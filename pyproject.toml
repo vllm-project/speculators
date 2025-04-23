@@ -86,9 +86,9 @@ dev = [
 ]
 
 [project.urls]
-homepage = "https://github.com/neuralmagic/speculators" 
+homepage = "https://github.com/neuralmagic/speculators"
 source = "https://github.com/neuralmagic/speculators"
-issues = "https://github.com/neuralmagic/speculators/issues" 
+issues = "https://github.com/neuralmagic/speculators/issues"
 
 # ************************************************
 # ********** Code Quality Tools **********
@@ -111,7 +111,7 @@ exclude = ["venv", ".tox"]
 follow_imports = 'silent'
 
 [[tool.mypy.overrides]]
-module = ["datasets.*", "transformers.*"]
+module = ["datasets.*", "transformers.*", "setuptools.*", "setuptools_git_versioning.*"]
 ignore_missing_imports=true
 
 [tool.ruff]

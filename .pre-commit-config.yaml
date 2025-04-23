@@ -28,6 +28,8 @@ repos:
         # dev dependencies
         pytest,
         pydantic_settings,
+        setuptools,
+        setuptools-git-versioning,
 
         # types
         types-click,
