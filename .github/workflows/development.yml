@@ -1,0 +1,129 @@
+name: Development
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  quality-checks:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install dependencies
+        run: pip install tox
+      - name: Run quality checks
+        run: tox -e quality
+
+  type-checks:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install dependencies
+        run: pip install tox
+      - name: Run quality checks
+        run: tox -e types
+
+  precommit-checks:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install dependencies
+        run: pip install pre-commit
+      - name: Run pre-commit checks
+        run: pre-commit run --all-files
+
+  unit-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install dependencies
+        run: pip install tox
+      - name: Run unit tests
+        run: tox -e test-unit -- -m "smoke or sanity"
+
+  integration-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install dependencies
+        run: pip install tox
+      - name: Run integration tests
+        run: tox -e test-integration -- -m smoke
+
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.9"]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install dependencies
+        run: pip install toml loguru tox
+      - name: Build the package
+        run: |
+          export SPECULATORS_BUILD_TYPE=dev
+          export SPECULATORS_BUILD_ITERATION=${{ github.event.pull_request.number }}
+          tox -e build
+      - name: Upload build artifacts
+        id: artifact-upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts
+          path: dist/*
+          compression-level: 6
+          if-no-files-found: error
+          retention-days: 30
+      - name: Comment Install instructions
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `Build artifacts (.whl and .tar.gz) are available for download for up to 30 days.
+              They are located at ${{ steps.artifact-upload.outputs.artifact-url }}`
+            })
