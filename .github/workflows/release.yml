@@ -21,7 +21,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: Install dependencies
-        run: pip install toml loguru tox
+        run: pip install tox
       - name: Build the package
         run: |
           export SPECULATORS_BUILD_TYPE=release
