@@ -1,125 +1,126 @@
 import os
 import re
-from datetime import datetime
 from pathlib import Path
+from typing import Optional, Union
 
 from packaging.version import Version
 from setuptools import setup
 from setuptools_git_versioning import count_since, get_branch, get_sha, get_tags
 
-BASE_VERSION = Version("0.1.0")
+LAST_RELEASE_VERSION = Version("0.0.0")
 TAG_VERSION_PATTERN = re.compile(r"^v(\d+\.\d+\.\d+)$")
 
 
-def get_version_metadata() -> tuple[str, dict[str, str]]:
+def get_last_version_diff() -> tuple[Version, Optional[str], Optional[int]]:
     """
-    Generate the package version string and associated metadata based on git tags,
-    environment variables, and the current build context.
-    The function determines the version and metadata as follows:
-    - Retrieves all git tags in the repository and filters those matching the version
-      pattern.
-    - Identifies the latest tag whose version is less than or equal to the base version.
-    - Calculates the number of commits since the latest tag to determine the build
-      iteration.
-    - Reads the build type from the ``SPECULATORS_BUILD_TYPE`` environment variable
-      (defaults to "dev").
-    - Determines the build iteration from the ``SPECULATORS_BUILD_ITERATION``
-      environment variable, or falls back to the number of commits since the last tag,
-      or 0 if neither is available.
+    Get the last version, last tag, and the number of commits since the last tag.
+    If no tags are found, return the last release version and None for the tag/commits.
 
-    The package version string is then constructed based on the build type:
-    - If release then set to the base version if the current commit matches the base tag
-      or the tag couldn't be determined, else set to the last tagged version with a
-      ``.post{build_iteration}`` suffix.
-    - If candidate then set to ``{base_version}.rc{build_iteration}``.
-    - If nightly or alpha then set to ``{base_version}.a{build_iteration}``.
-    - For dev (or anything else) set to ``{base_version}.dev{build_iteration}``.
-
-    The metadata dictionary includes:
-    - "version": The computed package version string.
-    - "base_version": The base version string.
-    - "commit": The current git commit SHA.
-    - "branch": The current git branch name.
-    - "build_type": The build type used for this build.
-    - "build_iteration": The build iteration value.
-    - "build_date": The current date in YYYY-MM-DD format.
-
-    :returns: A tuple containing the package version string and a dictionary of metadata
+    :returns: A tuple containing the last version, last tag, and number of commits since
+        the last tag.
     """
-
-    version = BASE_VERSION
-    metadata = {}
-    tags = get_tags(root=Path(__file__).parent)
     tagged_versions = [
-        (version, tag)
-        for tag in tags
+        (Version(match.group(1)), tag)
+        for tag in get_tags(root=Path(__file__).parent)
         if (match := TAG_VERSION_PATTERN.match(tag))
-        and ((version := Version(match.group(1))) <= BASE_VERSION)
     ]
-    last_ver, last_tag = max(
-        tagged_versions, key=lambda tv: tv[0], default=(None, None)
+    tagged_versions.sort(key=lambda tv: tv[0])
+    last_version, last_tag = (
+        tagged_versions[-1] if tagged_versions else (LAST_RELEASE_VERSION, None)
     )
-    commits_since_tag = (
+    commits_since_last = (
         count_since(last_tag + "^{commit}", root=Path(__file__).parent)
         if last_tag
         else None
     )
 
-    build_type = os.getenv("SPECULATORS_BUILD_TYPE", "dev").lower()
-    build_iteration = os.getenv("SPECULATORS_BUILD_ITERATION") or commits_since_tag or 0
+    return last_version, last_tag, commits_since_last
+
+
+def get_next_version(
+    build_type: str, build_iteration: Optional[Union[str, int]]
+) -> tuple[Version, Optional[str], int]:
+    """
+    Get the next version based on the build type and iteration.
+    - build_type == release: take the last version and add a post if build iteration
+    - build_type == candidate: increment to next minor, add 'rc' with build iteration
+    - build_type == nightly: increment to next minor, add 'a' with build iteration
+    - build_type == alpha: increment to next minor, add 'a' with build iteration
+    - build_type == dev: increment to next minor, add 'dev' with build iteration
+
+    :param build_type: The type of build (release, candidate, nightly, alpha, dev).
+    :param build_iteration: The build iteration number. If None, defaults to the number
+        of commits since the last tag or 0 if no commits since the last tag.
+    :returns: A tuple containing the next version, the last tag the version is based
+        off of (if any), and the final build iteration used.
+    """
+    version, tag, commits_since_last = get_last_version_diff()
+
+    if not build_iteration and build_iteration != 0:
+        build_iteration = commits_since_last or 0
+    elif isinstance(build_iteration, str):
+        build_iteration = int(build_iteration)
 
     if build_type == "release":
-        package_version = (
-            str(version)
-            if not last_ver or version > last_ver
-            else f"{last_ver}.post{build_iteration}"
-        )
-    elif build_type == "candidate":
-        package_version = f"{version}.rc{build_iteration}"
+        if commits_since_last:
+            # add post since we have commits since last tag
+            version = Version(f"{version.base_version}.post{build_iteration}")
+        return version, tag, build_iteration
+
+    # not in release pathway, so need to increment to target next release version
+    version = Version(f"{version.major}.{version.minor + 1}.0")
+
+    if build_type == "candidate":
+        # add 'rc' since we are in candidate pathway
+        version = Version(f"{version}.rc{build_iteration}")
     elif build_type in ["nightly", "alpha"]:
-        package_version = f"{version}.a{build_iteration}"
+        # add 'a' since we are in nightly or alpha pathway
+        version = Version(f"{version}.a{build_iteration}")
     else:
-        package_version = f"{version}.dev{build_iteration}"
+        # assume 'dev' if not in any of the above pathways
+        version = Version(f"{version}.dev{build_iteration}")
 
-    metadata = {
-        "version": f'"{package_version}"',
-        "base_version": f'"{BASE_VERSION}"',
-        "commit": f'"{get_sha()}"',
-        "branch": f'"{get_branch()}"',
-        "build_type": f'"{build_type}"',
-        "build_iteration": f'"{build_iteration}"',
-        "build_date": f'"{datetime.now().strftime("%Y-%m-%d")}"',
-    }
-
-    return package_version, metadata
+    return version, tag, build_iteration
 
 
-def write_module_version() -> str:
+def write_version_files() -> tuple[Path, Path]:
     """
-    Utilizes the `get_version_metadata` function to generate the package version string
-    and associated metadata, and writes them to the version.txt and version.py files
-    within the src/speculators directory.
+    Write the version information to version.txt and version.py files.
+    version.txt contains the version string.
+    version.py contains the version plus additional metadata.
 
-    :returns: The path to the version.txt file
+    :returns: A tuple containing the paths to the version.txt and version.py files.
     """
-
-    version, metadata = get_version_metadata()
+    build_type = os.getenv("SPECULATORS_BUILD_TYPE", "dev").lower()
+    version, tag, build_iteration = get_next_version(
+        build_type=build_type,
+        build_iteration=os.getenv("SPECULATORS_BUILD_ITERATION"),
+    )
     module_path = Path(__file__).parent / "src" / "speculators"
-    version_path = module_path / "version.txt"
-    metadata_path = module_path / "version.py"
+    version_txt_path = module_path / "version.txt"
+    version_py_path = module_path / "version.py"
 
-    with version_path.open("w") as file:
-        file.write(version)
+    with version_txt_path.open("w") as file:
+        file.write(str(version))
 
-    with metadata_path.open("w") as file:
-        file.writelines([f"{key} = {value}\n" for key, value in metadata.items()])
+    with version_py_path.open("w") as file:
+        file.writelines(
+            [
+                f'version = "{version}"\n',
+                f'build_type = "{build_type}"\n',
+                f'build_iteration = "{build_iteration}"\n',
+                f'git_commit = "{get_sha()}"\n',
+                f'git_branch = "{get_branch()}"\n',
+                f'git_last_tag = "{tag}"\n',
+            ]
+        )
 
-    return str(version_path)
+    return version_txt_path, version_py_path
 
 
 setup(
     setuptools_git_versioning={
         "enabled": True,
-        "version_file": write_module_version(),
+        "version_file": str(write_version_files()[0]),
     }
 )
