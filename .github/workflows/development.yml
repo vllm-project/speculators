@@ -119,7 +119,6 @@ jobs:
           retention-days: 30
       - name: Generate GitHub App token
         id: app-token
-        if: steps.check-version.outputs.update_needed == 'true'
         uses: actions/create-github-app-token@v1
         with:
           app-id: ${{ secrets.GH_NM_REDHAT_AUTOMATION_APP_ID }}
