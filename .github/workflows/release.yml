@@ -53,6 +53,8 @@ jobs:
 
   update-main-version:
     needs: build-and-publish
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -84,10 +86,18 @@ jobs:
             echo "No update needed."
             echo "update_needed=false" >> $GITHUB_OUTPUT
           fi
+      - name: Generate GitHub App token
+        id: app-token
+        if: steps.check-version.outputs.update_needed == 'true'
+        uses: peter-evans/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.GH_NM_REDHAT_AUTOMATION_APP_ID }}
+          private-key: ${{ secrets.GH_NM_REDHAT_AUTOMATION_APP_PRIVATE_KEY }}
+          installation-id: ${{ secrets.GH_NM_REDHAT_AUTOMATION_INSTALLATION_ID }}
       - name: Update LAST_RELEASE_VERSION in setup.py
         if: steps.check-version.outputs.update_needed == 'true'
         env:
-          GITHUB_TOKEN: ${{ secrets.NM_UPSTREAM_CICD_PAT }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
         run:
           TAG_VERSION=${{ steps.set-tag-version.outputs.tag_version }}
           SETUP_VERSION=${{ steps.set-setup-version.outputs.setup_version }}
