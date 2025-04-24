@@ -89,11 +89,10 @@ jobs:
       - name: Generate GitHub App token
         id: app-token
         if: steps.check-version.outputs.update_needed == 'true'
-        uses: peter-evans/create-github-app-token@v1
+        uses: actions/create-github-app-token@v1
         with:
           app-id: ${{ secrets.GH_NM_REDHAT_AUTOMATION_APP_ID }}
           private-key: ${{ secrets.GH_NM_REDHAT_AUTOMATION_APP_PRIVATE_KEY }}
-          installation-id: ${{ secrets.GH_NM_REDHAT_AUTOMATION_INSTALLATION_ID }}
       - name: Update LAST_RELEASE_VERSION in setup.py
         if: steps.check-version.outputs.update_needed == 'true'
         env:
