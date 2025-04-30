@@ -1,3 +1,7 @@
+# build version files
+src/speculators/version.txt
+src/speculators/version.py
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

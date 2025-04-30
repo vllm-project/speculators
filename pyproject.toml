@@ -1,7 +1,6 @@
 [build-system]
-requires = ["setuptools >= 61.0", "wheel", "build"]
+requires = ["setuptools >= 61.0", "setuptools-git-versioning>=2.0,<3"]
 build-backend = "setuptools.build_meta"
-
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -12,8 +11,8 @@ include = ["*"]
 # ************************************************
 
 [project]
+dynamic = ["version"]
 name = "speculators"
-version = "0.1.0"
 description = "A unified library for creating, representing, and storing speculative decoding algorithms for LLM serving such as in vLLM."
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.9"
@@ -51,6 +50,11 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+    # build
+    "build>=1.0.0",
+    "setuptools>=61.0",
+    "setuptools-git-versioning>=2.0,<3",
+
     # general and configurations
     "pre-commit~=3.5.0",
     "sphinx~=7.1.2",
@@ -82,9 +86,9 @@ dev = [
 ]
 
 [project.urls]
-homepage = "https://github.com/neuralmagic/speculators" 
+homepage = "https://github.com/neuralmagic/speculators"
 source = "https://github.com/neuralmagic/speculators"
-issues = "https://github.com/neuralmagic/speculators/issues" 
+issues = "https://github.com/neuralmagic/speculators/issues"
 
 # ************************************************
 # ********** Code Quality Tools **********
@@ -107,7 +111,7 @@ exclude = ["venv", ".tox"]
 follow_imports = 'silent'
 
 [[tool.mypy.overrides]]
-module = ["datasets.*", "transformers.*"]
+module = ["datasets.*", "transformers.*", "setuptools.*", "setuptools_git_versioning.*"]
 ignore_missing_imports=true
 
 [tool.ruff]
