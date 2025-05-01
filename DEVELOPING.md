@@ -173,7 +173,7 @@ Review the coverage report to confirm that your new code is adequately tested.
 
 ## Additional Resources
 
-- [CONTRIBUTING.md](./CONTRIBUTING.md): Guidelines for contributing to the project.
-- [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md): Our expectations for community behavior.
-- [tox.ini](./tox.ini): Configuration for Tox environments.
-- [.pre-commit-config.yaml](./.pre-commit-config.yaml): Configuration for pre-commit hooks.
+- [CONTRIBUTING.md](https://github.com/neuralmagic/speculators/blob/main/CONTRIBUTING.md): Guidelines for contributing to the project.
+- [CODE_OF_CONDUCT.md](https://github.com/neuralmagic/speculators/blob/main/CODE_OF_CONDUCT.md): Our expectations for community behavior.
+- [tox.ini](https://github.com/neuralmagic/speculators/blob/main/tox.ini): Configuration for Tox environments.
+- [.pre-commit-config.yaml](https://github.com/neuralmagic/speculators/blob/main/.pre-commit-config.yaml): Configuration for pre-commit hooks.

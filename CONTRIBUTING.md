@@ -47,7 +47,7 @@ You can either clone the repository directly or fork it if you plan to contribut
    cd speculators
    ```
 
-For detailed instructions on setting up your development environment, please refer to the [DEVELOPING.md](./DEVELOPING.md) file. It includes step-by-step guidance on:
+For detailed instructions on setting up your development environment, please refer to the [DEVELOPING.md](https://github.com/neuralmagic/speculators/blob/main/DEVELOPING.md) file. It includes step-by-step guidance on:
 
 - Installing dependencies
 - Running tests
@@ -114,8 +114,8 @@ If you encounter a bug or have a feature request, please open an issue on GitHub
 
 ## Community Standards
 
-We are committed to fostering a welcoming and inclusive community. Please read and adhere to our [Code of Conduct](./CODE_OF_CONDUCT.md).
+We are committed to fostering a welcoming and inclusive community. Please read and adhere to our [Code of Conduct](https://github.com/neuralmagic/speculators/blob/main/CODE_OF_CONDUCT.md).
 
 ## License
 
-By contributing to Speculators, you agree that your contributions will be licensed under the [Apache License 2.0](./LICENSE).
+By contributing to Speculators, you agree that your contributions will be licensed under the [Apache License 2.0](https://github.com/neuralmagic/speculators/blob/main/LICENSE).
