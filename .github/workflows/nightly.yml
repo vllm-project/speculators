@@ -3,6 +3,7 @@ name: Nightly
 on:
   schedule:
     - cron: '0 0 * * *'  # Runs at midnight every night
+  workflow_dispatch:  # Allows manual triggering of the workflow
 
 jobs:
   link-checks:
