@@ -94,6 +94,9 @@ homepage = "https://github.com/neuralmagic/speculators"
 source = "https://github.com/neuralmagic/speculators"
 issues = "https://github.com/neuralmagic/speculators/issues"
 
+[project.entry-points.console_scripts]
+speculators = "speculators.__main__:cli"
+
 # ************************************************
 # ********** Code Quality Tools **********
 # ************************************************

@@ -7,8 +7,8 @@ from pydantic import BaseModel, Field
 from transformers.utils import PushToHubMixin
 
 __all__ = [
-    "SpeculatorConfig",
     "DraftModelConfig",
+    "SpeculatorConfig",
     "TokenProposalConfig",
     "VerifierConfig",
     "__version__",
