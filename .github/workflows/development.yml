@@ -5,7 +5,19 @@ on:
     types: [opened, synchronize, reopened]
 
 jobs:
+  check-draft:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check if PR is a draft
+        id: check_draft
+        run: |
+          if [[ "${{ github.event.pull_request.draft }}" == "true" ]]; then
+            echo "This PR is a draft. Skipping the workflow."
+            exit 1
+          fi
+
   quality-checks:
+    needs: check-draft
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -22,6 +34,7 @@ jobs:
         run: tox -e quality
 
   type-checks:
+    needs: check-draft
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -38,6 +51,7 @@ jobs:
         run: tox -e types
 
   precommit-checks:
+    needs: check-draft
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -54,6 +68,7 @@ jobs:
         run: pre-commit run --all-files
 
   unit-tests:
+    needs: check-draft
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -70,6 +85,7 @@ jobs:
         run: tox -e test-unit -- -m "smoke or sanity"
 
   integration-tests:
+    needs: check-draft
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -86,6 +102,7 @@ jobs:
         run: tox -e test-integration -- -m smoke
 
   build:
+    needs: check-draft
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
