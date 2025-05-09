@@ -8,8 +8,8 @@ from speculators.base.objects import SpeculatorModel, TokenProposal
 
 class SamplingTokenProposal(TokenProposal):
     """
-    Implementation for the sampling token proposal algorithm where a sampling temperature
-    is used to select the next token for each proposal from the drafter.
+    Implementation for the sampling token proposal algorithm where a sampling
+    temperature is used to select the next token for each proposal from the drafter.
     After X number of tokens, the verifier is called to to validate the proposed tokens.
     """
 
@@ -21,7 +21,8 @@ class SamplingTokenProposal(TokenProposal):
         :param config: The configuration for the sampling token proposal.
         :return: The instance of the sampling token proposal.
         """
-        return cls(config)  # Placeholder, need to define and pull args from config
+        # Placeholder, need to define and pull args from config
+        return cls(config)  # type: ignore[arg-type,call-arg]
 
     def __init__(self, **kwargs):
         """
@@ -43,7 +44,7 @@ class SamplingTokenProposal(TokenProposal):
         """
         return TokenProposalConfig(
             type_="sampling",
-            args={...},
+            args={...},  # type: ignore[arg-type]
         )
 
     def init_generation(

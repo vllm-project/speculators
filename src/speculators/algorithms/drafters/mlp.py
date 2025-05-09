@@ -5,7 +5,10 @@ __all__ = ["MLPDrafter"]
 
 class MLPDrafter(Drafter):
     @classmethod
-    def from_config(cls, config: DraftModelConfig) -> "MLPDrafter":
+    def from_config(
+        cls,
+        config: DraftModelConfig,  # noqa: ARG003
+    ) -> "MLPDrafter":
         """
         Create a MLP drafter (multi-layer perceptron / feed-forward neural network)
         from the provided config.
@@ -13,7 +16,8 @@ class MLPDrafter(Drafter):
         :param config: The configuration for the MLP drafter.
         :return: The module instance of the MLP drafter.
         """
-        return cls(...)  # Placeholder, need to define and pull args from config
+        # Placeholder, need to define and pull args from config
+        return cls(...)  # type: ignore[arg-type,call-arg]
 
     def __init__(self, **kwargs):
         """
@@ -31,7 +35,11 @@ class MLPDrafter(Drafter):
 
         :return: The configuration of the MLP drafter.
         """
-        return DraftModelConfig(type_="ffn", inputs=["input_ids"], model_config={...})
+        return DraftModelConfig(
+            type_="ffn",
+            inputs=["input_ids"],
+            config={...},  # type: ignore[arg-type]
+        )
 
     def forward(self, **kwargs):
         """

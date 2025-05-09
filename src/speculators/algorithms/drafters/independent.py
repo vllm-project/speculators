@@ -11,14 +11,18 @@ __all__ = ["IndependentDrafter"]
 
 class IndependentDrafter(Drafter):
     @classmethod
-    def from_config(cls, config: DraftModelConfig) -> Module:
+    def from_config(
+        cls,
+        config: DraftModelConfig,  # noqa: ARG003
+    ) -> "IndependentDrafter":
         """
         Create an independent drafter (separate model) from the provided config.
 
         :param config: The configuration for the independent drafter.
         :return: The module instance of the independent drafter.
         """
-        return cls(...)  # Placeholder, need to define and pull args from config
+        # Placeholder, need to define and pull args from config
+        return cls(...)  # type: ignore[arg-type,call-arg]
 
     def __init__(self, source: Union[str, Path, Module]):
         """
@@ -39,7 +43,7 @@ class IndependentDrafter(Drafter):
         return DraftModelConfig(
             type_="independent",
             inputs=["input_ids"],
-            model_config={...},
+            config={...},  # type: ignore[arg-type,call-arg]
         )
 
     def forward(self, **kwargs):

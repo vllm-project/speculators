@@ -7,14 +7,18 @@ __all__ = ["TransformerDrafter"]
 
 class TransformerDrafter(Module):
     @classmethod
-    def from_config(cls, config: DraftModelConfig) -> "TransformerDrafter":
+    def from_config(
+        cls,
+        config: DraftModelConfig,  # noqa: ARG003
+    ) -> "TransformerDrafter":
         """
         Create a drafter built on top of a Transformer layer as defined in the config.
 
         :param config: The configuration for the transformer drafter.
         :return: The module instance of the transformer drafter.
         """
-        return cls(...)  # Placeholder, need to define and pull args
+        # Placeholder, need to define and pull args
+        return cls(...)  # type: ignore[arg-type,call-arg]
 
     def __init__(self, **kwargs):
         """
@@ -37,7 +41,7 @@ class TransformerDrafter(Module):
         return DraftModelConfig(
             type_="transformer",
             inputs=["input_ids"],
-            model_config={...},
+            config={...},  # type: ignore[arg-type]
         )
 
     def forward(self, **kwargs):

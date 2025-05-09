@@ -39,9 +39,9 @@ def config():
 
 @cli.command()
 def convert(
-    source: Union[str, Path],
-    config: Optional[Union[str, Path]] = None,
-    output: Optional[Union[str, Path]] = None,
+    source: Union[str, Path],  # noqa: ARG001
+    config: Optional[Union[str, Path]] = None,  # noqa: ARG001
+    output: Optional[Union[str, Path]] = None,  # noqa: ARG001
 ):
     """
     Convert a model from a specific format to the speculators library format.
@@ -53,7 +53,7 @@ def convert(
 
 
 @cli.command()
-def inference(**kwargs):
+def inference(**kwargs):  # noqa: ARG001
     """
     Run inference using the speculators library.
     """
@@ -64,14 +64,14 @@ def inference(**kwargs):
 
 
 @cli.command()
-def validate(**kwargs):
+def validate(**kwargs):  # noqa: ARG001
     """
     Validate a model using the speculators library.
     """
 
 
 @cli.command()
-def train(**kwargs):
+def train(**kwargs):  # noqa: ARG001
     """
     Train a model using the speculators library.
     """

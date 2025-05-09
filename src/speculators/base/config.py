@@ -39,7 +39,7 @@ class DraftModelConfig(BaseModel):
             "specific intermediate states, the output of the verifier model, etc."
         )
     )
-    model_config: dict[str, Any] = Field(
+    config: dict[str, Any] = Field(
         description=(
             "Additional configuration settings and arguments for creating and "
             "configuring the draft model architecture. "

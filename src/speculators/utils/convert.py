@@ -3,7 +3,10 @@ from typing import Literal, Optional, Union
 
 from torch.nn import Module
 
-from speculators.base.objects import SpeculatorModel
+from speculators.base import (
+    SpeculatorConfig,
+    SpeculatorModel,
+)  # will need to fix circular import
 
 __all__ = [
     "SpecDecodeLibraryFormats",
@@ -20,8 +23,8 @@ SpecDecodeLibraryFormats = Literal["speculators", "eagle", "eagle2", "eagle3", "
 
 
 def detect_model_format(
-    source: Union[str, Path, Module],
-    config: Optional[Union[str, Path, dict]],
+    source: Union[str, Path, Module],  # noqa: ARG001
+    config: Optional[Union[str, Path, dict, SpeculatorConfig]],  # noqa: ARG001
 ) -> SpecDecodeLibraryFormats:
     """
     Detect the model format based on the source and config.
@@ -60,7 +63,7 @@ def convert_to_speculators(
     :return: The converted speculator model.
     :raises ValueError: If the format is not supported.
     """
-    format_ = format_ or detect_model_format(source, config, verifier, **kwargs)
+    format_ = format_ or detect_model_format(source, config)
     if format_ == "eagle":
         return from_eagle_format(source, config, verifier, **kwargs)
     elif format_ == "hass":
@@ -72,10 +75,10 @@ def convert_to_speculators(
 
 
 def from_eagle_format(
-    source: Union[str, Path, Module],
-    config: Optional[Union[str, Path, dict]] = None,
-    verifier: Optional[Union[str, Path, Module]] = None,
-    **kwargs,
+    source: Union[str, Path, Module],  # noqa: ARG001
+    config: Optional[Union[str, Path, dict]] = None,  # noqa: ARG001
+    verifier: Optional[Union[str, Path, Module]] = None,  # noqa: ARG001
+    **kwargs,  # noqa: ARG001
 ) -> SpeculatorModel:
     """
     Convert a model from the Eagle repo v1 format to the speculators library format.
@@ -97,10 +100,10 @@ def from_eagle_format(
 
 
 def from_eagle2_format(
-    source: Union[str, Path, Module],
-    config: Optional[Union[str, Path, dict]] = None,
-    verifier: Optional[Union[str, Path, Module]] = None,
-    **kwargs,
+    source: Union[str, Path, Module],  # noqa: ARG001
+    config: Optional[Union[str, Path, dict]] = None,  # noqa: ARG001
+    verifier: Optional[Union[str, Path, Module]] = None,  # noqa: ARG001
+    **kwargs,  # noqa: ARG001
 ) -> SpeculatorModel:
     """
     Convert a model from the Eagle repo v2 format to the speculators library format.
@@ -122,10 +125,10 @@ def from_eagle2_format(
 
 
 def from_eagle3_format(
-    source: Union[str, Path, Module],
-    config: Optional[Union[str, Path, dict]] = None,
-    verifier: Optional[Union[str, Path, Module]] = None,
-    **kwargs,
+    source: Union[str, Path, Module],  # noqa: ARG001
+    config: Optional[Union[str, Path, dict]] = None,  # noqa: ARG001
+    verifier: Optional[Union[str, Path, Module]] = None,  # noqa: ARG001
+    **kwargs,  # noqa: ARG001
 ) -> SpeculatorModel:
     """
     Convert a model from the Eagle repo v3 format to the speculators library format.
@@ -147,10 +150,10 @@ def from_eagle3_format(
 
 
 def from_hass_format(
-    source: Union[str, Path, Module],
-    config: Optional[Union[str, Path, dict]] = None,
-    verifier: Optional[Union[str, Path, Module]] = None,
-    **kwargs,
+    source: Union[str, Path, Module],  # noqa: ARG001
+    config: Optional[Union[str, Path, dict]] = None,  # noqa: ARG001
+    verifier: Optional[Union[str, Path, Module]] = None,  # noqa: ARG001
+    **kwargs,  # noqa: ARG001
 ) -> SpeculatorModel:
     """
     Convert a model from the Hass repo format to the speculators library format.

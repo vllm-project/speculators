@@ -4,7 +4,7 @@ from typing import Union
 from torch.nn import Module
 
 
-def load_model(source: Union[str, Path, Module]) -> Module:
+def load_model(source: Union[str, Path, Module]) -> Module:  # noqa: ARG001
     """
     Load a PyTorch / Transformers model from the specified source.
 

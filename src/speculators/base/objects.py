@@ -4,18 +4,16 @@ from typing import Callable, Optional, Union
 
 import torch
 from torch.nn import Module
-from transformers import (
-    GenerationConfig,
-    LogitsProcessorList,
-    PreTrainedModel,
-    StoppingCriteriaList,
-)
+from transformers import GenerationConfig
+from transformers.generation.logits_process import LogitsProcessorList
+from transformers.generation.stopping_criteria import StoppingCriteriaList
 from transformers.generation.utils import (
     BaseStreamer,
     CandidateGenerator,
     GenerateOutput,
     GenerationMixin,
 )
+from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import PushToHubMixin
 
 from speculators.base.config import (
@@ -197,12 +195,19 @@ class SpeculatorModel(ABC, Module, GenerationMixin, PushToHubMixin):
             function signature rather than keeping them in kwargs as needed.
         """
         # Branch pathways to be implemented:
-        if is_huggingface_id := False:  # fill in with logic to detect Hugging Face ID
+        if is_huggingface_id := False:  # noqa: F841
+            # fill in with logic to detect Hugging Face ID
             raise NotImplementedError(
                 "Loading from Hugging Face ID is not yet implemented."
             )
 
         if (format_ := detect_model_format(source, config)) != "speculators":
+            if isinstance(config, SpeculatorConfig):
+                raise ValueError(
+                    "Config must not be a SpeculatorConfig when loading from a "
+                    "non-speculators model."
+                )
+
             return convert_to_speculators(
                 source=source,
                 config=config,
@@ -211,12 +216,9 @@ class SpeculatorModel(ABC, Module, GenerationMixin, PushToHubMixin):
                 **kwargs,
             )
 
-        speculator = (
-            ...
-        )  # factory method to create the appropriate speculator algorithm
+        # factory method to create the appropriate speculator algorithm
         # load weights from the source into the speculator instance
-
-        return speculator
+        return ...  # type: ignore[return-value]
 
     def __init__(
         self,
@@ -286,7 +288,7 @@ class SpeculatorModel(ABC, Module, GenerationMixin, PushToHubMixin):
         return self.drafter(*args, **kwargs)
 
     @torch.no_grad()
-    def generate(
+    def generate(  # type: ignore[override]
         self,
         inputs: Optional[torch.Tensor] = None,
         generation_config: Optional[GenerationConfig] = None,
@@ -355,19 +357,19 @@ class SpeculatorModel(ABC, Module, GenerationMixin, PushToHubMixin):
                 "ensure the speculator model has token proposal methods defined."
             )
 
-        method = (
-            method
+        method_key: str = (
+            str(method)
             or self.config.default_proposal_method
             or list(self.proposals.keys())[0]
         )
 
-        if method not in self.proposals:
+        if method_key not in self.proposals:
             raise ValueError(
-                f"Token proposal method {method} not found in speculator model. "
+                f"Token proposal method {method_key} not found in speculator model. "
                 f"Available methods: {list(self.proposals.keys())}"
             )
 
-        return self.proposals[method]
+        return self.proposals[method_key]
 
     def _prepare_generation_config(
         self,
@@ -381,24 +383,26 @@ class SpeculatorModel(ABC, Module, GenerationMixin, PushToHubMixin):
         generation_config.use_cache = True
         generation_config.assistant_early_exit = True  # trigger assisted gen pathway
 
-    def _get_candidate_generator(
+        return generation_config, model_kwargs
+
+    def _get_candidate_generator(  # type: ignore[override]
         self,
-        *args,
-        **kwargs,
+        *args,  # noqa: ARG002
+        **kwargs,  # noqa: ARG002
     ) -> Optional[CandidateGenerator]:
         return None  # not used since we take over the generation process
 
-    def _assisted_decoding(
+    def _assisted_decoding(  # type: ignore[override]
         self,
         input_ids: torch.LongTensor,
-        candidate_generator: Optional[CandidateGenerator],
-        logits_processor: LogitsProcessorList,
-        stopping_criteria: StoppingCriteriaList,
-        generation_config: GenerationConfig,
-        synced_gpus: bool,
-        streamer: Optional[BaseStreamer],
+        candidate_generator: Optional[CandidateGenerator],  # noqa: ARG002
+        logits_processor: LogitsProcessorList,  # noqa: ARG002
+        stopping_criteria: StoppingCriteriaList,  # noqa: ARG002
+        generation_config: GenerationConfig,  # noqa: ARG002
+        synced_gpus: bool,  # noqa: ARG002
+        streamer: Optional[BaseStreamer],  # noqa: ARG002
         token_proposal_method: Optional[Union[str, TokenProposal]] = None,
-        **model_kwargs,
+        **model_kwargs,  # noqa: ARG002
     ):
         token_proposal = self.resolve_token_proposal(token_proposal_method)
         # need to implement any state setup for the general decode
@@ -410,12 +414,17 @@ class SpeculatorModel(ABC, Module, GenerationMixin, PushToHubMixin):
         should_stop = False
 
         while not should_stop:
-            input_ids, logits, state = token_proposal.generate_and_verify_next(
+            next_vals = token_proposal.generate_and_verify_next(
                 input_ids=input_ids,
                 logits=logits,
                 state=state,
                 speculator=self,
                 # need to determine what else should be passed
             )
+            if next_vals is None:
+                should_stop = True
+                break
+
+            input_ids, logits, state = next_vals
 
         return input_ids  # need to return the correct output type and data

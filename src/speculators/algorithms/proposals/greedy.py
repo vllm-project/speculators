@@ -21,7 +21,8 @@ class GreedyTokenProposal(TokenProposal):
         :param config: The configuration for the greedy token proposal.
         :return: The instance of the greedy token proposal.
         """
-        return cls(config)  # Placeholder, need to define and pull args from config
+        # Placeholder, need to define and pull args from config
+        return cls(config)  # type: ignore[arg-type,call-arg]
 
     def __init__(self, **kwargs):
         """
@@ -43,7 +44,7 @@ class GreedyTokenProposal(TokenProposal):
         """
         return TokenProposalConfig(
             type_="greedy",
-            args={...},
+            args={...},  # type: ignore[arg-type]
         )
 
     def init_generation(
