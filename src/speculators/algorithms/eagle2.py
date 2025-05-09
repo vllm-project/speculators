@@ -13,19 +13,19 @@ from speculators.base import SpeculatorConfig, SpeculatorModel, TokenProposal
 from speculators.utils import load_model
 
 
-class EagleSpeculator(SpeculatorModel):
+class Eagle2Speculator(SpeculatorModel):
     @classmethod
     def from_config(
         cls,
         config: Union[str, Path, SpeculatorConfig],
         verifier: Optional[Union[str, Path, Module]] = None,
-    ) -> "EagleSpeculator":
+    ) -> "Eagle2Speculator":
         """
-        Create an EagleSpeculator instance from the provided config.
+        Create an Eagle2Speculator instance from the provided config.
 
-        :param config: The configuration for the EagleSpeculator.
+        :param config: The configuration for the Eagle2Speculator.
         :param verifier: The verifier model to be used.
-        :return: The instance of the EagleSpeculator.
+        :return: The instance of the Eagle2Speculator.
         """
         # extract expected args from the config
         return cls(...)
@@ -35,11 +35,11 @@ class EagleSpeculator(SpeculatorModel):
         **kwargs,
     ):
         """
-        Initialize an Eagle speculator instance with the provided arguments and
+        Initialize an Eagle 2 speculator instance with the provided arguments and
         hyperparameters. Specifically, it implements the following paper:
-        https://arxiv.org/abs/2401.15077
+        https://arxiv.org/abs/2406.16858
 
-        :param kwargs: Additional arguments for the Eagle speculator.
+        :param kwargs: Additional arguments for the Eagle 2 speculator.
             Need to define exact arguments for the implementation.
         """
         drafter = TransformerDrafter(...)
@@ -51,7 +51,7 @@ class EagleSpeculator(SpeculatorModel):
         verifier = load_model(...)
         self.default_proposal_method = "tree"
         self._config = SpeculatorConfig(
-            speculators_algorithm="eagle",
+            speculators_algorithm="eagle2",
             draft_model=drafter.config,
             proposal_methods={key: val.config for key, val in proposals.items()},
             default_proposal_method=self.default_proposal_method,

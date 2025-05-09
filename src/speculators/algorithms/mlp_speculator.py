@@ -3,29 +3,28 @@ from typing import Optional, Union
 
 from torch.nn import Module
 
-from speculators.algorithms.drafters import TransformerDrafter
+from speculators.algorithms.drafters import MLPDrafter
 from speculators.algorithms.proposals import (
     GreedyTokenProposal,
     SamplingTokenProposal,
-    TreeTokenProposal,
 )
 from speculators.base import SpeculatorConfig, SpeculatorModel, TokenProposal
 from speculators.utils import load_model
 
 
-class EagleSpeculator(SpeculatorModel):
+class MLPSpeculator(SpeculatorModel):
     @classmethod
     def from_config(
         cls,
         config: Union[str, Path, SpeculatorConfig],
         verifier: Optional[Union[str, Path, Module]] = None,
-    ) -> "EagleSpeculator":
+    ) -> "MLPSpeculator":
         """
-        Create an EagleSpeculator instance from the provided config.
+        Create an MLPSpeculator instance from the provided config.
 
-        :param config: The configuration for the EagleSpeculator.
+        :param config: The configuration for the MLPSpeculator.
         :param verifier: The verifier model to be used.
-        :return: The instance of the EagleSpeculator.
+        :return: The instance of the MLPSpeculator.
         """
         # extract expected args from the config
         return cls(...)
@@ -35,23 +34,22 @@ class EagleSpeculator(SpeculatorModel):
         **kwargs,
     ):
         """
-        Initialize an Eagle speculator instance with the provided arguments and
+        Initialize an MLP speculator instance with the provided arguments and
         hyperparameters. Specifically, it implements the following paper:
-        https://arxiv.org/abs/2401.15077
+        https://arxiv.org/abs/2404.19124v1
 
-        :param kwargs: Additional arguments for the Eagle speculator.
+        :param kwargs: Additional arguments for the MLP speculator.
             Need to define exact arguments for the implementation.
         """
-        drafter = TransformerDrafter(...)
+        drafter = MLPDrafter(...)
         proposals: dict[str, TokenProposal] = {
             "greedy": GreedyTokenProposal(...),
             "sampling": SamplingTokenProposal(...),
-            "tree": TreeTokenProposal(...),
         }
         verifier = load_model(...)
-        self.default_proposal_method = "tree"
+        self.default_proposal_method = "sampling"
         self._config = SpeculatorConfig(
-            speculators_algorithm="eagle",
+            speculators_algorithm="mlp_speculator",
             draft_model=drafter.config,
             proposal_methods={key: val.config for key, val in proposals.items()},
             default_proposal_method=self.default_proposal_method,

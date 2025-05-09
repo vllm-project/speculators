@@ -11,10 +11,10 @@ __all__ = [
     "SpeculatorConfig",
     "TokenProposalConfig",
     "VerifierConfig",
-    "__version__",
+    "speculators_config_version",
 ]
 
-__version__ = "0.1.0"
+speculators_config_version = "0.1.0"
 
 
 class DraftModelConfig(BaseModel):
@@ -128,7 +128,7 @@ class SpeculatorConfig(BaseModel, PushToHubMixin):
         return SpeculatorConfig.model_validate(config_data)
 
     version: Version = Field(
-        default=Version(__version__),
+        default=Version(speculators_config_version),
         description=(
             "The version of the speculator configuration class and file. "
             "This is updated on any major changes to the speculator class or "

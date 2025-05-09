@@ -14,6 +14,9 @@ speculators config
 ```
 """
 
+from pathlib import Path
+from typing import Optional, Union
+
 import click
 
 from speculators.settings import print_config
@@ -32,6 +35,46 @@ def config():
     Print the current configuration settings.
     """
     print_config()
+
+
+@cli.command()
+def convert(
+    source: Union[str, Path],
+    config: Optional[Union[str, Path]] = None,
+    output: Optional[Union[str, Path]] = None,
+):
+    """
+    Convert a model from a specific format to the speculators library format.
+    """
+    raise NotImplementedError(
+        "Model conversion is not yet implemented. "
+        "Please provide a valid source and config."
+    )
+
+
+@cli.command()
+def inference(**kwargs):
+    """
+    Run inference using the speculators library.
+    """
+    raise NotImplementedError(
+        "Inference is not yet implemented. "
+        "Please provide the necessary arguments for inference."
+    )
+
+
+@cli.command()
+def validate(**kwargs):
+    """
+    Validate a model using the speculators library.
+    """
+
+
+@cli.command()
+def train(**kwargs):
+    """
+    Train a model using the speculators library.
+    """
 
 
 if __name__ == "__main__":

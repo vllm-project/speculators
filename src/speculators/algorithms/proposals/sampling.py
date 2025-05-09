@@ -6,43 +6,43 @@ from speculators.base.config import TokenProposalConfig
 from speculators.base.objects import SpeculatorModel, TokenProposal
 
 
-class GreedyTokenProposal(TokenProposal):
+class SamplingTokenProposal(TokenProposal):
     """
-    Implementation for the greedy token proposal algorithm where the first token
-    for each proposal from the drafter is selected.
+    Implementation for the sampling token proposal algorithm where a sampling temperature
+    is used to select the next token for each proposal from the drafter.
     After X number of tokens, the verifier is called to to validate the proposed tokens.
     """
 
     @classmethod
-    def from_config(cls, config: TokenProposalConfig) -> "GreedyTokenProposal":
+    def from_config(cls, config: TokenProposalConfig) -> "SamplingTokenProposal":
         """
-        Create a greedy token proposal instance from the provided config.
+        Create a sampling token proposal instance from the provided config.
 
-        :param config: The configuration for the greedy token proposal.
-        :return: The instance of the greedy token proposal.
+        :param config: The configuration for the sampling token proposal.
+        :return: The instance of the sampling token proposal.
         """
         return cls(config)  # Placeholder, need to define and pull args from config
 
     def __init__(self, **kwargs):
         """
-        Initialize the greedy token proposal with the provided arguments.
+        Initialize the sampling token proposal with the provided arguments.
 
-        :param kwargs: Additional arguments for the greedy token proposal.
+        :param kwargs: Additional arguments for the sampling token proposal.
             Need to define exact arguments for the implementation.
         """
         raise NotImplementedError(
-            "GreedyTokenProposal initialization is not implemented yet."
+            "SamplingTokenProposal initialization is not implemented yet."
         )
 
     @property
     def config(self) -> TokenProposalConfig:
         """
-        Get the configuration of the greedy token proposal.
+        Get the configuration of the sampling token proposal.
 
-        :return: The configuration of the greedy token proposal.
+        :return: The configuration of the sampling token proposal.
         """
         return TokenProposalConfig(
-            type_="greedy",
+            type_="sampling",
             args={...},
         )
 
@@ -71,7 +71,7 @@ class GreedyTokenProposal(TokenProposal):
             next generate_and_verify_next call.
         """
         raise NotImplementedError(
-            "GreedyTokenProposal init_generation is not implemented yet."
+            "SamplingTokenProposal init_generation is not implemented yet."
         )
 
     def generate_and_verify_next(
@@ -104,5 +104,5 @@ class GreedyTokenProposal(TokenProposal):
             stopping criteria is met, None is returned.
         """
         raise NotImplementedError(
-            "GreedyTokenProposal generate_and_verify_next is not implemented yet."
+            "SamplingTokenProposal generate_and_verify_next is not implemented yet."
         )
