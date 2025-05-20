@@ -530,3 +530,15 @@ This section provides examples of `config.json` files for popular speculative de
     },
 }
 ```
+
+## Related Resources
+
+Related Docs:
+
+- [Entrypoints Overview](./entrypoints.md) - This doc provides detailed information about saving and loading speculators.
+- [Architecture Overview](./architecture.md) - This doc provides detailed information about the Speculators architecture that powers the entry points.
+
+Related External Resources:
+
+- [Speculative Decoding Overview](https://arxiv.org/abs/2401.07851) - A general-purpose, survey paper on speculative decoding, its benefits, and its applications.
+- [Hugging Face Transformers](https://huggingface.co/docs/transformers/index) - Documentation for the Transformers library, which Speculators integrates with
