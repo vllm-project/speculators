@@ -3,10 +3,18 @@ from typing import Literal, Optional, Union
 
 from torch.nn import Module
 
+from transformers import AutoConfig
 from speculators.base import (
-    SpeculatorConfig,
     SpeculatorModel,
-)  # will need to fix circular import
+    SpeculatorConfig,
+    DraftModelConfig,
+    DraftModelType,
+    TokenProposalConfig,
+    TokenProposalType,
+    AlgorithmType,
+    VerifierConfig,
+)
+import logging
 
 __all__ = [
     "SpecDecodeLibraryFormats",
@@ -20,7 +28,7 @@ __all__ = [
 
 
 SpecDecodeLibraryFormats = Literal["speculators", "eagle", "eagle2", "eagle3", "hass"]
-
+logger = logging.getLogger(__name__)
 
 def detect_model_format(
     source: Union[str, Path, Module],  # noqa: ARG001
@@ -96,8 +104,41 @@ def from_eagle_format(
         function signature rather than keeping them in kwargs as needed.
     :return: The converted speculator model.
     """
-    raise NotImplementedError("Eagle format conversion is not implemented yet.")
+    # Load config if it's not already a dict
+    if not isinstance(config, dict):
+        config = AutoConfig.from_pretrained(source if config is None else config)
 
+    # Build draft model config
+    draft_model_config = DraftModelConfig(
+        type_=DraftModelType.LLAMA_EAGLE,
+        inputs="model.layers[-1].*",
+        config=config,
+    )
+
+    # Set proposal config
+    proposal_config = TokenProposalConfig(type_=TokenProposalType.GREEDY)
+
+    # Construct verifier config
+    verifier_config = VerifierConfig(
+        architecture=config.get("architectures"),
+        model=getattr(verifier, "source", None) if verifier else None,
+    )
+
+    # Build full speculator config
+    speculator_config = SpeculatorConfig(
+        speculators_algorithm=AlgorithmType.EAGLE,
+        draft_model=draft_model_config,
+        proposal_methods=proposal_config,
+        default_proposal_method=proposal_config.type_,
+        verifier=verifier_config,
+    )
+
+    speculator_model = SpeculatorModel.from_config(speculator_config)
+    logger.info(
+        "Returning speculator model from config. "
+        "Note: weights have not been loaded from disk yet."
+        )
+    return speculator_model
 
 def from_eagle2_format(
     source: Union[str, Path, Module],  # noqa: ARG001

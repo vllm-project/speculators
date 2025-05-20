@@ -243,6 +243,7 @@ class SpeculatorModel(ABC, Module, GenerationMixin, PushToHubMixin):
         self.drafter = drafter
         self.verifier = verifier  # need to make optional and attach later
         self.proposals = proposals
+        
 
     @abstractmethod
     @property
@@ -254,7 +255,7 @@ class SpeculatorModel(ABC, Module, GenerationMixin, PushToHubMixin):
 
         :return: The config object for the speculator model.
         """
-        ...
+        return self._config
 
     def attach_verifier(self, verifier: Module):
         """

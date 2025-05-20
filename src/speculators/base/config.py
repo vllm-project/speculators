@@ -1,3 +1,4 @@
+from enum import Enum
 import json
 from pathlib import Path
 from typing import Any, Optional, Union
@@ -12,9 +13,21 @@ __all__ = [
     "TokenProposalConfig",
     "VerifierConfig",
     "speculators_config_version",
+    "DraftModelType",
+    "TokenProposalType",
+    "AlgorithmType",
 ]
 
 speculators_config_version = "0.1.0"
+
+class DraftModelType(str, Enum):
+    LLAMA_EAGLE = "LlamaEagle"
+
+class TokenProposalType(str, Enum):
+    GREEDY = "GREEDY"
+
+class AlgorithmType(str, Enum):
+    EAGLE = "EAGLE"
 
 
 class DraftModelConfig(BaseModel):
@@ -26,7 +39,7 @@ class DraftModelConfig(BaseModel):
     self-drafting (extensions of the verifier model).
     """
 
-    type_: str = Field(
+    type_: DraftModelType = Field(
         description=(
             "The type of the speculator architecture. "
             "This must be a valid architecture name from the speculators library."
@@ -55,7 +68,7 @@ class TokenProposalConfig(BaseModel):
     greedy, nucleus, token tree sampling, etc.
     """
 
-    type_: str = Field(
+    type_: TokenProposalType = Field(
         description=(
             "The type of the token proposal algorithm. "
             "This must be a valid proposer from the speculators library."
@@ -84,7 +97,7 @@ class VerifierConfig(BaseModel):
             "transformers library. Ex: `LlamaPreTrainedModel`"
         )
     )
-    model: str = Field(
+    model: Optional[str] = Field(
         description=(
             "The name of the verifier model. This must be a valid HF id/name or "
             "a path to a local model directory. Ex: `meta-llama/Llama-3.3-70B-Instruct`"

@@ -6,6 +6,8 @@ from .base import (
     TokenProposal,
     TokenProposalConfig,
     VerifierConfig,
+    DraftModelType,
+    TokenProposalType,
 )
 from .logging import configure_logger, logger
 from .settings import LoggingSettings, Settings, print_config, reload_settings, settings
@@ -25,4 +27,6 @@ __all__ = [
     "print_config",
     "reload_settings",
     "settings",
+    "DraftModelType",
+    "TokenProposalType",
 ]
