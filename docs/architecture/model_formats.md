@@ -4,7 +4,7 @@
 
 In this document, you will learn:
 
-1. The structure and organization of Speculators model formats
+1. The structure and organization of the Speculators model formats
 2. How to save, load, and share speculator models across the ecosystem
 3. The design principles that guide Speculators' model format implementation
 
@@ -16,21 +16,21 @@ Before reading this document, you should be familiar with the following concepts
 
 ## Overview
 
-Speculators employs a model format designed with ecosystem compatibility and user experience as top priorities. This format serves as a standard and bridge between various speculative decoding implementations and the broader machine learning ecosystem, particularly focusing on compatibility with Hugging Face's model hub, Speculators' own implementations built on top of Transformers, and other platforms like vLLM. With the Hugging Face format as a foundation, Speculators enables extensibility and usability from practioners consuming existing algorithms to researchers developing new ones.
+Speculators employs a model format designed with ecosystem compatibility and user experience as top priorities. This format serves as a standard and bridge between various speculative decoding implementations and the broader machine learning ecosystem, particularly focusing on compatibility with Hugging Face's model hub, Speculators' implementations built on top of Transformers, and other platforms like vLLM. With the Hugging Face format as a foundation, Speculators enables extensibility and usability for practitioners consuming existing algorithms and researchers developing new ones.
 
-The core components that make up the Speculators model format are the following, which are explained in detail in dedicated sections below:
+The core components that make up the Speculators model format are the following:
 
 - Hugging Face compatible directory structure and file formats
 - Speculators-specific extensions through the `speculators_config` key in the `config.json` file
 - Standardized interfaces for saving, loading, and pushing models to the Hugging Face Hub
 
-Complete examples are provided at the end of this document for popular speculative decoding algorithms.
+At the end of this document, examples of configuration files for popular algorithms are provided.
 
 ## Components
 
 ### Base Model Format
 
-The base model format for Speculators builds directly on the standard Hugging Face model format and represents the specific draft model, ensuring compatability with existing tools, libraries, and workflows. A typical Speculators model directory contains:
+The base model format for Speculators builds directly on the standard Hugging Face model format and represents the specific draft model, ensuring compatibility with existing tools, libraries, and workflows. A typical Speculators model directory contains:
 
 ```
 model_directory/
@@ -39,18 +39,18 @@ model_directory/
 └── README.md             # Optional documentation
 ```
 
-Where `config.json` and `model.safetensors` define the draft model and its weights, respectively. This has the additional benefit where independent draft models are stored in the same format with the later speculators-specific extensions.
+Where `config.json` and `model.safetensors` define the draft model and its weights, respectively. Standardizing the `config.json` file as the base for the draft model has the additional benefit for independent draft models, so they only need the speculators-specific addition.
 
 #### `config.json`
 
-The `config.json` file represents specifics about the architecture, hyperparams, and configurations for the draft model. It extends Transformers PretrainedConfig class and serves as the central configuration for a Speculators model, containing all necessary metadata and parameters. Core required keys in the config file include:
+The `config.json` file represents specifics about the draft model's architecture, hyperparams, and configurations. It extends the Transformers PretrainedConfig class and serves as the central configuration for a Speculators model, containing all necessary metadata and parameters. Core required keys in the config file include:
 
 - `architectures`: A list containing the model architecture class for the Speculators draft model (e.g., "MLPDraftModel"), or the Hugging Face model class for independent draft models.
 - `model_type`: A string identifying the Speculators draft model type (e.g., "mlp_draft_model"), or the Hugging Face model type for independent draft models.
 - `torch_dtype`: The data type used for the model weights (e.g., "float32", "bfloat16", "float16")
 - `transformers_version`: The version of Transformers used to create the model
 - `speculators_version`: The version of Speculators used to create the model
-- `inputs`: A list defining the expected inputs to the draft model in relation to the attachment points to the verifier (e.g., "input_ids", "layer.0")
+- `inputs`: A list defining the expected inputs to the draft model about the attachment points to the verifier (e.g., "input_ids", "layer.0")
 
 Additionally, the file contains implementation-specific keys that define the draft model's architecture and hyperparameters, such as hidden layer dimensions, activation functions, and other configuration parameters depending on the specific Drafter architecture.
 
@@ -68,13 +68,13 @@ Example of a minimal `config.json`:
 }
 ```
 
-Future versions of the format may support additional keys for advanced features, such as quantization and compression methods, to further enhance the model's performance and usability.
+Future format versions may support additional keys for advanced features, such as quantization and compression methods, to further enhance the model's performance and usability.
 
 #### `safetensors` Files
 
 Speculators adopts the `safetensors` format as the standard for storing the draft model's weights, providing multiple benefits:
 
-- **Security**: Unlike pickle-based formats, safetensors is designed to be secure against arbitrary code execution
+- **Security**: Unlike pickle-based formats, is secure against arbitrary code execution
 - **Efficiency**: Optimized for fast loading times and memory mapping capabilities
 - **Compatibility**: Widespread adoption across the Hugging Face ecosystem and related tools
 - **Mmap Support**: Allows accessing tensor data without loading the entire model into memory
@@ -90,7 +90,7 @@ model_directory/
 └── model-00003-of-00003.safetensors
 ```
 
-Future versions of the format may support additional file formats, such as compressed tensors formats, built on top of the safetensors format, to further enhance model size and loading performance.
+Future versions of the format may support additional file formats, such as compressed tensors formats, built on top of the safetensors format, to enhance model size and loading performance further.
 
 ### Speculators Format Extensions
 
@@ -101,11 +101,11 @@ The `speculators_config` dictionary contains subkeys that are broken apart by th
 - `algorithm`: The name of the speculative decoding algorithm used by the model
 - `proposal_methods`: A list of dictionaries defining the supported token proposal strategies for the speculator
 - `default_proposal_method`: The default token proposal method to use when generating tokens
-- `verifier`: A dictionary defining the target verifier model for which the speculator was created
+- `verifier`: A dictionary defining the target verifier model the speculator was created for
 
 #### Algorithm
 
-The `algorithm` field is a required string that specifies the speculative decoding algorithm used by the model. It serves as a primary identifier for the algorithm that the speculator model was created with and its intended to use. It additionally allows the Speculators library, and other tools, to automatically load the correct implementation and associated utilities when a model is loaded.
+The `algorithm` field is a required string that specifies the speculative decoding algorithm used by the model. It serves as a primary identifier for the algorithm with which the speculator model was created and intended to be used. It additionally allows the Speculators library and other tools to automatically load the correct implementation and associated utilities when a model is loaded.
 
 This field must match one of the supported algorithms in the Speculators library, such as:
 
@@ -125,9 +125,9 @@ Example usage in a config:
 
 #### Token Proposal Methods
 
-The `proposal_methods` field is a required list of dictionaries that defines the supported token proposal strategies for a speculator. This field works alongside the `default_proposal_method` key, which specifies which method to use by default.
+The `proposal_methods` field is a required list of dictionaries defining a speculator's supported token proposal strategies. This field works alongside the `default_proposal_method` key, which specifies which method to use by default.
 
-Token proposal methods determine how a speculator generates candidate tokens and how these tokens are verified with the verifier model. By supporting multiple potential methods and enabling the algorithm to define what is intended to work, they provide adaptability to different use cases and performance requirements. The method specific parameters are intended as the best defaults to ship the model with, but implementations may optionally allow users to override these parameters at runtime.
+Token proposal methods determine how a speculator generates candidate tokens and how these tokens are verified with the verifier model. By supporting multiple potential methods and enabling the algorithm to define what should work, they provide adaptability to different use cases and performance requirements. The method-specific parameters are the best defaults to ship the model, but implementations may optionally allow users to override these parameters at runtime.
 
 Each dictionary in the `proposal_methods` list must contain:
 
@@ -144,35 +144,35 @@ Example usage in a config:
 
 ```json
 "proposal_methods": [
-    {
+ {
         "proposal_type": "greedy",
         "...": "..."
-    },
-    {
+ },
+ {
         "proposal_type": "sample",
         "...": "..."
-    }
+ }
 ],
 "default_proposal_method": "greedy"
 ```
 
 #### Verifier
 
-The `verifier` field is a required dictionary that defines the target verifier model for which the draft model was created for. The dictionary serves two primary purposes:
+The `verifier` field is a required dictionary defining the target verifier model for which the draft model was created. The dictionary serves two primary purposes:
 
 1. Enabling automatic loading of the associated verifier model if one is not provided at runtime
 2. Providing validation parameters to ensure compatibility when using different verifiers with a trained draft model
 
-There are a number of required and optional keys within the `verifier` dict enabling the above functionality:
+There are several required and optional keys within the `verifier` dict, enabling the above functionality:
 
 - Keys for automatic loading
   - `name_or_path`: The Hugging Face model ID or local path to automatically load the verifier
-- Keys for model architecture compatability validation
+- Keys for model architecture compatibility validation
   - `architectures`: List of model architecture classes for compatibility validation
   - `hidden_size`: Hidden dimension size used for compatibility checks
   - `intermediate_size`: Intermediate dimension size for compatibility validation
   - Additional model configuration parameters from the original verifier model
-- Keys for tokenizer compatability validation
+- Keys for tokenizer compatibility validation
   - `vocab_size`: Size of the vocabulary used by the tokenizer
   - `max_position_embeddings`: Maximum position embeddings supported
   - `bos_token_id`: Beginning of sequence token ID
@@ -194,7 +194,7 @@ Example of a verifier configuration:
         128001,
         128008,
         128009
-    ]
+ ]
 }
 ```
 
@@ -214,7 +214,7 @@ For detailed usage and examples, refer to the [entrypoints documentation](./entr
 
 #### SpeculatorConfig Class
 
-The `SpeculatorConfig` class extends the Transformers `PretrainedConfig` class, providing compatibile APIs with the following methods:
+The `SpeculatorConfig` class extends the Transformers `PretrainedConfig` class, providing compatible APIs with the following methods:
 
 - `from_pretrained()`: Loads a speculator configuration from a local directory or the Hugging Face Hub
 - `save_pretrained()`: Saves a speculator configuration to a local directory
@@ -224,7 +224,7 @@ For detailed usage and examples, refer to the [entrypoints documentation](./entr
 
 ## Examples
 
-This section provides example `config.json` files for popular speculative decoding algorithms.
+This section provides examples of `config.json` files for popular speculative decoding algorithms.
 
 ### Eagle
 
