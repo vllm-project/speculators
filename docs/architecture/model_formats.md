@@ -144,14 +144,14 @@ Example usage in a config:
 
 ```json
 "proposal_methods": [
- {
+    {
         "proposal_type": "greedy",
         "...": "..."
- },
- {
+    },
+    {
         "proposal_type": "sample",
         "...": "..."
- }
+    }
 ],
 "default_proposal_method": "greedy"
 ```
@@ -194,7 +194,7 @@ Example of a verifier configuration:
         128001,
         128008,
         128009
- ]
+    ]
 }
 ```
 
