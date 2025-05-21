@@ -50,7 +50,7 @@ The `config.json` file represents specifics about the draft model's architecture
 - `torch_dtype`: The data type used for the model weights (e.g., "float32", "bfloat16", "float16")
 - `transformers_version`: The version of Transformers used to create the model
 - `speculators_version`: The version of Speculators used to create the model
-- `inputs`: A list defining the expected inputs to the draft model about the attachment points to the verifier (e.g., "input_ids", "layer.0")
+- `inputs`: A list defining the expected inputs to the draft model about the attachment points to the verifier (e.g., "input_ids", "input_embeddings", "layer.0")
 
 Additionally, the file contains implementation-specific keys that define the draft model's architecture and hyperparameters, such as hidden layer dimensions, activation functions, and other configuration parameters depending on the specific Drafter architecture.
 
@@ -63,7 +63,7 @@ Example of a minimal `config.json`:
     "torch_dtype": "bfloat16",
     "transformers_version": "4.35.0",
     "speculators_version": "0.1.0",
-    "inputs": ["input_ids"],
+    "inputs": ["input_embeddings"],
     "...": "..."
 }
 ```
@@ -117,9 +117,11 @@ This field must match one of the supported algorithms in the Speculators library
 Example usage in a config:
 
 ```json
-"speculators_config": {
-    "algorithm": "eagle",
-    "...": "..."
+{
+    "speculators_config": {
+        "algorithm": "eagle",
+        "...": "..."
+    }
 }
 ```
 
@@ -143,17 +145,28 @@ Some common proposal methods include:
 Example usage in a config:
 
 ```json
-"proposal_methods": [
-    {
-        "proposal_type": "greedy",
-        "...": "..."
-    },
-    {
-        "proposal_type": "sample",
-        "...": "..."
-    }
-],
-"default_proposal_method": "greedy"
+{
+    "proposal_methods": [
+        {
+            "proposal_type": "greedy",
+            "draft_tokens": 5
+        },
+        {
+            "proposal_type": "sample",
+            "draft_tokens": 5,
+            "temperature": 0.8,
+            "top_p": 0.5
+        },
+        {
+            "proposal_type": "tree",
+            "tree_type": "static",
+            "initial_branching_factor": 4,
+            "branching_factor": 2,
+            "draft_tokens": 5
+        }
+    ],
+    "default_proposal_method": "greedy"
+}
 ```
 
 #### Verifier
@@ -182,19 +195,21 @@ There are several required and optional keys within the `verifier` dict, enablin
 Example of a verifier configuration:
 
 ```json
-"verifier": {
-    "name_or_path": "meta-llama/Llama-3.1-8B-Instruct",
-    "architectures": ["LlamaForCausalLM"],
-    "hidden_size": 4096,
-    "intermediate_size": 14336,
-    "vocab_size": 128256,
-    "max_position_embeddings": 131072,
-    "bos_token_id": 128000,
-    "eos_token_id": [
-        128001,
-        128008,
-        128009
-    ]
+{
+    "verifier": {
+        "name_or_path": "meta-llama/Llama-3.1-8B-Instruct",
+        "architectures": ["LlamaForCausalLM"],
+        "hidden_size": 4096,
+        "intermediate_size": 14336,
+        "vocab_size": 128256,
+        "max_position_embeddings": 131072,
+        "bos_token_id": 128000,
+        "eos_token_id": [
+            128001,
+            128008,
+            128009
+        ]
+    }
 }
 ```
 
@@ -235,24 +250,57 @@ This section provides examples of `config.json` files for popular speculative de
     "torch_dtype": "bfloat16",
     "transformers_version": "X.X.X",
     "speculators_version": "X.X.X",
-    "inputs": ["input_ids", "TODO"],
-    "extra_args": "TODO",
+    "inputs": ["input_embeddings", "hidden_states[-2]"],
+    "inputs_hidden_states_after_layer_norm": false,
+    "transformer_architecture": "LlamaDecoderLayer",
+    "transformer_input_type": "projection",
+    "transformer_include_output_layer_norm": false,
+    "attention_bias": false,
+    "attention_dropout": 0.0,
+    "bos_token_id": 128000,
+    "eos_token_id": [
+        128001,
+        128008,
+        128009
+    ],
+    "head_dim": 128,
+    "hidden_act": "silu",
+    "hidden_size": 4096,
+    "intermediate_size": 14336,
+    "max_position_embeddings": 131072,
+    "mlp_bias": false,
+    "num_attention_heads": 32,
+    "num_key_value_heads": 8,
+    "rms_norm_eps": 1e-05,
+    "rope_scaling": {
+        "factor": 8.0,
+        "high_freq_factor": 4.0,
+        "low_freq_factor": 1.0,
+        "original_max_position_embeddings": 8192,
+        "rope_type": "llama3"
+    },
+    "rope_theta": 500000.0,
+    "use_cache": true,
+    "vocab_size": 128256,
     "speculators_config": {
         "algorithm": "eagle",
         "proposal_methods": [
             {
                 "proposal_type": "greedy",
-                "max_new_tokens": 5,
+                "draft_tokens": 5
             },
             {
                 "proposal_type": "sample",
-                "max_new_tokens": 5,
+                "draft_tokens": 5,
                 "temperature": 0.8,
                 "top_p": 0.5
             },
             {
                 "proposal_type": "tree",
-                "extra_args": "TODO"
+                "tree_type": "static",
+                "initial_branching_factor": 4,
+                "branching_factor": 2,
+                "depth": 5
             }
         ],
         "default_proposal_method": "tree",
@@ -283,24 +331,57 @@ This section provides examples of `config.json` files for popular speculative de
     "torch_dtype": "bfloat16",
     "transformers_version": "X.X.X",
     "speculators_version": "X.X.X",
-    "inputs": ["input_ids", "TODO"],
-    "extra_args": "TODO",
+    "inputs": ["input_embeddings", "hidden_states[-2]"],
+    "inputs_hidden_states_after_layer_norm": false,
+    "transformer_architecture": "LlamaDecoderLayer",
+    "transformer_input_type": "projection",
+    "transformer_include_output_layer_norm": false,
+    "attention_bias": false,
+    "attention_dropout": 0.0,
+    "bos_token_id": 128000,
+    "eos_token_id": [
+        128001,
+        128008,
+        128009
+    ],
+    "head_dim": 128,
+    "hidden_act": "silu",
+    "hidden_size": 4096,
+    "intermediate_size": 14336,
+    "max_position_embeddings": 131072,
+    "mlp_bias": false,
+    "num_attention_heads": 32,
+    "num_key_value_heads": 8,
+    "rms_norm_eps": 1e-05,
+    "rope_scaling": {
+        "factor": 8.0,
+        "high_freq_factor": 4.0,
+        "low_freq_factor": 1.0,
+        "original_max_position_embeddings": 8192,
+        "rope_type": "llama3"
+    },
+    "rope_theta": 500000.0,
+    "use_cache": true,
+    "vocab_size": 128256,
     "speculators_config": {
         "algorithm": "eagle_2",
         "proposal_methods": [
             {
                 "proposal_type": "greedy",
-                "max_new_tokens": 5,
+                "draft_tokens": 5
             },
             {
                 "proposal_type": "sample",
-                "max_new_tokens": 5,
+                "draft_tokens": 5,
                 "temperature": 0.8,
                 "top_p": 0.5
             },
             {
                 "proposal_type": "tree",
-                "extra_args": "TODO"
+                "tree_type": "context_aware",
+                "max_tokens": 64,
+                "max_branching_factor": 5,
+                "max_depth": 5
             }
         ],
         "default_proposal_method": "tree",
@@ -326,29 +407,62 @@ This section provides examples of `config.json` files for popular speculative de
 
 ```json
 {
-    "architectures": ["TransformerDraftModel"],
-    "model_type": "transformer_draft_model",
+    "architectures": ["FusedTransformerDraftModel"],
+    "model_type": "fused_transformer_draft_model",
     "torch_dtype": "bfloat16",
     "transformers_version": "X.X.X",
     "speculators_version": "X.X.X",
-    "inputs": ["input_ids", "TODO"],
-    "extra_args": "TODO",
+    "inputs": ["input_ids", "hidden[3]", "hidden[12]", "hidden[-2]"],
+    "inputs_hidden_states_after_layer_norm": false,
+    "transformer_architecture": "LlamaDecoderLayer",
+    "transformer_input_type": "projection",
+    "transformer_include_output_layer_norm": false,
+    "attention_bias": false,
+    "attention_dropout": 0.0,
+    "bos_token_id": 128000,
+    "eos_token_id": [
+        128001,
+        128008,
+        128009
+    ],
+    "head_dim": 128,
+    "hidden_act": "silu",
+    "hidden_size": 8192,
+    "intermediate_size": 14336,
+    "max_position_embeddings": 131072,
+    "mlp_bias": false,
+    "num_attention_heads": 32,
+    "num_key_value_heads": 8,
+    "rms_norm_eps": 1e-05,
+    "rope_scaling": {
+        "factor": 8.0,
+        "high_freq_factor": 4.0,
+        "low_freq_factor": 1.0,
+        "original_max_position_embeddings": 8192,
+        "rope_type": "llama3"
+    },
+    "rope_theta": 500000.0,
+    "use_cache": true,
+    "vocab_size": 128256,
     "speculators_config": {
         "algorithm": "eagle_3",
         "proposal_methods": [
             {
                 "proposal_type": "greedy",
-                "max_new_tokens": 5,
+                "draft_tokens": 5
             },
             {
                 "proposal_type": "sample",
-                "max_new_tokens": 5,
+                "draft_tokens": 5,
                 "temperature": 0.8,
                 "top_p": 0.5
             },
             {
                 "proposal_type": "tree",
-                "extra_args": "TODO"
+                "tree_type": "context_aware",
+                "max_tokens": 64,
+                "max_branching_factor": 5,
+                "max_depth": 5
             }
         ],
         "default_proposal_method": "tree",
@@ -379,24 +493,57 @@ This section provides examples of `config.json` files for popular speculative de
     "torch_dtype": "bfloat16",
     "transformers_version": "X.X.X",
     "speculators_version": "X.X.X",
-    "inputs": ["input_ids", "TODO"],
-    "extra_args": "TODO",
+    "inputs": ["input_embeddings", "hidden_states[-2]"],
+    "inputs_hidden_states_after_layer_norm": false,
+    "transformer_architecture": "LlamaDecoderLayer",
+    "transformer_input_type": "projection_with_bias",
+    "transformer_include_output_layer_norm": false,
+    "attention_bias": false,
+    "attention_dropout": 0.0,
+    "bos_token_id": 128000,
+    "eos_token_id": [
+        128001,
+        128008,
+        128009
+    ],
+    "head_dim": 128,
+    "hidden_act": "silu",
+    "hidden_size": 4096,
+    "intermediate_size": 14336,
+    "max_position_embeddings": 131072,
+    "mlp_bias": false,
+    "num_attention_heads": 32,
+    "num_key_value_heads": 8,
+    "rms_norm_eps": 1e-05,
+    "rope_scaling": {
+        "factor": 8.0,
+        "high_freq_factor": 4.0,
+        "low_freq_factor": 1.0,
+        "original_max_position_embeddings": 8192,
+        "rope_type": "llama3"
+    },
+    "rope_theta": 500000.0,
+    "use_cache": true,
+    "vocab_size": 128256,
     "speculators_config": {
         "algorithm": "hass",
         "proposal_methods": [
             {
                 "proposal_type": "greedy",
-                "max_new_tokens": 5,
+                "draft_tokens": 5
             },
             {
                 "proposal_type": "sample",
-                "max_new_tokens": 5,
+                "draft_tokens": 5,
                 "temperature": 0.8,
                 "top_p": 0.5
             },
             {
                 "proposal_type": "tree",
-                "extra_args": "TODO"
+                "tree_type": "context_aware",
+                "max_tokens": 64,
+                "max_branching_factor": 5,
+                "max_depth": 5
             }
         ],
         "default_proposal_method": "tree",
@@ -427,23 +574,22 @@ This section provides examples of `config.json` files for popular speculative de
     "torch_dtype": "bfloat16",
     "transformers_version": "X.X.X",
     "speculators_version": "X.X.X",
-    "inputs": ["input_ids", "TODO"],
-    "extra_args": "TODO",
+    "inputs": ["input_embeddings", "hidden_states[-1]"],
+    "inputs_hidden_states_after_layer_norm": false,
+    "hidden_size": 4096,
+    "intermediate_size": 4096,
+    "vocab_size": 128256,
+    "draft_tokens": 5,
+    "tie_weights": false,
     "speculators_config": {
         "algorithm": "mlp_speculator",
         "proposal_methods": [
             {
                 "proposal_type": "greedy",
-                "max_new_tokens": 5,
-            },
-            {
-                "proposal_type": "sample",
-                "max_new_tokens": 5,
-                "temperature": 0.8,
-                "top_p": 0.5
+                "draft_tokens": 5
             }
         ],
-        "default_proposal_method": "sample",
+        "default_proposal_method": "greedy",
         "verifier": {
             "name_or_path": "meta-llama/Llama-3.1-8B-Instruct",
             "architectures": ["LlamaForCausalLM"],
