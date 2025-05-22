@@ -71,7 +71,7 @@ class TokenProposalConfig(PydanticClassRegistryMixin):
 class VerifierConfig(BaseModel):
     """
     The base config for a verifier model which defines the parameters that are required
-    to either load the original verifier model or validate compatability with a new
+    to either load the original verifier model or validate compatibility with a new
     verifier based on the the architecture and tokenizers/processor properties.
     It provides convenience methods to extract the required parameters from a
     PretrainedConfig object.
@@ -114,35 +114,35 @@ class VerifierConfig(BaseModel):
     architectures: list[str] = Field(
         description=(
             "The architectures for the original verifier as found in its config.json. "
-            "Used to validate architecture compatability of different verifiers "
-            "with the speculatorm, if needed."
+            "Used to validate architecture compatibility of different verifiers "
+            "with the speculator, if needed."
         ),
     )
     hidden_size: int = Field(
         description=(
             "The hidden size of the original verifier as found in its config.json. "
-            "Used to validate architecture compatability of different verifiers "
+            "Used to validate architecture compatibility of different verifiers "
             "with the speculator, if needed."
         ),
     )
     intermediate_size: int = Field(
         description=(
             "The intermediate size of original verifier as found in its config.json. "
-            "Used to validate architecture compatability of different verifiers "
+            "Used to validate architecture compatibility of different verifiers "
             "with the speculator, if needed."
         ),
     )
     vocab_size: int = Field(
         description=(
             "The vocab size of the original verifier as found in the its config.json. "
-            "Used to validate tokenizer compatability of different verifiers "
+            "Used to validate tokenizer compatibility of different verifiers "
             "with the speculator, if needed."
         ),
     )
     max_position_embeddings: int = Field(
         description=(
             "The max position embeddings of original verifier as in its config.json. "
-            "Used to validate max length compatability of different verifiers "
+            "Used to validate max length compatibility of different verifiers "
             "with the speculator, if needed."
         ),
     )
@@ -150,7 +150,7 @@ class VerifierConfig(BaseModel):
         description=(
             "The beginning of sentence token id of the original verifier as "
             "found in its config.json. "
-            "Used to validate tokenizer compatability of different verifiers "
+            "Used to validate tokenizer compatibility of different verifiers "
             "with the speculator, if needed."
         ),
     )
@@ -158,7 +158,7 @@ class VerifierConfig(BaseModel):
         description=(
             "The end of sentence token id of the original verifier as "
             "found in its config.json. "
-            "Used to validate tokenizer compatability of different verifiers "
+            "Used to validate tokenizer compatibility of different verifiers "
             "with the speculator, if needed."
         ),
     )
@@ -194,7 +194,7 @@ class SpeculatorsConfig(ReloadableBaseModel):
             "The config for the verifier the speculator was created for. "
             "Used to auto load the verifier when the speculator is loaded, if needed. "
             "Also used to validate the verifier architecture and tokenizer "
-            "compatability for a new verifier, if needed."
+            "compatibility for a new verifier, if needed."
         ),
     )
 
@@ -207,7 +207,7 @@ class SpeculatorModelConfig(BaseModel, PretrainedConfig):
     speculators config describing the algorithm, token proposals, and verifier model.
 
     It inherits from the Transformers PretrainedConfig class to ensure full
-    compatability with standard Transformers model pathways while building on
+    compatibility with standard Transformers model pathways while building on
     the standard methods for PretrainedConfigs to load, save, and push to the HF hub.
 
     This is the main config which maps to the config.json file for saved speculators.
