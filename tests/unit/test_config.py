@@ -5,6 +5,7 @@ Unit tests for the config module in the Speculators library.
 import json
 import tempfile
 from pathlib import Path
+from typing import Literal
 from unittest.mock import MagicMock
 
 import pytest
@@ -16,15 +17,36 @@ from speculators import (
     SpeculatorsConfig,
     TokenProposalConfig,
     VerifierConfig,
+    reload_and_populate_configs,
 )
 
 # ===== TokenProposalConfig Tests =====
 
 
+@TokenProposalConfig.register("test_proposal")
+class TokenProposalConfigTest(TokenProposalConfig):
+    proposal_type: Literal["test_proposal"] = "test_proposal"
+    test_field: int = 123
+
+
+# Ensure the schemas are reloaded to include the test proposal type
+reload_and_populate_configs()
+
+
 @pytest.mark.smoke
 def test_token_proposal_config_initialization():
-    config = TokenProposalConfig(proposal_type="test_proposal")
+    config: TokenProposalConfigTest = TokenProposalConfig(  # type: ignore[assignment]
+        proposal_type="test_proposal"
+    )
     assert config.proposal_type == "test_proposal"
+    assert config.test_field == 123
+
+
+@pytest.mark.smoke
+def test_token_proposal_config_subclass_initialization():
+    config = TokenProposalConfigTest()
+    assert config.proposal_type == "test_proposal"
+    assert config.test_field == 123
 
 
 @pytest.mark.smoke
@@ -33,19 +55,33 @@ def test_token_proposal_config_invalid_initialization():
         TokenProposalConfig()  # type: ignore[call-arg]
 
     assert "proposal_type" in str(exc_info.value)
-    assert "Field required" in str(exc_info.value)
+
+
+@pytest.mark.smoke
+def test_token_proposal_config_auto_registry():
+    classes = TokenProposalConfig.registered_classes()
+    class_names = [cls.__name__ for cls in classes]
+    assert len(class_names) > 0
+    assert "DynamicTreeTokenProposalConfig" in class_names
+    assert "GreedyTokenProposalConfig" in class_names
+    assert "SamplingTokenProposalConfig" in class_names
+    assert "StaticTreeTokenProposalConfig" in class_names
 
 
 @pytest.mark.sanity
 def test_token_proposal_config_marshalling():
-    original_config = TokenProposalConfig(proposal_type="test_proposal")
+    original_config = TokenProposalConfigTest()
 
     config_dict = original_config.model_dump()
     assert isinstance(config_dict, dict)
     assert config_dict["proposal_type"] == "test_proposal"
+    assert config_dict["test_field"] == 123
 
-    recreated_config = TokenProposalConfig.model_validate(config_dict)
+    recreated_config: TokenProposalConfigTest = (
+        TokenProposalConfig.model_validate(config_dict)  # type: ignore[assignment]
+    )
     assert recreated_config.proposal_type == original_config.proposal_type
+    assert recreated_config.test_field == original_config.test_field
 
 
 # ===== VerifierConfig Tests =====
@@ -150,7 +186,7 @@ def test_verifier_config_marshalling():
 
 @pytest.fixture
 def sample_token_proposal_config():
-    return TokenProposalConfig(proposal_type="test_proposal")
+    return TokenProposalConfigTest()
 
 
 @pytest.fixture
