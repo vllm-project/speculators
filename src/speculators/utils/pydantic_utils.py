@@ -205,7 +205,7 @@ class PydanticClassRegistryMixin(ReloadableBaseModel, ABC, ClassRegistryMixin):
         :return: True if the registry was populated, False if it was already populated
         :raises ValueError: If called when registry_auto_discovery is False
         """
-        if populated := super().auto_populate_registry():
-            cls.reload_schema()
+        populated = super().auto_populate_registry()
+        cls.reload_schema()
 
         return populated

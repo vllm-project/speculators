@@ -25,6 +25,7 @@ from .config import (
     SpeculatorsConfig,
     TokenProposalConfig,
     VerifierConfig,
+    reload_and_populate_configs,
 )
 
 __all__ = [
@@ -32,4 +33,8 @@ __all__ = [
     "SpeculatorsConfig",
     "TokenProposalConfig",
     "VerifierConfig",
+    "reload_and_populate_configs",
 ]
+
+# base imports complete, run auto loading for base classes
+reload_and_populate_configs()
