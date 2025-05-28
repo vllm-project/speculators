@@ -199,7 +199,7 @@ class SpeculatorsConfig(ReloadableBaseModel):
     )
 
 
-class SpeculatorModelConfig(BaseModel, PretrainedConfig):
+class SpeculatorModelConfig(ReloadableBaseModel, PretrainedConfig):
     """
     The base config for a speculator model and implementation which defines the
     hyperparameters and settings required to implement a speculator model.
