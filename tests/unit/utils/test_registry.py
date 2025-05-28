@@ -6,7 +6,7 @@ from unittest import mock
 
 import pytest
 
-from speculators.utils.registry import AutoClassRegistryMixin, ClassRegistryMixin
+from speculators.utils.registry import ClassRegistryMixin
 
 # ===== ClassRegistryMixin Tests =====
 
@@ -171,22 +171,25 @@ def test_multiple_registries_isolation():
     assert "TestClass2" not in Registry1.registry
 
 
-# ===== AutoClassRegistryMixin Tests =====
+# ===== Auto-Discovery Tests =====
 
 
 @pytest.mark.smoke
-def test_auto_class_registry_initialization():
-    class TestAutoRegistry(AutoClassRegistryMixin):
+def test_auto_discovery_registry_initialization():
+    class TestAutoRegistry(ClassRegistryMixin):
+        registry_auto_discovery = True
         auto_package = "test_package.modules"
 
     assert TestAutoRegistry.registry is None
     assert TestAutoRegistry.registry_populated is False
     assert TestAutoRegistry.auto_package == "test_package.modules"
+    assert TestAutoRegistry.registry_auto_discovery is True
 
 
 @pytest.mark.smoke
 def test_auto_populate_registry():
-    class TestAutoRegistry(AutoClassRegistryMixin):
+    class TestAutoRegistry(ClassRegistryMixin):
+        registry_auto_discovery = True
         auto_package = "test_package.modules"
 
     with mock.patch.object(
@@ -196,30 +199,41 @@ def test_auto_populate_registry():
         mock_import.assert_called_once()
         assert TestAutoRegistry.registry_populated is True
 
+        # Second call should not trigger another import since already populated
         TestAutoRegistry.auto_populate_registry()
         mock_import.assert_called_once()
 
 
 @pytest.mark.sanity
-def test_auto_registered_classes():
-    class TestAutoRegistry(AutoClassRegistryMixin):
+def test_auto_populate_registry_disabled():
+    class TestDisabledAutoRegistry(ClassRegistryMixin):
+        # registry_auto_discovery is False by default
         auto_package = "test_package.modules"
 
-    with (
-        mock.patch.object(TestAutoRegistry, "auto_populate_registry") as mock_populate,
-        mock.patch.object(
-            ClassRegistryMixin, "registered_classes", return_value=("class1", "class2")
-        ) as mock_parent_registered,
-    ):
+    with pytest.raises(ValueError) as exc_info:
+        TestDisabledAutoRegistry.auto_populate_registry()
+
+    assert "registry_auto_discovery is set to False" in str(exc_info.value)
+
+
+@pytest.mark.sanity
+def test_auto_registered_classes():
+    class TestAutoRegistry(ClassRegistryMixin):
+        registry_auto_discovery = True
+        auto_package = "test_package.modules"
+
+    with mock.patch.object(TestAutoRegistry, "auto_populate_registry") as mock_populate:
+        # Mock the registry content
+        TestAutoRegistry.registry = {"Class1": "class1", "Class2": "class2"}  # type: ignore[dict-item]
         classes = TestAutoRegistry.registered_classes()
         mock_populate.assert_called_once()
-        mock_parent_registered.assert_called_once()
         assert classes == ("class1", "class2")
 
 
 @pytest.mark.regression
 def test_auto_registry_integration():
-    class TestAutoRegistry(AutoClassRegistryMixin):
+    class TestAutoRegistry(ClassRegistryMixin):
+        registry_auto_discovery = True
         auto_package = "test_package.modules"
 
     with (
@@ -264,17 +278,15 @@ def test_auto_registry_integration():
 
 @pytest.mark.regression
 def test_auto_registry_with_multiple_packages():
-    class TestMultiPackageRegistry(AutoClassRegistryMixin):
+    class TestMultiPackageRegistry(ClassRegistryMixin):
+        registry_auto_discovery = True
         auto_package = ("package1", "package2")
 
-    with (
-        mock.patch.object(
-            TestMultiPackageRegistry, "auto_import_package_modules"
-        ) as mock_import,
-        mock.patch.object(
-            ClassRegistryMixin, "registered_classes", return_value=("class1", "class2")
-        ),
-    ):
+    with mock.patch.object(
+        TestMultiPackageRegistry, "auto_import_package_modules"
+    ) as mock_import:
+        # Mock the registry to avoid ValueError when getting registered_classes
+        TestMultiPackageRegistry.registry = {}
         TestMultiPackageRegistry.registered_classes()
         mock_import.assert_called_once()
         assert TestMultiPackageRegistry.registry_populated is True
@@ -282,8 +294,9 @@ def test_auto_registry_with_multiple_packages():
 
 @pytest.mark.regression
 def test_auto_registry_no_package():
-    class TestNoPackageRegistry(AutoClassRegistryMixin):
-        pass
+    class TestNoPackageRegistry(ClassRegistryMixin):
+        registry_auto_discovery = True
+        # No auto_package defined
 
     with mock.patch.object(
         TestNoPackageRegistry,
