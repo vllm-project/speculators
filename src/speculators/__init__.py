@@ -27,6 +27,7 @@ from .config import (
     VerifierConfig,
     reload_and_populate_configs,
 )
+from .convert import convert
 
 __all__ = [
     "SpeculatorModelConfig",
@@ -34,6 +35,7 @@ __all__ = [
     "TokenProposalConfig",
     "VerifierConfig",
     "reload_and_populate_configs",
+    "convert",
 ]
 
 # base imports complete, run auto loading for base classes
