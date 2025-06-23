@@ -245,7 +245,7 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
         if cls.__name__ == "SpeculatorModelConfig":
             return cls
 
-        return TokenProposalConfig
+        return SpeculatorModelConfig
 
     # Pydantic configuration
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
