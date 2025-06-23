@@ -149,7 +149,7 @@ class ClassRegistryMixin(AutoImporterMixin):
             raise ValueError(
                 "ClassRegistryMixin.register_decorator must be used as a class "
                 "decorator and without invocation. "
-                f"Got imporoper name arg {name}."
+                f"Got improper name arg {name}."
             )
 
         if cls.registry is None:
