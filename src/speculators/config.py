@@ -199,7 +199,7 @@ class SpeculatorsConfig(ReloadableBaseModel):
     )
 
 
-class SpeculatorModelConfig(ReloadableBaseModel, PretrainedConfig):
+class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
     """
     The base config for a speculator model and implementation which defines the
     hyperparameters and settings required to implement a speculator model.
@@ -240,30 +240,73 @@ class SpeculatorModelConfig(ReloadableBaseModel, PretrainedConfig):
         """
         raise NotImplementedError("from_pretrained is not implemented yet.")
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-    # Get around to_diff_dict constructor
-    is_composition: ClassVar[bool] = True  # type: ignore[misc]
+    @classmethod
+    def __pydantic_schema_base_type__(cls) -> type["SpeculatorModelConfig"]:
+        if cls.__name__ == "SpeculatorModelConfig":
+            return cls
 
+        return SpeculatorModelConfig
+
+    # Pydantic configuration
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
+
+    # Registry configuration
+    auto_package: ClassVar[str] = "speculators.models"
+    registry_auto_discovery: ClassVar[bool] = True
+    schema_discriminator: ClassVar[str] = "speculators_model_type"
+
+    # PretrainedConfig class attributes
+    model_type: ClassVar[str] = "speculator_model"
+    base_config_key: ClassVar[str] = ""
+    sub_configs: ClassVar[dict[str, type]] = {}
+    is_composition: ClassVar[bool] = False  # type: ignore[misc] (get around to_diff_dict error)
+    attribute_map: ClassVar[dict[str, str]] = {}
+    base_model_tp_plane: ClassVar[str] = None
+    base_model_pp_plane: ClassVar[str] = None
+    _auto_class: ClassVar[Optional[str]] = None
+
+    # Speculator model instance attributes
     speculators_model_type: str = Field(
-        description=("The type of model from the Speculators repo this config is for.")
+        default=None,
+        description="The type of model from the Speculators repo this config is for.",
     )
     speculators_version: str = Field(
         default=version("speculators"),
         description="Version of the speculators library",
     )
     speculators_config: SpeculatorsConfig = Field(
+        default=None,
         description=(
             "The speculators config describing what the model implements and creation. "
             "Contains information about the algorithm, proposal methods, and verifier."
         ),
     )
 
+    def __init__(self, **kwargs):
+        # ensure we strip class vars before initializing
+        for key in ["model_type"]:
+            if key in kwargs:
+                del kwargs[key]
+
+        # initialize the parent classes
+        PydanticClassRegistryMixin.__init__(self, **kwargs)
+        PretrainedConfig.__init__(self, **kwargs)
+
+        # ensure we always update the transformers version
+        self.transformers_version = version("transformers")
+
     def to_dict(self) -> dict[str, Any]:
         """
         :return: A dictionary representation of the full config, including the
-            PretrainedConfig variables.
+            PretrainedConfig variables and Pydantic model fields.
         """
-        return self.model_dump()
+        config_dict = super().to_dict()
+        model_dict = self.model_dump()
+
+        return {
+            **config_dict,
+            **model_dict,
+        }
 
     def to_diff_dict(self) -> dict[str, Any]:
         """
@@ -282,4 +325,4 @@ def reload_and_populate_configs():
     """
     TokenProposalConfig.auto_populate_registry()
     SpeculatorsConfig.reload_schema()
-    SpeculatorModelConfig.reload_schema()
+    SpeculatorModelConfig.auto_populate_registry()
