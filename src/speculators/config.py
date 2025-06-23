@@ -242,7 +242,7 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
 
     @classmethod
     def __pydantic_schema_base_type__(cls) -> type["SpeculatorModelConfig"]:
-        if cls.__name__ == "TokenProposalConfig":
+        if cls.__name__ == "SpeculatorModelConfig":
             return cls
 
         return TokenProposalConfig
