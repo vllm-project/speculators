@@ -59,7 +59,7 @@ class SamplingTokenProposalConfig(TokenProposalConfig):
     accept_lenience: float = Field(
         default=1.0,
         description=(
-            "A parameter that increases the acceptance liklihood by multiplying the "
+            "A parameter that increases the acceptance likelihood by multiplying the "
             "verifier's probability of a speculative token by this value. "
             "1.0 (default) means the verifier's probability is unchanged, 0.5 means "
             "the verifier's probability is halved, and 0.0 means the verifier's "
