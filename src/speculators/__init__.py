@@ -10,7 +10,7 @@ LLM inference servers like vLLM.
 Speculative decoding is a technique that can significantly improve LLM inference
 performance by predicting multiple tokens with a smaller, speculative model and
 then verifying the predictions with the original, larger model.
-This approach trades off extra computation for reduced latency, making it suitable
+This approach tradesoff extra computation for reduced latency, making it suitable
 for real-time applications on deployments that are not compute-constrained.
 
 The library offers a modular architecture with components for:
@@ -25,6 +25,7 @@ from .config import (
     SpeculatorsConfig,
     TokenProposalConfig,
     VerifierConfig,
+    reload_and_populate_configs,
 )
 
 __all__ = [
@@ -32,4 +33,8 @@ __all__ = [
     "SpeculatorsConfig",
     "TokenProposalConfig",
     "VerifierConfig",
+    "reload_and_populate_configs",
 ]
+
+# base imports complete, run auto loading for base classes
+reload_and_populate_configs()

@@ -25,15 +25,18 @@ from typing import Any, ClassVar, Optional, Union
 from pydantic import BaseModel, ConfigDict, Field
 from transformers import PretrainedConfig
 
+from speculators.utils import PydanticClassRegistryMixin, ReloadableBaseModel
+
 __all__ = [
     "SpeculatorModelConfig",
     "SpeculatorsConfig",
     "TokenProposalConfig",
     "VerifierConfig",
+    "reload_and_populate_configs",
 ]
 
 
-class TokenProposalConfig(BaseModel):
+class TokenProposalConfig(PydanticClassRegistryMixin):
     """
     The base config for a token proposal method which defines how tokens are generated
     by the speculator, how they are passed to the verifier, and how they are scored
@@ -45,6 +48,17 @@ class TokenProposalConfig(BaseModel):
     enable automatic serialization and deserialization of the correct class
     types based on the proposal_type field.
     """
+
+    @classmethod
+    def __pydantic_schema_base_type__(cls) -> type["TokenProposalConfig"]:
+        if cls.__name__ == "TokenProposalConfig":
+            return cls
+
+        return TokenProposalConfig
+
+    auto_package: ClassVar[str] = "speculators.proposals"
+    registry_auto_discovery: ClassVar[bool] = True
+    schema_discriminator: ClassVar[str] = "proposal_type"
 
     proposal_type: str = Field(
         description=(
@@ -150,7 +164,7 @@ class VerifierConfig(BaseModel):
     )
 
 
-class SpeculatorsConfig(BaseModel):
+class SpeculatorsConfig(ReloadableBaseModel):
     """
     The base config for a spec decode implementation which defines the parameters
     required to implement a speculators algorithm for the parent, speculator model.
@@ -185,7 +199,7 @@ class SpeculatorsConfig(BaseModel):
     )
 
 
-class SpeculatorModelConfig(BaseModel, PretrainedConfig):
+class SpeculatorModelConfig(ReloadableBaseModel, PretrainedConfig):
     """
     The base config for a speculator model and implementation which defines the
     hyperparameters and settings required to implement a speculator model.
@@ -258,3 +272,14 @@ class SpeculatorModelConfig(BaseModel, PretrainedConfig):
             to_diff_dict method.
         """
         return super().to_diff_dict()
+
+
+def reload_and_populate_configs():
+    """
+    Automatically populates the registry for all PydanticClassRegistryMixin subclasses
+    and reloads schemas for all Config classes to ensure their schemas are up-to-date
+    with the current registry state.
+    """
+    TokenProposalConfig.auto_populate_registry()
+    SpeculatorsConfig.reload_schema()
+    SpeculatorModelConfig.reload_schema()
