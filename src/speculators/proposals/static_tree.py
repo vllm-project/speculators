@@ -2,7 +2,7 @@
 A module containing the implementation of the static tree based token proposal method,
 where a tree of speculative tokens is generated with a set branching scheme and
 depth. Each chain within the tree is verified in parallel by the verifier, increasing
-the compute required for verification and speculation, but increasing the liklihood
+the compute required for verification and speculation, but increasing the likelihood
 of matching the verifier's top token. This technique is described in detail in the
 [Eagle paper](https://arxiv.org/abs/2401.15077).
 
