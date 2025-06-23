@@ -241,7 +241,7 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
         raise NotImplementedError("from_pretrained is not implemented yet.")
 
     @classmethod
-    def __pydantic_schema_base_type__(cls) -> type["TokenProposalConfig"]:
+    def __pydantic_schema_base_type__(cls) -> type["SpeculatorModelConfig"]:
         if cls.__name__ == "TokenProposalConfig":
             return cls
 
