@@ -228,6 +228,7 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
         Load a SpeculatorModelConfig from the name/id of a model on the Hugging Face Hub
         or from a local directory. Will automatically instantiate the correct config
         from speculators.models package.
+
         :param pretrained_model_name_or_path: The name or path to the pretrained model.
         :param cache_dir: The directory to cache the config in.
         :param force_download: Whether to force download the config from the Hub.
@@ -255,24 +256,26 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
     schema_discriminator: ClassVar[str] = "speculators_model_type"
 
     # PretrainedConfig class attributes
-    model_type: ClassVar[str] = "speculator_model"  # type: ignore[misc]
-    base_config_key: ClassVar[str] = ""  # type: ignore[misc]
-    sub_configs: ClassVar[dict[str, PretrainedConfig]] = {}  # type: ignore[misc]
-    is_composition: ClassVar[bool] = False  # type: ignore[misc]
-    attribute_map: ClassVar[dict[str, str]] = {}  # type: ignore[misc]
-    _auto_class: ClassVar[Optional[str]] = None  # type: ignore[misc]
+    model_type: ClassVar[str] = "speculator_model"
+    base_config_key: ClassVar[str] = ""
+    sub_configs: ClassVar[dict[str, type]] = {}
+    is_composition: ClassVar[bool] = False  # type: ignore[misc] (get around to_diff_dict error)
+    attribute_map: ClassVar[dict[str, str]] = {}
+    base_model_tp_plane: ClassVar[str] = None
+    base_model_pp_plane: ClassVar[str] = None
+    _auto_class: ClassVar[Optional[str]] = None
 
     # Speculator model instance attributes
     speculators_model_type: str = Field(
-        default="speculator_model",
+        default=None,
         description="The type of model from the Speculators repo this config is for.",
     )
     speculators_version: str = Field(
         default=version("speculators"),
         description="Version of the speculators library",
     )
-    speculators_config: SpeculatorsConfig = Field(  # type: ignore[assignment]
-        default=None,  # work around for HF to_dict pathways
+    speculators_config: SpeculatorsConfig = Field(
+        default=None,
         description=(
             "The speculators config describing what the model implements and creation. "
             "Contains information about the algorithm, proposal methods, and verifier."
@@ -312,19 +315,6 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
             to_diff_dict method.
         """
         return super().to_diff_dict()
-
-    @classmethod
-    def from_dict(cls, config_dict, **kwargs):
-        """Override from_dict to handle speculators_config conversion."""
-        # Convert speculators_config dict to SpeculatorsConfig
-        if "speculators_config" in config_dict and isinstance(
-            config_dict["speculators_config"], dict
-        ):
-            config_dict = config_dict.copy()
-            config_dict["speculators_config"] = SpeculatorsConfig.model_validate(
-                config_dict["speculators_config"]
-            )
-        return super().from_dict(config_dict, **kwargs)
 
 
 def reload_and_populate_configs():
