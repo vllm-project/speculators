@@ -62,7 +62,6 @@ class EagleSpeculatorConfig(TransformerSpeculatorConfig):
             "Whether to use additional layernorms in the model architecture, "
             "specifically the layernorm after the verifier's hidden state, "
             "after the fusion layer, and before the LM head. "
-            "For Eagle1 and Eagle2, this is False, while for HASS it is True."
         ),
     )
     fusion_bias: bool = Field(
