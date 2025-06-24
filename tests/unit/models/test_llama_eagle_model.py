@@ -2,10 +2,10 @@
 
 import pytest
 import torch
-import torch.nn as nn
-from transformers.models.llama.configuration_llama import LlamaConfig
+from torch import nn
 
 from speculators.models.llama_eagle import (
+    LlamaDecoderParameters,
     LlamaEagleSpeculator,
     LlamaEagleSpeculatorConfig,
 )
@@ -17,39 +17,36 @@ class TestLlamaEagleSpeculator:
     @pytest.fixture
     def eagle_v1_config(self):
         """Create a test EAGLE v1 configuration."""
-        llama_config = LlamaConfig(
-            hidden_size=256,
-            intermediate_size=512,
-            num_hidden_layers=2,
-            num_attention_heads=8,
-            num_key_value_heads=4,
-            vocab_size=1000,
-            max_position_embeddings=512,
-            mlp_bias=False,
-        )
         return LlamaEagleSpeculatorConfig(
-            eagle_variant="eagle",
             num_hidden_layers=2,
-            llama_decoder_layer_config=llama_config,
+            llama_decoder_params=LlamaDecoderParameters(
+                hidden_size=256,
+                intermediate_size=512,
+                num_attention_heads=8,
+                num_key_value_heads=4,
+                vocab_size=1000,
+                max_position_embeddings=512,
+                mlp_bias=False,
+            ),
         )
 
     @pytest.fixture
     def hass_config(self):
         """Create a test HASS configuration."""
-        llama_config = LlamaConfig(
-            hidden_size=256,
-            intermediate_size=512,
-            num_hidden_layers=2,
-            num_attention_heads=8,
-            num_key_value_heads=4,
-            vocab_size=1000,
-            max_position_embeddings=512,
-            mlp_bias=False,
-        )
         return LlamaEagleSpeculatorConfig(
-            eagle_variant="hass",
             num_hidden_layers=2,
-            llama_decoder_layer_config=llama_config,
+            fc_bias=True,  # HASS uses bias in fusion layer
+            use_extra_layernorms=True,  # HASS uses extra layernorms
+            extra_layernorm_positions=["post_embedding", "pre_lm_head"],
+            llama_decoder_params=LlamaDecoderParameters(
+                hidden_size=256,
+                intermediate_size=512,
+                num_attention_heads=8,
+                num_key_value_heads=4,
+                vocab_size=1000,
+                max_position_embeddings=512,
+                mlp_bias=False,
+            ),
         )
 
     def test_model_initialization_eagle_v1(self, eagle_v1_config):
@@ -166,3 +163,36 @@ class TestLlamaEagleSpeculator:
         new_embeddings = nn.Embedding(2000, 256)
         model.set_input_embeddings(new_embeddings)
         assert model.get_input_embeddings() is new_embeddings
+
+    def test_pre_lm_head_layernorm(self):
+        """Test that pre_lm_head extra layernorm works as final layer norm."""
+        # Test configuration with pre_lm_head layernorm
+        config = LlamaEagleSpeculatorConfig(
+            num_hidden_layers=1,
+            use_extra_layernorms=True,
+            extra_layernorm_positions=["pre_lm_head"],
+            llama_decoder_params=LlamaDecoderParameters(
+                hidden_size=256,
+                intermediate_size=512,
+                num_attention_heads=8,
+                num_key_value_heads=4,
+                vocab_size=1000,
+            ),
+        )
+        model = LlamaEagleSpeculator(config)
+        
+        # Check that pre_lm_head layernorm is created
+        assert hasattr(model, "extra_layernorms")
+        assert "pre_lm_head" in model.extra_layernorms
+        assert isinstance(model.extra_layernorms["pre_lm_head"], nn.Module)
+        
+        # Test forward pass to ensure it's applied
+        batch_size = 1
+        seq_length = 5
+        input_ids = torch.randint(0, 1000, (batch_size, seq_length))
+        hidden_states = torch.randn(batch_size, seq_length, 256)
+        
+        with torch.no_grad():
+            output = model(input_ids=input_ids, hidden_states=hidden_states)
+        
+        assert output.shape == (batch_size, seq_length, 1000)
