@@ -18,6 +18,7 @@ Classes:
         compatibility
 """
 
+import os
 from importlib.metadata import version
 from typing import Any, ClassVar, Optional, Union
 
@@ -211,6 +212,32 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
 
     This is the main config which maps to the config.json file for saved speculators.
     """
+
+    @classmethod
+    def from_pretrained(
+        cls,
+        pretrained_model_name_or_path: Union[str, os.PathLike],
+        cache_dir: Optional[Union[str, os.PathLike]] = None,
+        force_download: bool = False,
+        local_files_only: bool = False,
+        token: Optional[Union[str, bool]] = None,
+        revision: str = "main",
+        **kwargs,
+    ) -> "SpeculatorModelConfig":
+        """
+        Load a SpeculatorModelConfig from the name/id of a model on the Hugging Face Hub
+        or from a local directory. Will automatically instantiate the correct config
+        from speculators.models package.
+        :param pretrained_model_name_or_path: The name or path to the pretrained model.
+        :param cache_dir: The directory to cache the config in.
+        :param force_download: Whether to force download the config from the Hub.
+        :param local_files_only: Whether to use local files, not download from the Hub.
+        :param token: The token to use for authentication with the Hub.
+        :param revision: The revision of the config to load from the Hub.
+        :param kwargs: Additional keyword arguments to pass to the config.
+        :return: A SpeculatorModelConfig object with the loaded parameters.
+        """
+        raise NotImplementedError("from_pretrained is not implemented yet.")
 
     @classmethod
     def __pydantic_schema_base_type__(cls) -> type["SpeculatorModelConfig"]:
