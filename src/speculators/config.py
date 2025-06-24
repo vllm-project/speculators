@@ -18,7 +18,6 @@ Classes:
         compatibility
 """
 
-import os
 from importlib.metadata import version
 from typing import Any, ClassVar, Optional, Union
 
