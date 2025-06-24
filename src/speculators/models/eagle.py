@@ -45,7 +45,7 @@ class EagleSpeculatorConfig(TransformerSpeculatorConfig):
         default="LlamaDecoderLayer",
         description=(
             "The architecture of the transformer layer to use. "
-            "Typically 'LlamaDecoderLayer' for EAGLE1 and HASS."
+            "Typically 'LlamaDecoderLayer' for Eagle 1, Eagle 2, and HASS."
         ),
     )
     transformer_layer_config: PretrainedConfig = Field(
@@ -62,6 +62,7 @@ class EagleSpeculatorConfig(TransformerSpeculatorConfig):
             "Whether to use additional layernorms in the model architecture, "
             "specifically the layernorm after the verifier's hidden state, "
             "after the fusion layer, and before the LM head. "
+            "For Eagle, Eagle 1, and HASS, this is False."
         ),
     )
     fusion_bias: bool = Field(
@@ -69,6 +70,6 @@ class EagleSpeculatorConfig(TransformerSpeculatorConfig):
         description=(
             "Whether to add a bias to the fusion (fc) layer that is applied to the "
             "concat of the input embeddings and input hidden state. "
-            "For EAGLE1, this is False, while for HASS it is True."
+            "For Eagle and Eagle 2, this is False, while for HASS it is True."
         ),
     )
