@@ -18,7 +18,6 @@ Classes:
         compatibility
 """
 
-import os
 from importlib.metadata import version
 from typing import Any, ClassVar, Optional, Union
 
@@ -213,7 +212,6 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
     This is the main config which maps to the config.json file for saved speculators.
     """
 
-
     @classmethod
     def __pydantic_schema_base_type__(cls) -> type["SpeculatorModelConfig"]:
         if cls.__name__ == "SpeculatorModelConfig":
@@ -247,7 +245,7 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
         description="Version of the speculators library",
     )
     speculators_config: SpeculatorsConfig = Field(  # type: ignore[assignment]
-        default=None,  # work around for HF config to_diff_dict method
+        default=None,  # work around for HF to_dict pathways
         description=(
             "The speculators config describing what the model implements and creation. "
             "Contains information about the algorithm, proposal methods, and verifier."
@@ -290,14 +288,18 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
             to_diff_dict method.
         """
         return super().to_diff_dict()
-    
+
     @classmethod
     def from_dict(cls, config_dict, **kwargs):
         """Override from_dict to handle speculators_config conversion."""
         # Convert speculators_config dict to SpeculatorsConfig
-        if 'speculators_config' in config_dict and isinstance(config_dict['speculators_config'], dict):
+        if "speculators_config" in config_dict and isinstance(
+            config_dict["speculators_config"], dict
+        ):
             config_dict = config_dict.copy()
-            config_dict['speculators_config'] = SpeculatorsConfig.model_validate(config_dict['speculators_config'])
+            config_dict["speculators_config"] = SpeculatorsConfig.model_validate(
+                config_dict["speculators_config"]
+            )
         return super().from_dict(config_dict, **kwargs)
 
 
