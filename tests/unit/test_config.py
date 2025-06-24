@@ -29,6 +29,13 @@ class TokenProposalConfigTest(TokenProposalConfig):
     test_field: int = 123
 
 
+# ===== Test SpeculatorModelConfig =====
+
+@SpeculatorModelConfig.register("test_model")
+class TestModelSpeculatorConfig(SpeculatorModelConfig):
+    speculators_model_type: Literal["test_model"] = "test_model"
+    test_field: str = "test_value"
+
 # Ensure the schemas are reloaded to include the test proposal type
 reload_and_populate_configs()
 
@@ -272,7 +279,7 @@ def test_speculators_config_marshalling(
 
 
 @pytest.fixture
-def sample_speculators_config(sample_token_proposal_config, sample_verifier_config):
+def sample_speculators_config_with_test_proposal(sample_token_proposal_config, sample_verifier_config):
     return SpeculatorsConfig(
         algorithm="test_algorithm",
         proposal_methods=[sample_token_proposal_config],
@@ -280,11 +287,20 @@ def sample_speculators_config(sample_token_proposal_config, sample_verifier_conf
         verifier=sample_verifier_config,
     )
 
+@pytest.fixture
+def sample_speculators_config(sample_verifier_config):
+    from speculators.proposals.greedy import GreedyTokenProposalConfig
+    return SpeculatorsConfig(
+        algorithm="test_algorithm",
+        proposal_methods=[GreedyTokenProposalConfig()],
+        default_proposal_method="greedy",
+        verifier=sample_verifier_config,
+    )
+
 
 @pytest.mark.smoke
 def test_speculator_model_config_initialization(sample_speculators_config):
-    config = SpeculatorModelConfig(
-        speculators_model_type="test_model",
+    config = TestModelSpeculatorConfig(
         speculators_config=sample_speculators_config,
     )
 
@@ -306,23 +322,24 @@ def test_speculator_model_config_invalid_initialization(sample_speculators_confi
         SpeculatorModelConfig()  # type: ignore[call-arg]
 
     error_str = str(exc_info.value)
-    assert "speculators_model_type" in error_str
-    assert "speculators_config" in error_str
+    # Updated assertion to match the actual error message for discriminated union
+    assert "Unable to extract tag using discriminator" in error_str or "speculators_model_type" in error_str
 
 
 @pytest.mark.sanity
 def test_speculator_model_config_marshalling(sample_speculators_config):
-    original_config = SpeculatorModelConfig(
-        speculators_model_type="test_model",
+    original_config = TestModelSpeculatorConfig(
         speculators_config=sample_speculators_config,
     )
 
-    config_dict = original_config.model_dump()
+    config_dict = original_config.to_dict()
     assert isinstance(config_dict, dict)
     assert config_dict["speculators_model_type"] == "test_model"
     assert config_dict["speculators_config"]["algorithm"] == "test_algorithm"
 
-    recreated_config = SpeculatorModelConfig.model_validate(config_dict)
+    # First reload configs to ensure test types are registered
+    reload_and_populate_configs()
+    recreated_config = SpeculatorModelConfig.from_dict(config_dict)
     assert (
         recreated_config.speculators_model_type
         == original_config.speculators_model_type
@@ -335,16 +352,16 @@ def test_speculator_model_config_marshalling(sample_speculators_config):
 
 @pytest.mark.smoke
 def test_speculator_model_config_from_pretrained():
-    with pytest.raises(NotImplementedError) as exc_info:
+    # This should raise OSError for non-existent model
+    with pytest.raises(OSError) as exc_info:
         SpeculatorModelConfig.from_pretrained("test/model")
 
-    assert "from_pretrained is not implemented yet" in str(exc_info.value)
+    assert "is not a local folder" in str(exc_info.value)
 
 
 @pytest.mark.regression
 def test_speculator_model_config_pretrained_methods(sample_speculators_config):
-    config = SpeculatorModelConfig(
-        speculators_model_type="test_model",
+    config = TestModelSpeculatorConfig(
         speculators_config=sample_speculators_config,
     )
 
