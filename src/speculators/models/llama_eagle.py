@@ -7,6 +7,7 @@ through configurable parameters. The key differences between the variants are:
 - HASS: bias in fusion layer, extra layernorms
 
 Classes:
+    LlamaDecoderParameters: Parameters for Llama decoder components
     LlamaEagleSpeculatorConfig: Configuration for EAGLE/HASS models
     LlamaEagleSpeculator: Model implementation for EAGLE/HASS
 """
@@ -14,9 +15,12 @@ Classes:
 from typing import Literal, Optional
 
 import torch
+from pydantic import BaseModel, Field, field_validator
 from torch import nn
-from pydantic import Field
-from transformers import PreTrainedModel, GenerationMixin, PretrainedConfig
+from transformers import GenerationMixin, PreTrainedModel
+from transformers.modeling_attn_mask_utils import (
+    _prepare_4d_causal_attention_mask,
+)
 from transformers.models.llama.configuration_llama import LlamaConfig
 from transformers.models.llama.modeling_llama import (
     LlamaDecoderLayer,
@@ -27,7 +31,167 @@ from transformers.models.llama.modeling_llama import (
 from speculators.config import SpeculatorModelConfig
 from speculators.models.transformer import TransformerSpeculatorConfig
 
-__all__ = ["LlamaEagleSpeculatorConfig", "LlamaEagleSpeculator"]
+__all__ = [
+    "LlamaDecoderParameters",
+    "LlamaEagleSpeculator",
+    "LlamaEagleSpeculatorConfig",
+]
+
+
+class LlamaDecoderParameters(BaseModel):
+    """
+    Parameters for configuring Llama decoder layers and components.
+
+    This class encapsulates a subset of LlamaConfig parameters that are
+    specifically needed for EAGLE/HASS speculator models. It includes only
+    the parameters required for decoder layers, embeddings, and output
+    projections, avoiding the full complexity of LlamaConfig.
+
+    Default values are based on Llama 3.1 8B models commonly used with EAGLE,
+    such as yuhuili/EAGLE-LLaMA3.1-Instruct-8B.
+    """
+
+    vocab_size: int = Field(
+        default=128256,
+        description=(
+            "Vocabulary size of the model. "
+            "Defines the number of different tokens. "
+            "Default: 128256 (Llama 3/3.1 vocabulary)."
+        ),
+    )
+
+    hidden_size: int = Field(
+        default=4096,
+        description=(
+            "Dimension of the hidden representations. "
+            "Default: 4096 (Llama 3.1 8B)."
+        ),
+    )
+
+    intermediate_size: int = Field(
+        default=14336,
+        description=(
+            "Dimension of the MLP representations in the decoder layers. "
+            "Default: 14336 (Llama 3.1 8B)."
+        ),
+    )
+
+    num_attention_heads: int = Field(
+        default=32,
+        description=(
+            "Number of attention heads for each attention layer. "
+            "Default: 32 (Llama 3.1 8B)."
+        ),
+    )
+
+    num_key_value_heads: int = Field(
+        default=8,
+        description=(
+            "Number of key_value heads for Grouped Query Attention (GQA). "
+            "Default: 8 (Llama 3.1 8B uses 4:1 GQA ratio)."
+        ),
+    )
+
+    hidden_act: str = Field(
+        default="silu",
+        description=(
+            "The non-linear activation function in the decoder. "
+            "Default: 'silu' (SwiGLU activation used in Llama)."
+        ),
+    )
+
+    max_position_embeddings: int = Field(
+        default=131072,
+        description=(
+            "The maximum sequence length the model can handle. "
+            "Default: 131072 (Llama 3.1 extended context)."
+        ),
+    )
+
+    rms_norm_eps: float = Field(
+        default=1e-5,
+        description=(
+            "The epsilon used by the RMS normalization layers. "
+            "Default: 1e-5 (Llama standard)."
+        ),
+    )
+
+    rope_theta: float = Field(
+        default=500000.0,
+        description=(
+            "The base period of the RoPE embeddings. "
+            "Default: 500000.0 (Llama 3.1 RoPE base)."
+        ),
+    )
+
+    attention_bias: bool = Field(
+        default=False,
+        description=(
+            "Whether to use bias in the attention layers. "
+            "Default: False (Llama models don't use attention bias)."
+        ),
+    )
+
+    attention_dropout: float = Field(
+        default=0.0,
+        description=(
+            "The dropout ratio for the attention probabilities. "
+            "Default: 0.0 (no dropout in inference)."
+        ),
+    )
+
+    mlp_bias: bool = Field(
+        default=False,
+        description=(
+            "Whether to use bias in MLP layers. "
+            "Default: False (Llama models don't use MLP bias)."
+        ),
+    )
+
+    pad_token_id: Optional[int] = Field(
+        default=None,
+        description=(
+            "Padding token id. "
+            "Default: None (often set to 0 or same as eos_token_id)."
+        ),
+    )
+
+    bos_token_id: int = Field(
+        default=128000,
+        description=(
+            "Beginning of stream token id. "
+            "Default: 128000 (Llama 3/3.1 BOS token)."
+        ),
+    )
+
+    eos_token_id: int = Field(
+        default=128001,
+        description=(
+            "End of stream token id. "
+            "Default: 128001 (Llama 3/3.1 primary EOS token)."
+        ),
+    )
+
+    def to_llama_config(self, num_hidden_layers: int = 1) -> LlamaConfig:
+        """Convert to a LlamaConfig object for use with transformers components."""
+        return LlamaConfig(
+            vocab_size=self.vocab_size,
+            hidden_size=self.hidden_size,
+            intermediate_size=self.intermediate_size,
+            num_hidden_layers=num_hidden_layers,
+            num_attention_heads=self.num_attention_heads,
+            num_key_value_heads=self.num_key_value_heads,
+            hidden_act=self.hidden_act,
+            max_position_embeddings=self.max_position_embeddings,
+            rms_norm_eps=self.rms_norm_eps,
+            rope_theta=self.rope_theta,
+            attention_bias=self.attention_bias,
+            attention_dropout=self.attention_dropout,
+            mlp_bias=self.mlp_bias,
+            pad_token_id=self.pad_token_id,
+            bos_token_id=self.bos_token_id,
+            eos_token_id=self.eos_token_id,
+        )
 
 
 @SpeculatorModelConfig.register("llama_eagle")
@@ -48,11 +212,6 @@ class LlamaEagleSpeculatorConfig(TransformerSpeculatorConfig):
         description="The architectures this speculator uses."
     )
 
-    # Variant selection
-    eagle_variant: Literal["eagle", "eagle2", "hass"] = Field(
-        default="eagle",
-        description="The variant of EAGLE architecture to use. 'eagle_v1' for EAGLE1, 'hass' for HASS."
-    )
 
     # Fusion layer configuration
     fc_bias: bool = Field(
@@ -83,20 +242,24 @@ class LlamaEagleSpeculatorConfig(TransformerSpeculatorConfig):
         )
     )
 
-    # First layer normalization handling
+    # Layer normalization handling
     replace_first_layer_norm: bool = Field(
         default=True,
         description=(
-            "Whether to replace the first decoder layer's input_layernorm with Identity. "
+            "Whether to replace the first decoder layer's input_layernorm "
+            "with Identity."
         )
     )
 
-    # Additional HASS-specific parameters
+    # Additional layernorm parameters
     extra_layernorm_positions: Optional[list[str]] = Field(
         default=None,
         description=(
-            "Positions where extra layernorms should be added for HASS variant. "
-            "E.g., ['post_embedding', 'pre_lm_head']. Only used if use_extra_layernorms is True."
+            "Positions where extra layernorms should be added. "
+            "Options: 'post_embedding' (after input embeddings), "
+            "'pre_lm_head' (before LM head, acts as final layer norm). "
+            "E.g., ['post_embedding', 'pre_lm_head']. "
+            "Only used if use_extra_layernorms is True."
         )
     )
 
@@ -107,108 +270,37 @@ class LlamaEagleSpeculatorConfig(TransformerSpeculatorConfig):
         ge=1,
     )
 
-    # Llama configuration for decoder layers
-    llama_decoder_layer_config: Optional[LlamaConfig] = Field(
-        default=None,
-        description=(
-            "LlamaConfig instance for creating decoder layers. "
-            "If not provided, a default LlamaConfig will be created. "
-            "This should include all necessary parameters like hidden_size, "
-            "num_attention_heads, mlp_bias, etc."
-        )
+    # Llama decoder parameters
+    llama_decoder_params: LlamaDecoderParameters = Field(
+        default_factory=LlamaDecoderParameters,
+        description="Parameters for configuring Llama decoder layers and components.",
     )
 
-    @property
-    def vocab_size(self) -> int:
-        """Get vocab_size from llama_decoder_layer_config."""
-        if self.llama_decoder_layer_config:
-            return self.llama_decoder_layer_config.vocab_size
-        return 128256  # Default vocab size
-
-    @property
-    def hidden_size(self) -> int:
-        """Get hidden_size from llama_decoder_layer_config."""
-        if self.llama_decoder_layer_config:
-            return self.llama_decoder_layer_config.hidden_size
-        return 4096  # Default hidden size
-
-    def __init__(self, **data):
-        # Set defaults based on variant if not explicitly provided
-        if "eagle_variant" in data:
-            variant = data["eagle_variant"]
-
-            # Set variant-specific defaults if not explicitly provided
-            if "transformer_input_type" not in data:
-                if variant in ["eagle", "eagle2"]:
-                    data["transformer_input_type"] = "linear_no_bias"
-                elif variant == "hass":
-                    data["transformer_input_type"] = "linear_with_bias"
-
-            if "fc_bias" not in data:
-                data["fc_bias"] = (variant == "hass")
-
-            if "use_extra_layernorms" not in data:
-                data["use_extra_layernorms"] = (variant == "hass")
-
-            if "extra_layernorm_positions" not in data and variant == "hass":
-                # Default positions for HASS extra layernorms
-                data["extra_layernorm_positions"] = ["post_embedding", "pre_lm_head"]
-
-        super().__init__(**data)
-
-    def to_dict(self) -> dict:
-        """
-        Override to properly serialize LlamaConfig to dict.
-        """
-        # Get the base dict from parent classes
-        output = super().to_dict()
-
-        # Convert LlamaConfig to dict if present
-        if self.llama_decoder_layer_config is not None:
-            output["llama_decoder_layer_config"] = self.llama_decoder_layer_config.to_dict()
-
-        return output
+    @field_validator('llama_decoder_params', mode='before')
+    @classmethod
+    def validate_llama_decoder_params(cls, v):
+        """Convert dict to LlamaDecoderParameters if necessary."""
+        if isinstance(v, dict):
+            return LlamaDecoderParameters(**v)
+        return v
 
     @classmethod
     def from_dict(cls, config_dict, **kwargs):
-        """
-        Override to properly deserialize LlamaConfig from dict.
-        """
-        # Make a copy to avoid modifying the original
-        config_dict = config_dict.copy()
-
-        # Convert dict back to LlamaConfig if present
-        if "llama_decoder_layer_config" in config_dict and isinstance(config_dict["llama_decoder_layer_config"], dict):
-            config_dict["llama_decoder_layer_config"] = LlamaConfig(**config_dict["llama_decoder_layer_config"])
-
-        # Remove None values for fields that have defaults
-        # This allows the defaults to be applied properly
-        fields_with_defaults = ["architectures", "torch_dtype"]
-        for field in fields_with_defaults:
-            if field in config_dict and config_dict[field] is None:
-                del config_dict[field]
-
-        # Call parent from_dict
+        """Override from_dict to handle llama_decoder_params conversion."""
+        # Convert llama_decoder_params dict to LlamaDecoderParameters
+        if 'llama_decoder_params' in config_dict and isinstance(config_dict['llama_decoder_params'], dict):
+            config_dict = config_dict.copy()
+            config_dict['llama_decoder_params'] = LlamaDecoderParameters(**config_dict['llama_decoder_params'])
         return super().from_dict(config_dict, **kwargs)
 
-    @classmethod
-    def from_pretrained(cls, pretrained_model_name_or_path, **kwargs):
-        """
-        Override to use PretrainedConfig's from_pretrained and convert to our class.
-        """
-        # The parent from_pretrained may return a tuple (config, unused_kwargs)
-        # when there are extra kwargs
-        result = PretrainedConfig.from_pretrained(pretrained_model_name_or_path, **kwargs)
+    def _create_llama_config(self) -> LlamaConfig:
+        """Create a LlamaConfig from the decoder parameters."""
+        # Handle case where llama_decoder_params might be loaded as dict
+        if isinstance(self.llama_decoder_params, dict):
+            params = LlamaDecoderParameters(**self.llama_decoder_params)
+            return params.to_llama_config(self.num_hidden_layers)
+        return self.llama_decoder_params.to_llama_config(self.num_hidden_layers)
 
-        if isinstance(result, tuple):
-            config, unused_kwargs = result
-            config_dict = config.to_dict()
-            # Use our from_dict to properly handle LlamaConfig
-            return cls.from_dict(config_dict, **unused_kwargs), unused_kwargs
-        else:
-            config_dict = result.to_dict()
-            # Use our from_dict to properly handle LlamaConfig
-            return cls.from_dict(config_dict, **kwargs)
 
 
 
@@ -230,43 +322,31 @@ class LlamaEagleSpeculator(PreTrainedModel, GenerationMixin):
         super().__init__(config)
         self.config = config
 
-        # Create or use provided LlamaConfig for decoder layers
-        if config.llama_decoder_layer_config is None:
-            # Create a default LlamaConfig with minimal required parameters
-            self.llama_decoder_layer_config = LlamaConfig(
-                hidden_size=4096,
-                num_hidden_layers=config.num_hidden_layers,
-                num_attention_heads=32,
-                num_key_value_heads=8,
-                intermediate_size=14336,
-                vocab_size=128256,
-                max_position_embeddings=131072,
-                rms_norm_eps=1e-5,
-                rope_theta=500000.0,
-                attention_bias=False,
-                attention_dropout=0.0,
-                hidden_act="silu",
-                mlp_bias=False,
-            )
-        else:
-            self.llama_decoder_layer_config = config.llama_decoder_layer_config
 
-        self.padding_idx = self.llama_decoder_layer_config.pad_token_id
-        self.vocab_size = self.llama_decoder_layer_config.vocab_size
+        # Create LlamaConfig from explicit parameters
+        self.llama_decoder_layer_config = config._create_llama_config()  # noqa: SLF001
+
+        # Handle case where llama_decoder_params might be loaded as dict
+        if isinstance(config.llama_decoder_params, dict):
+            decoder_params = LlamaDecoderParameters(**config.llama_decoder_params)
+            config.llama_decoder_params = decoder_params
+        
+        self.padding_idx = config.llama_decoder_params.pad_token_id
+        self.vocab_size = config.llama_decoder_params.vocab_size
 
         # Embeddings
         self.embed_tokens = nn.Embedding(
             self.vocab_size,
-            self.llama_decoder_layer_config.hidden_size,
+            config.llama_decoder_params.hidden_size,
             padding_idx=self.padding_idx
         )
         # Embeddings + hidden state
-        fc_input_dim = self.llama_decoder_layer_config.hidden_size * 2
+        fc_input_dim = config.llama_decoder_params.hidden_size * 2
 
         # Fusion layer
         self.fc = nn.Linear(
             fc_input_dim,
-            self.llama_decoder_layer_config.hidden_size,
+            config.llama_decoder_params.hidden_size,
             bias=config.fc_bias
         )
 
@@ -275,8 +355,8 @@ class LlamaEagleSpeculator(PreTrainedModel, GenerationMixin):
             self.extra_layernorms = nn.ModuleDict()
             for position in config.extra_layernorm_positions:
                 self.extra_layernorms[position] = LlamaRMSNorm(
-                    self.llama_decoder_layer_config.hidden_size,
-                    eps=self.llama_decoder_layer_config.rms_norm_eps
+                    config.llama_decoder_params.hidden_size,
+                    eps=config.llama_decoder_params.rms_norm_eps
                 )
 
         # Decoder layers
@@ -289,29 +369,29 @@ class LlamaEagleSpeculator(PreTrainedModel, GenerationMixin):
         if config.replace_first_layer_norm and len(self.layers) > 0:
             self.layers[0].input_layernorm = nn.Identity()
 
-        # Final layer norm
-        # commented out because it is missing in
-        # yuhuili/EAGLE-LLaMA3.1-Instruct-8B
-        # self.norm = LlamaRMSNorm(self.llama_decoder_layer_config.hidden_size, eps=self.llama_decoder_layer_config.rms_norm_eps)
+        # Final layer norm - not used in EAGLE models
+        # To add a final layer norm, use extra_layernorms with "pre_lm_head" position
+        # Example: extra_layernorm_positions=["pre_lm_head"]
 
         # Rotary embeddings
         self.rotary_emb = LlamaRotaryEmbedding(config=self.llama_decoder_layer_config)
 
         # LM Head
         self.lm_head = nn.Linear(
-            self.llama_decoder_layer_config.hidden_size,
+            config.llama_decoder_params.hidden_size,
             self.vocab_size,
             bias=False
         )
 
         # Initialize weights
-        self.post_init()
+        self.post_init()  # type: ignore[attr-defined]
 
     def get_input_embeddings(self):
         return self.embed_tokens
 
     def set_input_embeddings(self, value):
         self.embed_tokens = value
+
 
     def forward(
         self,
@@ -322,8 +402,8 @@ class LlamaEagleSpeculator(PreTrainedModel, GenerationMixin):
         past_key_values: Optional[list[torch.FloatTensor]] = None,
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,  # noqa: ARG002
+        return_dict: Optional[bool] = None,  # noqa: ARG002
     ):
         """
         Forward pass for EAGLE/HASS speculator.
@@ -348,7 +428,10 @@ class LlamaEagleSpeculator(PreTrainedModel, GenerationMixin):
         inputs_embeds = self.embed_tokens(input_ids)
 
         # Apply extra layernorm after embedding if configured (HASS)
-        if hasattr(self, "extra_layernorms") and "post_embedding" in self.extra_layernorms:
+        if (
+            hasattr(self, "extra_layernorms")
+            and "post_embedding" in self.extra_layernorms
+        ):
             inputs_embeds = self.extra_layernorms["post_embedding"](inputs_embeds)
 
         # Fusion: concatenate embeddings and hidden states, then project
@@ -356,10 +439,25 @@ class LlamaEagleSpeculator(PreTrainedModel, GenerationMixin):
 
         # Create position ids if not provided
         if position_ids is None:
+            device = hidden_states.device
             position_ids = torch.arange(
-                seq_length, dtype=torch.long, device=hidden_states.device
+                seq_length, dtype=torch.long, device=device
+            ).unsqueeze(0).expand(batch_size, -1)
+
+        # Prepare attention mask for decoder layers
+        # The LlamaDecoderLayer expects 4D attention masks in newer transformers
+        # This utility handles the conversion from 2D to 4D and adds causal masking
+        if attention_mask is not None and attention_mask.dim() == 2:  # noqa: PLR2004
+            past_key_values_length = (
+                past_key_values[0][0].shape[2] if past_key_values else 0
             )
-            position_ids = position_ids.unsqueeze(0).expand(batch_size, -1)
+            attention_mask = _prepare_4d_causal_attention_mask(
+                attention_mask,
+                (batch_size, seq_length),
+                hidden_states,
+                past_key_values_length,
+                sliding_window=getattr(self.config, "sliding_window", None)
+            )
 
         # Get rotary embeddings
         cos, sin = self.rotary_emb(hidden_states, position_ids)
@@ -377,34 +475,32 @@ class LlamaEagleSpeculator(PreTrainedModel, GenerationMixin):
             )
             hidden_states = layer_outputs[0]
 
-        # Final layer norm
-        # See comment above about missing norm in EAGLE
-        # hidden_states = self.norm(hidden_states)
+        # Final layer norm is handled via extra_layernorms["pre_lm_head"] below
 
         # Apply extra layernorm before LM head if configured (HASS)
-        if hasattr(self, "extra_layernorms") and "pre_lm_head" in self.extra_layernorms:
+        if (
+            hasattr(self, "extra_layernorms")
+            and "pre_lm_head" in self.extra_layernorms
+        ):
             hidden_states = self.extra_layernorms["pre_lm_head"](hidden_states)
 
         # Get logits
-        logits = self.lm_head(hidden_states)
-
-        return logits
+        return self.lm_head(hidden_states)
 
     def prepare_inputs_for_generation(
         self,
         input_ids,
         past_key_values=None,
         attention_mask=None,
-        inputs_embeds=None,
+        inputs_embeds=None,  # noqa: ARG002
         **kwargs
     ):
         """Prepare inputs for generation."""
         # May need to expand based on requirements
-        model_inputs = {
+        return {
             "input_ids": input_ids,
             "hidden_states": kwargs.get("hidden_states"),
             "attention_mask": attention_mask,
             "past_key_values": past_key_values,
             "use_cache": kwargs.get("use_cache"),
         }
-        return model_inputs

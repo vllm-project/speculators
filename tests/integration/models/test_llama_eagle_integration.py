@@ -1,19 +1,17 @@
 """Integration tests for LlamaEagleSpeculator model."""
 
-import json
 import tempfile
 from pathlib import Path
 
 import pytest
 import torch
-from transformers import AutoConfig
-from transformers.models.llama.configuration_llama import LlamaConfig
 
+from speculators.config import SpeculatorsConfig, VerifierConfig
 from speculators.models.llama_eagle import (
+    LlamaDecoderParameters,
     LlamaEagleSpeculator,
     LlamaEagleSpeculatorConfig,
 )
-from speculators.config import SpeculatorsConfig, VerifierConfig
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 
 
@@ -48,52 +46,47 @@ class TestLlamaEagleIntegration:
     @pytest.fixture
     def eagle_config(self, speculators_config):
         """Create a realistic EAGLE v1 configuration."""
-        llama_config = LlamaConfig(
-            hidden_size=2048,
-            intermediate_size=5632,
-            num_hidden_layers=1,
-            num_attention_heads=16,
-            num_key_value_heads=16,
-            vocab_size=32000,
-            max_position_embeddings=2048,
-            rope_theta=10000.0,
-            rms_norm_eps=1e-6,
-            use_cache=True,
-            pad_token_id=0,
-            bos_token_id=1,
-            eos_token_id=2,
-            mlp_bias=False,
-        )
         return LlamaEagleSpeculatorConfig(
-            eagle_variant="eagle",
             num_hidden_layers=1,
-            llama_decoder_layer_config=llama_config,
+            llama_decoder_params=LlamaDecoderParameters(
+                hidden_size=2048,
+                intermediate_size=5632,
+                num_attention_heads=16,
+                num_key_value_heads=16,
+                vocab_size=32000,
+                max_position_embeddings=2048,
+                rope_theta=10000.0,
+                rms_norm_eps=1e-6,
+                pad_token_id=0,
+                bos_token_id=1,
+                eos_token_id=2,
+                mlp_bias=False,
+            ),
             speculators_config=speculators_config,
         )
 
     @pytest.fixture
     def hass_config(self, speculators_config):
         """Create a realistic HASS configuration."""
-        llama_config = LlamaConfig(
-            hidden_size=4096,
-            intermediate_size=14336,
-            num_hidden_layers=1,
-            num_attention_heads=32,
-            num_key_value_heads=8,
-            vocab_size=128256,
-            max_position_embeddings=131072,
-            rope_theta=500000.0,
-            rms_norm_eps=1e-5,
-            use_cache=True,
-            pad_token_id=0,
-            bos_token_id=128000,
-            eos_token_id=[128001, 128008, 128009],
-            mlp_bias=False,
-        )
         return LlamaEagleSpeculatorConfig(
-            eagle_variant="hass",
             num_hidden_layers=1,
-            llama_decoder_layer_config=llama_config,
+            fc_bias=True,  # HASS uses bias
+            use_extra_layernorms=True,  # HASS uses extra layernorms
+            extra_layernorm_positions=["post_embedding", "pre_lm_head"],
+            llama_decoder_params=LlamaDecoderParameters(
+                hidden_size=4096,
+                intermediate_size=14336,
+                num_attention_heads=32,
+                num_key_value_heads=8,
+                vocab_size=128256,
+                max_position_embeddings=131072,
+                rope_theta=500000.0,
+                rms_norm_eps=1e-5,
+                pad_token_id=0,
+                bos_token_id=128000,
+                eos_token_id=128001,  # Changed from list to single int
+                mlp_bias=False,
+            ),
             speculators_config=speculators_config,
         )
 
@@ -113,11 +106,13 @@ class TestLlamaEagleIntegration:
             loaded_config = LlamaEagleSpeculatorConfig.from_pretrained(save_path)
 
             # Check attributes match
-            assert loaded_config.eagle_variant == eagle_config.eagle_variant
             assert loaded_config.fc_bias == eagle_config.fc_bias
-            assert loaded_config.use_extra_layernorms == eagle_config.use_extra_layernorms
-            assert loaded_config.hidden_size == eagle_config.hidden_size
-            assert loaded_config.vocab_size == eagle_config.vocab_size
+            assert (
+                loaded_config.use_extra_layernorms
+                == eagle_config.use_extra_layernorms
+            )
+            assert loaded_config.llama_decoder_params.hidden_size == eagle_config.llama_decoder_params.hidden_size
+            assert loaded_config.llama_decoder_params.vocab_size == eagle_config.llama_decoder_params.vocab_size
 
     def test_save_and_load_model(self, eagle_config):
         """Test saving and loading model."""
@@ -137,17 +132,21 @@ class TestLlamaEagleIntegration:
 
             # Check model architecture matches
             assert isinstance(loaded_model, LlamaEagleSpeculator)
-            assert loaded_model.config.eagle_variant == "eagle"
+            assert loaded_model.config.fc_bias == eagle_config.fc_bias
 
             # Test forward pass with loaded model
             input_ids = torch.randint(0, 1000, (1, 10))
             hidden_states = torch.randn(1, 10, 2048)
 
             with torch.no_grad():
-                original_logits = model(input_ids=input_ids, hidden_states=hidden_states)
-                loaded_logits = loaded_model(input_ids=input_ids, hidden_states=hidden_states)
+                original_logits = model(
+                    input_ids=input_ids, hidden_states=hidden_states
+                )
+                loaded_logits = loaded_model(
+                    input_ids=input_ids, hidden_states=hidden_states
+                )
 
-            # Check outputs match (approximately, due to potential numerical differences)
+            # Check outputs match approximately (numerical differences)
             assert torch.allclose(original_logits, loaded_logits, atol=1e-5)
 
     def test_model_with_different_hidden_states_inputs(self, eagle_config):
@@ -183,16 +182,20 @@ class TestLlamaEagleIntegration:
         post_embedding_called = False
         pre_lm_head_called = False
 
-        def hook_post_embedding(module, input, output):
+        def hook_post_embedding(module, input, output):  # noqa: A002
             nonlocal post_embedding_called
             post_embedding_called = True
 
-        def hook_pre_lm_head(module, input, output):
+        def hook_pre_lm_head(module, input, output):  # noqa: A002
             nonlocal pre_lm_head_called
             pre_lm_head_called = True
 
-        model.extra_layernorms["post_embedding"].register_forward_hook(hook_post_embedding)
-        model.extra_layernorms["pre_lm_head"].register_forward_hook(hook_pre_lm_head)
+        model.extra_layernorms["post_embedding"].register_forward_hook(
+            hook_post_embedding
+        )
+        model.extra_layernorms["pre_lm_head"].register_forward_hook(
+            hook_pre_lm_head
+        )
 
         with torch.no_grad():
             model(input_ids=input_ids, hidden_states=hidden_states)
