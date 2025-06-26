@@ -18,6 +18,7 @@ Classes:
         compatibility
 """
 
+import os
 from importlib.metadata import version
 from typing import Any, ClassVar, Optional, Union
 
@@ -368,7 +369,16 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
             including only the PretrainedConfig fields that have been modified
             or set, along with all Pydantic fields.
         """
-        return super().to_diff_dict()
+        # Get the diff dict from parent
+        diff_dict = super().to_diff_dict()
+
+        # Add Pydantic fields that were modified
+        pydantic_dict = self.model_dump(exclude_unset=True)
+        for key, value in pydantic_dict.items():
+            if key not in diff_dict:
+                diff_dict[key] = value
+
+        return diff_dict
 
 
 def reload_and_populate_configs():
