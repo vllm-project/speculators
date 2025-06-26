@@ -1,19 +1,17 @@
 """Integration tests for LlamaEagleSpeculator model."""
 
-import json
 import tempfile
 from pathlib import Path
 
 import pytest
 import torch
-from transformers import AutoConfig
 from transformers.models.llama.configuration_llama import LlamaConfig
 
+from speculators.config import SpeculatorsConfig, VerifierConfig
 from speculators.models.llama_eagle import (
     LlamaEagleSpeculator,
     LlamaEagleSpeculatorConfig,
 )
-from speculators.config import SpeculatorsConfig, VerifierConfig
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 
 
@@ -115,7 +113,9 @@ class TestLlamaEagleIntegration:
             # Check attributes match
             assert loaded_config.eagle_variant == eagle_config.eagle_variant
             assert loaded_config.fc_bias == eagle_config.fc_bias
-            assert loaded_config.use_extra_layernorms == eagle_config.use_extra_layernorms
+            assert (
+                loaded_config.use_extra_layernorms == eagle_config.use_extra_layernorms
+            )
             assert loaded_config.hidden_size == eagle_config.hidden_size
             assert loaded_config.vocab_size == eagle_config.vocab_size
 
@@ -144,8 +144,12 @@ class TestLlamaEagleIntegration:
             hidden_states = torch.randn(1, 10, 2048)
 
             with torch.no_grad():
-                original_logits = model(input_ids=input_ids, hidden_states=hidden_states)
-                loaded_logits = loaded_model(input_ids=input_ids, hidden_states=hidden_states)
+                original_logits = model(
+                    input_ids=input_ids, hidden_states=hidden_states
+                )
+                loaded_logits = loaded_model(
+                    input_ids=input_ids, hidden_states=hidden_states
+                )
 
             # Check outputs match (approximately, due to potential numerical differences)
             assert torch.allclose(original_logits, loaded_logits, atol=1e-5)
@@ -191,7 +195,9 @@ class TestLlamaEagleIntegration:
             nonlocal pre_lm_head_called
             pre_lm_head_called = True
 
-        model.extra_layernorms["post_embedding"].register_forward_hook(hook_post_embedding)
+        model.extra_layernorms["post_embedding"].register_forward_hook(
+            hook_post_embedding
+        )
         model.extra_layernorms["pre_lm_head"].register_forward_hook(hook_pre_lm_head)
 
         with torch.no_grad():

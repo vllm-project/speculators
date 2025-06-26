@@ -39,12 +39,15 @@ dependencies = [
     "click",
     "datasets",
     "httpx[http2]",
+    "huggingface-hub",
     "loguru",
     "numpy",
     "protobuf",
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
     "pyyaml>=6.0.0",
+    "safetensors",
+    "torch",
     "transformers",
     "torch",
 ]
@@ -93,6 +96,9 @@ dev = [
 homepage = "https://github.com/neuralmagic/speculators"
 source = "https://github.com/neuralmagic/speculators"
 issues = "https://github.com/neuralmagic/speculators/issues"
+
+[project.scripts]
+speculators = "speculators.cli:main"
 
 # ************************************************
 # ********** Code Quality Tools **********
@@ -206,6 +212,16 @@ select = [
     "PGH003", # allow general ignores in tests
     "S106", # allow hardcoded passwords in tests
     "PLR0915", # allow complex statements in tests
+    "S108", # allow probable insecure usage of temporary files in tests
+    "PLW2901", # allow variable overwrite in tests
+]
+"examples/**/*.py" = [
+    "T201", # allow print statements in examples
+    "BLE001", # allow catching Exception in examples
+]
+"src/speculators/convert/**/*.py" = [
+    "T201", # allow print statements for CLI output
+    "BLE001", # allow catching Exception for conversion errors
 ]
 
 [tool.ruff.lint.isort]
