@@ -2,19 +2,19 @@
 Unit tests for the config module in the Speculators library.
 """
 
+from typing import Literal
+from unittest.mock import MagicMock, patch
 import json
 import tempfile
 from pathlib import Path
-from typing import Literal
-from unittest.mock import MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
 from transformers import PretrainedConfig
 
 from speculators import (
-    SpeculatorModelConfig,
     SpeculatorsConfig,
+    SpeculatorModelConfig,
     TokenProposalConfig,
     VerifierConfig,
     reload_and_populate_configs,
