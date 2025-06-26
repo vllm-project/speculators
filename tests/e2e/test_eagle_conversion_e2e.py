@@ -112,14 +112,9 @@ class TestEagleConversionE2E:
         single_safetensors = checkpoint_dir / "model.safetensors"
         sharded_safetensors_index = checkpoint_dir / "model.safetensors.index.json"
 
-        has_weights = (
-            single_safetensors.exists()
-            or sharded_safetensors_index.exists()
-        )
+        has_weights = single_safetensors.exists() or sharded_safetensors_index.exists()
 
-        assert has_weights, (
-            "Missing model weights in safetensors format"
-        )
+        assert has_weights, "Missing model weights in safetensors format"
 
         # For sharded models, check that at least one shard exists
         if sharded_safetensors_index.exists():
