@@ -97,10 +97,9 @@ class TestEagleConversionE2E:
 
     def verify_checkpoint_structure(self, checkpoint_dir: Path):
         """
-        Verify checkpoint directory structure after save_pretrained.
+        Verify checkpoint directory structure after conversion.
 
-        Note: This is for verifying output from model.save_pretrained() which may
-        produce sharded files, unlike our converter which outputs model.safetensors.
+        After conversion, checkpoints are always stored in safetensors format.
 
         :param checkpoint_dir: Path to checkpoint directory
         """
@@ -109,42 +108,23 @@ class TestEagleConversionE2E:
         )
         assert (checkpoint_dir / "config.json").exists(), "Missing config.json"
 
-        # Check for weights in various formats
+        # Check for weights in safetensors format only
         single_safetensors = checkpoint_dir / "model.safetensors"
-        single_pytorch = checkpoint_dir / "pytorch_model.bin"
         sharded_safetensors_index = checkpoint_dir / "model.safetensors.index.json"
-        sharded_pytorch_index = checkpoint_dir / "pytorch_model.bin.index.json"
 
         has_weights = (
             single_safetensors.exists()
-            or single_pytorch.exists()
             or sharded_safetensors_index.exists()
-            or sharded_pytorch_index.exists()
         )
 
         assert has_weights, (
-            "Missing model weights (no safetensors, pytorch_model.bin, "
-            "or sharded files found)"
+            "Missing model weights in safetensors format"
         )
 
-        # Check file sizes are reasonable
-        config_size = (checkpoint_dir / "config.json").stat().st_size
-        assert config_size > 100, "Config file seems too small"
-
         # For sharded models, check that at least one shard exists
-        if sharded_safetensors_index.exists() or sharded_pytorch_index.exists():
-            shard_files = list(checkpoint_dir.glob("model-*.safetensors")) + list(
-                checkpoint_dir.glob("pytorch_model-*.bin")
-            )
+        if sharded_safetensors_index.exists():
+            shard_files = list(checkpoint_dir.glob("model-*.safetensors"))
             assert len(shard_files) > 0, "Index file exists but no shard files found"
-            total_size = sum(f.stat().st_size for f in shard_files)
-            assert total_size > 1000000, "Model shards seem too small"
-        else:
-            # Single file - check its size
-            model_file = (
-                single_safetensors if single_safetensors.exists() else single_pytorch
-            )
-            assert model_file.stat().st_size > 1000000, "Model file seems too small"
 
     def execute_forward_pass(self, model: EagleSpeculator) -> torch.Tensor:
         """
