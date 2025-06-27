@@ -2,6 +2,9 @@
 Unit tests for the config module in the Speculators library.
 """
 
+import json
+import tempfile
+from pathlib import Path
 from typing import Literal
 from unittest.mock import MagicMock, patch
 
