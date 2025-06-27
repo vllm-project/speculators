@@ -256,26 +256,24 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
     schema_discriminator: ClassVar[str] = "speculators_model_type"
 
     # PretrainedConfig class attributes
-    model_type: ClassVar[str] = "speculator_model"
-    base_config_key: ClassVar[str] = ""
-    sub_configs: ClassVar[dict[str, type]] = {}
-    is_composition: ClassVar[bool] = False  # type: ignore[misc] (get around to_diff_dict error)
-    attribute_map: ClassVar[dict[str, str]] = {}
-    base_model_tp_plane: ClassVar[str] = None
-    base_model_pp_plane: ClassVar[str] = None
-    _auto_class: ClassVar[Optional[str]] = None
+    model_type: ClassVar[str] = "speculator_model"  # type: ignore[misc]
+    base_config_key: ClassVar[str] = ""  # type: ignore[misc]
+    sub_configs: ClassVar[dict[str, PretrainedConfig]] = {}  # type: ignore[misc]
+    is_composition: ClassVar[bool] = False  # type: ignore[misc]
+    attribute_map: ClassVar[dict[str, str]] = {}  # type: ignore[misc]
+    _auto_class: ClassVar[Optional[str]] = None  # type: ignore[misc]
 
     # Speculator model instance attributes
     speculators_model_type: str = Field(
-        default=None,
+        default="speculator_model",
         description="The type of model from the Speculators repo this config is for.",
     )
     speculators_version: str = Field(
         default=version("speculators"),
         description="Version of the speculators library",
     )
-    speculators_config: SpeculatorsConfig = Field(
-        default=None,
+    speculators_config: SpeculatorsConfig = Field(  # type: ignore[assignment]
+        default=None,  # work around for HF config to_diff_dict method
         description=(
             "The speculators config describing what the model implements and creation. "
             "Contains information about the algorithm, proposal methods, and verifier."
@@ -283,13 +281,16 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
     )
 
     def __init__(self, **kwargs):
-        # ensure we strip class vars before initializing
-        for key in ["model_type"]:
-            if key in kwargs:
-                del kwargs[key]
-
-        # initialize the parent classes
+        # initialize the Pydantic arguments first to set all valid fields
         PydanticClassRegistryMixin.__init__(self, **kwargs)
+
+        # strip kwargs handled by Pydantic so we don't pass them to PretrainedConfig
+        pydantic_fields = self.__class__.model_fields.keys()
+        for field in list(kwargs.keys()):
+            if field in pydantic_fields:
+                del kwargs[field]
+
+        # initialize the Hugging Face PretrainedConfig arguments for the model
         PretrainedConfig.__init__(self, **kwargs)
 
         # ensure we always update the transformers version

@@ -10,9 +10,10 @@ Classes:
 
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from transformers import PretrainedConfig
 from transformers.models.llama.configuration_llama import LlamaConfig
+from typing_extensions import Self
 
 from speculators.config import SpeculatorModelConfig
 from speculators.models.transformer import TransformerSpeculatorConfig
@@ -32,7 +33,6 @@ class EagleSpeculatorConfig(TransformerSpeculatorConfig):
     both architectures.
     """
 
-    # Model identification
     speculators_model_type: Literal["eagle"] = "eagle"
     architectures: list[str] = Field(
         default_factory=lambda: ["EagleSpeculator"],
@@ -73,3 +73,16 @@ class EagleSpeculatorConfig(TransformerSpeculatorConfig):
             "For Eagle and Eagle 2, this is False, while for HASS it is True."
         ),
     )
+
+    @model_validator(mode="after")
+    def check_add_architectures(self) -> Self:
+        """
+        Ensure that the transformer_layer_architecture is included in the
+        architectures list.
+
+        :return: Self
+        """
+        if self.transformer_layer_architecture not in self.architectures:
+            self.architectures.append(self.transformer_layer_architecture)
+
+        return self

@@ -271,6 +271,16 @@ def test_speculators_config_marshalling(
 # ===== SpeculatorModelConfig Tests =====
 
 
+@SpeculatorModelConfig.register("test_model")
+class SpeculatorModelConfigTest(SpeculatorModelConfig):
+    speculators_model_type: Literal["test_model"] = "test_model"
+    test_field: int = 456
+
+
+# Ensure the schemas are reloaded to include the test proposal type
+reload_and_populate_configs()
+
+
 @pytest.fixture
 def sample_speculators_config(sample_token_proposal_config, sample_verifier_config):
     return SpeculatorsConfig(
@@ -300,27 +310,19 @@ def test_speculator_model_config_initialization(sample_speculators_config):
     assert hasattr(config, "save_pretrained")
 
 
-@pytest.mark.smoke
-def test_speculator_model_config_invalid_initialization(sample_speculators_config):
-    with pytest.raises(ValidationError) as exc_info:
-        SpeculatorModelConfig()  # type: ignore[call-arg]
-
-    error_str = str(exc_info.value)
-    assert "speculators_model_type" in error_str
-    assert "speculators_config" in error_str
-
-
 @pytest.mark.sanity
 def test_speculator_model_config_marshalling(sample_speculators_config):
-    original_config = SpeculatorModelConfig(
+    original_config = SpeculatorModelConfigTest(
         speculators_model_type="test_model",
         speculators_config=sample_speculators_config,
+        test_field=678,
     )
 
     config_dict = original_config.model_dump()
     assert isinstance(config_dict, dict)
     assert config_dict["speculators_model_type"] == "test_model"
     assert config_dict["speculators_config"]["algorithm"] == "test_algorithm"
+    assert config_dict["test_field"] == 678
 
     recreated_config = SpeculatorModelConfig.model_validate(config_dict)
     assert (
@@ -331,6 +333,7 @@ def test_speculator_model_config_marshalling(sample_speculators_config):
         recreated_config.speculators_config.algorithm
         == original_config.speculators_config.algorithm
     )
+    assert recreated_config.test_field == original_config.test_field
 
 
 @pytest.mark.smoke
@@ -343,25 +346,42 @@ def test_speculator_model_config_from_pretrained():
 
 @pytest.mark.regression
 def test_speculator_model_config_pretrained_methods(sample_speculators_config):
-    config = SpeculatorModelConfig(
+    config = SpeculatorModelConfigTest(
         speculators_model_type="test_model",
         speculators_config=sample_speculators_config,
+        test_field=678,
     )
 
     # Test to_dict and to_diff_dict
     config_dict = config.to_dict()
     assert isinstance(config_dict, dict)
     assert "speculators_model_type" in config_dict
+    assert config_dict["speculators_model_type"] == "test_model"
     assert "speculators_config" in config_dict
+    assert isinstance(config_dict["speculators_config"], dict)
+    assert "algorithm" in config_dict["speculators_config"]
+    assert config_dict["speculators_config"]["algorithm"] == "test_algorithm"
+    assert "test_field" in config_dict
+    assert config_dict["test_field"] == 678
 
     diff_dict = config.to_diff_dict()
     assert isinstance(diff_dict, dict)
     assert "speculators_model_type" in diff_dict
+    assert diff_dict["speculators_model_type"] == "test_model"
+    assert "speculators_config" in diff_dict
+    assert isinstance(diff_dict["speculators_config"], dict)
+    assert "algorithm" in diff_dict["speculators_config"]
+    assert diff_dict["speculators_config"]["algorithm"] == "test_algorithm"
+    assert "test_field" in diff_dict
+    assert diff_dict["test_field"] == 678
+
     # Test to_json_string
     json_string = config.to_json_string()
     assert isinstance(json_string, str)
     parsed_json = json.loads(json_string)
     assert parsed_json["speculators_model_type"] == "test_model"
+    assert parsed_json["speculators_config"]["algorithm"] == "test_algorithm"
+    assert parsed_json["test_field"] == 678
 
     # Test to_json_file and save_pretrained
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -379,3 +399,4 @@ def test_speculator_model_config_pretrained_methods(sample_speculators_config):
 
         assert saved_dict["speculators_model_type"] == "test_model"
         assert saved_dict["speculators_config"]["algorithm"] == "test_algorithm"
+        assert saved_dict["test_field"] == 678
