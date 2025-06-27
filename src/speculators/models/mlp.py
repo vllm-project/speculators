@@ -5,6 +5,7 @@ from speculators.config import SpeculatorModelConfig
 __all__ = ["MLPSpeculatorConfig"]
 
 
+@SpeculatorModelConfig.register("mlp")
 class MLPSpeculatorConfig(SpeculatorModelConfig):
     """
     TODO

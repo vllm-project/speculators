@@ -310,6 +310,16 @@ def test_speculator_model_config_initialization(sample_speculators_config):
     assert hasattr(config, "save_pretrained")
 
 
+@pytest.mark.smoke
+def test_speculator_model_config_auto_registry():
+    classes = SpeculatorModelConfig.registered_classes()
+    class_names = [cls.__name__ for cls in classes]
+    assert len(class_names) > 0
+    assert "EagleSpeculatorConfig" in class_names
+    assert "IndependentSpeculatorConfig" in class_names
+    assert "MLPSpeculatorConfig" in class_names
+
+
 @pytest.mark.sanity
 def test_speculator_model_config_marshalling(sample_speculators_config):
     original_config = SpeculatorModelConfigTest(
