@@ -213,7 +213,8 @@ class EagleSpeculator(PreTrainedModel, GenerationMixin):
         self.post_embedding_layernorm = LlamaRMSNorm(self.hidden_size, eps=eps)
         self.pre_lm_head_layernorm = LlamaRMSNorm(self.hidden_size, eps=eps)
 
-    def get_input_embeddings(self):
+    @property
+    def input_embeddings(self):
         """
         Get input embeddings layer.
 
@@ -221,7 +222,8 @@ class EagleSpeculator(PreTrainedModel, GenerationMixin):
         """
         return self.embed_tokens
 
-    def set_input_embeddings(self, value):
+    @input_embedding.setter
+    def input_embeddings(self, value):
         """
         Set input embeddings layer.
 
