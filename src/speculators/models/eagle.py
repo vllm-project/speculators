@@ -8,9 +8,9 @@ Classes:
     EagleSpeculatorConfig: Configuration for EAGLE/HASS models
 """
 
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_serializer, field_validator, model_validator
 from transformers import PretrainedConfig
 from transformers.models.llama.configuration_llama import LlamaConfig
 from typing_extensions import Self
@@ -85,3 +85,33 @@ class EagleSpeculatorConfig(SpeculatorModelConfig):
             self.architectures.append(self.transformer_layer_architecture)
 
         return self
+
+    @field_serializer("transformer_layer_config")
+    def serialize_transformer_layer_config(self, value: PretrainedConfig) -> dict:
+        """
+        Serialize the transformer_layer_config to a dictionary.
+
+        :param value: The PretrainedConfig instance to serialize.
+        :return: Serialized dictionary representation of the config.
+        """
+        return value.to_diff_dict()
+
+    @field_validator("transformer_layer_config", mode="before")
+    @classmethod
+    def validate_transformer_layer_config(cls, value: Any) -> PretrainedConfig:
+        """
+        Validate that the transformer_layer_config is a valid PretrainedConfig.
+
+        :param value: The instance to validate to a PretrainedConfig.
+        :return: The validated PretrainedConfig instance.
+        """
+        if isinstance(value, dict):
+            return PretrainedConfig.from_dict(value)
+
+        if isinstance(value, PretrainedConfig):
+            return value
+
+        raise ValueError(
+            "transformer_layer_config must be a PretrainedConfig or a dict "
+            "that can be converted to a PretrainedConfig."
+        )

@@ -238,7 +238,46 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
         :param kwargs: Additional keyword arguments to pass to the config.
         :return: A SpeculatorModelConfig object with the loaded parameters.
         """
-        raise NotImplementedError("from_pretrained is not implemented yet.")
+        # Transformers config loading
+        config_dict, kwargs = cls.get_config_dict(
+            pretrained_model_name_or_path,
+            cache_dir=cache_dir,
+            force_download=force_download,
+            local_files_only=local_files_only,
+            token=token,
+            revision=revision,
+            **kwargs,
+        )
+
+        if "speculators_model_type" not in config_dict:
+            # Conversion pathway
+            raise NotImplementedError(
+                "Loading a non-speculator model config is not supported yet."
+            )
+
+        return cls.from_dict(config_dict, **kwargs)
+
+    @classmethod
+    def from_dict(
+        cls, config_dict: dict[str, Any], **kwargs
+    ) -> "SpeculatorModelConfig":
+        """
+        Create a SpeculatorModelConfig from a dictionary, automatically instantiating
+        the correct subclass based on the speculators_model_type field.
+
+        :param config_dict: Dictionary containing the configuration
+        :param kwargs: Additional keyword arguments that override config values
+        :return: A SpeculatorModelConfig instance of the appropriate subclass
+        """
+        dict_obj = {**config_dict, **kwargs}
+
+        if "speculators_model_type" not in dict_obj:
+            raise ValueError(
+                "The config dictionary must contain the 'speculators_model_type' field "
+                "for loading a SpeculatorModelConfig in the Speculators library."
+            )
+
+        return cls.model_validate(dict_obj)
 
     @classmethod
     def __pydantic_schema_base_type__(cls) -> type["SpeculatorModelConfig"]:
@@ -261,11 +300,13 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
     sub_configs: ClassVar[dict[str, PretrainedConfig]] = {}  # type: ignore[misc]
     is_composition: ClassVar[bool] = False  # type: ignore[misc]
     attribute_map: ClassVar[dict[str, str]] = {}  # type: ignore[misc]
-    _auto_class: ClassVar[Optional[str]] = None  # type: ignore[misc]
+    base_model_tp_plan: ClassVar[Optional[dict[str, Any]]] = None  # type: ignore[misc]
+    base_model_pp_plan: ClassVar[Optional[dict[str, tuple[list[str]]]]] = None  # type: ignore[misc]
+    _auto_class: ClassVar[Optional[str]] = ""  # type: ignore[misc]
 
     # Speculator model instance attributes
     speculators_model_type: str = Field(
-        default="speculator_model",
+        default="",
         description="The type of model from the Speculators repo this config is for.",
     )
     speculators_version: str = Field(
@@ -273,7 +314,7 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
         description="Version of the speculators library",
     )
     speculators_config: SpeculatorsConfig = Field(  # type: ignore[assignment]
-        default=None,  # work around for HF config to_diff_dict method
+        default=None,
         description=(
             "The speculators config describing what the model implements and creation. "
             "Contains information about the algorithm, proposal methods, and verifier."
@@ -284,11 +325,9 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
         # initialize the Pydantic arguments first to set all valid fields
         PydanticClassRegistryMixin.__init__(self, **kwargs)
 
-        # strip kwargs handled by Pydantic so we don't pass them to PretrainedConfig
-        pydantic_fields = self.__class__.model_fields.keys()
-        for field in list(kwargs.keys()):
-            if field in pydantic_fields:
-                del kwargs[field]
+        # reset kwargs handled by Pydantic so PretrainedConfig doesn't override
+        for field in self.__class__.model_fields:
+            kwargs[field] = getattr(self, field)
 
         # initialize the Hugging Face PretrainedConfig arguments for the model
         PretrainedConfig.__init__(self, **kwargs)
@@ -301,19 +340,34 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
         :return: A dictionary representation of the full config, including the
             PretrainedConfig variables and Pydantic model fields.
         """
-        config_dict = super().to_dict()
+        pretrained_dict = super().to_dict()
         model_dict = self.model_dump()
+        config_dict = {**pretrained_dict, **model_dict}
 
-        return {
-            **config_dict,
-            **model_dict,
-        }
+        # strip all class variables and metadata that are not needed in the output
+        for key in (
+            "model_config",
+            "auto_package",
+            "registry_auto_discovery",
+            "schema_discriminator",
+            "model_type",
+            "base_config_key",
+            "sub_configs",
+            "is_composition",
+            "attribute_map",
+            "base_model_tp_plan",
+            "base_model_pp_plan",
+            "_auto_class",
+        ):
+            config_dict.pop(key, None)
+
+        return config_dict
 
     def to_diff_dict(self) -> dict[str, Any]:
         """
-        :return: A dictionary representation of the config minus any base
-            properties that are not needed for the diff. Uses the super's
-            to_diff_dict method.
+        :return: A dictionary representation of a simplified config,
+            including only the PretrainedConfig fields that have been modified
+            or set, along with all Pydantic fields.
         """
         return super().to_diff_dict()
 
