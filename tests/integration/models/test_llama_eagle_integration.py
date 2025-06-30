@@ -151,7 +151,7 @@ class TestLlamaEagleIntegration:
                     input_ids=input_ids, hidden_states=hidden_states
                 )
 
-            # Check outputs match (approximately, due to potential numerical differences)
+            # Check outputs match (approximately, potential numerical differences)
             assert torch.allclose(original_logits, loaded_logits, atol=1e-5)
 
     def test_model_with_different_hidden_states_inputs(self, eagle_config):
@@ -187,11 +187,11 @@ class TestLlamaEagleIntegration:
         post_embedding_called = False
         pre_lm_head_called = False
 
-        def hook_post_embedding(module, input, output):
+        def hook_post_embedding(module, input_, output):
             nonlocal post_embedding_called
             post_embedding_called = True
 
-        def hook_pre_lm_head(module, input, output):
+        def hook_pre_lm_head(module, input_, output):
             nonlocal pre_lm_head_called
             pre_lm_head_called = True
 

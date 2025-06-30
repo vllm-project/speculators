@@ -49,7 +49,6 @@ dependencies = [
     "safetensors",
     "torch",
     "transformers",
-    "torch",
 ]
 
 [project.optional-dependencies]
@@ -214,14 +213,6 @@ select = [
     "PLR0915", # allow complex statements in tests
     "S108", # allow probable insecure usage of temporary files in tests
     "PLW2901", # allow variable overwrite in tests
-]
-"examples/**/*.py" = [
-    "T201", # allow print statements in examples
-    "BLE001", # allow catching Exception in examples
-]
-"src/speculators/convert/**/*.py" = [
-    "T201", # allow print statements for CLI output
-    "BLE001", # allow catching Exception for conversion errors
 ]
 
 [tool.ruff.lint.isort]
