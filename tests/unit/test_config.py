@@ -6,7 +6,7 @@ import json
 import tempfile
 from pathlib import Path
 from typing import Literal
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
@@ -320,7 +320,7 @@ def test_speculator_model_config_auto_registry():
     assert "MLPSpeculatorConfig" in class_names
 
 
-@pytest.mark.sanity
+@pytest.mark.smoke
 def test_speculator_model_config_marshalling(sample_speculators_config):
     original_config = SpeculatorModelConfigTest(
         speculators_model_type="test_model",
@@ -347,66 +347,122 @@ def test_speculator_model_config_marshalling(sample_speculators_config):
 
 
 @pytest.mark.smoke
-def test_speculator_model_config_from_pretrained():
-    with pytest.raises(NotImplementedError) as exc_info:
-        SpeculatorModelConfig.from_pretrained("test/model")
-
-    assert "from_pretrained is not implemented yet" in str(exc_info.value)
-
-
-@pytest.mark.regression
-def test_speculator_model_config_pretrained_methods(sample_speculators_config):
-    config = SpeculatorModelConfigTest(
+def test_speculator_model_config_dict_marshaling(sample_speculators_config):
+    config: SpeculatorModelConfigTest = SpeculatorModelConfigTest(
         speculators_model_type="test_model",
         speculators_config=sample_speculators_config,
         test_field=678,
     )
 
-    # Test to_dict and to_diff_dict
     config_dict = config.to_dict()
     assert isinstance(config_dict, dict)
-    assert "speculators_model_type" in config_dict
     assert config_dict["speculators_model_type"] == "test_model"
-    assert "speculators_config" in config_dict
-    assert isinstance(config_dict["speculators_config"], dict)
-    assert "algorithm" in config_dict["speculators_config"]
     assert config_dict["speculators_config"]["algorithm"] == "test_algorithm"
-    assert "test_field" in config_dict
     assert config_dict["test_field"] == 678
 
-    diff_dict = config.to_diff_dict()
-    assert isinstance(diff_dict, dict)
-    assert "speculators_model_type" in diff_dict
-    assert diff_dict["speculators_model_type"] == "test_model"
-    assert "speculators_config" in diff_dict
-    assert isinstance(diff_dict["speculators_config"], dict)
-    assert "algorithm" in diff_dict["speculators_config"]
-    assert diff_dict["speculators_config"]["algorithm"] == "test_algorithm"
-    assert "test_field" in diff_dict
-    assert diff_dict["test_field"] == 678
+    config_diff_dict = config.to_diff_dict()
+    assert isinstance(config_diff_dict, dict)
+    assert config_diff_dict["speculators_model_type"] == "test_model"
+    assert config_diff_dict["speculators_config"]["algorithm"] == "test_algorithm"
+    assert config_diff_dict["test_field"] == 678
 
-    # Test to_json_string
-    json_string = config.to_json_string()
-    assert isinstance(json_string, str)
-    parsed_json = json.loads(json_string)
-    assert parsed_json["speculators_model_type"] == "test_model"
-    assert parsed_json["speculators_config"]["algorithm"] == "test_algorithm"
-    assert parsed_json["test_field"] == 678
+    reload_config = SpeculatorModelConfig.from_dict(config_dict)
+    assert reload_config.speculators_model_type == "test_model"
+    assert reload_config.speculators_config.algorithm == "test_algorithm"
+    assert reload_config.test_field == 678
 
-    # Test to_json_file and save_pretrained
+    reload_diff_config = SpeculatorModelConfig.from_dict(config_diff_dict)
+    assert reload_diff_config.speculators_model_type == "test_model"
+    assert reload_diff_config.speculators_config.algorithm == "test_algorithm"
+    assert reload_diff_config.test_field == 678
+
+
+@pytest.mark.sanity
+def test_speculator_model_config_from_dict_invalid(sample_speculators_config):
+    with pytest.raises(ValueError) as exc_info:
+        SpeculatorModelConfig.from_dict({})
+
+    assert (
+        "The config dictionary must contain the 'speculators_model_type' field"
+        in str(exc_info.value)
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        SpeculatorModelConfig.from_dict(
+            {
+                "speculators_config": sample_speculators_config.model_dump(),
+                "test_field": 678,
+            }
+        )
+
+    assert (
+        "The config dictionary must contain the 'speculators_model_type' field "
+        in str(exc_info.value)
+    )
+
+
+@pytest.mark.smoke
+def test_speculator_model_config_from_pretrained_local_marshalling(
+    sample_speculators_config,
+):
     with tempfile.TemporaryDirectory() as tmp_dir:
-        tmp_path = Path(tmp_dir)
-        json_path = tmp_path / "config.json"
-        config.to_json_file(json_path)
-        assert json_path.exists()
+        tmp_path = Path(tmp_dir) / "config.json"
+        config: SpeculatorModelConfigTest = SpeculatorModelConfigTest(
+            speculators_model_type="test_model",
+            speculators_config=sample_speculators_config,
+            test_field=678,
+        )
+        config.save_pretrained(tmp_path)
+        assert tmp_path.exists()
 
-        save_dir = tmp_path / "save_dir"
-        config.save_pretrained(save_dir)
-        assert (save_dir / "config.json").exists()
-        # Load the saved file and verify contents
-        with (save_dir / "config.json").open() as file:
-            saved_dict = json.load(file)
+        reloaded_config = SpeculatorModelConfig.from_pretrained(tmp_path)
+        assert reloaded_config.speculators_model_type == "test_model"
+        assert reloaded_config.speculators_config.algorithm == "test_algorithm"
+        assert reloaded_config.test_field == 678
 
-        assert saved_dict["speculators_model_type"] == "test_model"
-        assert saved_dict["speculators_config"]["algorithm"] == "test_algorithm"
-        assert saved_dict["test_field"] == 678
+
+@pytest.mark.smoke
+def test_speculator_model_config_from_pretrained_hf_hub(sample_speculators_config):
+    config_data = {
+        "speculators_model_type": "test_model",
+        "speculators_config": sample_speculators_config.model_dump(),
+        "test_field": 678,
+    }
+
+    with patch.object(SpeculatorModelConfig, "get_config_dict") as mock_get_config_dict:
+        mock_get_config_dict.return_value = (config_data, {})
+        config = SpeculatorModelConfig.from_pretrained("test/fake-model-hub-name")
+
+        mock_get_config_dict.assert_called_once_with(
+            "test/fake-model-hub-name",
+            cache_dir=None,
+            force_download=False,
+            local_files_only=False,
+            token=None,
+            revision="main",
+        )
+
+        # Verify the config was loaded correctly
+        assert config.speculators_model_type == "test_model"
+        assert config.speculators_config.algorithm == "test_algorithm"
+        assert config.test_field == 678
+
+
+@pytest.mark.smoke
+def test_speculator_model_config_from_pretrained_conversion(sample_speculators_config):
+    # conversion not implemented yet, ensure it raises NotImplementedError
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir) / "config.json"
+        config_data = {
+            "speculators_config": sample_speculators_config.model_dump(),
+            "test_field": 678,
+        }
+        with tmp_path.open("w") as f:
+            json.dump(config_data, f)
+
+        with pytest.raises(NotImplementedError) as exc_info:
+            SpeculatorModelConfig.from_pretrained(tmp_path, convert_to_speculator=True)
+
+    assert "Loading a non-speculator model config is not supported yet" in str(
+        exc_info.value
+    )
