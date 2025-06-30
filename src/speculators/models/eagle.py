@@ -9,25 +9,22 @@ Classes:
     EagleSpeculator: Model implementation for EAGLE/HASS speculators
 """
 
-from typing import Any, Literal, Optional, Union
+from typing import Any, ClassVar, Literal, Optional, Union
 
 import torch
 from pydantic import Field, field_serializer, field_validator, model_validator
 from torch import nn
-from transformers import GenerationMixin, PretrainedConfig, PreTrainedModel
+from transformers import PretrainedConfig, PreTrainedModel
 from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_mask
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.models.llama.configuration_llama import LlamaConfig
 from transformers.models.llama.modeling_llama import (
     LlamaDecoderLayer,
     LlamaRMSNorm,
-    LlamaRotaryEmbedding,
 )
 from typing_extensions import Self
 
-from speculators.config import (
-    SpeculatorModelConfig,
-)
+from speculators import SpeculatorModel, SpeculatorModelConfig
 
 __all__ = [
     "EagleSpeculator",
@@ -136,7 +133,8 @@ class EagleSpeculatorConfig(SpeculatorModelConfig):
         )
 
 
-class EagleSpeculator(PreTrainedModel, GenerationMixin):
+@SpeculatorModel.register("eagle")
+class EagleSpeculator(SpeculatorModel):
     """
     Eagle speculator model for speculative decoding.
 
@@ -148,88 +146,36 @@ class EagleSpeculator(PreTrainedModel, GenerationMixin):
     - TTT variant: layernorms=True, fusion_bias varies
     """
 
-    config_class = EagleSpeculatorConfig
-    base_model_prefix = "model"
-    supports_gradient_checkpointing = True
-    _no_split_modules = ["LlamaDecoderLayer"]
+    # PreTrainedModel settings
+    config_class: ClassVar[type[EagleSpeculatorConfig]] = EagleSpeculatorConfig
 
-    def __init__(self, config: EagleSpeculatorConfig):
-        super().__init__(config)
-        self.config = config
-
+    def __init__(
+        self, config: EagleSpeculatorConfig, verifier: Optional[PreTrainedModel] = None
+    ):
+        # Initialize model parameters from config
         self.vocab_size = config.transformer_layer_config.vocab_size
         self.hidden_size = config.transformer_layer_config.hidden_size
         self.padding_idx = config.transformer_layer_config.pad_token_id
 
-        self._init_embeddings()
-        self._init_fusion_layer()
-        self._init_decoder_layers()
-        self._init_output_layer()
+        # Set layers pulled from the verifier to None until attach is called
+        self.embed_tokens: Optional[nn.Embedding] = None
+        self.rotary_emb: Optional[nn.Module] = None
+        self.lm_head: Optional[nn.Linear] = None
 
-        if config.layernorms:
-            self._init_extra_layernorms()
+        # Delayed initialization to ensure everything needed for attach_verifier is set
+        super().__init__(config=config, verifier=verifier)
 
-        # Tie weights between embed_tokens and lm_head
-        self.lm_head.weight = self.embed_tokens.weight
-
-        self.post_init()
-
-    def _init_embeddings(self):
-        """Initialize embedding layer and rotary embeddings."""
-        self.embed_tokens = nn.Embedding(
-            self.vocab_size, self.hidden_size, self.padding_idx
-        )
-        self.rotary_emb = LlamaRotaryEmbedding(
-            config=self.config.transformer_layer_config
-        )
-
-    def _init_fusion_layer(self):
-        """Initialize fusion layer that combines embeddings and hidden states."""
-        self.fc = nn.Linear(
+        # Initialize layers based on the configuration
+        self.embedding_layernorm: Optional[nn.Module] = self._create_layernorm()
+        self.fusion_fc: nn.Linear = nn.Linear(
             2 * self.hidden_size,
             self.hidden_size,
-            bias=self.config.fusion_bias,
+            bias=config.fusion_bias,
         )
+        self.transformer: nn.Module = self._create_transformer_layer()
+        self.pre_lm_head_layernorm: Optional[nn.Module] = self._create_layernorm()
 
-    def _init_decoder_layers(self):
-        """Initialize single decoder layer."""
-        self.layers = nn.ModuleList(
-            [LlamaDecoderLayer(self.config.transformer_layer_config, layer_idx=0)]
-        )
-
-        # For models without layernorms, replace input_layernorm with Identity
-        # to match the Eagle architecture
-        if not self.config.layernorms:
-            self.layers[0].input_layernorm = nn.Identity()
-
-    def _init_output_layer(self):
-        """Initialize output projection layer."""
-        self.lm_head = nn.Linear(self.hidden_size, self.vocab_size, bias=False)
-
-    def _init_extra_layernorms(self):
-        """Initialize extra layernorms for TTT variant."""
-        eps = self.config.transformer_layer_config.rms_norm_eps
-
-        self.post_embedding_layernorm = LlamaRMSNorm(self.hidden_size, eps=eps)
-        self.pre_lm_head_layernorm = LlamaRMSNorm(self.hidden_size, eps=eps)
-
-    @property
-    def input_embeddings(self):
-        """
-        Get input embeddings layer.
-
-        :return: Embedding layer
-        """
-        return self.embed_tokens
-
-    @input_embedding.setter
-    def input_embeddings(self, value):
-        """
-        Set input embeddings layer.
-
-        :param value: New embedding layer
-        """
-        self.embed_tokens = value
+        self.post_init()  # type: ignore[attr-defined]
 
     def forward(
         self,
@@ -257,24 +203,29 @@ class EagleSpeculator(PreTrainedModel, GenerationMixin):
         :param return_dict: Whether to return a dict
         :return: Model outputs
         """
+        if self.embed_tokens is None or self.rotary_emb is None or self.lm_head is None:
+            raise ValueError(
+                "Verifier model layers not initialized. "
+                "Call `attach_verifier` to set up the model before using forward."
+            )
+
         return_dict = (
             return_dict if return_dict is not None else self.config.use_return_dict
         )
 
         inputs_embeds = self.embed_tokens(input_ids)
+        if self.embedding_layernorm is not None:
+            inputs_embeds = self.embedding_layernorm(inputs_embeds)
 
-        if hasattr(self, "post_embedding_layernorm"):
-            inputs_embeds = self.post_embedding_layernorm(inputs_embeds)
-
-        hidden_states = self.fc(torch.cat([inputs_embeds, hidden_states], dim=-1))
-
+        hidden_states = self.fusion_fc(
+            torch.cat([inputs_embeds, hidden_states], dim=-1)
+        )
         hidden_states, attention_mask, position_ids = self._prepare_decoder_inputs(
             hidden_states, attention_mask, position_ids, past_key_values
         )
 
         cos, sin = self.rotary_emb(hidden_states, position_ids)
-
-        layer_outputs = self.layers[0](
+        layer_outputs = self.transformer(
             hidden_states,
             attention_mask=attention_mask,
             position_ids=position_ids,
@@ -283,10 +234,9 @@ class EagleSpeculator(PreTrainedModel, GenerationMixin):
             use_cache=use_cache,
             position_embeddings=(cos, sin),
         )
-
         hidden_states = layer_outputs[0]
 
-        if hasattr(self, "pre_lm_head_layernorm"):
+        if self.pre_lm_head_layernorm is not None:
             hidden_states = self.pre_lm_head_layernorm(hidden_states)
 
         logits = self.lm_head(hidden_states)
@@ -307,7 +257,7 @@ class EagleSpeculator(PreTrainedModel, GenerationMixin):
         attention_mask: Optional[torch.Tensor],
         position_ids: Optional[torch.LongTensor],
         past_key_values: Optional[tuple[tuple[torch.FloatTensor]]],
-    ) -> tuple[torch.FloatTensor, torch.Tensor, torch.LongTensor]:
+    ) -> tuple[torch.FloatTensor, Optional[torch.Tensor], Optional[torch.LongTensor]]:
         """
         Prepare inputs for the decoder layer.
 
@@ -322,7 +272,7 @@ class EagleSpeculator(PreTrainedModel, GenerationMixin):
         if position_ids is None:
             device = hidden_states.device
             position_ids = (
-                torch.arange(seq_length, dtype=torch.long, device=device)
+                torch.arange(seq_length, dtype=torch.long, device=device)  # type: ignore[assignment]
                 .unsqueeze(0)
                 .expand(batch_size, -1)
             )
@@ -341,92 +291,29 @@ class EagleSpeculator(PreTrainedModel, GenerationMixin):
 
         return hidden_states, attention_mask, position_ids
 
-    def prepare_inputs_for_generation(
-        self,
-        input_ids: torch.LongTensor,
-        past_key_values: Optional[tuple[tuple[torch.FloatTensor]]] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,  # noqa: ARG002
-        **kwargs,
-    ) -> dict:
-        """
-        Prepare inputs for generation step.
+    def _create_layernorm(self) -> Optional[nn.Module]:
+        if not self.config.layernorms:
+            return None
 
-        :param input_ids: Input token IDs
-        :param past_key_values: Past key values
-        :param attention_mask: Attention mask
-        :param inputs_embeds: Input embeddings (unused)
-        :param kwargs: Additional keyword arguments
-        :return: Model inputs dict
-        """
-        if past_key_values:
-            input_ids = input_ids[:, -1:]
-
-        position_ids = kwargs.get("position_ids")
-        if attention_mask is not None and position_ids is None:
-            position_ids = attention_mask.long().cumsum(-1) - 1
-            position_ids.masked_fill_(attention_mask == 0, 1)
-            if past_key_values:
-                position_ids = position_ids[:, -1].unsqueeze(-1)
-
-        hidden_states = kwargs.get("hidden_states")
-        if hidden_states is None:
-            raise ValueError("Eagle speculator requires hidden_states from verifier")
-
-        return {
-            "input_ids": input_ids,
-            "hidden_states": hidden_states,
-            "position_ids": position_ids,
-            "past_key_values": past_key_values,
-            "use_cache": kwargs.get("use_cache"),
-            "attention_mask": attention_mask,
-        }
-
-    @classmethod
-    def from_pretrained(cls, pretrained_model_name_or_path, *args, **kwargs):
-        """
-        Load Eagle model from speculators-format checkpoint.
-
-        For original checkpoints, use::
-
-            speculators convert eagle <input_path> <output_path> <base_model>
-
-        :param pretrained_model_name_or_path: Model name or path
-        :param args: Additional positional arguments
-        :param kwargs: Additional keyword arguments
-        :return: Model instance
-        """
-        config = kwargs.pop("config", None)
-        if config is None:
-            try:
-                config = EagleSpeculatorConfig.from_pretrained(
-                    pretrained_model_name_or_path
-                )
-                if (
-                    not hasattr(config, "speculators_model_type")
-                    or config.speculators_model_type != "eagle"
-                ):
-                    raise ValueError("Missing or incorrect speculators_model_type")
-            except Exception as e:
-                raise ValueError(
-                    f"Failed to load EagleSpeculatorConfig from "
-                    f"'{pretrained_model_name_or_path}'.\n"
-                    "This checkpoint does not appear to be in speculators format.\n\n"
-                    "To convert an original Eagle/HASS checkpoint, use:\n"
-                    "  speculators convert eagle <input_path> <output_path> "
-                    "--base-model <base_model>\n\n"
-                    "For example:\n"
-                    "  speculators convert eagle yuhuili/EAGLE-LLaMA3.1-Instruct-8B "
-                    "./converted/eagle --base-model meta-llama/Llama-3.1-8B\n\n"
-                    f"Original error: {str(e)}"
-                ) from e
-
-        if not isinstance(config, EagleSpeculatorConfig):
-            raise ValueError(
-                f"Expected EagleSpeculatorConfig but got {type(config).__name__}. "
-                "Please ensure you're loading a properly converted Eagle checkpoint."
-            )
-
-        return super().from_pretrained(
-            pretrained_model_name_or_path, *args, config=config, **kwargs
+        return self._layernorm_class()(
+            self.hidden_size, eps=self.config.transformer_layer_config.rms_norm_eps
         )
+
+    def _create_transformer_layer(self) -> nn.Module:
+        layer_class = self._transformer_layer_class()
+        layer = layer_class(
+            self.config.transformer_layer_config,
+            layer_idx=0,
+        )
+
+        if not self.config.layernorms:
+            # Replace input_layernorm with Identity if layernorms are not used
+            layer.input_layernorm = nn.Identity()
+
+        return layer
+
+    def _layernorm_class(self) -> type[nn.Module]:
+        return LlamaRMSNorm
+
+    def _transformer_layer_class(self) -> type[nn.Module]:
+        return LlamaDecoderLayer
