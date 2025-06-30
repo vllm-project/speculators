@@ -222,7 +222,7 @@ class EagleSpeculator(PreTrainedModel, GenerationMixin):
         """
         return self.embed_tokens
 
-    @input_embedding.setter
+    @input_embeddings.setter
     def input_embeddings(self, value):
         """
         Set input embeddings layer.
