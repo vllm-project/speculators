@@ -78,8 +78,7 @@ class EagleSpeculatorConfig(SpeculatorModelConfig):
             "List of model architectures that can be used with the model "
             "pretrained weights. Automatically includes the transformer layer "
             "architecture to ensure compatibility during model loading and "
-            "validation. Used by Transformers AutoModel classes for dynamic "
-            "model class resolution."
+            "validation."
         ),
     )
 
@@ -88,10 +87,7 @@ class EagleSpeculatorConfig(SpeculatorModelConfig):
         description=(
             "The architecture class name of the transformer layer to use for "
             "the speculator's decoder layer. Must correspond to a valid "
-            "transformer decoder layer class (e.g., 'LlamaDecoderLayer', "
-            "'MistralDecoderLayer'). This determines the attention mechanism, "
-            "feedforward network, and layer normalization behavior. "
-            "Typically 'LlamaDecoderLayer' for EAGLE1, EAGLE2, and HASS variants."
+            "transformer decoder layer class (e.g., 'LlamaDecoderLayer')."
         ),
     )
     transformer_layer_config: PretrainedConfig = Field(
@@ -101,8 +97,7 @@ class EagleSpeculatorConfig(SpeculatorModelConfig):
             "Must be a PretrainedConfig instance that matches the requirements "
             "of the transformer_layer_architecture. Contains parameters such as "
             "hidden_size, num_attention_heads, intermediate_size, vocab_size, "
-            "and other architecture-specific settings. For EAGLE models, this "
-            "typically uses LlamaConfig with single-layer settings."
+            "and other architecture-specific settings."
         ),
     )
     layernorms: bool = Field(
@@ -112,8 +107,9 @@ class EagleSpeculatorConfig(SpeculatorModelConfig):
             "model architecture. When True, adds RMSNorm layers after the "
             "verifier's hidden state (embedding_layernorm), after the fusion "
             "layer output, and before the language model head (pre_lm_head_layernorm). "
-            "Standard EAGLE1, EAGLE2, and HASS implementations use False. "
-            "TTT (Test-Time Training) variants may use True for improved stability."
+            "When False, these layers are not included and the output layernorm "
+            "within the transformer architecture is removed as well. "
+            "Standard EAGLE1, EAGLE2, and HASS implementations use False."
         ),
     )
     fusion_bias: bool = Field(
@@ -123,8 +119,7 @@ class EagleSpeculatorConfig(SpeculatorModelConfig):
             "layer that combines input embeddings with verifier hidden states. "
             "The fusion layer concatenates input embeddings and hidden states, "
             "then projects to hidden_size dimensions. Standard EAGLE1 and EAGLE2 "
-            "use False, while some HASS variants may use True for hardware-specific "
-            "optimizations. Affects model capacity and training dynamics."
+            "use False, while HASS uses True."
         ),
     )
 
