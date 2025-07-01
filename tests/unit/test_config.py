@@ -108,22 +108,10 @@ def test_verifier_config_initialization():
     config = VerifierConfig(
         name_or_path="test/verifier",
         architectures=["TestModel"],
-        hidden_size=768,
-        intermediate_size=3072,
-        vocab_size=50000,
-        max_position_embeddings=512,
-        bos_token_id=1,
-        eos_token_id=2,
     )
 
     assert config.name_or_path == "test/verifier"
     assert config.architectures == ["TestModel"]
-    assert config.hidden_size == 768
-    assert config.intermediate_size == 3072
-    assert config.vocab_size == 50000
-    assert config.max_position_embeddings == 512
-    assert config.bos_token_id == 1
-    assert config.eos_token_id == 2
 
 
 @pytest.mark.smoke
@@ -132,12 +120,6 @@ def test_verifier_config_from_verifier_config(mock_pretrained_config):
 
     assert config.name_or_path == "test/verifier"
     assert config.architectures == ["TestModel"]
-    assert config.hidden_size == 768
-    assert config.intermediate_size == 3072
-    assert config.vocab_size == 50000
-    assert config.max_position_embeddings == 512
-    assert config.bos_token_id == 1
-    assert config.eos_token_id == 2
 
 
 @pytest.mark.smoke
@@ -148,12 +130,6 @@ def test_verifier_config_invalid_initialization():
     error_str = str(exc_info.value)
     assert "name_or_path" in error_str
     assert "architectures" in error_str
-    assert "hidden_size" in error_str
-    assert "intermediate_size" in error_str
-    assert "vocab_size" in error_str
-    assert "max_position_embeddings" in error_str
-    assert "bos_token_id" in error_str
-    assert "eos_token_id" in error_str
 
 
 @pytest.mark.sanity
@@ -161,24 +137,16 @@ def test_verifier_config_marshalling():
     original_config = VerifierConfig(
         name_or_path="test/verifier",
         architectures=["TestModel"],
-        hidden_size=768,
-        intermediate_size=3072,
-        vocab_size=50000,
-        max_position_embeddings=512,
-        bos_token_id=1,
-        eos_token_id=2,
     )
 
     config_dict = original_config.model_dump()
     assert isinstance(config_dict, dict)
     assert config_dict["name_or_path"] == "test/verifier"
     assert config_dict["architectures"] == ["TestModel"]
-    assert config_dict["hidden_size"] == 768
 
     recreated_config = VerifierConfig.model_validate(config_dict)
     assert recreated_config.name_or_path == original_config.name_or_path
     assert recreated_config.architectures == original_config.architectures
-    assert recreated_config.hidden_size == original_config.hidden_size
 
 
 # ===== SpeculatorsConfig Tests =====
@@ -194,12 +162,6 @@ def sample_verifier_config():
     return VerifierConfig(
         name_or_path="test/verifier",
         architectures=["TestModel"],
-        hidden_size=768,
-        intermediate_size=3072,
-        vocab_size=50000,
-        max_position_embeddings=512,
-        bos_token_id=1,
-        eos_token_id=2,
     )
 
 

@@ -21,10 +21,11 @@ Functions:
 """
 
 import os
-from typing import Callable, ClassVar, Optional, Union
+from typing import Callable, ClassVar, Literal, Optional, Union
 
 import torch
 from transformers import (
+    AutoModelForCausalLM,
     GenerationConfig,
     GenerationMixin,
     PretrainedConfig,
@@ -56,7 +57,7 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel, GenerationMixin):
         # Load a speculator model with automatic class resolution
         model = SpeculatorModel.from_pretrained("path/to/speculator")
 
-        # Attach a verifier model
+        # Optionally attach a new verifier model
         verifier = AutoModel.from_pretrained("path/to/verifier")
         model.attach_verifier(verifier)
 
@@ -79,6 +80,10 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel, GenerationMixin):
         cls: type["SpeculatorModel"],
         pretrained_model_name_or_path: Optional[Union[str, os.PathLike]],
         *model_args,
+        verifier: Optional[Union[str, os.PathLike, PreTrainedModel]] = None,
+        verifier_attachment_mode: Optional[
+            Literal["detached", "full", "train_only"]
+        ] = None,
         config: Optional[Union[PretrainedConfig, str, os.PathLike]] = None,
         cache_dir: Optional[Union[str, os.PathLike]] = None,
         ignore_mismatched_sizes: bool = False,
@@ -107,8 +112,10 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel, GenerationMixin):
             model = SpeculatorModel.from_pretrained("./my_speculator")
 
             # Load with custom config
-            config = EagleConfig.from_pretrained("RedHatAI/eagle-llama-7b")
-            model = SpeculatorModel.from_pretrained(None, config=config)
+            config = SpeculatorModelConfig.from_pretrained("RedHatAI/eagle-llama-7b")
+            model = SpeculatorModel.from_pretrained(
+                None, config=config, state_dict=state_dict
+            )
             ```
 
         :param pretrained_model_name_or_path: The model identifier on Hugging Face Hub,
@@ -116,6 +123,22 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel, GenerationMixin):
             config is provided as a path.
         :param model_args: Additional positional arguments passed to the model
             constructor.
+        :param verifier: Optional verifier model to attach the speculator to.
+            Can be a path to a local model directory, a Hugging Face model identifier,
+            or an instance of PreTrainedModel. If provided, the speculator will use this
+            verifier for speculative decoding. If None, the speculator will load the
+            verifier from the config if specified, or it must be attached later
+            using the `attach_verifier` method.
+        :param verifier_attachment_mode: Optional mode for how the verifier is
+            attached to the speculator. If "detached", any verifier passed in or
+            resolved from the config will not be ignored.
+            If "full", the verifier is fully integrated into the
+            speculator's forward pass and generation methods.
+            If "train_only", only the portions of the verifier needed for training
+            are attached, allowing for better resource utilization during training.
+            If None and a verifier is provided, it defaults to "full".
+            If a verifier is not provided and None is found in the config,
+            this parameter is ignored.
         :param config: Optional configuration for the model. Can be a
             SpeculatorModelConfig instance, a path to a config file, or None to load
             from model directory.
@@ -163,13 +186,21 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel, GenerationMixin):
                 f"got {type(config)}."
             )
 
-        if type(cls) is SpeculatorModel:
+        if not pretrained_model_name_or_path and not kwargs.get("state_dict"):
+            raise ValueError(
+                "Either `pretrained_model_name_or_path` or `state_dict` must be "
+                "provided to load a SpeculatorModel."
+            )
+
+        if cls is SpeculatorModel:
             # generic call to from_pretrained on this class, need to resolve the
             # specific model class to use for loading based on the config and registry
             model_class = cls.registered_model_class_from_config(config)
             return model_class.from_pretrained(
                 pretrained_model_name_or_path,
                 *model_args,
+                verifier=verifier,
+                verifier_attachment_mode=verifier_attachment_mode,
                 config=config,
                 cache_dir=cache_dir,
                 ignore_mismatched_sizes=ignore_mismatched_sizes,
@@ -182,9 +213,11 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel, GenerationMixin):
                 **kwargs,
             )
 
-        return cls.from_pretrained(
+        return super().from_pretrained(  # type: ignore[misc]
             pretrained_model_name_or_path,
             *model_args,
+            verifier=verifier,
+            verifier_attachment_mode=verifier_attachment_mode,
             config=config,
             cache_dir=cache_dir,
             ignore_mismatched_sizes=ignore_mismatched_sizes,
@@ -245,7 +278,8 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel, GenerationMixin):
     def __init__(
         self,
         config: SpeculatorModelConfig,
-        verifier: Optional[PreTrainedModel],
+        verifier: Optional[Union[str, os.PathLike, PreTrainedModel]],
+        verifier_attachment_mode: Optional[Literal["detached", "full", "train_only"]],
         **kwargs,
     ):
         """
@@ -261,23 +295,53 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel, GenerationMixin):
         :param config: The configuration for the speculator model. Must be a
             SpeculatorModelConfig instance containing model hyperparameters and
             speculative decoding settings.
-        :param verifier: The base verifier model to use for token validation during
-            speculative decoding. If None, attach_verifier must be called before
-            using the model for generation.
+        :param verifier: The verifier model to attach. This can be a path to a local
+            model directory, a Hugging Face model identifier, or an instance of
+            PreTrainedModel. If provided, the speculator will use this verifier for
+            speculative decoding. If None, the speculator will load the verifier from
+            the config if specified, or it must be attached later using the
+            `attach_verifier` method.
+        :param verifier_attachment_mode: Optional mode for how the verifier is
+            attached to the speculator. If "detach", any verifier passed in or
+            resolved from the config will not be attached.
+            If "full", the verifier is fully integrated into the
+            speculator's forward pass and generation methods.
+            If "train_only", only the portions of the verifier needed for training
+            are attached, allowing for better resource utilization during training.
+            If None and a verifier is provided, it defaults to "full".
+            If a verifier is not provided and None is found in the config,
+            this parameter is ignored.
         :param kwargs: Additional keyword arguments passed to the parent
             PreTrainedModel constructor.
         """
+        if not config:
+            raise ValueError(
+                "Config must be provided to initialize a SpeculatorModel. "
+                "Use SpeculatorModelConfig to create a valid configuration."
+            )
+
+        if not isinstance(config, SpeculatorModelConfig):
+            raise TypeError(
+                f"Expected config to be an instance of SpeculatorModelConfig, "
+                f"got {type(config)} {config}."
+            )
+
         super().__init__(config, **kwargs)
         self.config: SpeculatorModelConfig = config
         self.verifier: Optional[PreTrainedModel] = None
-        if verifier is not None:
-            self.attach_verifier(verifier)
+        self.verifier_attachment_mode: Literal["detached", "full", "train_only"] = (
+            "detached"
+        )
+
+        verifier = verifier or config.speculators_config.verifier.name_or_path
+        if verifier is not None and verifier_attachment_mode != "detached":
+            self.attach_verifier(verifier, mode=verifier_attachment_mode)
 
     def forward(self, *args, **kwargs):
         """
         Defines the forward pass computation for the speculator model.
 
-        This abstract method must be implemented by all concrete speculator model
+        This method must be implemented by all concrete speculator model
         subclasses. It defines how the model processes inputs to generate candidate
         tokens or logits specifically for training pipelines.
 
@@ -296,10 +360,45 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel, GenerationMixin):
             "speculator model subclasses."
         )
 
-    def attach_verifier(self, verifier: PreTrainedModel):
+    def resolve_verifier(
+        self, verifier: Union[str, os.PathLike, PreTrainedModel]
+    ) -> PreTrainedModel:
+        """
+        Resolves the verifier model from a given path or identifier.
+
+        This method loads the verifier model from a specified path or identifier,
+        ensuring it is compatible with the speculator's configuration. If the
+        verifier is already attached, it returns the existing verifier instance.
+
+        :param verifier: The verifier model to resolve. Can be a path to a local
+            model directory, a Hugging Face model identifier, or an instance of
+            PreTrainedModel.
+        :return: The resolved PreTrainedModel instance for the verifier.
+        """
+        if not verifier:
+            raise ValueError(
+                "Verifier must be provided as a path, identifier, or PreTrainedModel. "
+            )
+
+        if not isinstance(verifier, (str, os.PathLike, PreTrainedModel)):
+            raise TypeError(
+                f"Expected verifier to be a PreTrainedModel, a string path, "
+                f"or an os.PathLike object, got {type(verifier)} {verifier}."
+            )
+
+        if isinstance(verifier, PreTrainedModel):
+            return verifier
+
+        return AutoModelForCausalLM.from_pretrained(verifier)
+
+    def attach_verifier(
+        self,
+        verifier: Union[str, os.PathLike, PreTrainedModel],
+        mode: Optional[Literal["full", "train_only"]] = None,
+    ) -> PreTrainedModel:
         """
         Attach a verifier model for the speculator that is used to attach to
-        for running inference/trainign with the speculator and validates the
+        for running inference/training with the speculator and validates the
         candidate tokens generated by the speculator during the
         speculative decoding process. It should be compatible
         with the speculator's configuration in terms of vocabulary, architecture,
@@ -315,23 +414,55 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel, GenerationMixin):
             outputs = speculator.generate(input_ids)
             ```
 
-        :param verifier: The verifier model to attach. Must be an instance of
-            PreTrainedModel (or subclass) that is compatible with this speculator.
+        :param verifier: The verifier model to attach. This can be a path to a local
+            model directory, a Hugging Face model identifier, or an instance of
+            PreTrainedModel. If a path or identifier is provided, the model will be
+            loaded automatically. If an instance is provided, it will be used directly.
+        :param mode: Optional mode for how the verifier is attached to the speculator.
+            If "full", the verifier is fully integrated into the speculator's forward
+            pass and generation methods. If "train_only", only the portions of the
+            verifier needed for training are attached, allowing for better resource
+            utilization during training. If None, defaults to "full".
+        :return: The PreTrainedModel instance for the verifier that was attached.
         """
-        if not isinstance(verifier, PreTrainedModel):
-            raise TypeError(
-                f"Expected verifier to be a PreTrainedModel, got {type(verifier)}."
+        if self.verifier_attachment_mode != "detached":
+            raise RuntimeError(
+                "Cannot attach a verifier when the speculator is not in detached mode. "
+                "Detach the current verifier first using `detach_verifier()`."
             )
-        self.verifier = verifier
+
+        if mode not in {"full", "train_only", None}:
+            raise ValueError(
+                f"Invalid verifier_attachment_mode: {mode}. "
+                "Must be one of 'full', 'train_only', or None."
+            )
+
+        verifier = self.resolve_verifier(verifier)
+        self.verifier_attachment_mode = mode or "full"
+        self.verifier = (
+            verifier if self.verifier_attachment_mode == "full" else None
+        )  # Expect subclasses to handle references if train_only
+
+        return verifier
 
     def detach_verifier(self):
         """
         Removes the reference to the attached verifier model and frees up the
         associated memory. After calling this method, the speculator will not
-        be able to perform generation until a new verifier is attached.
+        be able to perform forward passes or generation until a new verifier
+        is attached.
         """
+        if self.verifier_attachment_mode == "detached":
+            raise RuntimeError(
+                "Verifier is already detached, cannot be called again until "
+                "a new verifier is attached."
+            )
+
         if self.verifier is not None:
             del self.verifier
+
+        self.verifier = None
+        self.verifier_attachment_mode = "detached"
 
     @torch.no_grad()
     def generate(

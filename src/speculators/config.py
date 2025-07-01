@@ -79,7 +79,7 @@ class VerifierConfig(BaseModel):
 
     @classmethod
     def from_verifier_config(
-        cls, config: PretrainedConfig, name_or_path: Optional[str] = None
+        cls, config: PretrainedConfig, name_or_path: Optional[str] = "UNSET"
     ) -> "VerifierConfig":
         """
         Create a VerifierConfig from a PretrainedConfig object.
@@ -88,23 +88,25 @@ class VerifierConfig(BaseModel):
 
         :param config: The PretrainedConfig object to extract the parameters from.
         :param name_or_path: The name or path for the verifier model.
+            Set to None to not add a specific name_or_path.
             If not provided, the name_or_path from the config will be used.
         :return: A VerifierConfig object with the extracted parameters.
         """
         config_dict = config.to_dict()
 
+        if name_or_path == "UNSET":
+            name_or_path = (
+                getattr(config, "name_or_path", None)
+                or config_dict.get("_name_or_path", None)
+                or config_dict.get("name_or_path", None)
+            )
+
         return cls(
-            name_or_path=name_or_path or config.name_or_path,
+            name_or_path=name_or_path,
             architectures=config_dict.get("architectures", []),
-            hidden_size=config_dict.get("hidden_size", -1),
-            intermediate_size=config_dict.get("intermediate_size", -1),
-            vocab_size=config_dict.get("vocab_size", -1),
-            max_position_embeddings=config_dict.get("max_position_embeddings", -1),
-            bos_token_id=config_dict.get("bos_token_id", -1),
-            eos_token_id=config_dict.get("eos_token_id", -1),
         )
 
-    name_or_path: str = Field(
+    name_or_path: Optional[str] = Field(
         description=(
             "The name as a Hugging Face id or path to the verifier model "
             "used for the speculator. Used to dynamically load the verifier the "
@@ -115,50 +117,6 @@ class VerifierConfig(BaseModel):
         description=(
             "The architectures for the original verifier as found in its config.json. "
             "Used to validate architecture compatibility of different verifiers "
-            "with the speculator, if needed."
-        ),
-    )
-    hidden_size: int = Field(
-        description=(
-            "The hidden size of the original verifier as found in its config.json. "
-            "Used to validate architecture compatibility of different verifiers "
-            "with the speculator, if needed."
-        ),
-    )
-    intermediate_size: int = Field(
-        description=(
-            "The intermediate size of original verifier as found in its config.json. "
-            "Used to validate architecture compatibility of different verifiers "
-            "with the speculator, if needed."
-        ),
-    )
-    vocab_size: int = Field(
-        description=(
-            "The vocab size of the original verifier as found in the its config.json. "
-            "Used to validate tokenizer compatibility of different verifiers "
-            "with the speculator, if needed."
-        ),
-    )
-    max_position_embeddings: int = Field(
-        description=(
-            "The max position embeddings of original verifier as in its config.json. "
-            "Used to validate max length compatibility of different verifiers "
-            "with the speculator, if needed."
-        ),
-    )
-    bos_token_id: Union[int, list[int]] = Field(
-        description=(
-            "The beginning of sentence token id of the original verifier as "
-            "found in its config.json. "
-            "Used to validate tokenizer compatibility of different verifiers "
-            "with the speculator, if needed."
-        ),
-    )
-    eos_token_id: Union[int, list[int]] = Field(
-        description=(
-            "The end of sentence token id of the original verifier as "
-            "found in its config.json. "
-            "Used to validate tokenizer compatibility of different verifiers "
             "with the speculator, if needed."
         ),
     )

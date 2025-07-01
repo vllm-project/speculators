@@ -25,12 +25,6 @@ def sample_verifier_config():
     return VerifierConfig(
         name_or_path="test/verifier",
         architectures=["LlamaForCausalLM"],
-        hidden_size=768,
-        intermediate_size=3072,
-        vocab_size=32000,
-        max_position_embeddings=2048,
-        bos_token_id=1,
-        eos_token_id=2,
     )
 
 

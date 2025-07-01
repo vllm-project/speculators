@@ -1,14 +1,16 @@
 """
-Eagle model implementation for EAGLE1 and HASS speculator models.
-
-This module provides a unified implementation for both EAGLE1 and HASS variants
-through configurable parameters.
+Speculators implementations providing a unified implementation
+for EAGLE v1, EAGLE v2, and HASS variants for spec decoding:
+    - Eagle / Eagle v1: https://arxiv.org/abs/2401.15077
+    - Eagle v2: https://arxiv.org/abs/2406.16858
+    - HASS: https://arxiv.org/abs/2408.15766
 
 Classes:
-    EagleSpeculatorConfig: Configuration for EAGLE/HASS models
-    EagleSpeculator: Model implementation for EAGLE/HASS speculators
+    EagleSpeculatorConfig: Configuration class for EAGLE/HASS model variants
+    EagleSpeculator: Main model implementation for EAGLE/HASS speculators
 """
 
+import os
 from typing import Any, ClassVar, Literal, Optional, Union
 
 import torch
@@ -35,67 +37,104 @@ __all__ = [
 @SpeculatorModelConfig.register("eagle")
 class EagleSpeculatorConfig(SpeculatorModelConfig):
     """
-    Configuration class for EAGLE1 and HASS speculator models.
+    A SpeculatorModelConfig implementation to be used with the EagleSpeculator
+    for EAGLE and HASS variants for spec decoding:
+        - Eagle / Eagle v1: https://arxiv.org/abs/2401.15077
+        - Eagle v2: https://arxiv.org/abs/2406.16858
+        - HASS: https://arxiv.org/abs/2408.15766
 
-    This unified configuration supports both EAGLE1 and HASS variants through
-    configurable parameters, allowing a single model implementation to handle
-    both architectures.
+    Model Configurations:
+        - EAGLE1: layernorms=False, fusion_bias=False
+        - EAGLE2: layernorms=False, fusion_bias=False
+        - HASS: layernorms=False, fusion_bias=True
+
+    Example:
+        ```python
+        from speculators import SpeculatorsConfig, VerifierConfig
+        from speculators.models import EagleSpeculatorConfig
+        from speculators.proposals import GreedyTokenProposalConfig
+        from transformers import AutoConfig
+
+        config = EagleSpeculatorConfig(
+            transformer_layer_config=AutoConfig.from_pretrained("meta-llama/Llama-3.1-8B-Instruct"),
+            speculators_config=SpeculatorsConfig(
+                algorithm="eagle_v1",
+                proposal_methods=[
+                    GreedyTokenProposalConfig(),
+                ],
+                default_proposal_method="greedy",
+                verifier=VerifierConfig(
+                    name_or_path="meta-llama/Llama-3.1-8B-Instruct",
+                    architectures=["LlamaForCausalLM"],
+                )
+        )
+        ```
     """
 
     speculators_model_type: Literal["eagle"] = "eagle"
     architectures: list[str] = Field(
         default_factory=lambda: ["EagleSpeculator"],
         description=(
-            "List of model architectures that can be used with the "
-            "model pretrained weights."
+            "List of model architectures that can be used with the model "
+            "pretrained weights. Automatically includes the transformer layer "
+            "architecture to ensure compatibility during model loading and "
+            "validation. Used by Transformers AutoModel classes for dynamic "
+            "model class resolution."
         ),
     )
-
-    def __init__(self, **kwargs):
-        if "architectures" not in kwargs:
-            kwargs["architectures"] = ["EagleSpeculator"]
-        super().__init__(**kwargs)
 
     transformer_layer_architecture: str = Field(
         default="LlamaDecoderLayer",
         description=(
-            "The architecture of the transformer layer to use. "
-            "Typically 'LlamaDecoderLayer' for Eagle 1, Eagle 2, and HASS."
+            "The architecture class name of the transformer layer to use for "
+            "the speculator's decoder layer. Must correspond to a valid "
+            "transformer decoder layer class (e.g., 'LlamaDecoderLayer', "
+            "'MistralDecoderLayer'). This determines the attention mechanism, "
+            "feedforward network, and layer normalization behavior. "
+            "Typically 'LlamaDecoderLayer' for EAGLE1, EAGLE2, and HASS variants."
         ),
     )
     transformer_layer_config: PretrainedConfig = Field(
         default_factory=LlamaConfig,
         description=(
-            "Configuration for the transformer layer to use in the "
-            "Eagle model architecture. This must be a PretrainedConfig that matches "
-            "the config required by the transformer_layer_architecture."
+            "Configuration object for the transformer layer architecture. "
+            "Must be a PretrainedConfig instance that matches the requirements "
+            "of the transformer_layer_architecture. Contains parameters such as "
+            "hidden_size, num_attention_heads, intermediate_size, vocab_size, "
+            "and other architecture-specific settings. For EAGLE models, this "
+            "typically uses LlamaConfig with single-layer settings."
         ),
     )
     layernorms: bool = Field(
         default=False,
         description=(
-            "Whether to use additional layernorms in the model architecture, "
-            "specifically the layernorm after the verifier's hidden state, "
-            "after the fusion layer, and before the LM head. "
-            "For Eagle, Eagle 1, and HASS, this is False."
+            "Whether to include additional layer normalization layers in the "
+            "model architecture. When True, adds RMSNorm layers after the "
+            "verifier's hidden state (embedding_layernorm), after the fusion "
+            "layer output, and before the language model head (pre_lm_head_layernorm). "
+            "Standard EAGLE1, EAGLE2, and HASS implementations use False. "
+            "TTT (Test-Time Training) variants may use True for improved stability."
         ),
     )
     fusion_bias: bool = Field(
         default=False,
         description=(
-            "Whether to add a bias to the fusion (fc) layer that is applied to the "
-            "concat of the input embeddings and input hidden state. "
-            "For Eagle and Eagle 2, this is False, while for HASS it is True."
+            "Whether to add a learnable bias term to the fusion (fully connected) "
+            "layer that combines input embeddings with verifier hidden states. "
+            "The fusion layer concatenates input embeddings and hidden states, "
+            "then projects to hidden_size dimensions. Standard EAGLE1 and EAGLE2 "
+            "use False, while some HASS variants may use True for hardware-specific "
+            "optimizations. Affects model capacity and training dynamics."
         ),
     )
 
     @model_validator(mode="after")
     def check_add_architectures(self) -> Self:
         """
-        Ensure that the transformer_layer_architecture is included in the
-        architectures list.
+        Automatically adds the transformer layer architecture to the
+        architectures list if it's not already present.
 
-        :return: Self
+        :return: The validated configuration instance with updated architectures
         """
         if self.transformer_layer_architecture not in self.architectures:
             self.architectures.append(self.transformer_layer_architecture)
@@ -105,10 +144,13 @@ class EagleSpeculatorConfig(SpeculatorModelConfig):
     @field_serializer("transformer_layer_config")
     def serialize_transformer_layer_config(self, value: PretrainedConfig) -> dict:
         """
-        Serialize the transformer_layer_config to a dictionary.
+        Serialize the transformer_layer_config to a dictionary for JSON storage.
 
-        :param value: The PretrainedConfig instance to serialize.
-        :return: Serialized dictionary representation of the config.
+        Converts the PretrainedConfig object to its dictionary representation
+        using to_diff_dict() to only include non-default values.
+
+        :param value: The PretrainedConfig instance to serialize
+        :return: Dictionary representation of the transformer layer configuration
         """
         return value.to_diff_dict()
 
@@ -116,10 +158,14 @@ class EagleSpeculatorConfig(SpeculatorModelConfig):
     @classmethod
     def validate_transformer_layer_config(cls, value: Any) -> PretrainedConfig:
         """
-        Validate that the transformer_layer_config is a valid PretrainedConfig.
+        Validate and convert transformer_layer_config to a PretrainedConfig instance.
 
-        :param value: The instance to validate to a PretrainedConfig.
-        :return: The validated PretrainedConfig instance.
+        Accepts either a dictionary that can be converted to a PretrainedConfig
+        or an existing PretrainedConfig instance.
+
+        :param value: The value to validate (dict or PretrainedConfig)
+        :return: A validated PretrainedConfig instance
+        :raises ValueError: If the value cannot be converted to a PretrainedConfig
         """
         if isinstance(value, dict):
             return PretrainedConfig.from_dict(value)
@@ -128,30 +174,98 @@ class EagleSpeculatorConfig(SpeculatorModelConfig):
             return value
 
         raise ValueError(
-            "transformer_layer_config must be a PretrainedConfig or a dict "
-            "that can be converted to a PretrainedConfig."
+            "transformer_layer_config must be a PretrainedConfig instance or a "
+            "dictionary that can be converted to a PretrainedConfig."
         )
 
 
 @SpeculatorModel.register("eagle")
 class EagleSpeculator(SpeculatorModel):
     """
-    Eagle speculator model for speculative decoding.
+    A SpeculatorModel implementation for EAGLE and HASS variants for spec decoding:
+        - Eagle / Eagle v1: https://arxiv.org/abs/2401.15077
+        - Eagle v2: https://arxiv.org/abs/2406.16858
+        - HASS: https://arxiv.org/abs/2408.15766
 
-    This model implements EAGLE1, EAGLE2, and HASS variants through configuration.
-    The key differences between variants are:
+    Architecture Overview:
+        The EAGLE speculator consists of:
+        1. Input embedding layer (shared with verifier)
+        2. Optional embedding layer normalization
+        3. Fusion layer: Concatenates and projects input embeddings + verifier hidden
+           states to a latent space of hidden_size
+        4. Single transformer decoder layer for candidate token generation
+        5. Optional pre-LM head layer normalization
+        6. Language model head (shared with verifier)
 
-    - EAGLE1/2: layernorms=False, fusion_bias=False (EAGLE2 same architecture)
-    - HASS: layernorms=False, fusion_bias=False
-    - TTT variant: layernorms=True, fusion_bias varies
+    Speculative Decoding Process:
+        1. Verifier model processes input and generates hidden states
+        2. EAGLE speculator uses these hidden states + input embeddings to predict
+           next tokens
+        3. Multiple candidate tokens generated in parallel using token proposal methods
+        4. Verifier validates candidates and accepts/rejects based on probability
+           thresholds
+        5. Process continues iteratively for multi-token speculation
+
+    Example:
+        ```python
+        from speculators import SpeculatorsConfig, VerifierConfig
+        from speculators.models import EagleSpeculator, EagleSpeculatorConfig
+        from speculators.proposals import GreedyTokenProposalConfig
+        from transformers import AutoConfig, AutoTokenizer
+
+        config = EagleSpeculatorConfig(
+            transformer_layer_config=AutoConfig.from_pretrained("meta-llama/Llama-3.1-8B-Instruct"),
+            speculators_config=SpeculatorsConfig(
+                algorithm="eagle_v1",
+                proposal_methods=[
+                    GreedyTokenProposalConfig(),
+                ],
+                default_proposal_method="greedy",
+                verifier=VerifierConfig(
+                    name_or_path="meta-llama/Llama-3.1-8B-Instruct",
+                    architectures=["LlamaForCausalLM"],
+                )
+        )
+        speculator = EagleSpeculator(
+            config, verifier=verifier, verifier_attachment_mode="full"
+        )
+
+        tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.1-8B-Instruct")
+        input_ids = tokenizer.encode("The future of AI is", return_tensors="pt")
+        outputs = speculator.generate(
+            input_ids, max_length=100, do_sample=True, temperature=0.7
+        )
+        print(tokenizer.decode(outputs[0], skip_special_tokens=True))
+        ```
     """
 
     # PreTrainedModel settings
     config_class: ClassVar[type[EagleSpeculatorConfig]] = EagleSpeculatorConfig
 
     def __init__(
-        self, config: EagleSpeculatorConfig, verifier: Optional[PreTrainedModel] = None
+        self,
+        config: EagleSpeculatorConfig,
+        verifier: Optional[Union[str, os.PathLike, PreTrainedModel]],
+        verifier_attachment_mode: Optional[Literal["detached", "full", "train_only"]],
     ):
+        """
+        Initializes an EAGLE speculator architecture with configurable components based
+        on the provided configuration. The model starts with verifier-dependent layers
+        (embed_tokens, rotary_emb, lm_head) set to None until a verifier is attached.
+
+        :param config: Configuration object specifying model architecture, layer
+            settings, and speculative decoding parameters. Must be an instance of
+            EagleSpeculatorConfig containing transformer layer configuration and
+            EAGLE-specific settings.
+        :param verifier: Optional verifier model to attach for speculative decoding.
+            Can be a path to a model directory, Hugging Face model identifier, or
+            PreTrainedModel instance. If None, must be attached later via
+            attach_verifier() before using the model.
+        :param verifier_attachment_mode: Mode for verifier attachment. "detached"
+            prevents attachment even if verifier is provided. "full" enables
+            complete integration for both training and generation. "train_only"
+            attaches only components needed for training, optimizing memory usage.
+        """
         # Initialize model parameters from config
         self.vocab_size = config.transformer_layer_config.vocab_size
         self.hidden_size = config.transformer_layer_config.hidden_size
@@ -163,7 +277,11 @@ class EagleSpeculator(SpeculatorModel):
         self.lm_head: Optional[nn.Linear] = None
 
         # Delayed initialization to ensure everything needed for attach_verifier is set
-        super().__init__(config=config, verifier=verifier)
+        super().__init__(
+            config=config,
+            verifier=verifier,
+            verifier_attachment_mode=verifier_attachment_mode,
+        )
 
         # Initialize layers based on the configuration
         self.embedding_layernorm: Optional[nn.Module] = self._create_layernorm()
@@ -176,6 +294,79 @@ class EagleSpeculator(SpeculatorModel):
         self.pre_lm_head_layernorm: Optional[nn.Module] = self._create_layernorm()
 
         self.post_init()  # type: ignore[attr-defined]
+
+    def attach_verifier(
+        self,
+        verifier: Union[str, os.PathLike, PreTrainedModel],
+        mode: Optional[Literal["full", "train_only"]] = None,
+    ) -> PreTrainedModel:
+        """
+        Attach a verifier model to the EagleSpeculator for speculative decoding.
+        Utilizes the verifier's embed_tokens, rotary_emb, and lm_head layers
+        for the speculator's forward pass and generation methods.
+        Additionally, for `generate`, it uses the verifier's hidden states
+        to generate speculative token predictions.
+
+        If mode is "full", the verifier is fully integrated for use with
+        both `generate` and `forward` methods.
+
+        If mode is "train_only", only the verifier's layers required for a forward pass
+        are attached, allowing for better resource utilization during training.
+        `generate` will not be available until a full verifier is attached.
+
+        Example:
+            ```python
+            # Load and attach a verifier
+            verifier = EagleSpeculator(...)
+
+            # For generation
+            speculator.attach_verifier(verifier)
+            outputs = speculator.generate(input_ids)
+            speculator.detach_verifier()
+
+            # For training
+            speculator.attach_verifier(verifier, mode="train_only")
+            outputs = speculator(input_ids, hidden_states)
+            speculator.detach_verifier()
+            ```
+
+        :param verifier: The verifier model to attach. This can be a path to a local
+            model directory, a Hugging Face model identifier, or an instance of
+            PreTrainedModel. If a path or identifier is provided, the model will be
+            loaded automatically. If an instance is provided, it will be used directly.
+        :param mode: The mode for attaching the verifier. Can be "full" or "train_only".
+            If None, defaults to "full". In "train_only" mode, only the layers
+            required for a forward pass are attached, and the speculator cannot
+            perform generation until a full verifier is attached.
+        :return: The PreTrainedModel instance for the verifier that was attached.
+        """
+        verifier = super().attach_verifier(
+            verifier=verifier,
+            mode=mode,
+        )
+
+        # Extract layers from the verifier model
+        self.embed_tokens = verifier.embed_tokens  # type: ignore[attr-defined]
+        self.rotary_emb = verifier.rotary_emb  # type: ignore[attr-defined]
+        self.lm_head = verifier.lm_head  # type: ignore[attr-defined]
+
+        return verifier
+
+    def detach_verifier(self):
+        """
+        Removes the reference to the attached verifier model and frees up the
+        associated memory. After calling this method, the speculator will not
+        be able to perform forward passes or generation until a new verifier
+        is attached.
+        """
+        super().detach_verifier()
+
+        del self.embed_tokens
+        self.embed_tokens = None
+        del self.rotary_emb
+        self.rotary_emb = None
+        del self.lm_head
+        self.lm_head = None
 
     def forward(
         self,
@@ -190,18 +381,41 @@ class EagleSpeculator(SpeculatorModel):
         return_dict: Optional[bool] = None,
     ) -> Union[torch.FloatTensor, CausalLMOutputWithPast]:
         """
-        Generate speculative token predictions using verifier's hidden states.
+        Execute the forward pass for speculative token generation.
 
-        :param input_ids: Input token IDs
-        :param hidden_states: Hidden states from verifier model
-        :param attention_mask: Attention mask
-        :param position_ids: Position IDs
-        :param past_key_values: Past key values for caching
-        :param use_cache: Whether to use caching
-        :param output_attentions: Whether to output attentions
-        :param output_hidden_states: Whether to output hidden states
-        :param return_dict: Whether to return a dict
-        :return: Model outputs
+        Processes input tokens and verifier hidden states through the EAGLE architecture
+        to generate candidate tokens for speculative decoding. The method combines input
+        embeddings with verifier hidden states via a fusion layer, processes them
+        through a transformer decoder layer, and produces logits for next token
+        prediction.
+
+        :param input_ids: Token IDs for the current input sequence. Shape: (batch_size,
+            sequence_length). These represent the tokens that will be converted to
+            embeddings and combined with verifier hidden states.
+        :param hidden_states: Hidden state representations from the verifier model
+            corresponding to the input sequence. Shape: (batch_size, sequence_length,
+            hidden_size). These capture the verifier's understanding of the context.
+        :param attention_mask: Optional attention mask to avoid attending to padding
+            tokens. Shape: (batch_size, sequence_length) for 2D or (batch_size, 1,
+            sequence_length, sequence_length) for 4D causal mask.
+        :param position_ids: Optional position indices for tokens in the sequence.
+            Shape: (batch_size, sequence_length). If None, auto-generated based on
+            sequence length and past key values.
+        :param past_key_values: Optional cached key-value states from previous forward
+            passes for efficient generation. Tuple of layer key-value pairs.
+        :param use_cache: Whether to return key-value states for caching in subsequent
+            forward passes. Useful for autoregressive generation efficiency.
+        :param output_attentions: Whether to return attention weights from the
+            transformer layer. Used for analysis and visualization.
+        :param output_hidden_states: Whether to return hidden states from the
+            transformer layer. Currently not implemented in this model.
+        :param return_dict: Whether to return structured CausalLMOutputWithPast instead
+            of raw logits. If None, uses config.use_return_dict default.
+        :return: Either raw logits tensor (batch_size, sequence_length, vocab_size) if
+            return_dict=False, or CausalLMOutputWithPast containing logits, past key
+            values, and optional attention weights.
+        :raises ValueError: If verifier components (embed_tokens, rotary_emb, lm_head)
+            are not attached. Call attach_verifier() before using forward().
         """
         if self.embed_tokens is None or self.rotary_emb is None or self.lm_head is None:
             raise ValueError(
@@ -258,15 +472,6 @@ class EagleSpeculator(SpeculatorModel):
         position_ids: Optional[torch.LongTensor],
         past_key_values: Optional[tuple[tuple[torch.FloatTensor]]],
     ) -> tuple[torch.FloatTensor, Optional[torch.Tensor], Optional[torch.LongTensor]]:
-        """
-        Prepare inputs for the decoder layer.
-
-        :param hidden_states: Hidden states
-        :param attention_mask: Attention mask
-        :param position_ids: Position IDs
-        :param past_key_values: Past key values
-        :return: Prepared hidden states, attention mask, and position IDs
-        """
         batch_size, seq_length = hidden_states.shape[:2]
 
         if position_ids is None:
