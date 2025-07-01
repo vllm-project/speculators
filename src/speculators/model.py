@@ -74,6 +74,9 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel, GenerationMixin):
     config_class: ClassVar[type[SpeculatorModelConfig]] = SpeculatorModelConfig
     base_model_prefix: ClassVar[str] = "model"
     main_input_name: ClassVar[str] = "input_ids"
+    _keys_to_ignore_on_load_missing: ClassVar[list[str]] = [
+        "verifier*",
+    ]
 
     @classmethod
     def from_pretrained(
@@ -337,29 +340,6 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel, GenerationMixin):
         if verifier is not None and verifier_attachment_mode != "detached":
             self.attach_verifier(verifier, mode=verifier_attachment_mode)
 
-    def forward(self, *args, **kwargs):
-        """
-        Defines the forward pass computation for the speculator model.
-
-        This method must be implemented by all concrete speculator model
-        subclasses. It defines how the model processes inputs to generate candidate
-        tokens or logits specifically for training pipelines.
-
-        Use `model.generate` for generation tasks, which will handle
-        speculative decoding with the attached verifier.
-
-        :param args: Positional arguments for the forward pass, typically including
-            input_ids and potentially attention_mask, position_ids, etc.
-        :param kwargs: Keyword arguments for the forward pass, which may include
-            various model-specific parameters and options.
-        :return: Model outputs, typically including logits or candidate token
-            sequences, depending on the specific speculator implementation.
-        """
-        raise NotImplementedError(
-            "The forward method is only supported on concrete "
-            "speculator model subclasses."
-        )
-
     def resolve_verifier(
         self, verifier: Union[str, os.PathLike, PreTrainedModel]
     ) -> PreTrainedModel:
@@ -463,6 +443,50 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel, GenerationMixin):
 
         self.verifier = None
         self.verifier_attachment_mode = "detached"
+
+    def state_dict(self, *args, **kwargs) -> dict[str, torch.Tensor]:
+        """
+        Overrides the state_dict method from PyTorch to ensure that save pathways
+        within Transformers PreTrainedModel do not include the verifier model's
+        parameters. This is important to ensure that the speculator model
+        can be saved and loaded without including the verifier's state, which
+        is expected to be managed separately.
+
+        :param args: Positional arguments passed to the state_dict method.
+        :param kwargs: Keyword arguments passed to the state_dict method.
+        :return: A dictionary containing the state of the speculator model,
+            excluding the verifier model's parameters. This dictionary can be used
+            to save the model's state to disk or for further processing.
+        """
+        tmp_verifier = self.verifier
+        self.verifier = None
+        state = super().state_dict(*args, **kwargs)  # type: ignore[misc]
+        self.verifier = tmp_verifier
+
+        return state
+
+    def forward(self, *args, **kwargs):
+        """
+        Defines the forward pass computation for the speculator model.
+
+        This method must be implemented by all concrete speculator model
+        subclasses. It defines how the model processes inputs to generate candidate
+        tokens or logits specifically for training pipelines.
+
+        Use `model.generate` for generation tasks, which will handle
+        speculative decoding with the attached verifier.
+
+        :param args: Positional arguments for the forward pass, typically including
+            input_ids and potentially attention_mask, position_ids, etc.
+        :param kwargs: Keyword arguments for the forward pass, which may include
+            various model-specific parameters and options.
+        :return: Model outputs, typically including logits or candidate token
+            sequences, depending on the specific speculator implementation.
+        """
+        raise NotImplementedError(
+            "The forward method is only supported on concrete "
+            "speculator model subclasses."
+        )
 
     @torch.no_grad()
     def generate(

@@ -236,12 +236,24 @@ class EagleSpeculator(SpeculatorModel):
 
     # PreTrainedModel settings
     config_class: ClassVar[type[EagleSpeculatorConfig]] = EagleSpeculatorConfig
+    _keys_to_ignore_on_load_missing: ClassVar[list[str]] = [
+        "verifier*",
+        "embed_tokens*",
+        "lm_head*",
+    ]
+    _keys_to_ignore_on_save: ClassVar[list[str]] = [
+        "embed_tokens.weight",
+        "lm_head.weight",
+        "lm_head.bias",
+    ]
 
     def __init__(
         self,
         config: EagleSpeculatorConfig,
-        verifier: Optional[Union[str, os.PathLike, PreTrainedModel]],
-        verifier_attachment_mode: Optional[Literal["detached", "full", "train_only"]],
+        verifier: Optional[Union[str, os.PathLike, PreTrainedModel]] = None,
+        verifier_attachment_mode: Optional[
+            Literal["detached", "full", "train_only"]
+        ] = None,
     ):
         """
         Initializes an EAGLE speculator architecture with configurable components based
@@ -261,6 +273,12 @@ class EagleSpeculator(SpeculatorModel):
             complete integration for both training and generation. "train_only"
             attaches only components needed for training, optimizing memory usage.
         """
+        if not isinstance(config, EagleSpeculatorConfig):
+            raise ValueError(
+                "config must be an instance of EagleSpeculatorConfig, "
+                f"got {type(config)} instead."
+            )
+
         # Initialize model parameters from config
         self.vocab_size = config.transformer_layer_config.vocab_size
         self.hidden_size = config.transformer_layer_config.hidden_size
