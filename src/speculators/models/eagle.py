@@ -58,7 +58,7 @@ class EagleSpeculatorConfig(SpeculatorModelConfig):
         config = EagleSpeculatorConfig(
             transformer_layer_config=AutoConfig.from_pretrained("meta-llama/Llama-3.1-8B-Instruct"),
             speculators_config=SpeculatorsConfig(
-                algorithm="eagle_v1",
+                algorithm="eagle",
                 proposal_methods=[
                     GreedyTokenProposalConfig(),
                 ],
