@@ -33,7 +33,7 @@ class SpeculatorModelTestConfig(SpeculatorModelConfig):
 
 @SpeculatorModel.register("test_speculator")
 class SpeculatorTestModel(SpeculatorModel):
-    config_class = SpeculatorModelTestConfig
+    config_class = SpeculatorModelTestConfig  # type: ignore[misc]
 
     def __init__(
         self,

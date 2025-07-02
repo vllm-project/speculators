@@ -8,6 +8,10 @@ repos:
   rev: v0.11.7
   hooks:
     - id: ruff
+      name: run linter
+      args: [ --fix, --show-fixes ]
+    - id: ruff-format
+      name: run formatter
 - repo: https://github.com/pre-commit/mirrors-mypy
   rev: v1.15.0
   hooks:
@@ -18,16 +22,22 @@ repos:
         # main dependencies
         click,
         datasets,
+        httpx,
+        huggingface-hub,
         loguru,
+        numpy,
+        protobuf,
         pydantic,
-        pydantic_settings,
+        pydantic-settings,
         pyyaml,
-        respx,
+        safetensors,
+        torch,
         transformers,
 
         # dev dependencies
         pytest,
         pydantic_settings,
+        respx,
         setuptools,
         setuptools-git-versioning,
 

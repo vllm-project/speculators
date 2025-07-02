@@ -21,7 +21,7 @@ Functions:
 """
 
 import os
-from typing import Callable, ClassVar, Literal, Optional, Union
+from typing import Any, Callable, ClassVar, Literal, Optional, Union
 
 import torch
 from transformers import (
@@ -40,7 +40,7 @@ from speculators.config import SpeculatorModelConfig
 from speculators.utils import ClassRegistryMixin
 
 
-class SpeculatorModel(ClassRegistryMixin, PreTrainedModel, GenerationMixin):
+class SpeculatorModel(ClassRegistryMixin, PreTrainedModel, GenerationMixin):  # type: ignore[misc]
     """
     Abstract base class for all speculator models in the Speculators library.
 
@@ -71,10 +71,10 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel, GenerationMixin):
     registry_auto_discovery: ClassVar[bool] = True
 
     # PreTrainedModel settings
-    config_class: ClassVar[type[SpeculatorModelConfig]] = SpeculatorModelConfig
-    base_model_prefix: ClassVar[str] = "model"
-    main_input_name: ClassVar[str] = "input_ids"
-    _keys_to_ignore_on_load_missing: ClassVar[list[str]] = [
+    config_class: ClassVar[type[SpeculatorModelConfig]] = SpeculatorModelConfig  # type: ignore[assignment,misc]
+    base_model_prefix: ClassVar[str] = "model"  # type: ignore[misc]
+    main_input_name: ClassVar[str] = "input_ids"  # type: ignore[misc]
+    _keys_to_ignore_on_load_missing: ClassVar[list[str]] = [  # type: ignore[assignment,misc]
         "verifier*",
     ]
 
@@ -444,7 +444,13 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel, GenerationMixin):
         self.verifier = None
         self.verifier_attachment_mode = "detached"
 
-    def state_dict(self, *args, **kwargs) -> dict[str, torch.Tensor]:
+    def state_dict(
+        self,
+        *,
+        destination: dict[str, Any] = None,  # type: ignore[assignment]
+        prefix: str = "",
+        keep_vars: bool = False,
+    ):
         """
         Overrides the state_dict method from PyTorch to ensure that save pathways
         within Transformers PreTrainedModel do not include the verifier model's
@@ -452,15 +458,18 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel, GenerationMixin):
         can be saved and loaded without including the verifier's state, which
         is expected to be managed separately.
 
-        :param args: Positional arguments passed to the state_dict method.
-        :param kwargs: Keyword arguments passed to the state_dict method.
+        :param destination: Optional dictionary to store the state.
+        :param prefix: Optional prefix for parameter names.
+        :param keep_vars: Whether to keep Variables in the state_dict.
         :return: A dictionary containing the state of the speculator model,
             excluding the verifier model's parameters. This dictionary can be used
             to save the model's state to disk or for further processing.
         """
         tmp_verifier = self.verifier
         self.verifier = None
-        state = super().state_dict(*args, **kwargs)  # type: ignore[misc]
+        state = super().state_dict(  # type: ignore[misc]
+            destination=destination, prefix=prefix, keep_vars=keep_vars
+        )
         self.verifier = tmp_verifier
 
         return state
@@ -504,6 +513,7 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel, GenerationMixin):
         negative_prompt_ids: Optional[torch.Tensor] = None,  # noqa: ARG002
         negative_prompt_attention_mask: Optional[torch.Tensor] = None,  # noqa: ARG002
         use_model_defaults: Optional[bool] = None,  # noqa: ARG002
+        custom_generate: Optional[str] = None,  # noqa: ARG002
         **kwargs,  # noqa: ARG002
     ) -> Union[GenerateOutput, torch.LongTensor]:
         """

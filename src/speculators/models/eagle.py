@@ -224,24 +224,17 @@ class EagleSpeculator(SpeculatorModel):
         speculator = EagleSpeculator(
             config, verifier=verifier, verifier_attachment_mode="full"
         )
-
-        tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.1-8B-Instruct")
-        input_ids = tokenizer.encode("The future of AI is", return_tensors="pt")
-        outputs = speculator.generate(
-            input_ids, max_length=100, do_sample=True, temperature=0.7
-        )
-        print(tokenizer.decode(outputs[0], skip_special_tokens=True))
         ```
     """
 
     # PreTrainedModel settings
-    config_class: ClassVar[type[EagleSpeculatorConfig]] = EagleSpeculatorConfig
-    _keys_to_ignore_on_load_missing: ClassVar[list[str]] = [
+    config_class: ClassVar[type[EagleSpeculatorConfig]] = EagleSpeculatorConfig  # type: ignore[misc]
+    _keys_to_ignore_on_load_missing: ClassVar[list[str]] = [  # type: ignore[misc]
         "verifier*",
         "embed_tokens*",
         "lm_head*",
     ]
-    _keys_to_ignore_on_save: ClassVar[list[str]] = [
+    _keys_to_ignore_on_save: ClassVar[list[str]] = [  # type: ignore[assignment,misc]
         "embed_tokens.weight",
         "lm_head.weight",
         "lm_head.bias",
@@ -359,9 +352,9 @@ class EagleSpeculator(SpeculatorModel):
         )
 
         # Extract layers from the verifier model
-        self.embed_tokens = verifier.embed_tokens  # type: ignore[attr-defined]
-        self.rotary_emb = verifier.rotary_emb  # type: ignore[attr-defined]
-        self.lm_head = verifier.lm_head  # type: ignore[attr-defined]
+        self.embed_tokens = verifier.embed_tokens  # type: ignore[assignment]
+        self.rotary_emb = verifier.rotary_emb  # type: ignore[assignment]
+        self.lm_head = verifier.lm_head  # type: ignore[assignment]
 
         return verifier
 

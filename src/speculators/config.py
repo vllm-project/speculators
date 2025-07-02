@@ -78,7 +78,7 @@ class VerifierConfig(BaseModel):
     """
 
     @classmethod
-    def from_verifier_config(
+    def from_config(
         cls, config: PretrainedConfig, name_or_path: Optional[str] = "UNSET"
     ) -> "VerifierConfig":
         """
