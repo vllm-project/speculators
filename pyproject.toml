@@ -39,12 +39,15 @@ dependencies = [
     "click",
     "datasets",
     "httpx[http2]",
+    "huggingface-hub",
     "loguru",
     "numpy",
     "protobuf",
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
     "pyyaml>=6.0.0",
+    "safetensors",
+    "torch",
     "transformers",
 ]
 
@@ -205,6 +208,8 @@ select = [
     "PGH003", # allow general ignores in tests
     "S106", # allow hardcoded passwords in tests
     "PLR0915", # allow complex statements in tests
+    "S108", # allow probable insecure usage of temporary files in tests
+    "PLW2901", # allow variable overwrite in tests
 ]
 
 [tool.ruff.lint.isort]
