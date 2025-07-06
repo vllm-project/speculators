@@ -38,22 +38,6 @@ jobs:
       - name: Run quality checks
         run: tox -e types
 
-  link-checks:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python: ["3.9"]
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python }}
-      - name: Install dependencies
-        run: pip install tox
-      - name: Run link checks
-        run: tox -e links
-
   precommit-checks:
     runs-on: ubuntu-latest
     strategy:
@@ -69,6 +53,30 @@ jobs:
         run: pip install pre-commit
       - name: Run pre-commit checks
         run: pre-commit run --all-files
+
+  link-checks:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Link Checker
+        id: lychee
+        uses: lycheeverse/lychee-action@v2
+        with:
+          fail: false
+      - name: Create Issues
+        if: steps.lychee.outputs.exit_code != '0'
+        uses: peter-evans/create-issue-from-file@v5
+        with:
+          title: Link Checker Report
+          content-filepath: ./lychee/out.md
+          labels: report, automated issue
+      - name: Fail on Issues
+        if: steps.lychee.outputs.exit_code != '0'
+        run: |
+          echo "Link Checker found issues. Please check the created issue for details."
+          exit 1
 
   unit-tests:
     runs-on: ubuntu-latest
