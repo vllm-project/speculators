@@ -332,9 +332,9 @@ class EagleConverter:
             else:
                 logger.debug("Skipping forward pass test (model on meta device)")
                 
-        except Exception as e:
-            logger.error(f"Validation failed: {e}")
-            raise
+        except Exception as exception:
+            logger.error(f"Validation failed: {exception}")
+            raise exception
     
     def _run_dummy_forward_pass(self, model: EagleSpeculator, device: torch.device) -> None:
         """
@@ -343,13 +343,24 @@ class EagleConverter:
         :param model: The Eagle speculator model
         :param device: Device to run on
         """
+        # Get dimensions from model config
+        config = model.config
+        vocab_size = config.transformer_layer_config.vocab_size
+        hidden_size = config.transformer_layer_config.hidden_size
+        max_position_embeddings = config.transformer_layer_config.max_position_embeddings
+        
+        # Use conservative defaults for batch size and sequence length
         batch_size = 1
-        seq_length = 10
-        hidden_size = model.config.transformer_layer_config.hidden_size
+        seq_length = min(10, max_position_embeddings)  # Don't exceed model's max length
         
-        logger.debug(f"Running forward pass with batch_size={batch_size}, seq_length={seq_length}")
+        logger.debug(
+            f"Running forward pass with batch_size={batch_size}, "
+            f"seq_length={seq_length}, vocab_size={vocab_size}, "
+            f"hidden_size={hidden_size}"
+        )
         
-        input_ids = torch.randint(0, 1000, (batch_size, seq_length)).to(device)
+        # Create dummy inputs with proper shapes
+        input_ids = torch.randint(0, vocab_size, (batch_size, seq_length)).to(device)
         hidden_states = torch.randn(batch_size, seq_length, hidden_size).to(device)
         
         with torch.no_grad():
