@@ -4,7 +4,6 @@ Unit tests for Eagle converter utility functions.
 
 import json
 from pathlib import Path
-from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -291,7 +290,7 @@ class TestDetectFusionBiasAndLayernorms:
 
     def test_empty_weights(self):
         """Test detection with empty weights dictionary."""
-        weights: dict[str, Any] = {}
+        weights = {}
 
         has_bias, has_layernorms = detect_fusion_bias_and_layernorms(weights)
 
