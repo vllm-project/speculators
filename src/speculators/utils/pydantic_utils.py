@@ -12,7 +12,6 @@ Classes:
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import Iterable
 from typing import Any, ClassVar, Optional, Union
 
 from pydantic import BaseModel, GetCoreSchemaHandler
@@ -96,7 +95,7 @@ class PydanticClassRegistryMixin(ReloadableBaseModel, ABC, ClassRegistryMixin):
 
     @classmethod
     def register_decorator(
-        cls, clazz: type[BaseModel], name: Optional[Union[str, Iterable[str]]] = None
+        cls, clazz: type[BaseModel], name: Optional[Union[str, list[str]]] = None
     ) -> type[BaseModel]:
         """
         Registers a Pydantic model class with the registry.
