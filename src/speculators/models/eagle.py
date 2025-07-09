@@ -370,11 +370,11 @@ class EagleSpeculator(SpeculatorModel):
             self.rotary_emb = verifier.model.rotary_emb  # type: ignore[assignment,union-attr]
         else:
             # Bare model structure
-            self.embed_tokens = verifier.embed_tokens  # type: ignore[assignment]
-            self.rotary_emb = verifier.rotary_emb  # type: ignore[assignment]
+            self.embed_tokens = verifier.embed_tokens  # type: ignore[assignment,attr-defined]
+            self.rotary_emb = verifier.rotary_emb  # type: ignore[assignment,attr-defined]
 
         # lm_head is always at the top level of the verifier
-        self.lm_head = verifier.lm_head  # type: ignore[assignment]
+        self.lm_head = verifier.lm_head  # type: ignore[assignment,attr-defined]
 
         return verifier
 

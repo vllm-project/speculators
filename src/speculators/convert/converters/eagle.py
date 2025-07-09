@@ -1,5 +1,15 @@
 """
-Eagle checkpoint converter with loguru logging.
+A module that provides the converter for Eagle/HASS checkpoints.
+It handles the transformation of checkpoints from the research eagle/hass repositories
+into the standardized speculators format, including automatic feature detection,
+weight remapping, and optional validation.
+It supports the following algorithms:
+- Eagle
+- Eagle2
+- HASS
+
+Classes:
+    EagleSpeculatorConverter: Converter for Eagle/HASS checkpoints to speculators format
 """
 
 import os
@@ -8,8 +18,8 @@ from typing import Literal, Optional, Union
 
 import torch
 from loguru import logger
-from torch import Tensor
-from transformers import LlamaConfig, PreTrainedModel
+from torch import Tensor, nn
+from transformers import LlamaConfig, PretrainedConfig, PreTrainedModel
 
 from speculators.config import SpeculatorsConfig, VerifierConfig
 from speculators.convert.converters.base import SpeculatorConverter
@@ -35,14 +45,20 @@ class EagleSpeculatorConverter(
     It supports automatic feature detection, weight remapping, and
     optional validation.
 
-    :Example:
+    Example:
+    ::
+        from speculators.convert import EagleSpeculatorConverter
 
-        >>> converter = EagleConverter()
-        >>> converter.convert(
-        ...     "yuhuili/EAGLE-LLaMA3.1-Instruct-8B",
-        ...     "./output",
-        ...     "meta-llama/Meta-Llama-3.1-8B-Instruct"
-        ... )
+        converter = EagleSpeculatorConverter(
+            model="yuhuili/EAGLE-LLaMA3.1-Instruct-8B",
+            config="./config.json",
+            verifier="meta-llama/Meta-Llama-3.1-8B-Instruct"
+        )
+        converted_model = converter.convert(
+            output_path="./output",
+            validate_device="cuda:0"
+        )
+        print(converted_model)
     """
 
     WEIGHT_MAPPINGS = {
@@ -58,15 +74,26 @@ class EagleSpeculatorConverter(
     @classmethod
     def is_supported(
         cls,
-        model: Union[str, os.PathLike],
-        config: Union[str, os.PathLike],  # noqa: ARG003
+        model: Union[Path, PreTrainedModel, nn.Module],
+        config: Union[Path, PretrainedConfig, dict],  # noqa: ARG003
         verifier: Optional[Union[str, os.PathLike, PreTrainedModel]] = None,  # noqa: ARG003
         fusion_bias: Optional[bool] = None,  # noqa: ARG003
         layernorms: Optional[bool] = None,  # noqa: ARG003
         **kwargs,  # noqa: ARG003
     ) -> bool:
-        state_dict = load_model_checkpoint_state_dict(model, keys_only=True)
-        has_fc = "fc.bias" in state_dict
+        """
+        Check if the provided model checkpoint and supporting arguments are supported
+        by this converter.
+
+        :param model: Model checkpoint path or instance
+        :param config: Model configuration path or instance
+        :param verifier: Optional verifier model path or instance
+        :param fusion_bias: Whether to include fusion bias in the conversion
+        :param layernorms: Whether to include extra layernorms in the conversion
+        :return: True if the model is supported, False otherwise
+        """
+        state_dict = load_model_checkpoint_state_dict(model)
+        has_fc = "fc.weight" in state_dict
         has_layers_0 = any(name.startswith("layers.0.") for name in state_dict)
         has_layers_non_0 = any(
             name.startswith("layers.") and not name.startswith("layers.0.")
@@ -77,12 +104,24 @@ class EagleSpeculatorConverter(
 
     def __init__(
         self,
-        model: Union[str, Path],
-        config: Union[str, Path],
-        verifier: Optional[Union[str, Path]] = None,
+        model: Union[Path, PreTrainedModel, nn.Module],
+        config: Union[Path, PretrainedConfig, dict],
+        verifier: Optional[Union[str, os.PathLike, PreTrainedModel]] = None,
         fusion_bias: Optional[bool] = None,
         layernorms: Optional[bool] = None,
     ):
+        """
+        Initialize the EagleSpeculatorConverter with model, config,
+        optional verifier, and feature flags.
+
+        :param model: Model checkpoint path or instance
+        :param config: Model configuration path or instance
+        :param verifier: Optional verifier model path or instance
+        :param fusion_bias: Whether to include fusion bias in the conversion,
+            if None, it will be auto-detected based on the presence of "fc.bias"
+        :param layernorms: Whether to include extra layernorms in the conversion,
+            if None, it will be auto-detected based on the presence of layernorm weights
+        """
         super().__init__(
             model=model,
             config=config,
@@ -94,6 +133,13 @@ class EagleSpeculatorConverter(
     def convert_config_state_dict(
         self,
     ) -> tuple[EagleSpeculatorConfig, dict[str, Tensor]]:
+        """
+        Convert the Eagle/HASS checkpoint config and state_dict to speculators format.
+        This method processes the original configuration and state_dict,
+        remapping weights and applying necessary transformations.
+
+        :return: Tuple of converted EagleSpeculatorConfig and state_dict
+        """
         logger.info(
             f"Converting Eagle/HASS checkpoint at model: {self.model} and "
             f"config: {self.config} to speculators format..."
@@ -138,6 +184,18 @@ class EagleSpeculatorConverter(
         verifier_attachment_mode: Literal["detached", "full", "train_only"],  # noqa: ARG002
         device: Union[str, torch.device, int],
     ):
+        """
+        Validate the converted EagleSpeculator model by running a forward pass
+        with a small batch of random input data. This ensures that the model
+        is correctly configured and can process inputs without errors.
+
+        :param model: The converted EagleSpeculator model to validate
+        :param verifier_attachment_mode: Mode that was used to attach the verifier.
+            Can be "detached", "full", or "train_only".
+        :param device: The device to validate the model on.
+            Can be a string (e.g., "cuda", "cpu"), a torch.device instance, or an int
+            (e.g., 0 for "cuda:0").
+        """
         logger.info("Validating converted checkpoint...")
 
         try:
@@ -158,7 +216,7 @@ class EagleSpeculatorConverter(
                 f"hidden_size={hidden_size}"
             )
 
-            model.to(device)  # type: ignore[arg-type]
+            model.to(device)  # type: ignore[attr-defined,arg-type]
             input_ids = torch.randint(0, vocab_size, (batch_size, seq_length)).to(
                 device
             )

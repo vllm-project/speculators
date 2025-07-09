@@ -11,11 +11,12 @@ import torch
 from huggingface_hub import snapshot_download
 from loguru import logger
 from safetensors import safe_open
-from torch import Tensor
+from torch import Tensor, nn
 from transformers import AutoConfig, PretrainedConfig, PreTrainedModel
 
 __all__ = [
     "check_download_model_checkpoint",
+    "check_download_model_config",
     "download_model_checkpoint_from_hub",
     "load_model_checkpoint_config_dict",
     "load_model_checkpoint_index_weight_files",
@@ -81,19 +82,20 @@ def download_model_checkpoint_from_hub(
 
 
 def check_download_model_checkpoint(
-    model: Union[str, os.PathLike],
+    model: Union[str, os.PathLike, PreTrainedModel, nn.Module],
     cache_dir: Optional[Union[str, Path]] = None,
     force_download: bool = False,
     local_files_only: bool = False,
     token: Optional[Union[str, bool]] = None,
-    revision: str = "main",
+    revision: Optional[str] = None,
     **kwargs,
-) -> Path:
+) -> Union[Path, PreTrainedModel, nn.Module]:
     """
     Ensure we have a local copy of the model checkpoint.
 
-    If the path exists locally, return it. Otherwise, treat it as a
-    HuggingFace model ID and download it.
+    If it is already a model, then return it as-is.
+    If the path exists locally, return it.
+    Otherwise, treat it as a HuggingFace model ID and download it.
 
     Example:
     ::
@@ -106,7 +108,7 @@ def check_download_model_checkpoint(
             "yuhuili/EAGLE-LLaMA3.1-Instruct-8B"
         )
 
-    :param model: Local path or HuggingFace model ID
+    :param model: Local path, HuggingFace model ID, or a PreTrainedModel instance
     :param cache_dir: Optional cache directory for downloads
     :param force_download: Whether to force re-download even if cached
     :param local_files_only: If True, only use local files
@@ -114,7 +116,13 @@ def check_download_model_checkpoint(
     :param revision: Optional model revision (branch, tag, or commit)
     :param kwargs: Additional arguments for `snapshot_download`
     :return: Path to the local directory containing the model checkpoint
+        if model is a path or HuggingFace ID,
+        or the model instance if it was passed directly.
     """
+    if isinstance(model, (PreTrainedModel, nn.Module)):
+        logger.debug("Model is already a PreTrainedModel or nn.Module instance")
+        return model
+
     if not isinstance(model, (str, os.PathLike)):
         raise TypeError(
             f"Expected model to be a string or Path, got {type(model)} for {model}"
@@ -144,13 +152,84 @@ def check_download_model_checkpoint(
     return checkpoint_path.resolve()
 
 
+def check_download_model_config(
+    config: Union[str, os.PathLike, PreTrainedModel, PretrainedConfig, dict],
+    cache_dir: Optional[Union[str, Path]] = None,
+    force_download: bool = False,
+    local_files_only: bool = False,
+    token: Optional[Union[str, bool]] = None,
+    revision: Optional[str] = None,
+    **kwargs,
+) -> Union[Path, PretrainedConfig, dict]:
+    """
+    Ensure we have a local copy of the model's configuration file.
+
+    If it is already a PretrainedConfig instance, return it as-is.
+    If it is a PreTrainedModel instance, return its config.
+    If the path exists locally, return it.
+    Otherwise, treat it as a HuggingFace model ID, download it,
+    and return the PreTrainedConfig object.
+
+    :param config: Local path, HuggingFace model ID,
+        PreTrainedModel instance, or PretrainedConfig instance.
+    :param cache_dir: Optional directory to cache downloads
+    :param force_download: Whether to force re-download even if cached
+    :param local_files_only: If True, only use local files
+    :param token: Optional authentication token for private models
+    :param revision: Optional model revision (branch, tag, or commit)
+    :param kwargs: Additional arguments for `AutoConfig.from_pretrained`
+    :return: Path to the local config.json file if config is a path or HuggingFace ID,
+        or the PretrainedConfig instance if it was passed directly.
+    """
+    if isinstance(config, PretrainedConfig):
+        logger.debug("Config is already a PretrainedConfig instance")
+        return config
+
+    if isinstance(config, PreTrainedModel):
+        logger.debug("Config is a PreTrainedModel instance, returning its config")
+        return config.config  # type: ignore[attr-defined]
+
+    if isinstance(config, dict):
+        logger.debug("Config is a dictionary, returning as is")
+        return config
+
+    if not isinstance(config, (str, os.PathLike)):
+        raise TypeError(
+            f"Expected config to be a string, Path, or PreTrainedModel, "
+            f"got {type(config)} for {config}"
+        )
+
+    config_path = Path(config)
+    if not config_path.exists():
+        logger.debug(f"Config path does not exist, downloading from hub: {config_path}")
+        return AutoConfig.from_pretrained(
+            str(config_path),
+            cache_dir=cache_dir,
+            force_download=force_download,
+            local_files_only=local_files_only,
+            token=token,
+            revision=revision,
+            **kwargs,
+        )
+
+    logger.debug(f"Using local config path: {config_path}")
+
+    if not config_path.is_file():
+        config_path = config_path / "config.json"
+
+    if not config_path.exists():
+        raise FileNotFoundError(f"No config.json found at {config_path}")
+
+    return config_path.resolve()
+
+
 def load_model_config(
     model: Union[str, os.PathLike, PreTrainedModel, PretrainedConfig],
     cache_dir: Optional[Union[str, Path]] = None,
     force_download: bool = False,
     local_files_only: bool = False,
     token: Optional[Union[str, bool]] = None,
-    revision: str = "main",
+    revision: Optional[str] = None,
     **kwargs,
 ) -> PretrainedConfig:
     """
@@ -184,7 +263,7 @@ def load_model_config(
 
     if isinstance(model, PreTrainedModel):
         logger.debug("Model is a PreTrainedModel instance, returning its config")
-        return model.config
+        return model.config  # type: ignore[attr-defined]
 
     if not isinstance(model, (str, os.PathLike)):
         raise TypeError(
@@ -208,10 +287,16 @@ def load_model_config(
         raise FileNotFoundError(f"Config not found for model: {model}") from err
 
 
-def load_model_checkpoint_config_dict(path: Union[str, os.PathLike]) -> dict:
+def load_model_checkpoint_config_dict(
+    config: Union[str, os.PathLike, PretrainedConfig, PreTrainedModel, dict],
+) -> dict:
     """
-    Load the config.json from a model's local checkpoint directory
-    into a dictionary.
+    Load the configuration dictionary from a model's local checkpoint directory,
+    a PreTrained instance, or previously extracted dictionary.
+    If config is a dict, it is returned as-is.
+    If config is a PretrainedConfig or PreTrainedModel instance,
+    its `to_dict()` method is called to extract the configuration.
+    If config is a str or Path, it is treated as a path to a local config.json file.
 
     Example:
     ::
@@ -226,7 +311,25 @@ def load_model_checkpoint_config_dict(path: Union[str, os.PathLike]) -> dict:
     :return: The configuration dictionary loaded from config.json.
     :raises FileNotFoundError: If the config.json file cannot be found
     """
-    path = Path(path)
+    if isinstance(config, dict):
+        logger.debug("Config is already a dictionary, returning as is")
+        return config
+
+    if isinstance(config, PreTrainedModel):
+        logger.debug("Config is a PreTrainedModel instance, returning its config dict")
+        return config.config.to_dict()  # type: ignore[attr-defined]
+
+    if isinstance(config, PretrainedConfig):
+        logger.debug("Config is a PretrainedConfig instance, returning its dict")
+        return config.to_dict()
+
+    if not isinstance(config, (str, os.PathLike)):
+        raise TypeError(
+            f"Expected config to be a string, Path, PreTrainedModel, "
+            f"or PretrainedConfig, got {type(config)}"
+        )
+
+    path = Path(config)
 
     if path.is_dir():
         path = path / "config.json"
@@ -360,32 +463,33 @@ def load_model_checkpoint_weight_files(path: Union[str, os.PathLike]) -> list[Pa
 
 
 def load_model_checkpoint_state_dict(
-    path: Union[str, os.PathLike], keys_only: bool = False
+    model: Union[str, os.PathLike, PreTrainedModel, nn.Module],
 ) -> dict[str, Tensor]:
     """
-    Load model weights from a local checkpoint directory or weights file.
-    The weights file can be a single `.bin` file, a single `.safetensors` file,
-    or an index.json file for sharded checkpoints.
-    If the path is a directory, it will look for `.bin` or `.safetensors` files
-    within that directory. If both are present, `.safetensors` will be preferred.
+    Load the state dictionary of a model from its local checkpoint directory,
+    a weights file, or a PreTrainedModel/Module instance.
+    If a str or Path is provided, this must be the path to a local
+    directory or weights file for the model.
 
     Example:
     ::
-        from speculators.utils import load_model_checkpoint_weights
+        from speculators.utils import load_model_checkpoint_state_dict
 
-        weights = load_model_checkpoint_weights(Path("./checkpoint"))
+        weights = load_model_checkpoint_state_dict(Path("./checkpoint"))
         print(f"Loaded {len(weights)} weights")
         # Output: Loaded 50 weights
 
-    :param path: The path to the model's local checkpoint directory
-        or the path to the local weights file itself.
-    :param keys_only: If True, only return the keys mapped to empty tensors
-        to avoid loading the large weights into memory if they are not needed.
+    :param model: The path to the model's local checkpoint directory,
+        a weights file, or a PreTrainedModel/Module instance to load
+        the state dictionary from.
     :return: Dictionary mapping weight names to tensors.
     """
-    logger.debug(f"Loading model weights from: {path}")
+    if isinstance(model, (PreTrainedModel, nn.Module)):
+        logger.debug("Model is already a PreTrainedModel or nn.Module instance")
+        return model.state_dict()
 
-    weight_files = load_model_checkpoint_weight_files(path)
+    logger.debug(f"Loading model weights from: {model}")
+    weight_files = load_model_checkpoint_weight_files(model)
 
     state_dict = {}
 
@@ -394,16 +498,12 @@ def load_model_checkpoint_state_dict(
             logger.debug(f"Loading safetensors weights from: {file}")
             with safe_open(file, framework="pt", device="cpu") as safetensors_file:
                 for key in safetensors_file.keys():  # noqa: SIM118
-                    state_dict[key] = (
-                        safetensors_file.get_tensor(key)
-                        if not keys_only
-                        else torch.empty(0)
-                    )
+                    state_dict[key] = safetensors_file.get_tensor(key)
         elif file.suffix == ".bin":
             logger.debug(f"Loading PyTorch weights from: {file}")
             loaded_weights = torch.load(file, map_location="cpu")
             for key, value in loaded_weights.items():
-                state_dict[key] = value if not keys_only else torch.empty(0)
+                state_dict[key] = value
         else:
             raise ValueError(
                 f"Unsupported file type {file.suffix} in {file}. "
