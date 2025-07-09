@@ -4,7 +4,7 @@ Unified CLI interface for checkpoint conversion.
 
 from typing import Annotated
 
-import typer  # type: ignore[import-not-found]
+import typer
 
 from speculators.convert.eagle.eagle_converter import EagleConverter
 
