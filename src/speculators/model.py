@@ -36,7 +36,7 @@ from transformers.generation.stopping_criteria import StoppingCriteriaList
 from transformers.generation.streamers import BaseStreamer
 from transformers.generation.utils import GenerateOutput
 
-from speculators.config import SpeculatorModelConfig
+from speculators.config import SpeculatorModelConfig, VerifierConfig
 from speculators.utils import ClassRegistryMixin
 
 
@@ -375,6 +375,7 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel, GenerationMixin):  # 
         self,
         verifier: Union[str, os.PathLike, PreTrainedModel],
         mode: Optional[Literal["full", "train_only"]] = None,
+        add_to_config: bool = True,
     ) -> PreTrainedModel:
         """
         Attach a verifier model for the speculator that is used to attach to
@@ -403,6 +404,11 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel, GenerationMixin):  # 
             pass and generation methods. If "train_only", only the portions of the
             verifier needed for training are attached, allowing for better resource
             utilization during training. If None, defaults to "full".
+        :param add_to_config: Whether to add the verifier that is being attached
+            to the speculator's configuration. If True (default),
+            the required references will be added to the speculator's config under
+            `speculators_config.verifier`.
+            If False, the speculator's configuration will not be modified,
         :return: The PreTrainedModel instance for the verifier that was attached.
         """
         if self.verifier_attachment_mode != "detached":
@@ -422,6 +428,11 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel, GenerationMixin):  # 
         self.verifier = (
             verifier if self.verifier_attachment_mode == "full" else None
         )  # Expect subclasses to handle references if train_only
+
+        if add_to_config:
+            self.config.speculators_config.verifier = VerifierConfig.from_pretrained(
+                verifier
+            )
 
         return verifier
 
