@@ -352,9 +352,17 @@ class EagleSpeculator(SpeculatorModel):
         )
 
         # Extract layers from the verifier model
-        self.embed_tokens = verifier.embed_tokens  # type: ignore[assignment]
-        self.rotary_emb = verifier.rotary_emb  # type: ignore[assignment]
-        self.lm_head = verifier.lm_head  # type: ignore[assignment]
+
+        if hasattr(verifier, "model"):
+            self.embed_tokens = verifier.model.embed_tokens  # type: ignore[assignment]
+            self.rotary_emb = verifier.model.rotary_emb  # type: ignore[assignment]
+        else:
+            # Bare model structure
+            self.embed_tokens = verifier.embed_tokens  # type: ignore[assignment]
+            self.rotary_emb = verifier.rotary_emb  # type: ignore[assignment]
+
+        # lm_head is always at the top level of the verifier
+        self.lm_head = verifier.lm_head
 
         return verifier
 
