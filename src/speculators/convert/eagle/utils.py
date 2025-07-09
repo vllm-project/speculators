@@ -10,10 +10,6 @@ import torch
 from huggingface_hub import snapshot_download
 from loguru import logger
 from safetensors import safe_open
-from safetensors.torch import save_file
-
-from speculators.config import SpeculatorModelConfig
-
 
 def download_checkpoint_from_hub(
     model_id: str, 
@@ -179,46 +175,3 @@ def detect_fusion_bias_and_layernorms(weights: dict[str, torch.Tensor]) -> tuple
         logger.info("Detected extra layernorms in checkpoint")
     
     return has_fusion_bias, has_layernorms
-
-
-def save_speculator_checkpoint(
-    config: SpeculatorModelConfig,
-    weights: dict[str, torch.Tensor],
-    output_dir: Union[str, Path],
-) -> Path:
-    """
-    Save a speculator model checkpoint with config and weights.
-    
-    This function saves a SpeculatorModelConfig and its associated weights
-    to a directory. The config is saved using its save_pretrained method,
-    which ensures proper serialization and includes auto-generated code.
-    The weights are saved in safetensors format.
-    
-    :param config: A SpeculatorModelConfig instance to save
-    :param weights: Model weights to save
-    :param output_dir: Directory where the checkpoint will be saved
-    :return: Path to the saved checkpoint directory
-    
-    :Example:
-        
-        >>> from speculators.models.eagle import EagleSpeculatorConfig
-        >>> config = EagleSpeculatorConfig(...)
-        >>> weights = {"fc.weight": torch.randn(4096, 8192), ...}
-        >>> saved_path = save_speculator_checkpoint(config, weights, "./output")
-        >>> print(f"Checkpoint saved to: {saved_path}")
-        Checkpoint saved to: ./output
-    """
-    
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Save config using save_pretrained
-    config.save_pretrained(output_dir)
-    logger.debug(f"Saved config to: {output_dir}")
-    
-    # Save weights in safetensors format
-    weights_path = output_dir / "model.safetensors"
-    save_file(weights, weights_path)
-    logger.debug(f"Saved weights to: {weights_path}")
-    
-    return output_dir
