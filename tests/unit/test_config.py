@@ -116,7 +116,7 @@ def test_verifier_config_initialization():
 
 @pytest.mark.smoke
 def test_verifier_config_from_verifier_config(mock_pretrained_config):
-    config = VerifierConfig.from_config(mock_pretrained_config)
+    config = VerifierConfig.from_pretrained(mock_pretrained_config)
 
     assert config.name_or_path == "test/verifier"
     assert config.architectures == ["TestModel"]

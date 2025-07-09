@@ -17,7 +17,7 @@ import pytest
 import torch
 from loguru import logger
 
-from speculators.convert.eagle import EagleConverter
+from speculators.convert.converters import EagleConverter
 from speculators.models.eagle import EagleSpeculator, EagleSpeculatorConfig
 
 

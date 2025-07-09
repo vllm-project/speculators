@@ -16,7 +16,7 @@ Classes:
         auto-discovery enabled by default
 """
 
-from typing import Any, Callable, ClassVar, Optional
+from typing import Any, Callable, ClassVar, Optional, Union
 
 from speculators.utils.auto_importer import AutoImporterMixin
 
@@ -81,7 +81,9 @@ class ClassRegistryMixin(AutoImporterMixin):
     registry_populated: ClassVar[bool] = False
 
     @classmethod
-    def register(cls, name: Optional[str] = None) -> Callable[[type[Any]], type[Any]]:
+    def register(
+        cls, name: Optional[Union[str, list[str]]] = None
+    ) -> Callable[[type[Any]], type[Any]]:
         """
         An invoked class decorator that registers that class with the registry under
         either the provided name or the class name if no name is provided.
@@ -97,22 +99,22 @@ class ClassRegistryMixin(AutoImporterMixin):
             ...
         ```
 
-        :param name: Optional name to register the class under. If None, the class name
-            is used as the registry key.
+        :param name: Optional name(s) to register the class under.
+            If None, the class name is used as the registry key.
         :return: A decorator function that registers the decorated class.
         :raises ValueError: If name is provided but is not a string.
         """
-        if name is not None and not isinstance(name, str):
+        if name is not None and not isinstance(name, (str, list)):
             raise ValueError(
-                "ClassRegistryMixin.register() name must be a string or None. "
-                f"Got {name}."
+                "ClassRegistryMixin.register() name must be a string, list of strings, "
+                f"or None. Got {name}."
             )
 
         return lambda subclass: cls.register_decorator(subclass, name=name)
 
     @classmethod
     def register_decorator(
-        cls, clazz: type[Any], name: Optional[str] = None
+        cls, clazz: type[Any], name: Optional[Union[str, list[str]]] = None
     ) -> type[Any]:
         """
         A non-invoked class decorator that registers the class with the registry.
@@ -127,8 +129,8 @@ class ClassRegistryMixin(AutoImporterMixin):
         ```
 
         :param clazz: The class to register
-        :param name: Optional name to register the class under. If None, the class name
-            is used as the registry key.
+        :param name: Optional name(s) to register the class under.
+            If None, the class name is used as the registry key.
         :return: The registered class.
         :raises TypeError: If the decorator is used incorrectly or if the class is not
             a type.
@@ -145,23 +147,32 @@ class ClassRegistryMixin(AutoImporterMixin):
 
         if not name:
             name = clazz.__name__
-        elif not isinstance(name, str):
+        elif not isinstance(name, (str, list)):
             raise ValueError(
-                "ClassRegistryMixin.register_decorator must be used as a class "
-                "decorator and without invocation. "
-                f"Got imporoper name arg {name}."
+                "ClassRegistryMixin.register_decorator name must be a string or "
+                f"an iterable of strings. Got {name}."
             )
 
         if cls.registry is None:
             cls.registry = {}
 
-        if name in cls.registry:
-            raise ValueError(
-                f"ClassRegistryMixin.register_decorator cannot register a class "
-                f"{clazz} with the name {name} because it is already registered."
-            )
+        names = [name] if isinstance(name, str) else list(name)
 
-        cls.registry[name] = clazz
+        for register_name in names:
+            if not isinstance(register_name, str):
+                raise ValueError(
+                    "ClassRegistryMixin.register_decorator name must be a string or "
+                    f"an iterable of strings. Got {register_name}."
+                )
+
+            if register_name in cls.registry:
+                raise ValueError(
+                    f"ClassRegistryMixin.register_decorator cannot register a class "
+                    f"{clazz} with the name {register_name} because it is already "
+                    "registered."
+                )
+
+            cls.registry[register_name] = clazz
 
         return clazz
 

@@ -305,6 +305,7 @@ class EagleSpeculator(SpeculatorModel):
         self,
         verifier: Union[str, os.PathLike, PreTrainedModel],
         mode: Optional[Literal["full", "train_only"]] = None,
+        add_to_config: bool = True,
     ) -> PreTrainedModel:
         """
         Attach a verifier model to the EagleSpeculator for speculative decoding.
@@ -344,25 +345,32 @@ class EagleSpeculator(SpeculatorModel):
             If None, defaults to "full". In "train_only" mode, only the layers
             required for a forward pass are attached, and the speculator cannot
             perform generation until a full verifier is attached.
+        :param add_to_config: Whether to add the verifier that is being attached
+            to the speculator's configuration. If True (default),
+            the required references will be added to the speculator's config under
+            `speculators_config.verifier`.
+            If False, the speculator's configuration will not be modified,
         :return: The PreTrainedModel instance for the verifier that was attached.
         """
         verifier = super().attach_verifier(
             verifier=verifier,
             mode=mode,
+            add_to_config=add_to_config,
         )
 
         # Extract layers from the verifier model
 
         if hasattr(verifier, "model"):
-            self.embed_tokens = verifier.model.embed_tokens  # type: ignore[assignment]
-            self.rotary_emb = verifier.model.rotary_emb  # type: ignore[assignment]
+            # LlamaForCausalLM structure
+            self.embed_tokens = verifier.model.embed_tokens  # type: ignore[assignment,union-attr]
+            self.rotary_emb = verifier.model.rotary_emb  # type: ignore[assignment,union-attr]
         else:
             # Bare model structure
             self.embed_tokens = verifier.embed_tokens  # type: ignore[assignment]
             self.rotary_emb = verifier.rotary_emb  # type: ignore[assignment]
 
         # lm_head is always at the top level of the verifier
-        self.lm_head = verifier.lm_head
+        self.lm_head = verifier.lm_head  # type: ignore[assignment]
 
         return verifier
 

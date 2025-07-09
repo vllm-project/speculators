@@ -23,9 +23,13 @@ from importlib.metadata import version
 from typing import Any, ClassVar, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field
-from transformers import PretrainedConfig
+from transformers import PretrainedConfig, PreTrainedModel
 
-from speculators.utils import PydanticClassRegistryMixin, ReloadableBaseModel
+from speculators.utils import (
+    PydanticClassRegistryMixin,
+    ReloadableBaseModel,
+    load_model_config,
+)
 
 __all__ = [
     "SpeculatorModelConfig",
@@ -78,28 +82,50 @@ class VerifierConfig(BaseModel):
     """
 
     @classmethod
-    def from_config(
-        cls, config: PretrainedConfig, name_or_path: Optional[str] = "UNSET"
+    def from_pretrained(
+        cls,
+        config: Optional[
+            Union[str, os.PathLike, PreTrainedModel, PretrainedConfig, dict]
+        ],
+        name_or_path: Optional[str] = "UNSET",
+        **kwargs,
     ) -> "VerifierConfig":
         """
-        Create a VerifierConfig from a PretrainedConfig object.
+        Create a VerifierConfig from a PretrainedConfig.
         Used to extract the required parameters from the original verifier
         config and create a VerifierConfig object.
 
-        :param config: The PretrainedConfig object to extract the parameters from.
+        :param config: The PretrainedConfig object or a path/huggingface model id
+            to the original verifier model config. If None, the config will be empty.
+            If a string or path is provided, it will be loaded as a PretrainedConfig.
+            If a PretrainedConfig is provided, it will be used directly.
         :param name_or_path: The name or path for the verifier model.
             Set to None to not add a specific name_or_path.
             If not provided, the name_or_path from the config will be used.
+        :param kwargs: Additional keyword arguments to pass to AutoConfig for loading.
         :return: A VerifierConfig object with the extracted parameters.
         """
-        config_dict = config.to_dict()
+        config_pretrained: Optional[Union[PretrainedConfig, dict]] = (
+            load_model_config(config, **kwargs)  # type: ignore[assignment]
+            if config and not isinstance(config, dict)
+            else config
+        )
+        config_dict: dict = (
+            config_pretrained.to_dict()  # type: ignore[assignment]
+            if config_pretrained and isinstance(config_pretrained, PretrainedConfig)
+            else config_pretrained
+        )
+        if not config_dict:
+            config_dict = {}
 
         if name_or_path == "UNSET":
-            name_or_path = (
-                getattr(config, "name_or_path", None)
-                or config_dict.get("_name_or_path", None)
-                or config_dict.get("name_or_path", None)
+            config_name_or_path = (
+                getattr(config, "name_or_path", None) if config else None
             )
+            config_dict_name_or_path = config_dict.get(
+                "_name_or_path", None
+            ) or config_dict.get("name_or_path", None)
+            name_or_path = config_name_or_path or config_dict_name_or_path
 
         return cls(
             name_or_path=name_or_path,
