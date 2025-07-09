@@ -19,11 +19,26 @@ from torch import nn
 from transformers import AutoConfig, PretrainedConfig, PreTrainedModel
 from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_mask
 from transformers.modeling_outputs import CausalLMOutputWithPast
-from transformers.models.llama.configuration_llama import LlamaConfig
-from transformers.models.llama.modeling_llama import (
-    LlamaDecoderLayer,
-    LlamaRMSNorm,
+from transformers.models.deepseek_v3.modeling_deepseek_v3 import (
+    DeepseekV3DecoderLayer,
+    DeepseekV3RMSNorm,
 )
+from transformers.models.gemma.modeling_gemma import GemmaDecoderLayer, GemmaRMSNorm
+from transformers.models.granite.modeling_granite import (
+    GraniteDecoderLayer,
+    GraniteRMSNorm,
+)
+from transformers.models.llama.configuration_llama import LlamaConfig
+from transformers.models.llama.modeling_llama import LlamaDecoderLayer, LlamaRMSNorm
+from transformers.models.mistral.modeling_mistral import (
+    MistralDecoderLayer,
+    MistralRMSNorm,
+)
+from transformers.models.mixtral.modeling_mixtral import (
+    MixtralDecoderLayer,
+    MixtralRMSNorm,
+)
+from transformers.models.qwen3.modeling_qwen3 import Qwen3DecoderLayer, Qwen3RMSNorm
 from typing_extensions import Self
 
 from speculators import SpeculatorModel, SpeculatorModelConfig
@@ -32,6 +47,16 @@ __all__ = [
     "EagleSpeculator",
     "EagleSpeculatorConfig",
 ]
+
+ARCHITECTURE_CLASSES = {
+    "LlamaDecoderLayer": (LlamaDecoderLayer, LlamaRMSNorm),
+    "MistralDecoderLayer": (MistralDecoderLayer, MistralRMSNorm),
+    "Qwen3DecoderLayer": (Qwen3DecoderLayer, Qwen3RMSNorm),
+    "GemmaDecoderLayer": (GemmaDecoderLayer, GemmaRMSNorm),
+    "MixtralDecoderLayer": (MixtralDecoderLayer, MixtralRMSNorm),
+    "DeepseekV3DecoderLayer": (DeepseekV3DecoderLayer, DeepseekV3RMSNorm),
+    "GraniteDecoderLayer": (GraniteDecoderLayer, GraniteRMSNorm),
+}
 
 
 @SpeculatorModelConfig.register("eagle")
@@ -270,6 +295,13 @@ class EagleSpeculator(SpeculatorModel):
                 "config must be an instance of EagleSpeculatorConfig, "
                 f"got {type(config)} instead."
             )
+
+        if config.transformer_layer_architecture not in ARCHITECTURE_CLASSES:
+            raise ValueError(
+                f"Invalid transformer layer architecture: {config.transformer_layer_architecture}. "
+                f"Must be one of: {list(ARCHITECTURE_CLASSES.keys())}"
+            )
+        self._architecture = config.transformer_layer_architecture
 
         # Initialize model parameters from config
         self.vocab_size = config.transformer_layer_config.vocab_size
@@ -531,7 +563,7 @@ class EagleSpeculator(SpeculatorModel):
         return layer
 
     def _layernorm_class(self) -> type[nn.Module]:
-        return LlamaRMSNorm
+        return ARCHITECTURE_CLASSES[self._architecture][1]
 
     def _transformer_layer_class(self) -> type[nn.Module]:
-        return LlamaDecoderLayer
+        return ARCHITECTURE_CLASSES[self._architecture][0]
