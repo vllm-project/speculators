@@ -10,12 +10,36 @@ import pytest
 import torch
 from torch import nn
 from transformers import PreTrainedModel
+from transformers.models.deepseek_v3.configuration_deepseek_v3 import DeepseekV3Config
+from transformers.models.deepseek_v3.modeling_deepseek_v3 import (
+    DeepseekV3DecoderLayer,
+    DeepseekV3RMSNorm,
+)
+from transformers.models.gemma.configuration_gemma import GemmaConfig
+from transformers.models.gemma.modeling_gemma import GemmaDecoderLayer, GemmaRMSNorm
+from transformers.models.granite.configuration_granite import GraniteConfig
+from transformers.models.granite.modeling_granite import (
+    GraniteDecoderLayer,
+    GraniteRMSNorm,
+)
 from transformers.models.llama.configuration_llama import LlamaConfig
 from transformers.models.llama.modeling_llama import (
     LlamaDecoderLayer,
     LlamaRMSNorm,
     LlamaRotaryEmbedding,
 )
+from transformers.models.mistral.configuration_mistral import MistralConfig
+from transformers.models.mistral.modeling_mistral import (
+    MistralDecoderLayer,
+    MistralRMSNorm,
+)
+from transformers.models.mixtral.configuration_mixtral import MixtralConfig
+from transformers.models.mixtral.modeling_mixtral import (
+    MixtralDecoderLayer,
+    MixtralRMSNorm,
+)
+from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
+from transformers.models.qwen3.modeling_qwen3 import Qwen3DecoderLayer, Qwen3RMSNorm
 
 from speculators import (
     SpeculatorModel,
@@ -24,6 +48,23 @@ from speculators import (
 )
 from speculators.models import EagleSpeculator, EagleSpeculatorConfig
 from speculators.proposals import GreedyTokenProposalConfig
+
+# ===== Layer Types Constants =====
+
+LAYER_TYPES: dict[str, tuple[type, type, type]] = {
+    "LlamaDecoderLayer": (LlamaDecoderLayer, LlamaRMSNorm),
+    "MistralDecoderLayer": (MistralDecoderLayer, MistralRMSNorm),
+    "Qwen3DecoderLayer": (Qwen3DecoderLayer, Qwen3RMSNorm),
+    "GemmaDecoderLayer": (GemmaDecoderLayer, GemmaRMSNorm),
+    "MixtralDecoderLayer": (MixtralDecoderLayer, MixtralRMSNorm),
+    "DeepseekV3DecoderLayer": (
+        DeepseekV3DecoderLayer,
+        DeepseekV3RMSNorm,
+    ),
+    "GraniteDecoderLayer": (GraniteDecoderLayer, GraniteRMSNorm),
+}
+
+LAYER_ARCHITECTURES = list(LAYER_TYPES.keys())
 
 # ===== Test Helper Classes =====
 
@@ -116,6 +157,105 @@ def eagle_speculator_config_layernorms(sample_llama_config, sample_speculators_c
         layernorms=True,
         fusion_bias=True,
     )
+
+
+@pytest.fixture
+def sample_mistral_config():
+    return MistralConfig(
+        vocab_size=32000,
+        hidden_size=768,
+        intermediate_size=3072,
+        num_hidden_layers=12,
+        num_attention_heads=12,
+        max_position_embeddings=2048,
+    )
+
+
+@pytest.fixture
+def sample_qwen3_config():
+    return Qwen3Config(
+        vocab_size=32000,
+        hidden_size=768,
+        intermediate_size=3072,
+        num_hidden_layers=12,
+        num_attention_heads=12,
+        max_position_embeddings=2048,
+    )
+
+
+@pytest.fixture
+def sample_gemma_config():
+    return GemmaConfig(
+        vocab_size=32000,
+        hidden_size=768,
+        intermediate_size=3072,
+        num_hidden_layers=12,
+        num_attention_heads=12,
+        max_position_embeddings=2048,
+    )
+
+
+@pytest.fixture
+def sample_mixtral_config():
+    return MixtralConfig(
+        vocab_size=32000,
+        hidden_size=768,
+        intermediate_size=3072,
+        num_hidden_layers=12,
+        num_attention_heads=12,
+        num_key_value_heads=12,
+        max_position_embeddings=2048,
+        num_local_experts=8,
+        num_experts_per_tok=2,
+    )
+
+
+@pytest.fixture
+def sample_deepseek_config():
+    return DeepseekV3Config(
+        vocab_size=32000,
+        hidden_size=768,
+        intermediate_size=3072,
+        num_hidden_layers=12,
+        num_attention_heads=12,
+        num_key_value_heads=12,
+        max_position_embeddings=2048,
+    )
+
+
+@pytest.fixture
+def sample_granite_config():
+    return GraniteConfig(
+        vocab_size=32000,
+        hidden_size=768,
+        intermediate_size=3072,
+        num_hidden_layers=12,
+        num_attention_heads=12,
+        num_key_value_heads=12,
+        max_position_embeddings=2048,
+    )
+
+
+@pytest.fixture
+def layer_configs(
+    sample_llama_config,
+    sample_mistral_config,
+    sample_qwen3_config,
+    sample_gemma_config,
+    sample_mixtral_config,
+    sample_deepseek_config,
+    sample_granite_config,
+):
+    """Return a mapping of layer architectures to their configurations."""
+    return {
+        "LlamaDecoderLayer": sample_llama_config,
+        "MistralDecoderLayer": sample_mistral_config,
+        "Qwen3DecoderLayer": sample_qwen3_config,
+        "GemmaDecoderLayer": sample_gemma_config,
+        "MixtralDecoderLayer": sample_mixtral_config,
+        "DeepseekV3DecoderLayer": sample_deepseek_config,
+        "GraniteDecoderLayer": sample_granite_config,
+    }
 
 
 @pytest.fixture
@@ -416,3 +556,246 @@ def test_eagle_speculator_architecture_hass(
     assert isinstance(model.transformer.input_layernorm, LlamaRMSNorm)
     assert model.pre_lm_head_layernorm is not None
     assert isinstance(model.pre_lm_head_layernorm, LlamaRMSNorm)
+
+
+# ===== EagleSpeculator Architecture Tests with Different Layer Types =====
+
+
+@pytest.mark.smoke
+@pytest.mark.parametrize("layer_architecture", LAYER_ARCHITECTURES)
+def test_eagle_speculator_initialization_different_layers(
+    layer_architecture, layer_configs, sample_speculators_config
+):
+    """Test EagleSpeculator initialization with different layer architectures."""
+    layer_config = layer_configs[layer_architecture]
+
+    # Create EagleSpeculatorConfig with the specific layer architecture
+    eagle_config = EagleSpeculatorConfig(
+        transformer_layer_architecture=layer_architecture,
+        transformer_layer_config=layer_config,
+        speculators_config=sample_speculators_config,
+    )
+
+    # Create mock verifier for this config
+    mock_verifier = MockVerifier(layer_config)
+
+    model = EagleSpeculator(eagle_config, verifier=mock_verifier)
+
+    assert model.config == eagle_config
+    assert model.verifier == mock_verifier
+    assert model.verifier_attachment_mode == "full"
+
+    # Verify basic architecture
+    assert model.embed_tokens is not None
+    assert model.embed_tokens == mock_verifier.embed_tokens
+    assert model.rotary_emb is not None
+    assert model.rotary_emb == mock_verifier.rotary_emb
+    assert model.lm_head is not None
+    assert model.lm_head == mock_verifier.lm_head
+    assert model.fusion_fc is not None
+    assert model.transformer is not None
+
+
+@pytest.mark.smoke
+@pytest.mark.parametrize("layer_architecture", LAYER_ARCHITECTURES)
+def test_eagle_speculator_architecture_different_layers(
+    layer_architecture, layer_configs, sample_speculators_config
+):
+    """Test EagleSpeculator architecture with different layer types."""
+    layer_config = layer_configs[layer_architecture]
+
+    # Create EagleSpeculatorConfig with the specific layer architecture
+    eagle_config = EagleSpeculatorConfig(
+        transformer_layer_architecture=layer_architecture,
+        transformer_layer_config=layer_config,
+        speculators_config=sample_speculators_config,
+    )
+
+    # Create mock verifier for this config
+    mock_verifier = MockVerifier(layer_config)
+
+    model = EagleSpeculator(
+        eagle_config, verifier=mock_verifier, verifier_attachment_mode="full"
+    )
+
+    assert isinstance(model, EagleSpeculator)
+    assert isinstance(model.config, EagleSpeculatorConfig)
+
+    # Verify embedding layer
+    assert model.embed_tokens is not None
+    assert isinstance(model.embed_tokens, nn.Embedding)
+    assert model.embed_tokens.weight.shape == (
+        layer_config.vocab_size,
+        layer_config.hidden_size,
+    )
+
+    # Verify rotary embedding
+    assert model.rotary_emb is not None
+    assert isinstance(model.rotary_emb, LlamaRotaryEmbedding)
+
+    # Verify language model head
+    assert model.lm_head is not None
+    assert isinstance(model.lm_head, nn.Linear)
+    assert model.lm_head.weight.shape == (
+        layer_config.vocab_size,
+        layer_config.hidden_size,
+    )
+    assert model.lm_head.bias is None
+
+    # Verify fusion layer
+    assert model.fusion_fc is not None
+    assert isinstance(model.fusion_fc, nn.Linear)
+    assert model.fusion_fc.weight.shape == (
+        layer_config.hidden_size,
+        2 * layer_config.hidden_size,
+    )
+    assert model.fusion_fc.bias is None
+
+    # Verify transformer layer
+    assert model.transformer is not None
+    assert isinstance(model.transformer, LAYER_TYPES[layer_architecture][0])
+    assert model.transformer.self_attn.config.hidden_size == layer_config.hidden_size
+
+    # Verify no layernorms by default
+    assert model.embedding_layernorm is None
+    assert model.pre_lm_head_layernorm is None
+
+
+@pytest.mark.smoke
+@pytest.mark.parametrize("layer_architecture", LAYER_ARCHITECTURES)
+def test_eagle_speculator_architecture_different_layers_with_layernorms(
+    layer_architecture, layer_configs, sample_speculators_config
+):
+    """Test EagleSpeculator with layernorms enabled for different decoder layers."""
+    layer_config = layer_configs[layer_architecture]
+
+    # Create EagleSpeculatorConfig with layernorms enabled
+    eagle_config = EagleSpeculatorConfig(
+        transformer_layer_architecture=layer_architecture,
+        transformer_layer_config=layer_config,
+        speculators_config=sample_speculators_config,
+        layernorms=True,
+        fusion_bias=True,
+    )
+
+    # Create mock verifier for this config
+    mock_verifier = MockVerifier(layer_config)
+
+    model = EagleSpeculator(
+        eagle_config, verifier=mock_verifier, verifier_attachment_mode="full"
+    )
+
+    assert isinstance(model, EagleSpeculator)
+    assert isinstance(model.config, EagleSpeculatorConfig)
+
+    # Verify embedding layer
+    assert model.embed_tokens is not None
+    assert isinstance(model.embed_tokens, nn.Embedding)
+    assert model.embed_tokens.weight.shape == (
+        layer_config.vocab_size,
+        layer_config.hidden_size,
+    )
+
+    # Verify embedding layernorm
+    assert model.embedding_layernorm is not None
+    assert isinstance(model.embedding_layernorm, LAYER_TYPES[layer_architecture][1])
+    assert model.embedding_layernorm.weight.shape == (layer_config.hidden_size,)
+
+    # Verify fusion layer with bias
+    assert model.fusion_fc is not None
+    assert isinstance(model.fusion_fc, nn.Linear)
+    assert model.fusion_fc.weight.shape == (
+        layer_config.hidden_size,
+        2 * layer_config.hidden_size,
+    )
+    assert model.fusion_fc.bias is not None
+
+    # Verify pre-lm-head layernorm
+    assert model.pre_lm_head_layernorm is not None
+    assert isinstance(model.pre_lm_head_layernorm, LAYER_TYPES[layer_architecture][1])
+
+
+@pytest.mark.smoke
+@pytest.mark.parametrize("layer_architecture", LAYER_ARCHITECTURES)
+def test_eagle_speculator_from_pretrained_different_layers(
+    layer_architecture, layer_configs, sample_speculators_config
+):
+    """Test EagleSpeculator from_pretrained with different layer architectures."""
+    layer_config = layer_configs[layer_architecture]
+
+    # Create EagleSpeculatorConfig with the specific layer architecture
+    eagle_config = EagleSpeculatorConfig(
+        transformer_layer_architecture=layer_architecture,
+        transformer_layer_config=layer_config,
+        speculators_config=sample_speculators_config,
+    )
+
+    # Create state dict from a detached model
+    state_dict = EagleSpeculator(
+        eagle_config, verifier_attachment_mode="detached"
+    ).state_dict()
+
+    # Create mock verifier for this config
+    mock_verifier = MockVerifier(layer_config)
+
+    # Load model using from_pretrained
+    model = SpeculatorModel.from_pretrained(
+        None,
+        config=eagle_config,
+        verifier=mock_verifier,
+        state_dict=state_dict,
+    )
+
+    assert isinstance(model, EagleSpeculator)
+    assert model.config.transformer_layer_architecture == layer_architecture
+    assert model.verifier == mock_verifier
+    assert model.verifier_attachment_mode == "full"
+    assert model.embed_tokens == mock_verifier.embed_tokens
+    assert model.rotary_emb == mock_verifier.rotary_emb
+    assert model.lm_head == mock_verifier.lm_head
+
+
+@pytest.mark.smoke
+@pytest.mark.parametrize("layer_architecture", LAYER_ARCHITECTURES)
+def test_eagle_speculator_local_marshalling_different_layers(
+    layer_architecture, layer_configs, sample_speculators_config
+):
+    """Test EagleSpeculator local marshalling with different layer architectures."""
+    layer_config = layer_configs[layer_architecture]
+
+    # Create EagleSpeculatorConfig with the specific layer architecture
+    eagle_config = EagleSpeculatorConfig(
+        transformer_layer_architecture=layer_architecture,
+        transformer_layer_config=layer_config,
+        speculators_config=sample_speculators_config,
+    )
+
+    # Create state dict from a detached model
+    state_dict = EagleSpeculator(
+        eagle_config, verifier_attachment_mode="detached"
+    ).state_dict()
+
+    # Create mock verifier for this config
+    mock_verifier = MockVerifier(layer_config)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create and save model
+        model = SpeculatorModel.from_pretrained(
+            None,
+            config=eagle_config,
+            verifier=mock_verifier,
+            state_dict=state_dict,
+        )
+        model.save_pretrained(tmpdir)  # type: ignore[attr-defined]
+
+        # Load model from saved directory
+        loaded_model = SpeculatorModel.from_pretrained(tmpdir, verifier=mock_verifier)
+
+        assert isinstance(loaded_model, EagleSpeculator)
+        assert isinstance(loaded_model.config, EagleSpeculatorConfig)
+        assert loaded_model.config.transformer_layer_architecture == layer_architecture
+        assert loaded_model.verifier == mock_verifier
+        assert loaded_model.verifier_attachment_mode == "full"
+        assert loaded_model.embed_tokens == mock_verifier.embed_tokens
+        assert loaded_model.rotary_emb == mock_verifier.rotary_emb
+        assert loaded_model.lm_head == mock_verifier.lm_head
