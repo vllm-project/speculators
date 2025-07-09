@@ -18,7 +18,6 @@ from speculators.convert.eagle.utils import (
     ensure_checkpoint_is_local,
     load_checkpoint_config,
     load_checkpoint_weights,
-    save_speculator_checkpoint,
 )
 
 
@@ -114,7 +113,8 @@ class EagleConverter:
         
         processed_weights = self._process_checkpoint_weights(weights, layernorms)
         
-        saved_path = save_speculator_checkpoint(
+        # Save the converted checkpoint using the model's save_pretrained
+        saved_path = self._save_converted_checkpoint(
             config=speculator_config,
             weights=processed_weights,
             output_dir=output_path
@@ -299,6 +299,42 @@ class EagleConverter:
             logger.debug(f"Remapped weights: {remapped_weights}")
         
         return processed_weights
+    
+    def _save_converted_checkpoint(
+        self,
+        config: EagleSpeculatorConfig,
+        weights: dict[str, torch.Tensor],
+        output_dir: Union[str, Path],
+    ) -> Path:
+        """
+        Save the converted checkpoint with config and weights.
+        
+        Uses config.save_pretrained to save the configuration with
+        auto-generated code, and saves weights in safetensors format.
+        
+        :param config: The Eagle speculator config
+        :param weights: The processed weights dictionary
+        :param output_dir: Directory to save the checkpoint
+        :return: Path to the saved checkpoint
+        """
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Initialize model with detached mode to prevent verifier loading
+        model = EagleSpeculator(
+            config=config,
+            verifier=None,
+            verifier_attachment_mode="detached"
+        )
+        
+        # Load the converted weights (strict=False since we don't have verifier weights)
+        model.load_state_dict(weights, strict=False)
+        
+        # Save using the model's save_pretrained method
+        logger.debug(f"Saving model to: {output_dir}")
+        model.save_pretrained(output_dir)
+        
+        return output_dir
     
     def _validate_converted_checkpoint(
         self, 
