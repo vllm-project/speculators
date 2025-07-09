@@ -16,7 +16,7 @@ from typing import Any, ClassVar, Literal, Optional, Union
 import torch
 from pydantic import Field, field_serializer, field_validator, model_validator
 from torch import nn
-from transformers import PretrainedConfig, PreTrainedModel
+from transformers import AutoConfig, PretrainedConfig, PreTrainedModel
 from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_mask
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.models.llama.configuration_llama import LlamaConfig
@@ -163,8 +163,7 @@ class EagleSpeculatorConfig(SpeculatorModelConfig):
         :raises ValueError: If the value cannot be converted to a PretrainedConfig
         """
         if isinstance(value, dict):
-            return PretrainedConfig.from_dict(value)
-
+            return AutoConfig.for_model(**value)
         if isinstance(value, PretrainedConfig):
             return value
 
