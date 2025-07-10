@@ -14,7 +14,7 @@ Classes:
 
 import os
 from pathlib import Path
-from typing import Literal, Optional, Union
+from typing import Optional, Union
 
 import torch
 from loguru import logger
@@ -178,20 +178,13 @@ class EagleSpeculatorConverter(
 
         return converted_config, converted_state_dict
 
-    def validate(
-        self,
-        model: EagleSpeculator,
-        verifier_attachment_mode: Literal["detached", "full", "train_only"],  # noqa: ARG002
-        device: Union[str, torch.device, int],
-    ):
+    def validate(self, model: EagleSpeculator, device: Union[str, torch.device, int]):
         """
         Validate the converted EagleSpeculator model by running a forward pass
         with a small batch of random input data. This ensures that the model
         is correctly configured and can process inputs without errors.
 
         :param model: The converted EagleSpeculator model to validate
-        :param verifier_attachment_mode: Mode that was used to attach the verifier.
-            Can be "detached", "full", or "train_only".
         :param device: The device to validate the model on.
             Can be a string (e.g., "cuda", "cpu"), a torch.device instance, or an int
             (e.g., 0 for "cuda:0").
