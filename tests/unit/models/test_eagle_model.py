@@ -52,16 +52,18 @@ from speculators.proposals import GreedyTokenProposalConfig
 # ===== Layer Types Constants =====
 
 LAYER_TYPES: dict[str, tuple[type, type, type]] = {
-    "LlamaDecoderLayer": (LlamaDecoderLayer, LlamaRMSNorm),
-    "MistralDecoderLayer": (MistralDecoderLayer, MistralRMSNorm),
-    "Qwen3DecoderLayer": (Qwen3DecoderLayer, Qwen3RMSNorm),
-    "GemmaDecoderLayer": (GemmaDecoderLayer, GemmaRMSNorm),
-    "MixtralDecoderLayer": (MixtralDecoderLayer, MixtralRMSNorm),
+    # Format: "LayerName": (LayerClass, NormClass, ConfigClass)
+    "LlamaDecoderLayer": (LlamaDecoderLayer, LlamaRMSNorm, LlamaConfig),
+    "MistralDecoderLayer": (MistralDecoderLayer, MistralRMSNorm, MistralConfig),
+    "Qwen3DecoderLayer": (Qwen3DecoderLayer, Qwen3RMSNorm, Qwen3Config),
+    "GemmaDecoderLayer": (GemmaDecoderLayer, GemmaRMSNorm, GemmaConfig),
+    "MixtralDecoderLayer": (MixtralDecoderLayer, MixtralRMSNorm, MixtralConfig),
     "DeepseekV3DecoderLayer": (
         DeepseekV3DecoderLayer,
         DeepseekV3RMSNorm,
+        DeepseekV3Config,
     ),
-    "GraniteDecoderLayer": (GraniteDecoderLayer, GraniteRMSNorm),
+    "GraniteDecoderLayer": (GraniteDecoderLayer, GraniteRMSNorm, GraniteConfig),
 }
 
 LAYER_ARCHITECTURES = list(LAYER_TYPES.keys())
@@ -123,6 +125,37 @@ def sample_llama_config():
     )
 
 
+# ===== Config Helper Function =====
+
+
+def create_layer_config_for_architecture(layer_architecture: str):
+    config_class = LAYER_TYPES[layer_architecture][
+        2
+    ]  # Third element is the config class
+    base_params = {
+        "vocab_size": 32000,
+        "hidden_size": 768,
+        "intermediate_size": 3072,
+        "num_hidden_layers": 12,
+        "num_attention_heads": 12,
+        "max_position_embeddings": 2048,
+    }
+
+    # Add extra parameters for specific config types
+    if config_class in (MixtralConfig, DeepseekV3Config, GraniteConfig):
+        base_params["num_key_value_heads"] = 12
+
+    if config_class == MixtralConfig:
+        base_params.update(
+            {
+                "num_local_experts": 8,
+                "num_experts_per_tok": 2,
+            }
+        )
+
+    return config_class(**base_params)
+
+
 @pytest.fixture
 def sample_verifier_config():
     return VerifierConfig(
@@ -157,105 +190,6 @@ def eagle_speculator_config_layernorms(sample_llama_config, sample_speculators_c
         layernorms=True,
         fusion_bias=True,
     )
-
-
-@pytest.fixture
-def sample_mistral_config():
-    return MistralConfig(
-        vocab_size=32000,
-        hidden_size=768,
-        intermediate_size=3072,
-        num_hidden_layers=12,
-        num_attention_heads=12,
-        max_position_embeddings=2048,
-    )
-
-
-@pytest.fixture
-def sample_qwen3_config():
-    return Qwen3Config(
-        vocab_size=32000,
-        hidden_size=768,
-        intermediate_size=3072,
-        num_hidden_layers=12,
-        num_attention_heads=12,
-        max_position_embeddings=2048,
-    )
-
-
-@pytest.fixture
-def sample_gemma_config():
-    return GemmaConfig(
-        vocab_size=32000,
-        hidden_size=768,
-        intermediate_size=3072,
-        num_hidden_layers=12,
-        num_attention_heads=12,
-        max_position_embeddings=2048,
-    )
-
-
-@pytest.fixture
-def sample_mixtral_config():
-    return MixtralConfig(
-        vocab_size=32000,
-        hidden_size=768,
-        intermediate_size=3072,
-        num_hidden_layers=12,
-        num_attention_heads=12,
-        num_key_value_heads=12,
-        max_position_embeddings=2048,
-        num_local_experts=8,
-        num_experts_per_tok=2,
-    )
-
-
-@pytest.fixture
-def sample_deepseek_config():
-    return DeepseekV3Config(
-        vocab_size=32000,
-        hidden_size=768,
-        intermediate_size=3072,
-        num_hidden_layers=12,
-        num_attention_heads=12,
-        num_key_value_heads=12,
-        max_position_embeddings=2048,
-    )
-
-
-@pytest.fixture
-def sample_granite_config():
-    return GraniteConfig(
-        vocab_size=32000,
-        hidden_size=768,
-        intermediate_size=3072,
-        num_hidden_layers=12,
-        num_attention_heads=12,
-        num_key_value_heads=12,
-        max_position_embeddings=2048,
-    )
-
-
-@pytest.fixture
-def layer_configs(
-    sample_llama_config,
-    sample_mistral_config,
-    sample_qwen3_config,
-    sample_gemma_config,
-    sample_mixtral_config,
-    sample_deepseek_config,
-    sample_granite_config,
-):
-    """Return a mapping of layer architectures to their configurations."""
-    return {
-        "LlamaDecoderLayer": sample_llama_config,
-        "MistralDecoderLayer": sample_mistral_config,
-        "Qwen3DecoderLayer": sample_qwen3_config,
-        "GemmaDecoderLayer": sample_gemma_config,
-        "MixtralDecoderLayer": sample_mixtral_config,
-        "DeepseekV3DecoderLayer": sample_deepseek_config,
-        "GraniteDecoderLayer": sample_granite_config,
-    }
 
 
 @pytest.fixture
@@ -564,10 +498,10 @@ def test_eagle_speculator_architecture_hass(
 @pytest.mark.smoke
 @pytest.mark.parametrize("layer_architecture", LAYER_ARCHITECTURES)
 def test_eagle_speculator_initialization_different_layers(
-    layer_architecture, layer_configs, sample_speculators_config
+    layer_architecture, sample_speculators_config
 ):
     """Test EagleSpeculator initialization with different layer architectures."""
-    layer_config = layer_configs[layer_architecture]
+    layer_config = create_layer_config_for_architecture(layer_architecture)
 
     # Create EagleSpeculatorConfig with the specific layer architecture
     eagle_config = EagleSpeculatorConfig(
@@ -599,10 +533,10 @@ def test_eagle_speculator_initialization_different_layers(
 @pytest.mark.smoke
 @pytest.mark.parametrize("layer_architecture", LAYER_ARCHITECTURES)
 def test_eagle_speculator_architecture_different_layers(
-    layer_architecture, layer_configs, sample_speculators_config
+    layer_architecture, sample_speculators_config
 ):
     """Test EagleSpeculator architecture with different layer types."""
-    layer_config = layer_configs[layer_architecture]
+    layer_config = create_layer_config_for_architecture(layer_architecture)
 
     # Create EagleSpeculatorConfig with the specific layer architecture
     eagle_config = EagleSpeculatorConfig(
@@ -664,10 +598,10 @@ def test_eagle_speculator_architecture_different_layers(
 @pytest.mark.smoke
 @pytest.mark.parametrize("layer_architecture", LAYER_ARCHITECTURES)
 def test_eagle_speculator_architecture_different_layers_with_layernorms(
-    layer_architecture, layer_configs, sample_speculators_config
+    layer_architecture, sample_speculators_config
 ):
     """Test EagleSpeculator with layernorms enabled for different decoder layers."""
-    layer_config = layer_configs[layer_architecture]
+    layer_config = create_layer_config_for_architecture(layer_architecture)
 
     # Create EagleSpeculatorConfig with layernorms enabled
     eagle_config = EagleSpeculatorConfig(
@@ -699,7 +633,7 @@ def test_eagle_speculator_architecture_different_layers_with_layernorms(
     # Verify embedding layernorm
     assert model.embedding_layernorm is not None
     assert isinstance(model.embedding_layernorm, LAYER_TYPES[layer_architecture][1])
-    assert model.embedding_layernorm.weight.shape == (layer_config.hidden_size,)
+    assert model.embedding_layernorm.weight.shape == (layer_config.hidden_size,)  # type: ignore[attr-defined]
 
     # Verify fusion layer with bias
     assert model.fusion_fc is not None
@@ -718,10 +652,10 @@ def test_eagle_speculator_architecture_different_layers_with_layernorms(
 @pytest.mark.smoke
 @pytest.mark.parametrize("layer_architecture", LAYER_ARCHITECTURES)
 def test_eagle_speculator_from_pretrained_different_layers(
-    layer_architecture, layer_configs, sample_speculators_config
+    layer_architecture, sample_speculators_config
 ):
     """Test EagleSpeculator from_pretrained with different layer architectures."""
-    layer_config = layer_configs[layer_architecture]
+    layer_config = create_layer_config_for_architecture(layer_architecture)
 
     # Create EagleSpeculatorConfig with the specific layer architecture
     eagle_config = EagleSpeculatorConfig(
@@ -758,10 +692,10 @@ def test_eagle_speculator_from_pretrained_different_layers(
 @pytest.mark.smoke
 @pytest.mark.parametrize("layer_architecture", LAYER_ARCHITECTURES)
 def test_eagle_speculator_local_marshalling_different_layers(
-    layer_architecture, layer_configs, sample_speculators_config
+    layer_architecture, sample_speculators_config
 ):
     """Test EagleSpeculator local marshalling with different layer architectures."""
-    layer_config = layer_configs[layer_architecture]
+    layer_config = create_layer_config_for_architecture(layer_architecture)
 
     # Create EagleSpeculatorConfig with the specific layer architecture
     eagle_config = EagleSpeculatorConfig(
