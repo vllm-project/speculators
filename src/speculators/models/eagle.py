@@ -10,6 +10,7 @@ Classes:
     EagleSpeculator: Main model implementation for EAGLE/HASS speculators
 """
 
+import importlib
 import os
 from typing import Any, ClassVar, Literal, Optional, Union
 
@@ -19,26 +20,7 @@ from torch import nn
 from transformers import AutoConfig, PretrainedConfig, PreTrainedModel
 from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_mask
 from transformers.modeling_outputs import CausalLMOutputWithPast
-from transformers.models.deepseek_v3.modeling_deepseek_v3 import (
-    DeepseekV3DecoderLayer,
-    DeepseekV3RMSNorm,
-)
-from transformers.models.gemma.modeling_gemma import GemmaDecoderLayer, GemmaRMSNorm
-from transformers.models.granite.modeling_granite import (
-    GraniteDecoderLayer,
-    GraniteRMSNorm,
-)
 from transformers.models.llama.configuration_llama import LlamaConfig
-from transformers.models.llama.modeling_llama import LlamaDecoderLayer, LlamaRMSNorm
-from transformers.models.mistral.modeling_mistral import (
-    MistralDecoderLayer,
-    MistralRMSNorm,
-)
-from transformers.models.mixtral.modeling_mixtral import (
-    MixtralDecoderLayer,
-    MixtralRMSNorm,
-)
-from transformers.models.qwen3.modeling_qwen3 import Qwen3DecoderLayer, Qwen3RMSNorm
 from typing_extensions import Self
 
 from speculators import SpeculatorModel, SpeculatorModelConfig
@@ -47,16 +29,6 @@ __all__ = [
     "EagleSpeculator",
     "EagleSpeculatorConfig",
 ]
-
-ARCHITECTURE_CLASSES = {
-    "LlamaDecoderLayer": (LlamaDecoderLayer, LlamaRMSNorm),
-    "MistralDecoderLayer": (MistralDecoderLayer, MistralRMSNorm),
-    "Qwen3DecoderLayer": (Qwen3DecoderLayer, Qwen3RMSNorm),
-    "GemmaDecoderLayer": (GemmaDecoderLayer, GemmaRMSNorm),
-    "MixtralDecoderLayer": (MixtralDecoderLayer, MixtralRMSNorm),
-    "DeepseekV3DecoderLayer": (DeepseekV3DecoderLayer, DeepseekV3RMSNorm),
-    "GraniteDecoderLayer": (GraniteDecoderLayer, GraniteRMSNorm),
-}
 
 
 @SpeculatorModelConfig.register("eagle")
@@ -296,13 +268,6 @@ class EagleSpeculator(SpeculatorModel):
                 f"got {type(config)} instead."
             )
 
-        if config.transformer_layer_architecture not in ARCHITECTURE_CLASSES:
-            raise ValueError(
-                f"Invalid transformer layer architecture: {config.transformer_layer_architecture}. "
-                f"Must be one of: {list(ARCHITECTURE_CLASSES.keys())}"
-            )
-        self._architecture = config.transformer_layer_architecture
-
         # Initialize model parameters from config
         self.vocab_size = config.transformer_layer_config.vocab_size
         self.hidden_size = config.transformer_layer_config.hidden_size
@@ -320,6 +285,7 @@ class EagleSpeculator(SpeculatorModel):
             verifier_attachment_mode=verifier_attachment_mode,
         )
 
+        self._architecture_classes = self._import_model_classes()
         # Initialize layers based on the configuration
         self.embedding_layernorm: Optional[nn.Module] = self._create_layernorm()
         self.fusion_fc: nn.Linear = nn.Linear(
@@ -563,7 +529,45 @@ class EagleSpeculator(SpeculatorModel):
         return layer
 
     def _layernorm_class(self) -> type[nn.Module]:
-        return ARCHITECTURE_CLASSES[self._architecture][1]
+        return self._architecture_classes[1]
 
     def _transformer_layer_class(self) -> type[nn.Module]:
-        return ARCHITECTURE_CLASSES[self._architecture][0]
+        return self._architecture_classes[0]
+
+    def _import_model_classes(self) -> tuple[type, type]:
+        """
+        Get the decoder layer class and layer normalization class for a given config
+        and decoder layer name. Uses the config qualified name to find the corresponding
+        modeling module to import the decoder layer and normalization classes from.
+        """
+        # e.g. LlamaConfig + LlamaDecoderLayer
+        # -> get qualname: transformers.models.llama.configuration_llama.LlamaConfig
+        # -> expected path: transformers.models.llama.modeling_llama.LlamaDecoderLayer
+        # -> expected path: transformers.models.llama.modeling_llama.LlamaRMSNorm
+
+        module_path = self.config.transformer_layer_config.__class__.__module__
+        parts = module_path.split(".")
+        if module_path.startswith("transformers.models.") and len(parts) >= 3:  # noqa: PLR2004
+            model_name = parts[2]
+        else:
+            raise ValueError(
+                "Could not import model classes. Please ensure the config is a valid "
+                "model specific config. i.e. LlamaConfig"
+            )
+
+        # Import the modeling module
+        modeling_module = importlib.import_module(
+            f"transformers.models.{model_name}.modeling_{model_name}"
+        )
+
+        transformer_arch_name = self.config.transformer_layer_architecture
+        decoder_class = getattr(modeling_module, transformer_arch_name)
+        try:
+            layer_norm_class = getattr(
+                modeling_module,
+                f"{transformer_arch_name.removesuffix('DecoderLayer')}RMSNorm",
+            )
+        except AttributeError:
+            layer_norm_class = torch.nn.LayerNorm
+
+        return decoder_class, layer_norm_class
