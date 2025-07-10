@@ -49,7 +49,11 @@ dependencies = [
     "safetensors",
     "torch",
     "transformers",
+    "typer-slim>=0.12.0",
 ]
+
+[project.scripts]
+speculators = "speculators.cli:main"
 
 [project.optional-dependencies]
 dev = [
@@ -210,6 +214,9 @@ select = [
     "PLR0915", # allow complex statements in tests
     "S108", # allow probable insecure usage of temporary files in tests
     "PLW2901", # allow variable overwrite in tests
+]
+"src/speculators/convert/**/*.py" = [
+    "BLE001", # allow catching Exception for conversion errors
 ]
 
 [tool.ruff.lint.isort]
