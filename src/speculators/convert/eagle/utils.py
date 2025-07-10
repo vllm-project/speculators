@@ -73,7 +73,7 @@ def ensure_checkpoint_is_local(
         return checkpoint_path
 
     return download_checkpoint_from_hub(
-        model_id=str(checkpoint_path), cache_dir=cache_dir
+        model_id=str(checkpoint_path), cache_dir=str(cache_dir) if cache_dir else None
     )
 
 

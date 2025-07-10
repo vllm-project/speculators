@@ -171,12 +171,6 @@ class EagleConverter:
         return VerifierConfig(
             name_or_path=base_model,
             architectures=eagle_config.get("architectures", ["LlamaForCausalLM"]),
-            vocab_size=eagle_config.get("vocab_size", 32000),
-            hidden_size=eagle_config.get("hidden_size", 4096),
-            intermediate_size=eagle_config.get("intermediate_size", 11008),
-            max_position_embeddings=eagle_config.get("max_position_embeddings", 4096),
-            bos_token_id=eagle_config.get("bos_token_id", 1),
-            eos_token_id=eos_token_id,
         )
 
     def _build_eagle_speculator_config(
@@ -325,13 +319,16 @@ class EagleConverter:
         :return: Path to the saved checkpoint
         :raises RuntimeError: If checkpoint saving fails
         """
-        model = EagleSpeculator(
-            config=config, verifier=None, verifier_attachment_mode="detached"
-        )
-        # Load the converted weights into the model
-        model.load_state_dict(weights, strict=False)
-        logger.debug(f"Saving model to: {output_dir}")
-        model.save_pretrained(output_dir)
+        # Save the config first
+        config.save_pretrained(str(output_dir))
+
+        # Save the weights in safetensors format
+        import safetensors.torch
+
+        output_file = Path(output_dir) / "model.safetensors"
+        safetensors.torch.save_file(weights, str(output_file))
+
+        logger.debug(f"Saved model to: {output_dir}")
         return Path(output_dir)
 
     def _validate_converted_checkpoint(
