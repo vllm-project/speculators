@@ -319,16 +319,13 @@ class EagleConverter:
         :return: Path to the saved checkpoint
         :raises RuntimeError: If checkpoint saving fails
         """
-        # Save the config first
-        config.save_pretrained(str(output_dir))
-
-        # Save the weights in safetensors format
-        import safetensors.torch
-
-        output_file = Path(output_dir) / "model.safetensors"
-        safetensors.torch.save_file(weights, str(output_file))
-
-        logger.debug(f"Saved model to: {output_dir}")
+        model = EagleSpeculator(
+            config=config, verifier=None, verifier_attachment_mode="detached"
+        )
+        # Load the converted weights into the model
+        model.load_state_dict(weights, strict=False)
+        logger.debug(f"Saving model to: {output_dir}")
+        model.save_pretrained(str(output_dir))
         return Path(output_dir)
 
     def _validate_converted_checkpoint(
