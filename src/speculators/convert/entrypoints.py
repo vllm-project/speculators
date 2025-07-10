@@ -36,7 +36,6 @@ def convert_model(
         Union[str, os.PathLike, PreTrainedModel, PretrainedConfig, dict]
     ] = None,
     verifier: Optional[Union[str, os.PathLike, PreTrainedModel]] = None,
-    verifier_attachment_mode: Literal["detached", "full", "train_only"] = "detached",
     validate_device: Optional[Union[str, torch.device, int]] = None,
     algorithm: Literal["auto", "eagle", "eagle2", "hass"] = "auto",
     algorithm_kwargs: Optional[dict] = None,
@@ -88,8 +87,6 @@ def convert_model(
     :param verifier: Optional path to a verifier checkpoint, Hugging Face model ID,
         or a PreTrainedModel instance. If provided, the verifier will be attached
         to the converted speculator model.
-    :param verifier_attachment_mode: How to attach the verifier to the model.
-        Can be "detached", "full", or "train_only". Defaults to "detached".
     :param validate_device: Optional device to validate the model on after conversion.
         Can be a string (e.g., "cpu", "cuda"), a torch.device instance, or an integer
         (e.g., 0 for "cuda:0"). If not provided, no validation is performed.
@@ -167,7 +164,6 @@ def convert_model(
     converted = converter(
         output_path=output_path,
         validate_device=validate_device,
-        verifier_attachment_mode=verifier_attachment_mode,
     )
     logger.info(f"Conversion complete: {converted}")
 

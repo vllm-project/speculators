@@ -79,7 +79,6 @@ def convert(
         output_path=output_path,
         config=config,
         verifier=verifier,
-        verifier_attachment_mode="train_only",
         validate_device=validate_device,
         algorithm=algorithm,  # type: ignore[arg-type]
         algorithm_kwargs=algorithm_kwargs,

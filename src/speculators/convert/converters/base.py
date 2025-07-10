@@ -13,7 +13,7 @@ Functions:
 import os
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Generic, Literal, Optional, TypeVar, Union
+from typing import Generic, Optional, TypeVar, Union
 
 from torch import Tensor, device, nn
 from transformers import PretrainedConfig, PreTrainedModel
@@ -152,9 +152,6 @@ class SpeculatorConverter(ABC, Generic[ConfigT, ModelT], ClassRegistryMixin):
         self,
         output_path: Optional[Union[str, os.PathLike]] = None,
         validate_device: Optional[Union[str, device, int]] = None,
-        verifier_attachment_mode: Literal[
-            "detached", "full", "train_only"
-        ] = "detached",
     ) -> ModelT:
         """
         Convert the model checkpoint and supporting args for the current instance
@@ -166,9 +163,6 @@ class SpeculatorConverter(ABC, Generic[ConfigT, ModelT], ClassRegistryMixin):
         :param validate_device: Device to validate the model on after converting.
             If provided, the model will be validated on this device.
             If None, no validation will be performed.
-        :param verifier_attachment_mode: The mode for attaching a verifier to the model.
-            Can be "detached", "full", or "train_only". Only relevant for the
-            usage of the converted instance that is returned.
         :return: The converted Speculators model instance.
         """
         config, state_dict = self.convert_config_state_dict()
@@ -176,48 +170,14 @@ class SpeculatorConverter(ABC, Generic[ConfigT, ModelT], ClassRegistryMixin):
             pretrained_model_name_or_path=None,
             config=config,
             state_dict=state_dict,
-        )
-        self.attach_verifier(
-            model=model,
-            verifier_attachment_mode=verifier_attachment_mode,
+            verifier=self.verifier,
+            verifier_attachment_mode="full",
         )
         if output_path:
             self.save(model, output_path)
         if validate_device:
-            self.validate(model, verifier_attachment_mode, validate_device)
+            self.validate(model, validate_device)
         return model
-
-    def attach_verifier(
-        self,
-        model: ModelT,
-        verifier_attachment_mode: Literal["detached", "full", "train_only"],
-    ) -> bool:
-        """
-        Attach a verifier to the model.
-
-        :param model: The converted Speculators model to attach the verifier to.
-        :param verifier_attachment_mode: The mode for attaching the verifier.
-            Can be "detached", "full", or "train_only".
-        :return: True if the verifier was successfully attached,
-            False if no verifier was set.
-        """
-        if self.verifier is None:
-            return False
-
-        # ensure verifier is set in the speculator's config
-        model.attach_verifier(
-            verifier=self.verifier,
-            mode=(
-                verifier_attachment_mode
-                if verifier_attachment_mode != "detached"
-                else "train_only"
-            ),
-        )
-        if verifier_attachment_mode == "detached":
-            # remove it if input is set to not keep the verifier attached
-            model.detach_verifier()
-
-        return True
 
     def save(self, model: ModelT, output_path: Union[str, os.PathLike]):
         """
@@ -230,9 +190,7 @@ class SpeculatorConverter(ABC, Generic[ConfigT, ModelT], ClassRegistryMixin):
         model.save_pretrained(output_path)  # type: ignore[attr-defined]
 
     @abstractmethod
-    def convert_config_state_dict(
-        self,
-    ) -> tuple[ConfigT, dict[str, Tensor]]:
+    def convert_config_state_dict(self) -> tuple[ConfigT, dict[str, Tensor]]:
         """
         Convert the model configuration and state dict to a format suitable for
         the Speculators model.
@@ -245,20 +203,13 @@ class SpeculatorConverter(ABC, Generic[ConfigT, ModelT], ClassRegistryMixin):
         ...
 
     @abstractmethod
-    def validate(
-        self,
-        model: ModelT,
-        verifier_attachment_mode: Literal["detached", "full", "train_only"],
-        device: Union[str, device, int],
-    ):
+    def validate(self, model: ModelT, device: Union[str, device, int]):
         """
         Validate the converted model on the specified device.
         This method should ensure that the model is correctly set up and can run
         inference or training on the specified device.
 
         :param model: The converted Speculators model to validate.
-        :param verifier_attachment_mode: The mode that was used to attach the verifier.
-            Can be "detached", "full", or "train_only".
         :param device: The device to validate the model on.
             Can be a string (e.g., "cuda", "cpu"), a torch.device instance, or an int
             representing the device index (e.g., 0 for "cuda:0").
