@@ -323,9 +323,9 @@ class EagleConverter:
             config=config, verifier=None, verifier_attachment_mode="detached"
         )
         # Load the converted weights into the model
-        model.load_state_dict(weights, strict=False)
+        model.load_state_dict(weights, strict=False)  # type: ignore[attr-defined]
         logger.debug(f"Saving model to: {output_dir}")
-        model.save_pretrained(str(output_dir))
+        model.save_pretrained(str(output_dir))  # type: ignore[attr-defined]
         return Path(output_dir)
 
     def _validate_converted_checkpoint(
