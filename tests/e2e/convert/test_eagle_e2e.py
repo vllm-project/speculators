@@ -310,7 +310,7 @@ class TestEagleConversionE2E:
         assert model.config.layernorms is False, "layernorms should be False"
 
         # Check that fc layer has bias
-        assert model.fusion_fc.bias is not None, (
+        assert model.fusion_fc.bias is not None, (  # type: ignore[union-attr]
             "fusion_fc layer should have bias parameter"
         )
 
@@ -344,7 +344,7 @@ class TestEagleConversionE2E:
 
         # Try loading the model - should work even if validation was skipped
         model = EagleSpeculator.from_pretrained(output_dir)
-        self.execute_forward_pass(model)
+        self.execute_forward_pass(model)  # type: ignore[arg-type]
 
         logger.success(f"Conversion with validate={validate} successful")
 

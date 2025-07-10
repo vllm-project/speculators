@@ -5,7 +5,7 @@ Main CLI entry point for speculators.
 from importlib.metadata import version as pkg_version
 from typing import Optional
 
-import typer
+import typer  # type: ignore[import-not-found]
 
 from speculators.convert.cli import convert
 
