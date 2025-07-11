@@ -165,8 +165,8 @@ def test_eagle_speculator_config_initialization():
 
     # Verify Eagle-specific defaults
     assert config.speculators_model_type == "eagle"
-    assert config.architectures == ["EagleSpeculator", "LlamaDecoderLayer"]
-    assert config.transformer_layer_architecture == "LlamaDecoderLayer"
+    assert config.architectures == ["EagleSpeculator"]
+    assert config.transformer_layer_architecture == "auto"
     assert isinstance(config.transformer_layer_config, LlamaConfig)
     assert config.layernorms is False
     assert config.fusion_bias is False

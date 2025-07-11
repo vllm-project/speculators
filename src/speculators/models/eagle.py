@@ -11,7 +11,10 @@ Classes:
 """
 
 import importlib
+import inspect
 import os
+import re
+import warnings
 from typing import Any, ClassVar, Literal, Optional, Union
 
 import torch
@@ -20,6 +23,7 @@ from torch import nn
 from transformers import AutoConfig, PretrainedConfig, PreTrainedModel
 from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_mask
 from transformers.modeling_outputs import CausalLMOutputWithPast
+from transformers.models.auto.modeling_auto import MODEL_FOR_CAUSAL_LM_MAPPING
 from transformers.models.llama.configuration_llama import LlamaConfig
 from typing_extensions import Self
 
@@ -80,7 +84,7 @@ class EagleSpeculatorConfig(SpeculatorModelConfig):
     )
 
     transformer_layer_architecture: str = Field(
-        default="LlamaDecoderLayer",
+        default="auto",
         description=(
             "The architecture class name of the transformer layer to use for "
             "the speculator's decoder layer. Must correspond to a valid "
@@ -128,7 +132,10 @@ class EagleSpeculatorConfig(SpeculatorModelConfig):
 
         :return: The validated configuration instance with updated architectures
         """
-        if self.transformer_layer_architecture not in self.architectures:
+        if (
+            self.transformer_layer_architecture != "auto"
+            and self.transformer_layer_architecture not in self.architectures
+        ):
             self.architectures.append(self.transformer_layer_architecture)
 
         return self
@@ -285,7 +292,7 @@ class EagleSpeculator(SpeculatorModel):
             verifier_attachment_mode=verifier_attachment_mode,
         )
 
-        self._architecture_classes = self._import_model_classes()
+        self._decoder_class, self._layernorm_class = self._import_model_classes()
         # Initialize layers based on the configuration
         self.embedding_layernorm: Optional[nn.Module] = self._create_layernorm()
         self.fusion_fc: nn.Linear = nn.Linear(
@@ -511,13 +518,12 @@ class EagleSpeculator(SpeculatorModel):
         if not self.config.layernorms:
             return None
 
-        return self._layernorm_class()(
+        return self._layernorm_class(
             self.hidden_size, eps=self.config.transformer_layer_config.rms_norm_eps
         )
 
     def _create_transformer_layer(self) -> nn.Module:
-        layer_class = self._transformer_layer_class()
-        layer = layer_class(
+        layer = self._decoder_class(
             self.config.transformer_layer_config,
             layer_idx=0,
         )
@@ -528,46 +534,84 @@ class EagleSpeculator(SpeculatorModel):
 
         return layer
 
-    def _layernorm_class(self) -> type[nn.Module]:
-        return self._architecture_classes[1]
+    def _update_config_with_decoder_class(self, decoder_class: type[nn.Module]):
+        if self.config.transformer_layer_architecture == "auto":
+            decoder_name = decoder_class.__name__
+            self.config.transformer_layer_architecture = decoder_name
+            if decoder_name not in self.config.architectures:
+                self.config.architectures.append(decoder_name)
 
-    def _transformer_layer_class(self) -> type[nn.Module]:
-        return self._architecture_classes[0]
-
-    def _import_model_classes(self) -> tuple[type, type]:
+    def _import_model_classes(self) -> tuple[type[nn.Module], type[nn.Module]]:
         """
         Get the decoder layer class and layer normalization class for a given config
         and decoder layer name. Uses the config qualified name to find the corresponding
         modeling module to import the decoder layer and normalization classes from.
         """
         # e.g. LlamaConfig + LlamaDecoderLayer
-        # -> get qualname: transformers.models.llama.configuration_llama.LlamaConfig
-        # -> expected path: transformers.models.llama.modeling_llama.LlamaDecoderLayer
-        # -> expected path: transformers.models.llama.modeling_llama.LlamaRMSNorm
+        # -> get config class: transformers.models.llama.configuration_llama.LlamaConfig
+        # -> find corresponding causal language model class:
+        #       transformers.models.llama.modeling_llama.LlamaForCausalLM
+        # -> import module: transformers.models.llama.modeling_llama
+        # -> get decoder layer class:
+        #       transformers.models.llama.modeling_llama.LlamaDecoderLayer
+        # -> get layer normalization class:
+        #       transformers.models.llama.modeling_llama.LlamaRMSNorm
 
-        module_path = self.config.transformer_layer_config.__class__.__module__
-        parts = module_path.split(".")
-        if module_path.startswith("transformers.models.") and len(parts) >= 3:  # noqa: PLR2004
-            model_name = parts[2]
-        else:
-            raise ValueError(
-                "Could not import model classes. Please ensure the config is a valid "
-                "model specific config. i.e. LlamaConfig"
+        config_class = type(self.config.transformer_layer_config)
+        if config_class not in MODEL_FOR_CAUSAL_LM_MAPPING:
+            raise TypeError(
+                f"Config class {config_class} is not a valid causal language model "
+                f"config class. Please use a valid config, e.g., LlamaConfig."
             )
+
+        causal_lm_model_class = MODEL_FOR_CAUSAL_LM_MAPPING[config_class]
+        module_path = causal_lm_model_class.__module__
 
         # Import the modeling module
-        modeling_module = importlib.import_module(
-            f"transformers.models.{model_name}.modeling_{model_name}"
+        modeling_module = importlib.import_module(module_path)
+
+        ### Get decoder layer class
+        transformer_arch_name = self.config.transformer_layer_architecture
+        if transformer_arch_name == "auto":
+            transformer_arch_name = (
+                config_class.__name__.removesuffix("Config") + "DecoderLayer"
+            )
+
+        try:
+            decoder_class = getattr(modeling_module, transformer_arch_name)
+        except AttributeError as e:
+            if self.config.transformer_layer_architecture == "auto":
+                msg = (
+                    "Unable to automatically determine transformer layer architecture. "
+                    "Please set `transformer_layer_architecture` to a valid "
+                    "architecture, e.g., 'LlamaDecoderLayer' for Llama models."
+                )
+            else:
+                msg = (
+                    f"Transformer layer architecture {transformer_arch_name} not found "
+                    f"in module {module_path}. Please set "
+                    "`transformer_layer_architecture` to a valid architecture, "
+                    "e.g., 'LlamaDecoderLayer' for Llama models."
+                )
+            raise ValueError(msg) from e
+
+        self._update_config_with_decoder_class(decoder_class)
+
+        ### Get layer normalization class
+        if not self.config.layernorms:
+            # No layernorms being used, so no need to import a layer normalization class
+            return decoder_class, nn.Identity
+
+        classes = dict(inspect.getmembers(modeling_module, inspect.isclass))
+        for pat in [r".*RMSNorm$", r".*Norm$"]:
+            for name, cls in classes.items():
+                if re.match(pat, name):
+                    return decoder_class, cls
+
+        warnings.warn(
+            "Unable to automatically determine layer normalization class. "
+            "Falling back to torch.nn.LayerNorm.",
+            stacklevel=2,
         )
 
-        transformer_arch_name = self.config.transformer_layer_architecture
-        decoder_class = getattr(modeling_module, transformer_arch_name)
-        try:
-            layer_norm_class = getattr(
-                modeling_module,
-                f"{transformer_arch_name.removesuffix('DecoderLayer')}RMSNorm",
-            )
-        except AttributeError:
-            layer_norm_class = torch.nn.LayerNorm
-
-        return decoder_class, layer_norm_class
+        return decoder_class, torch.nn.LayerNorm

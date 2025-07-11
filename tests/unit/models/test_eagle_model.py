@@ -10,6 +10,7 @@ import pytest
 import torch
 from torch import nn
 from transformers import PreTrainedModel
+from transformers.configuration_utils import PretrainedConfig
 from transformers.models.deepseek_v3.configuration_deepseek_v3 import DeepseekV3Config
 from transformers.models.deepseek_v3.modeling_deepseek_v3 import (
     DeepseekV3DecoderLayer,
@@ -733,3 +734,73 @@ def test_eagle_speculator_local_marshalling_different_layers(
         assert loaded_model.embed_tokens == mock_verifier.embed_tokens
         assert loaded_model.rotary_emb == mock_verifier.rotary_emb
         assert loaded_model.lm_head == mock_verifier.lm_head
+
+
+# ===== EagleSpeculator Architecture Auto-Detection Tests =====
+
+
+@pytest.mark.smoke
+def test_eagle_speculator_auto_architecture_derivation(sample_speculators_config):
+    layer_config = LlamaConfig()
+
+    # Create config with auto architecture
+    eagle_config = EagleSpeculatorConfig(
+        transformer_layer_architecture="auto",
+        transformer_layer_config=layer_config,
+        speculators_config=sample_speculators_config,
+    )
+
+    # Create mock verifier
+    mock_verifier = MockVerifier(layer_config)
+
+    # Create model - this should work with auto architecture
+    model = EagleSpeculator(eagle_config, verifier=mock_verifier)
+
+    # Verify the model was created successfully
+    assert isinstance(model, EagleSpeculator)
+    # This value is set during initialization when a decoder layer class is found
+    assert model.config.transformer_layer_architecture == "LlamaDecoderLayer"
+    assert "LlamaDecoderLayer" in model.config.architectures
+    assert model.verifier == mock_verifier
+    assert model.verifier_attachment_mode == "full"
+
+    # Verify the transformer layer is the correct type
+    assert isinstance(model.transformer, LlamaDecoderLayer)
+
+
+@pytest.mark.smoke
+def test_eagle_speculator_auto_architecture_error_handling():
+    # Create a custom config class that doesn't have a corresponding decoder layer
+    class CustomConfig(PretrainedConfig):
+        model_type = "custom"
+
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.vocab_size = 32000
+            self.hidden_size = 768
+            self.intermediate_size = 3072
+            self.num_hidden_layers = 12
+            self.num_attention_heads = 12
+            self.max_position_embeddings = 2048
+
+    # This config is not in MODEL_FOR_CAUSAL_LM_MAPPING, so it should fail
+    custom_config = CustomConfig()
+
+    eagle_config = EagleSpeculatorConfig(
+        transformer_layer_architecture="auto",
+        transformer_layer_config=custom_config,
+        speculators_config=SpeculatorsConfig(
+            algorithm="eagle",
+            proposal_methods=[GreedyTokenProposalConfig()],
+            default_proposal_method="greedy",
+            verifier=VerifierConfig(
+                name_or_path="test/verifier",
+                architectures=["CustomForCausalLM"],
+            ),
+        ),
+    )
+
+    with pytest.raises(
+        TypeError, match="is not a valid causal language model config class"
+    ):
+        EagleSpeculator(eagle_config, verifier_attachment_mode="detached")
