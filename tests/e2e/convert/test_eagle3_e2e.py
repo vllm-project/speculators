@@ -16,7 +16,6 @@ class TestEagle3ConversionE2E:
 
     def setup_method(self):
         import gc
-
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -165,5 +164,4 @@ class TestEagle3ConversionE2E:
 
 if __name__ == "__main__":
     import pytest
-
     pytest.main([__file__, "-v", "-s"])
