@@ -7,7 +7,14 @@ from pathlib import Path
 
 import pytest
 from pydantic import BaseModel, ValidationError
+from transformers import PretrainedConfig
+from transformers.models.deepseek_v3.configuration_deepseek_v3 import DeepseekV3Config
+from transformers.models.gemma.configuration_gemma import GemmaConfig
+from transformers.models.granite.configuration_granite import GraniteConfig
 from transformers.models.llama.configuration_llama import LlamaConfig
+from transformers.models.mistral.configuration_mistral import MistralConfig
+from transformers.models.mixtral.configuration_mixtral import MixtralConfig
+from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
 from speculators import (
     SpeculatorModelConfig,
@@ -109,6 +116,45 @@ def hass_config_dict(eagle12_config_dict):
     return config_dict
 
 
+# ===== Config Classes =====
+
+LAYER_TYPES: list[tuple[str, type[PretrainedConfig]]] = [
+    ("LlamaDecoderLayer", LlamaConfig),
+    ("MistralDecoderLayer", MistralConfig),
+    ("Qwen3DecoderLayer", Qwen3Config),
+    ("GemmaDecoderLayer", GemmaConfig),
+    ("MixtralDecoderLayer", MixtralConfig),
+    ("DeepseekV3DecoderLayer", DeepseekV3Config),
+    ("GraniteDecoderLayer", GraniteConfig),
+]
+
+
+def create_layer_config(config_class: type[PretrainedConfig]) -> PretrainedConfig:
+    """Create a config instance for the given config class with standard parameters."""
+    base_params = {
+        "vocab_size": 32000,
+        "hidden_size": 768,
+        "intermediate_size": 3072,
+        "num_hidden_layers": 12,
+        "num_attention_heads": 12,
+        "max_position_embeddings": 2048,
+    }
+
+    # Add extra parameters for specific config types
+    if config_class in (MixtralConfig, DeepseekV3Config, GraniteConfig):
+        base_params["num_key_value_heads"] = 12
+
+    if config_class == MixtralConfig:
+        base_params.update(
+            {
+                "num_local_experts": 8,
+                "num_experts_per_tok": 2,
+            }
+        )
+
+    return config_class(**base_params)
+
+
 # ===== EagleSpeculatorConfig Tests =====
 
 
@@ -119,8 +165,8 @@ def test_eagle_speculator_config_initialization():
 
     # Verify Eagle-specific defaults
     assert config.speculators_model_type == "eagle"
-    assert config.architectures == ["EagleSpeculator", "LlamaDecoderLayer"]
-    assert config.transformer_layer_architecture == "LlamaDecoderLayer"
+    assert config.architectures == ["EagleSpeculator"]
+    assert config.transformer_layer_architecture == "auto"
     assert isinstance(config.transformer_layer_config, LlamaConfig)
     assert config.layernorms is False
     assert config.fusion_bias is False
@@ -153,6 +199,30 @@ def test_eagle_speculator_config_custom_initialization(
     assert config.layernorms is True
     assert config.fusion_bias is True
     assert config.speculators_config == sample_speculators_config
+
+
+@pytest.mark.smoke
+@pytest.mark.parametrize(("layer_architecture", "config_class"), LAYER_TYPES)
+def test_eagle_speculator_config_with_different_configs(
+    layer_architecture, config_class, sample_speculators_config
+):
+    """Test EagleSpeculatorConfig with different transformer layer configurations."""
+    layer_config = create_layer_config(config_class)
+
+    config = EagleSpeculatorConfig(
+        transformer_layer_architecture=layer_architecture,
+        transformer_layer_config=layer_config,
+        speculators_config=sample_speculators_config,
+    )
+
+    # Verify the configuration
+    assert config.transformer_layer_architecture == layer_architecture
+    assert isinstance(config.transformer_layer_config, config_class)
+    assert config.transformer_layer_config.vocab_size == 32000
+    assert config.transformer_layer_config.hidden_size == 768
+    assert layer_architecture in config.architectures
+    assert "EagleSpeculator" in config.architectures
+    assert config.transformer_layer_config == layer_config
 
 
 @pytest.mark.smoke
@@ -292,6 +362,44 @@ def test_eagle_speculator_config_marshalling(sample_speculators_config):
 
 
 @pytest.mark.smoke
+@pytest.mark.parametrize(("layer_architecture", "config_class"), LAYER_TYPES)
+def test_eagle_speculator_config_marshalling_different_layers(
+    layer_architecture, config_class, sample_speculators_config
+):
+    """Test marshalling with different layer architectures."""
+    layer_config = create_layer_config(config_class)
+
+    original_config = EagleSpeculatorConfig(
+        transformer_layer_architecture=layer_architecture,
+        transformer_layer_config=layer_config,
+        layernorms=True,
+        fusion_bias=True,
+        speculators_config=sample_speculators_config,
+    )
+
+    # Test model_dump()
+    config_dict = original_config.model_dump()
+    assert isinstance(config_dict, dict)
+    assert config_dict["speculators_model_type"] == "eagle"
+    assert config_dict["transformer_layer_architecture"] == layer_architecture
+    assert layer_architecture in config_dict["architectures"]
+
+    # Test model_validate() on base class
+    recreated_base = SpeculatorModelConfig.model_validate(config_dict)
+    assert isinstance(recreated_base, EagleSpeculatorConfig)
+    assert recreated_base.transformer_layer_architecture == layer_architecture
+    assert recreated_base.layernorms is True
+    assert recreated_base.fusion_bias is True
+
+    # Test model_validate() roundtrip
+    recreated_config = EagleSpeculatorConfig.model_validate(config_dict)
+    assert isinstance(recreated_config, EagleSpeculatorConfig)
+    assert recreated_config.transformer_layer_architecture == layer_architecture
+    assert recreated_config.layernorms is True
+    assert recreated_config.fusion_bias is True
+
+
+@pytest.mark.smoke
 def test_eagle_speculator_config_model_validator():
     config1 = EagleSpeculatorConfig(transformer_layer_architecture="CustomDecoderLayer")
     assert "CustomDecoderLayer" in config1.architectures
@@ -338,6 +446,42 @@ def test_eagle_speculator_config_eagle12_backwards_compatibility(eagle12_config_
     assert config_base.layernorms is False
     assert config_base.fusion_bias is False
     assert config_base.speculators_config.algorithm == "eagle"
+
+
+@pytest.mark.smoke
+@pytest.mark.parametrize(("layer_architecture", "config_class"), LAYER_TYPES)
+def test_eagle_speculator_config_backwards_compatibility_different_layers(
+    layer_architecture, config_class, sample_speculators_config
+):
+    """Test backwards compatibility with different layer architectures."""
+    model_type = layer_architecture.lower().replace("decoderlayer", "")
+    if model_type == "deepseekv3":
+        model_type = "deepseek_v3"
+
+    config_dict = {
+        "speculators_model_type": "eagle",
+        "architectures": ["EagleSpeculator", layer_architecture],
+        "transformer_layer_architecture": layer_architecture,
+        "transformer_layer_config": {
+            "model_type": model_type,
+            "vocab_size": 32000,
+            "hidden_size": 768,
+            "intermediate_size": 3072,
+            "num_hidden_layers": 12,
+            "num_attention_heads": 12,
+            "max_position_embeddings": 2048,
+        },
+        "layernorms": False,
+        "fusion_bias": False,
+        "speculators_config": sample_speculators_config.model_dump(),
+    }
+
+    config = EagleSpeculatorConfig.model_validate(config_dict)
+    assert isinstance(config, EagleSpeculatorConfig)
+    assert config.speculators_model_type == "eagle"
+    assert config.transformer_layer_architecture == layer_architecture
+    assert layer_architecture in config.architectures
+    assert isinstance(config.transformer_layer_config, config_class)
 
 
 @pytest.mark.smoke
@@ -398,6 +542,40 @@ def test_eagle_speculator_config_eagle12_from_pretrained_local_marshalling(
         assert loaded_derived.transformer_layer_architecture == "LlamaDecoderLayer"
 
 
+@pytest.mark.smoke
+@pytest.mark.parametrize(("layer_architecture", "config_class"), LAYER_TYPES)
+def test_eagle_speculator_config_from_pretrained_different_layers(
+    layer_architecture, config_class, sample_speculators_config
+):
+    """Test from_pretrained with different layer architectures."""
+    layer_config = create_layer_config(config_class)
+
+    original_config = EagleSpeculatorConfig(
+        transformer_layer_architecture=layer_architecture,
+        transformer_layer_config=layer_config,
+        layernorms=False,
+        fusion_bias=False,
+        speculators_config=sample_speculators_config,
+    )
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+
+        # Save with save_pretrained
+        original_config.save_pretrained(temp_path)
+
+        # Verify config.json was created
+        config_file = temp_path / "config.json"
+        assert config_file.exists()
+
+        # Load with from_pretrained
+        loaded_config = EagleSpeculatorConfig.from_pretrained(temp_path)
+        assert isinstance(loaded_config, EagleSpeculatorConfig)
+        assert loaded_config.speculators_model_type == "eagle"
+        assert loaded_config.transformer_layer_architecture == layer_architecture
+        assert layer_architecture in loaded_config.architectures
+
+
 # ====== EagleSpeculatorConfig HASS Tests ======
 
 
@@ -423,6 +601,29 @@ def test_eagle_speculator_config_hass_backwards_compatibility(hass_config_dict):
 
 
 @pytest.mark.smoke
+@pytest.mark.parametrize(("layer_architecture", "config_class"), LAYER_TYPES)
+def test_eagle_speculator_config_hass_different_layers(
+    layer_architecture, config_class
+):
+    """Test HASS configuration with different layer architectures."""
+    layer_config = create_layer_config(config_class)
+
+    config = EagleSpeculatorConfig(
+        transformer_layer_architecture=layer_architecture,
+        transformer_layer_config=layer_config,
+        layernorms=False,
+        fusion_bias=True,  # Key difference for HASS
+    )
+
+    assert isinstance(config, EagleSpeculatorConfig)
+    assert config.speculators_model_type == "eagle"
+    assert config.transformer_layer_architecture == layer_architecture
+    assert layer_architecture in config.architectures
+    assert config.fusion_bias is True  # Key difference for HASS
+    assert config.layernorms is False
+
+
+@pytest.mark.smoke
 def test_eagle_speculator_config_hass_dict_marshalling(hass_config_dict):
     original_config = EagleSpeculatorConfig.model_validate(hass_config_dict)
 
@@ -438,6 +639,7 @@ def test_eagle_speculator_config_hass_dict_marshalling(hass_config_dict):
     assert recreated_base.fusion_bias is True  # Key difference for HASS
     assert recreated_base.layernorms is False
     assert recreated_base.transformer_layer_architecture == "LlamaDecoderLayer"
+    assert isinstance(recreated_base.transformer_layer_config, LlamaConfig)
 
     # Load with from_dict on derived class (should work through inheritance)
     recreated_derived = EagleSpeculatorConfig.model_validate(config_dict)
@@ -445,6 +647,7 @@ def test_eagle_speculator_config_hass_dict_marshalling(hass_config_dict):
     assert recreated_derived.fusion_bias is True  # Key difference for HASS
     assert recreated_derived.layernorms is False
     assert recreated_derived.transformer_layer_architecture == "LlamaDecoderLayer"
+    assert isinstance(recreated_derived.transformer_layer_config, LlamaConfig)
 
 
 @pytest.mark.smoke
@@ -470,6 +673,7 @@ def test_eagle_speculator_config_hass_from_pretrained_local_marshalling(
         assert loaded_base.fusion_bias is True  # Key difference for HASS
         assert loaded_base.layernorms is False
         assert loaded_base.transformer_layer_architecture == "LlamaDecoderLayer"
+        assert isinstance(loaded_base.transformer_layer_config, LlamaConfig)
 
         # Load with from_pretrained on derived class
         loaded_derived = EagleSpeculatorConfig.from_pretrained(temp_path)
@@ -478,3 +682,4 @@ def test_eagle_speculator_config_hass_from_pretrained_local_marshalling(
         assert loaded_derived.fusion_bias is True  # Key difference for HASS
         assert loaded_derived.layernorms is False
         assert loaded_derived.transformer_layer_architecture == "LlamaDecoderLayer"
+        assert isinstance(loaded_derived.transformer_layer_config, LlamaConfig)
