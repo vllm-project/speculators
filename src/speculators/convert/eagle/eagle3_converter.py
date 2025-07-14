@@ -11,7 +11,6 @@ from transformers import LlamaConfig
 
 from speculators.config import SpeculatorsConfig, VerifierConfig
 from speculators.convert.eagle.utils import (
-    detect_fusion_bias_and_layernorms,
     ensure_checkpoint_is_local,
     load_checkpoint_config,
     load_checkpoint_weights,
@@ -32,6 +31,7 @@ class Eagle3Converter:
         output_path: Union[str, Path],
         base_model: str,
         validate: bool = True,
+        norm_before_residual: bool = False,
         cache_dir: Optional[Union[str, Path]] = None,
     ) -> None:
         logger.info(f"Converting Eagle-3 checkpoint: {input_path}")
@@ -46,7 +46,7 @@ class Eagle3Converter:
         eagle_config["target_vocab_size"] = weights["t2d"].shape[0]
 
         config = self._build_eagle3_speculator_config(
-            eagle_config, base_model,
+            eagle_config, base_model, norm_before_residual,
         )
 
         saved_path = self._save_converted_checkpoint(config, weights, output_path)
@@ -60,9 +60,10 @@ class Eagle3Converter:
         self,
         eagle_config: dict,
         base_model: str,
+        norm_before_residual: bool = False,
     ) -> Eagle3SpeculatorConfig:
         transformer_config = self._create_transformer_config_from_eagle(eagle_config)
-        verifier_config = self._create_verifier_config_from_eagle(eagle_config, 
+        verifier_config = self._create_verifier_config_from_eagle(eagle_config,
                                                                   base_model)
 
         proposal_config = GreedyTokenProposalConfig(
@@ -81,7 +82,7 @@ class Eagle3Converter:
             transformer_layer_config=transformer_config,
             speculators_config=speculators_config,
             draft_vocab_size=eagle_config.get("draft_vocab_size", 32000),
-            norm_before_residual=eagle_config.get("norm_before_residual", False),
+            norm_before_residual=norm_before_residual,
         )
 
     def _create_transformer_config_from_eagle(self, eagle_config: dict) -> LlamaConfig:
@@ -104,8 +105,8 @@ class Eagle3Converter:
         )
 
     def _create_verifier_config_from_eagle(
-            self, 
-            eagle_config: dict, 
+            self,
+            eagle_config: dict,
             base_model: str
     ) -> VerifierConfig:
         eos_token_id = eagle_config.get("eos_token_id", 2)
@@ -132,8 +133,8 @@ class Eagle3Converter:
         return Path(output_dir)
 
     def _validate_converted_checkpoint(
-            self, 
-            checkpoint_path: Path, 
+            self,
+            checkpoint_path: Path,
             base_model: str
     ) -> None:
         logger.info("Validating converted Eagle-3 checkpoint...")
