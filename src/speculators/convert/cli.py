@@ -116,7 +116,6 @@ def convert(
         raise typer.Exit(1)
 
 
-
 def main():
     """Main entry point for the CLI."""
     app()
