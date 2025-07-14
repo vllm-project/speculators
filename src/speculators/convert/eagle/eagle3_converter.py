@@ -31,8 +31,6 @@ class Eagle3Converter:
         input_path: Union[str, Path],
         output_path: Union[str, Path],
         base_model: str,
-        fusion_bias: bool = False,
-        layernorms: bool = False,
         validate: bool = True,
         cache_dir: Optional[Union[str, Path]] = None,
     ) -> None:
@@ -47,16 +45,9 @@ class Eagle3Converter:
         # Patch: ensure target_vocab_size matches t2d tensor shape
         eagle_config["target_vocab_size"] = weights["t2d"].shape[0]
 
-        detected_fusion_bias, detected_layernorms = detect_fusion_bias_and_layernorms(
-            weights
-        )
-        fusion_bias = fusion_bias or detected_fusion_bias
-        layernorms = layernorms or detected_layernorms
-
         config = self._build_eagle3_speculator_config(
-            eagle_config, base_model, fusion_bias, layernorms
+            eagle_config, base_model,
         )
-        weights = self._process_weights(weights)
 
         saved_path = self._save_converted_checkpoint(config, weights, output_path)
         logger.success(f"Saved to: {saved_path}")
@@ -69,11 +60,9 @@ class Eagle3Converter:
         self,
         eagle_config: dict,
         base_model: str,
-        fusion_bias: bool,
-        layernorms: bool,
     ) -> Eagle3SpeculatorConfig:
-        transformer_config = self._create_transformer_config(eagle_config)
-        verifier_config = self._create_verifier_config(eagle_config, base_model)
+        transformer_config = self._create_transformer_config_from_eagle(eagle_config)
+        verifier_config = self._create_verifier_config_from_eagle(eagle_config, base_model)
 
         proposal_config = GreedyTokenProposalConfig(
             proposal_type="greedy",
@@ -94,7 +83,7 @@ class Eagle3Converter:
             norm_before_residual=eagle_config.get("norm_before_residual", False),
         )
 
-    def _create_transformer_config(self, eagle_config: dict) -> LlamaConfig:
+    def _create_transformer_config_from_eagle(self, eagle_config: dict) -> LlamaConfig:
         return LlamaConfig(
             vocab_size=eagle_config.get("target_vocab_size", 128000),
             hidden_size=eagle_config.get("hidden_size", 4096),
@@ -113,33 +102,14 @@ class Eagle3Converter:
             tie_word_embeddings=False,
         )
 
-    def _create_verifier_config(self, eagle_config: dict, base_model: str) -> VerifierConfig:
+    def _create_verifier_config_from_eagle(self, eagle_config: dict, base_model: str) -> VerifierConfig:
+        eos_token_id = eagle_config.get("eos_token_id", 2)
+        if isinstance(eos_token_id, int):
+            eos_token_id = [eos_token_id]
         return VerifierConfig(
             name_or_path=base_model,
             architectures=eagle_config.get("architectures", ["LlamaForCausalLM"]),
         )
-
-    def _process_weights(self, weights: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        processed = {}
-        skipped = []
-
-        for k, v in weights.items():
-            if k == "embed_tokens.weight":
-                skipped.append(k)
-                continue
-
-            if k.startswith("fc."):
-                new_k = k.replace("fc.", "fc.")
-            elif k.startswith("layers.0."):
-                new_k = k.replace("layers.0.", "layers.0.")
-            else:
-                new_k = k
-
-            processed[new_k] = v
-
-        if skipped:
-            logger.debug(f"Skipped weights: {skipped}")
-        return processed
 
     def _save_converted_checkpoint(
         self,
