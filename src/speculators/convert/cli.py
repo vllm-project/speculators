@@ -30,6 +30,7 @@ def convert(
         str,
         typer.Argument(help="Base model name/path (e.g., meta-llama/Llama-3.1-8B)"),
     ],
+    # Model type flags (mutually exclusive)
     eagle: Annotated[
         bool,
         typer.Option(
@@ -44,6 +45,7 @@ def convert(
             help="Convert Eagle-3 checkpoint",
         ),
     ] = False,
+    # Model-specific options
     layernorms: Annotated[
         bool,
         typer.Option(
@@ -58,6 +60,7 @@ def convert(
             help="Enable fusion bias (Eagle/HASS only)",
         ),
     ] = False,
+    # General options
     validate: Annotated[
         bool,
         typer.Option(
@@ -68,7 +71,18 @@ def convert(
 ):
     """
     Convert speculator checkpoints to speculators format.
+    Examples::
+        # Convert Eagle checkpoint
+        speculators convert --eagle yuhuili/EAGLE-LLaMA3.1-Instruct-8B \\
+            ./eagle-converted meta-llama/Llama-3.1-8B-Instruct
+        # Convert Eagle with layernorms enabled
+        speculators convert --eagle nm-testing/Eagle_TTT ./ttt-converted \\
+            meta-llama/Llama-3.1-8B-Instruct --layernorms
+        # Convert Eagle with fusion bias enabled
+        speculators convert --eagle ./checkpoint ./converted \\
+            meta-llama/Llama-3.1-8B --fusion-bias
     """
+    # Determine which converter to use
     if sum([eagle, eagle3]) > 1:
         typer.echo("Error: --eagle and --eagle3 are mutually exclusive.", err=True)
         raise typer.Exit(1)
