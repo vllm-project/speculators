@@ -5,7 +5,6 @@ from typing import Optional
 import pytest
 import torch
 from loguru import logger
-from safetensors import safe_open
 
 from speculators.convert.eagle.eagle3_converter import Eagle3Converter
 from speculators.models.eagle3 import Eagle3Speculator, Eagle3SpeculatorConfig
