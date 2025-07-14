@@ -79,9 +79,8 @@ class TestEagle3ConversionE2E:
         hidden_size = model.config.transformer_layer_config.hidden_size
         vocab_size = model.config.target_vocab_size
 
-        input_ids = torch.randint(0, min(1000, vocab_size), (batch_size, seq_len)).to(
-            device
-        )
+        input_ids = torch.randint(0, min(1000, vocab_size), 
+                                  (batch_size, seq_len)).to(device)
         hidden_states = torch.randn(batch_size, seq_len, 3 * hidden_size).to(device)
 
         with torch.no_grad():
