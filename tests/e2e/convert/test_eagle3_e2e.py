@@ -154,7 +154,9 @@ class TestEagle3ConversionE2E:
 
         logger.info("Loading resaved model...")
         model2 = Eagle3Speculator.from_pretrained(resaved_dir)
-        self.execute_forward_pass(model2)
+        assert isinstance(model2, Eagle3Speculator), "Wrong model type loaded"
+        assert model2.config.speculators_model_type == "eagle3"
+        self.execute_forward_pass(model2) # type: ignore[arg-type]
 
         logger.success(f"{name} - All tests passed!")
 
