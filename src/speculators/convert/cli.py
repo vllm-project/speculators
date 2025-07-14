@@ -30,6 +30,7 @@ def convert(
         str,
         typer.Argument(help="Base model name/path (e.g., meta-llama/Llama-3.1-8B)"),
     ],
+    # Model type flags (mutually exclusive)
     eagle: Annotated[
         bool,
         typer.Option(
@@ -59,6 +60,7 @@ def convert(
             help="Enable fusion bias (Eagle/HASS only)",
         ),
     ] = False,
+    # General options
     validate: Annotated[
         bool,
         typer.Option(
