@@ -31,8 +31,9 @@ class Eagle3Converter:
         input_path: Union[str, Path],
         output_path: Union[str, Path],
         base_model: str,
-        fusion_bias: bool = False,
-        layernorms: bool = False,
+        # fusion_bias: bool = False,
+        # layernorms: bool = False,
+        norm_before_residual: bool = False,
         validate: bool = True,
         cache_dir: Optional[Union[str, Path]] = None,
     ) -> None:
@@ -47,16 +48,16 @@ class Eagle3Converter:
         # Patch: ensure target_vocab_size matches t2d tensor shape
         eagle_config["target_vocab_size"] = weights["t2d"].shape[0]
 
-        detected_fusion_bias, detected_layernorms = detect_fusion_bias_and_layernorms(
-            weights
-        )
-        fusion_bias = fusion_bias or detected_fusion_bias
-        layernorms = layernorms or detected_layernorms
+        # detected_fusion_bias, detected_layernorms = detect_fusion_bias_and_layernorms(
+        #     weights
+        # )
+        # fusion_bias = fusion_bias or detected_fusion_bias
+        # layernorms = layernorms or detected_layernorms
 
         config = self._build_eagle3_speculator_config(
-            eagle_config, base_model, fusion_bias, layernorms
+            eagle_config, base_model, norm_before_residual, #fusion_bias, layernorms,
         )
-        weights = self._process_weights(weights)
+        # weights = self._process_weights(weights)
 
         saved_path = self._save_converted_checkpoint(config, weights, output_path)
         logger.success(f"Saved to: {saved_path}")
@@ -69,8 +70,9 @@ class Eagle3Converter:
         self,
         eagle_config: dict,
         base_model: str,
-        fusion_bias: bool,
-        layernorms: bool,
+        norm_before_residual: bool = False,
+        # fusion_bias: bool,
+        # layernorms: bool,
     ) -> Eagle3SpeculatorConfig:
         transformer_config = self._create_transformer_config(eagle_config)
         verifier_config = self._create_verifier_config(eagle_config, base_model)
@@ -91,7 +93,7 @@ class Eagle3Converter:
             transformer_layer_config=transformer_config,
             speculators_config=speculators_config,
             draft_vocab_size=eagle_config.get("draft_vocab_size", 32000),
-            norm_before_residual=eagle_config.get("norm_before_residual", False),
+            norm_before_residual=norm_before_residual,
         )
 
     def _create_transformer_config(self, eagle_config: dict) -> LlamaConfig:
