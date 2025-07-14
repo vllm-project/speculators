@@ -85,6 +85,7 @@ class Eagle3Converter:
             speculators_config=speculators_config,
             draft_vocab_size=eagle_config.get("draft_vocab_size", 32000),
             norm_before_residual=norm_before_residual,
+            target_hidden_size=eagle_config.get("target_hidden_size"),
         )
 
     def _create_transformer_config_from_eagle(self, eagle_config: dict) -> LlamaConfig:
