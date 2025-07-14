@@ -79,14 +79,15 @@ class TestEagle3ConversionE2E:
         hidden_size = model.config.transformer_layer_config.hidden_size
         vocab_size = model.config.target_vocab_size
 
-        input_ids = torch.randint(0, min(1000, vocab_size), (batch_size, seq_len)).to(device)
+        input_ids = torch.randint(0, min(1000, vocab_size), 
+                                  (batch_size, seq_len)).to(device)
         hidden_states = torch.randn(batch_size, seq_len, 3 * hidden_size).to(device)
 
         with torch.no_grad():
             output = model(input_ids=input_ids, hidden_states=hidden_states)
 
         assert hasattr(output, "logits"), "Output missing logits attribute"
-        assert output.logits.shape == (batch_size, seq_len, vocab_size), f"Unexpected logits shape {output.logits.shape}"
+        assert output.logits.shape == (batch_size, seq_len, vocab_size)
 
         assert not torch.isnan(output.logits).any(), "Output contains NaN"
         assert not torch.isinf(output.logits).any(), "Output contains Inf"
@@ -108,7 +109,6 @@ class TestEagle3ConversionE2E:
     ):
         name = checkpoint_info["name"]
         input_path = checkpoint_info["input_path"]
-        expected_algo = checkpoint_info["expected_algorithm"]
 
         converted_dir = temp_dir / f"{name.lower().replace(' ', '_')}_converted"
         resaved_dir = temp_dir / f"{name.lower().replace(' ', '_')}_resaved"

@@ -62,7 +62,8 @@ class Eagle3Converter:
         base_model: str,
     ) -> Eagle3SpeculatorConfig:
         transformer_config = self._create_transformer_config_from_eagle(eagle_config)
-        verifier_config = self._create_verifier_config_from_eagle(eagle_config, base_model)
+        verifier_config = self._create_verifier_config_from_eagle(eagle_config, 
+                                                                  base_model)
 
         proposal_config = GreedyTokenProposalConfig(
             proposal_type="greedy",
@@ -102,7 +103,11 @@ class Eagle3Converter:
             tie_word_embeddings=False,
         )
 
-    def _create_verifier_config_from_eagle(self, eagle_config: dict, base_model: str) -> VerifierConfig:
+    def _create_verifier_config_from_eagle(
+            self, 
+            eagle_config: dict, 
+            base_model: str
+    ) -> VerifierConfig:
         eos_token_id = eagle_config.get("eos_token_id", 2)
         if isinstance(eos_token_id, int):
             eos_token_id = [eos_token_id]
@@ -126,7 +131,11 @@ class Eagle3Converter:
         model.save_pretrained(str(output_dir))  # type: ignore[attr-defined]
         return Path(output_dir)
 
-    def _validate_converted_checkpoint(self, checkpoint_path: Path, base_model: str) -> None:
+    def _validate_converted_checkpoint(
+            self, 
+            checkpoint_path: Path, 
+            base_model: str
+    ) -> None:
         logger.info("Validating converted Eagle-3 checkpoint...")
         try:
             Eagle3Speculator.from_pretrained(
