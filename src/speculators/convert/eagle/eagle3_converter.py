@@ -64,7 +64,7 @@ class Eagle3Converter:
         norm_before_residual: bool = False,
     ) -> Eagle3SpeculatorConfig:
         transformer_config = self._create_transformer_config_from_eagle(eagle_config)
-        verifier_config = self._create_verifier_config_from_eagle(eagle_config, 
+        verifier_config = self._create_verifier_config_from_eagle(eagle_config,
                                                                   base_model)
 
         proposal_config = GreedyTokenProposalConfig(
@@ -107,8 +107,8 @@ class Eagle3Converter:
         )
 
     def _create_verifier_config_from_eagle(
-            self, 
-            eagle_config: dict, 
+            self,
+            eagle_config: dict,
             base_model: str
     ) -> VerifierConfig:
         eos_token_id = eagle_config.get("eos_token_id", 2)
@@ -135,8 +135,8 @@ class Eagle3Converter:
         return Path(output_dir)
 
     def _validate_converted_checkpoint(
-            self, 
-            checkpoint_path: Path, 
+            self,
+            checkpoint_path: Path,
             base_model: str
     ) -> None:
         logger.info("Validating converted Eagle-3 checkpoint...")
