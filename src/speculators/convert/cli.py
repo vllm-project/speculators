@@ -8,7 +8,6 @@ import typer  # type: ignore[import-not-found]
 
 from speculators.convert.eagle.eagle3_converter import Eagle3Converter
 from speculators.convert.eagle.eagle_converter import EagleConverter
-from speculators.convert.eagle.eagle3_converter import Eagle3Converter
 
 app = typer.Typer(
     help="Convert speculator checkpoints to the standardized speculators format.",
