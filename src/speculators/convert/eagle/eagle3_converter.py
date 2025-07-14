@@ -11,7 +11,6 @@ from transformers import LlamaConfig
 
 from speculators.config import SpeculatorsConfig, VerifierConfig
 from speculators.convert.eagle.utils import (
-    detect_fusion_bias_and_layernorms,
     ensure_checkpoint_is_local,
     load_checkpoint_config,
     load_checkpoint_weights,
