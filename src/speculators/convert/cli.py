@@ -8,6 +8,7 @@ import typer  # type: ignore[import-not-found]
 
 from speculators.convert.eagle.eagle3_converter import Eagle3Converter
 from speculators.convert.eagle.eagle_converter import EagleConverter
+from speculators.convert.eagle.eagle3_converter import Eagle3Converter
 
 app = typer.Typer(
     help="Convert speculator checkpoints to the standardized speculators format.",
@@ -30,7 +31,6 @@ def convert(
         str,
         typer.Argument(help="Base model name/path (e.g., meta-llama/Llama-3.1-8B)"),
     ],
-    # Model type flags (mutually exclusive)
     eagle: Annotated[
         bool,
         typer.Option(
@@ -60,7 +60,6 @@ def convert(
             help="Enable fusion bias (Eagle/HASS only)",
         ),
     ] = False,
-    # General options
     validate: Annotated[
         bool,
         typer.Option(
@@ -116,6 +115,7 @@ def convert(
     else:
         typer.echo("Error: Specify one model type: --eagle or --eagle3", err=True)
         raise typer.Exit(1)
+
 
 
 def main():
