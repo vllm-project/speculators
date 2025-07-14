@@ -72,7 +72,7 @@ class Eagle3SpeculatorConfig(SpeculatorModelConfig):
         default=False,
         description="Apply hidden_norm before storing residual",
     )
-    
+
     target_hidden_size: Optional[int] = Field(
         default=None,
         description="Hidden size of the target model (if different from draft model)",
@@ -353,11 +353,11 @@ class Eagle3Speculator(SpeculatorModel):
         self.hidden_size = config.transformer_layer_config.hidden_size
         self.draft_vocab_size = config.draft_vocab_size
         self.target_vocab_size = config.target_vocab_size
-        
+
         # Use target_hidden_size if specified, otherwise use draft model's hidden_size
         self.target_hidden_size = (
-            config.target_hidden_size 
-            if config.target_hidden_size is not None 
+            config.target_hidden_size
+            if config.target_hidden_size is not None
             else self.hidden_size
         )
 
