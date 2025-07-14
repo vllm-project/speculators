@@ -6,8 +6,8 @@ from typing import Annotated
 
 import typer  # type: ignore[import-not-found]
 
-from speculators.convert.eagle.eagle_converter import EagleConverter
 from speculators.convert.eagle.eagle3_converter import Eagle3Converter
+from speculators.convert.eagle.eagle_converter import EagleConverter
 
 app = typer.Typer(
     help="Convert speculator checkpoints to the standardized speculators format.",
@@ -88,7 +88,7 @@ def convert(
             typer.echo(f"✗ Conversion failed: {e}", err=True)
             raise typer.Exit(1) from e
     elif eagle3:
-        converter = Eagle3Converter()
+        converter = Eagle3Converter()  # type: ignore[assignment]
         try:
             converter.convert(
                 input_path,
@@ -100,7 +100,7 @@ def convert(
             typer.echo(f"✗ Conversion failed: {e}", err=True)
             raise typer.Exit(1) from e
     else:
-        typer.echo("Error: Please specify a model type (e.g., --eagle or --eagle3)", err=True)
+        typer.echo("Error: Specify one model type: --eagle or --eagle3", err=True)
         raise typer.Exit(1)
 
 
