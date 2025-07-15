@@ -18,7 +18,7 @@ from speculators.convert.eagle.utils import (
 )
 from speculators.models.eagle3 import Eagle3Speculator, Eagle3SpeculatorConfig
 from speculators.proposals.greedy import GreedyTokenProposalConfig
-
+from transformers import PretrainedConfig
 
 class Eagle3Converter:
     """
@@ -117,9 +117,10 @@ class Eagle3Converter:
         )
 
     def _create_verifier_config(self, eagle_config: dict, base_model: str) -> VerifierConfig:
+        config_dict, _ = PretrainedConfig.get_config_dict(base_model)
         return VerifierConfig(
             name_or_path=base_model,
-            architectures=eagle_config.get("architectures", ["LlamaForCausalLM"]),
+            architectures=config_dict.get("architectures", ["LlamaForCausalLM"]),
         )
 
     def _process_weights(self, weights: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
