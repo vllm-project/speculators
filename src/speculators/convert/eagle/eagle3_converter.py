@@ -56,7 +56,7 @@ class Eagle3Converter:
 
         if validate:
             self._validate_converted_checkpoint(saved_path, base_model)
-    
+
     def _create_verifier_config(self, base_model: str) -> VerifierConfig:
         config_dict, _ = PretrainedConfig.get_config_dict(base_model)
         return VerifierConfig(
