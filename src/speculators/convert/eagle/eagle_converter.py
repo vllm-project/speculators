@@ -2,6 +2,8 @@
 Eagle checkpoint converter with loguru logging.
 """
 
+import os
+
 from pathlib import Path
 from typing import Optional, Union
 
@@ -9,18 +11,16 @@ import torch
 from loguru import logger
 from transformers import LlamaConfig
 
-from speculators.config import SpeculatorsConfig, VerifierConfig
+
 from speculators.convert.eagle.utils import (
     detect_fusion_bias_and_layernorms,
-    ensure_checkpoint_is_local,
-    load_checkpoint_config,
-    load_checkpoint_weights,
 )
+from speculators.convert.eagle.base import SpeculatorConverter
 from speculators.models.eagle import EagleSpeculator, EagleSpeculatorConfig
-from speculators.proposals.greedy import GreedyTokenProposalConfig
+from transformers import LlamaConfig, PreTrainedModel
 
-
-class EagleConverter:
+@SpeculatorConverter.register("eagle")
+class EagleConverter(SpeculatorConverter):
     """
     Converter for Eagle/HASS checkpoints to speculators format.
 
@@ -44,15 +44,27 @@ class EagleConverter:
         "lm_head_layernorm.weight": "pre_lm_head_layernorm.weight",
     }
 
+    def __init__(
+        self,
+        model: Union[Path, PreTrainedModel, torch.nn.Module, str],
+        verifier: Union[str, os.PathLike, PreTrainedModel],
+        output_path: Optional[Union[str, Path]] = None,
+        cache_dir: Optional[Union[str, Path]] = None,
+    ):
+
+        super().__init__(
+            model=model,
+            verifier=verifier,
+            output_path=output_path,
+            model_type="eagle",
+            cache_dir=cache_dir,
+        )
+
     def convert(
         self,
-        input_path: Union[str, Path],
-        output_path: Union[str, Path],
-        base_model: str,
         fusion_bias: bool = False,
         layernorms: bool = False,
         validate: bool = True,
-        cache_dir: Optional[Union[str, Path]] = None,
     ) -> None:
         """
         Convert an Eagle checkpoint to speculators format.
@@ -67,13 +79,9 @@ class EagleConverter:
         6. Saves the converted checkpoint
         7. Optionally validates the result by running a forward pass
 
-        :param input_path: Path to Eagle checkpoint (local or HuggingFace ID)
-        :param output_path: Where to save converted checkpoint
-        :param base_model: Base model name (e.g., meta-llama/Llama-3.1-8B-Instruct)
         :param fusion_bias: Enable fusion bias (auto-detected if not specified)
         :param layernorms: Enable extra layernorms (auto-detected if not specified)
         :param validate: Whether to validate the converted checkpoint
-        :param cache_dir: Optional cache directory for downloads
 
         :Example:
 
@@ -94,35 +102,28 @@ class EagleConverter:
             ...     layernorms=True
             ... )
         """
-        logger.info(f"Converting Eagle checkpoint: {input_path}")
-
-        local_checkpoint_path = ensure_checkpoint_is_local(input_path, cache_dir)
-
-        eagle_config = load_checkpoint_config(local_checkpoint_path)
-        weights = load_checkpoint_weights(local_checkpoint_path)
-        logger.info(f"Loaded {len(weights)} weights")
 
         detected_fusion_bias, detected_layernorms = detect_fusion_bias_and_layernorms(
-            weights
+            self.weights
         )
         fusion_bias = fusion_bias or detected_fusion_bias
         layernorms = layernorms or detected_layernorms
 
         speculator_config = self._build_eagle_speculator_config(
-            eagle_config, base_model, fusion_bias, layernorms
+            self.config, self.verifier, fusion_bias, layernorms
         )
 
-        processed_weights = self._process_checkpoint_weights(weights, layernorms)
+        processed_weights = self._process_checkpoint_weights(self.weights, layernorms)
 
         # Save the converted checkpoint using the model's save_pretrained
         saved_path = self._save_converted_checkpoint(
-            config=speculator_config, weights=processed_weights, output_dir=output_path
+            config=speculator_config, weights=processed_weights, output_dir=self.output_path
         )
 
         logger.success(f"Saved to: {saved_path}")
 
         if validate:
-            self._validate_converted_checkpoint(saved_path, verifier_model=base_model)
+            self._validate_converted_checkpoint(saved_path, verifier_model=self.verifier)
 
     def _create_transformer_config_from_eagle(self, eagle_config: dict) -> LlamaConfig:
         """
@@ -154,25 +155,6 @@ class EagleConverter:
             mlp_bias=eagle_config.get("mlp_bias", False),
         )
 
-    def _create_verifier_config_from_eagle(
-        self, eagle_config: dict, base_model: str
-    ) -> VerifierConfig:
-        """
-        Create a verifier config that references the base model.
-
-        :param eagle_config: Original Eagle checkpoint config
-        :param base_model: Base model name/path
-        :return: VerifierConfig
-        """
-        eos_token_id = eagle_config.get("eos_token_id", 2)
-        if isinstance(eos_token_id, int):
-            eos_token_id = [eos_token_id]
-
-        return VerifierConfig(
-            name_or_path=base_model,
-            architectures=eagle_config.get("architectures", ["LlamaForCausalLM"]),
-        )
-
     def _build_eagle_speculator_config(
         self,
         eagle_config: dict,
@@ -194,20 +176,10 @@ class EagleConverter:
         )
 
         transformer_config = self._create_transformer_config_from_eagle(eagle_config)
-        verifier_config = self._create_verifier_config_from_eagle(
-            eagle_config, base_model
-        )
 
-        greedy_proposal = GreedyTokenProposalConfig(
-            proposal_type="greedy",
-            speculative_tokens=5,
-        )
-
-        speculators_config = SpeculatorsConfig(
-            algorithm="eagle",
-            proposal_methods=[greedy_proposal],
-            default_proposal_method="greedy",
-            verifier=verifier_config,
+        speculators_config = self._build_speculator_config(
+            checkpoint_config=eagle_config,
+            base_model=base_model,
         )
 
         return EagleSpeculatorConfig(
@@ -294,61 +266,3 @@ class EagleConverter:
             logger.debug(f"Remapped weights: {remapped_weights}")
 
         return processed_weights
-
-    def _save_converted_checkpoint(
-        self,
-        config: EagleSpeculatorConfig,
-        weights: dict[str, torch.Tensor],
-        output_dir: Union[str, Path],
-    ) -> Path:
-        """
-        Save the converted checkpoint using the model's save_pretrained method.
-
-        This method initializes an EagleSpeculator model with detached verifier mode
-        to prevent automatic verifier loading, loads the converted weights, and uses
-        the model's save_pretrained to ensure proper HuggingFace Hub compatibility.
-
-        The saved checkpoint will include:
-        - config.json: Model configuration
-        - model.safetensors: Model weights (excluding verifier-shared components)
-        - eagle.py: Auto-generated model code for Hub integration
-
-        :param config: The Eagle speculator config
-        :param weights: The processed weights dictionary
-        :param output_dir: Directory to save the checkpoint
-        :return: Path to the saved checkpoint
-        :raises RuntimeError: If checkpoint saving fails
-        """
-        model = EagleSpeculator(
-            config=config, verifier=None, verifier_attachment_mode="detached"
-        )
-        # Load the converted weights into the model
-        model.load_state_dict(weights, strict=False)  # type: ignore[attr-defined]
-        logger.debug(f"Saving model to: {output_dir}")
-        model.save_pretrained(str(output_dir))  # type: ignore[attr-defined]
-        return Path(output_dir)
-
-    def _validate_converted_checkpoint(
-        self, checkpoint_path: Path, verifier_model: str
-    ) -> None:
-        """
-        Validate that a converted checkpoint can be loaded using from_pretrained.
-
-        :param checkpoint_path: Path to the converted checkpoint
-        :param verifier_model: verifier model id or local path to attach
-        :raises Exception: If validation fails
-        """
-        logger.info("Validating converted checkpoint...")
-
-        try:
-            logger.debug("Loading model with EagleSpeculator.from_pretrained")
-            EagleSpeculator.from_pretrained(
-                checkpoint_path,
-                verifier=verifier_model,
-                verifier_attachment_mode="detached",
-            )
-            logger.success("Model loaded successfully")
-
-        except Exception as exception:
-            logger.error(f"Validation failed: {exception}")
-            raise exception
