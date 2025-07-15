@@ -73,6 +73,11 @@ class Eagle3SpeculatorConfig(SpeculatorModelConfig):
         description="Apply hidden_norm before storing residual",
     )
 
+    target_hidden_size: Optional[int] = Field(
+        default=None,
+        description="Hidden size of the target model (if different from draft model)",
+    )
+
     @property
     def target_vocab_size(self) -> int:
         """Get target vocabulary size from transformer config."""
@@ -349,6 +354,13 @@ class Eagle3Speculator(SpeculatorModel):
         self.draft_vocab_size = config.draft_vocab_size
         self.target_vocab_size = config.target_vocab_size
 
+        # Use target_hidden_size if specified, otherwise use draft model's hidden_size
+        self.target_hidden_size = (
+            config.target_hidden_size
+            if config.target_hidden_size is not None
+            else self.hidden_size
+        )
+
         super().__init__(
             config=config,
             verifier=verifier,
@@ -364,7 +376,7 @@ class Eagle3Speculator(SpeculatorModel):
         )
 
         self.fc = nn.Linear(
-            3 * self.hidden_size,
+            3 * self.target_hidden_size,  # Use target model's hidden size
             self.hidden_size,
             bias=False,
         )
@@ -422,7 +434,7 @@ class Eagle3Speculator(SpeculatorModel):
 
         :param input_ids: Input token IDs from draft vocabulary
         :param hidden_states: Concatenated hidden states from 3 verifier layers
-            [B, L, 3*H]
+            [B, L, 3*target_H] where target_H is the target model's hidden size
         :param attention_mask: Optional attention mask
         :param position_ids: Optional position IDs
         :param past_key_values: Optional cached key-values
