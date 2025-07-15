@@ -172,7 +172,7 @@ class ClassRegistryMixin(AutoImporterMixin):
                     "registered."
                 )
 
-            cls.registry[register_name] = clazz
+            cls.registry[register_name.lower()] = clazz
 
         return clazz
 

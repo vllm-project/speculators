@@ -32,6 +32,7 @@ Usage:
     )
 """
 
+from .converters import SpeculatorConverter
 from .entrypoints import convert_model
 
-__all__ = ["convert_model"]
+__all__ = ["SpeculatorConverter", "convert_model"]
