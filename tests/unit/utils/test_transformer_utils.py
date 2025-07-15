@@ -216,12 +216,12 @@ def test_check_download_model_checkpoint_with_local_path(temp_checkpoint_dir):
 def test_check_download_model_checkpoint_invalid():
     """Test with invalid input type."""
     with pytest.raises(TypeError) as exc_info:
-        transformer_utils.check_download_model_checkpoint(123)
+        transformer_utils.check_download_model_checkpoint(123)  # type: ignore[arg-type]
 
     assert "Expected model to be a string or Path" in str(exc_info.value)
 
     with tempfile.NamedTemporaryFile() as temp_file:
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ValueError) as exc_info:  # type: ignore[assignment]
             transformer_utils.check_download_model_checkpoint(temp_file.name)
 
         assert "Expected a directory for checkpoint" in str(exc_info.value)
@@ -300,7 +300,7 @@ def test_check_download_model_config_with_local_dir(temp_checkpoint_dir):
 def test_check_download_model_config_invalid():
     """Test with invalid input type."""
     with pytest.raises(TypeError) as exc_info:
-        transformer_utils.check_download_model_config(123)
+        transformer_utils.check_download_model_config(123)  # type: ignore[arg-type]
 
     assert "Expected config to be a string, Path, or PreTrainedModel" in str(
         exc_info.value
@@ -309,7 +309,7 @@ def test_check_download_model_config_invalid():
     with tempfile.TemporaryDirectory() as temp_dir:
         missing_config_path = Path(temp_dir) / "missing_dir"
 
-        with pytest.raises(OSError) as exc_info:
+        with pytest.raises(OSError) as exc_info:  # type: ignore[assignment]
             transformer_utils.check_download_model_config(missing_config_path)
 
         assert "Can't load the configuration" in str(exc_info.value)
@@ -389,7 +389,7 @@ def test_load_model_config_from_path(mock_auto_config):
 def test_load_model_config_invalid(mock_auto_config):
     """Test with invalid input type."""
     with pytest.raises(TypeError) as exc_info:
-        transformer_utils.load_model_config(123)
+        transformer_utils.load_model_config(123)  # type: ignore[arg-type]
 
     assert "Expected model to be a string, Path, or PreTrainedModel" in str(
         exc_info.value
@@ -397,7 +397,7 @@ def test_load_model_config_invalid(mock_auto_config):
 
     mock_auto_config.from_pretrained.side_effect = ValueError("Config not found")
 
-    with pytest.raises(FileNotFoundError) as exc_info:
+    with pytest.raises(FileNotFoundError) as exc_info:  # type: ignore[assignment]
         transformer_utils.load_model_config("test/model")
 
     assert "Config not found for model: test/model" in str(exc_info.value)
@@ -468,7 +468,7 @@ def test_load_model_checkpoint_config_dict_with_dir(temp_checkpoint_dir):
 def test_load_model_checkpoint_config_dict_invalid():
     """Test with invalid input type."""
     with pytest.raises(TypeError) as exc_info:
-        transformer_utils.load_model_checkpoint_config_dict(123)
+        transformer_utils.load_model_checkpoint_config_dict(123)  # type: ignore[arg-type]
 
     assert (
         "Expected config to be a string, Path, PreTrainedModel, or PretrainedConfig"
@@ -478,7 +478,7 @@ def test_load_model_checkpoint_config_dict_invalid():
     with tempfile.TemporaryDirectory() as temp_dir:
         missing_config_path = Path(temp_dir) / "config.json"
 
-        with pytest.raises(FileNotFoundError) as exc_info:
+        with pytest.raises(FileNotFoundError) as exc_info:  # type: ignore[assignment]
             transformer_utils.load_model_checkpoint_config_dict(missing_config_path)
 
         assert "No config.json found" in str(exc_info.value)
@@ -513,11 +513,11 @@ def test_load_model_checkpoint_index_weight_files_no_index_files():
 def test_load_model_checkpoint_index_weight_files_invalid():
     """Test with invalid input type."""
     with pytest.raises(TypeError) as exc_info:
-        transformer_utils.load_model_checkpoint_index_weight_files(123)
+        transformer_utils.load_model_checkpoint_index_weight_files(123)  # type: ignore[arg-type]
 
     assert "Expected path to be a string or Path" in str(exc_info.value)
 
-    with pytest.raises(FileNotFoundError) as exc_info:
+    with pytest.raises(FileNotFoundError) as exc_info:  # type: ignore[assignment]
         transformer_utils.load_model_checkpoint_index_weight_files("/nonexistent/path")
 
     assert "Model checkpoint path does not exist" in str(exc_info.value)
@@ -531,7 +531,7 @@ def test_load_model_checkpoint_index_weight_files_invalid():
         index_file.write_text(json.dumps(invalid_index_data))
 
         # When processing the directory, this should raise a ValueError
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ValueError) as exc_info:  # type: ignore[assignment]
             transformer_utils.load_model_checkpoint_index_weight_files(checkpoint_path)
 
         assert "does not contain a weight_map" in str(exc_info.value)
@@ -549,7 +549,7 @@ def test_load_model_checkpoint_index_weight_files_invalid():
         index_file.write_text(json.dumps(index_data))
 
         # When processing the directory, this should raise a FileNotFoundError
-        with pytest.raises(FileNotFoundError) as exc_info:
+        with pytest.raises(FileNotFoundError) as exc_info:  # type: ignore[assignment]
             transformer_utils.load_model_checkpoint_index_weight_files(checkpoint_path)
 
         assert "Weight file for" in str(exc_info.value)
@@ -636,11 +636,11 @@ def test_load_model_checkpoint_weight_files_with_index_files(temp_index_checkpoi
 def test_load_model_checkpoint_weight_files_invalid():
     """Test with invalid input type."""
     with pytest.raises(TypeError) as exc_info:
-        transformer_utils.load_model_checkpoint_weight_files(123)
+        transformer_utils.load_model_checkpoint_weight_files(123)  # type: ignore[arg-type]
 
     assert "Expected path to be a string or Path" in str(exc_info.value)
 
-    with pytest.raises(FileNotFoundError) as exc_info:
+    with pytest.raises(FileNotFoundError) as exc_info:  # type: ignore[assignment]
         transformer_utils.load_model_checkpoint_weight_files("/nonexistent/path")
 
     assert "Model checkpoint path does not exist" in str(exc_info.value)
@@ -652,7 +652,7 @@ def test_load_model_checkpoint_weight_files_invalid():
         other_file = checkpoint_path / "README.md"
         other_file.write_text("This is a readme")
 
-        with pytest.raises(FileNotFoundError) as exc_info:
+        with pytest.raises(FileNotFoundError) as exc_info:  # type: ignore[assignment]
             transformer_utils.load_model_checkpoint_weight_files(checkpoint_path)
 
         assert "No valid weight files found" in str(exc_info.value)
