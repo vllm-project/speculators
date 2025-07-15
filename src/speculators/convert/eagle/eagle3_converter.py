@@ -7,7 +7,7 @@ from typing import Optional, Union
 
 import torch
 from loguru import logger
-from transformers import LlamaConfig
+from transformers import LlamaConfig, PretrainedConfig
 
 from speculators.config import SpeculatorsConfig, VerifierConfig
 from speculators.convert.eagle.utils import (
@@ -56,6 +56,13 @@ class Eagle3Converter:
 
         if validate:
             self._validate_converted_checkpoint(saved_path, base_model)
+    
+    def _create_verifier_config(self, base_model: str) -> VerifierConfig:
+        config_dict, _ = PretrainedConfig.get_config_dict(base_model)
+        return VerifierConfig(
+            name_or_path=base_model,
+            architectures=config_dict.get("architectures", ["LlamaForCausalLM"]),
+        )
 
     def _build_eagle3_speculator_config(
         self,
@@ -64,9 +71,7 @@ class Eagle3Converter:
         norm_before_residual: bool = False,
     ) -> Eagle3SpeculatorConfig:
         transformer_config = self._create_transformer_config_from_eagle(eagle_config)
-        verifier_config = self._create_verifier_config_from_eagle(
-            eagle_config, base_model
-        )
+        verifier_config = self._create_verifier_config(base_model)
 
         proposal_config = GreedyTokenProposalConfig(
             proposal_type="greedy",
@@ -105,17 +110,6 @@ class Eagle3Converter:
             rope_theta=eagle_config.get("rope_theta", 10000.0),
             mlp_bias=eagle_config.get("mlp_bias", False),
             tie_word_embeddings=False,
-        )
-
-    def _create_verifier_config_from_eagle(
-        self, eagle_config: dict, base_model: str
-    ) -> VerifierConfig:
-        eos_token_id = eagle_config.get("eos_token_id", 2)
-        if isinstance(eos_token_id, int):
-            eos_token_id = [eos_token_id]
-        return VerifierConfig(
-            name_or_path=base_model,
-            architectures=eagle_config.get("architectures", ["LlamaForCausalLM"]),
         )
 
     def _save_converted_checkpoint(
