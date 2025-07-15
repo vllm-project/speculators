@@ -162,7 +162,7 @@ class ClassRegistryMixin(AutoImporterMixin):
             if not isinstance(register_name, str):
                 raise ValueError(
                     "ClassRegistryMixin.register_decorator name must be a string or "
-                    f"an iterable of strings. Got {register_name}."
+                    f"a list of strings. Got {register_name}."
                 )
 
             if register_name in cls.registry:

@@ -5,7 +5,6 @@ It supports various inputs while converting to a set list of supported algorithm
 - EAGLE
 - EAGLE2
 - HASS
-
 Functions:
     convert_model: Converts a model checkpoint to the Speculators format.
 """
@@ -51,23 +50,18 @@ def convert_model(
     for use within the Speculators library.
     Supports model instances, local Hugging Face checkpoints, and Hugging Face
     hub model IDs.
-
     Pass in the `verifier` argument to attach a verifier to the
     converted speculator model. The verifier can be a local path to a
     verifier checkpoint, a Hugging Face model ID, or a PreTrainedModel instance.
-
     Returns the converted model instance, which is a subclass of
     `speculators.model.SpeculatorModel`.
     If `output_path` is provided, the converted model will be saved
     to that path in the Speculators format.
-
     Currently supports conversion from EAGLE, EAGLE2, and HASS GitHub research
     repositories into an EagleSpeculator model instance.
-
     Example:
     ::
         from speculators.convert import convert_model
-
         # Convert a local checkpoint directory
         speculator_model = convert_model(
             model="./my_checkpoint",
@@ -76,7 +70,6 @@ def convert_model(
             verifier="./my_verifier_checkpoint",
         )
         print(speculator_model)
-
     :param model: Path to a local checkpoint directory, Hugging Face model ID,
         or a PreTrainedModel instance to convert.
     :param output_path: Optional path to save the converted speculator model.

@@ -1,13 +1,37 @@
 """
-A module that provides the base class for Speculators model converters handling
-the conversion of non-Speculators model checkpoints to the Speculators format.
+Base converter architecture for Speculators model format conversion.
+
+This module provides the abstract base class and registry system for converting
+external research model checkpoints into the standardized Speculators format.
+The converter architecture supports automatic algorithm detection, model validation,
+and extensible conversion workflows for various speculative decoding implementations.
+
+The base converter handles the common conversion pipeline including configuration
+translation, state dict transformation, model instantiation, and optional validation.
+Specific converter implementations inherit from this base to provide algorithm-specific
+conversion logic.
 
 Classes:
-    SpeculatorConverter: An abstract base class for Speculators model converters.
+    SpeculatorConverter: Abstract base class for model converters with registry support
 
-Functions:
-    reload_and_populate_converters: Reloads the SpeculatorConverter registry
-        and populates it with all registered converter classes.
+Type Variables:
+    ConfigT: Type variable bound to SpeculatorModelConfig for configuration types
+    ModelT: Type variable bound to SpeculatorModel for model types
+
+Usage:
+::
+    from speculators.convert.converters.base import SpeculatorConverter
+
+    # Resolve converter automatically
+    converter_cls = SpeculatorConverter.resolve_converter(
+        algorithm="auto",
+        model="path/to/model",
+        config="path/to/config"
+    )
+
+    # Create converter instance and convert
+    converter = converter_cls(model, config, verifier=None)
+    model = converter(output_path="converted_model", validate_device="cuda")
 """
 
 import os
@@ -31,11 +55,11 @@ ModelT = TypeVar("ModelT", bound=SpeculatorModel)
 
 class SpeculatorConverter(ABC, Generic[ConfigT, ModelT], ClassRegistryMixin):
     """
-    Base class for Speculators model converters.
-    This class provides a registry for different conversion algorithms,
-    a method to resolve the appropriate converter based on the specified algorithm,
-    and the basic structure and methods required for converting a model checkpoint
-    to a Speculators model format.
+    Abstract base class for converting external model checkpoints to Speculators format.
+
+    Provides a registry system for different conversion algorithms, automatic converter
+    resolution, and a standardized conversion pipeline. Subclasses must implement
+    algorithm-specific conversion logic and model validation.
     """
 
     @classmethod
@@ -48,27 +72,21 @@ class SpeculatorConverter(ABC, Generic[ConfigT, ModelT], ClassRegistryMixin):
         **kwargs,
     ) -> type["SpeculatorConverter"]:
         """
-        Return a SpeculatorConverter class based on the specified algorithm.
-        If `algorithm` is "auto", it will automatically determine the best
-        converter based on the provided model and config utilizing the
-        `is_supported` method of each registered converter.
+        Resolve and return the appropriate converter class for the specified algorithm.
 
-        :param algorithm: The name of the conversion algorithm to use.
-            If "auto", it will automatically select the best converter.
-        :param model: The model to convert, can be a local path, Hugging Face
-            model ID, or a PreTrainedModel instance. Only used for the
-            algorithm=auto case.
-        :param config: The configuration for the model, can be a local path,
-            Hugging Face model ID, or a PretrainedConfig instance.
-            Only used for the algorithm=auto case.
-        :param verifier: Optional verifier to attach to the converted model.
-            Can be a local path to a verifier checkpoint, a Hugging Face model ID,
-            or a PreTrainedModel instance.
-            Only used for the algorithm=auto case.
-        :param kwargs: Additional keyword arguments to pass to the converter's
-            `is_supported` method if `algorithm` is "auto".
-        :return: An instance of the SpeculatorConverter class for the
-            specified algorithm.
+        Supports automatic algorithm detection when algorithm="auto" by testing each
+        registered converter's `is_supported` method against the provided model
+        and config.
+
+        :param algorithm: Conversion algorithm name or "auto" for automatic detection
+        :param model: Model to convert (path, HF model ID, or PreTrainedModel instance)
+        :param config: Model configuration (path, HF model ID, or PretrainedConfig
+            instance)
+        :param verifier: Optional verifier model for speculative decoding attachment
+        :param kwargs: Additional arguments passed to `is_supported` for auto detection
+        :return: Converter class for the specified or detected algorithm
+        :raises ValueError: If algorithm is not registered or no supported converter
+            found
         """
         if cls.registry is None:
             raise ValueError(
@@ -105,18 +123,14 @@ class SpeculatorConverter(ABC, Generic[ConfigT, ModelT], ClassRegistryMixin):
         **kwargs,
     ) -> bool:
         """
-        Check if the converter supports the given model and config.
-        This method should be implemented by each specific converter class.
+        Check if this converter supports the given model and configuration.
 
-        :param model: The model to check, can be a local path, Hugging Face
-            model ID, or a PreTrainedModel instance.
-        :param config: The configuration for the model, can be a local path,
-            Hugging Face model ID, or a PretrainedConfig instance.
-        :param verifier: Optional verifier to attach to the converted model.
-            Can be a local path to a verifier checkpoint, a Hugging Face model ID,
-            or a PreTrainedModel instance.
-        :param kwargs: Additional keyword arguments for specific checks.
-        :return: True if the converter supports the model and config, False otherwise.
+        :param model: Model to check (path, HF model ID, or PreTrainedModel instance)
+        :param config: Model configuration (path, HF model ID, or PretrainedConfig
+            instance)
+        :param verifier: Optional verifier model for compatibility validation
+        :param kwargs: Additional arguments for algorithm-specific checks
+        :return: True if the converter supports the model and config
         """
         ...
 
@@ -127,16 +141,13 @@ class SpeculatorConverter(ABC, Generic[ConfigT, ModelT], ClassRegistryMixin):
         verifier: Optional[Union[str, os.PathLike, PreTrainedModel]],
     ):
         """
-        Initialize the SpeculatorConverter with the model, config,
-        and optional verifier.
+        Initialize the converter with model, configuration, and optional verifier.
 
-        :param model: The model to convert, can be a local path, Hugging Face
-            model ID, or a PreTrainedModel instance.
-        :param config: The configuration for the model, can be a local path,
-            Hugging Face model ID, or a PretrainedConfig instance.
-        :param verifier: Optional verifier to attach to the converted model.
-            Can be a local path to a verifier checkpoint, a Hugging Face model ID,
-            or a PreTrainedModel instance.
+        :param model: Model to convert (path, HF model ID, or PreTrainedModel instance)
+        :param config: Model configuration (path, HF model ID, or PretrainedConfig
+            instance)
+        :param verifier: Optional verifier model for speculative decoding attachment
+        :raises ValueError: If model or config is None or empty
         """
 
         if not model or not config:
@@ -154,16 +165,14 @@ class SpeculatorConverter(ABC, Generic[ConfigT, ModelT], ClassRegistryMixin):
         validate_device: Optional[Union[str, device, int]] = None,
     ) -> ModelT:
         """
-        Convert the model checkpoint and supporting args for the current instance
-        of the SpeculatorConverter to a Speculators model.
+        Convert the model checkpoint to Speculators format.
 
-        :param output_path: Optional path to save the converted model.
-            If provided, the converted model will be saved to this path.
-            Otherwise, the model will not be saved to disk.
-        :param validate_device: Device to validate the model on after converting.
-            If provided, the model will be validated on this device.
-            If None, no validation will be performed.
-        :return: The converted Speculators model instance.
+        Executes the complete conversion pipeline: configuration and state dict
+        conversion, model instantiation, optional saving, and validation.
+
+        :param output_path: Optional directory path to save the converted model
+        :param validate_device: Optional device for post-conversion validation
+        :return: Converted Speculators model instance
         """
         config, state_dict = self.convert_config_state_dict()
         model: ModelT = SpeculatorModel.from_pretrained(  # type: ignore[assignment]
@@ -181,24 +190,19 @@ class SpeculatorConverter(ABC, Generic[ConfigT, ModelT], ClassRegistryMixin):
 
     def save(self, model: ModelT, output_path: Union[str, os.PathLike]):
         """
-        Save the converted model to the specified output path.
+        Save the converted model to the specified directory.
 
-        :param model: The converted Speculators model to save.
-        :param output_path: The path for the directory where the model will be saved.
-            If the path does not exist, it will be created.
+        :param model: Converted Speculators model to save
+        :param output_path: Directory path where the model will be saved
         """
         model.save_pretrained(output_path)  # type: ignore[attr-defined]
 
     @abstractmethod
     def convert_config_state_dict(self) -> tuple[ConfigT, dict[str, Tensor]]:
         """
-        Convert the model configuration and state dict to a format suitable for
-        the Speculators model.
+        Convert model configuration and state dict to Speculators format.
 
-        :return: A tuple containing the converted configuration and state dict.
-            The configuration should be an instance of SpeculatorModelConfig or a
-            subclass, and the state dict should be a dictionary mapping parameter names
-            to PyTorch tensors.
+        :return: Tuple of (converted configuration, converted state dict)
         """
         ...
 
@@ -206,22 +210,8 @@ class SpeculatorConverter(ABC, Generic[ConfigT, ModelT], ClassRegistryMixin):
     def validate(self, model: ModelT, device: Union[str, device, int]):
         """
         Validate the converted model on the specified device.
-        This method should ensure that the model is correctly set up and can run
-        inference or training on the specified device.
 
-        :param model: The converted Speculators model to validate.
-        :param device: The device to validate the model on.
-            Can be a string (e.g., "cuda", "cpu"), a torch.device instance, or an int
-            representing the device index (e.g., 0 for "cuda:0").
+        :param model: Converted Speculators model to validate
+        :param device: Device for validation (string, torch.device, or device index)
         """
         ...
-
-
-def reload_and_populate_converters():
-    """
-    Reloads the SpeculatorConverter registry and populates it with all registered
-    converter classes. This is useful for dynamically loading converters at runtime.
-
-    :return: None
-    """
-    SpeculatorConverter.auto_populate_registry()

@@ -519,7 +519,7 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel, GenerationMixin):  # 
             Callable[[int, torch.Tensor], list[int]]
         ] = None,
         synced_gpus: Optional[bool] = None,  # noqa: ARG002
-        assistant_model: Optional["PreTrainedModel"] = None,  # noqa: ARG002
+        assistant_model: Optional["PreTrainedModel"] = None,  # type: ignore[override]  # noqa: ARG002
         streamer: Optional["BaseStreamer"] = None,  # noqa: ARG002
         negative_prompt_ids: Optional[torch.Tensor] = None,  # noqa: ARG002
         negative_prompt_attention_mask: Optional[torch.Tensor] = None,  # noqa: ARG002

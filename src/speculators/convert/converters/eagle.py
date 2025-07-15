@@ -1,15 +1,29 @@
 """
-A module that provides the converter for Eagle/HASS checkpoints.
-It handles the transformation of checkpoints from the research eagle/hass repositories
-into the standardized speculators format, including automatic feature detection,
-weight remapping, and optional validation.
-It supports the following algorithms:
-- Eagle
-- Eagle2
-- HASS
+Eagle/HASS checkpoint converter for Speculators model format.
+
+This module provides the EagleSpeculatorConverter class for transforming Eagle-style
+speculative decoding checkpoints (including HASS variants) from research repositories
+into the standardized Speculators format. The converter handles automatic feature
+detection, weight remapping, configuration translation, and optional validation.
+
+Supported Research Repositories:
+    - Eagle v1 and v2: https://github.com/SafeAILab/EAGLE
+    - HASS: https://github.com/HArmonizedSS/HASS
 
 Classes:
-    EagleSpeculatorConverter: Converter for Eagle/HASS checkpoints to speculators format
+    EagleSpeculatorConverter: Converter implementation for Eagle/HASS checkpoints
+
+Usage:
+::
+    from speculators.convert.converters import EagleSpeculatorConverter
+
+    # Convert with automatic feature detection
+    converter = EagleSpeculatorConverter(
+        model="path/to/eagle_checkpoint",
+        config="path/to/config.json",
+        verifier="meta-llama/Meta-Llama-3.1-8B-Instruct"
+    )
+    converted_model = converter(output_path="./output", validate_device="cuda")
 """
 
 import os
@@ -38,27 +52,15 @@ class EagleSpeculatorConverter(
     SpeculatorConverter[EagleSpeculatorConfig, EagleSpeculator]
 ):
     """
-    Converter for Eagle/HASS checkpoints to speculators format.
+    Converter for Eagle/HASS research checkpoint format to Speculators format.
 
-    This converter handles the transformation of Eagle-style checkpoints
-    (including HASS variants) into the standardized speculators format.
-    It supports automatic feature detection, weight remapping, and
-    optional validation.
+    This converter transforms Eagle-style speculative decoding checkpoints into the
+    standardized Speculators format, handling weight remapping, configuration
+    translation, and feature detection. It supports both the original Eagle
+    architecture and its variants including HASS.
 
-    Example:
-    ::
-        from speculators.convert import EagleSpeculatorConverter
-
-        converter = EagleSpeculatorConverter(
-            model="yuhuili/EAGLE-LLaMA3.1-Instruct-8B",
-            config="./config.json",
-            verifier="meta-llama/Meta-Llama-3.1-8B-Instruct"
-        )
-        converted_model = converter.convert(
-            output_path="./output",
-            validate_device="cuda:0"
-        )
-        print(converted_model)
+    The converter automatically detects model features such as fusion bias and
+    layernorms based on the checkpoint structure, with options for manual override.
     """
 
     WEIGHT_MAPPINGS = {
@@ -82,15 +84,18 @@ class EagleSpeculatorConverter(
         **kwargs,  # noqa: ARG003
     ) -> bool:
         """
-        Check if the provided model checkpoint and supporting arguments are supported
-        by this converter.
+        Check if the provided model checkpoint is supported by this converter.
 
-        :param model: Model checkpoint path or instance
-        :param config: Model configuration path or instance
-        :param verifier: Optional verifier model path or instance
-        :param fusion_bias: Whether to include fusion bias in the conversion
-        :param layernorms: Whether to include extra layernorms in the conversion
-        :return: True if the model is supported, False otherwise
+        Validates that the model follows the Eagle architecture pattern by checking
+        for the presence of fusion layer weights and single transformer layer structure.
+
+        :param model: Model checkpoint path or instance to validate
+        :param config: Model configuration (unused for Eagle detection)
+        :param verifier: Optional verifier model (unused for Eagle detection)
+        :param fusion_bias: Optional fusion bias setting (unused for Eagle detection)
+        :param layernorms: Optional layernorms setting (unused for Eagle detection)
+        :param kwargs: Additional arguments (unused for Eagle detection)
+        :return: True if the model follows Eagle architecture pattern
         """
         state_dict = load_model_checkpoint_state_dict(model)
         has_fc = "fc.weight" in state_dict
@@ -111,16 +116,16 @@ class EagleSpeculatorConverter(
         layernorms: Optional[bool] = None,
     ):
         """
-        Initialize the EagleSpeculatorConverter with model, config,
-        optional verifier, and feature flags.
+        Initialize the Eagle converter with model, configuration, and feature settings.
 
-        :param model: Model checkpoint path or instance
+        :param model: Model checkpoint path or instance to convert
         :param config: Model configuration path or instance
-        :param verifier: Optional verifier model path or instance
-        :param fusion_bias: Whether to include fusion bias in the conversion,
-            if None, it will be auto-detected based on the presence of "fc.bias"
-        :param layernorms: Whether to include extra layernorms in the conversion,
-            if None, it will be auto-detected based on the presence of layernorm weights
+        :param verifier: Optional verifier model path or instance for speculative
+            decoding
+        :param fusion_bias: Whether to include fusion bias in conversion. If None,
+            automatically detected from checkpoint structure
+        :param layernorms: Whether to include extra layernorms in conversion. If None,
+            automatically detected from checkpoint structure
         """
         super().__init__(
             model=model,
@@ -134,11 +139,14 @@ class EagleSpeculatorConverter(
         self,
     ) -> tuple[EagleSpeculatorConfig, dict[str, Tensor]]:
         """
-        Convert the Eagle/HASS checkpoint config and state_dict to speculators format.
-        This method processes the original configuration and state_dict,
-        remapping weights and applying necessary transformations.
+        Convert Eagle/HASS checkpoint configuration and state dict to Speculators
+        format.
 
-        :return: Tuple of converted EagleSpeculatorConfig and state_dict
+        Processes the original Eagle checkpoint by detecting features, remapping
+        weights, and creating a compatible EagleSpeculatorConfig. Handles automatic
+        detection of fusion bias and layernorms based on checkpoint structure.
+
+        :return: Tuple of converted configuration and remapped state dictionary
         """
         logger.info(
             f"Converting Eagle/HASS checkpoint at model: {self.model} and "
@@ -180,14 +188,15 @@ class EagleSpeculatorConverter(
 
     def validate(self, model: EagleSpeculator, device: Union[str, torch.device, int]):
         """
-        Validate the converted EagleSpeculator model by running a forward pass
-        with a small batch of random input data. This ensures that the model
-        is correctly configured and can process inputs without errors.
+        Validate the converted model by running a forward pass with test data.
+
+        Ensures the converted EagleSpeculator model is correctly configured and can
+        process inputs without errors. Uses conservative defaults for batch size and
+        sequence length to minimize resource requirements.
 
         :param model: The converted EagleSpeculator model to validate
-        :param device: The device to validate the model on.
-            Can be a string (e.g., "cuda", "cpu"), a torch.device instance, or an int
-            (e.g., 0 for "cuda:0").
+        :param device: Device for validation (string, torch.device, or device index)
+        :raises Exception: If validation forward pass fails
         """
         logger.info("Validating converted checkpoint...")
 
@@ -215,8 +224,8 @@ class EagleSpeculatorConverter(
             )
             hidden_states = torch.randn(batch_size, seq_length, hidden_size).to(device)
             with torch.no_grad():
-                model(input_ids=input_ids, hidden_states=hidden_states)
-            model.to("cpu")  # type: ignore[arg-type]
+                model(input_ids=input_ids, hidden_states=hidden_states)  # type: ignore[operator]
+            model.to("cpu")  # type: ignore[attr-defined,arg-type]
 
             logger.success("Validation forward pass successful")
         except Exception as exception:
@@ -225,10 +234,14 @@ class EagleSpeculatorConverter(
 
     def _pretrained_config_from_eagle(self, eagle_config: dict) -> LlamaConfig:
         """
-        Create a transformer config for the Eagle model's single decoder layer.
+        Create a LlamaConfig for the Eagle model's transformer layer.
 
-        :param eagle_config: Original Eagle checkpoint config
-        :return: LlamaConfig for the transformer layer
+        Extracts relevant configuration parameters from the Eagle checkpoint config
+        and creates a compatible LlamaConfig for the single transformer layer used
+        in Eagle architecture.
+
+        :param eagle_config: Original Eagle checkpoint configuration dictionary
+        :return: LlamaConfig configured for Eagle's transformer layer
         """
         return LlamaConfig(
             vocab_size=eagle_config.get("vocab_size", 32000),
@@ -260,12 +273,16 @@ class EagleSpeculatorConverter(
         layernorms: bool,
     ) -> EagleSpeculatorConfig:
         """
-        Build a complete EagleSpeculatorConfig from Eagle checkpoint config.
+        Build complete EagleSpeculatorConfig from Eagle checkpoint configuration.
 
-        :param orig_config: Original Eagle checkpoint config
-        :param fusion_bias: Whether to enable fusion bias
-        :param layernorms: Whether to enable extra layernorms
-        :return: Complete Eagle speculator configuration
+        Creates a comprehensive speculator configuration including transformer layer
+        config, speculative decoding settings, and feature flags for fusion bias
+        and layernorms.
+
+        :param orig_config: Original Eagle checkpoint configuration dictionary
+        :param fusion_bias: Whether to enable fusion bias in the speculator
+        :param layernorms: Whether to enable extra layernorms in the speculator
+        :return: Complete EagleSpeculatorConfig for the converted model
         """
         logger.debug(
             f"Building config with fusion_bias={fusion_bias}, layernorms={layernorms} "
@@ -296,11 +313,16 @@ class EagleSpeculatorConverter(
         self, weight_name: str, fusion_bias: bool, layernorms: bool
     ) -> bool:
         """
-        Determine if a weight should be skipped during conversion.
+        Determine if a weight should be excluded from the conversion process.
 
-        :param weight_name: Original weight name
-        :param has_layernorms: Whether layernorms are enabled
-        :return: True if the weight should be excluded from the output
+        Checks if a weight from the original Eagle checkpoint should be skipped
+        based on its name and the enabled features. Skips embedding tokens, optional
+        fusion bias, optional layernorms, and unmapped weights.
+
+        :param weight_name: Name of the weight from original checkpoint
+        :param fusion_bias: Whether fusion bias is enabled
+        :param layernorms: Whether layernorms are enabled
+        :return: True if the weight should be excluded from conversion
         """
         return (
             (weight_name == "embed_tokens.weight")
@@ -315,10 +337,15 @@ class EagleSpeculatorConverter(
 
     def _remap_weight_name(self, weight_name: str) -> str:
         """
-        Remap an Eagle weight name to speculators format.
+        Remap Eagle weight name to Speculators format.
 
-        :param weight_name: Original weight name
-        :return: Remapped weight name
+        Transforms weight names from the original Eagle checkpoint format to the
+        standardized Speculators format using predefined mappings for fusion layers
+        and layernorms.
+
+        :param weight_name: Original weight name from Eagle checkpoint
+        :return: Remapped weight name in Speculators format
+        :raises ValueError: If weight name doesn't match any known mapping pattern
         """
         mappings = {
             **self.WEIGHT_MAPPINGS,
@@ -340,12 +367,16 @@ class EagleSpeculatorConverter(
         layernorms: bool,
     ) -> tuple[dict[str, Tensor], list[str], list[str]]:
         """
-        Process and remap all weights from Eagle to speculators format.
+        Process and remap all weights from Eagle checkpoint to Speculators format.
 
-        :param orig_state_dict: Original state dict from Eagle checkpoint
-        :param fusion_bias: Whether to include fusion bias
-        :param layernorms: Whether to include extra layernorms
-        :return: Tuple of processed state_dict, missing keys, and extra keys
+        Transforms the complete state dictionary from Eagle format to Speculators
+        format, handling weight filtering, name remapping, and tracking of missing
+        or extra keys for diagnostic purposes.
+
+        :param orig_state_dict: Original state dictionary from Eagle checkpoint
+        :param fusion_bias: Whether fusion bias weights should be included
+        :param layernorms: Whether layernorm weights should be included
+        :return: Tuple of (converted state dict, missing keys, extra keys)
         """
         logger.debug(
             f"Processing state_dict with fusion_bias={fusion_bias}, "

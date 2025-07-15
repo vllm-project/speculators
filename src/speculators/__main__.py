@@ -1,5 +1,21 @@
 """
-Main CLI entry point for speculators.
+CLI entrypoints for the Speculators library.
+
+This module provides a command-line interface for creating and managing speculative
+decoding models. The CLI is built using Typer and provides commands for model
+conversion, version information, and other utilities.
+
+The CLI can be accessed through the `speculators` command after installation, or by
+running this module directly with `python -m speculators`.
+
+Commands:
+    convert: Convert models from external repos/formats to supported Speculators models
+    version: Display the current version of the Speculators library
+
+Usage:
+    $ speculators --help
+    $ speculators --version
+    $ speculators convert <model> [OPTIONS]
 """
 
 import json
@@ -11,13 +27,52 @@ import typer
 
 from speculators.convert import convert_model
 
-# Create main app
+__all__ = ["app"]
+
+# Configure the main Typer application
 app = typer.Typer(
     name="speculators",
     help="Speculators - Tools for speculative decoding with LLMs",
     add_completion=False,
     no_args_is_help=True,
 )
+
+
+def version_callback(value: bool):
+    """
+    Callback function to print the version of the Speculators package and exit.
+
+    This function is used as a callback for the --version option in the main CLI.
+    When the version option is specified, it prints the version information and
+    exits the application.
+
+    :param value: Boolean indicating whether the version option was specified.
+        If True, prints version and exits.
+    """
+    if value:
+        typer.echo(f"speculators version: {pkg_version('speculators')}")
+        raise typer.Exit
+
+
+@app.callback()
+def speculators(
+    ctx: typer.Context,
+    version: bool = typer.Option(
+        None,
+        "--version",
+        callback=version_callback,
+    ),
+):
+    """
+    Main entry point for the Speculators CLI application.
+
+    This function serves as the root command callback and handles global options
+    such as version display. It is automatically called by Typer when the CLI
+    is invoked.
+
+    :param ctx: The Typer context object containing runtime information.
+    :param version: Boolean option to display version information and exit.
+    """
 
 
 # Add convert command
@@ -41,38 +96,37 @@ def convert(
     revision: Optional[str] = None,
 ):
     """
-    Convert a model from an external repo/format to a supported Speculators model.
-    Currently supports conversion of Eagle, Eagle2, and HASS research repo models.
+    Convert external models to Speculators-compatible format.
 
-    :param model: Path to the model checkpoint or Hugging Face model ID.
-    :param output_path: Path to save the converted Speculators model.
-        Defaults to "speculators_converted" in the current directory.
-    :param config: Optional path to a local config.json file or a Hugging Face model ID
-        to use for the model configuration. If not provided, the model's config will be
-        inferred from the checkpoint.
-    :param verifier: Optional path to a verifier checkpoint or a Hugging Face model ID
-        to attach to the converted Speculators model as the larger model the speculator
-        will use to verify its predictions.
-        If not provided, no verifier will be attached.
-    :param validate_device: Optional device to validate the model on after conversion.
-        Can be set to a string like "cpu", "cuda", or a specific device ID.
-        If provided, the model will be validated on this device after conversion.
-        If not provided, no validation will be performed.
-    :param algorithm: The conversion algorithm to use.
-        Can be "auto", "eagle", "eagle2", or "hass".
-        Defaults to "auto", which will automatically select the appropriate algorithm
-        based on the model type and configuration, if possible.
-    :param algorithm_kwargs: Optional additional keyword arguments for the conversion
-        algorithm. These will be passed directly to the converter class.
-    :param cache_dir: Optional directory to cache downloaded models.
-        If not provided, the default Hugging Face cache directory will be used.
-    :param force_download: If True, forces redownload of the checkpoint and config.
-        If False, will use cached versions if available.
-    :param local_files_only: If True, only uses local files and does not attempt to
-        download from the Hugging Face Hub.
-    :param token: Optional Hugging Face authentication token for private models.
-    :param revision: Optional Git revision (branch, tag, or commit hash) to use when
-        downloading the model files from the Hugging Face Hub.
+    This command converts models from external research repositories or formats
+    into the standardized Speculators format. Currently supports model formats
+    from the list of research repositories below with automatic algorithm detection.
+
+    Supported Research Repositories:
+        - Eagle v1 and v2: https://github.com/SafeAILab/EAGLE
+        - HASS: https://github.com/HArmonizedSS/HASS
+
+    :param model: Path to model checkpoint or Hugging Face model ID to convert.
+    :param output_path: Directory path where converted model will be saved.
+    :param config: Path to config.json file or HF model ID for model configuration.
+        If not provided, configuration will be inferred from the checkpoint.
+    :param verifier: Path to verifier checkpoint or HF model ID to attach as the
+        verification model for speculative decoding.
+    :param validate_device: Device identifier (e.g., "cpu", "cuda") for post-conversion
+        validation. If not provided, validation is skipped.
+    :param algorithm: Conversion algorithm to use. "auto" enables automatic detection
+        based on model type and configuration.
+    :param algorithm_kwargs: Additional keyword arguments for the conversion algorithm
+        as a JSON string. Passed directly to the converter class.
+    :param cache_dir: Directory for caching downloaded models. Uses default HF cache
+        if not specified.
+    :param force_download: Force re-download of checkpoint and config files,
+        bypassing cache.
+    :param local_files_only: Use only local files without attempting downloads
+        from Hugging Face Hub.
+    :param token: Hugging Face authentication token for accessing private models.
+    :param revision: Git revision (branch, tag, or commit hash) for model files
+        from Hugging Face Hub.
     """
     convert_model(
         model=model,
@@ -88,12 +142,6 @@ def convert(
         token=token,
         revision=revision,
     )
-
-
-@app.command()
-def version():
-    """Show the speculators version."""
-    typer.echo(f"speculators version: {pkg_version('speculators')}")
 
 
 if __name__ == "__main__":

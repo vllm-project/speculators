@@ -1,5 +1,40 @@
 """
-Utility functions for checkpoint conversion operations.
+Utility functions for interacting with Hugging Face's Transformers library.
+
+This module provides utilities for downloading, loading, and managing model checkpoints
+and configurations from Hugging Face Hub and local directories. It handles various
+model formats including PyTorch bins, SafeTensors, and indexed weight files commonly
+used in transformer models.
+
+The utilities support both local file operations and remote downloads from Hugging Face
+Hub, with automatic caching and format detection. All functions are designed to work
+seamlessly with the transformers library ecosystem while providing additional
+convenience features for model management.
+
+Functions:
+    download_model_checkpoint_from_hub: Download checkpoints from Hugging Face Hub
+    check_download_model_checkpoint: Ensure local availability of model checkpoints
+    check_download_model_config: Ensure local availability of model configurations
+    load_model_config: Load PretrainedConfig from various sources
+    load_model_checkpoint_config_dict: Load configuration as dictionary
+    load_model_checkpoint_index_weight_files: Load weight files from index files
+    load_model_checkpoint_weight_files: Find and load model weight files
+    load_model_checkpoint_state_dict: Load complete model state dictionary
+
+Usage:
+::
+    from speculators.utils import transformer_utils
+
+    # Download and load a model checkpoint
+    checkpoint_path = transformer_utils.download_model_checkpoint_from_hub(
+        "huggingface/model-id"
+    )
+
+    # Load model configuration
+    config = transformer_utils.load_model_config(checkpoint_path)
+
+    # Load model weights
+    state_dict = transformer_utils.load_model_checkpoint_state_dict(checkpoint_path)
 """
 
 import json
@@ -36,25 +71,21 @@ def download_model_checkpoint_from_hub(
     **kwargs,
 ) -> Path:
     """
-    Download a checkpoint from HuggingFace Hub.
+    Download a model checkpoint from Hugging Face Hub.
 
-    Example:
-    ::
-        from speculators.utils import download_model_checkpoint_from_hub
+    Downloads model files including configuration, weights, and index files
+    to a local cache directory. Supports authentication for private models
+    and various download options.
 
-        path = download_model_checkpoint_from_hub("yuhuili/EAGLE-LLaMA3.1-Instruct-8B")
-        print(path)
-        # Output: .../uhuili/EAGLE-LLaMA3.1-Instruct-8B/snapshots/...
-
-    :param model_id: HuggingFace model ID
-    :param cache_dir: Optional directory to cache downloads
-    :param force_download: Whether to force re-download even if cached
-    :param local_files_only: If True, only use local files
-    :param token: Optional authentication token for private models
-    :param revision: Optional model revision (branch, tag, or commit)
+    :param model_id: Hugging Face model identifier
+    :param cache_dir: Directory to cache downloaded files
+    :param force_download: Whether to force re-download existing files
+    :param local_files_only: Only use cached files without downloading
+    :param token: Authentication token for private models
+    :param revision: Model revision (branch, tag, or commit hash)
     :param kwargs: Additional arguments for `snapshot_download`
-    :return: Local path to the downloaded checkpoint
-    :raises FileNotFoundError: If the checkpoint cannot be downloaded
+    :return: Path to the downloaded checkpoint directory
+    :raises FileNotFoundError: If the model cannot be downloaded
     """
     logger.info(f"Downloading a model checkpoint from HuggingFace: {model_id}")
     try:
@@ -91,33 +122,22 @@ def check_download_model_checkpoint(
     **kwargs,
 ) -> Union[Path, PreTrainedModel, nn.Module]:
     """
-    Ensure we have a local copy of the model checkpoint.
+    Ensure local availability of a model checkpoint.
 
-    If it is already a model, then return it as-is.
-    If the path exists locally, return it.
-    Otherwise, treat it as a HuggingFace model ID and download it.
+    Returns the model directly if it's already a model instance, returns the path
+    if it exists locally, or downloads from Hugging Face Hub if needed
+    and returns the local path after download.
 
-    Example:
-    ::
-        from speculators.utils import check_download_model_checkpoint
-
-        # Local path - returned as-is
-        local = check_download_model_checkpoint("./my_checkpoint")
-        # HuggingFace ID - downloaded first
-        downloaded = check_download_model_checkpoint(
-            "yuhuili/EAGLE-LLaMA3.1-Instruct-8B"
-        )
-
-    :param model: Local path, HuggingFace model ID, or a PreTrainedModel instance
-    :param cache_dir: Optional cache directory for downloads
-    :param force_download: Whether to force re-download even if cached
-    :param local_files_only: If True, only use local files
-    :param token: Optional authentication token for private models
-    :param revision: Optional model revision (branch, tag, or commit)
+    :param model: Local path, Hugging Face model ID, or model instance
+    :param cache_dir: Directory to cache downloaded files
+    :param force_download: Whether to force re-download existing files
+    :param local_files_only: Only use cached files without downloading
+    :param token: Authentication token for private models
+    :param revision: Model revision (branch, tag, or commit hash)
     :param kwargs: Additional arguments for `snapshot_download`
-    :return: Path to the local directory containing the model checkpoint
-        if model is a path or HuggingFace ID,
-        or the model instance if it was passed directly.
+    :return: Path to local checkpoint directory or the model instance
+    :raises TypeError: If model is not a supported type
+    :raises ValueError: If local path is not a directory
     """
     if isinstance(model, (PreTrainedModel, nn.Module)):
         logger.debug("Model is already a PreTrainedModel or nn.Module instance")
@@ -162,24 +182,23 @@ def check_download_model_config(
     **kwargs,
 ) -> Union[Path, PretrainedConfig, dict]:
     """
-    Ensure we have a local copy of the model's configuration file.
+    Ensure local availability of a model configuration.
 
-    If it is already a PretrainedConfig instance, return it as-is.
-    If it is a PreTrainedModel instance, return its config.
-    If the path exists locally, return it.
-    Otherwise, treat it as a HuggingFace model ID, download it,
-    and return the PreTrainedConfig object.
+    Returns the configuration directly if it's already a config instance or dict,
+    extracts config from model instances, returns local path if it exists,
+    or downloads from Hugging Face Hub if needed and returns the local path
+    after download.
 
-    :param config: Local path, HuggingFace model ID,
-        PreTrainedModel instance, or PretrainedConfig instance.
-    :param cache_dir: Optional directory to cache downloads
-    :param force_download: Whether to force re-download even if cached
-    :param local_files_only: If True, only use local files
-    :param token: Optional authentication token for private models
-    :param revision: Optional model revision (branch, tag, or commit)
+    :param config: Local path, Hugging Face model ID, model instance, or config
+    :param cache_dir: Directory to cache downloaded files
+    :param force_download: Whether to force re-download existing files
+    :param local_files_only: Only use cached files without downloading
+    :param token: Authentication token for private models
+    :param revision: Model revision (branch, tag, or commit hash)
     :param kwargs: Additional arguments for `AutoConfig.from_pretrained`
-    :return: Path to the local config.json file if config is a path or HuggingFace ID,
-        or the PretrainedConfig instance if it was passed directly.
+    :return: Path to local config.json file or the config instance
+    :raises TypeError: If config is not a supported type
+    :raises FileNotFoundError: If config.json cannot be found
     """
     if isinstance(config, PretrainedConfig):
         logger.debug("Config is already a PretrainedConfig instance")
@@ -233,27 +252,22 @@ def load_model_config(
     **kwargs,
 ) -> PretrainedConfig:
     """
-    Load the configuration for a model from a local checkpoint directory
-    or a PreTrainedModel instance.
+    Load a PretrainedConfig from various sources.
 
-    Example:
-    ::
-        from speculators.utils import load_model_config
+    Supports loading from local checkpoint directories, Hugging Face model IDs,
+    or extracting from existing model instances. Always returns a PretrainedConfig
+    object regardless of input type.
 
-        config = load_model_config("./checkpoint")
-        print(config.model_type)
-        # Output: llama
-
-    :param model: The path to the model's local checkpoint directory,
-        or a PreTrainedModel instance.
-    :param cache_dir: Optional directory to cache downloads
-    :param force_download: Whether to force re-download even if cached
-    :param local_files_only: If True, only use local files
-    :param token: Optional authentication token for private models
-    :param revision: Optional model revision (branch, tag, or commit)
+    :param model: Local path, Hugging Face model ID, or model instance
+    :param cache_dir: Directory to cache downloaded files
+    :param force_download: Whether to force re-download existing files
+    :param local_files_only: Only use cached files without downloading
+    :param token: Authentication token for private models
+    :param revision: Model revision (branch, tag, or commit hash)
     :param kwargs: Additional arguments for `AutoConfig.from_pretrained`
-    :return: The PretrainedConfig object for the model.
-    :raises FileNotFoundError: If the config.json file cannot be found
+    :return: PretrainedConfig object for the model
+    :raises TypeError: If model is not a supported type
+    :raises FileNotFoundError: If the configuration cannot be found
     """
     logger.debug(f"Loading model config from: {model}")
 
@@ -291,25 +305,16 @@ def load_model_checkpoint_config_dict(
     config: Union[str, os.PathLike, PretrainedConfig, PreTrainedModel, dict],
 ) -> dict:
     """
-    Load the configuration dictionary from a model's local checkpoint directory,
-    a PreTrained instance, or previously extracted dictionary.
-    If config is a dict, it is returned as-is.
-    If config is a PretrainedConfig or PreTrainedModel instance,
-    its `to_dict()` method is called to extract the configuration.
-    If config is a str or Path, it is treated as a path to a local config.json file.
+    Load model configuration as a dictionary from various sources.
 
-    Example:
-    ::
-        from speculators.utils import load_model_checkpoint_config_dict
+    Supports loading from local config.json files, checkpoint directories,
+    or extracting from existing model/config instances. Always returns
+    a dictionary representation of the configuration.
 
-        config = load_model_checkpoint_config_dict("./checkpoint")
-        print(config["model_type"])
-        # Output: llama
-
-    :param path: The path to the model's local checkpoint directory
-        or the path to the local config.json file itself.
-    :return: The configuration dictionary loaded from config.json.
-    :raises FileNotFoundError: If the config.json file cannot be found
+    :param config: Local path, PretrainedConfig, PreTrainedModel, or dict
+    :return: Configuration dictionary
+    :raises TypeError: If config is not a supported type
+    :raises FileNotFoundError: If config.json cannot be found
     """
     if isinstance(config, dict):
         logger.debug("Config is already a dictionary, returning as is")
@@ -346,28 +351,17 @@ def load_model_checkpoint_index_weight_files(
     path: Union[str, os.PathLike],
 ) -> list[Path]:
     """
-    Load all weight files from any index files in a model's local checkpoint directory.
-    The index files are expected to be in `.index.json` format, which maps weight names
-    to their corresponding file paths.
-    If the path is a directory, will look for `.index.json` files within that directory.
-    If the path is a single `.index.json` file, it will read that file directly.
-    If no index files are found, an empty list is returned.
+    Load weight files referenced in model index files.
 
-    Example:
-    ::
-        from speculators.utils import load_model_checkpoint_index_weight_files
+    Searches for .index.json files in the given directory or processes a single
+    index file, then returns all weight files referenced in the index mappings.
+    Returns an empty list if no index files are found.
 
-        index_files = load_model_checkpoint_index_weight_files("./checkpoint")
-        print(f"Found {len(index_files)} index files")
-        # Output: Found 2 index files
-
-    :param path: The path to the model's local checkpoint directory
-        or the path to the local index file itself.
-    :return: List of Paths to the weight files found in the index files.
-        Returns an empty list if no index files are found.
-    :raises FileNotFoundError: If the path, any index file, or any weight file
-        specified in the index file does not exist.
-    :raises ValueError: If any index file does not contain a valid weight_map.
+    :param path: Local checkpoint directory or path to index file
+    :return: List of paths to weight files found in index mappings
+    :raises TypeError: If path is not a string or Path-like object
+    :raises FileNotFoundError: If path or referenced weight files don't exist
+    :raises ValueError: If index file lacks valid weight_map
     """
     if not isinstance(path, (str, os.PathLike)):
         raise TypeError(f"Expected path to be a string or Path, got {type(path)}")
@@ -413,24 +407,17 @@ def load_model_checkpoint_index_weight_files(
 
 def load_model_checkpoint_weight_files(path: Union[str, os.PathLike]) -> list[Path]:
     """
-    Find and return all weight files given in a model's local checkpoint directory,
-    an index.json file, or a single weight file.
-    The weight files must be in `.bin` or `.safetensors` format.
+    Find and return all weight files for a model checkpoint.
 
-    Example:
-    ::
-        from speculators.utils import load_model_checkpoint_weight_files
+    Searches for weight files in various formats (.bin, .safetensors) either
+    directly in a directory, through index files, or as a single weight file.
+    Automatically detects and handles different weight file organization patterns.
 
-        weight_files = load_model_checkpoint_weight_files("./checkpoint")
-        print(f"Found {len(weight_files)} weight files")
-        # Output: Found 3 weight files
-
-    :param path: The path to the model's local checkpoint directory,
-        the path to the local index file, or the path to the local weights file itself.
-    :return: List of Paths to the weight files found.
-    :raises FileNotFoundError: If the path does not exist or no valid weight files
-        are found in the directory or index file.
-    :raises ValueError: If the index file does not contain a valid weight_map.
+    :param path: Local checkpoint directory, index file, or weight file path
+    :return: List of paths to weight files
+    :raises TypeError: If path is not a string or Path-like object
+    :raises FileNotFoundError: If path doesn't exist or no weight files found
+    :raises ValueError: If index file lacks valid weight_map
     """
     if not isinstance(path, (str, os.PathLike)):
         raise TypeError(f"Expected path to be a string or Path, got {type(path)}")
@@ -466,27 +453,19 @@ def load_model_checkpoint_state_dict(
     model: Union[str, os.PathLike, PreTrainedModel, nn.Module],
 ) -> dict[str, Tensor]:
     """
-    Load the state dictionary of a model from its local checkpoint directory,
-    a weights file, or a PreTrainedModel/Module instance.
-    If a str or Path is provided, this must be the path to a local
-    directory or weights file for the model.
+    Load complete model state dictionary from various sources.
 
-    Example:
-    ::
-        from speculators.utils import load_model_checkpoint_state_dict
+    Supports loading from model instances, local checkpoint directories,
+    individual weight files, or indexed weight collections. Handles both
+    PyTorch .bin and SafeTensors .safetensors formats automatically.
 
-        weights = load_model_checkpoint_state_dict(Path("./checkpoint"))
-        print(f"Loaded {len(weights)} weights")
-        # Output: Loaded 50 weights
-
-    :param model: The path to the model's local checkpoint directory,
-        a weights file, or a PreTrainedModel/Module instance to load
-        the state dictionary from.
-    :return: Dictionary mapping weight names to tensors.
+    :param model: Model instance, checkpoint directory, or weight file path
+    :return: Dictionary mapping parameter names to tensors
+    :raises ValueError: If unsupported file format is encountered
     """
     if isinstance(model, (PreTrainedModel, nn.Module)):
         logger.debug("Model is already a PreTrainedModel or nn.Module instance")
-        return model.state_dict()
+        return model.state_dict()  # type: ignore[union-attr]
 
     logger.debug(f"Loading model weights from: {model}")
     weight_files = load_model_checkpoint_weight_files(model)
