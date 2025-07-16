@@ -7,7 +7,7 @@ from typing import Optional, Union
 
 import torch
 from loguru import logger
-from transformers import LlamaConfig, PretrainedConfig
+from transformers import LlamaConfig
 
 from speculators.convert.eagle.base import SpeculatorConverter
 from speculators.convert.eagle.utils import (
