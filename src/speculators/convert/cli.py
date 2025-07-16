@@ -63,7 +63,7 @@ def convert(
     norm_before_residual: Annotated[
         bool,
         typer.Option(
-            "norm_before_residual",
+            "--norm_before_residual",
             help="Enable norm before residual (Eagle3 only)",
         ),
     ] = False,
