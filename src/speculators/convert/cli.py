@@ -60,6 +60,13 @@ def convert(
             help="Enable fusion bias (Eagle/HASS only)",
         ),
     ] = False,
+    norm_before_residual: Annotated[
+        bool,
+        typer.Option(
+            "norm_before_residual",
+            help="Enable norm before residual (Eagle3 only)",
+        ),
+    ] = False,
     # General options
     validate: Annotated[
         bool,
@@ -109,6 +116,7 @@ def convert(
                 output_path,
                 base_model,
                 validate=validate,
+                norm_before_residual=norm_before_residual,
             )
         except Exception as e:
             typer.echo(f"✗ Conversion failed: {e}", err=True)
