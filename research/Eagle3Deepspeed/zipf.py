@@ -1,4 +1,4 @@
-# This file calculates the most commonly used tokens 
+# This file calculates the most commonly used tokens
 # and generates a restricted vocabulary for the draft model based on those frequencies.
 import argparse
 import os

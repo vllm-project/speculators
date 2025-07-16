@@ -2,7 +2,12 @@
 # Which is a fork of the Eagle repository: https://github.com/SafeAILab/EAGLE (arxiv: https://arxiv.org/abs/2401.15077)
 
 import argparse
+import os
 import re
+
+import torch
+from datasets import load_dataset
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 parser = argparse.ArgumentParser(description="sp")
 parser.add_argument("--start", type=int, default=0)
@@ -14,31 +19,26 @@ parser.add_argument("--data_path", type=str, default="0")
 parser.add_argument("--model_path", type=str, default="0")
 parser.add_argument("--split", type=str, default="sft")
 args = parser.parse_args()
-import os
+
 
 os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu_index)[1:-1]
-import torch
-from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer
 
 bigname = args.model_path
 
 
-def build_dataset_rank(
+def build_ds(
     tokenizer,
     split="train",
-    select=None,
 ):
-    ds = load_dataset("HuggingFaceH4/ultrachat_200k", split=f"train_{args.split}")
+    ds = load_dataset("HuggingFaceH4/ultrachat_200k", split=f"{split}_{args.split}")
     ds1 = ds.select(range(args.start, args.end))
-    num_proc = 4
 
-    def preprocess_function(examples):
+    def preprocess(examples):
         new_examples = {"conversation": [], "input_ids": [], "loss_mask": []}
 
-        for i in range(len(examples["messages"])):
+        for j in range(len(examples["messages"])):
             messages = []
-            messages.extend(examples["messages"][i])
+            messages.extend(examples["messages"][j])
             conversation = tokenizer.apply_chat_template(
                 messages,
                 tokenize=False,
@@ -81,14 +81,14 @@ def build_dataset_rank(
 
         return new_examples
 
-    ds1 = ds1.map(preprocess_function, batched=True, load_from_cache_file=False)
+    ds1 = ds1.map(preprocess, batched=True, load_from_cache_file=False)
 
     ds1.set_format(type="torch")
     return ds1
 
 
 bigtokenizer = AutoTokenizer.from_pretrained(bigname, use_fast=False)
-ds = build_dataset_rank(bigtokenizer)
+ds = build_ds(bigtokenizer)
 bigmodel = AutoModelForCausalLM.from_pretrained(
     bigname, device_map="auto", torch_dtype=torch.float16
 )
@@ -100,23 +100,20 @@ def ge(data):
     input_ids = data["input_ids"]
     num_layers = len(bigmodel.model.layers)
     outs_big = bigmodel(input_ids.cuda(), output_hidden_states=True)
-    featureFusion = [
+    feature_fusion = [
         outs_big.hidden_states[3],
         outs_big.hidden_states[num_layers // 2 + 1],
         outs_big.hidden_states[-3],
     ]
-    hidden_state_big = torch.cat(featureFusion, dim=-1)
+    hidden_state_big = torch.cat(feature_fusion, dim=-1)
     target = outs_big.hidden_states[-1]
-    max_prob_tokens_big = torch.argmax(outs_big.logits, dim=-1)
-    probs = torch.softmax(outs_big.logits, dim=-1)
-    maxp = probs[0].max(dim=1).values
-    td = {
+
+    return {
         "input_ids": input_ids.cpu()[0],
         "hidden_state": hidden_state_big.cpu()[0],
         "loss_mask": data["loss_mask"].cpu()[0],
         "target": target.cpu()[0],
     }
-    return td
 
 
 outdir = f"{args.outdir}/{args.index}"
@@ -136,10 +133,10 @@ def writedata(name, data_point):
     torch.save(data_point, f"{name}/data_{idx}.ckpt")
 
 
-for id, data in enumerate(ds):
-    if id % 100 == 0:
-        print(id, end="\t", flush=True)
-    if id % 1000 == 0:
-        print("", flush=True)
+for item, data in enumerate(ds):
+    if item % 100 == 0:
+        print(item, end="\t")
+    if item % 1000 == 0:
+        print("")
     outdata = ge(data)
     writedata(outdir, outdata)

@@ -1,5 +1,9 @@
-file = "Eagle3UnlockedHead5step/model4.safetensors"
+import numpy as np
 import torch
+from safetensors.torch import save_file
+
+file = "Eagle3UnlockedHead5step/model4.safetensors"
+
 
 f = torch.load(file)
 print(f.keys())
@@ -19,13 +23,11 @@ del state_dict["input_layernorm.weight"]
 state_dict["norm.weight"] = state_dict["lm_head_layernorm.weight"]
 del state_dict["lm_head_layernorm.weight"]
 
-import numpy as np
 
 state_dict["t2d"] = torch.from_numpy(np.load("t2d.npy")).bool()
 
 state_dict["d2t"] = torch.from_numpy(np.load("d2t.npy"))
 
-from safetensors.torch import save_file
 
 save_file(state_dict, "eagle3/model.safetensors")
 

@@ -1,6 +1,7 @@
 # This file is adapted from https://github.com/HArmonizedSS/HASS (arxiv: https://arxiv.org/abs/2408.15766)
 # Which is a fork of the Eagle repository: https://github.com/SafeAILab/EAGLE (arxiv: https://arxiv.org/abs/2401.15077)
-# It has been modified to speed up the training function by using dot products instead of attention masks when running forward passes.
+# It has been modified to speed up the training function by
+# using dot products instead of attention masks when running forward passes.
 # And to use Llama 3 instead of Llama 2, along with a few other experiments.
 
 
@@ -28,8 +29,9 @@
 
 import math
 import os
-from typing import List, Optional, Tuple
+from typing import Optional
 
+import numpy as np
 import torch.utils.checkpoint
 from model.modeling_llama_TTT_eagle3 import (
     LlamaDecoderLayer,
@@ -38,15 +40,6 @@ from model.modeling_llama_TTT_eagle3 import (
 )
 from torch import nn
 from transformers.activations import ACT2FN
-
-try:
-    from .choices import *
-    from .utils_c import *
-except:
-    from choices import *
-    from utils_c import *
-
-import numpy as np
 
 
 class LlamaDecoderLayer(LlamaDecoderLayer):
@@ -165,14 +158,8 @@ class Model(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         hidden_states_history=None,
         position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]] = None,
-        position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        position_embeddings: Optional[tuple[torch.Tensor, torch.Tensor]] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
-        use_cache: Optional[bool] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
-        std=None,
     ):
         batch_size, seq_length, hidden_shape = hidden_states.shape
         with torch.no_grad():
@@ -197,12 +184,6 @@ class Model(nn.Module):
         else:
             position_ids = position_ids.view(-1, seq_length).long()
 
-        if attention_mask is None:
-            attention_mask = torch.ones(
-                (batch_size, seq_length_with_past),
-                dtype=torch.bool,
-                device=hidden_states.device,
-            )
         attention_mask = self._prepare_decoder_attention_mask(
             attention_mask,
             (batch_size, seq_length),
@@ -226,7 +207,7 @@ class Model(nn.Module):
 
         position_embeddings = self.rotary_emb(hidden_states, position_ids)
 
-        for idx, decoder_layer in enumerate(self.layers):
+        for _, decoder_layer in enumerate(self.layers):
             if self.gradient_checkpointing and self.training:
 
                 def create_custom_forward(module):
@@ -314,7 +295,8 @@ def _make_causal_mask(
 # Copied from transformers.models.bart.modeling_bart._expand_mask
 def _expand_mask(mask: torch.Tensor, dtype: torch.dtype, tgt_len: Optional[int] = None):
     """
-    Expands attention_mask from `[bsz, seq_len]` to `[bsz, 1, tgt_seq_len, src_seq_len]`.
+    Expands attention_mask from `[bsz, seq_len]` to
+    `[bsz, 1, tgt_seq_len, src_seq_len]`.
     """
     bsz, src_len = mask.size()
     tgt_len = tgt_len if tgt_len is not None else src_len

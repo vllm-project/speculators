@@ -1,3 +1,5 @@
+# ruff: noqa
+
 from transformers.configuration_utils import PretrainedConfig
 
 

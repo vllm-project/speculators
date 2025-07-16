@@ -3,6 +3,8 @@
 
 
 import argparse
+import os
+from concurrent.futures import ThreadPoolExecutor
 
 parser = argparse.ArgumentParser(description="sp")
 parser.add_argument("--outdir", type=str, default="0")
@@ -18,8 +20,6 @@ parser.add_argument("--chat_template", type=str, default="llama")
 
 args = parser.parse_args()
 
-import os
-from concurrent.futures import ThreadPoolExecutor
 
 s = 0
 e = args.samples
