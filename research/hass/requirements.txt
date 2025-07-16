@@ -1,4 +1,4 @@
-torch==2.1.0
+torch==2.7.1
 transformers==4.40.0
 accelerate==0.21.0
 fschat==0.2.31
