@@ -8,8 +8,8 @@ from typing import Annotated, Optional
 
 import typer  # type: ignore[import-not-found]
 
-from speculators.convert.eagle.eagle_converter import EagleConverter
 from speculators.convert.eagle.eagle3_converter import Eagle3Converter
+from speculators.convert.eagle.eagle_converter import EagleConverter
 
 app = typer.Typer(
     name="speculators",
@@ -29,7 +29,9 @@ def version_callback(
         callback=lambda v: (
             typer.echo(f"speculators version: {pkg_version('speculators')}")
             or raise_exit()
-        ) if v else None,
+        )
+        if v
+        else None,
         is_eager=True,
     ),
 ):
@@ -39,7 +41,7 @@ def version_callback(
 
 
 def raise_exit():
-    raise typer.Exit()
+    raise typer.Exit(0)
 
 
 @app.command(name="convert")
@@ -77,7 +79,9 @@ def convert(
     # General options
     validate: Annotated[
         bool,
-        typer.Option("--validate/--no-validate", help="Validate the converted checkpoint"),
+        typer.Option(
+            "--validate/--no-validate", help="Validate the converted checkpoint"
+        ),
     ] = False,
 ):
     """
@@ -88,12 +92,17 @@ def convert(
         speculators convert --eagle yuhuili/EAGLE-LLaMA3.1-Instruct-8B \\
             ./eagle-converted meta-llama/Llama-3.1-8B-Instruct
 
+
         # Convert Eagle with layernorms enabled
         speculators convert --eagle nm-testing/Eagle_TTT ./ttt-converted \\
             meta-llama/Llama-3.1-8B-Instruct --layernorms
 
+        # Convert Eagle with fusion bias enabled
+        speculators convert --eagle ./checkpoint ./converted \\
+            meta-llama/Llama-3.1-8B --fusion-bias
+
         # Convert Eagle-3 checkpoint
-        speculators convert --eagle3 nm-testing/SpeculatorLlama3-1-8B-Eagle3\\
+        speculators convert --eagle3 nm-testing/SpeculatorLlama3-1-8B-Eagle3 \\
             ./eagle3-converted meta-llama/Meta-Llama-3.1-8B-Instruct --validate
     """
     if sum([eagle, eagle3]) > 1:
@@ -117,7 +126,7 @@ def convert(
                 model=input_path,
                 verifier=base_model,
                 output_path=output_path,
-            )
+            )  # type: ignore[assignment]
             converter.convert(
                 validate=validate,
             )
@@ -136,4 +145,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

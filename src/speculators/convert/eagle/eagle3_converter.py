@@ -2,16 +2,14 @@
 Eagle-3 checkpoint converter with loguru logging.
 """
 
-import os
 from pathlib import Path
 from typing import Optional, Union
 
-from torch import nn
 from loguru import logger
-from transformers import LlamaConfig, PreTrainedModel
+from transformers import LlamaConfig
 
-from speculators.models.eagle3 import Eagle3SpeculatorConfig
 from speculators.convert.eagle.base import SpeculatorConverter
+from speculators.models.eagle3 import Eagle3SpeculatorConfig
 
 
 @SpeculatorConverter.register("eagle3")
@@ -23,12 +21,11 @@ class Eagle3Converter(SpeculatorConverter):
 
     def __init__(
         self,
-        model: Union[Path, PreTrainedModel, nn.Module, str],
-        verifier: Union[str, os.PathLike, PreTrainedModel],
+        model: Union[str, Path],
+        verifier: str,
         output_path: Optional[Union[str, Path]] = None,
         cache_dir: Optional[Union[str, Path]] = None,
     ):
-
         super().__init__(
             model=model,
             verifier=verifier,
@@ -49,7 +46,9 @@ class Eagle3Converter(SpeculatorConverter):
             norm_before_residual,
         )
 
-        saved_path = self._save_converted_checkpoint(config, self.weights, self.output_path)
+        saved_path = self._save_converted_checkpoint(
+            config, self.weights, self.output_path
+        )
         logger.success(f"Saved to: {saved_path}")
 
         if validate:

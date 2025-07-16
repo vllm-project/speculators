@@ -2,8 +2,6 @@
 Eagle checkpoint converter with loguru logging.
 """
 
-import os
-
 from pathlib import Path
 from typing import Optional, Union
 
@@ -11,13 +9,12 @@ import torch
 from loguru import logger
 from transformers import LlamaConfig
 
-
+from speculators.convert.eagle.base import SpeculatorConverter
 from speculators.convert.eagle.utils import (
     detect_fusion_bias_and_layernorms,
 )
-from speculators.convert.eagle.base import SpeculatorConverter
-from speculators.models.eagle import EagleSpeculator, EagleSpeculatorConfig
-from transformers import LlamaConfig, PreTrainedModel
+from speculators.models.eagle import EagleSpeculatorConfig
+
 
 @SpeculatorConverter.register("eagle")
 class EagleConverter(SpeculatorConverter):
@@ -46,12 +43,11 @@ class EagleConverter(SpeculatorConverter):
 
     def __init__(
         self,
-        model: Union[Path, PreTrainedModel, torch.nn.Module, str],
-        verifier: Union[str, os.PathLike, PreTrainedModel],
+        model: Union[str, Path],
+        verifier: str,
         output_path: Optional[Union[str, Path]] = None,
         cache_dir: Optional[Union[str, Path]] = None,
     ):
-
         super().__init__(
             model=model,
             verifier=verifier,
@@ -107,21 +103,23 @@ class EagleConverter(SpeculatorConverter):
         fusion_bias = fusion_bias or detected_fusion_bias
         layernorms = layernorms or detected_layernorms
 
-        speculator_config = self._build_eagle_speculator_config(
-            fusion_bias, layernorms
-        )
+        speculator_config = self._build_eagle_speculator_config(fusion_bias, layernorms)
 
         processed_weights = self._process_checkpoint_weights(self.weights, layernorms)
 
         # Save the converted checkpoint using the model's save_pretrained
         saved_path = self._save_converted_checkpoint(
-            config=speculator_config, weights=processed_weights, output_dir=self.output_path
+            config=speculator_config,
+            weights=processed_weights,
+            output_dir=self.output_path,
         )
 
         logger.success(f"Saved to: {saved_path}")
 
         if validate:
-            self._validate_converted_checkpoint(saved_path, verifier_model=self.verifier)
+            self._validate_converted_checkpoint(
+                saved_path, verifier_model=self.verifier
+            )
 
     def _create_transformer_config(self) -> LlamaConfig:
         """

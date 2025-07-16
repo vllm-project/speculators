@@ -1,13 +1,13 @@
 import json
 from pathlib import Path
-from typing import Optional, Type
+from typing import Optional
 
 import pytest
 import torch
 from loguru import logger
 
-from speculators.convert.eagle.eagle_converter import EagleConverter
 from speculators.convert.eagle.eagle3_converter import Eagle3Converter
+from speculators.convert.eagle.eagle_converter import EagleConverter
 from speculators.model import SpeculatorModel
 
 
@@ -16,6 +16,7 @@ class TestEagleConversionE2E:
 
     def setup_method(self):
         import gc
+
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -37,7 +38,9 @@ class TestEagleConversionE2E:
     def temp_dir(self, tmp_path):
         return tmp_path / "e2e_test"
 
-    def verify_config(self, config_path: Path, expected_type: str, expected_features: dict):
+    def verify_config(
+        self, config_path: Path, expected_type: str, expected_features: dict
+    ):
         assert config_path.exists(), f"Config file not found: {config_path}"
         with config_path.open() as f:
             config_dict = json.load(f)
@@ -51,16 +54,19 @@ class TestEagleConversionE2E:
         assert "transformer_layer_config" in config_dict
         assert "speculators_config" in config_dict
         assert config_dict["speculators_config"]["algorithm"] == expected_type
-        assert config_dict["speculators_config"]["verifier"]["name_or_path"] == \
-            "meta-llama/Llama-3.1-8B-Instruct"
+        assert (
+            config_dict["speculators_config"]["verifier"]["name_or_path"]
+            == "meta-llama/Llama-3.1-8B-Instruct"
+        )
 
     def verify_checkpoint_structure(self, checkpoint_dir: Path):
-        assert checkpoint_dir.exists(), f"Checkpoint directory not found: {checkpoint_dir}"
-        assert (checkpoint_dir / "config.json").exists(), "Missing config.json"
-        has_weights = (
-            (checkpoint_dir / "model.safetensors").exists()
-            or (checkpoint_dir / "model.safetensors.index.json").exists()
+        assert checkpoint_dir.exists(), (
+            f"Checkpoint directory not found: {checkpoint_dir}"
         )
+        assert (checkpoint_dir / "config.json").exists(), "Missing config.json"
+        has_weights = (checkpoint_dir / "model.safetensors").exists() or (
+            checkpoint_dir / "model.safetensors.index.json"
+        ).exists()
         assert has_weights, "Missing model weights in safetensors format"
         if (checkpoint_dir / "model.safetensors.index.json").exists():
             shards = list(checkpoint_dir.glob("model-*.safetensors"))
@@ -86,29 +92,32 @@ class TestEagleConversionE2E:
         assert not torch.isinf(output.logits).any()
         return output.logits
 
-    @pytest.mark.parametrize("converter_cls, model_type, input_path, convert_kwargs", [
-        (
-            EagleConverter,
-            "eagle",
-            "yuhuili/EAGLE-LLaMA3.1-Instruct-8B",
-            {"layernorms": False, "fusion_bias": False},
-        ),
-        (
-            EagleConverter,
-            "eagle",
-            "nm-testing/Eagle_Speculator_Llama_3_1_8B_TTT",
-            {"layernorms": True, "fusion_bias": False},
-        ),
-        (
-            Eagle3Converter,
-            "eagle3",
-            "nm-testing/SpeculatorLlama3-1-8B-Eagle3",
-            {"norm_before_residual": True},
-        ),
-    ])
+    @pytest.mark.parametrize(
+        ("converter_cls", "model_type", "input_path", "convert_kwargs"),
+        [
+            (
+                EagleConverter,
+                "eagle",
+                "yuhuili/EAGLE-LLaMA3.1-Instruct-8B",
+                {"layernorms": False, "fusion_bias": False},
+            ),
+            (
+                EagleConverter,
+                "eagle",
+                "nm-testing/Eagle_Speculator_Llama_3_1_8B_TTT",
+                {"layernorms": True, "fusion_bias": False},
+            ),
+            (
+                Eagle3Converter,
+                "eagle3",
+                "nm-testing/SpeculatorLlama3-1-8B-Eagle3",
+                {"norm_before_residual": True},
+            ),
+        ],
+    )
     def test_checkpoint_conversion_e2e(
         self,
-        converter_cls: Type,
+        converter_cls: type,
         model_type: str,
         input_path: str,
         convert_kwargs: dict,
