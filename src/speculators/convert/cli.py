@@ -117,7 +117,7 @@ def convert(
                 base_model,
                 validate=validate,
                 norm_before_residual=norm_before_residual,
-            )
+            )  # type: ignore[call-arg]
         except Exception as e:
             typer.echo(f"✗ Conversion failed: {e}", err=True)
             raise typer.Exit(1) from e
