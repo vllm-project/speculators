@@ -140,6 +140,7 @@ ignore = [
     "COM812",
     "ISC001",
     "TC002",
+    "S311", # allow random number generators
     "PLW1514", # allow Path.open without encoding
     "RET505", # allow `else` blocks
     "RET506", # allow `else` blocks
@@ -217,6 +218,17 @@ select = [
 ]
 "src/speculators/convert/**/*.py" = [
     "BLE001", # allow catching Exception for conversion errors
+]
+
+"research/**/*.py" = [
+    "PTH118", # os.file.join
+    "PTH110",
+    "PTH103",
+    "PTH123",
+    "PLR0915",
+    "T201",
+    "NPY002",
+    "PTH208",
 ]
 
 [tool.ruff.lint.isort]
