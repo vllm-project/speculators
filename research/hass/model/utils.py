@@ -1,17 +1,8 @@
 import copy
 import random
-
-# typing 
-from typing import List, Tuple
 import time
+
 import torch
-
-# TODO
-# from transformers import LlamaTokenizer
-# tokenizer=LlamaTokenizer.from_pretrained("/home/lyh/weights/hf/vicuna_v13/7B/")
-
-TOPK = 10  # topk for sparse tree
-
 from transformers.generation.logits_process import (
     LogitsProcessorList,
     RepetitionPenaltyLogitsProcessor,
@@ -20,26 +11,28 @@ from transformers.generation.logits_process import (
     TopPLogitsWarper,
 )
 
+TOPK = 10  # topk for sparse tree
+
 
 class Timer:
-    def __init__(self,name):
+    def __init__(self, name):
         self.name = name
+
     def __enter__(self):
         torch.cuda.synchronize()
         self.start = time.perf_counter()
 
-
     def __exit__(self, exc_type, exc_value, traceback):
         torch.cuda.synchronize()
         elapsed = time.perf_counter() - self.start
-        print(f'{self.name} took {elapsed} seconds')
+        print(f"{self.name} took {elapsed} seconds")
 
 
 def prepare_logits_processor(
-        temperature: float = 0.0,
-        repetition_penalty: float = 0.0,
-        top_p: float = 0.0,
-        top_k: int = 0
+    temperature: float = 0.0,
+    repetition_penalty: float = 0.0,
+    top_p: float = 0.0,
+    top_k: int = 0,
 ) -> LogitsProcessorList:
     processor_list = LogitsProcessorList()
     if temperature > 1e-5:
@@ -59,7 +52,7 @@ def prepare_logits_processor(
 #     )
 
 
-def pad_path(path: List[int], length: int, pad_value: int = -2) -> List[int]:
+def pad_path(path: list[int], length: int, pad_value: int = -2) -> list[int]:
     """
     Pad the given path list with a specific value up to a specified length.
 
@@ -93,12 +86,13 @@ def generate_tree_buffers(tree_choices, device="cuda"):
         for i in range(len(lst)):
             sort_keys.append(lst[i] if lst[i] >= 0 else maxitem)
         return sort_keys
-    with Timer("sort"):
 
+    with Timer("sort"):
         sorted_tree_choices = sorted(tree_choices, key=lambda x: (len(x), x))
         tree_len = len(sorted_tree_choices) + 1
 
-    # Initialize depth_counts to keep track of how many choices have a particular depth
+        # Initialize depth_counts to keep track of how many choices have a
+        # particular depth
         depth_counts = []
         prev_depth = 0
         for path in sorted_tree_choices:
@@ -119,7 +113,9 @@ def generate_tree_buffers(tree_choices, device="cuda"):
                     continue
                 ancestor_idx = []
                 for c in range(len(cur_tree_choice) - 1):
-                    ancestor_idx.append(sorted_tree_choices.index(cur_tree_choice[:c + 1]) + 1)
+                    ancestor_idx.append(
+                        sorted_tree_choices.index(cur_tree_choice[: c + 1]) + 1
+                    )
                 tree_attn_mask[j + start + 1, ancestor_idx] = 1
             start += depth_counts[i]
 
@@ -135,6 +131,7 @@ def generate_tree_buffers(tree_choices, device="cuda"):
             for j in range(depth_counts[i]):
                 cur_tree_choice = sorted_tree_choices[start + j]
                 cur_parent = cur_tree_choice[:-1]
+                parent = None
                 if j != 0:
                     if cur_parent != parent:
                         bias += 1
@@ -143,7 +140,9 @@ def generate_tree_buffers(tree_choices, device="cuda"):
                         b = []
                 else:
                     parent = cur_parent
-                tree_indices[start + j + 1] = cur_tree_choice[-1] + TOPK * (i + bias) + 1
+                tree_indices[start + j + 1] = (
+                    cur_tree_choice[-1] + TOPK * (i + bias) + 1
+                )
                 p_indices[start + j] = inlayer_bias
                 if len(b) > 0:
                     b_indices[start + j] = copy.deepcopy(b)
@@ -156,7 +155,7 @@ def generate_tree_buffers(tree_choices, device="cuda"):
         tree_position_ids = torch.zeros(tree_len, dtype=torch.long)
         start = 0
         for i in range(len(depth_counts)):
-            tree_position_ids[start + 1: start + depth_counts[i] + 1] = i + 1
+            tree_position_ids[start + 1 : start + depth_counts[i] + 1] = i + 1
             start += depth_counts[i]
 
         retrieve_indices_nest = []
@@ -166,27 +165,31 @@ def generate_tree_buffers(tree_choices, device="cuda"):
             retrieve_indice = []
             if cur_tree_choice in retrieve_paths:
                 continue
-            else:
-                for c in range(len(cur_tree_choice)):
-                    retrieve_indice.append(sorted_tree_choices.index(cur_tree_choice[:c + 1]))
-                    retrieve_paths.append(cur_tree_choice[:c + 1])
+            for c in range(len(cur_tree_choice)):
+                retrieve_indice.append(
+                    sorted_tree_choices.index(cur_tree_choice[: c + 1])
+                )
+                retrieve_paths.append(cur_tree_choice[: c + 1])
             retrieve_indices_nest.append(retrieve_indice)
         max_length = max([len(x) for x in retrieve_indices_nest])
-        retrieve_indices = [pad_path(path, max_length) for path in retrieve_indices_nest]
+        retrieve_indices = [
+            pad_path(path, max_length) for path in retrieve_indices_nest
+        ]
         retrieve_indices = torch.tensor(retrieve_indices, dtype=torch.long)
         retrieve_indices = retrieve_indices + 1
-        retrieve_indices = torch.cat([torch.zeros((retrieve_indices.shape[0], 1), dtype=torch.long), retrieve_indices],
-                                     dim=1)
+        retrieve_indices = torch.cat(
+            [
+                torch.zeros((retrieve_indices.shape[0], 1), dtype=torch.long),
+                retrieve_indices,
+            ],
+            dim=1,
+        )
 
         maxitem = retrieve_indices.max().item() + 5
-
-
 
         retrieve_indices = retrieve_indices.tolist()
         retrieve_indices = sorted(retrieve_indices, key=custom_sort)
         retrieve_indices = torch.tensor(retrieve_indices, dtype=torch.long)
-
-
 
     # Aggregate the generated buffers into a dictionary
     tree_buffers = {
@@ -197,37 +200,41 @@ def generate_tree_buffers(tree_choices, device="cuda"):
     }
 
     # Move the tensors in the dictionary to the specified device
-    tree_buffers = {
+    return {
         k: v.clone().to(device)
         if isinstance(v, torch.Tensor)
         else torch.tensor(v, device=device)
         for k, v in tree_buffers.items()
     }
 
-    return tree_buffers
-
 
 def initialize_tree0(input_ids, model, past_key_values, logits_processor):
-    draft_tokens, retrieve_indices,tree_mask,tree_position_ids, outputs, logits, hidden_state, sample_token = model(
-        input_ids, past_key_values=past_key_values, output_orig=True, logits_processor=logits_processor
+    (
+        draft_tokens,
+        retrieve_indices,
+        tree_mask,
+        tree_position_ids,
+        outputs,
+        logits,
+        hidden_state,
+        sample_token,
+    ) = model(
+        input_ids,
+        past_key_values=past_key_values,
+        output_orig=True,
+        logits_processor=logits_processor,
     )
 
-    #     if logits_processor is not None:
-    #         logits = orig[:, -1]
-    #         logits = logits_processor(None, logits)
-    #         probabilities = torch.nn.functional.softmax(logits, dim=1)
-    #         token = torch.multinomial(probabilities, 1)
-    #     else:
-    #         token = torch.argmax(orig[:, -1])
-    #         token = token[None, None]
-    #     input_ids = torch.cat((input_ids, token.to(input_ids.device)), dim=1)
-    #     # Clone the output hidden states
-    #
-    #     draft_tokens, retrieve_indices,tree_mask,tree_position_ids = self.ea_layer.topK_genrate(hidden_states, input_ids, self.base_model.lm_head)
-    #     if output_orig:
-    #         return draft_tokens, retrieve_indices,tree_mask,tree_position_ids, outputs, orig, hidden_states, token
-    #     return draft_tokens, retrieve_indices,tree_mask,tree_position_ids, hidden_states, token
-    return draft_tokens, retrieve_indices,tree_mask,tree_position_ids, logits, hidden_state, sample_token
+    return (
+        draft_tokens,
+        retrieve_indices,
+        tree_mask,
+        tree_position_ids,
+        logits,
+        hidden_state,
+        sample_token,
+    )
+
 
 def initialize_tree(input_ids, model, past_key_values, logits_processor):
     outputs, orig, hidden_states = model(
@@ -245,18 +252,30 @@ def initialize_tree(input_ids, model, past_key_values, logits_processor):
     input_ids = torch.cat((input_ids, token.to(input_ids.device)), dim=1)
     # Clone the output hidden states
 
-    draft_tokens, retrieve_indices,tree_mask,tree_position_ids = model.ea_layer.topK_genrate(hidden_states, input_ids, model.base_model.lm_head,logits_processor)
-    return draft_tokens, retrieve_indices,tree_mask,tree_position_ids, orig, hidden_states, token
+    draft_tokens, retrieve_indices, tree_mask, tree_position_ids = (
+        model.ea_layer.topK_genrate(
+            hidden_states, input_ids, model.base_model.lm_head, logits_processor
+        )
+    )
+    return (
+        draft_tokens,
+        retrieve_indices,
+        tree_mask,
+        tree_position_ids,
+        orig,
+        hidden_states,
+        token,
+    )
 
 
 def reset_tree_mode(
-        model,
+    model,
 ):
     model.base_model.model.tree_mask = None
     model.base_model.model.tree_mode = None
 
 
-def reset_past_key_values(passed_key_values: List[torch.Tensor]) -> List[torch.Tensor]:
+def reset_past_key_values(passed_key_values: list[torch.Tensor]) -> list[torch.Tensor]:
     """
     Resets the current lengths in the passed key-values to zero.
 
@@ -265,10 +284,12 @@ def reset_past_key_values(passed_key_values: List[torch.Tensor]) -> List[torch.T
     effectively resetting their state.
 
     Args:
-    - passed_key_values (list of torch.Tensor): Contains past hidden states and past attention values for each layer.
+    - passed_key_values (list of torch.Tensor): Contains past hidden states and past
+        attention values for each layer.
 
     Returns:
-    - passed_key_values (list of torch.Tensor): Updated past hidden states and past attention values with reset lengths.
+    - passed_key_values (list of torch.Tensor): Updated past hidden states and
+        past attention values with reset lengths.
     """
     for i in range(len(passed_key_values)):
         for j in range(2):
@@ -276,7 +297,13 @@ def reset_past_key_values(passed_key_values: List[torch.Tensor]) -> List[torch.T
     return passed_key_values
 
 
-def generate_candidates(tree_logits, tree_indices, retrieve_indices, sample_token, logits_processor):
+def generate_candidates(
+    tree_logits,
+    tree_indices,
+    retrieve_indices,
+    sample_token,
+    logits_processor,  # noqa: ARG001
+):
     sample_token = sample_token.to(tree_indices.device)
 
     candidates_logit = sample_token[0]
@@ -288,23 +315,27 @@ def generate_candidates(tree_logits, tree_indices, retrieve_indices, sample_toke
     tree_candidates = candidates[tree_indices]
 
     tree_candidates_ext = torch.cat(
-        [tree_candidates, torch.zeros((1), dtype=torch.long, device=tree_candidates.device) - 1], dim=0)
+        [
+            tree_candidates,
+            torch.zeros((1), dtype=torch.long, device=tree_candidates.device) - 1,
+        ],
+        dim=0,
+    )
 
     cart_candidates = tree_candidates_ext[retrieve_indices]
 
-
     # Unsqueeze the tree candidates for dimension consistency.
     tree_candidates = tree_candidates.unsqueeze(0)
-    return cart_candidates,  tree_candidates
+    return cart_candidates, tree_candidates
 
 
 def tree_decoding(
-        model,
-        tree_candidates,
-        past_key_values,
-        tree_position_ids,
-        input_ids,
-        retrieve_indices,
+    model,
+    tree_candidates,
+    past_key_values,
+    tree_position_ids,
+    input_ids,
+    retrieve_indices,
 ):
     position_ids = tree_position_ids + input_ids.shape[1]
 
@@ -315,29 +346,29 @@ def tree_decoding(
         position_ids=position_ids,
     )
 
-
     logits = tree_logits[0, retrieve_indices]
     return logits, hidden_state, outputs
 
 
-
-
-
 def evaluate_posterior(
-        logits: torch.Tensor,
-        candidates: torch.Tensor,
-        logits_processor,
+    logits: torch.Tensor,
+    candidates: torch.Tensor,
+    logits_processor,
 ):
     """
-    Evaluate the posterior probabilities of the candidates based on the provided logits and choose the best candidate.
+    Evaluate the posterior probabilities of the candidates based on the provided logits
+    and choose the best candidate.
 
-    Depending on the temperature value, the function either uses greedy decoding or evaluates posterior
+    Depending on the temperature value, the function either uses greedy decoding or
+    evaluates posterior
     probabilities to select the best candidate.
 
     Args:
-    - logits (torch.Tensor): Predicted logits of shape (batch_size, sequence_length, vocab_size).
+    - logits (torch.Tensor): Predicted logits of shape (batch_size, sequence_length,
+        vocab_size).
     - candidates (torch.Tensor): Candidate token sequences.
-    - temperature (float): Softmax temperature for probability scaling. A value of 0 indicates greedy decoding.
+    - temperature (float): Softmax temperature for probability scaling.
+        A value of 0 indicates greedy decoding.
     - posterior_threshold (float): Threshold for posterior probability.
     - posterior_alpha (float): Scaling factor for the threshold.
 
@@ -347,9 +378,10 @@ def evaluate_posterior(
     """
     # Greedy decoding based on temperature value
     if logits_processor is None:
-        # Find the tokens that match the maximum logits for each position in the sequence
+        # Find the tokens that match the maximum logits for each position in the
+        # sequence
         posterior_mask = (
-                candidates[:, 1:].to(logits.device) == torch.argmax(logits[:, :-1], dim=-1)
+            candidates[:, 1:].to(logits.device) == torch.argmax(logits[:, :-1], dim=-1)
         ).int()
         candidates_accept_length = (torch.cumprod(posterior_mask, dim=1)).sum(dim=1)
         accept_length = candidates_accept_length.max()
@@ -391,10 +423,9 @@ def evaluate_posterior(
                         accept_length += 1
                         best_candidate = j
                         break
-                    else:
-                        gtp[xi] = 0
-                        gtp = gtp / gtp.sum()
-                        adjustflag = True
+                    gtp[xi] = 0
+                    gtp = gtp / gtp.sum()
+                    adjustflag = True
         if adjustflag and accept_length != candidates.shape[1]:
             sample_p = gtp
         else:
@@ -405,34 +436,43 @@ def evaluate_posterior(
 
 @torch.no_grad()
 def update_inference_inputs(
-        input_ids,
-        candidates,
-        best_candidate,
-        accept_length,
-        retrieve_indices,
-        logits_processor,
-        new_token,
-        past_key_values_data_list,
-        current_length_data,
-        model,
-        hidden_state_new,
-        sample_p
+    input_ids,
+    candidates,
+    best_candidate,
+    accept_length,
+    retrieve_indices,
+    logits_processor,
+    new_token,
+    past_key_values_data_list,
+    current_length_data,
+    model,
+    hidden_state_new,
+    sample_p,
 ):
     prev_input_len = input_ids.shape[1]
     # Map the best candidate indices to the original indices in the sequence
     select_indices = (
-            retrieve_indices[best_candidate, : accept_length + 1] + prev_input_len
+        retrieve_indices[best_candidate, : accept_length + 1] + prev_input_len
     )
     # Append the tokens from the best candidate to the input sequence
     input_ids = torch.cat(
-        [input_ids, candidates[None, best_candidate, : accept_length + 1].to(input_ids.device)], dim=-1
+        [
+            input_ids,
+            candidates[None, best_candidate, : accept_length + 1].to(input_ids.device),
+        ],
+        dim=-1,
     )
     # Update the past key values based on the selected tokens
-    # Source tensor that contains relevant past information based on the selected candidate
+    # Source tensor that contains relevant past information based on the selected
+    # candidate
     for past_key_values_data in past_key_values_data_list:
-        tgt = past_key_values_data[..., select_indices.to(past_key_values_data.device), :]
+        tgt = past_key_values_data[
+            ..., select_indices.to(past_key_values_data.device), :
+        ]
         # Destination tensor where the relevant past information will be stored
-        dst = past_key_values_data[..., prev_input_len: prev_input_len + tgt.shape[-2], :]
+        dst = past_key_values_data[
+            ..., prev_input_len : prev_input_len + tgt.shape[-2], :
+        ]
         # Copy relevant past information from the source to the destination
         dst.copy_(tgt, non_blocking=True)
 
@@ -440,7 +480,9 @@ def update_inference_inputs(
     current_length_data.fill_(prev_input_len + tgt.shape[-2])
 
     retrieve_hidden_state_new = hidden_state_new[:, retrieve_indices]
-    accept_hidden_state_new = retrieve_hidden_state_new[:, best_candidate, : accept_length + 1]
+    accept_hidden_state_new = retrieve_hidden_state_new[
+        :, best_candidate, : accept_length + 1
+    ]
     # token=model.base_model.lm_head(accept_hidden_state_new[:,-1]).argmax()
     # token=token[None,None]
     prob = sample_p
@@ -451,19 +493,32 @@ def update_inference_inputs(
         token = torch.argmax(prob)
         token = token[None, None]
     # hidden_state = torch.cat((hidden_state, accept_hidden_state_new), dim=1)
-    draft_tokens, retrieve_indices,tree_mask,tree_position_ids = model.ea_layer.topK_genrate(accept_hidden_state_new,
-                                              input_ids=torch.cat((input_ids, token.to(input_ids.device)), dim=1),
-                                              head=model.base_model.lm_head,logits_processor=logits_processor)
-
+    draft_tokens, retrieve_indices, tree_mask, tree_position_ids = (
+        model.ea_layer.topK_genrate(
+            accept_hidden_state_new,
+            input_ids=torch.cat((input_ids, token.to(input_ids.device)), dim=1),
+            head=model.base_model.lm_head,
+            logits_processor=logits_processor,
+        )
+    )
 
     new_token += accept_length + 1
 
-    return input_ids, draft_tokens, retrieve_indices,tree_mask,tree_position_ids, new_token, None, token
+    return (
+        input_ids,
+        draft_tokens,
+        retrieve_indices,
+        tree_mask,
+        tree_position_ids,
+        new_token,
+        None,
+        token,
+    )
 
 
 if __name__ == "__main__":
     logits = torch.randn(1, 5)
     tp = prepare_logits_processor(0.9, 0, 0.9, 0)
-    l = tp(None, logits)
+    l = tp(None, logits)  # noqa: UP035, E741
     if tp is None:
         print(tp)

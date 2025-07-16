@@ -1,8 +1,8 @@
-# coding=utf-8
-#This file is adapted from https://github.com/HArmonizedSS/HASS (arxiv: https://arxiv.org/abs/2408.15766)
-#Which is a fork of the Eagle repository: https://github.com/SafeAILab/EAGLE (arxiv: https://arxiv.org/abs/2401.15077)
-#It has been modified to speed up the training function by using dot products instead of attention masks when running forward passes. 
-#And to use Llama 3 instead of Llama 2, along with a few other experiments.  
+# This file is adapted from https://github.com/HArmonizedSS/HASS (arxiv: https://arxiv.org/abs/2408.15766)
+# Which is a fork of the Eagle repository: https://github.com/SafeAILab/EAGLE (arxiv: https://arxiv.org/abs/2401.15077)
+# It has been modified to speed up the training function by using dot products instead
+# of attention masks when running forward passes.
+# And to use Llama 3 instead of Llama 2, along with a few other experiments.
 
 
 # Copyright 2022 EleutherAI and the HuggingFace Inc. team. All rights reserved.
@@ -24,33 +24,32 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# noqa
 
 
-""" updated eagle model."""
-import copy
-import os
+"""updated eagle model."""
+
 import math
-from typing import List, Optional, Tuple, Union
-import torch.nn.functional as F
-import torch.utils.checkpoint
-from torch import nn
+import os
+from typing import Optional
 
+import torch.utils.checkpoint
+from model.modeling_llama_TTT import (
+    LlamaDecoderLayer,
+    LlamaRMSNorm,
+    LlamaRotaryEmbedding,
+)
+from torch import nn
 from transformers.activations import ACT2FN
 
-from model.modeling_llama_TTT import LlamaDecoderLayer, LlamaRotaryEmbedding, LlamaRMSNorm
 try:
-    from .configs import EConfig
-    from .utils_c import *
+    from .utils_c import *  # noqa: F403
 
 except:
-    from configs import EConfig
-    from utils_c import *
-
-    from utils import prepare_logits_processor
+    from utils_c import *  # noqa: F403
 
 
 class LlamaDecoderLayer(LlamaDecoderLayer):
-
     def __init__(
         self,
         config,
@@ -67,37 +66,59 @@ class LlamaDecoderLayer(LlamaDecoderLayer):
 
 
 class Model(nn.Module):
-    def __init__(self, config, load_emb=False, path=None, bias=False, total_tokens=63, depth=5, top_k=8, threshold=1.0):
+    def __init__(
+        self,
+        config,
+        load_emb=False,
+        path=None,
+        bias=False,
+        total_tokens=63,
+        depth=5,
+        top_k=8,
+        threshold=1.0,
+    ):
         super().__init__()
         self.gradient_checkpointing = True
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
         self.rotary_emb = LlamaRotaryEmbedding(config=config)
-        self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
-        self.hidden_layernorm=LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.embed_layernorm=LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.lm_head_layernorm=LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.embed_tokens = nn.Embedding(
+            config.vocab_size, config.hidden_size, self.padding_idx
+        )
+        self.hidden_layernorm = LlamaRMSNorm(
+            config.hidden_size, eps=config.rms_norm_eps
+        )
+        self.embed_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.lm_head_layernorm = LlamaRMSNorm(
+            config.hidden_size, eps=config.rms_norm_eps
+        )
         if load_emb:
-            from safetensors import safe_open
             import json
+
+            from safetensors import safe_open
+
             try:
-                with open(os.path.join(path, "model.safetensors.index.json"), "r") as f:
+                with open(os.path.join(path, "model.safetensors.index.json")) as f:
                     index_json = json.loads(f.read())
                     try:
                         emb_path = index_json["weight_map"]["model.embed_tokens.weight"]
                     except:
-                        emb_path = index_json["weight_map"]["language_model.model.embed_tokens.weight"]
-                with safe_open(os.path.join(path, emb_path),
-                               framework="pt",
-                               device="cpu") as f:
+                        emb_path = index_json["weight_map"][
+                            "language_model.model.embed_tokens.weight"
+                        ]
+                with safe_open(
+                    os.path.join(path, emb_path), framework="pt", device="cpu"
+                ) as f:
                     try:
                         tensor_slice = f.get_slice("model.embed_tokens.weight")
                     except:
-                        tensor_slice = f.get_slice("language_model.model.embed_tokens.weight")
+                        tensor_slice = f.get_slice(
+                            "language_model.model.embed_tokens.weight"
+                        )
                     vocab_size, hidden_dim = tensor_slice.get_shape()
                     tensor = tensor_slice[:, :hidden_dim].float()
             except:
-                with open(os.path.join(path, "pytorch_model.bin.index.json"), "r") as f:
+                with open(os.path.join(path, "pytorch_model.bin.index.json")) as f:
                     index_json = json.loads(f.read())
                     emb_path = index_json["weight_map"]["model.embed_tokens.weight"]
                 weights = torch.load(os.path.join(path, emb_path))
@@ -108,7 +129,12 @@ class Model(nn.Module):
         self.depth = depth
         self.rotary_emb = LlamaRotaryEmbedding(config=config)
         self.threshold = math.log(threshold)
-        self.layers = nn.ModuleList([LlamaDecoderLayer(config, layer_idx=index) for index in range(config.num_hidden_layers)])
+        self.layers = nn.ModuleList(
+            [
+                LlamaDecoderLayer(config, layer_idx=index)
+                for index in range(config.num_hidden_layers)
+            ]
+        )
         self.fc = nn.Linear(2 * config.hidden_size, config.hidden_size, bias=bias)
         self.act = ACT2FN[config.hidden_act]
         self.logsoftmax = nn.LogSoftmax(dim=-1)
@@ -116,31 +142,37 @@ class Model(nn.Module):
         for param in self.embed_tokens.parameters():
             param.requires_grad = False
 
-
-    def forward(self,
-            hidden_states,
-            input_ids,
-            attention_mask: Optional[torch.Tensor] = None,
-            hidden_states_history=None,
-            position_ids: Optional[torch.LongTensor] = None,
-            past_key_values: Optional[List[torch.FloatTensor]] = None,
-            position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None, 
-            inputs_embeds: Optional[torch.FloatTensor] = None,
-            use_cache: Optional[bool] = None,
-            output_attentions: Optional[bool] = None,
-            output_hidden_states: Optional[bool] = None,
-            return_dict: Optional[bool] = None,
-            
-            std=None,
-            ):
+    def forward(
+        self,
+        hidden_states,
+        input_ids,
+        attention_mask: Optional[torch.Tensor] = None,
+        hidden_states_history=None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_values: Optional[list[torch.FloatTensor]] = None,  # noqa: ARG002
+        position_embeddings: Optional[tuple[torch.Tensor, torch.Tensor]] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        use_cache: Optional[bool] = None,  # noqa: ARG002
+        output_attentions: Optional[bool] = None,  # noqa: ARG002
+        output_hidden_states: Optional[bool] = None,  # noqa: ARG002
+        return_dict: Optional[bool] = None,  # noqa: ARG002
+        std=None,  # noqa: ARG002
+    ):
         batch_size, seq_length, _ = hidden_states.shape
         with torch.no_grad():
             inputs_embeds = self.embed_tokens(input_ids)
         past_key_values_length = 0
         if position_ids is None:
-            device = hidden_states.device if hidden_states is not None else inputs_embeds.device
+            device = (
+                hidden_states.device
+                if hidden_states is not None
+                else inputs_embeds.device
+            )
             position_ids = torch.arange(
-                past_key_values_length, seq_length + past_key_values_length, dtype=torch.long, device=device
+                past_key_values_length,
+                seq_length + past_key_values_length,
+                dtype=torch.long,
+                device=device,
             )
             position_ids = position_ids.unsqueeze(0).view(-1, seq_length)
         else:
@@ -148,29 +180,33 @@ class Model(nn.Module):
 
         if attention_mask is None:
             attention_mask = torch.ones(
-                (batch_size, seq_length_with_past), dtype=torch.bool, device=hidden_states.device
+                (batch_size, seq_length_with_past),  # noqa: F405
+                dtype=torch.bool,
+                device=hidden_states.device,
             )
         attention_mask = self._prepare_decoder_attention_mask(
-            attention_mask, (batch_size, seq_length), hidden_states, past_key_values_length
+            attention_mask,
+            (batch_size, seq_length),
+            hidden_states,
+            past_key_values_length,
         )
-        
+
         inputs_embeds = inputs_embeds.to(hidden_states.dtype)
 
+        inputs_embeds = self.embed_layernorm(inputs_embeds)
+        hidden_states = self.hidden_layernorm(hidden_states)
 
-        inputs_embeds=self.embed_layernorm(inputs_embeds)
-        hidden_states=self.hidden_layernorm(hidden_states)
-
-        prior_hidden_states=[]
+        prior_hidden_states = []
         for i in range(len(hidden_states_history)):
             prior_hidden_states.append(self.hidden_layernorm(hidden_states_history[i]))
-            prior_hidden_states[i]=self.fc(torch.cat((inputs_embeds, prior_hidden_states[i]), dim=-1))
-
+            prior_hidden_states[i] = self.fc(
+                torch.cat((inputs_embeds, prior_hidden_states[i]), dim=-1)
+            )
 
         hidden_states = self.fc(torch.cat((inputs_embeds, hidden_states), dim=-1))
         position_embeddings = self.rotary_emb(hidden_states, position_ids)
-        
-        for idx, decoder_layer in enumerate(self.layers):
 
+        for _, decoder_layer in enumerate(self.layers):
             if self.gradient_checkpointing and self.training:
 
                 def create_custom_forward(module):
@@ -186,18 +222,19 @@ class Model(nn.Module):
                     attention_mask,
                     position_ids,
                     prior_hidden_states,
-                    None, 
-                    False, 
-                    False, 
-                    None, 
+                    None,
+                    False,
+                    False,
+                    None,
                     position_embeddings,
-                    use_reentrant=False
+                    use_reentrant=False,
                 )
             hidden_states = layer_outputs[0]
         return hidden_states
 
-
-    def _prepare_decoder_attention_mask(self, attention_mask, input_shape, inputs_embeds, past_key_values_length):
+    def _prepare_decoder_attention_mask(
+        self, attention_mask, input_shape, inputs_embeds, past_key_values_length
+    ):
         # create causal mask
         # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
         combined_attention_mask = None
@@ -212,18 +249,23 @@ class Model(nn.Module):
 
         if attention_mask is not None:
             # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
-            expanded_attn_mask = _expand_mask(attention_mask, torch.float32, tgt_len=input_shape[-1]).to(
-                inputs_embeds.device
-            )
+            expanded_attn_mask = _expand_mask(
+                attention_mask, torch.float32, tgt_len=input_shape[-1]
+            ).to(inputs_embeds.device)
             combined_attention_mask = (
-                expanded_attn_mask if combined_attention_mask is None else expanded_attn_mask + combined_attention_mask
+                expanded_attn_mask
+                if combined_attention_mask is None
+                else expanded_attn_mask + combined_attention_mask
             )
 
         return combined_attention_mask
 
 
 def _make_causal_mask(
-        input_ids_shape: torch.Size, dtype: torch.dtype, device: torch.device, past_key_values_length: int = 0
+    input_ids_shape: torch.Size,
+    dtype: torch.dtype,
+    device: torch.device,
+    past_key_values_length: int = 0,
 ):
     """
     Make causal mask used for bi-directional self-attention.
@@ -235,13 +277,24 @@ def _make_causal_mask(
     mask = mask.to(dtype)
 
     if past_key_values_length > 0:
-        mask = torch.cat([torch.zeros(tgt_len, past_key_values_length, dtype=dtype, device=device), mask], dim=-1)
-    return mask[None, None, :, :].expand(bsz, 1, tgt_len, tgt_len + past_key_values_length)
+        mask = torch.cat(
+            [
+                torch.zeros(
+                    tgt_len, past_key_values_length, dtype=dtype, device=device
+                ),
+                mask,
+            ],
+            dim=-1,
+        )
+    return mask[None, None, :, :].expand(
+        bsz, 1, tgt_len, tgt_len + past_key_values_length
+    )
+
 
 # Copied from transformers.models.bart.modeling_bart._expand_mask
 def _expand_mask(mask: torch.Tensor, dtype: torch.dtype, tgt_len: Optional[int] = None):
     """
-    Expands attention_mask from `[bsz, seq_len]` to `[bsz, 1, tgt_seq_len, src_seq_len]`.
+    Expands attention_mask from `[bsz, seq_len]` to `[bsz, 1, tgt_seq_len, src_seq_len]`
     """
     bsz, src_len = mask.size()
     tgt_len = tgt_len if tgt_len is not None else src_len
@@ -250,4 +303,6 @@ def _expand_mask(mask: torch.Tensor, dtype: torch.dtype, tgt_len: Optional[int] 
 
     inverted_mask = 1.0 - expanded_mask
 
-    return inverted_mask.masked_fill(inverted_mask.to(torch.bool), torch.finfo(dtype).min)
+    return inverted_mask.masked_fill(
+        inverted_mask.to(torch.bool), torch.finfo(dtype).min
+    )
