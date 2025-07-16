@@ -83,24 +83,22 @@ class EagleConverter(SpeculatorConverter):
         :param layernorms: Enable extra layernorms (auto-detected if not specified)
         :param validate: Whether to validate the converted checkpoint
 
-        :Example:
-
-            >>> # Convert standard Eagle checkpoint
-            >>> converter = EagleConverter()
-            >>> converter.convert(
-            ...     "yuhuili/EAGLE-LLaMA3.1-Instruct-8B",
-            ...     "./eagle-converted",
-            ...     "meta-llama/Meta-Llama-3.1-8B-Instruct",
-            ...     validate=True
+        Example:
+            >>> from speculators.convert.eagle import EagleConverter
+            >>> converter = EagleConverter(
+            ...     model="yuhuili/EAGLE-LLaMA3.1-Instruct-8B",
+            ...     verifier="meta-llama/Meta-Llama-3.1-8B-Instruct",
+            ...     output_path="./eagle-converted"
             ... )
+            >>> converter.convert()
 
-            >>> # Convert HASS checkpoint with layernorms
-            >>> converter.convert(
-            ...     "nm-testing/Eagle_Speculator_Llama_3_1_8B_TTT",
-            ...     "./hass-converted",
-            ...     "meta-llama/Meta-Llama-3.1-8B-Instruct",
-            ...     layernorms=True
+            >>> # Convert a HASS variant with layernorms explicitly enabled
+            >>> converter = EagleConverter(
+            ...     model="nm-testing/Eagle_Speculator_Llama_3_1_8B_TTT",
+            ...     verifier="meta-llama/Meta-Llama-3.1-8B-Instruct",
+            ...     output_path="./hass-converted"
             ... )
+            >>> converter.convert(layernorms=True)
         """
 
         detected_fusion_bias, detected_layernorms = detect_fusion_bias_and_layernorms(
@@ -110,7 +108,7 @@ class EagleConverter(SpeculatorConverter):
         layernorms = layernorms or detected_layernorms
 
         speculator_config = self._build_eagle_speculator_config(
-            self.config, self.verifier, fusion_bias, layernorms
+            fusion_bias, layernorms
         )
 
         processed_weights = self._process_checkpoint_weights(self.weights, layernorms)
@@ -125,48 +123,43 @@ class EagleConverter(SpeculatorConverter):
         if validate:
             self._validate_converted_checkpoint(saved_path, verifier_model=self.verifier)
 
-    def _create_transformer_config_from_eagle(self, eagle_config: dict) -> LlamaConfig:
+    def _create_transformer_config(self) -> LlamaConfig:
         """
         Create a transformer config for the Eagle model's single decoder layer.
 
-        :param eagle_config: Original Eagle checkpoint config
         :return: LlamaConfig for the transformer layer
         """
         return LlamaConfig(
-            vocab_size=eagle_config.get("vocab_size", 32000),
-            hidden_size=eagle_config.get("hidden_size", 4096),
-            intermediate_size=eagle_config.get("intermediate_size", 11008),
+            vocab_size=self.config.get("vocab_size", 32000),
+            hidden_size=self.config.get("hidden_size", 4096),
+            intermediate_size=self.config.get("intermediate_size", 11008),
             num_hidden_layers=1,  # Eagle always uses a single decoder layer
-            num_attention_heads=eagle_config.get("num_attention_heads", 32),
-            num_key_value_heads=eagle_config.get("num_key_value_heads"),
-            hidden_act=eagle_config.get("hidden_act", "silu"),
-            max_position_embeddings=eagle_config.get("max_position_embeddings", 4096),
-            initializer_range=eagle_config.get("initializer_range", 0.02),
-            rms_norm_eps=eagle_config.get("rms_norm_eps", 1e-6),
-            use_cache=eagle_config.get("use_cache", True),
-            pad_token_id=eagle_config.get("pad_token_id"),
-            bos_token_id=eagle_config.get("bos_token_id", 1),
-            eos_token_id=eagle_config.get("eos_token_id", 2),
+            num_attention_heads=self.config.get("num_attention_heads", 32),
+            num_key_value_heads=self.config.get("num_key_value_heads"),
+            hidden_act=self.config.get("hidden_act", "silu"),
+            max_position_embeddings=self.config.get("max_position_embeddings", 4096),
+            initializer_range=self.config.get("initializer_range", 0.02),
+            rms_norm_eps=self.config.get("rms_norm_eps", 1e-6),
+            use_cache=self.config.get("use_cache", True),
+            pad_token_id=self.config.get("pad_token_id"),
+            bos_token_id=self.config.get("bos_token_id", 1),
+            eos_token_id=self.config.get("eos_token_id", 2),
             tie_word_embeddings=False,  # Eagle uses separate embed_tokens from verifier
-            rope_theta=eagle_config.get("rope_theta", 10000.0),
-            rope_scaling=eagle_config.get("rope_scaling"),
-            attention_bias=eagle_config.get("attention_bias", False),
-            attention_dropout=eagle_config.get("attention_dropout", 0.0),
-            mlp_bias=eagle_config.get("mlp_bias", False),
+            rope_theta=self.config.get("rope_theta", 10000.0),
+            rope_scaling=self.config.get("rope_scaling"),
+            attention_bias=self.config.get("attention_bias", False),
+            attention_dropout=self.config.get("attention_dropout", 0.0),
+            mlp_bias=self.config.get("mlp_bias", False),
         )
 
     def _build_eagle_speculator_config(
         self,
-        eagle_config: dict,
-        base_model: str,
         fusion_bias: bool,
         layernorms: bool,
     ) -> EagleSpeculatorConfig:
         """
         Build a complete EagleSpeculatorConfig from Eagle checkpoint config.
 
-        :param eagle_config: Original checkpoint config dictionary
-        :param base_model: Base model name for the verifier
         :param fusion_bias: Whether to enable fusion bias
         :param layernorms: Whether to enable extra layernorms
         :return: Complete Eagle speculator configuration
@@ -175,12 +168,9 @@ class EagleConverter(SpeculatorConverter):
             f"Building config with fusion_bias={fusion_bias}, layernorms={layernorms}"
         )
 
-        transformer_config = self._create_transformer_config_from_eagle(eagle_config)
+        transformer_config = self._create_transformer_config()
 
-        speculators_config = self._build_speculator_config(
-            checkpoint_config=eagle_config,
-            base_model=base_model,
-        )
+        speculators_config = self._create_speculator_config()
 
         return EagleSpeculatorConfig(
             transformer_layer_config=transformer_config,

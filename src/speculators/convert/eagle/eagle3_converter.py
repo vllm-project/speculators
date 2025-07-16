@@ -46,8 +46,6 @@ class Eagle3Converter(SpeculatorConverter):
         self.config["target_vocab_size"] = self.weights["t2d"].shape[0]
 
         config = self._build_eagle3_speculator_config(
-            self.config,
-            self.verifier,
             norm_before_residual,
         )
 
@@ -59,46 +57,39 @@ class Eagle3Converter(SpeculatorConverter):
 
     def _build_eagle3_speculator_config(
         self,
-        eagle_config: dict,
-        base_model: str,
         norm_before_residual: bool = False,
     ) -> Eagle3SpeculatorConfig:
         """
         Build a complete EagleSpeculatorConfig from Eagle checkpoint config.
 
-        :param eagle_config: Original checkpoint config dictionary
-        :param base_model: Base model name for the verifier
         :return: Complete Eagle speculator configuration
         """
-        transformer_config = self._create_transformer_config_from_eagle(eagle_config)
-        speculators_config = self._build_speculator_config(
-            checkpoint_config=eagle_config,
-            base_model=base_model,
-        )
+        transformer_config = self._create_transformer_config()
+        speculators_config = self._create_speculator_config()
 
         return Eagle3SpeculatorConfig(
             transformer_layer_config=transformer_config,
             speculators_config=speculators_config,
-            draft_vocab_size=eagle_config.get("draft_vocab_size", 32000),
+            draft_vocab_size=self.config.get("draft_vocab_size", 32000),
             norm_before_residual=norm_before_residual,
-            target_hidden_size=eagle_config.get("target_hidden_size"),
+            target_hidden_size=self.config.get("target_hidden_size"),
         )
 
-    def _create_transformer_config_from_eagle(self, eagle_config: dict) -> LlamaConfig:
+    def _create_transformer_config(self) -> LlamaConfig:
         return LlamaConfig(
-            vocab_size=eagle_config.get("target_vocab_size", 128000),
-            hidden_size=eagle_config.get("hidden_size", 4096),
-            intermediate_size=eagle_config.get("intermediate_size", 11008),
+            vocab_size=self.config.get("target_vocab_size", 128000),
+            hidden_size=self.config.get("hidden_size", 4096),
+            intermediate_size=self.config.get("intermediate_size", 11008),
             num_hidden_layers=1,
-            num_attention_heads=eagle_config.get("num_attention_heads", 32),
-            num_key_value_heads=eagle_config.get("num_key_value_heads", 8),
-            hidden_act=eagle_config.get("hidden_act", "silu"),
-            max_position_embeddings=eagle_config.get("max_position_embeddings", 4096),
-            initializer_range=eagle_config.get("initializer_range", 0.02),
-            rms_norm_eps=eagle_config.get("rms_norm_eps", 1e-6),
+            num_attention_heads=self.config.get("num_attention_heads", 32),
+            num_key_value_heads=self.config.get("num_key_value_heads", 8),
+            hidden_act=self.config.get("hidden_act", "silu"),
+            max_position_embeddings=self.config.get("max_position_embeddings", 4096),
+            initializer_range=self.config.get("initializer_range", 0.02),
+            rms_norm_eps=self.config.get("rms_norm_eps", 1e-6),
             use_cache=True,
-            attention_bias=eagle_config.get("attention_bias", False),
-            rope_theta=eagle_config.get("rope_theta", 10000.0),
-            mlp_bias=eagle_config.get("mlp_bias", False),
+            attention_bias=self.config.get("attention_bias", False),
+            rope_theta=self.config.get("rope_theta", 10000.0),
+            mlp_bias=self.config.get("mlp_bias", False),
             tie_word_embeddings=False,
         )
