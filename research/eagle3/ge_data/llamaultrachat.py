@@ -39,7 +39,9 @@ def build_ds(
             messages = [
                 {
                     "role": "system",
-                    "content": "Cutting Knowledge Date: December 2023\nToday Date: 26 Jul 2024",
+                    "content": (
+                        "Cutting Knowledge Date: December 2023\nToday Date: 26 Jul 2024"
+                    ),
                 },
             ]
             messages.extend(examples["messages"][j])

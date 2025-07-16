@@ -221,14 +221,13 @@ select = [
 ]
 
 "research/**/*.py" = [
-    "PTH118", # os.file.join
-    "PTH110",
-    "PTH103",
-    "PTH123",
-    "PLR0915",
-    "T201",
-    "NPY002",
-    "PTH208",
+    "PTH",  # ignore using os.* instead of Path errors
+    "T20",  # ignore usage of print statement errors
+    "PLR",  # ignore code complexity errors
+    "NPY",  # ignore numpy formatting/usage errors
+    "E722",  # allow bare exception catching
+    "C90",  # ignore code complexity errors
+    "PGH004",  # allow general style ignores
 ]
 
 [tool.ruff.lint.isort]
