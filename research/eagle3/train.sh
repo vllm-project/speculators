@@ -1,5 +1,5 @@
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch -m  --mixed_precision=bf16 --use_deepspeed --main_process_port  29501 --num_processes 8 train.main_train_full_gradient_calc_eagle3 \
-    --basepath ~/HASS/train/llama3-1 \
+    --basepath path/to/big/model/weights \
     --tmpdir dataDirectory \
     --cpdir Eagle3 \
     --configpath train/llama3_8_B.json \

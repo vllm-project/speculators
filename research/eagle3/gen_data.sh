@@ -5,7 +5,7 @@
 
 python -m ge_data.allocation \
 --outdir dataDirectory/sharegpt \
---data_path /ibmnetwork/ShareGPT_V4.3_unfiltered_cleaned_split.json \
+--data_path ShareGPT_V4.3_unfiltered_cleaned_split.json \
 --model_path meta-llama/Llama-3.1-8B-Instruct \
 --chat_template llama \
 --dataset ultrachat \
