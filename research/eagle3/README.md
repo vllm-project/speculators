@@ -21,19 +21,22 @@ Notes:  For llama 3.1.8B this will generate ~4TB of data on your system.  The sc
 
 ### Serve the model with vllm:
 1. Convert your saved model with: `convert.sh`
-2. Serve the model with: ` VLLM_USE_V1=1 vllm serve meta-llama/Llama-3.1-8B-Instruct --seed 42 -tp 1 --speculative-config '{"model": "llama_eagle3", "num_speculative_tokens": 3, "method":"eagle3", "draft_tensor_parallel_size":1}'`
+2. Serve the model with:
+` VLLM_USE_V1=1 vllm serve meta-llama/Llama-3.1-8B-Instruct --seed 42 -tp 1 --speculative-config '{"model": "llama_eagle3", "num_speculative_tokens": 3, "method":"eagle3", "draft_tensor_parallel_size":1}'`
 
-
-
-### TODO:
-1. Throw an error if you attempt to create a model that will not be supported in vllm - with the wrong configuration of heads etc.
 
 ## Replication
 To re-create the Eagle 3 experiments for Llama 3.1.8b and Qwen 3 8b, run the following commands:  
 1. Get data for sharegpt
+
+
 `wget https://huggingface.co/datasets/Aeala/ShareGPT_Vicuna_unfiltered/resolve/main/ShareGPT_V4.3_unfiltered_cleaned_split.json .
 `
+
+
 2. Generate sharegpt data  WARNING: THIS WILL TAKE A LOT OF MEMORY ON YOUR SYSTEM
+
+
 `python -m ge_data.allocation \
 --outdir dataDirectory/sharegpt \
 --data_path ShareGPT_V4.3_unfiltered_cleaned_split.json \
@@ -43,8 +46,12 @@ To re-create the Eagle 3 experiments for Llama 3.1.8b and Qwen 3 8b, run the fol
 --samples 68000 \
 --total_gpus 8`
 
+
+
 3. Generate ultrachat data for both sft and gen splits.
    3a.
+
+   
 `python -m ge_data.allocation \
 --outdir dataDirectory/ultrachat_gen \
 --data_path ShareGPT_V4.3_unfiltered_cleaned_split.json \
@@ -56,6 +63,8 @@ To re-create the Eagle 3 experiments for Llama 3.1.8b and Qwen 3 8b, run the fol
 --total_gpus 8`
 
   3b.
+
+  
 `python -m ge_data.allocation \
 --outdir dataDirectory/ultrachat_sft \
 --data_path ShareGPT_V4.3_unfiltered_cleaned_split.json \
@@ -67,13 +76,17 @@ To re-create the Eagle 3 experiments for Llama 3.1.8b and Qwen 3 8b, run the fol
 --total_gpus 8`
 
 4. Calculate the most common tokens and reduce the vocabulary based on those.
+
+
 `python zipf.py --dataDir dataDirectory \
 	--samples 10000 \
 	--vocab 128256 \
 	--reduced 32000`
 
 5. Run the training code.
-`CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch -m  --mixed_precision=bf16 --use_deepspeed --main_process_port  29501 --num_processes 8 train.main_train_full_gradient_calc_eagle3 \
+
+
+`CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch -m  --mixed_precision=bf16 --use_deepspeed --main_process_port  29501 --num_processes 8 train.main_train_full_gradient_calc_eagle3 \<br>
     --basepath path/to/big/model/weights \
     --tmpdir dataDirectory \
     --cpdir Eagle3 \
