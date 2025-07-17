@@ -75,7 +75,7 @@ class Eagle3Converter:
 
         proposal_config = GreedyTokenProposalConfig(
             proposal_type="greedy",
-            speculative_tokens=5,
+            speculative_tokens=3,
         )
 
         speculators_config = SpeculatorsConfig(

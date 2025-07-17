@@ -37,7 +37,7 @@ class GreedyTokenProposalConfig(TokenProposalConfig):
 
     proposal_type: Literal["greedy"] = "greedy"
     speculative_tokens: int = Field(
-        default=5,
+        default=3,
         description=(
             "The number of tokens created by the speculator to run through the "
             "verifier on each forward pass. This is the maximum number of tokens "

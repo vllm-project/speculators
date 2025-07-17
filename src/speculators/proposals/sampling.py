@@ -45,7 +45,7 @@ class SamplingTokenProposalConfig(TokenProposalConfig):
         description="The type of this token proposal.",
     )
     speculative_tokens: int = Field(
-        default=5,
+        default=3,
         description=(
             "The number of tokens created by the speculator to run through the "
             "verifier on each forward pass. This is the maximum number of tokens "
