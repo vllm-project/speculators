@@ -1,8 +1,9 @@
 import numpy as np
 import torch
+import os
 from safetensors.torch import save_file
 
-file = "Eagle3UnlockedHead5step/model4.safetensors"
+file = "Eagle3/model4.safetensors"
 
 
 f = torch.load(file)
@@ -28,7 +29,16 @@ state_dict["t2d"] = torch.from_numpy(np.load("t2d.npy")).bool()
 
 state_dict["d2t"] = torch.from_numpy(np.load("d2t.npy"))
 
+# Debug: print working directory
+print("Working directory:", os.getcwd())
 
-save_file(state_dict, "eagle3/model.safetensors")
+# Ensure directory exists
+model_dir = "trained_model"
+os.makedirs(model_dir, exist_ok=True)
+print(f"Created or found existing directory: {model_dir}")
+
+# Save your model
+save_file(state_dict, os.path.join(model_dir, "model.safetensors"))
+print("Model saved.")
 
 print(state_dict.keys())

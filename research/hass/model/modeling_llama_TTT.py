@@ -343,7 +343,7 @@ class LlamaAttention(nn.Module):
         self,
         hidden_states: torch.Tensor,
         position_embeddings: Tuple[torch.Tensor, torch.Tensor],
-        past_hidden_states: Optional[[torch.Tensor]],
+        past_hidden_states: Optional[torch.Tensor],
         attention_mask: Optional[torch.Tensor],
         past_key_value: Optional[Cache] = None,
         cache_position: Optional[torch.LongTensor] = None,
