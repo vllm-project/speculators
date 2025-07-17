@@ -131,7 +131,7 @@ class TestEagleConversionE2E:
         """
 
         # Check if model is on meta device
-        device = next(model.parameters()).device
+        device = next(model.parameters()).device  # type: ignore[attr-defined]
         if device.type == "meta":
             logger.info("Model is on meta device, skipping forward pass test")
             return None
@@ -149,7 +149,7 @@ class TestEagleConversionE2E:
 
         # Execute forward pass
         with torch.no_grad():
-            output = model(input_ids=input_ids, hidden_states=hidden_states)
+            output = model(input_ids=input_ids, hidden_states=hidden_states)  # type: ignore[operator]
 
         # Verify output shape
         assert hasattr(output, "logits"), "Output missing logits attribute"
@@ -249,7 +249,7 @@ class TestEagleConversionE2E:
 
         # Step 4: Save model using save_pretrained
         logger.info("Saving model using save_pretrained...")
-        model.save_pretrained(resaved_dir)
+        model.save_pretrained(resaved_dir)  # type: ignore[attr-defined]
         logger.success(f"Model saved to: {resaved_dir}")
 
         # Step 5: Validate saved checkpoint
@@ -310,7 +310,7 @@ class TestEagleConversionE2E:
         assert model.config.layernorms is False, "layernorms should be False"
 
         # Check that fc layer has bias
-        assert model.fusion_fc.bias is not None, (  # type: ignore[union-attr]
+        assert model.fusion_fc.bias is not None, (  # type: ignore[union-attr,attr-defined]
             "fusion_fc layer should have bias parameter"
         )
 
