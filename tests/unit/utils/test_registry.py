@@ -43,8 +43,8 @@ def test_register_without_name():
         pass
 
     assert TestRegistryClass.registry is not None
-    assert "TestClass" in TestRegistryClass.registry
-    assert TestRegistryClass.registry["TestClass"] is TestClass
+    assert "testclass" in TestRegistryClass.registry
+    assert TestRegistryClass.registry["testclass"] is TestClass
 
 
 @pytest.mark.smoke
@@ -57,8 +57,8 @@ def test_register_decorator_direct():
         pass
 
     assert TestRegistryClass.registry is not None
-    assert "TestClass" in TestRegistryClass.registry
-    assert TestRegistryClass.registry["TestClass"] is TestClass
+    assert "testclass" in TestRegistryClass.registry
+    assert TestRegistryClass.registry["testclass"] is TestClass
 
 
 @pytest.mark.sanity
@@ -69,7 +69,7 @@ def test_register_invalid_name_type():
     with pytest.raises(ValueError) as exc_info:
         TestRegistryClass.register(123)  # type: ignore[arg-type]
 
-    assert "name must be a string or None" in str(exc_info.value)
+    assert "name must be a string, list of strings, or None" in str(exc_info.value)
 
 
 @pytest.mark.sanity
@@ -94,7 +94,7 @@ def test_register_decorator_invalid_name():
     with pytest.raises(ValueError) as exc_info:
         TestRegistryClass.register_decorator(TestClass, name=123)  # type: ignore[arg-type]
 
-    assert "must be used as a class decorator" in str(exc_info.value)
+    assert "name must be a string or an iterable of strings" in str(exc_info.value)
 
 
 @pytest.mark.sanity
@@ -165,10 +165,10 @@ def test_multiple_registries_isolation():
     assert Registry1.registry is not None
     assert Registry2.registry is not None
     assert Registry1.registry != Registry2.registry
-    assert "TestClass1" in Registry1.registry
-    assert "TestClass2" in Registry2.registry
-    assert "TestClass1" not in Registry2.registry
-    assert "TestClass2" not in Registry1.registry
+    assert "testclass1" in Registry1.registry
+    assert "testclass2" in Registry2.registry
+    assert "testclass1" not in Registry2.registry
+    assert "testclass2" not in Registry1.registry
 
 
 # ===== Auto-Discovery Tests =====
@@ -273,7 +273,7 @@ def test_auto_registry_integration():
         assert len(classes) == 1
         assert TestAutoRegistry.registry_populated is True
         assert TestAutoRegistry.registry is not None
-        assert "Module1Class" in TestAutoRegistry.registry
+        assert "module1class" in TestAutoRegistry.registry
 
 
 @pytest.mark.regression

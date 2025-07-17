@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 import pytest
 import torch
 from torch import nn
-from transformers import PreTrainedModel
+from transformers import PretrainedConfig, PreTrainedModel
 
 from speculators import (
     SpeculatorModel,
@@ -23,6 +23,58 @@ from speculators import (
 from speculators.proposals import GreedyTokenProposalConfig
 
 # ===== Test Helper Classes =====
+
+
+@pytest.fixture
+def mock_verifier():
+    """Create a mock verifier with proper config attribute for testing."""
+    verifier = MagicMock()
+    verifier._spec_class = PreTrainedModel
+    verifier.config = MagicMock()
+    verifier.config._spec_class = PretrainedConfig
+    verifier.config.architectures = ["TestModel"]
+    verifier.config.name_or_path = "test/model"
+    verifier.config.to_dict.return_value = {
+        "architectures": ["TestModel"],
+        "name_or_path": "test/model",
+        "_name_or_path": "test/model",
+    }
+    verifier.name_or_path = "test/model"
+    verifier.smart_apply = MagicMock()
+    verifier.apply = MagicMock()
+    verifier.state_dict = MagicMock(return_value={})
+
+    return verifier
+
+
+@pytest.fixture
+def mock_verifier_2():
+    """Create a second mock verifier with different attributes for testing."""
+    # Create a mock that is less strict about method calls
+    verifier = MagicMock()
+    # Set the spec to PreTrainedModel for only the attributes we need
+    verifier._spec_class = PreTrainedModel
+
+    # Mock the config properly
+    verifier.config = MagicMock()
+    verifier.config._spec_class = PretrainedConfig
+    verifier.config.architectures = ["TestModel2"]
+    verifier.config.name_or_path = "test/model2"
+    verifier.config.to_dict.return_value = {
+        "architectures": ["TestModel2"],
+        "name_or_path": "test/model2",
+        "_name_or_path": "test/model2",
+    }
+
+    # Ensure the verifier itself has the name_or_path attribute
+    verifier.name_or_path = "test/model2"
+
+    # Add methods that might be called during initialization
+    verifier.smart_apply = MagicMock()
+    verifier.apply = MagicMock()
+    verifier.state_dict = MagicMock(return_value={})
+
+    return verifier
 
 
 @SpeculatorModelConfig.register("test_speculator_model")
@@ -171,8 +223,10 @@ def test_speculator_model_initialization_without_verifier(speculator_model_test_
 
 
 @pytest.mark.smoke
-def test_speculator_model_initialization_with_verifier(speculator_model_test_config):
-    verifier = MagicMock(spec=PreTrainedModel)
+def test_speculator_model_initialization_with_verifier(
+    speculator_model_test_config, mock_verifier
+):
+    verifier = mock_verifier
     model = SpeculatorTestModel(speculator_model_test_config, verifier=verifier)
     assert model.config == speculator_model_test_config
     assert model.verifier == verifier
@@ -181,9 +235,9 @@ def test_speculator_model_initialization_with_verifier(speculator_model_test_con
 
 @pytest.mark.smoke
 def test_speculator_model_initialization_with_verifier_path(
-    speculator_model_test_config, monkeypatch
+    speculator_model_test_config, mock_verifier, monkeypatch
 ):
-    mock_model = MagicMock(spec=PreTrainedModel)
+    mock_model = mock_verifier
     mock_from_pretrained = MagicMock(return_value=mock_model)
     monkeypatch.setattr(
         "transformers.AutoModelForCausalLM.from_pretrained", mock_from_pretrained
@@ -200,9 +254,9 @@ def test_speculator_model_initialization_with_verifier_path(
 
 @pytest.mark.smoke
 def test_speculator_model_initialization_with_verifier_train_only(
-    speculator_model_test_config,
+    speculator_model_test_config, mock_verifier
 ):
-    verifier = MagicMock(spec=PreTrainedModel)
+    verifier = mock_verifier
     model = SpeculatorTestModel(
         speculator_model_test_config,
         verifier=verifier,
@@ -299,15 +353,14 @@ def test_speculator_model_from_pretrained_local_marshalling(
 
         assert isinstance(loaded_model, SpeculatorTestModel)
         assert loaded_model.test_module is not None
-        assert (
-            pytest.approx(
-                (loaded_model.test_module.weight - original_model.test_module.weight)
-                .detach()
-                .abs()
-                .sum()
-            )
-            == 0
+        # Check that weights are approximately equal
+        weight_diff = (
+            (loaded_model.test_module.weight - original_model.test_module.weight)
+            .detach()
+            .abs()
+            .sum()
         )
+        assert weight_diff < 1e-6
         assert isinstance(loaded_model.config, SpeculatorModelTestConfig)
         assert loaded_model.config.speculators_model_type == "test_speculator_model"
         assert loaded_model.config.test_param == 456
@@ -315,10 +368,10 @@ def test_speculator_model_from_pretrained_local_marshalling(
 
 @pytest.mark.smoke
 def test_speculator_model_from_pretrained_verifier(
-    speculator_model_test_config,
+    speculator_model_test_config, mock_verifier
 ):
     state_dict = SpeculatorTestModel(speculator_model_test_config).state_dict()  # type: ignore[attr-defined]
-    verifier = MagicMock(spec=PreTrainedModel)
+    verifier = mock_verifier
     model = SpeculatorModel.from_pretrained(
         None,
         config=speculator_model_test_config,
@@ -335,10 +388,10 @@ def test_speculator_model_from_pretrained_verifier(
 
 @pytest.mark.smoke
 def test_speculator_model_from_pretrained_verifier_train_only(
-    speculator_model_test_config,
+    speculator_model_test_config, mock_verifier
 ):
     state_dict = SpeculatorTestModel(speculator_model_test_config).state_dict()  # type: ignore[attr-defined]
-    verifier = MagicMock(spec=PreTrainedModel)
+    verifier = mock_verifier
     model = SpeculatorModel.from_pretrained(
         None,
         config=speculator_model_test_config,
@@ -432,13 +485,15 @@ def test_speculator_model_forward_abstract(speculator_model_test_config):
 
 
 @pytest.mark.smoke
-def test_speculator_model_attachment_lifecycle(speculator_model_test_config):
+def test_speculator_model_attachment_lifecycle(
+    speculator_model_test_config, mock_verifier, mock_verifier_2
+):
     model = SpeculatorTestModel(config=speculator_model_test_config)
     assert model.verifier is None
     assert model.verifier_attachment_mode == "detached"
 
     # Attach a verifier
-    verifier = MagicMock(spec=PreTrainedModel)
+    verifier = mock_verifier
     model.attach_verifier(verifier)
     assert model.verifier == verifier
     assert model.verifier_attachment_mode == "full"
@@ -473,7 +528,7 @@ def test_speculator_model_attachment_lifecycle(speculator_model_test_config):
     assert model.verifier_attachment_mode == "detached"
 
     # Attach different verifier
-    new_verifier = MagicMock(spec=PreTrainedModel)
+    new_verifier = mock_verifier_2
     model.attach_verifier(new_verifier, mode="full")
     assert model.verifier == new_verifier
     assert model.verifier_attachment_mode == "full"

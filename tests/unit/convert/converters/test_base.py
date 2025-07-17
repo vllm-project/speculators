@@ -121,8 +121,14 @@ class TestSpeculatorConverterBase:
 
     def setup_method(self):
         """Set up test fixtures before each test method."""
-        # Clear the registry before each test
+        # Store the original registry and clear it for this test
+        self._original_registry = SpeculatorConverter.registry
         SpeculatorConverter.registry = None
+
+    def teardown_method(self):
+        """Clean up after each test method."""
+        # Restore the original registry
+        SpeculatorConverter.registry = self._original_registry
 
     @pytest.mark.smoke
     def test_class_attributes(self):

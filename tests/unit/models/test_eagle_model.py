@@ -50,6 +50,19 @@ from speculators import (
 from speculators.models import EagleSpeculator, EagleSpeculatorConfig
 from speculators.proposals import GreedyTokenProposalConfig
 
+# ===== Test Helper Functions =====
+
+
+def create_mock_verifier():
+    """Create a mock verifier with proper config attribute for testing."""
+    from unittest.mock import MagicMock
+
+    verifier = MagicMock(spec=PreTrainedModel)
+    verifier.config = MagicMock()
+    verifier.config.architectures = ["TestModel"]
+    return verifier
+
+
 # ===== Layer Types Constants =====
 
 LAYER_TYPES: dict[str, tuple[type, type, type]] = {
@@ -75,6 +88,9 @@ LAYER_ARCHITECTURES = list(LAYER_TYPES.keys())
 class MockVerifier(PreTrainedModel):
     def __init__(self, config):
         super().__init__(config)
+        # Add architectures attribute if not present
+        if not hasattr(config, "architectures"):
+            config.architectures = ["LlamaForCausalLM"]
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size)
         self.rotary_emb = LlamaRotaryEmbedding(config)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)

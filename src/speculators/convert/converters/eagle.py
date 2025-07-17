@@ -28,7 +28,7 @@ Usage:
 
 import os
 from pathlib import Path
-from typing import Optional, Union
+from typing import Literal, Optional, Union
 
 import torch
 from loguru import logger
@@ -172,15 +172,13 @@ class EagleSpeculatorConverter(
             f"Converted Eagle/HASS config to speculators format: {converted_config}"
         )
 
-        converted_state_dict, missing, extra = self._eagle_speculator_state_dict(
+        converted_state_dict, extra = self._eagle_speculator_state_dict(
             orig_state_dict, fusion_bias, layernorms
         )
         logger.info(
             "Converted Eagle/HASS state_dict to speculators format: "
             f"{converted_state_dict.keys()}"
         )
-        if missing:
-            logger.warning(f"Missing keys in converted state_dict: {missing}")
         if extra:
             logger.warning(f"Extra keys in converted state_dict: {extra}")
 
@@ -309,54 +307,59 @@ class EagleSpeculatorConverter(
             fusion_bias=fusion_bias,
         )
 
-    def _should_skip_weight(
+    def _classify_param_key(
         self, weight_name: str, fusion_bias: bool, layernorms: bool
-    ) -> bool:
+    ) -> Literal["keep", "ignore", "extra"]:
         """
-        Determine if a weight should be excluded from the conversion process.
+        Determine how to handle a parameter key during conversion.
 
-        Checks if a weight from the original Eagle checkpoint should be skipped
-        based on its name and the enabled features. Skips embedding tokens, optional
-        fusion bias, optional layernorms, and unmapped weights.
+        Returns one of three actions:
+        - "keep": Include the weight in the conversion
+        - "ignore": Exclude the weight from the conversion such as embedding tokens
+        - "extra": Exclude the weight but log a warning
 
         :param weight_name: Name of the weight from original checkpoint
         :param fusion_bias: Whether fusion bias is enabled
         :param layernorms: Whether layernorms are enabled
-        :return: True if the weight should be excluded from conversion
+        :return: The action to take for the param name
         """
+        if weight_name == "embed_tokens.weight":
+            return "ignore"
+
+        if weight_name == "fc.bias":
+            return "keep" if fusion_bias else "extra"
+
+        if weight_name in self.LAYERNORM_MAPPINGS:
+            return "keep" if layernorms else "extra"
+
         return (
-            (weight_name == "embed_tokens.weight")
-            or (weight_name == "fc.bias" and not fusion_bias)
-            or (weight_name in list(self.LAYERNORM_MAPPINGS.keys()) and not layernorms)
-            or (
-                not any(
-                    weight_name.startswith(prefix) for prefix in self.WEIGHT_MAPPINGS
-                )
-            )
+            "keep"
+            if any(weight_name.startswith(prefix) for prefix in self.WEIGHT_MAPPINGS)
+            else "extra"
         )
 
-    def _remap_weight_name(self, weight_name: str) -> str:
+    def _remap_param_name(self, param_name: str) -> str:
         """
-        Remap Eagle weight name to Speculators format.
+        Remap Eagle param name to Speculators format.
 
-        Transforms weight names from the original Eagle checkpoint format to the
+        Transforms parameter names from the original Eagle checkpoint format to the
         standardized Speculators format using predefined mappings for fusion layers
         and layernorms.
 
-        :param weight_name: Original weight name from Eagle checkpoint
-        :return: Remapped weight name in Speculators format
-        :raises ValueError: If weight name doesn't match any known mapping pattern
+        :param param_name: Original parameter name from Eagle checkpoint
+        :return: Remapped parameter name in Speculators format
+        :raises ValueError: If parameter name doesn't match any known mapping pattern
         """
         mappings = {
             **self.WEIGHT_MAPPINGS,
             **self.LAYERNORM_MAPPINGS,
         }
         for from_mapping, to_mapping in mappings.items():
-            if weight_name.startswith(from_mapping):
-                return weight_name.replace(from_mapping, to_mapping)
+            if param_name.startswith(from_mapping):
+                return param_name.replace(from_mapping, to_mapping)
 
         raise ValueError(
-            f"Unexpected weight name format: {weight_name}. "
+            f"Unexpected parameter name format: {param_name}. "
             "Please check the Eagle checkpoint structure."
         )
 
@@ -365,43 +368,42 @@ class EagleSpeculatorConverter(
         orig_state_dict: dict[str, Tensor],
         fusion_bias: bool,
         layernorms: bool,
-    ) -> tuple[dict[str, Tensor], list[str], list[str]]:
+    ) -> tuple[dict[str, Tensor], list[str]]:
         """
-        Process and remap all weights from Eagle checkpoint to Speculators format.
+        Process and remap all parameters from Eagle checkpoint to Speculators format.
 
         Transforms the complete state dictionary from Eagle format to Speculators
-        format, handling weight filtering, name remapping, and tracking of missing
-        or extra keys for diagnostic purposes.
+        format, handling parameter filtering, name remapping, and tracking of
+        extra keys for diagnostic purposes.
 
         :param orig_state_dict: Original state dictionary from Eagle checkpoint
-        :param fusion_bias: Whether fusion bias weights should be included
-        :param layernorms: Whether layernorm weights should be included
-        :return: Tuple of (converted state dict, missing keys, extra keys)
+        :param fusion_bias: Whether fusion bias parameters should be included
+        :param layernorms: Whether layernorm parameters should be included
+        :return: Tuple of (converted state dict, extra keys)
         """
         logger.debug(
             f"Processing state_dict with fusion_bias={fusion_bias}, "
             f"layernorms={layernorms} from original keys: {orig_state_dict.keys()}"
         )
         converted_state_dict = {}
-        missing_keys = []
         extra_keys = []
 
         for name, tensor in orig_state_dict.items():
-            if self._should_skip_weight(name, fusion_bias, layernorms):
-                missing_keys.append(name)
+            param_key_action = self._classify_param_key(name, fusion_bias, layernorms)
+
+            if param_key_action == "ignore":
                 continue
 
-            try:
-                new_name = self._remap_weight_name(name)
-            except ValueError:
+            if param_key_action == "extra":
                 extra_keys.append(name)
                 continue
 
+            new_name = self._remap_param_name(name)
             converted_state_dict[new_name] = tensor
 
         logger.debug(
             f"Converted state_dict with {list(converted_state_dict)} weights, "
-            f"{list(missing_keys)} missing keys, and {list(extra_keys)} extra keys."
+            f"and {list(extra_keys)} extra keys."
         )
 
-        return converted_state_dict, missing_keys, extra_keys
+        return converted_state_dict, extra_keys

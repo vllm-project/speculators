@@ -81,8 +81,8 @@ def test_pydantic_class_registry_decorator():
         value: str
 
     assert TestBaseModel.registry is not None
-    assert "TestSubModel" in TestBaseModel.registry
-    assert TestBaseModel.registry["TestSubModel"] is TestSubModel
+    assert "testsubmodel" in TestBaseModel.registry
+    assert TestBaseModel.registry["testsubmodel"] is TestSubModel
 
 
 @pytest.mark.sanity
