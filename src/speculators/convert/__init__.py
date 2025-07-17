@@ -1,7 +1,7 @@
 """
 Checkpoint conversion utilities for Speculators.
 
-Pprovides tools to convert existing speculative decoding model checkpoints from external
+Provides tools to convert existing speculative decoding model checkpoints from external
 research repositories (Eagle, HASS, etc.) into the standardized Speculators format.
 
 Supported Research Repositories:
