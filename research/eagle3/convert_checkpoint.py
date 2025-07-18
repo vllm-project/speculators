@@ -1,6 +1,7 @@
+import os
+
 import numpy as np
 import torch
-import os
 from safetensors.torch import save_file
 
 file = "Eagle3/model4.safetensors"
