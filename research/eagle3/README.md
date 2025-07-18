@@ -8,18 +8,7 @@ The training process is broken up into 2 steps: first you generate data from the
 
 ### Data Generation Step
 
-1. Modify the directory names and arguments in `gen_data.sh`.
-2. You can get the ShareGPT dataset from [Aeala/ShareGPT_Vicuna_unfiltered](https://huggingface.co/datasets/Aeala/ShareGPT_Vicuna_unfiltered) on Hugging Face. Ultrachat will be automatically downloaded.
-3. Make sure the system prompts and chat template delimiters are correct in the corresponding data loader files:
-   - `ultrachat.py`, `ultrachatMistral.py`
-   - `sharegpt.py`, `sharegptMistral.py`
-4. Run the script to generate forward data:
-    ```bash
-    ./gen_data.sh
-    ```
-5. Run it separately for each dataset and split:
-    - ShareGPT (sft and gen)
-    - Ultrachat (sft and gen)
+#### 1. Download Datasets
 
 **For ShareGPT:**
 ```bash
@@ -56,22 +45,11 @@ You can modify `gen_data.sh` with your specific parameters and run it instead of
 
 ### Training Step
 
-1. Generate Zipf-restricted vocabulary mapping:
-    After data generation, run:
-    ```bash
-    ```
-    This will create `d2t.npy` and `t2d.npy` files, which are needed for training.
-    Make sure to set the correct values for:
-    - number of samples
-    - vocabulary size
-    - data directory
-    in the `zipf.sh` script. We recommend using at least 10,000 examples for accurate frequency-based pruning.
-2. Update `train.sh` with the appropriate paths to your **base model**, **data directory**, and **training configuration** for your experiment.
-3. Launch training by running:
-   ```bash
-   ./train.sh
-   ```
+#### 1. Generate Zipf-restricted vocabulary mapping
 
+After data generation, create the vocabulary mapping files:
+
+```bash
 ./zipf.sh
 ```
 
