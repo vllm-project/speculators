@@ -23,7 +23,7 @@ The data generation uses the `ge_data.allocation` module to process datasets in 
 
 **Key Parameters:**
 - `--dataset`: Either `sharegpt` or `ultrachat`
-- `--split`: Either `sft` or `gen` 
+- `--split`: Either `sft` or `gen`
 - `--chat_template`: Either `llama` or `qwen` (must match your model)
 - `--samples`: Number of samples to process (use larger numbers for full datasets)
 - `--total_gpus`: Total number of GPUs available
@@ -53,11 +53,11 @@ After data generation, create the vocabulary mapping files:
 ./zipf.sh
 ```
 
-This will create `d2t.npy` and `t2d.npy` files needed for training. 
+This will create `d2t.npy` and `t2d.npy` files needed for training.
 
 **Configure zipf.sh parameters:**
 - `--samples`: Number of examples to use for frequency analysis (recommend 10,000+)
-- `--vocab`: Target model vocabulary size (128256 for Llama)  
+- `--vocab`: Target model vocabulary size (128256 for Llama)
 - `--reduced`: Draft model vocabulary size (32000 for Eagle3)
 - `--dataDir`: Directory containing your generated data
 
