@@ -7,7 +7,7 @@ from typing import Optional, Union
 
 import torch
 from loguru import logger
-from transformers import LlamaConfig, PretrainedConfig
+from transformers import AutoModelForCausalLM, LlamaConfig, PretrainedConfig
 
 from speculators.config import SpeculatorsConfig, VerifierConfig
 from speculators.convert.eagle.utils import (
@@ -21,8 +21,10 @@ from speculators.proposals.greedy import GreedyTokenProposalConfig
 
 class Eagle3Converter:
     """
-    Converter for Eagle-3 checkpoints to speculators format.
-    Supports automatic feature detection, weight remapping, and optional validation.
+    Converter for Eagle3 checkpoints to speculators format.
+    
+    Handles weight remapping, embeddings replacement, and vLLM compatibility fixes.
+    Produces production-ready models with standardized speculators_config metadata.
     """
 
     def convert(
@@ -51,11 +53,91 @@ class Eagle3Converter:
             norm_before_residual,
         )
 
-        saved_path = self._save_converted_checkpoint(config, weights, output_path)
+        # Process weights and ensure embeddings are properly handled
+        processed_weights = self._process_checkpoint_weights(weights, base_model)
+
+        saved_path = self._save_converted_checkpoint(config, processed_weights, output_path)
         logger.success(f"Saved to: {saved_path}")
 
         if validate:
             self._validate_converted_checkpoint(saved_path, base_model)
+
+    def _process_checkpoint_weights(
+        self, weights: dict[str, torch.Tensor], base_model: str
+    ) -> dict[str, torch.Tensor]:
+        """
+        Process and validate Eagle3 checkpoint weights.
+        
+        Eagle3 models need embeddings that match the verifier model for good acceptance rates.
+        We ALWAYS replace embeddings with verifier embeddings for compatibility.
+        
+        :param weights: Original checkpoint weights
+        :param base_model: Base model name to load verifier embeddings from
+        :return: Processed weights with verifier embeddings
+        """
+        logger.debug(f"Processing {len(weights)} Eagle3 weights")
+        
+        # Remap weight names: midlayer.* -> layers.0.*
+        processed_weights = {}
+        for original_name, tensor in weights.items():
+            # Remap midlayer.* -> layers.0.*
+            if original_name.startswith("midlayer."):
+                new_name = original_name.replace("midlayer.", "layers.0.")
+                processed_weights[new_name] = tensor
+                logger.debug(f"Remapped: {original_name} -> {new_name}")
+            # Keep layers.0.* as is (already correct)
+            elif original_name.startswith("layers.0."):
+                processed_weights[original_name] = tensor
+            else:
+                processed_weights[original_name] = tensor
+        
+        # Always replace embeddings with verifier embeddings for compatibility
+        logger.info("Adding verifier embeddings for compatibility")
+        processed_weights = self._add_verifier_embeddings(processed_weights, base_model)
+        
+        return processed_weights
+
+    def _add_verifier_embeddings(
+        self, weights: dict[str, torch.Tensor], base_model: str
+    ) -> dict[str, torch.Tensor]:
+        """
+        Add embeddings from the verifier model to the checkpoint.
+
+        :param weights: Current checkpoint weights
+        :param base_model: Base model to load embeddings from
+        :return: Updated weights with verifier embeddings
+        """
+        logger.info(f"Loading embeddings from verifier model: {base_model}")
+
+        try:
+            # Load verifier model to get embeddings
+            verifier = AutoModelForCausalLM.from_pretrained(
+                base_model, torch_dtype=torch.float32
+            )
+
+            # Extract embeddings from verifier
+            if hasattr(verifier, 'model') and hasattr(verifier.model, 'embed_tokens'):
+                embed_tokens = verifier.model.embed_tokens.weight.data.clone()
+            elif hasattr(verifier, 'embed_tokens'):
+                embed_tokens = verifier.embed_tokens.weight.data.clone()
+            else:
+                raise RuntimeError(f"Could not find embed_tokens in verifier model {base_model}")
+
+            logger.info(f"Loaded embeddings with shape: {embed_tokens.shape}")
+            weights["embed_tokens.weight"] = embed_tokens
+
+            # Clean up verifier model to save memory
+            del verifier
+            torch.cuda.empty_cache() if torch.cuda.is_available() else None
+
+        except Exception as e:
+            logger.error(f"Failed to load embeddings from verifier: {e}")
+            raise RuntimeError(
+                f"Could not load embeddings from verifier model {base_model}. "
+                "This is required for Eagle3 models that don't include trained embeddings."
+            ) from e
+
+        return weights
 
     def _create_verifier_config(self, base_model: str) -> VerifierConfig:
         config_dict, _ = PretrainedConfig.get_config_dict(base_model)
@@ -70,7 +152,7 @@ class Eagle3Converter:
         base_model: str,
         norm_before_residual: bool = False,
     ) -> Eagle3SpeculatorConfig:
-        transformer_config = self._create_transformer_config_from_eagle(eagle_config)
+        transformer_config = self._create_transformer_config_from_eagle(eagle_config, base_model)
         verifier_config = self._create_verifier_config(base_model)
 
         proposal_config = GreedyTokenProposalConfig(
@@ -93,7 +175,10 @@ class Eagle3Converter:
             target_hidden_size=eagle_config.get("target_hidden_size"),
         )
 
-    def _create_transformer_config_from_eagle(self, eagle_config: dict) -> LlamaConfig:
+    def _create_transformer_config_from_eagle(self, eagle_config: dict, base_model: str) -> LlamaConfig:
+        # Load target model config for vLLM compatibility
+        target_config_dict, _ = PretrainedConfig.get_config_dict(base_model)
+        
         return LlamaConfig(
             vocab_size=eagle_config.get("target_vocab_size", 128000),
             hidden_size=eagle_config.get("hidden_size", 4096),
@@ -102,7 +187,9 @@ class Eagle3Converter:
             num_attention_heads=eagle_config.get("num_attention_heads", 32),
             num_key_value_heads=eagle_config.get("num_key_value_heads", 8),
             hidden_act=eagle_config.get("hidden_act", "silu"),
-            max_position_embeddings=eagle_config.get("max_position_embeddings", 4096),
+            # TODO: hacky solution to ensure max_position_embeddings match for vllm
+            max_position_embeddings=max(eagle_config.get("max_position_embeddings", 4096),
+            target_config_dict.get("max_position_embeddings", 4096)),
             initializer_range=eagle_config.get("initializer_range", 0.02),
             rms_norm_eps=eagle_config.get("rms_norm_eps", 1e-6),
             use_cache=True,
