@@ -67,6 +67,7 @@ class TestEagle3ConverterFixes:
             "vocab_size": 128256,
         }
 
+    @pytest.mark.smoke
     def test_weight_remapping_midlayer_to_layers(self, sample_eagle3_weights):
         """Test that midlayer.* weights are correctly remapped to layers.0.*"""
         converter = Eagle3Converter()
@@ -101,6 +102,7 @@ class TestEagle3ConverterFixes:
         remapped_q_proj = processed_weights["layers.0.self_attn.q_proj.weight"]
         assert torch.equal(original_q_proj, remapped_q_proj)
 
+    @pytest.mark.smoke
     @patch(
         "speculators.convert.eagle.eagle3_converter.AutoModelForCausalLM.from_pretrained"
     )
@@ -155,6 +157,7 @@ class TestEagle3ConverterFixes:
             original_weights["other.weight"], processed_weights["other.weight"]
         )
 
+    @pytest.mark.sanity
     @patch(
         "speculators.convert.eagle.eagle3_converter.PretrainedConfig.get_config_dict"
     )
@@ -180,6 +183,7 @@ class TestEagle3ConverterFixes:
         # rope_theta comes from Eagle3 config, not verifier
         assert llama_config.rope_theta == 10000.0
 
+    @pytest.mark.sanity
     @patch(
         "speculators.convert.eagle.eagle3_converter.PretrainedConfig.get_config_dict"
     )
@@ -197,6 +201,7 @@ class TestEagle3ConverterFixes:
                 sample_eagle3_config, "meta-llama/Llama-3.1-8B"
             )
 
+    @pytest.mark.regression
     def test_weight_tensor_values_preservation(self):
         """Test that weight tensor values are correctly preserved through conversion."""
         converter = Eagle3Converter()
@@ -231,6 +236,7 @@ class TestEagle3ConverterFixes:
         assert remapped_down_proj.shape == original_down_proj.shape
         assert remapped_down_proj.dtype == original_down_proj.dtype
 
+    @pytest.mark.regression
     def test_embeddings_always_replaced_even_if_present(self):
         """Test that embeddings are always replaced, even if they exist."""
         converter = Eagle3Converter()
@@ -263,6 +269,7 @@ class TestEagle3ConverterFixes:
             processed_weights["embed_tokens.weight"], original_embeddings
         )
 
+    @pytest.mark.sanity
     def test_converted_model_config_structure(self):
         """Test that the config structure created is valid for Eagle3Speculator."""
         converter = Eagle3Converter()
@@ -290,6 +297,7 @@ class TestEagle3ConverterFixes:
             config.speculators_config.verifier.name_or_path == "meta-llama/Llama-3.1-8B"
         )
 
+    @pytest.mark.regression
     def test_layers_weights_preserved_not_remapped(self, sample_eagle3_weights):
         """Test that weights already named layers.0.* are preserved and not remapped."""
         converter = Eagle3Converter()
