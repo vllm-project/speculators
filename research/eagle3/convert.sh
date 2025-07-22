@@ -8,7 +8,7 @@ python convert_checkpoint.py
 CHECKPOINT_PATH="trained_model"
 CONFIG_PATH="train/llama3_8_B.json"
 OUTPUT_DIR="speculator-converted"
-BASE_MODEL="meta-llama/Llama-3.1-8B-Instruct"
+BASE_MODEL="meta-llama/Meta-Llama-3.1-8B-Instruct"
 
 # Step 1: Check if config.json exists
 if [ ! -f "$CONFIG_PATH" ]; then
