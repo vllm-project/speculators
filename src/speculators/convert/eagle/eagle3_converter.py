@@ -95,14 +95,10 @@ class Eagle3Converter:
 
         # Only add verifier embeddings if not present in eagle model
         if "embed_tokens.weight" not in processed_weights:
-            logger.info(
-                "Eagle model missing embeddings - adding verifier embeddings for compatibility"
-            )
+            logger.info("Eagle model missing embeddings - adding verifier embeddings")
             return self._add_verifier_embeddings(processed_weights, base_model)
         else:
-            logger.info(
-                "Eagle model already has embeddings - keeping original embeddings"
-            )
+            logger.info("Eagle model already has embeddings - keeping originals")
             return processed_weights
 
     def _add_verifier_embeddings(
