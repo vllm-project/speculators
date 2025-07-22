@@ -93,9 +93,13 @@ class Eagle3Converter:
             else:
                 processed_weights[original_name] = tensor
 
-        # Always replace embeddings with verifier embeddings for compatibility
-        logger.info("Adding verifier embeddings for compatibility")
-        return self._add_verifier_embeddings(processed_weights, base_model)
+        # Only add verifier embeddings if not present in eagle model
+        if "embed_tokens.weight" not in processed_weights:
+            logger.info("Eagle model missing embeddings - adding verifier embeddings for compatibility")
+            return self._add_verifier_embeddings(processed_weights, base_model)
+        else:
+            logger.info("Eagle model already has embeddings - keeping original embeddings")
+            return processed_weights
 
     def _add_verifier_embeddings(
         self, weights: dict[str, torch.Tensor], base_model: str
