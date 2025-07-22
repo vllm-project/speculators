@@ -130,7 +130,7 @@ class Eagle3Converter:
             del verifier
             torch.cuda.empty_cache() if torch.cuda.is_available() else None
 
-        except Exception as e:
+        except (OSError, ValueError, RuntimeError) as e:
             logger.error(f"Failed to load embeddings from verifier: {e}")
             raise RuntimeError(
                 f"Could not load embeddings from verifier model {base_model}. "
@@ -225,6 +225,6 @@ class Eagle3Converter:
                 verifier_attachment_mode="detached",
             )
             logger.success("Validation succeeded")
-        except Exception as e:
+        except (OSError, ValueError, RuntimeError) as e:
             logger.error(f"Validation failed: {e}")
             raise
