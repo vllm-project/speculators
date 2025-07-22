@@ -188,8 +188,10 @@ class Eagle3Converter:
             num_key_value_heads=eagle_config.get("num_key_value_heads", 8),
             hidden_act=eagle_config.get("hidden_act", "silu"),
             # TODO: hacky solution to ensure max_position_embeddings match for vllm
-            max_position_embeddings=max(eagle_config.get("max_position_embeddings", 4096),
-            target_config_dict.get("max_position_embeddings", 4096)),
+            max_position_embeddings=max(
+                eagle_config.get("max_position_embeddings", 4096),
+                target_config_dict.get("max_position_embeddings", 4096)
+            ),
             initializer_range=eagle_config.get("initializer_range", 0.02),
             rms_norm_eps=eagle_config.get("rms_norm_eps", 1e-6),
             use_cache=True,

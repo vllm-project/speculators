@@ -136,7 +136,9 @@ class TestEagle3ConverterFixes:
         )
         
         # Debug: Check if mock was called
-        mock_from_pretrained.assert_called_once_with("meta-llama/Llama-3.1-8B", torch_dtype=torch.float32)
+        mock_from_pretrained.assert_called_once_with(
+            "meta-llama/Llama-3.1-8B", torch_dtype=torch.float32
+        )
         
         # Check that embeddings were replaced (not equal to original)
         assert not torch.equal(
@@ -145,14 +147,20 @@ class TestEagle3ConverterFixes:
         )
         
         # Check that new embeddings match verifier
-        assert torch.equal(processed_weights["embed_tokens.weight"], verifier_embeddings)
+        assert torch.equal(
+            processed_weights["embed_tokens.weight"], verifier_embeddings
+        )
         
         # Check that other weights are preserved
-        assert torch.equal(original_weights["other.weight"], processed_weights["other.weight"])
+        assert torch.equal(
+            original_weights["other.weight"], processed_weights["other.weight"]
+        )
 
     @patch('speculators.convert.eagle.eagle3_converter.PretrainedConfig.get_config_dict')
-    def test_config_max_position_embeddings_logic(self, mock_get_config, sample_eagle3_config, sample_verifier_config):
-        """Test that max_position_embeddings uses the maximum of Eagle3 and verifier values."""
+    def test_config_max_position_embeddings_logic(
+        self, mock_get_config, sample_eagle3_config, sample_verifier_config
+    ):
+        """Test that max_position_embeddings uses max of Eagle3 and verifier."""
         mock_get_config.return_value = (sample_verifier_config, None)
         
         converter = Eagle3Converter()
@@ -168,17 +176,19 @@ class TestEagle3ConverterFixes:
         # Check that other values come from Eagle3 config  
         assert llama_config.hidden_size == 4096
         assert llama_config.num_attention_heads == 32
-        # rope_theta comes from Eagle3 config, not verifier (this is the actual implementation)
+        # rope_theta comes from Eagle3 config, not verifier
         assert llama_config.rope_theta == 10000.0
 
     @patch('speculators.convert.eagle.eagle3_converter.PretrainedConfig.get_config_dict')
-    def test_config_fallback_when_verifier_unavailable(self, mock_get_config, sample_eagle3_config):
+    def test_config_fallback_when_verifier_unavailable(
+        self, mock_get_config, sample_eagle3_config
+    ):
         """Test fallback behavior when verifier config cannot be loaded."""
         mock_get_config.side_effect = Exception("Network error")
         
         converter = Eagle3Converter()
         
-        # This should raise an exception since the method doesn't handle this case gracefully
+        # Should raise exception since method doesn't handle this gracefully
         with pytest.raises(Exception):
             converter._create_transformer_config_from_eagle(
                 sample_eagle3_config, "meta-llama/Llama-3.1-8B"
@@ -240,8 +250,12 @@ class TestEagle3ConverterFixes:
             )
         
         # Embeddings should be replaced with verifier embeddings
-        assert torch.equal(processed_weights["embed_tokens.weight"], verifier_embeddings)
-        assert not torch.equal(processed_weights["embed_tokens.weight"], original_embeddings)
+        assert torch.equal(
+            processed_weights["embed_tokens.weight"], verifier_embeddings
+        )
+        assert not torch.equal(
+            processed_weights["embed_tokens.weight"], original_embeddings
+        )
 
     def test_converted_model_config_structure(self):
         """Test that the config structure created is valid for Eagle3Speculator."""
@@ -292,4 +306,4 @@ class TestEagle3ConverterFixes:
         assert torch.equal(
             test_weights["layers.0.already_correct.weight"],
             processed_weights["layers.0.already_correct.weight"]
-        ) 
+        )
