@@ -23,17 +23,17 @@ The data generation uses the `ge_data.allocation` module to process datasets in 
 
 **Key Parameters:**
 - `--dataset`: Either `sharegpt` or `ultrachat`
-- `--split`: Either `sft` or `gen`
+- `--split`: Either `sft` or `gen` (for ultrachat only)
 - `--chat_template`: Either `llama` or `qwen` (must match your model)
 - `--samples`: Number of samples to process (use larger numbers for full datasets)
 - `--total_gpus`: Total number of GPUs available
-- `--outdir`: Output directory for generated data
+- `--outdir`: Output directory for generated data, ultrachat can be automatically downloaded.
 - `--data_path`: Path to the downloaded dataset file
 - `--model_path`: HuggingFace model path
 
 **For Qwen models**, change `--chat_template llama` to `--chat_template qwen` and use the appropriate Qwen model path.
 
-> 💡 **Note**: For LLaMA 3.1 8B with full sample counts, this process may generate ~4TB of data. The training script will search the data directory recursively, so the folder structure doesn't need to be flat.
+> 💡 **Note**: For LLaMA 3.1 8B with full sample counts, this process may generate ~18TB of data. The training script will search the data directory recursively, so the folder structure doesn't need to be flat.
 
 #### 3. Edit gen_data.sh (Optional)
 
