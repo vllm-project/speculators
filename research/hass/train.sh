@@ -1,0 +1,11 @@
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch -m --multi_gpu --mixed_precision=bf16 --main_process_port 29501 train.main_train_full_gradient_calc \
+    --basepath /saved/large/model/weights \
+    --tmpdir /your/saved/data/dir \
+    --cpdir /directory/where/you/want/to/save \
+    --configpath train/llama3_1_8_B.json \
+    --epoch 4 \
+    --bs 2 \
+    --topk_w 0 \
+    --topk 1 \
+    --lr 8e-5 \
+    --forward_num_total 3 \
