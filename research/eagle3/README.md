@@ -12,7 +12,7 @@ The training process is broken up into 2 steps: first you generate data from the
 
 **For ShareGPT:**
 ```bash
-wget https://huggingface.co/datasets/Aeala/ShareGPT_Vicuna_unfiltered/resolve/main/ShareGPT_V4.3_unfiltered_cleaned_split.json .
+wget https://huggingface.co/datasets/Aeala/ShareGPT_Vicuna_unfiltered/resolve/main/ShareGPT_V4.3_unfiltered_cleaned_split.json
 ```
 
 **For Ultrachat:** The dataset will be automatically downloaded when you run the generation script.
@@ -33,7 +33,8 @@ The data generation uses the `ge_data.allocation` module to process datasets in 
 
 **For Qwen models**, change `--chat_template llama` to `--chat_template qwen` and use the appropriate Qwen model path.
 
-> 💡 **Note**: For LLaMA 3.1 8B with full sample counts, this process may generate ~18TB of data. The training script will search the data directory recursively, so the folder structure doesn't need to be flat.
+> 💡 **Note**: Running this takes up about ~18TB of data on the system.  It is possible to run smaller tests using just the ShareGPT dataset (simply skip the ultrachat steps).  Performance will degrade slightly, but it will only take up ~4TB and run much faster.   If you would like to change the chat template or system prompt for one of the datasets, do so in the respective files in ge_data.  
+
 
 #### 3. Edit gen_data.sh (Optional)
 
@@ -63,10 +64,18 @@ This will create `d2t.npy` and `t2d.npy` files needed for training.
 
 #### 2. Run training
 
-Update `train.sh` with the appropriate paths to your:
-- **Base model** (e.g., `meta-llama/Llama-3.1-8B-Instruct`)
-- **Data directory** (e.g., `dataDirectory/`)
-- **Training configuration** for your experiment
+Update `train.sh` with the appropriate parameters:
+
+**Required Path Updates:**
+- `--basepath`: **Local path** to your downloaded base model (not HuggingFace identifier)
+- `--tmpdir`: Your data directory (e.g., `dataDirectory/`)
+- `--configpath`: Training config file (e.g., `train/llama3_8_B.json`)
+
+**CUDA Configuration:**
+The training script uses distributed training with DeepSpeed. You **must** match your GPU configuration:
+
+- `CUDA_VISIBLE_DEVICES`: Specify available GPUs
+- `--num_processes`: Must equal the number of GPUs in `CUDA_VISIBLE_DEVICES`
 
 Launch training:
 ```bash

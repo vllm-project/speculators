@@ -17,7 +17,7 @@ if [ ! -f "$CONFIG_PATH" ]; then
   exit 1
 fi
 
-mv "$CONFIG_PATH" "$CHECKPOINT_PATH/config.json"
+cp "$CONFIG_PATH" "$CHECKPOINT_PATH/config.json"
 
 # Step 2: Convert with Speculator CLI
 echo "Converting to Speculator format..."
