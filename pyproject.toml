@@ -36,6 +36,7 @@ keywords = [
     "inference server"
 ]
 dependencies = [
+    "accelerate",
     "click",
     "datasets",
     "httpx[http2]",
