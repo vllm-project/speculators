@@ -33,7 +33,7 @@ The data generation uses the `ge_data.allocation` module to process datasets in 
 
 **For Qwen models**, change `--chat_template llama` to `--chat_template qwen` and use the appropriate Qwen model path.
 
-> 💡 **Note**: Running this takes up about ~18TB of data on the system.  It is possible to run smaller tests using just the ShareGPT dataset (simply skip the ultrachat steps).  Performance will degrade slightly, but it will only take up ~4TB and run much faster.   If you would like to change the chat template or system prompt for one of the datasets, do so in the respective files in ge_data.  
+> 💡 **Note**: Running this takes up about ~18TB of data on the system.  It is possible to run smaller tests using just the ShareGPT dataset (simply skip the ultrachat steps).  Performance will degrade slightly, but it will only take up ~4TB and run much faster.   If you would like to change the chat template or system prompt for one of the datasets, do so in the respective files in ge_data.
 
 
 #### 3. Edit gen_data.sh (Optional)
