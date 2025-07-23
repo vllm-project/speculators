@@ -73,12 +73,14 @@ class Model(nn.Module):
         super().__init__()
         self.gradient_checkpointing = True
         self.padding_idx = config.pad_token_id
-        self.vocab_size = config.vocab_size
+        self.vocab_size = config.draft_vocab_size
         self.rotary_emb = LlamaRotaryEmbedding(config=config)
         self.embed_tokens = nn.Embedding(
-            config.target_vocab_size, config.hidden_size, self.padding_idx
+            config.vocab_size, config.hidden_size, self.padding_idx
         )
-        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+        self.lm_head = nn.Linear(
+            config.hidden_size, config.draft_vocab_size, bias=False
+        )  # noqa: E501
         self.hidden_norm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.input_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.lm_head_layernorm = LlamaRMSNorm(
