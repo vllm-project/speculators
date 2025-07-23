@@ -19,7 +19,6 @@ from accelerate.utils import set_seed
 from model.configs import EConfig
 from model.llama_eagle3_full_grad import Model
 from safetensors import safe_open
-from safetensors.torch import save_file
 from torch import nn, optim
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
@@ -166,6 +165,7 @@ class CustomDataset(Dataset):
 
     def __getitem__(self, index):
         data = torch.load(self.data[index])
+
         new_data = {}
         hidden_state = data["hidden_state"][: train_config["max_len"]][None, :]
 
@@ -402,7 +402,6 @@ def main():
         for _batch_idx, data in enumerate(tqdm(train_loader, dynamic_ncols=True)):
             with accelerator.accumulate(model):
                 optimizer.zero_grad()
-                
                 hidden_states, input_ids, attention_mask, target, loss_mask = (
                     data["hidden_states"],
                     data["input_ids"],
@@ -490,25 +489,6 @@ def main():
             torch.save(
                 unwrapped_model.state_dict(), f"{args.cpdir}/model{epoch}.safetensors"
             )
-            if epoch==num_epochs:
-
-    # at the end, save the model as a proper model file, with the vocab mappings.
-
-                state_dict=unwrapped_model.state_dict()
-
-                state_dict["layers.0.hidden_norm.weight"] = state_dict["hidden_norm.weight"]
-                del state_dict["hidden_norm.weight"]
-                state_dict["layers.0.input_layernorm.weight"] = state_dict["input_layernorm.weight"]
-                del state_dict["input_layernorm.weight"]
-                state_dict["norm.weight"] = state_dict["lm_head_layernorm.weight"]
-                del state_dict["lm_head_layernorm.weight"]
-
-                state_dict["t2d"] = torch.from_numpy(np.load("t2d.npy")).bool()
-
-                state_dict["d2t"] = torch.from_numpy(np.load("d2t.npy"))
-
-                os.makedirs(args.cpdir + "/final", exist_ok=True)
-                save_file(state_dict, f"{args.cpdir}/final/model.safetensors")
 
 
 if __name__ == "__main__":
