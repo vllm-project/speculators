@@ -4,7 +4,7 @@
 
 ## To Run:
 
-The training process is broken up into 2 steps: first you generate data from the large model, and second you train the drafter model. It works for Llama 3.1.8B-Instruct and Qwen 3 8B. Don't forget to change directory to research/eagle3 and install requirements. 
+The training process is broken up into 2 steps: first you generate data from the large model, and second you train the drafter model. It works for Llama 3.1.8B-Instruct and Qwen 3 8B. Don't forget to change directory to research/eagle3 and install requirements.
 
 ### Data Generation Step
 
