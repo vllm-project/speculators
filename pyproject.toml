@@ -39,6 +39,7 @@ dependencies = [
     "accelerate",
     "click",
     "datasets",
+    "deepspeed",
     "httpx[http2]",
     "huggingface-hub",
     "loguru",
