@@ -3,8 +3,20 @@ import os
 import numpy as np
 import torch
 from safetensors.torch import save_file
+import argparse
+import os
+parser = argparse.ArgumentParser(description="sp")
+parser.add_argument("--safetensors_file", type=str, default="Eagle3/model4.safetensors")
+parser.add_argument("--vocab_dir", type=str, default=".")
+parser.add_argument("--save_dir", type=str, default="trained_model")
 
-file = "Eagle3/model4.safetensors"
+
+args = parser.parse_args()
+
+
+
+
+file = args.safetensors_file
 
 
 f = torch.load(file)
@@ -26,15 +38,15 @@ state_dict["norm.weight"] = state_dict["lm_head_layernorm.weight"]
 del state_dict["lm_head_layernorm.weight"]
 
 
-state_dict["t2d"] = torch.from_numpy(np.load("t2d.npy")).bool()
+state_dict["t2d"] = torch.from_numpy(np.load(args.vocab_dir+"/t2d.npy")).bool()
 
-state_dict["d2t"] = torch.from_numpy(np.load("d2t.npy"))
+state_dict["d2t"] = torch.from_numpy(np.load(args.vocab_dir+"/d2t.npy"))
 
 # Debug: print working directory
 print("Working directory:", os.getcwd())
 
 # Ensure directory exists
-model_dir = "trained_model"
+model_dir = args.save_dir
 os.makedirs(model_dir, exist_ok=True)
 print(f"Created or found existing directory: {model_dir}")
 
