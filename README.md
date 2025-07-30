@@ -1,10 +1,10 @@
 <div align="center">
 
 # Speculators
+
 [![License](https://img.shields.io/github/license/neuralmagic/speculators.svg)](https://github.com/neuralmagic/speculators/blob/main/LICENSE) [![Python Versions](https://img.shields.io/badge/Python-3.9--3.13-orange)](https://pypi.python.org/pypi/speculators)
+
 </div>
-
-
 
 ## Overview
 
