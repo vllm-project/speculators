@@ -255,7 +255,7 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
     # PretrainedConfig class attributes
     model_type: ClassVar[str] = "speculator_model"  # type: ignore[misc]
     base_config_key: ClassVar[str] = ""  # type: ignore[misc]
-    sub_configs: ClassVar[dict[str, PretrainedConfig]] = {}  # type: ignore[misc]
+    sub_configs: ClassVar[dict[str, type[PretrainedConfig]]] = {}  # type: ignore[misc,assignment]
     is_composition: ClassVar[bool] = False  # type: ignore[misc]
     attribute_map: ClassVar[dict[str, str]] = {}  # type: ignore[misc]
     base_model_tp_plan: ClassVar[Optional[dict[str, Any]]] = None  # type: ignore[misc]
