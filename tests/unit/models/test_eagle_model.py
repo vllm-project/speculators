@@ -760,6 +760,7 @@ def test_eagle_speculator_auto_architecture_derivation(sample_speculators_config
     assert isinstance(model, EagleSpeculator)
     # This value is set during initialization when a decoder layer class is found
     assert model.config.transformer_layer_architecture == "LlamaDecoderLayer"
+    assert model.config.architectures is not None
     assert "LlamaDecoderLayer" in model.config.architectures
     assert model.verifier == mock_verifier
     assert model.verifier_attachment_mode == "full"

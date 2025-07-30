@@ -152,7 +152,7 @@ def create_layer_config(config_class: type[PretrainedConfig]) -> PretrainedConfi
             }
         )
 
-    return config_class(**base_params)
+    return config_class(**base_params)  # type: ignore[arg-type]
 
 
 # ===== EagleSpeculatorConfig Tests =====

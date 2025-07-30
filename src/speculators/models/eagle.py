@@ -538,7 +538,10 @@ class EagleSpeculator(SpeculatorModel):
         if self.config.transformer_layer_architecture == "auto":
             decoder_name = decoder_class.__name__
             self.config.transformer_layer_architecture = decoder_name
-            if decoder_name not in self.config.architectures:
+            if (
+                self.config.architectures
+                and decoder_name not in self.config.architectures
+            ):
                 self.config.architectures.append(decoder_name)
 
     def _import_model_classes(self) -> tuple[type[nn.Module], type[nn.Module]]:
