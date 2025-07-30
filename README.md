@@ -37,7 +37,7 @@ Here you can find links to our research implementations. These provide prototype
 
 - [eagle3](https://github.com/neuralmagic/speculators/tree/main/research/eagle3): This implementation trains models similar to the EAGLE 3 architecture, specifically utilizing the Train Time Test method.
 
-- [hass](https://github.com/neuralmagic/speculators/tree/main/research/hass): This implementation trains models that are a variation on the Eagle 1 architecture using the [HASS](https://github.com/HArmonizedSS/HASS) method.
+- [hass](https://github.com/neuralmagic/speculators/tree/main/research/hass): This implementation trains models that are a variation on the EAGLE 1 architecture using the [HASS](https://github.com/HArmonizedSS/HASS) method.
 
 ### License
 
