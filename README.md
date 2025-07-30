@@ -14,7 +14,7 @@
 
 - **Speculative Decoding**: Speculators is a unified library that simplifies the creation and representation of speculative decoding algorithms, aiding both research and productization efforts for LLMs.
 - **Standardized, Extensible Format:** Provides a Hugging Face-compatible format for defining speculative models, with tools to convert from external research repositories for easy adoption.
-- **vLLM Integration**: Speculators is designed for seamless and robust integration with inference servers, with **vLLM** being the primary and desired pathway for deploying speculative decoding models into production.
+- **Seamless vLLM Integration:** Built for direct deployment into vLLM, enabling low-latency, production-grade inference with minimal overhead.
 
 ## Getting Started
 
