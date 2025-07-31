@@ -557,14 +557,14 @@ class Eagle3Speculator(SpeculatorModel):
     def tie_weights(self):
         """
         Override tie_weights to prevent vocabulary corruption in transformers 4.54.1+
-        
+
         Eagle3 intentionally uses different vocabulary sizes:
-        - Input embeddings (embed_tokens): 128256 (full vocabulary)  
+        - Input embeddings (embed_tokens): 128256 (full vocabulary)
         - Output embeddings (lm_head): 32000 (draft vocabulary)
-        
+
         The default tie_weights() tries to make them identical, breaking Eagle3.
         This override preserves the intentional vocabulary size difference.
         """
-        # Don't call super().tie_weights() - this prevents the vocabulary corruption
-        # that occurs when _tie_or_clone_weights replaces lm_head.weight with embed_tokens.weight
-        pass
+        # Don't call super().tie_weights() - this prevents vocabulary corruption
+        # that occurs when _tie_or_clone_weights replaces lm_head.weight with
+        # embed_tokens.weight
