@@ -21,7 +21,7 @@ license-files = ["LICENSE"]
 authors = [ { name = "Red Hat"} ]
 keywords = [
     "speculative decoding",
-    "transformers<4.45",
+    "transformers",
     "llm",
     "inference",
     "vllm",
@@ -50,7 +50,7 @@ dependencies = [
     "pyyaml>=6.0.0",
     "safetensors",
     "torch",
-    "transformers",
+    "transformers<4.54",
     "typer-slim>=0.12.0",
 ]
 
