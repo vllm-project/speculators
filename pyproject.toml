@@ -21,7 +21,7 @@ license-files = ["LICENSE"]
 authors = [ { name = "Red Hat"} ]
 keywords = [
     "speculative decoding",
-    "transformers",
+    "transformers<4.45",
     "llm",
     "inference",
     "vllm",
