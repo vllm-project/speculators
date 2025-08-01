@@ -69,7 +69,7 @@ class TestEagle3ConversionE2E:
             assert shards, "Index file exists but no shards found"
 
     def execute_forward_pass(self, model: Eagle3Speculator) -> Optional[torch.Tensor]:
-        device = next(model.parameters()).device
+        device = next(model.parameters()).device  # type: ignore[attr-defined]
         if device.type == "meta":
             logger.info("Model on meta device, skipping forward pass")
             return None
@@ -85,7 +85,7 @@ class TestEagle3ConversionE2E:
         hidden_states = torch.randn(batch_size, seq_len, 3 * hidden_size).to(device)
 
         with torch.no_grad():
-            output = model(input_ids=input_ids, hidden_states=hidden_states)
+            output = model(input_ids=input_ids, hidden_states=hidden_states)  # type: ignore[operator]
 
         assert hasattr(output, "logits"), "Output missing logits attribute"
         assert output.logits.shape == (batch_size, seq_len, vocab_size)
@@ -146,7 +146,7 @@ class TestEagle3ConversionE2E:
 
         # Step 4: Save model
         logger.info("Saving model...")
-        model.save_pretrained(resaved_dir)
+        model.save_pretrained(resaved_dir)  # type: ignore[attr-defined]
         logger.success(f"Model saved to: {resaved_dir}")
 
         # Step 5: Verify resaved model
