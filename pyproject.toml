@@ -50,7 +50,7 @@ dependencies = [
     "pyyaml>=6.0.0",
     "safetensors",
     "torch",
-    "transformers<4.54",
+    "transformers",
     "typer-slim>=0.12.0",
 ]
 
