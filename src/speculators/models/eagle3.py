@@ -402,11 +402,11 @@ class Eagle3Speculator(SpeculatorModel):
             bias=False,
         )
 
-        self.register_buffer(
+        self.register_buffer(  # type: ignore[attr-defined]
             "d2t",
             torch.zeros(self.draft_vocab_size, dtype=torch.long),
         )
-        self.register_buffer(
+        self.register_buffer(  # type: ignore[attr-defined]
             "t2d",
             torch.zeros(self.target_vocab_size, dtype=torch.bool),
         )
@@ -415,7 +415,7 @@ class Eagle3Speculator(SpeculatorModel):
         self.d2t: torch.Tensor
         self.t2d: torch.Tensor
 
-        self.post_init()
+        self.post_init()  # type: ignore[attr-defined]
 
     def forward(
         self,
