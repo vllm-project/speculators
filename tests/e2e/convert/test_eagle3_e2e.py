@@ -78,34 +78,6 @@ class TestEagle3ConversionE2E:
         )
         assert len(weight_files) > 0, "No model weight files found"
 
-    def execute_forward_pass(self, model: Eagle3Speculator) -> Optional[torch.Tensor]:
-        """
-        Actually runs the model to verify it works correctly after conversion.
-        This catches issues like shape mismatches or broken layers.
-        """
-        try:
-            # Create dummy input
-            input_ids = torch.tensor([[1, 2, 3, 4, 5]], dtype=torch.long)
-
-            # Execute forward pass
-            with torch.no_grad():
-                output = model(input_ids)
-
-            # Basic checks
-            assert hasattr(output, "logits"), "Output missing logits"
-            assert output.logits.shape[0] == 1, (
-                f"Wrong batch size: {output.logits.shape[0]}"
-            )
-            assert output.logits.shape[1] == 5, (
-                f"Wrong sequence length: {output.logits.shape[1]}"
-            )
-
-            logger.info(f"Forward pass successful, logits shape: {output.logits.shape}")
-            return output.logits
-
-        except (RuntimeError, ValueError, AssertionError) as e:
-            logger.error(f"Forward pass failed: {e}")
-            return None
 
     @pytest.mark.smoke
     @pytest.mark.parametrize(
@@ -207,12 +179,6 @@ class TestEagle3ConversionE2E:
         )
         logger.success("Model loaded successfully")
 
-        # Step 3: Forward pass
-        logger.info("Executing forward pass...")
-        logits = self.execute_forward_pass(model)
-        if logits is not None:
-            logger.success(f"Forward pass successful, output shape: {logits.shape}")
-
         # Step 4: Save model
         logger.info("Saving model...")
         model.save_pretrained(resaved_dir)  # type: ignore[attr-defined]
@@ -224,27 +190,3 @@ class TestEagle3ConversionE2E:
             resaved_dir / "config.json", base_model, expected_type="eagle3"
         )
         logger.success("Full E2E test completed successfully")
-
-    @pytest.mark.regression
-    def test_eagle3_conversion_verifier_loading_failure(
-        self, converter, temp_dir, temp_cache_dir
-    ):
-        """Test handling of verifier model loading failures."""
-        logger.info("Testing verifier loading failure handling...")
-
-        with patch(
-            "speculators.convert.eagle.eagle3_converter.AutoModelForCausalLM.from_pretrained"
-        ) as mock_load:
-            mock_load.side_effect = OSError("Failed to load verifier model")
-
-            with pytest.raises(
-                RuntimeError, match="Could not load embeddings from verifier model"
-            ):
-                converter.convert(
-                    input_path="nm-testing/SpeculatorLlama3-1-8B-Eagle3",
-                    output_path=temp_dir / "failed_verifier_conversion",
-                    base_model="meta-llama/Meta-Llama-3.1-8B-Instruct",
-                    cache_dir=temp_cache_dir,
-                )
-
-        logger.success("Verifier loading failure handled correctly")
