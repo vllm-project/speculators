@@ -90,11 +90,13 @@ class TestEagle3ConversionE2E:
             input_ids = torch.tensor([[1, 2, 3, 4, 5]], dtype=torch.long)
             
             # Eagle3 requires hidden_states from 3 verifier layers
-            # Shape: [batch_size, seq_len, 3 * target_hidden_size]
             target_hidden_size = model.target_hidden_size
             hidden_states = torch.randn(batch_size, seq_len, 3 * target_hidden_size)
             
-            logger.info(f"Forward pass inputs - input_ids: {input_ids.shape}, hidden_states: {hidden_states.shape}")
+            logger.info(
+                f"Forward pass inputs - input_ids: {input_ids.shape}, "
+                f"hidden_states: {hidden_states.shape}"
+            )
 
             # Execute forward pass
             with torch.no_grad():
@@ -112,7 +114,8 @@ class TestEagle3ConversionE2E:
             # Verify output uses target vocabulary size (mapped from draft)
             expected_vocab_size = model.config.target_vocab_size
             assert output.logits.shape[2] == expected_vocab_size, (
-                f"Wrong vocab size: expected {expected_vocab_size}, got {output.logits.shape[2]}"
+                f"Wrong vocab size: expected {expected_vocab_size}, "
+                f"got {output.logits.shape[2]}"
             )
 
             logger.info(f"Forward pass successful, logits shape: {output.logits.shape}")
