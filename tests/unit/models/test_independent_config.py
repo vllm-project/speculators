@@ -77,6 +77,15 @@ def independent_config_dict():
 # ===== EagleSpeculatorConfig Tests =====
 
 
+def test_indepentent_speculator_from_pretrained():
+    config = IndependentSpeculatorConfig.from_pretrained(
+        "meta-llama/Llama-3.2-3B-Instruct"
+    )
+    assert config.model_type == "llama"
+    assert config.speculators_model_type == "independent"
+    assert config.speculators_config is None
+
+
 @pytest.mark.smoke
 def test_independent_speculator_config_initialization():
     """Test default initialization of IndependentSpeculatorConfig."""
@@ -84,8 +93,6 @@ def test_independent_speculator_config_initialization():
 
     # Verify Independent-specific defaults
     assert config.speculators_model_type == "independent"
-    assert config.architectures == ["LlamaForCausalLM"]
-    assert config.draft_model == ""
 
     # Verify base class defaults
     assert config.model_type == "speculator_model"
@@ -95,16 +102,10 @@ def test_independent_speculator_config_initialization():
 @pytest.mark.smoke
 def test_independent_speculator_config_custom_initialization(sample_speculators_config):
     """Test custom initialization of IndependentSpeculatorConfig."""
-    config = IndependentSpeculatorConfig(
-        architectures=["CustomIndependentSpeculator"],
-        draft_model="test/draft",
-        speculators_config=sample_speculators_config,
-    )
+    config = IndependentSpeculatorConfig(speculators_config=sample_speculators_config)
 
     # Verify custom values
     assert config.speculators_model_type == "independent"
-    assert "CustomIndependentSpeculator" in config.architectures
-    assert config.draft_model == "test/draft"
     assert config.speculators_config == sample_speculators_config
 
 
@@ -173,16 +174,6 @@ def test_independent_speculator_config_invalid_initialization():
     with pytest.raises(ValidationError) as exc_info:
         IndependentSpeculatorConfig(speculators_model_type="invalid")  # type: ignore[arg-type]
     assert "speculators_model_type" in str(exc_info.value)
-
-    # Test invalid architectures type
-    with pytest.raises(ValidationError) as exc_info:
-        IndependentSpeculatorConfig(architectures="not_a_list")  # type: ignore[arg-type]
-    assert "architectures" in str(exc_info.value)
-
-    # Test invalid draft_model type
-    with pytest.raises(ValidationError) as exc_info:
-        IndependentSpeculatorConfig(draft_model=123)  # type: ignore[arg-type]
-    assert "draft_model" in str(exc_info.value)
 
 
 @pytest.mark.smoke

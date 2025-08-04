@@ -9,6 +9,7 @@ import torch
 from torch import nn
 from transformers import PreTrainedModel
 from transformers.models.llama.configuration_llama import LlamaConfig
+from transformers.models.llama.modeling_llama import LlamaForCausalLM
 
 from speculators import SpeculatorsConfig, VerifierConfig
 from speculators.models import (
@@ -133,19 +134,21 @@ def sample_speculators_config_no_verifier(sample_token_proposal_config):
 
 
 @pytest.fixture
-def independent_speculator_config(sample_speculators_config):
+def independent_speculator_config(sample_speculators_config, sample_llama_config):
     """Sample IndependentSpeculatorConfig for testing."""
-    return IndependentSpeculatorConfig(
-        draft_model="test/draft-model",
+    return IndependentSpeculatorConfig.from_pretrained_config(
+        pretrained_config=sample_llama_config,
         speculators_config=sample_speculators_config,
     )
 
 
 @pytest.fixture
-def independent_speculator_config_no_verifier(sample_speculators_config_no_verifier):
+def independent_speculator_config_no_verifier(
+    sample_speculators_config_no_verifier, sample_llama_config
+):
     """Sample IndependentSpeculatorConfig without verifier for testing."""
-    return IndependentSpeculatorConfig(
-        draft_model="test/draft-model",
+    return IndependentSpeculatorConfig.from_pretrained_config(
+        pretrained_config=sample_llama_config,
         speculators_config=sample_speculators_config_no_verifier,
     )
 
@@ -170,22 +173,18 @@ def test_independent_speculator_instantiation_without_verifier(
     independent_speculator_config_no_verifier, mock_draft_model
 ):
     """Test IndependentSpeculator instantiation without verifier."""
-    with patch(
-        "transformers.AutoModelForCausalLM.from_pretrained",
-        return_value=mock_draft_model,
-    ):
-        model = IndependentSpeculator(
-            config=independent_speculator_config_no_verifier,
-            verifier=None,
-            verifier_attachment_mode="detached",
-        )
+    model = IndependentSpeculator(
+        config=independent_speculator_config_no_verifier,
+        verifier=None,
+        verifier_attachment_mode="detached",
+    )
 
-        # Verify model was created successfully
-        assert isinstance(model, IndependentSpeculator)
-        assert model.config == independent_speculator_config_no_verifier
-        assert model.draft_model == mock_draft_model
-        assert model.verifier is None
-        assert model.verifier_attachment_mode == "detached"
+    # Verify model was created successfully
+    assert isinstance(model, IndependentSpeculator)
+    assert model.config == independent_speculator_config_no_verifier
+    assert model._draft_model.config == independent_speculator_config_no_verifier
+    assert model.verifier is None
+    assert model.verifier_attachment_mode == "detached"
 
 
 @pytest.mark.smoke
@@ -193,47 +192,18 @@ def test_independent_speculator_instantiation_with_verifier_instance(
     independent_speculator_config, mock_draft_model, mock_verifier_model
 ):
     """Test IndependentSpeculator instantiation with verifier PreTrainedModel."""
-    with patch(
-        "transformers.AutoModelForCausalLM.from_pretrained",
-        return_value=mock_draft_model,
-    ):
-        model = IndependentSpeculator(
-            config=independent_speculator_config,
-            verifier=mock_verifier_model,
-            verifier_attachment_mode="full",
-        )
+    model = IndependentSpeculator(
+        config=independent_speculator_config,
+        verifier=mock_verifier_model,
+        verifier_attachment_mode="full",
+    )
 
-        # Verify model was created successfully
-        assert isinstance(model, IndependentSpeculator)
-        assert model.config == independent_speculator_config
-        assert model.draft_model == mock_draft_model
-        assert model.verifier == mock_verifier_model
-        assert model.verifier_attachment_mode == "full"
-
-
-@pytest.mark.smoke
-def test_independent_speculator_instantiation_with_verifier_path(
-    independent_speculator_config, mock_draft_model, mock_verifier_model
-):
-    """Test IndependentSpeculator instantiation with verifier path."""
-    verifier_path = "test/verifier-model"
-
-    with patch(
-        "transformers.AutoModelForCausalLM.from_pretrained",
-        side_effect=[mock_verifier_model, mock_draft_model],
-    ):
-        model = IndependentSpeculator(
-            config=independent_speculator_config,
-            verifier=verifier_path,
-            verifier_attachment_mode="full",
-        )
-
-        # Verify model was created successfully
-        assert isinstance(model, IndependentSpeculator)
-        assert model.config == independent_speculator_config
-        assert model.draft_model == mock_draft_model
-        assert model.verifier == mock_verifier_model
-        assert model.verifier_attachment_mode == "full"
+    # Verify model was created successfully
+    assert isinstance(model, IndependentSpeculator)
+    assert model.config == independent_speculator_config
+    assert isinstance(model._draft_model, LlamaForCausalLM)
+    assert model.verifier == mock_verifier_model
+    assert model.verifier_attachment_mode == "full"
 
 
 @pytest.mark.smoke
@@ -241,32 +211,25 @@ def test_independent_speculator_instantiation_train_only_mode(
     independent_speculator_config, mock_draft_model, mock_verifier_model
 ):
     """Test IndependentSpeculator instantiation with train_only attachment mode."""
-    with patch(
-        "transformers.AutoModelForCausalLM.from_pretrained",
-        return_value=mock_draft_model,
-    ):
-        model = IndependentSpeculator(
-            config=independent_speculator_config,
-            verifier=mock_verifier_model,
-            verifier_attachment_mode="train_only",
-        )
+    model = IndependentSpeculator(
+        config=independent_speculator_config,
+        verifier=mock_verifier_model,
+        verifier_attachment_mode="train_only",
+    )
 
-        # Verify model was created successfully
-        assert isinstance(model, IndependentSpeculator)
-        assert model.config == independent_speculator_config
-        assert model.draft_model == mock_draft_model
-        assert model.verifier is None  # Should be None in train_only mode
-        assert model.verifier_attachment_mode == "train_only"
+    # Verify model was created successfully
+    assert isinstance(model, IndependentSpeculator)
+    assert model.verifier_attachment_mode == "train_only"
 
 
 @pytest.mark.smoke
 def test_independent_speculator_instantiation_with_auto_verifier_from_config(
-    independent_speculator_config, mock_draft_model, mock_verifier_model
+    independent_speculator_config, mock_verifier_model
 ):
     """Test IndependentSpeculator instantiation with verifier loaded from config."""
     with patch(
         "transformers.AutoModelForCausalLM.from_pretrained",
-        side_effect=[mock_verifier_model, mock_draft_model],
+        side_effect=[mock_verifier_model],
     ):
         model = IndependentSpeculator(
             config=independent_speculator_config,
@@ -277,32 +240,8 @@ def test_independent_speculator_instantiation_with_auto_verifier_from_config(
         # Verify model was created successfully
         assert isinstance(model, IndependentSpeculator)
         assert model.config == independent_speculator_config
-        assert model.draft_model == mock_draft_model
         assert model.verifier == mock_verifier_model
         assert model.verifier_attachment_mode == "full"
-
-
-@pytest.mark.smoke
-def test_independent_speculator_instantiation_with_mocked_automodel(
-    independent_speculator_config_no_verifier, mock_draft_model
-):
-    """Test IndependentSpeculator instantiation with mock from_pretrained calls."""
-    with patch(
-        "transformers.AutoModelForCausalLM.from_pretrained",
-        return_value=mock_draft_model,
-    ):
-        model = IndependentSpeculator(
-            config=independent_speculator_config_no_verifier,
-            verifier=None,
-            verifier_attachment_mode="detached",
-        )
-
-        # Verify model was created successfully
-        assert isinstance(model, IndependentSpeculator)
-        assert model.config == independent_speculator_config_no_verifier
-        assert model.draft_model == mock_draft_model
-        assert model.verifier is None
-        assert model.verifier_attachment_mode == "detached"
 
 
 # ===== IndependentSpeculator Error Cases Tests =====
@@ -312,7 +251,7 @@ def test_independent_speculator_instantiation_with_mocked_automodel(
 def test_independent_speculator_instantiation_invalid_config():
     """Test IndependentSpeculator instantiation with invalid config."""
     with pytest.raises(
-        ValueError, match="config must be an instance of IndependentSpeculatorConfig"
+        ValueError, match="Attempted to initialize a IndependentSpeculator with a"
     ):
         IndependentSpeculator(
             config="invalid_config",  # type: ignore[arg-type]
@@ -333,29 +272,10 @@ def test_independent_speculator_instantiation_wrong_config_type(
     )
 
     with pytest.raises(
-        ValueError, match="config must be an instance of IndependentSpeculatorConfig"
+        ValueError, match="Attempted to initialize a IndependentSpeculator with a"
     ):
         IndependentSpeculator(
             config=eagle_config,  # type: ignore[arg-type]
-            verifier=None,
-            verifier_attachment_mode="detached",
-        )
-
-
-@pytest.mark.sanity
-def test_independent_speculator_instantiation_draft_model_resolution_error(
-    independent_speculator_config_no_verifier,
-):
-    """Test IndependentSpeculator instantiation when draft model resolution fails."""
-    with (
-        pytest.raises(Exception, match="Failed to load draft model"),
-        patch(
-            "transformers.AutoModelForCausalLM.from_pretrained",
-            side_effect=Exception("Failed to load draft model"),
-        ),
-    ):
-        IndependentSpeculator(
-            config=independent_speculator_config_no_verifier,
             verifier=None,
             verifier_attachment_mode="detached",
         )
