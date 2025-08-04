@@ -1,7 +1,6 @@
 import json
 from pathlib import Path
 from typing import Optional
-from unittest.mock import patch
 
 import pytest
 import torch
@@ -78,6 +77,50 @@ class TestEagle3ConversionE2E:
         )
         assert len(weight_files) > 0, "No model weight files found"
 
+    def execute_forward_pass(self, model: Eagle3Speculator) -> bool:
+        """
+        Actually runs the model to verify it works correctly after conversion.
+        This catches issues like shape mismatches or broken layers.
+        """
+        try:
+            batch_size = 1
+            seq_len = 5
+            
+            # Create dummy input_ids from draft vocabulary
+            input_ids = torch.tensor([[1, 2, 3, 4, 5]], dtype=torch.long)
+            
+            # Eagle3 requires hidden_states from 3 verifier layers
+            # Shape: [batch_size, seq_len, 3 * target_hidden_size]
+            target_hidden_size = model.target_hidden_size
+            hidden_states = torch.randn(batch_size, seq_len, 3 * target_hidden_size)
+            
+            logger.info(f"Forward pass inputs - input_ids: {input_ids.shape}, hidden_states: {hidden_states.shape}")
+
+            # Execute forward pass
+            with torch.no_grad():
+                output = model(input_ids=input_ids, hidden_states=hidden_states)
+
+            # Basic checks
+            assert hasattr(output, "logits"), "Output missing logits"
+            assert output.logits.shape[0] == batch_size, (
+                f"Wrong batch size: {output.logits.shape[0]}"
+            )
+            assert output.logits.shape[1] == seq_len, (
+                f"Wrong sequence length: {output.logits.shape[1]}"
+            )
+            
+            # Verify output uses target vocabulary size (mapped from draft)
+            expected_vocab_size = model.config.target_vocab_size
+            assert output.logits.shape[2] == expected_vocab_size, (
+                f"Wrong vocab size: expected {expected_vocab_size}, got {output.logits.shape[2]}"
+            )
+
+            logger.info(f"Forward pass successful, logits shape: {output.logits.shape}")
+            return True
+
+        except (RuntimeError, ValueError, AssertionError) as e:
+            logger.error(f"Forward pass failed: {e}")
+            return False
 
     @pytest.mark.smoke
     @pytest.mark.parametrize(
@@ -178,6 +221,12 @@ class TestEagle3ConversionE2E:
             f"got {model.config.norm_before_residual}"
         )
         logger.success("Model loaded successfully")
+
+        # Step 3: Forward pass
+        logger.info("Executing forward pass...")
+        forward_pass_success = self.execute_forward_pass(model)
+        assert forward_pass_success, "Forward pass failed - this indicates the converted model has issues"
+        logger.success("Forward pass completed successfully")
 
         # Step 4: Save model
         logger.info("Saving model...")
