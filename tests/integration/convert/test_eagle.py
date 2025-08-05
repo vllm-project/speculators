@@ -21,7 +21,7 @@ from speculators.convert.eagle import EagleConverter
 from speculators.models.eagle import EagleSpeculator, EagleSpeculatorConfig
 
 
-class TestEagleConversionE2E:
+class TestEagleConversion:
     """End-to-end tests for Eagle checkpoint conversion."""
 
     def setup_method(self):
@@ -178,7 +178,7 @@ class TestEagleConversionE2E:
             },
         ],
     )
-    def test_eagle_checkpoint_conversion_e2e(
+    def test_eagle_checkpoint_conversion(
         self, checkpoint_info, converter, base_model, temp_dir, temp_cache_dir
     ):
         """

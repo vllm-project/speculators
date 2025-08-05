@@ -109,19 +109,3 @@ jobs:
         run: pip install tox
       - name: Run integration tests
         run: tox -e test-integration -- -m smoke
-
-  e2e-tests:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python: ["3.9", "3.13"]
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python }}
-      - name: Install dependencies
-        run: pip install tox
-      - name: Run e2e tests
-        run: tox -e test-e2e -- -m smoke

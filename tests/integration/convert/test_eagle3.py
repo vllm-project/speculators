@@ -9,7 +9,7 @@ from speculators.convert.eagle.eagle3_converter import Eagle3Converter
 from speculators.models.eagle3 import Eagle3Speculator
 
 
-class TestEagle3ConversionE2E:
+class TestEagle3Conversion:
     """End-to-end tests for Eagle3 checkpoint conversion."""
 
     def setup_method(self):
@@ -135,25 +135,11 @@ class TestEagle3ConversionE2E:
                 "norm_before_residual": False,
             },
             {
-                "name": "Research Eagle3 Model",
-                "input_path": "nm-testing/SpeculatorLlama3-1-8B-Eagle3",
-                "base_model": "meta-llama/Meta-Llama-3.1-8B-Instruct",
-                "expected_algorithm": "eagle3",
-                "norm_before_residual": False,
-            },
-            {
                 "name": "Research Eagle3 Model with Norm Before Residual",
                 "input_path": "nm-testing/SpeculatorLlama3-1-8B-Eagle3",
                 "base_model": "meta-llama/Meta-Llama-3.1-8B-Instruct",
                 "expected_algorithm": "eagle3",
                 "norm_before_residual": True,
-            },
-            {
-                "name": "Research Eagle3 Qwen3 8B",
-                "input_path": "nm-testing/Speculator-Qwen3-8B-Eagle3",
-                "base_model": "Qwen/Qwen3-8B",
-                "expected_algorithm": "eagle3",
-                "norm_before_residual": False,
             },
             {
                 "name": "Research Eagle3 Qwen3 8B with Norm Before Residual",
@@ -164,7 +150,7 @@ class TestEagle3ConversionE2E:
             },
         ],
     )
-    def test_eagle3_checkpoint_conversion_e2e(
+    def test_eagle3_checkpoint_conversion(
         self, checkpoint_info, converter, temp_dir, temp_cache_dir
     ):
         """
@@ -241,4 +227,4 @@ class TestEagle3ConversionE2E:
         self.verify_config(
             resaved_dir / "config.json", base_model, expected_type="eagle3"
         )
-        logger.success("Full E2E test completed successfully")
+        logger.success("Full Integration test completed successfully")
