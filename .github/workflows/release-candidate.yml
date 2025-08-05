@@ -40,8 +40,6 @@ jobs:
 
   integration-tests:
     runs-on: ubuntu-latest
-    env:
-      HF_TOKEN: ${{ secrets.NM_HF_TOKEN }}
     strategy:
       matrix:
         python: ["3.9", "3.10", "3.11", "3.12", "3.13"]
@@ -58,8 +56,6 @@ jobs:
 
   e2e-tests:
     runs-on: ubuntu-latest
-    env:
-      HF_TOKEN: ${{ secrets.NM_HF_TOKEN }}
     strategy:
       matrix:
         python: ["3.9", "3.10", "3.11", "3.12", "3.13"]
