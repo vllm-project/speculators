@@ -163,6 +163,8 @@ class TestEagleConversion:
 
         return output.logits
 
+    @pytest.mark.smoke
+    @pytest.mark.skip("Missing Llama HF Token")
     @pytest.mark.parametrize(
         "checkpoint_info",
         [
@@ -281,6 +283,8 @@ class TestEagleConversion:
 
         logger.success(f"{name} - All tests passed!")
 
+    @pytest.mark.smoke
+    @pytest.mark.skip("Missing Llama HF Token")
     def test_conversion_with_explicit_features(
         self, converter, base_model, temp_dir, temp_cache_dir
     ):
@@ -316,6 +320,8 @@ class TestEagleConversion:
 
         logger.success("Explicit feature override successful")
 
+    @pytest.mark.smoke
+    @pytest.mark.skip("Missing Llama HF Token")
     @pytest.mark.parametrize("validate", [True, False])
     def test_validation_flag(
         self, converter, base_model, temp_dir, temp_cache_dir, validate

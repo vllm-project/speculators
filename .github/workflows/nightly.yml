@@ -43,7 +43,7 @@ jobs:
       - name: Install dependencies
         run: pip install tox
       - name: Run unit tests
-        run: tox -e test-unit
+        run: tox -e test-unit -- --cov=speculators --cov-report=term-missing --cov-fail-under=75
 
   integration-tests:
     runs-on: ubuntu-latest
@@ -59,7 +59,7 @@ jobs:
       - name: Install dependencies
         run: pip install tox
       - name: Run integration tests
-        run: tox -e test-integration
+        run: tox -e test-integration -- -m "smoke or sanity"
 
   e2e-tests:
     runs-on: ubuntu-latest
@@ -75,7 +75,7 @@ jobs:
       - name: Install dependencies
         run: pip install tox
       - name: Run integration tests
-        run: tox -e test-e2e
+        run: tox -e test-e2e -- -m smoke
 
   build-and-publish:
     needs: [unit-tests, integration-tests, e2e-tests]
