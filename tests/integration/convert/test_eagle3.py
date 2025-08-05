@@ -129,6 +129,13 @@ class TestEagle3Conversion:
         "checkpoint_info",
         [
             {
+                "name": "Eagle3 Llama 3.1 8B Instruct",
+                "input_path": "yuhuili/EAGLE3-LLaMA3.1-Instruct-8B",
+                "base_model": "meta-llama/Meta-Llama-3.1-8B-Instruct",
+                "expected_algorithm": "eagle3",
+                "norm_before_residual": False,
+            },
+            {
                 "name": "Research Eagle3 Qwen3 8B with Norm Before Residual",
                 "input_path": "nm-testing/Speculator-Qwen3-8B-Eagle3",
                 "base_model": "Qwen/Qwen3-8B",
