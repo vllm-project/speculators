@@ -21,7 +21,7 @@ from speculators.convert.eagle import EagleConverter
 from speculators.models.eagle import EagleSpeculator, EagleSpeculatorConfig
 
 
-class TestEagleConversionE2E:
+class TestEagleConversion:
     """End-to-end tests for Eagle checkpoint conversion."""
 
     def setup_method(self):
@@ -163,6 +163,8 @@ class TestEagleConversionE2E:
 
         return output.logits
 
+    @pytest.mark.smoke
+    @pytest.mark.skip("Missing Llama HF Token")
     @pytest.mark.parametrize(
         "checkpoint_info",
         [
@@ -178,7 +180,7 @@ class TestEagleConversionE2E:
             },
         ],
     )
-    def test_eagle_checkpoint_conversion_e2e(
+    def test_eagle_checkpoint_conversion(
         self, checkpoint_info, converter, base_model, temp_dir, temp_cache_dir
     ):
         """
@@ -281,6 +283,8 @@ class TestEagleConversionE2E:
 
         logger.success(f"{name} - All tests passed!")
 
+    @pytest.mark.smoke
+    @pytest.mark.skip("Missing Llama HF Token")
     def test_conversion_with_explicit_features(
         self, converter, base_model, temp_dir, temp_cache_dir
     ):
@@ -316,6 +320,8 @@ class TestEagleConversionE2E:
 
         logger.success("Explicit feature override successful")
 
+    @pytest.mark.smoke
+    @pytest.mark.skip("Missing Llama HF Token")
     @pytest.mark.parametrize("validate", [True, False])
     def test_validation_flag(
         self, converter, base_model, temp_dir, temp_cache_dir, validate
