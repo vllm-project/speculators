@@ -444,7 +444,7 @@ class Eagle3Speculator(SpeculatorModel):
             use_cache=use_cache,
         )
         hidden_states = layer_outputs[0]
-        logits = self.norm(hidden_states)
+        logits = self.lm_head(self.norm(hidden_states))
 
         if not return_dict:
             return logits
