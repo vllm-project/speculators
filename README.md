@@ -39,6 +39,26 @@ Here you can find links to our research implementations. These provide prototype
 
 - [hass](https://github.com/neuralmagic/speculators/tree/main/research/hass): This implementation trains models that are a variation on the EAGLE 1 architecture using the [HASS](https://github.com/HArmonizedSS/HASS) method.
 
+
+## vLLM Inference
+
+Once in the speculators format, you can serve the speculator using vLLM:
+
+```bash
+VLLM_USE_V1=1 vllm serve RedHatAI/Qwen3-8B-speculator.eagle3
+```
+
+Served models can then be benchmarked using [GuideLLM](https://github.com/vllm-project/guidellm).
+Below, we show sample benchmark results where we compare speculation with its dense counterpart. We also additionally compare [quantization](https://github.com/vllm-project/llm-compressor) to explore additional performance improvements.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/neuralmagic/speculators/main/docs/assets/qwen_quant_benchmark.png">
+    <img alt="GuideLLM Logo" src="https://raw.githubusercontent.com/neuralmagic/speculators/main/docs/assets/qwen_quant_benchmark.png" width=55%>
+  </picture>
+</p>
+
+
 ### License
 
 Speculators is licensed under the [Apache License 2.0](https://github.com/neuralmagic/speculators/blob/main/LICENSE).
