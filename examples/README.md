@@ -12,9 +12,10 @@ To properly serve the trained model with vLLM, a conversion step is required for
 
 Conversion is also supported of speculative decoder models produced by other research libraries. An example bash script to convert the Eagle 3 model, `yuhuili/EAGLE3-LLaMA3.1-Instruct-8B` can be found under `convert/eagle3`.
 
+## Conversion Updates
 Applying conversion will:
 
-1. Extends the model's config.json by adding a speculators_config. This contains proper EAGLE and EAGLE 3 configuration fields
+1. Extend the model's config.json by adding a speculators_config. This contains proper EAGLE and EAGLE 3 configuration fields
 2. Update model.safetensors  with correct embeddings and remapped weights
 3. Enable full vLLM compatibility
 
