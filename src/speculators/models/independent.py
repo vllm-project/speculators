@@ -29,8 +29,8 @@ class IndependentSpeculatorConfig(SpeculatorModelConfig):
         cls, config_dict: dict[str, Any], **kwargs
     ) -> "IndependentSpeculatorConfig":
         """
-        Create a IndependentSpeculatorConfig from a dictionary, automatically instantiating
-        the correct subclass based on the speculators_model_type field.
+        Create a IndependentSpeculatorConfig from a dictionary, automatically
+        instantiating the correct subclass based on the speculators_model_type field.
 
         :param config_dict: Dictionary containing the configuration
         :param kwargs: Additional keyword arguments that override config values
@@ -122,8 +122,10 @@ class IndependentSpeculator(SpeculatorModel):
                 and config.speculators_model_type != "independent"
             ):
                 raise ValueError(
-                    f"Attempted to initialize a IndependentSpeculator with a {config.speculators_model_type} config class."
-                    "IndependentSpeculator only supports models with speculators_model_type='independent'."
+                    "Attempted to initialize a IndependentSpeculator with a "
+                    f"{config.speculators_model_type} config class. "
+                    "IndependentSpeculator only supports models with "
+                    "speculators_model_type='independent'."
                 )
             # Subclass of PretrainedConfig but not an IndependentSpeculatorConfig
             # Convert to IndependentSpeculatorConfig
