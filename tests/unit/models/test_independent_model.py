@@ -182,6 +182,7 @@ def test_independent_speculator_instantiation_without_verifier(
     # Verify model was created successfully
     assert isinstance(model, IndependentSpeculator)
     assert model.config == independent_speculator_config_no_verifier
+    assert model._draft_model is not None
     assert model._draft_model.config == independent_speculator_config_no_verifier
     assert model.verifier is None
     assert model.verifier_attachment_mode == "detached"

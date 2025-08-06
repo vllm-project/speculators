@@ -47,8 +47,6 @@ def sample_speculators_config(sample_token_proposal_config, sample_verifier_conf
 def independent_config_dict():
     return {
         "speculators_model_type": "independent",
-        "architectures": ["LlamaForCausalLM"],
-        "draft_model": "test/draft",
         "speculators_config": {
             "algorithm": "independent",
             "proposal_methods": [
@@ -113,8 +111,6 @@ def test_independent_speculator_config_custom_initialization(sample_speculators_
 def test_independent_speculator_config_base_initialization(sample_speculators_config):
     # Create IndependentSpeculatorConfig with custom values
     original_config = IndependentSpeculatorConfig(
-        architectures=["CustomIndependentSpeculator"],
-        draft_model="test/draft",
         speculators_config=sample_speculators_config,
     )
 
@@ -125,47 +121,40 @@ def test_independent_speculator_config_base_initialization(sample_speculators_co
     # Verify type and values preservation
     assert isinstance(recreated_config, IndependentSpeculatorConfig)
     assert recreated_config.speculators_model_type == "independent"
-    assert "CustomIndependentSpeculator" in recreated_config.architectures
-    assert recreated_config.draft_model == "test/draft"
     assert recreated_config.speculators_config == sample_speculators_config
 
 
 @pytest.mark.regression
-def test_eagle_speculator_config_nested_initialization():
+def test_independent_speculator_config_nested_initialization():
     class ParentModel(BaseModel):
         single_config: IndependentSpeculatorConfig
         config_list: list[IndependentSpeculatorConfig]
         config_dict: dict[str, IndependentSpeculatorConfig]
 
     parent = ParentModel(
-        single_config=IndependentSpeculatorConfig(draft_model="test/draft"),
+        single_config=IndependentSpeculatorConfig(),
         config_list=[
-            IndependentSpeculatorConfig(draft_model="test/draft1"),
-            IndependentSpeculatorConfig(draft_model="test/draft2"),
+            IndependentSpeculatorConfig(),
+            IndependentSpeculatorConfig(),
         ],
         config_dict={
-            "draft1": IndependentSpeculatorConfig(draft_model="test/draft1"),
-            "draft2": IndependentSpeculatorConfig(draft_model="test/draft2"),
+            "draft1": IndependentSpeculatorConfig(),
+            "draft2": IndependentSpeculatorConfig(),
         },
     )
 
     # Verify single config
     assert isinstance(parent.single_config, IndependentSpeculatorConfig)
-    assert parent.single_config.draft_model == "test/draft"
 
     # Verify config list
     assert len(parent.config_list) == 2
     assert all(isinstance(c, IndependentSpeculatorConfig) for c in parent.config_list)
-    assert parent.config_list[0].draft_model == "test/draft1"
-    assert parent.config_list[1].draft_model == "test/draft2"
 
     # Verify config dict
     assert len(parent.config_dict) == 2
     assert all(
         isinstance(c, IndependentSpeculatorConfig) for c in parent.config_dict.values()
     )
-    assert parent.config_dict["draft1"].draft_model == "test/draft1"
-    assert parent.config_dict["draft2"].draft_model == "test/draft2"
 
 
 @pytest.mark.smoke
@@ -193,7 +182,6 @@ def test_independent_speculator_config_auto_registry():
 @pytest.mark.smoke
 def test_independent_speculator_config_marshalling(sample_speculators_config):
     original_config = IndependentSpeculatorConfig(
-        draft_model="test/draft",
         speculators_config=sample_speculators_config,
     )
 
@@ -201,17 +189,14 @@ def test_independent_speculator_config_marshalling(sample_speculators_config):
     config_dict = original_config.model_dump()
     assert isinstance(config_dict, dict)
     assert config_dict["speculators_model_type"] == "independent"
-    assert config_dict["draft_model"] == "test/draft"
     assert config_dict["speculators_config"] == sample_speculators_config.model_dump()
 
     # Test model_validate() on base class
     recreated_base = SpeculatorModelConfig.model_validate(config_dict)
     assert isinstance(recreated_base, IndependentSpeculatorConfig)
-    assert recreated_base.draft_model == "test/draft"
     assert recreated_base.speculators_config == sample_speculators_config
 
     # Test model_validate() on derived class
     recreated_derived = IndependentSpeculatorConfig.model_validate(config_dict)
     assert isinstance(recreated_derived, IndependentSpeculatorConfig)
-    assert recreated_derived.draft_model == "test/draft"
     assert recreated_derived.speculators_config == sample_speculators_config

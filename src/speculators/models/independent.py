@@ -141,13 +141,18 @@ class IndependentSpeculator(SpeculatorModel):
             verifier_attachment_mode=verifier_attachment_mode,
         )
 
-        config_class = CONFIG_MAPPING[config.model_type]
-        self._draft_model_class = MODEL_FOR_CAUSAL_LM_MAPPING[config_class]
-        self._draft_model = self._draft_model_class(config)
+        config_class: type[PretrainedConfig] = CONFIG_MAPPING[config.model_type]
+        self._draft_model_class: type[PreTrainedModel] = MODEL_FOR_CAUSAL_LM_MAPPING[  # type: ignore[assignment]
+            config_class
+        ]
+        self._draft_model = self._draft_model_class(config)  # type: ignore[operator]
 
         self.post_init()
 
     def forward(self, *args, **kwargs):
+        if self._draft_model is None:
+            raise ValueError("Draft model is not initialized")
+
         return self._draft_model(*args, **kwargs)
 
     @classmethod
@@ -253,8 +258,17 @@ class IndependentSpeculator(SpeculatorModel):
                 revision=revision,
             )
 
-        if not isinstance(config, SpeculatorModelConfig):
+        if isinstance(config, PretrainedConfig) and not isinstance(
+            config, IndependentSpeculatorConfig
+        ):
+            # Convert PretrainedConfig to IndependentSpeculatorConfig
             config = IndependentSpeculatorConfig.from_dict(config.to_dict())
+
+        if not isinstance(config, IndependentSpeculatorConfig):
+            raise ValueError(
+                f"Expected config to be an instance of IndependentSpeculatorConfig, "
+                f"got {type(config)}."
+            )
 
         if not pretrained_model_name_or_path and not kwargs.get("state_dict"):
             raise ValueError(
