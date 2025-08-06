@@ -44,6 +44,42 @@ You can modify `gen_data.sh` with your specific parameters and run it instead of
 ./gen_data.sh
 ```
 
+> 💡 **Note**: To reproduce the models available on https://huggingface.co/RedHatAI, use the following parameter combinations:  
+
+```python -m ge_data.allocation \
+--outdir dataDirectory/sharegpt \
+--data_path ShareGPT_V4.3_unfiltered_cleaned_split.json \
+--model_path meta-llama/Llama-3.1-8B-Instruct \
+--chat_template llama \
+--dataset sharegpt \
+--samples 68000 \
+--total_gpus 8
+```
+
+```python -m ge_data.allocation \
+--outdir dataDirectory/sharegpt \
+--data_path ShareGPT_V4.3_unfiltered_cleaned_split.json \
+--model_path meta-llama/Llama-3.1-8B-Instruct \
+--chat_template llama \
+--dataset ultrachat \
+--split gen \
+--samples 250000 \
+--total_gpus 8
+```
+
+```python -m ge_data.allocation \
+--outdir dataDirectory/sharegpt \
+--data_path ShareGPT_V4.3_unfiltered_cleaned_split.json \
+--model_path meta-llama/Llama-3.1-8B-Instruct \
+--chat_template llama \
+--dataset sharegpt \
+--split sft \
+--samples 207000 \
+--total_gpus 8
+```
+
+
+
 ### Training Step
 
 #### 1. Generate Zipf-restricted vocabulary mapping
@@ -70,6 +106,9 @@ Update `train.sh` with the appropriate parameters:
 - `--basepath`: **Local path** to your downloaded base model (not HuggingFace identifier)
 - `--tmpdir`: Your data directory (e.g., `dataDirectory/`)
 - `--configpath`: Training config file (e.g., `train/llama3_8_B.json`)
+- `--cpdir`: Where you would like to save model checkpoints
+
+Sample parameters, including the number of epochs, learning rate, and batch size, which reproduce our results are given in `train.sh`.  
 
 **CUDA Configuration:**
 The training script uses distributed training with DeepSpeed. You **must** match your GPU configuration:
@@ -96,6 +135,8 @@ Launch training:
 VLLM_USE_V1=1 vllm serve $PATH_TO_CONVERTED_MODEL
 ```
 Replace `$PATH_TO_CONVERTED_MODEL` with the actual directory path where your converted model was saved.
+
+> 💡 **Note**: Be sure to install vLLM from source!
 
 ### TODO:
 1. Throw an error if you attempt to create a model that will not be supported in vLLM - with the wrong configuration of heads etc.
