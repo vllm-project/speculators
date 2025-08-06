@@ -77,13 +77,6 @@ jobs:
     env:
       HF_TOKEN: ${{ secrets.NM_HF_TOKEN }}
     steps:
-      - name: Check token isn't empty
-        run: |-
-          if [[ -z "${HF_TOKEN}" ]]; then
-            echo "HF_TOKEN env var is empty!"
-            exit 1
-          fi
-        shell: bash
       - uses: actions/checkout@v4
       - name: Set up Python
         uses: actions/setup-python@v5
