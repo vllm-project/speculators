@@ -1,6 +1,6 @@
 # Training
 
-Speculators currently supports training of Eagle, Eagle 3 and HASS-style speculative decoders. This functionality is still under development and includes the necessary data generation and training steps required to produce the models. Examples of the training process can be found under the `research` directory
+Speculators currently supports training of Eagle, Eagle 3 and HASS-style speculative decoders. This functionality is still under development and includes the necessary data generation and training steps required to produce the models. Examples of the training process can be found under the `research` directory for [Eagle 3](https://github.com/neuralmagic/speculators/blob/main/research/eagle3/README.md) and [HASS](https://github.com/neuralmagic/speculators/blob/main/research/hass/README.md).
 
 # Conversion
 
