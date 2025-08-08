@@ -33,12 +33,14 @@ def test_verifier_config_from_verifier_config():
 
 
 @pytest.mark.smoke
+@pytest.mark.skip("Test not implemented")
 def test_speculator_model_config_from_pretrained():
     # Implement loading once real config is available
     assert True
 
 
 @pytest.mark.regression
+@pytest.mark.skip("Test not implemented")
 def test_speculator_model_config_pretrained_methods():
     # Implement saving once real config is available
     assert True
