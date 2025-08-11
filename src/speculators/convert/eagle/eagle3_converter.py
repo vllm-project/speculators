@@ -119,9 +119,15 @@ class Eagle3Converter:
                 base_model, torch_dtype=torch.float32
             )
 
-            # Extract embeddings from verifier using the proper API
-            embed_module = verifier.get_input_embeddings()
-            embed_tokens = embed_module.weight.data.clone()
+            # Extract embeddings from verifier
+            if hasattr(verifier, "model") and hasattr(verifier.model, "embed_tokens"):
+                embed_tokens = getattr(verifier.model, "embed_tokens").weight.data.clone()  # type: ignore[assignment,union-attr]
+            elif hasattr(verifier, "embed_tokens"):
+                embed_tokens = getattr(verifier, "embed_tokens").weight.data.clone()  # type: ignore[assignment,attr-defined]
+            else:
+                raise RuntimeError(
+                    f"Could not find embed_tokens in verifier model {base_model}"
+                )
 
             logger.info(f"Loaded embeddings with shape: {embed_tokens.shape}")
             weights["embed_tokens.weight"] = embed_tokens
