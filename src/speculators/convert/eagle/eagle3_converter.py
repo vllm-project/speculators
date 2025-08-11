@@ -121,9 +121,9 @@ class Eagle3Converter:
 
             # Extract embeddings from verifier
             if hasattr(verifier, "model") and hasattr(verifier.model, "embed_tokens"):
-                embed_tokens = getattr(verifier.model, "embed_tokens").weight.data.clone()  # type: ignore[assignment,union-attr]
+                embed_tokens = verifier.model.embed_tokens.weight.data.clone()  # type: ignore[assignment,union-attr]
             elif hasattr(verifier, "embed_tokens"):
-                embed_tokens = getattr(verifier, "embed_tokens").weight.data.clone()  # type: ignore[assignment,attr-defined]
+                embed_tokens = verifier.embed_tokens.weight.data.clone()  # type: ignore[assignment,attr-defined]
             else:
                 raise RuntimeError(
                     f"Could not find embed_tokens in verifier model {base_model}"
