@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Optional, Union
 
 import torch
+import torch.nn as nn
 from loguru import logger
 from transformers import AutoModelForCausalLM, LlamaConfig, PretrainedConfig
 
@@ -121,9 +122,9 @@ class Eagle3Converter:
 
             # Extract embeddings from verifier
             if hasattr(verifier, "model") and hasattr(verifier.model, "embed_tokens"):
-                embed_tokens = verifier.model.embed_tokens.weight.data.clone()
+                embed_tokens = verifier.model.embed_tokens.weight.data.clone()  # type: ignore
             elif hasattr(verifier, "embed_tokens"):
-                embed_tokens = verifier.embed_tokens.weight.data.clone()
+                embed_tokens = verifier.embed_tokens.weight.data.clone()  # type: ignore
             else:
                 raise RuntimeError(
                     f"Could not find embed_tokens in verifier model {base_model}"
