@@ -1,0 +1,1 @@
+ VLLM_USE_V1=1 accelerate launch -m --num_processes 2 train.main_train_online --basepath /proving-grounds/cache/hub/models--meta-llama--Llama-3.1-8B-Instruct/snapshots/0e9e39f249a16976918f6564b8830bc894c89659 --cpdir eagleSpec --configpath train/llama3_8_B.json
