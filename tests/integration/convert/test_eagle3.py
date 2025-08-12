@@ -98,7 +98,7 @@ class TestEagle3Conversion:
 
             # Execute forward pass
             with torch.no_grad():
-                output = model(input_ids=input_ids, hidden_states=hidden_states)
+                output = model(input_ids=input_ids, hidden_states=hidden_states)  # type: ignore[operator]
 
             # Basic checks
             assert hasattr(output, "logits"), "Output missing logits"
