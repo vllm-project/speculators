@@ -44,7 +44,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--basepath", type=str, default=None)
 parser.add_argument("--configpath", type=str, default=None)
 parser.add_argument("--lr", type=float, default=3e-5)
-parser.add_argument("--bs", type=int, default=4)
+parser.add_argument("--bs", type=int, default=7)
 parser.add_argument("--gradient-accumulation-steps", type=int, default=1)
 parser.add_argument("--tmpdir", type=str, default=None)
 parser.add_argument("--cpdir", type=str, default=None)
@@ -532,10 +532,6 @@ def train(data_queue, gpu_ids,args):
     torch.backends.cuda.matmul.allow_tf32 = True
 
     set_seed(0)
-    accelerator = Accelerator(
-        mixed_precision="bf16",
-        gradient_accumulation_steps=train_config["gradient_accumulation_steps"],
-    )
 
     baseconfig = AutoConfig.from_pretrained(args.basepath)
     try:
@@ -576,8 +572,8 @@ def train(data_queue, gpu_ids,args):
     for param in head.parameters():
         param.requires_grad = False
 
-    if accelerator.is_main_process and (not os.path.exists(args.cpdir)):
-        os.makedirs(args.cpdir)
+    # if accelerator.is_main_process and (not os.path.exists(args.cpdir)):
+    #     os.makedirs(args.cpdir)
 
     config = EConfig.from_pretrained(train_config["config_path"])
     model = Model(config, load_emb=True, path=args.basepath)
@@ -598,21 +594,21 @@ def train(data_queue, gpu_ids,args):
             optimizer, num_warmup_steps=num_warmup_steps, num_training_steps=total_steps
         )
 
-        model, optimizer, scheduler = accelerator.prepare(
-            model, optimizer, scheduler
-        )
-    else:
-        model, optimizer= accelerator.prepare(
-            model, optimizer
-        )
+    #     model, optimizer, scheduler = accelerator.prepare(
+    #         model, optimizer, scheduler
+    #     )
+    # else:
+    #     model, optimizer= accelerator.prepare(
+    #         model, optimizer
+    #     )
 
     map_tok = np.load("t2d.npy")
     map_tok = torch.from_numpy(map_tok).bool()
 
-    head = head.to(accelerator.device)
+    # head = head.to(accelerator.device)
+    head=head.to('cuda')
 
-
-    data_loader=DataLoader(QueueDataset(data_queue), batch_size=4, num_workers=0, pin_memory=True, collate_fn=collate)
+    data_loader=DataLoader(QueueDataset(data_queue), batch_size=7, num_workers=0, pin_memory=True, collate_fn=collate)
 
     for epoch in range(num_epochs + 1):
         top_3acc = [0 for _ in range(3)]
@@ -625,95 +621,95 @@ def train(data_queue, gpu_ids,args):
         for data in data_loader:
             print("step")
             print("success")
-            with accelerator.accumulate(model):
-                optimizer.zero_grad()
-                hidden_states, input_ids, attention_mask, target, loss_mask = (
-                    data["aux_hidden_states"],
-                    data["input_ids"],
-                    None,
-                    data["hidden_states"],
-                    data["loss_mask"][..., None],
-                )
-                loss = 0
-                with torch.no_grad():
-                    target_head = head(target.to(accelerator.device).to(torch.bfloat16))
-
-                    target_head = target_head[:,:, map_tok]
-
-                    target_p = nn.Softmax(dim=2)(target_head)
-                    target_p = target_p.detach()
-                hidden_states_history = []
-
-                hidden_states = model.module.fc(hidden_states.to(torch.bfloat16).to(accelerator.device))
-                weight_sum = 0
-                for forward_idx in range(forward_num_total):
-                    predict = model(
-                        hidden_states.to(accelerator.device), input_ids.to(accelerator.device), attention_mask, hidden_states_history
-                    )
-                    pred = model.module.lm_head_layernorm(predict)
-                    pred = model.module.lm_head(pred.to(torch.bfloat16))
-
-                    out_head, kldiv_loss = compute_loss(
-                        target_p, pred, loss_mask, kldiv
-                    )
-                    total_loss = train_config["kldiv_w"] * kldiv_loss
-                    weight = forward_idx + 1
-                    loss += total_loss
-                    weight_sum += weight
-                    hidden_states_history.append(hidden_states)
-                    hidden_states = torch.concat(
-                        [hidden_states[:, :1, :], predict[:, :-1, :]], dim=1
-                    )
-                accelerator.backward(loss)
-                torch.cuda.empty_cache()
-                accelerator.clip_grad_norm_(model.parameters(), 1.0)
-                optimizer.step()
-                optimizer.zero_grad()
-
-                if is_warmup:
-                    scheduler.step()
-
-            with torch.no_grad():
-                _, predicted = torch.max(out_head, 2)
-                _, target = torch.max(target_head, 2)
-                ct = loss_mask.sum().item()
-                cc = ((predicted == target) * loss_mask.squeeze().to(accelerator.device)).sum().item()
-                out_head = out_head.view(-1, target_head.shape[-1])[
-                    loss_mask.view(-1) == 1
-                ]
-                target = target.view(-1)[loss_mask.view(-1) == 1]
-                topkacc = top_accuracy(out_head, target, (1, 2, 3))
-                for top_i in range(len(topkacc)):
-                    top_3acc[top_i] += topkacc[top_i]
-                total += ct
-                correct += cc
-            if accelerator.is_main_process and ct != 0:
-                logdict = {
-                    "train/lr": optimizer.optimizer.param_groups[0]["lr"],
-                    "train/loss": loss.item(),
-                    "train/acc": cc / ct,
-                }
-                for item, _i in enumerate(top_3acc):
-                    logdict[f"train/top_{item + 1}_acc"] = topkacc[item].item() / ct
-
-            epoch_loss += loss.item()
-            num_batches += 1
-
-        correct, total = torch.tensor(correct).cuda(), torch.tensor(total).cuda()
-        correct, total = accelerator.gather_for_metrics((correct, total))
-
-        correct, total = correct.sum().item(), total.sum().item()
-
-        epoch_loss /= num_batches
-        top_3acc = accelerator.gather_for_metrics(top_3acc)
-        if accelerator.is_local_main_process:
-            print(f"Epoch [{epoch + 1}/{num_epochs}], Loss: {epoch_loss:.4f}")
-            print(f"Train Accuracy: {100 * correct / total:.2f}%")
-
-            unwrapped_model = accelerator.unwrap_model(model)
-            torch.save(
-                unwrapped_model.state_dict(), f"{args.cpdir}/model{epoch}.safetensors"
+            # with accelerator.accumulate(model):
+            optimizer.zero_grad()
+            hidden_states, input_ids, attention_mask, target, loss_mask = (
+                data["aux_hidden_states"],
+                data["input_ids"],
+                None,
+                data["hidden_states"],
+                data["loss_mask"][..., None],
             )
+            loss = 0
+            with torch.no_grad():
+                target_head = head(target.to('cuda').to(torch.bfloat16))
+
+                target_head = target_head[:,:, map_tok]
+
+                target_p = nn.Softmax(dim=2)(target_head)
+                target_p = target_p.detach()
+            hidden_states_history = []
+
+            hidden_states = model.module.fc(hidden_states.to(torch.bfloat16).to('cuda'))
+            weight_sum = 0
+            for forward_idx in range(forward_num_total):
+                predict = model(
+                    hidden_states.to('cuda'), input_ids.to('cuda'), attention_mask, hidden_states_history
+                )
+                pred = model.module.lm_head_layernorm(predict)
+                pred = model.module.lm_head(pred.to(torch.bfloat16))
+
+                out_head, kldiv_loss = compute_loss(
+                    target_p, pred, loss_mask, kldiv
+                )
+                total_loss = train_config["kldiv_w"] * kldiv_loss
+                weight = forward_idx + 1
+                loss += total_loss
+                weight_sum += weight
+                hidden_states_history.append(hidden_states)
+                hidden_states = torch.concat(
+                    [hidden_states[:, :1, :], predict[:, :-1, :]], dim=1
+                )
+            loss.backward()
+            # torch.cuda.empty_cache()
+            # optimizer.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+            optimizer.zero_grad()
+
+            if is_warmup:
+                scheduler.step()
+
+        with torch.no_grad():
+            _, predicted = torch.max(out_head, 2)
+            _, target = torch.max(target_head, 2)
+            ct = loss_mask.sum().item()
+            cc = ((predicted == target) * loss_mask.squeeze().to('cuda')).sum().item()
+            out_head = out_head.view(-1, target_head.shape[-1])[
+                loss_mask.view(-1) == 1
+            ]
+            target = target.view(-1)[loss_mask.view(-1) == 1]
+            topkacc = top_accuracy(out_head, target, (1, 2, 3))
+            for top_i in range(len(topkacc)):
+                top_3acc[top_i] += topkacc[top_i]
+            total += ct
+            correct += cc
+        if  ct != 0:
+            logdict = {
+                "train/lr": optimizer.optimizer.param_groups[0]["lr"],
+                "train/loss": loss.item(),
+                "train/acc": cc / ct,
+            }
+            for item, _i in enumerate(top_3acc):
+                logdict[f"train/top_{item + 1}_acc"] = topkacc[item].item() / ct
+
+        epoch_loss += loss.item()
+        num_batches += 1
+
+    # correct, total = torch.tensor(correct).cuda(), torch.tensor(total).cuda()
+    # correct, total = accelerator.gather_for_metrics((correct, total))
+
+    # correct, total = correct.sum().item(), total.sum().item()
+
+    # epoch_loss /= num_batches
+    # top_3acc = accelerator.gather_for_metrics(top_3acc)
+    # if accelerator.is_local_main_process:
+    #     print(f"Epoch [{epoch + 1}/{num_epochs}], Loss: {epoch_loss:.4f}")
+    #     print(f"Train Accuracy: {100 * correct / total:.2f}%")
+
+    #     unwrapped_model = accelerator.unwrap_model(model)
+    #     torch.save(
+    #         unwrapped_model.state_dict(), f"{args.cpdir}/model{epoch}.safetensors"
+    #     )
 
 
 
@@ -728,7 +724,7 @@ def main(
     verifier: str,
     data: str,
     verifier_batch_size: int,
-    data_cache_limit: int = 1e6,
+    data_cache_limit: int = 1e1,
     verifier_gpus: Union[
         float, int, list[int]
     ] = 0.5,  # Default to half of available GPUs
@@ -751,7 +747,12 @@ def main(
         verifier_gpus,
         train_gpus,
     )
+
+    verifier_gpu_ids=[0]
+    print("verifier")
     print(verifier_gpu_ids)
+    print("train")
+    train_gpu_ids=[1,2,3,4,5,6,7]
     print(train_gpu_ids)
 
     with multiprocessing.Manager() as manager:
