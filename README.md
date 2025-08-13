@@ -32,15 +32,52 @@
 
 ### Installation
 
-Before installing, ensure you have the following prerequisites:
+#### Prerequisites
 
-- OS: Linux or MacOS
-- Python: 3.9 or higher
+Before installing, ensure you have the following:
 
-Install Speculators directly from source using pip::
+- **Operating System:** Linux or macOS
+- **Python:** 3.9 or higher
+- **Package Manager:** pip (recommended) or conda
+
+#### Install from PyPI (Recommended)
+
+Install the latest stable release from PyPI:
 
 ```bash
-pip install git+https://github.com/neuralmagic/speculators.git
+pip install speculators
+```
+
+#### Install from Source
+
+For the latest development version or to contribute to the project:
+
+```bash
+git clone https://github.com/neuralmagic/speculators.git
+cd speculators
+
+pip install -e .
+```
+
+For development with additional tools:
+
+```bash
+pip install -e .[dev]
+```
+
+#### Verify Installation
+
+You can verify your installation by checking the version:
+
+```bash
+speculators --version
+```
+
+Or by importing the package in Python:
+
+```python
+import speculators
+print(speculators.__version__)
 ```
 
 ## Resources
