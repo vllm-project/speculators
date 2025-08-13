@@ -19,7 +19,7 @@ from datasets import Dataset
 from model.configs import EConfig
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import traceback
-
+from torch.utils.data import IterableDataset, DataLoader
 # from train import train
 import random
 import numpy as np 
@@ -261,7 +261,7 @@ def online_data_generator(
 
             try:
                 # print(input_ids[0][0].tolist())
-                output=model.generate( prompt_token_ids=input_ids[0][0].tolist(),sampling_params=sampling_params)
+                output=model.generate(prompt_token_ids=input_ids[0][0].tolist(),sampling_params=sampling_params)
                 req_id+=1
 
                 #output=model.generate(text[0], sampling_params)
@@ -296,6 +296,7 @@ class QueueDataset(IterableDataset):
         data_queue: multiprocessing.Queue,
         timeout: float = 1.0,
         eos_on_empty: bool = False,
+        batch_size=1
     ):
         """
         Initialize the QueueDataset which sources data from a multiprocessing Queue.
@@ -306,13 +307,17 @@ class QueueDataset(IterableDataset):
         """
         self.data_queue = data_queue
         self.timeout = timeout
+        self.batch_size=batch_size
         self.eos_on_empty = eos_on_empty
 
     def __iter__(self):
         while True:
             try:
-                data_item = self.data_queue.get(timeout=self.timeout)
-                yield {"text": data_item}
+                batch= self.data_queue.get(timeout=self.timeout)
+
+                
+                # print(max_len)
+                yield {"data": batch}
             except queue.Empty:
                 if self.eos_on_empty:
                     break
@@ -320,8 +325,29 @@ class QueueDataset(IterableDataset):
                 logging.error(f"Error getting data from queue: {err}")
                 raise err
 
+def collate(batch):
+
+    batch=[b['data'] for b in batch]
+    batch_size=len(batch)
+    max_len=max([i['input_ids'].shape[-1] for i in batch ])
+    input_ids=torch.zeros(batch_size, max_len, dtype=torch.int)
+    for i in range(batch_size):
+        input_ids[i, :len(batch[i]['input_ids'][0])]=batch[i]['input_ids'][0]
+    loss_mask=torch.zeros(batch_size, max_len, dtype=torch.int)
+    for i in range(batch_size):
+        loss_mask[i, :len(batch[i]['loss_mask'])]=batch[i]['loss_mask']
+    aux_hidden_states=torch.zeros(batch_size, max_len, batch[i]['aux_hidden_states'].shape[2],dtype=batch[i]['aux_hidden_states'].dtype )
+    for i in range(batch_size):
+        aux_hidden_states[i, :len(batch[i]['aux_hidden_states'][0])]=batch[i]['aux_hidden_states'][0]
+    hidden_states=torch.zeros(batch_size, max_len,batch[i]['hidden_states'].shape[2], dtype=batch[i]['hidden_states'].dtype )
+    for i in range(batch_size):
+        hidden_states[i, :len(batch[i]['hidden_states'][0])]=batch[i]['hidden_states'][0]
 
 
+    new_batch={"input_ids":input_ids, 'loss_mask':loss_mask, 'aux_hidden_states':aux_hidden_states, "hidden_states":hidden_states}
+    # print(batch)
+
+    return new_batch
 def get_gpu_ids_split(
     verifier_gpus: Union[float, int, list[int]],
     train_gpus: Union[float, int, list[int]],
@@ -586,10 +612,7 @@ def train(data_queue, gpu_ids,args):
     head = head.to(accelerator.device)
 
 
-
-
-
-
+    data_loader=DataLoader(QueueDataset(data_queue), batch_size=4, num_workers=0, pin_memory=True, collate_fn=collate)
 
     for epoch in range(num_epochs + 1):
         top_3acc = [0 for _ in range(3)]
@@ -599,9 +622,9 @@ def train(data_queue, gpu_ids,args):
         num_batches = 0
         model.train()
         forward_num_total = args.forward_num_total
-        for i in range(68000):
+        for data in data_loader:
             print("step")
-            data=data_queue.get()
+            print("success")
             with accelerator.accumulate(model):
                 optimizer.zero_grad()
                 hidden_states, input_ids, attention_mask, target, loss_mask = (
@@ -621,14 +644,14 @@ def train(data_queue, gpu_ids,args):
                     target_p = target_p.detach()
                 hidden_states_history = []
 
-                hidden_states = model.fc(hidden_states.to(torch.bfloat16).to(accelerator.device))
+                hidden_states = model.module.fc(hidden_states.to(torch.bfloat16).to(accelerator.device))
                 weight_sum = 0
                 for forward_idx in range(forward_num_total):
                     predict = model(
                         hidden_states.to(accelerator.device), input_ids.to(accelerator.device), attention_mask, hidden_states_history
                     )
-                    pred = model.lm_head_layernorm(predict)
-                    pred = model.lm_head(pred.to(torch.bfloat16))
+                    pred = model.module.lm_head_layernorm(predict)
+                    pred = model.module.lm_head(pred.to(torch.bfloat16))
 
                     out_head, kldiv_loss = compute_loss(
                         target_p, pred, loss_mask, kldiv

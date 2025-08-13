@@ -166,7 +166,7 @@ class Model(nn.Module):
         position_embeddings: Optional[tuple[torch.Tensor, torch.Tensor]] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
     ):
-        print(hidden_states.shape)
+
         batch_size, seq_length, hidden_shape = hidden_states.shape
         with torch.no_grad():
             inputs_embeds = self.embed_tokens(input_ids)
@@ -201,10 +201,7 @@ class Model(nn.Module):
 
         inputs_embeds = self.input_layernorm(inputs_embeds)
         hidden_states = self.hidden_norm(hidden_states)
-        print("input_embeds")
-        print(inputs_embeds.shape)
-        print("hidden states")
-        print(hidden_states.shape)
+
         hidden_states = torch.cat((inputs_embeds, hidden_states), dim=-1)
 
         prior_hidden_states = []
