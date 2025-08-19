@@ -88,7 +88,7 @@ Here you can find links to our research implementations. These provide prototype
 
 - [hass](https://github.com/neuralmagic/speculators/tree/main/research/hass): This implementation trains models that are a variation on the EAGLE 1 architecture using the [HASS](https://github.com/HArmonizedSS/HASS) method.
 
-## vLLM Inference 
+## vLLM Inference
 
 Once in the speculators format, you can serve the speculator using vLLM:
 
@@ -105,16 +105,17 @@ Served models can then be benchmarked using [GuideLLM](https://github.com/vllm-p
   </picture>
 </p>
 
-
 ### Supported Models Architectures
 
 The following model architectures are currently supported or are planned to be supported in the short term.
 
 **Currently supported:**
+
 - Llama-3
 - Qwen3
 
 **Trained checkpoints:**
+
 - Llama-3
 - Qwen3
 - Qwen3 MoE
