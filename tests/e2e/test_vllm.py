@@ -3,7 +3,7 @@ import torch
 from loguru import logger
 
 try:
-    from vllm import LLM, SamplingParams
+    from vllm import LLM, SamplingParams  # type: ignore
 
     vllm_installed = True
 except ImportError:
@@ -53,6 +53,3 @@ class TestEagle3vLLM:
         output = self._run_vllm_engine(model_path=model_path)
         print(output)  # noqa: T201
         assert output
-
-    def test_vllm_server_eagle3(self):
-        pass
