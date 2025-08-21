@@ -13,7 +13,6 @@ except ImportError:
 
 @pytest.mark.skipif(not vllm_installed, reason="vLLM is not installed, skipping test")
 class TestEagle3vLLM:
-    # move boilerplate code to some base testing class
     def setup_method(self):
         import gc
 
@@ -51,5 +50,5 @@ class TestEagle3vLLM:
     )
     def test_vllm_engine_eagle3(self, model_path):
         output = self._run_vllm_engine(model_path=model_path)
-        print(output)  # noqa: T201
+        logger.info(output)
         assert output
