@@ -29,7 +29,7 @@ class TestEagle3vLLM:
 
         for output in outputs:
             token_ids = output.outputs[0].token_ids
-            assert len(token_ids) > 0
+            assert len(token_ids) == 20
             assert all(isinstance(token, int) for token in token_ids)
 
     @pytest.mark.smoke
