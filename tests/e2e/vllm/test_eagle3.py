@@ -17,8 +17,6 @@ class TestEagle3vLLM:
         cache_dir = tmp_path / "hf_cache"
         cache_dir.mkdir(exist_ok=True)
         monkeypatch.setenv("HF_HOME", str(cache_dir))
-        monkeypatch.setenv("TRANSFORMERS_CACHE", str(cache_dir))
-        monkeypatch.setenv("HUGGINGFACE_HUB_CACHE", str(cache_dir))
         return cache_dir
 
     def _run_vllm_engine(self, model_path):
@@ -26,7 +24,13 @@ class TestEagle3vLLM:
 
         sampling_params = SamplingParams(temperature=0.80, top_p=0.95, max_tokens=20)
         llm = LLM(model=model_path, max_model_len=1024, gpu_memory_utilization=0.8)
-        return llm.generate(self.prompts, sampling_params)
+        outputs = llm.generate(self.prompts, sampling_params)
+        logger.info(outputs)
+
+        for output in outputs:
+            token_ids = output.outputs[0].token_ids
+            assert len(token_ids) > 0
+            assert all(isinstance(token, int) for token in token_ids)
 
     @pytest.mark.smoke
     @pytest.mark.parametrize(
@@ -59,9 +63,7 @@ class TestEagle3vLLM:
             cache_dir=temp_cache_dir,
             norm_before_residual=norm_before_residual,
         )
-        output = self._run_vllm_engine(model_path=str(converted_path))
-        logger.info(output)
-        assert output
+        assert self._run_vllm_engine(model_path=str(converted_path))
 
     @pytest.mark.smoke
     @pytest.mark.parametrize(
@@ -73,7 +75,4 @@ class TestEagle3vLLM:
     )
     def test_vllm_engine_eagle3(self, model_path):
         pytest.importorskip("vllm", reason="vLLM is not installed")
-
-        output = self._run_vllm_engine(model_path=model_path)
-        logger.info(output)
-        assert output
+        assert self._run_vllm_engine(model_path=model_path)
