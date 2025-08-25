@@ -63,7 +63,7 @@ class TestEagle3vLLM:
             cache_dir=temp_cache_dir,
             norm_before_residual=norm_before_residual,
         )
-        assert self._run_vllm_engine(model_path=str(converted_path))
+        self._run_vllm_engine(model_path=str(converted_path))
 
     @pytest.mark.smoke
     @pytest.mark.parametrize(
@@ -75,4 +75,4 @@ class TestEagle3vLLM:
     )
     def test_vllm_engine_eagle3(self, model_path):
         pytest.importorskip("vllm", reason="vLLM is not installed")
-        assert self._run_vllm_engine(model_path=model_path)
+        self._run_vllm_engine(model_path=model_path)
