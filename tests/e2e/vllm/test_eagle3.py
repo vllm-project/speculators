@@ -4,7 +4,6 @@ from loguru import logger
 from speculators.convert.eagle.eagle3_converter import Eagle3Converter
 
 
-@pytest.mark.importorskip("vllm", reason="vLLM is not installed")
 class TestEagle3vLLM:
     def setup_method(self):
         self.prompts = [
@@ -45,6 +44,8 @@ class TestEagle3vLLM:
         ],
     )
     def test_convert_run_vllm_engine_eagle3(self, model_info, temp_cache_dir, tmp_path):
+        pytest.importorskip("vllm", reason="vLLM is not installed")
+
         unconverted_model = model_info.get("unconverted_model")
         base_model = model_info.get("base_model")
         norm_before_residual = model_info.get("norm_before_residual", False)
@@ -71,6 +72,8 @@ class TestEagle3vLLM:
         ],
     )
     def test_vllm_engine_eagle3(self, model_path):
+        pytest.importorskip("vllm", reason="vLLM is not installed")
+
         output = self._run_vllm_engine(model_path=model_path)
         logger.info(output)
         assert output
