@@ -85,7 +85,7 @@ An example for converting a model using the entry point for an Eagle v1 model is
 
 ```bash
 speculators convert "yuhuili/EAGLE-LLaMA3.1-Instruct-8B" \
- --algorithm eagle \
+    --algorithm eagle \
     --verifier "meta-llama/Llama-3.1-8B-Instruct"
 ```
 
