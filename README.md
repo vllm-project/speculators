@@ -114,10 +114,8 @@ The following model architectures are currently supported or are planned to be s
 - Llama-3
 - Qwen3
 
-**Trained checkpoints:**
+**Trained checkpoints but not currently supported:**
 
-- Llama-3
-- Qwen3
 - Qwen3 MoE
 - Llama-4
 - DeepSeek-R1
