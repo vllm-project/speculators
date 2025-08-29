@@ -109,19 +109,90 @@ Served models can then be benchmarked using [GuideLLM](https://github.com/vllm-p
 
 The following models are currently supported or are planned to be supported in the short term.
 
-| Model (Verifier)                 | Training via speculators | Deployment in vLLM | Pretrained Checkpoints                                                           |
-| -------------------------------- | ------------------------ | ------------------ | -------------------------------------------------------------------------------- |
-| Llama-3.1-8B-Instruct            | EAGLE-3 ✅ \| HASS ✅    | ✅                 | ✅ [EAGLE-3](https://huggingface.co/yuhuili/EAGLE3-LLaMA3.1-Instruct-8B)         |
-| Llama-3.1-70B-Instruct           | EAGLE-3 ⏳               | ✅                 | ✅ [EAGLE-3](https://huggingface.co/yuhuili/EAGLE3-LLaMA3.1-Instruct-70B)        |
-| DeepSeek-R1-Distill-LLama-8B     | EAGLE-3 ❌               | ✅                 | ✅ [EAGLE-3](https://huggingface.co/yuhuili/EAGLE3-DeepSeek-R1-Distill-LLaMA-8B) |
-| Qwen3-8B                         | EAGLE-3 ✅               | ✅                 | ❌                                                                               |
-| Qwen3-14B                        | EAGLE-3 ❌               | ✅                 | ❌                                                                               |
-| Qwen3-32B                        | EAGLE-3 ❌               | ✅                 | ❌                                                                               |
-| Qwen3-30B-A3B                    | EAGLE-3 ❌               | ❌                 | ❌                                                                               |
-| Qwen3-235B-A22B                  | EAGLE-3 ❌               | ❌                 | ✅ [EAGLE-3](https://huggingface.co/nvidia/Qwen3-235B-A22B-Eagle3)               |
-| Llama-4-Scout-17B-16E-Instruct   | EAGLE-3 ❌               | ❌                 | ❌                                                                               |
-| Llama-4-Maverick-17B-128E-Eagle3 | EAGLE-3 ❌               | ❌                 | ✅ [EAGLE-3](https://huggingface.co/nvidia/Llama-4-Maverick-17B-128E-Eagle3)     |
-| DeepSeek-R1                      | EAGLE-3 ❌               | ❌                 | ✅ [HASS](https://huggingface.co/HArmonizedSS/HASS-DeepSeek-R1)                  |
+<table>
+<thead>
+<tr>
+<th>Verifier Architecture</th>
+<th>Verifier Size</th>
+<th>Training via Speculators</th>
+<th>Deployment in vLLM</th>
+<th>Conversion of External Checkpoints</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td rowspan="3">Llama</td>
+<td>8B-Instruct</td>
+<td>EAGLE-3 ✅ | HASS ✅</td>
+<td>✅</td>
+<td><a href="https://huggingface.co/yuhuili/EAGLE3-LLaMA3.1-Instruct-8B">EAGLE-3</a> ✅</td>
+</tr>
+<tr>
+<td>70B-Instruct</td>
+<td>EAGLE-3 ⏳</td>
+<td>✅</td>
+<td><a href="https://huggingface.co/yuhuili/EAGLE3-LLaMA3.3-Instruct-70B">EAGLE-3</a> ✅</td>
+</tr>
+<tr>
+<td>DeepSeek-R1-Distill-LLama-8B</td>
+<td>EAGLE-3 ❌</td>
+<td>✅</td>
+<td><a href="https://huggingface.co/yuhuili/EAGLE3-DeepSeek-R1-Distill-LLaMA-8B">EAGLE-3</a> ✅</td>
+</tr>
+<tr>
+<td rowspan="3">Qwen3</td>
+<td>8B</td>
+<td>EAGLE-3 ✅</td>
+<td>✅</td>
+<td>❌</td>
+</tr>
+<tr>
+<td>14B</td>
+<td>EAGLE-3 ❌</td>
+<td>✅</td>
+<td>❌</td>
+</tr>
+<tr>
+<td>32B</td>
+<td>EAGLE-3 ❌</td>
+<td>✅</td>
+<td>❌</td>
+</tr>
+<tr>
+<td rowspan="2">Qwen3 MoE</td>
+<td>30B-A3B</td>
+<td>EAGLE-3 ❌</td>
+<td>⏳</td>
+<td>❌</td>
+</tr>
+<tr>
+<td>235B-A22B</td>
+<td>EAGLE-3 ❌</td>
+<td>⏳</td>
+<td><a href="https://huggingface.co/nvidia/Qwen3-235B-A22B-Eagle3">EAGLE-3</a> ⏳</td>
+</tr>
+<tr>
+<td rowspan="2">Llama-4</td>
+<td>Scout-17B-16E-Instruct</td>
+<td>EAGLE-3 ❌</td>
+<td>⏳</td>
+<td>❌</td>
+</tr>
+<tr>
+<td>Maverick-17B-128E-Eagle3</td>
+<td>EAGLE-3 ❌</td>
+<td>⏳</td>
+<td><a href="https://huggingface.co/nvidia/Llama-4-Maverick-17B-128E-Eagle3">EAGLE-3</a> ⏳</td>
+</tr>
+<tr>
+<td>DeepSeek-R1</td>
+<td>DeepSeek-R1</td>
+<td>EAGLE-3 ❌</td>
+<td>⏳</td>
+<td><a href="https://huggingface.co/HArmonizedSS/HASS-DeepSeek-R1">HASS</a> ⏳</td>
+</tr>
+</tbody>
+</table>
 
 ✅ = Supported, ⏳ = In Progress, ❌ = Not Yet Supported
 
