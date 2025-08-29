@@ -54,6 +54,11 @@ from transformers.utils import (
 )
 from transformers.utils.deprecation import deprecate_kwarg
 
+# at top of file
+import torch.nn.functional as F
+
+
+
 if is_torch_flex_attn_available():
     from torch.nn.attention.flex_attention import BlockMask
     from transformers.integrations.flex_attention import make_flex_block_causal_mask
@@ -235,65 +240,61 @@ def eager_attention_forward(
     return attn_output, attn_weights
 
 
-import time
-
-
 def eager_attention_forward_train(
     module: nn.Module,
-    query: torch.Tensor,
-    key_cache: torch.Tensor,
-    value_cache: torch.Tensor,
-    attention_mask: Optional[torch.Tensor],
+    query: torch.Tensor,           # [B, H, S, D]
+    key_cache: torch.Tensor,       # iterable/list of [B, H_kv or G, S, D]
+    value_cache: torch.Tensor,     # iterable/list of [B, H_kv or G, S, D]
+    attention_mask: Optional[torch.Tensor],  # broadcastable to [B, H, S, S]
     scaling: float,
     dropout: float = 0.0,
     **kwargs,
 ):
-    module.k_cache
-    key_states_orig = repeat_kv(key_cache[0], module.num_key_value_groups)
-    value_states_orig = repeat_kv(value_cache[0], module.num_key_value_groups)
-    attn_weights = torch.matmul(query, key_states_orig.transpose(2, 3)) * scaling
-    attn_weights = torch.tril(attn_weights, diagonal=-1 * len(key_cache) + 1)
-    start = time.time()
+    # Repeat KV to match heads (your helper)
+    k0 = repeat_kv(key_cache[0], module.num_key_value_groups).contiguous()   # [B, H, S, D]
+    v0 = repeat_kv(value_cache[0], module.num_key_value_groups).contiguous() # [B, H, S, D]
+    q  = query.contiguous()
 
+    # base scores with k0, causal band limited by #caches
+    band = -len(key_cache) + 1
+    attn_scores = torch.matmul(q, k0.transpose(-2, -1)) * scaling            # [B, H, S, S]
+    attn_scores.tril_(diagonal=band)                                         # in-place, no alloc
+
+    # add diagonal updates WITHOUT materializing (B,H,S,S) masks
+    S = attn_scores.size(-1)
     for i in range(1, len(key_cache)):
-        key_states = repeat_kv(key_cache[i], module.num_key_value_groups)
-        dot = torch.sum(key_states * query, dim=-1)
-        offset = len(key_cache) - 1 - i
-        base = torch.ones(
-            attn_weights.shape[-1] - offset, device=key_states_orig.device
-        )
-        base = torch.diag(base, diagonal=-1 * offset)
+        ki = repeat_kv(key_cache[i], module.num_key_value_groups).contiguous()  # [B,H,S,D]
+        # dot per position: sum_d (q * k_i)
+        dot = (ki * q).sum(dim=-1)                                              # [B,H,S]
+        offset = len(key_cache) - 1 - i                                         # >=0
+        # view over the target diagonal and add in place
+        diag_view = attn_scores.diagonal(offset=-offset, dim1=-2, dim2=-1)      # [B,H,S-offset]
+        diag_view.add_(dot[..., offset:] * scaling)
 
-        base = base.unsqueeze(0).repeat(
-            attn_weights.shape[0], attn_weights.shape[1], 1, 1
-        )
-        base = base * dot[:, :, :, None]
-        attn_weights += base * scaling
-
+    # apply mask if provided (additive, -inf on masked):
     if attention_mask is not None:
-        causal_mask = attention_mask[:, :, :, : key_states_orig.shape[-2]]
-        attn_weights = attn_weights + causal_mask
+        # limit to current key length
+        attn_scores.add_(attention_mask[..., :S])
 
-    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(
-        query.dtype
-    )
-    attn_weights = nn.functional.dropout(
-        attn_weights, p=dropout, training=module.training
-    )
-    attn_output = torch.matmul(
-        torch.tril(attn_weights, diagonal=-1 * len(key_cache) + 1), value_states_orig
-    )
+    # softmax in fp32 then cast back
+    attn_weights = F.softmax(attn_scores, dim=-1, dtype=torch.float32).to(q.dtype)
+    if dropout and module.training:
+        attn_weights = F.dropout(attn_weights, p=dropout, training=True)
 
-    for i in range(1, len(key_cache)):
-        v_i = repeat_kv(value_cache[i], module.num_key_value_groups)
-        offset = len(key_cache) - 1 - i
-        coeff = torch.diagonal(attn_weights, offset=-1 * offset, dim1=-2, dim2=-1)
-        holder = torch.zeros(v_i.shape[:-1], device=v_i.device)
-        holder[:, :, offset:] = coeff
-        attn_output += holder[:, :, :, None] * v_i
+    # base output for v0 (respect the same causal band)
+    attn_output = torch.matmul(attn_weights.tril(diagonal=band), v0)            # [B,H,S,D]
 
-    attn_output = attn_output.transpose(1, 2).contiguous()
+    # add diagonal output contributions WITHOUT 'holder'
+    for i in range(1, len(value_cache)):
+        vi = repeat_kv(value_cache[i], module.num_key_value_groups).contiguous()  # [B,H,S,D]
+        offset = len(value_cache) - 1 - i
+        coeff = attn_weights.diagonal(offset=-offset, dim1=-2, dim2=-1)           # [B,H,S-offset]
+        # for t in [offset..S-1]: out[t] += coeff[t-offset] * v_i[t]
+        attn_output[..., offset:, :].add_(vi[..., offset:, :].mul_(coeff.unsqueeze(-1)))
+
+    attn_output = attn_output.transpose(1, 2).contiguous()  # [B, S, H, D] -> your expected shape
     return attn_output, attn_weights
+
 
 
 class LlamaAttention(nn.Module):
