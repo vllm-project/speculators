@@ -1,189 +1,149 @@
 """
-Registry system for classes in the Speculators library.
+Registry system for dynamic object registration and discovery.
 
-This module provides a flexible class registration and discovery system used
-throughout the Speculators library. It enables automatic registration of classes
-and discovery of implementations through class decorators and module imports.
-
-The registry system is used to track different implementations of token proposal
-methods, speculative decoding algorithms, and speculator models, allowing for
-dynamic discovery and instantiation based on configuration parameters.
-
-Classes:
-    ClassRegistryMixin: Base mixin for creating class registries with decorators
-        and optional auto-discovery capabilities through registry_auto_discovery flag.
-    AutoClassRegistryMixin: A backward-compatible version of ClassRegistryMixin with
-        auto-discovery enabled by default
+Provides a flexible object registration system with optional auto-discovery
+capabilities through decorators and module imports. Enables dynamic discovery
+and instantiation of implementations based on configuration parameters, supporting
+both manual registration and automatic package-based discovery for extensible
+plugin architectures.
 """
 
-from typing import Any, Callable, ClassVar, Optional
+from __future__ import annotations
+
+from typing import Callable, ClassVar, Generic, TypeVar, cast
 
 from speculators.utils.auto_importer import AutoImporterMixin
 
-__all__ = ["ClassRegistryMixin"]
+__all__ = ["RegisterT", "RegistryMixin", "RegistryObjT"]
 
 
-class ClassRegistryMixin(AutoImporterMixin):
+RegistryObjT = TypeVar("RegistryObjT")
+"""Generic type variable for objects managed by the registry system."""
+RegisterT = TypeVar("RegisterT")
+"""Generic type variable for the args and return values within the registry."""
+
+
+class RegistryMixin(Generic[RegistryObjT], AutoImporterMixin):
     """
-    A mixin class that provides a registration system for tracking class
-    implementations with optional auto-discovery capabilities.
+    Generic mixin for creating object registries with optional auto-discovery.
 
-    This mixin allows classes to maintain a registry of subclasses that can be
-    dynamically discovered and instantiated. Classes that inherit from this mixin
-    can use the @register decorator to add themselves to the registry.
-
-    The registry is class-specific, meaning each class that inherits from this mixin
-    will have its own separate registry of implementations.
-
-    The mixin can also be configured to automatically discover and register classes
-    from specified packages by setting registry_auto_discovery=True and defining
-    an auto_package class variable to specify which package(s) should be automatically
-    imported to discover implementations.
+    Enables classes to maintain separate registries of objects that can be dynamically
+    discovered and instantiated through decorators and module imports. Supports both
+    manual registration via decorators and automatic discovery through package scanning
+    for extensible plugin architectures.
 
     Example:
-    ```python
-    class BaseAlgorithm(ClassRegistryMixin):
-        pass
+    ::
+        class BaseAlgorithm(RegistryMixin):
+            pass
 
-    @BaseAlgorithm.register()
-    class ConcreteAlgorithm(BaseAlgorithm):
-        pass
+        @BaseAlgorithm.register()
+        class ConcreteAlgorithm(BaseAlgorithm):
+            pass
 
-    @BaseAlgorithm.register("custom_name")
-    class AnotherAlgorithm(BaseAlgorithm):
-        pass
+        @BaseAlgorithm.register("custom_name")
+        class AnotherAlgorithm(BaseAlgorithm):
+            pass
 
-    # Get all registered algorithm implementations
-    algorithms = BaseAlgorithm.registered_classes()
-    ```
+        # Get all registered implementations
+        algorithms = BaseAlgorithm.registered_objects()
 
     Example with auto-discovery:
-    ```python
-    class TokenProposal(ClassRegistryMixin):
-        registry_auto_discovery = True
-        auto_package = "speculators.proposals"
+    ::
+        class TokenProposal(RegistryMixin):
+            registry_auto_discovery = True
+            auto_package = "mypackage.proposals"
 
-    # This will automatically import all modules in the proposals package
-    # and register any classes decorated with @TokenProposal.register()
-    proposals = TokenProposal.registered_classes()
-    ```
+        # Automatically imports and registers decorated objects
+        proposals = TokenProposal.registered_objects()
 
-    :cvar registry: A dictionary mapping class names to classes that have been
-        registered to the extending subclass through the @subclass.register() decorator
-    :cvar registry_auto_discovery: A flag that enables automatic discovery and import of
-        modules from the auto_package when set to True. Default is False.
-    :cvar registry_populated: A flag that tracks whether the registry has been
-        populated with classes from the specified package(s).
+    :cvar registry: Dictionary mapping names to registered objects
+    :cvar registry_auto_discovery: Enable automatic package-based discovery
+    :cvar registry_populated: Track whether auto-discovery has completed
     """
 
-    registry: ClassVar[Optional[dict[str, type[Any]]]] = None
+    registry: ClassVar[dict[str, RegistryObjT] | None] = None  # type: ignore[misc]
     registry_auto_discovery: ClassVar[bool] = False
     registry_populated: ClassVar[bool] = False
 
     @classmethod
-    def register(cls, name: Optional[str] = None) -> Callable[[type[Any]], type[Any]]:
+    def register(
+        cls, name: str | list[str] | None = None
+    ) -> Callable[[RegisterT], RegisterT]:
         """
-        An invoked class decorator that registers that class with the registry under
-        either the provided name or the class name if no name is provided.
+        Decorator for registering objects with the registry.
 
-        Example:
-        ```python
-        @ClassRegistryMixin.register()
-        class ExampleClass:
-            ...
-
-        @ClassRegistryMixin.register("custom_name")
-        class AnotherExampleClass:
-            ...
-        ```
-
-        :param name: Optional name to register the class under. If None, the class name
-            is used as the registry key.
-        :return: A decorator function that registers the decorated class.
-        :raises ValueError: If name is provided but is not a string.
+        :param name: Optional name(s) to register the object under.
+            If None, uses the object's __name__ attribute
+        :return: Decorator function that registers the decorated object
+        :raises ValueError: If name is not a string, list of strings, or None
         """
-        if name is not None and not isinstance(name, str):
-            raise ValueError(
-                "ClassRegistryMixin.register() name must be a string or None. "
-                f"Got {name}."
-            )
 
-        return lambda subclass: cls.register_decorator(subclass, name=name)
+        def _decorator(obj: RegisterT) -> RegisterT:
+            cls.register_decorator(obj, name=name)
+            return obj
+
+        return _decorator
 
     @classmethod
     def register_decorator(
-        cls, clazz: type[Any], name: Optional[str] = None
-    ) -> type[Any]:
+        cls, obj: RegisterT, name: str | list[str] | None = None
+    ) -> RegisterT:
         """
-        A non-invoked class decorator that registers the class with the registry.
-        If passed through a lambda, then name can be passed in as well.
-        Otherwise, the only argument is the decorated class.
+        Register an object directly with the registry.
 
-        Example:
-        ```python
-        @ClassRegistryMixin.register_decorator
-        class ExampleClass:
-            ...
-        ```
-
-        :param clazz: The class to register
-        :param name: Optional name to register the class under. If None, the class name
-            is used as the registry key.
-        :return: The registered class.
-        :raises TypeError: If the decorator is used incorrectly or if the class is not
-            a type.
-        :raises ValueError: If the class is already registered or if name is provided
-            but is not a string.
+        :param obj: The object to register
+        :param name: Optional name(s) to register the object under.
+            If None, uses the object's __name__ attribute
+        :return: The registered object
+        :raises ValueError: If the object is already registered or name is invalid
         """
 
-        if not isinstance(clazz, type):
-            raise TypeError(
-                "ClassRegistryMixin.register_decorator must be used as a class "
-                "decorator and without invocation."
-                f"Got improper clazz arg {clazz}."
-            )
-
-        if not name:
-            name = clazz.__name__
-        elif not isinstance(name, str):
+        if name is None:
+            name = obj.__name__ if hasattr(obj, "__name__") else str(obj)
+        elif not isinstance(name, (str, list)):
             raise ValueError(
-                "ClassRegistryMixin.register_decorator must be used as a class "
-                "decorator and without invocation. "
-                f"Got imporoper name arg {name}."
+                "RegistryMixin.register_decorator name must be a string or "
+                f"an iterable of strings. Got {name}."
             )
 
         if cls.registry is None:
             cls.registry = {}
 
-        if name in cls.registry:
-            raise ValueError(
-                f"ClassRegistryMixin.register_decorator cannot register a class "
-                f"{clazz} with the name {name} because it is already registered."
-            )
+        names = [name] if isinstance(name, str) else list(name)
 
-        cls.registry[name] = clazz
+        for register_name in names:
+            if not isinstance(register_name, str):
+                raise ValueError(
+                    "RegistryMixin.register_decorator name must be a string or "
+                    f"a list of strings. Got {register_name}."
+                )
 
-        return clazz
+            if register_name in cls.registry:
+                raise ValueError(
+                    f"RegistryMixin.register_decorator cannot register an object "
+                    f"{obj} with the name {register_name} because it is already "
+                    "registered."
+                )
+
+            cls.registry[register_name] = cast("RegistryObjT", obj)
+
+        return obj
 
     @classmethod
     def auto_populate_registry(cls) -> bool:
         """
-        Ensures that all modules in the specified auto_package are imported.
+        Import and register all modules from the auto_package.
 
-        This method is called automatically by registered_classes when
-        registry_auto_discovery==True to ensure that all available implementations are
-        discovered and registered before returning the list of registered classes.
+        Automatically called by registered_objects when registry_auto_discovery is True
+        to ensure all available implementations are discovered.
 
-        To enable auto-discovery:
-        1. Set registry_auto_discovery = True on the class
-        2. Define an auto_package class variable with the package path to import
-
-        :return: True if the registry was populated, False if it was already populated.
+        :return: True if registry was populated, False if already populated
         :raises ValueError: If called when registry_auto_discovery is False
         """
         if not cls.registry_auto_discovery:
             raise ValueError(
-                "ClassRegistryMixin.auto_populate_registry() cannot be called "
+                "RegistryMixin.auto_populate_registry() cannot be called "
                 "because registry_auto_discovery is set to False. "
                 "Set registry_auto_discovery to True to enable auto-discovery."
             )
@@ -197,26 +157,62 @@ class ClassRegistryMixin(AutoImporterMixin):
         return True
 
     @classmethod
-    def registered_classes(cls) -> tuple[type[Any], ...]:
+    def registered_objects(cls) -> tuple[RegistryObjT, ...]:
         """
-        Returns a tuple of all classes that have been registered with this registry.
+        Get all registered objects from the registry.
 
-        If registry_auto_discovery is True, this method will first call
-        auto_populate_registry to ensure that all available implementations from
-        the specified auto_package are discovered and registered before returning
-        the list.
+        Automatically triggers auto-discovery if registry_auto_discovery is enabled
+        to ensure all available implementations are included.
 
-        :return: A tuple containing all registered class implementations, including
-            those discovered through auto-importing when registry_auto_discovery==True.
-        :raises ValueError: If called before any classes have been registered.
+        :return: Tuple of all registered objects including auto-discovered ones
+        :raises ValueError: If called before any objects have been registered
         """
         if cls.registry_auto_discovery:
             cls.auto_populate_registry()
 
         if cls.registry is None:
             raise ValueError(
-                "ClassRegistryMixin.registered_classes() must be called after "
-                "registering classes with ClassRegistryMixin.register()."
+                "RegistryMixin.registered_objects() must be called after "
+                "registering objects with RegistryMixin.register()."
             )
 
         return tuple(cls.registry.values())
+
+    @classmethod
+    def is_registered(cls, name: str) -> bool:
+        """
+        Check if an object is registered under the given name.
+        It matches first by exact name, then by str.lower().
+
+        :param name: The name to check for registration.
+        :return: True if the object is registered, False otherwise.
+        """
+        if cls.registry is None:
+            return False
+
+        return name in cls.registry or name.lower() in [
+            key.lower() for key in cls.registry
+        ]
+
+    @classmethod
+    def get_registered_object(cls, name: str) -> RegistryObjT | None:
+        """
+        Get a registered object by its name. It matches first by exact name,
+        then by str.lower().
+
+        :param name: The name of the registered object.
+        :return: The registered object if found, None otherwise.
+        """
+        if cls.registry is None:
+            return None
+
+        if name in cls.registry:
+            return cls.registry[name]
+
+        lower_key_map = {key.lower(): key for key in cls.registry}
+
+        return (
+            cls.registry[lower_key_map[name.lower()]]
+            if name.lower() in lower_key_map
+            else None
+        )

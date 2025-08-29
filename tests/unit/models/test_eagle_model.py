@@ -215,9 +215,9 @@ def test_eagle_speculator_class_attributes():
 
 @pytest.mark.smoke
 def test_eagle_speculator_registry():
-    assert SpeculatorModel.registry is not None
-    assert "eagle" in SpeculatorModel.registry
-    assert SpeculatorModel.registry["eagle"] == EagleSpeculator
+    assert SpeculatorModel.registry is not None  # type: ignore[misc]
+    assert "eagle" in SpeculatorModel.registry  # type: ignore[misc]
+    assert SpeculatorModel.registry["eagle"] == EagleSpeculator  # type: ignore[misc]
 
 
 @pytest.mark.smoke
