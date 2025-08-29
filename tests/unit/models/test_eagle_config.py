@@ -324,9 +324,9 @@ def test_eagle_speculator_config_auto_registry():
     assert "EagleSpeculatorConfig" in class_names
 
     # Verify registry key mapping
-    assert SpeculatorModelConfig.registry is not None
-    assert "eagle" in SpeculatorModelConfig.registry
-    assert SpeculatorModelConfig.registry["eagle"] == EagleSpeculatorConfig
+    assert SpeculatorModelConfig.registry is not None  # type: ignore[misc]
+    assert "eagle" in SpeculatorModelConfig.registry  # type: ignore[misc]
+    assert SpeculatorModelConfig.registry["eagle"] == EagleSpeculatorConfig  # type: ignore[misc]
 
 
 @pytest.mark.smoke

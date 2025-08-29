@@ -37,10 +37,12 @@ from transformers.generation.streamers import BaseStreamer
 from transformers.generation.utils import GenerateOutput
 
 from speculators.config import SpeculatorModelConfig
-from speculators.utils import ClassRegistryMixin
+from speculators.utils import RegistryMixin
 
 
-class SpeculatorModel(ClassRegistryMixin, PreTrainedModel, GenerationMixin):  # type: ignore[misc]
+class SpeculatorModel(  # type: ignore[misc]
+    RegistryMixin[type["SpeculatorModel"]], PreTrainedModel, GenerationMixin
+):
     """
     Abstract base class for all speculator models in the Speculators library.
 

@@ -1,196 +1,269 @@
 """
-Unit tests for the auto_importer module in the Speculators library.
+Unit tests for the auto_importer module.
 """
+
+from __future__ import annotations
 
 from unittest import mock
 
 import pytest
 
-from speculators.utils.auto_importer import AutoImporterMixin
-
-# ===== Basic Functionality Tests =====
+from speculators.utils import AutoImporterMixin
 
 
-@pytest.mark.smoke
-def test_auto_importer_initialization():
-    class TestAutoImporterClass(AutoImporterMixin):
-        auto_package = "test_package.modules"
+class TestAutoImporterMixin:
+    """Test suite for AutoImporterMixin functionality."""
 
-    assert AutoImporterMixin.auto_package is None
-    assert AutoImporterMixin.auto_ignore_modules is None
-    assert AutoImporterMixin.auto_imported_modules is None
+    @pytest.fixture(
+        params=[
+            {
+                "auto_package": "test.package",
+                "auto_ignore_modules": None,
+                "modules": [
+                    ("test.package.module1", False),
+                    ("test.package.module2", False),
+                ],
+                "expected_imports": ["test.package.module1", "test.package.module2"],
+            },
+            {
+                "auto_package": ("test.package1", "test.package2"),
+                "auto_ignore_modules": None,
+                "modules": [
+                    ("test.package1.moduleA", False),
+                    ("test.package2.moduleB", False),
+                ],
+                "expected_imports": ["test.package1.moduleA", "test.package2.moduleB"],
+            },
+            {
+                "auto_package": "test.package",
+                "auto_ignore_modules": ("test.package.module1",),
+                "modules": [
+                    ("test.package.module1", False),
+                    ("test.package.module2", False),
+                ],
+                "expected_imports": ["test.package.module2"],
+            },
+        ],
+        ids=["single_package", "multiple_packages", "ignored_modules"],
+    )
+    def valid_instances(self, request):
+        """Fixture providing test data for AutoImporterMixin subclasses."""
+        config = request.param
 
+        class TestClass(AutoImporterMixin):
+            auto_package = config["auto_package"]
+            auto_ignore_modules = config["auto_ignore_modules"]
 
-@pytest.mark.smoke
-def test_auto_importer_subclass_attributes():
-    class TestAutoImporterClass(AutoImporterMixin):
-        auto_package = "test_package.modules"
+        return TestClass, config
 
-    assert TestAutoImporterClass.auto_package == "test_package.modules"
-    assert TestAutoImporterClass.auto_ignore_modules is None
-    assert TestAutoImporterClass.auto_imported_modules is None
+    @pytest.mark.smoke
+    def test_class_signatures(self):
+        """Test AutoImporterMixin class signatures and attributes."""
+        assert hasattr(AutoImporterMixin, "auto_package")
+        assert hasattr(AutoImporterMixin, "auto_ignore_modules")
+        assert hasattr(AutoImporterMixin, "auto_imported_modules")
+        assert hasattr(AutoImporterMixin, "auto_import_package_modules")
+        assert callable(AutoImporterMixin.auto_import_package_modules)
 
+        # Test default class variables
+        assert AutoImporterMixin.auto_package is None
+        assert AutoImporterMixin.auto_ignore_modules is None
+        assert AutoImporterMixin.auto_imported_modules is None
 
-@pytest.mark.smoke
-def test_no_package_raises_error():
-    class TestAutoImporterClass(AutoImporterMixin): ...
+    @pytest.mark.smoke
+    def test_initialization(self, valid_instances):
+        """Test AutoImporterMixin subclass initialization."""
+        test_class, config = valid_instances
+        assert issubclass(test_class, AutoImporterMixin)
+        assert test_class.auto_package == config["auto_package"]
+        assert test_class.auto_ignore_modules == config["auto_ignore_modules"]
+        assert test_class.auto_imported_modules is None
 
-    with pytest.raises(ValueError) as exc_info:
-        TestAutoImporterClass.auto_import_package_modules()
+    @pytest.mark.sanity
+    def test_invalid_initialization_missing(self):
+        """Test AutoImporterMixin with missing auto_package."""
 
-    assert "auto_package" in str(exc_info.value)
-    assert "must be set" in str(exc_info.value)
+        class TestClass(AutoImporterMixin):
+            pass
 
+        with pytest.raises(ValueError, match="auto_package.*must be set"):
+            TestClass.auto_import_package_modules()
 
-# ===== Module Import Tests =====
+    @pytest.mark.smoke
+    @mock.patch("importlib.import_module")
+    @mock.patch("pkgutil.walk_packages")
+    def test_auto_import_package_modules(self, mock_walk, mock_import, valid_instances):
+        """Test auto_import_package_modules core functionality."""
+        test_class, config = valid_instances
 
+        # Setup mocks based on config
+        packages = {}
+        modules = {}
 
-@pytest.mark.smoke
-def test_single_package_import():
-    class TestAutoImporterClass(AutoImporterMixin):
-        auto_package = "test_package.modules"
+        if isinstance(config["auto_package"], tuple):
+            for pkg in config["auto_package"]:
+                pkg_path = pkg.replace(".", "/")
+                packages[pkg] = MockHelper.create_mock_package(pkg, pkg_path)
+        else:
+            pkg = config["auto_package"]
+            packages[pkg] = MockHelper.create_mock_package(pkg, pkg.replace(".", "/"))
 
-    with (
-        mock.patch("pkgutil.walk_packages") as mock_walk,
-        mock.patch("importlib.import_module") as mock_import,
-    ):
-        # Create a mock package with the necessary attributes
-        mock_package = mock.MagicMock()
-        mock_package.__path__ = ["test_package/modules"]
-        mock_package.__name__ = "test_package.modules"
+        for module_name, is_pkg in config["modules"]:
+            if not is_pkg:
+                modules[module_name] = MockHelper.create_mock_module(module_name)
 
-        def import_module(name: str):
-            if name == "test_package.modules":
-                return mock_package
-            elif name == "test_package.modules.module1":
-                module = mock.MagicMock()
-                module.__name__ = "test_package.modules.module1"
-                return module
-            elif name == "test_package.modules.module2":
-                module = mock.MagicMock()
-                module.__name__ = "test_package.modules.module2"
-                return module
-            else:
-                raise ImportError(f"No module named {name}")
+        mock_import.side_effect = lambda name: {**packages, **modules}.get(
+            name, mock.MagicMock()
+        )
 
-        def walk_packages(package_path, package_name):
-            if package_name == "test_package.modules.":
-                return [
-                    (None, "test_package.modules.module1", False),
-                    (None, "test_package.modules.module2", False),
-                ]
-            else:
-                raise ValueError(f"Unknown package: {package_name}")
+        def walk_side_effect(path, prefix):
+            return [
+                (None, module_name, is_pkg)
+                for module_name, is_pkg in config["modules"]
+                if module_name.startswith(prefix)
+            ]
 
-        mock_walk.side_effect = walk_packages
-        mock_import.side_effect = import_module
-        TestAutoImporterClass.auto_import_package_modules()
+        mock_walk.side_effect = walk_side_effect
 
-        mock_import.assert_any_call("test_package.modules")
-        assert TestAutoImporterClass.auto_imported_modules == [
-            "test_package.modules.module1",
-            "test_package.modules.module2",
+        # Execute
+        test_class.auto_import_package_modules()
+
+        # Verify
+        assert test_class.auto_imported_modules == config["expected_imports"]
+
+        # Verify package imports
+        if isinstance(config["auto_package"], tuple):
+            for pkg in config["auto_package"]:
+                mock_import.assert_any_call(pkg)
+        else:
+            mock_import.assert_any_call(config["auto_package"])
+
+        # Verify expected module imports
+        for expected_module in config["expected_imports"]:
+            mock_import.assert_any_call(expected_module)
+
+    @pytest.mark.sanity
+    @mock.patch("importlib.import_module")
+    @mock.patch("pkgutil.walk_packages")
+    def test_auto_import_package_modules_invalid(self, mock_walk, mock_import):
+        """Test auto_import_package_modules with invalid configurations."""
+
+        class TestClass(AutoImporterMixin):
+            auto_package = "test.package"
+
+        # Test import error handling
+        mock_import.side_effect = ImportError("Module not found")
+
+        with pytest.raises(ImportError):
+            TestClass.auto_import_package_modules()
+
+    @pytest.mark.sanity
+    @mock.patch("importlib.import_module")
+    @mock.patch("pkgutil.walk_packages")
+    def test_skip_packages(self, mock_walk, mock_import):
+        """Test that packages (is_pkg=True) are skipped."""
+
+        class TestClass(AutoImporterMixin):
+            auto_package = "test.package"
+
+        # Setup mocks
+        mock_package = MockHelper.create_mock_package("test.package", "test/package")
+        mock_module = MockHelper.create_mock_module("test.package.module")
+
+        mock_import.side_effect = lambda name: {
+            "test.package": mock_package,
+            "test.package.module": mock_module,
+        }[name]
+
+        mock_walk.return_value = [
+            (None, "test.package.subpackage", True),
+            (None, "test.package.module", False),
         ]
 
+        # Execute
+        TestClass.auto_import_package_modules()
 
-@pytest.mark.sanity
-def test_multiple_package_import():
-    class TestAutoImporterClass(AutoImporterMixin):
-        auto_package = ("test_package.modules1", "test_package.modules2")
+        # Verify
+        assert TestClass.auto_imported_modules == ["test.package.module"]
+        mock_import.assert_any_call("test.package.module")
+        # subpackage should not be imported
+        with pytest.raises(AssertionError):
+            mock_import.assert_any_call("test.package.subpackage")
 
-    with (
-        mock.patch("pkgutil.walk_packages") as mock_walk,
-        mock.patch("importlib.import_module") as mock_import,
-    ):
-        # Create a mock package with the necessary attributes
-        mock_package1 = mock.MagicMock()
-        mock_package1.__path__ = ["test_package/modules1"]
-        mock_package1.__name__ = "test_package.modules1"
+    @pytest.mark.sanity
+    @mock.patch("sys.modules", {"test.package.existing": mock.MagicMock()})
+    @mock.patch("importlib.import_module")
+    @mock.patch("pkgutil.walk_packages")
+    def test_skip_already_imported_modules(self, mock_walk, mock_import):
+        """Test that modules already in sys.modules are tracked but not re-imported."""
 
-        mock_package2 = mock.MagicMock()
-        mock_package2.__path__ = ["test_package/modules2"]
-        mock_package2.__name__ = "test_package.modules2"
+        class TestClass(AutoImporterMixin):
+            auto_package = "test.package"
 
-        def import_module(name: str):
-            if name == "test_package.modules1":
-                return mock_package1
-            elif name == "test_package.modules2":
-                return mock_package2
-            elif name == "test_package.modules1.moduleA":
-                module = mock.MagicMock()
-                module.__name__ = "test_package.modules1.moduleA"
-                return module
-            elif name == "test_package.modules2.moduleB":
-                module = mock.MagicMock()
-                module.__name__ = "test_package.modules2.moduleB"
-                return module
-            else:
-                raise ImportError(f"No module named {name}")
+        # Setup mocks
+        mock_package = MockHelper.create_mock_package("test.package", "test/package")
+        mock_import.side_effect = lambda name: {
+            "test.package": mock_package,
+        }.get(name, mock.MagicMock())
 
-        def walk_packages(package_path, package_name):
-            if package_name == "test_package.modules1.":
-                return [
-                    (None, "test_package.modules1.moduleA", False),
-                ]
-            elif package_name == "test_package.modules2.":
-                return [
-                    (None, "test_package.modules2.moduleB", False),
-                ]
-            else:
-                raise ValueError(f"Unknown package: {package_name}")
-
-        mock_walk.side_effect = walk_packages
-        mock_import.side_effect = import_module
-        TestAutoImporterClass.auto_import_package_modules()
-
-        assert TestAutoImporterClass.auto_imported_modules == [
-            "test_package.modules1.moduleA",
-            "test_package.modules2.moduleB",
+        mock_walk.return_value = [
+            (None, "test.package.existing", False),
         ]
 
+        # Execute
+        TestClass.auto_import_package_modules()
 
-@pytest.mark.sanity
-def test_ignore_modules():
-    class TestAutoImporterClass(AutoImporterMixin):
-        auto_package = "test_package.modules"
-        auto_ignore_modules = ("test_package.modules.module1",)
+        # Verify
+        assert TestClass.auto_imported_modules == ["test.package.existing"]
+        mock_import.assert_called_once_with("test.package")
+        with pytest.raises(AssertionError):
+            mock_import.assert_any_call("test.package.existing")
 
-    with (
-        mock.patch("pkgutil.walk_packages") as mock_walk,
-        mock.patch("importlib.import_module") as mock_import,
-    ):
-        # Create a mock package with the necessary attributes
-        mock_package = mock.MagicMock()
-        mock_package.__path__ = ["test_package/modules"]
-        mock_package.__name__ = "test_package.modules"
+    @pytest.mark.sanity
+    @mock.patch("importlib.import_module")
+    @mock.patch("pkgutil.walk_packages")
+    def test_prevent_duplicate_module_imports(self, mock_walk, mock_import):
+        """Test that modules already in auto_imported_modules are not re-imported."""
 
-        def import_module(name: str):
-            if name == "test_package.modules":
-                return mock_package
-            elif name == "test_package.modules.module1":
-                module = mock.MagicMock()
-                module.__name__ = "test_package.modules.module1"
-                return module
-            elif name == "test_package.modules.module2":
-                module = mock.MagicMock()
-                module.__name__ = "test_package.modules.module2"
-                return module
-            else:
-                raise ImportError(f"No module named {name}")
+        class TestClass(AutoImporterMixin):
+            auto_package = "test.package"
 
-        def walk_packages(package_path, package_name):
-            if package_name == "test_package.modules.":
-                return [
-                    (None, "test_package.modules.module1", False),
-                    (None, "test_package.modules.module2", False),
-                ]
-            else:
-                raise ValueError(f"Unknown package: {package_name}")
+        # Setup mocks
+        mock_package = MockHelper.create_mock_package("test.package", "test/package")
+        mock_module = MockHelper.create_mock_module("test.package.module")
 
-        mock_walk.side_effect = walk_packages
-        mock_import.side_effect = import_module
-        TestAutoImporterClass.auto_import_package_modules()
+        mock_import.side_effect = lambda name: {
+            "test.package": mock_package,
+            "test.package.module": mock_module,
+        }[name]
 
-        assert TestAutoImporterClass.auto_imported_modules == [
-            "test_package.modules.module2",
+        mock_walk.return_value = [
+            (None, "test.package.module", False),
+            (None, "test.package.module", False),
         ]
+
+        # Execute
+        TestClass.auto_import_package_modules()
+
+        # Verify
+        assert TestClass.auto_imported_modules == ["test.package.module"]
+        assert mock_import.call_count == 2  # Package + module (not duplicate)
+
+
+class MockHelper:
+    """Helper class to create consistent mock objects for testing."""
+
+    @staticmethod
+    def create_mock_package(name: str, path: str):
+        """Create a mock package with required attributes."""
+        package = mock.MagicMock()
+        package.__name__ = name
+        package.__path__ = [path]
+        return package
+
+    @staticmethod
+    def create_mock_module(name: str):
+        """Create a mock module with required attributes."""
+        module = mock.MagicMock()
+        module.__name__ = name
+        return module
