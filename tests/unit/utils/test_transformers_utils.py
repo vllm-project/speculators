@@ -1,5 +1,5 @@
 """
-Unit tests for the transformer_utils module in the Speculators library.
+Unit tests for the transformers_utils module in the Speculators library.
 """
 
 from __future__ import annotations
