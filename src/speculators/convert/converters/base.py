@@ -30,7 +30,7 @@ ModelT = TypeVar("ModelT", bound=SpeculatorModel)
 """Generic type variable for speculator models"""
 
 
-class SpeculatorConverter(ABC, RegistryMixin, Generic[ConfigT, ModelT]):
+class SpeculatorConverter(ABC, Generic[ConfigT, ModelT], RegistryMixin):
     """
     Abstract base converter for transforming external checkpoints to Speculators format.
 
