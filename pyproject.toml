@@ -156,7 +156,7 @@ ignore = [
     "COM812",
     "ISC001",
     "TC002",
-    "TC003", # allow imports for typing outside of type checking blocks
+    "TC003",  # allow imports for just typing without TYPE_CHECKING nested block
     "S311", # allow random number generators
     "PLW1514", # allow Path.open without encoding
     "RET505", # allow `else` blocks
