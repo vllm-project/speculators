@@ -12,7 +12,7 @@
 
 ## Overview
 
-**Speculators** is a unified library for building, evaluating, and storing speculative decoding algorithms for large language model (LLM) inference, including in frameworks like vLLM. Speculative decoding is a lossless technique that speeds up LLM inference by using a smaller, faster speculator model to propose tokens, which are then verified by the larger base model, reducing latency without compromising output quality. Speculators standardizes this process with reusable formats and tools, enabling easier integration and deployment of speculative decoding in production-grade inference servers.
+**Speculators** is a unified library for building, evaluating, and storing speculative decoding algorithms for large language model (LLM) inference, including in frameworks like vLLM. Speculative decoding is a lossless technique that speeds up LLM inference by using a smaller, faster speculator model to propose tokens, which are then verified by the larger base model, reducing latency without compromising output quality. The speculators intelligently drafts multiple tokens ahead of time and the main model verifies them in one go. This approach boosts performance without sacrificing output quality as every accepted token is confirmed to match what the main model would generate alone Speculators standardizes this process with reusable formats and tools, enabling easier integration and deployment of speculative decoding in production-grade inference servers.
 
 <p align="center">
   <picture>
@@ -22,90 +22,14 @@
   </picture>
 </p>
 
-### Key Features
+## Key Features
 
 - **Unified Speculative Decoding Toolkit:** Simplifies the development, evaluation, and representation of speculative decoding algorithms, supporting both research and production use cases for LLMs.
-- **Standardized, Extensible Format:** Provides a Hugging Face-compatible format for defining speculative models, with tools to convert from external research repositories for easy adoption.
+- **Standardized, Extensible Format:** Provides a Hugging Face-compatible format for defining speculative models, with tools to convert from external research repositories into a standard speculators format for easy adoption.
 - **Seamless vLLM Integration:** Built for direct deployment into vLLM, enabling low-latency, production-grade inference with minimal overhead.
+- **Coming Soon:** The ability to train speculators directly through the speculators repository
 
-## Getting Started
-
-### Installation
-
-#### Prerequisites
-
-Before installing, ensure you have the following:
-
-- **Operating System:** Linux or macOS
-- **Python:** 3.9 or higher
-- **Package Manager:** pip (recommended) or conda
-
-#### Install from PyPI (Recommended)
-
-Install the latest stable release from PyPI:
-
-```bash
-pip install speculators
-```
-
-#### Install from Source
-
-For the latest development version or to contribute to the project:
-
-```bash
-git clone https://github.com/neuralmagic/speculators.git
-cd speculators
-
-pip install -e .
-```
-
-For development with additional tools:
-
-```bash
-pip install -e .[dev]
-```
-
-#### Verify Installation
-
-You can verify your installation by checking the version:
-
-```bash
-speculators --version
-```
-
-Or by importing the package in Python:
-
-```python
-import speculators
-print(speculators.__version__)
-```
-
-## Resources
-
-Here you can find links to our research implementations. These provide prototype code for immediate enablement and experimentation, with plans for productization into the main package soon.
-
-- [eagle3](https://github.com/neuralmagic/speculators/tree/main/research/eagle3): This implementation trains models similar to the EAGLE 3 architecture, specifically utilizing the Train Time Test method.
-
-- [hass](https://github.com/neuralmagic/speculators/tree/main/research/hass): This implementation trains models that are a variation on the EAGLE 1 architecture using the [HASS](https://github.com/HArmonizedSS/HASS) method.
-
-## vLLM Inference
-
-Once in the speculators format, you can serve the speculator using vLLM:
-
-```bash
-VLLM_USE_V1=1 vllm serve RedHatAI/Qwen3-8B-speculator.eagle3
-```
-
-Served models can then be benchmarked using [GuideLLM](https://github.com/vllm-project/guidellm). Below, we show sample benchmark results where we compare our speculator with its dense counterpart. We also additionally compare [quantization](https://github.com/vllm-project/llm-compressor) to explore additional performance improvements by swapping the dense verifier, `Qwen/Qwen3-8B` with the quantized FP8 model, [RedHatAI/Qwen3-8B-FP8-dynamic](https://huggingface.co/RedHatAI/Qwen3-8B-FP8-dynamic) in the `speculator_config`.
-
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/neuralmagic/speculators/main/docs/assets/qwen_quant_benchmark.png">
-    <img alt="GuideLLM Logo" src="https://raw.githubusercontent.com/neuralmagic/speculators/main/docs/assets/qwen_quant_benchmark.png" width=180%>
-  </picture>
-</p>
-
-### Supported Models
+## Supported Models
 
 The following models are currently supported or are planned to be supported in the short term.
 
@@ -195,6 +119,83 @@ The following models are currently supported or are planned to be supported in t
 </table>
 
 ✅ = Supported, ⏳ = In Progress, ❌ = Not Yet Supported
+
+## Getting Started
+
+### Installation
+
+#### Prerequisites
+
+Before installing, ensure you have the following:
+
+- **Operating System:** Linux or macOS
+- **Python:** 3.9 or higher
+- **Package Manager:** pip (recommended) or conda
+
+#### Install from PyPI (Recommended)
+
+Install the latest stable release from PyPI:
+
+```bash
+pip install speculators
+```
+
+#### Install from Source
+
+For the latest development version or to contribute to the project:
+
+```bash
+git clone https://github.com/neuralmagic/speculators.git
+cd speculators
+
+pip install -e .
+```
+
+For development with additional tools:
+
+```bash
+pip install -e .[dev]
+```
+
+#### Verify Installation
+
+You can verify your installation by checking the version:
+
+```bash
+speculators --version
+```
+
+Or by importing the package in Python:
+
+```python
+import speculators
+print(speculators.__version__)
+```
+
+## Resources
+
+Here you can find links to our research implementations. These provide prototype code for immediate enablement and experimentation, with plans for productization into the main package soon.
+
+- [eagle3](https://github.com/neuralmagic/speculators/tree/main/research/eagle3): This implementation trains models similar to the EAGLE 3 architecture, specifically utilizing the Train Time Test method.
+
+- [hass](https://github.com/neuralmagic/speculators/tree/main/research/hass): This implementation trains models that are a variation on the EAGLE 1 architecture using the [HASS](https://github.com/HArmonizedSS/HASS) method.
+
+## vLLM Inference
+
+Once in the speculators format, you can serve the speculator using vLLM:
+
+```bash
+VLLM_USE_V1=1 vllm serve RedHatAI/Qwen3-8B-speculator.eagle3
+```
+
+Served models can then be benchmarked using [GuideLLM](https://github.com/vllm-project/guidellm). Below, we show sample benchmark results where we compare our speculator with its dense counterpart. We also additionally compare [quantization](https://github.com/vllm-project/llm-compressor) to explore additional performance improvements by swapping the dense verifier, `Qwen/Qwen3-8B` with the quantized FP8 model, [RedHatAI/Qwen3-8B-FP8-dynamic](https://huggingface.co/RedHatAI/Qwen3-8B-FP8-dynamic) in the `speculator_config`.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/neuralmagic/speculators/main/docs/assets/qwen_quant_benchmark.png">
+    <img alt="GuideLLM Logo" src="https://raw.githubusercontent.com/neuralmagic/speculators/main/docs/assets/qwen_quant_benchmark.png" width=180%>
+  </picture>
+</p>
 
 ## License
 
