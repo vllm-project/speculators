@@ -8,11 +8,6 @@
 
 [![License](https://img.shields.io/github/license/neuralmagic/speculators.svg)](https://github.com/neuralmagic/speculators/blob/main/LICENSE) [![Python Versions](https://img.shields.io/badge/Python-3.9--3.13-orange)](https://pypi.python.org/pypi/speculators) [![docs](https://img.shields.io/badge/docs-Speculators-blue)](https://docs.vllm.ai/projects/speculators/en/latest/) [![PyPI](https://img.shields.io/pypi/v/speculators.svg)](https://pypi.org/project/speculators/) [![tests](https://github.com/vllm-project/speculators/actions/workflows/nightly.yml/badge.svg)](https://github.com/vllm-project/speculators/actions/workflows/nightly.yml) [![tests](https://github.com/vllm-project/speculators/actions/workflows/main.yml/badge.svg)](https://github.com/vllm-project/speculators/actions/workflows/main.yml)
 
-
-
-
-
-
 </div>
 
 ## Overview
