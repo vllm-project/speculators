@@ -138,7 +138,9 @@ class Model(nn.Module):
         mapping = np.load("t2d.npy")
         self.t2d = torch.tensor(mapping)
 
-        self.lm_head.weight.data = tensor[self.t2d, :]
+        # FIX: Use indices of True values, not the boolean mask itself
+        t2d_indices = torch.nonzero(self.t2d).squeeze(-1)
+        self.lm_head.weight.data = tensor[t2d_indices, :]
         self.top_k = top_k
         self.total_tokens = total_tokens - 1
         self.depth = depth

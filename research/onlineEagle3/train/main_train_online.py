@@ -41,7 +41,7 @@ from model.llama_eagle3_full_grad import Model
 parser = argparse.ArgumentParser()
 parser.add_argument("--basepath", type=str, required=True)
 parser.add_argument("--configpath", type=str, required=True)
-parser.add_argument("--lr", type=float, default=3e-5)
+parser.add_argument("--lr", type=float, default=1e-5)
 parser.add_argument("--bs", type=int, default=7)
 parser.add_argument("--gradient-accumulation-steps", type=int, default=1)
 parser.add_argument("--tmpdir", type=str, default="/tmp")
@@ -49,7 +49,7 @@ parser.add_argument("--cpdir", type=str, default="checkpoints")
 parser.add_argument("--epoch", type=int, default=40)
 parser.add_argument("--forward_num_total", type=int, default=3)
 parser.add_argument("--ckpt_path", type=str, default=None)
-parser.add_argument("--data_num", type=int, default=500)
+parser.add_argument("--data_num", type=int, default=5000)
 parser.add_argument("--log_every", type=int, default=10)
 parser.add_argument("--quiet_vllm", action="store_true")
 parser.add_argument("--hf_export_every", type=int, default=10, help="Export HF-style folder every N epochs (and at final epoch)")
@@ -608,26 +608,14 @@ def train(data_queue: mp.Queue, args, train_config):
         if accelerator.is_local_main_process:
             accelerator.print(f"[epoch {epoch+1}] avg_loss={running / max_steps:.4f}")
 
-            # ---- Save checkpoint per epoch (.pt) ----
-            ckpt_dir = Path(args.cpdir)
-            ckpt_dir.mkdir(parents=True, exist_ok=True)
-            state = {
-                "epoch": epoch + 1,
-                "model": accelerator.get_state_dict(model),
-                "optimizer": optimizer.state_dict(),
-                "scheduler": scheduler.state_dict() if scheduler else None,
-                "args": vars(args),
-                "train_config": train_config,
-            }
-            torch.save(state, ckpt_dir / f"epoch_{epoch+1}.pt")
-            print(f"[ckpt] saved to {ckpt_dir / f'epoch_{epoch+1}.pt'}")
-
             # ---- HF export every N epochs or at final epoch ----
             do_hf_export = ((epoch + 1) % max(1, args.hf_export_every) == 0) or ((epoch + 1) == args.epoch)
             if do_hf_export:
                 hf_out = ckpt_dir / f"epoch_{epoch+1}-hf"
+                # Get model state from accelerator
+                model_state = accelerator.get_state_dict(model)
                 save_hf_drafter(
-                    model_state=state["model"],
+                    model_state=model_state,
                     teacher_cfg=teacher_cfg,
                     out_dir=str(hf_out),
                     draft_vocab_size=32000,
@@ -646,8 +634,8 @@ def main(
     data: str,
     verifier_batch_size: int,
     data_cache_limit: int = 16,
-    verifier_gpus: Union[float, int, list[int]] = [0, 1, 2, 3],
-    train_gpus: Union[float, int, list[int]] = [4, 5, 6, 7],
+    verifier_gpus: Union[float, int, list[int]] = [2, 3],
+    train_gpus: Union[float, int, list[int]] = [4, 5],
 ):
     ver_ids, tr_ids = verifier_gpus, train_gpus
 
