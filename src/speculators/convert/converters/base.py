@@ -30,7 +30,7 @@ ModelT = TypeVar("ModelT", bound=SpeculatorModel)
 """Generic type variable for speculator models"""
 
 
-class SpeculatorConverter(ABC, Generic[ConfigT, ModelT], RegistryMixin):
+class SpeculatorConverter(ABC, RegistryMixin, Generic[ConfigT, ModelT]):
     """
     Abstract base converter for transforming external checkpoints to Speculators format.
 
@@ -55,8 +55,8 @@ class SpeculatorConverter(ABC, Generic[ConfigT, ModelT], RegistryMixin):
     def resolve_converter(
         cls,
         algorithm: str,
-        model: Path | PreTrainedModel | nn.Module,
-        config: Path | PretrainedConfig | dict,
+        model: str | Path | PreTrainedModel | nn.Module,
+        config: str | Path | PretrainedConfig | dict,
         verifier: str | os.PathLike | PreTrainedModel | None = None,
         **kwargs,
     ) -> type[SpeculatorConverter]:
@@ -104,8 +104,8 @@ class SpeculatorConverter(ABC, Generic[ConfigT, ModelT], RegistryMixin):
     @abstractmethod
     def is_supported(
         cls,
-        model: Path | PreTrainedModel | nn.Module,
-        config: Path | PretrainedConfig | dict,
+        model: str | Path | PreTrainedModel | nn.Module,
+        config: str | Path | PretrainedConfig | dict,
         verifier: str | os.PathLike | PreTrainedModel | None = None,
         **kwargs,
     ) -> bool:
@@ -122,8 +122,8 @@ class SpeculatorConverter(ABC, Generic[ConfigT, ModelT], RegistryMixin):
 
     def __init__(
         self,
-        model: Path | PreTrainedModel | nn.Module,
-        config: Path | PretrainedConfig | dict,
+        model: str | Path | PreTrainedModel | nn.Module,
+        config: str | Path | PretrainedConfig | dict,
         verifier: str | os.PathLike | PreTrainedModel | None,
     ):
         """
@@ -135,7 +135,7 @@ class SpeculatorConverter(ABC, Generic[ConfigT, ModelT], RegistryMixin):
         :raises ValueError: If model or config is None or empty
         """
 
-        if model is None or config is None:
+        if model is None or config is None or model == "" or config == "":
             raise ValueError(
                 f"Model and config paths must be provided, got {model}, {config}"
             )
