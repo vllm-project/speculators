@@ -48,13 +48,13 @@ Unified Library for Speculative Decoding: Build, Evaluate, and Deploy Faster LLM
 
   [:octicons-arrow-right-24: Entrypoints](./entrypoints/)
 
-- :material-api:{ .lg .middle } API Reference
+<!-- - :material-api:{ .lg .middle } API Reference
 
     ---
 
     Complete reference documentation for the Speculators API to integrate speculative decoding into your workflow.
 
-    [:octicons-arrow-right-24: API Reference](./api/)
+    [:octicons-arrow-right-24: API Reference](./api/) -->
 
 </div>
 
@@ -85,5 +85,5 @@ VLLM_USE_V1=1 vllm serve RedHatAI/Qwen3-8B-speculator.eagle3
 
 Speculators includes prototype implementations of cutting-edge speculative decoding research:
 
-- **[EAGLE 3](./research/eagle3/)**: Train Time Test method implementation for advanced token speculation
-- **[HASS](./research/hass/)**: EAGLE 1 architecture variation using the HASS training method
+- **EAGLE 3**: Train Time Test method implementation for advanced token speculation
+- **HASS**: EAGLE 1 architecture variation using the HASS training method
