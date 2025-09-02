@@ -136,8 +136,7 @@ def convert(
             --verifier "meta-llama/Llama-3.1-8B-Instruct"
 
         # eagle3 with normalization before the residual
-        speculators convert "./eaglev3/checkpoint" \
-            --algorithm-kwargs '{"norm_before_residual": true}'
+            --algorithm-kwargs '{"norm_before_residual": true}' \
             --verifier "meta-llama/Llama-3.1-8B-Instruct"
 
     :param model: Model checkpoint path or Hugging Face model ID to convert
