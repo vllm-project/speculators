@@ -1,0 +1,41 @@
+PYTHONPATH=. python train/main_train_online.py   --basepath $VERIFIER_PATH   --configpath /cache/helen/speculators/research/onlineEagle3/train/llama3_8_B.json  --tmpdir /tmp   --cpdir checkpoints
+speculative_config={"model":"/cache/helen/speculators/research/onlineEagle3/meta-llama-3-70b-head-k6", "num_speculative_tokens":1, "method":"eagle3"}
+
+python create_eagle_head.py \
+  --base-model $VERIFIER_PATH \
+  --out meta-llama-3-70b-head-k3 \
+  --k 3 \
+  --dtype bfloat16
+
+python export_checkpoint.py   --ckpt checkpoints/epoch_40.pt   --out eagle3_ep40   --configpath $CONFIG_PATH  --dtype bf16   --map_file t2d.npy
+
+speculators convert research/onlineEagle3/eagle3_ep40 \
+  --algorithm eagle3 \
+  --verifier /proving-grounds/cache/hub/models--meta-llama--Llama-3.3-70B-Instruct/snapshots/6f6073b423013f6a7d4d9f39144961bfbfbc386b \
+  --output-path research/onlineEagle3/eagle3_ep40-converted
+
+python export_checkpoint.py   --in-dir research/onlineEagle3/checkpoints/epoch_1.pt   --out-dir research/onlineEagle3/eagle3_ep1   --trim-embeddings
+
+export VERIFIER_PATH=/proving-grounds/cache/hub/models--meta-llama--Llama-3.3-70B-Instruct/snapshots/6f6073b423013f6a7d4d9f39144961bfbfbc386b
+export CONFIG_PATH=/cache/helen/speculators/research/onlineEagle3/train/llama33_70b_head_k3.json
+
+
+python research/onlineEagle3/export_checkpoint.py \
+  --in-dir research/onlineEagle3/checkpoints/epoch_40.pt \
+  --out-dir research/onlineEagle3/eagle3_ep40 \
+  --verifier /proving-grounds/cache/hub/models--meta-llama--Llama-3.3-70B-Instruct/snapshots/6f6073b423013f6a7d4d9f39144961bfbfbc386b \
+  --draft-vocab 32000 \
+  --trim-embeddings
+
+  speculators convert research/onlineEagle3/eagle3_ep40   --algorithm eagle3   --verifier /proving-grounds/cache/hub/models--meta-llama--Llama-3.3-70B-Instruct/snapshots/6f6073b423013f6a7d4d9f39144961bfbfbc386b   --output-path research/onlineEagle3/eagle3_ep40-converted
+
+GUIDELLM__PREFERRED_ROUTE="chat_completions" guidellm benchmark --target "http://localhost:8000/v1" --model /proving-grounds/cache/hub/models--meta-llama--Llama-3.3-70B-Instruct/snapshots/6f6073b423013f6a7d4d9f39144961bfbfbc386b --data math_reasoning.jsonl --rate-type sweep --max-seconds 90  --backend-args '{"extra_body": {"chat_completions": {"temperature": 0.0}}, "max_output_tokens":1024}
+
+python compare_mappings_vs_training.py \
+  research/onlineEagle3/d2t.npy \
+  research/onlineEagle3/eagle3_ep40-converted/d2t.npy
+
+speculators convert research/onlineEagle3/checkpoints/072701/epoch_40-hf/   --algorithm eagle3   --verifier /proving-grounds/cache/hub/models--meta-llama--Llama-3.3-70B-Instruct/snapshots/6f6073b423013f6a7d4d9f39144961bfbfbc386b   --output-path research/onlineEagle3/eagle3_ep40-converted
+
+PYTHONPATH=. python train/main_train_online.py   --basepath $VERIFIER_PATH   --configpath $CONFIG_PATH --tmpdir /tmp   --cpdir checkpoints
+speculative_config={"model":"/cache/helen/speculators/research/onlineEagle3/meta-llama-3-70b-head-k3", "num_speculative_tokens":3, "method":"eagle3"}
