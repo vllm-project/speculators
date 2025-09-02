@@ -135,7 +135,7 @@ class SpeculatorConverter(ABC, Generic[ConfigT, ModelT], RegistryMixin):
         :raises ValueError: If model or config is None or empty
         """
 
-        if not model or not config:
+        if model is None or config is None:
             raise ValueError(
                 f"Model and config paths must be provided, got {model}, {config}"
             )
