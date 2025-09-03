@@ -218,15 +218,16 @@ def online_data_generator(
         tok = AutoTokenizer.from_pretrained(verifier, use_fast=False)
         ds = build_ds(tok)
 
+        # Enable prefix caching
         llm = vllm.LLM(
             model=verifier,
-            enable_prefix_caching=False,
+            enable_prefix_caching=True,  # Enable this!
             tensor_parallel_size=len(gpu_ids) if gpu_ids else 1,
             disable_custom_all_reduce=True,
             dtype="bfloat16",
-            max_model_len=8192,  # keep rotary cache at 8k to avoid compile meta-assert
+            max_model_len=8192,
             speculative_config={
-                "model": "/cache/helen/speculators/research/onlineEagle3/meta-llama-3-70b-head-k3",
+                "model": "/cache/helen/speculators/research/onlineEagle3/meta-llama-3-8b-head-k3",
                 "num_speculative_tokens": 1,
                 "method": "eagle3",
             },
@@ -404,24 +405,25 @@ def save_hf_drafter(
             k2 = k2.replace("midlayer.", "layers.0.")
         weights_to_save[k2] = v.detach().to("cpu")
 
-    save_safetensors(weights_to_save, str(out / "model.safetensors"))
-
-    # --- 3) (Optional) write mappings (d2t/t2d) ---
-    extra = {}
-    if d2t_npy is not None and Path(d2t_npy).exists():
+    # CRITICAL: Always include the mappings in the main weights file
+    if d2t_npy and Path(d2t_npy).exists():
         d2t = torch.from_numpy(np.load(d2t_npy)).to(torch.int64)
         assert d2t.ndim == 1, "d2t must be 1D"
-        assert d2t.numel() == draft_vocab_size, f"d2t length {d2t.numel()} != draft_vocab {draft_vocab_size}"
-        extra["d2t"] = d2t
-    if t2d_npy is not None and Path(t2d_npy).exists():
+        assert d2t.numel() == draft_vocab_size, f"d2d length {d2t.numel()} != draft_vocab {draft_vocab_size}"
+        weights_to_save["d2t"] = d2t
+        print(f"Added d2t mapping with shape {d2t.shape}")
+        
+    if t2d_npy and Path(t2d_npy).exists():
         t2d = np.load(t2d_npy)
-        t2d = torch.from_numpy(t2d.astype(np.int64, copy=False))  # store as int64
+        t2d = torch.from_numpy(t2d.astype(np.int64, copy=False))
         assert t2d.ndim == 1, "t2d must be 1D"
-        extra["t2d"] = t2d
-    if extra:
-        save_safetensors(extra, str(out / "mappings.safetensors"))
+        weights_to_save["t2d"] = t2d
+        print(f"Added t2d mapping with shape {t2d.shape}")
 
-    print(f"[HF save] wrote {out}/config.json, model.safetensors" + (", mappings.safetensors" if extra else ""))
+    # Save everything in one file (including mappings)
+    save_safetensors(weights_to_save, str(out / "model.safetensors"))
+
+    print(f"[HF save] wrote {out}/config.json, model.safetensors with mappings")
 
 
 # -------------------- trainer --------------------
@@ -506,6 +508,10 @@ def train(data_queue: mp.Queue, args, train_config):
     last_log_t = time.perf_counter()
     last_log_step = 0
 
+    # Create checkpoint directory
+    ckpt_dir = Path(args.cpdir)
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+
     for epoch in range(args.epoch):
         if accelerator.is_local_main_process:
             print(f"\n========== EPOCH {epoch+1}/{args.epoch} ==========")
@@ -542,7 +548,7 @@ def train(data_queue: mp.Queue, args, train_config):
                 hid_hist = []
                 hid_proj = model.fc(aux_states)                                 # (B,T,H_model) bf16
 
-                F = int(args.forward_num_total)
+                F = 1  # Instead of 3
                 with accelerator.autocast():
                     for _ in range(F):
                         pred_states = model(hid_proj, input_ids, None, hid_hist) # (B,T,H_model)
@@ -608,6 +614,20 @@ def train(data_queue: mp.Queue, args, train_config):
         if accelerator.is_local_main_process:
             accelerator.print(f"[epoch {epoch+1}] avg_loss={running / max_steps:.4f}")
 
+            # NEW: Save checkpoint every epoch
+            epoch_ckpt_path = ckpt_dir / f"epoch_{epoch+1}.pt"
+            if accelerator.is_local_main_process:
+                # Save PyTorch checkpoint
+                torch.save({
+                    'epoch': epoch + 1,
+                    'model_state_dict': accelerator.get_state_dict(model),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'scheduler_state_dict': scheduler.state_dict() if scheduler else None,
+                    'loss': running / max_steps,
+                    'config': train_config,
+                }, epoch_ckpt_path)
+                print(f"[checkpoint] Saved epoch {epoch+1} checkpoint to {epoch_ckpt_path}")
+
             # ---- HF export every N epochs or at final epoch ----
             do_hf_export = ((epoch + 1) % max(1, args.hf_export_every) == 0) or ((epoch + 1) == args.epoch)
             if do_hf_export:
@@ -634,8 +654,8 @@ def main(
     data: str,
     verifier_batch_size: int,
     data_cache_limit: int = 16,
-    verifier_gpus: Union[float, int, list[int]] = [2, 3],
-    train_gpus: Union[float, int, list[int]] = [4, 5],
+    verifier_gpus: Union[float, int, list[int]] = [0, 1, 2, 3],
+    train_gpus: Union[float, int, list[int]] = [4, 5, 6, 7],
 ):
     ver_ids, tr_ids = verifier_gpus, train_gpus
 

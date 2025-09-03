@@ -50,8 +50,8 @@ class LlamaDecoderLayer(LlamaDecoderLayer):
         disable_input_layernorm=True,
     ) -> None:
         super().__init__(config, layer_idx)
-        print("input layernorm")
-        print(disable_input_layernorm)
+        #print("input layernorm")
+        #print(disable_input_layernorm)
         # Skip the input_layernorm
         if disable_input_layernorm:
             del self.input_layernorm
@@ -97,7 +97,7 @@ class Model(nn.Module):
             try:
                 with open(os.path.join(path, "model.safetensors.index.json")) as f:
                     index_json = json.loads(f.read())
-                    print(index_json["weight_map"].keys())
+                    #print(index_json["weight_map"].keys())
                     emb_path = index_json["weight_map"]["model.embed_tokens.weight"]
                 with safe_open(
                     os.path.join(path, emb_path), framework="pt", device="cpu"

@@ -72,12 +72,11 @@ def main():
     # FC projection (aux-history -> hidden)
     sd["fc.weight"] = xavier_((H, args.k_fc * H), dtype)
 
-    # LayerNorms (weights only; RMSNorm-compatible if your Model uses it)
-    for name in ("layers.0.input_layernorm.weight",
-                 "layers.0.post_attention_layernorm.weight",
+    # Layer norms - only create the ones that actually exist in Eagle3
+    for name in ["layers.0.input_layernorm.weight",
                  "layers.0.hidden_norm.weight",
-                 "lm_head_layernorm.weight",
-                 "norm.weight"):
+                 "layers.0.post_attention_layernorm.weight",
+                 "norm.weight"]:
         sd[name] = torch.ones(H, dtype=dtype)
 
     # Self-Attn (q/k/v from 2H input by default, o: HxH)
