@@ -49,10 +49,12 @@ parser.add_argument("--cpdir", type=str, default="checkpoints")
 parser.add_argument("--epoch", type=int, default=40)
 parser.add_argument("--forward_num_total", type=int, default=3)
 parser.add_argument("--ckpt_path", type=str, default=None)
-parser.add_argument("--data_num", type=int, default=5000)
+parser.add_argument("--data_num", type=int, default=68623)
 parser.add_argument("--log_every", type=int, default=10)
 parser.add_argument("--quiet_vllm", action="store_true")
 parser.add_argument("--hf_export_every", type=int, default=10, help="Export HF-style folder every N epochs (and at final epoch)")
+parser.add_argument("--eagle-head-path", type=str, default="/cache/helen/speculators/research/onlineEagle3/meta-llama-3-8b-head-k3", help="Path to the Eagle head model")
+parser.add_argument("--num-speculative-tokens", type=int, default=1, help="Number of speculative tokens for Eagle3")
 args = parser.parse_args()
 
 # reproducibility
@@ -221,14 +223,14 @@ def online_data_generator(
         # Enable prefix caching
         llm = vllm.LLM(
             model=verifier,
-            enable_prefix_caching=True,  # Enable this!
-            tensor_parallel_size=len(gpu_ids) if gpu_ids else 1,
+            enable_prefix_caching=False,  # Disable to avoid tuple index issues
+            tensor_parallel_size=1,  # Force single GPU to avoid tuple index issues
             disable_custom_all_reduce=True,
             dtype="bfloat16",
             max_model_len=8192,
             speculative_config={
-                "model": "/cache/helen/speculators/research/onlineEagle3/meta-llama-3-8b-head-k3",
-                "num_speculative_tokens": 1,
+                "model": args.eagle_head_path,
+                "num_speculative_tokens": args.num_speculative_tokens,
                 "method": "eagle3",
             },
         )
@@ -507,10 +509,20 @@ def train(data_queue: mp.Queue, args, train_config):
     global_seconds_accum = 0.0
     last_log_t = time.perf_counter()
     last_log_step = 0
+    
+    # Queue monitoring
+    last_queue_log_t = time.perf_counter()
+    queue_log_interval = 30.0  # Log queue status every 30 seconds
 
     # Create checkpoint directory
     ckpt_dir = Path(args.cpdir)
     ckpt_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Initial queue status
+    if accelerator.is_local_main_process:
+        print(f"[queue] Initial status: size={data_queue.qsize()}/{data_queue._maxsize}")
+    
+
 
     for epoch in range(args.epoch):
         if accelerator.is_local_main_process:
@@ -585,8 +597,24 @@ def train(data_queue: mp.Queue, args, train_config):
             global_step_counter += 1
             global_seconds_accum += dt
 
+            # Queue monitoring
+            now = time.perf_counter()
+            if accelerator.is_local_main_process and (now - last_queue_log_t) >= queue_log_interval:
+                queue_size = data_queue.qsize()
+                queue_maxsize = data_queue._maxsize
+                queue_utilization = queue_size / queue_maxsize if queue_maxsize > 0 else 0
+                
+                print(f"[queue] size={queue_size}/{queue_maxsize} ({queue_utilization:.1%})")
+                
+                # Warn if queue is underflowing or overflowing
+                if queue_size < 2:
+                    print(f"[queue] WARNING: Underflowing! Only {queue_size} items in queue")
+                elif queue_size > queue_maxsize * 0.8:
+                    print(f"[queue] WARNING: Nearly full! {queue_size}/{queue_maxsize} items")
+                
+                last_queue_log_t = now
+            
             if accelerator.is_local_main_process and (step % max(1, args.log_every) == 0):
-                now = time.perf_counter()
                 steps_done_since = step - last_log_step
                 avg_step = (now - last_log_t) / max(1, steps_done_since)
                 epoch_steps_left = max_steps - step
@@ -608,7 +636,9 @@ def train(data_queue: mp.Queue, args, train_config):
                 last_log_t = now
                 last_log_step = step
 
-            if step % 200 == 0:
+            if step % 100 == 0:
+                if accelerator.is_local_main_process:
+                    queue_size = data_queue.qsize()
                 torch.cuda.empty_cache()
 
         if accelerator.is_local_main_process:
@@ -662,11 +692,7 @@ def main(
     # Parent-only run info (avoid duplicate prints from spawn child)
     if mp.current_process().name == "MainProcess":
         print(f"training on {data_num} examples total")
-        print(f"[config] TRAIN_TOKENS={TRAIN_TOKENS}  verifier_CHUNK_T={CHUNK_T}  bs={args.bs}  accum={max(1, args.gradient_accumulation_steps)}")
         steps_per_epoch = ceil(data_num / (args.bs * max(1, args.gradient_accumulation_steps)))
-        print(f"[schedule] steps/epoch={steps_per_epoch} micro-steps, total_micro_steps={steps_per_epoch*args.epoch} warmup={warm_steps}")
-        print("verifier", ver_ids)
-        print("train", tr_ids)
 
     mp.set_start_method("spawn", force=True)
     ctx = mp.get_context("spawn")
