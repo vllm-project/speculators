@@ -1,27 +1,18 @@
 """
-Base model classes for the Speculators library.
+Base model classes for speculative decoding implementations.
 
-This module contains the base model classes for speculative decoding implementations
-in the Speculators library. These classes provide the foundation for creating
-speculator models that can perform speculative token generation with verifier
-models for accelerated inference.
-
-The models extend Hugging Face's PreTrainedModel and GenerationMixin to maintain
-full compatibility with the transformers ecosystem while adding speculative
-decoding capabilities. They support automatic model registration and discovery,
-dynamic model loading based on configuration, and flexible verifier attachment.
-
-Classes:
-    SpeculatorModel: Abstract base class for all speculator models with transformers
-        compatibility, automatic registry support, and speculative generation methods
-
-Functions:
-    reload_and_populate_models: Automatically populates the model registry for
-        discovery and instantiation of registered speculator models
+This module provides the foundation for creating speculator models that generate
+candidate tokens verified by base models for accelerated inference. The models
+extend Hugging Face's PreTrainedModel and GenerationMixin to maintain full
+compatibility with the transformers ecosystem while adding speculative decoding
+capabilities, automatic model registration and discovery, dynamic model loading
+based on configuration, and flexible verifier attachment.
 """
 
+from __future__ import annotations
+
 import os
-from typing import Any, Callable, ClassVar, Literal, Optional, Union
+from typing import Any, Callable, ClassVar, Literal
 
 import torch
 from transformers import (
@@ -36,36 +27,44 @@ from transformers.generation.stopping_criteria import StoppingCriteriaList
 from transformers.generation.streamers import BaseStreamer
 from transformers.generation.utils import GenerateOutput
 
-from speculators.config import SpeculatorModelConfig
+from speculators.config import SpeculatorModelConfig, VerifierConfig
 from speculators.utils import RegistryMixin
+
+__all__ = ["SpeculatorModel", "reload_and_populate_models"]
 
 
 class SpeculatorModel(  # type: ignore[misc]
     RegistryMixin[type["SpeculatorModel"]], PreTrainedModel, GenerationMixin
 ):
     """
-    Abstract base class for all speculator models in the Speculators library.
+    Abstract base class for all speculator models.
 
-    This class provides the foundation for implementing speculative decoding models
-    that can generate candidate tokens to be verified by a base verifier model.
-    It combines the functionality of Hugging Face's PreTrainedModel and GenerationMixin
-    with automatic model registration and discovery capabilities.
-    All concrete speculator model implementations must inherit from this class,
-    register with `SpeculatorModel.register(NAME)`, and
-    implement the abstract forward method.
+    Provides the foundation for implementing speculative decoding models that
+    generate candidate tokens verified by base verifier models. Combines Hugging Face's
+    PreTrainedModel and GenerationMixin with automatic model registration and discovery
+    capabilities. All concrete implementations must inherit from this class,
+    register with `SpeculatorModel.register(NAME)`, and implement the abstract
+    forward method.
 
     Example:
-        ```python
-        # Load a speculator model with automatic class resolution
-        model = SpeculatorModel.from_pretrained("path/to/speculator")
+        ::
+            # Load a speculator model with automatic class resolution
+            model = SpeculatorModel.from_pretrained("path/to/speculator")
 
-        # Optionally attach a new verifier model
-        verifier = AutoModel.from_pretrained("path/to/verifier")
-        model.attach_verifier(verifier)
+            # Optionally attach a new verifier model
+            verifier = AutoModel.from_pretrained("path/to/verifier")
+            model.attach_verifier(verifier)
 
-        # Generate with speculative decoding
-        outputs = model.generate(input_ids, max_length=100)
-        ```
+            # Generate with speculative decoding
+            outputs = model.generate(input_ids, max_length=100)
+
+    :cvar auto_package: Package path for automatic model discovery
+    :cvar registry_auto_discovery: Whether to enable automatic registry population
+    :cvar config_class: Configuration class for speculator models
+    :cvar base_model_prefix: Prefix for model parameter names
+    :cvar main_input_name: Primary input tensor name
+    :cvar _keys_to_ignore_on_load_missing: Model parameter keys to ignore when missing
+        during loading
     """
 
     # Registry configuration
@@ -82,91 +81,51 @@ class SpeculatorModel(  # type: ignore[misc]
 
     @classmethod
     def from_pretrained(
-        cls: type["SpeculatorModel"],
-        pretrained_model_name_or_path: Optional[Union[str, os.PathLike]],
+        cls: type[SpeculatorModel],
+        pretrained_model_name_or_path: str | os.PathLike | None,
         *model_args,
-        verifier: Optional[Union[str, os.PathLike, PreTrainedModel]] = None,
-        verifier_attachment_mode: Optional[
-            Literal["detached", "full", "train_only"]
-        ] = None,
-        config: Optional[Union[PretrainedConfig, str, os.PathLike]] = None,
-        cache_dir: Optional[Union[str, os.PathLike]] = None,
+        verifier: str | os.PathLike | PreTrainedModel | None = None,
+        verifier_attachment_mode: Literal["detached", "full", "train_only"] | None = (
+            None
+        ),
+        config: PretrainedConfig | str | os.PathLike | None = None,
+        cache_dir: str | os.PathLike | None = None,
         ignore_mismatched_sizes: bool = False,
         force_download: bool = False,
         local_files_only: bool = False,
-        token: Optional[Union[str, bool]] = None,
+        token: str | bool | None = None,
         revision: str = "main",
-        use_safetensors: Optional[bool] = None,
+        use_safetensors: bool | None = None,
         weights_only: bool = True,
         **kwargs,
-    ) -> "SpeculatorModel":
+    ) -> SpeculatorModel:
         """
-        Load a pretrained speculator model from the Hugging Face Hub or local directory.
+        Load a pretrained speculator model from Hub or local directory.
 
-        This method automatically resolves the correct speculator model class based on
-        the configuration type and loads the model with the appropriate weights. If
-        called on the base SpeculatorModel class, it will automatically determine and
-        instantiate the correct subclass based on the model configuration.
+        Automatically resolves the correct speculator model class based on configuration
+        type and loads the model with appropriate weights. If called on the base
+        SpeculatorModel class, automatically determines and instantiates the correct
+        subclass based on the model configuration.
 
-        Example:
-            ```python
-            # Load with automatic class resolution
-            model = SpeculatorModel.from_pretrained("RedHatAI/speculator-llama-7b")
-
-            # Load from local directory
-            model = SpeculatorModel.from_pretrained("./my_speculator")
-
-            # Load with custom config
-            config = SpeculatorModelConfig.from_pretrained("RedHatAI/eagle-llama-7b")
-            model = SpeculatorModel.from_pretrained(
-                None, config=config, state_dict=state_dict
-            )
-            ```
-
-        :param pretrained_model_name_or_path: The model identifier on Hugging Face Hub,
-            or path to a local directory containing the model files. Can be None if
-            config is provided as a path.
-        :param model_args: Additional positional arguments passed to the model
-            constructor.
-        :param verifier: Optional verifier model to attach the speculator to.
-            Can be a path to a local model directory, a Hugging Face model identifier,
-            or an instance of PreTrainedModel. If provided, the speculator will use this
-            verifier for speculative decoding. If None, the speculator will load the
-            verifier from the config if specified, or it must be attached later
-            using the `attach_verifier` method.
-        :param verifier_attachment_mode: Optional mode for how the verifier is
-            attached to the speculator. If "detached", any verifier passed in or
-            resolved from the config will not be ignored.
-            If "full", the verifier is fully integrated into the
-            speculator's forward pass and generation methods.
-            If "train_only", only the portions of the verifier needed for training
-            are attached, allowing for better resource utilization during training.
-            If None and a verifier is provided, it defaults to "full".
-            If a verifier is not provided and None is found in the config,
-            this parameter is ignored.
-        :param config: Optional configuration for the model. Can be a
-            SpeculatorModelConfig instance, a path to a config file, or None to load
-            from model directory.
-        :param cache_dir: Directory to cache downloaded files. If None, uses default
-            transformers cache directory.
+        :param pretrained_model_name_or_path: Model identifier on Hugging Face Hub
+            or path to local directory containing model files
+        :param model_args: Additional positional arguments passed to model constructor
+        :param verifier: Optional verifier model to attach for speculative decoding
+        :param verifier_attachment_mode: How verifier is attached ("detached", "full",
+            "train_only")
+        :param config: Model configuration instance, path to config file, or None
+        :param cache_dir: Directory to cache downloaded files
         :param ignore_mismatched_sizes: Whether to ignore size mismatches when loading
-            pretrained weights. Useful for loading models with different architectures.
-        :param force_download: Whether to force re-download of model files even if
-            they exist in cache.
-        :param local_files_only: Whether to avoid downloading files and only use local
-            cached files. Raises an error if files are not found locally.
-        :param token: Optional authentication token for accessing private models on
-            Hugging Face Hub. Can be a string token or True to use saved token.
-        :param revision: The specific model revision to load (branch name, tag, or
-            commit hash). Defaults to "main".
-        :param use_safetensors: Whether to use safetensors format for loading weights.
-            If None, automatically detects the available format.
+        :param force_download: Whether to force re-download of model files
+        :param local_files_only: Whether to avoid downloading and only use local cache
+        :param token: Authentication token for private models on Hugging Face Hub
+        :param revision: Model revision to load (branch name, tag, or commit hash)
+        :param use_safetensors: Whether to use safetensors format for loading weights
         :param weights_only: Whether to only load model weights without optimizer
-            states or other training artifacts.
-        :param kwargs: Additional keyword arguments passed to the model constructor
-            and loading process.
-        :return: A SpeculatorModel instance of the appropriate subclass, loaded with
-            the pretrained weights and configuration.
+            states
+        :param kwargs: Additional keyword arguments passed to model constructor
+        :return: SpeculatorModel instance of appropriate subclass with pretrained
+            weights
         """
         if not config:
             if not pretrained_model_name_or_path:
@@ -238,16 +197,16 @@ class SpeculatorModel(  # type: ignore[misc]
     @classmethod
     def registered_model_class_from_config(
         cls, config: SpeculatorModelConfig
-    ) -> type["SpeculatorModel"]:
+    ) -> type[SpeculatorModel]:
         """
-        Looks up the appropriate speculator model class from the registry
-        based on the configuration type. It matches the config class to the
-        corresponding model class that was registered during auto-discovery or manual
-        registration.
+        Look up the appropriate speculator model class from registry based on config
+        type.
 
-        :param config: The configuration for which to find the registered model class.
-            Must be an instance of a SpeculatorModelConfig subclass.
-        :return: The registered model class that matches the configuration type.
+        Matches the config class to the corresponding model class that was registered
+        during auto-discovery or manual registration.
+
+        :param config: Configuration instance to find registered model class for
+        :return: Registered model class that matches the configuration type
         """
         if not isinstance(config, SpeculatorModelConfig):
             raise TypeError(
@@ -283,41 +242,25 @@ class SpeculatorModel(  # type: ignore[misc]
     def __init__(
         self,
         config: SpeculatorModelConfig,
-        verifier: Optional[Union[str, os.PathLike, PreTrainedModel]],
-        verifier_attachment_mode: Optional[Literal["detached", "full", "train_only"]],
+        verifier: str | os.PathLike | PreTrainedModel | None,
+        verifier_attachment_mode: Literal["detached", "full", "train_only"] | None,
         **kwargs,
     ):
         """
         Initialize a SpeculatorModel instance.
 
         Sets up the basic structure for a speculator model, including configuration
-        storage and optional verifier model attachment. The verifier model is used
-        during speculative decoding to validate the tokens proposed by the speculator.
+        storage and optional verifier model attachment for speculative decoding
+        validation. If no verifier is provided during initialization, it must be
+        attached later using the attach_verifier method before calling generate.
 
-        If no verifier is provided during initialization, it must be attached later
-        using the attach_verifier method before calling generate.
-
-        :param config: The configuration for the speculator model. Must be a
-            SpeculatorModelConfig instance containing model hyperparameters and
-            speculative decoding settings.
-        :param verifier: The verifier model to attach. This can be a path to a local
-            model directory, a Hugging Face model identifier, or an instance of
-            PreTrainedModel. If provided, the speculator will use this verifier for
-            speculative decoding. If None, the speculator will load the verifier from
-            the config if specified, or it must be attached later using the
-            `attach_verifier` method.
-        :param verifier_attachment_mode: Optional mode for how the verifier is
-            attached to the speculator. If "detach", any verifier passed in or
-            resolved from the config will not be attached.
-            If "full", the verifier is fully integrated into the
-            speculator's forward pass and generation methods.
-            If "train_only", only the portions of the verifier needed for training
-            are attached, allowing for better resource utilization during training.
-            If None and a verifier is provided, it defaults to "full".
-            If a verifier is not provided and None is found in the config,
-            this parameter is ignored.
-        :param kwargs: Additional keyword arguments passed to the parent
-            PreTrainedModel constructor.
+        :param config: Configuration instance containing model hyperparameters and
+            speculative decoding settings
+        :param verifier: Verifier model to attach for speculative decoding validation
+        :param verifier_attachment_mode: How verifier is attached ("detached", "full",
+            "train_only")
+        :param kwargs: Additional keyword arguments passed to PreTrainedModel
+            constructor
         """
         if not config:
             raise ValueError(
@@ -333,7 +276,7 @@ class SpeculatorModel(  # type: ignore[misc]
 
         super().__init__(config, **kwargs)
         self.config: SpeculatorModelConfig = config
-        self.verifier: Optional[PreTrainedModel] = None
+        self.verifier: PreTrainedModel | None = None
         self.verifier_attachment_mode: Literal["detached", "full", "train_only"] = (
             "detached"
         )
@@ -343,19 +286,16 @@ class SpeculatorModel(  # type: ignore[misc]
             self.attach_verifier(verifier, mode=verifier_attachment_mode)
 
     def resolve_verifier(
-        self, verifier: Union[str, os.PathLike, PreTrainedModel]
+        self, verifier: str | os.PathLike | PreTrainedModel
     ) -> PreTrainedModel:
         """
-        Resolves the verifier model from a given path or identifier.
+        Resolve the verifier model from a given path or identifier.
 
-        This method loads the verifier model from a specified path or identifier,
-        ensuring it is compatible with the speculator's configuration. If the
-        verifier is already attached, it returns the existing verifier instance.
+        Loads the verifier model from a specified path or identifier, ensuring
+        compatibility with the speculator's configuration.
 
-        :param verifier: The verifier model to resolve. Can be a path to a local
-            model directory, a Hugging Face model identifier, or an instance of
-            PreTrainedModel.
-        :return: The resolved PreTrainedModel instance for the verifier.
+        :param verifier: Verifier model path, identifier, or PreTrainedModel instance
+        :return: Resolved PreTrainedModel instance for the verifier
         """
         if not verifier:
             raise ValueError(
@@ -375,37 +315,22 @@ class SpeculatorModel(  # type: ignore[misc]
 
     def attach_verifier(
         self,
-        verifier: Union[str, os.PathLike, PreTrainedModel],
-        mode: Optional[Literal["full", "train_only"]] = None,
+        verifier: str | os.PathLike | PreTrainedModel,
+        mode: Literal["full", "train_only"] | None = None,
+        add_to_config: bool = True,
     ) -> PreTrainedModel:
         """
-        Attach a verifier model for the speculator that is used to attach to
-        for running inference/training with the speculator and validates the
-        candidate tokens generated by the speculator during the
-        speculative decoding process. It should be compatible
+        Attach a verifier model for speculative decoding validation.
+
+        Attaches a verifier model that validates candidate tokens generated by the
+        speculator during speculative decoding. The verifier should be compatible
         with the speculator's configuration in terms of vocabulary, architecture,
         and tokenization.
 
-        Example:
-            ```python
-            # Load and attach a verifier
-            verifier = AutoModel.from_pretrained("meta-llama/Llama-2-7b-hf")
-            speculator.attach_verifier(verifier)
-
-            # Now ready for generation
-            outputs = speculator.generate(input_ids)
-            ```
-
-        :param verifier: The verifier model to attach. This can be a path to a local
-            model directory, a Hugging Face model identifier, or an instance of
-            PreTrainedModel. If a path or identifier is provided, the model will be
-            loaded automatically. If an instance is provided, it will be used directly.
-        :param mode: Optional mode for how the verifier is attached to the speculator.
-            If "full", the verifier is fully integrated into the speculator's forward
-            pass and generation methods. If "train_only", only the portions of the
-            verifier needed for training are attached, allowing for better resource
-            utilization during training. If None, defaults to "full".
-        :return: The PreTrainedModel instance for the verifier that was attached.
+        :param verifier: Verifier model path, identifier, or PreTrainedModel instance
+        :param mode: Attachment mode ("full" or "train_only")
+        :param add_to_config: Whether to add verifier references to speculator config
+        :return: PreTrainedModel instance for the attached verifier
         """
         if self.verifier_attachment_mode != "detached":
             raise RuntimeError(
@@ -425,14 +350,19 @@ class SpeculatorModel(  # type: ignore[misc]
             verifier if self.verifier_attachment_mode == "full" else None
         )  # Expect subclasses to handle references if train_only
 
+        if add_to_config:
+            self.config.speculators_config.verifier = VerifierConfig.from_pretrained(
+                verifier
+            )
+
         return verifier
 
     def detach_verifier(self):
         """
-        Removes the reference to the attached verifier model and frees up the
-        associated memory. After calling this method, the speculator will not
-        be able to perform forward passes or generation until a new verifier
-        is attached.
+        Remove reference to attached verifier model and free associated memory.
+
+        After calling this method, the speculator will not be able to perform
+        forward passes or generation until a new verifier is attached.
         """
         if self.verifier_attachment_mode == "detached":
             raise RuntimeError(
@@ -454,18 +384,18 @@ class SpeculatorModel(  # type: ignore[misc]
         keep_vars: bool = False,
     ):
         """
-        Overrides the state_dict method from PyTorch to ensure that save pathways
-        within Transformers PreTrainedModel do not include the verifier model's
-        parameters. This is important to ensure that the speculator model
-        can be saved and loaded without including the verifier's state, which
-        is expected to be managed separately.
+        Get state dictionary excluding verifier model parameters.
 
-        :param destination: Optional dictionary to store the state.
-        :param prefix: Optional prefix for parameter names.
-        :param keep_vars: Whether to keep Variables in the state_dict.
-        :return: A dictionary containing the state of the speculator model,
-            excluding the verifier model's parameters. This dictionary can be used
-            to save the model's state to disk or for further processing.
+        Overrides PyTorch's state_dict method to ensure save pathways within
+        Transformers PreTrainedModel do not include the verifier model's parameters,
+        allowing the speculator model to be saved and loaded without including
+        the verifier's state.
+
+        :param destination: Optional dictionary to store the state
+        :param prefix: Optional prefix for parameter names
+        :param keep_vars: Whether to keep Variables in the state_dict
+        :return: Dictionary containing speculator model state excluding verifier
+            parameters
         """
         tmp_verifier = self.verifier
         self.verifier = None
@@ -478,21 +408,17 @@ class SpeculatorModel(  # type: ignore[misc]
 
     def forward(self, *args, **kwargs):
         """
-        Defines the forward pass computation for the speculator model.
+        Define forward pass computation for the speculator model.
 
-        This method must be implemented by all concrete speculator model
-        subclasses. It defines how the model processes inputs to generate candidate
-        tokens or logits specifically for training pipelines.
+        Must be implemented by all concrete speculator model subclasses. Defines
+        how the model processes inputs to generate candidate tokens or logits
+        specifically for training pipelines. Use `model.generate` for generation
+        tasks, which will handle speculative decoding with the attached verifier.
 
-        Use `model.generate` for generation tasks, which will handle
-        speculative decoding with the attached verifier.
-
-        :param args: Positional arguments for the forward pass, typically including
-            input_ids and potentially attention_mask, position_ids, etc.
-        :param kwargs: Keyword arguments for the forward pass, which may include
-            various model-specific parameters and options.
-        :return: Model outputs, typically including logits or candidate token
-            sequences, depending on the specific speculator implementation.
+        :param args: Positional arguments for forward pass (input_ids, attention_mask,
+            position_ids, etc.)
+        :param kwargs: Keyword arguments for forward pass with model-specific parameters
+        :return: Model outputs including logits or candidate token sequences
         """
         raise NotImplementedError(
             "The forward method is only supported on concrete "
@@ -502,55 +428,44 @@ class SpeculatorModel(  # type: ignore[misc]
     @torch.no_grad()
     def generate(
         self,
-        inputs: Optional[torch.Tensor] = None,  # noqa: ARG002
-        generation_config: Optional[GenerationConfig] = None,  # noqa: ARG002
-        logits_processor: Optional[LogitsProcessorList] = None,  # noqa: ARG002
-        stopping_criteria: Optional[StoppingCriteriaList] = None,  # noqa: ARG002
-        prefix_allowed_tokens_fn: Optional[  # noqa: ARG002
-            Callable[[int, torch.Tensor], list[int]]
-        ] = None,
-        synced_gpus: Optional[bool] = None,  # noqa: ARG002
-        assistant_model: Optional["PreTrainedModel"] = None,  # type: ignore[override]  # noqa: ARG002
-        streamer: Optional["BaseStreamer"] = None,  # noqa: ARG002
-        negative_prompt_ids: Optional[torch.Tensor] = None,  # noqa: ARG002
-        negative_prompt_attention_mask: Optional[torch.Tensor] = None,  # noqa: ARG002
-        use_model_defaults: Optional[bool] = None,  # noqa: ARG002
-        custom_generate: Union[str, Callable[..., Any], None] = None,  # noqa: ARG002
+        inputs: torch.Tensor | None = None,  # noqa: ARG002
+        generation_config: GenerationConfig | None = None,  # noqa: ARG002
+        logits_processor: LogitsProcessorList | None = None,  # noqa: ARG002
+        stopping_criteria: StoppingCriteriaList | None = None,  # noqa: ARG002
+        prefix_allowed_tokens_fn: (  # noqa: ARG002
+            Callable[[int, torch.Tensor], list[int]] | None
+        ) = None,
+        synced_gpus: bool | None = None,  # noqa: ARG002
+        assistant_model: PreTrainedModel | None = None,  # type: ignore[override]  # noqa: ARG002
+        streamer: BaseStreamer | None = None,  # noqa: ARG002
+        negative_prompt_ids: torch.Tensor | None = None,  # noqa: ARG002
+        negative_prompt_attention_mask: torch.Tensor | None = None,  # noqa: ARG002
+        use_model_defaults: bool | None = None,  # noqa: ARG002
+        custom_generate: str | None = None,  # noqa: ARG002
         **kwargs,  # noqa: ARG002
-    ) -> Union[GenerateOutput, torch.LongTensor]:
+    ) -> GenerateOutput | torch.LongTensor:
         """
-        Generate text using speculative decoding with the attached verifier model.
-        The method follows the standard transformers generation interface, making it
-        compatible with existing generation workflows while adding speculative
-        decoding capabilities allowing for faster generation.
+        Generate text using speculative decoding with attached verifier model.
 
-        :param inputs: The input token IDs to generate from. Can be None if input_ids
-            are provided in kwargs.
-        :param generation_config: Configuration for generation parameters like
-            max_length, temperature, top_p, etc. If None, uses model defaults.
+        Follows the standard transformers generation interface, making it compatible
+        with existing generation workflows while adding speculative decoding
+        capabilities for faster generation.
+
+        :param inputs: Input token IDs to generate from
+        :param generation_config: Configuration for generation parameters
         :param logits_processor: List of logits processors to apply during generation
-            for tasks like repetition penalty, top-k filtering, etc.
-        :param stopping_criteria: List of stopping criteria to determine when to
-            stop generation (e.g., max length, end-of-sequence tokens).
+        :param stopping_criteria: List of stopping criteria to determine when to stop
         :param prefix_allowed_tokens_fn: Function to constrain generation to allowed
-            tokens based on the current prefix. Useful for structured generation.
-        :param synced_gpus: Whether to synchronize GPUs during distributed generation.
-            Relevant for multi-GPU setups.
-        :param assistant_model: An assistant model to use for generation. This
-            parameter maintains compatibility with transformers but may not be
-            used in speculative decoding.
-        :param streamer: A streamer to output tokens as they are generated, enabling
-            real-time streaming of the generation process.
-        :param negative_prompt_ids: Token IDs for negative prompting to steer
-            generation away from certain content.
-        :param negative_prompt_attention_mask: Attention mask for negative prompt
-            tokens to properly handle padding.
-        :param use_model_defaults: Whether to use model-specific default generation
-            parameters instead of transformers defaults.
-        :param kwargs: Additional keyword arguments for generation, including
-            input_ids, attention_mask, max_length, etc.
-        :return: Generated token sequences as either a GenerateOutput object
-            (containing additional metadata) or a LongTensor of token IDs.
+            tokens based on current prefix
+        :param synced_gpus: Whether to synchronize GPUs during distributed generation
+        :param assistant_model: Assistant model for generation compatibility
+        :param streamer: Streamer to output tokens as they are generated
+        :param negative_prompt_ids: Token IDs for negative prompting
+        :param negative_prompt_attention_mask: Attention mask for negative prompt tokens
+        :param use_model_defaults: Whether to use model-specific default parameters
+        :param custom_generate: Custom generation parameter
+        :param kwargs: Additional keyword arguments for generation
+        :return: Generated token sequences as GenerateOutput object or LongTensor
         """
         if self.verifier is None:
             raise ValueError(
@@ -565,10 +480,11 @@ class SpeculatorModel(  # type: ignore[misc]
 
 def reload_and_populate_models():
     """
-    Triggers the automatic discovery and registration of all
-    SpeculatorModel subclasses found in the speculators.models package
-    that have been registered with `SpeculatorModel.register(NAME)`. This
-    enables dynamic model loading and instantiation based on configuration
-    types without requiring explicit imports.
+    Trigger automatic discovery and registration of all SpeculatorModel subclasses.
+
+    Discovers and registers all SpeculatorModel subclasses found in the
+    speculators.models package that have been registered with
+    `SpeculatorModel.register(NAME)`. Enables dynamic model loading and
+    instantiation based on configuration types without requiring explicit imports.
     """
     SpeculatorModel.auto_populate_registry()

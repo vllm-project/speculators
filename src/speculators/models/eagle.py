@@ -309,6 +309,7 @@ class EagleSpeculator(SpeculatorModel):
         self,
         verifier: Union[str, os.PathLike, PreTrainedModel],
         mode: Optional[Literal["full", "train_only"]] = None,
+        add_to_config: bool = True,
     ) -> PreTrainedModel:
         """
         Attach a verifier model to the EagleSpeculator for speculative decoding.
@@ -344,15 +345,19 @@ class EagleSpeculator(SpeculatorModel):
             model directory, a Hugging Face model identifier, or an instance of
             PreTrainedModel. If a path or identifier is provided, the model will be
             loaded automatically. If an instance is provided, it will be used directly.
-        :param mode: The mode for attaching the verifier. Can be "full" or "train_only".
+        :param mode: The mode for attaching the verifier.
+            Can be "full" or "train_only".
             If None, defaults to "full". In "train_only" mode, only the layers
             required for a forward pass are attached, and the speculator cannot
             perform generation until a full verifier is attached.
+        :param add_to_config: Whether to update the speculator's configuration
+            with details from the attached verifier model.
         :return: The PreTrainedModel instance for the verifier that was attached.
         """
         verifier = super().attach_verifier(
             verifier=verifier,
             mode=mode,
+            add_to_config=add_to_config,
         )
 
         # Extract layers from the verifier model
