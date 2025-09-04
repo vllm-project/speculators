@@ -351,9 +351,14 @@ class SpeculatorModel(  # type: ignore[misc]
         )  # Expect subclasses to handle references if train_only
 
         if add_to_config:
-            self.config.speculators_config.verifier = VerifierConfig.from_pretrained(
-                verifier
-            )
+            try:
+                self.config.speculators_config.verifier = VerifierConfig.from_pretrained(
+                    verifier
+                )
+            except (OSError, ValueError, Exception) as e:
+                raise RuntimeError(
+                    f"Failed to load verifier configuration from '{verifier}': {e}"
+                ) from e
 
         return verifier
 
