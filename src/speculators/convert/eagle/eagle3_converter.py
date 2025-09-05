@@ -80,7 +80,7 @@ class Eagle3Converter:
         """
         logger.debug(f"Processing {len(weights)} Eagle3 weights")
 
-        # Remap weight names: midlayer.* -> layers.0.*
+        # Remap weight names: midlayer.* -> layers.0.* and handle layer norms
         processed_weights = {}
         for original_name, tensor in weights.items():
             # Remap midlayer.* -> layers.0.*
@@ -88,6 +88,16 @@ class Eagle3Converter:
                 new_name = original_name.replace("midlayer.", "layers.0.")
                 processed_weights[new_name] = tensor
                 logger.debug(f"Remapped: {original_name} -> {new_name}")
+            # Map top-level layer norm weights to layers.0.*
+            elif original_name in ["hidden_norm.weight", "input_layernorm.weight"]:
+                new_name = f"layers.0.{original_name}"
+                processed_weights[new_name] = tensor
+                logger.debug(f"Remapped layer norm: {original_name} -> {new_name}")
+            # Map lm_head_layernorm to norm (final model norm)
+            elif original_name == "lm_head_layernorm.weight":
+                new_name = "norm.weight"
+                processed_weights[new_name] = tensor
+                logger.debug(f"Remapped lm_head_layernorm: {original_name} -> {new_name}")
             # Keep layers.0.* as is (already correct)
             elif original_name.startswith("layers.0."):
                 processed_weights[original_name] = tensor
