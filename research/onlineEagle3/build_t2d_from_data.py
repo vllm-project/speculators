@@ -22,7 +22,6 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(args.verifier, use_fast=False)
     config = AutoConfig.from_pretrained(args.verifier)
     vocab_size = config.vocab_size  # This should give you 128256
-    breakpoint()
     
     # Load dataset
     dataset = load_dataset("json", data_files=args.data)["train"]
@@ -64,11 +63,11 @@ def main():
     # Get top tokens by frequency
     top_tokens = np.argsort(-counts)[:args.drafter_vocab]
     
-    # Create t2d mask
+    # Create t2d mask: boolean mask indicating which tokens are in draft vocab
     t2d = np.zeros(vocab_size, dtype=bool)
     t2d[top_tokens] = True
     
-    # Create d2t offsets
+    # Create d2t offsets: offset between draft_id and teacher_id
     d2t = top_tokens - np.arange(args.drafter_vocab)
     
     # Save files
