@@ -67,7 +67,7 @@ torch.backends.cudnn.benchmark = False
 torch.backends.cudnn.deterministic = True
 
 # training/token window
-TRAIN_TOKENS = int(os.environ.get("TRAIN_TOKENS", "1024"))
+TRAIN_TOKENS = int(os.environ.get("TRAIN_TOKENS", "8192"))
 CHUNK_T = int(os.environ.get("VERIFIER_CHUNK_T", "256"))
 
 # schedule figures
@@ -206,6 +206,8 @@ def online_data_generator(
     batch_size: int = 32,
     gpu_ids: Optional[list[int]] = None,
     quiet: bool = True,
+    eagle_head_path: str = None,
+    num_speculative_tokens: int = 1,
 ):
     # Confine this child process to the vLLM GPUs BEFORE importing vllm/torch.
     configure_gpu_visibility(gpu_ids)
@@ -223,14 +225,14 @@ def online_data_generator(
         # Enable prefix caching
         llm = vllm.LLM(
             model=verifier,
-            enable_prefix_caching=False,  # Disable to avoid tuple index issues
-            tensor_parallel_size=1,  # Force single GPU to avoid tuple index issues
+            enable_prefix_caching=True,  # Enable this!
+            tensor_parallel_size=len(gpu_ids) if gpu_ids else 1,
             disable_custom_all_reduce=True,
             dtype="bfloat16",
             max_model_len=8192,
             speculative_config={
-                "model": args.eagle_head_path,
-                "num_speculative_tokens": args.num_speculative_tokens,
+                "model": eagle_head_path,
+                "num_speculative_tokens": num_speculative_tokens,
                 "method": "eagle3",
             },
         )
@@ -436,6 +438,7 @@ def train(data_queue: mp.Queue, args, train_config):
     accelerator = Accelerator(
         mixed_precision="bf16",
         gradient_accumulation_steps=max(1, args.gradient_accumulation_steps),
+        log_with="tensorboard",  # Enable tensorboard logging
     )
     device = accelerator.device
     torch.backends.cuda.matmul.allow_tf32 = True
@@ -471,7 +474,9 @@ def train(data_queue: mp.Queue, args, train_config):
     model = Model(config, load_emb=True, path=args.basepath)
     optimizer = optim.AdamW(model.parameters(),
                             lr=train_config["lr"],
-                            betas=(train_config["b1"], train_config["b2"]))
+                            betas=(train_config["b1"], train_config["b2"]),
+                            weight_decay=0.01,  # Add weight decay for regularization
+                            eps=1e-8)  # Better numerical stability
     scheduler = (get_linear_schedule_with_warmup(
         optimizer,
         num_warmup_steps=int(train_config["num_warmup_steps"]),
@@ -553,33 +558,31 @@ def train(data_queue: mp.Queue, args, train_config):
                         t1i = min(T, t0i + CHUNK_T)
                         t_logits.append((tgt_states[:, t0i:t1i, :] @ WT).float())  # (B,Ct,Vsub)
                     verifier_logits = torch.cat(t_logits, dim=1)
-                    verifier_probs  = torch.softmax(verifier_logits, dim=2)       # fp32
+                    verifier_probs  = torch.softmax(verifier_logits, dim=2)
+                    
 
                 # ----- drafter multi-forward unroll -----
-                loss = torch.zeros((), device=device, dtype=torch.float32)
+                loss = torch.zeros((), device=device, dtype=torch.float16)
                 hid_hist = []
                 hid_proj = model.fc(aux_states)                                 # (B,T,H_model) bf16
 
-                F = 1  # Instead of 3
+                F = args.forward_num_total  # Use proper forward passes (default: 3)
+                weight_sum = 0
+                
                 with accelerator.autocast():
-                    for _ in range(F):
+                    for forward_idx in range(F):
                         pred_states = model(hid_proj, input_ids, None, hid_hist) # (B,T,H_model)
                         logits = model.lm_head_layernorm(pred_states)
                         logits = model.lm_head(logits.to(torch.bfloat16))        # (B,T,Vsub)
-                        loss = loss + kl_loss(verifier_probs, logits, loss_mask)
+                        
+                        # Weighted loss like offline version
+                        weight = forward_idx + 1
+                        kldiv_loss = kl_loss(verifier_probs, logits, loss_mask)
+                        loss = loss + weight * kldiv_loss
+                        weight_sum += weight
 
                         hid_hist.append(hid_proj)
                         hid_proj = torch.cat([hid_proj[:, :1, :], pred_states[:, :-1, :]], dim=1)
-
-                # handle non-finite loss gracefully
-                if not torch.isfinite(loss):
-                    if accelerator.is_local_main_process:
-                        old_lr = optimizer.param_groups[0]["lr"]
-                        new_lr = max(old_lr * 0.5, 1e-8)
-                        print(f"[warn] non-finite loss detected. Lowering LR {old_lr:.2e} -> {new_lr:.2e} and skipping this micro-step.")
-                        for g in optimizer.param_groups:
-                            g["lr"] = new_lr  # <-- fixed
-                    continue
 
                 accelerator.backward(loss)
                 running += float(loss)
@@ -704,7 +707,7 @@ def main(
     # vLLM child must NOT be daemonic (it spawns its own workers)
     gen_proc = ctx.Process(
         target=online_data_generator,
-        args=(data_queue, shutdown_event, verifier, data, verifier_batch_size, ver_ids, args.quiet_vllm or True),
+        args=(data_queue, shutdown_event, verifier, data, verifier_batch_size, ver_ids, args.quiet_vllm or True, args.eagle_head_path, args.num_speculative_tokens),
         daemon=False,
     )
     gen_proc.start()
