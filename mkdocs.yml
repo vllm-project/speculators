@@ -10,8 +10,8 @@ theme:
     text: Roboto
     code: Roboto Mono
   language: en
-  logo: assets/branding/speculators-logo-black.svg
-  favicon: assets/branding/speculators-icon-blue.svg
+  logo: assets/branding/speculators-model-icon-blue.png
+  favicon: assets/branding/speculators-model-icon-blue.png
   features:
     - content.action.edit
     - content.code.annotate
@@ -48,6 +48,12 @@ theme:
         icon: material/brightness-4
         name: Switch to system preference
 
+validation:
+  links:
+    absolute_links: relative_to_docs
+    anchors: warn
+    unrecognized_links: warn
+
 markdown_extensions:
   - abbr
   - admonition
@@ -59,6 +65,7 @@ markdown_extensions:
       generic: true
   - pymdownx.blocks.caption
   - pymdownx.details
+  - pymdownx.magiclink
   - pymdownx.emoji:
       emoji_index: !!python/name:material.extensions.emoji.twemoji
       emoji_generator: !!python/name:material.extensions.emoji.to_svg
@@ -97,7 +104,18 @@ plugins:
       handlers:
         python:
           options:
+            docstring_section_style: list
             docstring_style: sphinx
+            filters: ["!^_"]
+            heading_level: 1
+            merge_init_into_class: true
+            parameter_headings: true
+            separate_signature: true
+            show_root_heading: true
+            show_signature_annotations: true
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            summary: true
   - search
   - section-index
   - social
