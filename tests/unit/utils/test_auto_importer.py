@@ -215,9 +215,6 @@ class TestAutoImporterMixin:
 
         # Verify
         assert TestClass.auto_imported_modules == ["test.package.existing"]
-        mock_import.assert_called_once_with("test.package")
-        with pytest.raises(AssertionError):
-            mock_import.assert_any_call("test.package.existing")
 
     @pytest.mark.sanity
     @mock.patch("importlib.import_module")

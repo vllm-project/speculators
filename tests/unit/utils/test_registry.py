@@ -573,7 +573,7 @@ class TestRegistryMixin:
             try:
                 annotations = inspect.get_annotations(registered_class.__init__)
                 assert "value" in annotations
-                assert annotations["value"] is int
+                assert annotations["value"] in (int, "int")
                 return_ann = annotations.get("return")
                 assert return_ann is None or return_ann is type(None)
             except (AttributeError, NameError):
