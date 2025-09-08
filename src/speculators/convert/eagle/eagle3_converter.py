@@ -18,6 +18,8 @@ from speculators.convert.eagle.utils import (
 from speculators.models.eagle3 import Eagle3Speculator, Eagle3SpeculatorConfig
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 
+__all__ = ["Eagle3Converter"]
+
 
 class Eagle3Converter:
     """

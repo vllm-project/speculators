@@ -10,7 +10,7 @@ plugin architectures.
 
 from __future__ import annotations
 
-from typing import Callable, ClassVar, Generic, TypeVar, cast
+from typing import Callable, ClassVar, Generic, TypeVar, Union, cast
 
 from speculators.utils.auto_importer import AutoImporterMixin
 
@@ -62,7 +62,7 @@ class RegistryMixin(Generic[RegistryObjT], AutoImporterMixin):
     :cvar registry_populated: Track whether auto-discovery has completed
     """
 
-    registry: ClassVar[dict[str, RegistryObjT] | None] = None  # type: ignore[misc]
+    registry: ClassVar[Union[dict[str, RegistryObjT], None]] = None  # type: ignore[misc]  # noqa: UP007
     registry_auto_discovery: ClassVar[bool] = False
     registry_populated: ClassVar[bool] = False
 

@@ -8,12 +8,10 @@ runtime, creating extensible systems where new implementations are automatically
 discovered when placed in the correct package structure.
 """
 
-from __future__ import annotations
-
 import importlib
 import pkgutil
 import sys
-from typing import ClassVar
+from typing import ClassVar, Union
 
 __all__ = ["AutoImporterMixin"]
 
@@ -41,9 +39,9 @@ class AutoImporterMixin:
     :cvar auto_imported_modules: List tracking which modules have been imported
     """
 
-    auto_package: ClassVar[str | tuple[str, ...] | None] = None
-    auto_ignore_modules: ClassVar[tuple[str, ...] | None] = None
-    auto_imported_modules: ClassVar[list[str] | None] = None
+    auto_package: ClassVar[Union[str, tuple[str, ...], None]] = None
+    auto_ignore_modules: ClassVar[Union[tuple[str, ...], None]] = None
+    auto_imported_modules: ClassVar[Union[list[str], None]] = None
 
     @classmethod
     def auto_import_package_modules(cls) -> None:
