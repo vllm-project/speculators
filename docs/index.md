@@ -1,15 +1,15 @@
-# Home
+# Speculators
 
-<p align="center">
+<div align="center" style="display: flex; align-items: center; justify-content: center; gap: 20px; text-align: left;">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/neuralmagic/speculators/main/docs/assets/branding/speculators-logo-white.svg">
-    <img alt="Speculators Logo" src="https://raw.githubusercontent.com/neuralmagic/speculators/main/docs/assets/branding/speculators-logo-black.svg" width=55%>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/neuralmagic/speculators/main/docs/assets/branding/speculators-model-icon-blue.png">
+    <img alt="Speculators Logo" src="https://raw.githubusercontent.com/neuralmagic/speculators/main/docs/assets/branding/speculators-model-icon-blue.png" width="120">
   </picture>
-</p>
 
-<h3 align="center">
-Unified Library for Speculative Decoding: Build, Evaluate, and Deploy Faster LLM Inference
-</h3>
+  <h3 style="margin: 0; text-align: left;">
+    Unified Library for Speculative Decoding: Build, Evaluate, and Deploy Faster LLM Inference
+  </h3>
+</div>
 
 **Speculators** is a unified library for building, evaluating, and storing speculative decoding algorithms for large language model (LLM) inference, including in frameworks like vLLM. Speculative decoding is a lossless technique that speeds up LLM inference by using a smaller, faster speculator model to propose tokens, which are then verified by the larger base model, reducing latency without compromising output quality. Speculators standardizes this process with reusable formats and tools, enabling easier integration and deployment of speculative decoding in production-grade inference servers.
 
@@ -24,29 +24,37 @@ Unified Library for Speculative Decoding: Build, Evaluate, and Deploy Faster LLM
 
 <div class="grid cards" markdown>
 
-<!-- - :material-rocket-launch:{ .lg .middle } Getting Started
+- :material-handshake:{ .lg .middle } Code of Conduct
 
     ---
 
-    Install Speculators, convert your first speculative model, and deploy it with vLLM for faster inference.
+    Our community guidelines ensure that participation in the Speculators project is a positive, inclusive, and respectful experience for everyone.
 
-    [:octicons-arrow-right-24: Getting started](./getting-started/) -->
+    [:octicons-arrow-right-24: Code of Conduct](https://github.com/neuralmagic/speculators/blob/main/CODE_OF_CONDUCT.md)
 
-<!-- - :material-book-open-variant:{ .lg .middle } Guides
+- :material-source-pull:{ .lg .middle } Contributing Guide
 
     ---
 
-    Detailed guides covering model conversion, format specifications, and integration with inference frameworks.
+    Learn how to effectively contribute to Speculators, including reporting bugs, suggesting features, improving documentation, and submitting code.
 
-    [:octicons-arrow-right-24: Guides](./guides/) -->
+    [:octicons-arrow-right-24: Contributing Guide](https://github.com/neuralmagic/speculators/blob/main/CONTRIBUTING.md)
 
-- :material-console-line:{ .lg .middle } Entrypoints
+- :material-source-pull:{ .lg .middle } Entrypoints
 
-  ---
+    ---
 
-  CLI tools, APIs, and end-to-end examples to get started with speculative decoding and dive into advanced implementations.
+    CLI tools, APIs, and end-to-end examples to get started with speculative decoding and dive into advanced implementations.
 
-  [:octicons-arrow-right-24: Entrypoints](./entrypoints/)
+    [:octicons-arrow-right-24: Entrypoints](entrypoints/)
+
+- :material-tools:{ .lg .middle } Development Guide
+
+    ---
+
+    Detailed instructions for setting up your development environment, implementing changes, and adhering to the project's coding standards and best practices.
+
+    [:octicons-arrow-right-24: Development Guide](developer/developing/)
 
 - :material-api:{ .lg .middle } API Reference
 
@@ -54,9 +62,17 @@ Unified Library for Speculative Decoding: Build, Evaluate, and Deploy Faster LLM
 
     Complete reference documentation for the Speculators API to integrate speculative decoding into your workflow.
 
-    [:octicons-arrow-right-24: API Reference](./api/)
+    [:octicons-arrow-right-24: API Reference](reference/speculators/)
 
+- :material-palette:{ .lg .middle } Branding Guidelines
+
+    ---
+
+    Visual identity and branding guidelines for using Speculators logos, colors, and brand assets in your projects and communications.
+
+    [:octicons-arrow-right-24: Branding Guidelines](developer/branding/)
 </div>
+
 
 ## Quick Start
 Install Speculators from PyPI:
@@ -85,5 +101,5 @@ VLLM_USE_V1=1 vllm serve RedHatAI/Qwen3-8B-speculator.eagle3
 
 Speculators includes prototype implementations of cutting-edge speculative decoding research:
 
-- **[EAGLE 3](./research/eagle3/)**: Train Time Test method implementation for advanced token speculation
-- **[HASS](./research/hass/)**: EAGLE 1 architecture variation using the HASS training method
+- **[EAGLE 3](https://github.com/neuralmagic/speculators/blob/main/research/eagle3/README.md)**: Train Time Test method implementation for advanced token speculation
+- **[HASS](https://github.com/neuralmagic/speculators/blob/main/research/hass/README.md)**: EAGLE 1 architecture variation using the HASS training method
