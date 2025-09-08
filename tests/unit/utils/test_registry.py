@@ -575,7 +575,11 @@ class TestRegistryMixin:
                 assert "value" in annotations
                 assert annotations["value"] in (int, "int")
                 return_ann = annotations.get("return")
-                assert return_ann is None or return_ann is type(None)
+                assert (
+                    return_ann == "None"
+                    or return_ann is None
+                    or return_ann is type(None)
+                )
             except (AttributeError, NameError):
                 # Fallback for older Python or missing annotations
                 pass
