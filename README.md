@@ -12,7 +12,7 @@
 
 ## Overview
 
-**Speculators** is a unified library for building, evaluating, and storing speculative decoding algorithms for large language model (LLM) inference, including in frameworks like vLLM. Speculative decoding is a lossless technique that speeds up LLM inference by using a smaller, faster speculator model to propose tokens, which are then verified by the larger base model, reducing latency without compromising output quality. Speculators intelligently draft multiple tokens ahead of time, and the main model verifies them in a single step. This approach boosts performance without sacrificing output quality, as every accepted token is guaranteed to match what the main model would have generated on its own. Speculators standardizes this process with reusable formats and tools, enabling easier integration and deployment of speculative decoding in production-grade inference servers.
+**Speculators** is a unified library for building, evaluating, and storing speculative decoding algorithms for large language model (LLM) inference, including in frameworks like vLLM. Speculative decoding is a lossless technique that speeds up LLM inference by using a smaller, faster draft model (i.e "the speculators") to propose tokens, which are then verified by the larger base model, reducing latency without compromising output quality. The speculator intelligently drafts multiple tokens ahead of time, and the base model verifies them in a single forward pass. This approach boosts performance without sacrificing output quality, as every accepted token is guaranteed to match what the main model would have generated on its own. Speculators standardizes this process with reusable formats and tools, enabling easier integration and deployment of speculative decoding in production-grade inference servers.
 
 <p align="center">
   <picture>
@@ -171,7 +171,7 @@ pip install -e .
 For development with additional tools:
 
 ```bash
-pip install -e .[dev]
+pip install -e . "[dev]"
 ```
 
 #### Verify Installation
