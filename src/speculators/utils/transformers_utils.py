@@ -248,10 +248,7 @@ def load_model_config(
         return model.config  # type: ignore[attr-defined]
 
     if not isinstance(model, (str, os.PathLike)):
-        raise TypeError(
-            "Expected model to be a string, Path, or PreTrainedModel, "
-            f"got {type(model)}"
-        )
+        raise TypeError(f"Expected model to be a string or Path, got {type(model)}")
 
     try:
         logger.debug(f"Loading config with AutoConfig from: {model}")
@@ -271,6 +268,12 @@ def load_model_config(
 
 def load_model_checkpoint_config_dict(
     config: str | os.PathLike | PretrainedConfig | PreTrainedModel | dict,
+    cache_dir: str | Path | None = None,
+    force_download: bool = False,
+    local_files_only: bool = False,
+    token: str | bool | None = None,
+    revision: str | None = None,
+    **kwargs,
 ) -> dict:
     """
     Load model configuration as dictionary from various sources.
@@ -279,6 +282,12 @@ def load_model_checkpoint_config_dict(
     or extracting from existing model/config instances.
 
     :param config: Local path, PretrainedConfig, PreTrainedModel, or dict
+    :param cache_dir: Directory to cache downloaded files
+    :param force_download: Whether to force re-download existing files
+    :param local_files_only: Only use cached files without downloading
+    :param token: Authentication token for private models
+    :param revision: Model revision (branch, tag, or commit hash)
+    :param kwargs: Additional arguments for `check_download_model_config`
     :return: Configuration dictionary
     :raises TypeError: If config is not a supported type
     :raises FileNotFoundError: If config.json cannot be found
@@ -301,7 +310,15 @@ def load_model_checkpoint_config_dict(
             f"or PretrainedConfig, got {type(config)}"
         )
 
-    path = Path(config)
+    path = check_download_model_config(
+        config,
+        cache_dir=cache_dir,
+        force_download=force_download,
+        local_files_only=local_files_only,
+        token=token,
+        revision=revision,
+        **kwargs,
+    )
 
     if path.is_dir():
         path = path / "config.json"
@@ -378,7 +395,7 @@ def load_model_checkpoint_weight_files(path: str | os.PathLike) -> list[Path]:
     Searches for weight files in various formats (.bin, .safetensors) through
     automatic detection of different organization patterns.
 
-    :param path: Local checkpoint directory, index file, or weight file path
+    :param path: HF ID, local checkpoint directory, index file, or weight file path
     :return: List of paths to weight files
     :raises TypeError: If path is not a string or Path-like object
     :raises FileNotFoundError: If path doesn't exist or no weight files found
@@ -416,6 +433,12 @@ def load_model_checkpoint_weight_files(path: str | os.PathLike) -> list[Path]:
 
 def load_model_checkpoint_state_dict(
     model: str | os.PathLike | PreTrainedModel | nn.Module,
+    cache_dir: str | Path | None = None,
+    force_download: bool = False,
+    local_files_only: bool = False,
+    token: str | bool | None = None,
+    revision: str | None = None,
+    **kwargs,
 ) -> dict[str, Tensor]:
     """
     Load complete model state dictionary from various sources.
@@ -423,7 +446,13 @@ def load_model_checkpoint_state_dict(
     Supports loading from model instances, local checkpoint directories,
     or individual weight files with automatic format detection.
 
-    :param model: Model instance, checkpoint directory, or weight file path
+    :param model: Model instance, HF ID, checkpoint directory, or weight file path
+    :param cache_dir: Directory to cache downloaded files
+    :param force_download: Whether to force re-download existing files
+    :param local_files_only: Only use cached files without downloading
+    :param token: Authentication token for private models
+    :param revision: Model revision (branch, tag, or commit hash)
+    :param kwargs: Additional arguments for `check_download_model_checkpoint`
     :return: Dictionary mapping parameter names to tensors
     :raises ValueError: If unsupported file format is encountered
     """
@@ -432,7 +461,17 @@ def load_model_checkpoint_state_dict(
         return model.state_dict()  # type: ignore[union-attr]
 
     logger.debug(f"Loading model weights from: {model}")
-    weight_files = load_model_checkpoint_weight_files(model)
+    weight_files = load_model_checkpoint_weight_files(
+        check_download_model_checkpoint(
+            model,
+            cache_dir=cache_dir,
+            force_download=force_download,
+            local_files_only=local_files_only,
+            token=token,
+            revision=revision,
+            **kwargs,
+        )
+    )
 
     state_dict = {}
 

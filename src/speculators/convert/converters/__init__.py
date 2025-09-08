@@ -11,5 +11,10 @@ from __future__ import annotations
 
 from .base import SpeculatorConverter
 from .eagle import EagleSpeculatorConverter
+from .eagle3 import Eagle3SpeculatorConverter
 
-__all__ = ["EagleSpeculatorConverter", "SpeculatorConverter"]
+__all__ = [
+    "Eagle3SpeculatorConverter",
+    "EagleSpeculatorConverter",
+    "SpeculatorConverter",
+]

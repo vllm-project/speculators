@@ -76,7 +76,7 @@ class VerifierConfig(BaseModel):
     @classmethod
     def from_pretrained(
         cls,
-        config: str | os.PathLike | PreTrainedModel | PretrainedConfig | None,
+        config: str | os.PathLike | PreTrainedModel | PretrainedConfig | dict | None,
         name_or_path: str | None = "UNSET",
         **kwargs,
     ) -> VerifierConfig:

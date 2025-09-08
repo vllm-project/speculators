@@ -378,7 +378,7 @@ class Eagle3Speculator(SpeculatorModel):
         self.fc = nn.Linear(
             3 * self.target_hidden_size,  # Use target model's hidden size
             self.hidden_size,
-            bias=False,
+            bias=True,
         )
 
         self.layers = nn.ModuleList(
