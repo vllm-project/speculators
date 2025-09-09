@@ -22,7 +22,7 @@ def test_verifier_config_from_verifier_config():
             cache_dir=tmp_dir,
         )
 
-    config = VerifierConfig.from_config(
+    config = VerifierConfig.from_pretrained(
         pretrained_config, name_or_path="RedHatAI/Llama-3.1-8B-Instruct"
     )
     assert config.name_or_path == "RedHatAI/Llama-3.1-8B-Instruct"
