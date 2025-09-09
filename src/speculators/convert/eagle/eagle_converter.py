@@ -10,16 +10,47 @@ from loguru import logger
 from transformers import LlamaConfig, PretrainedConfig
 
 from speculators.config import SpeculatorsConfig, VerifierConfig
-from speculators.convert.eagle.utils import (
-    detect_fusion_bias_and_layernorms,
-    ensure_checkpoint_is_local,
-    load_checkpoint_config,
-    load_checkpoint_weights,
-)
 from speculators.models.eagle import EagleSpeculator, EagleSpeculatorConfig
 from speculators.proposals.greedy import GreedyTokenProposalConfig
+from speculators.utils import (
+    load_model_checkpoint_config_dict,
+    load_model_checkpoint_state_dict,
+)
 
 __all__ = ["EagleConverter"]
+
+
+def detect_fusion_bias_and_layernorms(
+    weights: dict[str, torch.Tensor],
+) -> tuple[bool, bool]:
+    """
+    Auto-detect fusion bias and extra layernorms presence based on weight names.
+
+    :param weights: Dictionary of weight tensors
+    :return: Tuple of (has_fusion_bias, has_layernorms)
+
+    :Example:
+
+        >>> weights = {
+        ...     "fc.bias": torch.randn(4096),
+        ...     "embed_layernorm.weight": torch.randn(4096)
+        ... }
+        >>> has_bias, has_ln = detect_fusion_bias_and_layernorms(weights)
+        >>> print(f"Fusion bias: {has_bias}, Layernorms: {has_ln}")
+        Fusion bias: True, Layernorms: True
+    """
+    has_fusion_bias = "fc.bias" in weights
+    has_layernorms = any(
+        name in weights
+        for name in ["embed_layernorm.weight", "post_embedding_layernorm.weight"]
+    )
+
+    if has_fusion_bias:
+        logger.info("Detected fusion bias in checkpoint")
+    if has_layernorms:
+        logger.info("Detected extra layernorms in checkpoint")
+
+    return has_fusion_bias, has_layernorms
 
 
 class EagleConverter:
@@ -98,10 +129,10 @@ class EagleConverter:
         """
         logger.info(f"Converting Eagle checkpoint: {input_path}")
 
-        local_checkpoint_path = ensure_checkpoint_is_local(input_path, cache_dir)
-
-        eagle_config = load_checkpoint_config(local_checkpoint_path)
-        weights = load_checkpoint_weights(local_checkpoint_path)
+        eagle_config = load_model_checkpoint_config_dict(
+            input_path, cache_dir=cache_dir
+        )
+        weights = load_model_checkpoint_state_dict(input_path, cache_dir=cache_dir)
         logger.info(f"Loaded {len(weights)} weights")
 
         detected_fusion_bias, detected_layernorms = detect_fusion_bias_and_layernorms(
