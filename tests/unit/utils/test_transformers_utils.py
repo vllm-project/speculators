@@ -472,9 +472,7 @@ class TestLoadModelConfig:
         """Test with invalid input types and missing configs."""
         with pytest.raises(TypeError) as type_exc:
             load_model_config(123)  # type: ignore[arg-type]
-        assert "Expected model to be a string, Path, or PreTrainedModel" in str(
-            type_exc.value
-        )
+        assert "Expected model to be a string or Path" in str(type_exc.value)
 
         mock_auto_config.from_pretrained.side_effect = ValueError("Config not found")
         with pytest.raises(FileNotFoundError) as file_exc:
