@@ -428,7 +428,7 @@ class SpeculatorModel(  # type: ignore[misc]
         )
 
     @torch.no_grad()
-    def generate(self, **kwargs) -> GenerateOutput | torch.LongTensor:  # type: ignore[override]
+    def generate(self, **_kwargs) -> GenerateOutput | torch.LongTensor:  # type: ignore[override]
         """
         Generate text using speculative decoding with attached verifier model.
 
@@ -439,7 +439,6 @@ class SpeculatorModel(  # type: ignore[misc]
         :param kwargs: Generation keyword arguments
         :return: Generated token sequences as GenerateOutput object or LongTensor
         """
-        _ = (kwargs,)  # To avoid unused variable linting error
         if self.verifier is None:
             raise ValueError(
                 "Verifier model is not attached. Please attach a verifier model "
