@@ -2,14 +2,16 @@
 Eagle-3 checkpoint converter with loguru logging.
 """
 
+import os
 from pathlib import Path
-from typing import Optional, Union
+from typing import Optional, Union, cast
 
 import torch
 from loguru import logger
 from transformers import AutoModelForCausalLM, LlamaConfig, PretrainedConfig
 
 from speculators.config import SpeculatorsConfig, VerifierConfig
+from speculators.convert.converters import SpeculatorConverter
 from speculators.models.eagle3 import Eagle3Speculator, Eagle3SpeculatorConfig
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 from speculators.utils import (
@@ -18,6 +20,45 @@ from speculators.utils import (
 )
 
 __all__ = ["Eagle3Converter"]
+
+
+@SpeculatorConverter.register(["eagle3"])
+class Eagle3SpeculatorConverter(SpeculatorConverter):
+    """
+    Intermediate patch for Eagle converter to maintain backward compatibility.
+    """
+
+    @classmethod
+    def is_supported(cls, **_kwargs) -> bool:  # type: ignore[override]
+        return False  # Disable auto-detection until eagle3 is refactored
+
+    def __init__(
+        self,
+        norm_before_residual: bool = False,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self.norm_before_residual = norm_before_residual
+
+    def __call__(
+        self,
+        output_path: Union[str, os.PathLike, None] = None,
+        validate_device: Optional[Union[str, torch.device, int]] = None,
+    ):
+        converter = Eagle3Converter()
+        converter.convert(
+            input_path=cast("Union[str, Path]", self.model),
+            output_path=str(output_path) or "./converted_eagle_speculator",
+            base_model=self.verifier if isinstance(self.verifier, str) else "",
+            validate=bool(validate_device),
+            norm_before_residual=self.norm_before_residual,
+        )
+
+    def convert_config_state_dict(self):
+        pass  # No-op til eagle3 is refactored
+
+    def validate(self, **_kwargs):  # type: ignore[override]
+        pass  # No-op til eagle3 is refactored
 
 
 class Eagle3Converter:
