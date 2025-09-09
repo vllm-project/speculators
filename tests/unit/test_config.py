@@ -174,6 +174,7 @@ class TestVerifierConfig:
     def mock_pretrained_config(self):
         config = MagicMock(spec=PretrainedConfig)
         config.name_or_path = "test/verifier"
+        config.architectures = ["TestModel"]
         config.to_dict.return_value = {
             "architectures": ["TestModel"],
             "hidden_size": 768,
@@ -238,19 +239,15 @@ class TestVerifierConfig:
 
     @pytest.mark.smoke
     @pytest.mark.parametrize(
-        ("config_input", "name_or_path", "expected_name"),
+        ("config_input", "expected_name"),
         [
-            (None, "custom/path", "custom/path"),
-            ({}, "custom/path", "custom/path"),
-            ({"name_or_path": "dict/path"}, "UNSET", "dict/path"),
-            ({"_name_or_path": "private/path"}, "UNSET", "private/path"),
+            ({"name_or_path": "dict/path"}, "dict/path"),
+            ({"_name_or_path": "private/path"}, "private/path"),
         ],
     )
-    def test_from_pretrained_edge_cases(
-        self, config_input, name_or_path, expected_name
-    ):
+    def test_from_pretrained_edge_cases(self, config_input, expected_name):
         """Test VerifierConfig.from_pretrained with edge cases."""
-        config = VerifierConfig.from_pretrained(config_input, name_or_path=name_or_path)
+        config = VerifierConfig.from_pretrained(config_input)
         assert config.name_or_path == expected_name
         assert config.architectures == []
 
@@ -672,19 +669,19 @@ class TestSpeculatorModelConfig:
             "test_field": 678,
         }
 
-        with patch.object(
-            SpeculatorModelConfig, "get_config_dict"
-        ) as mock_get_config_dict:
-            mock_get_config_dict.return_value = (config_data, {})
+        with patch(
+            "speculators.config.load_model_checkpoint_config_dict"
+        ) as mock_load_config:
+            mock_load_config.return_value = config_data
             config = SpeculatorModelConfig.from_pretrained("test/fake-model-hub-name")
 
-            mock_get_config_dict.assert_called_once_with(
+            mock_load_config.assert_called_once_with(
                 "test/fake-model-hub-name",
                 cache_dir=None,
                 force_download=False,
                 local_files_only=False,
                 token=None,
-                revision="main",
+                revision=None,
             )
 
             # Verify the config was loaded correctly
@@ -712,7 +709,7 @@ class TestSpeculatorModelConfig:
                     tmp_path, convert_to_speculator=True
                 )
 
-        assert "Loading a non-speculator model config is not supported yet" in str(
+        assert "Loading a non-speculator model config is not supported" in str(
             exc_info.value
         )
 
