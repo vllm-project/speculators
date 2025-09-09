@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 from importlib.metadata import version
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 from transformers import PretrainedConfig, PreTrainedModel
@@ -21,9 +21,8 @@ from transformers import PretrainedConfig, PreTrainedModel
 from speculators.utils import (
     PydanticClassRegistryMixin,
     ReloadableBaseModel,
-    load_model_config,
+    load_model_checkpoint_config_dict,
 )
-from speculators.utils.transformers_utils import load_model_checkpoint_config_dict
 
 __all__ = [
     "SpeculatorModelConfig",
@@ -79,6 +78,7 @@ class VerifierConfig(BaseModel):
     def from_pretrained(
         cls,
         config: str | os.PathLike | PreTrainedModel | PretrainedConfig | dict,
+        name_or_path: str | None | Literal["UNSET"] = "UNSET",
         cache_dir: str | Path | None = None,
         force_download: bool = False,
         local_files_only: bool = False,
@@ -93,6 +93,8 @@ class VerifierConfig(BaseModel):
         a VerifierConfig instance for compatibility validation.
 
         :param config: The configuration source to extract parameters from
+        :param name_or_path: Optional name or path of the verifier model.
+            If "UNSET", will attempt to extract from the config object.
         :param cache_dir: Directory to cache the configuration
         :param force_download: Force download from Hub instead of using cache
         :param local_files_only: Use only local files, no Hub downloads
@@ -101,7 +103,17 @@ class VerifierConfig(BaseModel):
         :param kwargs: Additional arguments for configuration loading
         :return: A VerifierConfig object with extracted parameters
         """
-        config_pretrained: PretrainedConfig = load_model_config(
+        if name_or_path == "UNSET" and isinstance(
+            config, (PreTrainedModel, PretrainedConfig)
+        ):
+            # Extract before conversion
+            name_or_path = getattr(
+                config,
+                "name_or_path",
+                getattr(config, "_name_or_path", None),
+            )
+
+        config_dict: dict[str, Any] = load_model_checkpoint_config_dict(
             config,
             cache_dir=cache_dir,
             force_download=force_download,
@@ -110,15 +122,16 @@ class VerifierConfig(BaseModel):
             revision=revision,
             **kwargs,
         )
-        name_or_path = getattr(
-            config_pretrained,
-            "name_or_path",
-            getattr(config_pretrained, "_name_or_path", None),
-        )
+
+        if name_or_path == "UNSET":
+            # Still unset, extract after conversion
+            name_or_path = config_dict.get(
+                "name_or_path", config_dict.get("_name_or_path")
+            )
 
         return cls(
             name_or_path=name_or_path,
-            architectures=getattr(config_pretrained, "architectures", []) or [],
+            architectures=config_dict.get("architectures", []) or [],
         )
 
     name_or_path: str | None = Field(
