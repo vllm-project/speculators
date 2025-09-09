@@ -10,5 +10,6 @@ and model characteristics, supporting extensible conversion workflows with valid
 from __future__ import annotations
 
 from .base import SpeculatorConverter
+from .eagle import EagleSpeculatorConverter
 
-__all__ = ["SpeculatorConverter"]
+__all__ = ["EagleSpeculatorConverter", "SpeculatorConverter"]
