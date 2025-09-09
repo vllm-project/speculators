@@ -9,6 +9,7 @@ import json
 import os
 import random
 import warnings
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -164,8 +165,7 @@ class CustomDataset(Dataset):
         return len(self.data)
 
     def __getitem__(self, index):
-         
-
+        data = torch.load(self.data[index], map_location="cpu", weights_only=False)
         new_data = {}
         hidden_state = data["hidden_state"][: train_config["max_len"]][None, :]
 
@@ -273,6 +273,42 @@ def compute_loss(target_p, predict, loss_mask, kldiv=None):
     )
     return out_head, kldiv_loss
 
+def save_offline_debug_info(epoch, step, input_ids, target_states, pred_states, loss_mask, loss, save_dir="offline_debug"):
+    """Save debug information for offline training"""
+    Path(save_dir).mkdir(exist_ok=True)
+    
+    # Get predictions
+    with torch.no_grad():
+        target_preds = target_states.argmax(dim=-1)
+        drafter_preds = pred_states.argmax(dim=-1)
+    
+    debug_dict = {
+        'epoch': epoch,
+        'step': step,
+        'input_ids': input_ids.cpu(),
+        'target_states': target_states.cpu(),
+        'pred_states': pred_states.cpu(),
+        'loss_mask': loss_mask.cpu(),
+        'loss': loss.item(),
+        'target_preds': target_preds.cpu(),
+        'drafter_preds': drafter_preds.cpu(),
+    }
+    
+    # Save to file
+    filename = f"{save_dir}/offline_debug_e{epoch}_s{step}.pt"
+    torch.save(debug_dict, filename)
+    
+    # Print debug info
+    print(f"\nOFFLINE DEBUG INFO (epoch {epoch+1}, step {step}):")
+    print(f"Input shape: {input_ids.shape}")
+    print(f"Target states shape: {target_states.shape}")
+    print(f"Predicted states shape: {pred_states.shape}")
+    print(f"Loss mask shape: {loss_mask.shape}")
+    print(f"Loss: {loss.item():.4f}")
+    print(f"Target predictions: {target_preds[0,:10]}")
+    print(f"Drafter predictions: {drafter_preds[0,:10]}")
+    print(f"Loss mask (first 10): {loss_mask[0,:10,0].int().tolist()}\n")
+
 
 def main():
     baseconfig = AutoConfig.from_pretrained(args.basepath)
@@ -320,6 +356,13 @@ def main():
 
     traindatapath = datapath[: int(len(datapath) * train_frac)]
     testdatapath = datapath[int(len(datapath) * train_frac) :]
+
+    # Check if we have enough data
+    if len(traindatapath) == 0:
+        raise ValueError(f"No training data found in {args.tmpdir}. Please check the data directory.")
+    
+    if accelerator.is_main_process:
+        print(f"Training on {len(traindatapath)} files, testing on {len(testdatapath)} files")
 
     traindataset = CustomDataset(traindatapath, transform=aug)
 
@@ -417,16 +460,17 @@ def main():
 
                     target_p = nn.Softmax(dim=2)(target_head)
                     target_p = target_p.detach()
+                    
                 hidden_states_history = []
 
-                hidden_states = model.module.fc(hidden_states.to(torch.bfloat16))
+                hidden_states = model.fc(hidden_states.to(torch.bfloat16))
                 weight_sum = 0
                 for forward_idx in range(forward_num_total):
                     predict = model(
                         hidden_states, input_ids, attention_mask, hidden_states_history
                     )
-                    pred = model.module.lm_head_layernorm(predict)
-                    pred = model.module.lm_head(pred)
+                    pred = model.lm_head_layernorm(predict)
+                    pred = model.lm_head(pred)
 
                     out_head, kldiv_loss = compute_loss(
                         target_p, pred, loss_mask, kldiv
@@ -435,6 +479,17 @@ def main():
                     weight = forward_idx + 1
                     loss += total_loss
                     weight_sum += weight
+                    # Add debug info saving on first forward pass of first batch
+                    if _batch_idx == 0 and forward_idx == 0 and epoch == 0:
+                        save_offline_debug_info(
+                            epoch=epoch,
+                            step=_batch_idx,
+                            input_ids=input_ids,
+                            target_states=target_head,
+                            pred_states=pred,
+                            loss_mask=loss_mask,
+                            loss=total_loss,
+                        )
                     hidden_states_history.append(hidden_states)
                     hidden_states = torch.concat(
                         [hidden_states[:, :1, :], predict[:, :-1, :]], dim=1
@@ -479,11 +534,21 @@ def main():
 
         correct, total = correct.sum().item(), total.sum().item()
 
-        epoch_loss /= num_batches
+        # Safety check to prevent division by zero
+        if num_batches > 0:
+            epoch_loss /= num_batches
+        else:
+            epoch_loss = 0.0
+            if accelerator.is_local_main_process:
+                print(f"Warning: No batches processed in epoch {epoch + 1}")
+        
         top_3acc = accelerator.gather_for_metrics(top_3acc)
         if accelerator.is_local_main_process:
             print(f"Epoch [{epoch + 1}/{num_epochs}], Loss: {epoch_loss:.4f}")
-            print(f"Train Accuracy: {100 * correct / total:.2f}%")
+            if total > 0:
+                print(f"Train Accuracy: {100 * correct / total:.2f}%")
+            else:
+                print("Train Accuracy: N/A (no data processed)")
 
             unwrapped_model = accelerator.unwrap_model(model)
             torch.save(

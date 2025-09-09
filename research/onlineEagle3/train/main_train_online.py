@@ -9,7 +9,7 @@ os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
 os.environ.setdefault("VLLM_LOGGING_LEVEL", "ERROR")
 os.environ.setdefault("CUDA_DEVICE_MAX_CONNECTIONS", "1")
 os.environ.setdefault("VLLM_TORCH_COMPILE", "0")  # avoid inductor meta-kernel asserts
-
+from transformers import AutoModelForCausalLM
 import argparse
 import json
 import logging
@@ -42,19 +42,20 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--basepath", type=str, required=True)
 parser.add_argument("--configpath", type=str, required=True)
 parser.add_argument("--lr", type=float, default=1e-5)
-parser.add_argument("--bs", type=int, default=7)
+parser.add_argument("--bs", type=int, default=4)
 parser.add_argument("--gradient-accumulation-steps", type=int, default=1)
 parser.add_argument("--tmpdir", type=str, default="/tmp")
 parser.add_argument("--cpdir", type=str, default="checkpoints")
 parser.add_argument("--epoch", type=int, default=40)
 parser.add_argument("--forward_num_total", type=int, default=3)
 parser.add_argument("--ckpt_path", type=str, default=None)
-parser.add_argument("--data_num", type=int, default=68623)
+parser.add_argument("--data_num", type=int, default=5000)
 parser.add_argument("--log_every", type=int, default=10)
 parser.add_argument("--quiet_vllm", action="store_true")
 parser.add_argument("--hf_export_every", type=int, default=10, help="Export HF-style folder every N epochs (and at final epoch)")
-parser.add_argument("--eagle-head-path", type=str, default="/cache/helen/speculators/research/onlineEagle3/meta-llama-3-8b-head-k3", help="Path to the Eagle head model")
+parser.add_argument("--eagle-head-path", type=str, default="meta-llama-3-8b-head-k3", help="Path to the Eagle head model")
 parser.add_argument("--num-speculative-tokens", type=int, default=1, help="Number of speculative tokens for Eagle3")
+parser.add_argument("--num-data-workers", type=int, default=4, help="Number of parallel data generation workers")
 args = parser.parse_args()
 
 # reproducibility
@@ -67,7 +68,7 @@ torch.backends.cudnn.benchmark = False
 torch.backends.cudnn.deterministic = True
 
 # training/token window
-TRAIN_TOKENS = int(os.environ.get("TRAIN_TOKENS", "8192"))
+TRAIN_TOKENS = int(os.environ.get("TRAIN_TOKENS", "4096"))
 CHUNK_T = int(os.environ.get("VERIFIER_CHUNK_T", "256"))
 
 # schedule figures
@@ -113,16 +114,31 @@ def configure_gpu_visibility(gpu_ids: Optional[list[int]] = None) -> None:
         os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(map(str, gpu_ids))
 
 
-def build_ds(tokenizer, split="train"):
-    '''
-    Build a tokenized dataset with loss masks from ShareGPT-style JSON.
-    '''
-    ds = load_dataset("json", data_files="ShareGPT_V4.3_unfiltered_cleaned_split.json")[split]
-    ds = ds.shuffle(seed=42).select(range(0, data_num))
+def build_ds(tokenizer, split="train", worker_id=0, num_workers=1):
+    '''Build dataset with just one example for testing'''
+    ds = load_dataset("json", data_files="/proving-grounds/cache/megan/ShareGPT_first_entry.json")[split]
+    
+    # No need to partition for single example
+    print(f"[worker {worker_id}/{num_workers}] Processing single test example")
+    
+    # Rest stays the same...
     original_columns = ds.column_names
-
     sep_assist = "<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
-    sep_user   = "<|eot_id|><|start_header_id|>user<|end_header_id|>"
+    sep_user = "<|eot_id|><|start_header_id|>user<|end_header_id|>"
+    
+    # ds = load_dataset("json", data_files="ShareGPT_V4.3_unfiltered_cleaned_split.json")[split]
+    
+    # # First select total data_num examples and shuffle
+    # ds = ds.shuffle(seed=42).select(range(data_num))
+    
+    # # Then partition among workers
+    # worker_size = data_num // num_workers
+    # start_idx = worker_id * worker_size
+    # end_idx = start_idx + worker_size if worker_id < num_workers - 1 else data_num
+    
+    # # Select worker's partition
+    # ds = ds.select(range(start_idx, end_idx))
+    
 
     def preprocess(examples):
         out = {"conversation": [], "input_ids": [], "loss_mask": []}
@@ -208,35 +224,19 @@ def online_data_generator(
     quiet: bool = True,
     eagle_head_path: str = None,
     num_speculative_tokens: int = 1,
+    worker_id: int = 0,  # Add worker ID parameter
+    num_workers: int = 1, # Add number of workers parameter
 ):
     # Confine this child process to the vLLM GPUs BEFORE importing vllm/torch.
     configure_gpu_visibility(gpu_ids)
-    if quiet:
-        logging.getLogger("vllm").setLevel(logging.ERROR)
-        logging.getLogger("vllm.worker").setLevel(logging.ERROR)
-
-    import vllm
-    from vllm import SamplingParams
 
     try:
         tok = AutoTokenizer.from_pretrained(verifier, use_fast=False)
-        ds = build_ds(tok)
+        # Pass worker info to build_ds
+        ds = build_ds(tok, worker_id=worker_id, num_workers=num_workers)
 
-        # Enable prefix caching
-        llm = vllm.LLM(
-            model=verifier,
-            enable_prefix_caching=True,  # Enable this!
-            tensor_parallel_size=len(gpu_ids) if gpu_ids else 1,
-            disable_custom_all_reduce=True,
-            dtype="bfloat16",
-            max_model_len=8192,
-            speculative_config={
-                "model": eagle_head_path,
-                "num_speculative_tokens": num_speculative_tokens,
-                "method": "eagle3",
-            },
-        )
-        sp = SamplingParams(max_tokens=1)
+        bigmodel = AutoModelForCausalLM.from_pretrained(verifier, device_map="auto")
+        bigmodel.eval()
 
         for prompt_batch in data_batches_loader(data=ds, batch_size=batch_size):
             if shutdown_event.is_set():
@@ -246,24 +246,32 @@ def online_data_generator(
             batched_ids = [ids[0].tolist() for ids in input_ids]
 
             try:
-                outs = llm.generate(prompt_token_ids=batched_ids, sampling_params=sp, use_tqdm=False)
-                for i, out in enumerate(outs):
-                    T = len(batched_ids[i])
-                    hs = out.hidden_states[:T]
-                    aux = out.aux_hidden_states[:T]
-                    item = {
-                        "input_ids": input_ids[i],               # (1, T)
-                        "loss_mask": loss_mask[i].cpu()[0],      # (T,)
-                        "hidden_states": hs.unsqueeze(0),        # (1, T, H)
-                        "aux_hidden_states": aux.unsqueeze(0),   # (1, T, H)
-                    }
-                    data_queue.put(item)
+                with torch.no_grad():
+                    outs_big = bigmodel(input_ids[0].cuda(), output_hidden_states=True)
+                num_layers = len(bigmodel.model.layers)
+
+                feature_fusion = [
+                    outs_big.hidden_states[3],
+                    outs_big.hidden_states[num_layers // 2 + 1],
+                    outs_big.hidden_states[-3],
+                ]
+                target = outs_big.hidden_states[-1]
+                hidden_state_big = torch.cat(feature_fusion, dim=-1)
+
+                item = { 
+                    "input_ids": input_ids[0],
+                    "loss_mask": loss_mask[0].cpu()[0],
+                    "hidden_states": target.cpu(),
+                    "aux_hidden_states": hidden_state_big.cpu()
+                }
+                data_queue.put(item)
+
             except Exception as e:
-                logging.error(f"[generator] vLLM batch error: {e}", exc_info=True)
+                logging.error(f"[generator {worker_id}] vLLM batch error: {e}", exc_info=True)
                 break
 
     except Exception as e:
-        logging.error(f"[generator] fatal: {e}", exc_info=True)
+        logging.error(f"[generator {worker_id}] fatal: {e}", exc_info=True)
         raise
 
 
@@ -429,6 +437,26 @@ def save_hf_drafter(
 
     print(f"[HF save] wrote {out}/config.json, model.safetensors with mappings")
 
+def save_debug_info(epoch, step, input_ids, verifier_probs, logits, loss_mask, loss, save_dir="debug_info"):
+    """Save debug information to files"""
+    Path(save_dir).mkdir(exist_ok=True)
+    
+    debug_dict = {
+        'epoch': epoch,
+        'step': step,
+        'input_ids': input_ids.cpu(),
+        'verifier_probs': verifier_probs.cpu(),
+        'drafter_logits': logits.cpu(),
+        'loss_mask': loss_mask.cpu(),
+        'loss': loss.item(),
+        'verifier_pred': verifier_probs.argmax(dim=-1).cpu(),
+        'drafter_pred': logits.argmax(dim=-1).cpu(),
+    }
+    
+    # Save to file
+    filename = f"{save_dir}/debug_e{epoch}_s{step}.pt"
+    torch.save(debug_dict, filename)
+    print(f"Saved debug info to {filename}")
 
 # -------------------- trainer --------------------
 def train(data_queue: mp.Queue, args, train_config):
@@ -571,9 +599,32 @@ def train(data_queue: mp.Queue, args, train_config):
                 
                 with accelerator.autocast():
                     for forward_idx in range(F):
-                        pred_states = model(hid_proj, input_ids, None, hid_hist) # (B,T,H_model)
+                        pred_states = model(hid_proj, input_ids, None, hid_hist)
                         logits = model.lm_head_layernorm(pred_states)
-                        logits = model.lm_head(logits.to(torch.bfloat16))        # (B,T,Vsub)
+                        logits = model.lm_head(logits.to(torch.bfloat16))
+                        
+                        # Save debug info on first forward pass of first step each epoch
+                        if forward_idx == 0 and step == 1:
+                            save_debug_info(
+                                epoch=epoch,
+                                step=step,
+                                input_ids=input_ids,
+                                verifier_probs=verifier_probs,
+                                logits=logits,
+                                loss_mask=loss_mask,
+                                loss=loss,
+                            )
+                            
+                            # Also print key info
+                            print(f"\nDEBUG INFO (epoch {epoch+1}, step {step}):")
+                            print(f"Input shape: {input_ids.shape}")
+                            print(f"Verifier probs shape: {verifier_probs.shape}")
+                            print(f"Drafter logits shape: {logits.shape}")
+                            print(f"Loss mask shape: {loss_mask.shape}")
+                            print(f"Loss: {loss.item():.4f}")
+                            print(f"Verifier top preds: {verifier_probs.argmax(dim=-1)[0,:10]}")
+                            print(f"Drafter top preds: {logits.argmax(dim=-1)[0,:10]}")
+                            print(f"Loss mask (first 10): {loss_mask[0,:10,0].int().tolist()}\n")      # (B,T,Vsub)
                         
                         # Weighted loss like offline version
                         weight = forward_idx + 1
@@ -691,37 +742,47 @@ def main(
     train_gpus: Union[float, int, list[int]] = [4, 5, 6, 7],
 ):
     ver_ids, tr_ids = verifier_gpus, train_gpus
+    num_workers = args.num_data_workers
 
-    # Parent-only run info (avoid duplicate prints from spawn child)
     if mp.current_process().name == "MainProcess":
-        print(f"training on {data_num} examples total")
-        steps_per_epoch = ceil(data_num / (args.bs * max(1, args.gradient_accumulation_steps)))
+        print(f"Launching {num_workers} data generation workers")
 
     mp.set_start_method("spawn", force=True)
     ctx = mp.get_context("spawn")
 
-    # Shared IPC (no Manager needed)
     data_queue = ctx.Queue(maxsize=int(data_cache_limit))
     shutdown_event = ctx.Event()
 
-    # vLLM child must NOT be daemonic (it spawns its own workers)
-    gen_proc = ctx.Process(
-        target=online_data_generator,
-        args=(data_queue, shutdown_event, verifier, data, verifier_batch_size, ver_ids, args.quiet_vllm or True, args.eagle_head_path, args.num_speculative_tokens),
-        daemon=False,
-    )
-    gen_proc.start()
+    # Launch multiple workers
+    gen_procs = []
+    gpus_per_worker = max(1, len(ver_ids) // num_workers)
+    
+    for i in range(num_workers):
+        # Assign GPUs to each worker
+        worker_gpus = ver_ids[i*gpus_per_worker:(i+1)*gpus_per_worker]
+        
+        proc = ctx.Process(
+            target=online_data_generator,
+            args=(data_queue, shutdown_event, verifier, data, verifier_batch_size,
+                  worker_gpus, args.quiet_vllm, args.eagle_head_path,
+                  args.num_speculative_tokens, i, num_workers),
+            daemon=False,
+        )
+        proc.start()
+        gen_procs.append(proc)
 
-    # Make the training process only see training GPUs BEFORE touching CUDA
+    # Training process setup
     os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(map(str, tr_ids))
+    
     try:
         train(data_queue=data_queue, args=args, train_config=train_config)
     finally:
         shutdown_event.set()
-        gen_proc.join(timeout=60)
-        if gen_proc.is_alive():
-            gen_proc.terminate()
-            gen_proc.join()
+        for proc in gen_procs:
+            proc.join(timeout=60)
+            if proc.is_alive():
+                proc.terminate()
+                proc.join()
 
 
 if __name__ == "__main__":
