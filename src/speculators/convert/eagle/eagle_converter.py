@@ -2,14 +2,16 @@
 Eagle checkpoint converter with loguru logging.
 """
 
+import os
 from pathlib import Path
-from typing import Optional, Union
+from typing import Optional, Union, cast
 
 import torch
 from loguru import logger
 from transformers import LlamaConfig, PretrainedConfig
 
 from speculators.config import SpeculatorsConfig, VerifierConfig
+from speculators.convert.converters import SpeculatorConverter
 from speculators.models.eagle import EagleSpeculator, EagleSpeculatorConfig
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 from speculators.utils import (
@@ -17,7 +19,37 @@ from speculators.utils import (
     load_model_checkpoint_state_dict,
 )
 
-__all__ = ["EagleConverter"]
+__all__ = ["EagleConverter", "EagleSpeculatorConverter"]
+
+
+@SpeculatorConverter.register(["eagle", "hass", "eagle2"])
+class EagleSpeculatorConverter(SpeculatorConverter):
+    """
+    Intermediate patch for Eagle converter to maintain backward compatibility.
+    """
+
+    @classmethod
+    def is_supported(cls, **_kwargs) -> bool:  # type: ignore[override]
+        return False  # Disable auto-detection until eagle is refactored
+
+    def __call__(
+        self,
+        output_path: Union[str, os.PathLike, None] = None,
+        validate_device: Optional[Union[str, torch.device, int]] = None,
+    ):
+        converter = EagleConverter()
+        converter.convert(
+            input_path=cast("Union[str, Path]", self.model),
+            output_path=str(output_path) or "./converted_eagle_speculator",
+            base_model=self.verifier if isinstance(self.verifier, str) else "",
+            validate=bool(validate_device),
+        )
+
+    def convert_config_state_dict(self):
+        pass  # No-op til eagle is refactored
+
+    def validate(self, **_kwargs):  # type: ignore[override]
+        pass  # No-op til eagle is refactored
 
 
 def detect_fusion_bias_and_layernorms(

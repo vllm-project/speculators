@@ -10,6 +10,7 @@ Supported Research Repositories:
 """
 
 from .converters import SpeculatorConverter
+from .eagle import Eagle3Converter, EagleConverter
 from .entrypoints import convert_model
 
-__all__ = ["SpeculatorConverter", "convert_model"]
+__all__ = ["Eagle3Converter", "EagleConverter", "SpeculatorConverter", "convert_model"]
