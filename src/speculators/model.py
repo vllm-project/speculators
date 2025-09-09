@@ -12,19 +12,16 @@ based on configuration, and flexible verifier attachment.
 from __future__ import annotations
 
 import os
-from typing import Any, Callable, ClassVar, Literal
+from pathlib import Path
+from typing import Any, ClassVar, Literal
 
 import torch
 from transformers import (
     AutoModelForCausalLM,
-    GenerationConfig,
     GenerationMixin,
     PretrainedConfig,
     PreTrainedModel,
 )
-from transformers.generation.logits_process import LogitsProcessorList
-from transformers.generation.stopping_criteria import StoppingCriteriaList
-from transformers.generation.streamers import BaseStreamer
 from transformers.generation.utils import GenerateOutput
 
 from speculators.config import SpeculatorModelConfig, VerifierConfig
@@ -89,7 +86,7 @@ class SpeculatorModel(  # type: ignore[misc]
             None
         ),
         config: PretrainedConfig | str | os.PathLike | None = None,
-        cache_dir: str | os.PathLike | None = None,
+        cache_dir: str | Path | None = None,
         ignore_mismatched_sizes: bool = False,
         force_download: bool = False,
         local_files_only: bool = False,
@@ -352,8 +349,8 @@ class SpeculatorModel(  # type: ignore[misc]
 
         if add_to_config:
             try:
-                self.config.speculators_config.verifier = VerifierConfig.from_pretrained(
-                    verifier
+                self.config.speculators_config.verifier = (
+                    VerifierConfig.from_pretrained(verifier)
                 )
             except (OSError, ValueError, Exception) as e:
                 raise RuntimeError(
@@ -384,7 +381,7 @@ class SpeculatorModel(  # type: ignore[misc]
     def state_dict(
         self,
         *,
-        destination: dict[str, Any] = None,  # type: ignore[assignment]
+        destination: dict[str, Any] | None = None,
         prefix: str = "",
         keep_vars: bool = False,
     ):
@@ -404,7 +401,7 @@ class SpeculatorModel(  # type: ignore[misc]
         """
         tmp_verifier = self.verifier
         self.verifier = None
-        state = super().state_dict(  # type: ignore[misc]
+        state = super().state_dict(  # type: ignore[type-var]
             destination=destination, prefix=prefix, keep_vars=keep_vars
         )
         self.verifier = tmp_verifier
@@ -431,24 +428,7 @@ class SpeculatorModel(  # type: ignore[misc]
         )
 
     @torch.no_grad()
-    def generate(
-        self,
-        inputs: torch.Tensor | None = None,  # noqa: ARG002
-        generation_config: GenerationConfig | None = None,  # noqa: ARG002
-        logits_processor: LogitsProcessorList | None = None,  # noqa: ARG002
-        stopping_criteria: StoppingCriteriaList | None = None,  # noqa: ARG002
-        prefix_allowed_tokens_fn: (  # noqa: ARG002
-            Callable[[int, torch.Tensor], list[int]] | None
-        ) = None,
-        synced_gpus: bool | None = None,  # noqa: ARG002
-        assistant_model: PreTrainedModel | None = None,  # type: ignore[override]  # noqa: ARG002
-        streamer: BaseStreamer | None = None,  # noqa: ARG002
-        negative_prompt_ids: torch.Tensor | None = None,  # noqa: ARG002
-        negative_prompt_attention_mask: torch.Tensor | None = None,  # noqa: ARG002
-        use_model_defaults: bool | None = None,  # noqa: ARG002
-        custom_generate: str | None = None,  # noqa: ARG002
-        **kwargs,  # noqa: ARG002
-    ) -> GenerateOutput | torch.LongTensor:
+    def generate(self, **kwargs) -> GenerateOutput | torch.LongTensor:  # type: ignore[override]
         """
         Generate text using speculative decoding with attached verifier model.
 
@@ -456,22 +436,10 @@ class SpeculatorModel(  # type: ignore[misc]
         with existing generation workflows while adding speculative decoding
         capabilities for faster generation.
 
-        :param inputs: Input token IDs to generate from
-        :param generation_config: Configuration for generation parameters
-        :param logits_processor: List of logits processors to apply during generation
-        :param stopping_criteria: List of stopping criteria to determine when to stop
-        :param prefix_allowed_tokens_fn: Function to constrain generation to allowed
-            tokens based on current prefix
-        :param synced_gpus: Whether to synchronize GPUs during distributed generation
-        :param assistant_model: Assistant model for generation compatibility
-        :param streamer: Streamer to output tokens as they are generated
-        :param negative_prompt_ids: Token IDs for negative prompting
-        :param negative_prompt_attention_mask: Attention mask for negative prompt tokens
-        :param use_model_defaults: Whether to use model-specific default parameters
-        :param custom_generate: Custom generation parameter
-        :param kwargs: Additional keyword arguments for generation
+        :param kwargs: Generation keyword arguments
         :return: Generated token sequences as GenerateOutput object or LongTensor
         """
+        _ = (kwargs,)  # To avoid unused variable linting error
         if self.verifier is None:
             raise ValueError(
                 "Verifier model is not attached. Please attach a verifier model "

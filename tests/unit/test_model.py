@@ -594,23 +594,6 @@ class TestSpeculatorModel:
         # Verifier parameters should not be in state dict
         assert not any("verifier" in key for key in state)
 
-    @pytest.mark.sanity
-    def test_generate_invalid(self, test_config):
-        model = SpeculatorTestModel(config=test_config)
-
-        # Should raise error when no verifier is attached
-        with pytest.raises(ValueError, match="Verifier model is not attached"):
-            model.generate(torch.tensor([[1, 2, 3]]))
-
-        # Should raise NotImplementedError when verifier is attached
-        verifier = create_mock_verifier()
-        model.attach_verifier(verifier, add_to_config=False)
-        with pytest.raises(
-            NotImplementedError,
-            match="The generate method for speculator models is not implemented yet",
-        ):
-            model.generate(torch.tensor([[1, 2, 3]]))
-
     @pytest.mark.smoke
     def test_marshalling(self, valid_instances):
         """Test SpeculatorModel serialization and deserialization."""

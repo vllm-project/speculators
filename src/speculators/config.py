@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import os
 from importlib.metadata import version
-from typing import Any, ClassVar, cast
+from pathlib import Path
+from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
 from transformers import PretrainedConfig, PreTrainedModel
@@ -22,6 +23,7 @@ from speculators.utils import (
     ReloadableBaseModel,
     load_model_config,
 )
+from speculators.utils.transformers_utils import load_model_checkpoint_config_dict
 
 __all__ = [
     "SpeculatorModelConfig",
@@ -76,8 +78,12 @@ class VerifierConfig(BaseModel):
     @classmethod
     def from_pretrained(
         cls,
-        config: str | os.PathLike | PreTrainedModel | PretrainedConfig | None,
-        name_or_path: str | None = "UNSET",
+        config: str | os.PathLike | PreTrainedModel | PretrainedConfig | dict,
+        cache_dir: str | Path | None = None,
+        force_download: bool = False,
+        local_files_only: bool = False,
+        token: str | bool | None = None,
+        revision: str | None = None,
         **kwargs,
     ) -> VerifierConfig:
         """
@@ -87,38 +93,32 @@ class VerifierConfig(BaseModel):
         a VerifierConfig instance for compatibility validation.
 
         :param config: The configuration source to extract parameters from
-        :param name_or_path: The name or path for the verifier model
-        :param kwargs: Additional keyword arguments for config loading
+        :param cache_dir: Directory to cache the configuration
+        :param force_download: Force download from Hub instead of using cache
+        :param local_files_only: Use only local files, no Hub downloads
+        :param token: Authentication token for Hub access
+        :param revision: Model revision to load from Hub
+        :param kwargs: Additional arguments for configuration loading
         :return: A VerifierConfig object with extracted parameters
         """
-        # Get the PretrainedConfig object if we can
-        config_pretrained: PretrainedConfig | dict = (
-            load_model_config(config, **kwargs)
-            if config and not isinstance(config, dict)
-            else cast("dict", config or {})
+        config_pretrained: PretrainedConfig = load_model_config(
+            config,
+            cache_dir=cache_dir,
+            force_download=force_download,
+            local_files_only=local_files_only,
+            token=token,
+            revision=revision,
+            **kwargs,
         )
-        # Convert PretrainedConfig to dict if possible, otherwise use the original
-        config_dict: dict = (
-            config_pretrained.to_dict()
-            if config_pretrained and isinstance(config_pretrained, PretrainedConfig)
-            else cast("dict", config_pretrained)
+        name_or_path = getattr(
+            config_pretrained,
+            "name_or_path",
+            getattr(config_pretrained, "_name_or_path", None),
         )
-        if not config_dict:
-            config_dict = {}
-
-        if name_or_path == "UNSET":
-            # name_or_path wasn't passed in, resolve it from config
-            config_name_or_path = (
-                getattr(config, "name_or_path", None) if config else None
-            )
-            config_dict_name_or_path = config_dict.get(
-                "name_or_path"
-            ) or config_dict.get("_name_or_path")
-            name_or_path = config_name_or_path or config_dict_name_or_path
 
         return cls(
             name_or_path=name_or_path,
-            architectures=config_dict.get("architectures", []),
+            architectures=getattr(config_pretrained, "architectures", []) or [],
         )
 
     name_or_path: str | None = Field(
@@ -188,11 +188,11 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
     def from_pretrained(
         cls,
         pretrained_model_name_or_path: str | os.PathLike,
-        cache_dir: str | os.PathLike | None = None,
+        cache_dir: str | Path | None = None,  # type: ignore[override]
         force_download: bool = False,
         local_files_only: bool = False,
         token: str | bool | None = None,
-        revision: str = "main",
+        revision: str | None = None,
         **kwargs,
     ) -> SpeculatorModelConfig:
         """
@@ -211,7 +211,7 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
         :return: A SpeculatorModelConfig instance with loaded parameters
         """
         # Transformers config loading
-        config_dict, kwargs = cls.get_config_dict(
+        config_dict: dict[str, Any] = load_model_checkpoint_config_dict(
             pretrained_model_name_or_path,
             cache_dir=cache_dir,
             force_download=force_download,
@@ -224,7 +224,7 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
         if "speculators_model_type" not in config_dict:
             # Conversion pathway
             raise NotImplementedError(
-                "Loading a non-speculator model config is not supported yet."
+                "Loading a non-speculator model config is not supported."
             )
 
         return cls.from_dict(config_dict, **kwargs)

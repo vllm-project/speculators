@@ -94,6 +94,8 @@ class MockVerifier(PreTrainedModel):
 @pytest.fixture
 def sample_llama_config():
     return LlamaConfig(
+        name_or_path="test/verifier",
+        architectures=["LlamaForCausalLM"],
         attention_bias=False,
         attention_dropout=0.0,
         bos_token_id=128000,
