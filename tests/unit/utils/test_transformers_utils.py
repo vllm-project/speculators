@@ -7,10 +7,12 @@ from __future__ import annotations
 import json
 import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from typing import Literal, cast
+from unittest.mock import MagicMock
 
 import pytest
 import torch
+from pytest_mock import MockType
 from transformers import PretrainedConfig, PreTrainedModel
 
 from speculators.utils import (
@@ -23,342 +25,271 @@ from speculators.utils import (
     load_model_checkpoint_weight_files,
     load_model_config,
 )
-
-
-@pytest.fixture
-def mock_pretrained_config():
-    """Mock PretrainedConfig for testing."""
-    config = MagicMock(spec=PretrainedConfig)
-    config.name_or_path = "test/model"
-    config.to_dict.return_value = {
-        "architectures": ["TestModel"],
-        "hidden_size": 768,
-        "vocab_size": 50000,
-        "model_type": "test_model",
-    }
-    return config
-
-
-@pytest.fixture
-def mock_pretrained_model():
-    """Mock PreTrainedModel for testing."""
-    model = MagicMock(spec=PreTrainedModel)
-    model.config = MagicMock(spec=PretrainedConfig)
-    model.config.to_dict.return_value = {
-        "architectures": ["TestModel"],
-        "hidden_size": 768,
-        "vocab_size": 50000,
-        "model_type": "test_model",
-    }
-    model.state_dict.return_value = {
-        "embedding.weight": torch.randn(50000, 768),
-        "layer.0.weight": torch.randn(768, 768),
-    }
-    return model
-
-
-@pytest.fixture
-def mock_nn_module():
-    """Mock nn.Module for testing."""
-    module = MagicMock(spec=torch.nn.Module)
-    module.state_dict.return_value = {
-        "weight": torch.randn(10, 5),
-        "bias": torch.randn(10),
-    }
-    return module
-
-
-@pytest.fixture
-def temp_checkpoint_dir():
-    """Create a temporary directory with mock checkpoint files."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        checkpoint_path = Path(temp_dir)
-
-        # Create config.json
-        config_data = {
-            "architectures": ["TestModel"],
-            "hidden_size": 768,
-            "vocab_size": 50000,
-            "model_type": "test_model",
-        }
-        config_file = checkpoint_path / "config.json"
-        config_file.write_text(json.dumps(config_data))
-
-        # Create weight files
-        weight_file = checkpoint_path / "pytorch_model.bin"
-        torch.save({"weight": torch.randn(10, 5)}, weight_file)
-
-        safetensors_file = checkpoint_path / "model.safetensors"
-        safetensors_file.touch()
-
-        yield checkpoint_path
-
-
-@pytest.fixture
-def temp_index_checkpoint_dir():
-    """Create a temporary directory with indexed checkpoint files."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        checkpoint_path = Path(temp_dir)
-
-        # Create config.json
-        config_data = {
-            "architectures": ["TestModel"],
-            "hidden_size": 768,
-            "vocab_size": 50000,
-            "model_type": "test_model",
-        }
-        config_file = checkpoint_path / "config.json"
-        config_file.write_text(json.dumps(config_data))
-
-        # Create index file
-        index_data = {
-            "weight_map": {
-                "embedding.weight": "pytorch_model-00001-of-00002.bin",
-                "layer.0.weight": "pytorch_model-00002-of-00002.bin",
-            }
-        }
-        index_file = checkpoint_path / "pytorch_model.bin.index.json"
-        index_file.write_text(json.dumps(index_data))
-
-        # Create weight files referenced in index
-        weight_file_1 = checkpoint_path / "pytorch_model-00001-of-00002.bin"
-        torch.save({"embedding.weight": torch.randn(50000, 768)}, weight_file_1)
-
-        weight_file_2 = checkpoint_path / "pytorch_model-00002-of-00002.bin"
-        torch.save({"layer.0.weight": torch.randn(768, 768)}, weight_file_2)
-
-        yield checkpoint_path
+from tests.unit.mock import MockPretrainedTransformersFactory, PretrainedBundle
 
 
 class TestDownloadModelCheckpointFromHub:
     """Test suite for download_model_checkpoint_from_hub function."""
 
-    @pytest.mark.smoke
-    @pytest.mark.parametrize(
-        (
-            "model_id",
-            "cache_dir",
-            "force_download",
-            "local_files_only",
-            "token",
-            "revision",
-            "kwargs",
-            "expected_call",
-        ),
-        [
-            (
-                "test/model",
-                None,
-                False,
-                False,
-                None,
-                None,
-                {},
-                {
-                    "repo_id": "test/model",
-                    "cache_dir": None,
-                    "force_download": False,
-                    "local_files_only": False,
-                    "token": None,
-                    "revision": None,
-                    "allow_patterns": [
-                        "*.json",
-                        "*.safetensors",
-                        "*.bin",
-                        "*.index.json",
-                    ],
-                },
-            ),
-            (
-                "test/model",
-                "/cache",
-                True,
-                True,
-                "test_token",
-                "v1.0",
-                {"custom_param": "custom_value"},
-                {
-                    "repo_id": "test/model",
-                    "cache_dir": "/cache",
-                    "force_download": True,
-                    "local_files_only": True,
-                    "token": "test_token",
-                    "revision": "v1.0",
-                    "custom_param": "custom_value",
-                    "allow_patterns": [
-                        "*.json",
-                        "*.safetensors",
-                        "*.bin",
-                        "*.index.json",
-                    ],
-                },
-            ),
-        ],
-        ids=["default_parameters", "custom_parameters"],
-    )
-    @patch("speculators.utils.transformers_utils.snapshot_download")
-    def test_invocation(
+    @pytest.fixture
+    def valid_instances(
         self,
-        mock_snapshot_download,
-        model_id,
-        cache_dir,
-        force_download,
-        local_files_only,
-        token,
-        revision,
-        kwargs,
-        expected_call,
-    ):
-        """Test successful download of model checkpoint from HuggingFace Hub."""
-        mock_snapshot_download.return_value = "/path/to/downloaded/model"
+        mock_pretrained_factory: tuple[
+            MockPretrainedTransformersFactory, dict[str, MockType]
+        ],
+    ) -> tuple[PretrainedBundle, MockType]:
+        # Register default mock model
+        factory, patched = mock_pretrained_factory
 
-        result = download_model_checkpoint_from_hub(
-            model_id=model_id,
-            cache_dir=cache_dir,
-            force_download=force_download,
-            local_files_only=local_files_only,
-            token=token,
-            revision=revision,
-            **kwargs,
+        return factory.register(), patched[
+            "speculators.utils.transformers_utils.snapshot_download"
+        ]
+
+    @pytest.mark.smoke
+    def test_invocation(self, valid_instances: tuple[PretrainedBundle, MockType]):
+        """Test successful download of model checkpoint from HuggingFace Hub."""
+        bundle, patched = valid_instances
+        path = download_model_checkpoint_from_hub(
+            model_id=bundle.name_or_path,
+            cache_dir="/tmp/cache",
+            force_download=True,
+            local_files_only=True,
+            token="asdf",
+            revision="main",
+            kwarg="kwarg_value",
+        )
+        assert path == bundle.local_dir.resolve()
+        patched.assert_called_once_with(
+            repo_id=bundle.name_or_path,
+            cache_dir="/tmp/cache",
+            force_download=True,
+            local_files_only=True,
+            token="asdf",
+            revision="main",
+            kwarg="kwarg_value",
+            allow_patterns=["*.json", "*.safetensors", "*.bin", "*.index.json"],
         )
 
-        assert result == Path("/path/to/downloaded/model")
-        mock_snapshot_download.assert_called_once_with(**expected_call)
-
     @pytest.mark.sanity
-    @patch("speculators.utils.transformers_utils.snapshot_download")
-    def test_invalid_invocation(self, mock_snapshot_download):
+    def test_invalid_invocation(
+        self, valid_instances: tuple[PretrainedBundle, MockType]
+    ):
         """Test handling of download failure."""
-        mock_snapshot_download.side_effect = Exception("Download failed")
+        _, patched = valid_instances
+        patched.side_effect = Exception("Download failed")
 
         with pytest.raises(FileNotFoundError) as exc_info:
             download_model_checkpoint_from_hub("test/model")
 
-        assert "Checkpoint not found: test/model" in str(exc_info.value)
+        assert "Failed to download checkpoint for" in str(exc_info.value)
+        patched.assert_called_once_with(
+            repo_id="test/model",
+            cache_dir=None,
+            force_download=False,
+            local_files_only=False,
+            token=None,
+            revision=None,
+            allow_patterns=["*.json", "*.safetensors", "*.bin", "*.index.json"],
+        )
 
 
 class TestCheckDownloadModelCheckpoint:
     """Test suite for check_download_model_checkpoint function."""
 
-    @pytest.mark.smoke
-    @pytest.mark.parametrize(
-        ("model_input", "expected_type"),
-        [
-            ("pretrained_model", "PreTrainedModel"),
-            ("nn_module", "nn.Module"),
-        ],
-        ids=["pretrained_model", "nn_module"],
+    @pytest.fixture(
+        params=["pretrained", "module", "local_path", "hf_id"],
+        ids=["pretrained", "module", "local_path", "hf_id"],
     )
-    def test_invocation_with_model_instances(
+    def valid_instances(
         self,
-        model_input,
-        expected_type,
-        mock_pretrained_model,
-        mock_nn_module,
+        request,
+        tmp_path: Path,
+        mock_pretrained_factory: tuple[
+            MockPretrainedTransformersFactory, dict[str, MockType]
+        ],
+    ) -> tuple[
+        PreTrainedModel | torch.nn.Module | str | Path,
+        PretrainedBundle,
+        MockType,
+    ]:
+        """Fixture to provide valid instances for different input types."""
+        factory, patched = mock_pretrained_factory
+        bundle = factory.register()
+
+        model_type = cast("str", request.param)
+        model: PreTrainedModel | torch.nn.Module | str | Path
+        if model_type == "pretrained":
+            model = bundle.model
+        elif model_type == "module":
+            model = torch.nn.Module()
+        elif model_type == "local_path":
+            model = bundle.local_dir
+        elif model_type == "hf_id":
+            model = bundle.name_or_path
+        else:
+            raise ValueError(f"Unknown model type: {model_type}")
+
+        return (
+            model,
+            bundle,
+            patched["speculators.utils.transformers_utils.snapshot_download"],
+        )
+
+    @pytest.mark.smoke
+    def test_invocation(
+        self,
+        valid_instances: tuple[
+            PreTrainedModel | torch.nn.Module | str | Path,
+            PretrainedBundle,
+            MockType,
+        ],
     ):
         """Test with model instances (PreTrainedModel and nn.Module)."""
-        if model_input == "pretrained_model":
-            result = check_download_model_checkpoint(mock_pretrained_model)
-            assert result is mock_pretrained_model
-        else:
-            result = check_download_model_checkpoint(mock_nn_module)
-            assert result is mock_nn_module
-
-    @pytest.mark.smoke
-    def test_invocation_with_local_path(self, temp_checkpoint_dir):
-        """Test with existing local checkpoint directory."""
-        result = check_download_model_checkpoint(temp_checkpoint_dir)
-        assert result == temp_checkpoint_dir.resolve()
-
-    @pytest.mark.sanity
-    @pytest.mark.parametrize(
-        ("model_input", "expected_error", "error_message"),
-        [
-            (123, TypeError, "Expected model to be a string or Path"),
-            ("temp_file_path", ValueError, "Expected a directory for checkpoint"),
-        ],
-        ids=["invalid_type", "not_directory"],
-    )
-    def test_invalid_invocation(self, model_input, expected_error, error_message):
-        """Test with invalid input types and paths."""
-        if model_input == "temp_file_path":
-            with tempfile.NamedTemporaryFile() as temp_file:
-                with pytest.raises(expected_error) as exc_info:
-                    check_download_model_checkpoint(temp_file.name)
-                assert error_message in str(exc_info.value)
-        else:
-            with pytest.raises(expected_error) as exc_info:
-                check_download_model_checkpoint(model_input)
-            assert error_message in str(exc_info.value)
-
-    @pytest.mark.sanity
-    @patch("speculators.utils.transformers_utils.download_model_checkpoint_from_hub")
-    def test_download_from_hub(self, mock_download):
-        """Test download from hub when local path doesn't exist."""
-        mock_download.return_value = Path("/downloaded/model")
+        model, bundle, patched = valid_instances
 
         result = check_download_model_checkpoint(
-            "nonexistent/path",
-            cache_dir="/cache",
+            model,
+            cache_dir="/tmp/cache",
             force_download=True,
-            token="test_token",
+            local_files_only=True,
+            token="asdf",
+            revision="main",
         )
 
-        assert result == Path("/downloaded/model")
-        mock_download.assert_called_once_with(
-            model_id="nonexistent/path",
-            cache_dir="/cache",
-            force_download=True,
-            local_files_only=False,
-            token="test_token",
-            revision=None,
-        )
+        if isinstance(model, (PreTrainedModel, torch.nn.Module)):
+            assert result is model
+            patched.assert_not_called()
+        elif isinstance(model, Path):
+            assert result == model.resolve()
+            patched.assert_not_called()
+        elif isinstance(model, str):
+            assert result == bundle.local_dir.resolve()
+            patched.assert_called_once_with(
+                repo_id=bundle.name_or_path,
+                cache_dir="/tmp/cache",
+                force_download=True,
+                local_files_only=True,
+                token="asdf",
+                revision="main",
+                allow_patterns=["*.json", "*.safetensors", "*.bin", "*.index.json"],
+            )
+        else:
+            raise ValueError("Invalid model type in test.")
+
+    @pytest.mark.sanity
+    def test_invalid_invocation(self):
+        """Test with invalid input types and paths."""
+        with pytest.raises(TypeError) as exc_info:
+            check_download_model_checkpoint(123)  # type: ignore[arg-type]
+        assert "Expected model to be a string or Path" in str(exc_info.value)
 
 
 class TestCheckDownloadModelConfig:
     """Test suite for check_download_model_config function."""
 
-    @pytest.mark.smoke
-    @pytest.mark.parametrize(
-        ("config_input", "expected_result"),
-        [
-            ("pretrained_config", "pretrained_config"),
-            ("pretrained_model", "config_from_model"),
-            ("dict_config", "dict_config"),
+    @pytest.fixture(
+        params=[
+            "pretrained_config",
+            "pretrained_model",
+            "dict",
+            "local_file",
+            "local_dir",
+            "hf_id",
         ],
-        ids=["pretrained_config", "pretrained_model", "dict_config"],
+        ids=[
+            "pretrained_config",
+            "pretrained_model",
+            "dict",
+            "local_file",
+            "local_dir",
+            "hf_id",
+        ],
     )
-    def test_invocation_with_config_instances(
+    def valid_instances(
         self,
-        config_input,
-        expected_result,
-        mock_pretrained_config,
-        mock_pretrained_model,
+        request,
+        mock_pretrained_factory: tuple[
+            MockPretrainedTransformersFactory, dict[str, MockType]
+        ],
+    ) -> tuple[
+        PretrainedConfig | PreTrainedModel | dict | str | Path,
+        PretrainedBundle,
+        MockType,
+    ]:
+        """Fixture to provide valid instances for different input types."""
+        factory, patched = mock_pretrained_factory
+        bundle = factory.register()
+
+        config_type = cast("str", request.param)
+        config: PretrainedConfig | PreTrainedModel | dict | str | Path
+        if config_type == "pretrained_config":
+            config = bundle.config
+        elif config_type == "pretrained_model":
+            config = bundle.model
+        elif config_type == "dict":
+            config = bundle.config.to_dict()
+        elif config_type == "local_file":
+            config = bundle.local_dir / "config.json"
+        elif config_type == "local_dir":
+            config = bundle.local_dir
+        elif config_type == "hf_id":
+            config = bundle.name_or_path
+        else:
+            raise ValueError(f"Unknown config type: {config_type}")
+
+        return (
+            config,
+            bundle,
+            patched["speculators.utils.transformers_utils.snapshot_download"],
+        )
+
+    @pytest.mark.smoke
+    def test_invocation(
+        self,
+        valid_instances: tuple[
+            PretrainedConfig | PreTrainedModel | dict | str | Path,
+            PretrainedBundle,
+            MockType,
+        ],
     ):
         """Test with various config instance types."""
-        if config_input == "pretrained_config":
-            result = check_download_model_config(mock_pretrained_config)
-            assert result is mock_pretrained_config
-        elif config_input == "pretrained_model":
-            result = check_download_model_config(mock_pretrained_model)
-            assert result is mock_pretrained_model.config
+        config, bundle, patched = valid_instances
+
+        result = check_download_model_config(
+            config,
+            cache_dir="/tmp/cache",
+            force_download=True,
+            local_files_only=True,
+            token="asdf",
+            revision="main",
+            kwarg="kwarg_value",
+        )
+
+        expected: PretrainedConfig | Path | dict
+        if not isinstance(config, str):
+            if isinstance(config, PreTrainedModel):
+                expected = config.config
+            elif isinstance(config, Path):
+                expected = (
+                    config.resolve() if config.is_file() else config / "config.json"
+                )
+            else:
+                expected = config
+
+            assert result == expected
+            patched.assert_not_called()
         else:
-            config_dict = {"model_type": "test", "hidden_size": 768}
-            result = check_download_model_config(config_dict)
-            assert result is config_dict
-
-    @pytest.mark.smoke
-    def test_invocation_with_local_file(self, temp_checkpoint_dir):
-        """Test with existing local config file."""
-        config_path = temp_checkpoint_dir / "config.json"
-        result = check_download_model_config(config_path)
-        assert result == config_path.resolve()
-
-    @pytest.mark.smoke
-    def test_invocation_with_local_dir(self, temp_checkpoint_dir):
-        """Test with existing local checkpoint directory."""
-        result = check_download_model_config(temp_checkpoint_dir)
-        assert result == (temp_checkpoint_dir / "config.json").resolve()
+            assert result == bundle.local_dir.resolve() / "config.json"
+            patched.assert_called_once_with(
+                str(config),
+                allow_patterns=["config.json"],
+                cache_dir="/tmp/cache",
+                force_download=True,
+                local_files_only=True,
+                token="asdf",
+                revision="main",
+                kwarg="kwarg_value",
+            )
 
     @pytest.mark.sanity
     @pytest.mark.parametrize(
@@ -371,186 +302,127 @@ class TestCheckDownloadModelConfig:
             ),
             (
                 "missing_config",
-                OSError,
-                "Can't load the configuration",
+                FileNotFoundError,
+                "Failed to download config for",
             ),
         ],
         ids=["invalid_type", "missing_config"],
     )
-    def test_invalid_invocation(self, config_input, expected_error, error_message):
+    def test_invalid_invocation(
+        self, config_input, expected_error, error_message, tmp_path: Path
+    ):
         """Test with invalid input types and missing configs."""
-        if config_input == "missing_config":
-            with tempfile.TemporaryDirectory() as temp_dir:
-                missing_config_path = Path(temp_dir) / "missing_dir"
-                with pytest.raises(expected_error) as exc_info:
-                    check_download_model_config(missing_config_path)
-                assert error_message in str(exc_info.value)
-        else:
-            with pytest.raises(expected_error) as exc_info:
-                check_download_model_config(config_input)
-            assert error_message in str(exc_info.value)
-
-    @pytest.mark.sanity
-    @patch("speculators.utils.transformers_utils.AutoConfig")
-    def test_download_from_hub(self, mock_auto_config):
-        """Test download from hub when local path doesn't exist."""
-        mock_config = MagicMock(spec=PretrainedConfig)
-        mock_auto_config.from_pretrained.return_value = mock_config
-
-        result = check_download_model_config(
-            "nonexistent/path",
-            cache_dir="/cache",
-            force_download=True,
-            token="test_token",
-        )
-
-        assert result is mock_config
-        mock_auto_config.from_pretrained.assert_called_once_with(
-            "nonexistent/path",
-            cache_dir="/cache",
-            force_download=True,
-            local_files_only=False,
-            token="test_token",
-            revision=None,
-        )
+        with pytest.raises(expected_error) as exc_info:
+            check_download_model_config(
+                config_input if config_input != "missing_config" else tmp_path
+            )
+        assert error_message in str(exc_info.value)
 
 
 class TestLoadModelConfig:
     """Test suite for load_model_config function."""
 
-    @pytest.mark.smoke
-    @pytest.mark.parametrize(
-        ("model_input", "expected_result"),
-        [
-            ("pretrained_config", "pretrained_config"),
-            ("pretrained_model", "config_from_model"),
-        ],
-        ids=["pretrained_config", "pretrained_model"],
-    )
-    def test_invocation_with_instances(
-        self,
-        model_input,
-        expected_result,
-        mock_pretrained_config,
-        mock_pretrained_model,
-    ):
-        """Test with PretrainedConfig and PreTrainedModel instances."""
-        if model_input == "pretrained_config":
-            result = load_model_config(mock_pretrained_config)
-            assert result is mock_pretrained_config
-        else:
-            result = load_model_config(mock_pretrained_model)
-            assert result is mock_pretrained_model.config
-
-    @pytest.mark.smoke
-    @patch("speculators.utils.transformers_utils.AutoConfig")
-    def test_invocation_from_path(self, mock_auto_config):
-        """Test loading config from path."""
-        mock_config = MagicMock(spec=PretrainedConfig)
-        mock_auto_config.from_pretrained.return_value = mock_config
-
-        result = load_model_config(
-            "test/model",
-            cache_dir="/cache",
-            force_download=True,
-            token="test_token",
-        )
-
-        assert result is mock_config
-        mock_auto_config.from_pretrained.assert_called_once_with(
-            "test/model",
-            cache_dir="/cache",
-            force_download=True,
-            local_files_only=False,
-            token="test_token",
-            revision=None,
-        )
-
-    @pytest.mark.sanity
-    @patch("speculators.utils.transformers_utils.AutoConfig")
-    def test_invalid_invocation(self, mock_auto_config):
-        """Test with invalid input types and missing configs."""
-        with pytest.raises(TypeError) as type_exc:
-            load_model_config(123)  # type: ignore[arg-type]
-        assert "Expected model to be a string or Path" in str(type_exc.value)
-
-        mock_auto_config.from_pretrained.side_effect = ValueError("Config not found")
-        with pytest.raises(FileNotFoundError) as file_exc:
-            load_model_config("test/model")
-        assert "Config not found for model: test/model" in str(file_exc.value)
-
-
-class TestLoadModelCheckpointConfigDict:
-    """Test suite for load_model_checkpoint_config_dict function."""
-
     @pytest.fixture(
         params=[
-            {"model_type": "test", "hidden_size": 768},
-            {"architectures": ["TestModel"], "vocab_size": 50000},
+            "pretrained_config",
+            "pretrained_model",
+            "dict",
+            "local_file",
+            "local_dir",
+            "hf_id",
         ],
-        ids=["basic_config", "extended_config"],
-    )
-    def config_dict_instances(self, request):
-        """Fixture providing test config dictionaries."""
-        return request.param
-
-    @pytest.mark.smoke
-    @pytest.mark.parametrize(
-        ("config_input", "expected_result"),
-        [
-            ("dict_config", "dict_config"),
-            ("pretrained_model", "config_from_model"),
-            ("pretrained_config", "config_from_config"),
+        ids=[
+            "pretrained_config",
+            "pretrained_model",
+            "dict",
+            "local_file",
+            "local_dir",
+            "hf_id",
         ],
-        ids=["dict_config", "pretrained_model", "pretrained_config"],
     )
-    def test_invocation_with_instances(
+    def valid_instances(
         self,
-        config_input,
-        expected_result,
-        config_dict_instances,
-        mock_pretrained_model,
-        mock_pretrained_config,
-    ):
-        """Test with various config instance types."""
-        if config_input == "dict_config":
-            result = load_model_checkpoint_config_dict(config_dict_instances)
-            assert result is config_dict_instances
-        elif config_input == "pretrained_model":
-            result = load_model_checkpoint_config_dict(mock_pretrained_model)
-            assert result == mock_pretrained_model.config.to_dict.return_value
-            mock_pretrained_model.config.to_dict.assert_called_once()
+        request,
+        mock_pretrained_factory: tuple[
+            MockPretrainedTransformersFactory, dict[str, MockType]
+        ],
+    ) -> tuple[
+        PretrainedConfig | PreTrainedModel | dict | str | Path,
+        PretrainedBundle,
+        MagicMock,
+        MagicMock,
+    ]:
+        """Fixture providing valid model instances for testing."""
+        factory, patched = mock_pretrained_factory
+        bundle = factory.register()
+
+        config_type = cast("str", request.param)
+        config: PretrainedConfig | PreTrainedModel | dict | str | Path
+        if config_type == "pretrained_config":
+            config = bundle.config
+        elif config_type == "pretrained_model":
+            config = bundle.model
+        elif config_type == "dict":
+            config = bundle.config.to_dict()
+        elif config_type == "local_file":
+            config = bundle.local_dir / "config.json"
+        elif config_type == "local_dir":
+            config = bundle.local_dir
+        elif config_type == "hf_id":
+            config = bundle.name_or_path
         else:
-            result = load_model_checkpoint_config_dict(mock_pretrained_config)
-            assert result == mock_pretrained_config.to_dict.return_value
-            mock_pretrained_config.to_dict.assert_called_once()
+            raise ValueError(f"Unknown config type: {config_type}")
+
+        return (
+            config,
+            bundle,
+            patched["speculators.utils.transformers_utils.snapshot_download"],
+            patched["AutoConfig.from_pretrained"],
+        )
 
     @pytest.mark.smoke
-    def test_invocation_with_file(self, temp_checkpoint_dir):
-        """Test with config file path."""
-        config_path = temp_checkpoint_dir / "config.json"
-        result = load_model_checkpoint_config_dict(config_path)
+    def test_invocation(
+        self,
+        valid_instances: tuple[
+            PretrainedConfig | PreTrainedModel | dict | str | Path,
+            PretrainedBundle,
+            MagicMock,
+            MagicMock,
+        ],
+    ):
+        """Test with PretrainedConfig and PreTrainedModel instances."""
+        config, bundle, patched_snapshot, patched_auto = valid_instances
 
-        expected_config = {
-            "architectures": ["TestModel"],
-            "hidden_size": 768,
-            "vocab_size": 50000,
-            "model_type": "test_model",
-        }
-        assert result == expected_config
+        result = load_model_config(
+            config,
+            cache_dir="/tmp/cache",
+            force_download=True,
+            local_files_only=True,
+            token="asdf",
+            revision="main",
+            kwarg="kwarg_value",
+        )
+        assert isinstance(result, PretrainedConfig)
+        if isinstance(config, dict):
+            assert result == PretrainedConfig.from_dict(config)
+        else:
+            assert result == bundle.config
 
-    @pytest.mark.smoke
-    def test_invocation_with_dir(self, temp_checkpoint_dir):
-        """Test with checkpoint directory."""
-        result = load_model_checkpoint_config_dict(temp_checkpoint_dir)
+        if not isinstance(config, str):
+            patched_snapshot.assert_not_called()
 
-        expected_config = {
-            "architectures": ["TestModel"],
-            "hidden_size": 768,
-            "vocab_size": 50000,
-            "model_type": "test_model",
-        }
-        assert result == expected_config
+        if not isinstance(config, (str, Path)):
+            patched_auto.assert_not_called()
+        else:
+            patched_auto.assert_called_once_with(
+                str(config),
+                cache_dir="/tmp/cache",
+                force_download=True,
+                local_files_only=True,
+                token="asdf",
+                revision="main",
+                kwarg="kwarg_value",
+            )
 
     @pytest.mark.sanity
     @pytest.mark.parametrize(
@@ -559,49 +431,217 @@ class TestLoadModelCheckpointConfigDict:
             (
                 123,
                 TypeError,
-                "Expected config to be a string, Path, PreTrainedModel, "
-                "or PretrainedConfig",
+                "Expected config to be a string,",
             ),
             (
                 "missing_config",
                 FileNotFoundError,
-                "No config.json found",
+                "Failed to download config for",
             ),
         ],
         ids=["invalid_type", "missing_config"],
     )
-    def test_invalid_invocation(self, config_input, expected_error, error_message):
+    def test_invalid_invocation(
+        self, config_input, expected_error, error_message, tmp_path: Path
+    ):
         """Test with invalid input types and missing configs."""
-        if config_input == "missing_config":
-            with tempfile.TemporaryDirectory() as temp_dir:
-                missing_config_path = Path(temp_dir) / "config.json"
-                with pytest.raises(expected_error) as exc_info:
-                    load_model_checkpoint_config_dict(missing_config_path)
-                assert error_message in str(exc_info.value)
+        with pytest.raises(expected_error) as exc_info:
+            load_model_config(
+                config_input if config_input != "missing_config" else tmp_path
+            )
+        assert error_message in str(exc_info.value)
+
+
+class TestLoadModelCheckpointConfigDict:
+    """Test suite for load_model_checkpoint_config_dict function."""
+
+    @pytest.fixture(
+        params=[
+            "pretrained_config",
+            "pretrained_model",
+            "dict",
+            "local_file",
+            "local_dir",
+            "hf_id",
+        ],
+        ids=[
+            "pretrained_config",
+            "pretrained_model",
+            "dict",
+            "local_file",
+            "local_dir",
+            "hf_id",
+        ],
+    )
+    def valid_instances(
+        self,
+        request,
+        mock_pretrained_factory: tuple[
+            MockPretrainedTransformersFactory, dict[str, MockType]
+        ],
+    ) -> tuple[
+        PretrainedConfig | PreTrainedModel | dict | str | Path,
+        PretrainedBundle,
+        MagicMock,
+    ]:
+        """Fixture providing valid model instances for testing."""
+        factory, patched = mock_pretrained_factory
+        bundle = factory.register()
+
+        config_type = cast("str", request.param)
+        config: PretrainedConfig | PreTrainedModel | dict | str | Path
+        if config_type == "pretrained_config":
+            config = bundle.config
+        elif config_type == "pretrained_model":
+            config = bundle.model
+        elif config_type == "dict":
+            config = bundle.config.to_dict()
+        elif config_type == "local_file":
+            config = bundle.local_dir / "config.json"
+        elif config_type == "local_dir":
+            config = bundle.local_dir
+        elif config_type == "hf_id":
+            config = bundle.name_or_path
         else:
-            with pytest.raises(expected_error) as exc_info:
-                load_model_checkpoint_config_dict(config_input)
-            assert error_message in str(exc_info.value)
+            raise ValueError(f"Unknown config type: {config_type}")
+
+        return (
+            config,
+            bundle,
+            patched["speculators.utils.transformers_utils.snapshot_download"],
+        )
+
+    @pytest.mark.smoke
+    def test_invocation(
+        self,
+        valid_instances: tuple[
+            PretrainedConfig | PreTrainedModel | dict | str | Path,
+            PretrainedBundle,
+            MagicMock,
+        ],
+    ):
+        """Test with various config instance types."""
+        config, bundle, patched_snapshot = valid_instances
+
+        result = load_model_checkpoint_config_dict(
+            config,
+            cache_dir="/tmp/cache",
+            force_download=True,
+            local_files_only=True,
+            token="asdf",
+            revision="main",
+            kwarg="kwarg_value",
+        )
+        assert isinstance(result, dict)
+        assert result == bundle.config.to_dict()
+
+        if not isinstance(config, str):
+            patched_snapshot.assert_not_called()
+        else:
+            patched_snapshot.assert_called_once_with(
+                str(config),
+                allow_patterns=["config.json"],
+                cache_dir="/tmp/cache",
+                force_download=True,
+                local_files_only=True,
+                token="asdf",
+                revision="main",
+                kwarg="kwarg_value",
+            )
+
+    @pytest.mark.sanity
+    @pytest.mark.parametrize(
+        ("config_input", "expected_error", "error_message"),
+        [
+            (
+                123,
+                TypeError,
+                "Expected config to be a string,",
+            ),
+            (
+                "missing_config",
+                FileNotFoundError,
+                "Failed to download config for",
+            ),
+        ],
+        ids=["invalid_type", "missing_config"],
+    )
+    def test_invalid_invocation(
+        self, config_input, expected_error, error_message, tmp_path: Path
+    ):
+        """Test with invalid input types and missing configs."""
+        with pytest.raises(expected_error) as exc_info:
+            load_model_checkpoint_config_dict(
+                config_input if config_input != "missing_config" else tmp_path
+            )
+        assert error_message in str(exc_info.value)
 
 
 class TestLoadModelCheckpointIndexWeightFiles:
     """Test suite for load_model_checkpoint_index_weight_files function."""
 
-    @pytest.mark.smoke
-    def test_invocation_with_directory(self, temp_index_checkpoint_dir):
-        """Test with directory containing index files."""
-        result = load_model_checkpoint_index_weight_files(temp_index_checkpoint_dir)
+    @pytest.fixture(
+        params=[
+            "index_file_single",
+            "index_file_multiple",
+            "index_dir_single",
+            "index_dir_multiple",
+            "no_index",
+        ],
+        ids=[
+            "index_file_single",
+            "index_file_multiple",
+            "index_dir_single",
+            "index_dir_multiple",
+            "no_index",
+        ],
+    )
+    def valid_instances(
+        self,
+        request,
+        mock_pretrained_factory: tuple[
+            MockPretrainedTransformersFactory, dict[str, MockType]
+        ],
+    ) -> tuple[Path, list[Path]]:
+        """Fixture providing valid index file instances for testing."""
+        factory, _ = mock_pretrained_factory
+        bundle = factory.register()
 
-        assert len(result) == 2
+        index_type = cast("str", request.param)
+        state_dict = bundle.model.state_dict()
+
+        if index_type == "index_file_single":
+            return bundle.create_index_single_file(state_dict)
+
+        if index_type == "index_file_multiple":
+            return bundle.create_index_multi_file(state_dict)
+
+        if index_type == "index_dir_single":
+            _, weight_files = bundle.create_index_single_file(state_dict)
+            return bundle.local_dir, weight_files
+
+        if index_type == "index_dir_multiple":
+            _, weight_files = bundle.create_index_multi_file(state_dict)
+            return bundle.local_dir, weight_files
+
+        if index_type == "no_index":
+            bundle.create_bin_file(state_dict)
+            return bundle.local_dir, []
+
+        raise ValueError(f"Unknown index type: {index_type}")
+
+    @pytest.mark.smoke
+    def test_invocation(self, valid_instances: tuple[Path, list[Path]]):
+        """Test with directory containing index files."""
+        path, expected_files = valid_instances
+
+        result = load_model_checkpoint_index_weight_files(path)
+        assert len(result) == len(expected_files)
         assert all(isinstance(file, Path) for file in result)
         assert all(file.exists() for file in result)
-
-    @pytest.mark.smoke
-    def test_invocation_no_index_files(self):
-        """Test with directory containing no index files."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            result = load_model_checkpoint_index_weight_files(temp_dir)
-            assert result == []
+        assert {file.resolve() for file in result} == {
+            file.resolve() for file in expected_files
+        }
 
     @pytest.mark.sanity
     @pytest.mark.parametrize(
@@ -635,7 +675,7 @@ class TestLoadModelCheckpointIndexWeightFiles:
 
             with pytest.raises(ValueError) as exc_info:
                 load_model_checkpoint_index_weight_files(checkpoint_path)
-            assert "does not contain a weight_map" in str(exc_info.value)
+            assert "does not contain a valid weight_map" in str(exc_info.value)
 
     @pytest.mark.sanity
     def test_missing_weight_file(self):
@@ -655,83 +695,88 @@ class TestLoadModelCheckpointIndexWeightFiles:
             with pytest.raises(FileNotFoundError) as exc_info:
                 load_model_checkpoint_index_weight_files(checkpoint_path)
             assert "Weight file for" in str(exc_info.value)
-            assert "does not exist" in str(exc_info.value)
 
 
 class TestLoadModelCheckpointWeightFiles:
     """Test suite for load_model_checkpoint_weight_files function."""
 
-    @pytest.mark.smoke
-    @pytest.mark.parametrize(
-        ("file_type", "expected_extension"),
-        [
-            ("bin", ".bin"),
-            ("safetensors", ".safetensors"),
+    @pytest.fixture(
+        params=[
+            "index_file_single",
+            "index_file_multiple",
+            "index_dir_single",
+            "index_dir_multiple",
+            "bin_file",
+            "safetensors_file",
+            "bin_dir",
+            "safetensors_dir",
         ],
-        ids=["bin_file", "safetensors_file"],
     )
-    def test_invocation_with_single_file(
+    def valid_instances(
         self,
-        file_type,
-        expected_extension,
-        temp_checkpoint_dir,
-    ):
-        """Test with single weight files."""
-        if file_type == "bin":
-            target_file = temp_checkpoint_dir / "pytorch_model.bin"
-        else:  # safetensors
-            target_file = temp_checkpoint_dir / "model.safetensors"
+        request,
+        mock_pretrained_factory: tuple[
+            MockPretrainedTransformersFactory, dict[str, MockType]
+        ],
+    ) -> tuple[Path, list[Path]]:
+        """Fixture providing valid weight file instances for testing."""
+        factory, _ = mock_pretrained_factory
+        bundle = factory.register()
 
-        result = load_model_checkpoint_weight_files(target_file)
-        assert len(result) == 1
-        assert result[0] == target_file
+        instance_type = cast("str", request.param)
+        state_dict = bundle.model.state_dict()
 
-    @pytest.mark.smoke
-    def test_invocation_with_directory_bin_only(self):
-        """Test with directory containing only .bin files."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            checkpoint_path = Path(temp_dir)
+        if instance_type in ("index_file_single", "index_file_multiple"):
+            return (
+                bundle.create_index_single_file(state_dict)
+                if instance_type == "index_file_single"
+                else bundle.create_index_multi_file(state_dict)
+            )
 
-            # Create only bin files (no safetensors)
-            bin_file = checkpoint_path / "pytorch_model.bin"
-            torch.save({"weight": torch.randn(10, 5)}, bin_file)
+        if instance_type == "index_dir_single":
+            _, weight_files = bundle.create_index_single_file(state_dict)
+            return bundle.local_dir, weight_files
 
-            result = load_model_checkpoint_weight_files(checkpoint_path)
+        if instance_type == "index_dir_multiple":
+            _, weight_files = bundle.create_index_multi_file(state_dict)
+            return bundle.local_dir, weight_files
 
-            assert len(result) == 1
-            assert result[0].suffix == ".bin"
+        if instance_type == "bin_file":
+            weight_file = bundle.create_bin_file(state_dict)
+            return weight_file, [weight_file]
 
-    @pytest.mark.smoke
-    def test_invocation_with_directory_safetensors_preferred(self, temp_checkpoint_dir):
-        """Test with directory containing both file types (prefers safetensors)."""
-        result = load_model_checkpoint_weight_files(temp_checkpoint_dir)
+        if instance_type == "safetensors_file":
+            weight_file = bundle.create_safetensors_file(state_dict)
+            return weight_file, [weight_file]
 
-        # Should return .safetensors files first as they are preferred
-        assert len(result) == 1
-        assert result[0].suffix == ".safetensors"
+        if instance_type in ("bin_dir", "safetensors_dir"):
+            type_: Literal["bin", "safetensors"] = (
+                "bin" if instance_type == "bin_dir" else "safetensors"
+            )
+            weight_files, _ = bundle.create_files(
+                state_dict,
+                weight_file_names=[
+                    f"pytorch_model_00001.{type_}",
+                    f"pytorch_model_00002.{type_}",
+                ],
+                type_=type_,
+            )
+            return bundle.local_dir, weight_files
 
-    @pytest.mark.smoke
-    def test_invocation_with_directory_safetensors_only(self):
-        """Test with directory containing only .safetensors files."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            checkpoint_path = Path(temp_dir)
-
-            # Create only safetensors files
-            safetensors_file = checkpoint_path / "model.safetensors"
-            safetensors_file.touch()
-
-            result = load_model_checkpoint_weight_files(checkpoint_path)
-
-            assert len(result) == 1
-            assert result[0].suffix == ".safetensors"
+        raise ValueError(f"Unknown index type: {instance_type}")
 
     @pytest.mark.smoke
-    def test_invocation_with_index_files(self, temp_index_checkpoint_dir):
-        """Test with directory containing index files."""
-        result = load_model_checkpoint_weight_files(temp_index_checkpoint_dir)
+    def test_invocation(self, valid_instances: tuple[Path, list[Path]]):
+        """Test with various valid weight file instances."""
+        path, expected_files = valid_instances
 
-        assert len(result) == 2
-        assert all(file.suffix == ".bin" for file in result)
+        result = load_model_checkpoint_weight_files(path)
+        assert len(result) == len(expected_files)
+        assert all(isinstance(file, Path) for file in result)
+        assert all(file.exists() for file in result)
+        assert {file.resolve() for file in result} == {
+            file.resolve() for file in expected_files
+        }
 
     @pytest.mark.sanity
     @pytest.mark.parametrize(
@@ -753,158 +798,162 @@ class TestLoadModelCheckpointWeightFiles:
         assert error_message in str(exc_info.value)
 
     @pytest.mark.sanity
-    def test_no_valid_weight_files(self):
+    def test_no_valid_weight_files(self, tmp_path: Path):
         """Test with directory containing no valid weight files."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            checkpoint_path = Path(temp_dir)
+        other_file = tmp_path / "README.md"
+        other_file.write_text("This is a readme")
 
-            # Create a non-weight file
-            other_file = checkpoint_path / "README.md"
-            other_file.write_text("This is a readme")
-
-            with pytest.raises(FileNotFoundError) as exc_info:
-                load_model_checkpoint_weight_files(checkpoint_path)
-            assert "No valid weight files found" in str(exc_info.value)
+        with pytest.raises(FileNotFoundError) as exc_info:
+            load_model_checkpoint_weight_files(tmp_path)
+        assert "No valid weight files found" in str(exc_info.value)
 
 
 class TestLoadModelCheckpointStateDict:
     """Test suite for load_model_checkpoint_state_dict function."""
 
-    @pytest.mark.smoke
-    @pytest.mark.parametrize(
-        ("model_input", "expected_type"),
-        [
-            ("pretrained_model", "PreTrainedModel"),
-            ("nn_module", "nn.Module"),
+    @pytest.fixture(
+        params=[
+            "hf_id",
+            "local_dir",
+            "pretrained_model",
+            "bin_file",
+            "safetensors_file",
+            "index_file_single",
+            "index_file_multiple",
+            "bin_dir",
+            "safetensors_dir",
         ],
-        ids=["pretrained_model", "nn_module"],
+        ids=[
+            "hf_id",
+            "local_dir",
+            "pretrained_model",
+            "bin_file",
+            "safetensors_file",
+            "index_file_single",
+            "index_file_multiple",
+            "bin_dir",
+            "safetensors_dir",
+        ],
     )
-    def test_invocation_with_model_instances(
+    def valid_instances(
         self,
-        model_input,
-        expected_type,
-        mock_pretrained_model,
-        mock_nn_module,
-    ):
-        """Test with model instances (PreTrainedModel and nn.Module)."""
-        if model_input == "pretrained_model":
-            result = load_model_checkpoint_state_dict(mock_pretrained_model)
-            assert result == mock_pretrained_model.state_dict.return_value
-            mock_pretrained_model.state_dict.assert_called_once()
-        else:
-            result = load_model_checkpoint_state_dict(mock_nn_module)
-            assert result == mock_nn_module.state_dict.return_value
-            mock_nn_module.state_dict.assert_called_once()
+        request,
+        mock_pretrained_factory: tuple[
+            MockPretrainedTransformersFactory, dict[str, MockType]
+        ],
+    ) -> tuple[
+        PreTrainedModel | torch.nn.Module | str | Path,
+        dict[str, torch.Tensor],
+        MockType,
+    ]:
+        """Fixture providing valid instances for testing."""
+        factory, patched = mock_pretrained_factory
+        bundle = factory.register()
 
-    @pytest.mark.smoke
-    @patch("speculators.utils.transformers_utils.torch.load")
-    def test_invocation_with_bin_file(self, mock_torch_load, temp_checkpoint_dir):
-        """Test with .bin file."""
-        bin_file = temp_checkpoint_dir / "pytorch_model.bin"
-        expected_state_dict = {
-            "embedding.weight": torch.randn(50000, 768),
-            "layer.0.weight": torch.randn(768, 768),
-        }
-        mock_torch_load.return_value = expected_state_dict
-
-        result = load_model_checkpoint_state_dict(bin_file)
-
-        assert len(result) == 2
-        assert "embedding.weight" in result
-        assert "layer.0.weight" in result
-        mock_torch_load.assert_called_once_with(bin_file, map_location="cpu")
-
-    @pytest.mark.smoke
-    @patch("speculators.utils.transformers_utils.safe_open")
-    def test_invocation_with_safetensors_file(
-        self,
-        mock_safe_open,
-        temp_checkpoint_dir,
-    ):
-        """Test with .safetensors file."""
-        safetensors_file = temp_checkpoint_dir / "model.safetensors"
-
-        # Mock the safe_open context manager
-        mock_safetensors_file = MagicMock()
-        mock_safetensors_file.keys.return_value = ["embedding.weight", "layer.0.weight"]
-        mock_safetensors_file.get_tensor.side_effect = lambda key: torch.randn(768, 768)
-        mock_safe_open.return_value.__enter__.return_value = mock_safetensors_file
-
-        result = load_model_checkpoint_state_dict(safetensors_file)
-
-        assert len(result) == 2
-        assert "embedding.weight" in result
-        assert "layer.0.weight" in result
-        mock_safe_open.assert_called_once_with(
-            safetensors_file, framework="pt", device="cpu"
-        )
-
-    @pytest.mark.sanity
-    @patch("speculators.utils.transformers_utils.torch.load")
-    def test_invocation_with_index_files(
-        self,
-        mock_torch_load,
-        temp_index_checkpoint_dir,
-    ):
-        """Test with directory containing index files."""
-        mock_torch_load.side_effect = [
-            {"embedding.weight": torch.randn(50000, 768)},
-            {"layer.0.weight": torch.randn(768, 768)},
+        instance_type = cast("str", request.param)
+        state_dict = bundle.model.state_dict()
+        snapshot_patch = patched[
+            "speculators.utils.transformers_utils.snapshot_download"
         ]
 
-        result = load_model_checkpoint_state_dict(temp_index_checkpoint_dir)
+        if instance_type in ("hf_id", "local_dir"):
+            bundle.create_bin_file(state_dict)
+            return (
+                bundle.name_or_path if instance_type == "hf_id" else bundle.local_dir,
+                state_dict,
+                snapshot_patch,
+            )
 
-        assert len(result) == 2
-        assert "embedding.weight" in result
-        assert "layer.0.weight" in result
-        assert mock_torch_load.call_count == 2
+        if instance_type == "pretrained_model":
+            return bundle.model, state_dict, snapshot_patch
 
-    @pytest.mark.sanity
-    def test_invalid_invocation_unsupported_file_type(self):
-        """Test with unsupported file type."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            checkpoint_path = Path(temp_dir)
+        if instance_type in ("bin_file", "safetensors_file"):
+            weight_file = (
+                bundle.create_bin_file(state_dict)
+                if instance_type == "bin_file"
+                else bundle.create_safetensors_file(state_dict)
+            )
+            return weight_file, state_dict, snapshot_patch
 
-            # Create an unsupported file type
-            unsupported_file = checkpoint_path / "model.txt"
-            unsupported_file.write_text("This is not a weight file")
+        if instance_type in ("index_file_single", "index_file_multiple"):
+            bundle.create_index_single_file(
+                state_dict
+            ) if instance_type == "index_file_single" else (
+                bundle.create_index_multi_file(state_dict)
+            )
+            return bundle.local_dir, state_dict, snapshot_patch
 
-            with pytest.raises(FileNotFoundError) as exc_info:
-                load_model_checkpoint_state_dict(unsupported_file)
+        if instance_type in ("bin_dir", "safetensors_dir"):
+            type_: Literal["bin", "safetensors"] = (
+                "bin" if instance_type == "bin_dir" else "safetensors"
+            )
+            weight_files, _ = bundle.create_files(
+                state_dict,
+                weight_file_names=[
+                    f"pytorch_model_00001.{type_}",
+                    f"pytorch_model_00002.{type_}",
+                ],
+                type_=type_,
+            )
+            return bundle.local_dir, state_dict, snapshot_patch
 
-            assert "No valid weight files found" in str(exc_info.value)
+        raise ValueError(f"Unknown instance type: {instance_type}")
 
-    @pytest.mark.sanity
-    @patch("speculators.utils.transformers_utils.torch.load")
-    @patch("speculators.utils.transformers_utils.safe_open")
-    def test_invocation_mixed_file_types(
+    @pytest.mark.smoke
+    def test_invocation(
         self,
-        mock_safe_open,
-        mock_torch_load,
+        valid_instances: tuple[
+            PreTrainedModel | torch.nn.Module | str | Path,
+            dict[str, torch.Tensor],
+            MockType,
+        ],
     ):
-        """Test with directory containing both .bin and .safetensors files."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            checkpoint_path = Path(temp_dir)
+        """Test load_model_checkpoint_state_dict with various valid instances."""
+        model, expected_state_dict, patched_snapshot = valid_instances
 
-            # Create both file types
-            bin_file = checkpoint_path / "pytorch_model.bin"
-            bin_file.touch()
-            safetensors_file = checkpoint_path / "model.safetensors"
-            safetensors_file.touch()
+        result = load_model_checkpoint_state_dict(
+            model,
+            cache_dir="/tmp/cache",
+            force_download=True,
+            local_files_only=True,
+            token="asdf",
+            revision="main",
+        )
+        assert isinstance(result, dict)
+        assert all(isinstance(key, str) for key in result)
+        assert all(isinstance(value, torch.Tensor) for value in result.values())
+        assert len(result) == len(expected_state_dict)
 
-            # Mock torch.load
-            mock_torch_load.return_value = {"bin_weight": torch.randn(10, 10)}
+        if isinstance(model, str):
+            patched_snapshot.assert_called_once_with(
+                repo_id=model,
+                allow_patterns=["*.json", "*.safetensors", "*.bin", "*.index.json"],
+                cache_dir="/tmp/cache",
+                force_download=True,
+                local_files_only=True,
+                token="asdf",
+                revision="main",
+            )
 
-            # Mock safe_open
-            mock_safetensors_file = MagicMock()
-            mock_safetensors_file.keys.return_value = ["safetensors_weight"]
-            mock_safetensors_file.get_tensor.return_value = torch.randn(20, 20)
-            mock_safe_open.return_value.__enter__.return_value = mock_safetensors_file
+    @pytest.mark.sanity
+    def test_invalid_invocation_unsupported_file_type(self, tmp_path: Path):
+        """Test with unsupported file type."""
+        # Create an unsupported file type
+        unsupported_file = tmp_path / "model.txt"
+        unsupported_file.write_text("This is not a weight file")
 
-            result = load_model_checkpoint_state_dict(checkpoint_path)
+        with pytest.raises(FileNotFoundError) as exc_info:
+            load_model_checkpoint_state_dict(unsupported_file)
 
-            # Should prefer safetensors files
-            assert len(result) == 1
-            assert "safetensors_weight" in result
-            mock_safe_open.assert_called_once()
-            mock_torch_load.assert_not_called()
+        assert "No valid weight files found" in str(exc_info.value)
+
+    @pytest.mark.sanity
+    def test_no_valid_weight_files(self, tmp_path: Path):
+        """Test with directory containing no valid weight files."""
+        other_file = tmp_path / "README.md"
+        other_file.write_text("This is a readme")
+
+        with pytest.raises(FileNotFoundError) as exc_info:
+            load_model_checkpoint_state_dict(tmp_path)
+
+        assert "No valid weight files found" in str(exc_info.value)

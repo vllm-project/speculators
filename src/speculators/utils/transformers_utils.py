@@ -14,7 +14,6 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import cast
 
 import torch
 from huggingface_hub import snapshot_download
@@ -81,8 +80,9 @@ def download_model_checkpoint_from_hub(
         logger.info(f"Downloaded a model checkpoint from HuggingFace to: {local_path}")
         return Path(local_path)
     except Exception as hf_exception:
-        logger.error(f"Failed to download checkpoint: {hf_exception}")
-        raise FileNotFoundError(f"Checkpoint not found: {model_id}") from hf_exception
+        raise FileNotFoundError(
+            f"Failed to download checkpoint for {model_id}: {hf_exception}"
+        ) from hf_exception
 
 
 def check_download_model_checkpoint(
@@ -111,6 +111,8 @@ def check_download_model_checkpoint(
     :raises TypeError: If model is not a supported type
     :raises ValueError: If local path is not a directory
     """
+    logger.debug(f"Checking download model checkpoint for: {model}")
+
     if isinstance(model, (PreTrainedModel, nn.Module)):
         logger.debug("Model is already a PreTrainedModel or nn.Module instance")
         return model
@@ -122,26 +124,20 @@ def check_download_model_checkpoint(
 
     checkpoint_path = Path(model)
 
-    if not checkpoint_path.exists():
-        logger.debug(
-            f"Model path does not exist, downloading from hub: {checkpoint_path}"
-        )
-        return download_model_checkpoint_from_hub(
-            model_id=str(checkpoint_path),
-            cache_dir=cache_dir,
-            force_download=force_download,
-            local_files_only=local_files_only,
-            token=token,
-            revision=revision,
-            **kwargs,
-        )
+    if checkpoint_path.exists():
+        logger.debug(f"Model path exists locally: {checkpoint_path}")
+        return checkpoint_path.resolve()
 
-    if not checkpoint_path.is_dir():
-        raise ValueError(
-            f"Expected a directory for checkpoint, got file: {checkpoint_path}"
-        )
-
-    return checkpoint_path.resolve()
+    logger.debug(f"Model path does not exist, downloading from hub: {checkpoint_path}")
+    return download_model_checkpoint_from_hub(
+        model_id=str(checkpoint_path),
+        cache_dir=cache_dir,
+        force_download=force_download,
+        local_files_only=local_files_only,
+        token=token,
+        revision=revision,
+        **kwargs,
+    )
 
 
 def check_download_model_config(
@@ -189,10 +185,18 @@ def check_download_model_config(
         )
 
     config_path = Path(config)
-    if not config_path.exists():
-        logger.debug(f"Config path does not exist, downloading from hub: {config_path}")
-        return AutoConfig.from_pretrained(
-            str(config_path),
+    if config_path.exists() and config_path.is_dir():
+        logger.debug("Config path is a directory, looking for config.json in it")
+        config_path = config_path / "config.json"
+
+    if config_path.exists() and config_path.is_file():
+        logger.debug(f"Using local config file: {config_path}")
+        return config_path.resolve()
+
+    try:
+        local_path = snapshot_download(
+            str(config),
+            allow_patterns=["config.json"],
             cache_dir=cache_dir,
             force_download=force_download,
             local_files_only=local_files_only,
@@ -200,20 +204,17 @@ def check_download_model_config(
             revision=revision,
             **kwargs,
         )
+        logger.info(f"Downloaded a model config from HuggingFace to: {local_path}")
 
-    logger.debug(f"Using local config path: {config_path}")
-
-    if not config_path.is_file():
-        config_path = config_path / "config.json"
-
-    if not config_path.exists():
-        raise FileNotFoundError(f"No config.json found at {config_path}")
-
-    return config_path.resolve()
+        return Path(local_path) / "config.json"
+    except Exception as hf_exception:
+        raise FileNotFoundError(
+            f"Failed to download config for {config}: {hf_exception}"
+        ) from hf_exception
 
 
 def load_model_config(
-    model: str | os.PathLike | PreTrainedModel | PretrainedConfig,
+    model: str | os.PathLike | PreTrainedModel | PretrainedConfig | dict,
     cache_dir: str | Path | None = None,
     force_download: bool = False,
     local_files_only: bool = False,
@@ -240,21 +241,30 @@ def load_model_config(
     """
     logger.debug(f"Loading model config from: {model}")
 
-    if isinstance(model, PretrainedConfig):
+    config = check_download_model_config(
+        model,
+        cache_dir=cache_dir,
+        force_download=force_download,
+        local_files_only=local_files_only,
+        token=token,
+        revision=revision,
+        **kwargs,
+    )
+
+    if isinstance(config, PretrainedConfig):
         logger.debug("Model is already a PretrainedConfig instance")
-        return model
+        return config
 
-    if isinstance(model, PreTrainedModel):
-        logger.debug("Model is a PreTrainedModel instance, returning its config")
-        return model.config  # type: ignore[attr-defined]
-
-    if not isinstance(model, (str, os.PathLike)):
-        raise TypeError(f"Expected model to be a string or Path, got {type(model)}")
+    if isinstance(config, dict):
+        logger.debug("Model is a dictionary, loading config from dict")
+        return PretrainedConfig.from_dict(config)
 
     try:
         logger.debug(f"Loading config with AutoConfig from: {model}")
+        # use model to ensure proper handling of HF args
+        # it will resolve to the previously downloaded config path
         return AutoConfig.from_pretrained(
-            model,
+            str(model),
             cache_dir=cache_dir,
             force_download=force_download,
             local_files_only=local_files_only,
@@ -262,13 +272,14 @@ def load_model_config(
             revision=revision,
             **kwargs,
         )
-    except ValueError as err:
-        logger.error(f"Failed to load config from {model}: {err}")
-        raise FileNotFoundError(f"Config not found for model: {model}") from err
+    except Exception as hf_exception:
+        raise FileNotFoundError(
+            f"Failed to download model config for {model}: {hf_exception}"
+        ) from hf_exception
 
 
 def load_model_checkpoint_config_dict(
-    config: str | os.PathLike | PretrainedConfig | PreTrainedModel | dict,
+    model: str | os.PathLike | PretrainedConfig | PreTrainedModel | dict,
     cache_dir: str | Path | None = None,
     force_download: bool = False,
     local_files_only: bool = False,
@@ -282,7 +293,7 @@ def load_model_checkpoint_config_dict(
     Supports loading from local config.json files, checkpoint directories,
     or extracting from existing model/config instances.
 
-    :param config: Local path, PretrainedConfig, PreTrainedModel, or dict
+    :param model: Local path, PretrainedConfig, PreTrainedModel, or dict
     :param cache_dir: Directory to cache downloaded files
     :param force_download: Whether to force re-download existing files
     :param local_files_only: Only use cached files without downloading
@@ -293,45 +304,30 @@ def load_model_checkpoint_config_dict(
     :raises TypeError: If config is not a supported type
     :raises FileNotFoundError: If config.json cannot be found
     """
+    logger.debug(f"Loading model config dict from: {model}")
+    config = check_download_model_config(
+        model,
+        cache_dir=cache_dir,
+        force_download=force_download,
+        local_files_only=local_files_only,
+        token=token,
+        revision=revision,
+        **kwargs,
+    )
+
     if isinstance(config, dict):
         logger.debug("Config is already a dictionary, returning as is")
         return config
-
-    if isinstance(config, PreTrainedModel):
-        logger.debug("Config is a PreTrainedModel instance, returning its config dict")
-        return config.config.to_dict()  # type: ignore[attr-defined]
 
     if isinstance(config, PretrainedConfig):
         logger.debug("Config is a PretrainedConfig instance, returning its dict")
         return config.to_dict()
 
-    if not isinstance(config, (str, os.PathLike)):
-        raise TypeError(
-            f"Expected config to be a string, Path, PreTrainedModel, "
-            f"or PretrainedConfig, got {type(config)}"
-        )
+    if not isinstance(config, Path):
+        raise TypeError(f"Expected config to be a Path, got {type(config)}")
 
-    path = cast(
-        "Path",
-        check_download_model_config(
-            config,
-            cache_dir=cache_dir,
-            force_download=force_download,
-            local_files_only=local_files_only,
-            token=token,
-            revision=revision,
-            **kwargs,
-        ),
-    )
-
-    if path.is_dir():
-        path = path / "config.json"
-
-    if not path.exists():
-        raise FileNotFoundError(f"No config.json found at {path}")
-
-    logger.debug(f"Loading config from: {path}")
-    with path.open() as file:
+    logger.debug(f"Loading config from: {config}")
+    with config.open() as file:
         return json.load(file)
 
 
@@ -353,12 +349,10 @@ def load_model_checkpoint_index_weight_files(
     if not isinstance(path, (str, os.PathLike)):
         raise TypeError(f"Expected path to be a string or Path, got {type(path)}")
 
-    path = Path(path)
-
-    if not path.exists():
+    if not (path := Path(path)).exists():
         raise FileNotFoundError(f"Model checkpoint path does not exist: {path}")
 
-    if path.is_file() and path.suffix == ".index.json":
+    if path.is_file() and path.name.endswith(".index.json"):
         logger.debug(f"Single index file provided: {path}")
         index_files = [path]
     elif path.is_dir() and (glob_files := list(path.glob("*.index.json"))):
@@ -368,28 +362,38 @@ def load_model_checkpoint_index_weight_files(
         logger.debug(f"No index files found in directory: {path}")
         return []
 
-    files = []
+    files = set()
 
     for index_file in index_files:
         if not index_file.exists():
             raise FileNotFoundError(
                 f"Index file under {path} at {index_file} does not exist"
             )
+
         logger.debug(f"Reading index file: {index_file}")
         with index_file.open() as file_handle:
             index_data = json.load(file_handle)
-        if not index_data.get("weight_map"):
-            raise ValueError(f"Index file {index_file} does not contain a weight_map")
+
+        if (
+            not isinstance(index_data, dict)
+            or not index_data.get("weight_map")
+            or not isinstance(index_data["weight_map"], dict)
+        ):
+            raise ValueError(
+                f"Index file {index_file} does not contain a valid weight_map"
+            )
+
         for weight_file in set(index_data["weight_map"].values()):
             # Resolve relative paths to the index file's directory
-            weight_file_path = Path(index_file).parent / weight_file
-            if not weight_file_path.exists():
+            if not (
+                weight_file_path := Path(index_file).parent / str(weight_file)
+            ).exists():
                 raise FileNotFoundError(
                     f"Weight file for {path} at {weight_file_path} does not exist"
                 )
-            files.append(weight_file_path)
+            files.add(weight_file_path.resolve())
 
-    return files
+    return list(files)
 
 
 def load_model_checkpoint_weight_files(path: str | os.PathLike) -> list[Path]:
@@ -408,14 +412,12 @@ def load_model_checkpoint_weight_files(path: str | os.PathLike) -> list[Path]:
     if not isinstance(path, (str, os.PathLike)):
         raise TypeError(f"Expected path to be a string or Path, got {type(path)}")
 
-    path = Path(path)
-
-    if not path.exists():
+    if not (path := Path(path)).exists():
         raise FileNotFoundError(f"Model checkpoint path does not exist: {path}")
 
-    if index_files := load_model_checkpoint_index_weight_files(path):
-        logger.debug(f"Found index files at {path}: {index_files}")
-        return index_files
+    if weight_index_files := load_model_checkpoint_index_weight_files(path):
+        logger.debug(f"Found index files at {path}: {weight_index_files}")
+        return weight_index_files
 
     if path.is_file() and path.suffix in {".bin", ".safetensors"}:
         logger.debug(f"Single weight file provided: {path}")
@@ -460,25 +462,26 @@ def load_model_checkpoint_state_dict(
     :return: Dictionary mapping parameter names to tensors
     :raises ValueError: If unsupported file format is encountered
     """
+    logger.debug(f"Loading model state dict from: {model}")
+
+    model = check_download_model_checkpoint(
+        model,
+        cache_dir=cache_dir,
+        force_download=force_download,
+        local_files_only=local_files_only,
+        token=token,
+        revision=revision,
+        **kwargs,
+    )
+
     if isinstance(model, (PreTrainedModel, nn.Module)):
         logger.debug("Model is already a PreTrainedModel or nn.Module instance")
         return model.state_dict()  # type: ignore[union-attr]
 
     logger.debug(f"Loading model weights from: {model}")
-    weight_files = load_model_checkpoint_weight_files(
-        check_download_model_checkpoint(
-            model,
-            cache_dir=cache_dir,
-            force_download=force_download,
-            local_files_only=local_files_only,
-            token=token,
-            revision=revision,
-            **kwargs,
-        )
-    )
+    weight_files = load_model_checkpoint_weight_files(model)
 
     state_dict = {}
-
     for file in weight_files:
         if file.suffix == ".safetensors":
             logger.debug(f"Loading safetensors weights from: {file}")
