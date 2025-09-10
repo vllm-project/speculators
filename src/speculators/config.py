@@ -253,14 +253,12 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
     schema_discriminator: ClassVar[str] = "speculators_model_type"
 
     # PretrainedConfig class attributes
-    model_type: ClassVar[str] = "speculator_model"  # type: ignore[misc]
     base_config_key: ClassVar[str] = ""  # type: ignore[misc]
     sub_configs: ClassVar[dict[str, type[PretrainedConfig]]] = {}  # type: ignore[misc,assignment]
     is_composition: ClassVar[bool] = False  # type: ignore[misc]
     attribute_map: ClassVar[dict[str, str]] = {}  # type: ignore[misc]
     base_model_tp_plan: ClassVar[Optional[dict[str, Any]]] = None  # type: ignore[misc]
     base_model_pp_plan: ClassVar[Optional[dict[str, tuple[list[str]]]]] = None  # type: ignore[misc]
-    _auto_class: ClassVar[Optional[str]] = ""  # type: ignore[misc]
 
     # Speculator model instance attributes
     speculators_model_type: str = Field(
@@ -282,6 +280,9 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
     def __init__(self, **kwargs):
         # initialize the Pydantic arguments first to set all valid fields
         PydanticClassRegistryMixin.__init__(self, **kwargs)
+
+        # Set model_type to speculator_model if not already set
+        self.model_type = kwargs.setdefault("model_type", "speculator_model")
 
         # reset kwargs handled by Pydantic so PretrainedConfig doesn't override
         for field in self.__class__.model_fields:
@@ -308,14 +309,12 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
             "auto_package",
             "registry_auto_discovery",
             "schema_discriminator",
-            "model_type",
             "base_config_key",
             "sub_configs",
             "is_composition",
             "attribute_map",
             "base_model_tp_plan",
             "base_model_pp_plan",
-            "_auto_class",
         ):
             config_dict.pop(key, None)
 
