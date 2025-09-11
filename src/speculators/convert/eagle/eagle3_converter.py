@@ -10,13 +10,12 @@ from loguru import logger
 from transformers import AutoModelForCausalLM, LlamaConfig, PretrainedConfig
 
 from speculators.config import SpeculatorsConfig, VerifierConfig
-from speculators.convert.eagle.utils import (
-    ensure_checkpoint_is_local,
-    load_checkpoint_config,
-    load_checkpoint_weights,
-)
 from speculators.models.eagle3 import Eagle3Speculator, Eagle3SpeculatorConfig
 from speculators.proposals.greedy import GreedyTokenProposalConfig
+from speculators.utils import (
+    load_model_checkpoint_config_dict,
+    load_model_checkpoint_state_dict,
+)
 
 __all__ = ["Eagle3Converter"]
 
@@ -39,11 +38,10 @@ class Eagle3Converter:
         cache_dir: Optional[Union[str, Path]] = None,
     ) -> None:
         logger.info(f"Converting Eagle-3 checkpoint: {input_path}")
-
-        local_checkpoint_path = ensure_checkpoint_is_local(input_path, cache_dir)
-
-        eagle_config = load_checkpoint_config(local_checkpoint_path)
-        weights = load_checkpoint_weights(local_checkpoint_path)
+        eagle_config = load_model_checkpoint_config_dict(
+            input_path, cache_dir=cache_dir
+        )
+        weights = load_model_checkpoint_state_dict(input_path, cache_dir=cache_dir)
         logger.info(f"Loaded {len(weights)} weights")
 
         # Patch: ensure target_vocab_size matches t2d tensor shape
