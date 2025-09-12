@@ -46,7 +46,7 @@
 
     CLI tools, APIs, and end-to-end examples to get started with speculative decoding and dive into advanced implementations.
 
-    [:octicons-arrow-right-24: Entrypoints](entrypoints/)
+    [:octicons-arrow-right-24: Entrypoints](entrypoints/index.md)
 
 - :material-tools:{ .lg .middle } Development Guide
 
@@ -54,7 +54,7 @@
 
     Detailed instructions for setting up your development environment, implementing changes, and adhering to the project's coding standards and best practices.
 
-    [:octicons-arrow-right-24: Development Guide](developer/developing/)
+    [:octicons-arrow-right-24: Development Guide](developer/index.md/)
 
 - :material-api:{ .lg .middle } API Reference
 
@@ -70,7 +70,7 @@
 
     Visual identity and branding guidelines for using Speculators logos, colors, and brand assets in your projects and communications.
 
-    [:octicons-arrow-right-24: Branding Guidelines](developer/branding/)
+    [:octicons-arrow-right-24: Branding Guidelines](developer/branding.md/)
 </div>
 
 
