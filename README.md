@@ -53,7 +53,7 @@ The following models are currently supported or are planned to be supported in t
 </tr>
 <tr>
 <td>70B-Instruct</td>
-<td>EAGLE-3 ⏳</td>
+<td>EAGLE-3 ✅</td>
 <td>✅</td>
 <td><a href="https://huggingface.co/yuhuili/EAGLE3-LLaMA3.3-Instruct-70B">EAGLE-3</a> ✅</td>
 </tr>
