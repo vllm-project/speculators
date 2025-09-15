@@ -17,8 +17,6 @@ from speculators import (
     SpeculatorModelConfig,
     SpeculatorsConfig,
     VerifierConfig,
-    reload_and_populate_configs,
-    reload_and_populate_models,
 )
 from speculators.proposals import GreedyTokenProposalConfig
 
@@ -56,11 +54,6 @@ class SpeculatorTestModel(SpeculatorModel):
     def forward(self, *args, **kwargs):
         # Simple implementation for testing
         return {"logits": torch.randn(1, 10, 1000)}
-
-
-# Reload registries to include test classes
-reload_and_populate_configs()
-reload_and_populate_models()
 
 
 @pytest.fixture

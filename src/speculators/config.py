@@ -32,7 +32,6 @@ __all__ = [
     "SpeculatorsConfig",
     "TokenProposalConfig",
     "VerifierConfig",
-    "reload_and_populate_configs",
 ]
 
 
@@ -322,14 +321,3 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
             or set, along with all Pydantic fields.
         """
         return super().to_diff_dict()
-
-
-def reload_and_populate_configs():
-    """
-    Automatically populates the registry for all PydanticClassRegistryMixin subclasses
-    and reloads schemas for all Config classes to ensure their schemas are up-to-date
-    with the current registry state.
-    """
-    TokenProposalConfig.auto_populate_registry()
-    SpeculatorsConfig.reload_schema()
-    SpeculatorModelConfig.auto_populate_registry()

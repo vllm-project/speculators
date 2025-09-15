@@ -17,7 +17,6 @@ from speculators import (
     SpeculatorsConfig,
     TokenProposalConfig,
     VerifierConfig,
-    reload_and_populate_configs,
 )
 
 # ===== TokenProposalConfig Tests =====
@@ -27,10 +26,6 @@ from speculators import (
 class TokenProposalConfigTest(TokenProposalConfig):
     proposal_type: Literal["test_proposal"] = "test_proposal"
     test_field: int = 123
-
-
-# Ensure the schemas are reloaded to include the test proposal type
-reload_and_populate_configs()
 
 
 @pytest.mark.smoke
@@ -237,10 +232,6 @@ def test_speculators_config_marshalling(
 class SpeculatorModelConfigTest(SpeculatorModelConfig):
     speculators_model_type: Literal["test_model"] = "test_model"
     test_field: int = 456
-
-
-# Ensure the schemas are reloaded to include the test proposal type
-reload_and_populate_configs()
 
 
 @pytest.fixture
