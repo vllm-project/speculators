@@ -141,10 +141,8 @@ class TestPydanticClassRegistryMixin:
             test_type: str
 
             @classmethod
-            def __pydantic_schema_base_type__(cls) -> type[TestBaseModel]:
-                if cls.__name__ == "TestBaseModel":
-                    return cls
-                return TestBaseModel
+            def __pydantic_schema_base_name__(cls) -> str:
+                return "TestBaseModel"
 
         @TestBaseModel.register("test_sub")
         class TestSubModel(TestBaseModel):
@@ -195,10 +193,8 @@ class TestPydanticClassRegistryMixin:
             test_type: str
 
             @classmethod
-            def __pydantic_schema_base_type__(cls) -> type[TestBaseModel]:
-                if cls.__name__ == "TestBaseModel":
-                    return cls
-                return TestBaseModel
+            def __pydantic_schema_base_name__(cls) -> str:
+                return "TestBaseModel"
 
         @TestBaseModel.register("test_sub")
         class TestSubModel(TestBaseModel):
@@ -223,10 +219,8 @@ class TestPydanticClassRegistryMixin:
             test_type: str
 
             @classmethod
-            def __pydantic_schema_base_type__(cls) -> type[TestBaseModel]:
-                if cls.__name__ == "TestBaseModel":
-                    return cls
-                return TestBaseModel
+            def __pydantic_schema_base_name__(cls) -> str:
+                return "TestBaseModel"
 
         @TestBaseModel.register("test_sub")
         class TestSubModel(TestBaseModel):
@@ -245,10 +239,8 @@ class TestPydanticClassRegistryMixin:
             test_type: str
 
             @classmethod
-            def __pydantic_schema_base_type__(cls) -> type[TestBaseModel]:
-                if cls.__name__ == "TestBaseModel":
-                    return cls
-                return TestBaseModel
+            def __pydantic_schema_base_name__(cls) -> str:
+                return "TestBaseModel"
 
         @TestBaseModel.register()
         class TestSubModel(TestBaseModel):
@@ -268,10 +260,8 @@ class TestPydanticClassRegistryMixin:
             test_type: str
 
             @classmethod
-            def __pydantic_schema_base_type__(cls) -> type[TestBaseModel]:
-                if cls.__name__ == "TestBaseModel":
-                    return cls
-                return TestBaseModel
+            def __pydantic_schema_base_name__(cls) -> str:
+                return "TestBaseModel"
 
         @TestBaseModel.register("custom_name")
         class TestSubModel(TestBaseModel):
@@ -291,10 +281,8 @@ class TestPydanticClassRegistryMixin:
             test_type: str
 
             @classmethod
-            def __pydantic_schema_base_type__(cls) -> type[TestBaseModel]:
-                if cls.__name__ == "TestBaseModel":
-                    return cls
-                return TestBaseModel
+            def __pydantic_schema_base_name__(cls) -> str:
+                return "TestBaseModel"
 
         class RegularClass:
             pass
@@ -314,10 +302,8 @@ class TestPydanticClassRegistryMixin:
             registry_auto_discovery: ClassVar[bool] = True
 
             @classmethod
-            def __pydantic_schema_base_type__(cls) -> type[TestBaseModel]:
-                if cls.__name__ == "TestBaseModel":
-                    return cls
-                return TestBaseModel
+            def __pydantic_schema_base_name__(cls) -> str:
+                return "TestBaseModel"
 
         with (
             mock.patch.object(TestBaseModel, "reload_schema") as mock_reload,
@@ -340,10 +326,8 @@ class TestPydanticClassRegistryMixin:
             registry_auto_discovery: ClassVar[bool] = False
 
             @classmethod
-            def __pydantic_schema_base_type__(cls) -> type[TestBaseModel]:
-                if cls.__name__ == "TestBaseModel":
-                    return cls
-                return TestBaseModel
+            def __pydantic_schema_base_name__(cls) -> str:
+                return "TestBaseModel"
 
         @TestBaseModel.register("test_sub_a")
         class TestSubModelA(TestBaseModel):
@@ -372,10 +356,8 @@ class TestPydanticClassRegistryMixin:
             registry_auto_discovery: ClassVar[bool] = True
 
             @classmethod
-            def __pydantic_schema_base_type__(cls) -> type[TestBaseModel]:
-                if cls.__name__ == "TestBaseModel":
-                    return cls
-                return TestBaseModel
+            def __pydantic_schema_base_name__(cls) -> str:
+                return "TestBaseModel"
 
         with mock.patch.object(
             TestBaseModel, "auto_populate_registry"
@@ -398,10 +380,8 @@ class TestPydanticClassRegistryMixin:
             test_type: str
 
             @classmethod
-            def __pydantic_schema_base_type__(cls) -> type[TestBaseModel]:
-                if cls.__name__ == "TestBaseModel":
-                    return cls
-                return TestBaseModel
+            def __pydantic_schema_base_name__(cls) -> str:
+                return "TestBaseModel"
 
         # Ensure registry is None
         TestBaseModel.registry = None  # type: ignore[misc]
@@ -443,10 +423,8 @@ class TestPydanticClassRegistryMixin:
             test_type: str
 
             @classmethod
-            def __pydantic_schema_base_type__(cls) -> type[TestBaseModel]:
-                if cls.__name__ == "TestBaseModel":
-                    return cls
-                return TestBaseModel
+            def __pydantic_schema_base_name__(cls) -> str:
+                return "TestBaseModel"
 
             @classmethod
             def __pydantic_generate_base_schema__(cls, handler):
@@ -508,11 +486,8 @@ class TestPydanticClassRegistryMixin:
             model_type: str
 
             @classmethod
-            def __pydantic_schema_base_type__(cls) -> type[TestBaseModel]:
-                if cls.__name__ == "TestBaseModel":
-                    return cls
-
-                return TestBaseModel
+            def __pydantic_schema_base_name__(cls) -> str:
+                return "TestBaseModel"
 
         @TestBaseModel.register("documented_model")
         class DocumentedModel(TestBaseModel):

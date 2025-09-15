@@ -41,104 +41,152 @@ class ReloadableBaseModel(BaseModel):
     """
 
     @classmethod
-    def reload_schema(cls, parents: bool = True) -> None:
+    def reload_schema(cls, dependencies: bool = True):
         """
-        Reload the class schema with updated registry information.
+        Reload and rebuild the Pydantic model validation schema.
 
-        Forces a complete rebuild of the Pydantic model schema to incorporate
-        any changes made to associated registries or validation rules.
+        Forces reconstruction of the model schema and optionally rebuilds
+        schemas for all dependent models in the reloadable dependency chains.
+        Essential when new types are registered that affect polymorphic validation.
 
-        :param parents: Whether to also rebuild schemas for any pydantic parent
-            types that reference this model.
+        :param dependencies: Whether to reload dependent model schemas as well
         """
         cls.model_rebuild(force=True)
 
-        if parents:
-            cls.reload_parent_schemas()
+        if dependencies:
+            for chain in cls.reloadable_dependency_chains():
+                for clazz in chain:
+                    clazz.model_rebuild(force=True)
 
     @classmethod
-    def reload_parent_schemas(cls):
+    def reloadable_dependency_chains(
+        cls, target: type[ReloadableBaseModel] | None = None
+    ) -> list[list[type[ReloadableBaseModel]]]:
         """
-        Recursively reload schemas for all parent Pydantic models.
+        Find all dependency chains leading to the target model class.
 
-        Traverses the inheritance hierarchy to find all parent classes that
-        are Pydantic models and triggers schema rebuilding on each to ensure
-        that any changes in child models are reflected in parent schemas.
+        Uses depth-first search to identify dependency paths between reloadable
+        models, ensuring proper schema reload ordering to maintain validation
+        consistency across the polymorphic model hierarchy.
+
+        :param target: Target model class to find chains for. Uses cls if None
+        :return: List of dependency chains ending at the target class
         """
-        potential_parents: set[type[BaseModel]] = {BaseModel}
-        stack: list[type[BaseModel]] = [BaseModel]
+        if target is None:
+            target = cls
+
+        # Build a map of all reloadable classes to their dependencies
+        dependencies: dict[
+            type[ReloadableBaseModel], list[type[ReloadableBaseModel]]
+        ] = {}
+
+        for reloadable in cls.reloadable_descendants(ReloadableBaseModel):
+            deps = []
+            for field_deps in reloadable.reloadable_fields().values():
+                deps.extend(field_deps)
+            dependencies[reloadable] = deps
+
+        # Find all dependency chains ending at target using DFS
+        chains = []
+
+        def _find_chains(
+            current: type[ReloadableBaseModel], path: list[type[ReloadableBaseModel]]
+        ):
+            if current == target:
+                chains.append(path)
+                return
+
+            for dependent in dependencies.get(current, []):
+                if dependent not in path:  # Avoid cycles
+                    _find_chains(dependent, [current] + path)
+
+        for cls_type, deps in dependencies.items():
+            if deps and cls_type != target:
+                _find_chains(cls_type, [])
+
+        return chains
+
+    @classmethod
+    def reloadable_fields(
+        cls,
+    ) -> dict[str, list[type[ReloadableBaseModel]]]:
+        """
+        Identify model fields containing reloadable model types.
+
+        Recursively analyzes field type annotations to find all ReloadableBaseModel
+        subclasses used within the model schema, enabling dependency tracking for
+        proper schema reload ordering.
+
+        :return: Mapping of field names to lists of reloadable model types
+        """
+
+        def _recursive_resolve_reloadable_types(type_: type | None) -> list[type]:
+            if type_ is None:
+                return []
+
+            if (origin := get_origin(type_)) is None:
+                return [type_] if issubclass(type_, ReloadableBaseModel) else []
+
+            resolved = []
+            if issubclass(origin, ReloadableBaseModel):
+                resolved.append(origin)
+
+            for arg in get_args(type_):
+                resolved.extend(_recursive_resolve_reloadable_types(arg))
+
+            return resolved
+
+        fields = {}
+
+        for name, info in cls.model_fields.items():
+            if reloadable_types := _recursive_resolve_reloadable_types(info.annotation):
+                fields[name] = reloadable_types
+
+        return fields
+
+    @classmethod
+    def reloadable_descendants(
+        cls, target: type[ReloadableBaseModel] | None = None
+    ) -> set[type[ReloadableBaseModel]]:
+        """
+        Find all ReloadableBaseModel descendants of the target class.
+
+        Traverses the inheritance hierarchy to collect all subclasses that inherit
+        from ReloadableBaseModel, enabling comprehensive dependency analysis for
+        schema reloading operations.
+
+        :param target: Base class to find descendants for. Uses cls if None
+        :return: Set of all descendant ReloadableBaseModel classes
+        """
+        if target is None:
+            target = cls
+
+        descendants: set[type[ReloadableBaseModel]] = set()
+        stack: list[type[ReloadableBaseModel]] = [target]
 
         while stack:
             current = stack.pop()
             for subclass in current.__subclasses__():
                 if (
-                    issubclass(subclass, BaseModel)
+                    issubclass(subclass, ReloadableBaseModel)
                     and subclass is not cls
-                    and subclass not in potential_parents
+                    and subclass not in descendants
                 ):
-                    potential_parents.add(subclass)
+                    descendants.add(subclass)
                     stack.append(subclass)
 
-        for check in cls.__mro__:
-            if isinstance(check, type) and issubclass(check, BaseModel):
-                cls._reload_schemas_depending_on(check, potential_parents)
-
-    @classmethod
-    def _reload_schemas_depending_on(cls, target: type[BaseModel], types: set[type]):
-        changed = True
-        while changed:
-            changed = False
-            for candidate in types:
-                if (
-                    isinstance(candidate, type)
-                    and issubclass(candidate, BaseModel)
-                    and any(
-                        cls._uses_type(target, field_info.annotation)
-                        for field_info in candidate.model_fields.values()
-                        if field_info.annotation is not None
-                    )
-                ):
-                    try:
-                        before = candidate.model_json_schema()
-                    except Exception:  # noqa: BLE001
-                        before = None
-                    candidate.model_rebuild(force=True)
-                    if before is not None:
-                        after = candidate.model_json_schema()
-                        changed |= before != after
-
-    @classmethod
-    def _uses_type(cls, target: type, candidate: type) -> bool:
-        if target is candidate:
-            return True
-
-        origin = get_origin(candidate)
-
-        if origin is None:
-            return isinstance(candidate, type) and issubclass(candidate, target)
-
-        if isinstance(origin, type) and (
-            target is origin or issubclass(origin, target)
-        ):
-            return True
-
-        for arg in get_args(candidate) or []:
-            if isinstance(arg, type) and cls._uses_type(target, arg):
-                return True
-
-        return False
+        return descendants
 
 
 class PydanticClassRegistryMixin(
     ReloadableBaseModel, RegistryMixin[type[BaseModelT]], ABC, Generic[BaseModelT]
 ):
     """
-    Polymorphic Pydantic model mixin enabling registry-based dynamic instantiation.
+    Polymorphic Pydantic model enabling registry-based dynamic type instantiation.
 
-    Integrates Pydantic validation with the registry system to enable polymorphic
-    serialization and deserialization based on a discriminator field. Automatically
-    instantiates the correct subclass during validation based on registry mappings,
-    providing a foundation for extensible plugin-style architectures.
+    Integrates Pydantic validation with the registry system for polymorphic
+    serialization and deserialization using a discriminator field. Automatically
+    instantiates the correct subclass during validation based on registry mappings.
 
     Example:
     ::
@@ -149,8 +197,8 @@ class PydanticClassRegistryMixin(
             config_type: str = Field(description="Configuration type identifier")
 
             @classmethod
-            def __pydantic_schema_base_type__(cls) -> type["BaseConfig"]:
-                return BaseConfig
+            def __pydantic_schema_base_name__(cls) -> str:
+                return "BaseConfig"
 
         @BaseConfig.register("database")
         class DatabaseConfig(BaseConfig):
@@ -163,7 +211,7 @@ class PydanticClassRegistryMixin(
             "connection_string": "postgresql://localhost:5432/db"
         })
 
-    :cvar schema_discriminator: Field name used for polymorphic type discrimination
+    :cvar schema_discriminator: Field name for polymorphic type discrimination
     """
 
     schema_discriminator: ClassVar[str] = "model_type"
@@ -210,31 +258,35 @@ class PydanticClassRegistryMixin(
         :param handler: Pydantic core schema generation handler
         :return: Tagged union schema for polymorphic validation or base schema
         """
-        if source_type == cls.__pydantic_schema_base_type__():
-            if not cls.registry:
-                return cls.__pydantic_generate_base_schema__(handler)
+        if (
+            source_type is None
+            or not isinstance(source_type, type)
+            or source_type.__name__ != cls.__pydantic_schema_base_name__()
+        ):
+            return handler(cls)
 
-            choices = {
-                name: handler(model_class) for name, model_class in cls.registry.items()
-            }
+        if not cls.registry:
+            return cls.__pydantic_generate_base_schema__(handler)
 
-            return core_schema.tagged_union_schema(
-                choices=choices,
-                discriminator=cls.schema_discriminator,
-            )
+        choices = {
+            name: handler(model_class) for name, model_class in cls.registry.items()
+        }
 
-        return handler(cls)
+        return core_schema.tagged_union_schema(
+            choices=choices,
+            discriminator=cls.schema_discriminator,
+        )
 
     @classmethod
     @abstractmethod
-    def __pydantic_schema_base_type__(cls) -> type[BaseModelT]:
+    def __pydantic_schema_base_name__(cls) -> str:
         """
-        Define the base type for polymorphic validation hierarchy.
+        Define the name of the base type for polymorphic validation hierarchy.
 
         Must be implemented by subclasses to specify which type serves as the
         root of the polymorphic hierarchy for schema generation and validation.
 
-        :return: Base class type for the polymorphic model hierarchy
+        :return: Base class name for the polymorphic model hierarchy
         """
         ...
 

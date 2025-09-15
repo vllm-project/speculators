@@ -50,11 +50,8 @@ class TokenProposalConfig(PydanticClassRegistryMixin):
     """
 
     @classmethod
-    def __pydantic_schema_base_type__(cls) -> type["TokenProposalConfig"]:
-        if cls.__name__ == "TokenProposalConfig":
-            return cls
-
-        return TokenProposalConfig
+    def __pydantic_schema_base_name__(cls) -> str:
+        return "TokenProposalConfig"
 
     auto_package: ClassVar[str] = "speculators.proposals"
     registry_auto_discovery: ClassVar[bool] = True
@@ -238,11 +235,8 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
         return cls.model_validate(dict_obj)
 
     @classmethod
-    def __pydantic_schema_base_type__(cls) -> type["SpeculatorModelConfig"]:
-        if cls.__name__ == "SpeculatorModelConfig":
-            return cls
-
-        return SpeculatorModelConfig
+    def __pydantic_schema_base_name__(cls) -> str:
+        return "SpeculatorModelConfig"
 
     # Pydantic configuration
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
