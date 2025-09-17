@@ -120,7 +120,7 @@ class Eagle3Attention(nn.Module):
         self.num_heads = config.num_attention_heads
         self.num_key_value_heads = config.num_key_value_heads
         self.hidden_size = config.hidden_size
-        self.head_dim = self.hidden_size // self.num_heads
+        self.head_dim = getattr(config, "head_dim", self.hidden_size // self.num_heads)
         self.num_key_value_groups = self.num_heads // self.num_key_value_heads
 
         input_size = 2 * self.hidden_size
@@ -138,7 +138,7 @@ class Eagle3Attention(nn.Module):
             bias=config.attention_bias,
         )
         self.o_proj = nn.Linear(
-            self.hidden_size, self.hidden_size, bias=config.attention_bias
+            self.num_heads * self.head_dim, self.hidden_size, bias=config.attention_bias
         )
 
     def forward(
