@@ -231,7 +231,7 @@ class Eagle3Converter:
         model.load_state_dict(weights, strict=False)  # type: ignore[attr-defined]
         weights_dtype = getattr(config.transformer_layer_config, "torch_dtype", None)
         # .to() wont convert d2t/t2d buffers as they are not fp tensors
-        model.to(dtype=weights_dtype)
+        model.to(dtype=weights_dtype) # type: ignore[call-arg]
         model.save_pretrained(str(output_dir))  # type: ignore[attr-defined]
         return Path(output_dir)
 
