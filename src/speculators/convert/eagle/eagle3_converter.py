@@ -214,6 +214,7 @@ class Eagle3Converter:
             rope_theta=eagle_config.get("rope_theta", 10000.0),
             mlp_bias=eagle_config.get("mlp_bias", False),
             tie_word_embeddings=False,
+            torch_dtype=eagle_config.get("torch_dtype", None),
         )
 
     def _save_converted_checkpoint(
@@ -228,6 +229,11 @@ class Eagle3Converter:
             verifier_attachment_mode="detached",
         )
         model.load_state_dict(weights, strict=False)  # type: ignore[attr-defined]
+        weights_dtype = getattr(
+            config.transformer_layer_config, "torch_dtype", None
+        )
+        # .to() wont convert d2t/t2d buffers as they are not fp tensors
+        model.to(dtype=weights_dtype)
         model.save_pretrained(str(output_dir))  # type: ignore[attr-defined]
         return Path(output_dir)
 
