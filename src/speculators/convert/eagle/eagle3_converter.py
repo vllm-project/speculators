@@ -215,6 +215,7 @@ class Eagle3Converter:
             mlp_bias=eagle_config.get("mlp_bias", False),
             tie_word_embeddings=False,
             torch_dtype=eagle_config.get("torch_dtype"),
+            head_dim=eagle_config.get("head_dim"),
         )
 
     def _save_converted_checkpoint(
