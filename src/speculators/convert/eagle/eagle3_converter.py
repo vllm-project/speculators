@@ -214,7 +214,7 @@ class Eagle3Converter:
             rope_theta=eagle_config.get("rope_theta", 10000.0),
             mlp_bias=eagle_config.get("mlp_bias", False),
             tie_word_embeddings=False,
-            head_dim=eagle_config.get("head_dim", None),
+            head_dim=eagle_config.get("head_dim"),
         )
 
     def _save_converted_checkpoint(
