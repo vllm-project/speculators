@@ -47,13 +47,13 @@ The following models are currently supported or are planned to be supported in t
 <tr>
 <td rowspan="3">Llama</td>
 <td>8B-Instruct</td>
-<td>EAGLE-3 ✅ | HASS ✅</td>
+<td><a href="https://huggingface.co/RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3">EAGLE-3</a> ✅ | HASS ✅</td>
 <td>✅</td>
 <td><a href="https://huggingface.co/yuhuili/EAGLE3-LLaMA3.1-Instruct-8B">EAGLE-3</a> ✅</td>
 </tr>
 <tr>
 <td>70B-Instruct</td>
-<td>EAGLE-3 ⏳</td>
+<td><a href="https://huggingface.co/RedHatAI/Llama-3.3-70B-Instruct-speculator.eagle3">EAGLE-3</a> ✅</td>
 <td>✅</td>
 <td><a href="https://huggingface.co/yuhuili/EAGLE3-LLaMA3.3-Instruct-70B">EAGLE-3</a> ✅</td>
 </tr>
@@ -66,19 +66,19 @@ The following models are currently supported or are planned to be supported in t
 <tr>
 <td rowspan="3">Qwen3</td>
 <td>8B</td>
-<td>EAGLE-3 ✅</td>
+<td><a href="https://huggingface.co/RedHatAI/Qwen3-8B-speculator.eagle3">EAGLE-3</a> ✅</td>
 <td>✅</td>
 <td>❌</td>
 </tr>
 <tr>
 <td>14B</td>
-<td>EAGLE-3 ❌</td>
+<td><a href="https://huggingface.co/RedHatAI/Qwen3-14B-speculator.eagle3">EAGLE-3</a> ✅</td>
 <td>✅</td>
 <td>❌</td>
 </tr>
 <tr>
 <td>32B</td>
-<td>EAGLE-3 ❌</td>
+<td><a href="https://huggingface.co/RedHatAI/Qwen3-32B-speculator.eagle3">EAGLE-3</a> ✅</td>
 <td>✅</td>
 <td>❌</td>
 </tr>
