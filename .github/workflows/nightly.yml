@@ -16,13 +16,12 @@ jobs:
         uses: lycheeverse/lychee-action@v2
         with:
           fail: false
-      - name: Create Issues
+      - name: Create Comment
         if: steps.lychee.outputs.exit_code != '0'
-        uses: peter-evans/create-issue-from-file@v5
+        uses: peter-evans/create-or-update-comment@v4
         with:
-          title: Link Checker Report
-          content-filepath: ./lychee/out.md
-          labels: report, automated issue
+          issue-number: 128
+          body-path: ./lychee/out.md
       - name: Fail on Issues
         if: steps.lychee.outputs.exit_code != '0'
         run: |
