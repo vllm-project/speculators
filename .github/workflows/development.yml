@@ -74,6 +74,8 @@ jobs:
     strategy:
       matrix:
         python: ["3.9", "3.13"]
+    env:
+      HF_TOKEN: ${{ secrets.NM_HF_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
