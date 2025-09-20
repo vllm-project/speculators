@@ -40,6 +40,7 @@ dependencies = [
     "click",
     "datasets",
     "deepspeed",
+    "eval_type_backport",
     "httpx[http2]",
     "huggingface-hub",
     "loguru",
