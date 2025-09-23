@@ -1,0 +1,24 @@
+name: Nightly
+
+on:
+  push:
+    branches:
+      - testrunner
+
+jobs:
+
+  unit-tests:
+    runs-on: gcp-k8s-vllm-l4-solo
+    strategy:
+      matrix:
+        python: ["3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install dependencies
+        run: pip install tox
+      - name: Run unit tests
+        run: tox -e test-unit -- --cov=speculators --cov-report=term-missing --cov-fail-under=75
