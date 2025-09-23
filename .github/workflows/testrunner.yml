@@ -8,7 +8,7 @@ on:
 jobs:
 
   unit-tests:
-    runs-on: gcp-k8s-vllm-l4-solo
+    runs-on: ibm-os-vllm-h100-solo
     strategy:
       matrix:
         python: ["3.13"]
