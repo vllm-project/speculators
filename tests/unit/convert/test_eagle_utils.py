@@ -90,10 +90,10 @@ class TestEnsureCheckpointIsLocal:
         cache_dir = tmp_path / "cache"
         mock_download.return_value = tmp_path / "downloaded"
 
-        ensure_checkpoint_is_local("test-model/checkpoint", cache_dir=cache_dir)
+        ensure_checkpoint_is_local("test-model/checkpoint", cache_dir=str(cache_dir))
 
         mock_download.assert_called_once_with(
-            model_id="test-model/checkpoint", cache_dir=cache_dir
+            model_id="test-model/checkpoint", cache_dir=str(cache_dir)
         )
 
 
