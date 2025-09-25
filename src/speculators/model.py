@@ -14,10 +14,6 @@ dynamic model loading based on configuration, and flexible verifier attachment.
 Classes:
     SpeculatorModel: Abstract base class for all speculator models with transformers
         compatibility, automatic registry support, and speculative generation methods
-
-Functions:
-    reload_and_populate_models: Automatically populates the model registry for
-        discovery and instantiation of registered speculator models
 """
 
 import os
@@ -37,10 +33,12 @@ from transformers.generation.streamers import BaseStreamer
 from transformers.generation.utils import GenerateOutput
 
 from speculators.config import SpeculatorModelConfig
-from speculators.utils import ClassRegistryMixin
+from speculators.utils import RegistryMixin
 
 
-class SpeculatorModel(ClassRegistryMixin, PreTrainedModel, GenerationMixin):  # type: ignore[misc]
+class SpeculatorModel(  # type: ignore[misc]
+    RegistryMixin[type["SpeculatorModel"]], PreTrainedModel, GenerationMixin
+):
     """
     Abstract base class for all speculator models in the Speculators library.
 
@@ -559,14 +557,3 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel, GenerationMixin):  # 
         raise NotImplementedError(
             "The generate method for speculator models is not implemented yet."
         )
-
-
-def reload_and_populate_models():
-    """
-    Triggers the automatic discovery and registration of all
-    SpeculatorModel subclasses found in the speculators.models package
-    that have been registered with `SpeculatorModel.register(NAME)`. This
-    enables dynamic model loading and instantiation based on configuration
-    types without requiring explicit imports.
-    """
-    SpeculatorModel.auto_populate_registry()

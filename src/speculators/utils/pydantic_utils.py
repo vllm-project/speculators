@@ -1,113 +1,236 @@
 """
-General pydantic utilities for Speculators.
+Pydantic utilities for polymorphic model serialization and registry integration.
 
-This module provides integration between Pydantic and the Speculators library,
-enabling things like polymorphic serialization and deserialization of Pydantic
-models using a discriminator field and registry.
-
-Classes:
-    PydanticClassRegistryMixin: A mixin that combines Pydantic models with the
-        ClassRegistryMixin to support polymorphic model instantiation based on
-        a discriminator field
+Provides integration between Pydantic and the registry system, enabling
+polymorphic serialization and deserialization of Pydantic models using
+a discriminator field and dynamic class registry. Includes base model classes
+with standardized configurations and generic status breakdown models for
+structured result organization.
 """
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
-from typing import Any, ClassVar, Optional
+from typing import Any, ClassVar, Generic, TypeVar, get_args, get_origin
 
 from pydantic import BaseModel, GetCoreSchemaHandler
 from pydantic_core import CoreSchema, core_schema
 
-from speculators.utils.registry import ClassRegistryMixin
+from speculators.utils.registry import RegistryMixin
 
-__all__ = ["PydanticClassRegistryMixin", "ReloadableBaseModel"]
+__all__ = [
+    "BaseModelT",
+    "PydanticClassRegistryMixin",
+    "RegisterClassT",
+    "ReloadableBaseModel",
+]
+
+
+BaseModelT = TypeVar("BaseModelT", bound=BaseModel)
+RegisterClassT = TypeVar("RegisterClassT", bound=type[BaseModel])
 
 
 class ReloadableBaseModel(BaseModel):
-    @classmethod
-    def reload_schema(cls):
-        """
-        Reloads the schema for the class, ensuring that the registry is populated
-        and that the schema is up-to-date.
+    """
+    Base Pydantic model with schema reloading capabilities.
 
-        This method is useful when the registry has been modified or when the
-        class needs to be re-validated with the latest schema.
+    Provides dynamic schema rebuilding functionality for models that need to
+    update their validation schemas at runtime, particularly useful when
+    working with registry-based polymorphic models where new types are
+    registered after initial class definition.
+    """
+
+    @classmethod
+    def reload_schema(cls, dependencies: bool = True):
+        """
+        Reload and rebuild the Pydantic model validation schema.
+
+        Forces reconstruction of the model schema and optionally rebuilds
+        schemas for all dependent models in the reloadable dependency chains.
+        Essential when new types are registered that affect polymorphic validation.
+
+        :param dependencies: Whether to reload dependent model schemas as well
         """
         cls.model_rebuild(force=True)
 
+        if dependencies:
+            for chain in cls.reloadable_dependency_chains():
+                for clazz in chain:
+                    clazz.model_rebuild(force=True)
 
-class PydanticClassRegistryMixin(ReloadableBaseModel, ABC, ClassRegistryMixin):
+    @classmethod
+    def reloadable_dependency_chains(
+        cls, target: type[ReloadableBaseModel] | None = None
+    ) -> list[list[type[ReloadableBaseModel]]]:
+        """
+        Find all dependency chains leading to the target model class.
+
+        Uses depth-first search to identify dependency paths between reloadable
+        models, ensuring proper schema reload ordering to maintain validation
+        consistency across the polymorphic model hierarchy.
+
+        :param target: Target model class to find chains for. Uses cls if None
+        :return: List of dependency chains ending at the target class
+        """
+        if target is None:
+            target = cls
+
+        # Build a map of all reloadable classes to their dependencies
+        dependencies: dict[
+            type[ReloadableBaseModel], list[type[ReloadableBaseModel]]
+        ] = {}
+
+        for reloadable in cls.reloadable_descendants(ReloadableBaseModel):
+            deps = []
+            for field_deps in reloadable.reloadable_fields().values():
+                deps.extend(field_deps)
+            dependencies[reloadable] = deps
+
+        # Find all dependency chains ending at target using DFS
+        chains = []
+
+        def _find_chains(
+            current: type[ReloadableBaseModel], path: list[type[ReloadableBaseModel]]
+        ):
+            if current == target:
+                chains.append(path)
+                return
+
+            for dependent in dependencies.get(current, []):
+                if dependent not in path:  # Avoid cycles
+                    _find_chains(dependent, [current] + path)
+
+        for cls_type, deps in dependencies.items():
+            if deps and cls_type != target:
+                _find_chains(cls_type, [])
+
+        return chains
+
+    @classmethod
+    def reloadable_fields(
+        cls,
+    ) -> dict[str, list[type[ReloadableBaseModel]]]:
+        """
+        Identify model fields containing reloadable model types.
+
+        Recursively analyzes field type annotations to find all ReloadableBaseModel
+        subclasses used within the model schema, enabling dependency tracking for
+        proper schema reload ordering.
+
+        :return: Mapping of field names to lists of reloadable model types
+        """
+
+        def _recursive_resolve_reloadable_types(type_: type | None) -> list[type]:
+            if type_ is None:
+                return []
+
+            if (origin := get_origin(type_)) is None:
+                return [type_] if issubclass(type_, ReloadableBaseModel) else []
+
+            resolved = []
+            if issubclass(origin, ReloadableBaseModel):
+                resolved.append(origin)
+
+            for arg in get_args(type_):
+                resolved.extend(_recursive_resolve_reloadable_types(arg))
+
+            return resolved
+
+        fields = {}
+
+        for name, info in cls.model_fields.items():
+            if reloadable_types := _recursive_resolve_reloadable_types(info.annotation):
+                fields[name] = reloadable_types
+
+        return fields
+
+    @classmethod
+    def reloadable_descendants(
+        cls, target: type[ReloadableBaseModel] | None = None
+    ) -> set[type[ReloadableBaseModel]]:
+        """
+        Find all ReloadableBaseModel descendants of the target class.
+
+        Traverses the inheritance hierarchy to collect all subclasses that inherit
+        from ReloadableBaseModel, enabling comprehensive dependency analysis for
+        schema reloading operations.
+
+        :param target: Base class to find descendants for. Uses cls if None
+        :return: Set of all descendant ReloadableBaseModel classes
+        """
+        if target is None:
+            target = cls
+
+        descendants: set[type[ReloadableBaseModel]] = set()
+        stack: list[type[ReloadableBaseModel]] = [target]
+
+        while stack:
+            current = stack.pop()
+            for subclass in current.__subclasses__():
+                if (
+                    issubclass(subclass, ReloadableBaseModel)
+                    and subclass is not cls
+                    and subclass not in descendants
+                ):
+                    descendants.add(subclass)
+                    stack.append(subclass)
+
+        return descendants
+
+
+class PydanticClassRegistryMixin(
+    ReloadableBaseModel, RegistryMixin[type[BaseModelT]], ABC, Generic[BaseModelT]
+):
     """
-    A mixin class that integrates Pydantic models with the ClassRegistryMixin to enable
-    polymorphic serialization and deserialization based on a discriminator field.
+    Polymorphic Pydantic model enabling registry-based dynamic type instantiation.
 
-    This mixin allows Pydantic models to be registered in a registry and dynamically
-    instantiated based on a discriminator field in the input data.
-    It overrides Pydantic's validation system to correctly instantiate the appropriate
-    subclass based on the discriminator value and the name of the registered classes.
+    Integrates Pydantic validation with the registry system for polymorphic
+    serialization and deserialization using a discriminator field. Automatically
+    instantiates the correct subclass during validation based on registry mappings.
 
-    The mixin is particularly useful for implementing base registry classes that need to
-    support multiple implementations, such as different token proposal methods or
-    speculative decoding algorithms.
+    Example:
+    ::
+        from speculators.utils import PydanticClassRegistryMixin
 
-    Usage Example:
-    ```python
-    from typing import ClassVar
-    from pydantic import BaseModel, Field
-    from speculators.utils import PydanticClassRegistryMixin
+        class BaseConfig(PydanticClassRegistryMixin["BaseConfig"]):
+            schema_discriminator: ClassVar[str] = "config_type"
+            config_type: str = Field(description="Configuration type identifier")
 
-    class BaseConfig(PydanticClassRegistryMixin):
-        @classmethod
-        def __pydantic_schema_base_type__(cls) -> type["BaseConfig"]:
-            if cls.__name__ == "BaseConfig":
-                return cls
-            return BaseConfig
+            @classmethod
+            def __pydantic_schema_base_name__(cls) -> str:
+                return "BaseConfig"
 
-        schema_discriminator: ClassVar[str] = "config_type"
-        config_type: str = Field(description="The type of configuration")
+        @BaseConfig.register("database")
+        class DatabaseConfig(BaseConfig):
+            config_type: str = "database"
+            connection_string: str = Field(description="Database connection string")
 
-    @BaseConfig.register("config_a")
-    class ConfigA(BaseConfig):
-        config_type: str = "config_a"
-        value_a: str = Field(description="A value specific to ConfigA")
+        # Dynamic instantiation based on discriminator
+        config = BaseConfig.model_validate({
+            "config_type": "database",
+            "connection_string": "postgresql://localhost:5432/db"
+        })
 
-    @BaseConfig.register("config_b")
-    class ConfigB(BaseConfig):
-        config_type: str = "config_b"
-        value_b: int = Field(description="A value specific to ConfigB")
-
-    BaseConfig.reload_schema()  # Ensures the schema is up-to-date with registry
-
-    # Dynamic instantiation based on config_type
-    config_data = {"config_type": "config_a", "value_a": "test"}
-    config = BaseConfig.model_validate(config_data)  # Returns ConfigA instance
-    print(config)
-    dump_data = config.model_dump()  # Dumps the data to a dictionary
-    print(dump_data)  # Output: {'config_type': 'config_a', 'value_a': 'test'}
-    ```
-
-    :cvar schema_discriminator: The field name used as the discriminator in the JSON
-        schema. Default is "model_type".
-    :cvar registry: A dictionary mapping discriminator values to pydantic model classes.
+    :cvar schema_discriminator: Field name for polymorphic type discrimination
     """
 
     schema_discriminator: ClassVar[str] = "model_type"
-    registry: ClassVar[Optional[dict[str, BaseModel]]] = None  # type: ignore[assignment]
 
     @classmethod
-    def register_decorator(
-        cls, clazz: type[BaseModel], name: Optional[str] = None
-    ) -> type[BaseModel]:
+    def register_decorator(  # type: ignore[override]
+        cls, clazz: RegisterClassT, name: str | list[str] | None = None
+    ) -> RegisterClassT:
         """
-        Registers a Pydantic model class with the registry.
+        Register a Pydantic model class with type validation and schema reload.
 
-        This method extends the ClassRegistryMixin.register_decorator method by adding
-        a type check to ensure only Pydantic BaseModel subclasses can be registered.
+        Validates that the class is a proper Pydantic BaseModel subclass before
+        registering it in the class registry. Automatically triggers schema
+        reload to incorporate the new type into polymorphic validation.
 
-        :param clazz: The Pydantic model class to register
-        :param name: Optional name to register the class under. If None, the class name
-            is used as the registry key.
-        :return: The registered class.
-        :raises TypeError: If clazz is not a subclass of Pydantic BaseModel
+        :param clazz: Pydantic model class to register in the polymorphic hierarchy
+        :param name: Registry identifier for the class. Uses class name if None
+        :return: The registered class unchanged for decorator chaining
+        :raises TypeError: If clazz is not a Pydantic BaseModel subclass
         """
         if not issubclass(clazz, BaseModel):
             raise TypeError(
@@ -115,58 +238,55 @@ class PydanticClassRegistryMixin(ReloadableBaseModel, ABC, ClassRegistryMixin):
                 "Pydantic BaseModel"
             )
 
-        return super().register_decorator(clazz, name=name)
+        super().register_decorator(clazz, name=name)
+        cls.reload_schema()
+
+        return clazz
 
     @classmethod
     def __get_pydantic_core_schema__(
         cls, source_type: Any, handler: GetCoreSchemaHandler
     ) -> CoreSchema:
         """
-        Customizes the Pydantic schema for polymorphic model validation.
+        Generate polymorphic validation schema for dynamic type instantiation.
 
-        This method is part of Pydantic's validation system and is called during
-        schema generation. It checks if the source_type matches the base type of the
-        polymorphic model. If it does, it generates a tagged union schema that allows
-        for dynamic instantiation of the appropriate subclass based on the discriminator
-        field.
+        Creates a tagged union schema that enables Pydantic to automatically
+        instantiate the correct subclass based on the discriminator field value.
+        Falls back to base schema generation when no registry is available.
 
-        :param source_type: The type for which the schema is being generated
-        :param handler: Handler for generating core schema
-        :return: A CoreSchema object with the custom validator if appropriate
+        :param source_type: Type being processed for schema generation
+        :param handler: Pydantic core schema generation handler
+        :return: Tagged union schema for polymorphic validation or base schema
         """
-        if source_type == cls.__pydantic_schema_base_type__():
-            if not cls.registry:
-                return cls.__pydantic_generate_base_schema__(handler)
+        if (
+            source_type is None
+            or not isinstance(source_type, type)
+            or source_type.__name__ != cls.__pydantic_schema_base_name__()
+        ):
+            return handler(cls)
 
-            choices = {
-                name: handler(model_class) for name, model_class in cls.registry.items()
-            }
+        if not cls.registry:
+            return cls.__pydantic_generate_base_schema__(handler)
 
-            return core_schema.tagged_union_schema(
-                choices=choices,
-                discriminator=cls.schema_discriminator,
-            )
+        choices = {
+            name: handler(model_class) for name, model_class in cls.registry.items()
+        }
 
-        return handler(cls)
+        return core_schema.tagged_union_schema(
+            choices=choices,
+            discriminator=cls.schema_discriminator,
+        )
 
     @classmethod
     @abstractmethod
-    def __pydantic_schema_base_type__(cls) -> type[Any]:
+    def __pydantic_schema_base_name__(cls) -> str:
         """
-        Abstract method that must be implemented by subclasses to define the base type.
+        Define the name of the base type for polymorphic validation hierarchy.
 
-        This method should return the base class type that serves as the root of the
-        polymorphic hierarchy. The returned type is used to determine when to apply
-        the custom validation logic for polymorphic instantiation.
+        Must be implemented by subclasses to specify which type serves as the
+        root of the polymorphic hierarchy for schema generation and validation.
 
-        Example implementation:
-        ```python
-        @classmethod
-        def __pydantic_schema_base_type__(cls) -> type["MyBaseClass"]:
-            return MyBaseClass
-        ```
-
-        :return: The base class type for polymorphic validation
+        :return: Base class name for the polymorphic model hierarchy
         """
         ...
 
@@ -175,37 +295,52 @@ class PydanticClassRegistryMixin(ReloadableBaseModel, ABC, ClassRegistryMixin):
         cls, handler: GetCoreSchemaHandler
     ) -> CoreSchema:
         """
-        Generates the base schema for the polymorphic model.
+        Generate fallback schema for polymorphic models without registry.
 
-        This method is used by the Pydantic validation system to create the core
-        schema for the base class. By default, it returns an any_schema which accepts
-        any valid input, relying on the validator function to perform the actual
-        validation and model instantiation.
+        Provides a base schema that accepts any valid input when no registry
+        is available for polymorphic validation. Used as fallback during
+        schema generation when the registry has not been populated.
 
-        Subclasses can override this method to provide a more specific base schema
-        if needed.
-
-        :param handler: Handler for generating core schema
-        :return: A CoreSchema object representing the base schema
+        :param handler: Pydantic core schema generation handler
+        :return: Base CoreSchema that accepts any valid input
         """
         return core_schema.any_schema()
 
     @classmethod
     def auto_populate_registry(cls) -> bool:
         """
-        Ensures that all registered classes in the registry are properly initialized.
+        Initialize registry with auto-discovery and reload validation schema.
 
-        This method is called automatically by Pydantic when the model is instantiated
-        or validated. It ensures that all classes in the registry are loaded and ready
-        for use.
+        Triggers automatic population of the class registry through the parent
+        RegistryMixin functionality and ensures the Pydantic validation schema
+        is updated to include all discovered types for polymorphic validation.
 
-        This is particularly useful for ensuring that all subclasses are registered
-        before any validation occurs.
-
-        :return: True if the registry was populated, False if it was already populated
-        :raises ValueError: If called when registry_auto_discovery is False
+        :return: True if registry was populated, False if already populated
+        :raises ValueError: If called when registry_auto_discovery is disabled
         """
         populated = super().auto_populate_registry()
         cls.reload_schema()
 
         return populated
+
+    @classmethod
+    def registered_classes(cls) -> tuple[type[BaseModelT], ...]:
+        """
+        Get all registered pydantic classes from the registry.
+
+        Automatically triggers auto-discovery if registry_auto_discovery is enabled
+        to ensure all available implementations are included.
+
+        :return: Tuple of all registered classes including auto-discovered ones
+        :raises ValueError: If called before any objects have been registered
+        """
+        if cls.registry_auto_discovery:
+            cls.auto_populate_registry()
+
+        if cls.registry is None:
+            raise ValueError(
+                "ClassRegistryMixin.registered_classes() must be called after "
+                "registering classes with ClassRegistryMixin.register()."
+            )
+
+        return tuple(cls.registry.values())
