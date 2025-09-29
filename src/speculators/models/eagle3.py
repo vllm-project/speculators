@@ -78,6 +78,16 @@ class Eagle3SpeculatorConfig(SpeculatorModelConfig):
         description="Hidden size of the target model (if different from draft model)",
     )
 
+    eagle_aux_hidden_state_layer_ids:   Optional[list[int]] = Field(
+        default=None,
+        description="Layer IDs of the Eagle auxiliary hidden state layers",
+    )
+
+    inference_type: str = Field(
+        default="text",
+        description="Inference type of the speculator",
+    )
+
     @property
     def target_vocab_size(self) -> int:
         """Get target vocabulary size from transformer config."""

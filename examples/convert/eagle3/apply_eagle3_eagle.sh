@@ -1,5 +1,6 @@
-speculators convert yuhuili/EAGLE3-LLaMA3.1-Instruct-8B \
+speculators convert nvidia/Llama-4-Maverick-17B-128E-Eagle3 \
   --algorithm eagle3 \
-  --verifier meta-llama/Meta-Llama-3.1-8B-Instruct \
-  --output-path eagle3-llama-3.1-8b-instruct-converted \
-  --validate-device cuda:0
+  --verifier RedHatAI/Llama-4-Maverick-17B-128E-Instruct-quantized.w4a16 \
+  --output-path Llama4-Maverick-Eagle3-Speculators \
+  --validate-device cuda:0 \
+  --algorithm-kwargs '{"eagle_aux_hidden_state_layer_ids": [1,23,44], "inference_type": "text"}'

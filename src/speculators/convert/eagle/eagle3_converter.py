@@ -12,6 +12,7 @@ from transformers import AutoModelForCausalLM, LlamaConfig, PretrainedConfig
 from speculators.config import SpeculatorsConfig, VerifierConfig
 from speculators.convert.eagle.utils import (
     ensure_checkpoint_is_local,
+    find_vocab_size,
     load_checkpoint_config,
     load_checkpoint_weights,
 )
@@ -34,6 +35,8 @@ class Eagle3Converter:
         base_model: str,
         validate: bool = True,
         norm_before_residual: bool = False,
+        inference_type: Optional[str] = None,
+        eagle_aux_hidden_state_layer_ids: Optional[list[int]] = None,
         cache_dir: Optional[Union[str, Path]] = None,
     ) -> None:
         logger.info(f"Converting Eagle-3 checkpoint: {input_path}")
@@ -44,13 +47,23 @@ class Eagle3Converter:
         weights = load_checkpoint_weights(local_checkpoint_path)
         logger.info(f"Loaded {len(weights)} weights")
 
-        # Patch: ensure target_vocab_size matches t2d tensor shape
-        eagle_config["target_vocab_size"] = weights["t2d"].shape[0]
+        # Get target_vocab_size from t2d tensor shape if available
+        if "t2d" in weights:
+            eagle_config["target_vocab_size"] = weights["t2d"].shape[0]
+            logger.debug(f"Using target_vocab_size from t2d tensor: {eagle_config['target_vocab_size']}")
+        else:
+            # fall back to target model config - search for vocab_size at any nesting level
+            target_config_dict, _ = PretrainedConfig.get_config_dict(base_model)
+            vocab_size = find_vocab_size(target_config_dict)
+            eagle_config["target_vocab_size"] = vocab_size if vocab_size is not None else 128000
+            logger.debug(f"Using target_vocab_size from config: {eagle_config['target_vocab_size']}")
 
         config = self._build_eagle3_speculator_config(
             eagle_config,
             base_model,
             norm_before_residual,
+            inference_type,
+            eagle_aux_hidden_state_layer_ids,
         )
 
         # Process weights and ensure embeddings are properly handled
@@ -157,6 +170,8 @@ class Eagle3Converter:
         eagle_config: dict,
         base_model: str,
         norm_before_residual: bool = False,
+        inference_type: Optional[str] = None,
+        eagle_aux_hidden_state_layer_ids: Optional[list[int]] = None,
     ) -> Eagle3SpeculatorConfig:
         transformer_config = self._create_transformer_config_from_eagle(
             eagle_config, base_model
@@ -181,6 +196,8 @@ class Eagle3Converter:
             draft_vocab_size=eagle_config.get("draft_vocab_size", 32000),
             norm_before_residual=norm_before_residual,
             target_hidden_size=eagle_config.get("target_hidden_size"),
+            inference_type=inference_type,
+            eagle_aux_hidden_state_layer_ids=eagle_aux_hidden_state_layer_ids,
         )
 
     def _create_transformer_config_from_eagle(
