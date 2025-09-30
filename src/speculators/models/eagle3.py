@@ -83,7 +83,7 @@ class Eagle3SpeculatorConfig(SpeculatorModelConfig):
         description="Layer IDs of the Eagle auxiliary hidden state layers",
     )
 
-    inference_type: str = Field(
+    inference_type: Optional[str] = Field(
         default="text",
         description="Inference type of the speculator",
     )
