@@ -78,7 +78,7 @@ class Eagle3SpeculatorConfig(SpeculatorModelConfig):
         description="Hidden size of the target model (if different from draft model)",
     )
 
-    eagle_aux_hidden_state_layer_ids:   Optional[list[int]] = Field(
+    eagle_aux_hidden_state_layer_ids: Optional[list[int]] = Field(
         default=None,
         description="Layer IDs of the Eagle auxiliary hidden state layers",
     )

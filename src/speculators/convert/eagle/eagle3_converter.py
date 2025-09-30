@@ -50,13 +50,21 @@ class Eagle3Converter:
         # Get target_vocab_size from t2d tensor shape if available
         if "t2d" in weights:
             eagle_config["target_vocab_size"] = weights["t2d"].shape[0]
-            logger.debug(f"Using target_vocab_size from t2d tensor: {eagle_config['target_vocab_size']}")
+            logger.debug(
+                f"Using target_vocab_size from t2d tensor: "
+                f"{eagle_config['target_vocab_size']}"
+            )
         else:
-            # fall back to target model config - search for vocab_size at any nesting level
+            # fall back to target model config - search for vocab_size at any level
             target_config_dict, _ = PretrainedConfig.get_config_dict(base_model)
             vocab_size = find_vocab_size(target_config_dict)
-            eagle_config["target_vocab_size"] = vocab_size if vocab_size is not None else 128000
-            logger.debug(f"Using target_vocab_size from config: {eagle_config['target_vocab_size']}")
+            eagle_config["target_vocab_size"] = (
+                vocab_size if vocab_size is not None else 128000
+            )
+            logger.debug(
+                f"Using target_vocab_size from config: "
+                f"{eagle_config['target_vocab_size']}"
+            )
 
         config = self._build_eagle3_speculator_config(
             eagle_config,

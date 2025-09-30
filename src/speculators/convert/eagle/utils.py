@@ -15,7 +15,7 @@ from safetensors import safe_open
 def find_vocab_size(config_dict: dict) -> Optional[int]:
     """
     Recursively search for vocab_size in nested config dictionary.
-    
+
     :param config_dict: Configuration dictionary to search
     :return: vocab_size if found, None otherwise
     """
