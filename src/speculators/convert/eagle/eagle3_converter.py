@@ -47,6 +47,7 @@ class Eagle3Converter:
         weights = load_checkpoint_weights(local_checkpoint_path)
         logger.info(f"Loaded {len(weights)} weights")
 
+        reduce_vocab_size = False
         # Get target_vocab_size from t2d tensor shape if available
         if "t2d" in weights:
             eagle_config["target_vocab_size"] = weights["t2d"].shape[0]
@@ -54,6 +55,7 @@ class Eagle3Converter:
                 f"Using target_vocab_size from t2d tensor: "
                 f"{eagle_config['target_vocab_size']}"
             )
+            reduce_vocab_size = True
         else:
             # fall back to target model config - search for vocab_size at any level
             target_config_dict, _ = PretrainedConfig.get_config_dict(base_model)
@@ -78,7 +80,7 @@ class Eagle3Converter:
         processed_weights = self._process_checkpoint_weights(weights, base_model)
 
         saved_path = self._save_converted_checkpoint(
-            config, processed_weights, output_path
+            config, processed_weights, output_path, reduce_vocab_size = reduce_vocab_size
         )
         logger.success(f"Saved to: {saved_path}")
 
@@ -248,11 +250,13 @@ class Eagle3Converter:
         config: Eagle3SpeculatorConfig,
         weights: dict[str, torch.Tensor],
         output_dir: Union[str, Path],
+        reduce_vocab_size: bool,
     ) -> Path:
         model = Eagle3Speculator(
             config=config,
             verifier=None,
             verifier_attachment_mode="detached",
+            reduce_vocab_size=reduce_vocab_size,
         )
         model.load_state_dict(weights, strict=False)  # type: ignore[attr-defined]
         weights_dtype = getattr(config.transformer_layer_config, "torch_dtype", None)

@@ -345,6 +345,7 @@ class Eagle3Speculator(SpeculatorModel):
         verifier_attachment_mode: Optional[
             Literal["detached", "full", "train_only"]
         ] = None,
+        reduce_vocab_size: bool = True,
     ):
         """
         Initialize Eagle3 speculator.
@@ -411,6 +412,19 @@ class Eagle3Speculator(SpeculatorModel):
             self.draft_vocab_size,
             bias=False,
         )
+        if reduce_vocab_size:
+            self.register_buffer(  # type: ignore[attr-defined]
+                "d2t",
+                torch.zeros(self.draft_vocab_size, dtype=torch.long),
+            )
+            self.register_buffer(  # type: ignore[attr-defined]
+                "t2d",
+                torch.zeros(self.target_vocab_size, dtype=torch.bool),
+            )
+
+            # Type hints for buffers
+            self.d2t: torch.Tensor
+            self.t2d: torch.Tensor
 
         self.post_init()  # type: ignore[attr-defined]
 
@@ -497,37 +511,6 @@ class Eagle3Speculator(SpeculatorModel):
             hidden_states=None,
             attentions=None,
         )
-
-    def compute_logits(
-        self,
-        hidden_states: torch.FloatTensor,
-        map_to_target_vocab: bool = True,
-    ) -> torch.FloatTensor:
-        """
-        Compute logits with optional vocabulary mapping.
-
-        :param hidden_states: Hidden states from the model
-        :param map_to_target_vocab: Whether to map draft logits to target vocabulary
-        :return: Logits tensor
-        """
-        logits = self.lm_head(hidden_states)
-
-        if not map_to_target_vocab:
-            return logits
-
-        batch_size, seq_length, _ = logits.shape
-
-        draft_indices = torch.arange(self.draft_vocab_size, device=logits.device)
-
-        target_indices = draft_indices + self.d2t
-
-        mapped_logits = logits.new_full(
-            (batch_size, seq_length, self.target_vocab_size), float("-inf")
-        )
-
-        mapped_logits[:, :, target_indices] = logits
-
-        return mapped_logits
 
     def tie_weights(self):
         """
