@@ -19,8 +19,6 @@ import torch
 from pydantic import Field, field_serializer, field_validator
 from torch import nn
 from transformers import PretrainedConfig, PreTrainedModel
-from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_mask
-from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.models.llama.configuration_llama import LlamaConfig
 from transformers.models.llama.modeling_llama import (
     LlamaMLP,
