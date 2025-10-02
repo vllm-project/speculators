@@ -80,7 +80,7 @@ class Eagle3Converter:
         processed_weights = self._process_checkpoint_weights(weights, base_model)
 
         saved_path = self._save_converted_checkpoint(
-            config, processed_weights, output_path, reduce_vocab_size = reduce_vocab_size
+            config, processed_weights, output_path, reduce_vocab_size
         )
         logger.success(f"Saved to: {saved_path}")
 
