@@ -412,19 +412,6 @@ class Eagle3Speculator(SpeculatorModel):
             bias=False,
         )
 
-        self.register_buffer(  # type: ignore[attr-defined]
-            "d2t",
-            torch.zeros(self.draft_vocab_size, dtype=torch.long),
-        )
-        self.register_buffer(  # type: ignore[attr-defined]
-            "t2d",
-            torch.zeros(self.target_vocab_size, dtype=torch.bool),
-        )
-
-        # Type hints for buffers
-        self.d2t: torch.Tensor
-        self.t2d: torch.Tensor
-
         self.post_init()  # type: ignore[attr-defined]
 
     def forward(
@@ -541,28 +528,6 @@ class Eagle3Speculator(SpeculatorModel):
         mapped_logits[:, :, target_indices] = logits
 
         return mapped_logits
-
-    def map_draft_to_target_tokens(
-        self, draft_tokens: torch.LongTensor
-    ) -> torch.LongTensor:
-        """
-        Map draft token IDs to target token IDs.
-
-        :param draft_tokens: Draft vocabulary token IDs
-        :return: Target vocabulary token IDs
-        """
-        return draft_tokens + self.d2t[draft_tokens]  # type: ignore[return-value]
-
-    def check_target_token_availability(
-        self, target_tokens: torch.LongTensor
-    ) -> torch.BoolTensor:
-        """
-        Check if target tokens have draft equivalents.
-
-        :param target_tokens: Target vocabulary token IDs
-        :return: Boolean mask indicating availability in draft vocabulary
-        """
-        return self.t2d[target_tokens]  # type: ignore[return-value]
 
     def tie_weights(self):
         """
