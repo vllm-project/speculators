@@ -8,7 +8,7 @@ Tests cover:
 - Validation of the conversion process
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 import torch
@@ -72,9 +72,7 @@ class TestEagle3ConverterFixes:
         """Test that midlayer.* weights are correctly remapped to layers.0.*"""
         converter = Eagle3Converter()
 
-        processed_weights = converter._process_checkpoint_weights(
-            sample_eagle3_weights
-        )
+        processed_weights = converter._process_checkpoint_weights(sample_eagle3_weights)
 
         # Check that midlayer weights are remapped
         assert "layers.0.self_attn.q_proj.weight" in processed_weights
@@ -148,10 +146,7 @@ class TestEagle3ConverterFixes:
             "t2d": torch.randn(128000, 4096),
         }
 
-
-        processed_weights = converter._process_checkpoint_weights(
-            test_weights
-        )
+        processed_weights = converter._process_checkpoint_weights(test_weights)
 
         # Verify the tensor values are exactly preserved
         remapped_down_proj = processed_weights["layers.0.mlp.down_proj.weight"]
@@ -198,9 +193,7 @@ class TestEagle3ConverterFixes:
         test_weights = sample_eagle3_weights.copy()
         test_weights["layers.0.already_correct.weight"] = torch.randn(100, 100)
 
-        processed_weights = converter._process_checkpoint_weights(
-            test_weights
-        )
+        processed_weights = converter._process_checkpoint_weights(test_weights)
 
         # Verify that layers.0.* weights are preserved as-is
         assert "layers.0.already_correct.weight" in processed_weights
