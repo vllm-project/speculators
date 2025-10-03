@@ -55,6 +55,7 @@ class Eagle3DraftModel(torch.nn.Module):
         self.verifier_lm_head = torch.nn.Linear(
             hidden_size, self.draft_vocab_size, bias=False
         )
+        self.verifier_lm_head.weight.requires_grad = False
         self.lm_head = torch.nn.Linear(hidden_size, self.draft_vocab_size, bias=False)
         # shape: [hidden_size, draft_vocab_size]
 
