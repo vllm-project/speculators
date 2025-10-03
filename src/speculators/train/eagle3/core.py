@@ -67,18 +67,48 @@ class Eagle3DraftModel(torch.nn.Module):
         )
         self.verifier_lm_head.weight.data = verifier_lm_head_data[self.t2d_vocab, :]
 
-    def loss_function(self, logits: torch.Tensor, targets: torch.Tensor):
+    def loss_function(
+        self,
+        logits: torch.Tensor,
+        targets: torch.Tensor,
+        loss_mask: torch.Tensor,
+        ttt_step: int,
+    ):
+        # We don't have target values for the last ttt_step + 1 tokens, so we mask them out on the logit side
+        # We shift the target values by ttt_step + 1 to the left because that's the position the generated tokens correspond to
+        # e.g.
+        # targets_indices = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+        # logits_indices_ttt_step_0 = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        # logits_indices_ttt_step_1 = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+        # logits_indices_ttt_step_2 = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+        # The indices for the loss_mask need to be kept in line with the targets indices
+
+        # Note: this function is written such that a batch_size > 1 is supported. This is through careful handling of the 0-th "batch dimension"
+        # However, currently the 0-th "batch dimension" is always 1 because we are packing the samples together by extending the sequence (1st) dimension.
+        # There could be a future use case for batch_size > 1, if pad and stack samples together instead of packing them.
+        logits = logits[:, : -(ttt_step + 1)]
+        targets = targets[:, (ttt_step + 1) :]
+        # logits/targets shape: [batch_size=1, total_seq_len - (ttt_step + 1), draft_vocab_size]
+        loss_mask = loss_mask[:, (ttt_step + 1) :]
+        # loss_mask shape: [batch_size=1, total_seq_len - (ttt_step + 1)]
+
         logits = torch.nn.functional.log_softmax(logits, dim=-1)
         targets = torch.nn.functional.log_softmax(targets, dim=-1)
-        return torch.nn.functional.kl_div(
-            logits, targets, reduction="sum", log_target=True
-        ) / (logits.shape[0] * logits.shape[1])
+        kl_div = torch.nn.functional.kl_div(
+            logits, targets, reduction="none", log_target=True
+        )
+        masked_kl_div = torch.sum(loss_mask.unsqueeze(-1) * kl_div, dim=(1, 2)) / (
+            loss_mask.sum(dim=1) + 1e-5
+        )
+        # shape: [batch_size=1]
+        return masked_kl_div.mean()
 
     def forward(
         self,
         hidden_states: torch.Tensor,  # shape: [1, total_seq_len, 3 * hidden_size]
         input_ids: torch.Tensor,  # shape: [1, total_seq_len]
         lengths: torch.Tensor | None = None,  # shape: [batch_size]
+        loss_mask: torch.Tensor | None = None,  # shape: [1, total_seq_len]
         verifier_last_hidden_states: torch.Tensor
         | None = None,  # shape: [1, total_seq_len, hidden_size]
         ttt_steps: int | None = None,
@@ -159,9 +189,7 @@ class Eagle3DraftModel(torch.nn.Module):
             # shape: [1, total_seq_len, draft_vocab_size]
 
             if return_loss:
-                loss += self.loss_function(
-                    logits[:, : -(ttt_step + 1)], verifier_logits[:, (ttt_step + 1) :]
-                )
+                loss += self.loss_function(logits, verifier_logits, loss_mask, ttt_step)
 
             input_ids = torch.argmax(logits, dim=-1)
             # shape: [1, total_seq_len]

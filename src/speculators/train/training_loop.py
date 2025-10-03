@@ -8,10 +8,10 @@ from torch.utils.data import DataLoader
 
 DEVICE = "cuda:0"
 EPOCHS = 10
-draft_vocab_size = 4096
+draft_vocab_size = 5000
 verifier_vocab_size = 151936
 hidden_size = 5120
-total_seq_len = 4096
+total_seq_len = 2048
 datapath = "./data"
 verifier_model_name_or_path = "Qwen/Qwen2.5-VL-7B-Instruct"
 
@@ -72,7 +72,6 @@ def train_epoch(
 
     for batch in train_loader:
         batch = {k: v.to(local_rank) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
-        del batch["loss_mask"]
 
         _, loss = model(**batch, use_off_policy_tokens=True)
         print(loss.item())
