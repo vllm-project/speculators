@@ -81,11 +81,6 @@ class Eagle3SpeculatorConfig(SpeculatorModelConfig):
         description="Layer IDs of the Eagle auxiliary hidden state layers",
     )
 
-    inference_type: Optional[str] = Field(
-        default="text",
-        description="Inference type of the speculator",
-    )
-
     @property
     def target_vocab_size(self) -> int:
         """Get target vocabulary size from transformer config."""
@@ -423,5 +418,19 @@ class Eagle3Speculator(SpeculatorModel):
             # Type hints for buffers
             self.d2t: torch.Tensor
             self.t2d: torch.Tensor
-
         self.post_init()  # type: ignore[attr-defined]
+
+    def tie_weights(self):
+        """
+        Override tie_weights to prevent vocabulary corruption in transformers 4.54.1+
+
+        Eagle3 intentionally uses different vocabulary sizes:
+        - Input embeddings (embed_tokens): 128256 (full vocabulary)
+        - Output embeddings (lm_head): 32000 (draft vocabulary)
+
+        The default tie_weights() tries to make them identical, breaking Eagle3.
+        This override preserves the intentional vocabulary size difference.
+        """
+        # Don't call super().tie_weights() - this prevents vocabulary corruption
+        # that occurs when _tie_or_clone_weights replaces lm_head.weight with
+        # embed_tokens.weight

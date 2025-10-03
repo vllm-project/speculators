@@ -27,7 +27,7 @@ from .config import (
     VerifierConfig,
     reload_and_populate_configs,
 )
-from .model import SpeculatorModel, reload_and_populate_models
+from speculators.model import SpeculatorModel, reload_and_populate_models
 
 __all__ = [
     "SpeculatorModel",
