@@ -27,17 +27,30 @@ def maybe_setup_distributed():
         return 0, 1, 0, False
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
     world_size = int(os.environ.get("WORLD_SIZE", 1))
+    rank = dist.get_rank()
+
     torch.accelerator.set_device_index(local_rank)
     acc = torch.accelerator.current_accelerator()
     backend = torch.distributed.get_default_backend_for_device(acc)
     dist.init_process_group(backend)
-    rank = dist.get_rank()
 
     print(
         f"Started DDP with local_rank={local_rank}, world_size={world_size}, rank={rank}"
     )
     return local_rank, world_size, rank, True
 
+def maybe_destroy_distributed():
+    if "LOCAL_RANK" not in os.environ:
+        # No distributed training
+        return
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    world_size = int(os.environ.get("WORLD_SIZE", 1))
+    rank = dist.get_rank()
+
+    dist.destroy_process_group()
+    print(
+        f"Destroyed DDP with local_rank={local_rank}, world_size={world_size}, rank={rank}"
+    )
 
 local_rank, world_size, rank, is_distributed = maybe_setup_distributed()
 
@@ -79,13 +92,9 @@ draft_model = Eagle3DraftModel(
     verifier_pad_token_id=151643,
     num_layers=1,
     ttt_steps=3,
-).to(DEVICE)
+)
 
 # draft_model.load_verifier_lm_head(verifier_model_name_or_path) # Doesn't work for Qwen2.5 VL, need better head loading method
-
-if is_distributed:
-    draft_model = DDP(draft_model, device_ids=[local_rank])
-opt = torch.optim.Adam(draft_model.parameters(), lr=1e-4)
 
 dataset = Eagle3SampleFileDataset(datapath=datapath, max_len=total_seq_len)
 batch_sampler = MultipackDistributedBatchSamplerV2(
@@ -103,96 +112,107 @@ train_loader = DataLoader(
 )
 
 
-def save_checkpoint(
-    model: torch.nn.Module, optimizer: torch.optim.Optimizer, save_path: str, epoch: int
-):
-    os.makedirs(save_path, exist_ok=True)
-    save_path = f"{save_path}/checkpoint_epoch_{epoch}.pth"
-    torch.save(
-        {
-            "model_state_dict": model.state_dict(),
-            "optimizer_state_dict": optimizer.state_dict(),
-            "epoch": epoch,
-        },
-        save_path,
-    )
-    log_rank0(f"Checkpoint saved to {save_path}")
+# todo: make config better
+config = {
+    "num_epochs": EPOCHS,
+    "save_path": "./checkpoints",
+    "lr": 1e-4,
+    "total_seq_len": 4096,
+    "datapath": "./data",
+}
 
 
-def train_epoch(
-    model: torch.nn.Module,
-    train_loader: DataLoader,
-    val_laoder: DataLoader,
-    opt: torch.optim.Optimizer,
-    epoch: int,
-    local_rank: int,
-    is_distributed: bool,
-):
-    model.train()
+class Trainer:
+    def __init__(
+        self,
+        model: torch.nn.Module,
+        config: dict,
+        train_loader: DataLoader,
+        val_loader: DataLoader | None = None,
+        is_distributed: bool = False,
+        local_rank: int = 0,
+        world_size: int = 1,
+    ):
+        self.model = model
+        self.config = config
+        self.train_loader = train_loader
+        self.val_loader = val_loader
+        self.is_distributed = is_distributed
+        self.local_rank = local_rank
+        self.world_size = world_size
 
-    if local_rank == 0:
-        train_loader = tqdm(train_loader, desc=f"Epoch {epoch}")
+        self.setup_model()
+        self.setup_optimizer()
 
-    for batch in train_loader:
-        batch = {
-            k: v.to(local_rank) if isinstance(v, torch.Tensor) else v
-            for k, v in batch.items()
-        }
+    def setup_model(self):
+        self.model = self.model.to(self.local_rank)
+        if self.is_distributed:
+            self.model = DDP(self.model, device_ids=[self.local_rank])
 
-        _, loss = model(**batch, use_off_policy_tokens=True)
-        opt.zero_grad()
-        loss.backward()
-        opt.step()
+    def setup_optimizer(self):
+        self.opt = torch.optim.Adam(self.model.parameters(), lr=self.config["lr"])
 
-        loss = loss.detach().clone()
-        if is_distributed:
-            # Note: this is not needed for training, just for logging
-            dist.reduce(loss, dst=0, op=dist.ReduceOp.AVG)
+    def train_epoch(self, epoch: int):
+        self.model.train()
+        self.train_loader.batch_sampler.set_epoch(
+            epoch
+        )  # todo: check if this is safe to call
 
-        log_rank0(loss.item())
-
-
-def train(
-    model: torch.nn.Module,
-    train_loader: DataLoader,
-    val_loader: DataLoader,
-    opt: torch.optim.Optimizer,
-    epochs: int,
-    local_rank: int,
-    is_distributed: bool,
-    save_path: str,
-):
-    for epoch in range(epochs):
-        train_epoch(
-            model, train_loader, val_loader, opt, epoch, local_rank, is_distributed
-        )
-
-        if is_distributed:
-            dist.barrier()
-
-        log_rank0(f"Epoch {epoch} completed")
         if local_rank == 0:
-            save_checkpoint(model, opt, save_path, epoch)
+            train_loader = tqdm(self.train_loader, desc=f"Epoch {epoch}")
+        else:
+            train_loader = self.train_loader
 
-    log_rank0(f"Training completed")
+        for batch in train_loader:
+            batch = {
+                k: v.to(local_rank) if isinstance(v, torch.Tensor) else v
+                for k, v in batch.items()
+            }
+
+            _, loss = self.model(
+                **batch, use_off_policy_tokens=True
+            )  # set this in a better way
+
+            self.opt.zero_grad()
+            loss.backward()
+            self.opt.step()
+
+            loss = loss.detach().clone()
+            if self.is_distributed:
+                # Note: this is not needed for training, just for logging
+                dist.reduce(loss, dst=0, op=dist.ReduceOp.AVG)
+
+            log_rank0(loss.item())
+
+    def save_checkpoint(self, epoch: int):
+        os.makedirs(save_path, exist_ok=True)
+        save_path = f"{save_path}/checkpoint_epoch_{epoch}.pth"
+        torch.save(
+            {
+                "model_state_dict": self.model.state_dict(),
+                "optimizer_state_dict": self.opt.state_dict(),
+                "epoch": epoch,
+            },
+            save_path,
+        )
+        log_rank0(f"Checkpoint saved to {save_path}")
+
+    def train(self):
+        for epoch in range(self.config["num_epochs"]):
+            self.train_epoch(epoch)
+            if self.is_distributed:
+                dist.barrier()
+            log_rank0(f"Epoch {epoch} completed")
+            if self.local_rank == 0:
+                self.save_checkpoint(epoch)
 
 
-train(
-    draft_model,
-    train_loader,
-    None,
-    opt,
-    EPOCHS,
-    local_rank,
-    is_distributed,
-    "./checkpoints",
+trainer = Trainer(
+    draft_model, config, train_loader, None, is_distributed, local_rank, world_size
 )
+trainer.train()
 
-if is_distributed:
-    dist.destroy_process_group()
-    print(
-        f"Destroyed DDP with local_rank={local_rank}, world_size={world_size}, rank={rank}"
-    )
+maybe_destroy_distributed()
 
 
 # RUN WITH:
