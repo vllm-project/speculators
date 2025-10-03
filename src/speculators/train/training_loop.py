@@ -5,9 +5,15 @@ from transformers import LlamaConfig
 from speculators.train.eagle3.core import Eagle3DraftModel
 from speculators.train.data import Eagle3SampleFileDataset, create_collate_fn
 from torch.utils.data import DataLoader
+from tqdm.rich import tqdm # todo: requries tqdm and rich
 
 from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.distributed as dist
+
+def log_rank0(message):
+    if local_rank != 0:
+        return
+    print(message)
 
 def maybe_setup_distributed():
     # Based off of https://docs.pytorch.org/tutorials/intermediate/ddp_tutorial.html#initialize-ddp-with-torch-distributed-run-torchrun
@@ -83,6 +89,16 @@ train_loader = DataLoader(
     collate_fn=create_collate_fn(total_seq_len),
 )
 
+def save_checkpoint(model: torch.nn.Module, optimizer: torch.optim.Optimizer, save_path: str, epoch: int):
+    os.makedirs(save_path, exist_ok=True)
+    save_path = f'{save_path}/model_{epoch}.pth'
+    torch.save({
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'epoch': epoch,
+    }, save_path)
+    log_rank0(f'Checkpoint saved to {save_path}')
+
 
 def train_epoch(
     model: torch.nn.Module,
@@ -94,6 +110,9 @@ def train_epoch(
     is_distributed: bool,
 ):
     model.train()
+
+    if local_rank == 0:
+        train_loader = tqdm(train_loader, desc=f'Epoch {epoch}')
 
     for batch in train_loader:
         batch = {k: v.to(local_rank) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
@@ -108,13 +127,24 @@ def train_epoch(
             # Note: this is not needed for training, just for logging
             dist.reduce(loss, dst=0, op=dist.ReduceOp.AVG)
 
+        log_rank0(loss.item())
+
+
+def train(model: torch.nn.Module, train_loader: DataLoader, val_loader: DataLoader, opt: torch.optim.Optimizer, epochs: int, local_rank: int, is_distributed: bool, save_path: str):
+    for epoch in range(epochs):
+        train_epoch(model, train_loader, val_loader, opt, epoch, local_rank, is_distributed)
+
+        if is_distributed:
+            dist.barrier()
+
+        log_rank0(f'Epoch {epoch} completed')
         if local_rank == 0:
-            print(loss.item())
+            save_checkpoint(model, opt, save_path, epoch)
+
+    log_rank0(f'Training completed')
 
 
-
-for epoch in range(EPOCHS):
-    train_epoch(draft_model, train_loader, None, opt, epoch, local_rank, is_distributed)
+train(draft_model, train_loader, None, opt, EPOCHS, local_rank, is_distributed, "./checkpoints")
 
 if is_distributed:
     dist.destroy_process_group()
