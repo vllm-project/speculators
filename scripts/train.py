@@ -78,7 +78,7 @@ config = {
     "num_epochs": EPOCHS,
     "save_path": "./checkpoints",
     "lr": 1e-4,
-    "total_seq_len": 4096,
+    "total_seq_len": total_seq_len,
     "datapath": "./data",
 }
 
