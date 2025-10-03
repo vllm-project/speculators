@@ -22,18 +22,14 @@ def compute_draft_accuracy(
     draft_tokens: list[torch.Tensor],
     loss_mask: torch.Tensor | None = None,
 ):
-    # target_logits.shape: [batch_size, total_seq_len, draft_vocab_size]
-    # draft_tokens[i].shape: [batch_size, total_seq_len]
-    # loss_mask.shape: [batch_size, total_seq_len]
-
     accuracies = []
     target_tokens = torch.argmax(target_logits, dim=-1)
     # shape: [batch_size, total_seq_len]
 
     for step, drafts in enumerate(draft_tokens):
-        correct = target_tokens[:, (step + 1) :] == drafts[:, : -(step + 1)]
+        correct = target_tokens[:, step:] == (drafts[:, : -step] if step > 0 else drafts)
         if loss_mask is not None:
-            correct = correct[:, loss_mask[:, (step + 1) :]]
+            correct = correct[:, loss_mask[:, step:]]
         accuracies.append(correct.float().mean())
 
     return torch.tensor(accuracies, device=target_logits.device)
