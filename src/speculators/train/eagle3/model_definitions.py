@@ -38,6 +38,7 @@ class LlamaConcatInputDecoderLayer(LlamaDecoderLayer):
                 2 * config.hidden_size,  # previous: config.hidden_size
                 eps=config.rms_norm_eps,
             )
+        self.layer_idx = layer_idx
         ##### CHANGES END #####
 
     def forward(
@@ -55,7 +56,10 @@ class LlamaConcatInputDecoderLayer(LlamaDecoderLayer):
     ) -> torch.Tensor:
         ##### CHANGES START #####
         # previous: residual = hidden_states
-        residual = hidden_states[:, :, hidden_states.shape[2] // 2 :]
+        if self.layer_idx == 0:
+            residual = hidden_states[:, :, hidden_states.shape[2] // 2 :]
+        else:
+            residual = hidden_states
         ##### CHANGES END #####
 
         hidden_states = self.input_layernorm(hidden_states)

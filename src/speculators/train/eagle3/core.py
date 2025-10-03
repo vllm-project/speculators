@@ -56,8 +56,8 @@ class Eagle3DraftModel(torch.nn.Module):
         self.num_layers = num_layers
         self.decoder_layer_config = decoder_layer_config
         self.ttt_steps = ttt_steps
-        self.t2d_vocab = t2d_vocab  # shape: [verifier_vocab_size], bool
-        self.d2t_vocab = d2t_vocab  # shape: [draft_vocab_size], int offsets
+        self.register_buffer("t2d_vocab", t2d_vocab) # shape: [verifier_vocab_size], bool
+        self.register_buffer("d2t_vocab", d2t_vocab) # shape: [draft_vocab_size], int offsets
         self.draft_vocab_size = t2d_vocab.sum(dtype=torch.long).item()
         model_definitions = model_classes[decoder_layer_config.model_type]
 
