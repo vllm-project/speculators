@@ -86,28 +86,28 @@ class Eagle3DraftModel(torch.nn.Module):
 
     def loss_function(
         self,
-        logits: torch.Tensor,
-        targets: torch.Tensor,
-        loss_mask: torch.Tensor,
+        logits: torch.Tensor, # shape: [batch_size=1, total_seq_len, draft_vocab_size]
+        targets: torch.Tensor, # shape: [batch_size=1, total_seq_len, draft_vocab_size]
+        loss_mask: torch.Tensor, # shape: [batch_size=1, total_seq_len]
         ttt_step: int,
     ):
-        # We don't have target values for the last ttt_step + 1 tokens, so we mask them out on the logit side
+        # We don't have target values for the last ttt_step tokens, so we mask them out on the logit side
         # We shift the target values by ttt_step + 1 to the left because that's the position the generated tokens correspond to
         # e.g.
-        # targets_indices = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-        # logits_indices_ttt_step_0 = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-        # logits_indices_ttt_step_1 = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
-        # logits_indices_ttt_step_2 = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+        # targets_indices = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+        # logits_indices_ttt_step_0 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+        # logits_indices_ttt_step_1 = [2, 3, 4, 5, 6, 7, 8, 9, 10]
+        # logits_indices_ttt_step_2 = [3, 4, 5, 6, 7, 8, 9, 10, 11]
         # The indices for the loss_mask need to be kept in line with the targets indices
 
         # Note: this function is written such that a batch_size > 1 is supported. This is through careful handling of the 0-th "batch dimension"
         # However, currently the 0-th "batch dimension" is always 1 because we are packing the samples together by extending the sequence (1st) dimension.
         # There could be a future use case for batch_size > 1, if pad and stack samples together instead of packing them.
-        logits = logits[:, : -(ttt_step + 1)]
-        targets = targets[:, (ttt_step + 1) :]
-        # logits/targets shape: [batch_size=1, total_seq_len - (ttt_step + 1), draft_vocab_size]
-        loss_mask = loss_mask[:, (ttt_step + 1) :]
-        # loss_mask shape: [batch_size=1, total_seq_len - (ttt_step + 1)]
+        logits = logits[:, :-ttt_step] if ttt_step > 0 else logits
+        targets = targets[:, ttt_step:]
+        # logits/targets shape: [batch_size=1, total_seq_len - ttt_step, draft_vocab_size]
+        loss_mask = loss_mask[:, ttt_step:]
+        # loss_mask shape: [batch_size=1, total_seq_len - ttt_step]
 
         logits = torch.nn.functional.log_softmax(logits, dim=-1)
         targets = torch.nn.functional.log_softmax(targets, dim=-1)
@@ -126,6 +126,7 @@ class Eagle3DraftModel(torch.nn.Module):
         input_ids: torch.Tensor,  # shape: [1, total_seq_len]
         lengths: torch.Tensor | None = None,  # shape: [batch_size]
         loss_mask: torch.Tensor | None = None,  # shape: [1, total_seq_len]
+        position_ids: torch.Tensor | None = None,  # shape: [1, total_seq_len]
         target_logits: torch.Tensor
         | None = None,  # shape: [1, total_seq_len, draft_vocab_size]
         ttt_steps: int | None = None,
@@ -142,18 +143,6 @@ class Eagle3DraftModel(torch.nn.Module):
             lengths = torch.tensor([total_seq_len], dtype=torch.long, device=device)
 
         past_key_values = DynamicCache(config=self.decoder_layer_config)
-        position_ids = (
-            torch.cat(
-                [
-                    torch.arange(length, dtype=torch.long, device=device)
-                    for length in lengths
-                ],
-                dim=0,
-            )
-            .unsqueeze(0)
-            .contiguous()
-        )
-        # shape: [1, total_seq_len]
 
         combined_mask_mod = create_combined_mask_mod(lengths.to(device))
         block_mask = create_block_mask(
@@ -170,6 +159,8 @@ class Eagle3DraftModel(torch.nn.Module):
 
         if return_loss:
             loss = torch.tensor(0.0, device=device)
+
+        original_input_ids = input_ids.detach().clone()
 
         draft_tokens = []
         for ttt_step in range(ttt_steps):
@@ -220,7 +211,7 @@ class Eagle3DraftModel(torch.nn.Module):
                 # note: inputs_ids will no longer line up with verifier_last_hidden_state
                 # the draft logits generated from the padded tokens are ignored sliced out for loss calculation
                 input_ids = torch.cat(
-                    [input_ids[:, 1:], input_ids.new_zeros(1, 1)], dim=-1
+                    [original_input_ids[:, 1:], original_input_ids.new_zeros(1, 1)], dim=-1
                 )
                 # shape: [1, total_seq_len]
 
