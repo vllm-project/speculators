@@ -14,8 +14,10 @@ from torch.distributed.checkpoint.state_dict import (
 
 
 import torch.distributed as dist
+import logging
 
-from speculators.train.utils import log_rank0
+root_logger = logging.getLogger("speculators")
+metric_logger = logging.getLogger("speculators.metrics")
 
 
 @torch.no_grad()
@@ -177,6 +179,7 @@ class Trainer:
 
     def setup_trainer(self):
         self.current_epoch = self.checkpointer.previous_epoch + 1
+        self.global_step = 0
 
     def setup_model(self):
         if self.is_distributed:
@@ -210,8 +213,7 @@ class Trainer:
             train_loader = tqdm(self.train_loader, desc=f"Epoch {epoch}")
         else:
             train_loader = self.train_loader
-
-        log_rank0(f"Training Epoch {epoch} started")
+        root_logger.info(f"Training Epoch {epoch} started")
 
         for batch in train_loader:
             batch = {
@@ -239,14 +241,20 @@ class Trainer:
                 dist.reduce(loss, dst=0, op=dist.ReduceOp.AVG)
                 dist.reduce(draft_accuracies, dst=0, op=dist.ReduceOp.AVG)
 
-            log_rank0(loss.item())
-            log_rank0(draft_accuracies.tolist())
+            acc_values = {
+                f"acc_{i}": acc.item() for i, acc in enumerate(draft_accuracies)
+            }
+            metric_logger.info(
+                {"train": {"loss": loss.item(), **acc_values}, "epoch": epoch},
+                extra={"step": self.global_step},
+            )
+            self.global_step += 1
 
-        log_rank0(f"Training Epoch {epoch} completed")
+        root_logger.info(f"Training Epoch {epoch} completed")
 
     def val_epoch(self, epoch: int):
         if self.val_loader is None:
-            log_rank0("No val loader, skipping validation")
+            root_logger.warning("No val loader, skipping validation")
             return
         self.model.eval()
         self.val_loader.batch_sampler.set_epoch(epoch)
@@ -256,9 +264,9 @@ class Trainer:
         else:
             val_loader = self.val_loader
 
-        log_rank0(f"Validation Epoch {epoch} started")
+        root_logger.info(f"Validation Epoch {epoch} started")
 
-        for batch in val_loader:
+        for i, batch in enumerate(val_loader):
             batch = {
                 k: v.to(self.local_rank) if isinstance(v, torch.Tensor) else v
                 for k, v in batch.items()
@@ -278,14 +286,19 @@ class Trainer:
                 dist.reduce(val_loss, dst=0, op=dist.ReduceOp.AVG)
                 dist.reduce(draft_accuracies, dst=0, op=dist.ReduceOp.AVG)
 
-            log_rank0(val_loss.item())
-            log_rank0(draft_accuracies.tolist())
+            # todo: Accumulate these values across the epoch and then log at the end of the epoch
+            acc_values = {
+                f"acc_{i}": acc.item() for i, acc in enumerate(draft_accuracies)
+            }
+            metric_logger.info(
+                {"val": {"loss": val_loss.item(), **acc_values}}, extra={"step": i}
+            )
 
-        log_rank0(f"Validation Epoch {epoch} completed")
+        root_logger.info(f"Validation Epoch {epoch} completed")
 
     def save_checkpoint(self, epoch: int):
         self.checkpointer.save_checkpoint(self.model, self.opt, epoch)
-        log_rank0(f"Checkpoint saved to {self.checkpointer.path / str(epoch)}")
+        root_logger.info(f"Checkpoint saved to {self.checkpointer.path / str(epoch)}")
 
     def run_training(self):
         for epoch in range(self.current_epoch, self.config["num_epochs"]):

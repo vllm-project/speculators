@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader
 
 from speculators.train.utils import maybe_setup_distributed, maybe_destroy_distributed
 from speculators.train.trainer import Trainer
+from speculators.train.logger import setup_metric_logger, setup_root_logger
 
 
 local_rank, world_size, rank, is_distributed = maybe_setup_distributed()
@@ -40,6 +41,9 @@ t2d_vocab = (
     .to(torch.bool)
     .to(DEVICE)
 )
+
+setup_metric_logger(loggers=[], run_name=None)
+setup_root_logger()
 # END TEMP MODEL SETUP
 
 draft_model = Eagle3DraftModel(
@@ -53,7 +57,9 @@ draft_model = Eagle3DraftModel(
     ttt_steps=3,
 )
 
-verifier_lm_head = Eagle3VerifierLMHead(hidden_size=hidden_size, draft_vocab_size=draft_vocab_size)
+verifier_lm_head = Eagle3VerifierLMHead(
+    hidden_size=hidden_size, draft_vocab_size=draft_vocab_size
+)
 # verifier_lm_head.load_verifier_lm_head(verifier_model_name_or_path, t2d_vocab) # Doesn't work for Qwen2.5 VL, need better head loading method
 
 dataset = Eagle3SampleFileDataset(datapath=datapath, max_len=total_seq_len)
@@ -84,7 +90,14 @@ config = {
 
 
 trainer = Trainer(
-    draft_model, verifier_lm_head, config, train_loader, None, is_distributed, local_rank, world_size
+    draft_model,
+    verifier_lm_head,
+    config,
+    train_loader,
+    None,
+    is_distributed,
+    local_rank,
+    world_size,
 )
 trainer.run_training()
 
