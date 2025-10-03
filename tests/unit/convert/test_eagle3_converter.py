@@ -72,20 +72,9 @@ class TestEagle3ConverterFixes:
         """Test that midlayer.* weights are correctly remapped to layers.0.*"""
         converter = Eagle3Converter()
 
-        # Mock only the embeddings addition, let the remapping happen naturally
-        with patch.object(converter, "_add_verifier_embeddings") as mock_add_embeddings:
-            # Mock should preserve the remapped weights and just add embeddings
-            def mock_add_embeddings_func(weights, base_model):
-                # Just add a fake embedding and return
-                weights_copy = weights.copy()
-                weights_copy["embed_tokens.weight"] = torch.randn(128256, 4096)
-                return weights_copy
-
-            mock_add_embeddings.side_effect = mock_add_embeddings_func
-
-            processed_weights = converter._process_checkpoint_weights(
-                sample_eagle3_weights, "meta-llama/Llama-3.1-8B"
-            )
+        processed_weights = converter._process_checkpoint_weights(
+            sample_eagle3_weights, "meta-llama/Llama-3.1-8B"
+        )
 
         # Check that midlayer weights are remapped
         assert "layers.0.self_attn.q_proj.weight" in processed_weights
@@ -101,61 +90,6 @@ class TestEagle3ConverterFixes:
         original_q_proj = sample_eagle3_weights["midlayer.self_attn.q_proj.weight"]
         remapped_q_proj = processed_weights["layers.0.self_attn.q_proj.weight"]
         assert torch.equal(original_q_proj, remapped_q_proj)
-
-    @pytest.mark.smoke
-    @patch(
-        "speculators.convert.eagle.eagle3_converter.AutoModelForCausalLM.from_pretrained"
-    )
-    def test_embeddings_replacement_with_verifier(self, mock_from_pretrained):
-        """Test that embeddings are always replaced with verifier embeddings."""
-        # Create a mock model with seeded embeddings for deterministic testing
-        mock_model = MagicMock()
-        mock_embeddings = MagicMock()
-
-        # Use seeded random generator for deterministic but realistic embeddings
-        torch.manual_seed(42)
-        verifier_embeddings = torch.randn(128256, 4096)
-        mock_embeddings.weight.data = verifier_embeddings
-        mock_model.model.embed_tokens = mock_embeddings
-        mock_from_pretrained.return_value = mock_model
-
-        converter = Eagle3Converter()
-
-        # Use a different seed for original embeddings to ensure they're different
-        torch.manual_seed(123)
-        original_weights = {
-            "embed_tokens.weight": torch.randn(
-                128000, 4096
-            ),  # Different seed = different values
-            "other.weight": torch.randn(100, 100),
-        }
-
-        # Store original for comparison
-        original_embeddings = original_weights["embed_tokens.weight"].clone()
-
-        processed_weights = converter._add_verifier_embeddings(
-            original_weights, "meta-llama/Llama-3.1-8B"
-        )
-
-        # Debug: Check if mock was called
-        mock_from_pretrained.assert_called_once_with(
-            "meta-llama/Llama-3.1-8B", torch_dtype=torch.float32
-        )
-
-        # Check that embeddings were replaced (not equal to original)
-        assert not torch.equal(
-            original_embeddings, processed_weights["embed_tokens.weight"]
-        )
-
-        # Check that new embeddings match verifier
-        assert torch.equal(
-            processed_weights["embed_tokens.weight"], verifier_embeddings
-        )
-
-        # Check that other weights are preserved
-        assert torch.equal(
-            original_weights["other.weight"], processed_weights["other.weight"]
-        )
 
     @pytest.mark.sanity
     @patch(
