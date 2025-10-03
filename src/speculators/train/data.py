@@ -1,3 +1,5 @@
+from functools import lru_cache
+import math
 import os
 from typing import Any
 
@@ -65,6 +67,19 @@ class Eagle3SampleFileDataset(Dataset):
 
     def __len__(self):
         return len(self.data)
+
+    @lru_cache(maxsize=1)
+    def approx_lengths(self):
+        lengths_0 = self.__getitem__(0)["lengths"]
+        # this is a single sample so there is only one length
+        lengths_0 = lengths_0[0].item()
+        size_0 = os.path.getsize(self.data[0])
+
+        approx_lengths = [
+            math.ceil(os.path.getsize(fname) / size_0 * lengths_0)
+            for fname in self.data
+        ]
+        return approx_lengths
 
     def __getitem__(self, index) -> BatchType:
         data = torch.load(self.data[index])
