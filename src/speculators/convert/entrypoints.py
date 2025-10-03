@@ -76,7 +76,7 @@ def convert_model(
     :param output_path: Directory path where the converted model will be saved.
     :param kwargs: Additional keyword arguments for the conversion algorithm.
         Options for Eagle: {"layernorms": true, "fusion_bias": true}.
-        Options for Eagle3: {"norm_before_residual": true, "inference_type": "text",
+        Options for Eagle3: {"norm_before_residual": true,
         "eagle_aux_hidden_state_layer_ids": [1,23,44]}.
     """
 

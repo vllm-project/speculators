@@ -35,7 +35,6 @@ class Eagle3Converter:
         base_model: str,
         validate: bool = True,
         norm_before_residual: bool = False,
-        inference_type: Optional[str] = None,
         eagle_aux_hidden_state_layer_ids: Optional[list[int]] = None,
         cache_dir: Optional[Union[str, Path]] = None,
     ) -> None:
@@ -72,7 +71,6 @@ class Eagle3Converter:
             eagle_config,
             base_model,
             norm_before_residual,
-            inference_type,
             eagle_aux_hidden_state_layer_ids,
         )
 
@@ -180,7 +178,6 @@ class Eagle3Converter:
         eagle_config: dict,
         base_model: str,
         norm_before_residual: bool = False,
-        inference_type: Optional[str] = None,
         eagle_aux_hidden_state_layer_ids: Optional[list[int]] = None,
     ) -> Eagle3SpeculatorConfig:
         transformer_config = self._create_transformer_config_from_eagle(
@@ -206,7 +203,6 @@ class Eagle3Converter:
             draft_vocab_size=eagle_config.get("draft_vocab_size", 32000),
             norm_before_residual=norm_before_residual,
             target_hidden_size=eagle_config.get("target_hidden_size"),
-            inference_type=inference_type,
             eagle_aux_hidden_state_layer_ids=eagle_aux_hidden_state_layer_ids,
         )
 
