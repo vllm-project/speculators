@@ -11,6 +11,31 @@ from speculators.train.eagle3.attention import (
 from speculators.train.eagle3.model_definitions import model_classes
 
 
+class Eagle3VerifierLMHead(torch.nn.Module):
+    def __init__(self, hidden_size: int, draft_vocab_size: int):
+        super().__init__()
+        self.lm_head = torch.nn.Linear(hidden_size, draft_vocab_size, bias=False)
+        self.lm_head.weight.requires_grad = False
+
+    def load_verifier_lm_head(
+        self, verifier_model_name_or_path: str, t2d_vocab: torch.Tensor
+    ):
+        verifier_model = AutoModelForCausalLM.from_pretrained(
+            verifier_model_name_or_path
+        )
+        verifier_lm_head_data = verifier_model.lm_head.weight.data.to(t2d_vocab.device)
+        trucated_data = verifier_lm_head_data[t2d_vocab, :]
+        if trucated_data.shape[0] != self.lm_head.weight.shape[0]:
+            raise ValueError(
+                f"Truncated verifier lm head data shape {trucated_data.shape} does not match draft lm head shape {self.lm_head.weight.shape}"
+            )
+        self.lm_head.weight.data = trucated_data
+
+    @torch.no_grad()
+    def forward(self, verifier_last_hidden_states: torch.Tensor):
+        return self.lm_head(verifier_last_hidden_states)
+
+
 class Eagle3DraftModel(torch.nn.Module):
     def __init__(
         self,
@@ -52,21 +77,8 @@ class Eagle3DraftModel(torch.nn.Module):
         )
         # shape: [verifier_vocab_size, hidden_size]
 
-        self.verifier_lm_head = torch.nn.Linear(
-            hidden_size, self.draft_vocab_size, bias=False
-        )
-        self.verifier_lm_head.weight.requires_grad = False
         self.lm_head = torch.nn.Linear(hidden_size, self.draft_vocab_size, bias=False)
         # shape: [hidden_size, draft_vocab_size]
-
-    def load_verifier_lm_head(self, verifier_model_name_or_path: str):
-        verifier_model = AutoModelForCausalLM.from_pretrained(
-            verifier_model_name_or_path
-        )
-        verifier_lm_head_data = verifier_model.lm_head.weight.data.to(
-            self.t2d_vocab.device
-        )
-        self.verifier_lm_head.weight.data = verifier_lm_head_data[self.t2d_vocab, :]
 
     def loss_function(
         self,
@@ -110,15 +122,15 @@ class Eagle3DraftModel(torch.nn.Module):
         input_ids: torch.Tensor,  # shape: [1, total_seq_len]
         lengths: torch.Tensor | None = None,  # shape: [batch_size]
         loss_mask: torch.Tensor | None = None,  # shape: [1, total_seq_len]
-        verifier_last_hidden_states: torch.Tensor
-        | None = None,  # shape: [1, total_seq_len, hidden_size]
+        target_logits: torch.Tensor
+        | None = None,  # shape: [1, total_seq_len, draft_vocab_size]
         ttt_steps: int | None = None,
         use_off_policy_tokens: bool = False,
         **kwargs,
     ):
         device = hidden_states.device
         total_seq_len = hidden_states.shape[1]
-        return_loss = verifier_last_hidden_states is not None
+        return_loss = target_logits is not None
 
         if ttt_steps is None:
             ttt_steps = self.ttt_steps
@@ -153,7 +165,6 @@ class Eagle3DraftModel(torch.nn.Module):
         # shape: [1, total_seq_len, hidden_size]
 
         if return_loss:
-            verifier_logits = self.verifier_lm_head(verifier_last_hidden_states)
             loss = torch.tensor(0.0, device=device)
 
         draft_tokens = []
@@ -190,14 +201,14 @@ class Eagle3DraftModel(torch.nn.Module):
             # shape: [1, total_seq_len, draft_vocab_size]
 
             if return_loss:
-                loss += self.loss_function(logits, verifier_logits, loss_mask, ttt_step)
+                loss += self.loss_function(logits, target_logits, loss_mask, ttt_step)
 
             input_ids = torch.argmax(logits, dim=-1)
+            draft_tokens.append(input_ids.detach().clone())
             # shape: [1, total_seq_len]
             # Use d2t to map draft tokens to verifier tokens.
             # Must be in verifier vocabulary space because we use full verifier vocabulary in embedding
             input_ids = input_ids + self.d2t_vocab[input_ids]
-            draft_tokens.append(input_ids)
 
             if use_off_policy_tokens:
                 # Overwrite input_ids with ground truth tokens

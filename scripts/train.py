@@ -1,7 +1,7 @@
 import torch
 from transformers import LlamaConfig
 
-from speculators.train.eagle3.core import Eagle3DraftModel
+from speculators.train.eagle3.core import Eagle3DraftModel, Eagle3VerifierLMHead
 from speculators.train.data import Eagle3SampleFileDataset, create_collate_fn
 from speculators.train.distributed_batch_sampler import (
     MultipackDistributedBatchSamplerV2,
@@ -20,7 +20,7 @@ EPOCHS = 10
 draft_vocab_size = 5000
 verifier_vocab_size = 151936
 hidden_size = 5120
-total_seq_len = 2048
+total_seq_len = 4096
 datapath = "./data"
 verifier_model_name_or_path = "Qwen/Qwen2.5-VL-7B-Instruct"
 
@@ -54,7 +54,8 @@ draft_model = Eagle3DraftModel(
     ttt_steps=3,
 )
 
-# draft_model.load_verifier_lm_head(verifier_model_name_or_path) # Doesn't work for Qwen2.5 VL, need better head loading method
+verifier_lm_head = Eagle3VerifierLMHead(hidden_size=hidden_size, draft_vocab_size=draft_vocab_size)
+# verifier_lm_head.load_verifier_lm_head(verifier_model_name_or_path, t2d_vocab) # Doesn't work for Qwen2.5 VL, need better head loading method
 
 dataset = Eagle3SampleFileDataset(datapath=datapath, max_len=total_seq_len)
 batch_sampler = MultipackDistributedBatchSamplerV2(
@@ -83,9 +84,9 @@ config = {
 
 
 trainer = Trainer(
-    draft_model, config, train_loader, None, is_distributed, local_rank, world_size
+    draft_model, verifier_lm_head, config, train_loader, None, is_distributed, local_rank, world_size
 )
-trainer.train()
+trainer.run_training()
 
 maybe_destroy_distributed()
 
