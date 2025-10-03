@@ -111,7 +111,6 @@ def _assign_to_packed_batches(
             # Break and drop whatever lengths we have left
             break
 
-
         # binary search in [1, 1 + upper bound for x)
         left = 1
         right = 1 + np.searchsorted(

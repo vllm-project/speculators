@@ -42,7 +42,7 @@ t2d_vocab = (
     .to(DEVICE)
 )
 
-setup_metric_logger(loggers=[], run_name=None)
+setup_metric_logger(loggers=[], run_name=None, output_dir="./logs")
 setup_root_logger()
 # END TEMP MODEL SETUP
 
