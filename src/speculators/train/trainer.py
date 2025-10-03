@@ -1,9 +1,18 @@
 import os
+from pathlib import Path
 import torch
+from torch.distributed.fsdp import FSDPModule, fully_shard, MixedPrecisionPolicy
 from torch.utils.data import DataLoader
 from tqdm.rich import tqdm  # todo: requries tqdm and rich
+from torch.distributed.checkpoint.state_dict import (
+    get_model_state_dict,
+    get_optimizer_state_dict,
+    set_model_state_dict,
+    set_optimizer_state_dict,
+    StateDictOptions,
+)
 
-from torch.nn.parallel import DistributedDataParallel as DDP
+
 import torch.distributed as dist
 
 from speculators.train.utils import log_rank0
@@ -32,6 +41,111 @@ def compute_draft_accuracy(
     return torch.tensor(accuracies, device=target_logits.device)
 
 
+class Checkpointer:
+    """Helper class to save and load checkpoints.
+
+    Checkpoint file structure:
+    ../path/
+        0/ # epoch number
+            model_state_dict.pt
+            optimizer_state_dict.pt
+        1/
+            model_state_dict.pt
+            optimizer_state_dict.pt
+        ...
+    """
+
+    model_fname = "model_state_dict.pt"
+    optimizer_fname = "optimizer_state_dict.pt"
+
+    def __init__(self, path: Path | str, try_load_last_checkpoint: bool = True):
+        self.path = Path(path)
+        if try_load_last_checkpoint:
+            self.previous_epoch: int = self._get_previous_epoch()
+        else:
+            self.previous_epoch: int = -1
+
+    def _get_previous_epoch(self) -> int:
+        if not self.path.exists():
+            return -1
+        last_checkpoint_num = -1
+        for d in self.path.iterdir():
+            if d.is_dir():
+                try:
+                    last_checkpoint_num = max(last_checkpoint_num, int(d.name))
+                except ValueError:
+                    continue
+        return last_checkpoint_num
+
+    def load_model_state_dict(self, model: torch.nn.Module):
+        full_state_dict = torch.load(
+            self.path / str(self.previous_epoch) / self.model_fname,
+            mmap=True,
+            weights_only=True,
+            map_location="cpu",
+        )
+        set_model_state_dict(
+            model,
+            full_state_dict,
+            options=StateDictOptions(full_state_dict=True, broadcast_from_rank0=True),
+        )
+        dist.barrier()
+
+    def load_optimizer_state_dict(self, model, optimizer: torch.optim.Optimizer):
+        full_state_dict = torch.load(
+            self.path / str(self.previous_epoch) / self.optimizer_fname,
+            mmap=True,
+            weights_only=True,
+            map_location="cpu",
+        )
+        set_optimizer_state_dict(
+            model,
+            optimizer,
+            full_state_dict,
+            options=StateDictOptions(full_state_dict=True, broadcast_from_rank0=True),
+        )
+        dist.barrier()
+
+    def save_checkpoint(
+        self, model: torch.nn.Module, optimizer: torch.optim.Optimizer, epoch: int
+    ):
+        model_state_dict = get_model_state_dict(
+            model, options=StateDictOptions(full_state_dict=True, cpu_offload=True)
+        )
+        optimizer_state_dict = get_optimizer_state_dict(
+            model,
+            optimizer,
+            options=StateDictOptions(full_state_dict=True, cpu_offload=True),
+        )
+
+        if dist.get_rank() == 0:
+            # Only rank 0 saves the checkpoint
+            checkpoint_dir = self.path / str(epoch)
+            os.makedirs(checkpoint_dir, exist_ok=True)
+            torch.save(model_state_dict, checkpoint_dir / self.model_fname)
+            torch.save(optimizer_state_dict, checkpoint_dir / self.optimizer_fname)
+
+        dist.barrier()
+
+
+def apply_fully_sharded(model: torch.nn.Module):
+    fsdp_kwargs = {
+        "mp_policy": MixedPrecisionPolicy(
+            param_dtype=torch.bfloat16,
+            reduce_dtype=torch.float32,
+        )
+    }
+
+    for layer in model.layers:  # todo: this is hardcoded to the Eagle3DraftModel definition, should be made more general
+        # we apply fully_shard to each DecoderLayer
+        layer.to_empty(device="meta")
+        fully_shard(layer, **fsdp_kwargs)
+
+    fully_shard(model, **fsdp_kwargs)
+
+    return model
+
+
 class Trainer:
     def __init__(
         self,
@@ -52,18 +166,39 @@ class Trainer:
         self.is_distributed = is_distributed
         self.local_rank = local_rank
         self.world_size = world_size
+        self.checkpointer = Checkpointer(
+            config["save_path"],
+            try_load_last_checkpoint=config.get("resume_from_checkpoint", False),
+        )
 
+        self.setup_trainer()
         self.setup_model()
         self.setup_optimizer()
 
+    def setup_trainer(self):
+        self.current_epoch = self.checkpointer.previous_epoch + 1
+
     def setup_model(self):
-        self.model = self.model.to(self.local_rank)
         if self.is_distributed:
-            self.model = DDP(self.model, device_ids=[self.local_rank])
+            apply_fully_sharded(self.model)
+
+            if self.checkpointer.previous_epoch != -1:
+                self.checkpointer.load_model_state_dict(self.model)
+            else:
+                for m in self.model.layers.children():  # todo: generalize
+                    if not isinstance(m, FSDPModule):
+                        continue
+                    m.to_empty(device="cuda")  # todo: generalize
+                    for sub_module in m.modules():
+                        if hasattr(sub_module, "reset_parameters"):
+                            sub_module.reset_parameters()
+                # todo: We need to make sure we're loading lm_head and embed_tokens after this reset
         self.verifier_lm_head = self.verifier_lm_head.to(self.local_rank)
 
     def setup_optimizer(self):
         self.opt = torch.optim.Adam(self.model.parameters(), lr=self.config["lr"])
+        if self.checkpointer.previous_epoch != -1:
+            self.checkpointer.load_optimizer_state_dict(self.model, self.opt)
 
     def train_epoch(self, epoch: int):
         self.model.train()
@@ -106,7 +241,7 @@ class Trainer:
 
             log_rank0(loss.item())
             log_rank0(draft_accuracies.tolist())
-            
+
         log_rank0(f"Training Epoch {epoch} completed")
 
     def val_epoch(self, epoch: int):
@@ -145,27 +280,17 @@ class Trainer:
 
             log_rank0(val_loss.item())
             log_rank0(draft_accuracies.tolist())
-        
+
         log_rank0(f"Validation Epoch {epoch} completed")
 
     def save_checkpoint(self, epoch: int):
-        os.makedirs(self.config["save_path"], exist_ok=True)
-        save_path = f"{self.config['save_path']}/checkpoint_epoch_{epoch}.pth"
-        torch.save(
-            {
-                "model_state_dict": self.model.state_dict(),
-                "optimizer_state_dict": self.opt.state_dict(),
-                "epoch": epoch,
-            },
-            save_path,
-        )
-        log_rank0(f"Checkpoint saved to {save_path}")
+        self.checkpointer.save_checkpoint(self.model, self.opt, epoch)
+        log_rank0(f"Checkpoint saved to {self.checkpointer.path / str(epoch)}")
 
     def run_training(self):
-        for epoch in range(self.config["num_epochs"]):
+        for epoch in range(self.current_epoch, self.config["num_epochs"]):
             self.train_epoch(epoch)
             if self.is_distributed:
                 dist.barrier()
             self.val_epoch(epoch)
-            if self.local_rank == 0:
-                self.save_checkpoint(epoch)
+            self.save_checkpoint(epoch)

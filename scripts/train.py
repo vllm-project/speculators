@@ -20,7 +20,7 @@ EPOCHS = 10
 draft_vocab_size = 5000
 verifier_vocab_size = 151936
 hidden_size = 5120
-total_seq_len = 4096
+total_seq_len = 1024
 datapath = "./data"
 verifier_model_name_or_path = "Qwen/Qwen2.5-VL-7B-Instruct"
 
@@ -41,7 +41,6 @@ t2d_vocab = (
     .to(DEVICE)
 )
 # END TEMP MODEL SETUP
-
 
 draft_model = Eagle3DraftModel(
     hidden_size=hidden_size,
@@ -77,9 +76,10 @@ train_loader = DataLoader(
 config = {
     "num_epochs": EPOCHS,
     "save_path": "./checkpoints",
-    "lr": 1e-4,
+    "lr": 1e-5,
     "total_seq_len": total_seq_len,
     "datapath": "./data",
+    "resume_from_checkpoint": True,
 }
 
 
