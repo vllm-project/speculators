@@ -10,6 +10,12 @@ from speculators.train.eagle3.attention import (
 )
 from speculators.train.eagle3.model_definitions import model_classes
 
+def load_verifier_embeddings(verifier_model_name_or_path: str):
+    verifier_model = AutoModelForCausalLM.from_pretrained(
+        verifier_model_name_or_path
+    )
+    return verifier_model.model.embed_tokens.state_dict()
+
 
 class Eagle3VerifierLMHead(torch.nn.Module):
     def __init__(self, hidden_size: int, draft_vocab_size: int):
@@ -39,6 +45,7 @@ class Eagle3VerifierLMHead(torch.nn.Module):
 class Eagle3DraftModel(torch.nn.Module):
     def __init__(
         self,
+        verifier_model_name_or_path: str,
         hidden_size: int,  # Must be same for verifier and draft
         # Vocab mappings
         t2d_vocab: torch.Tensor,
@@ -46,12 +53,13 @@ class Eagle3DraftModel(torch.nn.Module):
         decoder_layer_config: PretrainedConfig,
         # Verifier
         verifier_vocab_size: int,
-        verifier_pad_token_id: int,
+        verifier_pad_token_id: int | None,
         # Draft config
         num_layers: int = 1,
         ttt_steps: int = 3,
     ):
         super().__init__()
+        self.verifier_model_name_or_path = verifier_model_name_or_path
         self.hidden_size = hidden_size
         self.num_layers = num_layers
         self.decoder_layer_config = decoder_layer_config
@@ -80,6 +88,7 @@ class Eagle3DraftModel(torch.nn.Module):
             verifier_vocab_size, hidden_size, padding_idx=verifier_pad_token_id
         )
         # shape: [verifier_vocab_size, hidden_size]
+        self.embed_tokens.load_state_dict(load_verifier_embeddings(verifier_model_name_or_path))
 
         self.lm_head = torch.nn.Linear(hidden_size, self.draft_vocab_size, bias=False)
         # shape: [hidden_size, draft_vocab_size]
