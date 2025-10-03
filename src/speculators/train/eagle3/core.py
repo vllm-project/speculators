@@ -72,14 +72,14 @@ class Eagle3DraftModel(torch.nn.Module):
         targets = torch.nn.functional.log_softmax(targets, dim=-1)
         return torch.nn.functional.kl_div(
             logits, targets, reduction="sum", log_target=True
-        )
+        ) / (logits.shape[0] * logits.shape[1])
 
     def forward(
         self,
         hidden_states: torch.Tensor,  # shape: [1, total_seq_len, 3 * hidden_size]
         input_ids: torch.Tensor,  # shape: [1, total_seq_len]
         lengths: torch.Tensor | None = None,  # shape: [batch_size]
-        verifier_last_hidden_state: torch.Tensor
+        verifier_last_hidden_states: torch.Tensor
         | None = None,  # shape: [1, total_seq_len, hidden_size]
         ttt_steps: int | None = None,
         use_off_policy_tokens: bool = False,
@@ -87,7 +87,7 @@ class Eagle3DraftModel(torch.nn.Module):
     ):
         device = hidden_states.device
         total_seq_len = hidden_states.shape[1]
-        return_loss = verifier_last_hidden_state is not None
+        return_loss = verifier_last_hidden_states is not None
 
         if ttt_steps is None:
             ttt_steps = self.ttt_steps
@@ -122,7 +122,7 @@ class Eagle3DraftModel(torch.nn.Module):
         # shape: [1, total_seq_len, hidden_size]
 
         if return_loss:
-            verifier_logits = self.verifier_lm_head(verifier_last_hidden_state)
+            verifier_logits = self.verifier_lm_head(verifier_last_hidden_states)
             loss = torch.tensor(0.0, device=device)
 
         draft_tokens = []
