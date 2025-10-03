@@ -108,8 +108,6 @@ def block_mask_to_dense_attention_mask(
     return attention_mask
 
 
-
-
 def flex_attention_forward(
     module: torch.nn.Module,
     query: torch.Tensor,
@@ -162,5 +160,5 @@ def flex_attention_forward(
     return attention_output, lse
 
 
-ALL_ATTENTION_FUNCTIONS = AttentionInterface() # Singleton class used for registry
+ALL_ATTENTION_FUNCTIONS = AttentionInterface()  # Singleton class used for registry
 ALL_ATTENTION_FUNCTIONS.register("simple_flex_attention", flex_attention_forward)
