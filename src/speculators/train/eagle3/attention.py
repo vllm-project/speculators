@@ -27,7 +27,7 @@ def create_combined_mask_mod(lengths: torch.Tensor):
     )
 
 
-def extend_mask_for_draft_tokens(block_mask, new_mask_mod: Callable | None = None):
+def extend_mask_for_draft_tokens(block_mask):
     """
     Extend the block mask to include new draft tokens. Concatenates a diagonal mask for the new draft tokens.
 
@@ -89,7 +89,7 @@ def extend_mask_for_draft_tokens(block_mask, new_mask_mod: Callable | None = Non
         kv_indices,
         block_mask.full_kv_num_blocks,
         block_mask.full_kv_indices,
-        mask_mod=new_mask_mod or block_mask.mask_mod,
+        mask_mod=block_mask.mask_mod,
     )
 
 
