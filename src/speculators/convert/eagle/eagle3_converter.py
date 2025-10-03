@@ -7,7 +7,7 @@ from typing import Optional, Union
 
 import torch
 from loguru import logger
-from transformers import AutoModelForCausalLM, LlamaConfig, PretrainedConfig
+from transformers import LlamaConfig, PretrainedConfig
 
 from speculators.config import SpeculatorsConfig, VerifierConfig
 from speculators.convert.eagle.utils import (
@@ -75,10 +75,16 @@ class Eagle3Converter:
         )
 
         # Process weights and ensure embeddings are properly handled
-        processed_weights = self._process_checkpoint_weights(weights, base_model)
+        processed_weights = self._process_checkpoint_weights(weights)
+
+        embed_tokens_available = "embed_tokens.weight" in processed_weights
 
         saved_path = self._save_converted_checkpoint(
-            config, processed_weights, output_path, reduce_vocab_size
+            config,
+            processed_weights,
+            output_path,
+            reduce_vocab_size,
+            embed_tokens_available,
         )
         logger.success(f"Saved to: {saved_path}")
 
@@ -86,7 +92,7 @@ class Eagle3Converter:
             self._validate_converted_checkpoint(saved_path, base_model)
 
     def _process_checkpoint_weights(
-        self, weights: dict[str, torch.Tensor], base_model: str
+        self, weights: dict[str, torch.Tensor]
     ) -> dict[str, torch.Tensor]:
         """
         Process and validate Eagle3 checkpoint weights.
@@ -113,58 +119,7 @@ class Eagle3Converter:
                 processed_weights[original_name] = tensor
             else:
                 processed_weights[original_name] = tensor
-
-        # Only add verifier embeddings if not present in eagle model
-        if "embed_tokens.weight" not in processed_weights:
-            logger.info("Eagle model missing embeddings - adding verifier embeddings")
-            return self._add_verifier_embeddings(processed_weights, base_model)
-        else:
-            logger.info("Eagle model already has embeddings - keeping originals")
-            return processed_weights
-
-    def _add_verifier_embeddings(
-        self, weights: dict[str, torch.Tensor], base_model: str
-    ) -> dict[str, torch.Tensor]:
-        """
-        Add embeddings from the verifier model to the checkpoint.
-
-        :param weights: Current checkpoint weights
-        :param base_model: Base model to load embeddings from
-        :return: Updated weights with verifier embeddings
-        """
-        logger.info(f"Loading embeddings from verifier model: {base_model}")
-
-        try:
-            # Load verifier model to get embeddings
-            verifier = AutoModelForCausalLM.from_pretrained(
-                base_model, torch_dtype=torch.float32
-            )
-
-            # Extract embeddings from verifier
-            if hasattr(verifier, "model") and hasattr(verifier.model, "embed_tokens"):
-                embed_tokens = verifier.model.embed_tokens.weight.data.clone()  # type: ignore[assignment,union-attr,operator,attr-defined]
-            elif hasattr(verifier, "embed_tokens"):
-                embed_tokens = verifier.embed_tokens.weight.data.clone()  # type: ignore[assignment,union-attr,operator,attr-defined]
-            else:
-                raise RuntimeError(
-                    f"Could not find embed_tokens in verifier model {base_model}"
-                )
-
-            logger.info(f"Loaded embeddings with shape: {embed_tokens.shape}")
-            weights["embed_tokens.weight"] = embed_tokens
-
-            # Clean up verifier model to save memory
-            del verifier
-            torch.cuda.empty_cache() if torch.cuda.is_available() else None
-
-        except (OSError, ValueError, RuntimeError) as e:
-            logger.error(f"Failed to load embeddings from verifier: {e}")
-            raise RuntimeError(
-                f"Could not load embeddings from verifier model {base_model}. "
-                "This is required for Eagle3 models without trained embeddings."
-            ) from e
-
-        return weights
+        return processed_weights
 
     def _create_verifier_config(self, base_model: str) -> VerifierConfig:
         config_dict, _ = PretrainedConfig.get_config_dict(base_model)
@@ -247,12 +202,14 @@ class Eagle3Converter:
         weights: dict[str, torch.Tensor],
         output_dir: Union[str, Path],
         reduce_vocab_size: bool,
+        embed_tokens_available: bool,
     ) -> Path:
         model = Eagle3Speculator(
             config=config,
             verifier=None,
             verifier_attachment_mode="detached",
             reduce_vocab_size=reduce_vocab_size,
+            embed_tokens_available=embed_tokens_available,
         )
         model.load_state_dict(weights, strict=False)  # type: ignore[attr-defined]
         weights_dtype = getattr(config.transformer_layer_config, "torch_dtype", None)

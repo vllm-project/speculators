@@ -339,6 +339,7 @@ class Eagle3Speculator(SpeculatorModel):
             Literal["detached", "full", "train_only"]
         ] = None,
         reduce_vocab_size: bool = True,
+        embed_tokens_available: bool = True,
     ):
         """
         Initialize Eagle3 speculator.
@@ -371,13 +372,14 @@ class Eagle3Speculator(SpeculatorModel):
             verifier_attachment_mode=verifier_attachment_mode,
         )
 
-        self.embed_tokens = nn.Embedding(
-            self.target_vocab_size,
-            self.hidden_size,
-            padding_idx=config.transformer_layer_config.pad_token_id
-            if hasattr(config.transformer_layer_config, "pad_token_id")
-            else None,
-        )
+        if embed_tokens_available:
+            self.embed_tokens = nn.Embedding(
+                self.target_vocab_size,
+                self.hidden_size,
+                padding_idx=config.transformer_layer_config.pad_token_id
+                if hasattr(config.transformer_layer_config, "pad_token_id")
+                else None,
+            )
 
         self.fc = nn.Linear(
             3 * self.target_hidden_size,  # Use target model's hidden size
