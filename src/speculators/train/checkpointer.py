@@ -1,0 +1,149 @@
+from abc import abstractmethod
+import os
+from pathlib import Path
+import torch
+from torch.distributed.checkpoint.state_dict import (
+    get_model_state_dict,
+    get_optimizer_state_dict,
+    set_model_state_dict,
+    set_optimizer_state_dict,
+    StateDictOptions,
+)
+
+import torch.distributed as dist
+
+
+class BaseCheckpointer:
+    """Helper class to save and load checkpoints.
+
+    Checkpoint file structure:
+    ../path/
+        0/ # epoch number
+            model_state_dict.pt
+            optimizer_state_dict.pt
+        1/
+            model_state_dict.pt
+            optimizer_state_dict.pt
+        ...
+    """
+
+    def __init__(self, path: Path | str, try_load_last_checkpoint: bool = True):
+        self.path = Path(path)
+        if try_load_last_checkpoint:
+            self.previous_epoch: int = self._get_previous_epoch()
+        else:
+            self.previous_epoch: int = -1
+
+    @abstractmethod
+    def load_model_state_dict(self, model: torch.nn.Module):
+        raise NotImplementedError
+
+    @abstractmethod
+    def load_optimizer_state_dict(
+        self, model: torch.nn.Module, optimizer: torch.optim.Optimizer
+    ):
+        raise NotImplementedError
+
+    @abstractmethod
+    def save_checkpoint(
+        self, model: torch.nn.Module, optimizer: torch.optim.Optimizer, epoch: int
+    ):
+        raise NotImplementedError
+
+    def _get_previous_epoch(self) -> int:
+        if not self.path.exists():
+            return -1
+        last_checkpoint_num = -1
+        for d in self.path.iterdir():
+            if d.is_dir():
+                try:
+                    last_checkpoint_num = max(last_checkpoint_num, int(d.name))
+                except ValueError:
+                    continue
+        return last_checkpoint_num
+
+    def model_path(self, epoch: int):
+        model_fname = "model_state_dict.pt"
+        return self.path / str(epoch) / model_fname
+
+    def optimizer_path(self, epoch: int):
+        optimizer_fname = "optimizer_state_dict.pt"
+        return self.path / str(epoch) / optimizer_fname
+
+
+class SingleGPUCheckpointer(BaseCheckpointer):
+    def load_model_state_dict(self, model: torch.nn.Module):
+        full_state_dict = torch.load(
+            self.model_path(self.previous_epoch),
+            weights_only=True,
+            map_location="cuda:0",  # todo: make this configurable
+        )
+        model.load_state_dict(full_state_dict)
+
+    def load_optimizer_state_dict(
+        self, model: torch.nn.Module, optimizer: torch.optim.Optimizer
+    ):
+        full_state_dict = torch.load(
+            self.optimizer_path(self.previous_epoch),
+            weights_only=True,
+            map_location="cuda:0",  # todo: make this configurable
+        )
+        optimizer.load_state_dict(full_state_dict)
+
+    def save_checkpoint(
+        self, model: torch.nn.Module, optimizer: torch.optim.Optimizer, epoch: int
+    ):
+        os.makedirs(self.path / str(epoch), exist_ok=True)
+        torch.save(model.state_dict(), self.model_path(epoch))
+        torch.save(optimizer.state_dict(), self.optimizer_path(epoch))
+
+
+class DistributedCheckpointer(BaseCheckpointer):
+    def load_model_state_dict(self, model: torch.nn.Module):
+        full_state_dict = torch.load(
+            self.model_path(self.previous_epoch),
+            mmap=True,
+            weights_only=True,
+            map_location="cpu",
+        )
+        set_model_state_dict(
+            model,
+            full_state_dict,
+            options=StateDictOptions(full_state_dict=True, broadcast_from_rank0=True),
+        )
+        dist.barrier()
+
+    def load_optimizer_state_dict(self, model, optimizer: torch.optim.Optimizer):
+        full_state_dict = torch.load(
+            self.optimizer_path(self.previous_epoch),
+            mmap=True,
+            weights_only=True,
+            map_location="cpu",
+        )
+        set_optimizer_state_dict(
+            model,
+            optimizer,
+            full_state_dict,
+            options=StateDictOptions(full_state_dict=True, broadcast_from_rank0=True),
+        )
+        dist.barrier()
+
+    def save_checkpoint(
+        self, model: torch.nn.Module, optimizer: torch.optim.Optimizer, epoch: int
+    ):
+        model_state_dict = get_model_state_dict(
+            model, options=StateDictOptions(full_state_dict=True, cpu_offload=True)
+        )
+        optimizer_state_dict = get_optimizer_state_dict(
+            model,
+            optimizer,
+            options=StateDictOptions(full_state_dict=True, cpu_offload=True),
+        )
+
+        if dist.get_rank() == 0:
+            # Only rank 0 saves the checkpoint
+            os.makedirs(self.path / str(epoch), exist_ok=True)
+            torch.save(model_state_dict, self.model_path(epoch))
+            torch.save(optimizer_state_dict, self.optimizer_path(epoch))
+
+        dist.barrier()

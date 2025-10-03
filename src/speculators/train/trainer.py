@@ -1,20 +1,16 @@
-import os
-from pathlib import Path
 import torch
 from torch.distributed.fsdp import FSDPModule, fully_shard, MixedPrecisionPolicy
 from torch.utils.data import DataLoader
 from tqdm.rich import tqdm  # todo: requries tqdm and rich
-from torch.distributed.checkpoint.state_dict import (
-    get_model_state_dict,
-    get_optimizer_state_dict,
-    set_model_state_dict,
-    set_optimizer_state_dict,
-    StateDictOptions,
-)
 
 
 import torch.distributed as dist
 import logging
+
+from speculators.train.checkpointer import (
+    SingleGPUCheckpointer,
+    DistributedCheckpointer,
+)
 
 root_logger = logging.getLogger("speculators")
 metric_logger = logging.getLogger("speculators.metrics")
@@ -41,93 +37,6 @@ def compute_draft_accuracy(
         accuracies.append(correct.float().mean())
 
     return torch.tensor(accuracies, device=target_logits.device)
-
-
-class Checkpointer:
-    """Helper class to save and load checkpoints.
-
-    Checkpoint file structure:
-    ../path/
-        0/ # epoch number
-            model_state_dict.pt
-            optimizer_state_dict.pt
-        1/
-            model_state_dict.pt
-            optimizer_state_dict.pt
-        ...
-    """
-
-    model_fname = "model_state_dict.pt"
-    optimizer_fname = "optimizer_state_dict.pt"
-
-    def __init__(self, path: Path | str, try_load_last_checkpoint: bool = True):
-        self.path = Path(path)
-        if try_load_last_checkpoint:
-            self.previous_epoch: int = self._get_previous_epoch()
-        else:
-            self.previous_epoch: int = -1
-
-    def _get_previous_epoch(self) -> int:
-        if not self.path.exists():
-            return -1
-        last_checkpoint_num = -1
-        for d in self.path.iterdir():
-            if d.is_dir():
-                try:
-                    last_checkpoint_num = max(last_checkpoint_num, int(d.name))
-                except ValueError:
-                    continue
-        return last_checkpoint_num
-
-    def load_model_state_dict(self, model: torch.nn.Module):
-        full_state_dict = torch.load(
-            self.path / str(self.previous_epoch) / self.model_fname,
-            mmap=True,
-            weights_only=True,
-            map_location="cpu",
-        )
-        set_model_state_dict(
-            model,
-            full_state_dict,
-            options=StateDictOptions(full_state_dict=True, broadcast_from_rank0=True),
-        )
-        dist.barrier()
-
-    def load_optimizer_state_dict(self, model, optimizer: torch.optim.Optimizer):
-        full_state_dict = torch.load(
-            self.path / str(self.previous_epoch) / self.optimizer_fname,
-            mmap=True,
-            weights_only=True,
-            map_location="cpu",
-        )
-        set_optimizer_state_dict(
-            model,
-            optimizer,
-            full_state_dict,
-            options=StateDictOptions(full_state_dict=True, broadcast_from_rank0=True),
-        )
-        dist.barrier()
-
-    def save_checkpoint(
-        self, model: torch.nn.Module, optimizer: torch.optim.Optimizer, epoch: int
-    ):
-        model_state_dict = get_model_state_dict(
-            model, options=StateDictOptions(full_state_dict=True, cpu_offload=True)
-        )
-        optimizer_state_dict = get_optimizer_state_dict(
-            model,
-            optimizer,
-            options=StateDictOptions(full_state_dict=True, cpu_offload=True),
-        )
-
-        if dist.get_rank() == 0:
-            # Only rank 0 saves the checkpoint
-            checkpoint_dir = self.path / str(epoch)
-            os.makedirs(checkpoint_dir, exist_ok=True)
-            torch.save(model_state_dict, checkpoint_dir / self.model_fname)
-            torch.save(optimizer_state_dict, checkpoint_dir / self.optimizer_fname)
-
-        dist.barrier()
 
 
 def apply_fully_sharded(model: torch.nn.Module):
@@ -168,7 +77,10 @@ class Trainer:
         self.is_distributed = is_distributed
         self.local_rank = local_rank
         self.world_size = world_size
-        self.checkpointer = Checkpointer(
+        checkpointer_class = (
+            DistributedCheckpointer if is_distributed else SingleGPUCheckpointer
+        )
+        self.checkpointer = checkpointer_class(
             config["save_path"],
             try_load_last_checkpoint=config.get("resume_from_checkpoint", False),
         )
@@ -196,6 +108,8 @@ class Trainer:
                         if hasattr(sub_module, "reset_parameters"):
                             sub_module.reset_parameters()
                 # todo: We need to make sure we're loading lm_head and embed_tokens after this reset
+        else:
+            self.model.to(self.local_rank)
         self.verifier_lm_head = self.verifier_lm_head.to(self.local_rank)
 
     def setup_optimizer(self):
