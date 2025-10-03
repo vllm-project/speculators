@@ -5,12 +5,6 @@ import torch.distributed as dist
 local_rank = int(os.environ.get("LOCAL_RANK", 0))
 
 
-def log_rank0(message):
-    if local_rank != 0:
-        return
-    print(message)
-
-
 def maybe_setup_distributed():
     # Based off of https://docs.pytorch.org/tutorials/intermediate/ddp_tutorial.html#initialize-ddp-with-torch-distributed-run-torchrun
     if "LOCAL_RANK" not in os.environ:
