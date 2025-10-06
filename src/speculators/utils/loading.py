@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Any, Union
+from typing import Any, Union, Optional
 
 import torch
 from huggingface_hub import hf_hub_download
@@ -10,7 +10,7 @@ from safetensors import safe_open
 
 def load_model_layers(
     layer_names: list[str], model_path: str
-) -> Union[torch.Tensor, dict[str, torch.Tensor]]:
+) -> Optional[Union[torch.Tensor, dict[str, torch.Tensor]]]:
     """
     Load one or more named tensors from a HF repo using safetensors shards.
     Returns a single tensor if len(layer_names)==1, else a dict[name] -> tensor.
