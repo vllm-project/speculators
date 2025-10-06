@@ -77,4 +77,3 @@ def _resolve_file(model_path: str, file_name: str) -> Path:
     # Treat as repo_id on the Hub
     logger.info("Loading from huggingface directory: {}", model_path)
     return Path(hf_hub_download(repo_id=model_path, filename=file_name))
-
