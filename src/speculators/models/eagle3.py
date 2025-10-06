@@ -339,7 +339,7 @@ class Eagle3Speculator(SpeculatorModel):
             Literal["detached", "full", "train_only"]
         ] = None,
         reduce_vocab_size: bool = True,
-        embed_tokens_available: bool = True,
+        has_drafter_embedding: bool = True,
     ):
         """
         Initialize Eagle3 speculator.
@@ -347,6 +347,8 @@ class Eagle3Speculator(SpeculatorModel):
         :param config: Eagle3SpeculatorConfig instance
         :param verifier: Optional verifier model
         :param verifier_attachment_mode: How to attach the verifier
+        :param reduce_vocab_size: Whether to reduce vocabulary size with mapping
+        :param has_drafter_embedding: Whether drafter embedding weights are provided
         """
         if not isinstance(config, Eagle3SpeculatorConfig):
             raise ValueError(
@@ -372,7 +374,7 @@ class Eagle3Speculator(SpeculatorModel):
             verifier_attachment_mode=verifier_attachment_mode,
         )
 
-        if embed_tokens_available:
+        if has_drafter_embedding:
             self.embed_tokens = nn.Embedding(
                 self.target_vocab_size,
                 self.hidden_size,

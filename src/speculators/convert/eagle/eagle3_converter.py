@@ -74,14 +74,14 @@ class Eagle3Converter:
             eagle_aux_hidden_state_layer_ids,
         )
 
-        embed_tokens_available = "embed_tokens.weight" in weights
+        has_drafter_embedding = "embed_tokens.weight" in weights
 
         saved_path = self._save_converted_checkpoint(
             config,
             weights,
             output_path,
             reduce_vocab_size,
-            embed_tokens_available,
+            has_drafter_embedding,
         )
         logger.success(f"Saved to: {saved_path}")
 
@@ -169,14 +169,14 @@ class Eagle3Converter:
         weights: dict[str, torch.Tensor],
         output_dir: Union[str, Path],
         reduce_vocab_size: bool,
-        embed_tokens_available: bool,
+        has_drafter_embedding: bool,
     ) -> Path:
         model = Eagle3Speculator(
             config=config,
             verifier=None,
             verifier_attachment_mode="detached",
             reduce_vocab_size=reduce_vocab_size,
-            embed_tokens_available=embed_tokens_available,
+            has_drafter_embedding=has_drafter_embedding,
         )
         model.load_state_dict(weights, strict=False)  # type: ignore[attr-defined]
         weights_dtype = getattr(config.transformer_layer_config, "torch_dtype", None)
