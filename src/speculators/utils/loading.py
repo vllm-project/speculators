@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Any, Union, Optional
+from typing import Any, Optional, Union
 
 import torch
 from huggingface_hub import hf_hub_download
