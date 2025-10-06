@@ -74,14 +74,11 @@ class Eagle3Converter:
             eagle_aux_hidden_state_layer_ids,
         )
 
-        # Process weights and ensure embeddings are properly handled
-        processed_weights = self._process_checkpoint_weights(weights)
-
-        embed_tokens_available = "embed_tokens.weight" in processed_weights
+        embed_tokens_available = "embed_tokens.weight" in weights
 
         saved_path = self._save_converted_checkpoint(
             config,
-            processed_weights,
+            weights,
             output_path,
             reduce_vocab_size,
             embed_tokens_available,
@@ -90,36 +87,6 @@ class Eagle3Converter:
 
         if validate:
             self._validate_converted_checkpoint(saved_path, base_model)
-
-    def _process_checkpoint_weights(
-        self, weights: dict[str, torch.Tensor]
-    ) -> dict[str, torch.Tensor]:
-        """
-        Process and validate Eagle3 checkpoint weights.
-
-        Eagle3 models need embeddings that match the verifier model for good acceptance.
-        We ALWAYS replace embeddings with verifier embeddings for compatibility.
-
-        :param weights: Original checkpoint weights
-        :param base_model: Base model name to load verifier embeddings from
-        :return: Processed weights with verifier embeddings
-        """
-        logger.debug(f"Processing {len(weights)} Eagle3 weights")
-
-        # Remap weight names: midlayer.* -> layers.0.*
-        processed_weights = {}
-        for original_name, tensor in weights.items():
-            # Remap midlayer.* -> layers.0.*
-            if original_name.startswith("midlayer."):
-                new_name = original_name.replace("midlayer.", "layers.0.")
-                processed_weights[new_name] = tensor
-                logger.debug(f"Remapped: {original_name} -> {new_name}")
-            # Keep layers.0.* as is (already correct)
-            elif original_name.startswith("layers.0."):
-                processed_weights[original_name] = tensor
-            else:
-                processed_weights[original_name] = tensor
-        return processed_weights
 
     def _create_verifier_config(self, base_model: str) -> VerifierConfig:
         config_dict, _ = PretrainedConfig.get_config_dict(base_model)
