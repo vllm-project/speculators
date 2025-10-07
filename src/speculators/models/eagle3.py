@@ -438,3 +438,32 @@ class Eagle3Speculator(SpeculatorModel):
         # Don't call super().tie_weights() - this prevents vocabulary corruption
         # that occurs when _tie_or_clone_weights replaces lm_head.weight with
         # embed_tokens.weight
+
+    def forward(
+        self,
+        input_ids: torch.LongTensor,
+        hidden_states: torch.FloatTensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_values: Optional[tuple[tuple[torch.FloatTensor]]] = None,
+        use_cache: Optional[bool] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,  # noqa: ARG002
+        return_dict: Optional[bool] = None,
+    ) -> torch.FloatTensor:
+        """
+        Forward pass for EAGLE-3 speculation.
+
+        :param input_ids: Input token IDs from draft vocabulary
+        :param hidden_states: Concatenated hidden states from 3 verifier layers
+            [B, L, 3*target_H] where target_H is the target model's hidden size
+        :param attention_mask: Optional attention mask
+        :param position_ids: Optional position IDs
+        :param past_key_values: Optional cached key-values
+        :param use_cache: Whether to cache key-values
+        :param output_attentions: Return attention weights
+        :param output_hidden_states: Return hidden states
+        :param return_dict: Return dict output
+        :return: Model outputs with draft vocabulary logits
+        """
+        raise NotImplementedError("Eagle3Speculator.forward is not implemented yet.")
