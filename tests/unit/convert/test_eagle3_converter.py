@@ -138,7 +138,7 @@ class TestEagle3ConverterFixes:
         assert (
             config.speculators_config.verifier.name_or_path == "meta-llama/Llama-3.1-8B"
         )
-    
+
     @pytest.mark.sanity
     def test_eagle_aux_hidden_state_layer_ids_parameter(self):
         """Test that eagle_aux_hidden_state_layer_ids parameter is properly handled."""
@@ -157,8 +157,8 @@ class TestEagle3ConverterFixes:
 
             # Test with None (default)
             config_none = converter._build_eagle3_speculator_config(
-                eagle_config, 
-                "meta-llama/Llama-3.1-8B", 
+                eagle_config,
+                "meta-llama/Llama-3.1-8B",
                 norm_before_residual=False,
             )
             assert config_none.eagle_aux_hidden_state_layer_ids is None
@@ -166,16 +166,16 @@ class TestEagle3ConverterFixes:
             # Test with specific layer IDs
             layer_ids = [1, 23, 44]
             config_with_ids = converter._build_eagle3_speculator_config(
-                eagle_config, 
-                "meta-llama/Llama-3.1-8B", 
+                eagle_config,
+                "meta-llama/Llama-3.1-8B",
                 norm_before_residual=False,
-                eagle_aux_hidden_state_layer_ids=layer_ids
+                eagle_aux_hidden_state_layer_ids=layer_ids,
             )
             assert config_with_ids.eagle_aux_hidden_state_layer_ids == layer_ids
-    
+
     @pytest.mark.sanity
     def test_eagle_aux_hidden_state_layer_ids_in_config_serialization(self):
-        """Test that eagle_aux_hidden_state_layer_ids is properly serialized in config."""
+        """Test that eagle_aux_hidden_state_layer_ids is properly serialized."""
         converter = Eagle3Converter()
 
         eagle_config = {
@@ -191,10 +191,10 @@ class TestEagle3ConverterFixes:
 
             layer_ids = [1, 23, 44]
             config = converter._build_eagle3_speculator_config(
-                eagle_config, 
-                "meta-llama/Llama-3.1-8B", 
+                eagle_config,
+                "meta-llama/Llama-3.1-8B",
                 norm_before_residual=False,
-                eagle_aux_hidden_state_layer_ids=layer_ids
+                eagle_aux_hidden_state_layer_ids=layer_ids,
             )
 
             # Test that the config can be serialized to dict
