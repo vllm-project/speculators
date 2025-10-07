@@ -513,7 +513,7 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel, GenerationMixin):  # 
         negative_prompt_ids: Optional[torch.Tensor] = None,  # noqa: ARG002
         negative_prompt_attention_mask: Optional[torch.Tensor] = None,  # noqa: ARG002
         use_model_defaults: Optional[bool] = None,  # noqa: ARG002
-        custom_generate: Optional[str] = None,  # noqa: ARG002
+        custom_generate: Union[str, Callable[..., Any], None] = None,  # noqa: ARG002
         **kwargs,  # noqa: ARG002
     ) -> Union[GenerateOutput, torch.LongTensor]:
         """
