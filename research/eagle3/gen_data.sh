@@ -8,7 +8,7 @@ python -m ge_data.allocation \
 --data_path ShareGPT_V4.3_unfiltered_cleaned_split.json \
 --model_path meta-llama/Llama-3.1-8B-Instruct \
 --chat_template llama \
---dataset ultrachat \
+--dataset sharegpt \
 --split gen \
 --samples 16 \
 --total_gpus 8
