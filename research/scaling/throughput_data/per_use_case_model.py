@@ -49,7 +49,7 @@ class PerUseCaseModel:
         return self.elldBc + self.elldBd * drafter_size + self.elldBh * hidden_size
 
     def batch_size(self, k, alpha, rps, verifier_size, drafter_size, hidden_size, number_of_layers):
-        return rps * self.latency(k, alpha, rps)
+        return rps * self.latency(k, alpha, rps, verifier_size, drafter_size, hidden_size, number_of_layers)
 
     def ttft(self, k, alpha, rps, verifier_size, drafter_size, hidden_size, number_of_layers):
         ellpB = self.ellpB(verifier_size, hidden_size, number_of_layers)
@@ -59,7 +59,7 @@ class PerUseCaseModel:
     
     def itl(self, k, alpha, rps, verifier_size, drafter_size, hidden_size, number_of_layers):
         ellvB = self.ellvB(verifier_size, hidden_size, number_of_layers)
-        elldB = self.elldB(drafter_size, hidden_size, number_of_layers)
+        elldB = self.elldB(drafter_size, hidden_size)
         ellvw = self.ellvw(verifier_size)
         elldw = self.elldw(drafter_size)
         B = self.batch_size(k, alpha, rps, verifier_size, drafter_size, hidden_size, number_of_layers)
