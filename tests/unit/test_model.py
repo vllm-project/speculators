@@ -17,8 +17,6 @@ from speculators import (
     SpeculatorModelConfig,
     SpeculatorsConfig,
     VerifierConfig,
-    reload_and_populate_configs,
-    reload_and_populate_models,
 )
 from speculators.proposals import GreedyTokenProposalConfig
 
@@ -58,11 +56,6 @@ class SpeculatorTestModel(SpeculatorModel):
         return {"logits": torch.randn(1, 10, 1000)}
 
 
-# Reload registries to include test classes
-reload_and_populate_configs()
-reload_and_populate_models()
-
-
 @pytest.fixture
 def speculator_model_test_config():
     return SpeculatorModelTestConfig(
@@ -96,9 +89,9 @@ def test_speculator_model_class_attributes():
 
 @pytest.mark.smoke
 def test_speculator_model_registry_contains_test_model():
-    assert SpeculatorModel.registry is not None
-    assert "test_speculator" in SpeculatorModel.registry
-    assert SpeculatorModel.registry["test_speculator"] == SpeculatorTestModel
+    assert SpeculatorModel.registry is not None  # type: ignore[misc]
+    assert "test_speculator" in SpeculatorModel.registry  # type: ignore[misc]
+    assert SpeculatorModel.registry["test_speculator"] == SpeculatorTestModel  # type: ignore[misc]
 
 
 @pytest.mark.smoke
