@@ -60,7 +60,9 @@ class Eagle3Converter:
             target_config_dict, _ = PretrainedConfig.get_config_dict(base_model)
             vocab_size = find_vocab_size(target_config_dict)
             if vocab_size is None:
-                raise ValueError("Could not determine vocab_size from target model config.")
+                raise ValueError(
+                    "Could not determine vocab_size from target model config."
+                )
             eagle_config["target_vocab_size"] = vocab_size
             logger.debug(
                 f"Using target_vocab_size from config: "
