@@ -187,6 +187,44 @@ class TestEagle3ConverterFixes:
     @patch(
         "speculators.convert.eagle.eagle3_converter.PretrainedConfig.get_config_dict"
     )
+    def test_config_num_hidden_layers_from_config(
+        self, mock_get_config, sample_eagle3_config
+    ):
+        """Test that num_hidden_layers is taken from eagle_config when present."""
+        mock_get_config.return_value = ({}, None)
+        converter = Eagle3Converter()
+
+        # Add num_hidden_layers to the sample config
+        sample_eagle3_config["num_hidden_layers"] = 3
+
+        llama_config = converter._create_transformer_config_from_eagle(
+            sample_eagle3_config, "meta-llama/Llama-3.1-8B"
+        )
+        assert llama_config.num_hidden_layers == 3
+
+    @pytest.mark.sanity
+    @patch(
+        "speculators.convert.eagle.eagle3_converter.PretrainedConfig.get_config_dict"
+    )
+    def test_config_num_hidden_layers_default(
+        self, mock_get_config, sample_eagle3_config
+    ):
+        """Test that num_hidden_layers defaults to 1 when not in config."""
+        mock_get_config.return_value = ({}, None)
+        converter = Eagle3Converter()
+
+        # Remove num_hidden_layers if present
+        sample_eagle3_config.pop("num_hidden_layers", None)
+
+        llama_config = converter._create_transformer_config_from_eagle(
+            sample_eagle3_config, "meta-llama/Llama-3.1-8B"
+        )
+        assert llama_config.num_hidden_layers == 1
+
+    @pytest.mark.sanity
+    @patch(
+        "speculators.convert.eagle.eagle3_converter.PretrainedConfig.get_config_dict"
+    )
     def test_config_fallback_when_verifier_unavailable(
         self, mock_get_config, sample_eagle3_config
     ):
