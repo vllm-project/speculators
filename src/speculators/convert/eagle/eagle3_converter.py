@@ -198,7 +198,8 @@ class Eagle3Converter:
             vocab_size=eagle_config.get("target_vocab_size", 128000),
             hidden_size=eagle_config.get("hidden_size", 4096),
             intermediate_size=eagle_config.get("intermediate_size", 11008),
-            num_hidden_layers=1,
+            num_hidden_layers=len([k for k in eagle_config.get("weights", {}).keys() 
+                               if k.endswith(".self_attn.q_proj.weight")]) or 1,
             num_attention_heads=eagle_config.get("num_attention_heads", 32),
             num_key_value_heads=eagle_config.get("num_key_value_heads", 8),
             hidden_act=eagle_config.get("hidden_act", "silu"),
