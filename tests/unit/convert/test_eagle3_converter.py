@@ -242,3 +242,24 @@ class TestEagle3ConverterFixes:
             config_dict = config.to_dict()
             assert "eagle_aux_hidden_state_layer_ids" in config_dict
             assert config_dict["eagle_aux_hidden_state_layer_ids"] == layer_ids
+
+    @pytest.mark.sanity
+    def test_nm_testing_2layer_eagle3_model_config(self, tmp_path):
+        """Test that multi-layer conversion support."""
+        converter = Eagle3Converter()
+
+        # TODO: Use a real model in the future  # noqa: FIX002
+        checkpoint_path = "shanjiaz/testing-llama3.1.8b-2layer-eagle3"
+        base_model = "RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8-dynamic"
+
+        converter.convert(
+            checkpoint_path,
+            tmp_path / checkpoint_path.split("/")[-1],
+            base_model,
+            norm_before_residual=False,
+        )
+
+        config = load_checkpoint_config(tmp_path / checkpoint_path.split("/")[-1])
+
+        # Verify that num_hidden_layers is correctly set to 2
+        assert config["transformer_layer_config"]["num_hidden_layers"] == 2
