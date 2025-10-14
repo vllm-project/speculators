@@ -12,6 +12,24 @@ from loguru import logger
 from safetensors import safe_open
 
 
+def find_vocab_size(config_dict: dict) -> Optional[int]:
+    """
+    Recursively search for vocab_size in nested config dictionary.
+
+    :param config_dict: Configuration dictionary to search
+    :return: vocab_size if found, None otherwise
+    """
+    if isinstance(config_dict, dict):
+        if "vocab_size" in config_dict:
+            return config_dict["vocab_size"]
+        for value in config_dict.values():
+            if isinstance(value, dict):
+                result = find_vocab_size(value)
+                if result is not None:
+                    return result
+    return None
+
+
 def download_checkpoint_from_hub(
     model_id: str, cache_dir: Optional[str] = None
 ) -> Path:
