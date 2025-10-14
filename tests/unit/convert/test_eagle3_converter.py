@@ -14,6 +14,9 @@ import pytest
 import torch
 
 from speculators.convert.eagle.eagle3_converter import Eagle3Converter
+from speculators.convert.eagle.utils import (
+    load_checkpoint_config,
+)
 
 
 class TestEagle3ConverterFixes:
@@ -92,6 +95,44 @@ class TestEagle3ConverterFixes:
         assert llama_config.num_attention_heads == 32
         # rope_theta comes from Eagle3 config, not verifier
         assert llama_config.rope_theta == 10000.0
+
+    @pytest.mark.sanity
+    @patch(
+        "speculators.convert.eagle.eagle3_converter.PretrainedConfig.get_config_dict"
+    )
+    def test_config_num_hidden_layers_from_config(
+        self, mock_get_config, sample_eagle3_config
+    ):
+        """Test that num_hidden_layers is taken from eagle_config when present."""
+        mock_get_config.return_value = ({}, None)
+        converter = Eagle3Converter()
+
+        # Add num_hidden_layers to the sample config
+        sample_eagle3_config["num_hidden_layers"] = 3
+
+        llama_config = converter._create_transformer_config_from_eagle(
+            sample_eagle3_config, "meta-llama/Llama-3.1-8B"
+        )
+        assert llama_config.num_hidden_layers == 3
+
+    @pytest.mark.sanity
+    @patch(
+        "speculators.convert.eagle.eagle3_converter.PretrainedConfig.get_config_dict"
+    )
+    def test_config_num_hidden_layers_default(
+        self, mock_get_config, sample_eagle3_config
+    ):
+        """Test that num_hidden_layers defaults to 1 when not in config."""
+        mock_get_config.return_value = ({}, None)
+        converter = Eagle3Converter()
+
+        # Remove num_hidden_layers if present
+        sample_eagle3_config.pop("num_hidden_layers", None)
+
+        llama_config = converter._create_transformer_config_from_eagle(
+            sample_eagle3_config, "meta-llama/Llama-3.1-8B"
+        )
+        assert llama_config.num_hidden_layers == 1
 
     @pytest.mark.sanity
     @patch(
@@ -201,3 +242,24 @@ class TestEagle3ConverterFixes:
             config_dict = config.to_dict()
             assert "eagle_aux_hidden_state_layer_ids" in config_dict
             assert config_dict["eagle_aux_hidden_state_layer_ids"] == layer_ids
+
+    @pytest.mark.sanity
+    def test_nm_testing_2layer_eagle3_model_config(self, tmp_path):
+        """Test that multi-layer conversion support."""
+        converter = Eagle3Converter()
+
+        # TODO: Use a real model in the future  # noqa: FIX002
+        checkpoint_path = "shanjiaz/testing-llama3.1.8b-2layer-eagle3"
+        base_model = "RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8-dynamic"
+
+        converter.convert(
+            checkpoint_path,
+            tmp_path / checkpoint_path.split("/")[-1],
+            base_model,
+            norm_before_residual=False,
+        )
+
+        config = load_checkpoint_config(tmp_path / checkpoint_path.split("/")[-1])
+
+        # Verify that num_hidden_layers is correctly set to 2
+        assert config["transformer_layer_config"]["num_hidden_layers"] == 2
