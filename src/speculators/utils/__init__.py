@@ -1,10 +1,10 @@
 from .auto_importer import AutoImporterMixin
 from .pydantic_utils import PydanticClassRegistryMixin, ReloadableBaseModel
-from .registry import ClassRegistryMixin
+from .registry import RegistryMixin
 
 __all__ = [
     "AutoImporterMixin",
-    "ClassRegistryMixin",
     "PydanticClassRegistryMixin",
+    "RegistryMixin",
     "ReloadableBaseModel",
 ]
