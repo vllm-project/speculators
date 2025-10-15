@@ -1,8 +1,9 @@
 import logging
+from typing import NamedTuple
 
 import torch
 import torch.distributed as dist
-from torch.distributed.fsdp import FSDPModule, MixedPrecisionPolicy, fully_shard
+from torch.distributed.fsdp import FSDPModule
 from torch.utils.data import DataLoader
 from tqdm.rich import tqdm
 from transformers import PreTrainedModel
@@ -11,51 +12,44 @@ from speculators.train.checkpointer import (
     DistributedCheckpointer,
     SingleGPUCheckpointer,
 )
+from speculators.train.utils import apply_fully_sharded
 
 root_logger = logging.getLogger("speculators")
 metric_logger = logging.getLogger("speculators.metrics")
 
 
-def apply_fully_sharded(model: torch.nn.Module):
-    mp_policy = MixedPrecisionPolicy(
-        param_dtype=torch.bfloat16,
-        reduce_dtype=torch.float32,
-    )
-    # todo: Hardcoded to Eagle3DraftModel, generalize
-    for layer in model.layers:  # type: ignore[union-attr]
-        # we apply fully_shard to each DecoderLayer
-        layer.to_empty(device="meta")
-        fully_shard(layer, mp_policy=mp_policy)
-
-    fully_shard(model, mp_policy=mp_policy)
-
-    return model
+class TrainerConfig(NamedTuple):
+    lr: float
+    num_epochs: int
+    save_path: str
+    resume_from_checkpoint: bool = False
+    is_distributed: bool = False
+    local_rank: int = 0
+    train_call_kwargs: dict = {}
+    val_call_kwargs: dict = {}
 
 
 class Trainer:
     def __init__(
         self,
         model: PreTrainedModel,
-        config: dict,
+        config: TrainerConfig,
         train_loader: DataLoader,
         val_loader: DataLoader | None = None,
-        is_distributed: bool = False,
-        local_rank: int = 0,
-        world_size: int = 1,
     ):
         self.model = model
         self.config = config
+        self.local_rank = config.local_rank
         self.train_loader = train_loader
         self.val_loader = val_loader
-        self.is_distributed = is_distributed
-        self.local_rank = local_rank
-        self.world_size = world_size
+        self.is_distributed = config.is_distributed
+        self.resume_from_checkpoint = config.resume_from_checkpoint
         checkpointer_class = (
-            DistributedCheckpointer if is_distributed else SingleGPUCheckpointer
+            DistributedCheckpointer if self.is_distributed else SingleGPUCheckpointer
         )
         self.checkpointer = checkpointer_class(
-            config["save_path"],
-            try_load_last_checkpoint=config.get("resume_from_checkpoint", False),
+            self.config.save_path,
+            try_load_last_checkpoint=self.config.resume_from_checkpoint,
         )
 
         self.setup_trainer()
@@ -63,14 +57,17 @@ class Trainer:
         self.setup_optimizer()
 
     def setup_trainer(self):
-        self.current_epoch = self.checkpointer.previous_epoch + 1
+        if self.resume_from_checkpoint:
+            self.current_epoch = self.checkpointer.previous_epoch + 1
+        else:
+            self.current_epoch = 0
         self.global_step = 0
 
     def setup_model(self):
         if self.is_distributed:
             apply_fully_sharded(self.model)
 
-            if self.checkpointer.previous_epoch != -1:
+            if self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1:
                 self.checkpointer.load_model_state_dict(self.model)
             else:
                 # Currently we make assumptions based on the Eagle3DraftModel
@@ -86,12 +83,12 @@ class Trainer:
                 # todo: Ensure lm_head and embed_tokens are loaded after reset
         else:
             self.model.to(self.local_rank)  # type: ignore[arg-type]
-            if self.checkpointer.previous_epoch != -1:
+            if self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1:
                 self.checkpointer.load_model_state_dict(self.model)
 
     def setup_optimizer(self):
-        self.opt = torch.optim.Adam(self.model.parameters(), lr=self.config["lr"])
-        if self.checkpointer.previous_epoch != -1:
+        self.opt = torch.optim.Adam(self.model.parameters(), lr=self.config.lr)
+        if self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1:
             self.checkpointer.load_optimizer_state_dict(self.model, self.opt)
 
     def train_epoch(self, epoch: int):
@@ -111,7 +108,7 @@ class Trainer:
             }
 
             _draft_tokens, loss, draft_accuracies = self.model(
-                **gpu_batch, use_off_policy_tokens=False
+                **gpu_batch, **self.config.train_call_kwargs
             )
 
             self.opt.zero_grad()
@@ -159,7 +156,7 @@ class Trainer:
             }
 
             _draft_tokens, loss, draft_accuracies = self.model(
-                **gpu_batch, use_off_policy_tokens=False
+                **gpu_batch, **self.config.val_call_kwargs
             )
 
             if self.is_distributed:
@@ -186,7 +183,7 @@ class Trainer:
         root_logger.info(f"Checkpoint saved to {self.checkpointer.path / str(epoch)}")
 
     def run_training(self):
-        for epoch in range(self.current_epoch, self.config["num_epochs"]):
+        for epoch in range(self.current_epoch, self.config.num_epochs):
             self.train_epoch(epoch)
             if self.is_distributed:
                 dist.barrier()

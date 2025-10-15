@@ -528,6 +528,8 @@ def setup_metric_logger(loggers, run_name, output_dir):
         )
         ```
     """
+    if loggers == "":
+        loggers = []
     if isinstance(loggers, str):
         loggers = loggers.split(",")
     loggers = [logger.strip() for logger in loggers]
