@@ -118,7 +118,7 @@ class Trainer:
                 for k, v in batch.items()
             }
 
-            _draft_tokens, loss, draft_accuracies = self.model(
+            _draft_tokens, loss, metrics = self.model(
                 **gpu_batch, **self.config.train_call_kwargs
             )
 
@@ -127,18 +127,13 @@ class Trainer:
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
             self.opt.step()
 
-            loss = loss.detach().clone()
             if self.is_distributed:
-                # Note: this is not needed for training, just for logging
-                dist.reduce(loss, dst=0, op=dist.ReduceOp.AVG)
-                dist.reduce(draft_accuracies, dst=0, op=dist.ReduceOp.AVG)
+                for v in metrics.values():
+                    dist.reduce(v, dst=0, op=dist.ReduceOp.AVG)
 
-            acc_values = {
-                f"acc_{i}": acc.item() for i, acc in enumerate(draft_accuracies)
-            }
+            metrics = {k: v.item() for k, v in metrics.items()}
             metric_logger.info(
-                {"train": {"loss": loss.item(), **acc_values}, "epoch": epoch},
-                extra={"step": self.global_step},
+                {"train": metrics, "epoch": epoch}, extra={"step": self.global_step}
             )
             self.global_step += 1
 
@@ -152,36 +147,29 @@ class Trainer:
         val_loader = self.val_loader
         if self.local_rank == 0:
             val_loader = tqdm(val_loader, desc=f"Epoch {epoch}")  # type: ignore[assignment]
-        val_loss = torch.zeros(1, device=self.local_rank)
-        val_accuracies = torch.zeros(
-            (), device=self.local_rank
-        )  # initialize to tensor of shape ()
+
+        val_metrics: dict[str, float] = {}
+        num_batches = len(val_loader)
         for batch in val_loader:
             gpu_batch = {
                 k: v.to(self.local_rank) if isinstance(v, torch.Tensor) else v
                 for k, v in batch.items()
             }
 
-            _draft_tokens, loss, draft_accuracies = self.model(
+            _draft_tokens, _loss, metrics = self.model(
                 **gpu_batch, **self.config.val_call_kwargs
             )
 
             if self.is_distributed:
-                dist.reduce(val_loss, dst=0, op=dist.ReduceOp.AVG)
-                dist.reduce(draft_accuracies, dst=0, op=dist.ReduceOp.AVG)
+                for v in metrics.values():
+                    dist.reduce(v, dst=0, op=dist.ReduceOp.AVG)
 
-            val_loss += loss.detach().clone()
-            # Can't use += here because val_accuracies has shape () on first iteration
-            val_accuracies = val_accuracies + draft_accuracies.detach()
+            for k, v in metrics.items():
+                val_metrics[k] = val_metrics.get(k, 0.0) + v.item()
 
-        val_loss /= len(val_loader)
-        val_accuracies /= len(val_loader)
-        acc_values = {
-            f"acc_{i}_epoch": acc.item() for i, acc in enumerate(val_accuracies)
-        }
+        val_metrics = {f"{k}_epoch": v / num_batches for k, v in val_metrics.items()}
         metric_logger.info(
-            {"val": {"loss_epoch": val_loss.item(), **acc_values}, "epoch": epoch},
-            extra={"step": self.global_step},
+            {"val": val_metrics, "epoch": epoch}, extra={"step": self.global_step}
         )
 
     def save_checkpoint(self, epoch: int):
