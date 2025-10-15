@@ -114,7 +114,9 @@ class Trainer:
 
         for batch in train_loader:
             gpu_batch = {
-                k: v.to(self.local_rank) if isinstance(v, torch.Tensor) else v
+                k: v.to(self.local_rank, non_blocking=True)
+                if isinstance(v, torch.Tensor)
+                else v
                 for k, v in batch.items()
             }
 
@@ -152,7 +154,9 @@ class Trainer:
         num_batches = len(val_loader)
         for batch in val_loader:
             gpu_batch = {
-                k: v.to(self.local_rank) if isinstance(v, torch.Tensor) else v
+                k: v.to(self.local_rank, non_blocking=True)
+                if isinstance(v, torch.Tensor)
+                else v
                 for k, v in batch.items()
             }
 
