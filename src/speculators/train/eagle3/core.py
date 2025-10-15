@@ -201,6 +201,7 @@ class Eagle3DraftModel(SpeculatorModel):
         self.verifier_lm_head.weight.data = masked_lm_head_weight.detach().clone()
         self.verifier_lm_head.weight.requires_grad = False
 
+    @torch.compile
     def forward(
         self,
         hidden_states: torch.Tensor,  # shape: [1, total_seq_len, 3 * hidden_size]
