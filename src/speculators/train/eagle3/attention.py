@@ -11,7 +11,17 @@ def create_combined_mask_mod(lengths: torch.Tensor, total_seq_len: int):
         torch.arange(lengths.shape[0], device=lengths.device, dtype=torch.long), lengths
     )
     # Pad ids with -1 to indicate padding
-    document_ids = torch.cat([document_ids, -1 * torch.ones(total_seq_len - document_ids.shape[0], device=lengths.device, dtype=torch.long)]).contiguous()
+    document_ids = torch.cat(
+        [
+            document_ids,
+            -1
+            * torch.ones(
+                total_seq_len - document_ids.shape[0],
+                device=lengths.device,
+                dtype=torch.long,
+            ),
+        ]
+    ).contiguous()
 
     N = document_ids.shape[0]
 
@@ -20,7 +30,9 @@ def create_combined_mask_mod(lengths: torch.Tensor, total_seq_len: int):
 
     def document_mask_mod(b, h, q_idx, kv_idx):
         # Exclude padding tokens in attention mask
-        return torch.logical_and(document_ids[q_idx] != -1, document_ids[q_idx] == document_ids[kv_idx % N])
+        return torch.logical_and(
+            document_ids[q_idx] != -1, document_ids[q_idx] == document_ids[kv_idx % N]
+        )
 
     def diagonal_draft_mask_mod(b, h, q_idx, kv_idx):
         return kv_idx % total_seq_len == q_idx
