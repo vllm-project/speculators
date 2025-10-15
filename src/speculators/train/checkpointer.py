@@ -84,7 +84,8 @@ class SingleGPUCheckpointer(BaseCheckpointer):
         full_state_dict = load_safetensors_state_dict(
             self.model_path(self.previous_epoch), "cuda:0"
         )
-        model.load_state_dict(full_state_dict)
+        # Note: `strict=False` because we don't load the verifier weights
+        model.load_state_dict(full_state_dict, strict=False)
 
     def load_optimizer_state_dict(
         self,
@@ -110,10 +111,13 @@ class DistributedCheckpointer(BaseCheckpointer):
         full_state_dict = load_safetensors_state_dict(
             self.model_path(self.previous_epoch), "cpu"
         )
+        # Note: `strict=False` because we don't load the verifier weights
         set_model_state_dict(
             model,
             full_state_dict,  # type: ignore[arg-type]
-            options=StateDictOptions(full_state_dict=True, broadcast_from_rank0=True),
+            options=StateDictOptions(
+                full_state_dict=True, broadcast_from_rank0=True, strict=False
+            ),
         )
         dist.barrier()
 
