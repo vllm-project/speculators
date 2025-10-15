@@ -13,7 +13,13 @@ logger = logging.getLogger("speculators")
 
 
 def maybe_setup_distributed():
-    # Based off of https://docs.pytorch.org/tutorials/intermediate/ddp_tutorial.html#initialize-ddp-with-torch-distributed-run-torchrun
+    """Setup distributed training.
+    Gets the local rank and world_size from environment variables (if set). If not set,
+    assumes single process training and returns early.
+
+    Otherwise, initializes the distributed process group and sets local device index.
+    Based off of https://docs.pytorch.org/tutorials/intermediate/ddp_tutorial.html#initialize-ddp-with-torch-distributed-run-torchrun
+    """
     if not is_distributed:
         # No distributed training
         return 0, 1, 0, False
@@ -35,6 +41,7 @@ def maybe_setup_distributed():
 
 
 def maybe_destroy_distributed():
+    """Destroy the distributed process group (if using distributed training)."""
     if not is_distributed:
         # No distributed training
         return
