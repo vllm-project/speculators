@@ -23,13 +23,13 @@ class Eagle3VerifierLMHead(torch.nn.Module):
         self.lm_head.weight.requires_grad = False
 
     def load_verifier_lm_head(
-        self, verifier_model_name_or_path: str, t2d_vocab: torch.Tensor
+        self, verifier_model_name_or_path: str, t2d: torch.Tensor
     ):
         verifier_model = AutoModelForCausalLM.from_pretrained(
             verifier_model_name_or_path
         )
-        verifier_lm_head_data = verifier_model.lm_head.weight.data.to(t2d_vocab.device)
-        trucated_data = verifier_lm_head_data[t2d_vocab, :]
+        verifier_lm_head_data = verifier_model.lm_head.weight.data.to(t2d.device)
+        trucated_data = verifier_lm_head_data[t2d, :]
         if trucated_data.shape[0] != self.lm_head.weight.shape[0]:
             raise ValueError(
                 f"Truncated verifier lm head data shape {trucated_data.shape} does not match draft lm head shape {self.lm_head.weight.shape}"
@@ -113,8 +113,8 @@ class Eagle3DraftModel(torch.nn.Module):
         verifier_model_name_or_path: str,
         hidden_size: int,  # Must be same for verifier and draft
         # Vocab mappings
-        t2d_vocab: torch.Tensor,
-        d2t_vocab: torch.Tensor,
+        t2d: torch.Tensor,
+        d2t: torch.Tensor,
         decoder_layer_config: PretrainedConfig,
         # Verifier
         verifier_vocab_size: int,
@@ -124,31 +124,30 @@ class Eagle3DraftModel(torch.nn.Module):
         ttt_steps: int = 3,
     ):
         super().__init__()
+        
+        norm_before_residual = True
         self.verifier_model_name_or_path = verifier_model_name_or_path
         self.hidden_size = hidden_size
         self.num_layers = num_layers
         self.decoder_layer_config = decoder_layer_config
         self.ttt_steps = ttt_steps
         self.register_buffer(
-            "t2d_vocab", t2d_vocab
+            "t2d", t2d
         )  # shape: [verifier_vocab_size], bool
         self.register_buffer(
-            "d2t_vocab", d2t_vocab
+            "d2t", d2t
         )  # shape: [draft_vocab_size], int offsets
-        self.draft_vocab_size = t2d_vocab.sum(dtype=torch.long).item()
+        self.draft_vocab_size = t2d.sum(dtype=torch.long).item()
         model_definitions = model_classes[decoder_layer_config.model_type]
 
-        self.fc_layer = torch.nn.Linear(3 * hidden_size, hidden_size)
+        self.fc = torch.nn.Linear(3 * hidden_size, hidden_size, bias=False)
         self.layers = torch.nn.ModuleList(
             [
-                model_definitions.decoder_layer_class(decoder_layer_config, layer_idx)
+                model_definitions.decoder_layer_class(decoder_layer_config, layer_idx, norm_before_residual=norm_before_residual)
                 for layer_idx in range(num_layers)
             ]
         )
-        self.hidden_norm = model_definitions.norm_class(
-            hidden_size, eps=decoder_layer_config.rms_norm_eps
-        )
-        self.lm_head_norm = model_definitions.norm_class(
+        self.norm = model_definitions.norm_class(
             hidden_size, eps=decoder_layer_config.rms_norm_eps
         )
         self.rotary_emb = model_definitions.rotary_emb_class(decoder_layer_config)
@@ -198,7 +197,7 @@ class Eagle3DraftModel(torch.nn.Module):
             device=device,
         )
 
-        hidden_states = self.fc_layer(hidden_states)
+        hidden_states = self.fc(hidden_states)
         # shape: [1, total_seq_len, hidden_size]
 
         original_input_ids = input_ids.detach().clone()
@@ -207,7 +206,6 @@ class Eagle3DraftModel(torch.nn.Module):
         draft_tokens = []
         accuracy_list = []
         for ttt_step in range(ttt_steps):
-            hidden_states = self.hidden_norm(hidden_states)
             with torch.no_grad():
                 input_embeds = self.embed_tokens(input_ids)
                 # shape: [1, total_seq_len, hidden_size]
@@ -235,7 +233,7 @@ class Eagle3DraftModel(torch.nn.Module):
                     **kwargs,
                 )
 
-            logits = self.lm_head(self.lm_head_norm(hidden_states))
+            logits = self.lm_head(self.norm(hidden_states))
             # shape: [1, total_seq_len, draft_vocab_size]
 
             if return_loss:
@@ -250,7 +248,7 @@ class Eagle3DraftModel(torch.nn.Module):
             # shape: [1, total_seq_len]
             # Use d2t to map draft tokens to verifier tokens.
             # Must be in verifier vocabulary space because we use full verifier vocabulary in embedding
-            input_ids = input_ids + self.d2t_vocab[input_ids]
+            input_ids = input_ids + self.d2t[input_ids]
 
             if use_off_policy_tokens:
                 # Overwrite input_ids with ground truth tokens

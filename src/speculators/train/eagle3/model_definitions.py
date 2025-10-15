@@ -14,11 +14,13 @@ from transformers.utils.generic import TransformersKwargs
 
 
 class LlamaConcatInputDecoderLayer(LlamaDecoderLayer):
-    def __init__(self, config: PretrainedConfig, layer_idx: int):
+    def __init__(self, config: PretrainedConfig, layer_idx: int, norm_before_residual: bool = False):
         super().__init__(config, layer_idx)
 
         ##### CHANGES START #####
+        self.norm_before_residual = norm_before_residual
         if layer_idx == 0:
+            self.hidden_norm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
             self.self_attn.q_proj = torch.nn.Linear(
                 2 * config.hidden_size,  # previous: config.hidden_size
                 config.num_attention_heads * config.head_dim,
@@ -33,10 +35,6 @@ class LlamaConcatInputDecoderLayer(LlamaDecoderLayer):
                 2 * config.hidden_size,  # previous: config.hidden_size
                 config.num_key_value_heads * config.head_dim,
                 bias=config.attention_bias,
-            )
-            self.input_layernorm = LlamaRMSNorm(
-                2 * config.hidden_size,  # previous: config.hidden_size
-                eps=config.rms_norm_eps,
             )
         self.layer_idx = layer_idx
         ##### CHANGES END #####
@@ -57,12 +55,23 @@ class LlamaConcatInputDecoderLayer(LlamaDecoderLayer):
         ##### CHANGES START #####
         # previous: residual = hidden_states
         if self.layer_idx == 0:
-            residual = hidden_states[:, :, hidden_states.shape[2] // 2 :]
+            # hidden_states are cat([embeds, hidden], dim=-1)
+            # so residual should be hidden part only, and embeds should be normalized
+            mid = hidden_states.shape[2] // 2
+            embeds, hidden = hidden_states.split(mid, dim=-1)
+            residual = hidden
+
+            # Apply norms
+            embeds = self.input_layernorm(embeds)
+            hidden = self.hidden_norm(hidden)
+            if self.norm_before_residual:
+                residual = hidden # set residual to normalized hidden
+            hidden_states = torch.cat([embeds, hidden], dim=-1)
         else:
             residual = hidden_states
+            hidden_states = self.input_layernorm(hidden_states)
         ##### CHANGES END #####
 
-        hidden_states = self.input_layernorm(hidden_states)
         # Self Attention
         hidden_states, _ = self.self_attn(
             hidden_states=hidden_states,
