@@ -2,8 +2,11 @@ import torch
 from transformers.configuration_utils import PretrainedConfig
 from transformers import AutoModelForCausalLM, DynamicCache
 
+from typing import ClassVar
 from torch.nn.attention.flex_attention import create_block_mask
 
+from speculators.model import SpeculatorModel
+from speculators.models.eagle3 import Eagle3SpeculatorConfig
 from speculators.train.eagle3.attention import (
     create_combined_mask_mod,
     extend_mask_for_draft_tokens,
@@ -106,8 +109,16 @@ def loss_function(
     # shape: [batch_size]
     return batch_loss.mean()
 
-
-class Eagle3DraftModel(torch.nn.Module):
+@SpeculatorModel.register("eagle3_draft")
+class Eagle3DraftModel(SpeculatorModel):
+    config_class: ClassVar[type[Eagle3SpeculatorConfig]] = Eagle3SpeculatorConfig  # type: ignore[misc]
+    _keys_to_ignore_on_load_missing: ClassVar[list[str]] = [  # type: ignore[misc]
+        "embed_tokens.weight",
+        "lm_head.weight",
+        "d2t",
+        "t2d",
+    ]
+    _keys_to_ignore_on_save: ClassVar[list[str]] = []  # type: ignore[misc,assignment]
     def __init__(
         self,
         verifier_model_name_or_path: str,
@@ -123,9 +134,28 @@ class Eagle3DraftModel(torch.nn.Module):
         num_layers: int = 1,
         ttt_steps: int = 3,
     ):
-        super().__init__()
         
         norm_before_residual = True
+        from speculators.config import SpeculatorsConfig, VerifierConfig
+        from speculators.proposals.greedy import GreedyTokenProposalConfig
+        speculator_config = Eagle3SpeculatorConfig(
+            transformer_layer_config=decoder_layer_config,
+            draft_vocab_size=t2d.sum(dtype=torch.long).item(),
+            norm_before_residual=norm_before_residual,
+            speculators_config=SpeculatorsConfig(
+                algorithm="eagle3",
+                proposal_methods=[GreedyTokenProposalConfig(
+                    proposal_type="greedy",
+                    speculative_tokens=ttt_steps,
+                )],
+                default_proposal_method="greedy",
+                verifier=VerifierConfig(
+                    name_or_path=verifier_model_name_or_path,
+                    architectures=["LlamaForCausalLM"], # todo: fix
+                ),
+            ),
+        )
+        super().__init__(config=speculator_config, verifier=None, verifier_attachment_mode="train_only")
         self.verifier_model_name_or_path = verifier_model_name_or_path
         self.hidden_size = hidden_size
         self.num_layers = num_layers
