@@ -5,6 +5,7 @@ from torch.nn.attention.flex_attention import create_block_mask
 from transformers import AutoConfig, AutoModelForCausalLM, DynamicCache
 from transformers.configuration_utils import PretrainedConfig
 
+from speculators.config import VerifierConfig
 from speculators.model import SpeculatorModel
 from speculators.models.eagle3 import Eagle3SpeculatorConfig
 from speculators.train.eagle3.attention import (
@@ -18,31 +19,9 @@ def load_verifier_embeddings(verifier_model_name_or_path: str):
     verifier_model = AutoModelForCausalLM.from_pretrained(verifier_model_name_or_path)
     return verifier_model.model.embed_tokens.state_dict()
 
-
-class Eagle3VerifierLMHead(torch.nn.Module):
-    def __init__(self, hidden_size: int, draft_vocab_size: int):
-        super().__init__()
-        self.lm_head = torch.nn.Linear(hidden_size, draft_vocab_size, bias=False)
-        self.lm_head.weight.requires_grad = False
-
-    def load_verifier_lm_head(
-        self, verifier_model_name_or_path: str, t2d: torch.Tensor
-    ):
-        verifier_model = AutoModelForCausalLM.from_pretrained(
-            verifier_model_name_or_path
-        )
-        verifier_lm_head_data = verifier_model.lm_head.weight.data.to(t2d.device)
-        trucated_data = verifier_lm_head_data[t2d, :]
-        if trucated_data.shape[0] != self.lm_head.weight.shape[0]:
-            raise ValueError(
-                f"Truncated verifier lm head data shape {trucated_data.shape} does not match draft lm head shape {self.lm_head.weight.shape}"
-            )
-        self.lm_head.weight.data = trucated_data
-
-    @torch.no_grad()
-    def forward(self, verifier_last_hidden_states: torch.Tensor):
-        return self.lm_head(verifier_last_hidden_states)
-
+def load_verifier_lm_head(verifier_model_name_or_path: str):
+    verifier_model = AutoModelForCausalLM.from_pretrained(verifier_model_name_or_path)
+    return verifier_model.lm_head.state_dict()
 
 def align_for_step(
     logits: torch.Tensor,  # shape: [batch_size, total_seq_len, draft_vocab_size]
@@ -115,11 +94,11 @@ class Eagle3DraftModel(SpeculatorModel):
     config_class: ClassVar[type[Eagle3SpeculatorConfig]] = Eagle3SpeculatorConfig  # type: ignore[misc]
     _keys_to_ignore_on_load_missing: ClassVar[list[str]] = [  # type: ignore[misc]
         "embed_tokens.weight",
-        "lm_head.weight",
+        "verifier_lm_head.weight",
         "d2t",
         "t2d",
     ]
-    _keys_to_ignore_on_save: ClassVar[list[str]] = []  # type: ignore[misc,assignment]
+    _keys_to_ignore_on_save: ClassVar[list[str]] = ["verifier_lm_head.weight"]  # type: ignore[misc,assignment]
 
     def __init__(
         self,
@@ -159,30 +138,49 @@ class Eagle3DraftModel(SpeculatorModel):
         self.rotary_emb = model_definitions.rotary_emb_class(
             config.transformer_layer_config
         )
+        self._setup_embeddings_and_lm_heads(config.speculators_config.verifier, t2d)
 
-        verifier_config = AutoConfig.from_pretrained(
-            config.speculators_config.verifier.name_or_path
+
+    def _setup_embeddings_and_lm_heads(self, config: VerifierConfig, t2d: torch.Tensor):
+        verifier_model_config = AutoConfig.from_pretrained(
+            config.name_or_path
         )
-        if verifier_config.hidden_size != self.hidden_size:
+        if verifier_model_config.hidden_size != self.hidden_size:
             raise ValueError(
-                f"Verifier hidden size {verifier_config.hidden_size} does not match draft hidden size {self.hidden_size}."
+                f"Verifier hidden size {verifier_model_config.hidden_size} does not match draft hidden size {self.hidden_size}."
             )
 
+        # EMBEDDINGS
         self.embed_tokens = torch.nn.Embedding(
-            verifier_config.vocab_size,
+            verifier_model_config.vocab_size,
             self.hidden_size,
-            padding_idx=verifier_config.pad_token_id,
+            padding_idx=verifier_model_config.pad_token_id,
         )
         # shape: [verifier_vocab_size, hidden_size]
+
         self.embed_tokens.load_state_dict(
-            load_verifier_embeddings(config.speculators_config.verifier.name_or_path)
+            load_verifier_embeddings(config.name_or_path)
         )
         self.embed_tokens.weight.requires_grad = False
 
+        # LM HEADS
         self.lm_head = torch.nn.Linear(
             self.hidden_size, self.draft_vocab_size, bias=False
         )
         # shape: [hidden_size, draft_vocab_size]
+        self.verifier_lm_head = torch.nn.Linear(self.hidden_size, self.draft_vocab_size, bias=False)
+
+        verifier_lm_head_state_dict = load_verifier_lm_head(config.name_or_path)
+        verifier_lm_head_weight = verifier_lm_head_state_dict["weight"].to(t2d.device)
+        truncated_verifier_lm_head_weight = verifier_lm_head_weight[t2d.to(torch.bool), :]
+        if truncated_verifier_lm_head_weight.shape != self.lm_head.weight.shape:
+            raise ValueError(
+                f"Truncated verifier lm head data shape {truncated_verifier_lm_head_weight.shape} does not match draft lm head shape {self.lm_head.weight.shape}"
+            )
+        self.lm_head.weight.data = truncated_verifier_lm_head_weight.detach().clone()
+        self.verifier_lm_head.weight.data = truncated_verifier_lm_head_weight.detach().clone()
+        self.verifier_lm_head.weight.requires_grad = False
+
 
     def forward(
         self,
@@ -191,15 +189,13 @@ class Eagle3DraftModel(SpeculatorModel):
         lengths: torch.Tensor | None = None,  # shape: [batch_size]
         loss_mask: torch.Tensor | None = None,  # shape: [1, total_seq_len]
         position_ids: torch.Tensor | None = None,  # shape: [1, total_seq_len]
-        target_logits: torch.Tensor
-        | None = None,  # shape: [1, total_seq_len, draft_vocab_size]
+        verifier_last_hidden_states: torch.Tensor | None = None,  # shape: [1, total_seq_len, hidden_size]
         ttt_steps: int | None = None,
         use_off_policy_tokens: bool = False,
         **kwargs,
     ):
         device = hidden_states.device
         total_seq_len = hidden_states.shape[1]
-        return_loss = target_logits is not None
 
         if ttt_steps is None:
             ttt_steps = self.ttt_steps
@@ -222,6 +218,11 @@ class Eagle3DraftModel(SpeculatorModel):
         # shape: [1, total_seq_len, hidden_size]
 
         original_input_ids = input_ids.detach().clone()
+        return_loss = verifier_last_hidden_states is not None
+        if return_loss:
+            with torch.no_grad():
+                target_logits = self.verifier_lm_head(verifier_last_hidden_states)
+                # shape: [1, total_seq_len, draft_vocab_size]
 
         loss = torch.tensor(0.0, device=device)
         draft_tokens = []

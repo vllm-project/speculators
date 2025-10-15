@@ -15,7 +15,7 @@ from speculators.train.data import (
 from speculators.train.distributed_batch_sampler import (
     MultipackDistributedBatchSamplerV2,
 )
-from speculators.train.eagle3.core import Eagle3DraftModel, Eagle3VerifierLMHead
+from speculators.train.eagle3.core import Eagle3DraftModel
 from speculators.train.logger import setup_metric_logger, setup_root_logger
 from speculators.train.trainer import Trainer
 from speculators.train.utils import maybe_destroy_distributed, maybe_setup_distributed
@@ -35,12 +35,14 @@ norm_before_residual = True
 ttt_steps = 3
 
 
-llama_config = LlamaConfig(hidden_size=hidden_size, num_hidden_layers=1)
+llama_config = LlamaConfig(hidden_size=hidden_size, vocab_size=verifier_vocab_size, num_hidden_layers=1)
 llama_config._attn_implementation = "simple_flex_attention"
 
 
 d2t = torch.from_numpy(np.load("d2t.npy")).to(DEVICE)
 t2d = torch.from_numpy(np.load("t2d.npy")).to(DEVICE)
+
+assert draft_vocab_size == t2d.sum(dtype=torch.long).item()
 
 setup_metric_logger(loggers="trackio", run_name=None, output_dir="./logs")
 setup_root_logger()
@@ -70,14 +72,7 @@ draft_model = Eagle3DraftModel(
     config=speculator_config, t2d=t2d, d2t=d2t, ttt_steps=ttt_steps
 )
 
-verifier_lm_head = Eagle3VerifierLMHead(
-    hidden_size=hidden_size, draft_vocab_size=draft_vocab_size
-)
-verifier_lm_head.load_verifier_lm_head(verifier_model_name_or_path, t2d)
 
-### TMP
-draft_model.lm_head.weight.data = verifier_lm_head.lm_head.weight.data.to(t2d.device)
-###
 noise_transform = AddUniformNoise(
     std=0.2, tensors=("hidden_states", "verifier_last_hidden_states")
 )
@@ -133,7 +128,6 @@ config = {
 
 trainer = Trainer(
     draft_model,
-    verifier_lm_head,
     config,
     train_loader,
     val_loader,
