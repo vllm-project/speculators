@@ -25,15 +25,16 @@ Adapted from https://github.com/imoneoi/multipack_sampler.
 """
 
 # Standard
+import warnings
 from functools import lru_cache
 from heapq import heapreplace
 from typing import NamedTuple
-import warnings
+
+import numpy as np
 
 # Third Party
 from numpy.typing import ArrayLike, NDArray
 from torch.utils.data import Sampler
-import numpy as np
 
 
 ## Multipack Distributed Batch Sampler

@@ -1,9 +1,9 @@
-import torch
-from transformers.configuration_utils import PretrainedConfig
-from transformers import AutoModelForCausalLM, DynamicCache
-
 from typing import ClassVar
+
+import torch
 from torch.nn.attention.flex_attention import create_block_mask
+from transformers import AutoModelForCausalLM, DynamicCache
+from transformers.configuration_utils import PretrainedConfig
 
 from speculators.model import SpeculatorModel
 from speculators.models.eagle3 import Eagle3SpeculatorConfig

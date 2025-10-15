@@ -1,8 +1,12 @@
 import torch
-from transformers.modeling_utils import AttentionInterface
+from torch.nn.attention.flex_attention import (
+    BlockMask,
+    and_masks,
+    flex_attention,
+    or_masks,
+)
 from transformers.integrations.flex_attention import repeat_kv
-from torch.nn.attention.flex_attention import flex_attention
-from torch.nn.attention.flex_attention import or_masks, and_masks, BlockMask
+from transformers.modeling_utils import AttentionInterface
 
 flex_attention = torch.compile(flex_attention)
 

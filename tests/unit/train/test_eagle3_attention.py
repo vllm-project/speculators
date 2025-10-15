@@ -1,11 +1,11 @@
 import pytest
+import torch
+from torch.nn.attention.flex_attention import BlockMask
+
 from speculators.train.eagle3.attention import (
     create_combined_mask_mod,
     extend_mask_for_draft_tokens,
-    flex_attention_forward,
 )
-from torch.nn.attention.flex_attention import BlockMask
-import torch
 
 
 def test_create_combined_mask_mod():
@@ -127,4 +127,3 @@ def test_extend_mask_for_draft_tokens(kv_num_blocks, kv_indices, expected_kv_ind
         )
 
     assert extended_mask.mask_mod == block_mask.mask_mod
-

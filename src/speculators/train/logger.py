@@ -48,20 +48,20 @@ Example Usage:
 # SPDX-License-Identifier: Apache-2.0
 
 # Standard
-from collections.abc import Mapping
-from datetime import datetime, timezone
-from logging.config import dictConfig
 import importlib
-from pathlib import Path
-from typing import Any, Union
 import logging
 import os
 import warnings
+from collections.abc import Mapping
+from datetime import datetime, timezone
+from logging.config import dictConfig
+from pathlib import Path
+from typing import Any, Union
 
+import torch
 
 # Third Party
 from rich.logging import RichHandler
-import torch
 
 ### Helper functions
 
