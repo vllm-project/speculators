@@ -10,8 +10,6 @@ from torch.nn.attention.flex_attention import (
 )
 from transformers.modeling_utils import AttentionInterface
 
-flex_attention = torch.compile(flex_attention)
-
 
 def create_combined_mask_mod(lengths: torch.Tensor, total_seq_len: int):
     document_ids = torch.repeat_interleave(
