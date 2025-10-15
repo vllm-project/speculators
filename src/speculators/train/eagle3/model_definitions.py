@@ -14,7 +14,12 @@ from transformers.utils.generic import TransformersKwargs
 
 
 class LlamaConcatInputDecoderLayer(LlamaDecoderLayer):
-    def __init__(self, config: PretrainedConfig, layer_idx: int, norm_before_residual: bool = False):
+    def __init__(
+        self,
+        config: PretrainedConfig,
+        layer_idx: int,
+        norm_before_residual: bool = False,
+    ):
         super().__init__(config, layer_idx)
 
         ##### CHANGES START #####
@@ -65,7 +70,7 @@ class LlamaConcatInputDecoderLayer(LlamaDecoderLayer):
             embeds = self.input_layernorm(embeds)
             hidden = self.hidden_norm(hidden)
             if self.norm_before_residual:
-                residual = hidden # set residual to normalized hidden
+                residual = hidden  # set residual to normalized hidden
             hidden_states = torch.cat([embeds, hidden], dim=-1)
         else:
             residual = hidden_states

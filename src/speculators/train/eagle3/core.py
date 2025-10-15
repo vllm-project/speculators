@@ -109,6 +109,7 @@ def loss_function(
     # shape: [batch_size]
     return batch_loss.mean()
 
+
 @SpeculatorModel.register("eagle3_draft")
 class Eagle3DraftModel(SpeculatorModel):
     config_class: ClassVar[type[Eagle3SpeculatorConfig]] = Eagle3SpeculatorConfig  # type: ignore[misc]
@@ -119,6 +120,7 @@ class Eagle3DraftModel(SpeculatorModel):
         "t2d",
     ]
     _keys_to_ignore_on_save: ClassVar[list[str]] = []  # type: ignore[misc,assignment]
+
     def __init__(
         self,
         verifier_model_name_or_path: str,
@@ -134,46 +136,52 @@ class Eagle3DraftModel(SpeculatorModel):
         num_layers: int = 1,
         ttt_steps: int = 3,
     ):
-        
         norm_before_residual = True
         from speculators.config import SpeculatorsConfig, VerifierConfig
         from speculators.proposals.greedy import GreedyTokenProposalConfig
+
         speculator_config = Eagle3SpeculatorConfig(
             transformer_layer_config=decoder_layer_config,
             draft_vocab_size=t2d.sum(dtype=torch.long).item(),
             norm_before_residual=norm_before_residual,
             speculators_config=SpeculatorsConfig(
                 algorithm="eagle3",
-                proposal_methods=[GreedyTokenProposalConfig(
-                    proposal_type="greedy",
-                    speculative_tokens=ttt_steps,
-                )],
+                proposal_methods=[
+                    GreedyTokenProposalConfig(
+                        proposal_type="greedy",
+                        speculative_tokens=ttt_steps,
+                    )
+                ],
                 default_proposal_method="greedy",
                 verifier=VerifierConfig(
                     name_or_path=verifier_model_name_or_path,
-                    architectures=["LlamaForCausalLM"], # todo: fix
+                    architectures=["LlamaForCausalLM"],  # todo: fix
                 ),
             ),
         )
-        super().__init__(config=speculator_config, verifier=None, verifier_attachment_mode="train_only")
+        super().__init__(
+            config=speculator_config,
+            verifier=None,
+            verifier_attachment_mode="train_only",
+        )
         self.verifier_model_name_or_path = verifier_model_name_or_path
         self.hidden_size = hidden_size
         self.num_layers = num_layers
         self.decoder_layer_config = decoder_layer_config
         self.ttt_steps = ttt_steps
-        self.register_buffer(
-            "t2d", t2d
-        )  # shape: [verifier_vocab_size], bool
-        self.register_buffer(
-            "d2t", d2t
-        )  # shape: [draft_vocab_size], int offsets
+        self.register_buffer("t2d", t2d)  # shape: [verifier_vocab_size], bool
+        self.register_buffer("d2t", d2t)  # shape: [draft_vocab_size], int offsets
         self.draft_vocab_size = t2d.sum(dtype=torch.long).item()
         model_definitions = model_classes[decoder_layer_config.model_type]
 
         self.fc = torch.nn.Linear(3 * hidden_size, hidden_size, bias=False)
         self.layers = torch.nn.ModuleList(
             [
-                model_definitions.decoder_layer_class(decoder_layer_config, layer_idx, norm_before_residual=norm_before_residual)
+                model_definitions.decoder_layer_class(
+                    decoder_layer_config,
+                    layer_idx,
+                    norm_before_residual=norm_before_residual,
+                )
                 for layer_idx in range(num_layers)
             ]
         )
