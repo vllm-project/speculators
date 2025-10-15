@@ -1,23 +1,21 @@
-import torch
 import numpy as np
+import torch
+from torch.utils.data import DataLoader
 from transformers import LlamaConfig
 
-from speculators.train.eagle3.core import Eagle3DraftModel, Eagle3VerifierLMHead
 from speculators.train.data import (
+    AddUniformNoise,
     Eagle3SampleFileDataset,
     create_collate_fn,
     split_files,
-    AddUniformNoise,
 )
 from speculators.train.distributed_batch_sampler import (
     MultipackDistributedBatchSamplerV2,
 )
-from torch.utils.data import DataLoader
-
-from speculators.train.utils import maybe_setup_distributed, maybe_destroy_distributed
-from speculators.train.trainer import Trainer
+from speculators.train.eagle3.core import Eagle3DraftModel, Eagle3VerifierLMHead
 from speculators.train.logger import setup_metric_logger, setup_root_logger
-
+from speculators.train.trainer import Trainer
+from speculators.train.utils import maybe_destroy_distributed, maybe_setup_distributed
 
 local_rank, world_size, rank, is_distributed = maybe_setup_distributed()
 

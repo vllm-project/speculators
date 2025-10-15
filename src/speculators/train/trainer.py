@@ -1,15 +1,14 @@
+import logging
+
 import torch
-from torch.distributed.fsdp import FSDPModule, fully_shard, MixedPrecisionPolicy
+import torch.distributed as dist
+from torch.distributed.fsdp import FSDPModule, MixedPrecisionPolicy, fully_shard
 from torch.utils.data import DataLoader
 from tqdm.rich import tqdm  # todo: requries tqdm and rich
 
-
-import torch.distributed as dist
-import logging
-
 from speculators.train.checkpointer import (
-    SingleGPUCheckpointer,
     DistributedCheckpointer,
+    SingleGPUCheckpointer,
 )
 
 root_logger = logging.getLogger("speculators")
