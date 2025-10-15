@@ -80,7 +80,8 @@ class Eagle3DraftModel(torch.nn.Module):
                 for layer_idx in range(num_layers)
             ]
         )
-        self.norm = model_definitions.norm_class(
+        self.hidden_norm = model_definitions.norm_class(hidden_size, eps=decoder_layer_config.rms_norm_eps)
+        self.lm_head_norm = model_definitions.norm_class(
             hidden_size, eps=decoder_layer_config.rms_norm_eps
         )
         self.rotary_emb = model_definitions.rotary_emb_class(decoder_layer_config)
@@ -89,6 +90,7 @@ class Eagle3DraftModel(torch.nn.Module):
         )
         # shape: [verifier_vocab_size, hidden_size]
         self.embed_tokens.load_state_dict(load_verifier_embeddings(verifier_model_name_or_path))
+        self.embed_tokens.weight.requires_grad = False
 
         self.lm_head = torch.nn.Linear(hidden_size, self.draft_vocab_size, bias=False)
         # shape: [hidden_size, draft_vocab_size]
@@ -120,18 +122,19 @@ class Eagle3DraftModel(torch.nn.Module):
             # shape: [batch_size=1, total_seq_len - ttt_step]
 
         logits = torch.nn.functional.log_softmax(logits, dim=-1)
-        targets = torch.nn.functional.log_softmax(targets, dim=-1)
-        kl_div = torch.nn.functional.kl_div(
-            logits, targets, reduction="none", log_target=True
+        target_p = torch.nn.functional.softmax(targets, dim=-1)
+        elementwise_loss = torch.nn.functional.kl_div(
+            logits, target_p, reduction="none", log_target=False
         )
+                
         if loss_mask is not None:
-            masked_kl_div = torch.sum(loss_mask.unsqueeze(-1) * kl_div, dim=(1, 2)) / (
-                    loss_mask.sum(dim=1) + 1e-5
-                )
+            elementwise_loss = elementwise_loss * loss_mask.unsqueeze(-1)
+            denominator = loss_mask.sum(dim=1) + 1e-5
         else:
-            masked_kl_div = kl_div.sum(-1).mean(-1) # sum over draft_vocab_size, mean over total_seq_len
+            denominator = logits.shape[1] # total_seq_len - ttt_step
+        batch_loss = torch.sum(elementwise_loss, dim=(1, 2)) / denominator
         # shape: [batch_size=1]
-        return masked_kl_div.mean()
+        return batch_loss.mean()
 
     def forward(
         self,
@@ -177,6 +180,7 @@ class Eagle3DraftModel(torch.nn.Module):
 
         draft_tokens = []
         for ttt_step in range(ttt_steps):
+            hidden_states = self.hidden_norm(hidden_states)
             with torch.no_grad():
                 input_embeds = self.embed_tokens(input_ids)
                 # shape: [1, total_seq_len, hidden_size]
@@ -204,9 +208,7 @@ class Eagle3DraftModel(torch.nn.Module):
                     **kwargs,
                 )
 
-            hidden_states = self.norm(hidden_states)
-
-            logits = self.lm_head(hidden_states)
+            logits = self.lm_head(self.lm_head_norm(hidden_states))
             # shape: [1, total_seq_len, draft_vocab_size]
 
             if return_loss:
@@ -225,7 +227,7 @@ class Eagle3DraftModel(torch.nn.Module):
                 # note: inputs_ids will no longer line up with verifier_last_hidden_state
                 # the draft logits generated from the padded tokens are ignored sliced out for loss calculation
                 input_ids = torch.cat(
-                    [original_input_ids[:, 1:], original_input_ids.new_zeros(1, 1)], dim=-1
+                    [original_input_ids[:, 1+ttt_step:], original_input_ids.new_zeros(1, 1+ttt_step)], dim=-1
                 )
                 # shape: [1, total_seq_len]
 
