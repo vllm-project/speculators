@@ -9,7 +9,6 @@ from speculators.config import SpeculatorsConfig, VerifierConfig
 from speculators.models.eagle3 import Eagle3SpeculatorConfig
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 from speculators.train.data import (
-    AddUniformNoise,
     Eagle3SampleFileDataset,
     create_collate_fn,
     split_files,
@@ -21,6 +20,7 @@ from speculators.train.distributed_batch_sampler import (
 )
 from speculators.train.eagle3.core import Eagle3DraftModel
 from speculators.train.logger import setup_metric_logger, setup_root_logger
+from speculators.train.noise_transforms import AddUniformNoise
 from speculators.train.trainer import Trainer, TrainerConfig
 from speculators.train.utils import maybe_destroy_distributed, maybe_setup_distributed
 
