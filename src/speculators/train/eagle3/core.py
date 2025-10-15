@@ -97,8 +97,8 @@ class Eagle3DraftModel(torch.nn.Module):
         self,
         logits: torch.Tensor, # shape: [batch_size=1, total_seq_len, draft_vocab_size]
         targets: torch.Tensor, # shape: [batch_size=1, total_seq_len, draft_vocab_size]
-        loss_mask: torch.Tensor, # shape: [batch_size=1, total_seq_len]
-        ttt_step: int,
+        loss_mask: torch.Tensor | None = None, # shape: [batch_size=1, total_seq_len]
+        ttt_step: int = 0,
     ):
         # We don't have target values for the last ttt_step tokens, so we mask them out on the logit side
         # We shift the target values by ttt_step + 1 to the left because that's the position the generated tokens correspond to
@@ -115,17 +115,21 @@ class Eagle3DraftModel(torch.nn.Module):
         logits = logits[:, :-ttt_step] if ttt_step > 0 else logits
         targets = targets[:, ttt_step:]
         # logits/targets shape: [batch_size=1, total_seq_len - ttt_step, draft_vocab_size]
-        loss_mask = loss_mask[:, ttt_step:]
-        # loss_mask shape: [batch_size=1, total_seq_len - ttt_step]
+        if loss_mask is not None:
+            loss_mask = loss_mask[:, ttt_step:]
+            # shape: [batch_size=1, total_seq_len - ttt_step]
 
         logits = torch.nn.functional.log_softmax(logits, dim=-1)
         targets = torch.nn.functional.log_softmax(targets, dim=-1)
         kl_div = torch.nn.functional.kl_div(
             logits, targets, reduction="none", log_target=True
         )
-        masked_kl_div = torch.sum(loss_mask.unsqueeze(-1) * kl_div, dim=(1, 2)) / (
-            loss_mask.sum(dim=1) + 1e-5
-        )
+        if loss_mask is not None:
+            masked_kl_div = torch.sum(loss_mask.unsqueeze(-1) * kl_div, dim=(1, 2)) / (
+                    loss_mask.sum(dim=1) + 1e-5
+                )
+        else:
+            masked_kl_div = kl_div.sum(-1).mean(-1) # sum over draft_vocab_size, mean over total_seq_len
         # shape: [batch_size=1]
         return masked_kl_div.mean()
 
@@ -153,7 +157,7 @@ class Eagle3DraftModel(torch.nn.Module):
 
         past_key_values = DynamicCache(config=self.decoder_layer_config)
 
-        combined_mask_mod = create_combined_mask_mod(lengths.to(device))
+        combined_mask_mod = create_combined_mask_mod(lengths.to(device), total_seq_len)
         block_mask = create_block_mask(
             combined_mask_mod,
             B=None,
@@ -173,8 +177,9 @@ class Eagle3DraftModel(torch.nn.Module):
 
         draft_tokens = []
         for ttt_step in range(ttt_steps):
-            input_embeds = self.embed_tokens(input_ids)
-            # shape: [1, total_seq_len, hidden_size]
+            with torch.no_grad():
+                input_embeds = self.embed_tokens(input_ids)
+                # shape: [1, total_seq_len, hidden_size]
             cache_position = torch.arange(
                 ttt_step * total_seq_len,
                 (ttt_step + 1) * total_seq_len,
