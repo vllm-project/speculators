@@ -175,13 +175,9 @@ def create_collate_fn(max_len: int):
         for length in lengths:
             if length + cum_length >= max_len:
                 new_lengths.append(max_len - cum_length)
-                cum_length = max_len
                 break
             new_lengths.append(length)
             cum_length += length
-        if cum_length < max_len:
-            # Add extra "padded" sample so that sum(new_lengths) == max_len
-            new_lengths.append(max_len - cum_length)
         collated_data["lengths"] = torch.tensor(new_lengths, dtype=torch.long)
         return collated_data
 

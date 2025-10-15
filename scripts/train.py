@@ -1,4 +1,5 @@
 import torch
+import numpy as np
 from transformers import LlamaConfig
 
 from speculators.train.eagle3.core import Eagle3DraftModel, Eagle3VerifierLMHead
@@ -18,17 +19,18 @@ local_rank, world_size, rank, is_distributed = maybe_setup_distributed()
 
 DEVICE = torch.device(local_rank)
 EPOCHS = 10
-draft_vocab_size = 5000
-total_seq_len = 5120
+draft_vocab_size = 32000
+total_seq_len = 4352
 datapath = "./data"
 verifier_model_name_or_path = "meta-llama/Llama-3.1-8B-Instruct"
 
 
 # TEMP MODEL SETUP
 llama_config = LlamaConfig.from_pretrained(verifier_model_name_or_path)
-llama_config._attn_implementation = "simple_flex_attention"
 hidden_size = llama_config.hidden_size
 verifier_vocab_size = llama_config.vocab_size
+llama_config = LlamaConfig(hidden_size=hidden_size, vocab_size=verifier_vocab_size)
+llama_config._attn_implementation = "simple_flex_attention"
 
 # d2t_vocab = torch.zeros(draft_vocab_size, dtype=torch.long).to(DEVICE)
 # t2d_vocab = (
@@ -41,8 +43,8 @@ verifier_vocab_size = llama_config.vocab_size
 #     .to(torch.bool)
 #     .to(DEVICE)
 # )
-d2t_vocab = torch.load("d2t.npy").to(DEVICE)
-t2d_vocab = torch.load("t2d.npy").to(DEVICE)
+d2t_vocab = torch.from_numpy(np.load("d2t.npy")).to(DEVICE)
+t2d_vocab = torch.from_numpy(np.load("t2d.npy")).to(DEVICE)
 
 setup_metric_logger(loggers="trackio", run_name=None, output_dir="./logs")
 setup_root_logger()
@@ -75,7 +77,8 @@ batch_sampler = MultipackDistributedBatchSamplerV2(
 train_loader = DataLoader(
     dataset,
     batch_sampler=batch_sampler,
-    num_workers=16,
+    num_workers=8,
+    prefetch_factor=4,
     pin_memory=True,
     collate_fn=create_collate_fn(total_seq_len),
 )

@@ -6,18 +6,21 @@ from torch.nn.attention.flex_attention import or_masks, and_masks, BlockMask
 from typing import Callable
 
 
-def create_combined_mask_mod(lengths: torch.Tensor):
-    total_seq_len = lengths.sum().item()
+def create_combined_mask_mod(lengths: torch.Tensor, total_seq_len: int):
     document_ids = torch.repeat_interleave(
         torch.arange(lengths.shape[0], device=lengths.device, dtype=torch.long), lengths
-    ).contiguous()
+    )
+    # Pad ids with -1 to indicate padding
+    document_ids = torch.cat([document_ids, -1 * torch.ones(total_seq_len - document_ids.shape[0], device=lengths.device, dtype=torch.long)]).contiguous()
+
     N = document_ids.shape[0]
 
     def causal_mask_mod(b, h, q_idx, kv_idx):
         return q_idx >= kv_idx
 
     def document_mask_mod(b, h, q_idx, kv_idx):
-        return document_ids[q_idx] == document_ids[kv_idx % N]
+        # Exclude padding tokens in attention mask
+        return torch.logical_and(document_ids[q_idx] != -1, document_ids[q_idx] == document_ids[kv_idx % N])
 
     def diagonal_draft_mask_mod(b, h, q_idx, kv_idx):
         return kv_idx % total_seq_len == q_idx
