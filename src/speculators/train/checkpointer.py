@@ -28,11 +28,14 @@ class BaseCheckpointer:
         ...
     """
 
-    def __init__(self, path: Path | str, try_load_last_checkpoint: bool = True):
+    def __init__(self, path: Path | str):
         self.path = Path(path)
-        self.previous_epoch = (
-            self._get_previous_epoch() if try_load_last_checkpoint else -1
-        )
+        self.previous_epoch = self._get_previous_epoch()
+
+        if self.previous_epoch != -1:
+            self.prev_path: Path | None = self.path / str(self.previous_epoch)
+        else:
+            self.prev_path = None
 
     @abstractmethod
     def load_model_state_dict(self, model: PreTrainedModel):

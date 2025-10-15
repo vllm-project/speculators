@@ -1,10 +1,12 @@
 import logging
+import warnings
 from typing import NamedTuple
 
 import torch
 import torch.distributed as dist
 from torch.distributed.fsdp import FSDPModule
 from torch.utils.data import DataLoader
+from tqdm import TqdmExperimentalWarning
 from tqdm.rich import tqdm
 from transformers import PreTrainedModel
 
@@ -16,6 +18,8 @@ from speculators.train.utils import apply_fully_sharded
 
 root_logger = logging.getLogger("speculators")
 metric_logger = logging.getLogger("speculators.metrics")
+
+warnings.filterwarnings("ignore", category=TqdmExperimentalWarning)
 
 
 class TrainerConfig(NamedTuple):
@@ -47,19 +51,27 @@ class Trainer:
         checkpointer_class = (
             DistributedCheckpointer if self.is_distributed else SingleGPUCheckpointer
         )
-        self.checkpointer = checkpointer_class(
-            self.config.save_path,
-            try_load_last_checkpoint=self.config.resume_from_checkpoint,
-        )
+        self.checkpointer = checkpointer_class(self.config.save_path)
 
         self.setup_trainer()
         self.setup_model()
         self.setup_optimizer()
 
     def setup_trainer(self):
-        if self.resume_from_checkpoint:
+        if self.checkpointer.previous_epoch != -1:
+            root_logger.info(f"Found checkpoint at {self.checkpointer.prev_path}.")
             self.current_epoch = self.checkpointer.previous_epoch + 1
+            if self.resume_from_checkpoint:
+                root_logger.info(f"Resuming training on {self.current_epoch} epoch.")
+            else:
+                root_logger.warning(
+                    "`resume_from_checkpoint` is False, starting "
+                    "training from scratch. This will overwrite the "
+                    f"existing checkpoints in {self.checkpointer.path}."
+                )
+                self.current_epoch = 0
         else:
+            root_logger.info("No previous checkpoint found. Starting from scratch.")
             self.current_epoch = 0
         self.global_step = 0
 
@@ -99,7 +111,6 @@ class Trainer:
         train_loader = self.train_loader
         if self.local_rank == 0:
             train_loader = tqdm(train_loader, desc=f"Epoch {epoch}")  # type: ignore[assignment]
-        root_logger.info(f"Training Epoch {epoch} started")
 
         for batch in train_loader:
             gpu_batch = {
@@ -131,17 +142,13 @@ class Trainer:
             )
             self.global_step += 1
 
-        root_logger.info(f"Training Epoch {epoch} completed")
-
     @torch.no_grad()
     def val_epoch(self, epoch: int):
         if self.val_loader is None:
-            root_logger.warning("No val loader, skipping validation")
             return
         self.model.eval()
         if hasattr(self.val_loader.batch_sampler, "set_epoch"):
             self.val_loader.batch_sampler.set_epoch(epoch)  # type: ignore[union-attr]
-        root_logger.info(f"Validation Epoch {epoch} started")
         val_loader = self.val_loader
         if self.local_rank == 0:
             val_loader = tqdm(val_loader, desc=f"Epoch {epoch}")  # type: ignore[assignment]
@@ -176,16 +183,34 @@ class Trainer:
             {"val": {"loss_epoch": val_loss.item(), **acc_values}, "epoch": epoch},
             extra={"step": self.global_step},
         )
-        root_logger.info(f"Validation Epoch {epoch} completed")
 
     def save_checkpoint(self, epoch: int):
         self.checkpointer.save_checkpoint(self.model, self.opt, epoch)
-        root_logger.info(f"Checkpoint saved to {self.checkpointer.path / str(epoch)}")
 
     def run_training(self):
-        for epoch in range(self.current_epoch, self.config.num_epochs):
+        n_epochs = self.config.num_epochs
+        for epoch in range(self.current_epoch, n_epochs):
+            root_logger.info(f"Training epoch {epoch + 1}/{n_epochs} started")
             self.train_epoch(epoch)
+            root_logger.info(f"Training epoch {epoch + 1}/{n_epochs} completed")
+
             if self.is_distributed:
                 dist.barrier()
-            self.val_epoch(epoch)
+
+            if self.val_loader is None:
+                root_logger.warning("No val loader, skipping validation epoch")
+            else:
+                root_logger.info(f"Validation epoch {epoch + 1}/{n_epochs} started")
+                self.val_epoch(epoch)
+                root_logger.info(f"Validation epoch {epoch + 1}/{n_epochs} completed")
+
+            if self.is_distributed:
+                dist.barrier()
+
+            root_logger.info(
+                f"Started saving checkpoint to {self.checkpointer.path / str(epoch)}"
+            )
             self.save_checkpoint(epoch)
+            root_logger.info(
+                f"Finished saving checkpoint to {self.checkpointer.path / str(epoch)}"
+            )
