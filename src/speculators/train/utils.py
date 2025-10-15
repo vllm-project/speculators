@@ -3,6 +3,7 @@ import os
 
 import torch
 import torch.distributed as dist
+from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
 
 local_rank = int(os.environ.get("LOCAL_RANK", "0"))
 world_size = int(os.environ.get("WORLD_SIZE", "1"))
@@ -43,3 +44,19 @@ def maybe_destroy_distributed():
         f"Destroyed distributed with local_rank={local_rank}, world_size={world_size}",
         extra={"override_rank0_filter": True},
     )
+
+
+def apply_fully_sharded(model: torch.nn.Module):
+    mp_policy = MixedPrecisionPolicy(
+        param_dtype=torch.bfloat16,
+        reduce_dtype=torch.float32,
+    )
+    # todo: Hardcoded to Eagle3DraftModel, generalize
+    for layer in model.layers:  # type: ignore[union-attr]
+        # we apply fully_shard to each DecoderLayer
+        layer.to_empty(device="meta")
+        fully_shard(layer, mp_policy=mp_policy)
+
+    fully_shard(model, mp_policy=mp_policy)
+
+    return model
