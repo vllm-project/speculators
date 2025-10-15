@@ -10,10 +10,9 @@ from speculators.train.eagle3.attention import (
 )
 from speculators.train.eagle3.model_definitions import model_classes
 
+
 def load_verifier_embeddings(verifier_model_name_or_path: str):
-    verifier_model = AutoModelForCausalLM.from_pretrained(
-        verifier_model_name_or_path
-    )
+    verifier_model = AutoModelForCausalLM.from_pretrained(verifier_model_name_or_path)
     return verifier_model.model.embed_tokens.state_dict()
 
 
@@ -40,6 +39,72 @@ class Eagle3VerifierLMHead(torch.nn.Module):
     @torch.no_grad()
     def forward(self, verifier_last_hidden_states: torch.Tensor):
         return self.lm_head(verifier_last_hidden_states)
+
+
+def align_for_step(
+    logits: torch.Tensor,  # shape: [batch_size, total_seq_len, draft_vocab_size]
+    targets: torch.Tensor,  # shape: [batch_size, total_seq_len, draft_vocab_size]
+    loss_mask: torch.Tensor | None,  # shape: [batch_size, total_seq_len]
+    ttt_step: int,
+):
+    # We don't have target values for the last ttt_step tokens, so we mask them out on the logit side
+    # We shift the target values by ttt_step + 1 to the left because that's the position the generated tokens correspond to
+    # e.g.
+    # targets_indices = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+    # logits_indices_ttt_step_0 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+    # logits_indices_ttt_step_1 = [2, 3, 4, 5, 6, 7, 8, 9, 10]
+    # logits_indices_ttt_step_2 = [3, 4, 5, 6, 7, 8, 9, 10, 11]
+    # The indices for the loss_mask need to be kept in line with the targets indices
+    logits = logits[:, :-ttt_step] if ttt_step > 0 else logits
+    # shape: [batch_size, total_seq_len - ttt_step, draft_vocab_size]
+    targets = targets[:, ttt_step:]
+    # shape: [batch_size, total_seq_len - ttt_step, draft_vocab_size]
+    if loss_mask is not None:
+        loss_mask = loss_mask[:, ttt_step:]
+        # shape: [batch_size, total_seq_len - ttt_step]
+    return logits, targets, loss_mask
+
+
+@torch.no_grad()
+def compute_accuracy(
+    logits: torch.Tensor,  # shape: [batch_size, total_seq_len - ttt_step, draft_vocab_size]
+    targets: torch.Tensor,  # shape: [batch_size, total_seq_len - ttt_step, draft_vocab_size]
+    loss_mask: torch.Tensor | None,  # shape: [batch_size, total_seq_len - ttt_step]
+):
+    # Note: logits, targets, and loss_mask are already aligned for the current ttt_step
+    target_tokens = torch.argmax(targets, dim=-1)
+    predicted_tokens = torch.argmax(logits, dim=-1)
+    # shape: [batch_size, total_seq_len - ttt_step]
+
+    correct = predicted_tokens == target_tokens
+    if loss_mask is not None:
+        correct = torch.masked_select(correct, loss_mask.to(torch.bool))
+    acc = correct.float().sum() / (
+        correct.numel() + 1e-5
+    )  # avoid NaNs when loss_mask is all False
+    return acc
+
+
+def loss_function(
+    logits: torch.Tensor,  # shape: [batch_size, total_seq_len - ttt_step, draft_vocab_size]
+    targets: torch.Tensor,  # shape: [batch_size, total_seq_len - ttt_step, draft_vocab_size]
+    loss_mask: torch.Tensor | None,  # shape: [batch_size, total_seq_len - ttt_step]
+):
+    # Note: logits, targets, and loss_mask are already aligned for the current ttt_step
+    logits = torch.nn.functional.log_softmax(logits, dim=-1)
+    target_p = torch.nn.functional.softmax(targets, dim=-1)
+    elementwise_loss = torch.nn.functional.kl_div(
+        logits, target_p, reduction="none", log_target=False
+    )
+
+    if loss_mask is not None:
+        elementwise_loss = elementwise_loss * loss_mask.unsqueeze(-1)
+        denominator = loss_mask.sum(dim=1) + 1e-5
+    else:
+        denominator = logits.shape[1]  # total_seq_len - ttt_step
+    batch_loss = torch.sum(elementwise_loss, dim=(1, 2)) / denominator
+    # shape: [batch_size]
+    return batch_loss.mean()
 
 
 class Eagle3DraftModel(torch.nn.Module):
@@ -80,7 +145,9 @@ class Eagle3DraftModel(torch.nn.Module):
                 for layer_idx in range(num_layers)
             ]
         )
-        self.hidden_norm = model_definitions.norm_class(hidden_size, eps=decoder_layer_config.rms_norm_eps)
+        self.hidden_norm = model_definitions.norm_class(
+            hidden_size, eps=decoder_layer_config.rms_norm_eps
+        )
         self.lm_head_norm = model_definitions.norm_class(
             hidden_size, eps=decoder_layer_config.rms_norm_eps
         )
@@ -89,52 +156,13 @@ class Eagle3DraftModel(torch.nn.Module):
             verifier_vocab_size, hidden_size, padding_idx=verifier_pad_token_id
         )
         # shape: [verifier_vocab_size, hidden_size]
-        self.embed_tokens.load_state_dict(load_verifier_embeddings(verifier_model_name_or_path))
+        self.embed_tokens.load_state_dict(
+            load_verifier_embeddings(verifier_model_name_or_path)
+        )
         self.embed_tokens.weight.requires_grad = False
 
         self.lm_head = torch.nn.Linear(hidden_size, self.draft_vocab_size, bias=False)
         # shape: [hidden_size, draft_vocab_size]
-
-    def loss_function(
-        self,
-        logits: torch.Tensor, # shape: [batch_size=1, total_seq_len, draft_vocab_size]
-        targets: torch.Tensor, # shape: [batch_size=1, total_seq_len, draft_vocab_size]
-        loss_mask: torch.Tensor | None = None, # shape: [batch_size=1, total_seq_len]
-        ttt_step: int = 0,
-    ):
-        # We don't have target values for the last ttt_step tokens, so we mask them out on the logit side
-        # We shift the target values by ttt_step + 1 to the left because that's the position the generated tokens correspond to
-        # e.g.
-        # targets_indices = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-        # logits_indices_ttt_step_0 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-        # logits_indices_ttt_step_1 = [2, 3, 4, 5, 6, 7, 8, 9, 10]
-        # logits_indices_ttt_step_2 = [3, 4, 5, 6, 7, 8, 9, 10, 11]
-        # The indices for the loss_mask need to be kept in line with the targets indices
-
-        # Note: this function is written such that a batch_size > 1 is supported. This is through careful handling of the 0-th "batch dimension"
-        # However, currently the 0-th "batch dimension" is always 1 because we are packing the samples together by extending the sequence (1st) dimension.
-        # There could be a future use case for batch_size > 1, if pad and stack samples together instead of packing them.
-        logits = logits[:, :-ttt_step] if ttt_step > 0 else logits
-        targets = targets[:, ttt_step:]
-        # logits/targets shape: [batch_size=1, total_seq_len - ttt_step, draft_vocab_size]
-        if loss_mask is not None:
-            loss_mask = loss_mask[:, ttt_step:]
-            # shape: [batch_size=1, total_seq_len - ttt_step]
-
-        logits = torch.nn.functional.log_softmax(logits, dim=-1)
-        target_p = torch.nn.functional.softmax(targets, dim=-1)
-        elementwise_loss = torch.nn.functional.kl_div(
-            logits, target_p, reduction="none", log_target=False
-        )
-                
-        if loss_mask is not None:
-            elementwise_loss = elementwise_loss * loss_mask.unsqueeze(-1)
-            denominator = loss_mask.sum(dim=1) + 1e-5
-        else:
-            denominator = logits.shape[1] # total_seq_len - ttt_step
-        batch_loss = torch.sum(elementwise_loss, dim=(1, 2)) / denominator
-        # shape: [batch_size=1]
-        return batch_loss.mean()
 
     def forward(
         self,
@@ -173,12 +201,11 @@ class Eagle3DraftModel(torch.nn.Module):
         hidden_states = self.fc_layer(hidden_states)
         # shape: [1, total_seq_len, hidden_size]
 
-        if return_loss:
-            loss = torch.tensor(0.0, device=device)
-
         original_input_ids = input_ids.detach().clone()
 
+        loss = torch.tensor(0.0, device=device)
         draft_tokens = []
+        accuracy_list = []
         for ttt_step in range(ttt_steps):
             hidden_states = self.hidden_norm(hidden_states)
             with torch.no_grad():
@@ -212,7 +239,11 @@ class Eagle3DraftModel(torch.nn.Module):
             # shape: [1, total_seq_len, draft_vocab_size]
 
             if return_loss:
-                loss += self.loss_function(logits, target_logits, loss_mask, ttt_step)
+                s_logits, s_targets, s_loss_mask = align_for_step(
+                    logits, target_logits, loss_mask, ttt_step
+                )
+                loss += loss_function(s_logits, s_targets, s_loss_mask)
+                accuracy_list.append(compute_accuracy(s_logits, s_targets, s_loss_mask))
 
             input_ids = torch.argmax(logits, dim=-1)
             draft_tokens.append(input_ids.detach().clone())
@@ -227,7 +258,11 @@ class Eagle3DraftModel(torch.nn.Module):
                 # note: inputs_ids will no longer line up with verifier_last_hidden_state
                 # the draft logits generated from the padded tokens are ignored sliced out for loss calculation
                 input_ids = torch.cat(
-                    [original_input_ids[:, 1+ttt_step:], original_input_ids.new_zeros(1, 1+ttt_step)], dim=-1
+                    [
+                        original_input_ids[:, 1 + ttt_step :],
+                        original_input_ids.new_zeros(1, 1 + ttt_step),
+                    ],
+                    dim=-1,
                 )
                 # shape: [1, total_seq_len]
 
@@ -235,4 +270,11 @@ class Eagle3DraftModel(torch.nn.Module):
             position_ids = position_ids + 1
             # shape: [1, total_seq_len]
 
-        return draft_tokens, loss if return_loss else None
+        if return_loss:
+            return (
+                draft_tokens,
+                loss,
+                torch.tensor(accuracy_list, device=device, dtype=torch.float),
+            )
+        else:
+            return draft_tokens

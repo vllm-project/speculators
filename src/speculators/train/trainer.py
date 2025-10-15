@@ -16,25 +16,6 @@ root_logger = logging.getLogger("speculators")
 metric_logger = logging.getLogger("speculators.metrics")
 
 
-@torch.no_grad()
-def compute_draft_accuracy(
-    target_logits: torch.Tensor,
-    draft_tokens: list[torch.Tensor],
-    loss_mask: torch.Tensor | None = None,
-):
-    accuracies = []
-    target_tokens = torch.argmax(target_logits, dim=-1)
-    # shape: [batch_size, total_seq_len]
-
-    for step, drafts in enumerate(draft_tokens):
-        correct = target_tokens[:, step:] == (drafts[:, : -step] if step > 0 else drafts)
-        if loss_mask is not None:
-            correct = torch.masked_select(correct, loss_mask[:, step:].to(torch.bool))
-        accuracies.append(correct.float().mean())
-
-    return torch.tensor(accuracies, device=target_logits.device)
-
-
 def apply_fully_sharded(model: torch.nn.Module):
     fsdp_kwargs = {
         "mp_policy": MixedPrecisionPolicy(
@@ -135,18 +116,14 @@ class Trainer:
             target_logits = self.verifier_lm_head(batch["verifier_last_hidden_states"])
             del batch["verifier_last_hidden_states"]
 
-            draft_tokens, loss = self.model(
-                **batch, target_logits=target_logits, use_off_policy_tokens=True
+            _draft_tokens, loss, draft_accuracies = self.model(
+                **batch, target_logits=target_logits, use_off_policy_tokens=False
             )  # set this in a better way
 
             self.opt.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
             self.opt.step()
-
-            draft_accuracies = compute_draft_accuracy(
-                target_logits, draft_tokens, batch["loss_mask"]
-            )
 
             loss = loss.detach().clone()
             if self.is_distributed:
