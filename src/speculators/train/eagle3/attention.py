@@ -150,13 +150,10 @@ def flex_attention_forward(
     **kwargs,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     block_mask = attention_mask
-    enable_gqa = False
 
-    num_local_query_heads = query.shape[1]
-    # When running TP this helps:
-    if (num_local_query_heads & (num_local_query_heads - 1)) != 0:
-        key = repeat_kv(key, query.shape[1] // key.shape[1])
-        value = repeat_kv(value, query.shape[1] // value.shape[1])
+    num_query_heads = query.shape[1]
+    num_key_value_heads = key.shape[1]
+    enable_gqa = num_query_heads != num_key_value_heads
 
     return_lse = query.device.type != "cpu"
 
