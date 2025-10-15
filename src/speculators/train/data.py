@@ -19,6 +19,8 @@ def list_files(path):
     datapath = []
     for root, _directories, files in os.walk(path):
         for file in files:
+            if not file.endswith("pt"):
+                continue
             file_path = Path(root) / file
             datapath.append(file_path)
 
@@ -168,7 +170,9 @@ class Eagle3SampleFileDataset(Dataset):
         ]
 
     def __getitem__(self, index) -> BatchType:
-        data = torch.load(self.data[index])
+        data = torch.load(
+            self.data[index], mmap=True, weights_only=True, map_location="cpu"
+        )
 
         data = self.standardize_fn(data)
         # data structure: {
