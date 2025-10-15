@@ -73,9 +73,7 @@ verifier_lm_head = Eagle3VerifierLMHead(
 verifier_lm_head.load_verifier_lm_head(verifier_model_name_or_path, t2d)
 
 ### TMP
-draft_model.lm_head.weight.data = verifier_lm_head.lm_head.weight.data.to(
-    t2d.device
-)
+draft_model.lm_head.weight.data = verifier_lm_head.lm_head.weight.data.to(t2d.device)
 ###
 noise_transform = AddUniformNoise(
     std=0.2, tensors=("hidden_states", "verifier_last_hidden_states")

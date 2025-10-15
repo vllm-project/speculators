@@ -72,6 +72,7 @@ class BaseCheckpointer:
         optimizer_fname = "optimizer_state_dict.pt"
         return self.path / str(epoch) / optimizer_fname
 
+
 def load_safetensors_state_dict(path: Path, device: str) -> dict[str, torch.Tensor]:
     full_state_dict = {}
     with safe_open(path, framework="pt", device=device) as f:
@@ -79,9 +80,12 @@ def load_safetensors_state_dict(path: Path, device: str) -> dict[str, torch.Tens
             full_state_dict[key] = f.get_tensor(key)
     return full_state_dict
 
+
 class SingleGPUCheckpointer(BaseCheckpointer):
     def load_model_state_dict(self, model: PreTrainedModel):
-        full_state_dict = load_safetensors_state_dict(self.model_path(self.previous_epoch), "cuda:0")
+        full_state_dict = load_safetensors_state_dict(
+            self.model_path(self.previous_epoch), "cuda:0"
+        )
         model.load_state_dict(full_state_dict)
 
     def load_optimizer_state_dict(
@@ -103,7 +107,9 @@ class SingleGPUCheckpointer(BaseCheckpointer):
 
 class DistributedCheckpointer(BaseCheckpointer):
     def load_model_state_dict(self, model: PreTrainedModel):
-        full_state_dict = load_safetensors_state_dict(self.model_path(self.previous_epoch), "cpu")
+        full_state_dict = load_safetensors_state_dict(
+            self.model_path(self.previous_epoch), "cpu"
+        )
         set_model_state_dict(
             model,
             full_state_dict,

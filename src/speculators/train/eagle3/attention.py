@@ -6,6 +6,7 @@ from torch.nn.attention.flex_attention import or_masks, and_masks, BlockMask
 
 flex_attention = torch.compile(flex_attention)
 
+
 def create_combined_mask_mod(lengths: torch.Tensor, total_seq_len: int):
     document_ids = torch.repeat_interleave(
         torch.arange(lengths.shape[0], device=lengths.device, dtype=torch.long), lengths
@@ -100,7 +101,11 @@ def extend_mask_for_draft_tokens(block_mask):
     kv_num_blocks = kv_num_blocks + 1
     if block_mask.full_kv_indices is not None:
         extended_full_kv_indices = torch.cat(
-            [block_mask.full_kv_indices, block_mask.full_kv_indices.new_zeros((b, h, q_blocks, q_blocks))], dim=-1
+            [
+                block_mask.full_kv_indices,
+                block_mask.full_kv_indices.new_zeros((b, h, q_blocks, q_blocks)),
+            ],
+            dim=-1,
         )
     else:
         extended_full_kv_indices = None
