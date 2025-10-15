@@ -18,7 +18,7 @@ local_rank, world_size, rank, is_distributed = maybe_setup_distributed()
 
 
 DEVICE = torch.device(local_rank)
-EPOCHS = 10
+EPOCHS = 102
 draft_vocab_size = 32000
 total_seq_len = 4352
 datapath = "./data"
@@ -67,6 +67,12 @@ verifier_lm_head = Eagle3VerifierLMHead(
 )
 verifier_lm_head.load_verifier_lm_head(verifier_model_name_or_path, t2d_vocab)
 
+### TMP
+draft_model.lm_head.weight.data = verifier_lm_head.lm_head.weight.data.to(
+    t2d_vocab.device
+)
+###
+
 dataset = Eagle3SampleFileDataset(datapath=datapath, max_len=total_seq_len)
 batch_sampler = MultipackDistributedBatchSamplerV2(
     batch_max_length=total_seq_len,
@@ -77,8 +83,8 @@ batch_sampler = MultipackDistributedBatchSamplerV2(
 train_loader = DataLoader(
     dataset,
     batch_sampler=batch_sampler,
-    num_workers=8,
-    prefetch_factor=4,
+    num_workers=16,
+    prefetch_factor=8,
     pin_memory=True,
     collate_fn=create_collate_fn(total_seq_len),
 )
@@ -88,7 +94,7 @@ train_loader = DataLoader(
 config = {
     "num_epochs": EPOCHS,
     "save_path": "./checkpoints",
-    "lr": 1e-5,
+    "lr": 1e-4,
     "total_seq_len": total_seq_len,
     "datapath": "./data",
     "resume_from_checkpoint": True,
