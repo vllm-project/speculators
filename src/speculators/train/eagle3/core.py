@@ -2,7 +2,7 @@ from typing import ClassVar
 
 import torch
 from torch.nn.attention.flex_attention import create_block_mask
-from transformers import AutoModelForCausalLM, DynamicCache
+from transformers import AutoConfig, AutoModelForCausalLM, DynamicCache
 from transformers.configuration_utils import PretrainedConfig
 
 from speculators.model import SpeculatorModel
@@ -123,82 +123,65 @@ class Eagle3DraftModel(SpeculatorModel):
 
     def __init__(
         self,
-        verifier_model_name_or_path: str,
-        hidden_size: int,  # Must be same for verifier and draft
-        # Vocab mappings
+        config: Eagle3SpeculatorConfig,
         t2d: torch.Tensor,
         d2t: torch.Tensor,
-        decoder_layer_config: PretrainedConfig,
-        # Verifier
-        verifier_vocab_size: int,
-        verifier_pad_token_id: int | None,
-        # Draft config
-        num_layers: int = 1,
         ttt_steps: int = 3,
     ):
-        norm_before_residual = True
-        from speculators.config import SpeculatorsConfig, VerifierConfig
-        from speculators.proposals.greedy import GreedyTokenProposalConfig
-
-        speculator_config = Eagle3SpeculatorConfig(
-            transformer_layer_config=decoder_layer_config,
-            draft_vocab_size=t2d.sum(dtype=torch.long).item(),
-            norm_before_residual=norm_before_residual,
-            speculators_config=SpeculatorsConfig(
-                algorithm="eagle3",
-                proposal_methods=[
-                    GreedyTokenProposalConfig(
-                        proposal_type="greedy",
-                        speculative_tokens=ttt_steps,
-                    )
-                ],
-                default_proposal_method="greedy",
-                verifier=VerifierConfig(
-                    name_or_path=verifier_model_name_or_path,
-                    architectures=["LlamaForCausalLM"],  # todo: fix
-                ),
-            ),
-        )
         super().__init__(
-            config=speculator_config,
+            config=config,
             verifier=None,
             verifier_attachment_mode="train_only",
         )
-        self.verifier_model_name_or_path = verifier_model_name_or_path
-        self.hidden_size = hidden_size
-        self.num_layers = num_layers
-        self.decoder_layer_config = decoder_layer_config
+        self.hidden_size = config.transformer_layer_config.hidden_size
+        self.num_layers = config.transformer_layer_config.num_hidden_layers
+        self.decoder_layer_config = config.transformer_layer_config
         self.ttt_steps = ttt_steps
         self.register_buffer("t2d", t2d)  # shape: [verifier_vocab_size], bool
         self.register_buffer("d2t", d2t)  # shape: [draft_vocab_size], int offsets
         self.draft_vocab_size = t2d.sum(dtype=torch.long).item()
-        model_definitions = model_classes[decoder_layer_config.model_type]
+        model_definitions = model_classes[config.transformer_layer_config.model_type]
 
-        self.fc = torch.nn.Linear(3 * hidden_size, hidden_size, bias=False)
+        self.fc = torch.nn.Linear(3 * self.hidden_size, self.hidden_size, bias=False)
         self.layers = torch.nn.ModuleList(
             [
                 model_definitions.decoder_layer_class(
-                    decoder_layer_config,
+                    config.transformer_layer_config,
                     layer_idx,
-                    norm_before_residual=norm_before_residual,
+                    norm_before_residual=config.norm_before_residual,
                 )
-                for layer_idx in range(num_layers)
+                for layer_idx in range(self.num_layers)
             ]
         )
         self.norm = model_definitions.norm_class(
-            hidden_size, eps=decoder_layer_config.rms_norm_eps
+            self.hidden_size, eps=config.transformer_layer_config.rms_norm_eps
         )
-        self.rotary_emb = model_definitions.rotary_emb_class(decoder_layer_config)
+        self.rotary_emb = model_definitions.rotary_emb_class(
+            config.transformer_layer_config
+        )
+
+        verifier_config = AutoConfig.from_pretrained(
+            config.speculators_config.verifier.name_or_path
+        )
+        if verifier_config.hidden_size != self.hidden_size:
+            raise ValueError(
+                f"Verifier hidden size {verifier_config.hidden_size} does not match draft hidden size {self.hidden_size}."
+            )
+
         self.embed_tokens = torch.nn.Embedding(
-            verifier_vocab_size, hidden_size, padding_idx=verifier_pad_token_id
+            verifier_config.vocab_size,
+            self.hidden_size,
+            padding_idx=verifier_config.pad_token_id,
         )
         # shape: [verifier_vocab_size, hidden_size]
         self.embed_tokens.load_state_dict(
-            load_verifier_embeddings(verifier_model_name_or_path)
+            load_verifier_embeddings(config.speculators_config.verifier.name_or_path)
         )
         self.embed_tokens.weight.requires_grad = False
 
-        self.lm_head = torch.nn.Linear(hidden_size, self.draft_vocab_size, bias=False)
+        self.lm_head = torch.nn.Linear(
+            self.hidden_size, self.draft_vocab_size, bias=False
+        )
         # shape: [hidden_size, draft_vocab_size]
 
     def forward(
