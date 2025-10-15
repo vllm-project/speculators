@@ -29,7 +29,7 @@ def compute_draft_accuracy(
     for step, drafts in enumerate(draft_tokens):
         correct = target_tokens[:, step:] == (drafts[:, : -step] if step > 0 else drafts)
         if loss_mask is not None:
-            correct = correct[:, loss_mask[:, step:]]
+            correct = torch.masked_select(correct, loss_mask[:, step:].to(torch.bool))
         accuracies.append(correct.float().mean())
 
     return torch.tensor(accuracies, device=target_logits.device)
@@ -106,6 +106,8 @@ class Trainer:
                 # todo: We need to make sure we're loading lm_head and embed_tokens after this reset
         else:
             self.model.to(self.local_rank)
+            if self.checkpointer.previous_epoch != -1:
+                self.checkpointer.load_model_state_dict(self.model)
         self.verifier_lm_head = self.verifier_lm_head.to(self.local_rank)
 
     def setup_optimizer(self):
@@ -139,6 +141,7 @@ class Trainer:
 
             self.opt.zero_grad()
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
             self.opt.step()
 
             draft_accuracies = compute_draft_accuracy(
@@ -185,7 +188,7 @@ class Trainer:
             del batch["verifier_last_hidden_states"]
 
             draft_tokens, val_loss = self.model(
-                **batch, target_logits=target_logits, use_off_policy_tokens=True
+                **batch, target_logits=target_logits, use_off_policy_tokens=False
             )  # set this in a better way
 
             draft_accuracies = compute_draft_accuracy(
