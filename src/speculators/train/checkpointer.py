@@ -1,17 +1,16 @@
 from abc import abstractmethod
-import os
 from pathlib import Path
-from safetensors import safe_open
+
 import torch
+import torch.distributed as dist
+from safetensors import safe_open
 from torch.distributed.checkpoint.state_dict import (
+    StateDictOptions,
     get_model_state_dict,
     get_optimizer_state_dict,
     set_model_state_dict,
     set_optimizer_state_dict,
-    StateDictOptions,
 )
-
-import torch.distributed as dist
 from transformers.modeling_utils import PreTrainedModel
 
 
