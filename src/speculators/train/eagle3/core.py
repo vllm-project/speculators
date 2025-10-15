@@ -20,6 +20,7 @@ def align_for_step(
     logits: torch.Tensor,  # shape: [1, total_seq_len, draft_vocab_size]
     targets: torch.Tensor,  # shape: [1, total_seq_len, draft_vocab_size]
     loss_mask: torch.Tensor | None,  # shape: [1, total_seq_len]
+    prev_correct: torch.Tensor | None,  # shape: [1, total_seq_len]
     ttt_step: int,
 ):
     # There are no target values for the last ttt_step tokens, so we mask them out
@@ -40,7 +41,11 @@ def align_for_step(
     if loss_mask is not None:
         loss_mask = loss_mask[:, ttt_step:]
         # shape: [1, total_seq_len - ttt_step]
-    return logits, targets, loss_mask
+    if prev_correct is not None:
+        # Align with draft starts
+        prev_correct = prev_correct[:, :-ttt_step] if ttt_step > 0 else prev_correct
+        # shape: [1, total_seq_len - ttt_step]
+    return logits, targets, loss_mask, prev_correct
 
 
 @torch.no_grad()
@@ -48,6 +53,7 @@ def compute_accuracy(
     logits: torch.Tensor,  # shape: [1, total_seq_len - ttt_step, draft_vocab_size]
     targets: torch.Tensor,  # shape: [1, total_seq_len - ttt_step, draft_vocab_size]
     loss_mask: torch.Tensor | None,  # shape: [1, total_seq_len - ttt_step]
+    prev_correct: torch.Tensor | None,  # shape: [1, total_seq_len - ttt_step]
 ):
     # Note: logits, targets, and loss_mask are already aligned for the current ttt_step
     target_tokens = torch.argmax(targets, dim=-1)
@@ -55,9 +61,18 @@ def compute_accuracy(
     # shape: [1, total_seq_len - ttt_step]
 
     correct = predicted_tokens == target_tokens
+    cond_denom: torch.Tensor | int = correct.numel()
+    if prev_correct is not None:
+        cond_denom = prev_correct.sum()
+        # Update prev_correct in place
+        correct = torch.logical_and(prev_correct, correct, out=prev_correct)
     if loss_mask is not None:
         correct = torch.masked_select(correct, loss_mask.to(torch.bool))
-    return correct.float().sum() / (correct.numel() + 1e-5)
+
+    correct_sum = correct.float().sum()
+    full_denom = correct.numel()
+
+    return correct_sum / (full_denom + 1e-5), correct_sum / (cond_denom + 1e-5)
 
 
 def loss_function(
@@ -235,8 +250,13 @@ class Eagle3DraftModel(SpeculatorModel):
                 # shape: [1, total_seq_len, draft_vocab_size]
 
         loss = torch.tensor(0.0, device=device)
+        prev_correct = (
+            loss_mask.clone()
+            if loss_mask is not None
+            else torch.ones(1, total_seq_len, device=device, dtype=torch.bool)
+        )
         draft_tokens = []
-        accuracy_list = []
+        metrics = {}
         for ttt_step in range(ttt_steps):
             with torch.no_grad():
                 input_embeds = self.embed_tokens(input_ids)
@@ -269,12 +289,19 @@ class Eagle3DraftModel(SpeculatorModel):
             # shape: [1, total_seq_len, draft_vocab_size]
 
             if return_loss:
-                s_logits, s_targets, s_loss_mask = align_for_step(
-                    logits, target_logits, loss_mask, ttt_step
+                s_logits, s_targets, s_loss_mask, s_prev_correct = align_for_step(
+                    logits, target_logits, loss_mask, prev_correct, ttt_step
                 )
                 loss_weight = self.ttt_step_loss_decay**ttt_step
-                loss += loss_weight * loss_function(s_logits, s_targets, s_loss_mask)
-                accuracy_list.append(compute_accuracy(s_logits, s_targets, s_loss_mask))
+                s_loss = loss_weight * loss_function(s_logits, s_targets, s_loss_mask)
+                loss += s_loss
+
+                s_full_acc, s_cond_acc = compute_accuracy(
+                    s_logits, s_targets, s_loss_mask, s_prev_correct
+                )
+                metrics[f"loss_{ttt_step}"] = s_loss.detach().clone()
+                metrics[f"full_acc_{ttt_step}"] = s_full_acc
+                metrics[f"cond_acc_{ttt_step}"] = s_cond_acc
 
             input_ids = torch.argmax(logits, dim=-1)
             draft_tokens.append(input_ids.detach().clone())
@@ -303,11 +330,9 @@ class Eagle3DraftModel(SpeculatorModel):
             position_ids = position_ids + 1
             # shape: [1, total_seq_len]
 
+        metrics["loss"] = loss.detach().clone()
+
         if return_loss:
-            return (
-                draft_tokens,
-                loss,
-                torch.tensor(accuracy_list, device=device, dtype=torch.float),
-            )
+            return draft_tokens, loss, metrics
         else:
             return draft_tokens
