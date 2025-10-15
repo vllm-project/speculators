@@ -2,6 +2,7 @@
 import math
 import os
 import random
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -114,14 +115,57 @@ def split_files(datapath: str, ratio: float = 0.9, seed: int = 0):
     return train_files, val_files
 
 
+# Data standardization functions
+StandardizeFnSig = Callable[[dict[str, Any]], dict[str, Any]]
+
+
+def standardize_data_v0(data: dict[str, Any]) -> dict[str, Any]:
+    # v0 data format:
+    # {
+    #  "input_ids": [seq_len],
+    #  "loss_mask": [seq_len],
+    #  "hidden_state": [seq_len, 3 * hidden_size],
+    #  "target": [seq_len, hidden_size],
+    # }
+
+    return {
+        "hidden_states": data["hidden_state"],
+        "input_ids": data["input_ids"],
+        "verifier_last_hidden_states": data["target"],
+        "loss_mask": data["loss_mask"],
+    }
+
+
+def standardize_data_v1(data: dict[str, Any]) -> dict[str, Any]:
+    # v1 data format:
+    # {
+    #  "input_ids": [seq_len],
+    #  "loss_mask": [seq_len],
+    #  "hidden_states": [
+    #    [seq_len, hidden_size],
+    #    [seq_len, hidden_size],
+    #    [seq_len, hidden_size],
+    #    ...
+    #  ],
+    # }
+
+    return {
+        "hidden_states": torch.cat(data["hidden_states"][:-1], dim=-1),
+        "input_ids": data["input_ids"],
+        "verifier_last_hidden_states": data["hidden_states"][-1],
+        "loss_mask": data["loss_mask"],
+    }
+
+
 class Eagle3SampleFileDataset(Dataset):
     def __init__(
         self,
         max_len: int,
         datapath: str | None = None,
         file_list: list[str] | None = None,
-        transform=None,
+        transform: TransformTensors | None = None,
         hidden_states_dtype=torch.float,
+        standardize_fn: StandardizeFnSig = standardize_data_v1,
     ):
         if datapath is not None and file_list is not None:
             raise ValueError("Only one of datapath or file_list may be provided")
@@ -134,6 +178,7 @@ class Eagle3SampleFileDataset(Dataset):
         self.data: list[str] = file_list
         self.max_len = max_len
         self.transform = transform
+        self.standardize_fn = standardize_fn
         self.hidden_states_dtype = hidden_states_dtype
         self.approx_lengths = self._compute_approx_lengths()
 
@@ -155,24 +200,24 @@ class Eagle3SampleFileDataset(Dataset):
     def __getitem__(self, index) -> BatchType:
         data = torch.load(self.data[index])
 
-        # todo: standardize names during data generation and then remove this
-        data["hidden_states"] = data["hidden_state"]
-        data["verifier_last_hidden_states"] = data["target"]
-        del data["hidden_state"]
-        del data["target"]
+        data = self.standardize_fn(data)
+        # data structure: {
+        #  "hidden_states": [seq_len, 3 * hidden_size],
+        #  "input_ids": [seq_len],
+        #  "verifier_last_hidden_states": [seq_len, hidden_size],
+        #  "loss_mask": [seq_len],
+        # }
 
-        # todo: standardize dtypes during data generation and then remove this
+        # Convert hidden states to the correct dtype
         data = {
             k: v.to(self.hidden_states_dtype) if "hidden_states" in k else v
             for k, v in data.items()
         }
 
-        seq_len = data["input_ids"].shape[0]
         # Add lengths tensor
+        seq_len = data["input_ids"].shape[0]
         data["lengths"] = torch.tensor([seq_len], dtype=torch.long)
-
-        if self.transform:
-            data = self.transform(data)
+        # shape: [1]
 
         data["position_ids"] = torch.arange(seq_len, dtype=torch.long)
         # shape: [seq_len]
@@ -186,6 +231,10 @@ class Eagle3SampleFileDataset(Dataset):
         #     "position_ids": [seq_len],
         # }
 
+        # Apply transform
+        if self.transform:
+            data = self.transform(data)
+
         # Note: shift_batch will reduce seq_len by 1
         return shift_batch(data)
 
@@ -194,15 +243,20 @@ def create_collate_fn(max_len: int):
     def collate_fn(batch: list[BatchType]) -> BatchType:
         collated_data = {}
         for key in batch[0]:
+            # Concatenate the tensors along the seq (0th) dimension
             collated_data[key] = torch.cat([b[key] for b in batch], dim=0)
+            # shape: [total_seq_len, ...]
 
             if key != "lengths":
+                # Slice and pad on seq (0th) dimension to max_len
                 collated_data[key] = slice_and_pad_to_length(
                     collated_data[key], max_len
                 ).unsqueeze(0)
                 # shape: [1, max_len, ...]
 
-        # Handle lengths update
+        # Include lengths until while they fit in max_len
+        # The last included length is (if necessary) truncated
+        # Any additional lengths are discarded
         lengths = collated_data["lengths"]
         new_lengths = []
         cum_length = 0

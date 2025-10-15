@@ -13,6 +13,8 @@ from speculators.train.data import (
     Eagle3SampleFileDataset,
     create_collate_fn,
     split_files,
+    standardize_data_v0,
+    standardize_data_v1,
 )
 from speculators.train.distributed_batch_sampler import (
     MultipackDistributedBatchSamplerV2,
@@ -41,6 +43,7 @@ def setup_dataloader(
     world_size: int,
     local_rank: int,
     add_noise: bool = True,
+    data_format_version: int = 1,
 ):
     if add_noise:
         noise_transform = AddUniformNoise(
@@ -49,8 +52,15 @@ def setup_dataloader(
     else:
         noise_transform = None
 
+    standardize_fn = (
+        standardize_data_v1 if data_format_version == 1 else standardize_data_v0
+    )
+
     dataset = Eagle3SampleFileDataset(
-        file_list=file_list, max_len=TOTAL_SEQ_LEN, transform=noise_transform
+        file_list=file_list,
+        max_len=TOTAL_SEQ_LEN,
+        transform=noise_transform,
+        standardize_fn=standardize_fn,
     )
     batch_sampler = MultipackDistributedBatchSamplerV2(
         batch_max_length=TOTAL_SEQ_LEN,
@@ -118,8 +128,20 @@ def main(args: argparse.Namespace):
 
     # Setup dataloaders
     train_files, val_files = split_files(args.data_path, ratio=0.9)
-    train_loader = setup_dataloader(train_files, world_size, local_rank, add_noise=True)
-    val_loader = setup_dataloader(val_files, world_size, local_rank, add_noise=False)
+    train_loader = setup_dataloader(
+        train_files,
+        world_size,
+        local_rank,
+        add_noise=True,
+        data_format_version=args.data_format_version,
+    )
+    val_loader = setup_dataloader(
+        val_files,
+        world_size,
+        local_rank,
+        add_noise=False,
+        data_format_version=args.data_format_version,
+    )
 
     # Setup trainer
     trainer_config = TrainerConfig(
@@ -154,6 +176,7 @@ def parse_args():
         default="",
         help="One of 'trackio', 'wandb', 'tensorboard' or comma separated list of them",
     )
+    parser.add_argument("--data-format-version", type=int, default=1)
     parser.add_argument("--log-dir", type=str, default="./logs")
     parser.add_argument("--run-name", type=str, default=None)
     parser.add_argument("--num-layers", type=int, default=1)
