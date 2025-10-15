@@ -37,7 +37,6 @@ class Trainer:
     def __init__(
         self,
         model: torch.nn.Module,
-        verifier_lm_head: torch.nn.Module,
         config: dict,
         train_loader: DataLoader,
         val_loader: DataLoader | None = None,
@@ -46,7 +45,6 @@ class Trainer:
         world_size: int = 1,
     ):
         self.model = model
-        self.verifier_lm_head = verifier_lm_head
         self.config = config
         self.train_loader = train_loader
         self.val_loader = val_loader
@@ -88,7 +86,6 @@ class Trainer:
             self.model.to(self.local_rank)
             if self.checkpointer.previous_epoch != -1:
                 self.checkpointer.load_model_state_dict(self.model)
-        self.verifier_lm_head = self.verifier_lm_head.to(self.local_rank)
 
     def setup_optimizer(self):
         self.opt = torch.optim.Adam(self.model.parameters(), lr=self.config["lr"])
@@ -112,12 +109,10 @@ class Trainer:
                 k: v.to(self.local_rank) if isinstance(v, torch.Tensor) else v
                 for k, v in batch.items()
             }
-            target_logits = self.verifier_lm_head(batch["verifier_last_hidden_states"])
-            del batch["verifier_last_hidden_states"]
 
             _draft_tokens, loss, draft_accuracies = self.model(
-                **batch, target_logits=target_logits, use_off_policy_tokens=False
-            )  # set this in a better way
+                **batch, use_off_policy_tokens=False
+            )
 
             self.opt.zero_grad()
             loss.backward()
@@ -162,12 +157,10 @@ class Trainer:
                 k: v.to(self.local_rank) if isinstance(v, torch.Tensor) else v
                 for k, v in batch.items()
             }
-            target_logits = self.verifier_lm_head(batch["verifier_last_hidden_states"])
-            del batch["verifier_last_hidden_states"]
 
             _draft_tokens, loss, draft_accuracies = self.model(
-                **batch, target_logits=target_logits, use_off_policy_tokens=False
-            )  # set this in a better way
+                **batch, use_off_policy_tokens=False
+            )
 
             if self.is_distributed:
                 dist.reduce(val_loss, dst=0, op=dist.ReduceOp.AVG)
