@@ -37,8 +37,8 @@ verifier_vocab_size = llama_config.vocab_size
 llama_config = LlamaConfig(hidden_size=hidden_size, vocab_size=verifier_vocab_size)
 llama_config._attn_implementation = "simple_flex_attention"
 
-# d2t_vocab = torch.zeros(draft_vocab_size, dtype=torch.long).to(DEVICE)
-# t2d_vocab = (
+# d2t = torch.zeros(draft_vocab_size, dtype=torch.long).to(DEVICE)
+# t2d = (
 #     torch.cat(
 #         [
 #             torch.ones(draft_vocab_size),
@@ -48,8 +48,8 @@ llama_config._attn_implementation = "simple_flex_attention"
 #     .to(torch.bool)
 #     .to(DEVICE)
 # )
-d2t_vocab = torch.from_numpy(np.load("d2t.npy")).to(DEVICE)
-t2d_vocab = torch.from_numpy(np.load("t2d.npy")).to(DEVICE)
+d2t = torch.from_numpy(np.load("d2t.npy")).to(DEVICE)
+t2d = torch.from_numpy(np.load("t2d.npy")).to(DEVICE)
 
 setup_metric_logger(loggers="trackio", run_name=None, output_dir="./logs")
 setup_root_logger()
@@ -58,8 +58,8 @@ setup_root_logger()
 draft_model = Eagle3DraftModel(
     verifier_model_name_or_path=verifier_model_name_or_path,
     hidden_size=hidden_size,
-    t2d_vocab=t2d_vocab,
-    d2t_vocab=d2t_vocab,
+    t2d=t2d,
+    d2t=d2t,
     decoder_layer_config=llama_config,
     verifier_vocab_size=verifier_vocab_size,
     verifier_pad_token_id=None,
@@ -70,11 +70,11 @@ draft_model = Eagle3DraftModel(
 verifier_lm_head = Eagle3VerifierLMHead(
     hidden_size=hidden_size, draft_vocab_size=draft_vocab_size
 )
-verifier_lm_head.load_verifier_lm_head(verifier_model_name_or_path, t2d_vocab)
+verifier_lm_head.load_verifier_lm_head(verifier_model_name_or_path, t2d)
 
 ### TMP
 draft_model.lm_head.weight.data = verifier_lm_head.lm_head.weight.data.to(
-    t2d_vocab.device
+    t2d.device
 )
 ###
 noise_transform = AddUniformNoise(
