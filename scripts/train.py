@@ -7,6 +7,7 @@ from speculators.train.data import (
     Eagle3SampleFileDataset,
     create_collate_fn,
     split_files,
+    AddUniformNoise,
 )
 from speculators.train.distributed_batch_sampler import (
     MultipackDistributedBatchSamplerV2,
@@ -76,9 +77,14 @@ draft_model.lm_head.weight.data = verifier_lm_head.lm_head.weight.data.to(
     t2d_vocab.device
 )
 ###
-train_files, val_files = split_files(datapath, ratio=0.9)
+noise_transform = AddUniformNoise(
+    std=0.2, tensors=("hidden_states", "verifier_last_hidden_states")
+)
 
-train_dataset = Eagle3SampleFileDataset(file_list=train_files, max_len=total_seq_len)
+train_files, val_files = split_files(datapath, ratio=0.9)
+train_dataset = Eagle3SampleFileDataset(
+    file_list=train_files, max_len=total_seq_len, transform=noise_transform
+)
 train_batch_sampler = MultipackDistributedBatchSamplerV2(
     batch_max_length=total_seq_len,
     lengths=train_dataset.approx_lengths(),
@@ -92,6 +98,7 @@ train_loader = DataLoader(
     prefetch_factor=8,
     pin_memory=True,
     collate_fn=create_collate_fn(total_seq_len),
+    persistent_workers=True,
 )
 
 val_dataset = Eagle3SampleFileDataset(file_list=val_files, max_len=total_seq_len)
@@ -108,6 +115,7 @@ val_loader = DataLoader(
     prefetch_factor=8,
     pin_memory=True,
     collate_fn=create_collate_fn(total_seq_len),
+    persistent_workers=True,
 )
 
 
