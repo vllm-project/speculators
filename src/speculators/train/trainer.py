@@ -142,21 +142,23 @@ class Trainer:
 
         root_logger.info(f"Training Epoch {epoch} completed")
 
+    @torch.no_grad()
     def val_epoch(self, epoch: int):
         if self.val_loader is None:
             root_logger.warning("No val loader, skipping validation")
             return
         self.model.eval()
         self.val_loader.batch_sampler.set_epoch(epoch)
-
+        root_logger.info(f"Validation Epoch {epoch} started")
         if self.local_rank == 0:
             val_loader = tqdm(self.val_loader, desc=f"Epoch {epoch}")
         else:
             val_loader = self.val_loader
-
-        root_logger.info(f"Validation Epoch {epoch} started")
-
-        for i, batch in enumerate(val_loader):
+        val_loss = torch.zeros(1, device=self.local_rank)
+        val_accuracies = torch.zeros(
+            (), device=self.local_rank
+        )  # initialize to tensor of shape ()
+        for batch in val_loader:
             batch = {
                 k: v.to(self.local_rank) if isinstance(v, torch.Tensor) else v
                 for k, v in batch.items()
@@ -164,26 +166,27 @@ class Trainer:
             target_logits = self.verifier_lm_head(batch["verifier_last_hidden_states"])
             del batch["verifier_last_hidden_states"]
 
-            draft_tokens, val_loss = self.model(
+            _draft_tokens, loss, draft_accuracies = self.model(
                 **batch, target_logits=target_logits, use_off_policy_tokens=False
             )  # set this in a better way
-
-            draft_accuracies = compute_draft_accuracy(
-                target_logits, draft_tokens, batch["loss_mask"]
-            )
 
             if self.is_distributed:
                 dist.reduce(val_loss, dst=0, op=dist.ReduceOp.AVG)
                 dist.reduce(draft_accuracies, dst=0, op=dist.ReduceOp.AVG)
 
-            # todo: Accumulate these values across the epoch and then log at the end of the epoch
-            acc_values = {
-                f"acc_{i}": acc.item() for i, acc in enumerate(draft_accuracies)
-            }
-            metric_logger.info(
-                {"val": {"loss": val_loss.item(), **acc_values}}, extra={"step": i}
-            )
+            val_loss += loss.detach().clone()
+            # Can't use += here because val_accuracies is a tensor of shape () on first iteration
+            val_accuracies = val_accuracies + draft_accuracies.detach()
 
+        val_loss /= len(val_loader)
+        val_accuracies /= len(val_loader)
+        acc_values = {
+            f"acc_{i}_epoch": acc.item() for i, acc in enumerate(val_accuracies)
+        }
+        metric_logger.info(
+            {"val": {"loss_epoch": val_loss.item(), **acc_values}, "epoch": epoch},
+            extra={"step": self.global_step},
+        )
         root_logger.info(f"Validation Epoch {epoch} completed")
 
     def save_checkpoint(self, epoch: int):
