@@ -10,7 +10,7 @@ import torch
 
 def test_create_combined_mask_mod():
     lengths = torch.tensor([1, 2, 3])
-    mask_mod = create_combined_mask_mod(lengths)
+    mask_mod = create_combined_mask_mod(lengths, total_seq_len=lengths.sum().item())
 
     # Creates causal document mask mod that supports extended diagonals
     # lengths -> document ids [0, 1, 1, 2, 2, 2]
@@ -42,7 +42,7 @@ def test_diagonal_draft_tokens_mask_mod(lengths):
     # If kv_idx > N (N = original seq len = num query indices), only the diagonal tokens are in mask
     # Diagonal tokens are those where kv_idx % N == q_idx
 
-    mask_mod = create_combined_mask_mod(lengths)
+    mask_mod = create_combined_mask_mod(lengths, total_seq_len=lengths.sum().item())
 
     N = lengths.sum().item()
 
