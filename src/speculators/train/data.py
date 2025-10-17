@@ -2,6 +2,7 @@ from functools import lru_cache
 import math
 import os
 from typing import Any
+import random
 
 import torch
 from torch.utils.data import Dataset
@@ -90,15 +91,39 @@ def shift_batch(batch: BatchType):
     }
 
 
+def split_files(datapath: str, ratio: float = 0.9, seed: int = 0):
+    """Given a datapath, split the files into a training and validation set
+    ratio is the proportion of files to put in the training set
+    1 - ratio is the proportion of files to put in the validation set
+    """
+    random.seed(seed)
+    file_list = list_files(datapath)
+    random.shuffle(file_list)
+    num_files = len(file_list)
+    num_train_files = int(num_files * ratio)
+    train_files = file_list[:num_train_files]
+    val_files = file_list[num_train_files:]
+    return train_files, val_files
+
+
 class Eagle3SampleFileDataset(Dataset):
     def __init__(
         self,
-        datapath: str,
         max_len: int,
+        datapath: str | None = None,
+        file_list: list[str] | None = None,
         transform=None,
         hidden_states_dtype=torch.float,
     ):
-        self.data = list_files(datapath)
+        if datapath is not None and file_list is not None:
+            raise ValueError("Only one of datapath or file_list may be provided")
+
+        if datapath is not None:
+            file_list = list_files(datapath)
+        elif file_list is None:
+            raise ValueError("Either datapath or file_list must be provided")
+
+        self.data = file_list
         self.max_len = max_len
         self.transform = transform
         self.hidden_states_dtype = hidden_states_dtype

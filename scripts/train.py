@@ -3,7 +3,11 @@ import numpy as np
 from transformers import LlamaConfig
 
 from speculators.train.eagle3.core import Eagle3DraftModel, Eagle3VerifierLMHead
-from speculators.train.data import Eagle3SampleFileDataset, create_collate_fn
+from speculators.train.data import (
+    Eagle3SampleFileDataset,
+    create_collate_fn,
+    split_files,
+)
 from speculators.train.distributed_batch_sampler import (
     MultipackDistributedBatchSamplerV2,
 )
@@ -20,7 +24,7 @@ local_rank, world_size, rank, is_distributed = maybe_setup_distributed()
 DEVICE = torch.device(local_rank)
 EPOCHS = 102
 draft_vocab_size = 32000
-total_seq_len = 4352
+total_seq_len = 8192
 datapath = "./data"
 verifier_model_name_or_path = "meta-llama/Llama-3.1-8B-Instruct"
 
@@ -72,18 +76,35 @@ draft_model.lm_head.weight.data = verifier_lm_head.lm_head.weight.data.to(
     t2d_vocab.device
 )
 ###
+train_files, val_files = split_files(datapath, ratio=0.9)
 
-dataset = Eagle3SampleFileDataset(datapath=datapath, max_len=total_seq_len)
-batch_sampler = MultipackDistributedBatchSamplerV2(
+train_dataset = Eagle3SampleFileDataset(file_list=train_files, max_len=total_seq_len)
+train_batch_sampler = MultipackDistributedBatchSamplerV2(
     batch_max_length=total_seq_len,
-    lengths=dataset.approx_lengths(),
+    lengths=train_dataset.approx_lengths(),
     num_replicas=world_size,
     rank=local_rank,
 )
 train_loader = DataLoader(
-    dataset,
-    batch_sampler=batch_sampler,
-    num_workers=16,
+    train_dataset,
+    batch_sampler=train_batch_sampler,
+    num_workers=32,
+    prefetch_factor=8,
+    pin_memory=True,
+    collate_fn=create_collate_fn(total_seq_len),
+)
+
+val_dataset = Eagle3SampleFileDataset(file_list=val_files, max_len=total_seq_len)
+val_batch_sampler = MultipackDistributedBatchSamplerV2(
+    batch_max_length=total_seq_len,
+    lengths=val_dataset.approx_lengths(),
+    num_replicas=world_size,
+    rank=local_rank,
+)
+val_loader = DataLoader(
+    val_dataset,
+    batch_sampler=val_batch_sampler,
+    num_workers=32,
     prefetch_factor=8,
     pin_memory=True,
     collate_fn=create_collate_fn(total_seq_len),
@@ -106,7 +127,7 @@ trainer = Trainer(
     verifier_lm_head,
     config,
     train_loader,
-    None,
+    val_loader,
     is_distributed,
     local_rank,
     world_size,
