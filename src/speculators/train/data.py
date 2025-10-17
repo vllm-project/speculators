@@ -11,29 +11,36 @@ import torch.nn.functional as F
 BatchType = dict[str, Any]
 
 
-class AddGaussianNoise:
-    def __init__(self, mean=0.0, std=0.0):
+class TransformTensors:
+    def __init__(self, tensors):
+        self.tensors = tensors
+
+    def __call__(self, data):
+        for tensor in self.tensors:
+            data[tensor] = self.transform(data[tensor])
+        return data
+
+    def transform(self, tensor: torch.Tensor) -> torch.Tensor:
+        raise NotImplementedError("Subclasses must implement this method")
+
+
+class AddGaussianNoise(TransformTensors):
+    def __init__(self, mean=0.0, std=0.2, tensors=("hidden_states",)):
+        super().__init__(tensors)
         self.mean = mean
         self.std = std
 
-    def __call__(self, data):
-        tensor = data["hidden_states"]
-        noise = torch.randn(tensor.size()) * self.std + self.mean
-        noisy_tensor = tensor + noise
-        data["hidden_states"] = noisy_tensor
-        return data
+    def transform(self, tensor: torch.Tensor) -> torch.Tensor:
+        return tensor + torch.randn_like(tensor) * self.std + self.mean
 
 
-class AddUniformNoise:
-    def __init__(self, std=0.0):
+class AddUniformNoise(TransformTensors):
+    def __init__(self, std=0.2, tensors=("hidden_states",)):
+        super().__init__(tensors)
         self.std = std
 
-    def __call__(self, data):
-        tensor = data["hidden_states"]
-        noise = (torch.rand_like(tensor) - 0.5) * self.std * 512 / tensor.shape[1]
-        noisy_tensor = tensor + noise
-        data["hidden_states"] = noisy_tensor
-        return data
+    def transform(self, tensor: torch.Tensor) -> torch.Tensor:
+        return tensor + (torch.rand_like(tensor) - 0.5) * self.std
 
 
 def list_files(path):
