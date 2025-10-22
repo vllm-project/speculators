@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any
 
 import torch
 from huggingface_hub import hf_hub_download
@@ -72,5 +72,5 @@ def _resolve_file(model_path: str, file_name: str) -> Path:
             raise FileNotFoundError(f"Expected local file missing: {p}")
         return p
     # Treat as repo_id on the Hub
-    logger.info("Loading from huggingface directory: {}", model_path)
+    logger.info(f"Loading from huggingface directory: {model_path}: {file_name}")
     return Path(hf_hub_download(repo_id=model_path, filename=file_name))
