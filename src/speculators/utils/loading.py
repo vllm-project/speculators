@@ -10,7 +10,7 @@ from safetensors import safe_open
 
 def load_model_layers(
     layer_names: list[str], model_path: str
-) -> Optional[Union[torch.Tensor, dict[str, torch.Tensor]]]:
+) -> dict[str, torch.Tensor]:
     """
     Load one or more named tensors from a HF repo using safetensors shards.
     Returns a single tensor if len(layer_names)==1, else a dict[name] -> tensor.
@@ -32,7 +32,7 @@ def load_model_layers(
     for name in layer_names:
         shard = weight_map.get(name)
         if shard is None:
-            logger.warning(f"Tensor '{name}' not found in index weight_map.")
+            logger.error(f"Tensor '{name}' not found in index weight_map.")
             continue
         shard_to_names.setdefault(shard, []).append(name)
 
@@ -47,14 +47,11 @@ def load_model_layers(
             available = set(f.keys())
             for name in names:
                 if name not in available:
-                    logger.warning(
+                    logger.error(
                         f"Tensor '{name}' not found inside shard '{shard_file}'."
                     )
                     continue
                 out[name] = f.get_tensor(name)
-
-    if len(layer_names) == 1:
-        return out.get(layer_names[0])
     return out
 
 
