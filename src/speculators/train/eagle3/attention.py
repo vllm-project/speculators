@@ -1,3 +1,4 @@
+# ruff: noqa: ERA001
 import torch
 from torch.nn.attention.flex_attention import (
     BlockMask,
@@ -5,7 +6,6 @@ from torch.nn.attention.flex_attention import (
     flex_attention,
     or_masks,
 )
-from transformers.integrations.flex_attention import repeat_kv
 from transformers.modeling_utils import AttentionInterface
 
 flex_attention = torch.compile(flex_attention)
@@ -28,18 +28,17 @@ def create_combined_mask_mod(lengths: torch.Tensor, total_seq_len: int):
         ]
     ).contiguous()
 
-    N = document_ids.shape[0]
-
-    def causal_mask_mod(b, h, q_idx, kv_idx):
+    def causal_mask_mod(_b, _h, q_idx, kv_idx):
         return q_idx >= kv_idx
 
-    def document_mask_mod(b, h, q_idx, kv_idx):
+    def document_mask_mod(_b, _h, q_idx, kv_idx):
         # Exclude padding tokens in attention mask
         return torch.logical_and(
-            document_ids[q_idx] != -1, document_ids[q_idx] == document_ids[kv_idx % N]
+            document_ids[q_idx] != -1,
+            document_ids[q_idx] == document_ids[kv_idx % total_seq_len],
         )
 
-    def diagonal_draft_mask_mod(b, h, q_idx, kv_idx):
+    def diagonal_draft_mask_mod(_b, _h, q_idx, kv_idx):
         return kv_idx % total_seq_len == q_idx
 
     return or_masks(
@@ -49,11 +48,13 @@ def create_combined_mask_mod(lengths: torch.Tensor, total_seq_len: int):
 
 def extend_mask_for_draft_tokens(block_mask):
     """
-    Extend the block mask to include new draft tokens. Concatenates a diagonal mask for the new draft tokens.
+    Extend the block mask to include new draft tokens. Concatenates a diagonal mask for
+    the new draft tokens.
 
     Assumptions:
     - block_mask BLOCK_SIZE := KV_BLOCK_SIZE == Q_BLOCK_SIZE
-    - The number of query values is the original total_seq_len (or equivalently the number of query blocks is the original total_seq_len // BLOCK_SIZE)
+    - The number of query values is the original total_seq_len (or equivalently the
+    number of query blocks is the original total_seq_len // BLOCK_SIZE)
 
     i.e. if block_mask is:
     [
@@ -138,24 +139,19 @@ def block_mask_to_dense_attention_mask(
 
 
 def flex_attention_forward(
-    module: torch.nn.Module,
+    module: torch.nn.Module,  # noqa: ARG001
     query: torch.Tensor,
     key: torch.Tensor,
     value: torch.Tensor,
     attention_mask,
     scaling: float | None = None,
-    softcap: float | None = None,
-    head_mask: torch.Tensor | None = None,
-    s_aux: torch.Tensor | None = None,
-    **kwargs,
+    **_kwargs,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     block_mask = attention_mask
 
     num_query_heads = query.shape[1]
     num_key_value_heads = key.shape[1]
     enable_gqa = num_query_heads != num_key_value_heads
-
-    return_lse = query.device.type != "cpu"
 
     query = query.contiguous()
     key = key.contiguous()
@@ -169,21 +165,11 @@ def flex_attention_forward(
         block_mask=block_mask,
         enable_gqa=enable_gqa,
         scale=scaling,
-        kernel_options=None,
-        # Last time checked on PyTorch == 2.5.1: Flex Attention always computes the lse regardless.
-        # For simplification, we thus always return it as no additional computations are introduced.
-        return_lse=return_lse,
     )
-    # lse is returned in float32
-    if return_lse:
-        attention_output, lse = flex_attention_output  # type: ignore[misc]
-        lse = lse.to(value.dtype)
-    else:
-        attention_output = flex_attention_output  # type: ignore[assignment]
-        lse = None
+    attention_output = flex_attention_output  # type: ignore[assignment]
 
     attention_output = attention_output.transpose(1, 2).contiguous()
-    return attention_output, lse
+    return attention_output, None
 
 
 ALL_ATTENTION_FUNCTIONS = AttentionInterface()  # Singleton class used for registry
