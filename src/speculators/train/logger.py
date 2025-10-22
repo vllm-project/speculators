@@ -1,7 +1,8 @@
 """Logging utilities for the Speculators training module.
 
 This module provides a logging system for training machine learning models,
-supporting multiple logging backends including TensorBoard (tensorboard), Weights & Biases (wandb).
+supporting multiple logging backends including TensorBoard (tensorboard),
+    Weights & Biases (wandb), and Trackio (trackio).
 
 Example Usage:
     ```python
@@ -85,7 +86,8 @@ def _substitute_placeholders(
         - {local_rank}: Local process rank from LOCAL_RANK environment variable
 
     Args:
-        run_name: String containing placeholders to be replaced. If None, uses default_template
+        run_name: String containing placeholders to be replaced. If None, uses
+            default_template
         default_template: Default template to use if run_name is None
 
     Returns:
@@ -108,8 +110,8 @@ def _substitute_placeholders(
     substitutions = {
         "{time}": datetime.now().isoformat(timespec="seconds"),
         "{utc_time}": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "{rank}": os.environ.get("RANK", 0),
-        "{local_rank}": os.environ.get("LOCAL_RANK", 0),
+        "{rank}": int(os.environ.get("RANK", "0")),
+        "{local_rank}": int(os.environ.get("LOCAL_RANK", "0")),
     }
     for placeholder_pat, value in substitutions.items():
         run_name = run_name.replace(placeholder_pat, str(value))
@@ -219,12 +221,12 @@ class FormatDictFilter(logging.Filter):
 
     Note: This is not a true filter, but a processing step as described in the
     Python logging cookbook: https://docs.python.org/3/howto/logging-cookbook.html#using-filters-to-impart-contextual-information
-    """
+    """  # noqa: E501
 
     @staticmethod
     def _format_value(v):
         if isinstance(v, float):
-            if abs(v) < 0.001 or abs(v) > 999:
+            if abs(v) < 0.001 or abs(v) > 999:  # noqa: PLR2004
                 return f"{v:.2e}"
             return f"{v:.3f}"
         elif isinstance(v, int):
@@ -248,10 +250,10 @@ class FormatDictFilter(logging.Filter):
 class TensorBoardHandler(logging.Handler):
     """Logger that writes metrics to TensorBoard.
 
-    This handler expects a (nested) dictionary of metrics or text to be logged with string keys.
-    A step can be specified by passing `extra={"step": <step>}` to the logging method.
-    To log hyperparameters, pass a (nested) mapping of hyperparameters to the logging method
-    and set `extra={"hparams": True}`.
+    This handler expects a (nested) dictionary of metrics or text to be logged with
+    string keys. A step can be specified by passing `extra={"step": <step>}` to the
+    logging method. To log hyperparameters, pass a (nested) mapping of hyperparameters
+    to the logging method and set `extra={"hparams": True}`.
     """
 
     def __init__(
@@ -288,12 +290,14 @@ class TensorBoardHandler(logging.Handler):
             from torch.utils.tensorboard import SummaryWriter
         except ImportError as e:
             msg = (
-                "Could not initialize TensorBoardHandler because package tensorboard could not be imported.\n"
-                "Please ensure it is installed by running 'pip install tensorboard' or configure the logger to use a different backend."
+                "Could not initialize TensorBoardHandler because package tensorboard "
+                "could not be imported.\n Please ensure it is installed by running "
+                "'pip install tensorboard' or configure the logger to use a different "
+                "backend."
             )
             raise RuntimeError(msg) from e
 
-        os.makedirs(self.tboard_init_kwargs["log_dir"], exist_ok=True)
+        Path.mkdir(self.tboard_init_kwargs["log_dir"], parents=True, exist_ok=True)
         self._tboard_writer = SummaryWriter(**self.tboard_init_kwargs)
 
     def emit(self, record: logging.LogRecord):
@@ -310,7 +314,12 @@ class TensorBoardHandler(logging.Handler):
 
         if not isinstance(record.msg, Mapping):
             warnings.warn(
-                f"TensorBoardHandler expected a mapping, got {type(record.msg)}. Skipping log. Please ensure the handler is configured correctly to filter out non-mapping objects."
+                (
+                    f"{self.__class__.__name__} expected a mapping, got "
+                    f"{type(record.msg)}. Skipping log. Please ensure the handler is "
+                    "configured correctly to filter out non-mapping objects.",
+                ),
+                stacklevel=2,
             )
             return
 
@@ -327,11 +336,17 @@ class TensorBoardHandler(logging.Handler):
                 # Check that `v` can be converted to float
                 float(v)
             except ValueError:
-                # Occurs for strings that cannot be converted to floats (e.g. "3.2.3") and aren't "inf" or "nan"
+                # Occurs for strings that cannot be converted to floats (e.g. "3.2.3")
+                # and aren't "inf" or "nan"
                 self._tboard_writer.add_text(k, v, global_step=step)
             except TypeError:
                 warnings.warn(
-                    f"TensorBoardHandler expected a scalar or text, got {type(v)}. Skipping log. Please ensure metric logger is only called with mappings containing scalar values or text."
+                    (
+                        f"{self.__class__.__name__} expected a scalar or text, got "
+                        f"{type(v)}. Skipping log. Please ensure metric logger is only "
+                        "called with mappings containing scalar values or text.",
+                    ),
+                    stacklevel=2,
                 )
             else:
                 self._tboard_writer.add_scalar(k, v, global_step=step)
@@ -352,10 +367,10 @@ class TensorBoardHandler(logging.Handler):
 class WandbHandler(logging.Handler):
     """Logger that sends metrics to Weights & Biases (wandb).
 
-    This handler expects a (nested) dictionary of metrics or text to be logged with string keys.
-    A step can be specified by passing `extra={"step": <step>}` to the logging method.
-    To log hyperparameters, pass a (nested) mapping of hyperparameters to the logging method
-    and set `extra={"hparams": True}`.
+    This handler expects a (nested) dictionary of metrics or text to be logged with
+    string keys. A step can be specified by passing `extra={"step": <step>}` to the
+    logging method. To log hyperparameters, pass a (nested) mapping of hyperparameters
+    to the logging method and set `extra={"hparams": True}`.
     """
 
     def __init__(
@@ -387,8 +402,10 @@ class WandbHandler(logging.Handler):
             wandb = importlib.import_module(self._package_name)
         except ImportError as e:
             msg = (
-                f"Could not initialize {self.__class__.__name__} because package {self._package_name} could not be imported.\n"
-                f"Please ensure it is installed by running 'pip install {self._package_name}' or configure the logger to use a different backend."
+                f"Could not initialize {self.__class__.__name__} because package "
+                f"'{self._package_name}' could not be imported.\n Please ensure it is "
+                f"installed by running 'pip install {self._package_name}' or configure "
+                "the logger to use a different backend."
             )
             raise RuntimeError(msg) from e
 
@@ -400,7 +417,12 @@ class WandbHandler(logging.Handler):
 
         if not isinstance(record.msg, Mapping):
             warnings.warn(
-                f"{self.__class__.__name__} expected a mapping, got {type(record.msg)}. Skipping log. Please ensure the handler is configured correctly to filter out non-mapping objects."
+                (
+                    f"{self.__class__.__name__} expected a mapping, got "
+                    f"{type(record.msg)}. Skipping log. Please ensure the handler is "
+                    "configured correctly to filter out non-mapping objects.",
+                ),
+                stacklevel=2,
             )
             return
 
@@ -417,17 +439,17 @@ class WandbHandler(logging.Handler):
 class TrackioHandler(WandbHandler):
     """Logger that sends metrics to Trackio.
 
-    This handler expects a (nested) dictionary of metrics or text to be logged with string keys.
-    A step can be specified by passing `extra={"step": <step>}` to the logging method.
-    To log hyperparameters, pass a (nested) mapping of hyperparameters to the logging method
-    and set `extra={"hparams": True}`.
+    This handler expects a (nested) dictionary of metrics or text to be logged with
+    string keys. A step can be specified by passing `extra={"step": <step>}` to the
+    logging method. To log hyperparameters, pass a (nested) mapping of hyperparameters
+    to the logging method and set `extra={"hparams": True}`.
     """
 
     def __init__(
         self,
         level: int = logging.INFO,
         run_name: str | None = None,
-        log_dir: str | os.PathLike = "logs",
+        log_dir: str | os.PathLike = "logs",  # noqa: ARG002
         **init_kwargs: Any,
     ):
         """Initialize the trackio logger and check for required dependencies.

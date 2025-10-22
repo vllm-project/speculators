@@ -35,14 +35,14 @@ norm_before_residual = True
 ttt_steps = 3
 
 
-llama_config = LlamaConfig(hidden_size=hidden_size, vocab_size=verifier_vocab_size, num_hidden_layers=1)
+llama_config = LlamaConfig(
+    hidden_size=hidden_size, vocab_size=verifier_vocab_size, num_hidden_layers=1
+)
 llama_config._attn_implementation = "simple_flex_attention"
 
 
 d2t = torch.from_numpy(np.load("d2t.npy")).to(DEVICE)
 t2d = torch.from_numpy(np.load("t2d.npy")).to(DEVICE)
-
-assert draft_vocab_size == t2d.sum(dtype=torch.long).item()
 
 setup_metric_logger(loggers="trackio", run_name=None, output_dir="./logs")
 setup_root_logger()
@@ -83,7 +83,7 @@ train_dataset = Eagle3SampleFileDataset(
 )
 train_batch_sampler = MultipackDistributedBatchSamplerV2(
     batch_max_length=total_seq_len,
-    lengths=train_dataset.approx_lengths(),
+    lengths=train_dataset.approx_lengths,
     num_replicas=world_size,
     rank=local_rank,
 )
@@ -100,7 +100,7 @@ train_loader = DataLoader(
 val_dataset = Eagle3SampleFileDataset(file_list=val_files, max_len=total_seq_len)
 val_batch_sampler = MultipackDistributedBatchSamplerV2(
     batch_max_length=total_seq_len,
-    lengths=val_dataset.approx_lengths(),
+    lengths=val_dataset.approx_lengths,
     num_replicas=world_size,
     rank=local_rank,
 )

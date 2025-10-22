@@ -75,7 +75,7 @@ class BaseCheckpointer:
 def load_safetensors_state_dict(path: Path, device: str) -> dict[str, torch.Tensor]:
     full_state_dict = {}
     with safe_open(path, framework="pt", device=device) as f:
-        for key in f.keys():
+        for key in f.keys():  # noqa: SIM118
             full_state_dict[key] = f.get_tensor(key)
     return full_state_dict
 
@@ -88,7 +88,9 @@ class SingleGPUCheckpointer(BaseCheckpointer):
         model.load_state_dict(full_state_dict)
 
     def load_optimizer_state_dict(
-        self, model: PreTrainedModel, optimizer: torch.optim.Optimizer
+        self,
+        model: PreTrainedModel,  # noqa: ARG002
+        optimizer: torch.optim.Optimizer,
     ):
         full_state_dict = torch.load(
             self.optimizer_path(self.previous_epoch),

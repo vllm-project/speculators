@@ -23,7 +23,7 @@ def apply_fully_sharded(model: torch.nn.Module):
         )
     }
 
-    for layer in model.layers:  # todo: this is hardcoded to the Eagle3DraftModel definition, should be made more general
+    for layer in model.layers:  # todo: Hardcoded to Eagle3DraftModel, generalize
         # we apply fully_shard to each DecoderLayer
         layer.to_empty(device="meta")
         fully_shard(layer, **fsdp_kwargs)
@@ -81,7 +81,7 @@ class Trainer:
                     for sub_module in m.modules():
                         if hasattr(sub_module, "reset_parameters"):
                             sub_module.reset_parameters()
-                # todo: We need to make sure we're loading lm_head and embed_tokens after this reset
+                # todo: Ensure lm_head and embed_tokens are loaded after reset
         else:
             self.model.to(self.local_rank)
             if self.checkpointer.previous_epoch != -1:
@@ -105,13 +105,13 @@ class Trainer:
         root_logger.info(f"Training Epoch {epoch} started")
 
         for batch in train_loader:
-            batch = {
+            gpu_batch = {
                 k: v.to(self.local_rank) if isinstance(v, torch.Tensor) else v
                 for k, v in batch.items()
             }
 
             _draft_tokens, loss, draft_accuracies = self.model(
-                **batch, use_off_policy_tokens=False
+                **gpu_batch, use_off_policy_tokens=False
             )
 
             self.opt.zero_grad()
@@ -153,13 +153,13 @@ class Trainer:
             (), device=self.local_rank
         )  # initialize to tensor of shape ()
         for batch in val_loader:
-            batch = {
+            gpu_batch = {
                 k: v.to(self.local_rank) if isinstance(v, torch.Tensor) else v
                 for k, v in batch.items()
             }
 
             _draft_tokens, loss, draft_accuracies = self.model(
-                **batch, use_off_policy_tokens=False
+                **gpu_batch, use_off_policy_tokens=False
             )
 
             if self.is_distributed:
@@ -167,7 +167,7 @@ class Trainer:
                 dist.reduce(draft_accuracies, dst=0, op=dist.ReduceOp.AVG)
 
             val_loss += loss.detach().clone()
-            # Can't use += here because val_accuracies is a tensor of shape () on first iteration
+            # Can't use += here because val_accuracies has shape () on first iteration
             val_accuracies = val_accuracies + draft_accuracies.detach()
 
         val_loss /= len(val_loader)

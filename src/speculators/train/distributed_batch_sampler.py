@@ -26,7 +26,6 @@ Adapted from https://github.com/imoneoi/multipack_sampler.
 
 # Standard
 import warnings
-from functools import lru_cache
 from heapq import heapreplace
 from typing import NamedTuple
 
@@ -49,17 +48,19 @@ def _lpt_packed_batch(
     lengths: np.ndarray, max_len: int, num_replicas: int, start_index: int, rank: int
 ) -> None | list:
     """
-    Check if lengths can be distributed into `num_replicas` machines with at most `max_len` tokens per machine and return local rank's batch.
+    Check if lengths can be distributed into `num_replicas` machines with at most
+    `max_len` tokens per machine and return local rank's batch.
 
     Uses the LPT (Longest processing time first scheduling) algorithm
     Time: O(|lengths| log |lengths| + |lengths| log replicas)
 
     Returns:
-    `None` if unable to find a valid packing. Otherwise return the batch indices that correspond to `rank`.
+    `None` if unable to find a valid packing. Otherwise, return the batch indices that
+    correspond to `rank`.
     """
 
-    # Greedily assign lengths (in decreasing order) to the least full rank until they are all assigned or
-    # we run out of space.
+    # Greedily assign lengths (in decreasing order) to the least full rank until they
+    # are all assigned or we run out of space.
     local_batch = []
     heap = [_Bin(0, i) for i in range(num_replicas)]
 
@@ -69,7 +70,7 @@ def _lpt_packed_batch(
     for idx, size in zip(indices, lengths[indices]):
         new_fill = heap[0].fill + size
         if new_fill > max_len:
-            # Size doesn't fit in least full batch (or any others), can't satisfy requirements
+            # Size doesn't fit in least full batch (or any others), report failure.
             return None
 
         if heap[0].rank == rank:
@@ -84,7 +85,8 @@ def _lpt_packed_batch(
 def _assign_to_packed_batches(
     lengths: np.ndarray, max_len: int, rank: int, replicas: int
 ) -> list[NDArray]:
-    """Distribute lengths to batches across all ranks, while respecting batch_max_length. Uses a binary search + LPT algorithm
+    """Distribute lengths to batches across all ranks, while respecting max_length.
+    Uses a binary search + LPT algorithm.
 
     Args:
         lengths (np.ndarray): array of dataset sample lengths
@@ -95,8 +97,9 @@ def _assign_to_packed_batches(
     Returns:
         tuple[list, int, int]:
             - list of np.arrays containing the indices for each batch on the local rank
-            - sum of dataset lengths included (total sum of lengths in dataset minus any that were dropped at end of dataset)
-            - total token capacity if each batch maxed out batch_max_length
+            - sum of dataset lengths included (total sum of lengths in dataset minus any
+              that were dropped at end of dataset)
+            - total token capacity if each batch maxed out max_length
     """
 
     lengths_so_far = 0
@@ -104,7 +107,8 @@ def _assign_to_packed_batches(
     result = []
     lengths_cumsum = np.cumsum(lengths)
 
-    # binary search for max integer x such that the next x elements in shuffled lengths array can be packed into `num_replicas` batches
+    # binary search for max integer x such that the next x elements in shuffled lengths
+    # array can be packed into `replicas` batches.
     # Add the local rank's batch to `result` and repeat until end of dataset
     while True:
         if len(lengths) - ind < replicas:
@@ -159,7 +163,7 @@ class MultipackDistributedBatchSamplerV2(Sampler):
             lengths (ArrayLike[int]): the lengths of each sample in the dataset
             num_replicas (int): The number of replicas to split the dataset across.
             rank (int): The local rank to collect batches for.
-            seed (int, optional): Seed for RNG, must be the same on all ranks. Defaults to 0.
+            seed (int, optional): Seed for RNG, must be the same on all ranks. Default 0
         """
         self.num_replicas = num_replicas
         self.rank = rank
@@ -175,7 +179,9 @@ class MultipackDistributedBatchSamplerV2(Sampler):
                 f"/{len(self.lengths)} samples longer than batch_max_length. "
                 "Ensure that the right max_batch_length is used during data processing."
             )
-            warnings.warn(msg)
+            warnings.warn(msg, stacklevel=1)
+
+        self._cached_generated_batches = (-1, [])
 
     def __iter__(self):
         batches = self._generate_batches(self.epoch)
@@ -188,13 +194,15 @@ class MultipackDistributedBatchSamplerV2(Sampler):
     def set_epoch(self, epoch: int):
         self.epoch = epoch
 
-    @lru_cache(maxsize=1)
     def _generate_batches(self, epoch: int) -> list[NDArray]:
         """Generate batches for local rank
 
         Returns:
-            list[NDArray]: list of np.arrays containing the indices for each batch on the local rank
+            list[NDArray]: list of np.arrays containing the indices for each batch on
+            the local rank
         """
+        if self._cached_generated_batches[0] == epoch:
+            return self._cached_generated_batches[1]
 
         rng = np.random.default_rng(seed=self.seed + epoch)
         indices = rng.permutation(self.valid_indices)
@@ -204,8 +212,10 @@ class MultipackDistributedBatchSamplerV2(Sampler):
         )
 
         # The indices in batches are relative to the shuffled self.lengths[indices]
-        # Translate them so that they are instead relative to the overall unshuffled self.lengths array
+        # Translate them so that they are instead relative to the overall unshuffled
+        # self.lengths array.
         batches = [indices[batch] for batch in batches]
 
         # Cache result
+        self._cached_generated_batches = (epoch, batches)
         return batches
