@@ -3,16 +3,16 @@ import os
 import torch
 import torch.distributed as dist
 
-local_rank = int(os.environ.get("LOCAL_RANK", 0))
+local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+world_size = int(os.environ.get("WORLD_SIZE", "1"))
+is_distributed = "LOCAL_RANK" in os.environ
 
 
 def maybe_setup_distributed():
     # Based off of https://docs.pytorch.org/tutorials/intermediate/ddp_tutorial.html#initialize-ddp-with-torch-distributed-run-torchrun
-    if "LOCAL_RANK" not in os.environ:
+    if not is_distributed:
         # No distributed training
         return 0, 1, 0, False
-    local_rank = int(os.environ.get("LOCAL_RANK", 0))
-    world_size = int(os.environ.get("WORLD_SIZE", 1))
 
     torch.accelerator.set_device_index(local_rank)
     acc = torch.accelerator.current_accelerator()
@@ -21,21 +21,16 @@ def maybe_setup_distributed():
 
     rank = dist.get_rank()
 
-    print(
-        f"Started DDP with local_rank={local_rank}, world_size={world_size}, rank={rank}"
-    )
+    print(f"Started distributed with local_rank={local_rank}, world_size={world_size}")
     return local_rank, world_size, rank, True
 
 
 def maybe_destroy_distributed():
-    if "LOCAL_RANK" not in os.environ:
+    if not is_distributed:
         # No distributed training
         return
-    local_rank = int(os.environ.get("LOCAL_RANK", 0))
-    world_size = int(os.environ.get("WORLD_SIZE", 1))
-    rank = dist.get_rank()
 
     dist.destroy_process_group()
     print(
-        f"Destroyed DDP with local_rank={local_rank}, world_size={world_size}, rank={rank}"
+        f"Destroyed distributed with local_rank={local_rank}, world_size={world_size}"
     )

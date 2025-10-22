@@ -1,11 +1,12 @@
+# ruff: noqa: ERA001
 import math
 import os
 import random
-from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 import torch
-import torch.nn.functional as F
+import torch.nn.functional as F  # noqa: N812
 from torch.utils.data import Dataset
 
 BatchType = dict[str, Any]
@@ -47,7 +48,7 @@ def list_files(path):
     datapath = []
     for root, _directories, files in os.walk(path):
         for file in files:
-            file_path = os.path.join(root, file)
+            file_path = Path(root) / file
             datapath.append(file_path)
 
     return datapath
@@ -134,22 +135,22 @@ class Eagle3SampleFileDataset(Dataset):
         self.max_len = max_len
         self.transform = transform
         self.hidden_states_dtype = hidden_states_dtype
+        self.approx_lengths = self._compute_approx_lengths()
 
     def __len__(self):
         return len(self.data)
 
-    @lru_cache(maxsize=1)
-    def approx_lengths(self):
+    def _compute_approx_lengths(self) -> list[int]:
+        """Approximate lengths of the dataset based on the size of the first file"""
         lengths_0 = self.__getitem__(0)["lengths"]
         # this is a single sample so there is only one length
         lengths_0 = lengths_0[0].item()
-        size_0 = os.path.getsize(self.data[0])
+        size_0 = Path(self.data[0]).stat().st_size
 
-        approx_lengths = [
-            math.ceil(os.path.getsize(fname) / size_0 * lengths_0)
+        return [
+            math.ceil(Path(fname).stat().st_size / size_0 * lengths_0)
             for fname in self.data
         ]
-        return approx_lengths
 
     def __getitem__(self, index) -> BatchType:
         data = torch.load(self.data[index])
@@ -186,15 +187,13 @@ class Eagle3SampleFileDataset(Dataset):
         # }
 
         # Note: shift_batch will reduce seq_len by 1
-        data = shift_batch(data)
-
-        return data
+        return shift_batch(data)
 
 
 def create_collate_fn(max_len: int):
     def collate_fn(batch: list[BatchType]) -> BatchType:
         collated_data = {}
-        for key in batch[0].keys():
+        for key in batch[0]:
             collated_data[key] = torch.cat([b[key] for b in batch], dim=0)
 
             if key != "lengths":

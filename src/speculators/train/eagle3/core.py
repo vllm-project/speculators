@@ -1,9 +1,9 @@
+# ruff: noqa: ERA001
 from typing import ClassVar
 
 import torch
 from torch.nn.attention.flex_attention import create_block_mask
 from transformers import AutoConfig, AutoModelForCausalLM, DynamicCache
-from transformers.configuration_utils import PretrainedConfig
 
 from speculators.config import VerifierConfig
 from speculators.model import SpeculatorModel
@@ -19,18 +19,23 @@ def load_verifier_embeddings(verifier_model_name_or_path: str):
     verifier_model = AutoModelForCausalLM.from_pretrained(verifier_model_name_or_path)
     return verifier_model.model.embed_tokens.state_dict()
 
+
 def load_verifier_lm_head(verifier_model_name_or_path: str):
     verifier_model = AutoModelForCausalLM.from_pretrained(verifier_model_name_or_path)
     return verifier_model.lm_head.state_dict()
 
+
 def align_for_step(
-    logits: torch.Tensor,  # shape: [batch_size, total_seq_len, draft_vocab_size]
-    targets: torch.Tensor,  # shape: [batch_size, total_seq_len, draft_vocab_size]
-    loss_mask: torch.Tensor | None,  # shape: [batch_size, total_seq_len]
+    logits: torch.Tensor,  # shape: [1, total_seq_len, draft_vocab_size]
+    targets: torch.Tensor,  # shape: [1, total_seq_len, draft_vocab_size]
+    loss_mask: torch.Tensor | None,  # shape: [1, total_seq_len]
     ttt_step: int,
 ):
-    # We don't have target values for the last ttt_step tokens, so we mask them out on the logit side
-    # We shift the target values by ttt_step + 1 to the left because that's the position the generated tokens correspond to
+    # There are no target values for the last ttt_step tokens, so we mask them out
+    # before computing the loss/accuracy. Likewise, there are no logits for the first
+    # ttt_step tokens, so we mask them out.
+    # This is equivalent to shifting the target values by ttt_step + 1 to the left
+    # which puts them in the correct position for the generated tokens.
     # e.g.
     # targets_indices = [1, 2, 3, 4, 5, 6, 7, 8, 9]
     # logits_indices_ttt_step_0 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
@@ -38,39 +43,36 @@ def align_for_step(
     # logits_indices_ttt_step_2 = [3, 4, 5, 6, 7, 8, 9, 10, 11]
     # The indices for the loss_mask need to be kept in line with the targets indices
     logits = logits[:, :-ttt_step] if ttt_step > 0 else logits
-    # shape: [batch_size, total_seq_len - ttt_step, draft_vocab_size]
+    # shape: [1, total_seq_len - ttt_step, draft_vocab_size]
     targets = targets[:, ttt_step:]
-    # shape: [batch_size, total_seq_len - ttt_step, draft_vocab_size]
+    # shape: [1, total_seq_len - ttt_step, draft_vocab_size]
     if loss_mask is not None:
         loss_mask = loss_mask[:, ttt_step:]
-        # shape: [batch_size, total_seq_len - ttt_step]
+        # shape: [1, total_seq_len - ttt_step]
     return logits, targets, loss_mask
 
 
 @torch.no_grad()
 def compute_accuracy(
-    logits: torch.Tensor,  # shape: [batch_size, total_seq_len - ttt_step, draft_vocab_size]
-    targets: torch.Tensor,  # shape: [batch_size, total_seq_len - ttt_step, draft_vocab_size]
-    loss_mask: torch.Tensor | None,  # shape: [batch_size, total_seq_len - ttt_step]
+    logits: torch.Tensor,  # shape: [1, total_seq_len - ttt_step, draft_vocab_size]
+    targets: torch.Tensor,  # shape: [1, total_seq_len - ttt_step, draft_vocab_size]
+    loss_mask: torch.Tensor | None,  # shape: [1, total_seq_len - ttt_step]
 ):
     # Note: logits, targets, and loss_mask are already aligned for the current ttt_step
     target_tokens = torch.argmax(targets, dim=-1)
     predicted_tokens = torch.argmax(logits, dim=-1)
-    # shape: [batch_size, total_seq_len - ttt_step]
+    # shape: [1, total_seq_len - ttt_step]
 
     correct = predicted_tokens == target_tokens
     if loss_mask is not None:
         correct = torch.masked_select(correct, loss_mask.to(torch.bool))
-    acc = correct.float().sum() / (
-        correct.numel() + 1e-5
-    )  # avoid NaNs when loss_mask is all False
-    return acc
+    return correct.float().sum() / (correct.numel() + 1e-5)
 
 
 def loss_function(
-    logits: torch.Tensor,  # shape: [batch_size, total_seq_len - ttt_step, draft_vocab_size]
-    targets: torch.Tensor,  # shape: [batch_size, total_seq_len - ttt_step, draft_vocab_size]
-    loss_mask: torch.Tensor | None,  # shape: [batch_size, total_seq_len - ttt_step]
+    logits: torch.Tensor,  # shape: [1, total_seq_len - ttt_step, draft_vocab_size]
+    targets: torch.Tensor,  # shape: [1, total_seq_len - ttt_step, draft_vocab_size]
+    loss_mask: torch.Tensor | None,  # shape: [1, total_seq_len - ttt_step]
 ):
     # Note: logits, targets, and loss_mask are already aligned for the current ttt_step
     logits = torch.nn.functional.log_softmax(logits, dim=-1)
@@ -85,7 +87,7 @@ def loss_function(
     else:
         denominator = logits.shape[1]  # total_seq_len - ttt_step
     batch_loss = torch.sum(elementwise_loss, dim=(1, 2)) / denominator
-    # shape: [batch_size]
+    # shape: [1]
     return batch_loss.mean()
 
 
@@ -140,14 +142,12 @@ class Eagle3DraftModel(SpeculatorModel):
         )
         self._setup_embeddings_and_lm_heads(config.speculators_config.verifier, t2d)
 
-
     def _setup_embeddings_and_lm_heads(self, config: VerifierConfig, t2d: torch.Tensor):
-        verifier_model_config = AutoConfig.from_pretrained(
-            config.name_or_path
-        )
+        verifier_model_config = AutoConfig.from_pretrained(config.name_or_path)
         if verifier_model_config.hidden_size != self.hidden_size:
             raise ValueError(
-                f"Verifier hidden size {verifier_model_config.hidden_size} does not match draft hidden size {self.hidden_size}."
+                f"Verifier hidden size {verifier_model_config.hidden_size} does not"
+                f" match draft hidden size {self.hidden_size}."
             )
 
         # EMBEDDINGS
@@ -158,9 +158,7 @@ class Eagle3DraftModel(SpeculatorModel):
         )
         # shape: [verifier_vocab_size, hidden_size]
 
-        self.embed_tokens.load_state_dict(
-            load_verifier_embeddings(config.name_or_path)
-        )
+        self.embed_tokens.load_state_dict(load_verifier_embeddings(config.name_or_path))
         self.embed_tokens.weight.requires_grad = False
 
         # LM HEADS
@@ -168,19 +166,26 @@ class Eagle3DraftModel(SpeculatorModel):
             self.hidden_size, self.draft_vocab_size, bias=False
         )
         # shape: [hidden_size, draft_vocab_size]
-        self.verifier_lm_head = torch.nn.Linear(self.hidden_size, self.draft_vocab_size, bias=False)
+        self.verifier_lm_head = torch.nn.Linear(
+            self.hidden_size, self.draft_vocab_size, bias=False
+        )
 
         verifier_lm_head_state_dict = load_verifier_lm_head(config.name_or_path)
-        verifier_lm_head_weight = verifier_lm_head_state_dict["weight"].to(t2d.device)
-        truncated_verifier_lm_head_weight = verifier_lm_head_weight[t2d.to(torch.bool), :]
+        verifier_lm_head_weight = verifier_lm_head_state_dict["weight"]
+        truncated_verifier_lm_head_weight = verifier_lm_head_weight.to(t2d.device)[
+            t2d.to(torch.bool), :
+        ]
         if truncated_verifier_lm_head_weight.shape != self.lm_head.weight.shape:
             raise ValueError(
-                f"Truncated verifier lm head data shape {truncated_verifier_lm_head_weight.shape} does not match draft lm head shape {self.lm_head.weight.shape}"
+                f"Truncated verifier lm head data shape "
+                f"{truncated_verifier_lm_head_weight.shape} does not match draft "
+                f"lm head shape {self.lm_head.weight.shape}"
             )
         self.lm_head.weight.data = truncated_verifier_lm_head_weight.detach().clone()
-        self.verifier_lm_head.weight.data = truncated_verifier_lm_head_weight.detach().clone()
+        self.verifier_lm_head.weight.data = (
+            truncated_verifier_lm_head_weight.detach().clone()
+        )
         self.verifier_lm_head.weight.requires_grad = False
-
 
     def forward(
         self,
@@ -189,7 +194,8 @@ class Eagle3DraftModel(SpeculatorModel):
         lengths: torch.Tensor | None = None,  # shape: [batch_size]
         loss_mask: torch.Tensor | None = None,  # shape: [1, total_seq_len]
         position_ids: torch.Tensor | None = None,  # shape: [1, total_seq_len]
-        verifier_last_hidden_states: torch.Tensor | None = None,  # shape: [1, total_seq_len, hidden_size]
+        verifier_last_hidden_states: torch.Tensor
+        | None = None,  # shape: [1, total_seq_len, hidden_size]
         ttt_steps: int | None = None,
         use_off_policy_tokens: bool = False,
         **kwargs,
@@ -247,7 +253,7 @@ class Eagle3DraftModel(SpeculatorModel):
             for decoder_layer in self.layers:
                 hidden_states = decoder_layer(
                     hidden_states,
-                    attention_mask=block_mask,  # block_mask_to_dense_attention_mask(block_mask, device, torch.bool),
+                    attention_mask=block_mask,
                     position_ids=position_ids,
                     past_key_values=past_key_values,
                     cache_position=cache_position,
@@ -269,14 +275,16 @@ class Eagle3DraftModel(SpeculatorModel):
             draft_tokens.append(input_ids.detach().clone())
             # shape: [1, total_seq_len]
             # Use d2t to map draft tokens to verifier tokens.
-            # Must be in verifier vocabulary space because we use full verifier vocabulary in embedding
+            # Must be in verifier vocabulary space because we use the full verifier
+            # vocabulary in the embedding.
             input_ids = input_ids + self.d2t[input_ids]
 
             if use_off_policy_tokens:
                 # Overwrite input_ids with ground truth tokens
                 # shift input_ids by 1 to the left and pad with 0
-                # note: inputs_ids will no longer line up with verifier_last_hidden_state
-                # the draft logits generated from the padded tokens are ignored sliced out for loss calculation
+                # note: inputs_ids no longer line up with verifier_last_hidden_states
+                # the draft logits generated from the padded tokens are ignored
+                # and sliced out for loss calculation
                 input_ids = torch.cat(
                     [
                         original_input_ids[:, 1 + ttt_step :],

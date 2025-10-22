@@ -1,3 +1,4 @@
+# ruff: noqa: ERA001
 import pytest
 import torch
 from torch.nn.attention.flex_attention import BlockMask
@@ -39,8 +40,8 @@ def test_diagonal_draft_tokens_mask_mod(lengths):
     # 1 0 0 | 1 0 0 1 0 0
     # 1 1 0 | 0 1 0 0 1 0
     # 1 1 1 | 0 0 1 0 0 1
-    # If kv_idx > N (N = original seq len = num query indices), only the diagonal tokens are in mask
-    # Diagonal tokens are those where kv_idx % N == q_idx
+    # If kv_idx > N (N = orig seq len = num query inds), only the diagonal tokens are
+    # in the mask. Diagonal tokens are those where kv_idx % N == q_idx
 
     mask_mod = create_combined_mask_mod(lengths, total_seq_len=lengths.sum().item())
 
@@ -53,7 +54,7 @@ def test_diagonal_draft_tokens_mask_mod(lengths):
 
 
 @pytest.mark.parametrize(
-    "kv_num_blocks, kv_indices, expected_kv_indices",
+    ("kv_num_blocks", "kv_indices", "expected_kv_indices"),
     [
         # Test 1: Dense matrix shown in comments in test code
         (
@@ -83,23 +84,29 @@ def test_diagonal_draft_tokens_mask_mod(lengths):
 def test_extend_mask_for_draft_tokens(kv_num_blocks, kv_indices, expected_kv_indices):
     # Block mask is stored in Block Compressed Sparse Row (BSRS) format
     # This means storing:
-    # - kv_num_blocks (shape: [batch, head, q_blocks]): contains the number of blocks for each batch, head, and query block
-    # - kv_indices (shape: [batch, head, q_blocks, kv_blocks]): contains the row indices of the blocks for each batch, head, and query block
+    # - kv_num_blocks (shape: [batch, head, q_blocks]): contains the number of blocks
+    #   for each batch, head, and query block
+    # - kv_indices (shape: [batch, head, q_blocks, kv_blocks]): contains the row indices
+    #   of the blocks for each batch, head, and query block
     # Only the first kv_num_blocks of each row of kv_indices are defined
     # e.g. To store (ignoring batch and head dimensions):
     # 1 0 1
     # 1 1 0
     # 0 1 0
-    # There are 2 blocks for the first query row (0, 2), 2 blocks for the second query row (0, 1), and 1 block for the third query row (1)
+    # There are 2 blocks for the first query row (0, 2), 2 blocks for the second query
+    # row (0, 1), and 1 block for the third query row (1)
     # Therefore:
     # kv_num_blocks = [2, 2, 1]
-    # kv_indices = [[[0, 2, U], [0, 1, U], [1, U, U]]] where U indicates the value is undefined
-    # Note: for our masks currently batch and head indices aren't considered in the mask function, so we just treat them as 1 when storing the BlockMask
+    # kv_indices = [[[0, 2, U], [0, 1, U], [1, U, U]]] where U is an undefined value
+    # Note: for our masks currently batch and head indices aren't considered in the mask
+    # function, so we just treat them as 1 when storing the BlockMask
 
-    # During ttt, we extend the mask to accomodate the new draft tokens. The tokens included will be those on the diagonal (see diagonal test above),
+    # During ttt, we extend the mask to accomodate the new draft tokens. The tokens
+    # included will be those on the diagonal (see diagonal test above),
     # and therefore we need to include blocks on the newly added diagonal.
 
-    # Therefore, we expect `kv_num_blocks` to increase by 1 for each query row because only the diagonal block will be added to each row.
+    # Therefore, we expect `kv_num_blocks` to increase by 1 for each query row because
+    # only the diagonal block will be added to each row.
     # We also expect `kv_indices` to include the new diagonal blocks for each query row.
 
     kv_num_blocks = kv_num_blocks.reshape(1, 1, *kv_num_blocks.shape)
@@ -119,7 +126,8 @@ def test_extend_mask_for_draft_tokens(kv_num_blocks, kv_indices, expected_kv_ind
 
     for q_idx in range(kv_num_blocks.shape[2]):
         num_defined_blocks_in_row = extended_mask.kv_num_blocks[0, 0, q_idx].item()
-        # Only the first num_defined_blocks_in_row of each row of kv_indices are defined, the rest can have any value
+        # Only the first num_defined_blocks_in_row of each row of kv_indices are
+        # defined, the rest can have any value
         # Check that the defined blocks are match expected values
         assert torch.equal(
             extended_mask.kv_indices[0, 0, q_idx, :num_defined_blocks_in_row],
