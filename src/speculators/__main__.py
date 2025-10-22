@@ -118,7 +118,8 @@ def convert(
             help=(
                 "Additional keyword args for the conversion alg as a JSON string. "
                 'Options for Eagle: {"layernorms": true, "fusion_bias": true}. '
-                'Options for Eagle3: {"norm_before_residual": true}.'
+                'Options for Eagle3: {"norm_before_residual": true, '
+                '"eagle_aux_hidden_state_layer_ids": [1,23,44]}.'
             ),
         ),
     ] = None,
