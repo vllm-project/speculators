@@ -504,7 +504,7 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel, GenerationMixin):  # 
         generation_config: GenerationConfig | None = None,  # noqa: ARG002
         logits_processor: LogitsProcessorList | None = None,  # noqa: ARG002
         stopping_criteria: StoppingCriteriaList | None = None,  # noqa: ARG002
-        prefix_allowed_tokens_fn: Callable[[int, torch.Tensor], list[int]] # noqa: ARG002
+        prefix_allowed_tokens_fn: Callable[[int, torch.Tensor], list[int]]  # noqa: ARG002
         | None = None,
         synced_gpus: bool | None = None,  # noqa: ARG002
         assistant_model: Optional["PreTrainedModel"] = None,  # type: ignore[override]  # noqa: ARG002
