@@ -41,7 +41,7 @@ ttt_steps = 3
 llama_config = LlamaConfig(
     hidden_size=hidden_size, vocab_size=verifier_vocab_size, num_hidden_layers=1
 )
-llama_config._attn_implementation = "simple_flex_attention"
+llama_config._attn_implementation = "simple_flex_attention"  # noqa: SLF001
 
 
 d2t = torch.from_numpy(np.load("d2t.npy")).to(DEVICE)

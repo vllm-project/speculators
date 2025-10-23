@@ -211,9 +211,6 @@ select = [
     "UP", # pyupgrade: automatically upgrades syntax for newer versions of Python
     "W", # Warning: provides warnings about potential issues in the code
     "YTT", # flake8-2020: identifies code that will break with future Python releases
-
-    # Code Documentation
-    "FIX", # flake8-fixme: detects FIXMEs and other temporary comments that should be resolved
 ]
 
 [tool.ruff.lint.extend-per-file-ignores]
@@ -235,6 +232,9 @@ select = [
 ]
 "src/speculators/convert/**/*.py" = [
     "BLE001", # allow catching Exception for conversion errors
+]
+"scripts/**/*.py" = [
+    "INP001",
 ]
 
 "src/speculators/data_generation/**/*.py" = [
