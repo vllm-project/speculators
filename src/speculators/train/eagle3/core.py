@@ -3,7 +3,7 @@ from typing import ClassVar
 
 import torch
 from torch.nn.attention.flex_attention import create_block_mask
-from transformers import AutoConfig, AutoModelForCausalLM, DynamicCache
+from transformers import AutoConfig, DynamicCache
 
 from speculators.config import VerifierConfig
 from speculators.model import SpeculatorModel
@@ -13,16 +13,7 @@ from speculators.train.eagle3.attention import (
     extend_mask_for_draft_tokens,
 )
 from speculators.train.eagle3.model_definitions import model_classes
-
-
-def load_verifier_embeddings(verifier_model_name_or_path: str):
-    verifier_model = AutoModelForCausalLM.from_pretrained(verifier_model_name_or_path)
-    return verifier_model.model.embed_tokens.state_dict()
-
-
-def load_verifier_lm_head(verifier_model_name_or_path: str):
-    verifier_model = AutoModelForCausalLM.from_pretrained(verifier_model_name_or_path)
-    return verifier_model.lm_head.state_dict()
+from speculators.utils.loading import load_model_layers
 
 
 def align_for_step(
@@ -152,6 +143,10 @@ class Eagle3DraftModel(SpeculatorModel):
                 f" match draft hidden size {self.hidden_size}."
             )
 
+        verifier_weights = load_model_layers(
+            ["model.embed_tokens.weight", "lm_head.weight"], config.name_or_path
+        )
+
         # EMBEDDINGS
         self.embed_tokens = torch.nn.Embedding(
             verifier_model_config.vocab_size,
@@ -160,7 +155,8 @@ class Eagle3DraftModel(SpeculatorModel):
         )
         # shape: [verifier_vocab_size, hidden_size]
 
-        self.embed_tokens.load_state_dict(load_verifier_embeddings(config.name_or_path))
+        embed_tokens_sd = {"weight": verifier_weights["model.embed_tokens.weight"]}
+        self.embed_tokens.load_state_dict(embed_tokens_sd)
         self.embed_tokens.weight.requires_grad = False
 
         # LM HEADS
@@ -172,21 +168,17 @@ class Eagle3DraftModel(SpeculatorModel):
             self.hidden_size, self.draft_vocab_size, bias=False
         )
 
-        verifier_lm_head_state_dict = load_verifier_lm_head(config.name_or_path)
-        verifier_lm_head_weight = verifier_lm_head_state_dict["weight"]
-        truncated_verifier_lm_head_weight = verifier_lm_head_weight.to(t2d.device)[
+        masked_lm_head_weight = verifier_weights["lm_head.weight"].to(t2d.device)[
             t2d.to(torch.bool), :
         ]
-        if truncated_verifier_lm_head_weight.shape != self.lm_head.weight.shape:
+        if masked_lm_head_weight.shape != self.lm_head.weight.shape:
             raise ValueError(
-                f"Truncated verifier lm head data shape "
-                f"{truncated_verifier_lm_head_weight.shape} does not match draft "
+                f"Masked verifier lm head data shape "
+                f"{masked_lm_head_weight.shape} does not match draft "
                 f"lm head shape {self.lm_head.weight.shape}"
             )
-        self.lm_head.weight.data = truncated_verifier_lm_head_weight.detach().clone()
-        self.verifier_lm_head.weight.data = (
-            truncated_verifier_lm_head_weight.detach().clone()
-        )
+        self.lm_head.weight.data = masked_lm_head_weight.detach().clone()
+        self.verifier_lm_head.weight.data = masked_lm_head_weight.detach().clone()
         self.verifier_lm_head.weight.requires_grad = False
 
     def forward(
