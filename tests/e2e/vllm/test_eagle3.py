@@ -20,7 +20,7 @@ class TestEagle3vLLM:
         return cache_dir
 
     def _run_vllm_engine(self, model_path):
-        from vllm import LLM, SamplingParams  # type: ignore
+        from vllm import LLM, SamplingParams  # type: ignore # noqa: PLC0415
 
         sampling_params = SamplingParams(temperature=0.80, top_p=0.95, max_tokens=20)
         llm = LLM(model=model_path, max_model_len=1024, gpu_memory_utilization=0.8)

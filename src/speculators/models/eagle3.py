@@ -18,7 +18,7 @@ from typing import Any, ClassVar, Literal
 import torch
 from pydantic import Field, field_serializer, field_validator
 from torch import nn
-from transformers import PretrainedConfig, PreTrainedModel
+from transformers import AutoConfig, PretrainedConfig, PreTrainedModel
 from transformers.models.llama.configuration_llama import LlamaConfig
 from transformers.models.llama.modeling_llama import (
     LlamaMLP,
@@ -98,8 +98,6 @@ class Eagle3SpeculatorConfig(SpeculatorModelConfig):
         if isinstance(value, dict):
             config_class: type[PretrainedConfig] = LlamaConfig
             if "model_type" in value:
-                from transformers import AutoConfig
-
                 config_class = AutoConfig.for_model(
                     model_type=value["model_type"]
                 ).__class__

@@ -245,6 +245,7 @@ select = [
     "PGH004",  # allow general style ignores
     "ERA001", # allow commented-out code
     "N80",  # allow upper case names
+    "PLC0415", # ignore import not at top of file errors
 ]
 
 [tool.ruff.lint.isort]

@@ -9,6 +9,7 @@ Verifies the complete conversion workflow for Eagle and HASS checkpoints:
 5. Validating saved directories and configs
 """
 
+import gc
 import json
 from pathlib import Path
 
@@ -26,9 +27,6 @@ class TestEagleConversion:
     def setup_method(self):
         """Clear any cached models or state before each test."""
         # Clear transformers model cache to ensure clean state
-        import gc
-
-        import torch
 
         gc.collect()
         if torch.cuda.is_available():
