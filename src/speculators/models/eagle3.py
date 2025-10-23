@@ -13,7 +13,7 @@ Classes:
 """
 
 import os
-from typing import Any, ClassVar, Literal, Optional, Union
+from typing import Any, ClassVar, Literal
 
 import torch
 from pydantic import Field, field_serializer, field_validator
@@ -71,12 +71,12 @@ class Eagle3SpeculatorConfig(SpeculatorModelConfig):
         description="Apply hidden_norm before storing residual",
     )
 
-    target_hidden_size: Optional[int] = Field(
+    target_hidden_size: int | None = Field(
         default=None,
         description="Hidden size of the target model (if different from draft model)",
     )
 
-    eagle_aux_hidden_state_layer_ids: Optional[list[int]] = Field(
+    eagle_aux_hidden_state_layer_ids: list[int] | None = Field(
         default=None,
         description="Layer IDs of the Eagle auxiliary hidden state layers",
     )
@@ -147,12 +147,12 @@ class Eagle3Attention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_value: Optional[tuple[torch.Tensor, torch.Tensor]] = None,
+        attention_mask: torch.Tensor | None = None,
+        position_ids: torch.LongTensor | None = None,
+        past_key_value: tuple[torch.Tensor, torch.Tensor] | None = None,
         output_attentions: bool = False,
         use_cache: bool = False,
-        position_embeddings: Optional[tuple[torch.Tensor, torch.Tensor]] = None,
+        position_embeddings: tuple[torch.Tensor, torch.Tensor] | None = None,
         **kwargs,  # noqa: ARG002
     ) -> tuple:
         """
@@ -257,13 +257,13 @@ class Eagle3DecoderLayer(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_value: Optional[tuple[torch.Tensor, torch.Tensor]] = None,
-        output_attentions: Optional[bool] = False,
-        use_cache: Optional[bool] = False,
-        cache_position: Optional[torch.LongTensor] = None,  # noqa: ARG002
-        position_embeddings: Optional[tuple[torch.Tensor, torch.Tensor]] = None,
+        attention_mask: torch.Tensor | None = None,
+        position_ids: torch.LongTensor | None = None,
+        past_key_value: tuple[torch.Tensor, torch.Tensor] | None = None,
+        output_attentions: bool | None = False,
+        use_cache: bool | None = False,
+        cache_position: torch.LongTensor | None = None,  # noqa: ARG002
+        position_embeddings: tuple[torch.Tensor, torch.Tensor] | None = None,
         **kwargs,  # noqa: ARG002
     ) -> tuple:
         """
@@ -334,10 +334,9 @@ class Eagle3Speculator(SpeculatorModel):
     def __init__(
         self,
         config: Eagle3SpeculatorConfig,
-        verifier: Optional[Union[str, os.PathLike, PreTrainedModel]] = None,
-        verifier_attachment_mode: Optional[
-            Literal["detached", "full", "train_only"]
-        ] = None,
+        verifier: str | os.PathLike | PreTrainedModel | None = None,
+        verifier_attachment_mode: Literal["detached", "full", "train_only"]
+        | None = None,
         reduce_vocab_size: bool = True,
         has_drafter_embedding: bool = True,
     ):
@@ -443,13 +442,13 @@ class Eagle3Speculator(SpeculatorModel):
         self,
         input_ids: torch.LongTensor,
         hidden_states: torch.FloatTensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[tuple[tuple[torch.FloatTensor]]] = None,
-        use_cache: Optional[bool] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,  # noqa: ARG002
-        return_dict: Optional[bool] = None,
+        attention_mask: torch.Tensor | None = None,
+        position_ids: torch.LongTensor | None = None,
+        past_key_values: tuple[tuple[torch.FloatTensor]] | None = None,
+        use_cache: bool | None = None,
+        output_attentions: bool | None = None,
+        output_hidden_states: bool | None = None,  # noqa: ARG002
+        return_dict: bool | None = None,
     ) -> torch.FloatTensor:
         """
         Forward pass for EAGLE-3 speculation.

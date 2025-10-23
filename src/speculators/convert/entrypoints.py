@@ -13,7 +13,7 @@ Functions:
     convert_model: Converts a model checkpoint to the Speculators format.
 """
 
-from typing import Literal, Optional
+from typing import Literal
 
 from speculators.convert.eagle.eagle3_converter import Eagle3Converter
 from speculators.convert.eagle.eagle_converter import EagleConverter
@@ -26,7 +26,7 @@ def convert_model(
     verifier: str,
     algorithm: Literal["eagle", "eagle3"],
     output_path: str = "converted",
-    validate_device: Optional[str] = None,
+    validate_device: str | None = None,
     **kwargs,
 ):
     """

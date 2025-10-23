@@ -16,7 +16,8 @@ Classes:
         auto-discovery enabled by default
 """
 
-from typing import Any, Callable, ClassVar, Optional
+from collections.abc import Callable
+from typing import Any, ClassVar
 
 from speculators.utils.auto_importer import AutoImporterMixin
 
@@ -76,12 +77,12 @@ class ClassRegistryMixin(AutoImporterMixin):
         populated with classes from the specified package(s).
     """
 
-    registry: ClassVar[Optional[dict[str, type[Any]]]] = None
+    registry: ClassVar[dict[str, type[Any]] | None] = None
     registry_auto_discovery: ClassVar[bool] = False
     registry_populated: ClassVar[bool] = False
 
     @classmethod
-    def register(cls, name: Optional[str] = None) -> Callable[[type[Any]], type[Any]]:
+    def register(cls, name: str | None = None) -> Callable[[type[Any]], type[Any]]:
         """
         An invoked class decorator that registers that class with the registry under
         either the provided name or the class name if no name is provided.
@@ -111,9 +112,7 @@ class ClassRegistryMixin(AutoImporterMixin):
         return lambda subclass: cls.register_decorator(subclass, name=name)
 
     @classmethod
-    def register_decorator(
-        cls, clazz: type[Any], name: Optional[str] = None
-    ) -> type[Any]:
+    def register_decorator(cls, clazz: type[Any], name: str | None = None) -> type[Any]:
         """
         A non-invoked class decorator that registers the class with the registry.
         If passed through a lambda, then name can be passed in as well.

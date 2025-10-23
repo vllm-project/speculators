@@ -4,7 +4,6 @@ Utility functions for checkpoint conversion operations.
 
 import json
 from pathlib import Path
-from typing import Optional, Union
 
 import torch
 from huggingface_hub import snapshot_download
@@ -12,7 +11,7 @@ from loguru import logger
 from safetensors import safe_open
 
 
-def find_vocab_size(config_dict: dict) -> Optional[int]:
+def find_vocab_size(config_dict: dict) -> int | None:
     """
     Recursively search for vocab_size in nested config dictionary.
 
@@ -30,9 +29,7 @@ def find_vocab_size(config_dict: dict) -> Optional[int]:
     return None
 
 
-def download_checkpoint_from_hub(
-    model_id: str, cache_dir: Optional[str] = None
-) -> Path:
+def download_checkpoint_from_hub(model_id: str, cache_dir: str | None = None) -> Path:
     """
     Download a checkpoint from HuggingFace Hub.
 
@@ -62,7 +59,7 @@ def download_checkpoint_from_hub(
 
 
 def ensure_checkpoint_is_local(
-    checkpoint_path: Union[str, Path], cache_dir: Optional[Union[str, Path]] = None
+    checkpoint_path: str | Path, cache_dir: str | Path | None = None
 ) -> Path:
     """
     Ensure we have a local copy of the checkpoint.

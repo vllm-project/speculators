@@ -11,7 +11,6 @@ Verifies the complete conversion workflow for Eagle and HASS checkpoints:
 
 import json
 from pathlib import Path
-from typing import Optional
 
 import pytest
 import torch
@@ -122,7 +121,7 @@ class TestEagleConversion:
             shard_files = list(checkpoint_dir.glob("model-*.safetensors"))
             assert len(shard_files) > 0, "Index file exists but no shard files found"
 
-    def execute_forward_pass(self, model: EagleSpeculator) -> Optional[torch.Tensor]:
+    def execute_forward_pass(self, model: EagleSpeculator) -> torch.Tensor | None:
         """
         Execute a forward pass with the model.
 
