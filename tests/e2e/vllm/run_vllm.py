@@ -2,7 +2,7 @@ import argparse
 import json
 from pathlib import Path
 
-from vllm import LLM, SamplingParams
+from vllm import LLM, SamplingParams  # type: ignore[import-not-found]
 
 
 def parse_args():
