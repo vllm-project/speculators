@@ -20,6 +20,9 @@ from speculators.train.logger import setup_metric_logger, setup_root_logger
 from speculators.train.trainer import Trainer
 from speculators.train.utils import maybe_destroy_distributed, maybe_setup_distributed
 
+setup_metric_logger(loggers="trackio", run_name=None, output_dir="./logs")
+setup_root_logger()
+
 local_rank, world_size, rank, is_distributed = maybe_setup_distributed()
 
 DEVICE = torch.device(local_rank)
@@ -43,10 +46,6 @@ llama_config._attn_implementation = "simple_flex_attention"
 
 d2t = torch.from_numpy(np.load("d2t.npy")).to(DEVICE)
 t2d = torch.from_numpy(np.load("t2d.npy")).to(DEVICE)
-
-setup_metric_logger(loggers="trackio", run_name=None, output_dir="./logs")
-setup_root_logger()
-
 
 speculator_config = Eagle3SpeculatorConfig(
     transformer_layer_config=llama_config,
