@@ -87,10 +87,10 @@ def build_ds(
     return ds1
 
 
-bigtokenizer = AutoTokenizer.from_pretrained(bigname, use_fast=False)
+bigtokenizer = AutoTokenizer.from_pretrained(bigname)
 ds = build_ds(bigtokenizer)
 bigmodel = AutoModelForCausalLM.from_pretrained(
-    bigname, device_map="auto", torch_dtype=torch.float16
+    bigname, device_map="auto", torch_dtype="auto"
 )
 bigmodel.eval()
 

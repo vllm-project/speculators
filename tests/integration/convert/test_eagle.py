@@ -9,9 +9,9 @@ Verifies the complete conversion workflow for Eagle and HASS checkpoints:
 5. Validating saved directories and configs
 """
 
+import gc
 import json
 from pathlib import Path
-from typing import Optional
 
 import pytest
 import torch
@@ -27,9 +27,6 @@ class TestEagleConversion:
     def setup_method(self):
         """Clear any cached models or state before each test."""
         # Clear transformers model cache to ensure clean state
-        import gc
-
-        import torch
 
         gc.collect()
         if torch.cuda.is_available():
@@ -122,7 +119,7 @@ class TestEagleConversion:
             shard_files = list(checkpoint_dir.glob("model-*.safetensors"))
             assert len(shard_files) > 0, "Index file exists but no shard files found"
 
-    def execute_forward_pass(self, model: EagleSpeculator) -> Optional[torch.Tensor]:
+    def execute_forward_pass(self, model: EagleSpeculator) -> torch.Tensor | None:
         """
         Execute a forward pass with the model.
 

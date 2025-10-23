@@ -29,7 +29,6 @@
 
 import math
 import os
-from typing import Optional
 
 import numpy as np
 import torch.utils.checkpoint
@@ -157,11 +156,11 @@ class Model(nn.Module):
         self,
         hidden_states,
         input_ids,
-        attention_mask: Optional[torch.Tensor] = None,
+        attention_mask: torch.Tensor | None = None,
         hidden_states_history=None,
-        position_ids: Optional[torch.LongTensor] = None,
-        position_embeddings: Optional[tuple[torch.Tensor, torch.Tensor]] = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
+        position_ids: torch.LongTensor | None = None,
+        position_embeddings: tuple[torch.Tensor, torch.Tensor] | None = None,
+        inputs_embeds: torch.FloatTensor | None = None,
     ):
         batch_size, seq_length, hidden_shape = hidden_states.shape
         with torch.no_grad():
@@ -295,7 +294,7 @@ def _make_causal_mask(
 
 
 # Copied from transformers.models.bart.modeling_bart._expand_mask
-def _expand_mask(mask: torch.Tensor, dtype: torch.dtype, tgt_len: Optional[int] = None):
+def _expand_mask(mask: torch.Tensor, dtype: torch.dtype, tgt_len: int | None = None):
     """
     Expands attention_mask from `[bsz, seq_len]` to
     `[bsz, 1, tgt_seq_len, src_seq_len]`.

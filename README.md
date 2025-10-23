@@ -6,7 +6,7 @@
     <img alt="Speculators logo" src="https://raw.githubusercontent.com/neuralmagic/speculators/main/docs/assets/branding/speculators-logo-black.svg" height="64" />
   </picture>
 
-[![License](https://img.shields.io/github/license/neuralmagic/speculators.svg)](https://github.com/neuralmagic/speculators/blob/main/LICENSE) [![Python Versions](https://img.shields.io/badge/Python-3.9--3.13-orange)](https://pypi.python.org/pypi/speculators) [![docs](https://img.shields.io/badge/docs-Speculators-blue)](https://docs.vllm.ai/projects/speculators/en/latest/) [![PyPI](https://img.shields.io/pypi/v/speculators.svg)](https://pypi.org/project/speculators/) [![tests](https://github.com/vllm-project/speculators/actions/workflows/nightly.yml/badge.svg)](https://github.com/vllm-project/speculators/actions/workflows/nightly.yml) [![tests](https://github.com/vllm-project/speculators/actions/workflows/main.yml/badge.svg)](https://github.com/vllm-project/speculators/actions/workflows/main.yml)
+[![License](https://img.shields.io/github/license/neuralmagic/speculators.svg)](https://github.com/neuralmagic/speculators/blob/main/LICENSE) [![Python Versions](https://img.shields.io/badge/Python-3.10--3.13-orange)](https://pypi.python.org/pypi/speculators) [![docs](https://img.shields.io/badge/docs-Speculators-blue)](https://docs.vllm.ai/projects/speculators/en/latest/) [![PyPI](https://img.shields.io/pypi/v/speculators.svg)](https://pypi.org/project/speculators/) [![tests](https://github.com/vllm-project/speculators/actions/workflows/nightly.yml/badge.svg)](https://github.com/vllm-project/speculators/actions/workflows/nightly.yml) [![tests](https://github.com/vllm-project/speculators/actions/workflows/main.yml/badge.svg)](https://github.com/vllm-project/speculators/actions/workflows/main.yml)
 
 </div>
 
@@ -105,8 +105,8 @@ The following models are currently supported or are planned to be supported in t
 <tr>
 <td>Maverick-17B-128E-Eagle3</td>
 <td>EAGLE-3 ❌</td>
-<td>⏳</td>
-<td><a href="https://huggingface.co/nvidia/Llama-4-Maverick-17B-128E-Eagle3">EAGLE-3</a> ⏳</td>
+<td>✅</td>
+<td><a href="https://huggingface.co/nvidia/Llama-4-Maverick-17B-128E-Eagle3">EAGLE-3</a> ✅</td>
 </tr>
 <tr>
 <td>DeepSeek-R1</td>
@@ -146,7 +146,7 @@ Served models can then be benchmarked using [GuideLLM](https://github.com/vllm-p
 Before installing, ensure you have the following:
 
 - **Operating System:** Linux or macOS
-- **Python:** 3.9 or higher
+- **Python:** 3.10 or higher
 - **Package Manager:** pip (recommended) or conda
 
 #### Install from PyPI (Recommended)

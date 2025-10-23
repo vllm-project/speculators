@@ -13,14 +13,12 @@ Classes:
 """
 
 import os
-from typing import Any, ClassVar, Literal, Optional, Union
+from typing import Any, ClassVar, Literal
 
 import torch
 from pydantic import Field, field_serializer, field_validator
 from torch import nn
-from transformers import PretrainedConfig, PreTrainedModel
-from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_mask
-from transformers.modeling_outputs import CausalLMOutputWithPast
+from transformers import AutoConfig, PretrainedConfig, PreTrainedModel
 from transformers.models.llama.configuration_llama import LlamaConfig
 from transformers.models.llama.modeling_llama import (
     LlamaMLP,
@@ -73,9 +71,14 @@ class Eagle3SpeculatorConfig(SpeculatorModelConfig):
         description="Apply hidden_norm before storing residual",
     )
 
-    target_hidden_size: Optional[int] = Field(
+    target_hidden_size: int | None = Field(
         default=None,
         description="Hidden size of the target model (if different from draft model)",
+    )
+
+    eagle_aux_hidden_state_layer_ids: list[int] | None = Field(
+        default=None,
+        description="Layer IDs of the Eagle auxiliary hidden state layers",
     )
 
     @property
@@ -95,8 +98,6 @@ class Eagle3SpeculatorConfig(SpeculatorModelConfig):
         if isinstance(value, dict):
             config_class: type[PretrainedConfig] = LlamaConfig
             if "model_type" in value:
-                from transformers import AutoConfig
-
                 config_class = AutoConfig.for_model(
                     model_type=value["model_type"]
                 ).__class__
@@ -144,12 +145,12 @@ class Eagle3Attention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_value: Optional[tuple[torch.Tensor, torch.Tensor]] = None,
+        attention_mask: torch.Tensor | None = None,
+        position_ids: torch.LongTensor | None = None,
+        past_key_value: tuple[torch.Tensor, torch.Tensor] | None = None,
         output_attentions: bool = False,
         use_cache: bool = False,
-        position_embeddings: Optional[tuple[torch.Tensor, torch.Tensor]] = None,
+        position_embeddings: tuple[torch.Tensor, torch.Tensor] | None = None,
         **kwargs,  # noqa: ARG002
     ) -> tuple:
         """
@@ -254,13 +255,13 @@ class Eagle3DecoderLayer(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_value: Optional[tuple[torch.Tensor, torch.Tensor]] = None,
-        output_attentions: Optional[bool] = False,
-        use_cache: Optional[bool] = False,
-        cache_position: Optional[torch.LongTensor] = None,  # noqa: ARG002
-        position_embeddings: Optional[tuple[torch.Tensor, torch.Tensor]] = None,
+        attention_mask: torch.Tensor | None = None,
+        position_ids: torch.LongTensor | None = None,
+        past_key_value: tuple[torch.Tensor, torch.Tensor] | None = None,
+        output_attentions: bool | None = False,
+        use_cache: bool | None = False,
+        cache_position: torch.LongTensor | None = None,  # noqa: ARG002
+        position_embeddings: tuple[torch.Tensor, torch.Tensor] | None = None,
         **kwargs,  # noqa: ARG002
     ) -> tuple:
         """
@@ -331,10 +332,11 @@ class Eagle3Speculator(SpeculatorModel):
     def __init__(
         self,
         config: Eagle3SpeculatorConfig,
-        verifier: Optional[Union[str, os.PathLike, PreTrainedModel]] = None,
-        verifier_attachment_mode: Optional[
-            Literal["detached", "full", "train_only"]
-        ] = None,
+        verifier: str | os.PathLike | PreTrainedModel | None = None,
+        verifier_attachment_mode: Literal["detached", "full", "train_only"]
+        | None = None,
+        reduce_vocab_size: bool = True,
+        has_drafter_embedding: bool = True,
     ):
         """
         Initialize Eagle3 speculator.
@@ -342,6 +344,8 @@ class Eagle3Speculator(SpeculatorModel):
         :param config: Eagle3SpeculatorConfig instance
         :param verifier: Optional verifier model
         :param verifier_attachment_mode: How to attach the verifier
+        :param reduce_vocab_size: Whether to reduce vocabulary size with mapping
+        :param has_drafter_embedding: Whether drafter embedding weights are provided
         """
         if not isinstance(config, Eagle3SpeculatorConfig):
             raise ValueError(
@@ -367,13 +371,14 @@ class Eagle3Speculator(SpeculatorModel):
             verifier_attachment_mode=verifier_attachment_mode,
         )
 
-        self.embed_tokens = nn.Embedding(
-            self.target_vocab_size,
-            self.hidden_size,
-            padding_idx=config.transformer_layer_config.pad_token_id
-            if hasattr(config.transformer_layer_config, "pad_token_id")
-            else None,
-        )
+        if has_drafter_embedding:
+            self.embed_tokens = nn.Embedding(
+                self.target_vocab_size,
+                self.hidden_size,
+                padding_idx=config.transformer_layer_config.pad_token_id
+                if hasattr(config.transformer_layer_config, "pad_token_id")
+                else None,
+            )
 
         self.fc = nn.Linear(
             3 * self.target_hidden_size,  # Use target model's hidden size
@@ -401,158 +406,20 @@ class Eagle3Speculator(SpeculatorModel):
             self.draft_vocab_size,
             bias=False,
         )
+        if reduce_vocab_size:
+            self.register_buffer(  # type: ignore[attr-defined]
+                "d2t",
+                torch.zeros(self.draft_vocab_size, dtype=torch.long),
+            )
+            self.register_buffer(  # type: ignore[attr-defined]
+                "t2d",
+                torch.zeros(self.target_vocab_size, dtype=torch.bool),
+            )
 
-        self.register_buffer(  # type: ignore[attr-defined]
-            "d2t",
-            torch.zeros(self.draft_vocab_size, dtype=torch.long),
-        )
-        self.register_buffer(  # type: ignore[attr-defined]
-            "t2d",
-            torch.zeros(self.target_vocab_size, dtype=torch.bool),
-        )
-
-        # Type hints for buffers
-        self.d2t: torch.Tensor
-        self.t2d: torch.Tensor
-
+            # Type hints for buffers
+            self.d2t: torch.Tensor
+            self.t2d: torch.Tensor
         self.post_init()  # type: ignore[attr-defined]
-
-    def forward(
-        self,
-        input_ids: torch.LongTensor,
-        hidden_states: torch.FloatTensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[tuple[tuple[torch.FloatTensor]]] = None,
-        use_cache: Optional[bool] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,  # noqa: ARG002
-        return_dict: Optional[bool] = None,
-    ) -> Union[torch.FloatTensor, CausalLMOutputWithPast]:
-        """
-        Forward pass for EAGLE-3 speculation.
-
-        :param input_ids: Input token IDs from draft vocabulary
-        :param hidden_states: Concatenated hidden states from 3 verifier layers
-            [B, L, 3*target_H] where target_H is the target model's hidden size
-        :param attention_mask: Optional attention mask
-        :param position_ids: Optional position IDs
-        :param past_key_values: Optional cached key-values
-        :param use_cache: Whether to cache key-values
-        :param output_attentions: Return attention weights
-        :param output_hidden_states: Return hidden states
-        :param return_dict: Return dict output
-        :return: Model outputs with draft vocabulary logits
-        """
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
-
-        inputs_embeds = self.embed_tokens(input_ids)
-
-        fused_hidden = self.fc(hidden_states)
-
-        layer_input = torch.cat([inputs_embeds, fused_hidden], dim=-1)
-
-        batch_size, seq_length = layer_input.shape[:2]
-        if attention_mask is not None and attention_mask.dim() == 2:  # noqa: PLR2004
-            past_key_values_length = (
-                past_key_values[0][0].shape[2] if past_key_values else 0
-            )
-            attention_mask = _prepare_4d_causal_attention_mask(
-                attention_mask,
-                (batch_size, seq_length),
-                hidden_states,
-                past_key_values_length,
-            )
-
-        if position_ids is None:
-            device = hidden_states.device
-            position_ids = (
-                torch.arange(  # type: ignore[assignment]
-                    seq_length, dtype=torch.long, device=device
-                )
-                .unsqueeze(0)
-                .expand(batch_size, -1)
-            )
-
-        layer_outputs = self.layers[0](
-            layer_input,
-            attention_mask=attention_mask,
-            position_ids=position_ids,
-            past_key_value=past_key_values[0] if past_key_values else None,
-            output_attentions=output_attentions,
-            use_cache=use_cache,
-        )
-
-        hidden_states = layer_outputs[0]
-
-        hidden_states = self.norm(hidden_states)
-
-        logits = self.compute_logits(hidden_states, map_to_target_vocab=True)
-
-        if not return_dict:
-            return logits
-
-        return CausalLMOutputWithPast(
-            logits=logits,
-            past_key_values=[layer_outputs[1]] if use_cache else None,  # type: ignore[arg-type]
-            hidden_states=None,
-            attentions=None,
-        )
-
-    def compute_logits(
-        self,
-        hidden_states: torch.FloatTensor,
-        map_to_target_vocab: bool = True,
-    ) -> torch.FloatTensor:
-        """
-        Compute logits with optional vocabulary mapping.
-
-        :param hidden_states: Hidden states from the model
-        :param map_to_target_vocab: Whether to map draft logits to target vocabulary
-        :return: Logits tensor
-        """
-        logits = self.lm_head(hidden_states)
-
-        if not map_to_target_vocab:
-            return logits
-
-        batch_size, seq_length, _ = logits.shape
-
-        draft_indices = torch.arange(self.draft_vocab_size, device=logits.device)
-
-        target_indices = draft_indices + self.d2t
-
-        mapped_logits = logits.new_full(
-            (batch_size, seq_length, self.target_vocab_size), float("-inf")
-        )
-
-        mapped_logits[:, :, target_indices] = logits
-
-        return mapped_logits
-
-    def map_draft_to_target_tokens(
-        self, draft_tokens: torch.LongTensor
-    ) -> torch.LongTensor:
-        """
-        Map draft token IDs to target token IDs.
-
-        :param draft_tokens: Draft vocabulary token IDs
-        :return: Target vocabulary token IDs
-        """
-        return draft_tokens + self.d2t[draft_tokens]  # type: ignore[return-value]
-
-    def check_target_token_availability(
-        self, target_tokens: torch.LongTensor
-    ) -> torch.BoolTensor:
-        """
-        Check if target tokens have draft equivalents.
-
-        :param target_tokens: Target vocabulary token IDs
-        :return: Boolean mask indicating availability in draft vocabulary
-        """
-        return self.t2d[target_tokens]  # type: ignore[return-value]
 
     def tie_weights(self):
         """
@@ -568,3 +435,32 @@ class Eagle3Speculator(SpeculatorModel):
         # Don't call super().tie_weights() - this prevents vocabulary corruption
         # that occurs when _tie_or_clone_weights replaces lm_head.weight with
         # embed_tokens.weight
+
+    def forward(
+        self,
+        input_ids: torch.LongTensor,
+        hidden_states: torch.FloatTensor,
+        attention_mask: torch.Tensor | None = None,
+        position_ids: torch.LongTensor | None = None,
+        past_key_values: tuple[tuple[torch.FloatTensor]] | None = None,
+        use_cache: bool | None = None,
+        output_attentions: bool | None = None,
+        output_hidden_states: bool | None = None,  # noqa: ARG002
+        return_dict: bool | None = None,
+    ) -> torch.FloatTensor:
+        """
+        Forward pass for EAGLE-3 speculation.
+
+        :param input_ids: Input token IDs from draft vocabulary
+        :param hidden_states: Concatenated hidden states from 3 verifier layers
+            [B, L, 3*target_H] where target_H is the target model's hidden size
+        :param attention_mask: Optional attention mask
+        :param position_ids: Optional position IDs
+        :param past_key_values: Optional cached key-values
+        :param use_cache: Whether to cache key-values
+        :param output_attentions: Return attention weights
+        :param output_hidden_states: Return hidden states
+        :param return_dict: Return dict output
+        :return: Model outputs with draft vocabulary logits
+        """
+        raise NotImplementedError("Eagle3Speculator.forward is not implemented yet.")
