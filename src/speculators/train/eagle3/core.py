@@ -156,7 +156,9 @@ class Eagle3DraftModel(SpeculatorModel):
         # shape: [verifier_vocab_size, hidden_size]
         default_dtype = self.embed_tokens.weight.dtype
 
-        embed_tokens_sd = {"weight": verifier_weights["model.embed_tokens.weight"].to(default_dtype)}
+        embed_tokens_sd = {
+            "weight": verifier_weights["model.embed_tokens.weight"].to(default_dtype)
+        }
         self.embed_tokens.load_state_dict(embed_tokens_sd)
         self.embed_tokens.weight.requires_grad = False
 
@@ -169,9 +171,9 @@ class Eagle3DraftModel(SpeculatorModel):
             self.hidden_size, self.draft_vocab_size, bias=False
         )
 
-        masked_lm_head_weight = verifier_weights["lm_head.weight"].to(device=t2d.device, dtype=default_dtype)[
-            t2d.to(torch.bool), :
-        ]
+        masked_lm_head_weight = verifier_weights["lm_head.weight"].to(
+            device=t2d.device, dtype=default_dtype
+        )[t2d.to(torch.bool), :]
         if masked_lm_head_weight.shape != self.lm_head.weight.shape:
             raise ValueError(
                 f"Masked verifier lm head data shape "
