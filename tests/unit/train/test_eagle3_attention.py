@@ -11,7 +11,9 @@ from speculators.train.eagle3.attention import (
 
 def test_create_combined_mask_mod():
     lengths = torch.tensor([1, 2, 3])
-    mask_mod = create_combined_mask_mod(lengths, total_seq_len=lengths.sum().item())
+    mask_mod = create_combined_mask_mod(
+        lengths, total_seq_len=int(lengths.sum().item())
+    )
 
     # Creates causal document mask mod that supports extended diagonals
     # lengths -> document ids [0, 1, 1, 2, 2, 2]

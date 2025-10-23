@@ -83,7 +83,7 @@ def loss_function(
 
     if loss_mask is not None:
         elementwise_loss = elementwise_loss * loss_mask.unsqueeze(-1)
-        denominator = loss_mask.sum(dim=1) + 1e-5
+        denominator: torch.Tensor | int = loss_mask.sum(dim=1) + 1e-5
     else:
         denominator = logits.shape[1]  # total_seq_len - ttt_step
     batch_loss = torch.sum(elementwise_loss, dim=(1, 2)) / denominator
@@ -120,7 +120,7 @@ class Eagle3DraftModel(SpeculatorModel):
         self.ttt_steps = ttt_steps
         self.register_buffer("t2d", t2d)  # shape: [verifier_vocab_size], bool
         self.register_buffer("d2t", d2t)  # shape: [draft_vocab_size], int offsets
-        self.draft_vocab_size = t2d.sum(dtype=torch.long).item()
+        self.draft_vocab_size = int(t2d.sum(dtype=torch.long).item())
         model_definitions = model_classes[config.transformer_layer_config.model_type]
 
         self.fc = torch.nn.Linear(3 * self.hidden_size, self.hidden_size, bias=False)
@@ -143,6 +143,8 @@ class Eagle3DraftModel(SpeculatorModel):
         self._setup_embeddings_and_lm_heads(config.speculators_config.verifier, t2d)
 
     def _setup_embeddings_and_lm_heads(self, config: VerifierConfig, t2d: torch.Tensor):
+        if config.name_or_path is None:
+            raise ValueError("VerifierConfig `name_or_path` value is required.")
         verifier_model_config = AutoConfig.from_pretrained(config.name_or_path)
         if verifier_model_config.hidden_size != self.hidden_size:
             raise ValueError(
@@ -207,6 +209,11 @@ class Eagle3DraftModel(SpeculatorModel):
             ttt_steps = self.ttt_steps
         if lengths is None:
             lengths = torch.tensor([total_seq_len], dtype=torch.long, device=device)
+        if position_ids is None:
+            position_ids = 1 + torch.arange(
+                total_seq_len, dtype=torch.long, device=device
+            ).unsqueeze(0)
+            # shape: [1, total_seq_len]
 
         past_key_values = DynamicCache(config=self.decoder_layer_config)
 
@@ -277,7 +284,7 @@ class Eagle3DraftModel(SpeculatorModel):
             # Use d2t to map draft tokens to verifier tokens.
             # Must be in verifier vocabulary space because we use the full verifier
             # vocabulary in the embedding.
-            input_ids = input_ids + self.d2t[input_ids]
+            input_ids = input_ids + self.d2t[input_ids]  # type: ignore[index]
 
             if use_off_policy_tokens:
                 # Overwrite input_ids with ground truth tokens
