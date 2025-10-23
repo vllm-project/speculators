@@ -1,3 +1,4 @@
+import gc
 import json
 from pathlib import Path
 
@@ -13,8 +14,6 @@ class TestEagle3Conversion:
     """End-to-end tests for Eagle3 checkpoint conversion."""
 
     def setup_method(self):
-        import gc
-
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()

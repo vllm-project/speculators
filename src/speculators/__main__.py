@@ -20,7 +20,7 @@ Usage:
 
 import json
 from importlib.metadata import version as pkg_version
-from typing import Annotated, Any, Optional
+from typing import Annotated, Any
 
 import click
 import typer  # type: ignore[import-not-found]
@@ -103,7 +103,7 @@ def convert(
         str, typer.Option(help="Directory path where converted model will be saved")
     ] = "converted",
     validate_device: Annotated[
-        Optional[str],
+        str | None,
         typer.Option(
             help=(
                 "Device to validate the model on (e.g. 'cuda:0') "
@@ -112,7 +112,7 @@ def convert(
         ),
     ] = None,
     algorithm_kwargs: Annotated[
-        Optional[dict[str, Any]],
+        dict[str, Any] | None,
         typer.Option(
             parser=json.loads,
             help=(

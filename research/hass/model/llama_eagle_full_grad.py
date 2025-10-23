@@ -31,7 +31,6 @@
 
 import math
 import os
-from typing import Optional
 
 import torch.utils.checkpoint
 from model.modeling_llama_TTT import (
@@ -146,16 +145,16 @@ class Model(nn.Module):
         self,
         hidden_states,
         input_ids,
-        attention_mask: Optional[torch.Tensor] = None,
+        attention_mask: torch.Tensor | None = None,
         hidden_states_history=None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[list[torch.FloatTensor]] = None,  # noqa: ARG002
-        position_embeddings: Optional[tuple[torch.Tensor, torch.Tensor]] = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
-        use_cache: Optional[bool] = None,  # noqa: ARG002
-        output_attentions: Optional[bool] = None,  # noqa: ARG002
-        output_hidden_states: Optional[bool] = None,  # noqa: ARG002
-        return_dict: Optional[bool] = None,  # noqa: ARG002
+        position_ids: torch.LongTensor | None = None,
+        past_key_values: list[torch.FloatTensor] | None = None,  # noqa: ARG002
+        position_embeddings: tuple[torch.Tensor, torch.Tensor] | None = None,
+        inputs_embeds: torch.FloatTensor | None = None,
+        use_cache: bool | None = None,  # noqa: ARG002
+        output_attentions: bool | None = None,  # noqa: ARG002
+        output_hidden_states: bool | None = None,  # noqa: ARG002
+        return_dict: bool | None = None,  # noqa: ARG002
         std=None,  # noqa: ARG002
     ):
         batch_size, seq_length, _ = hidden_states.shape
@@ -292,7 +291,7 @@ def _make_causal_mask(
 
 
 # Copied from transformers.models.bart.modeling_bart._expand_mask
-def _expand_mask(mask: torch.Tensor, dtype: torch.dtype, tgt_len: Optional[int] = None):
+def _expand_mask(mask: torch.Tensor, dtype: torch.dtype, tgt_len: int | None = None):
     """
     Expands attention_mask from `[bsz, seq_len]` to `[bsz, 1, tgt_seq_len, src_seq_len]`
     """

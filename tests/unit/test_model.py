@@ -4,7 +4,7 @@ Unit tests for the model module in the Speculators library.
 
 import os
 import tempfile
-from typing import Literal, Optional, Union
+from typing import Literal
 from unittest.mock import MagicMock
 
 import pytest
@@ -38,10 +38,9 @@ class SpeculatorTestModel(SpeculatorModel):
     def __init__(
         self,
         config: SpeculatorModelTestConfig,
-        verifier: Optional[Union[str, os.PathLike, PreTrainedModel]] = None,
-        verifier_attachment_mode: Optional[
-            Literal["detached", "full", "train_only"]
-        ] = None,
+        verifier: str | os.PathLike | PreTrainedModel | None = None,
+        verifier_attachment_mode: Literal["detached", "full", "train_only"]
+        | None = None,
         **kwargs,
     ):
         super().__init__(
