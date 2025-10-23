@@ -178,6 +178,8 @@ class IsRank0Filter(logging.Filter):
     4. Environment variables
     5. PyTorch distributed rank
 
+    Can be overriden by passing `extra={"override_rank0_filter": True}` to log method.
+
     Args:
         rank_val: Optional explicit rank value to use
         local_rank: If True, use local_rank instead of global rank
@@ -207,6 +209,8 @@ class IsRank0Filter(logging.Filter):
         return int(rank)
 
     def filter(self, record):
+        if hasattr(record, "override_rank0_filter") and record.override_rank0_filter:
+            return True
         return self._get_rank(record) == 0
 
 

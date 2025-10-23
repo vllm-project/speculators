@@ -3,9 +3,13 @@ import os
 import torch
 import torch.distributed as dist
 
+import logging
+
 local_rank = int(os.environ.get("LOCAL_RANK", "0"))
 world_size = int(os.environ.get("WORLD_SIZE", "1"))
 is_distributed = "LOCAL_RANK" in os.environ
+
+logger = logging.getLogger("speculators")
 
 
 def maybe_setup_distributed():
@@ -21,7 +25,10 @@ def maybe_setup_distributed():
 
     rank = dist.get_rank()
 
-    print(f"Started distributed with local_rank={local_rank}, world_size={world_size}")
+    logger.info(
+        f"Started distributed with local_rank={local_rank}, world_size={world_size}",
+        extra={"override_rank0_filter": True},
+    )
     return local_rank, world_size, rank, True
 
 
@@ -31,6 +38,7 @@ def maybe_destroy_distributed():
         return
 
     dist.destroy_process_group()
-    print(
-        f"Destroyed distributed with local_rank={local_rank}, world_size={world_size}"
+    logger.info(
+        f"Destroyed distributed with local_rank={local_rank}, world_size={world_size}",
+        extra={"override_rank0_filter": True},
     )
