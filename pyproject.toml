@@ -48,8 +48,10 @@ dependencies = [
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
     "pyyaml>=6.0.0",
+    "rich",
     "safetensors",
     "torch",
+    "tqdm",
     "transformers",
     "typer-slim>=0.12.0",
 ]

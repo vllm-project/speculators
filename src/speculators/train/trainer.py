@@ -4,7 +4,7 @@ import torch
 import torch.distributed as dist
 from torch.distributed.fsdp import FSDPModule, MixedPrecisionPolicy, fully_shard
 from torch.utils.data import DataLoader
-from tqdm.rich import tqdm  # todo: requries tqdm and rich
+from tqdm.rich import tqdm
 
 from speculators.train.checkpointer import (
     DistributedCheckpointer,
