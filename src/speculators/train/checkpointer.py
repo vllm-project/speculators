@@ -30,10 +30,9 @@ class BaseCheckpointer:
 
     def __init__(self, path: Path | str, try_load_last_checkpoint: bool = True):
         self.path = Path(path)
-        if try_load_last_checkpoint:
-            self.previous_epoch: int = self._get_previous_epoch()
-        else:
-            self.previous_epoch: int = -1
+        self.previous_epoch = (
+            self._get_previous_epoch() if try_load_last_checkpoint else -1
+        )
 
     @abstractmethod
     def load_model_state_dict(self, model: PreTrainedModel):
@@ -113,7 +112,7 @@ class DistributedCheckpointer(BaseCheckpointer):
         )
         set_model_state_dict(
             model,
-            full_state_dict,
+            full_state_dict,  # type: ignore[arg-type]
             options=StateDictOptions(full_state_dict=True, broadcast_from_rank0=True),
         )
         dist.barrier()

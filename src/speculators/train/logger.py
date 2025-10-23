@@ -57,12 +57,16 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from logging.config import dictConfig
 from pathlib import Path
-from typing import Any, Union
+from typing import TYPE_CHECKING, Any, Union
 
 import torch
 
 # Third Party
 from rich.logging import RichHandler
+
+if TYPE_CHECKING:
+    from torch.utils.tensorboard import SummaryWriter
+    from wandb import Run  # type: ignore[import-not-found]
 
 ### Helper functions
 
@@ -134,7 +138,7 @@ def _flatten_dict(log_dict: LogDict, sep: str = "/", prefix: str = "") -> dict:
     Returns:
         A flattened dictionary with keys joined by the separator
     """
-    flattened = {}
+    flattened: dict[str, Any] = {}
 
     for k, v in log_dict.items():
         if isinstance(v, Mapping):
@@ -281,7 +285,7 @@ class TensorBoardHandler(logging.Handler):
             "log_dir", Path(log_dir) / _substitute_placeholders(run_name)
         )
 
-        self._tboard_writer = None
+        self._tboard_writer: SummaryWriter | None = None
 
     def _setup(self):
         """Create the TensorBoard log directory and initialize the writer.
@@ -302,7 +306,7 @@ class TensorBoardHandler(logging.Handler):
             raise RuntimeError(msg) from e
 
         Path.mkdir(self.tboard_init_kwargs["log_dir"], parents=True, exist_ok=True)
-        self._tboard_writer = SummaryWriter(**self.tboard_init_kwargs)
+        return SummaryWriter(**self.tboard_init_kwargs)
 
     def emit(self, record: logging.LogRecord):
         """Emit a log record to TensorBoard.
@@ -314,14 +318,14 @@ class TensorBoardHandler(logging.Handler):
             record: The log record to emit
         """
         if self._tboard_writer is None:
-            self._setup()
+            self._tboard_writer = self._setup()
 
         if not isinstance(record.msg, Mapping):
             warnings.warn(
                 (
                     f"{self.__class__.__name__} expected a mapping, got "
                     f"{type(record.msg)}. Skipping log. Please ensure the handler is "
-                    "configured correctly to filter out non-mapping objects.",
+                    "configured correctly to filter out non-mapping objects."
                 ),
                 stacklevel=2,
             )
@@ -348,7 +352,7 @@ class TensorBoardHandler(logging.Handler):
                     (
                         f"{self.__class__.__name__} expected a scalar or text, got "
                         f"{type(v)}. Skipping log. Please ensure metric logger is only "
-                        "called with mappings containing scalar values or text.",
+                        "called with mappings containing scalar values or text."
                     ),
                     stacklevel=2,
                 )
@@ -399,7 +403,7 @@ class WandbHandler(logging.Handler):
         self.init_kwargs.setdefault("config", {})
 
         self._package_name = "wandb"
-        self._run = None
+        self._run: Run | None = None
 
     def _setup(self):
         try:
@@ -413,18 +417,18 @@ class WandbHandler(logging.Handler):
             )
             raise RuntimeError(msg) from e
 
-        self._run = wandb.init(**self.init_kwargs)
+        return wandb.init(**self.init_kwargs)
 
     def emit(self, record: logging.LogRecord):
         if self._run is None:
-            self._setup()
+            self._run = self._setup()
 
         if not isinstance(record.msg, Mapping):
             warnings.warn(
                 (
                     f"{self.__class__.__name__} expected a mapping, got "
                     f"{type(record.msg)}. Skipping log. Please ensure the handler is "
-                    "configured correctly to filter out non-mapping objects.",
+                    "configured correctly to filter out non-mapping objects."
                 ),
                 stacklevel=2,
             )
@@ -472,7 +476,7 @@ class TrackioHandler(WandbHandler):
         # Trackio doesn't support the dir keyword argument so we ignore log_dir
 
         self._package_name = "trackio"
-        self._run = None
+        self._run: Run | None = None
 
 
 ### Main functions
