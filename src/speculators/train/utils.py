@@ -1,9 +1,8 @@
+import logging
 import os
 
 import torch
 import torch.distributed as dist
-
-import logging
 
 local_rank = int(os.environ.get("LOCAL_RANK", "0"))
 world_size = int(os.environ.get("WORLD_SIZE", "1"))
