@@ -4,7 +4,6 @@ from typing import NamedTuple
 
 import torch
 from transformers import Cache, LlamaConfig
-from transformers.configuration_utils import PretrainedConfig
 from transformers.models.llama.modeling_llama import (
     LlamaDecoderLayer,
     LlamaRMSNorm,
@@ -17,7 +16,7 @@ from transformers.utils.generic import TransformersKwargs
 class LlamaConcatInputDecoderLayer(LlamaDecoderLayer):
     def __init__(
         self,
-        config: PretrainedConfig,
+        config: LlamaConfig,
         layer_idx: int,
         norm_before_residual: bool = False,
     ):
@@ -54,7 +53,7 @@ class LlamaConcatInputDecoderLayer(LlamaDecoderLayer):
         use_cache: bool | None = False,
         cache_position: torch.LongTensor | None = None,
         position_embeddings: tuple[torch.Tensor, torch.Tensor] | None = None,
-        **kwargs: Unpack[TransformersKwargs],
+        **kwargs: Unpack[TransformersKwargs],  # type: ignore[valid-type]
     ) -> torch.Tensor:
         ##### CHANGES START #####
         # previous: residual = hidden_states

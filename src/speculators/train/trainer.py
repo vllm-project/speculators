@@ -5,6 +5,7 @@ import torch.distributed as dist
 from torch.distributed.fsdp import FSDPModule, MixedPrecisionPolicy, fully_shard
 from torch.utils.data import DataLoader
 from tqdm.rich import tqdm
+from transformers import PreTrainedModel
 
 from speculators.train.checkpointer import (
     DistributedCheckpointer,
@@ -16,19 +17,17 @@ metric_logger = logging.getLogger("speculators.metrics")
 
 
 def apply_fully_sharded(model: torch.nn.Module):
-    fsdp_kwargs = {
-        "mp_policy": MixedPrecisionPolicy(
-            param_dtype=torch.bfloat16,
-            reduce_dtype=torch.float32,
-        )
-    }
-
-    for layer in model.layers:  # todo: Hardcoded to Eagle3DraftModel, generalize
+    mp_policy = MixedPrecisionPolicy(
+        param_dtype=torch.bfloat16,
+        reduce_dtype=torch.float32,
+    )
+    # todo: Hardcoded to Eagle3DraftModel, generalize
+    for layer in model.layers:  # type: ignore[union-attr]
         # we apply fully_shard to each DecoderLayer
         layer.to_empty(device="meta")
-        fully_shard(layer, **fsdp_kwargs)
+        fully_shard(layer, mp_policy=mp_policy)
 
-    fully_shard(model, **fsdp_kwargs)
+    fully_shard(model, mp_policy=mp_policy)
 
     return model
 
@@ -36,7 +35,7 @@ def apply_fully_sharded(model: torch.nn.Module):
 class Trainer:
     def __init__(
         self,
-        model: torch.nn.Module,
+        model: PreTrainedModel,
         config: dict,
         train_loader: DataLoader,
         val_loader: DataLoader | None = None,
@@ -74,16 +73,19 @@ class Trainer:
             if self.checkpointer.previous_epoch != -1:
                 self.checkpointer.load_model_state_dict(self.model)
             else:
-                for m in self.model.layers.children():  # todo: generalize
+                # Currently we make assumptions based on the Eagle3DraftModel
+                # architecture, including the existence of a layers attribute.
+                # todo: generalize to non-Eagle3DraftModel
+                for m in self.model.layers.children():  # type: ignore[union-attr]
                     if not isinstance(m, FSDPModule):
                         continue
-                    m.to_empty(device="cuda")  # todo: generalize
-                    for sub_module in m.modules():
+                    m.to_empty(device="cuda")  # type: ignore[attr-defined]
+                    for sub_module in m.modules():  # type: ignore[attr-defined]
                         if hasattr(sub_module, "reset_parameters"):
                             sub_module.reset_parameters()
                 # todo: Ensure lm_head and embed_tokens are loaded after reset
         else:
-            self.model.to(self.local_rank)
+            self.model.to(self.local_rank)  # type: ignore[arg-type]
             if self.checkpointer.previous_epoch != -1:
                 self.checkpointer.load_model_state_dict(self.model)
 
@@ -94,14 +96,12 @@ class Trainer:
 
     def train_epoch(self, epoch: int):
         self.model.train()
-        self.train_loader.batch_sampler.set_epoch(
-            epoch
-        )  # todo: check if this is safe to call
+        if hasattr(self.train_loader.batch_sampler, "set_epoch"):
+            self.train_loader.batch_sampler.set_epoch(epoch)  # type: ignore[union-attr]
 
+        train_loader = self.train_loader
         if self.local_rank == 0:
-            train_loader = tqdm(self.train_loader, desc=f"Epoch {epoch}")
-        else:
-            train_loader = self.train_loader
+            train_loader = tqdm(train_loader, desc=f"Epoch {epoch}")  # type: ignore[assignment]
         root_logger.info(f"Training Epoch {epoch} started")
 
         for batch in train_loader:
@@ -142,12 +142,12 @@ class Trainer:
             root_logger.warning("No val loader, skipping validation")
             return
         self.model.eval()
-        self.val_loader.batch_sampler.set_epoch(epoch)
+        if hasattr(self.val_loader.batch_sampler, "set_epoch"):
+            self.val_loader.batch_sampler.set_epoch(epoch)  # type: ignore[union-attr]
         root_logger.info(f"Validation Epoch {epoch} started")
+        val_loader = self.val_loader
         if self.local_rank == 0:
-            val_loader = tqdm(self.val_loader, desc=f"Epoch {epoch}")
-        else:
-            val_loader = self.val_loader
+            val_loader = tqdm(val_loader, desc=f"Epoch {epoch}")  # type: ignore[assignment]
         val_loss = torch.zeros(1, device=self.local_rank)
         val_accuracies = torch.zeros(
             (), device=self.local_rank

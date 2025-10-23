@@ -128,10 +128,10 @@ class Eagle3SampleFileDataset(Dataset):
 
         if datapath is not None:
             file_list = list_files(datapath)
-        elif file_list is None:
+        if file_list is None:
             raise ValueError("Either datapath or file_list must be provided")
 
-        self.data = file_list
+        self.data: list[str] = file_list
         self.max_len = max_len
         self.transform = transform
         self.hidden_states_dtype = hidden_states_dtype
