@@ -291,7 +291,7 @@ class TensorBoardHandler(logging.Handler):
         """
 
         try:
-            from torch.utils.tensorboard import SummaryWriter
+            from torch.utils.tensorboard import SummaryWriter  # noqa: PLC0415
         except ImportError as e:
             msg = (
                 "Could not initialize TensorBoardHandler because package tensorboard "

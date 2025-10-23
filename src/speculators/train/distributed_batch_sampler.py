@@ -67,7 +67,7 @@ def _lpt_packed_batch(
     # sort in descending order
     indices = np.argsort(lengths)[::-1]
 
-    for idx, size in zip(indices, lengths[indices]):
+    for idx, size in zip(indices, lengths[indices], strict=True):
         new_fill = heap[0].fill + size
         if new_fill > max_len:
             # Size doesn't fit in least full batch (or any others), report failure.
