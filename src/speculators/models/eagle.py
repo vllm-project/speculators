@@ -15,7 +15,7 @@ import inspect
 import os
 import re
 import warnings
-from typing import Any, ClassVar, Literal
+from typing import Any, ClassVar, Literal, cast
 
 import torch
 from pydantic import Field, field_serializer, field_validator, model_validator
@@ -308,7 +308,7 @@ class EagleSpeculator(SpeculatorModel):
         self,
         verifier: str | os.PathLike | PreTrainedModel,
         mode: Literal["full", "train_only"] | None = None,
-    ) -> PreTrainedModel:
+    ):
         """
         Attach a verifier model to the EagleSpeculator for speculative decoding.
         Utilizes the verifier's embed_tokens, rotary_emb, and lm_head layers
@@ -349,25 +349,25 @@ class EagleSpeculator(SpeculatorModel):
             perform generation until a full verifier is attached.
         :return: The PreTrainedModel instance for the verifier that was attached.
         """
-        verifier = super().attach_verifier(
-            verifier=verifier,
-            mode=mode,
-        )
+        super().attach_verifier(verifier=verifier, mode=mode)
 
-        # Extract layers from the verifier model
+        if self.verifier_attachment_mode == "train_only":
+            verifier_model = self.resolve_verifier(verifier)
+        elif self.verifier_attachment_mode == "full":
+            verifier_model = cast("PreTrainedModel", self.verifier)
+        else:
+            return
 
-        if hasattr(verifier, "model"):
-            self.embed_tokens = verifier.model.embed_tokens  # type: ignore[assignment,union-attr]
-            self.rotary_emb = verifier.model.rotary_emb  # type: ignore[assignment,union-attr]
+        if hasattr(verifier_model, "model"):
+            self.embed_tokens = verifier_model.model.embed_tokens  # type: ignore[assignment,union-attr]
+            self.rotary_emb = verifier_model.model.rotary_emb  # type: ignore[assignment,union-attr]
         else:
             # Bare model structure
-            self.embed_tokens = verifier.embed_tokens  # type: ignore[assignment,attr-defined]
-            self.rotary_emb = verifier.rotary_emb  # type: ignore[assignment,attr-defined]
+            self.embed_tokens = verifier_model.embed_tokens  # type: ignore[assignment,attr-defined]
+            self.rotary_emb = verifier_model.rotary_emb  # type: ignore[assignment,attr-defined]
 
         # lm_head is always at the top level of the verifier
-        self.lm_head = verifier.lm_head  # type: ignore[assignment,attr-defined]
-
-        return verifier
+        self.lm_head = verifier_model.lm_head  # type: ignore[assignment,attr-defined]
 
     def detach_verifier(self):
         """
