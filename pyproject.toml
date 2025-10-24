@@ -256,5 +256,6 @@ addopts = '-s -vvv --cache-clear'
 markers = [
     "smoke: quick tests to check basic functionality",
     "sanity: detailed tests to ensure major functions work correctly",
-    "regression: tests to ensure that new changes do not break existing functionality"
+    "regression: tests to ensure that new changes do not break existing functionality",
+    "nightly: tests that download large models or take significant time, run only in nightly builds"
 ]
