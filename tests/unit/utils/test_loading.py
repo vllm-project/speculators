@@ -14,7 +14,7 @@ TEST_MODEL_REPO = "nm-testing/Qwen3-8B-FP8-block"
 # _resolve_file Tests
 
 
-@pytest.mark.smoke
+@pytest.mark.regression
 def test_resolve_file_hub_download():
     """Test resolving a file from HuggingFace Hub using real model."""
     result = _resolve_file(TEST_MODEL_REPO, "config.json")
@@ -26,7 +26,7 @@ def test_resolve_file_hub_download():
 # load_model_layers Tests
 
 
-@pytest.mark.smoke
+@pytest.mark.regression
 def test_load_model_layers_multiple_shards():
     """Test loading layers from multiple safetensors shards."""
     # embed_tokens is in shard 1, lm_head is in shard 2
