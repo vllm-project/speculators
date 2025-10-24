@@ -9,7 +9,7 @@ from transformers import AutoModelForCausalLM
 from speculators.utils.loading import _resolve_file, load_model_layers
 
 # Test model from HuggingFace
-TEST_MODEL_REPO = "nm-testing/Qwen3-8B-FP8-block"
+TEST_MODEL_REPO = "nm-testing/tiny-testing-random-weights"
 
 # _resolve_file Tests
 
@@ -68,7 +68,7 @@ def test_load_model_layers_matches_full_model():
         "model.norm.weight",
         "model.layers.0.input_layernorm.weight",
         "model.layers.0.mlp.gate_proj.weight",
-        "model.layers.0.mlp.gate_proj.weight_scale",
+        "model.layers.1.mlp.down_proj.weight",
     ]
 
     loaded_tensors = load_model_layers(layer_names, TEST_MODEL_REPO)
