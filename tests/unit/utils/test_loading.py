@@ -4,6 +4,7 @@ Unit tests for the loading module in the Speculators library.
 
 import pytest
 import torch
+from transformers import AutoModelForCausalLM
 
 from speculators.utils.loading import _resolve_file, load_model_layers
 
@@ -40,7 +41,10 @@ def test_load_model_layers_multiple_shards():
     assert isinstance(result["model.embed_tokens.weight"], torch.Tensor)
     assert isinstance(result["lm_head.weight"], torch.Tensor)
     # Both should have same vocab dimension
-    assert result["model.embed_tokens.weight"].shape[0] == result["lm_head.weight"].shape[0]
+    assert (
+        result["model.embed_tokens.weight"].shape[0]
+        == result["lm_head.weight"].shape[0]
+    )
     # Verify CPU device
     assert result["model.embed_tokens.weight"].device.type == "cpu"
 
@@ -48,8 +52,6 @@ def test_load_model_layers_multiple_shards():
 @pytest.mark.nightly
 def test_load_model_layers_matches_full_model():
     """Test that tensors loaded via utility match those from full model loading."""
-    from transformers import AutoModelForCausalLM
-
     # Load full model
     full_model = AutoModelForCausalLM.from_pretrained(
         TEST_MODEL_REPO,
@@ -80,19 +82,21 @@ def test_load_model_layers_matches_full_model():
         model_tensor = state_dict[layer_name]
 
         # Check dtype matches
-        assert (
-            util_tensor.dtype == model_tensor.dtype
-        ), f"Dtype mismatch for {layer_name}: {util_tensor.dtype} vs {model_tensor.dtype}"
+        assert util_tensor.dtype == model_tensor.dtype, (
+            f"Dtype mismatch for {layer_name}: "
+            f"{util_tensor.dtype} vs {model_tensor.dtype}"
+        )
 
         # Check shape matches
-        assert (
-            util_tensor.shape == model_tensor.shape
-        ), f"Shape mismatch for {layer_name}: {util_tensor.shape} vs {model_tensor.shape}"
+        assert util_tensor.shape == model_tensor.shape, (
+            f"Shape mismatch for {layer_name}: "
+            f"{util_tensor.shape} vs {model_tensor.shape}"
+        )
 
         # Check values are identical
-        assert torch.equal(
-            util_tensor, model_tensor
-        ), f"Tensor values don't match for {layer_name}"
+        assert torch.equal(util_tensor, model_tensor), (
+            f"Tensor values don't match for {layer_name}"
+        )
 
     # Clean up
     del full_model
