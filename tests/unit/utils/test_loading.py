@@ -14,7 +14,7 @@ TEST_MODEL_REPO = "nm-testing/Qwen3-8B-FP8-block"
 # _resolve_file Tests
 
 
-@pytest.mark.nightly
+@pytest.mark.smoke
 def test_resolve_file_hub_download():
     """Test resolving a file from HuggingFace Hub using real model."""
     result = _resolve_file(TEST_MODEL_REPO, "config.json")
@@ -26,7 +26,7 @@ def test_resolve_file_hub_download():
 # load_model_layers Tests
 
 
-@pytest.mark.nightly
+@pytest.mark.smoke
 def test_load_model_layers_multiple_shards():
     """Test loading layers from multiple safetensors shards."""
     # embed_tokens is in shard 1, lm_head is in shard 2
@@ -49,7 +49,7 @@ def test_load_model_layers_multiple_shards():
     assert result["model.embed_tokens.weight"].device.type == "cpu"
 
 
-@pytest.mark.nightly
+@pytest.mark.regression
 def test_load_model_layers_matches_full_model():
     """Test that tensors loaded via utility match those from full model loading."""
     # Load full model
