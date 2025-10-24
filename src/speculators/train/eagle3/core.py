@@ -99,6 +99,7 @@ class Eagle3DraftModel(SpeculatorModel):
         t2d: torch.Tensor,
         d2t: torch.Tensor,
         ttt_steps: int = 3,
+        ttt_step_loss_decay: float = 1.0,
     ):
         super().__init__(
             config=config,
@@ -109,6 +110,7 @@ class Eagle3DraftModel(SpeculatorModel):
         self.num_layers = config.transformer_layer_config.num_hidden_layers
         self.decoder_layer_config = config.transformer_layer_config
         self.ttt_steps = ttt_steps
+        self.ttt_step_loss_decay = ttt_step_loss_decay
         self.register_buffer("t2d", t2d)  # shape: [verifier_vocab_size], bool
         self.register_buffer("d2t", d2t)  # shape: [draft_vocab_size], int offsets
         self.draft_vocab_size = int(t2d.sum(dtype=torch.long).item())
@@ -270,7 +272,8 @@ class Eagle3DraftModel(SpeculatorModel):
                 s_logits, s_targets, s_loss_mask = align_for_step(
                     logits, target_logits, loss_mask, ttt_step
                 )
-                loss += loss_function(s_logits, s_targets, s_loss_mask)
+                loss_weight = self.ttt_step_loss_decay**ttt_step
+                loss += loss_weight * loss_function(s_logits, s_targets, s_loss_mask)
                 accuracy_list.append(compute_accuracy(s_logits, s_targets, s_loss_mask))
 
             input_ids = torch.argmax(logits, dim=-1)
