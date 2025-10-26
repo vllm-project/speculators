@@ -24,12 +24,18 @@ Usage:
         tensor_parallel_size=4,
     )
 
-    data = generator.generate(prompts=["Your prompt here"])
+    # Generate with token IDs
+    token_ids = [1, 234, 567, 890]  # Single sequence
+    data = generator.generate(token_ids=token_ids)
+
+    # Or batch of sequences
+    token_ids_batch = [[1, 234, 567], [1, 890, 123, 456]]
+    data = generator.generate(token_ids=token_ids_batch)
 """
 
 import torch
 import logging
-from typing import List, Dict
+from typing import List, Dict, Union
 from transformers import AutoTokenizer, AutoConfig
 
 from vllm.config import VllmConfig, ModelConfig, CacheConfig, ParallelConfig, SchedulerConfig, DeviceConfig, LoadConfig
@@ -57,6 +63,7 @@ class VllmHiddenStatesGenerator:
     ):
         self.model_path = model_path
         self.tensor_parallel_size = tensor_parallel_size
+        self._request_counter = 0  # For unique request IDs across batches
 
         logger.info(f"Initializing hidden states generator for {model_path}")
         logger.info(f"Tensor parallel size: {tensor_parallel_size}")
@@ -189,34 +196,53 @@ class VllmHiddenStatesGenerator:
             args=(self.layer_ids,),
         )
 
-    def generate(self, prompts: List[str]) -> Dict:
+    def generate(self, token_ids: Union[List[int], List[List[int]], torch.Tensor]) -> List[Dict]:
         """
         Extract hidden states from prefill phase only (zero decode).
+
+        Args:
+            token_ids: Token IDs as either:
+                - List[int]: Single sequence of token IDs
+                - List[List[int]]: Batch of token ID sequences
+                - torch.Tensor: Tensor of shape (batch_size, seq_len) or (seq_len,)
+
+        Returns:
+            List of dicts, one per sequence, each containing:
+                - input_ids: torch.Tensor of token IDs
+                - hidden_state: torch.Tensor of concatenated hidden states
+                - loss_mask: None (to be filled by caller)
+                - target: None (to be filled by caller)
         """
-        # Ensure prompts is a list
-        if isinstance(prompts, str):
-            prompts = [prompts]
+        # Convert to list of lists format
+        if isinstance(token_ids, torch.Tensor):
+            # Tensor must be 2D batch: (batch_size, seq_len)
+            input_ids_list = [row.tolist() for row in token_ids]
+        elif isinstance(token_ids, list):
+            if len(token_ids) == 0:
+                raise ValueError("token_ids cannot be empty")
+            # Check if it's a list of ints or list of lists
+            if isinstance(token_ids[0], int):
+                input_ids_list = [token_ids]
+            else:
+                input_ids_list = token_ids
+        else:
+            raise TypeError(f"token_ids must be List[int], List[List[int]], or torch.Tensor, got {type(token_ids)}")
 
-        logger.info(f"Generating hidden states for {len(prompts)} prompts")
+        logger.info(f"Generating hidden states for {len(input_ids_list)} sequences")
 
-        # Tokenize with padding for batching
-        tokenized = self.tokenizer(
-            prompts,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=self.vllm_config.model_config.max_model_len,
-        )
-        input_ids_list = tokenized["input_ids"].tolist()
+        # Trim to max_model_len - 1 to account for vLLM scheduling 1 decode token
+        # (we abort before decode actually runs, but scheduler needs the budget)
+        max_len = self.vllm_config.model_config.max_model_len - 1
+        input_ids_list = [ids[:max_len] for ids in input_ids_list]
 
-        # Store the original tensor for return
-        input_ids_tensor = tokenized["input_ids"]
-
-        # Create requests
         requests = []
         for i, input_ids in enumerate(input_ids_list):
+            # Ensure input_ids is a list of ints (vLLM Request expects list, not tensor)
+            if isinstance(input_ids, torch.Tensor):
+                input_ids = input_ids.tolist()
+
             req = Request(
-                request_id=f"req_{i}",
+                request_id=f"req_{self._request_counter}_{i}",  # Unique across all batches
                 prompt_token_ids=input_ids,
                 sampling_params=SamplingParams(max_tokens=1, temperature=0.0),
                 pooling_params=None,
@@ -225,27 +251,37 @@ class VllmHiddenStatesGenerator:
             )
             requests.append(req)
 
+        # Increment counter for next batch
+        self._request_counter += 1
+
         # Add to scheduler
         for req in requests:
             self.scheduler.add_request(req)
 
-        # Enable capture on all workers
+        # Enable capture on all workers (this also clears previous captures)
         self.executor.collective_rpc("_enable_capture")
 
-        # Schedule
-        scheduler_output = self.scheduler.schedule()
+        # Loop until all requests are processed (handles partial batches)
+        while True:
+            # Schedule
+            scheduler_output = self.scheduler.schedule()
 
-        if scheduler_output.total_num_scheduled_tokens == 0:
-            logger.warning("No tokens scheduled")
-            self.executor.collective_rpc("_disable_capture")
-            return {
-                'input_ids': tokenized['input_ids'],
-                'aux_hidden_states': None,
-                'layer_ids': self.layer_ids,
-            }
+            if scheduler_output.total_num_scheduled_tokens == 0:
+                # All requests processed
+                break
 
-        # Execute model (prefill only)
-        self.executor.execute_model(scheduler_output)
+            # Debug: log what's being scheduled
+            logger.info(f"Scheduler output - total tokens: {scheduler_output.total_num_scheduled_tokens}, "
+                       f"num reqs: {len(scheduler_output.scheduled_new_reqs) if hasattr(scheduler_output, 'scheduled_new_reqs') else 'N/A'}")
+            if hasattr(scheduler_output, 'num_scheduled_tokens'):
+                logger.info(f"Scheduled tokens breakdown: {scheduler_output.num_scheduled_tokens}")
+
+            # Execute model (prefill only)
+            self.executor.execute_model(scheduler_output)
+
+            # Finish all requests that were just processed
+            for req_id in scheduler_output.num_scheduled_tokens.keys():
+                self.scheduler.finish_requests([req_id], RequestStatus.FINISHED_ABORTED)
 
         # Get captured states from driver worker
         captured_states_list = self.executor.collective_rpc(
@@ -257,16 +293,18 @@ class VllmHiddenStatesGenerator:
         # Disable capture
         self.executor.collective_rpc("_disable_capture")
 
-        # Remove requests
-        for req in requests:
-            self.scheduler.finish_requests([req.request_id], RequestStatus.FINISHED_ABORTED)
+        # Make sure scheduler state is clean for next batch
+        # Force schedule one more time to ensure all state is cleared
+        empty_schedule = self.scheduler.schedule()
+        if empty_schedule.total_num_scheduled_tokens > 0:
+            logger.warning(f"Unexpected tokens still scheduled after abort: {empty_schedule.total_num_scheduled_tokens}")
 
         logger.info(f"Successfully captured {len(aux_hidden_states) if aux_hidden_states else 0} layers")
 
-        # Reshape captured states from (total_tokens, hidden_dim) to (batch_size, seq_len, hidden_dim)
+        # Reshape captured states from (total_tokens, hidden_dim) to list of (seq_len, hidden_dim) tensors
         # vLLM batches all tokens together, we need to unflatten based on actual sequence lengths
         if aux_hidden_states:
-            # Get actual sequence lengths from input_ids
+            # Get actual sequence lengths from input_ids (these were trimmed to max_len)
             seq_lens = [len(ids) for ids in input_ids_list]
 
             # Reshape each captured layer
@@ -278,19 +316,12 @@ class VllmHiddenStatesGenerator:
                 for seq_len in seq_lens:
                     batch_states.append(h[offset:offset + seq_len])
                     offset += seq_len
-                # Stack to (batch_size, seq_len, hidden_dim)
-                reshaped = torch.stack(batch_states)
-                reshaped_states.append(reshaped)
+                # Keep as list of tensors (not stacked, since sequences have different lengths)
+                reshaped_states.append(batch_states)
             aux_hidden_states = reshaped_states
 
-        # Format output to match EAGLE3:
-        # - input_ids: (seq_len,)
-        # - hidden_state: (seq_len, hidden_size * 3) - concatenated aux layers
-        # - loss_mask: (seq_len,) - user provided
-        # - target: (seq_len, hidden_size) - final layer output
-
         results = []
-        for i in range(len(prompts)):
+        for i in range(len(input_ids_list)):
             # Concatenate auxiliary hidden states
             if aux_hidden_states:
                 hidden_state = torch.cat([h[i] for h in aux_hidden_states], dim=-1)
@@ -298,15 +329,14 @@ class VllmHiddenStatesGenerator:
                 hidden_state = None
 
             result = {
-                'input_ids': input_ids_tensor[i],  # Use the stored tensor
+                'input_ids': torch.tensor(input_ids_list[i], dtype=torch.long),
                 'hidden_state': hidden_state,
-                'loss_mask': None,  # User needs to provide this externally
-                'target': None,  # TODO: capture final layer if needed
+                'loss_mask': None,
+                'target': None,
             }
             results.append(result)
 
-        # Return single dict if single prompt, otherwise list
-        return results[0] if len(results) == 1 else results
+        return results
 
     def __del__(self):
         """Cleanup"""

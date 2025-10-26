@@ -23,25 +23,8 @@ class HiddenStatesWorkerExtension:
     become available on the Worker instance in each worker process.
     """
 
-    def _setup_hidden_states_capture(self, layer_ids: List[int]):
-        """Setup model to capture auxiliary hidden states from specific layers"""
-        self._layer_ids = layer_ids
-        self._captured_states = None
-        self._should_capture = False
-
-        model = self.model_runner.model
-
-        if not supports_eagle3(model):
-            logger.warning(f"Model {type(model).__name__} does not support hidden state extraction")
-            return
-
-        base_model = model.model
-        base_model.aux_hidden_state_layers = tuple(layer_ids)
-
-        # Patch the forward pass to capture hidden states
-        original_forward = base_model.forward
-        worker_self = self  # Capture self reference for closure
-
+    def _create_patched_forward(self, base_model):
+        """Create a patched forward function for hidden state capture"""
         def patched_forward(input_ids, positions, intermediate_tensors=None, inputs_embeds=None):
             # Get initial hidden states (first rank in pipeline parallel)
             if get_pp_group().is_first_rank:
@@ -57,7 +40,10 @@ class HiddenStatesWorkerExtension:
 
             aux_hidden_states = []
 
-            # Pass through each layer
+            # Hoist invariant checks outside the loop for performance
+            should_capture_here = self._should_capture and get_tp_group().rank_in_group == 0
+            target_layers = base_model.aux_hidden_state_layers if should_capture_here else frozenset()
+
             for idx, layer in enumerate(
                 islice(base_model.layers, base_model.start_layer, base_model.end_layer)
             ):
@@ -66,9 +52,8 @@ class HiddenStatesWorkerExtension:
                 # Capture hidden states from target layers (only on TP rank 0)
                 # idx is relative to start_layer, so convert to absolute layer index
                 absolute_layer_idx = base_model.start_layer + idx
-                if worker_self._should_capture and absolute_layer_idx in base_model.aux_hidden_state_layers:
-                    if get_tp_group().rank_in_group == 0:
-                        aux_hidden_states.append((hidden_states + residual).detach().clone())
+                if absolute_layer_idx in target_layers:
+                    aux_hidden_states.append((hidden_states + residual).clone())
 
             # If not last rank in pipeline parallel, return intermediate tensors
             if not get_pp_group().is_last_rank:
@@ -76,24 +61,48 @@ class HiddenStatesWorkerExtension:
                     {"hidden_states": hidden_states, "residual": residual}
                 )
 
-            # Final normalization
             hidden_states, _ = base_model.norm(hidden_states, residual)
 
-            # Store captured states (accumulate across batches)
-            if worker_self._should_capture and len(aux_hidden_states) > 0:
+            if self._should_capture and len(aux_hidden_states) > 0:
                 if get_tp_group().rank_in_group == 0:
-                    if worker_self._captured_states is None:
-                        worker_self._captured_states = aux_hidden_states
+                    if self._captured_states is None:
+                        self._captured_states = aux_hidden_states
                     else:
                         # Concatenate with previous captures along batch dimension
                         for i, h in enumerate(aux_hidden_states):
-                            worker_self._captured_states[i] = torch.cat([
-                                worker_self._captured_states[i], h
+                            self._captured_states[i] = torch.cat([
+                                self._captured_states[i], h
                             ], dim=0)
 
             return hidden_states
 
-        base_model.forward = patched_forward
+        return patched_forward
+
+    def _setup_hidden_states_capture(self, layer_ids: List[int]):
+        """Setup model to capture auxiliary hidden states from specific layers"""
+        self._layer_ids = layer_ids
+        self._captured_states = None
+        self._should_capture = False
+
+        model = self.model_runner.model
+
+        if not supports_eagle3(model):
+            raise ValueError(f"Model {type(model).__name__} does not support hidden state extraction")
+
+        base_model = model.model
+
+        # Validate layer IDs are within valid range
+        num_layers = len(base_model.layers)
+        invalid_layers = [l for l in layer_ids if l < 0 or l >= num_layers]
+        if invalid_layers:
+            raise ValueError(
+                f"Invalid layer IDs {invalid_layers}. "
+                f"Model has {num_layers} layers (valid range: 0-{num_layers - 1})"
+            )
+
+        base_model.aux_hidden_state_layers = tuple(layer_ids)
+
+        base_model.forward = self._create_patched_forward(base_model)
         logger.info(f"Hidden states capture setup complete for layers {layer_ids}")
 
     def _enable_capture(self):
