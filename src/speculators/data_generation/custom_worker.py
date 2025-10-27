@@ -8,6 +8,7 @@ To use: set ParallelConfig.worker_extension_cls =
 
 import logging
 from itertools import islice
+from typing import Any
 
 import torch
 from vllm.distributed import get_pp_group, get_tp_group
@@ -24,6 +25,12 @@ class HiddenStatesWorkerExtension:
     via vLLM's worker_extension_cls mechanism. All methods defined here
     become available on the Worker instance in each worker process.
     """
+
+    # Type annotations for dynamically added attributes
+    _layer_ids: list[int]
+    _captured_states: list[Any] | None
+    _should_capture: bool
+    model_runner: Any  # vLLM ModelRunner, dynamically available via mixin
 
     def _create_patched_forward(self, base_model):
         """Create a patched forward function for hidden state capture"""

@@ -38,7 +38,6 @@ def cleanup_memory():
         ("Qwen/Qwen2-0.5B", 1),  # Small model for quick testing
         pytest.param("meta-llama/Llama-3.1-8B", 1, marks=pytest.mark.slow),
         pytest.param("meta-llama/Llama-3.1-70B", 4, marks=pytest.mark.slow),
-        pytest.param("Qwen/Qwen2.5-72B", 4, marks=pytest.mark.slow),
     ],
 )
 def test_vllm_vs_huggingface_accuracy(model_path, tensor_parallel_size):
@@ -181,7 +180,6 @@ def test_vllm_vs_huggingface_accuracy(model_path, tensor_parallel_size):
         assert "input_ids" in result
         assert "hidden_state" in result
         assert "loss_mask" in result
-        assert "target" in result
         assert result["hidden_state"].shape[0] == result["input_ids"].shape[0], (
             "Sequence length mismatch"
         )

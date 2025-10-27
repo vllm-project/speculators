@@ -65,10 +65,15 @@ class VllmHiddenStatesGenerator:
     Uses MultiprocExecutor for proper multi-GPU tensor parallelism.
     """
 
+    layer_ids: list[int]  # Populated in __init__
+    model_path: str
+    tensor_parallel_size: int
+    _request_counter: int
+
     def __init__(
         self,
         model_path: str,
-        layer_ids: list[int] = None,
+        layer_ids: list[int] | None = None,
         max_model_len: int = 2048,
         gpu_memory_utilization: float = 0.8,
         tensor_parallel_size: int = 1,
