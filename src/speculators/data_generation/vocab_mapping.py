@@ -11,7 +11,7 @@ from collections import Counter
 
 import torch
 from datasets import Dataset as HFDataset
-from tqdm import tqdm
+from tqdm import tqdm  # type: ignore[import-untyped]
 
 
 def save_token_frequency_distribution(

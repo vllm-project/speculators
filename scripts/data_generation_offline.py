@@ -40,7 +40,7 @@ import os
 
 import torch
 from datasets import load_from_disk
-from tqdm import tqdm
+from tqdm import tqdm  # type: ignore[import-untyped]
 
 from speculators.data_generation.logging_utils import PipelineLogger
 from speculators.data_generation.preprocessing import (
