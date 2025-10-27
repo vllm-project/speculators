@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        python: ["3.10", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        python: ["3.10", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
@@ -42,7 +42,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python: ["3.9"]
+        python: ["3.10"]
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
@@ -58,7 +58,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python: ["3.9", "3.13"]
+        python: ["3.10", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
@@ -68,13 +68,13 @@ jobs:
       - name: Install dependencies
         run: pip install tox
       - name: Run unit tests
-        run: tox -e test-unit -- -m "smoke or sanity"
+        run: tox -e test-unit
 
   integration-tests:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python: ["3.9", "3.13"]
+        python: ["3.10", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
@@ -84,4 +84,4 @@ jobs:
       - name: Install dependencies
         run: pip install tox
       - name: Run integration tests
-        run: tox -e test-integration -- -m smoke
+        run: tox -e test-integration

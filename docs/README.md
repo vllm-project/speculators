@@ -4,7 +4,7 @@ This directory contains the documentation for the Speculators project, built usi
 
 ## Prerequisites
 
-- Python 3.9 or higher
+- Python 3.10 or higher
 - Install the development dependencies: `pip install -e .[dev]`
 
 ## Building the Documentation

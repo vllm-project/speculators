@@ -3,7 +3,6 @@ Eagle-3 checkpoint converter with loguru logging.
 """
 
 from pathlib import Path
-from typing import Optional, Union
 
 import torch
 from loguru import logger
@@ -30,13 +29,13 @@ class Eagle3Converter:
 
     def convert(
         self,
-        input_path: Union[str, Path],
-        output_path: Union[str, Path],
+        input_path: str | Path,
+        output_path: str | Path,
         base_model: str,
         validate: bool = True,
         norm_before_residual: bool = False,
-        eagle_aux_hidden_state_layer_ids: Optional[list[int]] = None,
-        cache_dir: Optional[Union[str, Path]] = None,
+        eagle_aux_hidden_state_layer_ids: list[int] | None = None,
+        cache_dir: str | Path | None = None,
     ) -> None:
         logger.info(f"Converting Eagle-3 checkpoint: {input_path}")
 
@@ -102,7 +101,7 @@ class Eagle3Converter:
         eagle_config: dict,
         base_model: str,
         norm_before_residual: bool = False,
-        eagle_aux_hidden_state_layer_ids: Optional[list[int]] = None,
+        eagle_aux_hidden_state_layer_ids: list[int] | None = None,
     ) -> Eagle3SpeculatorConfig:
         transformer_config = self._create_transformer_config_from_eagle(
             eagle_config, base_model
@@ -169,7 +168,7 @@ class Eagle3Converter:
         self,
         config: Eagle3SpeculatorConfig,
         weights: dict[str, torch.Tensor],
-        output_dir: Union[str, Path],
+        output_dir: str | Path,
         reduce_vocab_size: bool,
         has_drafter_embedding: bool,
     ) -> Path:
