@@ -79,15 +79,42 @@ class TestEagle3vLLM:
     @pytest.mark.parametrize(
         "model_info",
         [
-            {
-                "unconverted_model": "yuhuili/EAGLE3-LLaMA3.1-Instruct-8B",
-                "base_model": "meta-llama/Meta-Llama-3.1-8B-Instruct",
-            },
-            {
-                "unconverted_model": "nm-testing/Speculator-Qwen3-8B-Eagle3",
-                "base_model": "Qwen/Qwen3-8B",
-                "norm_before_residual": True,
-            },
+            pytest.param(
+                {
+                    "unconverted_model": "yuhuili/EAGLE3-LLaMA3.1-Instruct-8B",
+                    "base_model": "meta-llama/Meta-Llama-3.1-8B-Instruct",
+                },
+                id="llama3-8b",
+            ),
+            pytest.param(
+                {
+                    "unconverted_model": "nm-testing/Speculator-Qwen3-8B-Eagle3",
+                    "base_model": "Qwen/Qwen3-8B",
+                    "norm_before_residual": True,
+                },
+                id="qwen3-8b",
+            ),
+            pytest.param(
+                {
+                    "unconverted_model": "nvidia/Llama-4-Maverick-17B-128E-Eagle3",
+                    "base_model": (
+                        "RedHatAI/Llama-4-Maverick-17B-128E-Instruct-quantized.w4a16"
+                    ),
+                    "norm_before_residual": False,
+                    "eagle_aux_hidden_state_layer_ids": [1, 23, 44],
+                },
+                id="llama4-diff-hidden",
+            ),
+            pytest.param(
+                {
+                    "unconverted_model": (
+                        "nm-testing/random-weights-llama3.1.8b-2layer-eagle3"
+                    ),
+                    "base_model": "meta-llama/Meta-Llama-3.1-8B-Instruct",
+                    "norm_before_residual": False,
+                },
+                id="llama3-2layer",
+            ),
         ],
     )
     def test_convert_run_vllm_engine_eagle3(self, model_info, temp_cache_dir, tmp_path):
@@ -97,21 +124,36 @@ class TestEagle3vLLM:
         converted_path = tmp_path / unconverted_model.split("/")[-1]
         converter = Eagle3Converter()
 
-        converter.convert(
-            input_path=unconverted_model,
-            output_path=converted_path,
-            base_model=base_model,
-            cache_dir=temp_cache_dir,
-            norm_before_residual=norm_before_residual,
-        )
+        convert_kwargs = {
+            "input_path": unconverted_model,
+            "output_path": converted_path,
+            "base_model": base_model,
+            "cache_dir": temp_cache_dir,
+            "norm_before_residual": norm_before_residual,
+        }
+
+        # including eagle_aux_hidden_state_layer_ids
+        #  if specified
+        if "eagle_aux_hidden_state_layer_ids" in model_info:
+            convert_kwargs["eagle_aux_hidden_state_layer_ids"] = model_info[
+                "eagle_aux_hidden_state_layer_ids"
+            ]
+
+        converter.convert(**convert_kwargs)
         self._run_vllm_engine(model_path=str(converted_path), tmp_path=tmp_path)
 
     @pytest.mark.smoke
     @pytest.mark.parametrize(
         "model_path",
         [
-            "nm-testing/SpeculatorLlama3-1-8B-Eagle3-converted-0717-quantized",
-            "nm-testing/Speculator-Qwen3-8B-Eagle3-converted-071-quantized",
+            pytest.param(
+                "nm-testing/SpeculatorLlama3-1-8B-Eagle3-converted-0717-quantized",
+                id="llama3-converted-quantized",
+            ),
+            pytest.param(
+                "nm-testing/Speculator-Qwen3-8B-Eagle3-converted-071-quantized",
+                id="qwen3-converted-quantized",
+            ),
         ],
     )
     def test_vllm_engine_eagle3(self, model_path, tmp_path):
