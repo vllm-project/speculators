@@ -152,7 +152,7 @@ class TestEagle3vLLM:
                 id="llama3-converted-quantized",
             ),
             pytest.param(
-                "nm-testing/Speculator-Qwen3-8B-Eagle3-converted-071-quantized",
+                "RedHatAI/Qwen3-8B-speculator.eagle3",
                 id="qwen3-converted-quantized",
             ),
         ],
