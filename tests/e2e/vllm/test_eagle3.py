@@ -96,6 +96,17 @@ class TestEagle3vLLM:
             ),
             pytest.param(
                 {
+                    "unconverted_model": (
+                        "nm-testing/random-weights-llama3.1.8b-2layer-eagle3-unconverted"
+                    ),
+                    "base_model": "meta-llama/Meta-Llama-3.1-8B-Instruct",
+                    "norm_before_residual": False,
+                },
+                id="llama3-2layer",
+            ),
+            # Note: This test may use a lot of memory due to the model size
+            pytest.param(
+                {
                     "unconverted_model": "nvidia/Llama-4-Maverick-17B-128E-Eagle3",
                     "base_model": (
                         "RedHatAI/Llama-4-Maverick-17B-128E-Instruct-quantized.w4a16"
@@ -104,16 +115,6 @@ class TestEagle3vLLM:
                     "eagle_aux_hidden_state_layer_ids": [1, 23, 44],
                 },
                 id="llama4-diff-hidden",
-            ),
-            pytest.param(
-                {
-                    "unconverted_model": (
-                        "nm-testing/random-weights-llama3.1.8b-2layer-eagle3"
-                    ),
-                    "base_model": "meta-llama/Meta-Llama-3.1-8B-Instruct",
-                    "norm_before_residual": False,
-                },
-                id="llama3-2layer",
             ),
         ],
     )
