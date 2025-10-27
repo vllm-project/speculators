@@ -90,16 +90,6 @@ class HiddenStatesWorkerExtension:
             raise ValueError(f"Model {type(model).__name__} does not support hidden state extraction")
 
         base_model = model.model
-
-        # Validate layer IDs are within valid range
-        num_layers = len(base_model.layers)
-        invalid_layers = [l for l in layer_ids if l < 0 or l >= num_layers]
-        if invalid_layers:
-            raise ValueError(
-                f"Invalid layer IDs {invalid_layers}. "
-                f"Model has {num_layers} layers (valid range: 0-{num_layers - 1})"
-            )
-
         base_model.aux_hidden_state_layers = tuple(layer_ids)
 
         base_model.forward = self._create_patched_forward(base_model)

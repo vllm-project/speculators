@@ -6,7 +6,7 @@ import re
 from typing import Dict, List, Optional, Tuple
 
 import torch
-from datasets import Dataset as HFDataset, load_dataset
+from datasets import Dataset as HFDataset, load_dataset, load_from_disk
 from transformers import AutoTokenizer, PreTrainedTokenizer
 
 from .configs import CHAT_TEMPLATES, DATASET_CONFIGS, ChatTemplate, format_conversation
@@ -62,7 +62,7 @@ def _apply_loss_mask_from_chat_template(
                 loss_mask[idx] = 1
 
     if matches_found == 0:
-        log.logger.warning("No assistant response spans found in the conversation text.")
+        log.warning("No assistant response spans found in the conversation text.")
 
     return loss_mask
 
@@ -88,8 +88,11 @@ def _preprocess_batch(
     results = {"input_ids": [], "loss_mask": []}
 
     conversations = examples.get("conversations", [])
+    if not conversations:
+        return results
+
     for conv in conversations:
-        if not conv:
+        if not conv or not isinstance(conv, list):
             continue
 
         text = format_conversation(conv, template)
@@ -106,7 +109,6 @@ def _preprocess_batch(
         input_ids = encoded.input_ids[0]
         offsets = encoded.offset_mapping[0]
 
-        # Apply loss mask based on assistant spans
         loss_mask = _apply_loss_mask_from_chat_template(text, offsets, template)
 
         results["input_ids"].append(input_ids)
@@ -142,10 +144,8 @@ def build_eagle3_dataset(
             f"Available templates: {list(CHAT_TEMPLATES.keys())}"
         )
     template = CHAT_TEMPLATES[chat_template]
-
     original_cols = dataset.column_names
 
-    # Process the dataset (disable map caching - we cache the final result instead)
     dataset = dataset.map(
         lambda examples: _preprocess_batch(examples, tokenizer, template, max_length),
         batched=True,
@@ -234,23 +234,18 @@ def load_and_preprocess_dataset(
     """
     log.section("Starting dataset preprocessing")
 
-    # Validate chat template
     if chat_template not in CHAT_TEMPLATES:
         raise ValueError(
             f"Chat template '{chat_template}' not found. "
             f"Available: {list(CHAT_TEMPLATES.keys())}"
         )
 
-    # Load tokenizer
     log.subsection("Loading tokenizer and dataset")
     tokenizer = AutoTokenizer.from_pretrained(target_model_path, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    # Load raw dataset
     raw_dataset = load_raw_dataset(train_data_path, num_proc=build_dataset_num_proc)
-
-    # Shuffle dataset (always shuffle for reproducibility)
     raw_dataset = raw_dataset.shuffle(seed=seed)
 
     # Limit dataset size if requested
@@ -259,19 +254,16 @@ def load_and_preprocess_dataset(
 
     log.info(f"Loaded {len(raw_dataset)} samples")
 
-    # Generate cache key
+    # Prepare cache directories
     cache_key = generate_cache_key(target_model_path, chat_template, seq_length, train_data_path)
     if max_samples is not None:
         cache_key = f"{cache_key}_samples{max_samples}"
-
-    # Prepare cache directories
     dataset_cache_dir = os.path.join(cache_dir, 'processed_dataset', cache_key)
     os.makedirs(dataset_cache_dir, exist_ok=True)
 
     # Check if already cached
     if os.path.exists(os.path.join(dataset_cache_dir, 'dataset_info.json')):
         log.info(f"Loading cached dataset from {dataset_cache_dir}")
-        from datasets import load_from_disk
         preprocessed_dataset = load_from_disk(dataset_cache_dir)
     else:
         log.subsection("Tokenizing and building dataset")

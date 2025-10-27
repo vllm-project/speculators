@@ -34,3 +34,7 @@ class PipelineLogger:
     def debug(self, message: str):
         """Standard debug logging (passthrough)."""
         self.logger.debug(message)
+
+    def warning(self, message: str):
+        """Standard warning logging (passthrough)."""
+        self.logger.warning(message)

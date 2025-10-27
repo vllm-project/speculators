@@ -239,7 +239,6 @@ def generate_and_save_hidden_states(args, dataset):
         log.info("All samples already processed!")
         return 0
 
-    # Initialize hidden states generator
     log.subsection("Initializing vLLM hidden states generator")
     generator = VllmHiddenStatesGenerator(
         model_path=args.target_model_path,
@@ -250,8 +249,6 @@ def generate_and_save_hidden_states(args, dataset):
     )
 
     log.info(f"Processing {num_samples - start_sample_idx}/{num_samples} samples")
-
-    # Process dataset in batches
     file_idx = start_file_idx
 
     for i in tqdm(
@@ -265,7 +262,6 @@ def generate_and_save_hidden_states(args, dataset):
         batch_input_ids = batch['input_ids']
         batch_loss_mask = batch['loss_mask']
 
-        # Generate hidden states
         results = generator.generate(batch_input_ids)
 
         # Save each sample (one file per sample for variable-length sequences)
@@ -292,10 +288,8 @@ def main():
         "Batch Size": args.batch_size,
     })
 
-    # Load or preprocess dataset (automatically handles preprocessing if needed)
-    dataset = load_or_preprocess_dataset(args)
 
-    # Generate and save hidden states
+    dataset = load_or_preprocess_dataset(args)
     num_saved = generate_and_save_hidden_states(args, dataset)
 
     log.section("Data generation complete!")
