@@ -52,6 +52,7 @@ dependencies = [
     "torch",
     "transformers",
     "typer-slim>=0.12.0",
+    "vllm",
 ]
 
 [project.optional-dependencies]

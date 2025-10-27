@@ -214,7 +214,6 @@ class VllmHiddenStatesGenerator:
                 - input_ids: torch.Tensor of token IDs
                 - hidden_state: torch.Tensor of concatenated hidden states
                 - loss_mask: None (to be filled by caller)
-                - target: None (to be filled by caller)
         """
         if isinstance(token_ids, torch.Tensor):
             input_ids_list = [row.tolist() for row in token_ids]
@@ -290,7 +289,6 @@ class VllmHiddenStatesGenerator:
                 'input_ids': torch.tensor(input_ids_list[i], dtype=torch.long),
                 'hidden_state': hidden_state,
                 'loss_mask': None,
-                'target': None,
             })
             offset += seq_len
 
