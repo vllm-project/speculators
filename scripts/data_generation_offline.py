@@ -37,22 +37,22 @@ Usage:
 import argparse
 import logging
 import os
-from typing import List, Optional
 
 import torch
 from datasets import load_from_disk
 from tqdm import tqdm
 
+from speculators.data_generation.logging_utils import PipelineLogger
 from speculators.data_generation.preprocessing import (
     generate_cache_key,
     load_and_preprocess_dataset,
 )
-from speculators.data_generation.vllm_hidden_states_generator import VllmHiddenStatesGenerator
-from speculators.data_generation.logging_utils import PipelineLogger
+from speculators.data_generation.vllm_hidden_states_generator import (
+    VllmHiddenStatesGenerator,
+)
 
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 log = PipelineLogger(__name__)
 
@@ -62,103 +62,103 @@ def parse_args():
 
     # Model arguments
     parser.add_argument(
-        '--target-model-path',
+        "--target-model-path",
         type=str,
         required=True,
-        help='HuggingFace model ID or local path for target model'
+        help="HuggingFace model ID or local path for target model",
     )
     parser.add_argument(
-        '--tensor-parallel-size',
+        "--tensor-parallel-size",
         type=int,
         default=1,
-        help='Tensor parallel size for target model (default: 1)'
+        help="Tensor parallel size for target model (default: 1)",
     )
     parser.add_argument(
-        '--max-model-len',
+        "--max-model-len",
         type=int,
         default=2048,
-        help='Maximum sequence length supported by the model (default: 2048)'
+        help="Maximum sequence length supported by the model (default: 2048)",
     )
     parser.add_argument(
-        '--gpu-memory-utilization',
+        "--gpu-memory-utilization",
         type=float,
         default=0.8,
-        help='Target GPU memory utilization (default: 0.8)'
+        help="Target GPU memory utilization (default: 0.8)",
     )
 
     # Data arguments
     parser.add_argument(
-        '--train-data-path',
+        "--train-data-path",
         type=str,
         required=True,
-        help='Path to training data (same as used in preprocessing)'
+        help="Path to training data (same as used in preprocessing)",
     )
     parser.add_argument(
-        '--chat-template',
+        "--chat-template",
         type=str,
         required=True,
-        help='Chat template name (same as used in preprocessing)'
+        help="Chat template name (same as used in preprocessing)",
     )
     parser.add_argument(
-        '--seq-length',
+        "--seq-length",
         type=int,
         default=2048,
-        help='Maximum sequence length (same as used in preprocessing, default: 2048)'
+        help="Maximum sequence length (same as used in preprocessing, default: 2048)",
     )
     parser.add_argument(
-        '--cache-dir',
+        "--cache-dir",
         type=str,
-        default='./cache',
-        help='Directory where preprocessed data is cached (default: ./cache)'
+        default="./cache",
+        help="Directory where preprocessed data is cached (default: ./cache)",
     )
     parser.add_argument(
-        '--max-samples',
+        "--max-samples",
         type=int,
         default=None,
-        help='Maximum number of samples to process (default: None, process all)'
+        help="Maximum number of samples to process (default: None, process all)",
     )
 
     # Output arguments
     parser.add_argument(
-        '--output-dir',
-        type=str,
-        required=True,
-        help='Directory to save .pt files'
+        "--output-dir", type=str, required=True, help="Directory to save .pt files"
     )
 
     # Hidden states generation arguments
     parser.add_argument(
-        '--layer-ids',
+        "--layer-ids",
         type=int,
-        nargs='+',
+        nargs="+",
         default=None,
-        help='List of layer IDs from which to capture hidden states (default: auto-select)'
+        help=(
+            "List of layer IDs from which to capture hidden states "
+            "(default: auto-select)"
+        ),
     )
     parser.add_argument(
-        '--batch-size',
+        "--batch-size",
         type=int,
         default=8,
-        help='Batch size for hidden states generation (default: 8)'
+        help="Batch size for hidden states generation (default: 8)",
     )
 
     # Processing arguments
     parser.add_argument(
-        '--seed',
+        "--seed",
         type=int,
         default=0,
-        help='Random seed (must match preprocessing seed, default: 0)'
+        help="Random seed (must match preprocessing seed, default: 0)",
     )
     parser.add_argument(
-        '--start-idx',
+        "--start-idx",
         type=int,
         default=0,
-        help='Starting index for output files (default: 0)'
+        help="Starting index for output files (default: 0)",
     )
     parser.add_argument(
-        '--num-preprocessing-workers',
+        "--num-preprocessing-workers",
         type=int,
         default=8,
-        help='Number of CPU processes for dataset preprocessing (default: 8)'
+        help="Number of CPU processes for dataset preprocessing (default: 8)",
     )
 
     return parser.parse_args()
@@ -181,7 +181,7 @@ def load_or_preprocess_dataset(args):
     if args.max_samples is not None:
         cache_key = f"{cache_key}_samples{args.max_samples}"
 
-    dataset_cache_dir = os.path.join(args.cache_dir, 'processed_dataset', cache_key)
+    dataset_cache_dir = os.path.join(args.cache_dir, "processed_dataset", cache_key)
 
     # Run preprocessing only when cached data is not found
     if os.path.exists(dataset_cache_dir):
@@ -190,7 +190,9 @@ def load_or_preprocess_dataset(args):
         dataset = load_from_disk(dataset_cache_dir)
         log.info(f"Loaded {len(dataset)} samples")
     else:
-        log.subsection("Preprocessed data not found - running preprocessing automatically")
+        log.subsection(
+            "Preprocessed data not found - running preprocessing automatically"
+        )
 
         dataset, _ = load_and_preprocess_dataset(
             target_model_path=args.target_model_path,
@@ -212,12 +214,14 @@ def find_last_checkpoint(output_dir: str) -> int:
     if not os.path.exists(output_dir):
         return 0
 
-    existing_files = [f for f in os.listdir(output_dir) if f.startswith('data_') and f.endswith('.pt')]
+    existing_files = [
+        f for f in os.listdir(output_dir) if f.startswith("data_") and f.endswith(".pt")
+    ]
     if not existing_files:
         return 0
 
     # Extract indices and find max
-    indices = [int(f.replace('data_', '').replace('.pt', '')) for f in existing_files]
+    indices = [int(f.replace("data_", "").replace(".pt", "")) for f in existing_files]
     return max(indices) + 1
 
 
@@ -255,19 +259,19 @@ def generate_and_save_hidden_states(args, dataset):
         range(start_sample_idx, num_samples, args.batch_size),
         desc="Generating hidden states",
         initial=start_sample_idx,
-        total=num_samples
+        total=num_samples,
     ):
         batch_end = min(i + args.batch_size, num_samples)
         batch = dataset[i:batch_end]
-        batch_input_ids = batch['input_ids']
-        batch_loss_mask = batch['loss_mask']
+        batch_input_ids = batch["input_ids"]
+        batch_loss_mask = batch["loss_mask"]
 
         results = generator.generate(batch_input_ids)
 
         # Save each sample (one file per sample for variable-length sequences)
         for j, result in enumerate(results):
-            result['loss_mask'] = batch_loss_mask[j]
-            torch.save(result, os.path.join(args.output_dir, f'data_{file_idx}.pt'))
+            result["loss_mask"] = batch_loss_mask[j]
+            torch.save(result, os.path.join(args.output_dir, f"data_{file_idx}.pt"))
             file_idx += 1
 
     samples_saved = file_idx - start_file_idx
@@ -279,15 +283,16 @@ def main():
     args = parse_args()
 
     log.section("EAGLE Offline Data Generation")
-    log.config({
-        "Target Model": args.target_model_path,
-        "Dataset": args.train_data_path,
-        "Chat Template": args.chat_template,
-        "Output Dir": args.output_dir,
-        "Tensor Parallel": args.tensor_parallel_size,
-        "Batch Size": args.batch_size,
-    })
-
+    log.config(
+        {
+            "Target Model": args.target_model_path,
+            "Dataset": args.train_data_path,
+            "Chat Template": args.chat_template,
+            "Output Dir": args.output_dir,
+            "Tensor Parallel": args.tensor_parallel_size,
+            "Batch Size": args.batch_size,
+        }
+    )
 
     dataset = load_or_preprocess_dataset(args)
     num_saved = generate_and_save_hidden_states(args, dataset)
@@ -296,5 +301,5 @@ def main():
     log.info(f"Saved {num_saved} files to {args.output_dir}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

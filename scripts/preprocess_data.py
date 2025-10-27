@@ -24,8 +24,7 @@ from speculators.data_generation.preprocessing import (
 )
 
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
@@ -35,64 +34,61 @@ def parse_args():
 
     # Model paths
     parser.add_argument(
-        '--target-model-path',
+        "--target-model-path",
         type=str,
         required=True,
-        help='HuggingFace model ID or local path for target model'
+        help="HuggingFace model ID or local path for target model",
     )
 
     # Data paths
     parser.add_argument(
-        '--train-data-path',
+        "--train-data-path",
         type=str,
         required=True,
-        help='Path to training data (JSON/JSONL, sharegpt, or ultrachat)'
+        help="Path to training data (JSON/JSONL, sharegpt, or ultrachat)",
     )
 
     # Processing parameters
     parser.add_argument(
-        '--chat-template',
+        "--chat-template",
         type=str,
         required=True,
-        help='Chat template name (e.g., qwen2, llama3, etc.)'
+        help="Chat template name (e.g., qwen2, llama3, etc.)",
     )
     parser.add_argument(
-        '--seq-length',
+        "--seq-length",
         type=int,
         default=2048,
-        help='Maximum sequence length (default: 2048)'
+        help="Maximum sequence length (default: 2048)",
     )
     parser.add_argument(
-        '--cache-dir',
+        "--cache-dir",
         type=str,
-        default='./cache',
-        help='Directory for caching processed data (default: ./cache)'
+        default="./cache",
+        help="Directory for caching processed data (default: ./cache)",
     )
     parser.add_argument(
-        '--seed',
-        type=int,
-        default=0,
-        help='Random seed for shuffling (default: 0)'
+        "--seed", type=int, default=0, help="Random seed for shuffling (default: 0)"
     )
     parser.add_argument(
-        '--build-dataset-num-proc',
+        "--build-dataset-num-proc",
         type=int,
         default=8,
-        help='Number of processes for dataset building (default: 8)'
+        help="Number of processes for dataset building (default: 8)",
     )
 
     # Optional flags
     parser.add_argument(
-        '--max-samples',
+        "--max-samples",
         type=int,
         default=None,
-        help='Maximum number of samples to preprocess (default: None, process all)'
+        help="Maximum number of samples to preprocess (default: None, process all)",
     )
     parser.add_argument(
-        '--view-samples',
+        "--view-samples",
         type=int,
         default=0,
-        help='Number of samples to view for sanity check (default: 0)'
+        help="Number of samples to view for sanity check (default: 0)",
     )
 
     return parser.parse_args()
@@ -125,8 +121,11 @@ def main():
         view_samples(preprocessed_dataset, tokenizer, args.view_samples)
 
     logger.info(f"Dataset: {args.cache_dir}/processed_dataset/{cache_key}")
-    logger.info(f"Token frequencies: {args.cache_dir}/token_frequencies/{cache_key}_token_freq.pt")
+    logger.info(
+        f"Token frequencies: {args.cache_dir}/token_frequencies/"
+        f"{cache_key}_token_freq.pt"
+    )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

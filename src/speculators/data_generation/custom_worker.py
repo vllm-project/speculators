@@ -2,15 +2,17 @@
 Custom Worker Extension for hidden states capture
 
 This is used via vLLM's worker_extension_cls mechanism.
-To use: set ParallelConfig.worker_extension_cls = "custom_worker:HiddenStatesWorkerExtension"
+To use: set ParallelConfig.worker_extension_cls =
+    "custom_worker:HiddenStatesWorkerExtension"
 """
-import torch
+
 import logging
-from typing import List
-from vllm.model_executor.models.interfaces import supports_eagle3
-from vllm.distributed import get_pp_group, get_tp_group
-from vllm.sequence import IntermediateTensors
 from itertools import islice
+
+import torch
+from vllm.distributed import get_pp_group, get_tp_group
+from vllm.model_executor.models.interfaces import supports_eagle3
+from vllm.sequence import IntermediateTensors
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +27,10 @@ class HiddenStatesWorkerExtension:
 
     def _create_patched_forward(self, base_model):
         """Create a patched forward function for hidden state capture"""
-        def patched_forward(input_ids, positions, intermediate_tensors=None, inputs_embeds=None):
+
+        def patched_forward(
+            input_ids, positions, intermediate_tensors=None, inputs_embeds=None
+        ):
             # Get initial hidden states (first rank in pipeline parallel)
             if get_pp_group().is_first_rank:
                 if inputs_embeds is not None:
@@ -41,8 +46,14 @@ class HiddenStatesWorkerExtension:
             aux_hidden_states = []
 
             # Hoist invariant checks outside the loop for performance
-            should_capture_here = self._should_capture and get_tp_group().rank_in_group == 0
-            target_layers = base_model.aux_hidden_state_layers if should_capture_here else frozenset()
+            should_capture_here = (
+                self._should_capture and get_tp_group().rank_in_group == 0
+            )
+            target_layers = (
+                base_model.aux_hidden_state_layers
+                if should_capture_here
+                else frozenset()
+            )
 
             for idx, layer in enumerate(
                 islice(base_model.layers, base_model.start_layer, base_model.end_layer)
@@ -70,15 +81,15 @@ class HiddenStatesWorkerExtension:
                     else:
                         # Concatenate with previous captures along batch dimension
                         for i, h in enumerate(aux_hidden_states):
-                            self._captured_states[i] = torch.cat([
-                                self._captured_states[i], h
-                            ], dim=0)
+                            self._captured_states[i] = torch.cat(
+                                [self._captured_states[i], h], dim=0
+                            )
 
             return hidden_states
 
         return patched_forward
 
-    def _setup_hidden_states_capture(self, layer_ids: List[int]):
+    def _setup_hidden_states_capture(self, layer_ids: list[int]):
         """Setup model to capture auxiliary hidden states from specific layers"""
         self._layer_ids = layer_ids
         self._captured_states = None
@@ -87,7 +98,9 @@ class HiddenStatesWorkerExtension:
         model = self.model_runner.model
 
         if not supports_eagle3(model):
-            raise ValueError(f"Model {type(model).__name__} does not support hidden state extraction")
+            raise ValueError(
+                f"Model {type(model).__name__} does not support hidden state extraction"
+            )
 
         base_model = model.model
         base_model.aux_hidden_state_layers = tuple(layer_ids)

@@ -1,7 +1,7 @@
 """Clean logging utilities for data generation pipeline."""
 
 import logging
-from typing import Dict, Any
+from typing import Any
 
 
 class PipelineLogger:
@@ -20,10 +20,10 @@ class PipelineLogger:
         """Log a subsection header."""
         self.logger.info(f"\n── {title}")
 
-    def config(self, config_dict: Dict[str, Any]):
+    def config(self, config_dict: dict[str, Any]):
         """Log configuration in a clean format."""
         self.logger.info("Configuration:")
-        max_key_len = max(len(str(k)) for k in config_dict.keys())
+        max_key_len = max(len(str(k)) for k in config_dict)
         for key, value in config_dict.items():
             self.logger.info(f"  {str(key).ljust(max_key_len)} : {value}")
 

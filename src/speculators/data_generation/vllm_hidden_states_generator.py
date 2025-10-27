@@ -33,11 +33,8 @@ Usage:
     data = generator.generate(token_ids=token_ids_batch)
 """
 
-from typing import Dict, List, Union
-
 import torch
 from transformers import AutoConfig, AutoTokenizer
-
 from vllm.config import (
     CacheConfig,
     DeviceConfig,
@@ -71,7 +68,7 @@ class VllmHiddenStatesGenerator:
     def __init__(
         self,
         model_path: str,
-        layer_ids: List[int] = None,
+        layer_ids: list[int] = None,
         max_model_len: int = 2048,
         gpu_memory_utilization: float = 0.8,
         tensor_parallel_size: int = 1,
@@ -88,9 +85,9 @@ class VllmHiddenStatesGenerator:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
         config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
-        if hasattr(config, 'num_hidden_layers'):
+        if hasattr(config, "num_hidden_layers"):
             num_layers = config.num_hidden_layers
-        elif hasattr(config, 'text_config'):
+        elif hasattr(config, "text_config"):
             num_layers = config.text_config.num_hidden_layers
         else:
             raise ValueError("Cannot determine num_layers from config")
@@ -98,11 +95,16 @@ class VllmHiddenStatesGenerator:
         log.info(f"Model has {num_layers} layers")
 
         # Auto-select layers if not specified
-        # Matches EAGLE3 pattern: hidden_states[3], hidden_states[num_layers // 2 + 1], hidden_states[-3]
-        # Since hidden_states includes embedding (index 0), we subtract 1 to get layer indices
+        # Matches EAGLE3 pattern: hidden_states[3],
+        # hidden_states[num_layers // 2 + 1], hidden_states[-3]
+        # Since hidden_states includes embedding (index 0),
+        # we subtract 1 to get layer indices
         if layer_ids is None:
             self.layer_ids = [2, num_layers // 2, num_layers - 3]
-            log.info(f"Auto-selected layers: {self.layer_ids} (from {num_layers} total layers)")
+            log.info(
+                f"Auto-selected layers: {self.layer_ids} "
+                f"(from {num_layers} total layers)"
+            )
         else:
             self.layer_ids = layer_ids
             log.info(f"Using specified layers: {layer_ids}")
@@ -110,7 +112,9 @@ class VllmHiddenStatesGenerator:
         # Validate layer indices
         for layer_id in self.layer_ids:
             if layer_id < 0 or layer_id >= num_layers:
-                raise ValueError(f"Layer index {layer_id} out of bounds [0, {num_layers - 1}]")
+                raise ValueError(
+                    f"Layer index {layer_id} out of bounds [0, {num_layers - 1}]"
+                )
 
         self.vllm_config = self._create_vllm_config(
             model_path=model_path,
@@ -143,7 +147,9 @@ class VllmHiddenStatesGenerator:
         )
 
         self.vllm_config.cache_config.num_gpu_blocks = kv_cache_config.num_blocks
-        structured_output_manager = StructuredOutputManager(vllm_config=self.vllm_config)
+        structured_output_manager = StructuredOutputManager(
+            vllm_config=self.vllm_config
+        )
 
         self.scheduler = Scheduler(
             vllm_config=self.vllm_config,
@@ -199,7 +205,9 @@ class VllmHiddenStatesGenerator:
             args=(self.layer_ids,),
         )
 
-    def generate(self, token_ids: Union[List[int], List[List[int]], torch.Tensor]) -> List[Dict]:
+    def generate(
+        self, token_ids: list[int] | list[list[int]] | torch.Tensor
+    ) -> list[dict]:
         """
         Extract hidden states from prefill phase only (zero decode).
 
@@ -217,12 +225,19 @@ class VllmHiddenStatesGenerator:
         """
         if isinstance(token_ids, torch.Tensor):
             input_ids_list = [row.tolist() for row in token_ids]
-        elif isinstance(token_ids, list) and len(token_ids) > 0 and isinstance(token_ids[0], int):
+        elif (
+            isinstance(token_ids, list)
+            and len(token_ids) > 0
+            and isinstance(token_ids[0], int)
+        ):
             input_ids_list = [token_ids]
         elif isinstance(token_ids, list) and len(token_ids) > 0:
             input_ids_list = token_ids
         else:
-            raise ValueError(f"token_ids must be non-empty List[int], List[List[int]], or torch.Tensor, got {type(token_ids)}")
+            raise ValueError(
+                f"token_ids must be non-empty List[int], List[List[int]], "
+                f"or torch.Tensor, got {type(token_ids)}"
+            )
 
         log.debug(f"Generating hidden states for {len(input_ids_list)} sequences")
 
@@ -230,13 +245,12 @@ class VllmHiddenStatesGenerator:
         input_ids_list = [ids[:max_len] for ids in input_ids_list]
 
         requests = []
-        for i, input_ids in enumerate(input_ids_list):
-            if isinstance(input_ids, torch.Tensor):
-                input_ids = input_ids.tolist()
+        for i, ids in enumerate(input_ids_list):
+            input_ids_for_req = ids.tolist() if isinstance(ids, torch.Tensor) else ids
 
             req = Request(
                 request_id=f"req_{self._request_counter}_{i}",
-                prompt_token_ids=input_ids,
+                prompt_token_ids=input_ids_for_req,
                 sampling_params=SamplingParams(max_tokens=1, temperature=0.0),
                 pooling_params=None,
                 eos_token_id=self.tokenizer.eos_token_id,
@@ -257,11 +271,14 @@ class VllmHiddenStatesGenerator:
             if scheduler_output.total_num_scheduled_tokens == 0:
                 break
 
-            log.debug(f"Scheduler output - total tokens: {scheduler_output.total_num_scheduled_tokens}")
+            log.debug(
+                f"Scheduler output - total tokens: "
+                f"{scheduler_output.total_num_scheduled_tokens}"
+            )
 
             self.executor.execute_model(scheduler_output)
 
-            for req_id in scheduler_output.num_scheduled_tokens.keys():
+            for req_id in scheduler_output.num_scheduled_tokens:
                 self.scheduler.finish_requests([req_id], RequestStatus.FINISHED_ABORTED)
 
         # Get captured states from driver worker
@@ -282,20 +299,22 @@ class VllmHiddenStatesGenerator:
         results = []
         offset = 0
         for i, seq_len in enumerate(seq_lens):
-            layer_states = [h[offset:offset + seq_len] for h in aux_hidden_states]
+            layer_states = [h[offset : offset + seq_len] for h in aux_hidden_states]
             hidden_state = torch.cat(layer_states, dim=-1)
 
-            results.append({
-                'input_ids': torch.tensor(input_ids_list[i], dtype=torch.long),
-                'hidden_state': hidden_state,
-                'loss_mask': None,
-            })
+            results.append(
+                {
+                    "input_ids": torch.tensor(input_ids_list[i], dtype=torch.long),
+                    "hidden_state": hidden_state,
+                    "loss_mask": None,
+                }
+            )
             offset += seq_len
 
         return results
 
     def __del__(self):
-        if hasattr(self, 'executor'):
+        if hasattr(self, "executor"):
             try:
                 self.executor.shutdown()
             except Exception:

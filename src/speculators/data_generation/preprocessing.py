@@ -3,10 +3,10 @@ import hashlib
 import os
 import random
 import re
-from typing import Dict, List, Optional, Tuple
 
 import torch
-from datasets import Dataset as HFDataset, load_dataset, load_from_disk
+from datasets import Dataset as HFDataset
+from datasets import load_dataset, load_from_disk
 from transformers import AutoTokenizer, PreTrainedTokenizer
 
 from .configs import CHAT_TEMPLATES, DATASET_CONFIGS, ChatTemplate, format_conversation
@@ -34,8 +34,12 @@ def _apply_loss_mask_from_chat_template(
     """
     loss_mask = torch.zeros(len(offsets), dtype=torch.long)
 
-    user_message_separator = f"{chat_template.end_of_turn_token}{chat_template.user_header}"
-    assistant_message_separator = f"{chat_template.end_of_turn_token}{chat_template.assistant_header}"
+    user_message_separator = (
+        f"{chat_template.end_of_turn_token}{chat_template.user_header}"
+    )
+    assistant_message_separator = (
+        f"{chat_template.end_of_turn_token}{chat_template.assistant_header}"
+    )
 
     assistant_pattern = (
         re.escape(assistant_message_separator)
@@ -68,11 +72,11 @@ def _apply_loss_mask_from_chat_template(
 
 
 def _preprocess_batch(
-    examples: Dict,
+    examples: dict,
     tokenizer: PreTrainedTokenizer,
     template: ChatTemplate,
     max_length: int,
-) -> Dict[str, List]:
+) -> dict[str, list]:
     """
     Process a batch of conversations into tokenized format with loss masks.
 
@@ -175,8 +179,8 @@ def load_raw_dataset(train_data_path: str, num_proc: int = 8) -> HFDataset:
         HuggingFace Dataset with conversations in standard format
     """
     # Load from local file
-    if train_data_path.endswith('.jsonl') or train_data_path.endswith('.json'):
-        return load_dataset('json', data_files=train_data_path, split='train')
+    if train_data_path.endswith((".jsonl", ".json")):
+        return load_dataset("json", data_files=train_data_path, split="train")
 
     # Load from HuggingFace using registry
     if train_data_path not in DATASET_CONFIGS:
@@ -214,14 +218,15 @@ def load_and_preprocess_dataset(
     cache_dir: str,
     build_dataset_num_proc: int = 8,
     seed: int = 0,
-    max_samples: Optional[int] = None,
-) -> Tuple[HFDataset, PreTrainedTokenizer]:
+    max_samples: int | None = None,
+) -> tuple[HFDataset, PreTrainedTokenizer]:
     """
     Load, tokenize, and preprocess a dataset for EAGLE3 training.
 
     Args:
         target_model_path: HuggingFace model ID or local path
-        train_data_path: Path to training data (JSON/JSONL) or dataset name (sharegpt/ultrachat)
+        train_data_path: Path to training data (JSON/JSONL) or dataset name
+            (sharegpt/ultrachat)
         chat_template: Chat template identifier
         seq_length: Maximum sequence length
         cache_dir: Directory for caching
@@ -255,14 +260,16 @@ def load_and_preprocess_dataset(
     log.info(f"Loaded {len(raw_dataset)} samples")
 
     # Prepare cache directories
-    cache_key = generate_cache_key(target_model_path, chat_template, seq_length, train_data_path)
+    cache_key = generate_cache_key(
+        target_model_path, chat_template, seq_length, train_data_path
+    )
     if max_samples is not None:
         cache_key = f"{cache_key}_samples{max_samples}"
-    dataset_cache_dir = os.path.join(cache_dir, 'processed_dataset', cache_key)
+    dataset_cache_dir = os.path.join(cache_dir, "processed_dataset", cache_key)
     os.makedirs(dataset_cache_dir, exist_ok=True)
 
     # Check if already cached
-    if os.path.exists(os.path.join(dataset_cache_dir, 'dataset_info.json')):
+    if os.path.exists(os.path.join(dataset_cache_dir, "dataset_info.json")):
         log.info(f"Loading cached dataset from {dataset_cache_dir}")
         preprocessed_dataset = load_from_disk(dataset_cache_dir)
     else:
@@ -281,7 +288,7 @@ def load_and_preprocess_dataset(
 
     # Save token frequency distribution (for later vocab mapping generation)
     log.subsection("Computing token frequency distribution")
-    token_freq_cache_dir = os.path.join(cache_dir, 'token_frequencies')
+    token_freq_cache_dir = os.path.join(cache_dir, "token_frequencies")
     save_token_frequency_distribution(
         dataset=preprocessed_dataset,
         cache_dir=token_freq_cache_dir,
@@ -293,7 +300,9 @@ def load_and_preprocess_dataset(
     return preprocessed_dataset, tokenizer
 
 
-def view_samples(dataset: HFDataset, tokenizer: PreTrainedTokenizer, num_samples: int = 3):
+def view_samples(
+    dataset: HFDataset, tokenizer: PreTrainedTokenizer, num_samples: int = 3
+):
     """View random samples for sanity check."""
     log.section(f"Viewing {num_samples} random samples")
 
@@ -301,13 +310,17 @@ def view_samples(dataset: HFDataset, tokenizer: PreTrainedTokenizer, num_samples
 
     for idx in indices:
         sample = dataset[idx]
-        input_ids = sample['input_ids'].squeeze()
-        loss_mask = sample['loss_mask'].squeeze()
+        input_ids = sample["input_ids"].squeeze()
+        loss_mask = sample["loss_mask"].squeeze()
 
         log.info(f"\nSample {idx}:")
-        log.info(f"  Shape: {input_ids.shape}, Trainable tokens: {loss_mask.sum().item()}")
-        log.info(f"  Text (first 500 chars):\n{tokenizer.decode(input_ids, skip_special_tokens=False)[:500]}...")
+        log.info(
+            f"  Shape: {input_ids.shape}, Trainable tokens: {loss_mask.sum().item()}"
+        )
+        decoded_text = tokenizer.decode(input_ids, skip_special_tokens=False)
+        log.info(f"  Text (first 500 chars):\n{decoded_text[:500]}...")
 
         trainable_ids = input_ids[loss_mask == 1]
         if len(trainable_ids) > 0:
-            log.info(f"  Trainable text (first 200 chars):\n{tokenizer.decode(trainable_ids, skip_special_tokens=False)[:200]}...")
+            trainable_text = tokenizer.decode(trainable_ids, skip_special_tokens=False)
+            log.info(f"  Trainable text (first 200 chars):\n{trainable_text[:200]}...")
