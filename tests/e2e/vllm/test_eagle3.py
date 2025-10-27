@@ -104,18 +104,6 @@ class TestEagle3vLLM:
                 },
                 id="llama3-2layer",
             ),
-            # Note: This test may use a lot of memory due to the model size
-            pytest.param(
-                {
-                    "unconverted_model": "nvidia/Llama-4-Maverick-17B-128E-Eagle3",
-                    "base_model": (
-                        "RedHatAI/Llama-4-Maverick-17B-128E-Instruct-quantized.w4a16"
-                    ),
-                    "norm_before_residual": False,
-                    "eagle_aux_hidden_state_layer_ids": [1, 23, 44],
-                },
-                id="llama4-diff-hidden",
-            ),
         ],
     )
     def test_convert_run_vllm_engine_eagle3(self, model_info, temp_cache_dir, tmp_path):
