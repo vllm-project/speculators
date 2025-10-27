@@ -160,6 +160,7 @@ Adjust based on GPU memory and sequence length.
 ### Caching
 
 Preprocessing is automatically cached. Cache key includes:
+
 - Model path
 - Chat template
 - Sequence length
