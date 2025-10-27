@@ -64,6 +64,7 @@ results = generator.generate(token_ids=token_ids)
 ```
 
 **Features:**
+
 - Auto-selects layers using EAGLE3 pattern if not specified
 - Supports multi-GPU tensor parallelism
 - Prefill-only mode (no decode overhead)
@@ -87,6 +88,7 @@ dataset, tokenizer = load_and_preprocess_dataset(
 ```
 
 **Supports:**
+
 - ShareGPT format datasets
 - HuggingFace datasets (sharegpt, ultrachat)
 - Local JSON/JSONL files
@@ -97,6 +99,7 @@ dataset, tokenizer = load_and_preprocess_dataset(
 vLLM worker extension that captures hidden states during model forward pass.
 
 **Features:**
+
 - Minimal overhead - only captures target layers
 - TP rank 0 only (prevents duplicate captures)
 - Automatic batching across sequences
@@ -106,6 +109,7 @@ vLLM worker extension that captures hidden states during model forward pass.
 #### Chat Templates
 
 Supported templates in `configs.py`:
+
 - `llama3` - Llama 3/3.1 format
 - `qwen2` - Qwen 2 format
 - `vicuna` - Vicuna format
@@ -115,6 +119,7 @@ Supported templates in `configs.py`:
 #### Dataset Configs
 
 Built-in datasets in `configs.py`:
+
 - `sharegpt` - ShareGPT Vicuna unfiltered
 - `ultrachat` - HuggingFace UltraChat 200k
 
@@ -223,19 +228,23 @@ def build_eagle3_dataset(
 ### Common Issues
 
 **Issue**: Out of memory during hidden state extraction
+
 - Reduce `--batch-size`
 - Reduce `--seq-length`
 - Increase `--tensor-parallel-size`
 
 **Issue**: Layer index out of bounds
+
 - Check model's actual number of layers
 - Auto-selection uses: `[2, num_layers // 2, num_layers - 3]`
 
 **Issue**: No assistant response spans found
+
 - Verify chat template matches your data format
 - Check that conversations have assistant responses
 
 **Issue**: Cache invalidation
+
 - Delete cache directory if changing preprocessing parameters
 - Ensure `--seed` matches between runs for reproducibility
 

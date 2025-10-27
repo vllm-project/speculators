@@ -39,7 +39,7 @@ def save_token_frequency_distribution(
     if os.path.exists(freq_dist_path):
         return freq_dist_path
 
-    token_freq = Counter()
+    token_freq: Counter[int] = Counter()
     for item in tqdm(dataset, desc="Counting token frequencies"):
         input_ids = item["input_ids"]
         loss_mask = item["loss_mask"]

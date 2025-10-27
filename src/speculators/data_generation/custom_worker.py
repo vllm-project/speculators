@@ -109,7 +109,7 @@ class HiddenStatesWorkerExtension:
                 f"Model {type(model).__name__} does not support hidden state extraction"
             )
 
-        base_model = model.model
+        base_model = model.model  # type: ignore[attr-defined]
         base_model.aux_hidden_state_layers = tuple(layer_ids)
 
         base_model.forward = self._create_patched_forward(base_model)

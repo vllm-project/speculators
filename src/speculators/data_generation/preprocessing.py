@@ -89,7 +89,7 @@ def _preprocess_batch(
     Returns:
         Dictionary with input_ids and loss_mask lists
     """
-    results = {"input_ids": [], "loss_mask": []}
+    results: dict[str, list] = {"input_ids": [], "loss_mask": []}
 
     conversations = examples.get("conversations", [])
     if not conversations:
