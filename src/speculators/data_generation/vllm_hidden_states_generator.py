@@ -196,7 +196,7 @@ class VllmHiddenStatesGenerator:
             scheduler_config=SchedulerConfig(
                 max_num_seqs=256,
                 max_model_len=max_model_len,
-                max_num_batched_tokens=8192,
+                max_num_batched_tokens=65536,
             ),
             device_config=DeviceConfig(),
             load_config=LoadConfig(),
@@ -270,14 +270,16 @@ class VllmHiddenStatesGenerator:
 
         self.executor.collective_rpc("_enable_capture")
 
+        schedule_iterations = 0
         while True:
             scheduler_output = self.scheduler.schedule()
 
             if scheduler_output.total_num_scheduled_tokens == 0:
                 break
 
+            schedule_iterations += 1
             log.debug(
-                f"Scheduler output - total tokens: "
+                f"Scheduler iteration {schedule_iterations} - tokens: "
                 f"{scheduler_output.total_num_scheduled_tokens}"
             )
 
@@ -307,9 +309,16 @@ class VllmHiddenStatesGenerator:
             layer_states = [h[offset : offset + seq_len] for h in aux_hidden_states]
             hidden_state = torch.cat(layer_states, dim=-1)
 
+            # Convert to tensor efficiently
+            input_ids_tensor = (
+                input_ids_list[i]
+                if isinstance(input_ids_list[i], torch.Tensor)
+                else torch.as_tensor(input_ids_list[i], dtype=torch.long)
+            )
+
             results.append(
                 {
-                    "input_ids": torch.tensor(input_ids_list[i], dtype=torch.long),
+                    "input_ids": input_ids_tensor,
                     "hidden_state": hidden_state,
                     "loss_mask": None,
                 }
