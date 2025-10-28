@@ -82,7 +82,7 @@ class TestEagle3vLLM:
             pytest.param(
                 {
                     "unconverted_model": "yuhuili/EAGLE3-LLaMA3.1-Instruct-8B",
-                    "base_model": "meta-llama/Meta-Llama-3.1-8B-Instruct",
+                    "base_model": "meta-llama/Llama-3.1-8B-Instruct",
                 },
                 id="llama3-8b",
             ),
@@ -99,7 +99,7 @@ class TestEagle3vLLM:
                     "unconverted_model": (
                         "nm-testing/random-weights-llama3.1.8b-2layer-eagle3-unconverted"
                     ),
-                    "base_model": "meta-llama/Meta-Llama-3.1-8B-Instruct",
+                    "base_model": "meta-llama/Llama-3.1-8B-Instruct",
                     "norm_before_residual": False,
                 },
                 id="llama3-2layer",
