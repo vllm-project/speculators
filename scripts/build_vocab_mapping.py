@@ -18,6 +18,7 @@ import argparse
 import logging
 import os
 
+import numpy as np
 import torch
 
 from speculators.data_generation.vocab_mapping import (
@@ -79,17 +80,20 @@ def main():
         target_vocab_size=args.target_vocab_size,
     )
 
-    vocab_mapping = {"d2t": d2t, "t2d": t2d}
-
     output_dir = os.path.dirname(args.output_path)
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
 
-    torch.save(vocab_mapping, args.output_path)
-    logger.info(
-        f"Saved vocabulary mapping to {args.output_path} "
-        f"(d2t: {d2t.shape}, t2d: {t2d.shape})"
-    )
+    # Save as .npy files (expected by training script)
+    base_dir = output_dir if output_dir else "."
+    d2t_path = os.path.join(base_dir, "d2t.npy")
+    t2d_path = os.path.join(base_dir, "t2d.npy")
+
+    np.save(d2t_path, d2t.cpu().numpy())
+    np.save(t2d_path, t2d.cpu().numpy())
+
+    logger.info(f"Saved d2t to {d2t_path} (shape: {d2t.shape})")
+    logger.info(f"Saved t2d to {t2d_path} (shape: {t2d.shape})")
 
 
 if __name__ == "__main__":
