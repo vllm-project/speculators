@@ -35,8 +35,10 @@ Usage:
 """
 
 import argparse
+import json
 import logging
 import os
+from datetime import datetime
 
 import torch
 from datasets import load_from_disk
@@ -227,9 +229,6 @@ def find_last_checkpoint(output_dir: str) -> int:
 
 def save_config(args, generator, num_samples, output_dir):
     """Save metadata config file for reproducibility"""
-    import json
-    from datetime import datetime
-
     config = {
         "version": "1.0",
         "generated_at": datetime.now().isoformat(),
@@ -250,7 +249,9 @@ def save_config(args, generator, num_samples, output_dir):
         "hidden_states": {
             "layer_ids": generator.layer_ids,
             "num_layers": len(generator.layer_ids),
-            "description": "First 3 layers for EAGLE3 fusion, last layer for target logits",
+            "description": (
+                "First 3 layers for EAGLE3 fusion, last layer for target logits"
+            ),
         },
         "generation": {
             "batch_size": args.batch_size,
@@ -260,8 +261,8 @@ def save_config(args, generator, num_samples, output_dir):
             "file_pattern": "data_{idx}.pt",
             "fields": ["input_ids", "hidden_state", "loss_mask"],
             "hidden_state_shape": "[seq_len, hidden_dim * num_layers]",
-            "note": "hidden_state contains concatenated layers in order of layer_ids",
-        }
+            "note": ("hidden_state contains concatenated layers in order of layer_ids"),
+        },
     }
 
     config_path = os.path.join(output_dir, "data_config.json")
