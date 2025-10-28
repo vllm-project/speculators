@@ -225,6 +225,51 @@ def find_last_checkpoint(output_dir: str) -> int:
     return max(indices) + 1
 
 
+def save_config(args, generator, num_samples, output_dir):
+    """Save metadata config file for reproducibility"""
+    import json
+    from datetime import datetime
+
+    config = {
+        "version": "1.0",
+        "generated_at": datetime.now().isoformat(),
+        "model": {
+            "target_model_path": args.target_model_path,
+            "tensor_parallel_size": args.tensor_parallel_size,
+            "max_model_len": args.max_model_len,
+            "gpu_memory_utilization": args.gpu_memory_utilization,
+        },
+        "data": {
+            "train_data_path": args.train_data_path,
+            "chat_template": args.chat_template,
+            "seq_length": args.seq_length,
+            "max_samples": args.max_samples,
+            "num_samples": num_samples,
+            "seed": args.seed,
+        },
+        "hidden_states": {
+            "layer_ids": generator.layer_ids,
+            "num_layers": len(generator.layer_ids),
+            "description": "First 3 layers for EAGLE3 fusion, last layer for target logits",
+        },
+        "generation": {
+            "batch_size": args.batch_size,
+            "cache_dir": args.cache_dir,
+        },
+        "format": {
+            "file_pattern": "data_{idx}.pt",
+            "fields": ["input_ids", "hidden_state", "loss_mask"],
+            "hidden_state_shape": "[seq_len, hidden_dim * num_layers]",
+            "note": "hidden_state contains concatenated layers in order of layer_ids",
+        }
+    }
+
+    config_path = os.path.join(output_dir, "data_config.json")
+    with open(config_path, "w") as f:
+        json.dump(config, f, indent=2)
+    log.info(f"Saved config to {config_path}")
+
+
 def generate_and_save_hidden_states(args, dataset):
     """Generate hidden states and save each sample as a .pt file"""
 
@@ -276,6 +321,10 @@ def generate_and_save_hidden_states(args, dataset):
 
     samples_saved = file_idx - start_file_idx
     log.info(f"Saved {samples_saved} new data points to {args.output_dir}")
+
+    # Save config file with all metadata
+    save_config(args, generator, num_samples, args.output_dir)
+
     return samples_saved
 
 

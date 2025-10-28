@@ -100,12 +100,12 @@ class VllmHiddenStatesGenerator:
         log.info(f"Model has {num_layers} layers")
 
         # Auto-select layers if not specified
-        # Matches EAGLE3 pattern: hidden_states[3],
-        # hidden_states[num_layers // 2 + 1], hidden_states[-3]
-        # Since hidden_states includes embedding (index 0),
-        # we subtract 1 to get layer indices
+        # Matches EAGLE3 pattern:
+        # - Feature fusion: hidden_states[3], hidden_states[num_layers // 2 + 1], hidden_states[-3]
+        # - Target (last layer): hidden_states[-1]
+        # Since hidden_states includes embedding (index 0), we subtract 1 to get layer indices
         if layer_ids is None:
-            self.layer_ids = [2, num_layers // 2, num_layers - 3]
+            self.layer_ids = [2, num_layers // 2, num_layers - 3, num_layers - 1]
             log.info(
                 f"Auto-selected layers: {self.layer_ids} "
                 f"(from {num_layers} total layers)"
