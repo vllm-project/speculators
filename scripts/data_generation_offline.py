@@ -259,9 +259,12 @@ def save_config(args, generator, num_samples, output_dir):
         },
         "format": {
             "file_pattern": "data_{idx}.pt",
-            "fields": ["input_ids", "hidden_state", "loss_mask"],
-            "hidden_state_shape": "[seq_len, hidden_dim * num_layers]",
-            "note": ("hidden_state contains concatenated layers in order of layer_ids"),
+            "fields": ["input_ids", "hidden_states", "loss_mask"],
+            "hidden_states_type": "List[torch.Tensor]",
+            "hidden_states_shape": "List of [seq_len, hidden_dim], one per layer",
+            "note": (
+                "hidden_states is a list of tensors in order of layer_ids"
+            ),
         },
     }
 

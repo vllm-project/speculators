@@ -227,7 +227,7 @@ class VllmHiddenStatesGenerator:
         Returns:
             List of dicts, one per sequence, each containing:
                 - input_ids: torch.Tensor of token IDs
-                - hidden_state: torch.Tensor of concatenated hidden states
+                - hidden_states: List[torch.Tensor] of hidden states (one per layer)
                 - loss_mask: None (to be filled by caller)
         """
         if isinstance(token_ids, torch.Tensor):
@@ -308,8 +308,8 @@ class VllmHiddenStatesGenerator:
         results = []
         offset = 0
         for i, seq_len in enumerate(seq_lens):
+            # Keep hidden states as a list (one tensor per layer)
             layer_states = [h[offset : offset + seq_len] for h in aux_hidden_states]
-            hidden_state = torch.cat(layer_states, dim=-1)
 
             # Convert to tensor efficiently
             input_ids_tensor = (
@@ -321,7 +321,7 @@ class VllmHiddenStatesGenerator:
             results.append(
                 {
                     "input_ids": input_ids_tensor,
-                    "hidden_state": hidden_state,
+                    "hidden_states": layer_states,  # List of layer tensors
                     "loss_mask": None,
                 }
             )
