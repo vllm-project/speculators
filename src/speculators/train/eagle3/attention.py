@@ -74,7 +74,7 @@ def extend_mask_for_draft_tokens(block_mask):
             [0, 0, 1, 0, 0, 1],
         ]
     ]
-    and then callinga again will give:
+    and then calling again will give:
     [
         [
             [1, 0, 0, 1, 0, 0, 1, 0, 0],
