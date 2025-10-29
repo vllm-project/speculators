@@ -9,6 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      pull-requests: write
       id-token: write
     steps:
       - name: Checkout code
@@ -18,16 +19,16 @@ jobs:
         uses: lycheeverse/lychee-action@v2
         with:
           fail: false
-      - name: Create Comment
+      - name: Create PR Comment
         if: steps.lychee.outputs.exit_code != '0'
         uses: peter-evans/create-or-update-comment@v4
         with:
-          issue-number: 128
+          issue-number: ${{ github.event.pull_request.number }}
           body-path: ./lychee/out.md
       - name: Fail on Issues
         if: steps.lychee.outputs.exit_code != '0'
         run: |
-          echo "Link Checker found issues. Please check the created issue for details."
+          echo "Link Checker found issues. Please check the PR comment for details."
           exit 1
 
   quality-checks:
