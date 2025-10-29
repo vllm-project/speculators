@@ -491,6 +491,7 @@ def test_speculator_model_attach_verifier_invalid(
     ):
         model.attach_verifier(123)  # type: ignore[arg-type]
 
+    model = SpeculatorTestModel(config=speculator_model_test_config)
     # Invalid attachment mode
     with pytest.raises(
         ValueError, match="Invalid verifier_attachment_mode: invalid_mode"
@@ -498,6 +499,7 @@ def test_speculator_model_attach_verifier_invalid(
         model.attach_verifier(verifier=None, mode="invalid_mode")  # type: ignore[arg-type]
 
     # Attaching when not in detached mode
+    model = SpeculatorTestModel(config=speculator_model_test_config)
     model.verifier_attachment_mode = "full"
     with pytest.raises(
         RuntimeError,
