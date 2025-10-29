@@ -319,8 +319,14 @@ def generate_and_save_hidden_states(args, dataset):
 
         # Save each sample (one file per sample for variable-length sequences)
         for j, result in enumerate(results):
-            result["loss_mask"] = batch_loss_mask[j]
-            torch.save(result, os.path.join(args.output_dir, f"data_{file_idx}.pt"))
+            # Clone tensors to avoid saving excess storage from tensor views/slices
+            # This reduces file size by ~10x (from ~750MB to ~75MB per file)
+            result_cleaned = {
+                "input_ids": result["input_ids"].clone(),
+                "hidden_states": [h.clone() for h in result["hidden_states"]],
+                "loss_mask": batch_loss_mask[j].clone(),
+            }
+            torch.save(result_cleaned, os.path.join(args.output_dir, f"data_{file_idx}.pt"))
             file_idx += 1
 
     samples_saved = file_idx - start_file_idx

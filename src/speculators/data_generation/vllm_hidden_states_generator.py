@@ -308,8 +308,9 @@ class VllmHiddenStatesGenerator:
         results = []
         offset = 0
         for i, seq_len in enumerate(seq_lens):
-            # Keep hidden states as a list (one tensor per layer)
-            layer_states = [h[offset : offset + seq_len] for h in aux_hidden_states]
+            # Clone slices and move to CPU to free GPU memory immediately
+            # This prevents GPU memory accumulation across batches
+            layer_states = [h[offset : offset + seq_len].clone().cpu() for h in aux_hidden_states]
 
             # Convert to tensor efficiently
             input_ids_tensor = (
@@ -326,6 +327,10 @@ class VllmHiddenStatesGenerator:
                 }
             )
             offset += seq_len
+
+        # Explicitly delete GPU tensors to free memory immediately
+        del aux_hidden_states
+        torch.cuda.empty_cache()
 
         return results
 
