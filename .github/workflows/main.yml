@@ -6,6 +6,31 @@ on:
       - main
 
 jobs:
+  link-checks:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+      - name: Link Checker
+        id: lychee
+        uses: lycheeverse/lychee-action@v2
+        with:
+          fail: false
+      - name: Create Comment
+        if: steps.lychee.outputs.exit_code != '0'
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: 128
+          body-path: ./lychee/out.md
+      - name: Fail on Issues
+        if: steps.lychee.outputs.exit_code != '0'
+        run: |
+          echo "Link Checker found issues. Please check the created issue for details."
+          exit 1
+
   quality-checks:
     runs-on: ubuntu-latest
     strategy:
