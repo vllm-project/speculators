@@ -26,7 +26,9 @@ class TestEagle3vLLM:
         monkeypatch.setenv("HF_HOME", str(cache_dir))
         return cache_dir
 
-    def _run_vllm_engine(self, model_path: str, tmp_path: Path):
+    def _run_vllm_engine(
+        self, model_path: str, tmp_path: Path, disable_compile_cache: bool = False
+    ):
         VLLM_PYTHON = os.environ.get("VLLM_PYTHON", sys.executable)
         logger.info("vLLM Python executable: {}", VLLM_PYTHON)
 
@@ -53,12 +55,19 @@ class TestEagle3vLLM:
         ]
         logger.info("run_vllm.py command:\n    {}", command)
 
+        # Set environment variables for subprocess
+        env = os.environ.copy()
+        if disable_compile_cache:
+            env["VLLM_DISABLE_COMPILE_CACHE"] = "1"
+            logger.info("Disabling vLLM compile cache for this test")
+
         result = subprocess.run(  # noqa: S603
             command,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
             check=False,
+            env=env,
         )
         logger.info("run_vllm.py output:\n{}", indent(result.stdout, "    "))
 
@@ -100,7 +109,8 @@ class TestEagle3vLLM:
                         "nm-testing/random-weights-llama3.1.8b-2layer-eagle3-unconverted"
                     ),
                     "base_model": "meta-llama/Meta-Llama-3.1-8B-Instruct",
-                    "norm_before_residual": False,
+                    "norm_before_residual": True,
+                    "disable_compile_cache": True,
                 },
                 id="llama3-2layer",
             ),
@@ -110,6 +120,7 @@ class TestEagle3vLLM:
         unconverted_model = model_info.get("unconverted_model")
         base_model = model_info.get("base_model")
         norm_before_residual = model_info.get("norm_before_residual", False)
+        disable_compile_cache = model_info.get("disable_compile_cache", False)
         converted_path = tmp_path / unconverted_model.split("/")[-1]
         converter = Eagle3Converter()
 
@@ -129,7 +140,11 @@ class TestEagle3vLLM:
             ]
 
         converter.convert(**convert_kwargs)
-        self._run_vllm_engine(model_path=str(converted_path), tmp_path=tmp_path)
+        self._run_vllm_engine(
+            model_path=str(converted_path),
+            tmp_path=tmp_path,
+            disable_compile_cache=disable_compile_cache,
+        )
 
     @pytest.mark.smoke
     @pytest.mark.parametrize(
