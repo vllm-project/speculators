@@ -24,12 +24,7 @@ from speculators.train.noise_transforms import AddUniformNoise
 from speculators.train.trainer import Trainer, TrainerConfig
 from speculators.train.utils import maybe_destroy_distributed, maybe_setup_distributed
 
-# Model
-DRAFT_VOCAB_SIZE = 32000  # Must match t2d and d2t tensors
-TOTAL_SEQ_LEN = 8192
-VERIFIER_MODEL_NAME_OR_PATH = "meta-llama/Llama-3.1-8B-Instruct"
-HIDDEN_SIZE = 4096  # Must match the verifier model's hidden size
-VERIFIER_VOCAB_SIZE = 128256  # Must match the verifier model's vocab size
+# DRAFTER MODEL HYPARAMETERS
 NORM_BEFORE_RESIDUAL = True
 
 # Dataloader
@@ -58,12 +53,12 @@ def setup_dataloader(
 
     dataset = Eagle3SampleFileDataset(
         file_list=file_list,
-        max_len=TOTAL_SEQ_LEN,
+        max_len=args.total_seq_len,
         transform=noise_transform,
         standardize_fn=standardize_fn,
     )
     batch_sampler = MultipackDistributedBatchSamplerV2(
-        batch_max_length=TOTAL_SEQ_LEN,
+        batch_max_length=args.total_seq_len,
         lengths=dataset.approx_lengths,
         num_replicas=world_size,
         rank=local_rank,
@@ -74,7 +69,7 @@ def setup_dataloader(
         num_workers=NUM_WORKERS,
         prefetch_factor=PREFETCH_FACTOR,
         pin_memory=True,
-        collate_fn=create_collate_fn(TOTAL_SEQ_LEN),
+        collate_fn=create_collate_fn(args.total_seq_len),
         persistent_workers=True,
     )
 
@@ -91,15 +86,19 @@ def main(args: argparse.Namespace):
     device = torch.device(local_rank)
 
     # Setup speculator config
-    llama_config = LlamaConfig(
-        hidden_size=HIDDEN_SIZE,
-        vocab_size=VERIFIER_VOCAB_SIZE,
-        num_hidden_layers=args.num_layers,
-    )
+    llama_config = LlamaConfig.from_pretrained(args.verifier_name_or_path)
+    llama_config.num_hidden_layers = args.num_layers
+    llama_config.model_type = "llama"  # reset to llama (handles non-llama verifiers)
     llama_config._attn_implementation = "simple_flex_attention"  # noqa: SLF001
+
+    # Load t2d and d2t tensors
+    d2t = torch.from_numpy(np.load(args.d2t_path)).to(device)
+    t2d = torch.from_numpy(np.load(args.t2d_path)).to(device)
+    draft_vocab_size = d2t.shape[0]
+
     speculator_config = Eagle3SpeculatorConfig(
         transformer_layer_config=llama_config,
-        draft_vocab_size=DRAFT_VOCAB_SIZE,
+        draft_vocab_size=draft_vocab_size,
         norm_before_residual=NORM_BEFORE_RESIDUAL,
         speculators_config=SpeculatorsConfig(
             algorithm="eagle3",
@@ -111,15 +110,11 @@ def main(args: argparse.Namespace):
             ],
             default_proposal_method="greedy",
             verifier=VerifierConfig(
-                name_or_path=VERIFIER_MODEL_NAME_OR_PATH,
+                name_or_path=args.verifier_name_or_path,
                 architectures=["LlamaForCausalLM"],
             ),
         ),
     )
-
-    # Load t2d and d2t tensors
-    d2t = torch.from_numpy(np.load(args.d2t_path)).to(device)
-    t2d = torch.from_numpy(np.load(args.t2d_path)).to(device)
 
     # Setup draft model
     draft_model = Eagle3DraftModel(
@@ -165,6 +160,7 @@ def main(args: argparse.Namespace):
 
 def parse_args():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--verifier_name_or_path", type=str, required=True)
     parser.add_argument("--data-path", type=str, default="./data")
     parser.add_argument("--save-path", type=str, default="./checkpoints")
     parser.add_argument("--epochs", type=int, default=20)
@@ -176,6 +172,7 @@ def parse_args():
         default="",
         help="One of 'trackio', 'wandb', 'tensorboard' or comma separated list of them",
     )
+    parser.add_argument("--total-seq-len", type=int, default=8192)
     parser.add_argument("--data-format-version", type=int, default=1)
     parser.add_argument("--log-dir", type=str, default="./logs")
     parser.add_argument("--run-name", type=str, default=None)
