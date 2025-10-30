@@ -262,9 +262,7 @@ def save_config(args, generator, num_samples, output_dir):
             "fields": ["input_ids", "hidden_states", "loss_mask"],
             "hidden_states_type": "List[torch.Tensor]",
             "hidden_states_shape": "List of [seq_len, hidden_dim], one per layer",
-            "note": (
-                "hidden_states is a list of tensors in order of layer_ids"
-            ),
+            "note": ("hidden_states is a list of tensors in order of layer_ids"),
         },
     }
 
@@ -304,12 +302,17 @@ def generate_and_save_hidden_states(args, dataset):
     log.info(f"Processing {num_samples - start_sample_idx}/{num_samples} samples")
     file_idx = start_file_idx
 
-    for i in tqdm(
+    # Calculate total number of batches for accurate progress tracking
+    num_batches = (
+        num_samples - start_sample_idx + args.batch_size - 1
+    ) // args.batch_size
+
+    pbar = tqdm(
         range(start_sample_idx, num_samples, args.batch_size),
         desc="Generating hidden states",
-        initial=start_sample_idx,
-        total=num_samples,
-    ):
+        total=num_batches,
+    )
+    for i in pbar:
         batch_end = min(i + args.batch_size, num_samples)
         batch = dataset[i:batch_end]
         batch_input_ids = batch["input_ids"]
@@ -326,7 +329,9 @@ def generate_and_save_hidden_states(args, dataset):
                 "hidden_states": [h.clone() for h in result["hidden_states"]],
                 "loss_mask": batch_loss_mask[j].clone(),
             }
-            torch.save(result_cleaned, os.path.join(args.output_dir, f"data_{file_idx}.pt"))
+            torch.save(
+                result_cleaned, os.path.join(args.output_dir, f"data_{file_idx}.pt")
+            )
             file_idx += 1
 
     samples_saved = file_idx - start_file_idx

@@ -144,7 +144,7 @@ class VllmHiddenStatesGenerator:
         # TODO: Optimize KV cache allocation for prefill-only workloads
         # Currently allocating based on available memory, but we only need minimal cache
         free_memory, total_memory = torch.cuda.mem_get_info()
-        cache_memory = int(free_memory * gpu_memory_utilization * 0.8)
+        cache_memory = int(free_memory * gpu_memory_utilization * 0.2)
 
         kv_cache_config = get_kv_cache_config_from_groups(
             vllm_config=self.vllm_config,
@@ -162,6 +162,7 @@ class VllmHiddenStatesGenerator:
             vllm_config=self.vllm_config,
             kv_cache_config=kv_cache_config,
             structured_output_manager=structured_output_manager,
+            block_size=self.vllm_config.cache_config.block_size,
         )
 
         log.info("Initializing KV cache on all workers...")
@@ -181,6 +182,13 @@ class VllmHiddenStatesGenerator:
             gpu_memory_utilization=gpu_memory_utilization,
         )
 
+        # For prefill-only workloads, use conservative scheduler limits
+        # to reduce warmup memory allocation. max_num_seqs controls the
+        # warmup allocation size (see gpu_worker.py:441-444).
+        # We set it to a small value since we only do prefill in batches.
+        max_num_seqs = 32  # Reduced from 256
+        max_num_batched_tokens = max(8192, max_model_len)  # Reduced from 65536
+
         return VllmConfig(
             model_config=ModelConfig(
                 model=model_path,
@@ -196,9 +204,9 @@ class VllmHiddenStatesGenerator:
                 worker_extension_cls="speculators.data_generation.custom_worker.HiddenStatesWorkerExtension",
             ),
             scheduler_config=SchedulerConfig(
-                max_num_seqs=256,
+                max_num_seqs=max_num_seqs,
                 max_model_len=max_model_len,
-                max_num_batched_tokens=65536,
+                max_num_batched_tokens=max_num_batched_tokens,
             ),
             device_config=DeviceConfig(),
             load_config=LoadConfig(),
@@ -310,7 +318,9 @@ class VllmHiddenStatesGenerator:
         for i, seq_len in enumerate(seq_lens):
             # Clone slices and move to CPU to free GPU memory immediately
             # This prevents GPU memory accumulation across batches
-            layer_states = [h[offset : offset + seq_len].clone().cpu() for h in aux_hidden_states]
+            layer_states = [
+                h[offset : offset + seq_len].clone().cpu() for h in aux_hidden_states
+            ]
 
             # Convert to tensor efficiently
             input_ids_tensor = (

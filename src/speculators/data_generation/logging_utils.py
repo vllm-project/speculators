@@ -1,5 +1,6 @@
 """Clean logging utilities for data generation pipeline."""
 
+import logging
 import sys
 from typing import Any
 
@@ -8,7 +9,7 @@ class PipelineLogger:
     """Simple logger with clean output."""
 
     def __init__(self, name: str = ""):
-        self.name = name
+        self.logger = logging.getLogger(name)
         self.use_colors = sys.stdout.isatty()
 
     def _color(self, text: str, code: str) -> str:
@@ -21,14 +22,14 @@ class PipelineLogger:
         blue_bold = "\033[1;34m"
         colored_line = self._color(line, blue_bold)
         colored_title = self._color(f"  {title}", blue_bold)
-        print(f"\n{colored_line}")
-        print(colored_title)
-        print(colored_line)
+        self.logger.info("\n%s", colored_line)
+        self.logger.info("%s", colored_title)
+        self.logger.info("%s", colored_line)
 
     def subsection(self, title: str):
         """Print a subsection header."""
         bold = "\033[1m"
-        print(f"\n{self._color(f'▸ {title}', bold)}")
+        self.logger.info("\n%s", self._color(f"▸ {title}", bold))
 
     def config(self, config_dict: dict[str, Any]):
         """Print configuration in aligned format."""
@@ -39,28 +40,28 @@ class PipelineLogger:
         for key, value in config_dict.items():
             key_str = str(key).ljust(max_key_len)
             colored_key = self._color(key_str, dim)
-            print(f"  {colored_key} │ {value}")
+            self.logger.info("  %s │ %s", colored_key, value)
 
     def info(self, message: str):
         """Print info message."""
-        print(f"  {message}")
+        self.logger.info("  %s", message)
 
     def success(self, message: str):
         """Print success message."""
         green = "\033[92m"
-        print(f"  {self._color('✓', green)} {message}")
+        self.logger.info("  %s %s", self._color("✓", green), message)
 
     def warning(self, message: str):
         """Print warning message."""
         yellow = "\033[93m"
-        print(f"  {self._color('⚠', yellow)} {message}")
+        self.logger.warning("  %s %s", self._color("⚠", yellow), message)
 
     def error(self, message: str):
         """Print error message."""
         red = "\033[91m"
-        print(f"  {self._color('✗', red)} {message}")
+        self.logger.error("  %s %s", self._color("✗", red), message)
 
     def debug(self, message: str):
         """Print debug message (dimmed)."""
         dim = "\033[2m"
-        print(self._color(f"  {message}", dim))
+        self.logger.debug("%s", self._color(f"  {message}", dim))
