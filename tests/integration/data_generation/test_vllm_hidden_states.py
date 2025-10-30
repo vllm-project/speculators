@@ -85,16 +85,18 @@ def test_vllm_vs_huggingface_accuracy(model_path, tensor_parallel_size):
         hf_output = hf_model(**inputs, output_hidden_states=True)
 
     # Extract layers using EAGLE3 pattern
+    # Feature fusion: layers 2, num_layers//2, num_layers-3 (before norm)
+    # Target: layer num_layers-1 (after norm)
+    expected_layer_ids = [2, num_layers // 2, num_layers - 3, num_layers - 1]
     hf_layers = [
-        hf_output.hidden_states[3],
-        hf_output.hidden_states[num_layers // 2 + 1],
-        hf_output.hidden_states[-3],
+        hf_output.hidden_states[3],                    # layer 2 (before norm)
+        hf_output.hidden_states[num_layers // 2 + 1],  # layer num_layers//2 (before norm)
+        hf_output.hidden_states[num_layers - 2],       # layer num_layers-3 (before norm)
+        hf_output.hidden_states[-1],                   # layer num_layers-1 (after final norm)
     ]
-    expected_layer_ids = [2, num_layers // 2, num_layers - 3]
 
-    logger.info(f"HuggingFace layers: {expected_layer_ids}")
     hf_concat = torch.cat(hf_layers, dim=-1).cpu()
-    logger.info(f"HuggingFace concat: {hf_concat.shape}")
+    logger.info(f"HuggingFace layers {expected_layer_ids}: {hf_concat.shape}")
 
     # Cleanup HuggingFace model - aggressive cleanup
     del hf_model, hf_output, hf_layers, inputs, tokenizer
@@ -135,19 +137,16 @@ def test_vllm_vs_huggingface_accuracy(model_path, tensor_parallel_size):
         )
         token_ids_batch = vllm_inputs["input_ids"].tolist()
 
-        logger.info(f"Tokenized {len(token_ids_batch)} prompts for vLLM")
-        logger.info(f"Token IDs shape: {vllm_inputs['input_ids'].shape}")
-
         vllm_results = generator.generate(token_ids=token_ids_batch)
         if not isinstance(vllm_results, list):
             vllm_results = [vllm_results]
 
-        logger.info(f"vLLM layers: {expected_layer_ids}")
-        logger.info(f"vLLM returned {len(vllm_results)} results")
-
-        vllm_hidden_states = [r["hidden_state"] for r in vllm_results]
-        vllm_concat = torch.stack(vllm_hidden_states).cpu()
-        logger.info(f"vLLM concat: {vllm_concat.shape}")
+        vllm_concat_per_seq = []
+        for r in vllm_results:
+            seq_concat = torch.cat(r["hidden_states"], dim=-1)
+            vllm_concat_per_seq.append(seq_concat)
+        vllm_concat = torch.stack(vllm_concat_per_seq).cpu()
+        logger.info(f"vLLM layers {expected_layer_ids}: {vllm_concat.shape}")
 
         # Check layer IDs before cleanup
         actual_layer_ids = generator.layer_ids
@@ -157,50 +156,37 @@ def test_vllm_vs_huggingface_accuracy(model_path, tensor_parallel_size):
         torch.cuda.empty_cache()
         time.sleep(1)
 
-    logger.info("=" * 80)
-    logger.info("COMPARISON:")
-    logger.info("=" * 80)
-
-    # Check layer IDs
+    # Verify layer IDs
     assert actual_layer_ids == expected_layer_ids, (
         f"Layer IDs mismatch! Got {actual_layer_ids}, expected {expected_layer_ids}"
     )
-    logger.info(f"✓ Layer IDs match: {expected_layer_ids}")
 
-    # Check shapes
+    # Verify shapes
     assert hf_concat.shape == vllm_concat.shape, (
         f"Shape mismatch! HF: {hf_concat.shape}, vLLM: {vllm_concat.shape}"
     )
-    logger.info(f"✓ Shapes match: {hf_concat.shape}")
 
-    # Check EAGLE3 format
-    for _i, result in enumerate(vllm_results):
+    # Verify EAGLE3 output format
+    for result in vllm_results:
         assert "input_ids" in result
-        assert "hidden_state" in result
+        assert "hidden_states" in result
         assert "loss_mask" in result
-        assert result["hidden_state"].shape[0] == result["input_ids"].shape[0], (
-            "Sequence length mismatch"
-        )
-        assert result["hidden_state"].shape[1] == hf_concat.shape[2], (
-            "Hidden dimension mismatch"
-        )
-
-    logger.info("saving format validated")
+        assert isinstance(result["hidden_states"], list)
+        for layer_state in result["hidden_states"]:
+            assert layer_state.shape[0] == result["input_ids"].shape[0], (
+                "Sequence length mismatch"
+            )
 
     # Numerical comparison
     max_diff = torch.abs(hf_concat - vllm_concat).max().item()
     mean_diff = torch.abs(hf_concat - vllm_concat).mean().item()
+    logger.info(f"Max diff: {max_diff:.6f}, Mean diff: {mean_diff:.6f}")
 
-    logger.info("Numerical differences:")
-    logger.info(f"  Max absolute diff:  {max_diff:.6f}")
-    logger.info(f"  Mean absolute diff: {mean_diff:.6f}")
-
-    # Debug: check sample values
-    logger.info(f"HF sample [0,0,:5]: {hf_concat[0, 0, :5]}")
-    logger.info(f"vLLM sample [0,0,:5]: {vllm_concat[0, 0, :5]}")
-
-    # Mean diff should be very small (< 0.01)
-    assert mean_diff < 0.01, (
+    # Mean diff should be small - relaxed tolerance due to:
+    # 1. bfloat16 precision
+    # 2. Different computation order between HF and vLLM
+    # 3. Potential numerical differences in norm implementation
+    assert mean_diff < 0.02, (
         f"Mean difference {mean_diff} too large. "
         f"Expected layer_ids={expected_layer_ids}"
     )

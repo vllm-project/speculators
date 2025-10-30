@@ -62,6 +62,9 @@ class HiddenStatesWorkerExtension:
                 else frozenset()
             )
 
+            # Get the total number of layers to identify the last layer
+            total_layers = len(base_model.layers)
+
             for idx, layer in enumerate(
                 islice(base_model.layers, base_model.start_layer, base_model.end_layer)
             ):
@@ -71,7 +74,10 @@ class HiddenStatesWorkerExtension:
                 # idx is relative to start_layer, so convert to absolute layer index
                 absolute_layer_idx = base_model.start_layer + idx
                 if absolute_layer_idx in target_layers:
-                    aux_hidden_states.append((hidden_states + residual).clone())
+                    # For intermediate layers (not the last), capture before norm for feature fusion
+                    # For the last layer, we'll capture after norm below
+                    if absolute_layer_idx != total_layers - 1:
+                        aux_hidden_states.append((hidden_states + residual).clone())
 
             # If not last rank in pipeline parallel, return intermediate tensors
             if not get_pp_group().is_last_rank:
@@ -79,10 +85,15 @@ class HiddenStatesWorkerExtension:
                     {"hidden_states": hidden_states, "residual": residual}
                 )
 
+            # Apply final normalization
             hidden_states, _ = base_model.norm(hidden_states, residual)
 
-            if self._should_capture and len(aux_hidden_states) > 0:
-                if get_tp_group().rank_in_group == 0:
+            # Capture the final normalized layer if it's in target_layers
+            if self._should_capture and get_tp_group().rank_in_group == 0:
+                if (total_layers - 1) in target_layers:
+                    aux_hidden_states.append(hidden_states.clone())
+
+                if len(aux_hidden_states) > 0:
                     if self._captured_states is None:
                         self._captured_states = aux_hidden_states
                     else:
