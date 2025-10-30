@@ -89,10 +89,12 @@ def test_vllm_vs_huggingface_accuracy(model_path, tensor_parallel_size):
     # Target: layer num_layers-1 (after norm)
     expected_layer_ids = [2, num_layers // 2, num_layers - 3, num_layers - 1]
     hf_layers = [
-        hf_output.hidden_states[3],                    # layer 2 (before norm)
-        hf_output.hidden_states[num_layers // 2 + 1],  # layer num_layers//2 (before norm)
-        hf_output.hidden_states[num_layers - 2],       # layer num_layers-3 (before norm)
-        hf_output.hidden_states[-1],                   # layer num_layers-1 (after final norm)
+        hf_output.hidden_states[3],  # layer 2 (before norm)
+        hf_output.hidden_states[
+            num_layers // 2 + 1
+        ],  # layer num_layers//2 (before norm)
+        hf_output.hidden_states[num_layers - 2],  # layer num_layers-3 (before norm)
+        hf_output.hidden_states[-1],  # layer num_layers-1 (after final norm)
     ]
 
     hf_concat = torch.cat(hf_layers, dim=-1).cpu()
