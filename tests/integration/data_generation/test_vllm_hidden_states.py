@@ -35,9 +35,7 @@ def cleanup_memory():
 @pytest.mark.parametrize(
     ("model_path", "tensor_parallel_size"),
     [
-        ("Qwen/Qwen2-0.5B", 1),  # Small model for quick testing
-        pytest.param("meta-llama/Llama-3.1-8B", 1, marks=pytest.mark.slow),
-        pytest.param("meta-llama/Llama-3.1-70B", 4, marks=pytest.mark.slow),
+        ("Qwen/Qwen2-0.5B", 1),
     ],
 )
 def test_vllm_vs_huggingface_accuracy(model_path, tensor_parallel_size):

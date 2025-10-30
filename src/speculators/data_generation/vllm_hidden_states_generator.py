@@ -162,7 +162,6 @@ class VllmHiddenStatesGenerator:
             vllm_config=self.vllm_config,
             kv_cache_config=kv_cache_config,
             structured_output_manager=structured_output_manager,
-            block_size=self.vllm_config.cache_config.block_size,
         )
 
         log.info("Initializing KV cache on all workers...")
