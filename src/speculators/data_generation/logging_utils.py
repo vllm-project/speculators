@@ -4,6 +4,8 @@ import logging
 import sys
 from typing import Any
 
+__all__ = ["PipelineLogger"]
+
 
 class PipelineLogger:
     """Simple logger with clean output."""

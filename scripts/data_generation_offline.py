@@ -7,31 +7,13 @@ This script generates training data for EAGLE models by:
 2. Using vLLM to extract hidden states from target model
 3. Saving each data point as a separate .pt file
 
-The script intelligently handles preprocessing - if the data has already been
-preprocessed with matching parameters, it loads from cache. Otherwise, it runs
-preprocessing automatically. This eliminates the need to run preprocess_data.py
-separately and prevents parameter mismatches.
-
 Usage:
-    # Basic usage - preprocessing happens automatically if needed
     python data_generation_offline.py \
         --target-model-path meta-llama/Llama-3.1-8B \
         --train-data-path sharegpt \
         --chat-template llama3 \
         --output-dir ./training_data \
         --max-samples 5000
-
-    # Advanced usage with custom parameters
-    python data_generation_offline.py \
-        --target-model-path meta-llama/Llama-3.1-8B \
-        --train-data-path sharegpt \
-        --chat-template llama3 \
-        --seq-length 2048 \
-        --cache-dir ./cache \
-        --output-dir ./training_data \
-        --layer-ids 2 14 24 \
-        --tensor-parallel-size 1 \
-        --batch-size 8
 """
 
 import argparse
@@ -167,12 +149,7 @@ def parse_args():
 
 
 def load_or_preprocess_dataset(args):
-    """Load preprocessed dataset from cache, or run preprocessing if needed.
-
-    This automatically handles preprocessing if the cached data doesn't exist,
-    making the pipeline more user-friendly and preventing parameter mismatches.
-    """
-    # Generate cache key (must match the one used during preprocessing)
+    """Load preprocessed dataset from cache, or run preprocessing if needed."""
     cache_key = generate_cache_key(
         args.target_model_path,
         args.chat_template,
@@ -185,7 +162,6 @@ def load_or_preprocess_dataset(args):
 
     dataset_cache_dir = os.path.join(args.cache_dir, "processed_dataset", cache_key)
 
-    # Run preprocessing only when cached data is not found
     if os.path.exists(dataset_cache_dir):
         log.subsection("Loading cached preprocessed data")
         log.info(f"Cache: {dataset_cache_dir}")
@@ -222,7 +198,6 @@ def find_last_checkpoint(output_dir: str) -> int:
     if not existing_files:
         return 0
 
-    # Extract indices and find max
     indices = [int(f.replace("data_", "").replace(".pt", "")) for f in existing_files]
     return max(indices) + 1
 
@@ -274,15 +249,12 @@ def save_config(args, generator, num_samples, output_dir):
 
 def generate_and_save_hidden_states(args, dataset):
     """Generate hidden states and save each sample as a .pt file"""
-
     os.makedirs(args.output_dir, exist_ok=True)
 
-    # Auto-resume: find where we left off based on existing files
     start_file_idx = find_last_checkpoint(args.output_dir)
     if start_file_idx > 0:
         log.subsection(f"Resuming: {start_file_idx} files already exist")
 
-    # Calculate which dataset samples to process
     num_samples = len(dataset)
     start_sample_idx = start_file_idx - args.start_idx
 
@@ -302,7 +274,6 @@ def generate_and_save_hidden_states(args, dataset):
     log.info(f"Processing {num_samples - start_sample_idx}/{num_samples} samples")
     file_idx = start_file_idx
 
-    # Calculate total number of batches for accurate progress tracking
     num_batches = (
         num_samples - start_sample_idx + args.batch_size - 1
     ) // args.batch_size
@@ -320,10 +291,7 @@ def generate_and_save_hidden_states(args, dataset):
 
         results = generator.generate(batch_input_ids)
 
-        # Save each sample (one file per sample for variable-length sequences)
         for j, result in enumerate(results):
-            # Clone tensors to avoid saving excess storage from tensor views/slices
-            # This reduces file size by ~10x (from ~750MB to ~75MB per file)
             result_cleaned = {
                 "input_ids": result["input_ids"].clone(),
                 "hidden_states": [h.clone() for h in result["hidden_states"]],
@@ -337,7 +305,6 @@ def generate_and_save_hidden_states(args, dataset):
     samples_saved = file_idx - start_file_idx
     log.info(f"Saved {samples_saved} new data points to {args.output_dir}")
 
-    # Save config file with all metadata
     save_config(args, generator, num_samples, args.output_dir)
 
     return samples_saved

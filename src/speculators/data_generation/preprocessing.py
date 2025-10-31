@@ -13,6 +13,14 @@ from .configs import CHAT_TEMPLATES, DATASET_CONFIGS, ChatTemplate, format_conve
 from .logging_utils import PipelineLogger
 from .vocab_mapping import save_token_frequency_distribution
 
+__all__ = [
+    "build_eagle3_dataset",
+    "load_raw_dataset",
+    "generate_cache_key",
+    "load_and_preprocess_dataset",
+    "view_samples",
+]
+
 log = PipelineLogger(__name__)
 
 
@@ -21,17 +29,7 @@ def _apply_loss_mask_from_chat_template(
     offsets: torch.Tensor,
     chat_template: ChatTemplate,
 ) -> torch.Tensor:
-    """
-    Apply loss mask to identify assistant response spans using chat template.
-
-    Args:
-        text: The formatted conversation text
-        offsets: Token offset mapping from tokenizer
-        chat_template: The chat template to use for identifying assistant spans
-
-    Returns:
-        A tensor indicating which tokens should contribute to the loss (1) or not (0)
-    """
+    """Apply loss mask to identify assistant response spans."""
     loss_mask = torch.zeros(len(offsets), dtype=torch.long)
 
     user_message_separator = (
@@ -77,18 +75,7 @@ def _preprocess_batch(
     template: ChatTemplate,
     max_length: int,
 ) -> dict[str, list]:
-    """
-    Process a batch of conversations into tokenized format with loss masks.
-
-    Args:
-        examples: Batch of examples from dataset
-        tokenizer: Tokenizer to use
-        template: Chat template for formatting
-        max_length: Maximum sequence length
-
-    Returns:
-        Dictionary with input_ids and loss_mask lists
-    """
+    """Process a batch of conversations into tokenized format with loss masks."""
     results: dict[str, list] = {"input_ids": [], "loss_mask": []}
 
     conversations = examples.get("conversations", [])
@@ -101,7 +88,6 @@ def _preprocess_batch(
 
         text = format_conversation(conv, template)
 
-        # Tokenize with offset mapping for loss mask
         encoded = tokenizer(
             text,
             max_length=max_length,
@@ -128,20 +114,7 @@ def build_eagle3_dataset(
     max_length: int = 2048,
     num_proc: int = 8,
 ) -> HFDataset:
-    """
-    Build EAGLE3 dataset by tokenizing conversations and creating loss masks.
-
-    Args:
-        dataset: HF dataset to process with "conversations" column in ShareGPT format
-        tokenizer: The tokenizer to use for tokenization
-        chat_template: The chat template identifier (e.g., "qwen2", "llama3")
-        max_length: Maximum sequence length
-        num_proc: Number of processes for multiprocessing
-
-    Returns:
-        Processed HF dataset with input_ids and loss_mask
-    """
-    # Get the chat template
+    """Build EAGLE3 dataset by tokenizing conversations and creating loss masks."""
     if chat_template not in CHAT_TEMPLATES:
         raise ValueError(
             f"Chat template '{chat_template}' not found. "
@@ -164,25 +137,10 @@ def build_eagle3_dataset(
 
 
 def load_raw_dataset(train_data_path: str, num_proc: int = 8) -> HFDataset:
-    """
-    Load raw dataset from local file or HuggingFace.
-
-    Supports:
-    - Local .json/.jsonl files
-    - HuggingFace dataset shortcuts (see DATASET_CONFIGS)
-
-    Args:
-        train_data_path: Path to local file or dataset name
-        num_proc: Number of processes for preprocessing
-
-    Returns:
-        HuggingFace Dataset with conversations in standard format
-    """
-    # Load from local file
+    """Load raw dataset from local file or HuggingFace."""
     if train_data_path.endswith((".jsonl", ".json")):
         return load_dataset("json", data_files=train_data_path, split="train")
 
-    # Load from HuggingFace using registry
     if train_data_path not in DATASET_CONFIGS:
         raise ValueError(
             f"Unsupported dataset: {train_data_path}. "
@@ -192,7 +150,6 @@ def load_raw_dataset(train_data_path: str, num_proc: int = 8) -> HFDataset:
     config = DATASET_CONFIGS[train_data_path]
     raw_dataset = load_dataset(config.hf_path, split=config.split)
 
-    # Apply normalization if configured
     if config.normalize_fn is not None:
         raw_dataset = raw_dataset.map(config.normalize_fn, num_proc=num_proc)
 
@@ -220,23 +177,7 @@ def load_and_preprocess_dataset(
     seed: int = 0,
     max_samples: int | None = None,
 ) -> tuple[HFDataset, PreTrainedTokenizer]:
-    """
-    Load, tokenize, and preprocess a dataset for EAGLE3 training.
-
-    Args:
-        target_model_path: HuggingFace model ID or local path
-        train_data_path: Path to training data (JSON/JSONL) or dataset name
-            (sharegpt/ultrachat)
-        chat_template: Chat template identifier
-        seq_length: Maximum sequence length
-        cache_dir: Directory for caching
-        build_dataset_num_proc: Number of processes for dataset building
-        seed: Random seed for shuffling
-        max_samples: Maximum number of samples to process (None = process all)
-
-    Returns:
-        Tuple of (preprocessed_dataset, tokenizer)
-    """
+    """Load, tokenize, and preprocess a dataset for EAGLE3 training."""
     log.section("Starting dataset preprocessing")
 
     if chat_template not in CHAT_TEMPLATES:
@@ -253,13 +194,11 @@ def load_and_preprocess_dataset(
     raw_dataset = load_raw_dataset(train_data_path, num_proc=build_dataset_num_proc)
     raw_dataset = raw_dataset.shuffle(seed=seed)
 
-    # Limit dataset size if requested
     if max_samples is not None and len(raw_dataset) > max_samples:
         raw_dataset = raw_dataset.select(range(max_samples))
 
     log.info(f"Loaded {len(raw_dataset)} samples")
 
-    # Prepare cache directories
     cache_key = generate_cache_key(
         target_model_path, chat_template, seq_length, train_data_path
     )
@@ -268,7 +207,6 @@ def load_and_preprocess_dataset(
     dataset_cache_dir = os.path.join(cache_dir, "processed_dataset", cache_key)
     os.makedirs(dataset_cache_dir, exist_ok=True)
 
-    # Check if already cached
     if os.path.exists(os.path.join(dataset_cache_dir, "dataset_info.json")):
         log.info(f"Loading cached dataset from {dataset_cache_dir}")
         preprocessed_dataset = load_from_disk(dataset_cache_dir)
@@ -282,11 +220,9 @@ def load_and_preprocess_dataset(
             num_proc=build_dataset_num_proc,
         )
 
-        # Save to disk
         preprocessed_dataset.save_to_disk(dataset_cache_dir)
         log.info(f"Saved preprocessed dataset to {dataset_cache_dir}")
 
-    # Save token frequency distribution (for later vocab mapping generation)
     log.subsection("Computing token frequency distribution")
     token_freq_cache_dir = os.path.join(cache_dir, "token_frequencies")
     save_token_frequency_distribution(

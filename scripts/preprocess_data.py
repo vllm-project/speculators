@@ -104,7 +104,6 @@ def main():
         args.train_data_path,
     )
 
-    # Preprocess dataset
     preprocessed_dataset, tokenizer = load_and_preprocess_dataset(
         target_model_path=args.target_model_path,
         train_data_path=args.train_data_path,
@@ -116,7 +115,6 @@ def main():
         max_samples=args.max_samples,
     )
 
-    # View samples if requested
     if args.view_samples > 0:
         view_samples(preprocessed_dataset, tokenizer, args.view_samples)
 

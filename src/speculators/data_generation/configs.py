@@ -1,17 +1,15 @@
-"""
-Configuration registries for data generation pipeline.
-
-This module provides centralized configuration for:
-- Chat templates for different model formats
-- Dataset loading configurations
-"""
+"""Configuration registries for data generation pipeline."""
 
 from collections.abc import Callable
 from dataclasses import dataclass
 
-# ============================================================================
-# Chat Template Configurations
-# ============================================================================
+__all__ = [
+    "ChatTemplate",
+    "CHAT_TEMPLATES",
+    "format_conversation",
+    "DatasetConfig",
+    "DATASET_CONFIGS",
+]
 
 
 @dataclass
@@ -84,30 +82,19 @@ def format_conversation(
     conversation: list[dict[str, str]],
     template: ChatTemplate,
 ) -> str:
-    """
-    Format a ShareGPT-style conversation using a chat template.
-
-    Args:
-        conversation: List of messages with 'from'/'role' and 'value'/'content' fields
-        template: The chat template to use
-
-    Returns:
-        Formatted conversation string
-    """
+    """Format a ShareGPT-style conversation using a chat template."""
+    # TODO: Support more chat templates
     formatted = ""
 
-    # Add BOS token if present
     if template.bos_token:
         formatted += template.bos_token
 
-    # Add system prompt (for some templates)
     if template.system_prompt:
         formatted += (
             f"{template.assistant_header}{template.system_prompt}"
             f"{template.end_of_turn_token}"
         )
 
-    # Format each turn
     for turn in conversation:
         role = turn.get("from", turn.get("role", ""))
         content = turn.get("value", turn.get("content", ""))
@@ -122,11 +109,6 @@ def format_conversation(
     return formatted
 
 
-# ============================================================================
-# Dataset Configurations
-# ============================================================================
-
-
 @dataclass
 class DatasetConfig:
     """Configuration for loading a dataset"""
@@ -138,7 +120,6 @@ class DatasetConfig:
 
 
 def _normalize_ultrachat(example: dict) -> dict:
-    """Convert ultrachat 'messages' field to 'conversations'"""
     if "messages" in example:
         return {"conversations": example["messages"]}
     return example

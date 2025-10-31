@@ -1,37 +1,4 @@
-"""
-vLLM Hidden States Generator
-
-Extracts hidden states from intermediate layers during prefill.
-Uses vLLM's MultiprocExecutor for proper multi-GPU tensor parallelism.
-
-Usage:
-    from vllm_hidden_states_generator import VllmHiddenStatesGenerator
-
-    # Auto-select layers
-    generator = VllmHiddenStatesGenerator(
-        model_path="Qwen/Qwen2.5-7B",
-    )
-
-    # Or manually specify layers
-    generator = VllmHiddenStatesGenerator(
-        model_path="Qwen/Qwen2.5-7B",
-        layer_ids=[2, 14, 24],
-    )
-
-    # Multi-GPU tensor parallelism
-    generator = VllmHiddenStatesGenerator(
-        model_path="meta-llama/Llama-3.1-70B",
-        tensor_parallel_size=4,
-    )
-
-    # Generate with token IDs
-    token_ids = [1, 234, 567, 890]  # Single sequence
-    data = generator.generate(token_ids=token_ids)
-
-    # Or batch of sequences
-    token_ids_batch = [[1, 234, 567], [1, 890, 123, 456]]
-    data = generator.generate(token_ids=token_ids_batch)
-"""
+"""Extract hidden states from intermediate layers during prefill using vLLM."""
 
 import torch
 from transformers import AutoConfig, AutoTokenizer
@@ -56,16 +23,15 @@ from vllm.v1.structured_output import StructuredOutputManager
 
 from .logging_utils import PipelineLogger
 
+__all__ = ["VllmHiddenStatesGenerator"]
+
 log = PipelineLogger(__name__)
 
 
 class VllmHiddenStatesGenerator:
-    """
-    Extracts hidden states from intermediate layers during prefill only.
-    Uses MultiprocExecutor for proper multi-GPU tensor parallelism.
-    """
+    """Extracts hidden states from intermediate layers during prefill only."""
 
-    layer_ids: list[int]  # Populated in __init__
+    layer_ids: list[int]
     model_path: str
     tensor_parallel_size: int
     _request_counter: int
@@ -80,7 +46,7 @@ class VllmHiddenStatesGenerator:
     ):
         self.model_path = model_path
         self.tensor_parallel_size = tensor_parallel_size
-        self._request_counter = 0  # For unique request IDs across batches
+        self._request_counter = 0
 
         log.info(f"Initializing hidden states generator for {model_path}")
         log.info(f"Tensor parallel size: {tensor_parallel_size}")
@@ -99,13 +65,6 @@ class VllmHiddenStatesGenerator:
 
         log.info(f"Model has {num_layers} layers")
 
-        # Auto-select layers if not specified
-        # Matches EAGLE3 pattern:
-        # - Feature fusion: hidden_states[3], hidden_states[num_layers // 2 + 1],
-        #   hidden_states[-3]
-        # - Target (last layer): hidden_states[-1]
-        # - Note: hidden_states includes embedding (index 0),
-        #   so we subtract 1 to get layer indices
         if layer_ids is None:
             self.layer_ids = [2, num_layers // 2, num_layers - 3, num_layers - 1]
             log.info(
@@ -116,7 +75,6 @@ class VllmHiddenStatesGenerator:
             self.layer_ids = layer_ids
             log.info(f"Using specified layers: {layer_ids}")
 
-        # Validate layer indices
         for layer_id in self.layer_ids:
             if layer_id < 0 or layer_id >= num_layers:
                 raise ValueError(
@@ -141,8 +99,6 @@ class VllmHiddenStatesGenerator:
         kv_cache_spec = kv_cache_spec_list[0]
         kv_cache_groups = _get_kv_cache_groups_uniform_spec(kv_cache_spec)
 
-        # TODO: Optimize KV cache allocation for prefill-only workloads
-        # Currently allocating based on available memory, but we only need minimal cache
         free_memory, total_memory = torch.cuda.mem_get_info()
         cache_memory = int(free_memory * gpu_memory_utilization * 0.2)
 
@@ -212,8 +168,6 @@ class VllmHiddenStatesGenerator:
         )
 
     def _setup_capture(self):
-        """Setup hidden states capture on all workers"""
-        # Call setup on all workers via RPC
         self.executor.collective_rpc(
             "_setup_hidden_states_capture",
             args=(self.layer_ids,),
@@ -222,21 +176,7 @@ class VllmHiddenStatesGenerator:
     def generate(
         self, token_ids: list[int] | list[list[int]] | torch.Tensor
     ) -> list[dict]:
-        """
-        Extract hidden states from prefill phase only (zero decode).
-
-        Args:
-            token_ids: Token IDs as either:
-                - List[int]: Single sequence of token IDs
-                - List[List[int]]: Batch of token ID sequences
-                - torch.Tensor: Tensor of shape (batch_size, seq_len) or (seq_len,)
-
-        Returns:
-            List of dicts, one per sequence, each containing:
-                - input_ids: torch.Tensor of token IDs
-                - hidden_states: List[torch.Tensor] of hidden states (one per layer)
-                - loss_mask: None (to be filled by caller)
-        """
+        """Extract hidden states from prefill phase only."""
         if isinstance(token_ids, torch.Tensor):
             input_ids_list = [row.tolist() for row in token_ids]
         elif (
@@ -315,13 +255,10 @@ class VllmHiddenStatesGenerator:
         results = []
         offset = 0
         for i, seq_len in enumerate(seq_lens):
-            # Clone slices and move to CPU to free GPU memory immediately
-            # This prevents GPU memory accumulation across batches
             layer_states = [
                 h[offset : offset + seq_len].clone().cpu() for h in aux_hidden_states
             ]
 
-            # Convert to tensor efficiently
             input_ids_tensor = (
                 input_ids_list[i]
                 if isinstance(input_ids_list[i], torch.Tensor)
@@ -331,13 +268,12 @@ class VllmHiddenStatesGenerator:
             results.append(
                 {
                     "input_ids": input_ids_tensor,
-                    "hidden_states": layer_states,  # List of layer tensors
+                    "hidden_states": layer_states,
                     "loss_mask": None,
                 }
             )
             offset += seq_len
 
-        # Explicitly delete GPU tensors to free memory immediately
         del aux_hidden_states
         torch.cuda.empty_cache()
 

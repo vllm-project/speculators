@@ -1,10 +1,4 @@
-"""
-Custom Worker Extension for hidden states capture
-
-This is used via vLLM's worker_extension_cls mechanism.
-To use: set ParallelConfig.worker_extension_cls =
-    "custom_worker:HiddenStatesWorkerExtension"
-"""
+"""Custom worker extension for hidden states capture."""
 
 import logging
 from itertools import islice
@@ -15,25 +9,20 @@ from vllm.distributed import get_pp_group, get_tp_group
 from vllm.model_executor.models.interfaces import supports_eagle3
 from vllm.sequence import IntermediateTensors
 
+__all__ = ["HiddenStatesWorkerExtension"]
+
 logger = logging.getLogger(__name__)
 
 
 class HiddenStatesWorkerExtension:
-    """Worker extension that adds hidden states capture functionality
+    """Worker extension that adds hidden states capture functionality."""
 
-    This extension class gets dynamically added to Worker's base classes
-    via vLLM's worker_extension_cls mechanism. All methods defined here
-    become available on the Worker instance in each worker process.
-    """
-
-    # Type annotations for dynamically added attributes
     _layer_ids: list[int]
     _captured_states: list[Any] | None
     _should_capture: bool
-    model_runner: Any  # vLLM ModelRunner, dynamically available via mixin
+    model_runner: Any
 
     def _store_captured_states(self, aux_hidden_states):
-        """Store or concatenate captured hidden states"""
         if self._captured_states is None:
             self._captured_states = aux_hidden_states
         else:
@@ -43,8 +32,6 @@ class HiddenStatesWorkerExtension:
                 )
 
     def _create_patched_forward(self, base_model):
-        """Create a patched forward function for hidden state capture"""
-
         def patched_forward(
             input_ids, positions, intermediate_tensors=None, inputs_embeds=None
         ):
