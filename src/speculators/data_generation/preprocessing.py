@@ -15,9 +15,9 @@ from .vocab_mapping import save_token_frequency_distribution
 
 __all__ = [
     "build_eagle3_dataset",
-    "load_raw_dataset",
     "generate_cache_key",
     "load_and_preprocess_dataset",
+    "load_raw_dataset",
     "view_samples",
 ]
 

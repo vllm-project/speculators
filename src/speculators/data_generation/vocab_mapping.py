@@ -8,8 +8,8 @@ from datasets import Dataset as HFDataset
 from tqdm import tqdm  # type: ignore[import-untyped]
 
 __all__ = [
-    "save_token_frequency_distribution",
     "build_vocab_mappings_from_distribution",
+    "save_token_frequency_distribution",
 ]
 
 
