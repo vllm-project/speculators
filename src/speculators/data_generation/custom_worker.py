@@ -35,7 +35,6 @@ class HiddenStatesWorkerExtension:
         def patched_forward(
             input_ids, positions, intermediate_tensors=None, inputs_embeds=None
         ):
-            # Get initial hidden states
             if get_pp_group().is_first_rank:
                 hidden_states = (
                     inputs_embeds
@@ -53,9 +52,7 @@ class HiddenStatesWorkerExtension:
             target_layers = (
                 base_model.aux_hidden_state_layers if should_capture else frozenset()
             )
-            total_layers = len(base_model.layers)
 
-            # Process transformer layers
             for idx, layer in enumerate(
                 islice(base_model.layers, base_model.start_layer, base_model.end_layer)
             ):
@@ -63,10 +60,7 @@ class HiddenStatesWorkerExtension:
                 absolute_layer_idx = base_model.start_layer + idx
 
                 # Capture intermediate layers (not the last) before norm
-                if (
-                    absolute_layer_idx in target_layers
-                    and absolute_layer_idx != total_layers - 1
-                ):
+                if absolute_layer_idx in target_layers:
                     aux_hidden_states.append((hidden_states + residual).clone())
 
             # Return early if not last PP rank
@@ -75,15 +69,9 @@ class HiddenStatesWorkerExtension:
                     {"hidden_states": hidden_states, "residual": residual}
                 )
 
-            # Apply final normalization
             hidden_states, _ = base_model.norm(hidden_states, residual)
-
-            # Capture final normalized layer and store all
-            if should_capture:
-                if (total_layers - 1) in target_layers:
-                    aux_hidden_states.append(hidden_states.clone())
-                if aux_hidden_states:
-                    self._store_captured_states(aux_hidden_states)
+            if should_capture and aux_hidden_states:
+                self._store_captured_states(aux_hidden_states)
 
             return hidden_states
 

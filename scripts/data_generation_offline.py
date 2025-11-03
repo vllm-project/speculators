@@ -192,14 +192,17 @@ def find_last_checkpoint(output_dir: str) -> int:
     if not os.path.exists(output_dir):
         return 0
 
-    existing_files = [
-        f for f in os.listdir(output_dir) if f.startswith("data_") and f.endswith(".pt")
-    ]
-    if not existing_files:
-        return 0
+    max_index = -1
+    for filename in os.listdir(output_dir):
+        if filename.startswith("data_") and filename.endswith(".pt"):
+            index_str = filename[5:-3]
+            try:
+                index = int(index_str)
+                max_index = max(max_index, index)
+            except ValueError:
+                continue
 
-    indices = [int(f.replace("data_", "").replace(".pt", "")) for f in existing_files]
-    return max(indices) + 1
+    return max_index + 1
 
 
 def save_config(args, generator, num_samples, output_dir):

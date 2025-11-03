@@ -52,8 +52,6 @@ class VllmHiddenStatesGenerator:
         log.info(f"Tensor parallel size: {tensor_parallel_size}")
 
         self.tokenizer = AutoTokenizer.from_pretrained(model_path)
-        if self.tokenizer.pad_token is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
 
         config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
         if hasattr(config, "num_hidden_layers"):
@@ -99,7 +97,7 @@ class VllmHiddenStatesGenerator:
         kv_cache_spec = kv_cache_spec_list[0]
         kv_cache_groups = _get_kv_cache_groups_uniform_spec(kv_cache_spec)
 
-        free_memory, total_memory = torch.cuda.mem_get_info()
+        free_memory, _ = torch.cuda.mem_get_info()
         cache_memory = int(free_memory * gpu_memory_utilization * 0.2)
 
         kv_cache_config = get_kv_cache_config_from_groups(
@@ -141,7 +139,7 @@ class VllmHiddenStatesGenerator:
         # to reduce warmup memory allocation. max_num_seqs controls the
         # warmup allocation size (see gpu_worker.py:441-444).
         # We set it to a small value since we only do prefill in batches.
-        max_num_seqs = 32  # Reduced from 256
+        max_num_seqs = 32
         max_num_batched_tokens = max(8192, max_model_len)  # Reduced from 65536
 
         return VllmConfig(
@@ -173,56 +171,50 @@ class VllmHiddenStatesGenerator:
             args=(self.layer_ids,),
         )
 
-    def generate(
-        self, token_ids: list[int] | list[list[int]] | torch.Tensor
-    ) -> list[dict]:
-        """Extract hidden states from prefill phase only."""
+    def generate(self, token_ids: list[list[int]] | torch.Tensor) -> list[dict]:
+        """Extract hidden states from prefill phase only.
+
+        Args:
+            token_ids: Batch of token ID sequences as list[list[int]] or Tensor
+
+        Returns:
+            List of dicts with keys: input_ids, hidden_states, loss_mask
+        """
         if isinstance(token_ids, torch.Tensor):
-            input_ids_list = [row.tolist() for row in token_ids]
-        elif (
-            isinstance(token_ids, list)
-            and len(token_ids) > 0
-            and isinstance(token_ids[0], int)
-        ):
-            input_ids_list = [token_ids]
-        elif isinstance(token_ids, list) and len(token_ids) > 0:
-            input_ids_list = token_ids
+            input_ids_list = token_ids.tolist()
         else:
-            raise ValueError(
-                f"token_ids must be non-empty List[int], List[List[int]], "
-                f"or torch.Tensor, got {type(token_ids)}"
-            )
+            if not token_ids:
+                raise ValueError("token_ids cannot be empty")
+            input_ids_list = token_ids
 
         log.debug(f"Generating hidden states for {len(input_ids_list)} sequences")
-
+        # Account for max_tokens=1 in sampling params
+        # (vLLM enforces: len(prompt) + max_tokens <= max_model_len)
         max_len = self.vllm_config.model_config.max_model_len - 1
         input_ids_list = [ids[:max_len] for ids in input_ids_list]
 
-        requests = []
         for i, ids in enumerate(input_ids_list):
-            input_ids_for_req = ids.tolist() if isinstance(ids, torch.Tensor) else ids
-
+            # Ensure ids is a list (not tensor) for vLLM Request
+            ids_list = ids.tolist() if isinstance(ids, torch.Tensor) else ids
             req = Request(
                 request_id=f"req_{self._request_counter}_{i}",
-                prompt_token_ids=input_ids_for_req,
+                prompt_token_ids=ids_list,
                 sampling_params=SamplingParams(max_tokens=1, temperature=0.0),
                 pooling_params=None,
                 eos_token_id=self.tokenizer.eos_token_id,
                 arrival_time=0.0,
             )
-            requests.append(req)
-
-        self._request_counter += 1
-
-        for req in requests:
             self.scheduler.add_request(req)
+
+        # Increment to ensure unique request IDs across calls
+        # (prevents KV cache corruption with delayed block freeing)
+        self._request_counter += 1
 
         self.executor.collective_rpc("_enable_capture")
 
         schedule_iterations = 0
         while True:
             scheduler_output = self.scheduler.schedule()
-
             if scheduler_output.total_num_scheduled_tokens == 0:
                 break
 
@@ -259,11 +251,7 @@ class VllmHiddenStatesGenerator:
                 h[offset : offset + seq_len].clone().cpu() for h in aux_hidden_states
             ]
 
-            input_ids_tensor = (
-                input_ids_list[i]
-                if isinstance(input_ids_list[i], torch.Tensor)
-                else torch.as_tensor(input_ids_list[i], dtype=torch.long)
-            )
+            input_ids_tensor = torch.as_tensor(input_ids_list[i], dtype=torch.long)
 
             results.append(
                 {

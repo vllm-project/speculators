@@ -20,11 +20,11 @@ class PipelineLogger:
 
     def section(self, title: str):
         """Print a major section header."""
-        line = "━" * 60
+        line = "━" * (len(title) + 4)
         blue_bold = "\033[1;34m"
         colored_line = self._color(line, blue_bold)
         colored_title = self._color(f"  {title}", blue_bold)
-        self.logger.info("\n%s", colored_line)
+        self.logger.info("%s", colored_line)
         self.logger.info("%s", colored_title)
         self.logger.info("%s", colored_line)
 
