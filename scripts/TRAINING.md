@@ -1,6 +1,6 @@
 # Eagle3 Training
 
-`scripts/train.py` provides the main entry point for training Eagle3 models. 
+`scripts/train.py` provides the main entry point for training Eagle3 models.
 
 ## Running the training script
 
@@ -15,7 +15,7 @@ python scripts/train.py
 ```
 
 ## Arguments
-The scripts has one required argument: `--verifier_name_or_path`, which is the name or path of the verifier model to use.
+The scripts has one required argument: `--verifier-name-or-path`, which is the name or path of the verifier model to use.
 
 The scripts has the following optional arguments:
 - `--data-path`: The path to the data directory. Defaults to `./data`. The script will collect all `.pt` files in this directory or its subdirectories and use them as training data.
@@ -37,7 +37,7 @@ The scripts has the following optional arguments:
 ## Example run command
 ```bash
 torchrun --nnodes=1 --nproc_per_node=8 scripts/train.py \
-    --verifier_name_or_path "meta-llama/Llama-3.1-8B" \
+    --verifier-name-or-path "meta-llama/Llama-3.1-8B" \
     --data-path "./data/llama-3.1-8b_sharegpt/gen/" \
     --save-path "./checkpoints/llama-3.1-8b.eagle3" \
     --epochs 10 \

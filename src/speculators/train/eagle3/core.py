@@ -24,17 +24,20 @@ def align_for_step(
     prev_correct: torch.Tensor | None,  # shape: [1, total_seq_len]
     ttt_step: int,
 ):
-    # There are no target values for the last ttt_step tokens, so we mask them out
-    # before computing the loss/accuracy. Likewise, there are no logits for the first
-    # ttt_step tokens, so we mask them out.
-    # This is equivalent to shifting the target values by ttt_step + 1 to the left
-    # which puts them in the correct position for the generated tokens.
-    # e.g.
-    # targets_indices = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-    # logits_indices_ttt_step_0 = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-    # logits_indices_ttt_step_1 = [2, 3, 4, 5, 6, 7, 8, 9, 10]
-    # logits_indices_ttt_step_2 = [3, 4, 5, 6, 7, 8, 9, 10, 11]
-    # The indices for the loss_mask need to be kept in line with the targets indices
+    """Align logits, targets, loss_mask, and prev_correct for a given ttt_step.
+
+    There are no target values for the last ttt_step tokens, so we mask them out
+    before computing the loss/accuracy. Likewise, there are no logits for the first
+    ttt_step tokens, so we mask them out.
+    This is equivalent to shifting the target values by ttt_step + 1 to the left
+    which puts them in the correct position for the generated tokens.
+    e.g.
+        indices of targets = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+        indices of logits for ttt_step_0 = [1, 2, 3, 4, 5, 6, 7, 8, 9] # no shift
+        indices of logits for ttt_step_1 = [2, 3, 4, 5, 6, 7, 8, 9, 10] # shift by 1
+        indices of logits for ttt_step_2 = [3, 4, 5, 6, 7, 8, 9, 10, 11] # shift by 2
+    The indices for the loss_mask need to be kept in line with the targets indices
+    """
     logits = logits[:, :-ttt_step] if ttt_step > 0 else logits
     # shape: [1, total_seq_len - ttt_step, draft_vocab_size]
     targets = targets[:, ttt_step:]

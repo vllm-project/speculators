@@ -39,7 +39,7 @@ def setup_dataloader(
     local_rank: int,
     add_noise: bool = True,
     data_format_version: int = 1,
-):
+) -> DataLoader:
     """Setup dataloader for training.
     Args:
         file_list: List of file paths to load data from.
@@ -176,7 +176,7 @@ def main(args: argparse.Namespace):
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--verifier_name_or_path", type=str, required=True)
+    parser.add_argument("--verifier-name-or-path", type=str, required=True)
     parser.add_argument("--data-path", type=str, default="./data")
     parser.add_argument("--save-path", type=str, default="./checkpoints")
     parser.add_argument("--epochs", type=int, default=20)

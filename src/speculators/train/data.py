@@ -139,13 +139,38 @@ class Eagle3SampleFileDataset(Dataset):
         hidden_states_dtype=torch.float,
         standardize_fn: StandardizeFnSig = standardize_data_v1,
     ):
+        """Initialize the Eagle3SampleFileDataset.
+        Args:
+            max_len: The maximum length of the sequence.
+            datapath: The path to the data directory. All `.pt` files in this directory
+            or its subdirectories will be loaded and used as training data. MUTUALLY
+            EXCLUSIVE with `file_list`.
+            file_list: The list of explict file paths to load data from. These files
+            must be in the format produced by the Speculators generation scripts.
+            MUTUALLY EXCLUSIVE with `datapath`.
+            transform: The transform to apply to the data.
+            hidden_states_dtype: The dtype of the hidden states.
+            standardize_fn: The function to standardize the data.
+
+            Note: datapath or file_list must be provided, but not both.
+
+        """
         if datapath is not None and file_list is not None:
-            raise ValueError("Only one of datapath or file_list may be provided")
+            raise ValueError(
+                "Either `datapath` or `file_list` must be provided, but "
+                "not both. Use `datapath` to auto-discover files, or "
+                "`file_list` to use a list of explicit file paths."
+            )
 
         if datapath is not None:
             file_list = list_files(datapath)
+
         if file_list is None:
-            raise ValueError("Either datapath or file_list must be provided")
+            raise ValueError(
+                "Either `datapath` or `file_list` must be provided, but "
+                "not both. Use `datapath` to auto-discover files, or "
+                "`file_list` to use a list of explicit file paths."
+            )
 
         self.data: list[str] = file_list
         self.max_len = max_len
