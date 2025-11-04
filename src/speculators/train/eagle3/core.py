@@ -122,8 +122,6 @@ class Eagle3DraftModel(SpeculatorModel):
             verifier_attachment_mode="train_only",
         )
         self.hidden_size = config.transformer_layer_config.hidden_size
-        self.num_layers = config.transformer_layer_config.num_hidden_layers
-        self.decoder_layer_config = config.transformer_layer_config
         self.ttt_steps = ttt_steps
         self.ttt_step_loss_decay = ttt_step_loss_decay
         self.register_buffer("t2d", t2d)  # shape: [verifier_vocab_size], bool
@@ -132,6 +130,7 @@ class Eagle3DraftModel(SpeculatorModel):
         model_definitions = model_classes[config.transformer_layer_config.model_type]
 
         self.fc = torch.nn.Linear(3 * self.hidden_size, self.hidden_size, bias=False)
+        num_hidden_layers = config.transformer_layer_config.num_hidden_layers
         self.layers = torch.nn.ModuleList(
             [
                 model_definitions.decoder_layer_class(
@@ -139,7 +138,7 @@ class Eagle3DraftModel(SpeculatorModel):
                     layer_idx,
                     norm_before_residual=config.norm_before_residual,
                 )
-                for layer_idx in range(self.num_layers)
+                for layer_idx in range(num_hidden_layers)
             ]
         )
         self.norm = model_definitions.norm_class(
@@ -228,7 +227,7 @@ class Eagle3DraftModel(SpeculatorModel):
             ).unsqueeze(0)
             # shape: [1, total_seq_len]
 
-        past_key_values = DynamicCache(config=self.decoder_layer_config)
+        past_key_values = DynamicCache(config=self.config.transformer_layer_config)
 
         combined_mask_mod = create_combined_mask_mod(lengths.to(device), total_seq_len)
         block_mask = create_block_mask(
