@@ -1,9 +1,10 @@
 # ruff: noqa: ERA001
+import copy
 from typing import ClassVar
 
 import torch
 from torch.nn.attention.flex_attention import create_block_mask
-from transformers import AutoConfig, DynamicCache
+from transformers import AutoConfig, DynamicCache, PretrainedConfig
 
 from speculators.config import VerifierConfig
 from speculators.model import SpeculatorModel
@@ -133,33 +134,46 @@ class Eagle3DraftModel(SpeculatorModel):
             )
 
         self.fc = torch.nn.Linear(3 * self.hidden_size, self.hidden_size, bias=False)
-        num_hidden_layers = config.transformer_layer_config.num_hidden_layers
-        model_definitions = model_classes[config.transformer_layer_config.model_type]
+        self._model_definitions = model_classes[
+            config.transformer_layer_config.model_type
+        ]
+        self._setup_decoder_layers(
+            config.transformer_layer_config, config.norm_before_residual
+        )
+        self.norm = self._model_definitions.norm_class(
+            self.hidden_size, eps=config.transformer_layer_config.rms_norm_eps
+        )
+        self._setup_rotary_embedding(config.transformer_layer_config)
+        self._setup_embeddings_and_lm_heads(config.speculators_config.verifier, t2d)
+
+    def _setup_decoder_layers(
+        self, transformer_layer_config: PretrainedConfig, norm_before_residual: bool
+    ):
+        num_hidden_layers = transformer_layer_config.num_hidden_layers
         # Add first layer
         layers = [
-            model_definitions.first_layer_class(
-                config.transformer_layer_config,
+            self._model_definitions.first_layer_class(
+                transformer_layer_config,
                 layer_idx=0,
-                norm_before_residual=config.norm_before_residual,
+                norm_before_residual=norm_before_residual,
             )
         ]
         # Add additional regular decoder layers
         layers.extend(
             [
-                model_definitions.decoder_layer_class(
-                    config.transformer_layer_config, layer_idx
+                self._model_definitions.decoder_layer_class(
+                    transformer_layer_config, layer_idx
                 )
                 for layer_idx in range(1, num_hidden_layers)
             ]
         )
         self.layers = torch.nn.ModuleList(layers)
-        self.norm = model_definitions.norm_class(
-            self.hidden_size, eps=config.transformer_layer_config.rms_norm_eps
-        )
-        self.rotary_emb = model_definitions.rotary_emb_class(
-            config.transformer_layer_config
-        )
-        self._setup_embeddings_and_lm_heads(config.speculators_config.verifier, t2d)
+
+    def _setup_rotary_embedding(self, transformer_layer_config: PretrainedConfig):
+        # Create a modified config for the rotary embedding to use 2x the hidden size
+        modified_config = copy.copy(transformer_layer_config)
+        modified_config.hidden_size = modified_config.hidden_size * 2
+        self.rotary_emb = self._model_definitions.rotary_emb_class(modified_config)
 
     def _setup_embeddings_and_lm_heads(self, config: VerifierConfig, t2d: torch.Tensor):
         if config.name_or_path is None:

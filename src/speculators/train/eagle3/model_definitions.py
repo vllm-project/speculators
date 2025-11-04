@@ -1,5 +1,4 @@
 # ruff: noqa: ERA001
-import copy
 from typing import NamedTuple
 
 import torch
@@ -95,13 +94,6 @@ class LlamaDecoderEagle3FirstLayer(LlamaDecoderLayer):
         return hidden_states  # noqa: RET504
 
 
-class LlamaConcatInputRotaryEmbedding(LlamaRotaryEmbedding):
-    def __init__(self, config: LlamaConfig, device=None):
-        config = copy.copy(config)
-        config.hidden_size = config.hidden_size * 2
-        super().__init__(config, device)
-
-
 class ModelComponents(NamedTuple):
     first_layer_class: type
     decoder_layer_class: type
@@ -114,6 +106,6 @@ model_classes: dict[str, ModelComponents] = {
         LlamaDecoderEagle3FirstLayer,
         LlamaDecoderLayer,
         LlamaRMSNorm,
-        LlamaConcatInputRotaryEmbedding,
+        LlamaRotaryEmbedding,
     ),
 }
