@@ -120,20 +120,28 @@ class Eagle3DraftModel(SpeculatorModel):
         self.register_buffer("t2d", t2d)  # shape: [verifier_vocab_size], bool
         self.register_buffer("d2t", d2t)  # shape: [draft_vocab_size], int offsets
         self.draft_vocab_size = int(t2d.sum(dtype=torch.long).item())
-        model_definitions = model_classes[config.transformer_layer_config.model_type]
 
         self.fc = torch.nn.Linear(3 * self.hidden_size, self.hidden_size, bias=False)
         num_hidden_layers = config.transformer_layer_config.num_hidden_layers
-        self.layers = torch.nn.ModuleList(
+        model_definitions = model_classes[config.transformer_layer_config.model_type]
+        # Add first layer
+        layers = [
+            model_definitions.first_layer_class(
+                config.transformer_layer_config,
+                layer_idx=0,
+                norm_before_residual=config.norm_before_residual,
+            )
+        ]
+        # Add additional regular decoder layers
+        layers.extend(
             [
                 model_definitions.decoder_layer_class(
-                    config.transformer_layer_config,
-                    layer_idx,
-                    norm_before_residual=config.norm_before_residual,
+                    config.transformer_layer_config, layer_idx
                 )
-                for layer_idx in range(num_hidden_layers)
+                for layer_idx in range(1, num_hidden_layers)
             ]
         )
+        self.layers = torch.nn.ModuleList(layers)
         self.norm = model_definitions.norm_class(
             self.hidden_size, eps=config.transformer_layer_config.rms_norm_eps
         )
