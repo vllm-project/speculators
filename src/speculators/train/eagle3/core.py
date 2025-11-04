@@ -98,6 +98,48 @@ def loss_function(
     return batch_loss.mean()
 
 
+def compute_metrics(
+    logits: torch.Tensor,
+    targets: torch.Tensor,
+    loss_mask: torch.Tensor | None,
+    prev_correct: torch.Tensor | None,
+    ttt_step: int,
+    ttt_step_loss_decay: float,
+) -> tuple[torch.Tensor, dict]:
+    """Compute metrics for a given ttt_step.
+
+    Args:
+        logits: The logits for the current ttt_step.
+        targets: The targets for the current ttt_step.
+        loss_mask: The loss mask for the current ttt_step.
+        prev_correct: The previous correct predictions for the current ttt_step.
+        ttt_step: The current ttt_step.
+        ttt_step_loss_decay: The loss decay for the current ttt_step.
+
+    Effects:
+        Modifies prev_correct in place.
+
+    Returns:
+        Loss value and metrics dictionary.
+    """
+
+    s_metrics = {}
+    s_logits, s_targets, s_loss_mask, s_prev_correct = align_for_step(
+        logits, targets, loss_mask, prev_correct, ttt_step
+    )
+    loss_weight = ttt_step_loss_decay**ttt_step
+    s_loss = loss_weight * loss_function(s_logits, s_targets, s_loss_mask)
+
+    s_full_acc, s_cond_acc = compute_accuracy(
+        s_logits, s_targets, s_loss_mask, s_prev_correct
+    )
+    s_metrics[f"loss_{ttt_step}"] = s_loss.detach().clone()
+    s_metrics[f"full_acc_{ttt_step}"] = s_full_acc
+    s_metrics[f"cond_acc_{ttt_step}"] = s_cond_acc
+
+    return s_loss, s_metrics
+
+
 @SpeculatorModel.register("eagle3_draft")
 class Eagle3DraftModel(SpeculatorModel):
     config_class: ClassVar[type[Eagle3SpeculatorConfig]] = Eagle3SpeculatorConfig  # type: ignore[misc]
@@ -277,7 +319,7 @@ class Eagle3DraftModel(SpeculatorModel):
         return_loss = verifier_last_hidden_states is not None
         if return_loss:
             with torch.no_grad():
-                target_logits = self.verifier_lm_head(verifier_last_hidden_states)
+                targets = self.verifier_lm_head(verifier_last_hidden_states)
                 # shape: [1, total_seq_len, draft_vocab_size]
 
             loss = torch.tensor(0.0, device=device)
@@ -326,19 +368,16 @@ class Eagle3DraftModel(SpeculatorModel):
             # shape: [1, total_seq_len, draft_vocab_size]
 
             if return_loss:
-                s_logits, s_targets, s_loss_mask, s_prev_correct = align_for_step(
-                    logits, target_logits, loss_mask, prev_correct, ttt_step
+                s_loss, s_metrics = compute_metrics(
+                    logits,
+                    targets,
+                    loss_mask,
+                    prev_correct,
+                    ttt_step,
+                    ttt_step_loss_decay,
                 )
-                loss_weight = ttt_step_loss_decay**ttt_step
-                s_loss = loss_weight * loss_function(s_logits, s_targets, s_loss_mask)
                 loss += s_loss
-
-                s_full_acc, s_cond_acc = compute_accuracy(
-                    s_logits, s_targets, s_loss_mask, s_prev_correct
-                )
-                metrics[f"loss_{ttt_step}"] = s_loss.detach().clone()
-                metrics[f"full_acc_{ttt_step}"] = s_full_acc
-                metrics[f"cond_acc_{ttt_step}"] = s_cond_acc
+                metrics.update(s_metrics)
 
             input_ids = torch.argmax(logits, dim=-1)
             draft_tokens.append(input_ids.detach().clone())
