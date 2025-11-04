@@ -117,9 +117,7 @@ def main(args: argparse.Namespace):
     )
 
     # Setup draft model
-    draft_model = Eagle3DraftModel(
-        config=speculator_config, t2d=t2d, d2t=d2t, ttt_steps=args.ttt_steps
-    )
+    draft_model = Eagle3DraftModel(config=speculator_config, t2d=t2d, d2t=d2t)
 
     # Setup dataloaders
     train_files, val_files = split_files(args.data_path, ratio=0.9)
@@ -146,8 +144,16 @@ def main(args: argparse.Namespace):
         resume_from_checkpoint=not args.no_resume_from_checkpoint,
         is_distributed=is_distributed,
         local_rank=local_rank,
-        train_call_kwargs={"use_off_policy_tokens": False},
-        val_call_kwargs={"use_off_policy_tokens": False},
+        train_call_kwargs={
+            "use_off_policy_tokens": False,
+            "ttt_steps": args.ttt_steps,
+            "ttt_step_loss_decay": args.ttt_step_loss_decay,
+        },
+        val_call_kwargs={
+            "use_off_policy_tokens": False,
+            "ttt_steps": args.ttt_steps,
+            "ttt_step_loss_decay": args.ttt_step_loss_decay,
+        },
     )
     trainer = Trainer(draft_model, trainer_config, train_loader, val_loader)
 
@@ -180,6 +186,7 @@ def parse_args():
     parser.add_argument("--d2t-path", type=str, default="d2t.npy")
     parser.add_argument("--t2d-path", type=str, default="t2d.npy")
     parser.add_argument("--ttt-steps", type=int, default=3)
+    parser.add_argument("--ttt-step-loss-decay", type=float, default=1.0)
     return parser.parse_args()
 
 

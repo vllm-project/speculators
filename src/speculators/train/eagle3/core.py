@@ -109,12 +109,7 @@ class Eagle3DraftModel(SpeculatorModel):
     _keys_to_ignore_on_save: ClassVar[list[str]] = ["verifier_lm_head.weight"]  # type: ignore[misc,assignment]
 
     def __init__(
-        self,
-        config: Eagle3SpeculatorConfig,
-        t2d: torch.Tensor,
-        d2t: torch.Tensor,
-        ttt_steps: int = 3,
-        ttt_step_loss_decay: float = 1.0,
+        self, config: Eagle3SpeculatorConfig, t2d: torch.Tensor, d2t: torch.Tensor
     ):
         super().__init__(
             config=config,
@@ -122,8 +117,6 @@ class Eagle3DraftModel(SpeculatorModel):
             verifier_attachment_mode="train_only",
         )
         self.hidden_size = config.transformer_layer_config.hidden_size
-        self.ttt_steps = ttt_steps
-        self.ttt_step_loss_decay = ttt_step_loss_decay
         self.register_buffer("t2d", t2d)  # shape: [verifier_vocab_size], bool
         self.register_buffer("d2t", d2t)  # shape: [draft_vocab_size], int offsets
         self.draft_vocab_size = int(t2d.sum(dtype=torch.long).item())
@@ -210,15 +203,14 @@ class Eagle3DraftModel(SpeculatorModel):
         position_ids: torch.Tensor | None = None,  # shape: [1, total_seq_len]
         verifier_last_hidden_states: torch.Tensor
         | None = None,  # shape: [1, total_seq_len, hidden_size]
-        ttt_steps: int | None = None,
+        ttt_steps: int = 3,
+        ttt_step_loss_decay: float = 1.0,
         use_off_policy_tokens: bool = False,
         **kwargs,
     ):
         device = hidden_states.device
         total_seq_len = hidden_states.shape[1]
 
-        if ttt_steps is None:
-            ttt_steps = self.ttt_steps
         if lengths is None:
             lengths = torch.tensor([total_seq_len], dtype=torch.long, device=device)
         if position_ids is None:
@@ -292,7 +284,7 @@ class Eagle3DraftModel(SpeculatorModel):
                 s_logits, s_targets, s_loss_mask, s_prev_correct = align_for_step(
                     logits, target_logits, loss_mask, prev_correct, ttt_step
                 )
-                loss_weight = self.ttt_step_loss_decay**ttt_step
+                loss_weight = ttt_step_loss_decay**ttt_step
                 s_loss = loss_weight * loss_function(s_logits, s_targets, s_loss_mask)
                 loss += s_loss
 
