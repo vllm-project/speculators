@@ -222,7 +222,8 @@ class Eagle3DraftModel(SpeculatorModel):
         past_key_values = DynamicCache(config=self.config.transformer_layer_config)
 
         combined_mask_mod = create_combined_mask_mod(lengths.to(device), total_seq_len)
-        block_mask = create_block_mask(
+        # Note: Attention mask is stored as a BlockMask object
+        attention_mask = create_block_mask(
             combined_mask_mod,
             B=None,
             H=None,
@@ -269,7 +270,7 @@ class Eagle3DraftModel(SpeculatorModel):
             for decoder_layer in self.layers:
                 hidden_states = decoder_layer(
                     hidden_states,
-                    attention_mask=block_mask,
+                    attention_mask=attention_mask,
                     position_ids=position_ids,
                     past_key_values=past_key_values,
                     cache_position=cache_position,
@@ -318,7 +319,7 @@ class Eagle3DraftModel(SpeculatorModel):
                 )
                 # shape: [1, total_seq_len]
 
-            block_mask = extend_mask_for_draft_tokens(block_mask)
+            attention_mask = extend_mask_for_draft_tokens(attention_mask)
             position_ids = position_ids + 1
             # shape: [1, total_seq_len]
 

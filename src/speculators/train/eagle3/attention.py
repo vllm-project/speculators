@@ -147,8 +147,6 @@ def flex_attention_forward(
     scaling: float | None = None,
     **_kwargs,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
-    block_mask = attention_mask
-
     num_query_heads = query.shape[1]
     num_key_value_heads = key.shape[1]
     enable_gqa = num_query_heads != num_key_value_heads
@@ -162,7 +160,7 @@ def flex_attention_forward(
         key,
         value,
         score_mod=None,
-        block_mask=block_mask,
+        block_mask=attention_mask,
         enable_gqa=enable_gqa,
         scale=scaling,
     )
