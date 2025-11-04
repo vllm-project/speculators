@@ -119,7 +119,18 @@ class Eagle3DraftModel(SpeculatorModel):
         self.hidden_size = config.transformer_layer_config.hidden_size
         self.register_buffer("t2d", t2d)  # shape: [verifier_vocab_size], bool
         self.register_buffer("d2t", d2t)  # shape: [draft_vocab_size], int offsets
-        self.draft_vocab_size = int(t2d.sum(dtype=torch.long).item())
+        self.draft_vocab_size = config.draft_vocab_size
+
+        if int(t2d.sum(dtype=torch.long).item()) != self.draft_vocab_size:
+            raise ValueError(
+                f"t2d has {int(t2d.sum(dtype=torch.long).item())} non-zero values, "
+                f"expected {self.draft_vocab_size}."
+            )
+        if d2t.shape[0] != self.draft_vocab_size:
+            raise ValueError(
+                f"d2t.shape[0] ({d2t.shape[0]}) must match"
+                f" draft_vocab_size ({self.draft_vocab_size})."
+            )
 
         self.fc = torch.nn.Linear(3 * self.hidden_size, self.hidden_size, bias=False)
         num_hidden_layers = config.transformer_layer_config.num_hidden_layers
@@ -158,6 +169,11 @@ class Eagle3DraftModel(SpeculatorModel):
             raise ValueError(
                 f"Verifier hidden size {verifier_model_config.hidden_size} does not"
                 f" match draft hidden size {self.hidden_size}."
+            )
+        if t2d.shape[0] != verifier_model_config.vocab_size:
+            raise ValueError(
+                f"t2d.shape[0] ({t2d.shape[0]}) must match"
+                f" verifier_vocab_size ({verifier_model_config.vocab_size})."
             )
 
         verifier_weights = load_model_layers(
