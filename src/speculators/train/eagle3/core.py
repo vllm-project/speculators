@@ -267,6 +267,11 @@ class Eagle3DraftModel(SpeculatorModel):
                 # shape: [1, total_seq_len, draft_vocab_size]
 
             loss = torch.tensor(0.0, device=device)
+
+            # prev_correct is a boolean tensor that is True for tokens that have been
+            # correctly predicted on all previous ttt_steps.
+            # Initialized to True if the token is included in the loss_mask
+            # or if there is no loss_mask
             prev_correct = (
                 loss_mask.clone()
                 if loss_mask is not None
