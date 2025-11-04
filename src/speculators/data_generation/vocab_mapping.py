@@ -48,8 +48,7 @@ def save_token_frequency_distribution(
         batch_token_freq = dict(zip(unique_ids.tolist(), counts.tolist(), strict=False))
         token_freq.update(batch_token_freq)
 
-    token_freq_dict = dict(token_freq)
-    torch.save(token_freq_dict, freq_dist_path)
+    torch.save(dict(token_freq), freq_dist_path)
 
     return freq_dist_path
 

@@ -17,6 +17,7 @@ Usage:
 import argparse
 import logging
 import os
+from argparse import ArgumentParser, Namespace
 
 import numpy as np
 import torch
@@ -31,8 +32,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(
+def parse_args() -> Namespace:
+    parser: ArgumentParser = argparse.ArgumentParser(
         description="Build vocabulary mappings from token frequency distribution"
     )
 
@@ -64,7 +65,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def main():
+def main() -> None:
     args = parse_args()
 
     if not os.path.exists(args.token_freq_path):

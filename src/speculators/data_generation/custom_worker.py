@@ -42,6 +42,21 @@ class HiddenStatesWorkerExtension:
                     [self._captured_states[i], h], dim=0
                 )
 
+    def _should_capture_intermediate_layer(
+        self, layer_idx: int, total_layers: int, target_layers: frozenset
+    ) -> bool:
+        """Check if we should capture this intermediate layer.
+
+        Args:
+            layer_idx: Current layer index
+            total_layers: Total number of layers in model
+            target_layers: Set of target layer indices to capture
+
+        Returns:
+            True if this layer should be captured (before norm)
+        """
+        return layer_idx in target_layers and layer_idx != total_layers - 1
+
     def _create_patched_forward(self, base_model):
         """Create a patched forward function for hidden state capture"""
 
@@ -76,9 +91,8 @@ class HiddenStatesWorkerExtension:
                 absolute_layer_idx = base_model.start_layer + idx
 
                 # Capture intermediate layers (not the last) before norm
-                if (
-                    absolute_layer_idx in target_layers
-                    and absolute_layer_idx != total_layers - 1
+                if self._should_capture_intermediate_layer(
+                    absolute_layer_idx, total_layers, target_layers
                 ):
                     aux_hidden_states.append((hidden_states + residual).clone())
 
