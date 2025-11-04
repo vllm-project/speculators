@@ -242,14 +242,15 @@ class Eagle3DraftModel(SpeculatorModel):
                 target_logits = self.verifier_lm_head(verifier_last_hidden_states)
                 # shape: [1, total_seq_len, draft_vocab_size]
 
-        loss = torch.tensor(0.0, device=device)
-        prev_correct = (
-            loss_mask.clone()
-            if loss_mask is not None
-            else torch.ones(1, total_seq_len, device=device, dtype=torch.bool)
-        )
+            loss = torch.tensor(0.0, device=device)
+            prev_correct = (
+                loss_mask.clone()
+                if loss_mask is not None
+                else torch.ones(1, total_seq_len, device=device, dtype=torch.bool)
+            )
+            metrics = {}
+
         draft_tokens = []
-        metrics = {}
         for ttt_step in range(ttt_steps):
             with torch.no_grad():
                 input_embeds = self.embed_tokens(input_ids)
@@ -323,9 +324,8 @@ class Eagle3DraftModel(SpeculatorModel):
             position_ids = position_ids + 1
             # shape: [1, total_seq_len]
 
-        metrics["loss"] = loss.detach().clone()
-
         if return_loss:
+            metrics["loss"] = loss.detach().clone()
             return draft_tokens, loss, metrics
         else:
             return draft_tokens
