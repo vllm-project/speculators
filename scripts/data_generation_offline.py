@@ -20,6 +20,7 @@ import argparse
 import json
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
 import torch
@@ -205,6 +206,12 @@ def find_last_checkpoint(output_dir: str) -> int:
     return max_index + 1
 
 
+def save_sample_to_disk(data_dict, output_path):
+    """Helper function to save a single sample to disk (for async execution)"""
+    torch.save(data_dict, output_path)
+    return output_path
+
+
 def save_config(args, generator, num_samples, output_dir):
     """Save metadata config file for reproducibility"""
     config = {
@@ -281,29 +288,41 @@ def generate_and_save_hidden_states(args, dataset):
         num_samples - start_sample_idx + args.batch_size - 1
     ) // args.batch_size
 
+    # Use ThreadPoolExecutor for async file I/O
+    max_io_workers = 4  # Number of parallel save operations
+
     pbar = tqdm(
         range(start_sample_idx, num_samples, args.batch_size),
         desc="Generating hidden states",
         total=num_batches,
     )
-    for i in pbar:
-        batch_end = min(i + args.batch_size, num_samples)
-        batch = dataset[i:batch_end]
-        batch_input_ids = batch["input_ids"]
-        batch_loss_mask = batch["loss_mask"]
 
-        results = generator.generate(batch_input_ids)
+    with ThreadPoolExecutor(max_workers=max_io_workers) as thread_executor:
+        futures = []
 
-        for j, result in enumerate(results):
-            result_cleaned = {
-                "input_ids": result["input_ids"].clone(),
-                "hidden_states": [h.clone() for h in result["hidden_states"]],
-                "loss_mask": batch_loss_mask[j].clone(),
-            }
-            torch.save(
-                result_cleaned, os.path.join(args.output_dir, f"data_{file_idx}.pt")
-            )
-            file_idx += 1
+        for i in pbar:
+            batch_end = min(i + args.batch_size, num_samples)
+            batch = dataset[i:batch_end]
+            batch_input_ids = batch["input_ids"]
+            batch_loss_mask = batch["loss_mask"]
+
+            results = generator.generate(batch_input_ids)
+
+            # Submit save operations to thread pool (async I/O)
+            for j, result in enumerate(results):
+                result_cleaned = {
+                    "input_ids": result["input_ids"].clone(),
+                    "hidden_states": [h.clone() for h in result["hidden_states"]],
+                    "loss_mask": batch_loss_mask[j].clone(),
+                }
+                output_path = os.path.join(args.output_dir, f"data_{file_idx}.pt")
+                future = thread_executor.submit(save_sample_to_disk, result_cleaned, output_path)
+                futures.append(future)
+                file_idx += 1
+
+        log.info("Waiting for remaining file saves to complete...")
+        for future in tqdm(as_completed(futures), total=len(futures), desc="Saving files"):
+            future.result()
 
     samples_saved = file_idx - start_file_idx
     log.info(f"Saved {samples_saved} new data points to {args.output_dir}")
