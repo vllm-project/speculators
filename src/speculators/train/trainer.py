@@ -15,9 +15,11 @@ from transformers import (
 )
 
 from speculators.train.checkpointer import (
+    BaseCheckpointer,
     DistributedCheckpointer,
     SingleGPUCheckpointer,
 )
+from speculators.train.eagle3.core import Eagle3DraftModel
 from speculators.train.utils import apply_fully_sharded
 
 root_logger = logging.getLogger("speculators")
@@ -59,7 +61,7 @@ class Trainer:
         checkpointer_class = (
             DistributedCheckpointer if self.is_distributed else SingleGPUCheckpointer
         )
-        self.checkpointer = checkpointer_class(self.config.save_path)
+        self.checkpointer: BaseCheckpointer = checkpointer_class(self.config.save_path)
 
         self.setup_trainer()
         self.setup_model()
@@ -90,16 +92,19 @@ class Trainer:
             if self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1:
                 self.checkpointer.load_model_state_dict(self.model)
             else:
-                # Currently we make assumptions based on the Eagle3DraftModel
-                # architecture, including the existence of a layers attribute.
-                # todo: generalize to non-Eagle3DraftModel
+                if not isinstance(self.model, Eagle3DraftModel):
+                    # todo: generalize to non-Eagle3DraftModel
+                    # Currently we make assumptions based on the Eagle3DraftModel
+                    # architecture, including the existence of a layers attribute.
+                    msg = "Only Eagle3DraftModel is supported for sharded training"
+                    raise ValueError(msg)
                 for m in self.model.layers.children():  # type: ignore[union-attr]
                     if not isinstance(m, FSDPModule):
                         continue
                     m.to_empty(device="cuda")  # type: ignore[attr-defined]
                     for sub_module in m.modules():  # type: ignore[attr-defined]
                         if hasattr(sub_module, "reset_parameters"):
-                            sub_module.reset_parameters()
+                            sub_module.reset_parameters()  # type: ignore[operator]
                 # todo: Ensure lm_head and embed_tokens are loaded after reset
         else:
             self.model.to(self.local_rank)  # type: ignore[arg-type]
