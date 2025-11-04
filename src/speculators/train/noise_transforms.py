@@ -2,8 +2,9 @@ import torch
 
 
 class TransformTensors:
-    def __init__(self, tensors):
+    def __init__(self, std=0.05, tensors=("hidden_states",)):
         self.tensors = tensors
+        self.std = std
 
     def __call__(self, data):
         for tensor in self.tensors:
@@ -15,19 +16,10 @@ class TransformTensors:
 
 
 class AddGaussianNoise(TransformTensors):
-    def __init__(self, mean=0.0, std=0.2, tensors=("hidden_states",)):
-        super().__init__(tensors)
-        self.mean = mean
-        self.std = std
-
     def transform(self, tensor: torch.Tensor) -> torch.Tensor:
-        return tensor + torch.randn_like(tensor) * self.std + self.mean
+        return tensor + torch.randn_like(tensor) * self.std
 
 
 class AddUniformNoise(TransformTensors):
-    def __init__(self, std=0.2, tensors=("hidden_states",)):
-        super().__init__(tensors)
-        self.std = std
-
     def transform(self, tensor: torch.Tensor) -> torch.Tensor:
-        return tensor + (torch.rand_like(tensor) - 0.5) * self.std
+        return tensor + 2 * (torch.rand_like(tensor) - 0.5) * self.std

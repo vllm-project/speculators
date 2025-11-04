@@ -30,7 +30,7 @@ NORM_BEFORE_RESIDUAL = True
 # Dataloader
 NUM_WORKERS = 12
 PREFETCH_FACTOR = 4
-NOISE_STD = 0.2
+NOISE_STD = 0.05
 
 
 def setup_dataloader(
