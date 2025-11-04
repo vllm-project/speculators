@@ -40,6 +40,16 @@ def setup_dataloader(
     add_noise: bool = True,
     data_format_version: int = 1,
 ):
+    """Setup dataloader for training.
+    Args:
+        file_list: List of file paths to load data from.
+        world_size: Number of processes in the distributed training.
+        local_rank: Rank of the current process.
+        add_noise: Whether to add noise to the data.
+        data_format_version: Version of the data format. Default is 1.
+    Returns:
+        DataLoader: Dataloader for training.
+    """
     if add_noise:
         noise_transform = AddUniformNoise(
             std=NOISE_STD, tensors=("hidden_states", "verifier_last_hidden_states")

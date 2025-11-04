@@ -14,13 +14,14 @@ is_distributed = "LOCAL_RANK" in os.environ
 logger = logging.getLogger("speculators")
 
 
-def maybe_setup_distributed():
-    """Setup distributed training.
-    Gets the local rank and world_size from environment variables (if set). If not set,
-    assumes single process training and returns early.
+def maybe_setup_distributed() -> tuple[int, int, int, bool]:
+    """Sets up distributed training if the process was launched with `torchrun`.
+    If not, returns single process training.
 
-    Otherwise, initializes the distributed process group and sets local device index.
-    Based off of https://docs.pytorch.org/tutorials/intermediate/ddp_tutorial.html#initialize-ddp-with-torch-distributed-run-torchrun
+    Based on of https://docs.pytorch.org/tutorials/intermediate/ddp_tutorial.html#initialize-ddp-with-torch-distributed-run-torchrun
+
+    Returns:
+        tuple[int, int, int, bool]: Local rank, world size, rank, and is_distributed.
     """
     if not is_distributed:
         # No distributed training
@@ -43,7 +44,7 @@ def maybe_setup_distributed():
 
 
 def maybe_destroy_distributed():
-    """Destroy the distributed process group (if using distributed training)."""
+    """Destroys the distributed process group if using distributed training."""
     if not is_distributed:
         # No distributed training
         return
@@ -56,6 +57,7 @@ def maybe_destroy_distributed():
 
 
 def apply_fully_sharded(model: torch.nn.Module):
+    """Applies torch FSDP fully_shard to the model, wrapping layers in FSDPModule."""
     mp_policy = MixedPrecisionPolicy(
         param_dtype=torch.bfloat16,
         reduce_dtype=torch.float32,
