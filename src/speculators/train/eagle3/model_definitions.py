@@ -20,9 +20,10 @@ class LlamaConcatInputDecoderLayer(LlamaDecoderLayer):
         layer_idx: int,
         norm_before_residual: bool = False,
     ):
+        # Run original init
         super().__init__(config, layer_idx)
 
-        ##### CHANGES START #####
+        # Apply Eagle3 modifications
         self.norm_before_residual = norm_before_residual
         if layer_idx == 0:
             self.hidden_norm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
@@ -42,7 +43,6 @@ class LlamaConcatInputDecoderLayer(LlamaDecoderLayer):
                 bias=config.attention_bias,
             )
         self.layer_idx = layer_idx
-        ##### CHANGES END #####
 
     def forward(
         self,
