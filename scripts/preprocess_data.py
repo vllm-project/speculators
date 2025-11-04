@@ -16,6 +16,7 @@ Usage:
 
 import argparse
 import logging
+from argparse import ArgumentParser, Namespace
 
 from speculators.data_generation.preprocessing import (
     generate_cache_key,
@@ -29,8 +30,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Preprocess data for EAGLE3 training")
+def parse_args() -> Namespace:
+    parser: ArgumentParser = argparse.ArgumentParser(
+        description="Preprocess data for EAGLE3 training"
+    )
 
     # Model paths
     parser.add_argument(
@@ -94,15 +97,8 @@ def parse_args():
     return parser.parse_args()
 
 
-def main():
+def main() -> None:
     args = parse_args()
-
-    cache_key = generate_cache_key(
-        args.target_model_path,
-        args.chat_template,
-        args.seq_length,
-        args.train_data_path,
-    )
 
     # Preprocess dataset
     preprocessed_dataset, tokenizer = load_and_preprocess_dataset(
@@ -119,6 +115,16 @@ def main():
     # View samples if requested
     if args.view_samples > 0:
         view_samples(preprocessed_dataset, tokenizer, args.view_samples)
+
+    # Generate cache key for output paths
+    cache_key = generate_cache_key(
+        args.target_model_path,
+        args.chat_template,
+        args.seq_length,
+        args.train_data_path,
+    )
+    if args.max_samples is not None:
+        cache_key = f"{cache_key}_samples{args.max_samples}"
 
     logger.info(f"Dataset: {args.cache_dir}/processed_dataset/{cache_key}")
     logger.info(

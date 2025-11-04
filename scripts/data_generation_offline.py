@@ -38,8 +38,10 @@ import argparse
 import json
 import logging
 import os
+from argparse import Namespace
 
 import torch
+from datasets import Dataset as HFDataset
 from datasets import load_from_disk
 from tqdm import tqdm  # type: ignore[import-untyped]
 
@@ -59,8 +61,10 @@ logging.basicConfig(
 log = PipelineLogger(__name__)
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Generate EAGLE training data offline")
+def parse_args() -> Namespace:
+    parser: argparse.ArgumentParser = argparse.ArgumentParser(
+        description="Generate EAGLE training data offline"
+    )
 
     # Model arguments
     parser.add_argument(
@@ -166,7 +170,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def load_or_preprocess_dataset(args):
+def load_or_preprocess_dataset(args: Namespace) -> HFDataset:
     """Load preprocessed dataset from cache, or run preprocessing if needed.
 
     This automatically handles preprocessing if the cached data doesn't exist,
@@ -227,7 +231,12 @@ def find_last_checkpoint(output_dir: str) -> int:
     return max(indices) + 1
 
 
-def save_config(args, generator, num_samples, output_dir):
+def save_config(
+    args: Namespace,
+    generator: VllmHiddenStatesGenerator,
+    num_samples: int,
+    output_dir: str,
+) -> None:
     """
     Save metadata config file for reproducibility.
 
@@ -257,7 +266,7 @@ def save_config(args, generator, num_samples, output_dir):
     log.success(f"Saved config v{config.version} to {config_path}")
 
 
-def generate_and_save_hidden_states(args, dataset):
+def generate_and_save_hidden_states(args: Namespace, dataset: HFDataset) -> int:
     """Generate hidden states and save each sample as a .pt file"""
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -328,7 +337,7 @@ def generate_and_save_hidden_states(args, dataset):
     return samples_saved
 
 
-def main():
+def main() -> None:
     args = parse_args()
 
     log.section("EAGLE Offline Data Generation")

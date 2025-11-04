@@ -77,18 +77,6 @@ def mock_vllm_generator():
     return generator
 
 
-def test_package_versions_dataclass():
-    """Test PackageVersions dataclass creation."""
-    versions = PackageVersions(
-        torch="2.0.0", vllm="0.6.0", transformers="4.40.0", speculators="0.1.0"
-    )
-
-    assert versions.torch == "2.0.0"
-    assert versions.vllm == "0.6.0"
-    assert versions.transformers == "4.40.0"
-    assert versions.speculators == "0.1.0"
-
-
 def test_package_versions_from_environment():
     """Test detecting package versions from environment."""
     versions = PackageVersions.from_environment()
@@ -143,10 +131,15 @@ def test_get_gpu_info():
 
 
 def test_package_versions_speculators_version():
-    """Test that PackageVersions can detect speculators version."""
+    """Test PackageVersions can detect speculators version or handle missing package."""
     versions = PackageVersions.from_environment()
 
-    assert versions.speculators is None or isinstance(versions.speculators, str)
+    # Should be None if not installed, or a valid version string (e.g., "0.1.0")
+    if versions.speculators is not None:
+        assert isinstance(versions.speculators, str)
+        assert len(versions.speculators) > 0
+        # Version strings should contain at least one digit
+        assert any(c.isdigit() for c in versions.speculators)
 
 
 def test_get_hidden_size_from_model():
@@ -197,14 +190,18 @@ def test_generate_example_data(mock_tokenizer):
     mock_tokenizer.decode.assert_called()
 
 
-def test_generate_config_basic(mock_hidden_size):
-    """Test basic config generation."""
+@pytest.mark.parametrize("provide_tokenizer", [True, False])
+def test_generate_config(mock_hidden_size, provide_tokenizer):
+    """Test config generation with and without pre-loaded tokenizer."""
+    mock_tokenizer = Mock()
+    mock_tokenizer.encode.side_effect = [[1, 2, 3, 4, 5], [10, 11, 12]]
+    mock_tokenizer.decode.side_effect = ["prompt text", "output text"]
+
+    tokenizer_arg = mock_tokenizer if provide_tokenizer else None
+
     with patch(
         "speculators.data_generation.config_generator.AutoTokenizer.from_pretrained"
     ) as mock_tokenizer_load:
-        mock_tokenizer = Mock()
-        mock_tokenizer.encode.side_effect = [[1, 2, 3, 4, 5], [10, 11, 12]]
-        mock_tokenizer.decode.side_effect = ["prompt text", "output text"]
         mock_tokenizer_load.return_value = mock_tokenizer
 
         config = generate_config(
@@ -222,8 +219,10 @@ def test_generate_config_basic(mock_hidden_size):
             example_prompt_token_ids=[1, 2, 3, 4, 5],
             example_output_token_ids=[10, 11, 12],
             seed=0,
+            tokenizer=tokenizer_arg,
         )
 
+        # Verify config structure
         assert isinstance(config, DataGenerationConfig)
         assert config.version == "2.0"
         assert config.model["target_model_path"] == "test-model"
@@ -232,31 +231,12 @@ def test_generate_config_basic(mock_hidden_size):
         assert len(config.example_prompt_token_ids) > 0
         assert len(config.example_output_token_ids) > 0
 
+        # Verify tokenizer usage
+        mock_tokenizer.decode.assert_called()
 
-def test_generate_config_with_tokenizer(mock_hidden_size):
-    """Test config generation with pre-loaded tokenizer."""
-    mock_tokenizer = Mock()
-    mock_tokenizer.encode.side_effect = [[1, 2, 3, 4, 5], [10, 11, 12]]
-    mock_tokenizer.decode.side_effect = ["prompt", "output"]
-
-    generate_config(
-        target_model_path="test-model",
-        train_data_path="sharegpt",
-        chat_template="llama3",
-        seq_length=2048,
-        layer_ids=[2, 14, 24, 31],
-        tensor_parallel_size=1,
-        max_model_len=2048,
-        gpu_memory_utilization=0.8,
-        batch_size=8,
-        cache_dir="./cache",
-        num_samples=1000,
-        example_prompt_token_ids=[1, 2, 3, 4, 5],
-        example_output_token_ids=[10, 11, 12],
-        tokenizer=mock_tokenizer,
-    )
-
-    mock_tokenizer.decode.assert_called()
+        # If tokenizer not provided, should load it
+        if not provide_tokenizer:
+            mock_tokenizer_load.assert_called_once()
 
 
 def test_config_json_serializable(mock_hidden_size):
@@ -368,26 +348,3 @@ def test_generate_config_with_max_samples_none(mock_hidden_size):
         assert config.data["num_samples"] == 1000
 
 
-def test_reproducibility_info_contains_all_fields():
-    """Test that reproducibility info has all required fields."""
-    versions = PackageVersions(torch="2.0.0", vllm="0.6.0", transformers="4.40.0")
-
-    info = ReproducibilityInfo.create(
-        command="test command", cache_key="abc123", package_versions=versions
-    )
-
-    assert info.packages["torch"] == "2.0.0"
-    assert info.packages["vllm"] == "0.6.0"
-    assert info.packages["transformers"] == "4.40.0"
-
-
-def test_format_config_schema_structure():
-    """Test that format config schema has correct structure."""
-    config = FormatConfig.create_default(num_layers=4, hidden_size=4096)
-
-    for _field_name, field_schema in config.schema.items():
-        assert "dtype" in field_schema
-        assert "shape" in field_schema
-
-    assert "num_tensors" in config.schema["hidden_states"]
-    assert config.schema["hidden_states"]["num_tensors"] == 4

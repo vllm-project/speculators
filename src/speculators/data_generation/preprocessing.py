@@ -66,7 +66,11 @@ def _apply_loss_mask_from_chat_template(
                 loss_mask[idx] = 1
 
     if matches_found == 0:
-        log.warning("No assistant response spans found in the conversation text.")
+        log.warning(
+            "No assistant response spans found in conversation. "
+            "Verify chat template matches your data format and that "
+            "conversations contain assistant responses."
+        )
 
     return loss_mask
 
@@ -145,7 +149,7 @@ def build_eagle3_dataset(
     if chat_template not in CHAT_TEMPLATES:
         raise ValueError(
             f"Chat template '{chat_template}' not found. "
-            f"Available templates: {list(CHAT_TEMPLATES.keys())}"
+            f"Available templates: {', '.join(sorted(CHAT_TEMPLATES.keys()))}"
         )
     template = CHAT_TEMPLATES[chat_template]
     original_cols = dataset.column_names
@@ -185,8 +189,10 @@ def load_raw_dataset(train_data_path: str, num_proc: int = 8) -> HFDataset:
     # Load from HuggingFace using registry
     if train_data_path not in DATASET_CONFIGS:
         raise ValueError(
-            f"Unsupported dataset: {train_data_path}. "
-            f"Supported: local .json/.jsonl files or {list(DATASET_CONFIGS.keys())}"
+            f"Unsupported dataset: '{train_data_path}'. "
+            f"Supported options:\n"
+            f"  - Local files: .json or .jsonl files\n"
+            f"  - Registered datasets: {', '.join(DATASET_CONFIGS.keys())}"
         )
 
     config = DATASET_CONFIGS[train_data_path]
@@ -242,7 +248,7 @@ def load_and_preprocess_dataset(
     if chat_template not in CHAT_TEMPLATES:
         raise ValueError(
             f"Chat template '{chat_template}' not found. "
-            f"Available: {list(CHAT_TEMPLATES.keys())}"
+            f"Available: {', '.join(sorted(CHAT_TEMPLATES.keys()))}"
         )
 
     log.subsection("Loading tokenizer and dataset")

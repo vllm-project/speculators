@@ -9,12 +9,15 @@ import sys
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import torch
 from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizer
 
 from speculators.data_generation.logging_utils import PipelineLogger
+
+if TYPE_CHECKING:
+    from .vllm_hidden_states_generator import VllmHiddenStatesGenerator
 
 log = PipelineLogger(__name__)
 
@@ -44,7 +47,7 @@ class PackageVersions:
             from importlib.metadata import version  # noqa: PLC0415
 
             speculators_version = version("speculators")
-        except Exception:  # noqa: BLE001
+        except Exception:
             speculators_version = None
 
         return cls(
@@ -200,7 +203,11 @@ def _get_hidden_size_from_model(model_path: str) -> int:
     if hasattr(config, "text_config") and hasattr(config.text_config, "hidden_size"):
         return config.text_config.hidden_size
 
-    raise ValueError(f"Could not determine hidden size for {model_path}")
+    raise ValueError(
+        f"Could not determine hidden size for model '{model_path}'. "
+        f"Model config type: {type(config).__name__}. "
+        f"Expected 'hidden_size', 'd_model', or 'text_config.hidden_size' attribute."
+    )
 
 
 def generate_example_data(
@@ -308,7 +315,7 @@ def generate_config(
 
 
 def extract_config_from_generator(
-    generator: Any,
+    generator: "VllmHiddenStatesGenerator",
     train_data_path: str,
     chat_template: str,
     seq_length: int,
@@ -319,15 +326,31 @@ def extract_config_from_generator(
     max_samples: int | None = None,
     seed: int = 0,
 ) -> DataGenerationConfig:
-    """Extract configuration from VllmHiddenStatesGenerator instance."""
+    """Extract configuration from VllmHiddenStatesGenerator instance.
+
+    Args:
+        generator: VllmHiddenStatesGenerator instance to extract config from
+        train_data_path: Path to training data
+        chat_template: Chat template identifier
+        seq_length: Maximum sequence length
+        batch_size: Batch size for generation
+        cache_dir: Directory for caching
+        num_samples: Total number of samples
+        example_prompt: Example prompt for generating example output
+        max_samples: Maximum samples to process (None = all)
+        seed: Random seed for reproducibility
+
+    Returns:
+        Complete DataGenerationConfig object
+    """
     log.info("Generating example from vLLM generator")
     example_prompt_token_ids = generator.tokenizer.encode(
         example_prompt, add_special_tokens=True
     )
 
-    outputs = generator.llm.generate(
+    outputs = generator.llm.generate(  # type: ignore[attr-defined]
         prompt_token_ids=[example_prompt_token_ids],
-        sampling_params=generator.sampling_params,
+        sampling_params=generator.sampling_params,  # type: ignore[attr-defined]
     )
     example_output_token_ids = outputs[0].outputs[0].token_ids
 
