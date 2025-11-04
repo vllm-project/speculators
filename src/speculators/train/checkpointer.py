@@ -1,8 +1,10 @@
 from abc import abstractmethod
 from pathlib import Path
+from typing import Any
 
 import torch
 import torch.distributed as dist
+import torch.utils._pytree as pytree
 from safetensors import safe_open
 from torch.distributed.checkpoint.state_dict import (
     StateDictOptions,
@@ -40,12 +42,17 @@ class BaseCheckpointer:
             self.prev_path = None
 
     @abstractmethod
-    def load_model_state_dict(self, model: PreTrainedModel):
+    def load_model_state_dict(
+        self, model: PreTrainedModel, float_dtype: torch.dtype | None = None
+    ):
         raise NotImplementedError
 
     @abstractmethod
     def load_optimizer_state_dict(
-        self, model: PreTrainedModel, optimizer: torch.optim.Optimizer
+        self,
+        model: PreTrainedModel,
+        optimizer: torch.optim.Optimizer,
+        float_dtype: torch.dtype | None = None,
     ):
         raise NotImplementedError
 
@@ -66,7 +73,11 @@ class BaseCheckpointer:
 
     @abstractmethod
     def save_checkpoint(
-        self, model: PreTrainedModel, optimizer: torch.optim.Optimizer, epoch: int
+        self,
+        model: PreTrainedModel,
+        optimizer: torch.optim.Optimizer,
+        epoch: int,
+        float_dtype: torch.dtype = torch.bfloat16,
     ):
         raise NotImplementedError
 
@@ -95,6 +106,15 @@ class BaseCheckpointer:
         return self.path / str(epoch) / scheduler_fname
 
 
+def convert_float_dtype(sd: dict[str, Any], dtype: torch.dtype):
+    def convert_fn(x):
+        if isinstance(x, torch.Tensor) and x.is_floating_point():
+            return x.to(dtype)
+        return x
+
+    return pytree.tree_map(convert_fn, sd)
+
+
 def load_safetensors_state_dict(path: Path, device: str) -> dict[str, torch.Tensor]:
     full_state_dict = {}
     with safe_open(path, framework="pt", device=device) as f:
@@ -104,9 +124,14 @@ def load_safetensors_state_dict(path: Path, device: str) -> dict[str, torch.Tens
 
 
 class SingleGPUCheckpointer(BaseCheckpointer):
-    def load_model_state_dict(self, model: PreTrainedModel):
+    def load_model_state_dict(
+        self, model: PreTrainedModel, float_dtype: torch.dtype | None = None
+    ):
         full_state_dict = load_safetensors_state_dict(
             self.model_path(self.previous_epoch), "cuda:0"
+        )
+        full_state_dict = convert_float_dtype(
+            full_state_dict, float_dtype or model.dtype
         )
         # Note: `strict=False` because we don't load the verifier weights
         model.load_state_dict(full_state_dict, strict=False)
@@ -115,26 +140,42 @@ class SingleGPUCheckpointer(BaseCheckpointer):
         self,
         model: PreTrainedModel,  # noqa: ARG002
         optimizer: torch.optim.Optimizer,
+        float_dtype: torch.dtype | None = None,
     ):
         full_state_dict = torch.load(
             self.optimizer_path(self.previous_epoch),
             weights_only=True,
             map_location="cuda:0",  # todo: make this configurable
         )
+        full_state_dict = convert_float_dtype(
+            full_state_dict, float_dtype or model.dtype
+        )
         optimizer.load_state_dict(full_state_dict)
 
     def save_checkpoint(
-        self, model: PreTrainedModel, optimizer: torch.optim.Optimizer, epoch: int
+        self,
+        model: PreTrainedModel,
+        optimizer: torch.optim.Optimizer,
+        epoch: int,
+        float_dtype: torch.dtype = torch.bfloat16,
     ):
-        model.save_pretrained(self.path / str(epoch))
-        torch.save(optimizer.state_dict(), self.optimizer_path(epoch))
+        model_state_dict = convert_float_dtype(model.state_dict(), float_dtype)
+        model.save_pretrained(self.path / str(epoch), state_dict=model_state_dict)
+        optimizer_state_dict = convert_float_dtype(optimizer.state_dict(), float_dtype)
+        torch.save(optimizer_state_dict, self.optimizer_path(epoch))
 
 
 class DistributedCheckpointer(BaseCheckpointer):
-    def load_model_state_dict(self, model: PreTrainedModel):
+    def load_model_state_dict(
+        self, model: PreTrainedModel, float_dtype: torch.dtype | None = None
+    ):
         full_state_dict = load_safetensors_state_dict(
             self.model_path(self.previous_epoch), "cpu"
         )
+        full_state_dict = convert_float_dtype(
+            full_state_dict, float_dtype or model.dtype
+        )
+
         # Note: `strict=False` because we don't load the verifier weights
         set_model_state_dict(
             model,
@@ -145,13 +186,22 @@ class DistributedCheckpointer(BaseCheckpointer):
         )
         dist.barrier()
 
-    def load_optimizer_state_dict(self, model, optimizer: torch.optim.Optimizer):
+    def load_optimizer_state_dict(
+        self,
+        model,
+        optimizer: torch.optim.Optimizer,
+        float_dtype: torch.dtype | None = None,
+    ):
         full_state_dict = torch.load(
             self.optimizer_path(self.previous_epoch),
             mmap=True,
             weights_only=True,
             map_location="cpu",
         )
+        full_state_dict = convert_float_dtype(
+            full_state_dict, float_dtype or model.dtype
+        )
+
         set_optimizer_state_dict(
             model,
             optimizer,
@@ -161,16 +211,23 @@ class DistributedCheckpointer(BaseCheckpointer):
         dist.barrier()
 
     def save_checkpoint(
-        self, model: PreTrainedModel, optimizer: torch.optim.Optimizer, epoch: int
+        self,
+        model: PreTrainedModel,
+        optimizer: torch.optim.Optimizer,
+        epoch: int,
+        float_dtype: torch.dtype = torch.bfloat16,
     ):
         model_state_dict = get_model_state_dict(
             model, options=StateDictOptions(full_state_dict=True, cpu_offload=True)
         )
+        model_state_dict = convert_float_dtype(model_state_dict, float_dtype)
+
         optimizer_state_dict = get_optimizer_state_dict(
             model,
             optimizer,
             options=StateDictOptions(full_state_dict=True, cpu_offload=True),
         )
+        optimizer_state_dict = convert_float_dtype(optimizer_state_dict, float_dtype)
 
         if dist.get_rank() == 0:
             # Only rank 0 saves the checkpoint
