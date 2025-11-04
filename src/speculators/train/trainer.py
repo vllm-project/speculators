@@ -1,6 +1,6 @@
 import logging
 import warnings
-from typing import NamedTuple
+from typing import Literal, NamedTuple
 
 import torch
 import torch.distributed as dist
@@ -8,7 +8,11 @@ from torch.distributed.fsdp import FSDPModule
 from torch.utils.data import DataLoader
 from tqdm import TqdmExperimentalWarning
 from tqdm.rich import tqdm
-from transformers import PreTrainedModel
+from transformers import (
+    PreTrainedModel,
+    get_cosine_schedule_with_warmup,
+    get_linear_schedule_with_warmup,
+)
 
 from speculators.train.checkpointer import (
     DistributedCheckpointer,
@@ -31,6 +35,10 @@ class TrainerConfig(NamedTuple):
     local_rank: int = 0
     train_call_kwargs: dict = {}
     val_call_kwargs: dict = {}
+    scheduler_type: Literal["linear", "cosine", "none"] = "linear"
+    scheduler_warmup_steps: int | None = None
+    scheduler_total_steps: int | None = None
+    scheduler_num_cosine_cycles: float = 0.5
 
 
 class Trainer:
@@ -99,9 +107,45 @@ class Trainer:
                 self.checkpointer.load_model_state_dict(self.model)
 
     def setup_optimizer(self):
-        self.opt = torch.optim.Adam(self.model.parameters(), lr=self.config.lr)
+        # Setup optimizer
+        self.opt = torch.optim.AdamW(self.model.named_parameters(), lr=self.config.lr)
+        last_epoch = -1
         if self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1:
             self.checkpointer.load_optimizer_state_dict(self.model, self.opt)
+            last_epoch = self.checkpointer.previous_epoch
+
+        # Setup scheduler
+        if self.config.scheduler_type == "none":
+            self.scheduler = None
+            return
+
+        # Compute defaults if None
+        scheduler_warmup_steps = (
+            self.config.scheduler_warmup_steps
+            or (self.config.num_epochs * len(self.train_loader)) // 100
+        )
+        scheduler_total_steps = self.config.scheduler_total_steps or (
+            self.config.num_epochs * len(self.train_loader)
+        )
+
+        if self.config.scheduler_type == "linear":
+            self.scheduler = get_linear_schedule_with_warmup(
+                self.opt,
+                num_warmup_steps=scheduler_warmup_steps,
+                num_training_steps=scheduler_total_steps,
+                last_epoch=last_epoch,
+            )
+        else:
+            self.scheduler = get_cosine_schedule_with_warmup(
+                self.opt,
+                num_warmup_steps=scheduler_warmup_steps,
+                num_training_steps=scheduler_total_steps,
+                num_cycles=self.config.scheduler_num_cosine_cycles,
+                last_epoch=last_epoch,
+            )
+
+        if self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1:
+            self.checkpointer.load_scheduler_state_dict(self.scheduler)
 
     def train_epoch(self, epoch: int):
         self.model.train()
@@ -129,13 +173,18 @@ class Trainer:
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
             self.opt.step()
 
+            current_lr = self.opt.param_groups[0]["lr"]
+            if self.scheduler is not None:
+                self.scheduler.step()
+
             if self.is_distributed:
                 for v in metrics.values():
                     dist.reduce(v, dst=0, op=dist.ReduceOp.AVG)
 
             metrics = {k: v.item() for k, v in metrics.items()}
             metric_logger.info(
-                {"train": metrics, "epoch": epoch}, extra={"step": self.global_step}
+                {"train": metrics, "epoch": epoch, "lr": current_lr},
+                extra={"step": self.global_step},
             )
             self.global_step += 1
 
@@ -178,6 +227,8 @@ class Trainer:
 
     def save_checkpoint(self, epoch: int):
         self.checkpointer.save_checkpoint(self.model, self.opt, epoch)
+        if self.scheduler is not None:
+            self.checkpointer.save_scheduler_state_dict(self.scheduler, epoch)
 
     def run_training(self):
         n_epochs = self.config.num_epochs

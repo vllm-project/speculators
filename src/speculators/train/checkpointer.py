@@ -22,9 +22,11 @@ class BaseCheckpointer:
         0/ # epoch number
             model.safetensors
             optimizer_state_dict.pt
+            scheduler_state_dict.pt (optional)
         1/
             model.safetensors
             optimizer_state_dict.pt
+            scheduler_state_dict.pt (optional)
         ...
     """
 
@@ -46,6 +48,21 @@ class BaseCheckpointer:
         self, model: PreTrainedModel, optimizer: torch.optim.Optimizer
     ):
         raise NotImplementedError
+
+    def load_scheduler_state_dict(
+        self, scheduler: torch.optim.lr_scheduler.LRScheduler
+    ):
+        scheduler_path = self.scheduler_path(self.previous_epoch)
+        if not scheduler_path.exists():
+            return
+        full_state_dict = torch.load(scheduler_path, weights_only=True)
+        scheduler.load_state_dict(full_state_dict)
+
+    def save_scheduler_state_dict(
+        self, scheduler: torch.optim.lr_scheduler.LRScheduler, epoch: int
+    ):
+        scheduler_path = self.scheduler_path(epoch)
+        torch.save(scheduler.state_dict(), scheduler_path)
 
     @abstractmethod
     def save_checkpoint(
@@ -72,6 +89,10 @@ class BaseCheckpointer:
     def optimizer_path(self, epoch: int):
         optimizer_fname = "optimizer_state_dict.pt"
         return self.path / str(epoch) / optimizer_fname
+
+    def scheduler_path(self, epoch: int):
+        scheduler_fname = "scheduler_state_dict.pt"
+        return self.path / str(epoch) / scheduler_fname
 
 
 def load_safetensors_state_dict(path: Path, device: str) -> dict[str, torch.Tensor]:
