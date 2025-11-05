@@ -43,7 +43,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: Install dependencies
-        run: pip install tox
+        run: pip install tox tox-uv
       - name: Run quality checks
         run: tox -e quality
 
@@ -59,7 +59,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: Install dependencies
-        run: pip install tox
+        run: pip install tox tox-uv
       - name: Run quality checks
         run: tox -e types
 
@@ -91,7 +91,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: Install dependencies
-        run: pip install tox
+        run: pip install tox tox-uv
       - name: Run unit tests
         run: tox -e test-unit
 
@@ -107,6 +107,6 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: Install dependencies
-        run: pip install tox
+        run: pip install tox tox-uv
       - name: Run integration tests
         run: tox -e test-integration
