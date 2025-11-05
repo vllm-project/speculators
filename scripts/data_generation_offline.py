@@ -316,12 +316,16 @@ def generate_and_save_hidden_states(args, dataset):
                     "loss_mask": batch_loss_mask[j].clone(),
                 }
                 output_path = os.path.join(args.output_dir, f"data_{file_idx}.pt")
-                future = thread_executor.submit(save_sample_to_disk, result_cleaned, output_path)
+                future = thread_executor.submit(
+                    save_sample_to_disk, result_cleaned, output_path
+                )
                 futures.append(future)
                 file_idx += 1
 
         log.info("Waiting for remaining file saves to complete...")
-        for future in tqdm(as_completed(futures), total=len(futures), desc="Saving files"):
+        for future in tqdm(
+            as_completed(futures), total=len(futures), desc="Saving files"
+        ):
             future.result()
 
     samples_saved = file_idx - start_file_idx
