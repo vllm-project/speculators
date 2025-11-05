@@ -1,5 +1,5 @@
 site_name: Speculators Docs
-site_description: A unified library for building, evaluating, and storing speculative decoding algorithms for large language model (LLM) inference
+site_description: A unified library for building, and storing speculative decoding algorithms for large language model (LLM) inference
 site_url: https://neuralmagic.github.io/speculators
 repo_url: https://github.com/neuralmagic/speculators
 edit_uri: https://github.com/neuralmagic/speculators/tree/main/docs
