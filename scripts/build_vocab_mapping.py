@@ -72,7 +72,7 @@ def main():
             f"Token frequency file not found: {args.token_freq_path}"
         )
 
-    token_freq_dict = torch.load(args.token_freq_path, weights_only=False)
+    token_freq_dict = torch.load(args.token_freq_path, weights_only=True)
 
     d2t, t2d = build_vocab_mappings_from_distribution(
         token_freq_dict=token_freq_dict,

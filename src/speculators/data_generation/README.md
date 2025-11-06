@@ -19,10 +19,11 @@ Generate training data from ShareGPT using Llama 3.1 8B:
 python scripts/data_generation_offline.py \
     --target-model-path meta-llama/Llama-3.1-8B \
     --train-data-path sharegpt \
-    --chat-template llama3 \
     --output-dir ./training_data \
     --max-samples 5000
 ```
+
+The script automatically uses the tokenizer's built-in chat template via `apply_chat_template`.
 
 ### Advanced Usage
 
@@ -32,7 +33,6 @@ With custom settings and multi-GPU:
 python scripts/data_generation_offline.py \
     --target-model-path meta-llama/Llama-3.1-70B \
     --train-data-path ./my_data.jsonl \
-    --chat-template llama3 \
     --seq-length 4096 \
     --cache-dir ./cache \
     --output-dir ./training_data \
@@ -80,19 +80,20 @@ from speculators.data_generation.preprocessing import load_and_preprocess_datase
 dataset, tokenizer = load_and_preprocess_dataset(
     target_model_path="meta-llama/Llama-3.1-8B",
     train_data_path="sharegpt",
-    chat_template="llama3",
     seq_length=2048,
-    cache_dir="./cache",
     max_samples=1000,
+    token_freq_path="./token_freq.pt",
+    cache_dir="/path/to/cache",  # Optional
 )
 ```
 
-**Supports:**
+**Features:**
 
+- Uses tokenizer's built-in chat template via `apply_chat_template`
+- Automatically creates loss masks for assistant responses
 - ShareGPT format datasets
 - HuggingFace datasets (sharegpt, ultrachat)
 - Local JSON/JSONL files
-- Multiple chat templates (llama3, qwen2, vicuna, chatml, mistral)
 
 #### 3. Custom Worker Extension
 
@@ -105,16 +106,6 @@ vLLM worker extension that captures hidden states during model forward pass.
 - Automatic batching across sequences
 
 ### Configuration
-
-#### Chat Templates
-
-Supported templates in `configs.py`:
-
-- `llama3` - Llama 3/3.1 format
-- `qwen2` - Qwen 2 format
-- `vicuna` - Vicuna format
-- `chatml` - ChatML format
-- `mistral` - Mistral Instruct format
 
 #### Dataset Configs
 
@@ -159,13 +150,26 @@ Adjust based on GPU memory and sequence length.
 
 ### Caching
 
-Preprocessing is automatically cached. Cache key includes:
+Preprocessing is automatically cached by HuggingFace datasets using fingerprint-based cache invalidation. The cache automatically updates when:
 
-- Model path
-- Chat template
-- Sequence length
-- Dataset path
-- Max samples (if specified)
+- Tokenizer changes
+- Preprocessing parameters change (seq_length, etc.)
+- Dataset changes
+
+**Cache Location:**
+- Default: `~/.cache/huggingface/datasets`
+- Custom: Set `HF_DATASETS_CACHE` environment variable
+
+```bash
+# Example: Use custom cache directory
+export HF_DATASETS_CACHE=/path/to/your/cache
+python scripts/data_generation_offline.py ...
+```
+
+Or set it per-command:
+```bash
+HF_DATASETS_CACHE=./my_cache python scripts/data_generation_offline.py ...
+```
 
 ## Module Structure
 
@@ -207,22 +211,23 @@ class VllmHiddenStatesGenerator:
 def load_and_preprocess_dataset(
     target_model_path: str,
     train_data_path: str,
-    chat_template: str,
     seq_length: int,
-    cache_dir: str,
     build_dataset_num_proc: int = 8,
     seed: int = 0,
     max_samples: Optional[int] = None,
+    token_freq_path: str = "./token_freq.pt",
+    cache_dir: Optional[str] = None,
 ) -> Tuple[HFDataset, PreTrainedTokenizer]
 
 def build_eagle3_dataset(
     dataset: HFDataset,
     tokenizer: PreTrainedTokenizer,
-    chat_template: str,
     max_length: int = 2048,
     num_proc: int = 8,
 ) -> HFDataset
 ```
+
+**Note:** Both functions now use the tokenizer's built-in chat template via `apply_chat_template`.
 
 ## Troubleshooting
 
@@ -241,8 +246,8 @@ def build_eagle3_dataset(
 
 **Issue**: No assistant response spans found
 
-- Verify chat template matches your data format
-- Check that conversations have assistant responses
+- Ensure tokenizer has a chat template (supports `apply_chat_template`)
+- Check that conversations have assistant responses in correct format (role/content keys)
 
 **Issue**: Cache invalidation
 
@@ -250,22 +255,6 @@ def build_eagle3_dataset(
 - Ensure `--seed` matches between runs for reproducibility
 
 ## Development
-
-### Adding a New Chat Template
-
-Edit `configs.py`:
-
-```python
-CHAT_TEMPLATES["my_template"] = ChatTemplate(
-    name="my_template",
-    system_prompt="...",
-    user_header="...",
-    assistant_header="...",
-    end_of_turn_token="...",
-    bos_token="...",
-    eos_token="...",
-)
-```
 
 ### Adding a New Dataset
 

@@ -24,12 +24,10 @@ class HiddenStatesWorkerExtension:
 
     def _store_captured_states(self, aux_hidden_states):
         if self._captured_states is None:
-            self._captured_states = aux_hidden_states
+            self._captured_states = [[h] for h in aux_hidden_states]
         else:
             for i, h in enumerate(aux_hidden_states):
-                self._captured_states[i] = torch.cat(
-                    [self._captured_states[i], h], dim=0
-                )
+                self._captured_states[i].append(h)
 
     def _create_patched_forward(self, base_model):
         def patched_forward(
@@ -112,4 +110,10 @@ class HiddenStatesWorkerExtension:
         Returns:
             List of tensors, one per target layer, or None if no states captured
         """
-        return self._captured_states
+        if self._captured_states is None:
+            return None
+        # Concatenate lists of tensors into single tensors
+        result = [torch.cat(layer_tensors, dim=0) for layer_tensors in self._captured_states]
+        # Clear intermediate storage after concatenating
+        self._captured_states = None
+        return result

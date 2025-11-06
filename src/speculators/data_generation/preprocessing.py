@@ -1,70 +1,96 @@
 import bisect
-import hashlib
 import os
 import random
 import re
 
 import torch
 from datasets import Dataset as HFDataset
-from datasets import load_dataset, load_from_disk
+from datasets import load_dataset
 from transformers import AutoTokenizer, PreTrainedTokenizer
 
-from .configs import CHAT_TEMPLATES, DATASET_CONFIGS, ChatTemplate, format_conversation
+from .configs import DATASET_CONFIGS
 from .logging_utils import PipelineLogger
 from .vocab_mapping import save_token_frequency_distribution
 
 __all__ = [
     "build_eagle3_dataset",
-    "generate_cache_key",
     "load_and_preprocess_dataset",
     "load_raw_dataset",
-    "view_samples",
 ]
 
 log = PipelineLogger(__name__)
 
 
-def _apply_loss_mask_from_chat_template(
+def _normalize_conversation(conv: list[dict]) -> list[dict]:
+    """Normalize conversation to standard format with role/content keys."""
+    normalized = []
+    for turn in conv:
+        role = turn.get("from", turn.get("role", ""))
+        content = turn.get("value", turn.get("content", ""))
+
+        # Map various role names to standard user/assistant
+        if role in ("human", "user"):
+            role = "user"
+        elif role in ("gpt", "assistant"):
+            role = "assistant"
+        elif role == "system":
+            role = "system"
+        else:
+            log.warning(f"Unknown role '{role}', skipping turn")
+            continue
+
+        normalized.append({"role": role, "content": content})
+
+    return normalized
+
+
+
+
+def _create_loss_mask_from_offsets(
     text: str,
-    offsets: torch.Tensor,
-    chat_template: ChatTemplate,
+    offsets: list[tuple[int, int]],
 ) -> torch.Tensor:
-    """Apply loss mask to identify assistant response spans."""
+    """Create loss mask by finding assistant response spans in formatted text.
+
+    Args:
+        text: Formatted conversation text with chat template applied
+        offsets: Character offsets for each token [(start, end), ...]
+
+    Returns:
+        Loss mask tensor with 1 for assistant tokens, 0 otherwise
+    """
     loss_mask = torch.zeros(len(offsets), dtype=torch.long)
 
-    user_message_separator = (
-        f"{chat_template.end_of_turn_token}{chat_template.user_header}"
-    )
-    assistant_message_separator = (
-        f"{chat_template.end_of_turn_token}{chat_template.assistant_header}"
-    )
-
+    # Find all assistant response spans using the Llama 3 format
+    # Pattern: <|start_header_id|>assistant<|end_header_id|>\n\n{content}<|eot_id|>
     assistant_pattern = (
-        re.escape(assistant_message_separator)
-        + r"(.*?)(?="
-        + re.escape(user_message_separator)
-        + "|$)"
+        r"<\|start_header_id\|>assistant<\|end_header_id\|>\n\n"
+        r"(.*?)"
+        r"<\|eot_id\|>"
     )
 
     matches_found = 0
-    token_starts = [int(offset[0]) for offset in offsets]
+    token_starts = [offset[0] for offset in offsets]
 
     for match in re.finditer(assistant_pattern, text, re.DOTALL):
         matches_found += 1
-        assistant_start_char = match.start(1)
-        assistant_end_char = match.end(1)
+        # Include the header and footer in the trainable span
+        span_start_char = match.start()
+        span_end_char = match.end()
 
-        start_idx = bisect.bisect_left(token_starts, assistant_start_char)
+        # Find tokens that overlap with this character span
+        start_idx = bisect.bisect_left(token_starts, span_start_char)
 
         for idx in range(max(0, start_idx - 1), len(offsets)):
-            token_start, token_end = int(offsets[idx][0]), int(offsets[idx][1])
-            if token_start > assistant_end_char:
+            token_start, token_end = offsets[idx]
+            if token_start >= span_end_char:
                 break
-            if token_end > assistant_start_char and token_start <= assistant_end_char:
+            # Mark token as trainable if it overlaps with assistant span
+            if token_end > span_start_char and token_start < span_end_char:
                 loss_mask[idx] = 1
 
     if matches_found == 0:
-        log.warning("No assistant response spans found in the conversation text.")
+        log.warning("No assistant response spans found in conversation")
 
     return loss_mask
 
@@ -72,7 +98,6 @@ def _apply_loss_mask_from_chat_template(
 def _preprocess_batch(
     examples: dict,
     tokenizer: PreTrainedTokenizer,
-    template: ChatTemplate,
     max_length: int,
 ) -> dict[str, list]:
     """Process a batch of conversations into tokenized format with loss masks."""
@@ -80,29 +105,53 @@ def _preprocess_batch(
 
     conversations = examples.get("conversations", [])
     if not conversations:
+        log.warning(f"No conversations key found. Keys: {list(examples.keys())}")
         return results
 
-    for conv in conversations:
+    for idx, conv in enumerate(conversations):
         if not conv or not isinstance(conv, list):
             continue
 
-        text = format_conversation(conv, template)
+        # Normalize to standard format
+        normalized_conv = _normalize_conversation(conv)
+        if not normalized_conv:
+            continue
 
-        encoded = tokenizer(
-            text,
-            max_length=max_length,
-            truncation=True,
-            padding=False,
-            return_tensors="pt",
-            return_offsets_mapping=True,
-        )
-        input_ids = encoded.input_ids[0]
-        offsets = encoded.offset_mapping[0]
+        try:
+            # Get formatted text with chat template
+            formatted_text = tokenizer.apply_chat_template(
+                normalized_conv,
+                tokenize=False,
+                add_generation_prompt=False,
+            )
 
-        loss_mask = _apply_loss_mask_from_chat_template(text, offsets, template)
+            # Tokenize with offsets
+            encoding = tokenizer(
+                formatted_text,
+                return_offsets_mapping=True,
+                max_length=max_length,
+                truncation=True,
+                add_special_tokens=False,  # Already added by chat template
+            )
 
-        results["input_ids"].append(input_ids)
-        results["loss_mask"].append(loss_mask)
+            input_ids = encoding["input_ids"]
+            offsets = encoding["offset_mapping"]
+
+            # Create loss mask using character offsets
+            loss_mask = _create_loss_mask_from_offsets(formatted_text, offsets)
+
+            # Verify shapes match exactly
+            assert len(input_ids) == len(loss_mask), (
+                f"Shape mismatch: input_ids={len(input_ids)}, "
+                f"loss_mask={len(loss_mask)}"
+            )
+
+            results["input_ids"].append(torch.tensor(input_ids, dtype=torch.long))
+            results["loss_mask"].append(loss_mask)
+
+        except Exception as e:
+            log.warning(f"Failed to process conversation {idx}: {e}")
+            continue
 
     return results
 
@@ -110,36 +159,37 @@ def _preprocess_batch(
 def build_eagle3_dataset(
     dataset: HFDataset,
     tokenizer: PreTrainedTokenizer,
-    chat_template: str,
     max_length: int = 2048,
     num_proc: int = 8,
 ) -> HFDataset:
-    """Build EAGLE3 dataset by tokenizing conversations and creating loss masks."""
-    if chat_template not in CHAT_TEMPLATES:
-        raise ValueError(
-            f"Chat template '{chat_template}' not found. "
-            f"Available templates: {list(CHAT_TEMPLATES.keys())}"
-        )
-    template = CHAT_TEMPLATES[chat_template]
+    """Build EAGLE3 dataset by tokenizing conversations and creating loss masks.
+
+    Uses the tokenizer's built-in chat template via apply_chat_template.
+    """
     original_cols = dataset.column_names
 
     dataset = dataset.map(
-        lambda examples: _preprocess_batch(examples, tokenizer, template, max_length),
+        lambda examples: _preprocess_batch(examples, tokenizer, max_length),
         batched=True,
         num_proc=num_proc,
         batch_size=1000,
         remove_columns=original_cols,
-        load_from_cache_file=False,
+        load_from_cache_file=True,
     )
 
     dataset.set_format(type="torch")
     return dataset
 
 
-def load_raw_dataset(train_data_path: str, num_proc: int = 8) -> HFDataset:
-    """Load raw dataset from local file or HuggingFace."""
+def load_raw_dataset(
+    train_data_path: str, num_proc: int = 8, cache_dir: str | None = None
+) -> HFDataset:
+    """Load raw dataset from local file or HuggingFace.
+    """
     if train_data_path.endswith((".jsonl", ".json")):
-        return load_dataset("json", data_files=train_data_path, split="train")
+        return load_dataset(
+            "json", data_files=train_data_path, split="train", cache_dir=cache_dir
+        )
 
     if train_data_path not in DATASET_CONFIGS:
         raise ValueError(
@@ -148,7 +198,7 @@ def load_raw_dataset(train_data_path: str, num_proc: int = 8) -> HFDataset:
         )
 
     config = DATASET_CONFIGS[train_data_path]
-    raw_dataset = load_dataset(config.hf_path, split=config.split)
+    raw_dataset = load_dataset(config.hf_path, split=config.split, cache_dir=cache_dir)
 
     if config.normalize_fn is not None:
         raw_dataset = raw_dataset.map(config.normalize_fn, num_proc=num_proc)
@@ -156,42 +206,50 @@ def load_raw_dataset(train_data_path: str, num_proc: int = 8) -> HFDataset:
     return raw_dataset
 
 
-def generate_cache_key(
-    target_model_path: str,
-    chat_template: str,
-    seq_length: int,
-    train_data_path: str,
-) -> str:
-    """Generate MD5 cache key from preprocessing parameters."""
-    key_string = f"{target_model_path}_{chat_template}_{seq_length}_{train_data_path}"
-    return hashlib.md5(key_string.encode()).hexdigest()
-
-
 def load_and_preprocess_dataset(
     target_model_path: str,
     train_data_path: str,
-    chat_template: str,
     seq_length: int,
-    cache_dir: str,
     build_dataset_num_proc: int = 8,
     seed: int = 0,
     max_samples: int | None = None,
+    token_freq_path: str = "./token_freq.pt",
+    cache_dir: str | None = None,
 ) -> tuple[HFDataset, PreTrainedTokenizer]:
-    """Load, tokenize, and preprocess a dataset for EAGLE3 training."""
-    log.section("Starting dataset preprocessing")
+    """Load, tokenize, and preprocess a dataset for EAGLE3 training.
 
-    if chat_template not in CHAT_TEMPLATES:
-        raise ValueError(
-            f"Chat template '{chat_template}' not found. "
-            f"Available: {list(CHAT_TEMPLATES.keys())}"
-        )
+    Uses the tokenizer's built-in chat template via apply_chat_template.
+    Caching is handled automatically by HuggingFace datasets.
+
+    Args:
+        target_model_path: HuggingFace model ID or local path
+        train_data_path: Dataset name or path to JSON/JSONL file
+        seq_length: Maximum sequence length
+        build_dataset_num_proc: Number of processes for dataset building
+        seed: Random seed for shuffling
+        max_samples: Optional limit on number of samples
+        token_freq_path: Path to save token frequency distribution
+        cache_dir: Directory to cache HuggingFace datasets (optional)
+
+    Returns:
+        Tuple of (preprocessed_dataset, tokenizer)
+    """
+    log.section("Starting dataset preprocessing")
 
     log.subsection("Loading tokenizer and dataset")
     tokenizer = AutoTokenizer.from_pretrained(target_model_path, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    raw_dataset = load_raw_dataset(train_data_path, num_proc=build_dataset_num_proc)
+    if not hasattr(tokenizer, 'apply_chat_template') or tokenizer.chat_template is None:
+        raise ValueError(
+            f"Tokenizer for {target_model_path} does not support chat templates. "
+            "Please use a model with a pre-configured chat template."
+        )
+
+    raw_dataset = load_raw_dataset(
+        train_data_path, num_proc=build_dataset_num_proc, cache_dir=cache_dir
+    )
     raw_dataset = raw_dataset.shuffle(seed=seed)
 
     if max_samples is not None and len(raw_dataset) > max_samples:
@@ -199,36 +257,21 @@ def load_and_preprocess_dataset(
 
     log.info(f"Loaded {len(raw_dataset)} samples")
 
-    cache_key = generate_cache_key(
-        target_model_path, chat_template, seq_length, train_data_path
+    log.subsection("Tokenizing and building dataset")
+    if cache_dir:
+        log.info(f"Preprocessed data will be cached at: {cache_dir}")
+
+    preprocessed_dataset = build_eagle3_dataset(
+        dataset=raw_dataset,
+        tokenizer=tokenizer,
+        max_length=seq_length,
+        num_proc=build_dataset_num_proc,
     )
-    if max_samples is not None:
-        cache_key = f"{cache_key}_samples{max_samples}"
-    dataset_cache_dir = os.path.join(cache_dir, "processed_dataset", cache_key)
-    os.makedirs(dataset_cache_dir, exist_ok=True)
-
-    if os.path.exists(os.path.join(dataset_cache_dir, "dataset_info.json")):
-        log.info(f"Loading cached dataset from {dataset_cache_dir}")
-        preprocessed_dataset = load_from_disk(dataset_cache_dir)
-    else:
-        log.subsection("Tokenizing and building dataset")
-        preprocessed_dataset = build_eagle3_dataset(
-            dataset=raw_dataset,
-            tokenizer=tokenizer,
-            chat_template=chat_template,
-            max_length=seq_length,
-            num_proc=build_dataset_num_proc,
-        )
-
-        preprocessed_dataset.save_to_disk(dataset_cache_dir)
-        log.info(f"Saved preprocessed dataset to {dataset_cache_dir}")
 
     log.subsection("Computing token frequency distribution")
-    token_freq_cache_dir = os.path.join(cache_dir, "token_frequencies")
     save_token_frequency_distribution(
         dataset=preprocessed_dataset,
-        cache_dir=token_freq_cache_dir,
-        cache_key=cache_key,
+        output_path=token_freq_path,
     )
 
     log.section("Dataset preprocessing complete")
@@ -236,27 +279,3 @@ def load_and_preprocess_dataset(
     return preprocessed_dataset, tokenizer
 
 
-def view_samples(
-    dataset: HFDataset, tokenizer: PreTrainedTokenizer, num_samples: int = 3
-):
-    """View random samples for sanity check."""
-    log.section(f"Viewing {num_samples} random samples")
-
-    indices = random.sample(range(len(dataset)), min(num_samples, len(dataset)))
-
-    for idx in indices:
-        sample = dataset[idx]
-        input_ids = sample["input_ids"].squeeze()
-        loss_mask = sample["loss_mask"].squeeze()
-
-        log.info(f"\nSample {idx}:")
-        log.info(
-            f"  Shape: {input_ids.shape}, Trainable tokens: {loss_mask.sum().item()}"
-        )
-        decoded_text = tokenizer.decode(input_ids, skip_special_tokens=False)
-        log.info(f"  Text (first 500 chars):\n{decoded_text[:500]}...")
-
-        trainable_ids = input_ids[loss_mask == 1]
-        if len(trainable_ids) > 0:
-            trainable_text = tokenizer.decode(trainable_ids, skip_special_tokens=False)
-            log.info(f"  Trainable text (first 200 chars):\n{trainable_text[:200]}...")

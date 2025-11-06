@@ -15,15 +15,19 @@ __all__ = [
 
 def save_token_frequency_distribution(
     dataset: HFDataset,
-    cache_dir: str = "./cache/token_frequencies",
-    cache_key: str = "token_freq",
+    output_path: str = "./token_freq.pt",
 ) -> str:
-    """Save token frequency distribution from the dataset."""
-    os.makedirs(cache_dir, exist_ok=True)
-    freq_dist_path = os.path.join(cache_dir, f"{cache_key}_token_freq.pt")
+    """Save token frequency distribution from the dataset.
 
-    if os.path.exists(freq_dist_path):
-        return freq_dist_path
+    Args:
+        dataset: HuggingFace dataset with input_ids and loss_mask
+        output_path: Path where to save the token frequency distribution
+
+    Returns:
+        Path to the saved frequency distribution file
+    """
+    if os.path.exists(output_path):
+        return output_path
 
     token_freq: Counter[int] = Counter()
     for item in tqdm(dataset, desc="Counting token frequencies"):
@@ -35,9 +39,9 @@ def save_token_frequency_distribution(
         token_freq.update(batch_token_freq)
 
     token_freq_dict = dict(token_freq)
-    torch.save(token_freq_dict, freq_dist_path)
+    torch.save(token_freq_dict, output_path)
 
-    return freq_dist_path
+    return output_path
 
 
 def build_vocab_mappings_from_distribution(

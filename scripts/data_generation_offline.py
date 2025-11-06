@@ -7,12 +7,15 @@ This script generates training data for EAGLE models by:
 2. Using vLLM to extract hidden states from target model
 3. Saving each data point as a separate .pt file
 
+Preprocessing is cached automatically by HuggingFace datasets.
+Token frequencies are saved in the current directory by default.
+
 Usage:
     python data_generation_offline.py \
         --target-model-path meta-llama/Llama-3.1-8B \
         --train-data-path sharegpt \
-        --chat-template llama3 \
         --output-dir ./training_data \
+        --hf-cache-dir /path/to/cache \
         --max-samples 5000
 """
 
@@ -24,14 +27,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
 import torch
-from datasets import load_from_disk
 from tqdm import tqdm  # type: ignore[import-untyped]
 
 from speculators.data_generation.logging_utils import PipelineLogger
-from speculators.data_generation.preprocessing import (
-    generate_cache_key,
-    load_and_preprocess_dataset,
-)
+from speculators.data_generation.preprocessing import load_and_preprocess_dataset
 from speculators.data_generation.vllm_hidden_states_generator import (
     VllmHiddenStatesGenerator,
 )
@@ -79,28 +78,32 @@ def parse_args():
         help="Path to training data (same as used in preprocessing)",
     )
     parser.add_argument(
-        "--chat-template",
-        type=str,
-        required=True,
-        help="Chat template name (same as used in preprocessing)",
-    )
-    parser.add_argument(
         "--seq-length",
         type=int,
         default=2048,
         help="Maximum sequence length (same as used in preprocessing, default: 2048)",
     )
     parser.add_argument(
-        "--cache-dir",
-        type=str,
-        default="./cache",
-        help="Directory where preprocessed data is cached (default: ./cache)",
-    )
-    parser.add_argument(
         "--max-samples",
         type=int,
         default=None,
         help="Maximum number of samples to process (default: None, process all)",
+    )
+    parser.add_argument(
+        "--token-freq-path",
+        type=str,
+        default="./token_freq.pt",
+        help="Path to save token frequency distribution (default: ./token_freq.pt)",
+    )
+    parser.add_argument(
+        "--hf-cache-dir",
+        type=str,
+        default=None,
+        help=(
+            "Directory for HuggingFace datasets cache. "
+            "If not specified, uses HF_DATASETS_CACHE env var or default location. "
+            "(default: None)"
+        ),
     )
 
     # Output arguments
@@ -149,43 +152,6 @@ def parse_args():
     return parser.parse_args()
 
 
-def load_or_preprocess_dataset(args):
-    """Load preprocessed dataset from cache, or run preprocessing if needed."""
-    cache_key = generate_cache_key(
-        args.target_model_path,
-        args.chat_template,
-        args.seq_length,
-        args.train_data_path,
-    )
-
-    if args.max_samples is not None:
-        cache_key = f"{cache_key}_samples{args.max_samples}"
-
-    dataset_cache_dir = os.path.join(args.cache_dir, "processed_dataset", cache_key)
-
-    if os.path.exists(dataset_cache_dir):
-        log.subsection("Loading cached preprocessed data")
-        log.info(f"Cache: {dataset_cache_dir}")
-        dataset = load_from_disk(dataset_cache_dir)
-        log.info(f"Loaded {len(dataset)} samples")
-    else:
-        log.subsection(
-            "Preprocessed data not found - running preprocessing automatically"
-        )
-
-        dataset, _ = load_and_preprocess_dataset(
-            target_model_path=args.target_model_path,
-            train_data_path=args.train_data_path,
-            chat_template=args.chat_template,
-            seq_length=args.seq_length,
-            cache_dir=args.cache_dir,
-            build_dataset_num_proc=args.num_preprocessing_workers,
-            seed=args.seed,
-            max_samples=args.max_samples,
-        )
-        log.info(f"Data cached at: {dataset_cache_dir}")
-
-    return dataset
 
 
 def find_last_checkpoint(output_dir: str) -> int:
@@ -225,11 +191,11 @@ def save_config(args, generator, num_samples, output_dir):
         },
         "data": {
             "train_data_path": args.train_data_path,
-            "chat_template": args.chat_template,
             "seq_length": args.seq_length,
             "max_samples": args.max_samples,
             "num_samples": num_samples,
             "seed": args.seed,
+            "note": "Chat template is from tokenizer's built-in template",
         },
         "hidden_states": {
             "layer_ids": generator.layer_ids,
@@ -240,7 +206,7 @@ def save_config(args, generator, num_samples, output_dir):
         },
         "generation": {
             "batch_size": args.batch_size,
-            "cache_dir": args.cache_dir,
+            "token_freq_path": args.token_freq_path,
         },
         "format": {
             "file_pattern": "data_{idx}.pt",
@@ -311,9 +277,9 @@ def generate_and_save_hidden_states(args, dataset):
             # Submit save operations to thread pool (async I/O)
             for j, result in enumerate(results):
                 result_cleaned = {
-                    "input_ids": result["input_ids"].clone(),
-                    "hidden_states": [h.clone() for h in result["hidden_states"]],
-                    "loss_mask": batch_loss_mask[j].clone(),
+                    "input_ids": result["input_ids"],
+                    "hidden_states": [h.contiguous() for h in result["hidden_states"]],
+                    "loss_mask": batch_loss_mask[j],
                 }
                 output_path = os.path.join(args.output_dir, f"data_{file_idx}.pt")
                 future = thread_executor.submit(
@@ -344,14 +310,22 @@ def main():
         {
             "Target Model": args.target_model_path,
             "Dataset": args.train_data_path,
-            "Chat Template": args.chat_template,
             "Output Dir": args.output_dir,
             "Tensor Parallel": args.tensor_parallel_size,
             "Batch Size": args.batch_size,
         }
     )
 
-    dataset = load_or_preprocess_dataset(args)
+    dataset, _ = load_and_preprocess_dataset(
+        target_model_path=args.target_model_path,
+        train_data_path=args.train_data_path,
+        seq_length=args.seq_length,
+        build_dataset_num_proc=args.num_preprocessing_workers,
+        seed=args.seed,
+        max_samples=args.max_samples,
+        token_freq_path=args.token_freq_path,
+        cache_dir=args.hf_cache_dir,
+    )
     num_saved = generate_and_save_hidden_states(args, dataset)
 
     log.section("Data generation complete!")

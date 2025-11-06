@@ -213,11 +213,7 @@ class VllmHiddenStatesGenerator:
         self.executor.collective_rpc("_enable_capture")
 
         schedule_iterations = 0
-        while True:
-            scheduler_output = self.scheduler.schedule()
-            if scheduler_output.total_num_scheduled_tokens == 0:
-                break
-
+        while (scheduler_output := self.scheduler.schedule()).total_num_scheduled_tokens > 0:
             schedule_iterations += 1
             log.debug(
                 f"Scheduler iteration {schedule_iterations} - tokens: "
@@ -262,7 +258,6 @@ class VllmHiddenStatesGenerator:
             )
             offset += seq_len
 
-        del aux_hidden_states
         torch.cuda.empty_cache()
 
         return results
@@ -272,4 +267,4 @@ class VllmHiddenStatesGenerator:
             try:
                 self.executor.shutdown()
             except Exception:
-                pass
+                log.warning("Exception during executor shutdown", exc_info=True)
