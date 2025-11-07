@@ -155,8 +155,6 @@ def parse_args():
     return parser.parse_args()
 
 
-
-
 def find_last_checkpoint(output_dir: str) -> int:
     """Find the last successfully saved file index by scanning existing files."""
     if not os.path.exists(output_dir):

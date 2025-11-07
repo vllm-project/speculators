@@ -37,8 +37,8 @@ def _patched_forward(
         residual = intermediate_tensors["residual"]
 
     aux_hidden_states = []
-    extension = self._extension
-    should_capture = extension._should_capture and get_tp_group().rank_in_group == 0
+    extension = self._extension  # noqa: SLF001
+    should_capture = extension._should_capture and get_tp_group().rank_in_group == 0  # noqa: SLF001
     target_layers = self.aux_hidden_state_layers if should_capture else frozenset()
 
     for idx, layer in enumerate(islice(self.layers, self.start_layer, self.end_layer)):
@@ -57,7 +57,7 @@ def _patched_forward(
 
     hidden_states, _ = self.norm(hidden_states, residual)
     if should_capture and aux_hidden_states:
-        extension._store_captured_states(aux_hidden_states)
+        extension._store_captured_states(aux_hidden_states)  # noqa: SLF001
 
     return hidden_states
 
@@ -92,7 +92,7 @@ class HiddenStatesWorkerExtension:
 
         base_model = model.model  # type: ignore[attr-defined]
         base_model.aux_hidden_state_layers = tuple(layer_ids)
-        base_model._extension = self
+        base_model._extension = self  # noqa: SLF001
 
         base_model.forward = types.MethodType(_patched_forward, base_model)
         logger.info(f"Hidden states capture setup complete for layers {layer_ids}")
@@ -116,7 +116,9 @@ class HiddenStatesWorkerExtension:
         if self._captured_states is None:
             return None
         # Concatenate lists of tensors into single tensors
-        result = [torch.cat(layer_tensors, dim=0) for layer_tensors in self._captured_states]
+        result = [
+            torch.cat(layer_tensors, dim=0) for layer_tensors in self._captured_states
+        ]
         # Clear intermediate storage after concatenating
         self._captured_states = None
         return result

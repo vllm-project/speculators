@@ -149,7 +149,9 @@ class VllmHiddenStatesGenerator:
         # warmup allocation size (see gpu_worker.py:441-444).
         # We set it to a small value since we only do prefill in batches.
         max_num_seqs = MAX_NUM_SEQS
-        max_num_batched_tokens = max(MIN_MAX_BATCHED_TOKENS, max_model_len)  # Reduced from 65536
+        max_num_batched_tokens = max(
+            MIN_MAX_BATCHED_TOKENS, max_model_len
+        )  # Reduced from 65536
 
         return VllmConfig(
             model_config=ModelConfig(
@@ -224,7 +226,9 @@ class VllmHiddenStatesGenerator:
         self.executor.collective_rpc("_enable_capture")
 
         schedule_iterations = 0
-        while (scheduler_output := self.scheduler.schedule()).total_num_scheduled_tokens > 0:
+        while (
+            scheduler_output := self.scheduler.schedule()
+        ).total_num_scheduled_tokens > 0:
             schedule_iterations += 1
             log.debug(
                 f"Scheduler iteration {schedule_iterations} - tokens: "

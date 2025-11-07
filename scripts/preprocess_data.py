@@ -16,7 +16,6 @@ Usage:
 
 import argparse
 import logging
-import os
 
 from speculators.data_generation.preprocessing import load_and_preprocess_dataset
 
