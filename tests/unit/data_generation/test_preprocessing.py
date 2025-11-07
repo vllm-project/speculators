@@ -18,7 +18,8 @@ from speculators.data_generation.preprocessing import (
 )
 
 # Test model from HuggingFace with chat template
-# Using Qwen2-0.5B-Instruct: small (0.5B params), fast model with proper chat template support
+# Using Qwen2-0.5B-Instruct: small (0.5B params), fast model with proper
+# chat template support
 TEST_MODEL_REPO = "Qwen/Qwen2-0.5B-Instruct"
 
 
@@ -33,8 +34,14 @@ def test_normalize_conversation_sharegpt_format():
     result = _normalize_conversation(conv)
 
     assert len(result) == 2
-    assert result[0] == {"role": "user", "content": "What is the capital of France?"}
-    assert result[1] == {"role": "assistant", "content": "Paris is the capital of France."}
+    assert result[0] == {
+        "role": "user",
+        "content": "What is the capital of France?",
+    }
+    assert result[1] == {
+        "role": "assistant",
+        "content": "Paris is the capital of France.",
+    }
 
 
 @pytest.mark.sanity
@@ -69,7 +76,6 @@ def test_normalize_conversation_unknown_role():
     assert result[1]["role"] == "assistant"
 
 
-
 # Tests for _detect_assistant_pattern
 @pytest.mark.sanity
 def test_detect_assistant_pattern_structure():
@@ -91,7 +97,9 @@ def test_detect_assistant_pattern_structure():
 
     # Pattern should contain exactly one capture group for content
     assert pattern.count("(") == pattern.count(")")
-    assert "(.*?)" in pattern, "Pattern should have a non-greedy capture group for content"
+    assert "(.*?)" in pattern, (
+        "Pattern should have a non-greedy capture group for content"
+    )
 
 
 @pytest.mark.sanity
@@ -121,9 +129,15 @@ def test_detect_assistant_pattern_correctly_identifies_assistant_vs_user():
     assert len(matches) == 1, f"Expected 1 match, got {len(matches)}"
 
     # The match should capture only ASSISTANT_MSG, not USER_MSG
-    captured_content = matches[0].group(1) if matches[0].lastindex else matches[0].group(0)
-    assert "ASSISTANT_MSG" in captured_content, "Pattern should capture assistant content"
-    assert "USER_MSG" not in captured_content, "Pattern should NOT capture user content"
+    captured_content = (
+        matches[0].group(1) if matches[0].lastindex else matches[0].group(0)
+    )
+    assert "ASSISTANT_MSG" in captured_content, (
+        "Pattern should capture assistant content"
+    )
+    assert "USER_MSG" not in captured_content, (
+        "Pattern should NOT capture user content"
+    )
 
 
 @pytest.mark.sanity
@@ -271,7 +285,9 @@ def test_preprocess_batch_basic():
     }
 
     assistant_pattern = _detect_assistant_pattern(tokenizer)
-    results = _preprocess_batch(examples, tokenizer, max_length=512, assistant_pattern=assistant_pattern)
+    results = _preprocess_batch(
+        examples, tokenizer, max_length=512, assistant_pattern=assistant_pattern
+    )
 
     assert "input_ids" in results
     assert "loss_mask" in results
@@ -295,7 +311,9 @@ def test_preprocess_batch_empty_conversations():
 
     examples = {"conversations": []}
     assistant_pattern = _detect_assistant_pattern(tokenizer)
-    results = _preprocess_batch(examples, tokenizer, max_length=512, assistant_pattern=assistant_pattern)
+    results = _preprocess_batch(
+        examples, tokenizer, max_length=512, assistant_pattern=assistant_pattern
+    )
 
     assert results["input_ids"] == []
     assert results["loss_mask"] == []
@@ -321,7 +339,9 @@ def test_preprocess_batch_invalid_conversation():
     }
 
     assistant_pattern = _detect_assistant_pattern(tokenizer)
-    results = _preprocess_batch(examples, tokenizer, max_length=512, assistant_pattern=assistant_pattern)
+    results = _preprocess_batch(
+        examples, tokenizer, max_length=512, assistant_pattern=assistant_pattern
+    )
 
     # Should only process the valid conversation
     assert len(results["input_ids"]) <= 1
@@ -353,7 +373,9 @@ def test_preprocess_batch_truncation():
 
     max_length = 100
     assistant_pattern = _detect_assistant_pattern(tokenizer)
-    results = _preprocess_batch(examples, tokenizer, max_length=max_length, assistant_pattern=assistant_pattern)
+    results = _preprocess_batch(
+        examples, tokenizer, max_length=max_length, assistant_pattern=assistant_pattern
+    )
 
     if len(results["input_ids"]) > 0:
         # Should be truncated to max_length
