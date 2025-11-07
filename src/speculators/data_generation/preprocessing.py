@@ -137,6 +137,8 @@ def _preprocess_batch(
                 tokenize=False,
                 add_generation_prompt=False,
             )
+            # Type assertion: tokenize=False returns str
+            assert isinstance(formatted_raw, str)
 
             # Tokenize with offsets
             encoding = tokenizer(

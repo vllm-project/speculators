@@ -135,9 +135,7 @@ def test_detect_assistant_pattern_correctly_identifies_assistant_vs_user():
     assert "ASSISTANT_MSG" in captured_content, (
         "Pattern should capture assistant content"
     )
-    assert "USER_MSG" not in captured_content, (
-        "Pattern should NOT capture user content"
-    )
+    assert "USER_MSG" not in captured_content, "Pattern should NOT capture user content"
 
 
 @pytest.mark.sanity
@@ -309,7 +307,7 @@ def test_preprocess_batch_empty_conversations():
     if not hasattr(tokenizer, "apply_chat_template") or tokenizer.chat_template is None:
         pytest.skip("Tokenizer does not support chat templates")
 
-    examples = {"conversations": []}
+    examples: dict[str, list] = {"conversations": []}
     assistant_pattern = _detect_assistant_pattern(tokenizer)
     results = _preprocess_batch(
         examples, tokenizer, max_length=512, assistant_pattern=assistant_pattern

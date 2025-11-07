@@ -32,6 +32,7 @@ def cleanup_memory():
     time.sleep(1)  # Give time for cleanup
 
 
+@pytest.mark.regression
 @pytest.mark.parametrize(
     ("model_path", "tensor_parallel_size"),
     [
@@ -186,10 +187,6 @@ def test_vllm_vs_huggingface_accuracy(model_path, tensor_parallel_size):
     mean_diff = torch.abs(hf_concat - vllm_concat).mean().item()
     logger.info(f"Max diff: {max_diff:.6f}, Mean diff: {mean_diff:.6f}")
 
-    # Mean diff should be small - relaxed tolerance due to:
-    # 1. bfloat16 precision
-    # 2. Different computation order between HF and vLLM
-    # 3. Potential numerical differences in norm implementation
     assert mean_diff < 0.02, (
         f"Mean difference {mean_diff} too large. "
         f"Expected layer_ids={expected_layer_ids}"
