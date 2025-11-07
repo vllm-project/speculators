@@ -33,6 +33,7 @@ def cleanup_memory():
 
 
 @pytest.mark.regression
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
 @pytest.mark.parametrize(
     ("model_path", "tensor_parallel_size"),
     [
