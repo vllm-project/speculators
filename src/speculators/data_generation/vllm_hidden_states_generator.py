@@ -1,4 +1,28 @@
-"""Extract hidden states from intermediate layers during prefill using vLLM."""
+"""Extract hidden states from intermediate layers during prefill using vLLM.
+
+This module provides a generator for extracting hidden states from transformer models
+during the prefill phase using VLLM's inference engine. It is designed for generating
+training data for speculative decoding models like EAGLE3.
+
+The generator:
+- Uses VLLM's multiprocess executor for efficient batch inference
+- Patches model forward pass to capture intermediate layer hidden states
+- Operates in prefill-only mode (max_tokens=1) for data generation
+- Supports tensor parallelism for large models
+- Automatically manages KV cache and memory allocation
+
+Example:
+    generator = VllmHiddenStatesGenerator(
+        model_path="meta-llama/Llama-3.1-8B",
+        layer_ids=[10, 20, 30],
+        tensor_parallel_size=2
+    )
+
+    results = generator.generate(token_ids)
+    for result in results:
+        input_ids = result["input_ids"]
+        hidden_states = result["hidden_states"]  # List of tensors per layer
+"""
 
 import torch
 from transformers import AutoConfig, AutoTokenizer
@@ -222,8 +246,7 @@ class VllmHiddenStatesGenerator:
         # Increment to ensure unique request IDs across calls
         # (prevents KV cache corruption with delayed block freeing)
         self._request_counter += 1
-
-        self.executor.collective_rpc("_enable_capture")
+        self.executor.collective_rpc("_reset_capture")
 
         schedule_iterations = 0
         while (
@@ -246,8 +269,6 @@ class VllmHiddenStatesGenerator:
             unique_reply_rank=0,
         )
         aux_hidden_states = captured_states_list[0]
-
-        self.executor.collective_rpc("_disable_capture")
 
         if not aux_hidden_states:
             raise RuntimeError("Failed to capture hidden states from worker")

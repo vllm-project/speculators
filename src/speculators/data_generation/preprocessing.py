@@ -137,13 +137,10 @@ def _preprocess_batch(
                 tokenize=False,
                 add_generation_prompt=False,
             )
-            # Type assertion: when tokenize=False, result is always str
-            assert isinstance(formatted_raw, str)
-            formatted_text: str = formatted_raw
 
             # Tokenize with offsets
             encoding = tokenizer(
-                formatted_text,
+                formatted_raw,
                 return_offsets_mapping=True,
                 max_length=max_length,
                 truncation=True,
@@ -155,7 +152,7 @@ def _preprocess_batch(
 
             # Create loss mask using character offsets
             loss_mask = _create_loss_mask_from_offsets(
-                formatted_text, offsets, assistant_pattern
+                formatted_raw, offsets, assistant_pattern
             )
 
             # Verify shapes match exactly

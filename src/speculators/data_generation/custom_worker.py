@@ -38,8 +38,9 @@ def _patched_forward(
 
     aux_hidden_states = []
     extension = self._extension  # noqa: SLF001
-    should_capture = extension._should_capture and get_tp_group().rank_in_group == 0  # noqa: SLF001
-    target_layers = self.aux_hidden_state_layers if should_capture else frozenset()
+    # Only capture on TP rank 0 to avoid duplicates
+    should_capture = get_tp_group().rank_in_group == 0
+    target_layers = extension._layer_ids if should_capture else frozenset()  # noqa: SLF001
 
     for idx, layer in enumerate(islice(self.layers, self.start_layer, self.end_layer)):
         hidden_states, residual = layer(positions, hidden_states, residual)
@@ -63,11 +64,28 @@ def _patched_forward(
 
 
 class HiddenStatesWorkerExtension:
-    """Worker extension that adds hidden states capture functionality."""
+    """Worker extension that adds hidden states capture functionality.
 
-    _layer_ids: list[int]
+    This extension hooks into VLLM's Worker initialization by being specified
+    in ParallelConfig.worker_extension_cls. It patches the model's forward pass
+    to intercept and capture intermediate layer hidden states during inference.
+
+    Key behaviors:
+    - Only captures on tensor parallel (TP) rank 0 to avoid duplicate data when
+      using tensor parallelism. All TP ranks compute the same hidden states, so
+      capturing from rank 0 is sufficient.
+    - Stores captured states in GPU memory during batch processing as lists of
+      tensors, concatenating them only when retrieved via _get_captured_states().
+    - Supports pipeline parallelism by handling IntermediateTensors correctly.
+
+    Attributes:
+        _layer_ids: Frozenset of layer indices for O(1) lookup during capture
+        _captured_states: Accumulated hidden states per layer (GPU tensors)
+        model_runner: Reference to the VLLM model runner
+    """
+
+    _layer_ids: frozenset[int]
     _captured_states: list[Any] | None
-    _should_capture: bool
     model_runner: Any
 
     def _store_captured_states(self, aux_hidden_states):
@@ -79,9 +97,8 @@ class HiddenStatesWorkerExtension:
 
     def _setup_hidden_states_capture(self, layer_ids: list[int]):
         """Setup model to capture auxiliary hidden states from specific layers"""
-        self._layer_ids = layer_ids
+        self._layer_ids = frozenset(layer_ids)  # Convert once for O(1) lookup
         self._captured_states = None
-        self._should_capture = False
 
         model = self.model_runner.model
 
@@ -91,20 +108,16 @@ class HiddenStatesWorkerExtension:
             )
 
         base_model = model.model  # type: ignore[attr-defined]
-        base_model.aux_hidden_state_layers = tuple(layer_ids)
         base_model._extension = self  # noqa: SLF001
-
         base_model.forward = types.MethodType(_patched_forward, base_model)
         logger.info(f"Hidden states capture setup complete for layers {layer_ids}")
 
-    def _enable_capture(self):
-        """Enable hidden states capture"""
-        self._should_capture = True
-        self._captured_states = None
-
-    def _disable_capture(self):
-        """Disable hidden states capture and clear captured data"""
-        self._should_capture = False
+    def _reset_capture(self):
+        """Reset captured states before starting a new batch"""
+        if not hasattr(self, "_layer_ids"):
+            raise RuntimeError(
+                "Must call _setup_hidden_states_capture before capturing states"
+            )
         self._captured_states = None
 
     def _get_captured_states(self):
