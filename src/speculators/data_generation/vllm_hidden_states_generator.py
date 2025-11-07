@@ -25,6 +25,15 @@ from .logging_utils import PipelineLogger
 
 __all__ = ["VllmHiddenStatesGenerator"]
 
+# Constants
+CACHE_MEMORY_FRACTION = 0.2  # Fraction of GPU memory for KV cache
+VLLM_BLOCK_SIZE = 16  # Block size for KV cache
+MAX_NUM_SEQS = 32  # Maximum sequences for prefill-only workload
+MIN_MAX_BATCHED_TOKENS = 8192  # Minimum batched tokens threshold
+MAX_DECODE_TOKENS = 1  # Maximum tokens to generate (prefill only)
+SAMPLING_TEMPERATURE = 0.0  # Temperature for sampling (greedy)
+INITIAL_ARRIVAL_TIME = 0.0  # Initial request arrival time
+
 log = PipelineLogger(__name__)
 
 
@@ -98,7 +107,7 @@ class VllmHiddenStatesGenerator:
         kv_cache_groups = _get_kv_cache_groups_uniform_spec(kv_cache_spec)
 
         free_memory, _ = torch.cuda.mem_get_info()
-        cache_memory = int(free_memory * gpu_memory_utilization * 0.2)
+        cache_memory = int(free_memory * gpu_memory_utilization * CACHE_MEMORY_FRACTION)
 
         kv_cache_config = get_kv_cache_config_from_groups(
             vllm_config=self.vllm_config,
@@ -131,7 +140,7 @@ class VllmHiddenStatesGenerator:
     ) -> VllmConfig:
         """Create VllmConfig with hidden states worker extension"""
         cache_config = CacheConfig(
-            block_size=16,
+            block_size=VLLM_BLOCK_SIZE,
             gpu_memory_utilization=gpu_memory_utilization,
         )
 
@@ -139,8 +148,8 @@ class VllmHiddenStatesGenerator:
         # to reduce warmup memory allocation. max_num_seqs controls the
         # warmup allocation size (see gpu_worker.py:441-444).
         # We set it to a small value since we only do prefill in batches.
-        max_num_seqs = 32
-        max_num_batched_tokens = max(8192, max_model_len)  # Reduced from 65536
+        max_num_seqs = MAX_NUM_SEQS
+        max_num_batched_tokens = max(MIN_MAX_BATCHED_TOKENS, max_model_len)  # Reduced from 65536
 
         return VllmConfig(
             model_config=ModelConfig(
@@ -199,10 +208,12 @@ class VllmHiddenStatesGenerator:
             req = Request(
                 request_id=f"req_{self._request_counter}_{i}",
                 prompt_token_ids=ids_list,
-                sampling_params=SamplingParams(max_tokens=1, temperature=0.0),
+                sampling_params=SamplingParams(
+                    max_tokens=MAX_DECODE_TOKENS, temperature=SAMPLING_TEMPERATURE
+                ),
                 pooling_params=None,
                 eos_token_id=self.tokenizer.eos_token_id,
-                arrival_time=0.0,
+                arrival_time=INITIAL_ARRIVAL_TIME,
             )
             self.scheduler.add_request(req)
 

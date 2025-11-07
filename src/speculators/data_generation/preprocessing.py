@@ -8,9 +8,9 @@ from datasets import Dataset as HFDataset
 from datasets import load_dataset
 from transformers import AutoTokenizer, PreTrainedTokenizer
 
-from .configs import DATASET_CONFIGS
-from .logging_utils import PipelineLogger
-from .vocab_mapping import save_token_frequency_distribution
+from speculators.data_generation.configs import DATASET_CONFIGS
+from speculators.data_generation.logging_utils import PipelineLogger
+from speculators.data_generation.vocab_mapping import save_token_frequency_distribution
 
 __all__ = [
     "build_eagle3_dataset",
@@ -46,39 +46,54 @@ def _normalize_conversation(conv: list[dict]) -> list[dict]:
 
 
 
+def _detect_assistant_pattern(tokenizer: PreTrainedTokenizer) -> str:
+    """Auto-detect the assistant message pattern from the tokenizer's 
+    chat template using a dummy example.
+
+    TODO: Replace this with return_assistant_tokens_mask when more models
+    support it natively.
+    """
+
+    test_conv = [
+        {"role": "user", "content": "USER_MSG"},
+        {"role": "assistant", "content": "ASSISTANT_MSG"},
+    ]
+
+    formatted = tokenizer.apply_chat_template(
+        test_conv, tokenize=False, add_generation_prompt=False
+    )
+
+    assistant_start = formatted.find("ASSISTANT_MSG")
+    if assistant_start == -1:
+        raise ValueError("Could not detect assistant message in chat template")
+
+    assistant_end = assistant_start + len("ASSISTANT_MSG")
+    user_end = formatted.find("USER_MSG") + len("USER_MSG")
+    prefix = formatted[user_end:assistant_start]
+
+    suffix = formatted[assistant_end:]
+    pattern = re.escape(prefix) + r"(.*?)" + re.escape(suffix)
+
+    return pattern
+
+
 def _create_loss_mask_from_offsets(
     text: str,
     offsets: list[tuple[int, int]],
+    assistant_pattern: str,
 ) -> torch.Tensor:
     """Create loss mask by finding assistant response spans in formatted text.
-
-    Args:
-        text: Formatted conversation text with chat template applied
-        offsets: Character offsets for each token [(start, end), ...]
-
-    Returns:
-        Loss mask tensor with 1 for assistant tokens, 0 otherwise
     """
     loss_mask = torch.zeros(len(offsets), dtype=torch.long)
-
-    # Find all assistant response spans using the Llama 3 format
-    # Pattern: <|start_header_id|>assistant<|end_header_id|>\n\n{content}<|eot_id|>
-    assistant_pattern = (
-        r"<\|start_header_id\|>assistant<\|end_header_id\|>\n\n"
-        r"(.*?)"
-        r"<\|eot_id\|>"
-    )
 
     matches_found = 0
     token_starts = [offset[0] for offset in offsets]
 
     for match in re.finditer(assistant_pattern, text, re.DOTALL):
         matches_found += 1
-        # Include the header and footer in the trainable span
+
         span_start_char = match.start()
         span_end_char = match.end()
-
-        # Find tokens that overlap with this character span
         start_idx = bisect.bisect_left(token_starts, span_start_char)
 
         for idx in range(max(0, start_idx - 1), len(offsets)):
@@ -99,11 +114,13 @@ def _preprocess_batch(
     examples: dict,
     tokenizer: PreTrainedTokenizer,
     max_length: int,
+    assistant_pattern: str,
 ) -> dict[str, list]:
     """Process a batch of conversations into tokenized format with loss masks."""
+    
     results: dict[str, list] = {"input_ids": [], "loss_mask": []}
-
     conversations = examples.get("conversations", [])
+
     if not conversations:
         log.warning(f"No conversations key found. Keys: {list(examples.keys())}")
         return results
@@ -131,14 +148,14 @@ def _preprocess_batch(
                 return_offsets_mapping=True,
                 max_length=max_length,
                 truncation=True,
-                add_special_tokens=False,  # Already added by chat template
+                add_special_tokens=False,
             )
 
             input_ids = encoding["input_ids"]
             offsets = encoding["offset_mapping"]
 
             # Create loss mask using character offsets
-            loss_mask = _create_loss_mask_from_offsets(formatted_text, offsets)
+            loss_mask = _create_loss_mask_from_offsets(formatted_text, offsets, assistant_pattern)
 
             # Verify shapes match exactly
             assert len(input_ids) == len(loss_mask), (
@@ -166,10 +183,14 @@ def build_eagle3_dataset(
 
     Uses the tokenizer's built-in chat template via apply_chat_template.
     """
+    # Detect assistant message pattern from chat template
+    assistant_pattern = _detect_assistant_pattern(tokenizer)
+    log.info(f"Detected assistant pattern: {assistant_pattern[:80]}...")
+
     original_cols = dataset.column_names
 
     dataset = dataset.map(
-        lambda examples: _preprocess_batch(examples, tokenizer, max_length),
+        lambda examples: _preprocess_batch(examples, tokenizer, max_length, assistant_pattern),
         batched=True,
         num_proc=num_proc,
         batch_size=1000,

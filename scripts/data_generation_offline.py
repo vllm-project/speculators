@@ -35,6 +35,9 @@ from speculators.data_generation.vllm_hidden_states_generator import (
     VllmHiddenStatesGenerator,
 )
 
+# Constants
+MAX_IO_WORKERS = 4  # Number of parallel file save operations
+
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
@@ -255,7 +258,7 @@ def generate_and_save_hidden_states(args, dataset):
     ) // args.batch_size
 
     # Use ThreadPoolExecutor for async file I/O
-    max_io_workers = 4  # Number of parallel save operations
+    max_io_workers = MAX_IO_WORKERS
 
     pbar = tqdm(
         range(start_sample_idx, num_samples, args.batch_size),

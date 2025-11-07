@@ -1,6 +1,7 @@
 """Custom worker extension for hidden states capture."""
 
 import logging
+import types
 from itertools import islice
 from typing import Any
 
@@ -12,6 +13,53 @@ from vllm.sequence import IntermediateTensors
 __all__ = ["HiddenStatesWorkerExtension"]
 
 logger = logging.getLogger(__name__)
+
+
+def _patched_forward(
+    self, input_ids, positions, intermediate_tensors=None, inputs_embeds=None
+):
+    """Patched forward pass that captures hidden states from specified layers.
+
+    This function is bound to base_model instances via types.MethodType.
+    It expects base_model to have an _extension attribute pointing to the
+    HiddenStatesWorkerExtension instance.
+    """
+    if get_pp_group().is_first_rank:
+        hidden_states = (
+            inputs_embeds
+            if inputs_embeds is not None
+            else self.get_input_embeddings(input_ids)
+        )
+        residual = None
+    else:
+        assert intermediate_tensors is not None
+        hidden_states = intermediate_tensors["hidden_states"]
+        residual = intermediate_tensors["residual"]
+
+    aux_hidden_states = []
+    extension = self._extension
+    should_capture = extension._should_capture and get_tp_group().rank_in_group == 0
+    target_layers = self.aux_hidden_state_layers if should_capture else frozenset()
+
+    for idx, layer in enumerate(islice(self.layers, self.start_layer, self.end_layer)):
+        hidden_states, residual = layer(positions, hidden_states, residual)
+        absolute_layer_idx = self.start_layer + idx
+
+        # Capture intermediate layers (not the last) before norm
+        if absolute_layer_idx in target_layers:
+            aux_hidden_states.append((hidden_states + residual).clone())
+
+    # Return early if not last PP rank
+    if not get_pp_group().is_last_rank:
+        return IntermediateTensors(
+            {"hidden_states": hidden_states, "residual": residual}
+        )
+
+    hidden_states, _ = self.norm(hidden_states, residual)
+    if should_capture and aux_hidden_states:
+        extension._store_captured_states(aux_hidden_states)
+
+    return hidden_states
 
 
 class HiddenStatesWorkerExtension:
@@ -29,52 +77,6 @@ class HiddenStatesWorkerExtension:
             for i, h in enumerate(aux_hidden_states):
                 self._captured_states[i].append(h)
 
-    def _create_patched_forward(self, base_model):
-        def patched_forward(
-            input_ids, positions, intermediate_tensors=None, inputs_embeds=None
-        ):
-            if get_pp_group().is_first_rank:
-                hidden_states = (
-                    inputs_embeds
-                    if inputs_embeds is not None
-                    else base_model.get_input_embeddings(input_ids)
-                )
-                residual = None
-            else:
-                assert intermediate_tensors is not None
-                hidden_states = intermediate_tensors["hidden_states"]
-                residual = intermediate_tensors["residual"]
-
-            aux_hidden_states = []
-            should_capture = self._should_capture and get_tp_group().rank_in_group == 0
-            target_layers = (
-                base_model.aux_hidden_state_layers if should_capture else frozenset()
-            )
-
-            for idx, layer in enumerate(
-                islice(base_model.layers, base_model.start_layer, base_model.end_layer)
-            ):
-                hidden_states, residual = layer(positions, hidden_states, residual)
-                absolute_layer_idx = base_model.start_layer + idx
-
-                # Capture intermediate layers (not the last) before norm
-                if absolute_layer_idx in target_layers:
-                    aux_hidden_states.append((hidden_states + residual).clone())
-
-            # Return early if not last PP rank
-            if not get_pp_group().is_last_rank:
-                return IntermediateTensors(
-                    {"hidden_states": hidden_states, "residual": residual}
-                )
-
-            hidden_states, _ = base_model.norm(hidden_states, residual)
-            if should_capture and aux_hidden_states:
-                self._store_captured_states(aux_hidden_states)
-
-            return hidden_states
-
-        return patched_forward
-
     def _setup_hidden_states_capture(self, layer_ids: list[int]):
         """Setup model to capture auxiliary hidden states from specific layers"""
         self._layer_ids = layer_ids
@@ -90,8 +92,9 @@ class HiddenStatesWorkerExtension:
 
         base_model = model.model  # type: ignore[attr-defined]
         base_model.aux_hidden_state_layers = tuple(layer_ids)
+        base_model._extension = self
 
-        base_model.forward = self._create_patched_forward(base_model)
+        base_model.forward = types.MethodType(_patched_forward, base_model)
         logger.info(f"Hidden states capture setup complete for layers {layer_ids}")
 
     def _enable_capture(self):
