@@ -16,7 +16,7 @@ Usage:
 
 import argparse
 import logging
-import os
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -67,12 +67,11 @@ def parse_args():
 def main():
     args = parse_args()
 
-    if not os.path.exists(args.token_freq_path):
-        raise FileNotFoundError(
-            f"Token frequency file not found: {args.token_freq_path}"
-        )
+    token_freq_path = Path(args.token_freq_path)
+    if not token_freq_path.exists():
+        raise FileNotFoundError(f"Token frequency file not found: {token_freq_path}")
 
-    token_freq_dict = torch.load(args.token_freq_path, weights_only=True)
+    token_freq_dict = torch.load(token_freq_path, weights_only=True)
 
     d2t, t2d = build_vocab_mappings_from_distribution(
         token_freq_dict=token_freq_dict,
@@ -80,14 +79,13 @@ def main():
         target_vocab_size=args.target_vocab_size,
     )
 
-    output_dir = os.path.dirname(args.output_path)
-    if output_dir:
-        os.makedirs(output_dir, exist_ok=True)
+    output_path = Path(args.output_path)
+    output_dir = output_path.parent
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     # Save as .npy files (expected by training script)
-    base_dir = output_dir if output_dir else "."
-    d2t_path = os.path.join(base_dir, "d2t.npy")
-    t2d_path = os.path.join(base_dir, "t2d.npy")
+    d2t_path = output_dir / "d2t.npy"
+    t2d_path = output_dir / "t2d.npy"
 
     np.save(d2t_path, d2t.cpu().numpy())
     np.save(t2d_path, t2d.cpu().numpy())

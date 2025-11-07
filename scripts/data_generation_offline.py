@@ -22,9 +22,9 @@ Usage:
 import argparse
 import json
 import logging
-import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+from pathlib import Path
 
 import torch
 from tqdm import tqdm  # type: ignore[import-untyped]
@@ -157,13 +157,14 @@ def parse_args():
 
 def find_last_checkpoint(output_dir: str) -> int:
     """Find the last successfully saved file index by scanning existing files."""
-    if not os.path.exists(output_dir):
+    output_path = Path(output_dir)
+    if not output_path.exists():
         return 0
 
     max_index = -1
-    for filename in os.listdir(output_dir):
-        if filename.startswith("data_") and filename.endswith(".pt"):
-            index_str = filename[5:-3]
+    for file_path in output_path.iterdir():
+        if file_path.name.startswith("data_") and file_path.name.endswith(".pt"):
+            index_str = file_path.stem[5:]  # Remove "data_" prefix
             try:
                 index = int(index_str)
                 max_index = max(max_index, index)
@@ -218,15 +219,14 @@ def save_config(args, generator, num_samples, output_dir):
         },
     }
 
-    config_path = os.path.join(output_dir, "data_config.json")
-    with open(config_path, "w") as f:
-        json.dump(config, f, indent=2)
+    config_path = Path(output_dir) / "data_config.json"
+    config_path.write_text(json.dumps(config, indent=2))
     log.info(f"Saved config to {config_path}")
 
 
 def generate_and_save_hidden_states(args, dataset):
     """Generate hidden states and save each sample as a .pt file"""
-    os.makedirs(args.output_dir, exist_ok=True)
+    Path(args.output_dir).mkdir(parents=True, exist_ok=True)
 
     start_file_idx = find_last_checkpoint(args.output_dir)
     if start_file_idx > 0:
@@ -286,7 +286,7 @@ def generate_and_save_hidden_states(args, dataset):
                     "hidden_states": [h.contiguous() for h in result["hidden_states"]],
                     "loss_mask": loss_mask,
                 }
-                output_path = os.path.join(args.output_dir, f"data_{file_idx}.pt")
+                output_path = Path(args.output_dir) / f"data_{file_idx}.pt"
                 future = thread_executor.submit(
                     save_sample_to_disk, result_cleaned, output_path
                 )

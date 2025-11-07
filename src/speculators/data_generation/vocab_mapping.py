@@ -1,7 +1,7 @@
 """Vocabulary mapping utilities for draft model training."""
 
-import os
 from collections import Counter
+from pathlib import Path
 
 import torch
 from datasets import Dataset as HFDataset
@@ -26,7 +26,8 @@ def save_token_frequency_distribution(
     Returns:
         Path to the saved frequency distribution file
     """
-    if os.path.exists(output_path):
+    path = Path(output_path)
+    if path.exists():
         return output_path
 
     token_freq: Counter[int] = Counter()
@@ -40,7 +41,7 @@ def save_token_frequency_distribution(
         token_freq.update(batch_token_freq)
 
     token_freq_dict = dict(token_freq)
-    torch.save(token_freq_dict, output_path)
+    torch.save(token_freq_dict, path)
 
     return output_path
 
