@@ -157,6 +157,7 @@ Preprocessing is automatically cached by HuggingFace datasets using fingerprint-
 - Dataset changes
 
 **Cache Location:**
+
 - Default: `~/.cache/huggingface/datasets`
 - Custom: Set `HF_DATASETS_CACHE` environment variable
 
@@ -167,6 +168,7 @@ python scripts/data_generation_offline.py ...
 ```
 
 Or set it per-command:
+
 ```bash
 HF_DATASETS_CACHE=./my_cache python scripts/data_generation_offline.py ...
 ```

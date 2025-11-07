@@ -55,9 +55,12 @@ def _detect_assistant_pattern(tokenizer: PreTrainedTokenizer) -> str:
         {"role": "assistant", "content": "ASSISTANT_MSG"},
     ]
 
-    formatted = tokenizer.apply_chat_template(
+    formatted_raw = tokenizer.apply_chat_template(
         test_conv, tokenize=False, add_generation_prompt=False
     )
+    # Type assertion: when tokenize=False, result is always str
+    assert isinstance(formatted_raw, str)
+    formatted: str = formatted_raw
 
     assistant_start = formatted.find("ASSISTANT_MSG")
     if assistant_start == -1:
@@ -129,11 +132,14 @@ def _preprocess_batch(
 
         try:
             # Get formatted text with chat template
-            formatted_text = tokenizer.apply_chat_template(
+            formatted_raw = tokenizer.apply_chat_template(
                 normalized_conv,
                 tokenize=False,
                 add_generation_prompt=False,
             )
+            # Type assertion: when tokenize=False, result is always str
+            assert isinstance(formatted_raw, str)
+            formatted_text: str = formatted_raw
 
             # Tokenize with offsets
             encoding = tokenizer(

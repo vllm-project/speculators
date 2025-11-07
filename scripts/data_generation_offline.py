@@ -277,10 +277,14 @@ def generate_and_save_hidden_states(args, dataset):
 
             # Submit save operations to thread pool (async I/O)
             for j, result in enumerate(results):
+                # Truncate loss_mask to match input_ids length (generator may truncate)
+                input_len = len(result["input_ids"])
+                loss_mask = batch_loss_mask[j][:input_len]
+
                 result_cleaned = {
                     "input_ids": result["input_ids"],
                     "hidden_states": [h.contiguous() for h in result["hidden_states"]],
-                    "loss_mask": batch_loss_mask[j],
+                    "loss_mask": loss_mask,
                 }
                 output_path = os.path.join(args.output_dir, f"data_{file_idx}.pt")
                 future = thread_executor.submit(

@@ -282,4 +282,4 @@ class VllmHiddenStatesGenerator:
             try:
                 self.executor.shutdown()
             except Exception:
-                log.warning("Exception during executor shutdown", exc_info=True)
+                log.warning("Exception during executor shutdown")
