@@ -80,12 +80,11 @@ def main():
     )
 
     output_path = Path(args.output_path)
-    output_dir = output_path.parent
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path.mkdir(parents=True, exist_ok=True)
 
     # Save as .npy files (expected by training script)
-    d2t_path = output_dir / "d2t.npy"
-    t2d_path = output_dir / "t2d.npy"
+    d2t_path = output_path / "d2t.npy"
+    t2d_path = output_path / "t2d.npy"
 
     np.save(d2t_path, d2t.cpu().numpy())
     np.save(t2d_path, t2d.cpu().numpy())
