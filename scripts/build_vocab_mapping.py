@@ -58,7 +58,7 @@ def parse_args():
         "--output-path",
         type=str,
         required=True,
-        help="Path to save the vocabulary mapping file (.pt)",
+        help="Path to save the vocabulary mapping files",
     )
 
     return parser.parse_args()
