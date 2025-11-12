@@ -84,7 +84,7 @@ class HiddenStatesWorkerExtension:
     """
 
     def _store_captured_states(self, aux_hidden_states):
-        if self._captured_states is None:
+        if self._captured_states is None:  # type: ignore[has-type]
             self._captured_states = [[h] for h in aux_hidden_states]
         else:
             for i, h in enumerate(aux_hidden_states):
@@ -93,9 +93,9 @@ class HiddenStatesWorkerExtension:
     def _setup_hidden_states_capture(self, layer_ids: list[int]):
         """Setup model to capture auxiliary hidden states from specific layers"""
         self._layer_ids = frozenset(layer_ids)  # Convert once for O(1) lookup
-        self._captured_states = None
+        self._captured_states = None  # type: ignore[assignment]
 
-        model = self.model_runner.model
+        model = self.model_runner.model  # type: ignore[attr-defined]
 
         if not supports_eagle3(model):
             raise ValueError(
@@ -113,7 +113,7 @@ class HiddenStatesWorkerExtension:
             raise RuntimeError(
                 "Must call _setup_hidden_states_capture before capturing states"
             )
-        self._captured_states = None
+        self._captured_states = None  # type: ignore[assignment]
 
     def _get_captured_states(self):
         """Get the captured hidden states
@@ -128,5 +128,5 @@ class HiddenStatesWorkerExtension:
             torch.cat(layer_tensors, dim=0) for layer_tensors in self._captured_states
         ]
         # Clear intermediate storage after concatenating
-        self._captured_states = None
+        self._captured_states = None  # type: ignore[assignment]
         return result
