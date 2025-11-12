@@ -80,7 +80,7 @@ jobs:
         run: pre-commit run --all-files
 
   unit-tests:
-    runs-on: ubuntu-latest
+    runs-on: ibm-wdc-k8s-vllm-h100-solo
     strategy:
       matrix:
         python: ["3.10", "3.13"]
@@ -96,7 +96,7 @@ jobs:
         run: tox -e test-unit
 
   integration-tests:
-    runs-on: ubuntu-latest
+    runs-on: ibm-wdc-k8s-vllm-h100-solo
     strategy:
       matrix:
         python: ["3.10", "3.13"]
