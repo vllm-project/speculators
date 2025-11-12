@@ -3,7 +3,6 @@
 import logging
 import types
 from itertools import islice
-from typing import Any
 
 import torch
 from vllm.distributed import get_pp_group, get_tp_group
@@ -83,10 +82,6 @@ class HiddenStatesWorkerExtension:
         _captured_states: Accumulated hidden states per layer (GPU tensors)
         model_runner: Reference to the VLLM model runner
     """
-
-    _layer_ids: frozenset[int]
-    _captured_states: list[Any] | None
-    model_runner: Any
 
     def _store_captured_states(self, aux_hidden_states):
         if self._captured_states is None:

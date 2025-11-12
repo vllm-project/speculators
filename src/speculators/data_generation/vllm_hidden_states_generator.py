@@ -1,28 +1,4 @@
-"""Extract hidden states from intermediate layers during prefill using vLLM.
-
-This module provides a generator for extracting hidden states from transformer models
-during the prefill phase using VLLM's inference engine. It is designed for generating
-training data for speculative decoding models like EAGLE3.
-
-The generator:
-- Uses VLLM's multiprocess executor for efficient batch inference
-- Patches model forward pass to capture intermediate layer hidden states
-- Operates in prefill-only mode (max_tokens=1) for data generation
-- Supports tensor parallelism for large models
-- Automatically manages KV cache and memory allocation
-
-Example:
-    generator = VllmHiddenStatesGenerator(
-        model_path="meta-llama/Llama-3.1-8B",
-        layer_ids=[10, 20, 30],
-        tensor_parallel_size=2
-    )
-
-    results = generator.generate(token_ids)
-    for result in results:
-        input_ids = result["input_ids"]
-        hidden_states = result["hidden_states"]  # List of tensors per layer
-"""
+"""Extract hidden states from intermediate layers during prefill using vLLM."""
 
 import torch
 from transformers import AutoConfig, AutoTokenizer
@@ -62,12 +38,32 @@ log = PipelineLogger(__name__)
 
 
 class VllmHiddenStatesGenerator:
-    """Extracts hidden states from intermediate layers during prefill only."""
+    """Extracts hidden states from intermediate layers during prefill only.
 
-    layer_ids: list[int]
-    model_path: str
-    tensor_parallel_size: int
-    _request_counter: int
+    This module provides a generator for extracting hidden states from
+    transformer models during the prefill phase using VLLM's inference engine.
+    It is designed for generating training data for speculative decoding models
+    like EAGLE3.
+
+    The generator:
+    - Uses VLLM's multiprocess executor for efficient batch inference
+    - Patches model forward pass to capture intermediate layer hidden states
+    - Operates in prefill-only mode (max_tokens=1) for data generation
+    - Supports tensor parallelism for large models
+    - Automatically manages KV cache and memory allocation
+
+    Example:
+        generator = VllmHiddenStatesGenerator(
+            model_path="meta-llama/Llama-3.1-8B",
+            layer_ids=[10, 20, 30],
+            tensor_parallel_size=2
+        )
+
+        results = generator.generate(token_ids)
+        for result in results:
+            input_ids = result["input_ids"]
+            hidden_states = result["hidden_states"]  # List of tensors per layer`
+    """
 
     def __init__(
         self,
