@@ -101,5 +101,5 @@ VLLM_USE_V1=1 vllm serve RedHatAI/Qwen3-8B-speculator.eagle3
 
 Speculators includes prototype implementations of cutting-edge speculative decoding research:
 
-- **[EAGLE 3](https://github.com/neuralmagic/speculators/blob/main/research/eagle3/README.md)**: Train Time Test method implementation for advanced token speculation
-- **[HASS](https://github.com/neuralmagic/speculators/blob/main/research/hass/README.md)**: EAGLE 1 architecture variation using the HASS training method
+- **EAGLE 3**: Train Time Test method implementation for advanced token speculation
+- **HASS**: EAGLE 1 architecture variation using the HASS training method

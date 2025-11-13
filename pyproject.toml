@@ -129,7 +129,7 @@ warn_redundant_casts = true
 warn_unused_ignores = false
 show_error_codes = true
 namespace_packages = true
-exclude = ["venv", ".tox", "build", "dist", "research"]
+exclude = ["venv", ".tox", "build", "dist"]
 
 # Silence "type import errors" as our 3rd-party libs does not have types
 # Check: https://mypy.readthedocs.io/en/latest/config_file.html#import-discovery
@@ -233,19 +233,6 @@ select = [
 ]
 "src/speculators/convert/**/*.py" = [
     "BLE001", # allow catching Exception for conversion errors
-]
-
-"research/**/*.py" = [
-    "PTH",  # ignore using os.* instead of Path errors
-    "T20",  # ignore usage of print statement errors
-    "PLR",  # ignore code complexity errors
-    "NPY",  # ignore numpy formatting/usage errors
-    "E722",  # allow bare exception catching
-    "C90",  # ignore code complexity errors
-    "PGH004",  # allow general style ignores
-    "ERA001", # allow commented-out code
-    "N80",  # allow upper case names
-    "PLC0415", # ignore import not at top of file errors
 ]
 
 [tool.ruff.lint.isort]
