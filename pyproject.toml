@@ -107,6 +107,8 @@ dev = [
     "mkdocs-linkcheck~=1.0.6",
 ]
 
+datagen = ["vllm~=0.11.0"]
+
 [project.entry-points.console_scripts]
 speculators = "speculators.__main__:app"
 
@@ -136,7 +138,7 @@ exclude = ["venv", ".tox", "build", "dist"]
 follow_imports = 'silent'
 
 [[tool.mypy.overrides]]
-module = ["datasets.*", "transformers.*", "setuptools.*", "setuptools_git_versioning.*"]
+module = ["datasets.*", "transformers.*", "setuptools.*", "setuptools_git_versioning.*", "vllm.*"]
 ignore_missing_imports=true
 
 [tool.ruff]
@@ -233,6 +235,23 @@ select = [
 ]
 "src/speculators/convert/**/*.py" = [
     "BLE001", # allow catching Exception for conversion errors
+]
+
+"src/speculators/data_generation/**/*.py" = [
+    "S106", # false positives for chat template tokens
+    "S324", # MD5 is used for cache keys, not security
+    "FIX002", # TODOs are tracked
+    "C901", # complexity is acceptable for data processing
+    "BLE001", # catching Exception in __del__ is acceptable
+    "S110", # try-except-pass in __del__ is acceptable
+    "SIM105", # contextlib.suppress not needed for __del__
+    "S101", # assert in worker is acceptable
+    "SIM102", # nested if is clearer
+    "ERA001", # comment is documentation, not code
+    "PTH", # os.path is acceptable in data generation
+]
+"scripts/**/*.py" = [
+    "PTH", # os.path is acceptable in scripts
 ]
 
 [tool.ruff.lint.isort]
