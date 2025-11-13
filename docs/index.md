@@ -30,7 +30,7 @@
 
     Our community guidelines ensure that participation in the Speculators project is a positive, inclusive, and respectful experience for everyone.
 
-    [:octicons-arrow-right-24: Code of Conduct](https://github.com/neuralmagic/speculators/blob/main/CODE_OF_CONDUCT.md)
+    [:octicons-arrow-right-24: Code of Conduct](developer/code-of-conduct.md)
 
 - :material-source-pull:{ .lg .middle } Contributing Guide
 
@@ -38,7 +38,7 @@
 
     Learn how to effectively contribute to Speculators, including reporting bugs, suggesting features, improving documentation, and submitting code.
 
-    [:octicons-arrow-right-24: Contributing Guide](https://github.com/neuralmagic/speculators/blob/main/CONTRIBUTING.md)
+    [:octicons-arrow-right-24: Contributing Guide](developer/contributing.md)
 
 - :material-source-pull:{ .lg .middle } Entrypoints
 
