@@ -57,6 +57,8 @@ pip install -e .[dev]
 
 The `-e` flag installs the package in editable mode, allowing you to make changes to the code without reinstalling it. The `[dev]` part installs additional dependencies needed for development, such as testing and linting tools.
 
+Note: the data generation components off speculators (i.e. `src/speculators/data_generation`) require a vLLM installation. Code in this module should be run in a separate environment, with vllm. This can be done by installing the `datagen` extra using `pip install -e .[datagen]` (or `pip install -e .[datagen,dev]` for development).
+
 ## Code Style and Guidelines
 
 We follow strict coding standards to ensure code quality and maintainability. Please adhere to the following guidelines:
@@ -122,6 +124,8 @@ tox
 
 ### Running Specific Tests
 
+`tox` will set up the environment for the test environment for each test you run.
+
 - Unit tests (focused on individual components with mocking):
 
   ```bash
@@ -142,9 +146,11 @@ tox
 
 - Data generation tests (focused on the data generation process):
 
-  ```bash
-  tox -e test-datagen
-  ```
+Note: This creates an environment with the `datagen` extra installed (including vllm) and executes the tests in this environment.
+
+```bash
+tox -e test-datagen
+```
 
 ### Running Tests with Coverage
 
