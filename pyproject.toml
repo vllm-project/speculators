@@ -48,8 +48,10 @@ dependencies = [
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
     "pyyaml>=6.0.0",
+    "rich",
     "safetensors",
     "torch",
+    "tqdm",
     "transformers",
     "typer-slim>=0.12.0",
 ]
@@ -102,6 +104,7 @@ dev = [
     "types-PyYAML~=6.0.1",
     "types-requests~=2.32.0",
     "types-toml",
+    "types-tqdm",
 
     # link checking
     "mkdocs-linkcheck~=1.0.6",
@@ -211,9 +214,6 @@ select = [
     "UP", # pyupgrade: automatically upgrades syntax for newer versions of Python
     "W", # Warning: provides warnings about potential issues in the code
     "YTT", # flake8-2020: identifies code that will break with future Python releases
-
-    # Code Documentation
-    "FIX", # flake8-fixme: detects FIXMEs and other temporary comments that should be resolved
 ]
 
 [tool.ruff.lint.extend-per-file-ignores]
@@ -251,6 +251,7 @@ select = [
     "PTH", # os.path is acceptable in data generation
 ]
 "scripts/**/*.py" = [
+    "INP001", # allow implicit namespace packages in scripts
     "PTH", # os.path is acceptable in scripts
 ]
 
