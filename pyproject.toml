@@ -236,9 +236,6 @@ select = [
 "src/speculators/convert/**/*.py" = [
     "BLE001", # allow catching Exception for conversion errors
 ]
-"scripts/**/*.py" = [
-    "INP001",
-]
 
 "src/speculators/data_generation/**/*.py" = [
     "S106", # false positives for chat template tokens
@@ -254,6 +251,7 @@ select = [
     "PTH", # os.path is acceptable in data generation
 ]
 "scripts/**/*.py" = [
+    "INP001", # allow implicit namespace packages in scripts
     "PTH", # os.path is acceptable in scripts
 ]
 
