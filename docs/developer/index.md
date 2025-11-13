@@ -28,13 +28,6 @@ Speculators is an open-source project that values community contributions. We ma
 
     [:octicons-arrow-right-24: Contributing Guide](https://github.com/neuralmagic/speculators/blob/main/CONTRIBUTING.md)
 
-- :material-tools:{ .lg .middle } Development Guide
-
-    ---
-
-    Detailed instructions for setting up your development environment, implementing changes, and adhering to the project's coding standards and best practices.
-
-    [:octicons-arrow-right-24: Development Guide](https://github.com/neuralmagic/speculators/blob/main/DEVELOPING.md)
 
 - :material-palette:{ .lg .middle } Branding Guidelines
 
