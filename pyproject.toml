@@ -124,9 +124,6 @@ issues = "https://github.com/neuralmagic/speculators/issues"
 # ********** Code Quality Tools **********
 # ************************************************
 
-[tool.isort]
-profile = "black"
-
 [tool.mypy]
 files = ["src/speculators", "tests"]
 python_version = "3.10"
