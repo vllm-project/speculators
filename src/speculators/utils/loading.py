@@ -4,6 +4,7 @@ from typing import Any
 
 import torch
 from huggingface_hub import hf_hub_download
+from huggingface_hub.errors import EntryNotFoundError
 from loguru import logger
 from safetensors import safe_open
 
@@ -21,20 +22,28 @@ def load_model_layers(
     :return: a single tensor or a dict of tensors
     """
     # download the index file
-    index_file = _resolve_file(model_path, "model.safetensors.index.json")
-    with Path(index_file).open() as f:
-        index = json.load(f)
+    try:
+        index_file = _resolve_file(model_path, "model.safetensors.index.json")
+    except (FileNotFoundError, EntryNotFoundError) as e:
+        # logger.error(
+        #     f"Index file not found: {e}. Checking for `model.safetensors` instead."
+        # )
+        _model_file = _resolve_file(model_path, "model.safetensors")
+        shard_to_names = {"model.safetensors": layer_names}
+    else:
+        with Path(index_file).open() as f:
+            index = json.load(f)
 
-    weight_map: dict[str, str] = index["weight_map"]
+        weight_map: dict[str, str] = index["weight_map"]
 
-    # group requested names by shard filename
-    shard_to_names: dict[str, list[str]] = {}
-    for name in layer_names:
-        shard = weight_map.get(name)
-        if shard is None:
-            logger.error(f"Tensor '{name}' not found in index weight_map.")
-            continue
-        shard_to_names.setdefault(shard, []).append(name)
+        # group requested names by shard filename
+        shard_to_names: dict[str, list[str]] = {}
+        for name in layer_names:
+            shard = weight_map.get(name)
+            if shard is None:
+                logger.error(f"Tensor '{name}' not found in index weight_map.")
+                continue
+            shard_to_names.setdefault(shard, []).append(name)
 
     if not shard_to_names:
         raise ValueError("None of the requested tensor names were found in the index.")
