@@ -30,7 +30,7 @@ def load_model_layers(
             "Checking for `model.safetensors` instead."
         )
         _model_file = _resolve_file(model_path, "model.safetensors")
-        shard_to_names = {"model.safetensors": layer_names}
+        shard_to_names: dict[str, list[str]] = {"model.safetensors": layer_names}
     else:
         with Path(index_file).open() as f:
             index = json.load(f)
@@ -38,7 +38,7 @@ def load_model_layers(
         weight_map: dict[str, str] = index["weight_map"]
 
         # group requested names by shard filename
-        shard_to_names: dict[str, list[str]] = {}
+        shard_to_names = {}
         for name in layer_names:
             shard = weight_map.get(name)
             if shard is None:
