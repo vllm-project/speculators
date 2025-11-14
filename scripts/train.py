@@ -4,6 +4,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 from transformers import LlamaConfig
+from transformers.models.auto.configuration_auto import AutoConfig
 
 from speculators.config import SpeculatorsConfig, VerifierConfig
 from speculators.models.eagle3 import Eagle3SpeculatorConfig
@@ -84,6 +85,27 @@ def setup_dataloader(
     )
 
 
+def create_transformer_layer_config(
+    verifier_name_or_path: str, draft_vocab_size: int, num_layers: int
+) -> LlamaConfig:
+    verifier_config = AutoConfig.from_pretrained(verifier_name_or_path)
+    transformer_layer_config = LlamaConfig(
+        vocab_size=draft_vocab_size,
+        hidden_size=verifier_config.hidden_size,
+        intermediate_size=verifier_config.intermediate_size,
+        num_hidden_layers=num_layers,
+        num_attention_heads=verifier_config.num_attention_heads,
+        num_key_value_heads=verifier_config.num_key_value_heads,
+        hidden_act=verifier_config.hidden_act,
+        max_position_embeddings=verifier_config.max_position_embeddings,
+        initializer_range=verifier_config.initializer_range,
+        rms_norm_eps=verifier_config.rms_norm_eps,
+        head_dim=getattr(verifier_config, "head_dim", None),
+    )
+    transformer_layer_config._attn_implementation = "simple_flex_attention"  # noqa: SLF001
+    return transformer_layer_config
+
+
 def main(args: argparse.Namespace):
     # Setup logging
     setup_root_logger()
@@ -95,19 +117,18 @@ def main(args: argparse.Namespace):
     local_rank, world_size, rank, is_distributed = maybe_setup_distributed()
     device = torch.device(local_rank)
 
-    # Setup speculator config
-    llama_config = LlamaConfig.from_pretrained(args.verifier_name_or_path)
-    llama_config.num_hidden_layers = args.num_layers
-    llama_config.model_type = "llama"  # reset to llama (handles non-llama verifiers)
-    llama_config._attn_implementation = "simple_flex_attention"  # noqa: SLF001
-
     # Load t2d and d2t tensors
     d2t = torch.from_numpy(np.load(args.d2t_path)).to(device)
     t2d = torch.from_numpy(np.load(args.t2d_path)).to(device)
     draft_vocab_size = d2t.shape[0]
 
+    # Setup speculator config
+    transformer_layer_config = create_transformer_layer_config(
+        args.verifier_name_or_path, draft_vocab_size, args.num_layers
+    )
+
     speculator_config = Eagle3SpeculatorConfig(
-        transformer_layer_config=llama_config,
+        transformer_layer_config=transformer_layer_config,
         draft_vocab_size=draft_vocab_size,
         norm_before_residual=NORM_BEFORE_RESIDUAL,
         speculators_config=SpeculatorsConfig(
