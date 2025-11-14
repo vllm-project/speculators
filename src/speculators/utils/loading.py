@@ -24,10 +24,11 @@ def load_model_layers(
     # download the index file
     try:
         index_file = _resolve_file(model_path, "model.safetensors.index.json")
-    except (FileNotFoundError, EntryNotFoundError) as e:
-        # logger.error(
-        #     f"Index file not found: {e}. Checking for `model.safetensors` instead."
-        # )
+    except (FileNotFoundError, EntryNotFoundError):
+        logger.warning(
+            "`model.safetensors.index.json` file not found. "
+            "Checking for `model.safetensors` instead."
+        )
         _model_file = _resolve_file(model_path, "model.safetensors")
         shard_to_names = {"model.safetensors": layer_names}
     else:
@@ -56,7 +57,7 @@ def load_model_layers(
             available = set(f.keys())
             for name in names:
                 if name not in available:
-                    logger.error(
+                    logger.warning(
                         f"Tensor '{name}' not found inside shard '{shard_file}'."
                     )
                     continue
