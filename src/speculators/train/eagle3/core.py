@@ -235,9 +235,12 @@ class Eagle3DraftModel(SpeculatorModel):
                 f" verifier_vocab_size ({verifier_model_config.vocab_size})."
             )
 
+        lm_head_key = "lm_head.weight"
         verifier_weights = load_model_layers(
-            ["model.embed_tokens.weight", "lm_head.weight"], config.name_or_path
+            ["model.embed_tokens.weight", lm_head_key], config.name_or_path
         )
+        if lm_head_key not in verifier_weights:
+            lm_head_key = "model.embed_tokens.weight"
 
         # EMBEDDINGS
         self.embed_tokens = torch.nn.Embedding(
@@ -263,7 +266,7 @@ class Eagle3DraftModel(SpeculatorModel):
             self.hidden_size, self.draft_vocab_size, bias=False
         )
 
-        masked_lm_head_weight = verifier_weights["lm_head.weight"].to(
+        masked_lm_head_weight = verifier_weights[lm_head_key].to(
             device=t2d.device, dtype=default_dtype
         )[t2d.to(torch.bool), :]
         if masked_lm_head_weight.shape != self.lm_head.weight.shape:
