@@ -154,6 +154,7 @@ class MultipackDistributedBatchSamplerV2(Sampler):
         lengths: ArrayLike,
         num_replicas: int,
         rank: int,
+        truncate_long_samples: bool = True,
         seed: int = 0,
     ):
         """Efficient distributed packing sampler for linear attention style models
@@ -163,6 +164,8 @@ class MultipackDistributedBatchSamplerV2(Sampler):
             lengths (ArrayLike[int]): the lengths of each sample in the dataset
             num_replicas (int): The number of replicas to split the dataset across.
             rank (int): The local rank to collect batches for.
+            truncate_long_samples (bool, optional): Whether to truncate long samples
+            (True) or drop them (False). Default is True.
             seed (int, optional): Seed for RNG, must be the same on all ranks. Default 0
         """
         self.num_replicas = num_replicas
@@ -173,13 +176,24 @@ class MultipackDistributedBatchSamplerV2(Sampler):
         self.lengths = np.array(lengths)
 
         self.valid_indices = np.nonzero(self.lengths <= self.batch_max_length)[0]
-        if self.rank == 0 and len(self.valid_indices) < len(self.lengths):
-            msg = (
-                f"Dropping {len(self.lengths) - len(self.valid_indices)}"
-                f"/{len(self.lengths)} samples longer than batch_max_length. "
-                "Ensure that the right max_batch_length is used during data processing."
-            )
-            warnings.warn(msg, stacklevel=1)
+        if len(self.valid_indices) < len(self.lengths):
+            if truncate_long_samples:
+                msg = (
+                    f"Found {len(self.lengths) - len(self.valid_indices)}"
+                    f"/{len(self.lengths)} samples longer than batch_max_length. "
+                    "These samples will be truncated to batch_max_length."
+                )
+                self.valid_indices = np.arange(len(self.lengths))
+                self.lengths = np.clip(self.lengths, 0, self.batch_max_length)
+            else:
+                msg = (
+                    f"Dropping {len(self.lengths) - len(self.valid_indices)}"
+                    f"/{len(self.lengths)} samples longer than batch_max_length. Ensure"
+                    " that the right max_batch_length is used during data processing."
+                )
+
+            if self.rank == 0:
+                warnings.warn(msg, stacklevel=1)
 
         self._cached_generated_batches = (-1, [])
 
