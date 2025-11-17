@@ -50,6 +50,7 @@ dependencies = [
     "pyyaml>=6.0.0",
     "rich",
     "safetensors",
+    "setuptools",
     "torch",
     "tqdm",
     "transformers",

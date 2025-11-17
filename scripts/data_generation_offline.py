@@ -58,7 +58,7 @@ def parse_args():
     parser.add_argument(
         "--tensor-parallel-size",
         type=int,
-        default=1,
+        default=torch.accelerator.device_count(),
         help="Tensor parallel size for target model (default: 1)",
     )
     parser.add_argument(
