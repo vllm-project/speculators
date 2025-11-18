@@ -145,6 +145,7 @@ class VllmHiddenStatesGenerator:
             vllm_config=self.vllm_config,
             kv_cache_config=kv_cache_config,
             structured_output_manager=structured_output_manager,
+            block_size=self.vllm_config.cache_config.block_size,
         )
 
         log.info("Initializing KV cache on all workers...")
@@ -254,7 +255,8 @@ class VllmHiddenStatesGenerator:
                 f"{scheduler_output.total_num_scheduled_tokens}"
             )
 
-            self.executor.execute_model(scheduler_output)
+            model_output=self.executor.execute_model(scheduler_output)
+            self.executor.sample_tokens(model_output)
 
             for req_id in scheduler_output.num_scheduled_tokens:
                 self.scheduler.finish_requests([req_id], RequestStatus.FINISHED_ABORTED)
@@ -266,7 +268,7 @@ class VllmHiddenStatesGenerator:
         )
         aux_hidden_states = captured_states_list[0]
 
-        if not aux_hidden_states:
+        if aux_hidden_states is None or len(aux_hidden_states) == 0:
             raise RuntimeError("Failed to capture hidden states from worker")
 
         log.debug(f"Successfully captured {len(aux_hidden_states)} layers")
