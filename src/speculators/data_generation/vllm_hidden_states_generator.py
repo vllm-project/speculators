@@ -212,6 +212,7 @@ class VllmHiddenStatesGenerator:
         Returns:
             List of dicts with keys: input_ids, hidden_states, loss_mask
         """
+        log.info("Starting hidden states generation...")
         if isinstance(token_ids, torch.Tensor):
             input_ids_list = token_ids.tolist()
         else:
@@ -262,11 +263,12 @@ class VllmHiddenStatesGenerator:
                 self.scheduler.finish_requests([req_id], RequestStatus.FINISHED_ABORTED)
 
         # Get captured states from driver worker
-        captured_states_list = self.executor.collective_rpc(
+        # Note: collective_rpc unpacks the returned list, so if worker returns [tensor1, tensor2],
+        # we receive [tensor1, tensor2] not [[tensor1, tensor2]]
+        aux_hidden_states = self.executor.collective_rpc(
             "_get_captured_states",
             unique_reply_rank=0,
         )
-        aux_hidden_states = captured_states_list[0]
 
         if aux_hidden_states is None or len(aux_hidden_states) == 0:
             raise RuntimeError("Failed to capture hidden states from worker")
