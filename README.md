@@ -47,7 +47,7 @@ The following models are currently supported or are planned to be supported in t
 <tr>
 <td rowspan="3">Llama</td>
 <td>8B-Instruct</td>
-<td><a href="https://huggingface.co/RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3">EAGLE-3</a> ✅ | HASS ✅</td>
+<td><a href="https://huggingface.co/RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3">EAGLE-3</a> ✅</td>
 <td>✅</td>
 <td><a href="https://huggingface.co/yuhuili/EAGLE3-LLaMA3.1-Instruct-8B">EAGLE-3</a> ✅</td>
 </tr>
@@ -83,37 +83,38 @@ The following models are currently supported or are planned to be supported in t
 <td>❌</td>
 </tr>
 <tr>
-<td rowspan="2">Qwen3 MoE</td>
-<td>30B-A3B</td>
-<td>EAGLE-3 ❌</td>
-<td>⏳</td>
-<td>❌</td>
-</tr>
-<tr>
+<td>Qwen3 MoE</td>
 <td>235B-A22B</td>
-<td>EAGLE-3 ❌</td>
+<td>EAGLE-3 ⏳</td>
 <td>⏳</td>
 <td><a href="https://huggingface.co/nvidia/Qwen3-235B-A22B-Eagle3">EAGLE-3</a> ⏳</td>
 </tr>
 <tr>
-<td rowspan="2">Llama-4</td>
-<td>Scout-17B-16E-Instruct</td>
-<td>EAGLE-3 ❌</td>
-<td>⏳</td>
-<td>❌</td>
-</tr>
-<tr>
+<td>Llama-4</td>
 <td>Maverick-17B-128E-Eagle3</td>
 <td>EAGLE-3 ❌</td>
 <td>✅</td>
 <td><a href="https://huggingface.co/nvidia/Llama-4-Maverick-17B-128E-Eagle3">EAGLE-3</a> ✅</td>
 </tr>
 <tr>
-<td>DeepSeek-R1</td>
-<td>DeepSeek-R1</td>
+<td rowspan="2">gpt-oss</td>
+<td>20b</td>
+<td><a href="https://huggingface.co/RedHatAI/gpt-oss-20b-speculator.eagle3">EAGLE-3</a> ✅</td>
+<td>✅</td>
+<td>❌</td>
+</tr>
+<tr>
+<td>120b</td>
 <td>EAGLE-3 ❌</td>
 <td>⏳</td>
-<td><a href="https://huggingface.co/HArmonizedSS/HASS-DeepSeek-R1">HASS</a> ⏳</td>
+<td><a href="https://huggingface.co/nvidia/gpt-oss-120b-Eagle3-v2">EAGLE-3</a> ⏳</td>
+</tr>
+<tr>
+<td>Qwen3-VL</td>
+<td>235B-A22B</td>
+<td>EAGLE-3 ⏳</td>
+<td>⏳</td>
+<td>❌</td>
 </tr>
 </tbody>
 </table>
