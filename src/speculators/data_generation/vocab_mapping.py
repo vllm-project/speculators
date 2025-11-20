@@ -47,6 +47,21 @@ def save_token_frequency_distribution(
     return output_path
 
 
+def combine_token_frequency_distributions(
+    token_freq_paths: list[str | Path],
+    output_path: str | Path,
+):
+    """Combine multiple token frequency distributions into a single file."""
+    token_freq_dicts = [
+        torch.load(path, weights_only=True) for path in token_freq_paths
+    ]
+    combined_token_freq = Counter()
+    for token_freq_dict in token_freq_dicts:
+        combined_token_freq.update(token_freq_dict)
+    combined_token_freq_dict = dict(combined_token_freq)
+    torch.save(combined_token_freq_dict, output_path)
+
+
 def build_vocab_mappings_from_distribution(
     token_freq_dict: dict[int, int],
     draft_vocab_size: int,
