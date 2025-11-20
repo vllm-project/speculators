@@ -22,6 +22,15 @@
   </picture>
 </p>
 
+______________________________________________________________________
+
+💬 Join us on the [vLLM Community Slack](https://communityinviter.com/apps/vllm-dev/join-vllm-developers-slack) and share your questions, thoughts, or ideas in:
+
+- `#speculators`
+- `#feat-spec-decode`
+
+______________________________________________________________________
+
 ## Key Features
 
 - **Unified Speculative Decoding Toolkit:** Simplifies the development and representation of speculative decoding algorithms, supporting both research and production use cases for LLMs.
