@@ -253,6 +253,10 @@ select = [
     "PTH", # os.path is acceptable in scripts
 ]
 
+"scripts/gen_and_train.py" = [
+    "T201", # allow print in scripts
+]
+
 [tool.ruff.lint.isort]
 known-first-party = ["speculators", "tests"]
 

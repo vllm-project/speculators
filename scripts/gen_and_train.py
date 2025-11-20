@@ -23,8 +23,8 @@ Usage:
 import shutil
 import subprocess
 import sys
-from pathlib import Path
 import time
+from pathlib import Path
 from typing import Any
 
 import psutil
@@ -149,12 +149,13 @@ def run_script(
 
     start_time = time.perf_counter()
     try:
-        process = subprocess.Popen(command, stdout=sys.stdout, stderr=sys.stderr)
+        process = subprocess.Popen(command, stdout=sys.stdout, stderr=sys.stderr)  # noqa: S603
         process.wait()
     except KeyboardInterrupt:
         # Clean up subprocesses
         print(
-            f"Received KeyboardInterrupt. Terminating process {process.pid} and its children."
+            f"Received KeyboardInterrupt. Terminating process {process.pid} "
+            "and its children."
         )
         end_time = time.perf_counter()
         print_block(
@@ -167,7 +168,9 @@ def run_script(
         process.terminate()
 
         for _ in range(10):
-            remaining_children = list(psutil.Process(process.pid).children(recursive=True))
+            remaining_children = list(
+                psutil.Process(process.pid).children(recursive=True)
+            )
             if not remaining_children:
                 break
             time.sleep(1)
@@ -175,15 +178,18 @@ def run_script(
             print(f"Failed to terminate all children of process {process.pid}.")
             print("Retrying...")
             for child in psutil.Process(process.pid).children(recursive=True):
-                child.kill() # escalate to SIGKILL
-            process.kill() # escalate to SIGKILL
+                child.kill()  # escalate to SIGKILL
+            process.kill()  # escalate to SIGKILL
 
         sys.exit(1)
 
     end_time = time.perf_counter()
     print_block(
         f"COMPLETED {script_name}",
-        f"Time taken: {end_time - start_time:.2f} seconds. Exit code: {process.returncode}",
+        (
+            f"Time taken: {end_time - start_time:.2f} seconds. "
+            f"Exit code: {process.returncode}"
+        ),
     )
 
     if process.returncode != 0:
