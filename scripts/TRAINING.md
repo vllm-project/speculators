@@ -37,7 +37,7 @@ The scripts has the following optional arguments:
 ## Example run command
 ```bash
 torchrun --nnodes=1 --nproc_per_node=8 scripts/train.py \
-    --verifier-name-or-path "meta-llama/Llama-3.1-8B" \
+    --verifier-name-or-path "meta-llama/Llama-3.1-8B-Instruct" \
     --data-path "./data/llama-3.1-8b_sharegpt/gen/" \
     --save-path "./checkpoints/llama-3.1-8b.eagle3" \
     --epochs 10 \
