@@ -24,6 +24,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+import time
 from typing import Any
 
 import psutil
@@ -101,6 +102,21 @@ def prepare_args(args: dict[str, Any]) -> list[str]:
     return args_list
 
 
+def print_block(title: str, content: str):
+    title = f" {title} "
+    term_width, _terminal_height = shutil.get_terminal_size((80, 20))
+    print(
+        "\n",
+        "#" * ((term_width - len(title)) // 2),
+        title,
+        "#" * ((term_width - len(title) + 1) // 2),
+        "\n",
+        sep="",
+    )
+    print(content)
+    print("\n", "#" * term_width, "\n", sep="")
+
+
 def run_script(
     script_name: str,
     script_args: list[str],
@@ -129,30 +145,46 @@ def run_script(
     command.append(str(script_path))
     command.extend(script_args)
 
-    term_width, _terminal_height = shutil.get_terminal_size((80, 20))
-    title = " RUNNING "
-    print(
-        "\n",
-        "#" * ((term_width - len(title)) // 2),
-        title,
-        "#" * ((term_width - len(title) + 1) // 2),
-        "\n",
-        sep="",
-    )
-    print(" ".join(command))
-    print("\n", "#" * term_width, "\n", sep="")
+    print_block(f"RUNNING {script_name}", " ".join(command))
 
+    start_time = time.perf_counter()
     try:
         process = subprocess.Popen(command, stdout=sys.stdout, stderr=sys.stderr)
         process.wait()
     except KeyboardInterrupt:
+        # Clean up subprocesses
         print(
             f"Received KeyboardInterrupt. Terminating process {process.pid} and its children."
         )
+        end_time = time.perf_counter()
+        print_block(
+            f"CANCELLED {script_name}",
+            f"Time taken: {end_time - start_time:.2f} seconds",
+        )
+
         for child in psutil.Process(process.pid).children(recursive=True):
             child.terminate()
         process.terminate()
+
+        for _ in range(10):
+            remaining_children = list(psutil.Process(process.pid).children(recursive=True))
+            if not remaining_children:
+                break
+            time.sleep(1)
+        else:
+            print(f"Failed to terminate all children of process {process.pid}.")
+            print("Retrying...")
+            for child in psutil.Process(process.pid).children(recursive=True):
+                child.kill() # escalate to SIGKILL
+            process.kill() # escalate to SIGKILL
+
         sys.exit(1)
+
+    end_time = time.perf_counter()
+    print_block(
+        f"COMPLETED {script_name}",
+        f"Time taken: {end_time - start_time:.2f} seconds. Exit code: {process.returncode}",
+    )
 
     if process.returncode != 0:
         raise subprocess.CalledProcessError(process.returncode, command)
