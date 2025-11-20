@@ -23,12 +23,13 @@ import argparse
 import json
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
 from pathlib import Path
 
 import torch
+from datasets import config as datasets_config
 from tqdm import tqdm  # type: ignore[import-untyped]
 
+from speculators.data_generation.config_generator import DataGenerationConfig
 from speculators.data_generation.logging_utils import PipelineLogger
 from speculators.data_generation.preprocessing import load_and_preprocess_dataset
 from speculators.data_generation.vllm_hidden_states_generator import (
@@ -181,47 +182,27 @@ def save_sample_to_disk(data_dict, output_path):
 
 
 def save_config(args, generator, num_samples, output_dir):
-    """Save metadata config file for reproducibility"""
-    config = {
-        "version": "1.0",
-        "generated_at": datetime.now().isoformat(),
-        "model": {
-            "target_model_path": args.target_model_path,
-            "tensor_parallel_size": args.tensor_parallel_size,
-            "max_model_len": args.max_model_len,
-            "gpu_memory_utilization": args.gpu_memory_utilization,
-        },
-        "data": {
-            "train_data_path": args.train_data_path,
-            "seq_length": args.seq_length,
-            "max_samples": args.max_samples,
-            "num_samples": num_samples,
-            "seed": args.seed,
-            "note": "Chat template is from tokenizer's built-in template",
-        },
-        "hidden_states": {
-            "layer_ids": generator.layer_ids,
-            "num_layers": len(generator.layer_ids),
-            "description": (
-                "First 3 layers for EAGLE3 fusion, last layer for target logits"
-            ),
-        },
-        "generation": {
-            "batch_size": args.batch_size,
-            "token_freq_path": args.token_freq_path,
-        },
-        "format": {
-            "file_pattern": "data_{idx}.pt",
-            "fields": ["input_ids", "hidden_states", "loss_mask"],
-            "hidden_states_type": "List[torch.Tensor]",
-            "hidden_states_shape": "List of [seq_len, hidden_dim], one per layer",
-            "note": ("hidden_states is a list of tensors in order of layer_ids"),
-        },
-    }
+    """Save metadata config file for reproducibility."""
+    log.subsection("Saving configuration metadata")
+
+    cache_dir = (
+        args.hf_cache_dir if args.hf_cache_dir else datasets_config.HF_DATASETS_CACHE
+    )
+
+    config = DataGenerationConfig.from_generator(
+        generator=generator,
+        train_data_path=args.train_data_path,
+        seq_length=args.seq_length,
+        batch_size=args.batch_size,
+        cache_dir=cache_dir,
+        num_samples=num_samples,
+        max_samples=args.max_samples,
+        seed=args.seed,
+    )
 
     config_path = Path(output_dir) / "data_config.json"
-    config_path.write_text(json.dumps(config, indent=2))
-    log.info(f"Saved config to {config_path}")
+    config_path.write_text(json.dumps(config.to_dict(), indent=2))
+    log.info(f"Saved config v{config.version} to {config_path}")
 
 
 def generate_and_save_hidden_states(args, dataset):
