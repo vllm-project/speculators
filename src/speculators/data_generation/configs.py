@@ -34,7 +34,7 @@ DATASET_CONFIGS: dict[str, DatasetConfig] = {
     "ultrachat": DatasetConfig(
         name="ultrachat",
         hf_path="HuggingFaceH4/ultrachat_200k",
-        split="train",
+        split="train_sft",
         normalize_fn=_normalize_ultrachat,
     ),
 }
