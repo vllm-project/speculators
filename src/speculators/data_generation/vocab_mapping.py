@@ -41,6 +41,7 @@ def save_token_frequency_distribution(
         token_freq.update(batch_token_freq)
 
     token_freq_dict = dict(token_freq)
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
     torch.save(token_freq_dict, path)
 
     return output_path
