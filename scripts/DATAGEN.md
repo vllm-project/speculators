@@ -17,7 +17,7 @@ Generate training data from ShareGPT using Llama 3.1 8B:
 
 ```bash
 python scripts/data_generation_offline.py \
-    --target-model-path meta-llama/Llama-3.1-8B \
+    --target-model-path meta-llama/Llama-3.1-8B-Instruct \
     --train-data-path sharegpt \
     --output-dir ./training_data \
     --max-samples 5000
@@ -31,7 +31,7 @@ With custom settings and multi-GPU:
 
 ```bash
 python scripts/data_generation_offline.py \
-    --target-model-path meta-llama/Llama-3.1-70B \
+    --target-model-path meta-llama/Llama-3.1-70B-Instruct \
     --train-data-path ./my_data.jsonl \
     --seq-length 4096 \
     --cache-dir ./cache \
@@ -54,7 +54,7 @@ Extracts hidden states from intermediate layers during prefill using vLLM's effi
 from speculators.data_generation import VllmHiddenStatesGenerator
 
 generator = VllmHiddenStatesGenerator(
-    model_path="meta-llama/Llama-3.1-8B",
+    model_path="meta-llama/Llama-3.1-8B-Instruct",
     layer_ids=[2, 14, 24],  # or None for auto-select
     tensor_parallel_size=1,
 )
@@ -78,7 +78,7 @@ Tokenizes conversations and creates loss masks to identify trainable tokens.
 from speculators.data_generation.preprocessing import load_and_preprocess_dataset
 
 dataset, tokenizer = load_and_preprocess_dataset(
-    target_model_path="meta-llama/Llama-3.1-8B",
+    target_model_path="meta-llama/Llama-3.1-8B-Instruct",
     train_data_path="sharegpt",
     seq_length=2048,
     max_samples=1000,
