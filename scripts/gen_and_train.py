@@ -2,22 +2,24 @@
 """
 Combined EAGLE3 Data Generation and Training Pipeline
 
-This script creates EAGLE3 draft models by:
-1. Automatically preprocessing data if needed (or loading from cache)
-2. Using vLLM to extract hidden states from target model
-3. Saving each data point as a separate .pt file
-4. Creating vocabulary mappings from token frequency distribution
-5. Training the draft model on the generated data
+This script is a convenience wrapper around the following scripts:
+  1. scripts/data_generation_offline.py
+  2. scripts/build_vocab_mapping.py
+  3. scripts/train.py
 
-This script combines the logic from:
-  1. preprocess_data.py
-  2. data_generation_offline.py
-  3. build_vocab_mapping.py
-  4. train.py
+It can be used to run the full pipeline in one command. It also ensures each script is
+run with the correct arguments and dependencies.
+
+Prerequisites:
+  - python 3.10+
+  - uv (`pip install uv`)
 
 Usage:
-    UPDATE ARGUMENTS BELOW. THEN RUN:
-    python gen_and_train.py
+    Update arguments below. Then run:
+    python scripts/gen_and_train.py
+
+    Note: You can call the script with environment variables (like
+    `CUDA_VISIBLE_DEVICES` and `HF_HOME`) to control the behavior of the scripts.
 """
 
 import shutil
@@ -29,7 +31,9 @@ from typing import Any
 
 import psutil
 
-_NOT_SET = object()
+_NOT_SET = object()  # Sentinel value for optional arguments that are not set
+
+### SCRIPT ARGUMENTS ###
 
 # Shared
 OUTPUT_PATH = "./output"
@@ -90,6 +94,8 @@ train_args = {
     "num-layers": _NOT_SET,
     "ttt-step-loss-decay": _NOT_SET,
 }
+
+### END OF SCRIPT ARGUMENTS ###
 
 
 def prepare_args(args: dict[str, Any]) -> list[str]:
