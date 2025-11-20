@@ -7,7 +7,7 @@ Preprocessed data is automatically cached by HuggingFace datasets.
 
 Usage:
     python preprocess_data.py \
-        --target-model-path meta-llama/Llama-3.1-8B \
+        --target-model-path meta-llama/Llama-3.1-8B-Instruct \
         --train-data-path sharegpt \
         --seq-length 2048 \
         --hf-cache-dir /path/to/cache \

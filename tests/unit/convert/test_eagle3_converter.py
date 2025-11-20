@@ -83,7 +83,7 @@ class TestEagle3ConverterFixes:
         converter = Eagle3Converter()
 
         llama_config = converter._create_transformer_config_from_eagle(
-            sample_eagle3_config, "meta-llama/Llama-3.1-8B"
+            sample_eagle3_config, "meta-llama/Llama-3.1-8B-Instruct"
         )
 
         # Check that max_position_embeddings is the max of both values
@@ -111,7 +111,7 @@ class TestEagle3ConverterFixes:
         sample_eagle3_config["num_hidden_layers"] = 3
 
         llama_config = converter._create_transformer_config_from_eagle(
-            sample_eagle3_config, "meta-llama/Llama-3.1-8B"
+            sample_eagle3_config, "meta-llama/Llama-3.1-8B-Instruct"
         )
         assert llama_config.num_hidden_layers == 3
 
@@ -130,7 +130,7 @@ class TestEagle3ConverterFixes:
         sample_eagle3_config.pop("num_hidden_layers", None)
 
         llama_config = converter._create_transformer_config_from_eagle(
-            sample_eagle3_config, "meta-llama/Llama-3.1-8B"
+            sample_eagle3_config, "meta-llama/Llama-3.1-8B-Instruct"
         )
         assert llama_config.num_hidden_layers == 1
 
@@ -149,7 +149,7 @@ class TestEagle3ConverterFixes:
         # Should raise exception since method doesn't handle this gracefully
         with pytest.raises((RuntimeError, ValueError)):
             converter._create_transformer_config_from_eagle(
-                sample_eagle3_config, "meta-llama/Llama-3.1-8B"
+                sample_eagle3_config, "meta-llama/Llama-3.1-8B-Instruct"
             )
 
     @pytest.mark.sanity
@@ -169,7 +169,9 @@ class TestEagle3ConverterFixes:
             mock_config.return_value = ({"max_position_embeddings": 131072}, None)
 
             config = converter._build_eagle3_speculator_config(
-                eagle_config, "meta-llama/Llama-3.1-8B", norm_before_residual=False
+                eagle_config,
+                "meta-llama/Llama-3.1-8B-Instruct",
+                norm_before_residual=False,
             )
 
         # Verify config structure
@@ -177,7 +179,8 @@ class TestEagle3ConverterFixes:
         assert config.transformer_layer_config.hidden_size == 4096
         assert config.speculators_config.algorithm == "eagle3"
         assert (
-            config.speculators_config.verifier.name_or_path == "meta-llama/Llama-3.1-8B"
+            config.speculators_config.verifier.name_or_path
+            == "meta-llama/Llama-3.1-8B-Instruct"
         )
 
     @pytest.mark.sanity
@@ -199,7 +202,7 @@ class TestEagle3ConverterFixes:
             # Test with None (default)
             config_none = converter._build_eagle3_speculator_config(
                 eagle_config,
-                "meta-llama/Llama-3.1-8B",
+                "meta-llama/Llama-3.1-8B-Instruct",
                 norm_before_residual=False,
             )
             assert config_none.eagle_aux_hidden_state_layer_ids is None
@@ -208,7 +211,7 @@ class TestEagle3ConverterFixes:
             layer_ids = [1, 23, 44]
             config_with_ids = converter._build_eagle3_speculator_config(
                 eagle_config,
-                "meta-llama/Llama-3.1-8B",
+                "meta-llama/Llama-3.1-8B-Instruct",
                 norm_before_residual=False,
                 eagle_aux_hidden_state_layer_ids=layer_ids,
             )
@@ -233,7 +236,7 @@ class TestEagle3ConverterFixes:
             layer_ids = [1, 23, 44]
             config = converter._build_eagle3_speculator_config(
                 eagle_config,
-                "meta-llama/Llama-3.1-8B",
+                "meta-llama/Llama-3.1-8B-Instruct",
                 norm_before_residual=False,
                 eagle_aux_hidden_state_layer_ids=layer_ids,
             )

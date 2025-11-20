@@ -12,7 +12,7 @@ Token frequencies are saved in the current directory by default.
 
 Usage:
     python data_generation_offline.py \
-        --target-model-path meta-llama/Llama-3.1-8B \
+        --target-model-path meta-llama/Llama-3.1-8B-Instruct \
         --train-data-path sharegpt \
         --output-dir ./training_data \
         --hf-cache-dir /path/to/cache \
