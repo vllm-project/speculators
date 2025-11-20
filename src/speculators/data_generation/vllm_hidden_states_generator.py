@@ -54,7 +54,7 @@ class VllmHiddenStatesGenerator:
 
     Example:
         generator = VllmHiddenStatesGenerator(
-            model_path="meta-llama/Llama-3.1-8B",
+            model_path="meta-llama/Llama-3.1-8B-Instruct",
             layer_ids=[10, 20, 30],
             tensor_parallel_size=2
         )
