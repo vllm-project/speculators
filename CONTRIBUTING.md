@@ -180,7 +180,7 @@ Review the coverage report to confirm that your new code is adequately tested.
    git push origin feature/your-feature-name
    ```
 
-6. **Open a Pull Request**: Go to the original repository and open a pull request. Provide a clear description of your changes and link any related issues.
+6. **Open a Pull Request**: From the fork repository, use the contribute button to open a pull request to the original repository's main branch. Provide a clear description of your changes and link any related issues.
 
 ## Reporting Issues
 
