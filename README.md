@@ -22,14 +22,14 @@
   </picture>
 </p>
 
----
+______________________________________________________________________
 
 💬 Join us on the [vLLM Community Slack](https://communityinviter.com/apps/vllm-dev/join-vllm-developers-slack) and share your questions, thoughts, or ideas in:
 
 - `#speculators`
 - `#feat-spec-decode`
 
----
+______________________________________________________________________
 
 ## Key Features
 
