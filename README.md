@@ -103,7 +103,7 @@ The following models are currently supported or are planned to be supported in t
 <td>Maverick-17B-128E-Eagle3</td>
 <td>EAGLE-3 ❌</td>
 <td>✅</td>
-<td><a href="https://huggingface.co/nvidia/Llama-4-Maverick-17B-128E-Eagle3">EAGLE-3</a> ✅</td>
+<td><a href="https://huggingface.co/RedHatAI/Llama4-Maverick-17B-128E-Instruct-speculator.eagle3">EAGLE-3</a> ✅</td>
 </tr>
 <tr>
 <td rowspan="2">gpt-oss</td>
