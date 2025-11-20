@@ -4,6 +4,9 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
 
+env:
+  UV_TORCH_BACKEND: "auto"
+
 jobs:
   link-checks:
     runs-on: ubuntu-latest
@@ -14,6 +17,14 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+      - name: Generate doc files
+        run: uv run --with .[dev] --no-sync --isolated docs/scripts/gen_files.py
       - name: Link Checker
         id: lychee
         uses: lycheeverse/lychee-action@v2
