@@ -37,7 +37,7 @@ def cleanup_memory():
 @pytest.mark.parametrize(
     ("model_path", "tensor_parallel_size"),
     [
-        ("Qwen/Qwen2-0.5B", 1),
+        ("Qwen/Qwen3-30B-A3B-Instruct-2507", 4),
     ],
 )
 def test_vllm_vs_huggingface_accuracy(model_path, tensor_parallel_size):

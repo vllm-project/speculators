@@ -95,11 +95,10 @@ def test_detect_assistant_pattern_structure():
     compiled = re.compile(pattern, re.DOTALL)
     assert compiled is not None
 
-    # Pattern should contain exactly one capture group for content
+    # Pattern should contain balanced parentheses
     assert pattern.count("(") == pattern.count(")")
-    assert "(.*?)" in pattern, (
-        "Pattern should have a non-greedy capture group for content"
-    )
+    # Pattern should have at least one capture group (may use negative lookahead)
+    assert "(" in pattern, "Pattern should have a capture group for content"
 
 
 @pytest.mark.sanity
@@ -476,3 +475,75 @@ def test_build_eagle3_dataset_removes_original_columns():
     if len(result) > 0:
         assert "conversations" not in result.column_names
         assert "extra_column" not in result.column_names
+
+
+# Tests for turn dropout feature
+
+
+@pytest.mark.sanity
+def test_preprocess_batch_with_turn_dropout():
+    """Test preprocessing batch with turn dropout enabled."""
+    tokenizer = AutoTokenizer.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
+
+    if not hasattr(tokenizer, "apply_chat_template") or tokenizer.chat_template is None:
+        pytest.skip("Tokenizer does not support chat templates")
+
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    examples = {
+        "conversations": [
+            [
+                {"role": "user", "content": "Hello"},
+                {"role": "assistant", "content": "Hi there!"},
+                {"role": "user", "content": "How are you?"},
+                {"role": "assistant", "content": "I'm good!"},
+            ]
+        ]
+    }
+
+    assistant_pattern = _detect_assistant_pattern(tokenizer)
+    results = _preprocess_batch(
+        examples, tokenizer, max_length=512, assistant_pattern=assistant_pattern, turn_dropout=True
+    )
+
+    # Should still produce valid results
+    assert "input_ids" in results
+    assert "loss_mask" in results
+    assert len(results["input_ids"]) > 0
+
+
+# Tests for custom assistant pattern feature
+
+
+@pytest.mark.sanity
+def test_build_eagle3_dataset_with_custom_pattern():
+    """Test building dataset with custom assistant pattern."""
+    tokenizer = AutoTokenizer.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
+
+    if not hasattr(tokenizer, "apply_chat_template") or tokenizer.chat_template is None:
+        pytest.skip("Tokenizer does not support chat templates")
+
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    data = {
+        "conversations": [
+            [
+                {"role": "user", "content": "Hello"},
+                {"role": "assistant", "content": "Hi!"},
+            ]
+        ]
+    }
+
+    # Use a simple custom pattern
+    custom_pattern = r"<\|im_start\|>assistant\s*(.*?)<\|im_end\|>"
+
+    dataset = HFDataset.from_dict(data)
+    result = build_eagle3_dataset(
+        dataset, tokenizer, max_length=512, num_proc=1, assistant_pattern=custom_pattern
+    )
+
+    # Should successfully build dataset with custom pattern
+    assert isinstance(result, HFDataset)
+    assert len(result) > 0

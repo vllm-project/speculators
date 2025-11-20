@@ -74,26 +74,145 @@ results = generator.generate(token_ids=token_ids)
 
 Tokenizes conversations and creates loss masks to identify trainable tokens.
 
+The preprocessing pipeline:
+1. Loads raw conversation data (JSON/JSONL or from datasets like ShareGPT, UltraChat)
+2. Normalizes conversation format
+3. Applies the model's chat template
+4. Creates loss masks to train only on assistant responses
+5. Tokenizes and caches the result
+
+##### Basic Usage
+
+```bash
+python scripts/preprocess_data.py \
+    --target-model-path meta-llama/Llama-3.1-8B-Instruct \
+    --train-data-path sharegpt \
+    --seq-length 2048 \
+    --build-dataset-num-proc 8
+```
+
+##### Python API
+
 ```python
 from speculators.data_generation.preprocessing import load_and_preprocess_dataset
 
+# Basic usage
 dataset, tokenizer = load_and_preprocess_dataset(
-    target_model_path="meta-llama/Llama-3.1-8B",
+    target_model_path="meta-llama/Llama-3.1-8B-Instruct",
     train_data_path="sharegpt",
     seq_length=2048,
-    max_samples=1000,
-    token_freq_path="./token_freq.pt",
-    cache_dir="/path/to/cache",  # Optional
+)
+
+# With turn dropout
+dataset, tokenizer = load_and_preprocess_dataset(
+    target_model_path="meta-llama/Llama-3.1-8B-Instruct",
+    train_data_path="sharegpt",
+    seq_length=2048,
+    turn_dropout=True,
+)
+
+# With custom pattern
+dataset, tokenizer = load_and_preprocess_dataset(
+    target_model_path="openai/gpt-oss-20b",
+    train_data_path="sharegpt",
+    seq_length=2048,
+    assistant_pattern=r'<\|start\|>assistant<\|channel\|>final<\|message\|>(.*?)<\|return\|>',
 )
 ```
 
-**Features:**
+##### Advanced Features
 
-- Uses tokenizer's built-in chat template via `apply_chat_template`
-- Automatically creates loss masks for assistant responses
-- ShareGPT format datasets
-- HuggingFace datasets (sharegpt, ultrachat)
-- Local JSON/JSONL files
+**Turn Dropout**
+
+Turn dropout is a data augmentation technique that randomly truncates conversations to different lengths during preprocessing. This helps the model learn to generate continuations from various conversation contexts.
+
+When enabled, each conversation is randomly truncated to keep only the first N consecutive turns (where N is randomly chosen between 1 and the total number of turns).
+
+```bash
+python scripts/preprocess_data.py \
+    --target-model-path meta-llama/Llama-3.1-8B-Instruct \
+    --train-data-path sharegpt \
+    --seq-length 2048 \
+    --turn-dropout
+```
+
+Benefits:
+- Increases training data diversity
+- Helps model generalize across different conversation lengths
+- Prevents overfitting to full-length conversations
+
+**Custom Assistant Pattern**
+
+By default, the assistant response pattern is auto-detected from the model's chat template. However, you can override this with a custom regex pattern if needed.
+
+```bash
+python scripts/preprocess_data.py \
+    --target-model-path openai/gpt-oss-20b \
+    --train-data-path sharegpt \
+    --seq-length 2048 \
+    --assistant-pattern '<\|start\|>assistant<\|channel\|>final<\|message\|>(.*?)<\|return\|>'
+```
+
+When to use:
+- Custom chat template formats not recognized automatically
+- Fine-grained control over what content is marked as trainable
+- Models with non-standard message boundaries
+
+Pattern requirements:
+- Must be a valid Python regex pattern
+- Should contain exactly one capture group `(.*?)` for the assistant's response content
+- Must not match across role boundaries (use negative lookahead if needed)
+
+##### Preprocessing Arguments
+
+| Argument | Type | Required | Default | Description |
+|----------|------|----------|---------|-------------|
+| `--target-model-path` | str | Yes | - | HuggingFace model ID or local path |
+| `--train-data-path` | str | Yes | - | Dataset name (sharegpt, ultrachat) or path to JSON/JSONL file |
+| `--seq-length` | int | No | 2048 | Maximum sequence length |
+| `--seed` | int | No | 0 | Random seed for shuffling |
+| `--build-dataset-num-proc` | int | No | 8 | Number of parallel processes for preprocessing |
+| `--max-samples` | int | No | None | Maximum number of samples to process |
+| `--token-freq-path` | str | No | ./token_freq.pt | Path to save token frequency distribution |
+| `--hf-cache-dir` | str | No | None | Directory for HuggingFace datasets cache |
+| `--assistant-pattern` | str | No | None | Custom regex pattern for assistant responses |
+| `--turn-dropout` | flag | No | False | Enable turn dropout for data augmentation |
+
+##### Supported Datasets
+
+- **sharegpt**: ShareGPT conversation dataset
+- **ultrachat**: UltraChat conversation dataset
+- **Custom JSON/JSONL**: Local files with conversation format
+
+**Custom Dataset Format:**
+
+Your JSON/JSONL file should contain conversations in this format:
+
+```json
+{
+  "conversations": [
+    {"from": "human", "value": "Hello!"},
+    {"from": "gpt", "value": "Hi! How can I help you?"},
+    {"from": "human", "value": "What's the weather?"},
+    {"from": "gpt", "value": "I don't have access to weather data."}
+  ]
+}
+```
+
+Supported role names:
+- User: `"human"`, `"user"`
+- Assistant: `"gpt"`, `"assistant"`
+- System: `"system"`
+
+##### Preprocessing Output
+
+The preprocessing produces:
+1. **Preprocessed dataset**: Automatically cached by HuggingFace Datasets
+2. **Token frequency distribution**: Saved to `token_freq.pt` (or path specified by `--token-freq-path`)
+
+The preprocessed dataset contains:
+- `input_ids`: Tokenized conversation sequences
+- `loss_mask`: Binary mask indicating which tokens to train on (1 = train, 0 = mask)
 
 #### 3. Custom Worker Extension
 
@@ -219,6 +338,8 @@ def load_and_preprocess_dataset(
     max_samples: Optional[int] = None,
     token_freq_path: str = "./token_freq.pt",
     cache_dir: Optional[str] = None,
+    assistant_pattern: Optional[str] = None,
+    turn_dropout: bool = False,
 ) -> Tuple[HFDataset, PreTrainedTokenizer]
 
 def build_eagle3_dataset(
@@ -226,10 +347,12 @@ def build_eagle3_dataset(
     tokenizer: PreTrainedTokenizer,
     max_length: int = 2048,
     num_proc: int = 8,
+    assistant_pattern: Optional[str] = None,
+    turn_dropout: bool = False,
 ) -> HFDataset
 ```
 
-**Note:** Both functions now use the tokenizer's built-in chat template via `apply_chat_template`.
+**Note:** Both functions use the tokenizer's built-in chat template via `apply_chat_template`. The `assistant_pattern` is auto-detected if not provided, and `turn_dropout` enables data augmentation by randomly truncating conversations.
 
 ## Troubleshooting
 
