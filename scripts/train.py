@@ -86,11 +86,11 @@ def setup_dataloader(
 
 
 def create_transformer_layer_config(
-    verifier_name_or_path: str, draft_vocab_size: int, num_layers: int
+    verifier_name_or_path: str, num_layers: int
 ) -> LlamaConfig:
     verifier_config = AutoConfig.from_pretrained(verifier_name_or_path)
     transformer_layer_config = LlamaConfig(
-        vocab_size=draft_vocab_size,
+        vocab_size=verifier_config.vocab_size,
         hidden_size=verifier_config.hidden_size,
         intermediate_size=verifier_config.intermediate_size,
         num_hidden_layers=num_layers,
@@ -124,7 +124,7 @@ def main(args: argparse.Namespace):
 
     # Setup speculator config
     transformer_layer_config = create_transformer_layer_config(
-        args.verifier_name_or_path, draft_vocab_size, args.num_layers
+        args.verifier_name_or_path, args.num_layers
     )
 
     speculator_config = Eagle3SpeculatorConfig(
