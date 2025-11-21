@@ -58,14 +58,12 @@ def _visualize_sample(_dataset, preprocessed, tokenizer, idx: int = 0):
 def _normalize_conversation(
     conv: list[dict],
     turn_dropout: bool = False,
-    _seed: int | None = None,
 ) -> list[dict]:
     """Normalize conversation to standard format with role/content keys.
 
     Args:
         conv: Raw conversation turns
         turn_dropout: If True, randomly keeps first N consecutive turns (1 to len(conv))
-        _seed: Not used - kept for backward compatibility
 
     Returns:
         Normalized conversation with optional turn dropout applied
@@ -202,7 +200,7 @@ def _preprocess_batch(
             continue
 
         # Normalize to standard format with optional turn dropout
-        normalized_conv = _normalize_conversation(conv, turn_dropout, seed=idx)
+        normalized_conv = _normalize_conversation(conv, turn_dropout)
         if not normalized_conv:
             continue
 
