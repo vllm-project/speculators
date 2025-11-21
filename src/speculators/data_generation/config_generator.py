@@ -175,9 +175,23 @@ class DataGenerationConfig:
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization.
 
+        Handles Path objects by converting them to strings.
+
         :return: Dictionary representation of the config
         """
-        return asdict(self)
+
+        def serialize_value(obj: Any) -> Any:
+            """Recursively convert Path objects to strings."""
+            if isinstance(obj, Path):
+                return str(obj)
+            if isinstance(obj, dict):
+                return {k: serialize_value(v) for k, v in obj.items()}
+            if isinstance(obj, (list, tuple)):
+                return [serialize_value(item) for item in obj]
+            return obj
+
+        config_dict = asdict(self)
+        return serialize_value(config_dict)
 
     @classmethod
     def from_generator(

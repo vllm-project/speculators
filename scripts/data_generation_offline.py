@@ -193,7 +193,7 @@ def save_config(args, generator, num_samples, output_dir):
         generator=generator,
         train_data_path=args.train_data_path,
         seq_length=args.seq_length,
-        cache_dir=cache_dir,
+        cache_dir=str(cache_dir),
         num_samples=num_samples,
         max_samples=args.max_samples,
         seed=args.seed,
