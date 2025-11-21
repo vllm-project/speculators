@@ -504,7 +504,11 @@ def test_preprocess_batch_with_turn_dropout():
 
     assistant_pattern = _detect_assistant_pattern(tokenizer)
     results = _preprocess_batch(
-        examples, tokenizer, max_length=512, assistant_pattern=assistant_pattern, turn_dropout=True
+        examples,
+        tokenizer,
+        max_length=512,
+        assistant_pattern=assistant_pattern,
+        turn_dropout=True,
     )
 
     # Should still produce valid results

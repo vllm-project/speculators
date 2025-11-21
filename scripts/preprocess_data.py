@@ -26,7 +26,8 @@ Usage:
         --target-model-path openai/gpt-oss-20b \
         --train-data-path sharegpt \
         --seq-length 2048 \
-        --assistant-pattern '<\|start\|>assistant<\|channel\|>final<\|message\|>(.*?)<\|return\|>'
+        --assistant-pattern \\
+            '<\\|start\\|>assistant<\\|channel\\|>final<\\|message\\|>(.*?)<\\|return\\|>'
 """
 
 import argparse
@@ -103,12 +104,18 @@ def parse_args():
         "--assistant-pattern",
         type=str,
         default=None,
-        help="Custom regex pattern for matching assistant responses. If not provided, auto-detected from chat template.",
+        help=(
+            "Custom regex pattern for matching assistant responses. "
+            "If not provided, auto-detected from chat template."
+        ),
     )
     parser.add_argument(
         "--turn-dropout",
         action="store_true",
-        help="Enable turn dropout: randomly keeps first N consecutive turns per conversation for data augmentation.",
+        help=(
+            "Enable turn dropout: randomly keeps first N consecutive turns "
+            "per conversation for data augmentation."
+        ),
     )
 
     return parser.parse_args()

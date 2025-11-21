@@ -1,4 +1,5 @@
 import bisect
+import random
 import re
 
 import torch
@@ -19,32 +20,20 @@ __all__ = [
 log = PipelineLogger(__name__)
 
 
-def _visualize_sample(dataset, preprocessed, tokenizer, idx: int = 0):
+def _visualize_sample(_dataset, preprocessed, tokenizer, idx: int = 0):
     """Visualize a single sample with color-coded trainable regions."""
-    # Get raw sample
-    raw_sample = dataset[idx]
-    conv = raw_sample["conversations"]
-    normalized = _normalize_conversation(conv)
-
     # Get preprocessed sample
     prep_sample = preprocessed[idx]
     input_ids = prep_sample["input_ids"]
     loss_mask = prep_sample["loss_mask"]
 
-    # Format with chat template
-    formatted_text = tokenizer.apply_chat_template(
-        normalized,
-        tokenize=False,
-        add_generation_prompt=False,
-    )
-
     log.info(f"SAMPLE #{idx}")
     log.info("HIGHLIGHTED TEXT (BLUE = trainable, GREY = masked)")
 
     # Create color-highlighted text
-    BLUE = '\033[38;5;153m'  # Very light blue text for trainable tokens
-    GREY = '\033[90m'        # Grey text for masked tokens
-    RESET = '\033[0m'        # Reset color
+    blue = "\033[38;5;153m"  # Very light blue text for trainable tokens
+    grey = "\033[90m"  # Grey text for masked tokens
+    reset = "\033[0m"  # Reset color
 
     output = []
     prev_state = None
@@ -55,13 +44,13 @@ def _visualize_sample(dataset, preprocessed, tokenizer, idx: int = 0):
 
         # Switch colors when state changes
         if is_train != prev_state:
-            output.append(BLUE if is_train else GREY)
+            output.append(blue if is_train else grey)
             prev_state = is_train
 
         output.append(token)
 
-    output.append(RESET)
-    highlighted = ''.join(output)
+    output.append(reset)
+    highlighted = "".join(output)
 
     log.info(highlighted)
 
@@ -69,20 +58,18 @@ def _visualize_sample(dataset, preprocessed, tokenizer, idx: int = 0):
 def _normalize_conversation(
     conv: list[dict],
     turn_dropout: bool = False,
-    seed: int | None = None,
+    _seed: int | None = None,
 ) -> list[dict]:
     """Normalize conversation to standard format with role/content keys.
 
     Args:
         conv: Raw conversation turns
         turn_dropout: If True, randomly keeps first N consecutive turns (1 to len(conv))
-        seed: Not used - kept for backward compatibility
+        _seed: Not used - kept for backward compatibility
 
     Returns:
         Normalized conversation with optional turn dropout applied
     """
-    import random
-
     # Randomly pick how many consecutive turns to keep from the start
     num_turns_to_keep = random.randint(1, len(conv)) if turn_dropout else len(conv)
 
@@ -114,7 +101,8 @@ def _normalize_conversation(
 def _detect_assistant_pattern(tokenizer: PreTrainedTokenizer) -> str:
     """Auto-detect the assistant message pattern from the tokenizer's chat template.
 
-    Uses multi-turn conversation but extracts pattern from the LAST assistant message only.
+    Uses multi-turn conversation but extracts pattern from the LAST assistant
+    message only.
     """
     test_conv = [
         {"role": "user", "content": "USER_MSG_1"},
@@ -172,7 +160,8 @@ def _create_loss_mask_from_offsets(
     for match in re.finditer(assistant_pattern, text, re.DOTALL):
         matches_found += 1
 
-        # Use group(1) to get only the assistant message content, excluding prefix/suffix markers
+        # Use group(1) to get only the assistant message content,
+        # excluding prefix/suffix markers
         span_start_char = match.start(1)
         span_end_char = match.end(1)
 
@@ -277,9 +266,11 @@ def build_eagle3_dataset(
         tokenizer: Tokenizer with chat template support
         max_length: Maximum sequence length
         num_proc: Number of processes for parallel processing
-        assistant_pattern: Optional custom regex pattern for matching assistant responses.
-                          If None, pattern will be auto-detected from chat template.
-        turn_dropout: If True, randomly keeps first N consecutive turns per conversation
+        assistant_pattern: Optional custom regex pattern for matching assistant
+                          responses. If None, pattern will be auto-detected from
+                          chat template.
+        turn_dropout: If True, randomly keeps first N consecutive turns per
+                     conversation
     """
     # Detect or use provided assistant message pattern
     if assistant_pattern is None:
@@ -355,9 +346,11 @@ def load_and_preprocess_dataset(
         max_samples: Optional limit on number of samples
         token_freq_path: Path to save token frequency distribution
         cache_dir: Directory to cache HuggingFace datasets (optional)
-        assistant_pattern: Optional custom regex pattern for matching assistant responses.
-                          If None, pattern will be auto-detected from chat template.
-        turn_dropout: If True, randomly keeps first N consecutive turns per conversation
+        assistant_pattern: Optional custom regex pattern for matching assistant
+                          responses. If None, pattern will be auto-detected from
+                          chat template.
+        turn_dropout: If True, randomly keeps first N consecutive turns per
+                     conversation
 
     Returns:
         Tuple of (preprocessed_dataset, tokenizer)
