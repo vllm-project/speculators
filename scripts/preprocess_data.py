@@ -6,12 +6,28 @@ This script tokenizes raw chats using the model's built-in chat template.
 Preprocessed data is automatically cached by HuggingFace datasets.
 
 Usage:
+    # Basic usage
     python preprocess_data.py \
         --target-model-path meta-llama/Llama-3.1-8B-Instruct \
         --train-data-path sharegpt \
         --seq-length 2048 \
         --hf-cache-dir /path/to/cache \
         --build-dataset-num-proc 8
+
+    # With turn dropout for data augmentation
+    python preprocess_data.py \
+        --target-model-path meta-llama/Llama-3.1-8B \
+        --train-data-path sharegpt \
+        --seq-length 2048 \
+        --turn-dropout
+
+    # With custom assistant pattern
+    python preprocess_data.py \
+        --target-model-path openai/gpt-oss-20b \
+        --train-data-path sharegpt \
+        --seq-length 2048 \
+        --assistant-pattern \\
+            '<\\|start\\|>assistant<\\|channel\\|>final<\\|message\\|>(.*?)<\\|return\\|>'
 """
 
 import argparse
@@ -84,6 +100,23 @@ def parse_args():
         default=None,
         help="Maximum number of samples to preprocess (default: None, process all)",
     )
+    parser.add_argument(
+        "--assistant-pattern",
+        type=str,
+        default=None,
+        help=(
+            "Custom regex pattern for matching assistant responses. "
+            "If not provided, auto-detected from chat template."
+        ),
+    )
+    parser.add_argument(
+        "--turn-dropout",
+        action="store_true",
+        help=(
+            "Enable turn dropout: randomly keeps first N consecutive turns "
+            "per conversation for data augmentation."
+        ),
+    )
 
     return parser.parse_args()
 
@@ -100,6 +133,8 @@ def main():
         max_samples=args.max_samples,
         token_freq_path=args.token_freq_path,
         cache_dir=args.hf_cache_dir,
+        assistant_pattern=args.assistant_pattern,
+        turn_dropout=args.turn_dropout,
     )
 
     logger.info("Preprocessing complete!")
