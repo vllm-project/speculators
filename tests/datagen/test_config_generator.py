@@ -12,7 +12,6 @@ from speculators.data_generation.config_generator import DataGenerationConfig
 
 TRAIN_DATA_PATH = "sharegpt"
 SEQ_LENGTH = 2048
-BATCH_SIZE = 8
 CACHE_DIR = "/cache"
 NUM_SAMPLES = 100
 
@@ -73,7 +72,6 @@ def create_config(generator):
         generator=generator,
         train_data_path=TRAIN_DATA_PATH,
         seq_length=SEQ_LENGTH,
-        batch_size=BATCH_SIZE,
         cache_dir=CACHE_DIR,
         num_samples=NUM_SAMPLES,
     )

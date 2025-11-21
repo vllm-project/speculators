@@ -10,7 +10,7 @@ import sys
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import torch
 from transformers import AutoConfig
@@ -25,8 +25,6 @@ if TYPE_CHECKING:
 __all__ = ["DataGenerationConfig", "PackageVersions"]
 
 log = PipelineLogger(__name__)
-
-CONFIG_VERSION = "2.0"
 
 
 def _get_gpu_info() -> str:
@@ -60,17 +58,11 @@ class PackageVersions:
         from importlib.metadata import version  # noqa: PLC0415
 
         import transformers  # noqa: PLC0415
-
-        try:
-            import vllm  # noqa: PLC0415
-
-            vllm_version = vllm.__version__
-        except (ImportError, AttributeError):
-            vllm_version = "unknown"
+        import vllm  # noqa: PLC0415
 
         return cls(
             torch=torch.__version__,
-            vllm=vllm_version,
+            vllm=vllm.__version__,
             transformers=transformers.__version__,
             speculators=version("speculators"),
         )
@@ -120,7 +112,6 @@ class HiddenStatesConfig:
 class GenerationConfig:
     """Runtime generation parameters."""
 
-    batch_size: int
     cache_dir: str
 
 
@@ -169,6 +160,8 @@ class DataGenerationConfig:
     Saved alongside generated data for full reproducibility.
     """
 
+    VERSION: ClassVar[str] = "2.0"
+
     version: str
     generated_at: str
     speculators_version: str
@@ -192,7 +185,6 @@ class DataGenerationConfig:
         generator: VllmHiddenStatesGenerator,
         train_data_path: str,
         seq_length: int,
-        batch_size: int,
         cache_dir: str,
         num_samples: int,
         max_samples: int | None = None,
@@ -203,27 +195,54 @@ class DataGenerationConfig:
         :param generator: Initialized VllmHiddenStatesGenerator instance
         :param train_data_path: Path or HF dataset name used for training data
         :param seq_length: Maximum sequence length used in preprocessing
-        :param batch_size: Batch size used during generation
         :param cache_dir: Directory where preprocessed data is cached
         :param num_samples: Total number of samples generated
         :param max_samples: Maximum samples to process (None = all)
         :param seed: Random seed used
         :return: Complete DataGenerationConfig ready to save as JSON
         """
-        return generate_config(
-            target_model_path=generator.model_path,
-            train_data_path=train_data_path,
-            seq_length=seq_length,
-            layer_ids=generator.layer_ids,
-            tensor_parallel_size=generator.tensor_parallel_size,
-            max_model_len=generator.vllm_config.model_config.max_model_len,
-            gpu_memory_utilization=generator.vllm_config.cache_config.gpu_memory_utilization,
-            batch_size=batch_size,
-            cache_dir=cache_dir,
-            num_samples=num_samples,
-            max_samples=max_samples,
-            seed=seed,
+        log.subsection("Generating configuration metadata")
+
+        package_versions = PackageVersions.from_environment()
+        log.info(
+            f"Packages: torch={package_versions.torch}, vllm={package_versions.vllm}"
         )
+
+        hidden_size = _get_hidden_size_from_model(generator.model_path)
+        log.info(f"Hidden size: {hidden_size}")
+        log.info(f"GPU: {_get_gpu_info()}")
+
+        config = cls(
+            version=cls.VERSION,
+            generated_at=datetime.now(timezone.utc).isoformat(),
+            speculators_version=package_versions.speculators,
+            reproducibility=ReproducibilityInfo(
+                command=" ".join([Path(sys.argv[0]).name, *sys.argv[1:]]),
+                package_versions=package_versions,
+            ),
+            model=ModelConfig(
+                target_model_path=generator.model_path,
+                tensor_parallel_size=generator.tensor_parallel_size,
+                max_model_len=generator.vllm_config.model_config.max_model_len,
+                gpu_memory_utilization=generator.vllm_config.cache_config.gpu_memory_utilization,
+                hidden_size=hidden_size,
+            ),
+            data=DataConfig(
+                train_data_path=train_data_path,
+                seq_length=seq_length,
+                max_samples=max_samples,
+                num_samples=num_samples,
+                seed=seed,
+            ),
+            hidden_states=HiddenStatesConfig(layer_ids=generator.layer_ids),
+            generation=GenerationConfig(cache_dir=cache_dir),
+            format=FormatConfig.create_default(
+                num_layers=len(generator.layer_ids), hidden_size=hidden_size
+            ),
+        )
+
+        log.success("Configuration generated")
+        return config
 
 
 def _get_hidden_size_from_model(model_path: str) -> int:
@@ -246,75 +265,3 @@ def _get_hidden_size_from_model(model_path: str) -> int:
         f"Could not determine hidden size for {model_path}. "
         f"Expected 'hidden_size' or 'text_config.hidden_size' attribute"
     )
-
-
-def generate_config(
-    target_model_path: str,
-    train_data_path: str,
-    seq_length: int,
-    layer_ids: list[int],
-    tensor_parallel_size: int,
-    max_model_len: int,
-    gpu_memory_utilization: float,
-    batch_size: int,
-    cache_dir: str,
-    num_samples: int,
-    max_samples: int | None = None,
-    seed: int = 0,
-) -> DataGenerationConfig:
-    """Generate complete data generation configuration with full metadata.
-
-    :param target_model_path: HuggingFace model ID or local path
-    :param train_data_path: Path or HF dataset name for training data
-    :param seq_length: Maximum sequence length for tokenization
-    :param layer_ids: Transformer layer indices to extract hidden states from
-    :param tensor_parallel_size: Number of GPUs for tensor parallelism
-    :param max_model_len: Maximum sequence length the model supports
-    :param gpu_memory_utilization: Fraction of GPU memory to use (0.0-1.0)
-    :param batch_size: Number of samples to process in parallel
-    :param cache_dir: Directory for cached preprocessed data
-    :param num_samples: Total number of samples generated
-    :param max_samples: Maximum samples to process (None = all)
-    :param seed: Random seed for reproducibility
-    :return: Complete configuration with package versions and GPU info
-    """
-    log.subsection("Generating configuration metadata")
-
-    package_versions = PackageVersions.from_environment()
-    log.info(f"Packages: torch={package_versions.torch}, vllm={package_versions.vllm}")
-
-    hidden_size = _get_hidden_size_from_model(target_model_path)
-    log.info(f"Hidden size: {hidden_size}")
-    log.info(f"GPU: {_get_gpu_info()}")
-
-    config = DataGenerationConfig(
-        version=CONFIG_VERSION,
-        generated_at=datetime.now(timezone.utc).isoformat(),
-        speculators_version=package_versions.speculators,
-        reproducibility=ReproducibilityInfo(
-            command=" ".join([Path(sys.argv[0]).name, *sys.argv[1:]]),
-            package_versions=package_versions,
-        ),
-        model=ModelConfig(
-            target_model_path=target_model_path,
-            tensor_parallel_size=tensor_parallel_size,
-            max_model_len=max_model_len,
-            gpu_memory_utilization=gpu_memory_utilization,
-            hidden_size=hidden_size,
-        ),
-        data=DataConfig(
-            train_data_path=train_data_path,
-            seq_length=seq_length,
-            max_samples=max_samples,
-            num_samples=num_samples,
-            seed=seed,
-        ),
-        hidden_states=HiddenStatesConfig(layer_ids=layer_ids),
-        generation=GenerationConfig(batch_size=batch_size, cache_dir=cache_dir),
-        format=FormatConfig.create_default(
-            num_layers=len(layer_ids), hidden_size=hidden_size
-        ),
-    )
-
-    log.success("Configuration generated")
-    return config
