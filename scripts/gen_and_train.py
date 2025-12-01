@@ -95,6 +95,7 @@ class DataGenArgs(NamedTuple):
     """The path to the training data. Can be one of ["sharegpt", "ultrachat"] or a huggingface dataset path or a local JSON/JSONL file."""
     dataset_name: str | None = None
     """The name of the dataset to generate data for. Used exclusively for logging and output path generation. If None and train_data_path is sharegpt or ultrachat, the dataset name will be inferred from the train_data_path."""
+    turn_dropout: bool = False
     max_model_len: int | _NS = _NOTSET
     seq_length: int | _NS = _NOTSET
     max_samples: int | _NS = _NOTSET
@@ -273,6 +274,9 @@ def run_e2e(
         dga_dict["output-dir"] = str(output_path / "gen" / dataset_name)
 
         dga_list = prepare_args(dga_dict)
+        if dga_dict["turn_dropout"]:
+            dga_list.append("--turn-dropout")
+        del dga_dict["turn_dropout"]
         run_script("data_generation_offline.py", dga_list, [".[datagen]"])
 
     # Combine token frequency files from all datasets into a single file.

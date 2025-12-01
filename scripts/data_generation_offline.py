@@ -109,6 +109,23 @@ def parse_args():
             "(default: None)"
         ),
     )
+    parser.add_argument(
+        "--assistant-pattern",
+        type=str,
+        default=None,
+        help=(
+            "Custom regex pattern for matching assistant responses. "
+            "If not provided, auto-detected from chat template."
+        ),
+    )
+    parser.add_argument(
+        "--turn-dropout",
+        action="store_true",
+        help=(
+            "Enable turn dropout: randomly keeps first N consecutive turns "
+            "per conversation for data augmentation."
+        ),
+    )
 
     # Output arguments
     parser.add_argument(
@@ -310,6 +327,8 @@ def main():
         max_samples=args.max_samples,
         token_freq_path=args.token_freq_path,
         cache_dir=args.hf_cache_dir,
+        assistant_pattern=args.assistant_pattern,
+        turn_dropout=args.turn_dropout,
     )
     num_saved = generate_and_save_hidden_states(args, dataset)
 
