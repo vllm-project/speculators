@@ -80,6 +80,7 @@ The preprocessing pipeline:
 3. Applies the model's chat template
 4. Creates loss masks to train only on assistant responses
 5. Tokenizes and caches the result
+6. Computes token frequency statistics and stores to file
 
 ##### Basic Usage
 
