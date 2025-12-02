@@ -253,6 +253,10 @@ select = [
     "PTH", # os.path is acceptable in scripts
 ]
 
+"examples/**/*.py" = [
+    "INP001", # allow implicit namespace packages in examples
+]
+
 "scripts/gen_and_train.py" = [
     "T201", # allow print in scripts
 ]

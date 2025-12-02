@@ -21,13 +21,13 @@ Usage:
     `CUDA_VISIBLE_DEVICES` and `HF_HOME`) to control the behavior of the scripts.
 """
 
+import enum
 import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
 from typing import Any, NamedTuple
-import enum
 
 import psutil
 
@@ -92,9 +92,12 @@ class DataGenArgs(NamedTuple):
     """Arguments for data generation."""
 
     train_data_path: str
-    """The path to the training data. Can be one of ["sharegpt", "ultrachat"] or a huggingface dataset path or a local JSON/JSONL file."""
+    """The path to the training data. Can be one of ["sharegpt", "ultrachat"] or a
+ huggingface dataset path or a local JSON/JSONL file."""
     dataset_name: str | None = None
-    """The name of the dataset to generate data for. Used exclusively for logging and output path generation. If None and train_data_path is sharegpt or ultrachat, the dataset name will be inferred from the train_data_path."""
+    """The name of the dataset to generate data for. Used exclusively for logging and
+ output path generation. If None and train_data_path is sharegpt or ultrachat, the
+ dataset name will be inferred from the train_data_path."""
     turn_dropout: bool = False
     max_model_len: int | _NS = _NOTSET
     seq_length: int | _NS = _NOTSET
@@ -264,7 +267,9 @@ def run_e2e(
                 raise ValueError(
                     f"Dataset name is required for {dga_dict['train_data_path']}"
                 )
-        del dga_dict["dataset_name"] # Remove name so it isn't passed as argument to data_generation_offline.py
+        del dga_dict[
+            "dataset_name"
+        ]  # Remove name so it isn't passed as argument to data_generation_offline.py
 
         token_freq_path = (
             output_path / "vocab_mapping" / f"token_freq_{dataset_name}.pt"
@@ -298,14 +303,16 @@ def run_e2e(
     run_script("build_vocab_mapping.py", vma_list, [".[datagen]"])
 
     # Training
-    ta_dict = train_args._asdict()
-    ta_dict["verifier-name-or-path"] = verifier_name_or_path
-    ta_dict["data-path"] = str(output_path / "gen")
-    ta_dict["save-path"] = str(output_path / "checkpoints" / train_args.run_name)
-    ta_dict["data-format-version"] = 1
-    ta_dict["log-dir"] = str(output_path / "logs" / train_args.run_name)
-    ta_dict["d2t-path"] = str(output_path / "vocab_mapping" / "d2t.npy")
-    ta_dict["t2d-path"] = str(output_path / "vocab_mapping" / "t2d.npy")
+    ta_dict = {
+        **train_args._asdict(),
+        "verifier-name-or-path": verifier_name_or_path,
+        "data-path": str(output_path / "gen"),
+        "save-path": str(output_path / "checkpoints" / train_args.run_name),
+        "data-format-version": 1,
+        "log-dir": str(output_path / "logs" / train_args.run_name),
+        "d2t-path": str(output_path / "vocab_mapping" / "d2t.npy"),
+        "t2d-path": str(output_path / "vocab_mapping" / "t2d.npy"),
+    }
 
     ta_list = prepare_args(ta_dict)
 

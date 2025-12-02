@@ -55,7 +55,7 @@ def combine_token_frequency_distributions(
     token_freq_dicts = [
         torch.load(path, weights_only=True) for path in token_freq_paths
     ]
-    combined_token_freq = Counter()
+    combined_token_freq: Counter[str] = Counter()
     for token_freq_dict in token_freq_dicts:
         combined_token_freq.update(token_freq_dict)
     combined_token_freq_dict = dict(combined_token_freq)

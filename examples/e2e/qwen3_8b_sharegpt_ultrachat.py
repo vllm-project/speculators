@@ -5,8 +5,12 @@ from pathlib import Path
 scripts_path = Path(__file__).absolute().parent.parent.parent / "scripts"
 sys.path.append(str(scripts_path))
 
-from gen_and_train import DataGenArgs, VocabMappingArgs, TrainArgs, run_e2e
-
+from gen_and_train import (  # noqa: E402
+    DataGenArgs,
+    TrainArgs,
+    VocabMappingArgs,
+    run_e2e,
+)
 
 if __name__ == "__main__":
     VERIFIER_NAME_OR_PATH = "Qwen/Qwen3-8B"
