@@ -120,6 +120,7 @@ class FormatConfig:
     """Output format specification for generated data files."""
 
     file_pattern: str
+    data_format_version: int
     schema: dict[str, dict[str, Any]]
 
     @classmethod
@@ -132,6 +133,7 @@ class FormatConfig:
         """
         return cls(
             file_pattern="data_{idx}.pt",
+            data_format_version=1,
             schema={
                 "input_ids": {
                     "dtype": "torch.long",
