@@ -68,12 +68,6 @@ def migrate_developer_docs():
             title="Contributing Guide",
             weight=-8,
         ),
-        ProcessFile(
-            root_path=Path("DEVELOPING.md"),
-            docs_path=Path("developer/developing.md"),
-            title="Development Guide",
-            weight=-6,
-        ),
     ]
     process_files(files, project_root)
 
