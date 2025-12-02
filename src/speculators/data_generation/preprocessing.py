@@ -1,4 +1,5 @@
 import bisect
+import random
 import re
 
 import torch
@@ -19,10 +20,63 @@ __all__ = [
 log = PipelineLogger(__name__)
 
 
-def _normalize_conversation(conv: list[dict]) -> list[dict]:
-    """Normalize conversation to standard format with role/content keys."""
+def _visualize_sample(_dataset, preprocessed, tokenizer, idx: int = 0):
+    """Visualize a single sample with color-coded trainable regions."""
+    # Get preprocessed sample
+    prep_sample = preprocessed[idx]
+    input_ids = prep_sample["input_ids"]
+    loss_mask = prep_sample["loss_mask"]
+
+    log.info(f"SAMPLE #{idx}")
+    log.info("HIGHLIGHTED TEXT (BLUE = trainable, GREY = masked)")
+
+    # Create color-highlighted text
+    blue = "\033[38;5;153m"  # Very light blue text for trainable tokens
+    grey = "\033[90m"  # Grey text for masked tokens
+    reset = "\033[0m"  # Reset color
+
+    output = []
+    prev_state = None
+
+    for i in range(len(input_ids)):
+        is_train = loss_mask[i].item() == 1
+        token = tokenizer.decode([input_ids[i].item()])
+
+        # Switch colors when state changes
+        if is_train != prev_state:
+            output.append(blue if is_train else grey)
+            prev_state = is_train
+
+        output.append(token)
+
+    output.append(reset)
+    highlighted = "".join(output)
+
+    log.info(highlighted)
+
+
+def _normalize_conversation(
+    conv: list[dict],
+    turn_dropout: bool = False,
+) -> list[dict]:
+    """Normalize conversation to standard format with role/content keys.
+
+    Args:
+        conv: Raw conversation turns
+        turn_dropout: If True, randomly keeps first N consecutive turns (1 to len(conv))
+
+    Returns:
+        Normalized conversation with optional turn dropout applied
+    """
+    # Randomly pick how many consecutive turns to keep from the start
+    num_turns_to_keep = random.randint(1, len(conv)) if turn_dropout else len(conv)
+
     normalized = []
-    for turn in conv:
+    for i, turn in enumerate(conv):
+        # Stop if we've reached the truncation point
+        if i >= num_turns_to_keep:
+            break
+
         role = turn.get("from", turn.get("role", ""))
         content = turn.get("value", turn.get("content", ""))
 
@@ -43,35 +97,51 @@ def _normalize_conversation(conv: list[dict]) -> list[dict]:
 
 
 def _detect_assistant_pattern(tokenizer: PreTrainedTokenizer) -> str:
-    """Auto-detect the assistant message pattern from the tokenizer's
-    chat template using a dummy example.
+    """Auto-detect the assistant message pattern from the tokenizer's chat template.
 
-    TODO: Replace this with return_assistant_tokens_mask when more models
-    support it natively.
+    Uses multi-turn conversation but extracts pattern from the LAST assistant
+    message only.
     """
-
     test_conv = [
-        {"role": "user", "content": "USER_MSG"},
-        {"role": "assistant", "content": "ASSISTANT_MSG"},
+        {"role": "user", "content": "USER_MSG_1"},
+        {"role": "assistant", "content": "ASSISTANT_MSG_1"},
+        {"role": "user", "content": "USER_MSG_2"},
+        {"role": "assistant", "content": "ASSISTANT_MSG_2"},
     ]
 
-    formatted_raw = tokenizer.apply_chat_template(
+    formatted = tokenizer.apply_chat_template(
         test_conv, tokenize=False, add_generation_prompt=False
     )
-    # Type assertion: when tokenize=False, result is always str
-    assert isinstance(formatted_raw, str)
-    formatted: str = formatted_raw
+    assert isinstance(formatted, str), "Expected string from apply_chat_template"
 
-    assistant_start = formatted.find("ASSISTANT_MSG")
-    if assistant_start == -1:
-        raise ValueError("Could not detect assistant message in chat template")
+    # Find the LAST assistant message
+    second_start = formatted.find("ASSISTANT_MSG_2")
+    second_end = second_start + len("ASSISTANT_MSG_2")
 
-    assistant_end = assistant_start + len("ASSISTANT_MSG")
-    user_end = formatted.find("USER_MSG") + len("USER_MSG")
-    prefix = formatted[user_end:assistant_start]
+    if second_start == -1:
+        raise ValueError("Could not detect second assistant message in chat template")
 
-    suffix = formatted[assistant_end:]
-    return re.escape(prefix) + r"(.*?)" + re.escape(suffix)
+    # Extract role marker from before the last assistant message
+    second_user_end = formatted.find("USER_MSG_2") + len("USER_MSG_2")
+    prefix = formatted[second_user_end:second_start]
+
+    # Find where the assistant role marker starts
+    assistant_pos = prefix.rfind("assistant")
+    if assistant_pos != -1:
+        role_start = prefix.rfind("<", 0, assistant_pos)
+        if role_start != -1:
+            role_marker = prefix[role_start:]
+        else:
+            role_marker = prefix[assistant_pos:]
+    else:
+        role_marker = prefix
+
+    # Extract suffix from the last assistant message
+    suffix = formatted[second_end:]
+
+    # Use negative lookahead to prevent matching across role boundaries
+    # This prevents the pattern from spanning multiple messages
+    return re.escape(role_marker) + r"((?:(?!<\|start\|).)*?)" + re.escape(suffix)
 
 
 def _create_loss_mask_from_offsets(
@@ -88,8 +158,11 @@ def _create_loss_mask_from_offsets(
     for match in re.finditer(assistant_pattern, text, re.DOTALL):
         matches_found += 1
 
-        span_start_char = match.start()
-        span_end_char = match.end()
+        # Use group(1) to get only the assistant message content,
+        # excluding prefix/suffix markers
+        span_start_char = match.start(1)
+        span_end_char = match.end(1)
+
         start_idx = bisect.bisect_left(token_starts, span_start_char)
 
         for idx in range(max(0, start_idx - 1), len(offsets)):
@@ -111,6 +184,7 @@ def _preprocess_batch(
     tokenizer: PreTrainedTokenizer,
     max_length: int,
     assistant_pattern: str,
+    turn_dropout: bool = False,
 ) -> dict[str, list]:
     """Process a batch of conversations into tokenized format with loss masks."""
 
@@ -125,8 +199,8 @@ def _preprocess_batch(
         if not conv or not isinstance(conv, list):
             continue
 
-        # Normalize to standard format
-        normalized_conv = _normalize_conversation(conv)
+        # Normalize to standard format with optional turn dropout
+        normalized_conv = _normalize_conversation(conv, turn_dropout)
         if not normalized_conv:
             continue
 
@@ -178,20 +252,36 @@ def build_eagle3_dataset(
     tokenizer: PreTrainedTokenizer,
     max_length: int = 2048,
     num_proc: int = 8,
+    assistant_pattern: str | None = None,
+    turn_dropout: bool = False,
 ) -> HFDataset:
     """Build EAGLE3 dataset by tokenizing conversations and creating loss masks.
 
     Uses the tokenizer's built-in chat template via apply_chat_template.
+
+    Args:
+        dataset: Raw dataset with conversations
+        tokenizer: Tokenizer with chat template support
+        max_length: Maximum sequence length
+        num_proc: Number of processes for parallel processing
+        assistant_pattern: Optional custom regex pattern for matching assistant
+                          responses. If None, pattern will be auto-detected from
+                          chat template.
+        turn_dropout: If True, randomly keeps first N consecutive turns per
+                     conversation
     """
-    # Detect assistant message pattern from chat template
-    assistant_pattern = _detect_assistant_pattern(tokenizer)
-    log.info(f"Detected assistant pattern: {assistant_pattern[:80]}...")
+    # Detect or use provided assistant message pattern
+    if assistant_pattern is None:
+        assistant_pattern = _detect_assistant_pattern(tokenizer)
+        log.info(f"Detected assistant pattern: {assistant_pattern[:80]}...")
+    else:
+        log.info(f"Using custom assistant pattern: {assistant_pattern[:80]}...")
 
     original_cols = dataset.column_names
 
     dataset = dataset.map(
         lambda examples: _preprocess_batch(
-            examples, tokenizer, max_length, assistant_pattern
+            examples, tokenizer, max_length, assistant_pattern, turn_dropout
         ),
         batched=True,
         num_proc=num_proc,
@@ -237,6 +327,8 @@ def load_and_preprocess_dataset(
     max_samples: int | None = None,
     token_freq_path: str = "./token_freq.pt",  # noqa: S107
     cache_dir: str | None = None,
+    assistant_pattern: str | None = None,
+    turn_dropout: bool = False,
 ) -> tuple[HFDataset, PreTrainedTokenizer]:
     """Load, tokenize, and preprocess a dataset for EAGLE3 training.
 
@@ -252,6 +344,11 @@ def load_and_preprocess_dataset(
         max_samples: Optional limit on number of samples
         token_freq_path: Path to save token frequency distribution
         cache_dir: Directory to cache HuggingFace datasets (optional)
+        assistant_pattern: Optional custom regex pattern for matching assistant
+                          responses. If None, pattern will be auto-detected from
+                          chat template.
+        turn_dropout: If True, randomly keeps first N consecutive turns per
+                     conversation
 
     Returns:
         Tuple of (preprocessed_dataset, tokenizer)
@@ -282,12 +379,16 @@ def load_and_preprocess_dataset(
     log.subsection("Tokenizing and building dataset")
     if cache_dir:
         log.info(f"Preprocessed data will be cached at: {cache_dir}")
+    if turn_dropout:
+        log.info("Turn dropout enabled: randomly keeping N consecutive turns")
 
     preprocessed_dataset = build_eagle3_dataset(
         dataset=raw_dataset,
         tokenizer=tokenizer,
         max_length=seq_length,
         num_proc=build_dataset_num_proc,
+        assistant_pattern=assistant_pattern,
+        turn_dropout=turn_dropout,
     )
 
     log.subsection("Computing token frequency distribution")
@@ -295,6 +396,9 @@ def load_and_preprocess_dataset(
         dataset=preprocessed_dataset,
         output_path=token_freq_path,
     )
+
+    log.subsection("Visualizing sample")
+    _visualize_sample(raw_dataset, preprocessed_dataset, tokenizer, idx=0)
 
     log.section("Dataset preprocessing complete")
 
