@@ -10,6 +10,7 @@ from speculators.utils.loading import _resolve_file, load_model_layers
 
 # Test model from HuggingFace
 TEST_MODEL_REPO = "nm-testing/tiny-testing-random-weights"
+SMALL_MODEL_REPO = "nm-testing/tinysmokellama-3.2"
 
 # _resolve_file Tests
 
@@ -27,12 +28,18 @@ def test_resolve_file_hub_download():
 
 
 @pytest.mark.sanity
-def test_load_model_layers_multiple_shards():
-    """Test loading layers from multiple safetensors shards."""
-    # embed_tokens is in shard 1, lm_head is in shard 2
+@pytest.mark.parametrize(
+    "test_model_repo",
+    [
+        TEST_MODEL_REPO,  # Multi-shard model
+        SMALL_MODEL_REPO,  # Single-shard model
+    ],
+)
+def test_load_model(test_model_repo: str):
+    """Test loading layers from a model repository."""
     result = load_model_layers(
         ["model.embed_tokens.weight", "lm_head.weight"],
-        TEST_MODEL_REPO,
+        test_model_repo,
     )
 
     assert len(result) == 2

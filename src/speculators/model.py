@@ -375,7 +375,7 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel, GenerationMixin):  # 
         self,
         verifier: str | os.PathLike | PreTrainedModel,
         mode: Literal["full", "train_only"] | None = None,
-    ) -> PreTrainedModel:
+    ):
         """
         Attach a verifier model for the speculator that is used to attach to
         for running inference/training with the speculator and validates the
@@ -417,13 +417,12 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel, GenerationMixin):  # 
                 "Must be one of 'full', 'train_only', or None."
             )
 
-        verifier = self.resolve_verifier(verifier)
         self.verifier_attachment_mode = mode or "full"
         self.verifier = (
-            verifier if self.verifier_attachment_mode == "full" else None
+            self.resolve_verifier(verifier)
+            if self.verifier_attachment_mode == "full"
+            else None
         )  # Expect subclasses to handle references if train_only
-
-        return verifier
 
     def detach_verifier(self):
         """

@@ -6,13 +6,13 @@
     <img alt="Speculators logo" src="https://raw.githubusercontent.com/neuralmagic/speculators/main/docs/assets/branding/speculators-logo-black.svg" height="64" />
   </picture>
 
-[![License](https://img.shields.io/github/license/neuralmagic/speculators.svg)](https://github.com/neuralmagic/speculators/blob/main/LICENSE) [![Python Versions](https://img.shields.io/badge/Python-3.10--3.13-orange)](https://pypi.python.org/pypi/speculators) [![docs](https://img.shields.io/badge/docs-Speculators-blue)](https://docs.vllm.ai/projects/speculators/en/latest/) [![PyPI](https://img.shields.io/pypi/v/speculators.svg)](https://pypi.org/project/speculators/) [![tests](https://github.com/vllm-project/speculators/actions/workflows/nightly.yml/badge.svg)](https://github.com/vllm-project/speculators/actions/workflows/nightly.yml) [![tests](https://github.com/vllm-project/speculators/actions/workflows/main.yml/badge.svg)](https://github.com/vllm-project/speculators/actions/workflows/main.yml)
+[![License](https://img.shields.io/github/license/neuralmagic/speculators.svg)](https://github.com/neuralmagic/speculators/blob/main/LICENSE) [![Python Versions](https://img.shields.io/badge/Python-3.10--3.13-orange)](https://pypi.python.org/pypi/speculators) [![docs](https://img.shields.io/badge/docs-Speculators-blue)](https://docs.vllm.ai/projects/speculators/en/latest/) [![PyPI](https://img.shields.io/pypi/v/speculators.svg)](https://pypi.org/project/speculators/) [![tests](https://github.com/vllm-project/speculators/actions/workflows/main.yml/badge.svg)](https://github.com/vllm-project/speculators/actions/workflows/main.yml)
 
 </div>
 
 ## Overview
 
-**Speculators** is a unified library for building, evaluating, and storing speculative decoding algorithms for large language model (LLM) inference, including in frameworks like vLLM. Speculative decoding is a lossless technique that speeds up LLM inference by using a smaller, faster draft model (i.e "the speculators") to propose tokens, which are then verified by the larger base model, reducing latency without compromising output quality. The speculator intelligently drafts multiple tokens ahead of time, and the base model verifies them in a single forward pass. This approach boosts performance without sacrificing output quality, as every accepted token is guaranteed to match what the main model would have generated on its own. Speculators standardizes this process with reusable formats and tools, enabling easier integration and deployment of speculative decoding in production-grade inference servers.
+**Speculators** is a unified library for building and storing speculative decoding algorithms for large language model (LLM) inference, including in frameworks like vLLM. Speculative decoding is a lossless technique that speeds up LLM inference by using a smaller, faster draft model (i.e "the speculators") to propose tokens, which are then verified by the larger base model, reducing latency without compromising output quality. The speculator intelligently drafts multiple tokens ahead of time, and the base model verifies them in a single forward pass. This approach boosts performance without sacrificing output quality, as every accepted token is guaranteed to match what the main model would have generated on its own. Speculators standardizes this process with reusable formats and tools, enabling easier integration and deployment of speculative decoding in production-grade inference servers.
 
 <p align="center">
   <picture>
@@ -22,9 +22,18 @@
   </picture>
 </p>
 
+______________________________________________________________________
+
+💬 Join us on the [vLLM Community Slack](https://communityinviter.com/apps/vllm-dev/join-vllm-developers-slack) and share your questions, thoughts, or ideas in:
+
+- `#speculators`
+- `#feat-spec-decode`
+
+______________________________________________________________________
+
 ## Key Features
 
-- **Unified Speculative Decoding Toolkit:** Simplifies the development, evaluation, and representation of speculative decoding algorithms, supporting both research and production use cases for LLMs.
+- **Unified Speculative Decoding Toolkit:** Simplifies the development and representation of speculative decoding algorithms, supporting both research and production use cases for LLMs.
 - **Standardized, Extensible Format:** Provides a Hugging Face-compatible format for defining speculative models, with tools to convert from external research repositories into a standard speculators format for easy adoption.
 - **Seamless vLLM Integration:** Built for direct deployment into vLLM, enabling low-latency, production-grade inference with minimal overhead.
 - **Coming Soon:** The ability to train speculators directly through the speculators repository
@@ -47,7 +56,7 @@ The following models are currently supported or are planned to be supported in t
 <tr>
 <td rowspan="3">Llama</td>
 <td>8B-Instruct</td>
-<td><a href="https://huggingface.co/RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3">EAGLE-3</a> ✅ | HASS ✅</td>
+<td><a href="https://huggingface.co/RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3">EAGLE-3</a> ✅</td>
 <td>✅</td>
 <td><a href="https://huggingface.co/yuhuili/EAGLE3-LLaMA3.1-Instruct-8B">EAGLE-3</a> ✅</td>
 </tr>
@@ -83,37 +92,38 @@ The following models are currently supported or are planned to be supported in t
 <td>❌</td>
 </tr>
 <tr>
-<td rowspan="2">Qwen3 MoE</td>
-<td>30B-A3B</td>
-<td>EAGLE-3 ❌</td>
-<td>⏳</td>
-<td>❌</td>
-</tr>
-<tr>
+<td>Qwen3 MoE</td>
 <td>235B-A22B</td>
-<td>EAGLE-3 ❌</td>
+<td>EAGLE-3 ⏳</td>
 <td>⏳</td>
 <td><a href="https://huggingface.co/nvidia/Qwen3-235B-A22B-Eagle3">EAGLE-3</a> ⏳</td>
 </tr>
 <tr>
-<td rowspan="2">Llama-4</td>
-<td>Scout-17B-16E-Instruct</td>
-<td>EAGLE-3 ❌</td>
-<td>⏳</td>
-<td>❌</td>
-</tr>
-<tr>
+<td>Llama-4</td>
 <td>Maverick-17B-128E-Eagle3</td>
 <td>EAGLE-3 ❌</td>
 <td>✅</td>
 <td><a href="https://huggingface.co/RedHatAI/Llama4-Maverick-17B-128E-Instruct-speculator.eagle3">EAGLE-3</a> ✅</td>
 </tr>
 <tr>
-<td>DeepSeek-R1</td>
-<td>DeepSeek-R1</td>
+<td rowspan="2">gpt-oss</td>
+<td>20b</td>
+<td><a href="https://huggingface.co/RedHatAI/gpt-oss-20b-speculator.eagle3">EAGLE-3</a> ✅</td>
+<td>✅</td>
+<td>❌</td>
+</tr>
+<tr>
+<td>120b</td>
 <td>EAGLE-3 ❌</td>
 <td>⏳</td>
-<td><a href="https://huggingface.co/HArmonizedSS/HASS-DeepSeek-R1">HASS</a> ⏳</td>
+<td><a href="https://huggingface.co/nvidia/gpt-oss-120b-Eagle3-v2">EAGLE-3</a> ⏳</td>
+</tr>
+<tr>
+<td>Qwen3-VL</td>
+<td>235B-A22B</td>
+<td>EAGLE-3 ⏳</td>
+<td>⏳</td>
+<td>❌</td>
 </tr>
 </tbody>
 </table>
@@ -193,9 +203,9 @@ print(speculators.__version__)
 
 Here you can find links to our research implementations. These provide prototype code for immediate enablement and experimentation, with plans for productization into the main package soon.
 
-- [eagle3](https://github.com/neuralmagic/speculators/tree/main/research/eagle3): This implementation trains models similar to the EAGLE 3 architecture, specifically utilizing the Train Time Test method.
+- eagle3: This implementation trains models similar to the EAGLE 3 architecture, specifically utilizing the Train Time Test method.
 
-- [hass](https://github.com/neuralmagic/speculators/tree/main/research/hass): This implementation trains models that are a variation on the EAGLE 1 architecture using the [HASS](https://github.com/HArmonizedSS/HASS) method.
+- hass: This implementation trains models that are a variation on the EAGLE 1 architecture using the [HASS](https://github.com/HArmonizedSS/HASS) method.
 
 ## License
 

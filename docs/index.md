@@ -7,15 +7,15 @@
   </picture>
 
   <h3 style="margin: 0; text-align: left;">
-    Unified Library for Speculative Decoding: Build, Evaluate, and Deploy Faster LLM Inference
+    Unified Library for Speculative Decoding: Build and Deploy Faster LLM Inference
   </h3>
 </div>
 
-**Speculators** is a unified library for building, evaluating, and storing speculative decoding algorithms for large language model (LLM) inference, including in frameworks like vLLM. Speculative decoding is a lossless technique that speeds up LLM inference by using a smaller, faster speculator model to propose tokens, which are then verified by the larger base model, reducing latency without compromising output quality. Speculators standardizes this process with reusable formats and tools, enabling easier integration and deployment of speculative decoding in production-grade inference servers.
+**Speculators** is a unified library for building and storing speculative decoding algorithms for large language model (LLM) inference, including in frameworks like vLLM. Speculative decoding is a lossless technique that speeds up LLM inference by using a smaller, faster speculator model to propose tokens, which are then verified by the larger base model, reducing latency without compromising output quality. Speculators standardizes this process with reusable formats and tools, enabling easier integration and deployment of speculative decoding in production-grade inference servers.
 
 ## Key Features
 
-- **Unified Speculative Decoding Toolkit:** Simplifies the development, evaluation, and representation of speculative decoding algorithms, supporting both research and production use cases for LLMs.
+- **Unified Speculative Decoding Toolkit:** Simplifies the development and representation of speculative decoding algorithms, supporting both research and production use cases for LLMs.
 - **Standardized, Extensible Format:** Provides a Hugging Face-compatible format for defining speculative models, with tools to convert from external research repositories for easy adoption.
 - **Seamless vLLM Integration:** Built for direct deployment into vLLM, enabling low-latency, production-grade inference with minimal overhead.
 - **Research-to-Production Pipeline:** Bridge the gap between experimental speculative decoding research and production deployments.
@@ -30,7 +30,7 @@
 
     Our community guidelines ensure that participation in the Speculators project is a positive, inclusive, and respectful experience for everyone.
 
-    [:octicons-arrow-right-24: Code of Conduct](https://github.com/neuralmagic/speculators/blob/main/CODE_OF_CONDUCT.md)
+    [:octicons-arrow-right-24: Code of Conduct](developer/code-of-conduct.md)
 
 - :material-source-pull:{ .lg .middle } Contributing Guide
 
@@ -38,7 +38,7 @@
 
     Learn how to effectively contribute to Speculators, including reporting bugs, suggesting features, improving documentation, and submitting code.
 
-    [:octicons-arrow-right-24: Contributing Guide](https://github.com/neuralmagic/speculators/blob/main/CONTRIBUTING.md)
+    [:octicons-arrow-right-24: Contributing Guide](developer/contributing.md)
 
 - :material-source-pull:{ .lg .middle } Entrypoints
 
@@ -101,5 +101,5 @@ VLLM_USE_V1=1 vllm serve RedHatAI/Qwen3-8B-speculator.eagle3
 
 Speculators includes prototype implementations of cutting-edge speculative decoding research:
 
-- **[EAGLE 3](https://github.com/neuralmagic/speculators/blob/main/research/eagle3/README.md)**: Train Time Test method implementation for advanced token speculation
-- **[HASS](https://github.com/neuralmagic/speculators/blob/main/research/hass/README.md)**: EAGLE 1 architecture variation using the HASS training method
+- **EAGLE 3**: Train Time Test method implementation for advanced token speculation
+- **HASS**: EAGLE 1 architecture variation using the HASS training method

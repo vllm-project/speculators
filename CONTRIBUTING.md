@@ -47,22 +47,34 @@ You can either clone the repository directly or fork it if you plan to contribut
    cd speculators
    ```
 
-For detailed instructions on setting up your development environment, please refer to the [DEVELOPING.md](https://github.com/neuralmagic/speculators/blob/main/DEVELOPING.md) file. It includes step-by-step guidance on:
+### Installing Dependencies
 
-- Installing dependencies
-- Running tests
-- Using Tox for various tasks
+To install the required dependencies for the package and development, run:
+
+```bash
+pip install -e .[dev]
+```
+
+The `-e` flag installs the package in editable mode, allowing you to make changes to the code without reinstalling it. The `[dev]` part installs additional dependencies needed for development, such as testing and linting tools.
+
+Note: the data generation components off speculators (i.e. `src/speculators/data_generation`) require a vLLM installation. Code in this module should be run in a separate environment, with vllm. This can be done by installing the `datagen` extra using `pip install -e .[datagen]` (or `pip install -e .[datagen,dev]` for development).
 
 ## Code Style and Guidelines
 
 We follow strict coding standards to ensure code quality and maintainability. Please adhere to the following guidelines:
 
-- **Code Style**: Use [Black](https://black.readthedocs.io/en/stable/) for code formatting and [Ruff](https://github.com/charliermarsh/ruff) for linting.
+- **Code Style**: Use [Ruff](https://github.com/astral-sh/ruff) for formatting and linting.
 - **Type Checking**: Use [Mypy](http://mypy-lang.org/) for type checking.
 - **Testing**: Write unit tests for new features and bug fixes. Use [pytest](https://docs.pytest.org/) for testing.
 - **Documentation**: Update documentation for any changes to the codebase.
 
-To check code quality locally, use the following Tox environment:
+We use Tox to simplify running various tasks in isolated environments. Tox standardizes environments to ensure consistency across local development, CI/CD pipelines, and releases. This guarantees that the code behaves the same regardless of where it is executed.
+
+Additionally, to ensure consistency and quality of the codebase, we use [ruff](https://github.com/astral-sh/ruff) for linting and styling, [mypy](https://github.com/python/mypy) for type checking, and [mdformat](https://github.com/hukkin/mdformat) for formatting Markdown files.
+
+### Code Quality and Style
+
+To check code quality, including linting and formatting:
 
 ```bash
 tox -e quality
@@ -74,11 +86,81 @@ To automatically fix style issues, use:
 tox -e style
 ```
 
-To run type checks, use:
+### Type Checking
+
+To ensure type safety using Mypy:
 
 ```bash
 tox -e types
 ```
+
+### Automating Quality Checks with Pre-Commit Hooks (Optional)
+
+We use [pre-commit](https://pre-commit.com/) to automate quality checks before commits. Pre-commit hooks run checks like linting, formatting, and type checking, ensuring that only high-quality code is committed.
+
+To install the pre-commit hooks, run:
+
+```bash
+pre-commit install
+```
+
+This will set up the hooks to run automatically before each commit. To manually run the hooks on all files, use:
+
+```bash
+pre-commit run --all-files
+```
+
+## Running Tests
+
+For testing, we use [pytest](https://docs.pytest.org/) as our testing framework. We have different test suites for unit tests, integration tests, end-to-end tests, and data generation tests. To run the tests, you can use Tox, which will automatically create isolated environments for each test suite. Tox will also ensure that the tests are run in a consistent environment, regardless of where they are executed.
+
+### Running All Tests
+
+To run all tests:
+
+```bash
+tox
+```
+
+### Running Specific Tests
+
+`tox` will set up the environment for the test environment for each test you run.
+
+- Unit tests (focused on individual components with mocking):
+
+  ```bash
+  tox -e test-unit
+  ```
+
+- Integration tests (focused on interactions between components ideally without mocking):
+
+  ```bash
+  tox -e test-integration
+  ```
+
+- End-to-end tests (focused on the entire system and user interfaces):
+
+  ```bash
+  tox -e test-e2e
+  ```
+
+- Data generation tests (focused on the data generation process):
+
+Note: This creates an environment with the `datagen` extra installed (including vllm) and executes the tests in this environment.
+
+```bash
+tox -e test-datagen
+```
+
+### Running Tests with Coverage
+
+To ensure your changes are covered by tests, run:
+
+```bash
+tox -e test-unit -- --cov=speculators --cov-report=html
+```
+
+Review the coverage report to confirm that your new code is adequately tested.
 
 ## Submitting Changes
 
@@ -88,21 +170,23 @@ tox -e types
    git checkout -b feature/your-feature-name
    ```
 
-2. **Make Changes**: Commit your changes with clear and descriptive commit messages.
+2. **Make Changes**: Implement your changes in the appropriate files. Commit your changes with clear and descriptive commit messages.
 
-3. **Run Tests and Quality Checks**: Before submitting your changes, ensure all tests pass and code quality checks are satisfied:
+3. **Update Documentation**: Update or add documentation to reflect your changes. This includes updating README files, docstrings, and any relevant guides.
+
+4. **Run Tests and Quality Checks**: Before submitting your changes, ensure all tests pass and code quality checks are satisfied:
 
    ```bash
    tox
    ```
 
-4. **Push Changes**: Push your branch to your forked repository (if you forked):
+5. **Push Changes**: Push your branch to your forked repository (if you forked):
 
    ```bash
    git push origin feature/your-feature-name
    ```
 
-5. **Open a Pull Request**: Go to the original repository and open a pull request. Provide a clear description of your changes and link any related issues.
+6. **Open a Pull Request**: From the fork repository, use the contribute button to open a pull request to the original repository's main branch. Provide a clear description of your changes and link any related issues.
 
 ## Reporting Issues
 
@@ -115,6 +199,12 @@ If you encounter a bug or have a feature request, please open an issue on GitHub
 ## Community Standards
 
 We are committed to fostering a welcoming and inclusive community. Please read and adhere to our [Code of Conduct](https://github.com/neuralmagic/speculators/blob/main/CODE_OF_CONDUCT.md).
+
+## Additional Resources
+
+- [CODE_OF_CONDUCT.md](https://github.com/neuralmagic/speculators/blob/main/CODE_OF_CONDUCT.md): Our expectations for community behavior.
+- [tox.ini](https://github.com/neuralmagic/speculators/blob/main/tox.ini): Configuration for Tox environments.
+- [.pre-commit-config.yaml](https://github.com/neuralmagic/speculators/blob/main/.pre-commit-config.yaml): Configuration for pre-commit hooks.
 
 ## License
 
