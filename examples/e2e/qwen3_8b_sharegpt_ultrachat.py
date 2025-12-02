@@ -22,12 +22,14 @@ if __name__ == "__main__":
         train_data_path="sharegpt",
         max_model_len=TOTAL_SEQ_LEN,
         seq_length=TOTAL_SEQ_LEN,
+        turn_dropout=True,
     )
 
     data_gen_args_ultrachat = DataGenArgs(
         train_data_path="ultrachat",
         max_model_len=TOTAL_SEQ_LEN,
         seq_length=TOTAL_SEQ_LEN,
+        turn_dropout=True,
     )
 
     # Vocab Mapping

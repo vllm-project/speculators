@@ -276,10 +276,10 @@ def run_e2e(
         token_freq_paths.append(token_freq_path)
         dga_dict["output-dir"] = str(output_path / "gen" / dataset_name)
 
+        del dga_dict["turn_dropout"]  # Don't include in args
         dga_list = prepare_args(dga_dict)
-        if dga_dict["turn_dropout"]:
+        if dga_obj.turn_dropout:
             dga_list.append("--turn-dropout")
-        del dga_dict["turn_dropout"]
         run_script("data_generation_offline.py", dga_list, [".[datagen]"])
 
     # Combine token frequency files from all datasets into a single file.
