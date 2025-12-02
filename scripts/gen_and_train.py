@@ -68,24 +68,22 @@ _NOTSET = _NS.value  # sentinel value
 #     d2t.npy
 #     t2d.npy
 #   checkpoints/
-#     <run_name>/
-#       0/
-#         config.json
-#         eagle3.py
-#         generation_config.json
-#         model.safetensors
-#         optimizer_state_dict.pt
-#         scheduler_state_dict.pt
-#       1/
-#         config.json
-#         eagle3.py
-#         generation_config.json
-#         model.safetensors
-#         optimizer_state_dict.pt
-#         scheduler_state_dict.pt
-#       ...
+#     0/
+#       config.json
+#       eagle3.py
+#       generation_config.json
+#       model.safetensors
+#       optimizer_state_dict.pt
+#       scheduler_state_dict.pt
+#     1/
+#       config.json
+#       eagle3.py
+#       generation_config.json
+#       model.safetensors
+#       optimizer_state_dict.pt
+#       scheduler_state_dict.pt
+#     ...
 #   logs/
-#     <run_name>/
 
 
 class DataGenArgs(NamedTuple):
@@ -307,9 +305,9 @@ def run_e2e(
         **train_args._asdict(),
         "verifier-name-or-path": verifier_name_or_path,
         "data-path": str(output_path / "gen"),
-        "save-path": str(output_path / "checkpoints" / train_args.run_name),
+        "save-path": str(output_path / "checkpoints"),
         "data-format-version": 1,
-        "log-dir": str(output_path / "logs" / train_args.run_name),
+        "log-dir": str(output_path / "logs"),
         "d2t-path": str(output_path / "vocab_mapping" / "d2t.npy"),
         "t2d-path": str(output_path / "vocab_mapping" / "t2d.npy"),
     }
