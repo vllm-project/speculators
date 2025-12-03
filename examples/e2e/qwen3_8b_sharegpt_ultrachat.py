@@ -12,9 +12,32 @@ from gen_and_train import (  # noqa: E402
     run_e2e,
 )
 
+### Example E2E full run for Qwen 3 8B on ShareGPT and UltraChat ###
+
+# Note: This is a full training run using all the data from ShareGPT (~130k samples) and
+# UltraChat (~200k samples).
+
+# Because this is a thinking model, we use "turn dropout" which randomly truncates
+# training conversations. This is because thinking models only use the last response
+# when training (via loss masking). By randomly truncating the conversations, the model
+# learns to generalize to both short and long conversations.
+
+# Timing (on 4x NVIDIA H100 80GB GPUs)
+# Data Generation: ~15 hours
+# Vocab Mapping: 6 seconds
+# Training: ~8 hours
+# Total: ~23 hours
+
+# Results on MT-Bench:
+# first token accuracy: 0.58
+# second token accuracy: 0.28
+# third token accuracy: 0.13
+# average acceptance length: 1.98
+
+
 if __name__ == "__main__":
     VERIFIER_NAME_OR_PATH = "Qwen/Qwen3-8B"
-    OUTPUT_PATH = "./output"
+    OUTPUT_PATH = "./output/qwen3_8b_sharegpt_ultrachat"
     TOTAL_SEQ_LEN = 8_192
 
     # Data Generation
@@ -22,20 +45,20 @@ if __name__ == "__main__":
         train_data_path="sharegpt",
         max_model_len=TOTAL_SEQ_LEN,
         seq_length=TOTAL_SEQ_LEN,
-        turn_dropout=True,
+        turn_dropout=True,  # Turn dropout enabled here
     )
 
     data_gen_args_ultrachat = DataGenArgs(
         train_data_path="ultrachat",
         max_model_len=TOTAL_SEQ_LEN,
         seq_length=TOTAL_SEQ_LEN,
-        turn_dropout=True,
+        turn_dropout=True,  # Turn dropout enabled here
     )
 
     # Vocab Mapping
     vocab_mapping_args = VocabMappingArgs(
-        draft_vocab_size=32_000,
-        target_vocab_size=151_936,
+        draft_vocab_size=32_000,  # Use an 32k draft vocabulary
+        target_vocab_size=151_936,  # From https://huggingface.co/Qwen/Qwen3-8B/blob/main/config.json#L29
     )
 
     # Training
