@@ -58,6 +58,79 @@ python scripts/data_generation_offline.py \
     --max-samples 10000
 ```
 
+#### Data Config File
+
+The script will produce a `data_config.json` file in the output directory, which contains the configuration used to generate the data, as well as other metadata about the data generation process.
+
+Example file:
+```json
+{
+  "version": "2.0",
+  "generated_at": "2025-12-03T16:03:02.471808+00:00",
+  "speculators_version": "0.3.0",
+  "reproducibility": {
+    "command": "data_generation_offline.py --target-model-path meta-llama/Llama-3.1-8B-Instruct --train-data-path sharegpt --output-dir ./training_data --max-samples 5000",
+    "package_versions": {
+      "torch": "2.8.0+cu128",
+      "vllm": "0.11.0",
+      "transformers": "4.57.3",
+      "speculators": "0.3.0"
+    },
+    "gpu": "NVIDIA H100 80GB HBM3"
+  },
+  "model": {
+    "target_model_path": "meta-llama/Llama-3.1-8B-Instruct",
+    "tensor_parallel_size": 1,
+    "max_model_len": 2048,
+    "gpu_memory_utilization": 0.8,
+    "hidden_size": 4096
+  },
+  "data": {
+    "train_data_path": "sharegpt",
+    "seq_length": 2048,
+    "max_samples": 5000,
+    "num_samples": 5000,
+    "seed": 0,
+    "chat_template_note": "Uses tokenizer's built-in chat template"
+  },
+  "hidden_states": {
+    "layer_ids": [
+      2,
+      16,
+      29,
+      31
+    ],
+    "description": "Layers selected for EAGLE3 fusion and target logits"
+  },
+  "generation": {
+    "cache_dir": "/home/***/.cache/huggingface/datasets"
+  },
+  "format": {
+    "file_pattern": "data_{idx}.pt",
+    "data_format_version": 1,
+    "schema": {
+      "input_ids": {
+        "dtype": "torch.long",
+        "shape": "[seq_len]",
+        "description": "Tokenized input sequence"
+      },
+      "hidden_states": {
+        "dtype": "list[torch.bfloat16]",
+        "shape": "list of [seq_len, 4096]",
+        "num_tensors": 4,
+        "description": "Hidden states from 4 layers"
+      },
+      "loss_mask": {
+        "dtype": "torch.long",
+        "shape": "[seq_len]",
+        "description": "1 for assistant tokens to train on, 0 elsewhere"
+      }
+    }
+  }
+}
+```
+
+
 
 #### Dataset Configs
 
