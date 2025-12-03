@@ -62,12 +62,6 @@ def parse_args():
         help="Tensor parallel size for target model (default: 1)",
     )
     parser.add_argument(
-        "--max-model-len",
-        type=int,
-        default=2048,
-        help="Maximum sequence length supported by the model (default: 2048)",
-    )
-    parser.add_argument(
         "--gpu-memory-utilization",
         type=float,
         default=0.8,
@@ -85,7 +79,7 @@ def parse_args():
         "--seq-length",
         type=int,
         default=2048,
-        help="Maximum sequence length (same as used in preprocessing, default: 2048)",
+        help="Maximum sequence length for preprocessing and model (default: 2048)",
     )
     parser.add_argument(
         "--max-samples",
@@ -151,6 +145,24 @@ def parse_args():
         type=int,
         default=8,
         help="Number of CPU processes for dataset preprocessing (default: 8)",
+    )
+    parser.add_argument(
+        "--assistant-pattern",
+        type=str,
+        default=None,
+        help=(
+            "Custom regex pattern for matching assistant responses. "
+            "If not provided, pattern will be auto-detected from chat template. "
+            "(default: None)"
+        ),
+    )
+    parser.add_argument(
+        "--turn-dropout",
+        action="store_true",
+        help=(
+            "Enable data augmentation by randomly truncating conversations to "
+            "first N consecutive turns (default: False)"
+        ),
     )
 
     return parser.parse_args()
@@ -223,7 +235,7 @@ def generate_and_save_hidden_states(args, dataset):
     generator = VllmHiddenStatesGenerator(
         model_path=args.target_model_path,
         layer_ids=args.layer_ids,
-        max_model_len=args.max_model_len,
+        max_model_len=args.seq_length,
         gpu_memory_utilization=args.gpu_memory_utilization,
         tensor_parallel_size=args.tensor_parallel_size,
     )
@@ -310,6 +322,8 @@ def main():
         max_samples=args.max_samples,
         token_freq_path=args.token_freq_path,
         cache_dir=args.hf_cache_dir,
+        assistant_pattern=args.assistant_pattern,
+        turn_dropout=args.turn_dropout,
     )
     num_saved = generate_and_save_hidden_states(args, dataset)
 
