@@ -187,7 +187,7 @@ pip install -e ".[dev]"
 To enable the generation of data (i.e hidden states) from vLLM for speculator training:
 
 ```bash
-pip install -e ".[dev,datagen]"
+pip install -e ".[datagen]"
 ```
 
 #### Verify Installation
