@@ -39,7 +39,7 @@ python scripts/data_generation_offline.py \
     --max-samples 5000
 ```
 
-The script automatically uses the tokenizer's built-in chat template via `apply_chat_template`.
+The script automatically uses the tokenizer's built-in chat template via `apply_chat_template`. It will use vllm to generate target model hidden states for the training data, and save them alongside the input_ids and loss_mask tensors.
 
 ### Advanced Usage
 
@@ -134,9 +134,11 @@ Example file:
 
 #### Dataset Configs
 
-Built-in datasets:
+Built-in datasets (can be used directly by name in the `--train-data-path` argument):
 - `sharegpt` - ShareGPT Vicuna unfiltered
 - `ultrachat` - HuggingFace UltraChat 200k
+
+Alternatively, you can use a different dataset by passing the HuggingFace dataset path or local JSON/JSONL file path in the `--train-data-path` argument.
 
 #### Caching
 
