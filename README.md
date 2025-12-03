@@ -184,6 +184,12 @@ For development with additional tools:
 pip install -e ".[dev]"
 ```
 
+To enable the generation of data (i.e hiddne states) from vLLM:
+
+```bash
+pip install -e ".[dev,datagen]"
+```
+
 #### Verify Installation
 
 You can verify your installation by checking the version:
