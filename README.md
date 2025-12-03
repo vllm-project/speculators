@@ -184,7 +184,7 @@ For development with additional tools:
 pip install -e ".[dev]"
 ```
 
-To enable the generation of data (i.e hiddne states) from vLLM:
+To enable the generation of data (i.e hidden states) from vLLM for speculator training:
 
 ```bash
 pip install -e ".[dev,datagen]"
