@@ -32,7 +32,7 @@ You can either clone the repository directly or fork it if you plan to contribut
 1. Clone the repository to your local machine:
 
    ```bash
-   git clone https://github.com/neuralmagic/speculators.git
+   git clone https://github.com/vllm-project/speculators.git
    cd speculators
    ```
 
@@ -64,7 +64,7 @@ Note: the data generation components off speculators (i.e. `src/speculators/data
 We follow strict coding standards to ensure code quality and maintainability. Please adhere to the following guidelines:
 
 - **Code Style**: Use [Ruff](https://github.com/astral-sh/ruff) for formatting and linting.
-- **Type Checking**: Use [Mypy](http://mypy-lang.org/) for type checking.
+- **Type Checking**: Use [Mypy](https://mypy-lang.org/) for type checking.
 - **Testing**: Write unit tests for new features and bug fixes. Use [pytest](https://docs.pytest.org/) for testing.
 - **Documentation**: Update documentation for any changes to the codebase.
 
@@ -198,14 +198,14 @@ If you encounter a bug or have a feature request, please open an issue on GitHub
 
 ## Community Standards
 
-We are committed to fostering a welcoming and inclusive community. Please read and adhere to our [Code of Conduct](https://github.com/neuralmagic/speculators/blob/main/CODE_OF_CONDUCT.md).
+We are committed to fostering a welcoming and inclusive community. Please read and adhere to our [Code of Conduct](https://github.com/vllm-project/speculators/blob/main/CODE_OF_CONDUCT.md).
 
 ## Additional Resources
 
-- [CODE_OF_CONDUCT.md](https://github.com/neuralmagic/speculators/blob/main/CODE_OF_CONDUCT.md): Our expectations for community behavior.
-- [tox.ini](https://github.com/neuralmagic/speculators/blob/main/tox.ini): Configuration for Tox environments.
-- [.pre-commit-config.yaml](https://github.com/neuralmagic/speculators/blob/main/.pre-commit-config.yaml): Configuration for pre-commit hooks.
+- [CODE_OF_CONDUCT.md](https://github.com/vllm-project/speculators/blob/main/CODE_OF_CONDUCT.md): Our expectations for community behavior.
+- [tox.ini](https://github.com/vllm-project/speculators/blob/main/tox.ini): Configuration for Tox environments.
+- [.pre-commit-config.yaml](https://github.com/vllm-project/speculators/blob/main/.pre-commit-config.yaml): Configuration for pre-commit hooks.
 
 ## License
 
-By contributing to Speculators, you agree that your contributions will be licensed under the [Apache License 2.0](https://github.com/neuralmagic/speculators/blob/main/LICENSE).
+By contributing to Speculators, you agree that your contributions will be licensed under the [Apache License 2.0](https://github.com/vllm-project/speculators/blob/main/LICENSE).
