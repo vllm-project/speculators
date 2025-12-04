@@ -14,12 +14,12 @@ from transformers import (
     get_linear_schedule_with_warmup,
 )
 
+from speculators.models.eagle3 import Eagle3DraftModel
 from speculators.train.checkpointer import (
     BaseCheckpointer,
     DistributedCheckpointer,
     SingleGPUCheckpointer,
 )
-from speculators.train.eagle3.core import Eagle3DraftModel
 from speculators.train.utils import apply_fully_sharded
 
 root_logger = logging.getLogger("speculators")

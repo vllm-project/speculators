@@ -5,7 +5,7 @@ import torch
 import torch.distributed as dist
 from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
 
-from speculators.train.eagle3.core import Eagle3DraftModel
+from speculators.models.eagle3 import Eagle3DraftModel
 
 local_rank = int(os.environ.get("LOCAL_RANK", "0"))
 world_size = int(os.environ.get("WORLD_SIZE", "1"))

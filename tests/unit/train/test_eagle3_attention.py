@@ -3,7 +3,7 @@ import pytest
 import torch
 from torch.nn.attention.flex_attention import BlockMask
 
-from speculators.train.eagle3.attention import (
+from speculators.models.eagle3.attention import (
     create_combined_mask_mod,
     extend_mask_for_draft_tokens,
 )

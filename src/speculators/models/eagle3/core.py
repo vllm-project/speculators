@@ -9,11 +9,11 @@ from transformers import AutoConfig, DynamicCache, PretrainedConfig
 from speculators.config import VerifierConfig
 from speculators.model import SpeculatorModel
 from speculators.models.eagle3 import Eagle3SpeculatorConfig
-from speculators.train.eagle3.attention import (
+from speculators.models.eagle3.attention import (
     create_combined_mask_mod,
     extend_mask_for_draft_tokens,
 )
-from speculators.train.eagle3.model_definitions import model_classes
+from speculators.models.eagle3.model_definitions import model_classes
 from speculators.utils.loading import load_model_layers
 
 
@@ -143,7 +143,7 @@ def compute_metrics(
     return s_loss, s_metrics
 
 
-@SpeculatorModel.register("eagle3_draft")
+@SpeculatorModel.register("eagle3")
 class Eagle3DraftModel(SpeculatorModel):
     config_class: ClassVar[type[Eagle3SpeculatorConfig]] = Eagle3SpeculatorConfig  # type: ignore[misc]
     _keys_to_ignore_on_load_missing: ClassVar[list[str]] = [  # type: ignore[misc]

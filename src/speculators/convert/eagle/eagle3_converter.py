@@ -9,13 +9,14 @@ from loguru import logger
 from transformers import LlamaConfig, PretrainedConfig
 
 from speculators.config import SpeculatorsConfig, VerifierConfig
+from speculators.convert.eagle.eagle3_legacy_model import Eagle3Speculator
 from speculators.convert.eagle.utils import (
     ensure_checkpoint_is_local,
     find_vocab_size,
     load_checkpoint_config,
     load_checkpoint_weights,
 )
-from speculators.models.eagle3 import Eagle3Speculator, Eagle3SpeculatorConfig
+from speculators.models.eagle3 import Eagle3SpeculatorConfig
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 
 
