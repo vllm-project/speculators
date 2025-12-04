@@ -58,7 +58,7 @@ def parse_args():
     parser.add_argument(
         "--tensor-parallel-size",
         type=int,
-        default=1,
+        default=torch.accelerator.device_count(),
         help="Tensor parallel size for target model (default: 1)",
     )
     parser.add_argument(
@@ -101,6 +101,23 @@ def parse_args():
             "Directory for HuggingFace datasets cache. "
             "If not specified, uses HF_DATASETS_CACHE env var or default location. "
             "(default: None)"
+        ),
+    )
+    parser.add_argument(
+        "--assistant-pattern",
+        type=str,
+        default=None,
+        help=(
+            "Custom regex pattern for matching assistant responses. "
+            "If not provided, auto-detected from chat template."
+        ),
+    )
+    parser.add_argument(
+        "--turn-dropout",
+        action="store_true",
+        help=(
+            "Enable turn dropout: randomly keeps first N consecutive turns "
+            "per conversation for data augmentation."
         ),
     )
 
