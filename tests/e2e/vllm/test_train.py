@@ -46,7 +46,8 @@ class TestTrainvLLM:
             else:
                 cmd.extend([flag, str(value)])
 
-        logger.info("CMD:", " ".join(cmd))
+        logger.info("CMD:")
+        logger.info(" ".join(cmd))
         return subprocess.Popen(cmd)  # noqa: S603
 
     @pytest.mark.smoke
