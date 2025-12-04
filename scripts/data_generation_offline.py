@@ -163,25 +163,6 @@ def parse_args():
         default=8,
         help="Number of CPU processes for dataset preprocessing (default: 8)",
     )
-    parser.add_argument(
-        "--assistant-pattern",
-        type=str,
-        default=None,
-        help=(
-            "Custom regex pattern for matching assistant responses. "
-            "If not provided, pattern will be auto-detected from chat template. "
-            "(default: None)"
-        ),
-    )
-    parser.add_argument(
-        "--turn-dropout",
-        action="store_true",
-        help=(
-            "Enable data augmentation by randomly truncating conversations to "
-            "first N consecutive turns (default: False)"
-        ),
-    )
-
     return parser.parse_args()
 
 
