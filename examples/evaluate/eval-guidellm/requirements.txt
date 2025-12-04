@@ -1,0 +1,3 @@
+# Core dependencies for evaluating speculator models with guidellm
+vllm
+guidellm
