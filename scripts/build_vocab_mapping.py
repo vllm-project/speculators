@@ -11,7 +11,7 @@ Usage:
         --token-freq-path ./cache/token_frequencies/xxx_token_freq.pt \
         --draft-vocab-size 32000 \
         --target-vocab-size 128256 \
-        --output-path ./vocab_mapping.pt
+        --output-path ./vocab_mapping
 """
 
 import argparse
@@ -21,7 +21,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from speculators.data_generation.vocab_mapping import (
+from speculators.train.vocab_mapping import (
     build_vocab_mappings_from_distribution,
 )
 
