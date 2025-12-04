@@ -35,20 +35,20 @@ from gen_and_train import (  # noqa: E402
 if __name__ == "__main__":
     VERIFIER_NAME_OR_PATH = "meta-llama/Llama-3.1-8B-Instruct"
     OUTPUT_PATH = "./output/llama3_8b_sharegpt_5k"
-    TOTAL_SEQ_LEN = 8_192
+    TOTAL_SEQ_LEN = 8192
 
     # Data Generation
     data_gen_args_sharegpt = DataGenArgs(
         train_data_path="sharegpt",
         max_model_len=TOTAL_SEQ_LEN,
         seq_length=TOTAL_SEQ_LEN,
-        max_samples=5_000,  # Only use 5000 samples from ShareGPT
+        max_samples=5000,  # Only use 5000 samples from ShareGPT
     )
 
     # Vocab Mapping
     vocab_mapping_args = VocabMappingArgs(
-        draft_vocab_size=8_192,  # Use a very small draft vocabulary for this example
-        target_vocab_size=128_256,  # From https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct/blob/main/config.json#L37
+        draft_vocab_size=8192,  # Use a very small draft vocabulary for this example
+        target_vocab_size=128256,  # From https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct/blob/main/config.json#L37
     )
 
     # Training

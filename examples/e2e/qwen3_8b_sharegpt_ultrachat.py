@@ -38,7 +38,7 @@ from gen_and_train import (  # noqa: E402
 if __name__ == "__main__":
     VERIFIER_NAME_OR_PATH = "Qwen/Qwen3-8B"
     OUTPUT_PATH = "./output/qwen3_8b_sharegpt_ultrachat"
-    TOTAL_SEQ_LEN = 8_192
+    TOTAL_SEQ_LEN = 8192
 
     # Data Generation
     data_gen_args_sharegpt = DataGenArgs(
@@ -57,8 +57,8 @@ if __name__ == "__main__":
 
     # Vocab Mapping
     vocab_mapping_args = VocabMappingArgs(
-        draft_vocab_size=32_000,  # Use an 32k draft vocabulary
-        target_vocab_size=151_936,  # From https://huggingface.co/Qwen/Qwen3-8B/blob/main/config.json#L29
+        draft_vocab_size=32000,  # Use an 32k draft vocabulary
+        target_vocab_size=151936,  # From https://huggingface.co/Qwen/Qwen3-8B/blob/main/config.json#L29
     )
 
     # Training
