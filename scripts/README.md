@@ -179,7 +179,7 @@ python scripts/data_generation_offline.py ...
 4. **Cache invalidation**
     - Delete cache directory if changing preprocessing parameters
     - Ensure `--seed` matches between runs for reproducibility
-  
+
 ## Vocab Mapping
 `scripts/build_vocab_mapping.py` Uses the token frequency distribution file to build `d2t` (draft to target) and `t2d` (target to draft) vocabulary mappings.
 ### Quick Start
