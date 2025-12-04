@@ -31,7 +31,7 @@ from typing import Any, NamedTuple
 
 import psutil
 
-from speculators.data_generation.vocab_mapping import (
+from speculators.train.vocab_mapping import (
     combine_token_frequency_distributions,
 )
 

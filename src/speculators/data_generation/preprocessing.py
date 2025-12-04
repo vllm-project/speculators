@@ -9,7 +9,7 @@ from transformers import AutoTokenizer, PreTrainedTokenizer
 
 from speculators.data_generation.configs import DATASET_CONFIGS
 from speculators.data_generation.logging_utils import PipelineLogger
-from speculators.data_generation.vocab_mapping import save_token_frequency_distribution
+from speculators.train.vocab_mapping import save_token_frequency_distribution
 
 __all__ = [
     "build_eagle3_dataset",
