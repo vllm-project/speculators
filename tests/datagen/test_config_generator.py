@@ -105,6 +105,7 @@ def test_config_from_generator_extracts_all_settings(
     assert config.hidden_states.layer_ids == mock_vllm_generator.layer_ids
     assert config.model.tensor_parallel_size == mock_vllm_generator.tensor_parallel_size
 
+
 @pytest.mark.smoke
 def test_config_tracks_reproducibility_metadata(
     mock_vllm_generator, model_config_direct
