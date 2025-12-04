@@ -317,7 +317,7 @@ def run_e2e(
     # Get additional packages to install if loggers are specified.
     packages = ["."]
     loggers = ta_dict["logger"]
-    if loggers and loggers is not _NS:
+    if loggers and loggers is not _NOTSET:
         if isinstance(loggers, str):
             loggers = loggers.split(",")
         loggers = [logger.strip() for logger in loggers]
