@@ -10,17 +10,18 @@ Speculators currently supports training of Eagle3 models. This functionality is 
 
 ## Table of Contents
 - **[Data Generation](#data-generation)**<br>
-    - **[Overview](#overview)**<br>
     - **[Quick Start](#quick-start)**<br>
     - **[Advanced Usage](#advanced-usage)**<br>
     - **[Troubleshooting](#troubleshooting)**<br>
+- **[Vocab Mapping](#vocab-mapping)**<br>
+    - **[Quick Start](#quick-start-1)**<br>
 - **[Training](#training)**<br>
     <!-- duplicate subsection name, requires -1 suffix to avoid conflict -->
-    - **[Quick Start](#quick-start-1)**<br>
+    - **[Quick Start](#quick-start-2)**<br>
     - **[Arguments](#arguments)**<br>
     - **[Example Command](#example-command)**<br>
 - **[E2E Pipeline](#e2e-pipeline)**<br>
-    - **[Overview](#overview-1)**<br>
+    - **[Overview](#overview)**<br>
     - **[Prerequisites](#prerequisites)**<br>
     - **[Usage](#usage)**<br>
 
@@ -178,6 +179,23 @@ python scripts/data_generation_offline.py ...
 4. **Cache invalidation**
     - Delete cache directory if changing preprocessing parameters
     - Ensure `--seed` matches between runs for reproducibility
+  
+## Vocab Mapping
+`scripts/build_vocab_mapping.py` Uses the token frequency distribution file to build `d2t` (draft to target) and `t2d` (target to draft) vocabulary mappings.
+### Quick Start
+
+Generate vocab mapping using Llama 3.1 8B:
+
+```bash
+    python scripts/build_vocab_mapping.py \
+        --token-freq-path ./token_freq.pt \
+        --draft-vocab-size 32000 \
+        --target-vocab-size 128256 \
+        --output-path ./vocab_mapping
+```
+
+If not specified, the default location for token frequency file is `./token_freq.pt`. Make sure  `target-vocab-size` match the verifier model vocab size exactly.
+
 
 ## Training
 
