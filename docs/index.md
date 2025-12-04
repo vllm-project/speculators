@@ -2,8 +2,8 @@
 
 <div align="center" style="display: flex; align-items: center; justify-content: center; gap: 20px; text-align: left;">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/neuralmagic/speculators/main/docs/assets/branding/speculators-model-icon-blue.png">
-    <img alt="Speculators Logo" src="https://raw.githubusercontent.com/neuralmagic/speculators/main/docs/assets/branding/speculators-model-icon-blue.png" width="120">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vllm-project/speculators/main/docs/assets/branding/speculators-model-icon-blue.png">
+    <img alt="Speculators Logo" src="https://raw.githubusercontent.com/vllm-project/speculators/main/docs/assets/branding/speculators-model-icon-blue.png" width="120">
   </picture>
 
   <h3 style="margin: 0; text-align: left;">
@@ -84,7 +84,7 @@ pip install speculators
 Or install directly from source:
 
 ```bash
-pip install git+https://github.com/neuralmagic/speculators.git
+pip install git+https://github.com/vllm-project/speculators.git
 ```
 
 Convert a speculative model and serve with vLLM:

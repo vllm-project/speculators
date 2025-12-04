@@ -1,12 +1,12 @@
 <div align="center">
 
 <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/neuralmagic/speculators/main/docs/assets/branding/speculators-logo-white.svg" />
-    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/neuralmagic/speculators/main/docs/assets/branding/speculators-logo-black.svg" />
-    <img alt="Speculators logo" src="https://raw.githubusercontent.com/neuralmagic/speculators/main/docs/assets/branding/speculators-logo-black.svg" height="64" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vllm-project/speculators/main/docs/assets/branding/speculators-logo-white.svg" />
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/vllm-project/speculators/main/docs/assets/branding/speculators-logo-black.svg" />
+    <img alt="Speculators logo" src="https://raw.githubusercontent.com/vllm-project/speculators/main/docs/assets/branding/speculators-logo-black.svg" height="64" />
   </picture>
 
-[![License](https://img.shields.io/github/license/neuralmagic/speculators.svg)](https://github.com/neuralmagic/speculators/blob/main/LICENSE) [![Python Versions](https://img.shields.io/badge/Python-3.10--3.13-orange)](https://pypi.python.org/pypi/speculators) [![docs](https://img.shields.io/badge/docs-Speculators-blue)](https://docs.vllm.ai/projects/speculators/en/latest/) [![PyPI](https://img.shields.io/pypi/v/speculators.svg)](https://pypi.org/project/speculators/) [![tests](https://github.com/vllm-project/speculators/actions/workflows/main.yml/badge.svg)](https://github.com/vllm-project/speculators/actions/workflows/main.yml)
+[![License](https://img.shields.io/github/license/vllm-project/speculators.svg)](https://github.com/vllm-project/speculators/blob/main/LICENSE) [![Python Versions](https://img.shields.io/badge/Python-3.10--3.13-orange)](https://pypi.org/project/speculators/) [![docs](https://img.shields.io/badge/docs-Speculators-blue)](https://docs.vllm.ai/projects/speculators/en/latest/) [![PyPI](https://img.shields.io/pypi/v/speculators.svg)](https://pypi.org/project/speculators/) [![tests](https://github.com/vllm-project/speculators/actions/workflows/main.yml/badge.svg)](https://github.com/vllm-project/speculators/actions/workflows/main.yml)
 
 </div>
 
@@ -16,9 +16,9 @@
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/neuralmagic/speculators/main/docs/assets/branding/speculators-user-flow-dark.svg" />
-    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/neuralmagic/speculators/main/docs/assets/branding/speculators-user-flow-light.svg" />
-    <img alt="Speculators user flow diagram" src="https://raw.githubusercontent.com/neuralmagic/speculators/main/docs/assets/branding/speculators-user-flow-light.svg" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vllm-project/speculators/main/docs/assets/branding/speculators-user-flow-dark.svg" />
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/vllm-project/speculators/main/docs/assets/branding/speculators-user-flow-light.svg" />
+    <img alt="Speculators user flow diagram" src="https://raw.githubusercontent.com/vllm-project/speculators/main/docs/assets/branding/speculators-user-flow-light.svg" />
   </picture>
 </p>
 
@@ -142,8 +142,8 @@ Served models can then be benchmarked using [GuideLLM](https://github.com/vllm-p
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/neuralmagic/speculators/main/docs/assets/qwen_quant_benchmark.png">
-    <img alt="GuideLLM Logo" src="https://raw.githubusercontent.com/neuralmagic/speculators/main/docs/assets/qwen_quant_benchmark.png" width=180%>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vllm-project/speculators/main/docs/assets/qwen_quant_benchmark.png">
+    <img alt="GuideLLM Logo" src="https://raw.githubusercontent.com/vllm-project/speculators/main/docs/assets/qwen_quant_benchmark.png" width=180%>
   </picture>
 </p>
 
@@ -172,7 +172,7 @@ pip install speculators
 For the latest development version or to contribute to the project:
 
 ```bash
-git clone https://github.com/neuralmagic/speculators.git
+git clone https://github.com/vllm-project/speculators.git
 cd speculators
 
 pip install -e .
@@ -182,6 +182,12 @@ For development with additional tools:
 
 ```bash
 pip install -e ".[dev]"
+```
+
+To enable the generation of data (i.e hidden states) from vLLM for speculator training:
+
+```bash
+pip install -e ".[datagen]"
 ```
 
 #### Verify Installation
@@ -209,7 +215,7 @@ Here you can find links to our research implementations. These provide prototype
 
 ## License
 
-Speculators is licensed under the [Apache License 2.0](https://github.com/neuralmagic/speculators/blob/main/LICENSE).
+Speculators is licensed under the [Apache License 2.0](https://github.com/vllm-project/speculators/blob/main/LICENSE).
 
 ## Cite
 
@@ -220,6 +226,6 @@ If you find Speculators helpful in your research or projects, please consider ci
   title={Speculators: A Unified Library for Speculative Decoding Algorithms in LLM Serving},
   author={Red Hat},
   year={2025},
-  howpublished={\url{https://github.com/neuralmagic/speculators}},
+  howpublished={\url{https://github.com/vllm-project/speculators}},
 }
 ```
