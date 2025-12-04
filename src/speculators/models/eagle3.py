@@ -29,6 +29,8 @@ from transformers.models.llama.modeling_llama import (
 )
 
 from speculators import SpeculatorModel, SpeculatorModelConfig
+import os
+from typing import Any, ClassVar, Literal, Optional
 
 __all__ = [
     "Eagle3Attention",
@@ -339,8 +341,8 @@ class Eagle3Speculator(SpeculatorModel):
         reduce_vocab_size: bool = True,
         has_drafter_embedding: bool = True,
         """new parameters"""
-        t2d: Optional[torch.Tensor] = None
-        d2t: Optional[torch.Tensor] = None
+        t2d: Optional[torch.Tensor] = None,
+        d2t: Optional[torch.Tensor] = None,
         """end of the new parameters"""
     ):
         """
