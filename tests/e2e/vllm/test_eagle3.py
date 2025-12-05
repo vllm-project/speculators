@@ -1,89 +1,10 @@
-import json
-import os
-import subprocess
-import sys
-from pathlib import Path
-from textwrap import indent
-
 import pytest
-from loguru import logger
 
 from speculators.convert.eagle.eagle3_converter import Eagle3Converter
+from tests.e2e.vllm.utils import run_vllm_engine
 
 
 class TestEagle3vLLM:
-    def setup_method(self):
-        self.prompts = [
-            "The capital of France is",
-            "The president of the US is",
-            "My name is",
-        ]
-
-    @pytest.fixture
-    def temp_cache_dir(self, tmp_path, monkeypatch):
-        cache_dir = tmp_path / "hf_cache"
-        cache_dir.mkdir(exist_ok=True)
-        monkeypatch.setenv("HF_HOME", str(cache_dir))
-        return cache_dir
-
-    def _run_vllm_engine(
-        self, model_path: str, tmp_path: Path, disable_compile_cache: bool = False
-    ):
-        VLLM_PYTHON = os.environ.get("VLLM_PYTHON", sys.executable)
-        logger.info("vLLM Python executable: {}", VLLM_PYTHON)
-
-        run_vllm_file = str(Path(__file__).with_name("run_vllm.py"))
-        results_file = str(tmp_path / "outputs_token_ids.json")
-
-        command = [
-            VLLM_PYTHON,
-            run_vllm_file,
-            "--sampling-params-args",
-            json.dumps({"temperature": 0.8, "top_p": 0.95, "max_tokens": 20}),
-            "--llm-args",
-            json.dumps(
-                {
-                    "model": model_path,
-                    "max_model_len": 1024,
-                    "gpu_memory_utilization": 0.8,
-                }
-            ),
-            "--prompts",
-            json.dumps(self.prompts),
-            "--results-file",
-            results_file,
-        ]
-        logger.info("run_vllm.py command:\n    {}", command)
-
-        # Set environment variables for subprocess
-        env = os.environ.copy()
-        if disable_compile_cache:
-            env["VLLM_DISABLE_COMPILE_CACHE"] = "1"
-            logger.info("Disabling vLLM compile cache for this test")
-
-        result = subprocess.run(  # noqa: S603
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            check=False,
-            env=env,
-        )
-        logger.info("run_vllm.py output:\n{}", indent(result.stdout, "    "))
-
-        returncode = result.returncode
-        assert returncode == 0, (
-            f"run_vllm.py command exited with non-zero return code: {returncode}"
-        )
-
-        with Path(results_file).open(encoding="utf-8") as f:
-            outputs_token_ids = json.load(f)
-        logger.info("outputs_token_ids: {}", outputs_token_ids)
-
-        for output_token_ids in outputs_token_ids:
-            assert len(output_token_ids) == 20
-            assert all(isinstance(token, int) for token in output_token_ids)
-
     @pytest.mark.smoke
     @pytest.mark.parametrize(
         "model_info",
@@ -116,7 +37,9 @@ class TestEagle3vLLM:
             ),
         ],
     )
-    def test_convert_run_vllm_engine_eagle3(self, model_info, temp_cache_dir, tmp_path):
+    def test_convert_run_vllm_engine_eagle3(
+        self, model_info, temp_cache_dir, prompts, tmp_path
+    ):
         unconverted_model = model_info.get("unconverted_model")
         base_model = model_info.get("base_model")
         norm_before_residual = model_info.get("norm_before_residual", False)
@@ -140,10 +63,11 @@ class TestEagle3vLLM:
             ]
 
         converter.convert(**convert_kwargs)
-        self._run_vllm_engine(
+        run_vllm_engine(
             model_path=str(converted_path),
             tmp_path=tmp_path,
             disable_compile_cache=disable_compile_cache,
+            prompts=prompts,
         )
 
     @pytest.mark.smoke
@@ -160,5 +84,5 @@ class TestEagle3vLLM:
             ),
         ],
     )
-    def test_vllm_engine_eagle3(self, model_path, tmp_path):
-        self._run_vllm_engine(model_path=model_path, tmp_path=tmp_path)
+    def test_vllm_engine_eagle3(self, model_path, prompts, tmp_path):
+        run_vllm_engine(model_path=model_path, tmp_path=tmp_path, prompts=prompts)
