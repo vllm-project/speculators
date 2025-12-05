@@ -48,7 +48,12 @@ class TestTrainvLLM:
 
         logger.info("CMD:")
         logger.info(" ".join(cmd))
-        return subprocess.Popen(cmd)  # noqa: S603
+        return subprocess.Popen(  # noqa: S603
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
 
     @pytest.mark.smoke
     def test_train_vllm_engine(self, tmp_path: Path, prompts: list[str]):
@@ -82,6 +87,14 @@ class TestTrainvLLM:
         # 3. Train draft model for one epoch
         p = self._run_training("scripts/train.py", training_args)
         p.wait()
+
+        stdout, stderr = p.communicate()
+
+        if p.returncode != 0:
+            print(stdout)  # noqa: T201
+            print(stderr)  # noqa: T201
+
+        assert p.returncode == 0
 
         # 4. Run trained speculator in vLLM
         # TODO: is there a way to get the checkpoint folder directly?
