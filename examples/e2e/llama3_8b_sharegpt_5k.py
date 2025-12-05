@@ -40,7 +40,6 @@ if __name__ == "__main__":
     # Data Generation
     data_gen_args_sharegpt = DataGenArgs(
         train_data_path="sharegpt",
-        max_model_len=TOTAL_SEQ_LEN,
         seq_length=TOTAL_SEQ_LEN,
         max_samples=5000,  # Only use 5000 samples from ShareGPT
     )

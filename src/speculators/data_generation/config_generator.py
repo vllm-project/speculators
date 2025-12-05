@@ -83,7 +83,6 @@ class ModelConfig:
 
     target_model_path: str
     tensor_parallel_size: int
-    max_model_len: int
     gpu_memory_utilization: float
     hidden_size: int
 
@@ -239,7 +238,6 @@ class DataGenerationConfig:
             model=ModelConfig(
                 target_model_path=generator.model_path,
                 tensor_parallel_size=generator.tensor_parallel_size,
-                max_model_len=generator.vllm_config.model_config.max_model_len,
                 gpu_memory_utilization=generator.vllm_config.cache_config.gpu_memory_utilization,
                 hidden_size=hidden_size,
             ),
