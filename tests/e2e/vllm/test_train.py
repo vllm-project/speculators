@@ -7,7 +7,7 @@ import torch
 from huggingface_hub import snapshot_download
 from loguru import logger
 
-from speculators.data_generation.vocab_mapping import (
+from speculators.train.vocab_mapping import (
     build_vocab_mappings_from_distribution,
 )
 from tests.e2e.vllm.utils import run_vllm_engine
@@ -51,7 +51,7 @@ class TestTrainvLLM:
         return subprocess.Popen(cmd)  # noqa: S603
 
     @pytest.mark.smoke
-    def test_train_vllm_engine(self, tmp_path: str, prompts: list[str]):
+    def test_train_vllm_engine(self, tmp_path: Path, prompts: list[str]):
         MODEL_PATH = "meta-llama/Llama-3.1-8B-Instruct"
         DATASET_PATH = "nm-testing/sharegpt_llama3_8b_hidden_states"
         TOKEN_FREQ_PATH = "nm-testing/sharegpt_llama3_8b_token_freq"
