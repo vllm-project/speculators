@@ -19,7 +19,7 @@ class TestTrainvLLM:
     and runs the trained model in vLLM.
     """
 
-    def _generate_t2d_d2t(self, token_freq: str, d2t_path: str, t2d_path: str):
+    def _generate_t2d_d2t(self, token_freq: str, d2t_path: Path, t2d_path: Path):
         token_freq_dict = torch.load(
             Path(token_freq) / "token_freq.pt", weights_only=True
         )
