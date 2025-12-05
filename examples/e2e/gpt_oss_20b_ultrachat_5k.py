@@ -25,16 +25,16 @@ from gen_and_train import (  # noqa: E402
 # learns to generalize to both short and long conversations.
 
 # Timing (on 4x NVIDIA H100 80GB GPUs)
-# Data Generation: TBD
-# Vocab Mapping: TBD
-# Training: TBD
-# Total: TBD
+# Data Generation:
+# Vocab Mapping:
+# Training:
+# Total:
 
 # Results on MT-Bench:
-# first token accuracy: TBD
-# second token accuracy: TBD
-# third token accuracy: TBD
-# average acceptance length: TBD
+# first token accuracy:
+# second token accuracy:
+# third token accuracy:
+# average acceptance length:
 
 
 if __name__ == "__main__":
