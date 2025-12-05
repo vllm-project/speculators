@@ -62,12 +62,6 @@ def parse_args():
         help="Tensor parallel size for target model (default: 1)",
     )
     parser.add_argument(
-        "--max-model-len",
-        type=int,
-        default=2048,
-        help="Maximum sequence length supported by the model (default: 2048)",
-    )
-    parser.add_argument(
         "--gpu-memory-utilization",
         type=float,
         default=0.8,
@@ -85,7 +79,7 @@ def parse_args():
         "--seq-length",
         type=int,
         default=2048,
-        help="Maximum sequence length (same as used in preprocessing, default: 2048)",
+        help="Maximum sequence length for preprocessing and model (default: 2048)",
     )
     parser.add_argument(
         "--max-samples",
@@ -169,7 +163,6 @@ def parse_args():
         default=8,
         help="Number of CPU processes for dataset preprocessing (default: 8)",
     )
-
     return parser.parse_args()
 
 
@@ -240,7 +233,7 @@ def generate_and_save_hidden_states(args, dataset):
     generator = VllmHiddenStatesGenerator(
         model_path=args.target_model_path,
         layer_ids=args.layer_ids,
-        max_model_len=args.max_model_len,
+        max_model_len=args.seq_length,
         gpu_memory_utilization=args.gpu_memory_utilization,
         tensor_parallel_size=args.tensor_parallel_size,
     )

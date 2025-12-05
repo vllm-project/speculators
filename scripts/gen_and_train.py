@@ -31,7 +31,7 @@ from typing import Any, NamedTuple
 
 import psutil
 
-from speculators.data_generation.vocab_mapping import (
+from speculators.train.vocab_mapping import (
     combine_token_frequency_distributions,
 )
 
@@ -97,7 +97,6 @@ class DataGenArgs(NamedTuple):
  output path generation. If None and train_data_path is sharegpt or ultrachat, the
  dataset name will be inferred from the train_data_path."""
     turn_dropout: bool = False
-    max_model_len: int | _NS = _NOTSET
     seq_length: int | _NS = _NOTSET
     max_samples: int | _NS = _NOTSET
     tensor_parallel_size: int | _NS = _NOTSET

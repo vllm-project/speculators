@@ -1,26 +1,26 @@
 # Eagle3 Model Production
 
 Speculators currently supports training of Eagle3 models. This functionality is available via the scripts in this directory.
-1. (Optional) [preprocess_data.py](preprocess_data.py):  Tokenize and preprocess raw chat data for training. Also produces a token frequency distribution file.
-2. [data_generation_offline.py](data_generation_offline.py): Generate training data (verifier hidden states) using vLLM. Note: this script will also preprocess the data if it hasn't been already.
-3. [build_vocab_mapping.py](build_vocab_mapping.py): Uses the token frequency distribution file to build `d2t` (draft to target) and `t2d` (target to draft) vocabulary mappings.
-4. [train.py](train.py): Trains an Eagle3 model using the training data and vocabulary mappings.
-5. (Optional) [gen_and_train.py](gen_and_train.py): A convenience wrapper around the above scripts that runs the full pipeline in one command.
+1. [data_generation_offline.py](data_generation_offline.py): Generate training data (verifier hidden states) using vLLM. Note: this script will also preprocess the data if it hasn't been already.
+2. [build_vocab_mapping.py](build_vocab_mapping.py): Uses the token frequency distribution file to build `d2t` (draft to target) and `t2d` (target to draft) vocabulary mappings.
+3. [train.py](train.py): Trains an Eagle3 model using the training data and vocabulary mappings.
+4. (Optional) [gen_and_train.py](gen_and_train.py): A convenience wrapper around the above scripts that runs the full pipeline in one command.
 
 
 ## Table of Contents
 - **[Data Generation](#data-generation)**<br>
-    - **[Overview](#overview)**<br>
     - **[Quick Start](#quick-start)**<br>
     - **[Advanced Usage](#advanced-usage)**<br>
     - **[Troubleshooting](#troubleshooting)**<br>
+- **[Vocab Mapping](#vocab-mapping)**<br>
+    - **[Quick Start](#quick-start-1)**<br>
 - **[Training](#training)**<br>
     <!-- duplicate subsection name, requires -1 suffix to avoid conflict -->
-    - **[Quick Start](#quick-start-1)**<br>
+    - **[Quick Start](#quick-start-2)**<br>
     - **[Arguments](#arguments)**<br>
     - **[Example Command](#example-command)**<br>
 - **[E2E Pipeline](#e2e-pipeline)**<br>
-    - **[Overview](#overview-1)**<br>
+    - **[Overview](#overview)**<br>
     - **[Prerequisites](#prerequisites)**<br>
     - **[Usage](#usage)**<br>
 
@@ -178,6 +178,23 @@ python scripts/data_generation_offline.py ...
 4. **Cache invalidation**
     - Delete cache directory if changing preprocessing parameters
     - Ensure `--seed` matches between runs for reproducibility
+
+## Vocab Mapping
+`scripts/build_vocab_mapping.py` Uses the token frequency distribution file to build `d2t` (draft to target) and `t2d` (target to draft) vocabulary mappings.
+### Quick Start
+
+Generate vocab mapping using Llama 3.1 8B:
+
+```bash
+    python scripts/build_vocab_mapping.py \
+        --token-freq-path ./token_freq.pt \
+        --draft-vocab-size 32000 \
+        --target-vocab-size 128256 \
+        --output-path ./vocab_mapping
+```
+
+If not specified, the default location for token frequency file is `./token_freq.pt`. Make sure  `target-vocab-size` match the verifier model vocab size exactly.
+
 
 ## Training
 
