@@ -15,6 +15,7 @@ from vllm.sampling_params import SamplingParams
 from vllm.v1.core.kv_cache_utils import (
     _get_kv_cache_groups_uniform_spec,
     get_kv_cache_config_from_groups,
+    unify_hybrid_kv_cache_specs,
 )
 from vllm.v1.core.sched.scheduler import Scheduler
 from vllm.v1.executor.multiproc_executor import MultiprocExecutor
@@ -124,6 +125,10 @@ class VllmHiddenStatesGenerator:
         log.info("Creating scheduler...")
         kv_cache_spec_list = self.executor.collective_rpc("get_kv_cache_spec")
         kv_cache_spec = kv_cache_spec_list[0]
+
+        # Unify hybrid KV cache specs for models with non-uniform layers
+        unify_hybrid_kv_cache_specs(kv_cache_spec)
+
         kv_cache_groups = _get_kv_cache_groups_uniform_spec(kv_cache_spec)
 
         free_memory, _ = torch.cuda.mem_get_info()
