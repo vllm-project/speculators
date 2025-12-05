@@ -1,91 +1,262 @@
-# Evaluating Speculator Models with GuideLLM
+# Speculator Model Evaluation with GuideLLM
 
-Automate evaluation of speculator models and extract acceptance length metrics.
+Evaluate speculator models using vLLM and GuideLLM, and extract acceptance length metrics.
 
 ## Quick Start
 
 **1. Install dependencies:**
 ```bash
-bash setup.sh
+bash setup.sh  # or: bash setup.sh --use-uv for faster installation
 ```
 
-**2. Run evaluation:**
+**2. Run evaluation with a pre-configured model:**
 ```bash
-# With built-in emulated dataset
-./run_eval.sh \
-  -m "RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3" \
-  -d emulated
+# Llama-3.1-8B EAGLE3 on math_reasoning dataset
+./run_evaluation.sh -c configs/llama-eagle3.env
 
-# With HuggingFace dataset (automatically downloaded)
-./run_eval.sh \
+# Qwen3-8B EAGLE3 on math_reasoning dataset
+./run_evaluation.sh -c configs/qwen-eagle3.env
+```
+
+**Or run with custom parameters:**
+```bash
+./run_evaluation.sh \
+  -m "RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3" \
+  -d "emulated"
+```
+
+Results will be in a timestamped directory like `eval_results_20251203_165432/`.
+
+## Architecture
+
+This framework consists of modular scripts organized in a clean directory structure:
+
+```
+eval-guidellm/
+├── run_evaluation.sh         # Main controller
+├── configs/                  # Pre-configured evaluations
+│   ├── llama-eagle3.env
+│   └── qwen-eagle3.env
+├── scripts/                  # Utility scripts
+│   ├── vllm_serve.sh
+│   ├── vllm_stop.sh
+│   ├── run_guidellm.sh
+│   └── parse_logs.py
+└── setup.sh                  # Install dependencies
+```
+
+## Configuration
+
+### Pre-configured Models
+
+The framework includes configs for common models:
+
+```bash
+# Llama-3.1-8B EAGLE3 on math_reasoning
+./run_evaluation.sh -c configs/llama-eagle3.env
+
+# Qwen3-8B EAGLE3 on math_reasoning
+./run_evaluation.sh -c configs/qwen-eagle3.env
+```
+
+### Command Line Usage
+
+```bash
+./run_evaluation.sh -m MODEL -d DATASET [OPTIONS]
+
+Required:
+  -m MODEL      Speculator model (e.g., "RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3")
+  -d DATASET    Dataset for benchmarking (see Dataset Options below)
+
+Optional:
+  -c FILE       Config file to use (e.g., configs/llama-eagle3.env)
+  -o DIR        Output directory (default: eval_results_TIMESTAMP)
+```
+
+### Creating Custom Configs
+
+Create a new config file in `configs/`:
+
+```bash
+# configs/my-model.env
+MODEL="my-org/my-model"
+DATASET="RedHatAI/speculator_benchmarks:math_reasoning.jsonl"
+TENSOR_PARALLEL_SIZE=2
+GPU_MEMORY_UTILIZATION=0.8
+PORT=8000
+HEALTH_CHECK_TIMEOUT=300
+OUTPUT_DIR="eval_results_$(date +%Y%m%d_%H%M%S)"
+```
+
+Then run:
+```bash
+./run_evaluation.sh -c configs/my-model.env
+```
+
+### Configuration Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `MODEL` | Speculator model path or HuggingFace ID | (required) |
+| `DATASET` | Dataset for benchmarking (emulated, HF dataset, or file path) | (required) |
+| `TENSOR_PARALLEL_SIZE` | Number of GPUs for tensor parallelism | 2 |
+| `GPU_MEMORY_UTILIZATION` | GPU memory fraction to use | 0.8 |
+| `PORT` | Server port | 8000 |
+| `HEALTH_CHECK_TIMEOUT` | Server startup timeout (seconds) | 300 |
+| `OUTPUT_DIR` | Output directory | `eval_results_TIMESTAMP` |
+
+### Dataset Options
+
+The framework supports five types of dataset inputs:
+
+1. **Built-in datasets**: `emulated` (included with guidellm)
+   - Example: `DATASET="emulated"`
+
+2. **HuggingFace datasets (all files)**: `org/dataset-name`
+   - Automatically downloaded using HuggingFace CLI
+   - Runs benchmarks on **all** .jsonl files in the dataset
+   - Example: `DATASET="RedHatAI/speculator_benchmarks"`
+
+3. **HuggingFace datasets (specific file)**: `org/dataset-name:filename.jsonl`
+   - Downloads the dataset and uses only the specified file
+   - Use colon (`:`) to separate dataset from filename
+   - Example: `DATASET="RedHatAI/speculator_benchmarks:math_reasoning.jsonl"`
+
+4. **Local directory**: Path to a folder containing .jsonl files
+   - Runs benchmarks on **all** .jsonl files in the directory
+   - Results are saved with dataset-specific filenames
+   - Example: `DATASET="./my_datasets/"`
+
+5. **Local file**: Path to a single .jsonl file
+   - Runs benchmark on that specific file
+   - Example: `DATASET="./my_data.jsonl"`
+
+## Advanced Usage
+
+### Manual Workflow
+
+For debugging or running multiple benchmarks against the same server:
+
+```bash
+# Terminal 1: Start server
+./scripts/vllm_serve.sh \
+  -m "RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3" \
+  --tensor-parallel-size 2 \
+  --gpu-memory-utilization 0.8 \
+  --log-file server.log \
+  --pid-file server.pid
+
+# Terminal 2: Run benchmarks
+./scripts/run_guidellm.sh -d "dataset1.jsonl" --output-file results1.json
+./scripts/run_guidellm.sh -d "dataset2.jsonl" --output-file results2.json
+
+# Parse acceptance metrics
+python scripts/parse_logs.py server.log -o acceptance_stats.txt
+
+# Terminal 1: Stop server
+./scripts/vllm_stop.sh --pid-file server.pid
+```
+
+## Output Files
+
+All results are saved in a timestamped output directory.
+
+### Single Dataset
+
+```
+eval_results_20251203_165432/
+├── vllm_server.log          # vLLM server output (used for parsing)
+├── guidellm_output.log      # GuideLLM benchmark progress
+├── guidellm_results.json    # GuideLLM performance metrics
+└── acceptance_analysis.txt  # Acceptance length statistics
+```
+
+### Multiple Datasets (Directory or HuggingFace)
+
+When using a directory or HuggingFace dataset with multiple .jsonl files:
+
+```
+eval_results_20251203_165432/
+├── vllm_server.log                    # vLLM server output (all benchmarks)
+├── guidellm_output_dataset1.log       # Benchmark progress for dataset1
+├── guidellm_output_dataset2.log       # Benchmark progress for dataset2
+├── guidellm_results_dataset1.json     # Performance metrics for dataset1
+├── guidellm_results_dataset2.json     # Performance metrics for dataset2
+└── acceptance_analysis.txt            # Combined acceptance statistics
+```
+
+### Acceptance Metrics
+
+The `acceptance_analysis.txt` contains:
+- **Weighted acceptance rates**: Per-position acceptance rates weighted by draft tokens
+- **Conditional acceptance rates**: Probability of accepting position N given position N-1 was accepted
+
+These metrics help evaluate the effectiveness of speculative decoding.
+
+## Examples
+
+### Using Pre-configured Models
+```bash
+./run_evaluation.sh -c configs/llama-eagle3.env
+./run_evaluation.sh -c configs/qwen-eagle3.env
+```
+
+### Quick Test with Emulated Dataset
+```bash
+./run_evaluation.sh \
+  -m "RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3" \
+  -d "emulated"
+```
+
+### HuggingFace Dataset (Specific File)
+```bash
+./run_evaluation.sh \
+  -m "RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3" \
+  -d "RedHatAI/speculator_benchmarks:math_reasoning.jsonl"
+```
+
+### HuggingFace Dataset (All Files)
+```bash
+./run_evaluation.sh \
   -m "RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3" \
   -d "RedHatAI/speculator_benchmarks"
 ```
 
-## Command Line Options
+### Local File or Directory
+```bash
+# Single file
+./run_evaluation.sh -m MODEL -d "./my_data.jsonl"
+
+# All .jsonl files in directory
+./run_evaluation.sh -m MODEL -d "./my_datasets/"
+```
+
+
+## Troubleshooting
+
+**Server won't start:**
+```bash
+tail -n 50 eval_results_*/vllm_server.log  # Check logs
+nvidia-smi                                  # Verify GPU availability
+```
+
+**Dataset not found:**
+```bash
+hf download DATASET --repo-type dataset  # Test HF dataset download
+./run_evaluation.sh -m MODEL -d emulated # Use built-in dataset
+```
+
+**Server cleanup:**
+```bash
+./scripts/vllm_stop.sh                   # Graceful shutdown
+pkill -9 -f "vllm serve"                 # Force kill if needed
+```
+
+## Dependencies
+
+Required: Python 3.9+, vLLM, GuideLLM, HuggingFace CLI, curl
 
 ```bash
-./run_eval.sh -m MODEL -d DATASET [OPTIONS]
+bash setup.sh              # Install with pip
+bash setup.sh --use-uv     # Install with uv (faster)
 ```
-
-### Required Arguments
-- `-m MODEL` - Speculator model path or HuggingFace model ID
-- `-d DATASET` - Dataset for guidellm benchmarking
-  - Built-in datasets: `emulated` (included with guidellm)
-  - HuggingFace datasets: `org/dataset-name` (e.g., `RedHatAI/speculator_benchmarks`)
-    - Automatically downloaded using HuggingFace CLI
-    - First data file (.json/.jsonl) is used automatically
-  - Local files: Path to a local .json or .jsonl file
-
-### Optional Arguments
-- `--tensor-parallel-size SIZE` - Number of GPUs (default: 2)
-- `--gpu-memory-utilization UTIL` - GPU memory fraction (default: 0.8)
-- `--port PORT` - Server port (default: 8000)
-- `--max-seconds SECONDS` - Benchmark duration (default: 600)
-- `-o OUTPUT_DIR` - Output directory (default: eval_results_TIMESTAMP)
-
-## Output Files
-
-All results are saved to `eval_results_TIMESTAMP/`:
-
-| File | Description |
-|------|-------------|
-| `vllm_server.log` | vLLM server logs with SpecDecoding metrics |
-| `guidellm_output.log` | GuideLLM console output |
-| `guidellm_results.json` | GuideLLM benchmark results |
-| `acceptance_analysis.txt` | Parsed acceptance rate statistics |
-
-## Understanding the Results
-
-The `acceptance_analysis.txt` file contains two key metrics:
-
-**1. Weighted per-position acceptance rates:**
-- Average acceptance rate at each draft position
-- Weighted by number of tokens drafted
-
-**2. Conditional acceptance rates:**
-- Probability of accepting position i given position i-1 was accepted
-- Formula: P(accept_i | accept_{i-1})
-
-### Example Output
-```
-======================================================================
-Speculative Decoding Acceptance Analysis
-======================================================================
-
-Total samples: 150
-Total drafted tokens: 750
-Average drafted tokens: 5.00
-
-Weighted per-position acceptance rates:
-[0.95  0.85  0.72  0.58  0.42]
-
-Conditional acceptance rates:
-[0.947 0.894 0.847 0.806 0.724]
-======================================================================
-```
-
-**Interpretation:**
-- Position 0: 95% of first draft tokens are accepted
-- Position 1: 85% of second draft tokens are accepted
-- Conditional rate at position 1: 89.4% acceptance given position 0 accepted

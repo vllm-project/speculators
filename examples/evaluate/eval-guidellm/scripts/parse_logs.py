@@ -9,6 +9,9 @@ This script:
 """
 
 import argparse
+import sys
+from pathlib import Path
+
 import numpy as np
 
 
@@ -23,8 +26,7 @@ def parse_log(log_file):
         tokens: Array of drafted token counts per sample
         acceptances: List of acceptance rate arrays per sample
     """
-    with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
-        text = f.read()
+    text = Path(log_file).read_text(encoding="utf-8", errors="ignore")
 
     # Split log by SpecDecoding metric sections
     sections = text.split("SpecDecoding metrics:")
@@ -38,13 +40,18 @@ def parse_log(log_file):
     for section in sections[1:]:
         first_line = section.split("\n")[0]
 
-        # Extract: "Drafted: X tokens"
+        # Extract drafted token count from log line
         drafted = int(first_line.split("Drafted: ")[1].split()[0])
         tokens.append(drafted)
 
-        # Extract: "Per-position acceptance rate: 0.9, 0.8, 0.7, ..."
+        # Extract per-position acceptance rates, excluding summary stats
+        # Line format: "Per-position acceptance rate: 0.797, 0.592, ..."
         acceptance_str = first_line.split("Per-position acceptance rate: ")[1]
-        acceptance_values = [float(x.strip(",")) for x in acceptance_str.split()]
+        # Remove the trailing ", Avg Draft..." summary portion
+        acceptance_str = acceptance_str.split(", Avg")[0]
+
+        # Parse comma-separated acceptance rate values
+        acceptance_values = [float(x.strip()) for x in acceptance_str.split(",")]
         acceptances.append(acceptance_values)
 
     return np.array(tokens), acceptances
@@ -64,7 +71,9 @@ def calculate_metrics(tokens, acceptances):
     """
     # Pad all acceptance arrays to same length (zero-pad shorter ones)
     max_length = max(len(acc) for acc in acceptances)
-    padded_acceptances = [np.pad(acc, (0, max_length - len(acc))) for acc in acceptances]
+    padded_acceptances = [
+        np.pad(acc, (0, max_length - len(acc))) for acc in acceptances
+    ]
     acceptance_array = np.array(padded_acceptances)
 
     # Calculate weighted average: sum(acceptance * tokens) / sum(tokens)
@@ -97,9 +106,9 @@ def format_results(tokens, weighted, conditional):
     lines.append(f"\nTotal samples: {len(tokens)}")
     lines.append(f"Total drafted tokens: {np.sum(tokens)}")
     lines.append(f"Average drafted tokens: {np.mean(tokens):.2f}")
-    lines.append(f"\nWeighted per-position acceptance rates:")
+    lines.append("\nWeighted per-position acceptance rates:")
     lines.append(str(np.round(weighted, decimals=3)))
-    lines.append(f"\nConditional acceptance rates:")
+    lines.append("\nConditional acceptance rates:")
     lines.append(str(np.round(conditional, decimals=3)))
     lines.append("=" * 70)
 
@@ -123,12 +132,11 @@ def main():
 
     # Format and display results
     results = format_results(tokens, weighted, conditional)
-    print(results)
+    sys.stdout.write(f"{results}\n")
 
     # Save to file if requested
     if args.output:
-        with open(args.output, 'w') as f:
-            f.write(results)
+        Path(args.output).write_text(results)
 
 
 if __name__ == "__main__":
