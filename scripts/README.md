@@ -185,11 +185,23 @@ python scripts/data_generation_offline.py ...
 
 Generate vocab mapping using Llama 3.1 8B:
 
+by specifying `target-vocab-size` manually:
+
 ```bash
     python scripts/build_vocab_mapping.py \
         --token-freq-path ./token_freq.pt \
         --draft-vocab-size 32000 \
         --target-vocab-size 128256 \
+        --output-path ./vocab_mapping
+```
+
+or by using `target-model-path` to automatically infer the target vocab size:
+
+```bash
+    python scripts/build_vocab_mapping.py \
+        --token-freq-path ./token_freq.pt \
+        --draft-vocab-size 32000 \
+        --target-model-path meta-llama/Llama-3.1-8B-Instruct \
         --output-path ./vocab_mapping
 ```
 
