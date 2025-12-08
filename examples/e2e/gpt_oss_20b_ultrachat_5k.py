@@ -25,16 +25,16 @@ from gen_and_train import (  # noqa: E402
 # learns to generalize to both short and long conversations.
 
 # Timing (on 4x NVIDIA H100 80GB GPUs)
-# Data Generation:
-# Vocab Mapping:
-# Training:
+# Data Generation: 484.58 seconds
+# Vocab Mapping: 4.41 seconds
+# Training: 542.34 seconds seconds
 # Total:
 
 # Results on MT-Bench:
-# first token accuracy:
-# second token accuracy:
-# third token accuracy:
-# average acceptance length:
+# first token accuracy: 0.14
+# second token accuracy: 0.01
+# third token accuracy: 0.00
+# average acceptance length: 1.34
 
 
 if __name__ == "__main__":
@@ -45,7 +45,6 @@ if __name__ == "__main__":
     # Data Generation
     data_gen_args_ultrachat = DataGenArgs(
         train_data_path="ultrachat",
-        max_model_len=TOTAL_SEQ_LEN,
         seq_length=TOTAL_SEQ_LEN,
         max_samples=5000,  # Only use 5000 samples from UltraChat
         turn_dropout=True,  # Turn dropout enabled here
@@ -59,7 +58,7 @@ if __name__ == "__main__":
 
     # Training
     train_args = TrainArgs(
-        logger="trackio",
+        logger="tensorboard",
         lr=3e-5,
         total_seq_len=TOTAL_SEQ_LEN,
         run_name="gpt_oss_20b_ultrachat_5k",
