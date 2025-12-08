@@ -188,6 +188,8 @@ python scripts/data_generation_offline.py ...
 
 Generate vocab mapping using Llama 3.1 8B:
 
+by specifying `target-vocab-size` manually:
+
 ```bash
     python scripts/build_vocab_mapping.py \
         --token-freq-path ./token_freq.pt \
@@ -196,7 +198,18 @@ Generate vocab mapping using Llama 3.1 8B:
         --output-path ./vocab_mapping
 ```
 
-Make sure  `target-vocab-size` match the verifier model vocab size exactly. Once complete, this step will generate and save `t2d.npy` and `d2t.npy` files to disk.
+or by using `target-model-path` to automatically infer the target vocab size:
+
+```bash
+    python scripts/build_vocab_mapping.py \
+        --token-freq-path ./token_freq.pt \
+        --draft-vocab-size 32000 \
+        --target-model-path meta-llama/Llama-3.1-8B-Instruct \
+        --output-path ./vocab_mapping
+```
+
+If not specified, the default location for token frequency file is `./token_freq.pt`. Make sure  `target-vocab-size` match the verifier model vocab size exactly.
+Once complete, this step will generate and save `t2d.npy` and `d2t.npy` files to disk.
 
 ## Training
 
