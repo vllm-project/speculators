@@ -43,6 +43,3 @@ For a full list of models with support, see: https://github.com/vllm-project/spe
 
 The files in this folder provide end-to-end examples which run the three steps listed above for Llama3 and Qwen3 draft
 models. If at any point a step fails, you can rerun the script and continue from the last step. Seprate steps may also run using the individual scripts listed above.
-
-# TODO
-The table below shows current benchmarked performance of draft models trained e2e using speculators and validated in vLLM:

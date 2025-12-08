@@ -1,6 +1,6 @@
 # Running Speculators Models
 
-All models trained through `speculators` include a `speculators_config` in their config.json. These models are in the speculators format and directly runnable in vLLM, using `vllm serve </path/to/convered/model>` which will apply all the speculative decoding parameters defined in the `speculators_config`.
+All models trained through `speculators` include a `speculators_config` in their config.json. These models are in the speculators format and directly runnable in vLLM, using `vllm serve </path/to/speculator/model>` which will apply all the speculative decoding parameters defined in the `speculators_config`.
 
 # Converting models from third-party libraries
 
@@ -12,4 +12,4 @@ Applying conversion will:
 2. Update model.safetensors with correct embeddings and remapped weights
 3. Enable full vLLM compatibility
 
-Once converted, all models can run using `vllm serve </path/to/convered/model>`
+Once converted, all models can run using `vllm serve </path/to/speculator/model>`
