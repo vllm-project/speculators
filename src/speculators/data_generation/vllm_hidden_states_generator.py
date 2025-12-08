@@ -125,7 +125,8 @@ class VllmHiddenStatesGenerator:
         log.info("Creating scheduler...")
         kv_cache_spec_list = self.executor.collective_rpc("get_kv_cache_spec")
         kv_cache_spec = kv_cache_spec_list[0]
-        # Unify hybrid KV cache specs for models with non-uniform layers
+        # Normalize hybrid KV cache specs for models with non-uniform attention
+        # (e.g., GPT-OSS with sliding/full attention layers)
         unify_hybrid_kv_cache_specs(kv_cache_spec)
         kv_cache_groups = _get_kv_cache_groups_uniform_spec(kv_cache_spec)
 
