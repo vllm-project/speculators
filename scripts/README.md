@@ -25,7 +25,7 @@ Speculators currently supports training of Eagle3 models. This functionality is 
     - **[Usage](#usage)**<br>
 
 ## Data Generation
-`scripts/data_generation_offline.py` provides the main entry point for generating training data for Eagle3 models.
+`scripts/data_generation_offline.py` provides the main entry point for generating training data for Eagle3 models. Generating data requires uses vLLM and requires the optional `datagen` install.
 
 ### Quick Start
 
