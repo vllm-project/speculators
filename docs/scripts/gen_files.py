@@ -56,6 +56,7 @@ def process_files(files: list[ProcessFile], project_root: Path):
 def migrate_developer_docs():
     project_root = find_project_root()
     files = [
+        # Developer
         ProcessFile(
             root_path=Path("CODE_OF_CONDUCT.md"),
             docs_path=Path("developer/code-of-conduct.md"),
@@ -67,6 +68,31 @@ def migrate_developer_docs():
             docs_path=Path("developer/contributing.md"),
             title="Contributing Guide",
             weight=-8,
+        ),
+        # Examples
+        ProcessFile(
+            root_path=Path("examples/data_generation_and_training/README.md"),
+            docs_path=Path("examples/data_generation_and_training.md"),
+            title="Train",
+            weight=1,
+        ),
+        ProcessFile(
+            root_path=Path("examples/convert/README.md"),
+            docs_path=Path("examples/convert.md"),
+            title="Convert",
+            weight=2,
+        ),
+        ProcessFile(
+            root_path=Path("examples/evaluate/eval-guidellm/README.md"),
+            docs_path=Path("examples/evaluate.md"),
+            title="Evaluate",
+            weight=3,
+        ),
+        ProcessFile(
+            root_path=Path("scripts/README.md"),
+            docs_path=Path("train/index.md"),
+            title="Train",
+            weight=-6,
         ),
     ]
     process_files(files, project_root)
