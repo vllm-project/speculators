@@ -42,7 +42,9 @@ def _patched_forward(
     target_layers = extension._layer_ids if should_capture else frozenset()  # noqa: SLF001
 
     for idx, layer in enumerate(islice(self.layers, self.start_layer, self.end_layer)):
-        hidden_states, residual = layer(positions, hidden_states, residual)
+        hidden_states, residual = layer(
+            hidden_states=hidden_states, positions=positions, residual=residual
+        )
         absolute_layer_idx = self.start_layer + idx
 
         # Capture intermediate layers (not the last) before norm
