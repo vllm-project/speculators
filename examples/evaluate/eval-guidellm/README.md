@@ -12,10 +12,19 @@ bash setup.sh  # or: bash setup.sh --use-uv for faster installation
 **2. Run evaluation with a pre-configured model:**
 ```bash
 # Llama-3.1-8B EAGLE3 on math_reasoning dataset
-./run_evaluation.sh -c configs/llama-eagle3.env
+./run_evaluation.sh -c configs/llama-3.1-8b-eagle3.env
+
+# Llama-3.3-70B EAGLE3 on math_reasoning dataset
+./run_evaluation.sh -c configs/llama-3.3-70b-eagle3.env
+
+# GPT-OSS-20B EAGLE3 on math_reasoning dataset
+./run_evaluation.sh -c configs/gpt-oss-20b-eagle3.env
 
 # Qwen3-8B EAGLE3 on math_reasoning dataset
-./run_evaluation.sh -c configs/qwen-eagle3.env
+./run_evaluation.sh -c configs/qwen3-8b-eagle3.env
+
+# Qwen3-32B EAGLE3 on math_reasoning dataset
+./run_evaluation.sh -c configs/qwen3-32b-eagle3.env
 ```
 
 **Or run with custom parameters:**
@@ -33,16 +42,19 @@ This framework consists of modular scripts organized in a clean directory struct
 
 ```
 eval-guidellm/
-├── run_evaluation.sh         # Main controller
-├── configs/                  # Pre-configured evaluations
-│   ├── llama-eagle3.env
-│   └── qwen-eagle3.env
-├── scripts/                  # Utility scripts
+├── run_evaluation.sh              # Main controller
+├── configs/                       # Pre-configured evaluations
+│   ├── llama-3.1-8b-eagle3.env    # Llama-3.1-8B
+│   ├── llama-3.3-70b-eagle3.env   # Llama-3.3-70B
+│   ├── gpt-oss-20b-eagle3.env     # GPT-OSS-20B
+│   ├── qwen3-8b-eagle3.env        # Qwen3-8B
+│   └── qwen3-32b-eagle3.env       # Qwen3-32B
+├── scripts/                       # Utility scripts
 │   ├── vllm_serve.sh
 │   ├── vllm_stop.sh
 │   ├── run_guidellm.sh
 │   └── parse_logs.py
-└── setup.sh                  # Install dependencies
+└── setup.sh                       # Install dependencies
 ```
 
 ## Configuration
@@ -53,10 +65,19 @@ The framework includes configs for common models:
 
 ```bash
 # Llama-3.1-8B EAGLE3 on math_reasoning
-./run_evaluation.sh -c configs/llama-eagle3.env
+./run_evaluation.sh -c configs/llama-3.1-8b-eagle3.env
+
+# Llama-3.3-70B EAGLE3 on math_reasoning
+./run_evaluation.sh -c configs/llama-3.3-70b-eagle3.env
+
+# GPT-OSS-20B EAGLE3 on math_reasoning
+./run_evaluation.sh -c configs/gpt-oss-20b-eagle3.env
 
 # Qwen3-8B EAGLE3 on math_reasoning
-./run_evaluation.sh -c configs/qwen-eagle3.env
+./run_evaluation.sh -c configs/qwen3-8b-eagle3.env
+
+# Qwen3-32B EAGLE3 on math_reasoning
+./run_evaluation.sh -c configs/qwen3-32b-eagle3.env
 ```
 
 ### Command Line Usage
@@ -206,8 +227,11 @@ These metrics help evaluate the effectiveness of speculative decoding.
 
 ### Using Pre-configured Models
 ```bash
-./run_evaluation.sh -c configs/llama-eagle3.env
-./run_evaluation.sh -c configs/qwen-eagle3.env
+./run_evaluation.sh -c configs/llama-3.1-8b-eagle3.env
+./run_evaluation.sh -c configs/llama-3.3-70b-eagle3.env
+./run_evaluation.sh -c configs/gpt-oss-20b-eagle3.env
+./run_evaluation.sh -c configs/qwen3-8b-eagle3.env
+./run_evaluation.sh -c configs/qwen3-32b-eagle3.env
 ```
 
 ### Quick Test with Emulated Dataset

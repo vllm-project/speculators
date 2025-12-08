@@ -4,18 +4,16 @@
 set -euo pipefail
 
 # ==============================================================================
-# Default Configuration
+# Configuration Variables
 # ==============================================================================
 
-TARGET="http://localhost:8000/v1"
+TARGET=""
 DATASET=""
-GUIDELLM_RESULTS="guidellm_results.json"
-GUIDELLM_LOG="guidellm_output.log"
-
-# Sampling parameters
-TEMPERATURE=0.6
-TOP_P=0.95
-TOP_K=20
+GUIDELLM_RESULTS=""
+GUIDELLM_LOG=""
+TEMPERATURE=""
+TOP_P=""
+TOP_K=""
 
 # ==============================================================================
 # Helper Functions
@@ -96,6 +94,18 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# ==============================================================================
+# Apply Defaults
+# ==============================================================================
+
+# Apply defaults for any arguments not provided
+TARGET="${TARGET:-http://localhost:8000/v1}"
+GUIDELLM_RESULTS="${GUIDELLM_RESULTS:-guidellm_results.json}"
+GUIDELLM_LOG="${GUIDELLM_LOG:-guidellm_output.log}"
+TEMPERATURE="${TEMPERATURE:-0.6}"
+TOP_P="${TOP_P:-0.95}"
+TOP_K="${TOP_K:-20}"
 
 # ==============================================================================
 # Validate Arguments

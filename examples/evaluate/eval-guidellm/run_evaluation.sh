@@ -10,19 +10,17 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_FILE=""
 
-# Default values (can be overridden by config file or command line)
+# Variables (precedence: CLI args > config file > defaults)
 MODEL=""
 DATASET=""
-TENSOR_PARALLEL_SIZE=2
-GPU_MEMORY_UTILIZATION=0.8
-PORT=8000
-HEALTH_CHECK_TIMEOUT=300
-OUTPUT_DIR="eval_results_$(date +%Y%m%d_%H%M%S)"
-
-# Sampling parameters
-TEMPERATURE=0.6
-TOP_P=0.95
-TOP_K=20
+TENSOR_PARALLEL_SIZE=""
+GPU_MEMORY_UTILIZATION=""
+PORT=""
+HEALTH_CHECK_TIMEOUT=""
+OUTPUT_DIR=""
+TEMPERATURE=""
+TOP_P=""
+TOP_K=""
 
 # ==============================================================================
 # Helper Functions
@@ -135,6 +133,20 @@ if [[ -n "${CONFIG_FILE}" ]]; then
         exit 1
     fi
 fi
+
+# ==============================================================================
+# Apply Defaults
+# ==============================================================================
+
+# Apply defaults for any variables not set by CLI args or config file
+TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-2}"
+GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.8}"
+PORT="${PORT:-8000}"
+HEALTH_CHECK_TIMEOUT="${HEALTH_CHECK_TIMEOUT:-300}"
+OUTPUT_DIR="${OUTPUT_DIR:-eval_results_$(date +%Y%m%d_%H%M%S)}"
+TEMPERATURE="${TEMPERATURE:-0.6}"
+TOP_P="${TOP_P:-0.95}"
+TOP_K="${TOP_K:-20}"
 
 # ==============================================================================
 # Validate Configuration

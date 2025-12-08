@@ -4,16 +4,16 @@
 set -euo pipefail
 
 # ==============================================================================
-# Default Configuration
+# Configuration Variables
 # ==============================================================================
 
 MODEL=""
-TENSOR_PARALLEL_SIZE=2
-GPU_MEMORY_UTILIZATION=0.8
-PORT=8000
-HEALTH_CHECK_TIMEOUT=300
-SERVER_LOG="vllm_server.log"
-PID_FILE="vllm_server.pid"
+TENSOR_PARALLEL_SIZE=""
+GPU_MEMORY_UTILIZATION=""
+PORT=""
+HEALTH_CHECK_TIMEOUT=""
+SERVER_LOG=""
+PID_FILE=""
 
 readonly SLEEP_INTERVAL=5
 
@@ -83,6 +83,18 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# ==============================================================================
+# Apply Defaults
+# ==============================================================================
+
+# Apply defaults for any arguments not provided
+TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-2}"
+GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.8}"
+PORT="${PORT:-8000}"
+HEALTH_CHECK_TIMEOUT="${HEALTH_CHECK_TIMEOUT:-300}"
+SERVER_LOG="${SERVER_LOG:-vllm_server.log}"
+PID_FILE="${PID_FILE:-vllm_server.pid}"
 
 # ==============================================================================
 # Validate Arguments
