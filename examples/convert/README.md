@@ -4,7 +4,7 @@ All models trained through `speculators` include a `speculators_config` in their
 
 # Converting models from third-party libraries
 
-It may also be desirable to to convert third-party models to the `speculators` format. Conversion is supported of speculative decoder models produced by other research libraries. An example bash script to convert the Eagle3 model, `yuhuili/EAGLE3-LLaMA3.1-Instruct-8B` can be found under `convert/eagle3`.
+It may also be desirable to convert third-party models to the `speculators` format. Conversion is supported of speculative decoder models produced by other research libraries. An example bash script to convert the Eagle3 model, `yuhuili/EAGLE3-LLaMA3.1-Instruct-8B` can be found under `convert/eagle3`.
 
 Applying conversion will:
 
