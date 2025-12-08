@@ -19,10 +19,8 @@ class TestTrainvLLM:
     and runs the trained model in vLLM.
     """
 
-    def _generate_t2d_d2t(self, token_freq: str, d2t_path: Path, t2d_path: Path):
-        token_freq_dict = torch.load(
-            Path(token_freq) / "token_freq.pt", weights_only=True
-        )
+    def _generate_t2d_d2t(self, token_freq: Path, d2t_path: Path, t2d_path: Path):
+        token_freq_dict = torch.load(token_freq / "token_freq.pt", weights_only=True)
         d2t, t2d = build_vocab_mappings_from_distribution(
             token_freq_dict=token_freq_dict,
             draft_vocab_size=8192,
@@ -70,7 +68,7 @@ class TestTrainvLLM:
         t2d_path = tmp_path / "t2d.npy"
 
         # 2. Generate t2d and d2t files
-        self._generate_t2d_d2t(token_freq, d2t_path=d2t_path, t2d_path=t2d_path)
+        self._generate_t2d_d2t(Path(token_freq), d2t_path=d2t_path, t2d_path=t2d_path)
 
         training_args = {
             "lr": 3e-5,
