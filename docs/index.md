@@ -20,86 +20,16 @@
 - **Seamless vLLM Integration:** Built for direct deployment into vLLM, enabling low-latency, production-grade inference with minimal overhead.
 - **Research-to-Production Pipeline:** Bridge the gap between experimental speculative decoding research and production deployments.
 
-## Key Sections
-
-<div class="grid cards" markdown>
-
-- :material-handshake:{ .lg .middle } Code of Conduct
-
-    ---
-
-    Our community guidelines ensure that participation in the Speculators project is a positive, inclusive, and respectful experience for everyone.
-
-    [:octicons-arrow-right-24: Code of Conduct](developer/code-of-conduct.md)
-
-- :material-source-pull:{ .lg .middle } Contributing Guide
-
-    ---
-
-    Learn how to effectively contribute to Speculators, including reporting bugs, suggesting features, improving documentation, and submitting code.
-
-    [:octicons-arrow-right-24: Contributing Guide](developer/contributing.md)
-
-- :material-source-pull:{ .lg .middle } Entrypoints
-
-    ---
-
-    CLI tools, APIs, and end-to-end examples to get started with speculative decoding and dive into advanced implementations.
-
-    [:octicons-arrow-right-24: Entrypoints](entrypoints/index.md)
-
-- :material-tools:{ .lg .middle } Development Guide
-
-    ---
-
-    Detailed instructions for setting up your development environment, implementing changes, and adhering to the project's coding standards and best practices.
-
-    [:octicons-arrow-right-24: Development Guide](developer/index.md/)
-
-- :material-api:{ .lg .middle } API Reference
-
-    ---
-
-    Complete reference documentation for the Speculators API to integrate speculative decoding into your workflow.
-
-    [:octicons-arrow-right-24: API Reference](reference/speculators/)
-
-- :material-palette:{ .lg .middle } Branding Guidelines
-
-    ---
-
-    Visual identity and branding guidelines for using Speculators logos, colors, and brand assets in your projects and communications.
-
-    [:octicons-arrow-right-24: Branding Guidelines](developer/branding.md/)
-</div>
-
-
 ## Quick Start
-Install Speculators from PyPI:
 
+To try out a speculative decoding model you can get started by running a pre-made one with vLLM. After [installing vLLM](https://docs.vllm.ai/en/latest/getting_started/installation/), run:
 ```bash
-pip install speculators
-```
-
-Or install directly from source:
-
-```bash
-pip install git+https://github.com/vllm-project/speculators.git
-```
-
-Convert a speculative model and serve with vLLM:
-
-```bash
-# Convert a research model to Speculators format
-speculators convert --help
-
-# Serve with vLLM
 VLLM_USE_V1=1 vllm serve RedHatAI/Qwen3-8B-speculator.eagle3
 ```
+(Or choose another model from the [RedHatAI/speculator-models](https://huggingface.co/collections/RedHatAI/speculator-models) collection.)
 
-## Research Implementations
+Behind the scenes, this is reading the model from Hugging Face, parsing the `speculators_config` and setting up both the speculator and verifier models to run together.
 
-Speculators includes prototype implementations of cutting-edge speculative decoding research:
-
-- **EAGLE 3**: Train Time Test method implementation for advanced token speculation
-- **HASS**: EAGLE 1 architecture variation using the HASS training method
+To create a speculative decoding model for a different verifier model there are two approaches you can choose:
+1. Train a new speculative decoding model ([instructions](train/index.md))([examples](examples/data_generation_and_training.md)).
+2. Convert an existing model from a third-party library to the Speculators format for easy deployment with vLLM ([instructions](convert/index.md)) ([examples](examples/convert.md)).
