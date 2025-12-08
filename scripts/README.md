@@ -1,11 +1,10 @@
 # Eagle3 Model Production
 
 Speculators currently supports training of Eagle3 models. This functionality is available via the scripts in this directory.
-1. (Optional) [preprocess_data.py](preprocess_data.py):  Tokenize and preprocess raw chat data for training. Also produces a token frequency distribution file.
-2. [data_generation_offline.py](data_generation_offline.py): Generate training data (verifier hidden states) using vLLM. Note: this script will also preprocess the data if it hasn't been already.
-3. [build_vocab_mapping.py](build_vocab_mapping.py): Uses the token frequency distribution file to build `d2t` (draft to target) and `t2d` (target to draft) vocabulary mappings.
-4. [train.py](train.py): Trains an Eagle3 model using the training data and vocabulary mappings.
-5. (Optional) [gen_and_train.py](gen_and_train.py): A convenience wrapper around the above scripts that runs the full pipeline in one command.
+1. [data_generation_offline.py](data_generation_offline.py): Generate training data (verifier hidden states) using vLLM. Note: this script will also preprocess the data if it hasn't been already.
+2. [build_vocab_mapping.py](build_vocab_mapping.py): Uses the token frequency distribution file to build `d2t` (draft to target) and `t2d` (target to draft) vocabulary mappings.
+3. [train.py](train.py): Trains an Eagle3 model using the training data and vocabulary mappings.
+4. (Optional) [gen_and_train.py](gen_and_train.py): A convenience wrapper around the above scripts that runs the full pipeline in one command.
 
 
 ## Table of Contents
@@ -186,11 +185,23 @@ python scripts/data_generation_offline.py ...
 
 Generate vocab mapping using Llama 3.1 8B:
 
+by specifying `target-vocab-size` manually:
+
 ```bash
     python scripts/build_vocab_mapping.py \
         --token-freq-path ./token_freq.pt \
         --draft-vocab-size 32000 \
         --target-vocab-size 128256 \
+        --output-path ./vocab_mapping
+```
+
+or by using `target-model-path` to automatically infer the target vocab size:
+
+```bash
+    python scripts/build_vocab_mapping.py \
+        --token-freq-path ./token_freq.pt \
+        --draft-vocab-size 32000 \
+        --target-model-path meta-llama/Llama-3.1-8B-Instruct \
         --output-path ./vocab_mapping
 ```
 

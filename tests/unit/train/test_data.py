@@ -1,9 +1,7 @@
 """Unit tests for data processing in speculators.train.data."""
 
-import tempfile
 from pathlib import Path
 
-import pytest
 import torch
 
 from speculators.train.data import (
