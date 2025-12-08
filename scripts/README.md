@@ -25,7 +25,7 @@ Speculators currently supports training of Eagle3 models. This functionality is 
     - **[Usage](#usage)**<br>
 
 ## Data Generation
-`scripts/data_generation_offline.py` provides the main entry point for generating training data for Eagle3 models.
+`scripts/data_generation_offline.py` provides the main entry point for generating training data for Eagle3 models. Data generation uses vLLM and requires the optional `datagen` install.
 
 ### Quick Start
 
@@ -39,7 +39,9 @@ python scripts/data_generation_offline.py \
     --max-samples 5000
 ```
 
-The script automatically uses the tokenizer's built-in chat template via `apply_chat_template`. It will use vllm to generate target model hidden states for the training data, and save them alongside the input_ids and loss_mask tensors.
+The script automatically uses the tokenizer's built-in chat template via `apply_chat_template`. It will use vllm to generate target model hidden states for the training data, and save them to disk alongside the input_ids and loss_mask tensors, as .pt files.
+
+For sample generated data, see: https://huggingface.co/datasets/nm-testing/sharegpt_llama3_8b_hidden_states
 
 ### Advanced Usage
 
@@ -58,7 +60,7 @@ python scripts/data_generation_offline.py \
     --max-samples 10000
 ```
 
-#### Data Config File
+### Data Config File
 
 The script will produce a `data_config.json` file in the output directory, which contains the configuration used to generate the data, as well as other metadata about the data generation process.
 
@@ -129,10 +131,11 @@ Example file:
   }
 }
 ```
+### Token Frequency File
 
+Along with the `data_config.json`, the data generation step will also generate a `token_freq.pt` file containing the token frequencies. If not specified, the default location for the token frequency file is `./token_freq.pt` i.e in the same directory where the script runs. This frequencies will be used to `d2t` i.e `draft-to-target` and `t2d` i.e `target-to-draft` vocabulary mappings.
 
-
-#### Dataset Configs
+#### Datasets
 
 Built-in datasets (can be used directly by name in the `--train-data-path` argument):
 - `sharegpt` - ShareGPT Vicuna unfiltered
@@ -159,7 +162,6 @@ export HF_HUB_CACHE=/path/to/your/cache
 python scripts/data_generation_offline.py ...
 ```
 
-
 ### Troubleshooting
 
 1. **Out of memory during hidden state extraction**
@@ -181,6 +183,7 @@ python scripts/data_generation_offline.py ...
 
 ## Vocab Mapping
 `scripts/build_vocab_mapping.py` Uses the token frequency distribution file to build `d2t` (draft to target) and `t2d` (target to draft) vocabulary mappings.
+
 ### Quick Start
 
 Generate vocab mapping using Llama 3.1 8B:
@@ -206,7 +209,7 @@ or by using `target-model-path` to automatically infer the target vocab size:
 ```
 
 If not specified, the default location for token frequency file is `./token_freq.pt`. Make sure  `target-vocab-size` match the verifier model vocab size exactly.
-
+Once complete, this step will generate and save `t2d.npy` and `d2t.npy` files to disk.
 
 ## Training
 

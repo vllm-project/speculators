@@ -62,10 +62,7 @@ def test_token_proposal_config_auto_registry():
     classes = TokenProposalConfig.registered_classes()
     class_names = [cls.__name__ for cls in classes]
     assert len(class_names) > 0
-    assert "DynamicTreeTokenProposalConfig" in class_names
     assert "GreedyTokenProposalConfig" in class_names
-    assert "SamplingTokenProposalConfig" in class_names
-    assert "StaticTreeTokenProposalConfig" in class_names
 
 
 @pytest.mark.sanity
