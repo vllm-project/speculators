@@ -19,6 +19,11 @@ PORT=8000
 HEALTH_CHECK_TIMEOUT=300
 OUTPUT_DIR="eval_results_$(date +%Y%m%d_%H%M%S)"
 
+# Sampling parameters
+TEMPERATURE=0.6
+TOP_P=0.95
+TOP_K=20
+
 # ==============================================================================
 # Helper Functions
 # ==============================================================================
@@ -197,7 +202,10 @@ echo "[INFO] Running benchmark..."
     -d "${DATASET}" \
     --target "http://localhost:${PORT}/v1" \
     --output-file "${GUIDELLM_RESULTS}" \
-    --log-file "${GUIDELLM_LOG}"
+    --log-file "${GUIDELLM_LOG}" \
+    --temperature "${TEMPERATURE}" \
+    --top-p "${TOP_P}" \
+    --top-k "${TOP_K}"
 
 # ==============================================================================
 # Parse Acceptance Lengths

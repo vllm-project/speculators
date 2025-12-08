@@ -85,6 +85,12 @@ TENSOR_PARALLEL_SIZE=2
 GPU_MEMORY_UTILIZATION=0.8
 PORT=8000
 HEALTH_CHECK_TIMEOUT=300
+
+# Sampling parameters
+TEMPERATURE=0.6
+TOP_P=0.95
+TOP_K=20
+
 OUTPUT_DIR="eval_results_$(date +%Y%m%d_%H%M%S)"
 ```
 
@@ -103,6 +109,9 @@ Then run:
 | `GPU_MEMORY_UTILIZATION` | GPU memory fraction to use | 0.8 |
 | `PORT` | Server port | 8000 |
 | `HEALTH_CHECK_TIMEOUT` | Server startup timeout (seconds) | 300 |
+| `TEMPERATURE` | Sampling temperature | 0.6 |
+| `TOP_P` | Top-p (nucleus) sampling parameter | 0.95 |
+| `TOP_K` | Top-k sampling parameter | 20 |
 | `OUTPUT_DIR` | Output directory | `eval_results_TIMESTAMP` |
 
 ### Dataset Options

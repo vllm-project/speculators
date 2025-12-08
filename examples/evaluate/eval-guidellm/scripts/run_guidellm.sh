@@ -12,6 +12,11 @@ DATASET=""
 GUIDELLM_RESULTS="guidellm_results.json"
 GUIDELLM_LOG="guidellm_output.log"
 
+# Sampling parameters
+TEMPERATURE=0.6
+TOP_P=0.95
+TOP_K=20
+
 # ==============================================================================
 # Helper Functions
 # ==============================================================================
@@ -32,6 +37,9 @@ Optional:
   --target URL              Target server URL (default: http://localhost:8000/v1)
   --output-file FILE        Results JSON file (default: guidellm_results.json)
   --log-file FILE          Output log file (default: guidellm_output.log)
+  --temperature TEMP        Sampling temperature (default: 0.6)
+  --top-p TOP_P            Top-p sampling (default: 0.95)
+  --top-k TOP_K            Top-k sampling (default: 20)
   -h, --help               Show this help message
 
 Examples:
@@ -63,6 +71,18 @@ while [[ $# -gt 0 ]]; do
             ;;
         --log-file)
             GUIDELLM_LOG="$2"
+            shift 2
+            ;;
+        --temperature)
+            TEMPERATURE="$2"
+            shift 2
+            ;;
+        --top-p)
+            TOP_P="$2"
+            shift 2
+            ;;
+        --top-k)
+            TOP_K="$2"
             shift 2
             ;;
         -h|--help)
@@ -189,6 +209,7 @@ for dataset_file in "${DATASET_FILES[@]}"; do
     echo "[INFO] Running guidellm benchmark..."
     echo "[INFO]   Target: ${TARGET}"
     echo "[INFO]   Dataset: ${dataset_file}"
+    echo "[INFO]   Sampling params - temperature: ${TEMPERATURE}, top_p: ${TOP_P}, top_k: ${TOP_K}"
     echo "[INFO]   Output: ${output_file}"
 
     GUIDELLM__PREFERRED_ROUTE="chat_completions" \
@@ -197,6 +218,7 @@ for dataset_file in "${DATASET_FILES[@]}"; do
       --data "${dataset_file}" \
       --rate-type throughput \
       --output-path "${output_file}" \
+      --backend-args "{\"extra_body\": {\"chat_completions\": {\"temperature\":${TEMPERATURE}, \"top_p\":${TOP_P}, \"top_k\":${TOP_K}}}}" \
       | tee "${log_file}"
 
     echo "[INFO] Benchmark complete for: ${dataset_file}"
