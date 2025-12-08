@@ -42,7 +42,7 @@ ______________________________________________________________________
 
 ## Supported Models
 
-The following models have full end-to-end support in Speculators or are planned to be supported:
+The following table summarizes the models that have been trained end-to-end by our team as well as others in the roadmap:
 
 <table>
 <thead>
@@ -116,6 +116,14 @@ The following models have full end-to-end support in Speculators or are planned 
 </table>
 
 ✅ = Supported, ⏳ = In Progress, ❌ = Not Yet Supported
+
+## Examples
+
+End-To-End Training Examples:
+
+- [Train Llama3 Draft Model](https://github.com/vllm-project/speculators/blob/main/examples/data_generation_and_training/llama3_8b_sharegpt_5k.py)
+- [Train Qwen3 (Non-MoE) Draft Model](https://github.com/vllm-project/speculators/blob/main/examples/data_generation_and_training/qwen3_8b_sharegpt_ultrachat.py)
+- [Train GPT-OSS Draft Model](https://github.com/vllm-project/speculators/blob/main/examples/data_generation_and_training/gpt_oss_20b_ultrachat_5k.py)
 
 ## vLLM Inference
 
@@ -191,13 +199,6 @@ Or by importing the package in Python:
 import speculators
 print(speculators.__version__)
 ```
-
-## Examples
-
-End-To-End Training Examples:
-
-- [Train Llama3 Draft Model](https://github.com/vllm-project/speculators/blob/main/examples/e2e/llama3_8b_sharegpt_5k.py)
-- [Train Qwen3 (Non-MoE) Draft Model](https://github.com/vllm-project/speculators/blob/main/examples/e2e/qwen3_8b_sharegpt_ultrachat.py)
 
 ## License
 
