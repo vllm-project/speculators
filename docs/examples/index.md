@@ -8,7 +8,7 @@ Welcome to the Examples section of Speculators! This area provides end-to-end ex
 
 <div class="grid cards" markdown>
 
-- :material-modeling:{ .lg .middle } Train
+- :octicons-ai-model-16:{ .lg .middle } Train
 
     ---
 
@@ -16,7 +16,7 @@ Welcome to the Examples section of Speculators! This area provides end-to-end ex
 
     [:octicons-arrow-right-24: Train](data_generation_and_training.md)
 
-- :material-transform:{ .lg .middle } Convert
+- :octicons-arrow-switch-16:{ .lg .middle } Convert
 
     ---
 
@@ -25,7 +25,7 @@ Welcome to the Examples section of Speculators! This area provides end-to-end ex
     [:octicons-arrow-right-24: Convert](convert.md)
 
 
-- :material-readiness_score:{ .lg .middle } Evaluate
+- :material-scale:{ .lg .middle } Evaluate
 
     ---
 
