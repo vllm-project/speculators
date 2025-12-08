@@ -1,10 +1,10 @@
 # Eagle3 Model Production
 
 Speculators currently supports training of Eagle3 models. This functionality is available via the scripts in this directory.
-1. [data_generation_offline.py](data_generation_offline.py): Generate training data (verifier hidden states) using vLLM. Note: this script will also preprocess the data if it hasn't been already.
-2. [build_vocab_mapping.py](build_vocab_mapping.py): Uses the token frequency distribution file to build `d2t` (draft to target) and `t2d` (target to draft) vocabulary mappings.
-3. [train.py](train.py): Trains an Eagle3 model using the training data and vocabulary mappings.
-4. (Optional) [gen_and_train.py](gen_and_train.py): A convenience wrapper around the above scripts that runs the full pipeline in one command.
+1. [data_generation_offline.py](/scripts/data_generation_offline.py): Generate training data (verifier hidden states) using vLLM. Note: this script will also preprocess the data if it hasn't been already.
+2. [build_vocab_mapping.py](/scripts/build_vocab_mapping.py): Uses the token frequency distribution file to build `d2t` (draft to target) and `t2d` (target to draft) vocabulary mappings.
+3. [train.py](/scripts/train.py): Trains an Eagle3 model using the training data and vocabulary mappings.
+4. (Optional) [gen_and_train.py](/scripts/gen_and_train.py): A convenience wrapper around the above scripts that runs the full pipeline in one command.
 
 
 ## Table of Contents
