@@ -12,7 +12,9 @@
 
 ## Overview
 
-**Speculators** is a unified library for building and storing speculative decoding algorithms for large language model (LLM) inference, including in frameworks like vLLM. Speculative decoding is a lossless technique that speeds up LLM inference by using a smaller, faster draft model (i.e "the speculators") to propose tokens, which are then verified by the larger base model, reducing latency without compromising output quality. The speculator intelligently drafts multiple tokens ahead of time, and the base model verifies them in a single forward pass. This approach boosts performance without sacrificing output quality, as every accepted token is guaranteed to match what the main model would have generated on its own. Speculators standardizes this process with reusable formats and tools, enabling easier integration and deployment of speculative decoding in production-grade inference servers.
+Speculators is a unified library for building, training and storing speculative decoding algorithms for large language model (LLM) inference, including in frameworks like vLLM. Speculative decoding is a lossless technique that speeds up LLM inference by using a smaller, faster draft model (i.e "the speculator") to propose tokens, which are then verified by the larger base model, reducing latency without compromising output quality. The speculator intelligently drafts multiple tokens ahead of time, and the base model verifies them in a single forward pass. This approach boosts performance without sacrificing output quality, as every accepted token is guaranteed to match what the main model would have generated on its own.
+
+Speculators standardizes this process by providing a productionized end-to-end framework to train draft models with reusable formats and tools. Trained models can seamlessly run in vLLM, enabling the deployment of speculative decoding in production-grade inference servers.
 
 <p align="center">
   <picture>
@@ -33,23 +35,22 @@ ______________________________________________________________________
 
 ## Key Features
 
-- **Unified Speculative Decoding Toolkit:** Simplifies the development and representation of speculative decoding algorithms, supporting both research and production use cases for LLMs.
+- **Offline Training Data Generation using vLLM:** Enable the generation of hidden states using vLLM. Data samples are saved to disk and can be used for draft model training.
+- **Draft Model Training Support:** E2E training support of single and multi-layer draft models. Training is supported for both non-MoE and MoE models. VL Training is coming soon.
 - **Standardized, Extensible Format:** Provides a Hugging Face-compatible format for defining speculative models, with tools to convert from external research repositories into a standard speculators format for easy adoption.
 - **Seamless vLLM Integration:** Built for direct deployment into vLLM, enabling low-latency, production-grade inference with minimal overhead.
-- **Coming Soon:** The ability to train speculators directly through the speculators repository
 
 ## Supported Models
 
-The following models are currently supported or are planned to be supported in the short term.
+The following table summarizes the models that have been trained end-to-end by our team as well as others in the roadmap:
 
 <table>
 <thead>
 <tr>
 <th>Verifier Architecture</th>
 <th>Verifier Size</th>
-<th>Training via Speculators</th>
-<th>Deployment in vLLM</th>
-<th>Conversion of External Checkpoints</th>
+<th>Training Support</th>
+<th>vLLM Deployment Support</th>
 </tr>
 </thead>
 <tbody>
@@ -58,81 +59,75 @@ The following models are currently supported or are planned to be supported in t
 <td>8B-Instruct</td>
 <td><a href="https://huggingface.co/RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3">EAGLE-3</a> ✅</td>
 <td>✅</td>
-<td><a href="https://huggingface.co/yuhuili/EAGLE3-LLaMA3.1-Instruct-8B">EAGLE-3</a> ✅</td>
 </tr>
 <tr>
 <td>70B-Instruct</td>
 <td><a href="https://huggingface.co/RedHatAI/Llama-3.3-70B-Instruct-speculator.eagle3">EAGLE-3</a> ✅</td>
 <td>✅</td>
-<td><a href="https://huggingface.co/yuhuili/EAGLE3-LLaMA3.3-Instruct-70B">EAGLE-3</a> ✅</td>
 </tr>
 <tr>
-<td>DeepSeek-R1-Distill-LLama-8B</td>
-<td>EAGLE-3 ❌</td>
-<td>✅</td>
-<td><a href="https://huggingface.co/yuhuili/EAGLE3-DeepSeek-R1-Distill-LLaMA-8B">EAGLE-3</a> ✅</td>
 </tr>
 <tr>
 <td rowspan="3">Qwen3</td>
 <td>8B</td>
 <td><a href="https://huggingface.co/RedHatAI/Qwen3-8B-speculator.eagle3">EAGLE-3</a> ✅</td>
 <td>✅</td>
-<td>❌</td>
 </tr>
 <tr>
 <td>14B</td>
 <td><a href="https://huggingface.co/RedHatAI/Qwen3-14B-speculator.eagle3">EAGLE-3</a> ✅</td>
 <td>✅</td>
-<td>❌</td>
 </tr>
 <tr>
 <td>32B</td>
 <td><a href="https://huggingface.co/RedHatAI/Qwen3-32B-speculator.eagle3">EAGLE-3</a> ✅</td>
 <td>✅</td>
-<td>❌</td>
-</tr>
-<tr>
-<td>Qwen3 MoE</td>
-<td>235B-A22B</td>
-<td>EAGLE-3 ⏳</td>
-<td>⏳</td>
-<td><a href="https://huggingface.co/nvidia/Qwen3-235B-A22B-Eagle3">EAGLE-3</a> ⏳</td>
-</tr>
-<tr>
-<td>Llama-4</td>
-<td>Maverick-17B-128E-Eagle3</td>
-<td>EAGLE-3 ❌</td>
-<td>✅</td>
-<td><a href="https://huggingface.co/RedHatAI/Llama4-Maverick-17B-128E-Instruct-speculator.eagle3">EAGLE-3</a> ✅</td>
 </tr>
 <tr>
 <td rowspan="2">gpt-oss</td>
 <td>20b</td>
 <td><a href="https://huggingface.co/RedHatAI/gpt-oss-20b-speculator.eagle3">EAGLE-3</a> ✅</td>
 <td>✅</td>
-<td>❌</td>
 </tr>
 <tr>
 <td>120b</td>
-<td>EAGLE-3 ❌</td>
-<td>⏳</td>
-<td><a href="https://huggingface.co/nvidia/gpt-oss-120b-Eagle3-v2">EAGLE-3</a> ⏳</td>
+<td>EAGLE-3 ✅</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>Qwen3 MoE</td>
+<td>235B-A22B</td>
+<td><a href="https://huggingface.co/RedHatAI/Qwen3-235B-A22B-Instruct-2507-speculator.eagle3">EAGLE-3</a> ✅</td>
+<td>✅</td>
 </tr>
 <tr>
 <td>Qwen3-VL</td>
 <td>235B-A22B</td>
 <td>EAGLE-3 ⏳</td>
 <td>⏳</td>
-<td>❌</td>
+</tr>
+<tr>
+<td>Mistral 3 Large</td>
+<td>675B-Instruct</td>
+<td>EAGLE-3 ⏳</td>
+<td>⏳</td>
 </tr>
 </tbody>
 </table>
 
 ✅ = Supported, ⏳ = In Progress, ❌ = Not Yet Supported
 
+## Examples
+
+End-To-End Training Examples:
+
+- [Train Llama3 Draft Model](https://github.com/vllm-project/speculators/blob/main/examples/data_generation_and_training/llama3_8b_sharegpt_5k.py)
+- [Train Qwen3 (Non-MoE) Draft Model](https://github.com/vllm-project/speculators/blob/main/examples/data_generation_and_training/qwen3_8b_sharegpt_ultrachat.py)
+- [Train GPT-OSS Draft Model](https://github.com/vllm-project/speculators/blob/main/examples/data_generation_and_training/gpt_oss_20b_ultrachat_5k.py)
+
 ## vLLM Inference
 
-Once in the speculators format, you can serve the speculator using vLLM:
+Models trained through Speculators can run seamlessly in vLLM using a simple `vllm serve <speculator_model>` command. This will run the model in vLLM using default arguments, defined in the `speculator_config` of the model's config.json.
 
 ```bash
 VLLM_USE_V1=1 vllm serve RedHatAI/Qwen3-8B-speculator.eagle3
@@ -204,14 +199,6 @@ Or by importing the package in Python:
 import speculators
 print(speculators.__version__)
 ```
-
-## Resources
-
-Here you can find links to our research implementations. These provide prototype code for immediate enablement and experimentation, with plans for productization into the main package soon.
-
-- eagle3: This implementation trains models similar to the EAGLE 3 architecture, specifically utilizing the Train Time Test method.
-
-- hass: This implementation trains models that are a variation on the EAGLE 1 architecture using the [HASS](https://github.com/HArmonizedSS/HASS) method.
 
 ## License
 
