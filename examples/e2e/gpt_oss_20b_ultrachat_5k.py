@@ -28,7 +28,7 @@ from gen_and_train import (  # noqa: E402
 # Data Generation: 484.58 seconds
 # Vocab Mapping: 4.41 seconds
 # Training: 542.34 seconds seconds
-# Total:
+# Total: 1031.33 seconds (17 mins)
 
 # Results on MT-Bench:
 # first token accuracy: 0.14
