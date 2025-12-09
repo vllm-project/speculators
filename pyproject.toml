@@ -50,6 +50,7 @@ dependencies = [
     "pyyaml>=6.0.0",
     "rich",
     "safetensors",
+    "setuptools",
     "torch",
     "tqdm",
     "transformers",
@@ -116,9 +117,9 @@ datagen = ["vllm==0.11.0"]
 speculators = "speculators.__main__:app"
 
 [project.urls]
-homepage = "https://github.com/neuralmagic/speculators"
-source = "https://github.com/neuralmagic/speculators"
-issues = "https://github.com/neuralmagic/speculators/issues"
+homepage = "https://github.com/vllm-project/speculators"
+source = "https://github.com/vllm-project/speculators"
+issues = "https://github.com/vllm-project/speculators/issues"
 
 # ************************************************
 # ********** Code Quality Tools **********
@@ -250,6 +251,14 @@ select = [
 "scripts/**/*.py" = [
     "INP001", # allow implicit namespace packages in scripts
     "PTH", # os.path is acceptable in scripts
+]
+
+"examples/**/*.py" = [
+    "INP001", # allow implicit namespace packages in examples
+]
+
+"scripts/gen_and_train.py" = [
+    "T201", # allow print in scripts
 ]
 
 [tool.ruff.lint.isort]

@@ -9,7 +9,7 @@ from transformers import AutoTokenizer, PreTrainedTokenizer
 
 from speculators.data_generation.configs import DATASET_CONFIGS
 from speculators.data_generation.logging_utils import PipelineLogger
-from speculators.data_generation.vocab_mapping import save_token_frequency_distribution
+from speculators.train.vocab_mapping import save_token_frequency_distribution
 
 __all__ = [
     "build_eagle3_dataset",
@@ -73,10 +73,6 @@ def _normalize_conversation(
 
     normalized = []
     for i, turn in enumerate(conv):
-        # Stop if we've reached the truncation point
-        if i >= num_turns_to_keep:
-            break
-
         role = turn.get("from", turn.get("role", ""))
         content = turn.get("value", turn.get("content", ""))
 
@@ -92,6 +88,11 @@ def _normalize_conversation(
             continue
 
         normalized.append({"role": role, "content": content})
+
+        # Stop if we've reached the truncation point
+        if i + 1 >= num_turns_to_keep and role == "assistant":
+            # Only break after an assistant turn
+            break
 
     return normalized
 
