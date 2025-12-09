@@ -38,7 +38,7 @@ keywords = [
 dependencies = [
     "accelerate",
     "click",
-    "datasets>=4.4.1",
+    "datasets>=4.0.0",
     "deepspeed",
     "httpx[http2]",
     "huggingface-hub",
