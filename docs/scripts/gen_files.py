@@ -110,7 +110,7 @@ def migrate_developer_docs():
         ),
         ProcessFile(
             root_path=Path("scripts/README.md"),
-            docs_path=Path("train/index.md"),
+            docs_path=Path("train.md"),
             title="Train",
             weight=-6,
         ),
