@@ -50,7 +50,7 @@ Speculators is an open-source project that values community contributions. We ma
 
 ## Community and Support
 
-Speculators is developed and maintained by Neural Magic and the open-source community. We encourage contributions from researchers, engineers, and practitioners working with large language model inference optimization.
+Speculators is developed and maintained by Red Hat and the open-source community. We encourage contributions from researchers, engineers, and practitioners working with large language model inference optimization.
 
 For questions, discussions, or support:
 
