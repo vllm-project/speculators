@@ -7,7 +7,7 @@ from transformers import LlamaConfig
 from transformers.models.auto.configuration_auto import AutoConfig
 
 from speculators.config import SpeculatorsConfig, VerifierConfig
-from speculators.models.eagle3 import Eagle3SpeculatorConfig
+from speculators.models.eagle3 import Eagle3DraftModel, Eagle3SpeculatorConfig
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 from speculators.train.data import (
     Eagle3SampleFileDataset,
@@ -19,7 +19,6 @@ from speculators.train.data import (
 from speculators.train.distributed_batch_sampler import (
     MultipackDistributedBatchSamplerV2,
 )
-from speculators.train.eagle3.core import Eagle3DraftModel
 from speculators.train.logger import setup_metric_logger, setup_root_logger
 from speculators.train.noise_transforms import AddUniformNoise
 from speculators.train.trainer import Trainer, TrainerConfig

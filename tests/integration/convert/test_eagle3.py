@@ -7,7 +7,7 @@ import torch
 from loguru import logger
 
 from speculators.convert.eagle.eagle3_converter import Eagle3Converter
-from speculators.models.eagle3 import Eagle3Speculator
+from speculators.convert.eagle.eagle3_legacy_model import Eagle3Speculator
 
 
 class TestEagle3Conversion:
