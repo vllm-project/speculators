@@ -1,5 +1,3 @@
-# Speculators
-
 <div align="center" style="display: flex; align-items: center; justify-content: center; gap: 20px; text-align: left;">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vllm-project/speculators/main/docs/assets/branding/speculators-logo-white.svg" />

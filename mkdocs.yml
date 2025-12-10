@@ -10,8 +10,8 @@ theme:
     text: Roboto
     code: Roboto Mono
   language: en
-  logo: assets/branding/speculators-logo-white.png
-  favicon: assets/branding/speculators-icon-blue.png
+  logo: assets/branding/speculators-icon-white.png
+  favicon: assets/branding/speculators-icon-black.png
   features:
     - content.action.edit
     - content.code.annotate
