@@ -6,10 +6,6 @@
     <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/vllm-project/speculators/main/docs/assets/branding/speculators-logo-black.svg" />
     <img alt="Speculators logo" src="https://raw.githubusercontent.com/vllm-project/speculators/main/docs/assets/branding/speculators-logo-black.svg" height="64" />
   </picture>
-
-  <h3 style="margin: 0; text-align: left;">
-    Unified Library for Speculative Decoding: Build and Deploy Faster LLM Inference
-  </h3>
 </div>
 
 Speculators is a unified library for building, training and storing speculative decoding algorithms for large language model (LLM) inference, including in frameworks like vLLM. Speculative decoding is a lossless technique that speeds up LLM inference by using a smaller, faster draft model (i.e "the speculator") to propose tokens, which are then verified by the larger base model, reducing latency without compromising output quality. The speculator intelligently drafts multiple tokens ahead of time, and the base model verifies them in a single forward pass. This approach boosts performance without sacrificing output quality, as every accepted token is guaranteed to match what the main model would have generated on its own.
