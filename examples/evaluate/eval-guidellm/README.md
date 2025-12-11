@@ -30,7 +30,8 @@ bash setup.sh  # or: bash setup.sh --use-uv for faster installation
 **Or run with custom parameters:**
 ```bash
 ./run_evaluation.sh \
-  -m "RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3" \
+  -b "meta-llama/Llama-3.1-8B-Instruct" \
+  -s "RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3" \
   -d "emulated"
 ```
 
@@ -38,7 +39,12 @@ Results will be in a timestamped directory like `eval_results_20251203_165432/`.
 
 ## Architecture
 
-This framework consists of modular scripts organized in a clean directory structure:
+This framework uses vLLM's speculative decoding feature to evaluate speculator models. The evaluation setup consists of:
+- **Base Model**: The main LLM that performs final token acceptance/rejection
+- **Speculator Model**: A smaller, faster model that generates speculative tokens
+- **Speculative Decoding**: The base model validates tokens proposed by the speculator, speeding up inference
+
+The framework consists of modular scripts organized in a clean directory structure:
 
 ```
 eval-guidellm/
@@ -83,11 +89,12 @@ The framework includes configs for common models:
 ### Command Line Usage
 
 ```bash
-./run_evaluation.sh -m MODEL -d DATASET [OPTIONS]
+./run_evaluation.sh -b BASE_MODEL -s SPECULATOR_MODEL -d DATASET [OPTIONS]
 
 Required:
-  -m MODEL      Speculator model (e.g., "RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3")
-  -d DATASET    Dataset for benchmarking (see Dataset Options below)
+  -b BASE_MODEL         Base model (e.g., "meta-llama/Llama-3.1-8B-Instruct")
+  -s SPECULATOR_MODEL   Speculator model (e.g., "RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3")
+  -d DATASET            Dataset for benchmarking (see Dataset Options below)
 
 Optional:
   -c FILE       Config file to use (e.g., configs/llama-eagle3.env)
@@ -100,8 +107,16 @@ Create a new config file in `configs/`:
 
 ```bash
 # configs/my-model.env
-MODEL="my-org/my-model"
+# Model configuration
+BASE_MODEL="my-org/my-base-model"
+SPECULATOR_MODEL="my-org/my-speculator-model"
+NUM_SPEC_TOKENS=3
+METHOD="eagle3"
+
+# Dataset configuration
 DATASET="RedHatAI/speculator_benchmarks:math_reasoning.jsonl"
+
+# vLLM server settings
 TENSOR_PARALLEL_SIZE=2
 GPU_MEMORY_UTILIZATION=0.8
 PORT=8000
@@ -112,6 +127,7 @@ TEMPERATURE=0.6
 TOP_P=0.95
 TOP_K=20
 
+# Output settings
 OUTPUT_DIR="eval_results_$(date +%Y%m%d_%H%M%S)"
 ```
 
@@ -124,7 +140,10 @@ Then run:
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `MODEL` | Speculator model path or HuggingFace ID | (required) |
+| `BASE_MODEL` | Base model path or HuggingFace ID | (required) |
+| `SPECULATOR_MODEL` | Speculator model path or HuggingFace ID | (required) |
+| `NUM_SPEC_TOKENS` | Number of speculative tokens to generate | 3 |
+| `METHOD` | Speculative decoding method | eagle3 |
 | `DATASET` | Dataset for benchmarking (emulated, HF dataset, or file path) | (required) |
 | `TENSOR_PARALLEL_SIZE` | Number of GPUs for tensor parallelism | 2 |
 | `GPU_MEMORY_UTILIZATION` | GPU memory fraction to use | 0.8 |
@@ -170,7 +189,10 @@ For debugging or running multiple benchmarks against the same server:
 ```bash
 # Terminal 1: Start server
 ./scripts/vllm_serve.sh \
-  -m "RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3" \
+  -b "meta-llama/Llama-3.1-8B-Instruct" \
+  -s "RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3" \
+  --num-spec-tokens 3 \
+  --method eagle3 \
   --tensor-parallel-size 2 \
   --gpu-memory-utilization 0.8 \
   --log-file server.log \
@@ -237,31 +259,40 @@ These metrics help evaluate the effectiveness of speculative decoding.
 ### Quick Test with Emulated Dataset
 ```bash
 ./run_evaluation.sh \
-  -m "RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3" \
+  -b "meta-llama/Llama-3.1-8B-Instruct" \
+  -s "RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3" \
   -d "emulated"
 ```
 
 ### HuggingFace Dataset (Specific File)
 ```bash
 ./run_evaluation.sh \
-  -m "RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3" \
+  -b "meta-llama/Llama-3.1-8B-Instruct" \
+  -s "RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3" \
   -d "RedHatAI/speculator_benchmarks:math_reasoning.jsonl"
 ```
 
 ### HuggingFace Dataset (All Files)
 ```bash
 ./run_evaluation.sh \
-  -m "RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3" \
+  -b "meta-llama/Llama-3.1-8B-Instruct" \
+  -s "RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3" \
   -d "RedHatAI/speculator_benchmarks"
 ```
 
 ### Local File or Directory
 ```bash
 # Single file
-./run_evaluation.sh -m MODEL -d "./my_data.jsonl"
+./run_evaluation.sh \
+  -b "meta-llama/Llama-3.1-8B-Instruct" \
+  -s "RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3" \
+  -d "./my_data.jsonl"
 
 # All .jsonl files in directory
-./run_evaluation.sh -m MODEL -d "./my_datasets/"
+./run_evaluation.sh \
+  -b "meta-llama/Llama-3.1-8B-Instruct" \
+  -s "RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3" \
+  -d "./my_datasets/"
 ```
 
 
