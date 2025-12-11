@@ -11,7 +11,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_FILE=""
 
 # Variables (precedence: CLI args > config file > defaults)
-MODEL=""
+BASE_MODEL=""
+SPECULATOR_MODEL=""
+NUM_SPEC_TOKENS=""
+METHOD=""
 DATASET=""
 TENSOR_PARALLEL_SIZE=""
 GPU_MEMORY_UTILIZATION=""
@@ -31,16 +34,18 @@ show_usage() {
 Usage: $0 [OPTIONS]
 
 Required (use one):
-  -c, --config FILE         Config file (e.g., configs/llama-eagle3.env)
-  -m MODEL -d DATASET       Model and dataset via command line
+  -c, --config FILE                    Config file (e.g., configs/llama-eagle3.env)
+  -b BASE_MODEL -s SPECULATOR_MODEL    Base model, speculator, and dataset via command line
+     -d DATASET
 
 Optional:
-  -o OUTPUT_DIR             Output directory (default: eval_results_TIMESTAMP)
-  -h, --help                Show this help message
+  -o OUTPUT_DIR                        Output directory (default: eval_results_TIMESTAMP)
+  -h, --help                           Show this help message
 
 Examples:
-  $0 -c configs/llama-eagle3.env                              # Use config file
-  $0 -m "RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3" \\
+  $0 -c configs/llama-3.3-70b-eagle3.env                      # Use config file
+  $0 -b "RedHatAI/Llama-3.3-70B-Instruct-FP8-dynamic" \\
+     -s "RedHatAI/Llama-3.3-70B-Instruct-speculator.eagle3" \\
      -d "emulated"                                             # Use command line
   $0 -c configs/llama-eagle3.env -d "different-dataset"       # Override dataset
 EOF
@@ -83,8 +88,12 @@ while [[ $# -gt 0 ]]; do
             CONFIG_FILE="$2"
             shift 2
             ;;
-        -m)
-            MODEL="$2"
+        -b)
+            BASE_MODEL="$2"
+            shift 2
+            ;;
+        -s)
+            SPECULATOR_MODEL="$2"
             shift 2
             ;;
         -d)
@@ -139,6 +148,8 @@ fi
 # ==============================================================================
 
 # Apply defaults for any variables not set by CLI args or config file
+NUM_SPEC_TOKENS="${NUM_SPEC_TOKENS:-3}"
+METHOD="${METHOD:-eagle3}"
 TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-2}"
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.8}"
 PORT="${PORT:-8000}"
@@ -152,8 +163,14 @@ TOP_K="${TOP_K:-20}"
 # Validate Configuration
 # ==============================================================================
 
-if [[ -z "${MODEL}" ]]; then
-    echo "[ERROR] MODEL is required (set in config file or via -m)" >&2
+if [[ -z "${BASE_MODEL}" ]]; then
+    echo "[ERROR] BASE_MODEL is required (set in config file or via -b)" >&2
+    show_usage
+    exit 1
+fi
+
+if [[ -z "${SPECULATOR_MODEL}" ]]; then
+    echo "[ERROR] SPECULATOR_MODEL is required (set in config file or via -s)" >&2
     show_usage
     exit 1
 fi
@@ -196,7 +213,10 @@ ACCEPTANCE_RESULTS="${OUTPUT_DIR}/acceptance_analysis.txt"
 echo "[INFO] Starting vLLM server..."
 
 "${SCRIPT_DIR}/scripts/vllm_serve.sh" \
-    -m "${MODEL}" \
+    -b "${BASE_MODEL}" \
+    -s "${SPECULATOR_MODEL}" \
+    --num-spec-tokens "${NUM_SPEC_TOKENS}" \
+    --method "${METHOD}" \
     --tensor-parallel-size "${TENSOR_PARALLEL_SIZE}" \
     --gpu-memory-utilization "${GPU_MEMORY_UTILIZATION}" \
     --port "${PORT}" \
