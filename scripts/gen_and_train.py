@@ -124,6 +124,7 @@ class TrainArgs(NamedTuple):
     no_resume_from_checkpoint: bool | _NS = _NOTSET
     num_layers: int | _NS = _NOTSET
     ttt_step_loss_decay: float | _NS = _NOTSET
+    use_off_policy_tokens: bool | _NS = _NOTSET
 
 
 ### END OF SCRIPT ARGUMENTS ###
