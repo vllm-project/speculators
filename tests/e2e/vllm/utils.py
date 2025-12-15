@@ -2,6 +2,7 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Iterable
 from pathlib import Path
 from textwrap import indent
 
@@ -15,18 +16,20 @@ def run_vllm_engine(
     tmp_path: Path,
     prompts: list[str],
     disable_compile_cache: bool = False,
+    max_tokens: int = 20,
+    acceptance_thresholds: Iterable[float] | None = None,
 ):
     VLLM_PYTHON = os.environ.get("VLLM_PYTHON", sys.executable)
     logger.info("vLLM Python executable: {}", VLLM_PYTHON)
 
     run_vllm_file = str(Path(__file__).with_name("run_vllm.py"))
-    results_file = str(tmp_path / "outputs_token_ids.json")
+    results_file = str(tmp_path / "results.json")
 
     command = [
         VLLM_PYTHON,
         run_vllm_file,
         "--sampling-params-args",
-        json.dumps({"temperature": 0.8, "top_p": 0.95, "max_tokens": 20}),
+        json.dumps({"temperature": 0.8, "top_p": 0.95, "max_tokens": max_tokens}),
         "--llm-args",
         json.dumps(
             {
@@ -64,9 +67,22 @@ def run_vllm_engine(
     )
 
     with Path(results_file).open(encoding="utf-8") as f:
-        outputs_token_ids = json.load(f)
+        results_dict = json.load(f)
+
+    outputs_token_ids = results_dict["outputs"]
+    metrics_dict = results_dict["metrics"]
     logger.info("outputs_token_ids: {}", outputs_token_ids)
 
     for output_token_ids in outputs_token_ids:
-        assert len(output_token_ids) == 20
+        # If max_tokens is 100 or less, make sure the output length is max_tokens
+        assert max_tokens > 100 or len(output_token_ids) == max_tokens
         assert all(isinstance(token, int) for token in output_token_ids)
+
+    if acceptance_thresholds is not None:
+        for i, threshold in enumerate(acceptance_thresholds):
+            assert f"acceptance_at_token_{i}" in metrics_dict, (
+                f"Acceptance at token {i} is not in metrics_dict"
+            )
+            assert metrics_dict[f"acceptance_at_token_{i}"] >= threshold, (
+                f"Acceptance at token {i} is less than threshold {threshold}"
+            )
