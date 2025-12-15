@@ -137,8 +137,14 @@ def prepare_args(args: dict[str, Any]) -> list[str]:
             continue
         # Convert snake_case to kebab-case for command line arguments.
         dashed_key = key.replace("_", "-")
-        args_list.append(f"--{dashed_key}")
-        args_list.append(str(value))
+        # Handle boolean flags (action="store_true")
+        if isinstance(value, bool):
+            if value:
+                args_list.append(f"--{dashed_key}")
+            # If False, don't add the flag at all
+        else:
+            args_list.append(f"--{dashed_key}")
+            args_list.append(str(value))
     return args_list
 
 
