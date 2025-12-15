@@ -17,6 +17,7 @@ def run_vllm_engine(
     prompts: list[str],
     disable_compile_cache: bool = False,
     max_tokens: int = 20,
+    ignore_eos: bool = False,
     acceptance_thresholds: Iterable[float] | None = None,
 ):
     VLLM_PYTHON = os.environ.get("VLLM_PYTHON", sys.executable)
@@ -29,7 +30,14 @@ def run_vllm_engine(
         VLLM_PYTHON,
         run_vllm_file,
         "--sampling-params-args",
-        json.dumps({"temperature": 0.8, "top_p": 0.95, "max_tokens": max_tokens}),
+        json.dumps(
+            {
+                "temperature": 0.8,
+                "top_p": 0.95,
+                "max_tokens": max_tokens,
+                "ignore_eos": ignore_eos,
+            }
+        ),
         "--llm-args",
         json.dumps(
             {
@@ -79,10 +87,11 @@ def run_vllm_engine(
         assert all(isinstance(token, int) for token in output_token_ids)
 
     if acceptance_thresholds is not None:
-        for i, threshold in enumerate(acceptance_thresholds):
+        for i, thresholdi in enumerate(acceptance_thresholds):
             assert f"acceptance_at_token_{i}" in metrics_dict, (
                 f"Acceptance at token {i} is not in metrics_dict"
             )
-            assert metrics_dict[f"acceptance_at_token_{i}"] >= threshold, (
-                f"Acceptance at token {i} is less than threshold {threshold}"
+            acci = metrics_dict[f"acceptance_at_token_{i}"]
+            assert acci >= thresholdi, (
+                f"Acceptance {acci} at token {i} is less than threshold {thresholdi}"
             )

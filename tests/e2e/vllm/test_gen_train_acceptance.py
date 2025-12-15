@@ -1,3 +1,4 @@
+import shutil
 import sys
 from pathlib import Path
 
@@ -5,7 +6,7 @@ from pathlib import Path
 scripts_path = Path(__file__).absolute().parent.parent.parent.parent / "scripts"
 sys.path.append(str(scripts_path))
 
-from gen_and_train import (  # noqa: E402
+from gen_and_train import (  # type: ignore[import-not-found] # noqa: E402
     DataGenArgs,
     TrainArgs,
     VocabMappingArgs,
@@ -19,12 +20,13 @@ def test_gen_train_acceptance(tmp_path: Path):
     VERIFIER_NAME_OR_PATH = "meta-llama/Llama-3.1-8B-Instruct"
     OUTPUT_PATH = tmp_path / "llama3_8b_sharegpt_5k"
     TOTAL_SEQ_LEN = 8192
+    NUM_EPOCHS = 5
 
     # Data Generation
     data_gen_args_sharegpt = DataGenArgs(
         train_data_path="sharegpt",
         seq_length=TOTAL_SEQ_LEN,
-        max_samples=5000,  # Only use 5000 samples from ShareGPT
+        max_samples=5000,
     )
 
     # Vocab Mapping
@@ -35,9 +37,10 @@ def test_gen_train_acceptance(tmp_path: Path):
 
     # Training
     train_args = TrainArgs(
-        lr=3e-5,
+        lr=3e-4,
         total_seq_len=TOTAL_SEQ_LEN,
-        epochs=5,
+        run_name="test_gen_train_acceptance",
+        epochs=NUM_EPOCHS,
     )
 
     run_e2e(
@@ -49,12 +52,22 @@ def test_gen_train_acceptance(tmp_path: Path):
     )
 
     # Final checkpoint path
-    FINAL_CHECKPOINT_PATH = OUTPUT_PATH / "checkpoints" / "4"
+    FINAL_CHECKPOINT_PATH = OUTPUT_PATH / "checkpoints" / str(NUM_EPOCHS - 1)
+
+    prompts = [
+        "Write a binary search algorithm in Python",
+        "Explain the concept of quantum computing",
+        "Code a simple web server in Python",
+    ]
 
     run_vllm_engine(
         str(FINAL_CHECKPOINT_PATH),
         tmp_path,
-        [],
+        prompts,
         max_tokens=512,
-        acceptance_thresholds=[0.35, 0.1, 0.02],
+        ignore_eos=True,
+        acceptance_thresholds=[0.35, 0.12, 0.03],
     )
+
+    # Forcibly clean up
+    shutil.rmtree(str(OUTPUT_PATH))

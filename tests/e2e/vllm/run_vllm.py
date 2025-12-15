@@ -32,15 +32,14 @@ def parse_args():
     return parser.parse_args()
 
 
-def extract_metrics(raw_metrics: list[Metric]) -> dict:
-    metrics_dict = {}
-    total_num_output_tokens = sum(
-        len(output.outputs[0].token_ids) for output in outputs
-    )
+def extract_metrics(
+    raw_metrics: list[Metric], total_num_output_tokens: int, num_spec_tokens: int = 3
+) -> dict:
+    metrics_dict: dict[str, int | float] = {}
     num_drafts = 0
     num_draft_tokens = 0
     num_accepted_tokens = 0
-    acceptance_counts = [0] * args.num_spec_tokens
+    acceptance_counts = [0] * num_spec_tokens
     for metric in raw_metrics:
         if metric.name == "vllm:spec_decode_num_drafts":
             assert isinstance(metric, Counter)
@@ -73,7 +72,10 @@ def run_vllm(args: argparse.Namespace):
     sampling_params = SamplingParams(**json.loads(args.sampling_params_args))
     llm = LLM(**json.loads(args.llm_args), disable_log_stats=False)
     outputs = llm.generate(json.loads(args.prompts), sampling_params)
-    metrics_dict = extract_metrics(llm.get_metrics())
+    total_num_output_tokens = sum(
+        len(output.outputs[0].token_ids) for output in outputs
+    )
+    metrics_dict = extract_metrics(llm.get_metrics(), total_num_output_tokens)
     return outputs, metrics_dict
 
 
