@@ -124,7 +124,6 @@ class TrainArgs(NamedTuple):
     no_resume_from_checkpoint: bool | _NS = _NOTSET
     num_layers: int | _NS = _NOTSET
     ttt_step_loss_decay: float | _NS = _NOTSET
-    use_off_policy_tokens: bool | _NS = _NOTSET
 
 
 ### END OF SCRIPT ARGUMENTS ###
@@ -137,13 +136,8 @@ def prepare_args(args: dict[str, Any]) -> list[str]:
             continue
         # Convert snake_case to kebab-case for command line arguments.
         dashed_key = key.replace("_", "-")
-        # Handle boolean flags
-        if isinstance(value, bool):
-            if value:
-                args_list.append(f"--{dashed_key}")
-        else:
-            args_list.append(f"--{dashed_key}")
-            args_list.append(str(value))
+        args_list.append(f"--{dashed_key}")
+        args_list.append(str(value))
     return args_list
 
 
@@ -281,10 +275,7 @@ def run_e2e(
         token_freq_paths.append(token_freq_path)
         dga_dict["output-dir"] = str(output_path / "gen" / dataset_name)
 
-        del dga_dict["turn_dropout"]  # Don't include in args
         dga_list = prepare_args(dga_dict)
-        if dga_obj.turn_dropout:
-            dga_list.append("--turn-dropout")
         run_script("data_generation_offline.py", dga_list, [".[datagen]"])
 
     # Combine token frequency files from all datasets into a single file.
