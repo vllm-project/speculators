@@ -99,6 +99,7 @@ dev = [
     "mdformat-footnote~=0.1.1",
     "mdformat-frontmatter~=2.0.8",
     "mdformat-gfm~=0.3.6",
+    "mdformat-gfm-alerts~=2.0.0",
 
     # type-checking
     "types-click~=7.1.8",
