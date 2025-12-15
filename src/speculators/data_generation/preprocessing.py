@@ -74,7 +74,7 @@ def _normalize_conversation(
     normalized = []
     for i, turn in enumerate(conv):
         role = turn.get("from", turn.get("role", ""))
-        content = turn.get("value", turn.get("content", ""))
+        content = turn.get("value") or turn.get("content") or ""
 
         # Map various role names to standard user/assistant
         if role in ("human", "user"):
@@ -87,7 +87,14 @@ def _normalize_conversation(
             log.warning(f"Unknown role '{role}', skipping turn")
             continue
 
-        normalized.append({"role": role, "content": content})
+        # Build normalized turn with role and content
+        normalized_turn = {"role": role, "content": content}
+
+        # Preserve 'thinking' field if it exists
+        if "thinking" in turn and turn["thinking"]:
+            normalized_turn["thinking"] = turn["thinking"]
+
+        normalized.append(normalized_turn)
 
         # Stop if we've reached the truncation point
         if i + 1 >= num_turns_to_keep and role == "assistant":

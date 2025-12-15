@@ -175,7 +175,7 @@ def main(args: argparse.Namespace):
         is_distributed=is_distributed,
         local_rank=local_rank,
         train_call_kwargs={
-            "use_off_policy_tokens": False,
+            "use_off_policy_tokens": True,
             "ttt_steps": args.ttt_steps,
             "ttt_step_loss_decay": args.ttt_step_loss_decay,
         },
