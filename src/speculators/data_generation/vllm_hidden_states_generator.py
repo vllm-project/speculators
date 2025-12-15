@@ -2,14 +2,7 @@
 
 import torch
 from transformers import AutoConfig, AutoTokenizer
-
-# Fix CUDA multiprocessing: Set vLLM to use 'spawn' instead of 'fork'
-# This must be done before importing vLLM modules
-from vllm import envs
-
-envs.VLLM_WORKER_MULTIPROC_METHOD = "spawn"
-
-from vllm.config import (  # noqa: E402
+from vllm.config import (
     CacheConfig,
     DeviceConfig,
     LoadConfig,
@@ -18,18 +11,18 @@ from vllm.config import (  # noqa: E402
     SchedulerConfig,
     VllmConfig,
 )
-from vllm.sampling_params import SamplingParams  # noqa: E402
-from vllm.v1.core.kv_cache_utils import (  # noqa: E402
+from vllm.sampling_params import SamplingParams
+from vllm.v1.core.kv_cache_utils import (
     _get_kv_cache_groups_uniform_spec,
     get_kv_cache_config_from_groups,
     unify_hybrid_kv_cache_specs,
 )
-from vllm.v1.core.sched.scheduler import Scheduler  # noqa: E402
-from vllm.v1.executor.multiproc_executor import MultiprocExecutor  # noqa: E402
-from vllm.v1.request import Request, RequestStatus  # noqa: E402
-from vllm.v1.structured_output import StructuredOutputManager  # noqa: E402
+from vllm.v1.core.sched.scheduler import Scheduler
+from vllm.v1.executor.multiproc_executor import MultiprocExecutor
+from vllm.v1.request import Request, RequestStatus
+from vllm.v1.structured_output import StructuredOutputManager
 
-from .logging_utils import PipelineLogger  # noqa: E402
+from .logging_utils import PipelineLogger
 
 __all__ = ["VllmHiddenStatesGenerator"]
 

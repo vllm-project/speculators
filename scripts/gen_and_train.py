@@ -124,6 +124,7 @@ class TrainArgs(NamedTuple):
     no_resume_from_checkpoint: bool | _NS = _NOTSET
     num_layers: int | _NS = _NOTSET
     ttt_step_loss_decay: float | _NS = _NOTSET
+    use_off_policy_tokens: bool | _NS = _NOTSET
 
 
 ### END OF SCRIPT ARGUMENTS ###
@@ -136,8 +137,13 @@ def prepare_args(args: dict[str, Any]) -> list[str]:
             continue
         # Convert snake_case to kebab-case for command line arguments.
         dashed_key = key.replace("_", "-")
-        args_list.append(f"--{dashed_key}")
-        args_list.append(str(value))
+        # Handle boolean flags
+        if isinstance(value, bool):
+            if value:
+                args_list.append(f"--{dashed_key}")
+        else:
+            args_list.append(f"--{dashed_key}")
+            args_list.append(str(value))
     return args_list
 
 

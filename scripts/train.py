@@ -175,7 +175,7 @@ def main(args: argparse.Namespace):
         is_distributed=is_distributed,
         local_rank=local_rank,
         train_call_kwargs={
-            "use_off_policy_tokens": True,
+            "use_off_policy_tokens": args.use_off_policy_tokens,
             "ttt_steps": args.ttt_steps,
             "ttt_step_loss_decay": args.ttt_step_loss_decay,
         },
@@ -217,6 +217,12 @@ def parse_args():
     parser.add_argument("--t2d-path", type=str, default="t2d.npy")
     parser.add_argument("--ttt-steps", type=int, default=3)
     parser.add_argument("--ttt-step-loss-decay", type=float, default=1.0)
+    parser.add_argument(
+        "--use-off-policy-tokens",
+        action="store_true",
+        default=False,
+        help="Use off-policy tokens during training (required for regenerated data)",
+    )
     return parser.parse_args()
 
 
