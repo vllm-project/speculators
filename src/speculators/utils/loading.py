@@ -36,7 +36,7 @@ def load_model_layers(
         model_file = _resolve_file(model_path, "model.safetensors")
         # Build virtual weight map for single-file models
         with safe_open(model_file, framework="pt", device="cpu") as f:
-            weight_map = {key: "model.safetensors" for key in f.keys()}
+            weight_map = dict.fromkeys(f.keys(), "model.safetensors")
 
     # Resolve names: try exact match first, then suffix match
     name_to_key = {}  # Maps input name to actual checkpoint key
