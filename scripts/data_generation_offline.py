@@ -29,10 +29,20 @@ import torch
 from datasets import config as datasets_config
 from tqdm import tqdm  # type: ignore[import-untyped]
 
-from speculators.data_generation.config_generator import DataGenerationConfig
-from speculators.data_generation.logging_utils import PipelineLogger
-from speculators.data_generation.preprocessing import load_and_preprocess_dataset
-from speculators.data_generation.vllm_hidden_states_generator import (
+# Set vLLM to use 'spawn' instead of 'fork'
+# to prevent "Cannot re-initialize CUDA in forked subprocess" errors
+from vllm import envs
+
+envs.VLLM_WORKER_MULTIPROC_METHOD = "spawn"
+
+from speculators.data_generation.config_generator import (  # noqa: E402
+    DataGenerationConfig,
+)
+from speculators.data_generation.logging_utils import PipelineLogger  # noqa: E402
+from speculators.data_generation.preprocessing import (  # noqa: E402
+    load_and_preprocess_dataset,
+)
+from speculators.data_generation.vllm_hidden_states_generator import (  # noqa: E402
     VllmHiddenStatesGenerator,
 )
 
