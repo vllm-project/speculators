@@ -22,40 +22,40 @@ def load_model_layers(
     :param model_path: either a local directory containing model.safetensors.index
     :return: dict mapping input names/patterns to loaded tensors
     """
-    # download the index file
+    # download the index file or build virtual weight map for single-file models
     try:
         index_file = _resolve_file(model_path, "model.safetensors.index.json")
+        with Path(index_file).open() as f:
+            index = json.load(f)
+        weight_map: dict[str, str] = index["weight_map"]
     except (FileNotFoundError, EntryNotFoundError):
         logger.warning(
             "`model.safetensors.index.json` file not found. "
             "Checking for `model.safetensors` instead."
         )
-        _model_file = _resolve_file(model_path, "model.safetensors")
-        shard_to_names: dict[str, list[str]] = {"model.safetensors": layer_names}
-    else:
-        with Path(index_file).open() as f:
-            index = json.load(f)
+        model_file = _resolve_file(model_path, "model.safetensors")
+        # Build virtual weight map for single-file models
+        with safe_open(model_file, framework="pt", device="cpu") as f:
+            weight_map = {key: "model.safetensors" for key in f.keys()}
 
-        weight_map: dict[str, str] = index["weight_map"]
-
-        # Resolve names: try exact match first, then suffix match
-        name_to_key = {}  # Maps input name to actual checkpoint key
-        for name in layer_names:
-            if name in weight_map:
-                name_to_key[name] = name  # Exact match
+    # Resolve names: try exact match first, then suffix match
+    name_to_key = {}  # Maps input name to actual checkpoint key
+    for name in layer_names:
+        if name in weight_map:
+            name_to_key[name] = name  # Exact match
+        else:
+            # Try suffix match
+            matched = next((k for k in weight_map if k.endswith(name)), None)
+            if matched:
+                name_to_key[name] = matched
             else:
-                # Try suffix match
-                matched = next((k for k in weight_map if k.endswith(name)), None)
-                if matched:
-                    name_to_key[name] = matched
-                else:
-                    logger.error(f"Tensor '{name}' not found in index weight_map.")
+                logger.error(f"Tensor '{name}' not found in weight_map.")
 
-        # group requested names by shard filename
-        shard_to_names = {}
-        for name, key in name_to_key.items():
-            shard = weight_map[key]
-            shard_to_names.setdefault(shard, []).append((name, key))
+    # group requested names by shard filename
+    shard_to_names: dict[str, list[tuple[str, str]]] = {}
+    for name, key in name_to_key.items():
+        shard = weight_map[key]
+        shard_to_names.setdefault(shard, []).append((name, key))
 
     if not shard_to_names:
         raise ValueError("None of the requested tensor names were found in the index.")
