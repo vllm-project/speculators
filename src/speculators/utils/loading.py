@@ -17,7 +17,8 @@ def load_model_layers(
     Supports both exact keys and suffix pattern matching.
 
     :param layer_names: list of tensor names to load, e.g.
-    ["model.embed_tokens.weight", "lm_head.weight"] or suffix patterns like ["embed_tokens.weight"]
+    ["model.embed_tokens.weight", "lm_head.weight"] or suffix patterns
+    like ["embed_tokens.weight"]
     :param model_path: either a local directory containing model.safetensors.index
     :return: dict mapping input names/patterns to loaded tensors
     """

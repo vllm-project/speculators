@@ -56,7 +56,7 @@ def _patched_forward(
 
         # Apply deepstack embeddings if present (for Qwen3VL multimodal)
         if deepstack_input_embeds is not None and absolute_layer_idx in range(
-            0, len(deepstack_input_embeds)
+            len(deepstack_input_embeds)
         ):
             hidden_states = (
                 hidden_states
@@ -115,7 +115,6 @@ class HiddenStatesWorkerExtension:
 
         model = self.model_runner.model  # type: ignore[attr-defined]
 
-
         # vLLM model structures:
         # - Vision-language models: model.get_language_model().model.layers
         # - Text models: model.model.layers
@@ -126,10 +125,11 @@ class HiddenStatesWorkerExtension:
             base_model = model.model
             logger.info("Found base model at model.model")
         else:
+            attrs = [a for a in dir(model) if not a.startswith("_")]
             raise AttributeError(
                 f"Could not find base model with 'layers' attribute. "
                 f"Model type: {type(model).__name__}, "
-                f"Available attributes: {[a for a in dir(model) if not a.startswith('_')]}"
+                f"Available attributes: {attrs}"
             )
 
         base_model._extension = self  # noqa: SLF001

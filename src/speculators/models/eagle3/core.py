@@ -265,9 +265,7 @@ class Eagle3DraftModel(SpeculatorModel):
         # shape: [verifier_vocab_size, hidden_size]
         default_dtype = self.embed_tokens.weight.dtype
 
-        embed_tokens_sd = {
-            "weight": embed_tokens_weight.to(default_dtype)
-        }
+        embed_tokens_sd = {"weight": embed_tokens_weight.to(default_dtype)}
         self.embed_tokens.load_state_dict(embed_tokens_sd)
         self.embed_tokens.weight.requires_grad = False
 
