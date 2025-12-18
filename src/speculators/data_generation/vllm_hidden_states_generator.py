@@ -12,9 +12,12 @@ from vllm.config import (
     VllmConfig,
 )
 from vllm.sampling_params import SamplingParams
+from vllm.utils.hashing import get_hash_fn_by_name
 from vllm.v1.core.kv_cache_utils import (
     _get_kv_cache_groups_uniform_spec,
     get_kv_cache_config_from_groups,
+    get_request_block_hasher,
+    init_none_hash,
     unify_hybrid_kv_cache_specs,
 )
 from vllm.v1.core.sched.scheduler import Scheduler
@@ -136,7 +139,6 @@ class VllmHiddenStatesGenerator:
         kv_cache_config = get_kv_cache_config_from_groups(
             vllm_config=self.vllm_config,
             kv_cache_groups=kv_cache_groups,
-            kv_cache_specs=kv_cache_spec,
             available_memory=cache_memory,
         )
 
@@ -149,11 +151,24 @@ class VllmHiddenStatesGenerator:
             vllm_config=self.vllm_config,
             kv_cache_config=kv_cache_config,
             structured_output_manager=structured_output_manager,
+            block_size=VLLM_BLOCK_SIZE,
         )
 
         log.info("Initializing KV cache on all workers...")
         kv_cache_configs = [kv_cache_config] * tensor_parallel_size
         self.executor.initialize_from_config(kv_cache_configs)
+
+        # Create block hasher for request KV cache management
+        # Following vLLM's pattern in v1/engine/core.py
+        caching_hash_fn = get_hash_fn_by_name(
+            self.vllm_config.cache_config.prefix_caching_hash_algo
+        )
+        init_none_hash(caching_hash_fn)
+
+        self.block_hasher = get_request_block_hasher(
+            self.vllm_config.cache_config.block_size,
+            caching_hash_fn,
+        )
 
     def _create_vllm_config(
         self,
@@ -195,6 +210,7 @@ class VllmHiddenStatesGenerator:
                 max_num_seqs=max_num_seqs,
                 max_model_len=max_model_len,
                 max_num_batched_tokens=max_num_batched_tokens,
+                is_encoder_decoder=False,
             ),
             device_config=DeviceConfig(),
             load_config=LoadConfig(),
@@ -240,6 +256,7 @@ class VllmHiddenStatesGenerator:
                 pooling_params=None,
                 eos_token_id=self.tokenizer.eos_token_id,
                 arrival_time=INITIAL_ARRIVAL_TIME,
+                block_hasher=self.block_hasher,
             )
             self.scheduler.add_request(req)
 
@@ -258,19 +275,19 @@ class VllmHiddenStatesGenerator:
                 f"{scheduler_output.total_num_scheduled_tokens}"
             )
 
-            self.executor.execute_model(scheduler_output)
+            model_output = self.executor.execute_model(scheduler_output)
+            self.executor.sample_tokens(model_output)
 
             for req_id in scheduler_output.num_scheduled_tokens:
                 self.scheduler.finish_requests([req_id], RequestStatus.FINISHED_ABORTED)
 
         # Get captured states from driver worker
-        captured_states_list = self.executor.collective_rpc(
+        aux_hidden_states = self.executor.collective_rpc(
             "_get_captured_states",
             unique_reply_rank=0,
         )
-        aux_hidden_states = captured_states_list[0]
 
-        if not aux_hidden_states:
+        if not aux_hidden_states or len(aux_hidden_states) == 0:
             raise RuntimeError("Failed to capture hidden states from worker")
 
         log.debug(f"Successfully captured {len(aux_hidden_states)} layers")
