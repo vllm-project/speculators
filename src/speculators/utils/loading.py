@@ -44,7 +44,7 @@ def load_model_layers(
                 name_to_key[name] = name  # Exact match
             else:
                 # Try suffix match
-                matched = next((k for k in weight_map.keys() if k.endswith(name)), None)
+                matched = next((k for k in weight_map if k.endswith(name)), None)
                 if matched:
                     name_to_key[name] = matched
                 else:

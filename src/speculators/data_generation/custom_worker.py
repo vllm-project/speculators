@@ -120,11 +120,9 @@ class HiddenStatesWorkerExtension:
         # - Vision-language models: model.get_language_model().model.layers
         # - Text models: model.model.layers
         if hasattr(model, "get_language_model"):
-            # Multimodal model - get language model then access its .model
             base_model = model.get_language_model().model
             logger.info("Found base model via get_language_model().model")
         elif hasattr(model, "model") and hasattr(model.model, "layers"):
-            # Text-only model
             base_model = model.model
             logger.info("Found base model at model.model")
         else:
