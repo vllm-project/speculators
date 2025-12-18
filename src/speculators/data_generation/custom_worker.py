@@ -14,13 +14,21 @@ logger = logging.getLogger(__name__)
 
 
 def _patched_forward(
-    self, input_ids, positions, intermediate_tensors=None, inputs_embeds=None
+    self,
+    input_ids,
+    positions,
+    intermediate_tensors=None,
+    inputs_embeds=None,
+    deepstack_input_embeds=None,
 ):
     """Patched forward pass that captures hidden states from specified layers.
 
     This function is bound to base_model instances via types.MethodType.
     It expects base_model to have an _extension attribute pointing to the
     HiddenStatesWorkerExtension instance.
+
+    Args:
+        deepstack_input_embeds: For multimodal models with deepstack (Qwen3VL)
     """
     if get_pp_group().is_first_rank:
         hidden_states = (
@@ -45,6 +53,15 @@ def _patched_forward(
             hidden_states=hidden_states, positions=positions, residual=residual
         )
         absolute_layer_idx = self.start_layer + idx
+
+        # Apply deepstack embeddings if present (for Qwen3VL multimodal)
+        if deepstack_input_embeds is not None and absolute_layer_idx in range(
+            0, len(deepstack_input_embeds)
+        ):
+            hidden_states = (
+                hidden_states
+                + deepstack_input_embeds[f"deepstack_input_embeds_{absolute_layer_idx}"]
+            )
 
         # Capture intermediate layers (not the last) before norm
         if absolute_layer_idx in target_layers:
@@ -98,7 +115,25 @@ class HiddenStatesWorkerExtension:
 
         model = self.model_runner.model  # type: ignore[attr-defined]
 
-        base_model = model.model  # type: ignore[attr-defined]
+
+        # vLLM model structures:
+        # - Vision-language models: model.get_language_model().model.layers
+        # - Text models: model.model.layers
+        if hasattr(model, "get_language_model"):
+            # Multimodal model - get language model then access its .model
+            base_model = model.get_language_model().model
+            logger.info("Found base model via get_language_model().model")
+        elif hasattr(model, "model") and hasattr(model.model, "layers"):
+            # Text-only model
+            base_model = model.model
+            logger.info("Found base model at model.model")
+        else:
+            raise AttributeError(
+                f"Could not find base model with 'layers' attribute. "
+                f"Model type: {type(model).__name__}, "
+                f"Available attributes: {[a for a in dir(model) if not a.startswith('_')]}"
+            )
+
         base_model._extension = self  # noqa: SLF001
         base_model.forward = types.MethodType(_patched_forward, base_model)
         logger.info(f"Hidden states capture setup complete for layers {layer_ids}")
