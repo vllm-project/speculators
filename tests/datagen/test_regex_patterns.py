@@ -22,12 +22,12 @@ from speculators.data_generation.preprocessing import (
 MODELS = [
     # Qwen/ChatML style
     "Qwen/Qwen2-0.5B-Instruct",
-    # Llama-3 style (<|begin_of_text|>...) - used unsloth to avoid gated repo
+    # Llama-3 style (<|begin_of_text|>...)
     "unsloth/llama-3-8b-Instruct",
     # Mistral family ([INST] ... [/INST])
     "mistralai/Mistral-7B-Instruct-v0.2",
     # Gemma style
-    "google/gemma-2b-it",
+    "unsloth/gemma-2b-it",
     # Phi-3 style
     "microsoft/Phi-3-mini-4k-instruct",
     # GPT-OSS
