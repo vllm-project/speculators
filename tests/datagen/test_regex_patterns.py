@@ -11,6 +11,8 @@ from transformers import AutoTokenizer
 
 sys.path.append(str(Path(__file__).resolve().parents[2] / "src"))
 
+from loguru import logger as log
+
 from speculators.data_generation.preprocessing import (
     _detect_assistant_pattern,
     _preprocess_batch,
@@ -22,7 +24,7 @@ MODELS = [
     "Qwen/Qwen2-0.5B-Instruct",
     # Llama-3 style (<|begin_of_text|>...) - used unsloth to avoid gated repo
     "unsloth/llama-3-8b-Instruct",
-    # Mistral family ([INST] ... [/INST]) 
+    # Mistral family ([INST] ... [/INST])
     "mistralai/Mistral-7B-Instruct-v0.2",
     # Gemma style
     "google/gemma-2b-it",
@@ -49,15 +51,15 @@ def test_regex_detection_across_models(tokenizer):
     work correctly for a variety of model families.
     """
     model_name = tokenizer.name_or_path
-    print(f"\nTesting family: {model_name}")
+    log.info(f"Testing family: {model_name}")
 
     # 1. Detect pattern
     try:
         pattern = _detect_assistant_pattern(tokenizer)
-    except Exception as e:
+    except (ValueError, RuntimeError) as e:
         pytest.fail(f"Failed to detect assistant pattern for {model_name}: {e}")
 
-    print(f"  Detected pattern: {pattern}")
+    log.info(f"Detected pattern: {pattern}")
     assert isinstance(pattern, (str, Pattern)), "Pattern must be str or regex object"
 
     # 2. Preprocess a simple multi-turn conversation using REGEX path
@@ -91,7 +93,7 @@ def test_regex_detection_across_models(tokenizer):
     trainable_tokens = input_ids[loss_mask == 1]
     decoded_assistant = tokenizer.decode(trainable_tokens)
 
-    print(f"  Decoded trainable regions: {decoded_assistant}")
+    log.info(f"Decoded trainable regions: {decoded_assistant}")
 
     # It should at least contain parts of our assistant messages
     assert "helpful assistant" in decoded_assistant
