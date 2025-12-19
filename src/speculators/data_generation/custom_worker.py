@@ -120,10 +120,8 @@ class HiddenStatesWorkerExtension:
         # - Text models: model.model.layers
         if hasattr(model, "get_language_model"):
             base_model = model.get_language_model().model
-            logger.info("Found base model via get_language_model().model")
         elif hasattr(model, "model") and hasattr(model.model, "layers"):
             base_model = model.model
-            logger.info("Found base model at model.model")
         else:
             attrs = [a for a in dir(model) if not a.startswith("_")]
             raise AttributeError(
