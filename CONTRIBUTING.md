@@ -162,6 +162,21 @@ tox -e test-unit -- --cov=speculators --cov-report=html
 
 Review the coverage report to confirm that your new code is adequately tested.
 
+## DCO Signoff
+
+We require a DCO signoff for all commits. For more information, see the [DCO Signoff](https://cert-manager.io/docs/contributing/sign-off/) documentation.
+
+```bash
+# Sign off a commit as you're making it
+git commit --signoff -m"my commit"
+
+# Add a signoff to the last commit you made
+git commit --amend --signoff
+
+# Rebase your branch against master and sign off every commit in your branch
+git rebase --signoff master
+```
+
 ## Submitting Changes
 
 1. **Create a Branch**: Create a new branch for your changes:

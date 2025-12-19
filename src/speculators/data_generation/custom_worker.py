@@ -6,7 +6,6 @@ from itertools import islice
 
 import torch
 from vllm.distributed import get_pp_group, get_tp_group
-from vllm.model_executor.models.interfaces import supports_eagle3
 from vllm.sequence import IntermediateTensors
 
 __all__ = ["HiddenStatesWorkerExtension"]
@@ -27,7 +26,7 @@ def _patched_forward(
         hidden_states = (
             inputs_embeds
             if inputs_embeds is not None
-            else self.get_input_embeddings(input_ids)
+            else self.embed_input_ids(input_ids)
         )
         residual = None
     else:
@@ -98,11 +97,6 @@ class HiddenStatesWorkerExtension:
         self._captured_states = None  # type: ignore[assignment]
 
         model = self.model_runner.model  # type: ignore[attr-defined]
-
-        if not supports_eagle3(model):
-            raise ValueError(
-                f"Model {type(model).__name__} does not support hidden state extraction"
-            )
 
         base_model = model.model  # type: ignore[attr-defined]
         base_model._extension = self  # noqa: SLF001
