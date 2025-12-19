@@ -242,8 +242,7 @@ class Eagle3DraftModel(SpeculatorModel):
 
         # Load embedding and lm_head weights using suffix patterns (model-agnostic)
         verifier_weights = load_model_layers(
-            ["embed_tokens.weight", "lm_head.weight"],
-            config.name_or_path,
+            ["embed_tokens.weight", "lm_head.weight"], config.name_or_path,
         )
 
         if "embed_tokens.weight" not in verifier_weights:

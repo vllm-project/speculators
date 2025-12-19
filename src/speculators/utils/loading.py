@@ -16,13 +16,13 @@ def load_model_layers(
     Load one or more named tensors from a HF repo using safetensors shards.
     Supports both exact keys and suffix pattern matching.
 
-    :param layer_names: list of tensor names to load, e.g.
-    ["model.embed_tokens.weight", "lm_head.weight"] or suffix patterns
-    like ["embed_tokens.weight"]
-    :param model_path: either a local directory containing model.safetensors.index
+    :param layer_names: list of tensor names or suffix patterns to load, e.g.
+    ["model.embed_tokens.weight", "lm_head.weight"]
+    :param model_path: either a local directory of huggingface model
+    containing model.safetensors.index
     :return: dict mapping input names/patterns to loaded tensors
     """
-    # download the index file or build virtual weight map for single-file models
+    # download the index file or build weight map for single-file models
     try:
         index_file = _resolve_file(model_path, "model.safetensors.index.json")
         with Path(index_file).open() as f:
@@ -42,9 +42,8 @@ def load_model_layers(
     name_to_key = {}  # Maps input name to actual checkpoint key
     for name in layer_names:
         if name in weight_map:
-            name_to_key[name] = name  # Exact match
+            name_to_key[name] = name
         else:
-            # Try suffix match
             matched = next((k for k in weight_map if k.endswith(name)), None)
             if matched:
                 name_to_key[name] = matched
