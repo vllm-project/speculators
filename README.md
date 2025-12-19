@@ -40,6 +40,9 @@ ______________________________________________________________________
 - **Standardized, Extensible Format:** Provides a Hugging Face-compatible format for defining speculative models, with tools to convert from external research repositories into a standard speculators format for easy adoption.
 - **Seamless vLLM Integration:** Built for direct deployment into vLLM, enabling low-latency, production-grade inference with minimal overhead.
 
+> [!TIP]
+> Read more about Speculators features in this [vLLM blog post](https://blog.vllm.ai/2025/12/13/speculators-v030.html).
+
 ## Supported Models
 
 The following table summarizes the models that have been trained end-to-end by our team as well as others in the roadmap:
