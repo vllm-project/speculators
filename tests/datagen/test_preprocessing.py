@@ -14,6 +14,7 @@ from speculators.data_generation.preprocessing import (
     _detect_assistant_pattern,
     _normalize_conversation,
     _preprocess_batch,
+    _supports_assistant_mask,
     build_eagle3_dataset,
 )
 
@@ -391,15 +392,8 @@ def test_preprocess_batch_uses_hf_assistant_mask():
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    # Skip test if assistant mask is not supported by this tokenizer
-    try:
-        tokenizer.apply_chat_template(
-            [{"role": "assistant", "content": "test"}],
-            tokenize=True,
-            return_assistant_tokens_mask=True,
-            return_dict=True,
-        )
-    except (TypeError, ValueError, KeyError, AttributeError):
+    # Skip test if assistant mask is not supported/functional for this tokenizer
+    if not _supports_assistant_mask(tokenizer):
         pytest.skip("Tokenizer does not support assistant token mask")
 
     examples = {
@@ -411,14 +405,12 @@ def test_preprocess_batch_uses_hf_assistant_mask():
         ]
     }
 
-    # Detect pattern to handle fallback case if mask is not supported
-    assistant_pattern = _detect_assistant_pattern(tokenizer)
-
+    # Pass None to trigger masking path
     results = _preprocess_batch(
         examples,
         tokenizer,
         max_length=128,
-        assistant_pattern=assistant_pattern,
+        assistant_pattern=None,
     )
 
     assert "input_ids" in results

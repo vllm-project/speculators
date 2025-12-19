@@ -1,6 +1,8 @@
 import bisect
 import random
 import re
+from re import Pattern
+from typing import Any, cast
 
 import torch
 from datasets import Dataset as HFDataset
@@ -98,14 +100,25 @@ def _normalize_conversation(
 
 
 def _supports_assistant_mask(tokenizer: PreTrainedTokenizer) -> bool:
-    """Check if tokenizer supports HF assistant token mask."""
+    """Check if tokenizer truly supports HF assistant token mask.
+
+    Must return a non-zero mask for a conversation containing an assistant message.
+    """
     try:
-        tokenizer.apply_chat_template(
+        res_any = tokenizer.apply_chat_template(
             [{"role": "assistant", "content": "test"}],
             tokenize=True,
             return_assistant_tokens_mask=True,
+            return_dict=True,
         )
-        return True
+        res = cast("dict[str, Any]", res_any)
+        # Check both singular and plural key names
+        mask = res.get("assistant_masks", res.get("assistant_mask"))
+        if mask is None:
+            return False
+
+        # Verify the mask is not all zeros
+        return any(m == 1 for m in mask)
     except (TypeError, ValueError, KeyError, AttributeError):
         return False
 
@@ -128,21 +141,27 @@ def _detect_assistant_pattern(tokenizer: PreTrainedTokenizer) -> str:
     )
     assert isinstance(formatted, str), "Expected string from apply_chat_template"
 
-    # Find the LAST assistant message
+    # Find the START and END of both assistant messages
+    first_start = formatted.find("ASSISTANT_MSG_1")
+    first_end = first_start + len("ASSISTANT_MSG_1")
     second_start = formatted.find("ASSISTANT_MSG_2")
     second_end = second_start + len("ASSISTANT_MSG_2")
 
-    if second_start == -1:
-        raise ValueError("Could not detect second assistant message in chat template")
+    if first_start == -1 or second_start == -1:
+        raise ValueError("Could not detect assistant messages in chat template")
 
-    # Extract role marker from before the last assistant message
+    # Extract role marker from before the second assistant message
     second_user_end = formatted.find("USER_MSG_2") + len("USER_MSG_2")
     prefix = formatted[second_user_end:second_start]
 
     # Find where the assistant role marker starts
     assistant_pos = prefix.rfind("assistant")
     if assistant_pos != -1:
-        role_start = prefix.rfind("<", 0, assistant_pos)
+        # Search for a tag start ('<' or '[') before 'assistant'
+        role_start = -1
+        for char in ["<", "["]:
+            pos = prefix.rfind(char, 0, assistant_pos)
+            role_start = max(role_start, pos)
         if role_start != -1:
             role_marker = prefix[role_start:]
         else:
@@ -150,8 +169,21 @@ def _detect_assistant_pattern(tokenizer: PreTrainedTokenizer) -> str:
     else:
         role_marker = prefix
 
-    # Extract suffix from the last assistant message
-    suffix = formatted[second_end:]
+    # Determine the stable TURN-LEVEL suffix
+    suffix1 = formatted[first_end : formatted.find("USER_MSG_2")]
+    suffix2 = formatted[second_end:]
+
+    # The stable suffix is the common prefix of these two tails
+    common_len = 0
+    for c1, c2 in zip(suffix1, suffix2, strict=False):
+        if c1 == c2:
+            common_len += 1
+        else:
+            break
+    suffix = suffix1[:common_len]
+
+    if not suffix:
+        suffix = suffix1 if suffix1 else "\n"
 
     # Extract dynamic boundary marker from role_marker
     boundary_match = re.search(
@@ -176,7 +208,7 @@ def _detect_assistant_pattern(tokenizer: PreTrainedTokenizer) -> str:
 def _create_loss_mask_from_offsets(
     text: str,
     offsets: list[tuple[int, int]],
-    assistant_pattern: str,
+    assistant_pattern: str | Pattern[str],
 ) -> torch.Tensor:
     """Create loss mask by finding assistant response spans in formatted text."""
     loss_mask = torch.zeros(len(offsets), dtype=torch.long)
@@ -212,7 +244,7 @@ def _preprocess_batch(
     examples: dict,
     tokenizer: PreTrainedTokenizer,
     max_length: int,
-    assistant_pattern: str,
+    assistant_pattern: str | Pattern[str] | None,
     turn_dropout: bool = False,
 ) -> dict[str, list]:
     """Process a batch of conversations into tokenized format with loss masks."""
@@ -224,9 +256,6 @@ def _preprocess_batch(
         log.warning(f"No conversations key found. Keys: {list(examples.keys())}")
         return results
 
-    # Check for mask support once per batch
-    supports_mask = _supports_assistant_mask(tokenizer)
-
     for idx, conv in enumerate(conversations):
         if not conv or not isinstance(conv, list):
             continue
@@ -237,21 +266,32 @@ def _preprocess_batch(
             continue
 
         try:
-            if supports_mask:
+            if assistant_pattern is None:
                 # HF assistant token mask
-                encoded = tokenizer.apply_chat_template(
+                encoded_any = tokenizer.apply_chat_template(
                     normalized_conv,
                     tokenize=True,
                     add_generation_prompt=False,
                     return_assistant_tokens_mask=True,
+                    return_dict=True,
                 )
+                encoded = cast("dict[str, Any]", encoded_any)
 
                 # input IDs and loss mask
                 input_ids = encoded["input_ids"]
-                loss_mask = torch.tensor(encoded["assistant_mask"], dtype=torch.long)
+                # HF uses 'assistant_masks' in recent versions
+                mask_key = (
+                    "assistant_masks"
+                    if "assistant_masks" in encoded
+                    else "assistant_mask"
+                )
+                loss_mask = torch.tensor(encoded[mask_key], dtype=torch.long)
 
             else:
                 # Fallback: regex-based detection
+                assert assistant_pattern is not None, (
+                    "Assistant pattern required for fallback"
+                )
                 formatted_raw = tokenizer.apply_chat_template(
                     normalized_conv,
                     tokenize=False,
@@ -287,7 +327,10 @@ def _preprocess_batch(
             results["loss_mask"].append(loss_mask)
 
         except (TypeError, ValueError, KeyError, AttributeError, RuntimeError) as e:
-            log.warning(f"Failed to process conversation {idx}: {e}")
+            log.error(
+                f"Failed to process conversation {idx} "
+                f"(assistant_pattern={assistant_pattern is not None}): {e}"
+            )
             continue
 
     return results
@@ -298,7 +341,7 @@ def build_eagle3_dataset(
     tokenizer: PreTrainedTokenizer,
     max_length: int = 2048,
     num_proc: int = 8,
-    assistant_pattern: str | None = None,
+    assistant_pattern: str | Pattern[str] | None = None,
     turn_dropout: bool = False,
 ) -> HFDataset:
     """Build EAGLE3 dataset by tokenizing conversations and creating loss masks.
@@ -317,15 +360,14 @@ def build_eagle3_dataset(
                      conversation
     """
     # Detect and use provided assistant message pattern
-    supports_mask = _supports_assistant_mask(tokenizer)
-
-    if assistant_pattern is None and not supports_mask:
-        assistant_pattern = _detect_assistant_pattern(tokenizer)
-        log.info(f"Detected assistant pattern: {assistant_pattern[:80]}...")
-    elif supports_mask:
+    if assistant_pattern is not None:
+        log.info(f"Using custom assistant pattern: {str(assistant_pattern)[:80]}...")
+    elif _supports_assistant_mask(tokenizer):
+        assistant_pattern = None  # Signal to use HF mask in _preprocess_batch
         log.info("Using HF assistant token mask for loss masking")
     else:
-        log.info(f"Using custom assistant pattern: {assistant_pattern[:80]}...")
+        assistant_pattern = _detect_assistant_pattern(tokenizer)
+        log.info(f"Detected assistant pattern: {str(assistant_pattern)[:80]}...")
 
     original_cols = dataset.column_names
 
