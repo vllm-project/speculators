@@ -2,16 +2,11 @@
 Tests for dynamic regex assistant pattern detection across different model families.
 """
 
-import sys
-from pathlib import Path
 from re import Pattern
 
 import pytest
-from transformers import AutoTokenizer
-
-sys.path.append(str(Path(__file__).resolve().parents[2] / "src"))
-
 from loguru import logger as log
+from transformers import AutoTokenizer
 
 from speculators.data_generation.preprocessing import (
     _detect_assistant_pattern,
