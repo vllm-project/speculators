@@ -14,6 +14,7 @@ from speculators.data_generation.preprocessing import (
     _detect_assistant_pattern,
     _normalize_conversation,
     _preprocess_batch,
+    _supports_assistant_mask,
     build_eagle3_dataset,
 )
 
@@ -378,6 +379,97 @@ def test_preprocess_batch_truncation():
         # Should be truncated to max_length
         assert len(results["input_ids"][0]) <= max_length
         assert len(results["loss_mask"][0]) <= max_length
+
+
+@pytest.mark.sanity
+def test_preprocess_batch_uses_hf_assistant_mask():
+    """Test that HF assistant token mask is used when supported."""
+    tokenizer = AutoTokenizer.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
+
+    if not hasattr(tokenizer, "apply_chat_template") or tokenizer.chat_template is None:
+        pytest.skip("Tokenizer does not support chat templates")
+
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    # Skip test if assistant mask is not supported/functional for this tokenizer
+    if not _supports_assistant_mask(tokenizer):
+        pytest.skip("Tokenizer does not support assistant token mask")
+
+    examples = {
+        "conversations": [
+            [
+                {"role": "user", "content": "Hello"},
+                {"role": "assistant", "content": "Hi there!"},
+            ]
+        ]
+    }
+
+    # Pass None to trigger masking path
+    results = _preprocess_batch(
+        examples,
+        tokenizer,
+        max_length=128,
+        assistant_pattern=None,
+    )
+
+    assert "input_ids" in results
+    assert "loss_mask" in results
+    assert len(results["input_ids"]) == 1
+    assert len(results["loss_mask"]) == 1
+
+    # Ensure at least some assistant tokens are trainable
+    assert torch.any(results["loss_mask"][0] == 1)
+
+
+@pytest.mark.sanity
+def test_preprocess_batch_falls_back_to_regex():
+    """Test that preprocessing falls back to regex-based detection
+    when HF mask is unavailable.
+    """
+    tokenizer = AutoTokenizer.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
+
+    if not hasattr(tokenizer, "apply_chat_template") or tokenizer.chat_template is None:
+        pytest.skip("Tokenizer does not support chat templates")
+
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    # Monkeypatch apply_chat_template to force HF mask failure
+    original_apply_chat_template = tokenizer.apply_chat_template
+
+    def patched_apply_chat_template(*args, **kwargs):
+        if kwargs.get("return_assistant_tokens_mask", False):
+            raise ValueError("Forcing fallback to regex path")
+        return original_apply_chat_template(*args, **kwargs)
+
+    tokenizer.apply_chat_template = patched_apply_chat_template
+
+    examples = {
+        "conversations": [
+            [
+                {"role": "user", "content": "Hello"},
+                {"role": "assistant", "content": "Hi!"},
+            ]
+        ]
+    }
+
+    assistant_pattern = _detect_assistant_pattern(tokenizer)
+
+    results = _preprocess_batch(
+        examples,
+        tokenizer,
+        max_length=128,
+        assistant_pattern=assistant_pattern,
+    )
+
+    assert "input_ids" in results
+    assert "loss_mask" in results
+    assert len(results["input_ids"]) == 1
+    assert len(results["loss_mask"]) == 1
+
+    # Regex path should still mark assistant tokens
+    assert torch.any(results["loss_mask"][0] == 1)
 
 
 # Tests for build_eagle3_dataset
