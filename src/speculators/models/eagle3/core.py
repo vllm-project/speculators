@@ -143,6 +143,13 @@ def compute_metrics(
     return s_loss, s_metrics
 
 
+def conditional_torch_compile(func):
+    if torch.cuda.is_available() and hasattr(torch, "compile"):
+        return torch.compile(func)
+    else:
+        return func
+
+
 @SpeculatorModel.register("eagle3")
 class Eagle3DraftModel(SpeculatorModel):
     config_class: ClassVar[type[Eagle3SpeculatorConfig]] = Eagle3SpeculatorConfig  # type: ignore[misc]
@@ -291,7 +298,7 @@ class Eagle3DraftModel(SpeculatorModel):
         self.verifier_lm_head.weight.data = masked_lm_head_weight.detach().clone()
         self.verifier_lm_head.weight.requires_grad = False
 
-    @torch.compile
+    @conditional_torch_compile
     def forward(
         self,
         hidden_states: torch.Tensor,  # shape: [1, total_seq_len, 3 * hidden_size]
