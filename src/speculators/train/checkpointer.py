@@ -126,9 +126,12 @@ class SingleGPUCheckpointer(BaseCheckpointer):
     def load_model_state_dict(
         self, model: PreTrainedModel, float_dtype: torch.dtype | None = None
     ):
+        acc_type = torch.accelerator.current_accelerator().type
+        device_idx = torch.accelerator.current_device_index()
+        device = f"{acc_type}:{device_idx}"
         full_state_dict = load_safetensors_state_dict(
             self.model_path(self.previous_epoch),
-            "cuda:0",  # todo: generalize
+            device,  # todo: generalize
         )
         full_state_dict = convert_float_dtype(
             full_state_dict, float_dtype or model.dtype
@@ -142,10 +145,13 @@ class SingleGPUCheckpointer(BaseCheckpointer):
         optimizer: torch.optim.Optimizer,
         float_dtype: torch.dtype | None = None,
     ):
+        acc_type = torch.accelerator.current_accelerator().type
+        device_idx = torch.accelerator.current_device_index()
+        device = f"{acc_type}:{device_idx}"
         full_state_dict = torch.load(
             self.optimizer_path(self.previous_epoch),
             weights_only=True,
-            map_location="cuda:0",  # todo: generalize
+            map_location=device,  # todo: generalize
         )
         full_state_dict = convert_float_dtype(
             full_state_dict, float_dtype or model.dtype
