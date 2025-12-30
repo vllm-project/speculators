@@ -30,10 +30,12 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 import psutil
+import torch
 
 from speculators.train.vocab_mapping import (
     combine_token_frequency_distributions,
 )
+from speculators.utils.util import is_npu_available
 
 
 class _NS(enum.Enum):
@@ -167,6 +169,16 @@ def print_block(title: str, content: str):
     print("\n", "#" * term_width, "\n", sep="")
 
 
+def npu_command(python_alt, command):
+    if is_npu_available():
+        if python_alt and python_alt.strip():
+            command = []
+            command.extend(python_alt.split())
+        else:
+            command = ["python"]
+    return command
+
+
 def run_script(
     script_name: str,
     script_args: list[str],
@@ -190,6 +202,8 @@ def run_script(
 
     if python_alt:
         command.extend(python_alt.split())
+
+    command = npu_command(python_alt, command)
 
     script_path = (Path(__file__).parent / script_name).absolute()
     command.append(str(script_path))
@@ -329,10 +343,10 @@ def run_e2e(
             loggers = loggers.split(",")
         loggers = [logger.strip() for logger in loggers]
         packages.extend(loggers)
-
+    device_count = torch.accelerator.device_count()
     run_script(
         "train.py",
         ta_list,
         packages,
-        python_alt="torchrun --standalone --nproc_per_node=gpu",
+        python_alt=f"torchrun --standalone --nproc_per_node={device_count}",
     )

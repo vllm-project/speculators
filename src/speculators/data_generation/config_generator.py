@@ -16,6 +16,7 @@ import torch
 from transformers import AutoConfig
 
 from speculators.data_generation.logging_utils import PipelineLogger
+from speculators.utils.util import get_device_name
 
 if TYPE_CHECKING:
     from speculators.data_generation.vllm_hidden_states_generator import (
@@ -30,14 +31,15 @@ log = PipelineLogger(__name__)
 def _get_gpu_info() -> str:
     """Get GPU information string.
 
-    :return: GPU model and count, or "CPU only" if no GPU available
+    :return: GPU model and count or NPU model and count,
+             or "CPU only" if no GPU/NPU available
     """
-    if not torch.cuda.is_available():
-        return "CPU only"
-
-    gpu_count = torch.cuda.device_count()
-    gpu_name = torch.cuda.get_device_name(0)
-    return gpu_name if gpu_count == 1 else f"{gpu_count}x {gpu_name}"
+    device_count = torch.accelerator.device_count()
+    device_name = get_device_name(0)
+    if device_name == "NO ACCELERATOR":
+        return "CPU ONLY"
+    else:
+        return device_name if device_count == 1 else f"{device_count}x {device_name}"
 
 
 @dataclass
