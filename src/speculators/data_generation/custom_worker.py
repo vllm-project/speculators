@@ -19,7 +19,7 @@ def _patched_forward(
     positions,
     intermediate_tensors=None,
     inputs_embeds=None,
-    deepstack_input_embeds=None,
+    deepstack_input_embeds=None,  # noqa: ARG001
 ):
     """Patched forward pass that captures hidden states from specified layers.
 
@@ -53,15 +53,6 @@ def _patched_forward(
             hidden_states=hidden_states, positions=positions, residual=residual
         )
         absolute_layer_idx = self.start_layer + idx
-
-        # Apply deepstack embeddings if present (for Qwen3VL multimodal)
-        if deepstack_input_embeds is not None and absolute_layer_idx in range(
-            len(deepstack_input_embeds)
-        ):
-            hidden_states = (
-                hidden_states
-                + deepstack_input_embeds[f"deepstack_input_embeds_{absolute_layer_idx}"]
-            )
 
         # Capture intermediate layers (not the last) before norm
         if absolute_layer_idx in target_layers:
@@ -115,11 +106,10 @@ class HiddenStatesWorkerExtension:
 
         model = self.model_runner.model  # type: ignore[attr-defined]
 
-        # vLLM model structures:
-        # - Vision-language models: model.get_language_model().model.layers
-        # - Text models: model.model.layers
+        # Vision-language models
         if hasattr(model, "get_language_model"):
             base_model = model.get_language_model().model
+        # Text models
         elif hasattr(model, "model") and hasattr(model.model, "layers"):
             base_model = model.model
         else:
