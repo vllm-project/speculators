@@ -19,7 +19,7 @@ def _patched_forward(
     positions,
     intermediate_tensors=None,
     inputs_embeds=None,
-    deepstack_input_embeds=None,  # noqa: ARG001
+    **_kwargs,
 ):
     """Patched forward pass that captures hidden states from specified layers.
 
