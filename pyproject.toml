@@ -113,7 +113,7 @@ dev = [
     "mkdocs-linkcheck~=1.0.6",
 ]
 
-datagen = ["vllm==0.13.0"]
+datagen = ["vllm>=0.12.0,<=0.13.0"]
 
 [project.entry-points.console_scripts]
 speculators = "speculators.__main__:app"
