@@ -88,6 +88,11 @@ def create_transformer_layer_config(
     verifier_name_or_path: str, num_layers: int
 ) -> LlamaConfig:
     verifier_config = AutoConfig.from_pretrained(verifier_name_or_path)
+
+    # For multimodal models (Qwen3VL, etc.), extract text_config
+    if hasattr(verifier_config, "text_config"):
+        verifier_config = verifier_config.text_config
+
     transformer_layer_config = LlamaConfig(
         vocab_size=verifier_config.vocab_size,
         hidden_size=verifier_config.hidden_size,

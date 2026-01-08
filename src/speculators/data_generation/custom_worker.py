@@ -14,13 +14,21 @@ logger = logging.getLogger(__name__)
 
 
 def _patched_forward(
-    self, input_ids, positions, intermediate_tensors=None, inputs_embeds=None
+    self,
+    input_ids,
+    positions,
+    intermediate_tensors=None,
+    inputs_embeds=None,
+    **_kwargs,
 ):
     """Patched forward pass that captures hidden states from specified layers.
 
     This function is bound to base_model instances via types.MethodType.
     It expects base_model to have an _extension attribute pointing to the
     HiddenStatesWorkerExtension instance.
+
+    Args:
+        deepstack_input_embeds: For multimodal models with deepstack (Qwen3VL)
     """
     if get_pp_group().is_first_rank:
         hidden_states = (
@@ -98,7 +106,20 @@ class HiddenStatesWorkerExtension:
 
         model = self.model_runner.model  # type: ignore[attr-defined]
 
-        base_model = model.model  # type: ignore[attr-defined]
+        # Vision-language models
+        if hasattr(model, "get_language_model"):
+            base_model = model.get_language_model().model
+        # Text models
+        elif hasattr(model, "model") and hasattr(model.model, "layers"):
+            base_model = model.model
+        else:
+            attrs = [a for a in dir(model) if not a.startswith("_")]
+            raise AttributeError(
+                f"Could not find base model with 'layers' attribute. "
+                f"Model type: {type(model).__name__}, "
+                f"Available attributes: {attrs}"
+            )
+
         base_model._extension = self  # noqa: SLF001
         base_model.forward = types.MethodType(_patched_forward, base_model)
         logger.info(f"Hidden states capture setup complete for layers {layer_ids}")
