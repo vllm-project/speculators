@@ -81,6 +81,7 @@ dev = [
     "pre-commit~=3.5.0",
     "sphinx~=7.1.2",
     "tox~=4.16.0",
+    "tox-uv", # version is tied to tox version
 
     # testing
     "pytest~=8.2.2",
@@ -112,7 +113,7 @@ dev = [
     "mkdocs-linkcheck~=1.0.6",
 ]
 
-datagen = ["vllm==0.12.0"]
+datagen = ["vllm>=0.12.0,<=0.13.0"]
 
 [project.entry-points.console_scripts]
 speculators = "speculators.__main__:app"
