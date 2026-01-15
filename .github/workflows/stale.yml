@@ -6,7 +6,7 @@ on:
 
 jobs:
   close-pull-requests:
-    if: github.repository == 'vllm-project/llm-compressor'
+    if: github.repository == 'vllm-project/speculators'
     permissions:
       issues: write
       pull-requests: write
