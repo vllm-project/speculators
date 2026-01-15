@@ -98,12 +98,29 @@ The following table summarizes the models that have been trained end-to-end by o
 <td>✅</td>
 </tr>
 <tr>
-<td>Qwen3 MoE</td>
-<td>235B-A22B</td>
-<td><a href="https://huggingface.co/RedHatAI/Qwen3-235B-A22B-Instruct-2507-speculator.eagle3">EAGLE-3</a> ✅</td>
-<td>✅</td>
+  <td rowspan="3">Qwen3 MoE</td>
+  <td>30B-Instruct</td>
+  <td><a href="https://huggingface.co/RedHatAI/Qwen3-30B-A3B-Instruct-2507-speculator.eagle3">
+      EAGLE-3
+    </a> ✅</td>
+  <td>✅</td>
 </tr>
 <tr>
+  <td>235B-Instruct</td>
+  <td>
+    <a href="https://huggingface.co/RedHatAI/Qwen3-235B-A22B-Instruct-2507-speculator.eagle3">
+      EAGLE-3
+    </a> ✅
+  </td>
+  <td>✅</td>
+</tr>
+<tr>
+  <td>235B</td>
+  <td><a href="https://huggingface.co/RedHatAI/Qwen3-235B-A22B-speculator.eagle3">
+      EAGLE-3
+    </a> ✅</td>
+  <td>✅</td>
+</tr>
 <td>Qwen3-VL</td>
 <td>235B-A22B</td>
 <td>EAGLE-3 ⏳</td>
