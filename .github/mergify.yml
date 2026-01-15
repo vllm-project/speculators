@@ -41,7 +41,7 @@ pull_request_rules:
   - name: add quality-failed label
     conditions:
       - label != stale
-      - check-failure = quality-check
+      - check-failure = quality-checks
       - -closed
     actions:
       label:
@@ -57,7 +57,7 @@ pull_request_rules:
   - name: remove quality-failed label
     conditions:
       - label != stale
-      - -check-failure = quality-check
+      - -check-failure = quality-checks
       - -closed
     actions:
       label:
