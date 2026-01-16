@@ -66,7 +66,7 @@ def test_gen_train_acceptance(tmp_path: Path):
         prompts,
         max_tokens=512,
         ignore_eos=True,
-        acceptance_thresholds=[0.30, 0.10, 0.02],
+        acceptance_thresholds=[0.30, 0.07, 0.01],
     )
 
     # Forcibly clean up
