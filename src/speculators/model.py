@@ -21,7 +21,8 @@ Functions:
 """
 
 import os
-from typing import Any, Callable, ClassVar, Literal, Optional, Union
+from collections.abc import Callable
+from typing import Any, ClassVar, Literal, Optional
 
 import torch
 from transformers import (
@@ -81,20 +82,19 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel, GenerationMixin):  # 
     @classmethod
     def from_pretrained(
         cls: type["SpeculatorModel"],
-        pretrained_model_name_or_path: Optional[Union[str, os.PathLike]],
+        pretrained_model_name_or_path: str | os.PathLike | None,
         *model_args,
-        verifier: Optional[Union[str, os.PathLike, PreTrainedModel]] = None,
-        verifier_attachment_mode: Optional[
-            Literal["detached", "full", "train_only"]
-        ] = None,
-        config: Optional[Union[PretrainedConfig, str, os.PathLike]] = None,
-        cache_dir: Optional[Union[str, os.PathLike]] = None,
+        verifier: str | os.PathLike | PreTrainedModel | None = None,
+        verifier_attachment_mode: Literal["detached", "full", "train_only"]
+        | None = None,
+        config: PretrainedConfig | str | os.PathLike | None = None,
+        cache_dir: str | os.PathLike | None = None,
         ignore_mismatched_sizes: bool = False,
         force_download: bool = False,
         local_files_only: bool = False,
-        token: Optional[Union[str, bool]] = None,
+        token: str | bool | None = None,
         revision: str = "main",
-        use_safetensors: Optional[bool] = None,
+        use_safetensors: bool | None = None,
         weights_only: bool = True,
         **kwargs,
     ) -> "SpeculatorModel":
@@ -281,8 +281,8 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel, GenerationMixin):  # 
     def __init__(
         self,
         config: SpeculatorModelConfig,
-        verifier: Optional[Union[str, os.PathLike, PreTrainedModel]],
-        verifier_attachment_mode: Optional[Literal["detached", "full", "train_only"]],
+        verifier: str | os.PathLike | PreTrainedModel | None,
+        verifier_attachment_mode: Literal["detached", "full", "train_only"] | None,
         **kwargs,
     ):
         """
@@ -331,7 +331,7 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel, GenerationMixin):  # 
 
         super().__init__(config, **kwargs)
         self.config: SpeculatorModelConfig = config
-        self.verifier: Optional[PreTrainedModel] = None
+        self.verifier: PreTrainedModel | None = None
         self.verifier_attachment_mode: Literal["detached", "full", "train_only"] = (
             "detached"
         )
@@ -341,7 +341,7 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel, GenerationMixin):  # 
             self.attach_verifier(verifier, mode=verifier_attachment_mode)
 
     def resolve_verifier(
-        self, verifier: Union[str, os.PathLike, PreTrainedModel]
+        self, verifier: str | os.PathLike | PreTrainedModel
     ) -> PreTrainedModel:
         """
         Resolves the verifier model from a given path or identifier.
@@ -373,9 +373,9 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel, GenerationMixin):  # 
 
     def attach_verifier(
         self,
-        verifier: Union[str, os.PathLike, PreTrainedModel],
-        mode: Optional[Literal["full", "train_only"]] = None,
-    ) -> PreTrainedModel:
+        verifier: str | os.PathLike | PreTrainedModel,
+        mode: Literal["full", "train_only"] | None = None,
+    ):
         """
         Attach a verifier model for the speculator that is used to attach to
         for running inference/training with the speculator and validates the
@@ -417,13 +417,12 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel, GenerationMixin):  # 
                 "Must be one of 'full', 'train_only', or None."
             )
 
-        verifier = self.resolve_verifier(verifier)
         self.verifier_attachment_mode = mode or "full"
         self.verifier = (
-            verifier if self.verifier_attachment_mode == "full" else None
+            self.resolve_verifier(verifier)
+            if self.verifier_attachment_mode == "full"
+            else None
         )  # Expect subclasses to handle references if train_only
-
-        return verifier
 
     def detach_verifier(self):
         """
@@ -500,22 +499,21 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel, GenerationMixin):  # 
     @torch.no_grad()
     def generate(
         self,
-        inputs: Optional[torch.Tensor] = None,  # noqa: ARG002
-        generation_config: Optional[GenerationConfig] = None,  # noqa: ARG002
-        logits_processor: Optional[LogitsProcessorList] = None,  # noqa: ARG002
-        stopping_criteria: Optional[StoppingCriteriaList] = None,  # noqa: ARG002
-        prefix_allowed_tokens_fn: Optional[  # noqa: ARG002
-            Callable[[int, torch.Tensor], list[int]]
-        ] = None,
-        synced_gpus: Optional[bool] = None,  # noqa: ARG002
+        inputs: torch.Tensor | None = None,  # noqa: ARG002
+        generation_config: GenerationConfig | None = None,  # noqa: ARG002
+        logits_processor: LogitsProcessorList | None = None,  # noqa: ARG002
+        stopping_criteria: StoppingCriteriaList | None = None,  # noqa: ARG002
+        prefix_allowed_tokens_fn: Callable[[int, torch.Tensor], list[int]]  # noqa: ARG002
+        | None = None,
+        synced_gpus: bool | None = None,  # noqa: ARG002
         assistant_model: Optional["PreTrainedModel"] = None,  # type: ignore[override]  # noqa: ARG002
         streamer: Optional["BaseStreamer"] = None,  # noqa: ARG002
-        negative_prompt_ids: Optional[torch.Tensor] = None,  # noqa: ARG002
-        negative_prompt_attention_mask: Optional[torch.Tensor] = None,  # noqa: ARG002
-        use_model_defaults: Optional[bool] = None,  # noqa: ARG002
-        custom_generate: Union[str, Callable[..., Any], None] = None,  # noqa: ARG002
+        negative_prompt_ids: torch.Tensor | None = None,  # noqa: ARG002
+        negative_prompt_attention_mask: torch.Tensor | None = None,  # noqa: ARG002
+        use_model_defaults: bool | None = None,  # noqa: ARG002
+        custom_generate: str | Callable[..., Any] | None = None,  # noqa: ARG002
         **kwargs,  # noqa: ARG002
-    ) -> Union[GenerateOutput, torch.LongTensor]:
+    ) -> GenerateOutput | torch.LongTensor:
         """
         Generate text using speculative decoding with the attached verifier model.
         The method follows the standard transformers generation interface, making it

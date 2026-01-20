@@ -31,7 +31,7 @@ Fast, practical guidance and assets for using the Speculators brand in docs, sli
 
 ## Project Summary
 
-Speculators is an open, unified library for creating, evaluating, and storing speculative decoding algorithms for efficient LLM inference. It integrates with Hugging Face formats and pairs with vLLM for production serving.
+Speculators is an open, unified library for creating and storing speculative decoding algorithms for efficient LLM inference. It integrates with Hugging Face formats and pairs with vLLM for production serving.
 
 ## Asset Catalog
 
@@ -90,7 +90,7 @@ All files reside in `docs/assets/branding`.
 
 ## License & Attribution
 
-- License: assets are distributed under the [Apache License 2.0](https://github.com/neuralmagic/speculators/blob/main/LICENSE) for identifying the Speculators open-source project
+- License: assets are distributed under the [Apache License 2.0](https://github.com/vllm-project/speculators/blob/main/LICENSE) for identifying the Speculators open-source project
 - Do not use assets to misrepresent affiliation or create derivative brand identities
 
 ## Changelog

@@ -15,7 +15,7 @@ import inspect
 import os
 import re
 import warnings
-from typing import Any, ClassVar, Literal, Optional, Union
+from typing import Any, ClassVar, Literal, cast
 
 import torch
 from pydantic import Field, field_serializer, field_validator, model_validator
@@ -246,10 +246,9 @@ class EagleSpeculator(SpeculatorModel):
     def __init__(
         self,
         config: EagleSpeculatorConfig,
-        verifier: Optional[Union[str, os.PathLike, PreTrainedModel]] = None,
-        verifier_attachment_mode: Optional[
-            Literal["detached", "full", "train_only"]
-        ] = None,
+        verifier: str | os.PathLike | PreTrainedModel | None = None,
+        verifier_attachment_mode: Literal["detached", "full", "train_only"]
+        | None = None,
     ):
         """
         Initializes an EAGLE speculator architecture with configurable components based
@@ -281,9 +280,9 @@ class EagleSpeculator(SpeculatorModel):
         self.padding_idx = config.transformer_layer_config.pad_token_id
 
         # Set layers pulled from the verifier to None until attach is called
-        self.embed_tokens: Optional[nn.Embedding] = None
-        self.rotary_emb: Optional[nn.Module] = None
-        self.lm_head: Optional[nn.Linear] = None
+        self.embed_tokens: nn.Embedding | None = None
+        self.rotary_emb: nn.Module | None = None
+        self.lm_head: nn.Linear | None = None
 
         # Delayed initialization to ensure everything needed for attach_verifier is set
         super().__init__(
@@ -294,22 +293,22 @@ class EagleSpeculator(SpeculatorModel):
 
         self._decoder_class, self._layernorm_class = self._import_model_classes()
         # Initialize layers based on the configuration
-        self.embedding_layernorm: Optional[nn.Module] = self._create_layernorm()
+        self.embedding_layernorm: nn.Module | None = self._create_layernorm()
         self.fusion_fc: nn.Linear = nn.Linear(
             2 * self.hidden_size,
             self.hidden_size,
             bias=config.fusion_bias,
         )
         self.transformer: nn.Module = self._create_transformer_layer()
-        self.pre_lm_head_layernorm: Optional[nn.Module] = self._create_layernorm()
+        self.pre_lm_head_layernorm: nn.Module | None = self._create_layernorm()
 
         self.post_init()  # type: ignore[attr-defined]
 
     def attach_verifier(
         self,
-        verifier: Union[str, os.PathLike, PreTrainedModel],
-        mode: Optional[Literal["full", "train_only"]] = None,
-    ) -> PreTrainedModel:
+        verifier: str | os.PathLike | PreTrainedModel,
+        mode: Literal["full", "train_only"] | None = None,
+    ):
         """
         Attach a verifier model to the EagleSpeculator for speculative decoding.
         Utilizes the verifier's embed_tokens, rotary_emb, and lm_head layers
@@ -350,25 +349,25 @@ class EagleSpeculator(SpeculatorModel):
             perform generation until a full verifier is attached.
         :return: The PreTrainedModel instance for the verifier that was attached.
         """
-        verifier = super().attach_verifier(
-            verifier=verifier,
-            mode=mode,
-        )
+        super().attach_verifier(verifier=verifier, mode=mode)
 
-        # Extract layers from the verifier model
+        if self.verifier_attachment_mode == "train_only":
+            verifier_model = self.resolve_verifier(verifier)
+        elif self.verifier_attachment_mode == "full":
+            verifier_model = cast("PreTrainedModel", self.verifier)
+        else:
+            return
 
-        if hasattr(verifier, "model"):
-            self.embed_tokens = verifier.model.embed_tokens  # type: ignore[assignment,union-attr]
-            self.rotary_emb = verifier.model.rotary_emb  # type: ignore[assignment,union-attr]
+        if hasattr(verifier_model, "model"):
+            self.embed_tokens = verifier_model.model.embed_tokens  # type: ignore[assignment,union-attr]
+            self.rotary_emb = verifier_model.model.rotary_emb  # type: ignore[assignment,union-attr]
         else:
             # Bare model structure
-            self.embed_tokens = verifier.embed_tokens  # type: ignore[assignment,attr-defined]
-            self.rotary_emb = verifier.rotary_emb  # type: ignore[assignment,attr-defined]
+            self.embed_tokens = verifier_model.embed_tokens  # type: ignore[assignment,attr-defined]
+            self.rotary_emb = verifier_model.rotary_emb  # type: ignore[assignment,attr-defined]
 
         # lm_head is always at the top level of the verifier
-        self.lm_head = verifier.lm_head  # type: ignore[assignment,attr-defined]
-
-        return verifier
+        self.lm_head = verifier_model.lm_head  # type: ignore[assignment,attr-defined]
 
     def detach_verifier(self):
         """
@@ -390,14 +389,14 @@ class EagleSpeculator(SpeculatorModel):
         self,
         input_ids: torch.LongTensor,
         hidden_states: torch.FloatTensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[tuple[tuple[torch.FloatTensor]]] = None,
-        use_cache: Optional[bool] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,  # noqa: ARG002
-        return_dict: Optional[bool] = None,
-    ) -> Union[torch.FloatTensor, CausalLMOutputWithPast]:
+        attention_mask: torch.Tensor | None = None,
+        position_ids: torch.LongTensor | None = None,
+        past_key_values: tuple[tuple[torch.FloatTensor]] | None = None,
+        use_cache: bool | None = None,
+        output_attentions: bool | None = None,
+        output_hidden_states: bool | None = None,  # noqa: ARG002
+        return_dict: bool | None = None,
+    ) -> torch.FloatTensor | CausalLMOutputWithPast:
         """
         Execute the forward pass for speculative token generation.
 
@@ -486,10 +485,10 @@ class EagleSpeculator(SpeculatorModel):
     def _prepare_decoder_inputs(
         self,
         hidden_states: torch.FloatTensor,
-        attention_mask: Optional[torch.Tensor],
-        position_ids: Optional[torch.LongTensor],
-        past_key_values: Optional[tuple[tuple[torch.FloatTensor]]],
-    ) -> tuple[torch.FloatTensor, Optional[torch.Tensor], Optional[torch.LongTensor]]:
+        attention_mask: torch.Tensor | None,
+        position_ids: torch.LongTensor | None,
+        past_key_values: tuple[tuple[torch.FloatTensor]] | None,
+    ) -> tuple[torch.FloatTensor, torch.Tensor | None, torch.LongTensor | None]:
         batch_size, seq_length = hidden_states.shape[:2]
 
         if position_ids is None:
@@ -514,7 +513,7 @@ class EagleSpeculator(SpeculatorModel):
 
         return hidden_states, attention_mask, position_ids
 
-    def _create_layernorm(self) -> Optional[nn.Module]:
+    def _create_layernorm(self) -> nn.Module | None:
         if not self.config.layernorms:
             return None
 

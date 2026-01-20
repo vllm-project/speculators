@@ -4,7 +4,7 @@ Unit tests for the model module in the Speculators library.
 
 import os
 import tempfile
-from typing import Literal, Optional, Union
+from typing import Literal
 from unittest.mock import MagicMock
 
 import pytest
@@ -38,10 +38,9 @@ class SpeculatorTestModel(SpeculatorModel):
     def __init__(
         self,
         config: SpeculatorModelTestConfig,
-        verifier: Optional[Union[str, os.PathLike, PreTrainedModel]] = None,
-        verifier_attachment_mode: Optional[
-            Literal["detached", "full", "train_only"]
-        ] = None,
+        verifier: str | os.PathLike | PreTrainedModel | None = None,
+        verifier_attachment_mode: Literal["detached", "full", "train_only"]
+        | None = None,
         **kwargs,
     ):
         super().__init__(
@@ -492,6 +491,7 @@ def test_speculator_model_attach_verifier_invalid(
     ):
         model.attach_verifier(123)  # type: ignore[arg-type]
 
+    model = SpeculatorTestModel(config=speculator_model_test_config)
     # Invalid attachment mode
     with pytest.raises(
         ValueError, match="Invalid verifier_attachment_mode: invalid_mode"
@@ -499,6 +499,7 @@ def test_speculator_model_attach_verifier_invalid(
         model.attach_verifier(verifier=None, mode="invalid_mode")  # type: ignore[arg-type]
 
     # Attaching when not in detached mode
+    model = SpeculatorTestModel(config=speculator_model_test_config)
     model.verifier_attachment_mode = "full"
     with pytest.raises(
         RuntimeError,

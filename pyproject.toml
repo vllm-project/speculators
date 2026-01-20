@@ -15,7 +15,7 @@ dynamic = ["version"]
 name = "speculators"
 description = "A unified library for creating, representing, and storing speculative decoding algorithms for LLM serving such as in vLLM."
 readme = { file = "README.md", content-type = "text/markdown" }
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 authors = [ { name = "Red Hat"} ]
@@ -38,7 +38,7 @@ keywords = [
 dependencies = [
     "accelerate",
     "click",
-    "datasets",
+    "datasets>=4.0.0",
     "deepspeed",
     "httpx[http2]",
     "huggingface-hub",
@@ -48,8 +48,11 @@ dependencies = [
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
     "pyyaml>=6.0.0",
+    "rich",
     "safetensors",
+    "setuptools",
     "torch",
+    "tqdm",
     "transformers",
     "typer-slim>=0.12.0",
 ]
@@ -78,6 +81,7 @@ dev = [
     "pre-commit~=3.5.0",
     "sphinx~=7.1.2",
     "tox~=4.16.0",
+    "tox-uv", # version is tied to tox version
 
     # testing
     "pytest~=8.2.2",
@@ -89,54 +93,55 @@ dev = [
 
     # code quality
     "mypy~=1.15.0",
-    "ruff~=0.11.7",
+    "ruff~=0.14.1",
 
     # docs quality
     "mdformat~=0.7.17",
     "mdformat-footnote~=0.1.1",
     "mdformat-frontmatter~=2.0.8",
     "mdformat-gfm~=0.3.6",
+    "mdformat-gfm-alerts~=2.0.0",
 
     # type-checking
     "types-click~=7.1.8",
     "types-PyYAML~=6.0.1",
     "types-requests~=2.32.0",
     "types-toml",
+    "types-tqdm",
 
     # link checking
     "mkdocs-linkcheck~=1.0.6",
 ]
 
+datagen = ["vllm>=0.12.0,<=0.13.0"]
+
 [project.entry-points.console_scripts]
 speculators = "speculators.__main__:app"
 
 [project.urls]
-homepage = "https://github.com/neuralmagic/speculators"
-source = "https://github.com/neuralmagic/speculators"
-issues = "https://github.com/neuralmagic/speculators/issues"
+homepage = "https://github.com/vllm-project/speculators"
+source = "https://github.com/vllm-project/speculators"
+issues = "https://github.com/vllm-project/speculators/issues"
 
 # ************************************************
 # ********** Code Quality Tools **********
 # ************************************************
 
-[tool.isort]
-profile = "black"
-
 [tool.mypy]
 files = ["src/speculators", "tests"]
-python_version = "3.9"
+python_version = "3.10"
 warn_redundant_casts = true
 warn_unused_ignores = false
 show_error_codes = true
 namespace_packages = true
-exclude = ["venv", ".tox", "build", "dist", "research"]
+exclude = ["venv", ".tox", "build", "dist"]
 
 # Silence "type import errors" as our 3rd-party libs does not have types
 # Check: https://mypy.readthedocs.io/en/latest/config_file.html#import-discovery
 follow_imports = 'silent'
 
 [[tool.mypy.overrides]]
-module = ["datasets.*", "transformers.*", "setuptools.*", "setuptools_git_versioning.*"]
+module = ["datasets.*", "transformers.*", "setuptools.*", "setuptools_git_versioning.*", "vllm.*"]
 ignore_missing_imports=true
 
 [tool.ruff]
@@ -209,9 +214,6 @@ select = [
     "UP", # pyupgrade: automatically upgrades syntax for newer versions of Python
     "W", # Warning: provides warnings about potential issues in the code
     "YTT", # flake8-2020: identifies code that will break with future Python releases
-
-    # Code Documentation
-    "FIX", # flake8-fixme: detects FIXMEs and other temporary comments that should be resolved
 ]
 
 [tool.ruff.lint.extend-per-file-ignores]
@@ -235,16 +237,30 @@ select = [
     "BLE001", # allow catching Exception for conversion errors
 ]
 
-"research/**/*.py" = [
-    "PTH",  # ignore using os.* instead of Path errors
-    "T20",  # ignore usage of print statement errors
-    "PLR",  # ignore code complexity errors
-    "NPY",  # ignore numpy formatting/usage errors
-    "E722",  # allow bare exception catching
-    "C90",  # ignore code complexity errors
-    "PGH004",  # allow general style ignores
-    "ERA001", # allow commented-out code
-    "N80",  # allow upper case names
+"src/speculators/data_generation/**/*.py" = [
+    "S106", # false positives for chat template tokens
+    "S324", # MD5 is used for cache keys, not security
+    "FIX002", # TODOs are tracked
+    "C901", # complexity is acceptable for data processing
+    "BLE001", # catching Exception in __del__ is acceptable
+    "S110", # try-except-pass in __del__ is acceptable
+    "SIM105", # contextlib.suppress not needed for __del__
+    "S101", # assert in worker is acceptable
+    "SIM102", # nested if is clearer
+    "ERA001", # comment is documentation, not code
+    "PTH", # os.path is acceptable in data generation
+]
+"scripts/**/*.py" = [
+    "INP001", # allow implicit namespace packages in scripts
+    "PTH", # os.path is acceptable in scripts
+]
+
+"examples/**/*.py" = [
+    "INP001", # allow implicit namespace packages in examples
+]
+
+"scripts/gen_and_train.py" = [
+    "T201", # allow print in scripts
 ]
 
 [tool.ruff.lint.isort]

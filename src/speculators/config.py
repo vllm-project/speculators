@@ -20,7 +20,7 @@ Classes:
 
 import os
 from importlib.metadata import version
-from typing import Any, ClassVar, Optional, Union
+from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
 from transformers import PretrainedConfig
@@ -79,7 +79,7 @@ class VerifierConfig(BaseModel):
 
     @classmethod
     def from_config(
-        cls, config: PretrainedConfig, name_or_path: Optional[str] = "UNSET"
+        cls, config: PretrainedConfig, name_or_path: str | None = "UNSET"
     ) -> "VerifierConfig":
         """
         Create a VerifierConfig from a PretrainedConfig object.
@@ -106,7 +106,7 @@ class VerifierConfig(BaseModel):
             architectures=config_dict.get("architectures", []),
         )
 
-    name_or_path: Optional[str] = Field(
+    name_or_path: str | None = Field(
         description=(
             "The name as a Hugging Face id or path to the verifier model "
             "used for the speculator. Used to dynamically load the verifier the "
@@ -174,11 +174,11 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
     @classmethod
     def from_pretrained(
         cls,
-        pretrained_model_name_or_path: Union[str, os.PathLike],
-        cache_dir: Optional[Union[str, os.PathLike]] = None,
+        pretrained_model_name_or_path: str | os.PathLike,
+        cache_dir: str | os.PathLike | None = None,
         force_download: bool = False,
         local_files_only: bool = False,
-        token: Optional[Union[str, bool]] = None,
+        token: str | bool | None = None,
         revision: str = "main",
         **kwargs,
     ) -> "SpeculatorModelConfig":
@@ -258,9 +258,9 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
     sub_configs: ClassVar[dict[str, type[PretrainedConfig]]] = {}  # type: ignore[misc,assignment]
     is_composition: ClassVar[bool] = False  # type: ignore[misc]
     attribute_map: ClassVar[dict[str, str]] = {}  # type: ignore[misc]
-    base_model_tp_plan: ClassVar[Optional[dict[str, Any]]] = None  # type: ignore[misc]
-    base_model_pp_plan: ClassVar[Optional[dict[str, tuple[list[str]]]]] = None  # type: ignore[misc]
-    _auto_class: ClassVar[Optional[str]] = ""  # type: ignore[misc]
+    base_model_tp_plan: ClassVar[dict[str, Any] | None] = None  # type: ignore[misc]
+    base_model_pp_plan: ClassVar[dict[str, tuple[list[str]]] | None] = None  # type: ignore[misc]
+    _auto_class: ClassVar[str | None] = ""  # type: ignore[misc]
 
     # Speculator model instance attributes
     speculators_model_type: str = Field(

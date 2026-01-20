@@ -3,7 +3,6 @@ Eagle checkpoint converter with loguru logging.
 """
 
 from pathlib import Path
-from typing import Optional, Union
 
 import torch
 from loguru import logger
@@ -46,13 +45,13 @@ class EagleConverter:
 
     def convert(
         self,
-        input_path: Union[str, Path],
-        output_path: Union[str, Path],
+        input_path: str | Path,
+        output_path: str | Path,
         base_model: str,
         fusion_bias: bool = False,
         layernorms: bool = False,
         validate: bool = True,
-        cache_dir: Optional[Union[str, Path]] = None,
+        cache_dir: str | Path | None = None,
     ) -> None:
         """
         Convert an Eagle checkpoint to speculators format.
@@ -186,7 +185,7 @@ class EagleConverter:
 
         greedy_proposal = GreedyTokenProposalConfig(
             proposal_type="greedy",
-            speculative_tokens=5,
+            speculative_tokens=3,
         )
 
         speculators_config = SpeculatorsConfig(
@@ -285,7 +284,7 @@ class EagleConverter:
         self,
         config: EagleSpeculatorConfig,
         weights: dict[str, torch.Tensor],
-        output_dir: Union[str, Path],
+        output_dir: str | Path,
     ) -> Path:
         """
         Save the converted checkpoint using the model's save_pretrained method.

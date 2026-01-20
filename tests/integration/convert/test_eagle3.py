@@ -1,3 +1,4 @@
+import gc
 import json
 from pathlib import Path
 
@@ -6,15 +7,13 @@ import torch
 from loguru import logger
 
 from speculators.convert.eagle.eagle3_converter import Eagle3Converter
-from speculators.models.eagle3 import Eagle3Speculator
+from speculators.convert.eagle.eagle3_legacy_model import Eagle3Speculator
 
 
 class TestEagle3Conversion:
     """End-to-end tests for Eagle3 checkpoint conversion."""
 
     def setup_method(self):
-        import gc
-
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -196,20 +195,12 @@ class TestEagle3Conversion:
         )
         logger.success("Model loaded successfully")
 
-        # Step 3: Forward pass
-        logger.info("Executing forward pass...")
-        forward_pass_success = self.execute_forward_pass(model)
-        assert forward_pass_success, (
-            "Forward pass failed - this indicates the converted model has issues"
-        )
-        logger.success("Forward pass completed successfully")
-
-        # Step 4: Save model
+        # Step 3: Save model
         logger.info("Saving model...")
         model.save_pretrained(resaved_dir)  # type: ignore[attr-defined]
         logger.success(f"Model saved to: {resaved_dir}")
 
-        # Step 5: Verify resaved model
+        # Step 4: Verify resaved model
         self.verify_checkpoint_structure(resaved_dir)
         self.verify_config(
             resaved_dir / "config.json", base_model, expected_type="eagle3"

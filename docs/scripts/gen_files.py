@@ -4,6 +4,7 @@ for the documentation build and site.
 Uses mkdocs-gen-files to handle the file generation and compatibility with MkDocs.
 """
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -32,6 +33,24 @@ def find_project_root() -> Path:
     )
 
 
+def remap_python_absolute_links(content: str):
+    # Replace links like `/scripts/data_generation_offline.py` with https://github.com/vllm-project/speculators/blob/main/scripts/data_generation_offline.py
+    # Match criteria:
+    # Link starts with `(/` and ends with `.py)`
+
+    # Uses [^)]+ to allow multiple path segments (e.g., /scripts/file.py)
+    matches = re.findall(r"\((/[^)]+\.py)\)", content)
+    for link in matches:
+        # Remove the leading slash for the GitHub URL (repo root)
+        file_path = link.lstrip("/")
+        new_link = (
+            f"(https://github.com/vllm-project/speculators/blob/main/{file_path})"
+        )
+        # Replace the original link (including parentheses) with the new absolute link
+        content = content.replace(f"({link})", new_link)
+    return content
+
+
 def process_files(files: list[ProcessFile], project_root: Path):
     for file in files:
         source_path = project_root / file.root_path
@@ -45,6 +64,7 @@ def process_files(files: list[ProcessFile], project_root: Path):
 
         frontmatter = f"---\ntitle: {file.title}\nweight: {file.weight}\n---\n\n"
         content = source_path.read_text(encoding="utf-8")
+        content = remap_python_absolute_links(content)
 
         with mkdocs_gen_files.open(target_path, "w") as file_handle:
             file_handle.write(frontmatter)
@@ -56,6 +76,7 @@ def process_files(files: list[ProcessFile], project_root: Path):
 def migrate_developer_docs():
     project_root = find_project_root()
     files = [
+        # Developer
         ProcessFile(
             root_path=Path("CODE_OF_CONDUCT.md"),
             docs_path=Path("developer/code-of-conduct.md"),
@@ -68,10 +89,29 @@ def migrate_developer_docs():
             title="Contributing Guide",
             weight=-8,
         ),
+        # Examples
         ProcessFile(
-            root_path=Path("DEVELOPING.md"),
-            docs_path=Path("developer/developing.md"),
-            title="Development Guide",
+            root_path=Path("examples/data_generation_and_training/README.md"),
+            docs_path=Path("examples/data_generation_and_training.md"),
+            title="Train",
+            weight=1,
+        ),
+        ProcessFile(
+            root_path=Path("examples/convert/README.md"),
+            docs_path=Path("examples/convert.md"),
+            title="Convert",
+            weight=2,
+        ),
+        ProcessFile(
+            root_path=Path("examples/evaluate/eval-guidellm/README.md"),
+            docs_path=Path("examples/evaluate.md"),
+            title="Evaluate",
+            weight=3,
+        ),
+        ProcessFile(
+            root_path=Path("scripts/README.md"),
+            docs_path=Path("train.md"),
+            title="Train",
             weight=-6,
         ),
     ]
