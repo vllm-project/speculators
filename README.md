@@ -31,6 +31,8 @@ ______________________________________________________________________
 - `#speculators`
 - `#feat-spec-decode`
 
+🎥 Watch our Office Hours presentation: [Video](https://www.youtube.com/live/2ISAr_JVGLs) | [Slides](https://docs.google.com/presentation/d/1s4eAb7v-rdZt8smyULBJWGXjJXrgFTZWnwqYa2-h1l4/edit?slide=id.g3365e070742_6_0#slide=id.g3365e070742_6_0)
+
 ______________________________________________________________________
 
 ## Key Features
