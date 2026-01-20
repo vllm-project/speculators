@@ -189,6 +189,10 @@ def main(args: argparse.Namespace):
             "ttt_steps": args.ttt_steps,
             "ttt_step_loss_decay": args.ttt_step_loss_decay,
         },
+        scheduler_type=args.scheduler_type,
+        scheduler_warmup_steps=args.scheduler_warmup_steps,
+        scheduler_total_steps=args.scheduler_total_steps,
+        scheduler_num_cosine_cycles=args.scheduler_num_cosine_cycles,
     )
     trainer = Trainer(draft_model, trainer_config, train_loader, val_loader)
 
@@ -228,6 +232,11 @@ def parse_args():
         default=False,
         help="Use off-policy tokens during training (required for regenerated data)",
     )
+    # lr scheduler
+    parser.add_argument("--scheduler-type", type=str, default="linear")
+    parser.add_argument("--scheduler-warmup-steps", type=int, default=None)
+    parser.add_argument("--scheduler-total-steps", type=int, default=None)
+    parser.add_argument("--scheduler-num-cosine-cycles", type=float, default=0.5)
     return parser.parse_args()
 
 
