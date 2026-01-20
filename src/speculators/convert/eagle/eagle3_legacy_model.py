@@ -1,25 +1,16 @@
 """
-Speculators implementation of EAGLE-3:
-    - https://arxiv.org/abs/2503.01840
+Legacy model implementation of EAGLE-3. This is deprecated and will be removed in the
+future.
 
-Classes:
-    Eagle3SpeculatorConfig: Configuration class for EAGLE-3 speculator model
-    EagleSpeculator3: Main model implementation for EAGLE-3 speculators
-    Eagle3Attention: Custom attention layer for EAGLE-3, processes
-        concatenated embeddings and hidden states
-    Eagle3DecoderLayer: Custom decoder layer for EAGLE-3, processes
-        concatenated embeddings and hidden states with Eagle3Attention
-        and support for moving hidden layernorm before residual
+Currently only used for converting workflow.
 """
 
 import os
-from typing import Any, ClassVar, Literal
+from typing import ClassVar, Literal
 
 import torch
-from pydantic import Field, field_serializer, field_validator
 from torch import nn
-from transformers import AutoConfig, PretrainedConfig, PreTrainedModel
-from transformers.models.llama.configuration_llama import LlamaConfig
+from transformers import PretrainedConfig, PreTrainedModel
 from transformers.models.llama.modeling_llama import (
     LlamaMLP,
     LlamaRMSNorm,
@@ -27,82 +18,10 @@ from transformers.models.llama.modeling_llama import (
     repeat_kv,
 )
 
-from speculators import SpeculatorModel, SpeculatorModelConfig
+from speculators import SpeculatorModel
+from speculators.models.eagle3 import Eagle3SpeculatorConfig
 
-__all__ = [
-    "Eagle3Attention",
-    "Eagle3DecoderLayer",
-    "Eagle3Speculator",
-    "Eagle3SpeculatorConfig",
-]
-
-
-@SpeculatorModelConfig.register("eagle3")
-class Eagle3SpeculatorConfig(SpeculatorModelConfig):
-    """
-    Configuration for EAGLE-3 speculator with vocabulary mapping.
-
-    EAGLE-3 features vocabulary mapping between draft (32K) and target (128K)
-    vocabularies, enabling cross-tokenizer speculation.
-
-    :param transformer_layer_config: Configuration for the transformer decoder layer
-    :param draft_vocab_size: Size of draft model vocabulary for speculation
-    :param norm_before_residual: Apply hidden_norm before storing residual
-    """
-
-    speculators_model_type: Literal["eagle3"] = "eagle3"
-    architectures: list[str] = Field(
-        default_factory=lambda: ["Eagle3Speculator"],
-        description="Model architectures that can load these weights",
-    )
-
-    transformer_layer_config: PretrainedConfig = Field(
-        default_factory=LlamaConfig,
-        description="Configuration for the transformer decoder layer",
-    )
-
-    draft_vocab_size: int = Field(
-        default=32000,
-        description="Size of draft model vocabulary for speculation",
-    )
-
-    norm_before_residual: bool = Field(
-        default=False,
-        description="Apply hidden_norm before storing residual",
-    )
-
-    target_hidden_size: int | None = Field(
-        default=None,
-        description="Hidden size of the target model (if different from draft model)",
-    )
-
-    eagle_aux_hidden_state_layer_ids: list[int] | None = Field(
-        default=None,
-        description="Layer IDs of the Eagle auxiliary hidden state layers",
-    )
-
-    @property
-    def target_vocab_size(self) -> int:
-        """Get target vocabulary size from transformer config."""
-        return self.transformer_layer_config.vocab_size
-
-    @field_serializer("transformer_layer_config")
-    def serialize_transformer_config(self, value: PretrainedConfig) -> dict:
-        """Serialize transformer config to dict."""
-        return value.to_diff_dict()
-
-    @field_validator("transformer_layer_config", mode="before")
-    @classmethod
-    def validate_transformer_config(cls, value: Any) -> PretrainedConfig:
-        """Validate and convert transformer config."""
-        if isinstance(value, dict):
-            config_class: type[PretrainedConfig] = LlamaConfig
-            if "model_type" in value:
-                config_class = AutoConfig.for_model(
-                    model_type=value["model_type"]
-                ).__class__
-            return config_class(**value)
-        return value
+__all__ = ["Eagle3Speculator"]
 
 
 class Eagle3Attention(nn.Module):
@@ -313,7 +232,6 @@ class Eagle3DecoderLayer(nn.Module):
         return outputs
 
 
-@SpeculatorModel.register("eagle3")
 class Eagle3Speculator(SpeculatorModel):
     """
     EAGLE-3 speculator with vocabulary mapping and multi-layer fusion.

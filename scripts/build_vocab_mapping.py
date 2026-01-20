@@ -11,7 +11,7 @@ Usage:
         --token-freq-path ./cache/token_frequencies/xxx_token_freq.pt \
         --draft-vocab-size 32000 \
         --target-vocab-size 128256 \
-        --output-path ./vocab_mapping.pt
+        --output-path ./vocab_mapping
 """
 
 import argparse
@@ -20,8 +20,9 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from transformers import AutoConfig
 
-from speculators.data_generation.vocab_mapping import (
+from speculators.train.vocab_mapping import (
     build_vocab_mappings_from_distribution,
 )
 
@@ -51,8 +52,14 @@ def parse_args():
     parser.add_argument(
         "--target-vocab-size",
         type=int,
-        required=True,
+        required=False,
         help="Vocabulary size for the target model",
+    )
+    parser.add_argument(
+        "--target-model-path",
+        type=str,
+        required=False,
+        help="Model name or path from which to load the target vocabulary",
     )
     parser.add_argument(
         "--output-path",
@@ -64,6 +71,29 @@ def parse_args():
     return parser.parse_args()
 
 
+def get_target_vocab_size(args):
+    has_vocab = args.target_vocab_size is not None
+    has_model = args.target_model_path is not None
+
+    if has_vocab and has_model:
+        raise ValueError("Cannot specify both target-vocab-size and target-model-path")
+
+    if not has_vocab and not has_model:
+        raise ValueError("Must specify either target-vocab-size or target-model-path")
+
+    if has_vocab:
+        return args.target_vocab_size
+
+    logger.info(f"Loading target model config from {args.target_model_path}")
+    config = AutoConfig.from_pretrained(args.target_model_path)
+
+    # For multimodal models (Qwen3VL, etc.), extract text_config
+    if hasattr(config, "text_config"):
+        config = config.text_config
+
+    return config.vocab_size
+
+
 def main():
     args = parse_args()
 
@@ -73,10 +103,12 @@ def main():
 
     token_freq_dict = torch.load(token_freq_path, weights_only=True)
 
+    target_vocab_size = get_target_vocab_size(args)
+
     d2t, t2d = build_vocab_mappings_from_distribution(
         token_freq_dict=token_freq_dict,
         draft_vocab_size=args.draft_vocab_size,
-        target_vocab_size=args.target_vocab_size,
+        target_vocab_size=target_vocab_size,
     )
 
     output_path = Path(args.output_path)

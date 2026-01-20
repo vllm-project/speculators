@@ -44,16 +44,16 @@ Speculators is an open-source project that values community contributions. We ma
 ### Quick Setup
 
 1. **Prerequisites**: Ensure you have Python 3.10+ and Git installed
-2. **Clone**: `git clone https://github.com/neuralmagic/speculators.git`
+2. **Clone**: `git clone https://github.com/vllm-project/speculators.git`
 3. **Install**: `pip install -e .[dev]`
 4. **Code Quality**: Run `pre-commit install` to set up code quality checks
 
 ## Community and Support
 
-Speculators is developed and maintained by Neural Magic and the open-source community. We encourage contributions from researchers, engineers, and practitioners working with large language model inference optimization.
+Speculators is developed and maintained by Red Hat and the open-source community. We encourage contributions from researchers, engineers, and practitioners working with large language model inference optimization.
 
 For questions, discussions, or support:
 
-- **Issues**: [GitHub Issues](https://github.com/neuralmagic/speculators/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/neuralmagic/speculators/discussions)
-- **License**: [Apache 2.0](https://github.com/neuralmagic/speculators/blob/main/LICENSE)
+- **Issues**: [GitHub Issues](https://github.com/vllm-project/speculators/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/vllm-project/speculators/discussions)
+- **License**: [Apache 2.0](https://github.com/vllm-project/speculators/blob/main/LICENSE)

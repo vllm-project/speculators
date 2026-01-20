@@ -7,7 +7,7 @@ from transformers import LlamaConfig
 from transformers.models.auto.configuration_auto import AutoConfig
 
 from speculators.config import SpeculatorsConfig, VerifierConfig
-from speculators.models.eagle3 import Eagle3SpeculatorConfig
+from speculators.models.eagle3 import Eagle3DraftModel, Eagle3SpeculatorConfig
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 from speculators.train.data import (
     Eagle3SampleFileDataset,
@@ -19,7 +19,6 @@ from speculators.train.data import (
 from speculators.train.distributed_batch_sampler import (
     MultipackDistributedBatchSamplerV2,
 )
-from speculators.train.eagle3.core import Eagle3DraftModel
 from speculators.train.logger import setup_metric_logger, setup_root_logger
 from speculators.train.noise_transforms import AddUniformNoise
 from speculators.train.trainer import Trainer, TrainerConfig
@@ -89,6 +88,11 @@ def create_transformer_layer_config(
     verifier_name_or_path: str, num_layers: int
 ) -> LlamaConfig:
     verifier_config = AutoConfig.from_pretrained(verifier_name_or_path)
+
+    # For multimodal models (Qwen3VL, etc.), extract text_config
+    if hasattr(verifier_config, "text_config"):
+        verifier_config = verifier_config.text_config
+
     transformer_layer_config = LlamaConfig(
         vocab_size=verifier_config.vocab_size,
         hidden_size=verifier_config.hidden_size,
@@ -176,7 +180,7 @@ def main(args: argparse.Namespace):
         is_distributed=is_distributed,
         local_rank=local_rank,
         train_call_kwargs={
-            "use_off_policy_tokens": False,
+            "use_off_policy_tokens": args.use_off_policy_tokens,
             "ttt_steps": args.ttt_steps,
             "ttt_step_loss_decay": args.ttt_step_loss_decay,
         },
@@ -218,6 +222,12 @@ def parse_args():
     parser.add_argument("--t2d-path", type=str, default="t2d.npy")
     parser.add_argument("--ttt-steps", type=int, default=3)
     parser.add_argument("--ttt-step-loss-decay", type=float, default=1.0)
+    parser.add_argument(
+        "--use-off-policy-tokens",
+        action="store_true",
+        default=False,
+        help="Use off-policy tokens during training (required for regenerated data)",
+    )
     return parser.parse_args()
 
 

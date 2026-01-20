@@ -9,11 +9,11 @@ from transformers import AutoConfig, DynamicCache, PretrainedConfig
 from speculators.config import VerifierConfig
 from speculators.model import SpeculatorModel
 from speculators.models.eagle3 import Eagle3SpeculatorConfig
-from speculators.train.eagle3.attention import (
+from speculators.models.eagle3.attention import (
     create_combined_mask_mod,
     extend_mask_for_draft_tokens,
 )
-from speculators.train.eagle3.model_definitions import model_classes
+from speculators.models.eagle3.model_definitions import model_classes
 from speculators.utils.loading import load_model_layers
 
 
@@ -143,7 +143,7 @@ def compute_metrics(
     return s_loss, s_metrics
 
 
-@SpeculatorModel.register("eagle3_draft")
+@SpeculatorModel.register("eagle3")
 class Eagle3DraftModel(SpeculatorModel):
     config_class: ClassVar[type[Eagle3SpeculatorConfig]] = Eagle3SpeculatorConfig  # type: ignore[misc]
     _keys_to_ignore_on_load_missing: ClassVar[list[str]] = [  # type: ignore[misc]
@@ -224,6 +224,11 @@ class Eagle3DraftModel(SpeculatorModel):
         if config.name_or_path is None:
             raise ValueError("VerifierConfig `name_or_path` value is required.")
         verifier_model_config = AutoConfig.from_pretrained(config.name_or_path)
+
+        # For multimodal models (Qwen3VL, etc.), extract text_config
+        if hasattr(verifier_model_config, "text_config"):
+            verifier_model_config = verifier_model_config.text_config
+
         if verifier_model_config.hidden_size != self.hidden_size:
             raise ValueError(
                 f"Verifier hidden size {verifier_model_config.hidden_size} does not"
@@ -235,12 +240,21 @@ class Eagle3DraftModel(SpeculatorModel):
                 f" verifier_vocab_size ({verifier_model_config.vocab_size})."
             )
 
-        lm_head_key = "lm_head.weight"
+        # Load embedding and lm_head weights using suffix patterns (model-agnostic)
         verifier_weights = load_model_layers(
-            ["model.embed_tokens.weight", lm_head_key], config.name_or_path
+            ["embed_tokens.weight", "lm_head.weight"],
+            config.name_or_path,
         )
-        if lm_head_key not in verifier_weights:
-            lm_head_key = "model.embed_tokens.weight"
+
+        if "embed_tokens.weight" not in verifier_weights:
+            raise KeyError(
+                f"Could not find embedding weights in {config.name_or_path}. "
+                "Expected a key ending with 'embed_tokens.weight'."
+            )
+
+        embed_tokens_weight = verifier_weights["embed_tokens.weight"]
+        # Use embed_tokens as fallback for lm_head if not found (tied weights)
+        lm_head_weight = verifier_weights.get("lm_head.weight", embed_tokens_weight)
 
         # EMBEDDINGS
         self.embed_tokens = torch.nn.Embedding(
@@ -251,9 +265,7 @@ class Eagle3DraftModel(SpeculatorModel):
         # shape: [verifier_vocab_size, hidden_size]
         default_dtype = self.embed_tokens.weight.dtype
 
-        embed_tokens_sd = {
-            "weight": verifier_weights["model.embed_tokens.weight"].to(default_dtype)
-        }
+        embed_tokens_sd = {"weight": embed_tokens_weight.to(default_dtype)}
         self.embed_tokens.load_state_dict(embed_tokens_sd)
         self.embed_tokens.weight.requires_grad = False
 
@@ -266,7 +278,7 @@ class Eagle3DraftModel(SpeculatorModel):
             self.hidden_size, self.draft_vocab_size, bias=False
         )
 
-        masked_lm_head_weight = verifier_weights[lm_head_key].to(
+        masked_lm_head_weight = lm_head_weight.to(
             device=t2d.device, dtype=default_dtype
         )[t2d.to(torch.bool), :]
         if masked_lm_head_weight.shape != self.lm_head.weight.shape:

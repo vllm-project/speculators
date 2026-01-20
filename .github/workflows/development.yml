@@ -35,7 +35,9 @@ jobs:
         with:
           fail: false
       - name: Create PR Comment
-        if: steps.lychee.outputs.exit_code != '0'
+        if: >
+          steps.lychee.outputs.exit_code != '0' &&
+          github.event.pull_request.head.repo.full_name == github.repository
         uses: peter-evans/create-or-update-comment@v4
         with:
           issue-number: ${{ github.event.pull_request.number }}
@@ -175,6 +177,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
       - name: Find comment
+        if: github.event.pull_request.head.repo.full_name == github.repository
         uses: peter-evans/find-comment@v3
         id: fc
         with:
@@ -182,6 +185,7 @@ jobs:
           comment-author: "github-actions[bot]"
           body-includes: Build Artifacts Available
       - name: Create or update comment
+        if: github.event.pull_request.head.repo.full_name == github.repository
         uses: peter-evans/create-or-update-comment@v4
         with:
           comment-id: ${{ steps.fc.outputs.comment-id }}

@@ -29,10 +29,20 @@ import torch
 from datasets import config as datasets_config
 from tqdm import tqdm  # type: ignore[import-untyped]
 
-from speculators.data_generation.config_generator import DataGenerationConfig
-from speculators.data_generation.logging_utils import PipelineLogger
-from speculators.data_generation.preprocessing import load_and_preprocess_dataset
-from speculators.data_generation.vllm_hidden_states_generator import (
+# Set vLLM to use 'spawn' instead of 'fork'
+# to prevent "Cannot re-initialize CUDA in forked subprocess" errors
+from vllm import envs
+
+envs.VLLM_WORKER_MULTIPROC_METHOD = "spawn"
+
+from speculators.data_generation.config_generator import (  # noqa: E402
+    DataGenerationConfig,
+)
+from speculators.data_generation.logging_utils import PipelineLogger  # noqa: E402
+from speculators.data_generation.preprocessing import (  # noqa: E402
+    load_and_preprocess_dataset,
+)
+from speculators.data_generation.vllm_hidden_states_generator import (  # noqa: E402
     VllmHiddenStatesGenerator,
 )
 
@@ -58,14 +68,8 @@ def parse_args():
     parser.add_argument(
         "--tensor-parallel-size",
         type=int,
-        default=1,
+        default=torch.accelerator.device_count(),
         help="Tensor parallel size for target model (default: 1)",
-    )
-    parser.add_argument(
-        "--max-model-len",
-        type=int,
-        default=2048,
-        help="Maximum sequence length supported by the model (default: 2048)",
     )
     parser.add_argument(
         "--gpu-memory-utilization",
@@ -85,7 +89,7 @@ def parse_args():
         "--seq-length",
         type=int,
         default=2048,
-        help="Maximum sequence length (same as used in preprocessing, default: 2048)",
+        help="Maximum sequence length for preprocessing and model (default: 2048)",
     )
     parser.add_argument(
         "--max-samples",
@@ -107,6 +111,23 @@ def parse_args():
             "Directory for HuggingFace datasets cache. "
             "If not specified, uses HF_DATASETS_CACHE env var or default location. "
             "(default: None)"
+        ),
+    )
+    parser.add_argument(
+        "--assistant-pattern",
+        type=str,
+        default=None,
+        help=(
+            "Custom regex pattern for matching assistant responses. "
+            "If not provided, auto-detected from chat template."
+        ),
+    )
+    parser.add_argument(
+        "--turn-dropout",
+        action="store_true",
+        help=(
+            "Enable turn dropout: randomly keeps first N consecutive turns "
+            "per conversation for data augmentation."
         ),
     )
 
@@ -152,7 +173,6 @@ def parse_args():
         default=8,
         help="Number of CPU processes for dataset preprocessing (default: 8)",
     )
-
     return parser.parse_args()
 
 
@@ -223,7 +243,7 @@ def generate_and_save_hidden_states(args, dataset):
     generator = VllmHiddenStatesGenerator(
         model_path=args.target_model_path,
         layer_ids=args.layer_ids,
-        max_model_len=args.max_model_len,
+        max_model_len=args.seq_length,
         gpu_memory_utilization=args.gpu_memory_utilization,
         tensor_parallel_size=args.tensor_parallel_size,
     )
@@ -310,6 +330,8 @@ def main():
         max_samples=args.max_samples,
         token_freq_path=args.token_freq_path,
         cache_dir=args.hf_cache_dir,
+        assistant_pattern=args.assistant_pattern,
+        turn_dropout=args.turn_dropout,
     )
     num_saved = generate_and_save_hidden_states(args, dataset)
 

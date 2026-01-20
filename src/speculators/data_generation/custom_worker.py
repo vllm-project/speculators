@@ -6,7 +6,6 @@ from itertools import islice
 
 import torch
 from vllm.distributed import get_pp_group, get_tp_group
-from vllm.model_executor.models.interfaces import supports_eagle3
 from vllm.sequence import IntermediateTensors
 
 __all__ = ["HiddenStatesWorkerExtension"]
@@ -15,19 +14,27 @@ logger = logging.getLogger(__name__)
 
 
 def _patched_forward(
-    self, input_ids, positions, intermediate_tensors=None, inputs_embeds=None
+    self,
+    input_ids,
+    positions,
+    intermediate_tensors=None,
+    inputs_embeds=None,
+    **_kwargs,
 ):
     """Patched forward pass that captures hidden states from specified layers.
 
     This function is bound to base_model instances via types.MethodType.
     It expects base_model to have an _extension attribute pointing to the
     HiddenStatesWorkerExtension instance.
+
+    Args:
+        deepstack_input_embeds: For multimodal models with deepstack (Qwen3VL)
     """
     if get_pp_group().is_first_rank:
         hidden_states = (
             inputs_embeds
             if inputs_embeds is not None
-            else self.get_input_embeddings(input_ids)
+            else self.embed_input_ids(input_ids)
         )
         residual = None
     else:
@@ -42,7 +49,9 @@ def _patched_forward(
     target_layers = extension._layer_ids if should_capture else frozenset()  # noqa: SLF001
 
     for idx, layer in enumerate(islice(self.layers, self.start_layer, self.end_layer)):
-        hidden_states, residual = layer(positions, hidden_states, residual)
+        hidden_states, residual = layer(
+            hidden_states=hidden_states, positions=positions, residual=residual
+        )
         absolute_layer_idx = self.start_layer + idx
 
         # Capture intermediate layers (not the last) before norm
@@ -97,12 +106,20 @@ class HiddenStatesWorkerExtension:
 
         model = self.model_runner.model  # type: ignore[attr-defined]
 
-        if not supports_eagle3(model):
-            raise ValueError(
-                f"Model {type(model).__name__} does not support hidden state extraction"
+        # Vision-language models
+        if hasattr(model, "get_language_model"):
+            base_model = model.get_language_model().model
+        # Text models
+        elif hasattr(model, "model") and hasattr(model.model, "layers"):
+            base_model = model.model
+        else:
+            attrs = [a for a in dir(model) if not a.startswith("_")]
+            raise AttributeError(
+                f"Could not find base model with 'layers' attribute. "
+                f"Model type: {type(model).__name__}, "
+                f"Available attributes: {attrs}"
             )
 
-        base_model = model.model  # type: ignore[attr-defined]
         base_model._extension = self  # noqa: SLF001
         base_model.forward = types.MethodType(_patched_forward, base_model)
         logger.info(f"Hidden states capture setup complete for layers {layer_ids}")

@@ -1,8 +1,8 @@
 site_name: Speculators Docs
 site_description: A unified library for building, and storing speculative decoding algorithms for large language model (LLM) inference
-site_url: https://neuralmagic.github.io/speculators
-repo_url: https://github.com/neuralmagic/speculators
-edit_uri: https://github.com/neuralmagic/speculators/tree/main/docs
+site_url: https://vllm-project.github.io/speculators
+repo_url: https://github.com/vllm-project/speculators
+edit_uri: https://github.com/vllm-project/speculators/tree/main/docs
 
 theme:
   name: material
@@ -10,8 +10,8 @@ theme:
     text: Roboto
     code: Roboto Mono
   language: en
-  logo: assets/branding/speculators-model-icon-blue.png
-  favicon: assets/branding/speculators-model-icon-blue.png
+  logo: assets/branding/speculators-icon-white.png
+  favicon: assets/branding/speculators-icon-black.png
   features:
     - content.action.edit
     - content.code.annotate
