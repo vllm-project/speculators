@@ -72,6 +72,6 @@ def apply_fully_sharded(model: torch.nn.Module):
         layer.to_empty(device="meta")
         fully_shard(layer, mp_policy=mp_policy)
 
-    fully_shard(model, mp_policy=mp_policy)
+    fully_shard(model)
 
     return model
