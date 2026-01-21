@@ -15,6 +15,7 @@ from transformers import (
 )
 
 from speculators.models.eagle3 import Eagle3DraftModel
+from speculators.models.dflash import DFlashDraftModel
 from speculators.train.checkpointer import (
     BaseCheckpointer,
     DistributedCheckpointer,
@@ -92,11 +93,11 @@ class Trainer:
             if self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1:
                 self.checkpointer.load_model_state_dict(self.model)
             else:
-                if not isinstance(self.model, Eagle3DraftModel):
+                if not (isinstance(self.model, Eagle3DraftModel) or isinstance(self.model, DFlashDraftModel)):
                     # todo: generalize to non-Eagle3DraftModel
                     # Currently we make assumptions based on the Eagle3DraftModel
                     # architecture, including the existence of a layers attribute.
-                    msg = "Only Eagle3DraftModel is supported for sharded training"
+                    msg = "Only Eagle3DraftModels and DFlashDraftModels are supported for sharded training"
                     raise ValueError(msg)
                 for m in self.model.layers.children():  # type: ignore[union-attr]
                     if not isinstance(m, FSDPModule):
