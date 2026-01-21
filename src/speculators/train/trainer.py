@@ -16,7 +16,15 @@ from transformers import (
     get_linear_schedule_with_warmup,
 )
 
+try:
+    from torch.distributed.fsdp import FSDPModule
+except ImportError:
+    # Fallback for newer PyTorch versions where FSDPModule was removed
+    from torch.distributed.fsdp import FullyShardedDataParallel as FSDPModule
+
 from speculators.model import SpeculatorModel
+from speculators.models.eagle3 import Eagle3DraftModel
+from speculators.models.dflash import DFlashDraftModel
 from speculators.train.checkpointer import (
     BaseCheckpointer,
     DistributedCheckpointer,
@@ -113,16 +121,31 @@ class Trainer:
         if load_checkpoint:
             self.checkpointer.load_model_state_dict(self.model)
         else:
-            # Broadcast full state dict from rank 0 to all ranks
-            set_model_state_dict(
-                self.model,
-                full_state_dict,
-                options=StateDictOptions(
-                    full_state_dict=True,
-                    broadcast_from_rank0=True,
-                    strict=False,
-                ),
-            )
+            # For Eagle3/DFlash models, use custom initialization logic
+            if isinstance(self.model, (Eagle3DraftModel, DFlashDraftModel)):
+                # Skip verifier-shared layers during reset to preserve pretrained weights
+                skip_modules = {self.model.lm_head, self.model.embed_tokens, self.model.verifier_lm_head}
+
+                for m in self.model.layers.children():  # type: ignore[union-attr]
+                    if not isinstance(m, FSDPModule):
+                        continue
+                    m.to_empty(device="cuda")  # type: ignore[attr-defined]
+                    for sub_module in m.modules():  # type: ignore[attr-defined]
+                        if sub_module in skip_modules:
+                            continue
+                        if hasattr(sub_module, "reset_parameters"):
+                            sub_module.reset_parameters()  # type: ignore[operator]
+            else:
+                # Standard FSDP initialization - broadcast full state dict from rank 0 to all ranks
+                set_model_state_dict(
+                    self.model,
+                    full_state_dict,
+                    options=StateDictOptions(
+                        full_state_dict=True,
+                        broadcast_from_rank0=True,
+                        strict=False,
+                    ),
+                )
             del full_state_dict
             dist.barrier()
 
