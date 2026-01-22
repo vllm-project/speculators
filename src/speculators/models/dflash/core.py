@@ -309,6 +309,7 @@ class DFlashDraftModel(Qwen3PreTrainedModel, SpeculatorModel):
             with torch.no_grad():
                 targets = self.verifier_lm_head(verifier_last_hidden_states)
             loss = torch.tensor(0.0, device=device)
+            metrics = {}
 
         for layer in self.layers:
             hidden_states = layer(
@@ -321,35 +322,24 @@ class DFlashDraftModel(Qwen3PreTrainedModel, SpeculatorModel):
                 position_embeddings=position_embeddings,
                 **kwargs,
             )
-        
+        hidden_states=self.norm(hidden_states)
 
-
-    def forward(
-        self,
-        position_ids: torch.LongTensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        noise_embedding: Optional[torch.Tensor] = None,
-        target_hidden: Optional[torch.Tensor] = None,
-        past_key_values: Optional[Cache] = None,
-        use_cache: bool = False,
-        **kwargs,
-    ) -> CausalLMOutputWithPast:
-        hidden_states = noise_embedding
-        target_hidden = self.hidden_norm(self.fc(target_hidden))
-        position_embeddings = self.rotary_emb(hidden_states, position_ids)
-        for layer in self.layers:
-            hidden_states = layer(
-                hidden_states=hidden_states,
-                target_hidden=target_hidden,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                past_key_value=past_key_values,
-                use_cache=use_cache,
-                position_embeddings=position_embeddings,
-                **kwargs,
+        logits=self.verifier.lm_head(hidden_states)
+        if return_loss:
+            s_loss, s_metrics = compute_metrics(
+                logits,
+                targets,
+                loss_mask,
             )
-        return self.norm(hidden_states)
+            loss += s_loss
+            metrics.update(s_metrics)
+        draft_tokens=torch.argmax(logits, dim=1)
 
 
+        if return_loss:
+            metrics["loss"] = loss.detach().clone()
+            return draft_tokens, loss, metrics
+        else:
+            return draft_tokens
 
 
