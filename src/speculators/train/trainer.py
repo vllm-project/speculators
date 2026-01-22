@@ -21,7 +21,6 @@ from speculators.train.checkpointer import (
     SingleGPUCheckpointer,
 )
 from speculators.train.utils import apply_fully_sharded
-from speculators.utils.util import is_npu_available
 
 root_logger = logging.getLogger("speculators")
 metric_logger = logging.getLogger("speculators.metrics")
