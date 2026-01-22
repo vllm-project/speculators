@@ -125,6 +125,10 @@ class TrainArgs(NamedTuple):
     num_layers: int | _NS = _NOTSET
     ttt_step_loss_decay: float | _NS = _NOTSET
     use_off_policy_tokens: bool | _NS = _NOTSET
+    scheduler_type: str | _NS = _NOTSET
+    scheduler_warmup_steps: int | _NS = _NOTSET
+    scheduler_total_steps: int | _NS = _NOTSET
+    scheduler_num_cosine_cycles: float | _NS = _NOTSET
 
 
 ### END OF SCRIPT ARGUMENTS ###
