@@ -69,7 +69,7 @@ def compute_metrics(
     loss_mask: torch.Tensor | None,
     prev_correct: torch.Tensor | None,
 ) -> tuple[torch.Tensor, dict]:
-    """Compute metrics for a given ttt_step.
+    """Compute metrics for a given draft.
 
     Args:
         logits: The logits for the current ttt_step.
@@ -86,11 +86,11 @@ def compute_metrics(
         Loss value and metrics dictionary.
     """
 
-
-    s_loss=0
+    s_loss = loss_function(logits, targets, loss_mask)
     s_metrics=0
-
-
+    s_metrics = {}
+    s_metrics[f"loss"] = s_loss.detach().clone()
+    s_metrics[f"full_acc"] = s_full_acc
 
     return s_loss, s_metrics
 
