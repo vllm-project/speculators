@@ -101,7 +101,12 @@ class Trainer:
                 for m in self.model.layers.children():  # type: ignore[union-attr]
                     if not isinstance(m, FSDPModule):
                         continue
-                    m.to_empty(device="cuda")  # type: ignore[attr-defined]
+                    acc = torch.accelerator.current_accelerator()
+                    if acc is None:
+                        m.to_empty(device="cuda")
+                    else:
+                        acc_type = acc.type
+                        m.to_empty(device=acc_type)  # type: ignore[attr-defined]
                     for sub_module in m.modules():  # type: ignore[attr-defined]
                         if hasattr(sub_module, "reset_parameters"):
                             sub_module.reset_parameters()  # type: ignore[operator]

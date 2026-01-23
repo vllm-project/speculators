@@ -25,13 +25,15 @@ from vllm.v1.executor.multiproc_executor import MultiprocExecutor
 from vllm.v1.request import Request, RequestStatus
 from vllm.v1.structured_output import StructuredOutputManager
 
+from speculators.utils.util import empty_cache, is_npu_available, mem_get_info
+
 from .logging_utils import PipelineLogger
 
 __all__ = ["VllmHiddenStatesGenerator"]
 
 # Constants
 CACHE_MEMORY_FRACTION = 0.2  # Fraction of GPU memory for KV cache
-VLLM_BLOCK_SIZE = 16  # Block size for KV cache
+VLLM_BLOCK_SIZE = 128 if is_npu_available() else 16  # Block size for KV cache
 MAX_NUM_SEQS = 32  # Maximum sequences for prefill-only workload
 MIN_MAX_BATCHED_TOKENS = 8192  # Minimum batched tokens threshold
 MAX_DECODE_TOKENS = 1  # Maximum tokens to generate (prefill only)
@@ -133,7 +135,7 @@ class VllmHiddenStatesGenerator:
         unify_hybrid_kv_cache_specs(kv_cache_spec)
         kv_cache_groups = _get_kv_cache_groups_uniform_spec(kv_cache_spec)
 
-        free_memory, _ = torch.cuda.mem_get_info()
+        free_memory, _ = mem_get_info()
         cache_memory = int(free_memory * gpu_memory_utilization * CACHE_MEMORY_FRACTION)
 
         kv_cache_config = get_kv_cache_config_from_groups(
@@ -310,8 +312,7 @@ class VllmHiddenStatesGenerator:
                 }
             )
             offset += seq_len
-
-        torch.cuda.empty_cache()
+        empty_cache()
 
         return results
 
