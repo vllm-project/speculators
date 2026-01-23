@@ -125,8 +125,10 @@ The following table summarizes the models that have been trained end-to-end by o
 </tr>
 <td>Qwen3-VL</td>
 <td>235B-A22B</td>
-<td>EAGLE-3 ⏳</td>
-<td>⏳</td>
+<td><a href="https://huggingface.co/RedHatAI/Qwen3-VL-235B-A22B-Instruct-speculator.eagle3">
+      EAGLE-3
+    </a> ✅</td>
+<td>✅</td>
 </tr>
 <tr>
 <td>Mistral 3 Large</td>
