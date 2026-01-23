@@ -3,7 +3,18 @@ import os
 
 import torch
 import torch.distributed as dist
-from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
+
+# Handle different PyTorch FSDP APIs across versions
+try:
+    from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
+except ImportError:
+    try:
+        # Older PyTorch versions use MixedPrecision instead of MixedPrecisionPolicy
+        from torch.distributed.fsdp import MixedPrecision as MixedPrecisionPolicy, fully_shard
+    except ImportError:
+        # Even older versions - provide no-op implementations
+        MixedPrecisionPolicy = None
+        fully_shard = None
 
 from speculators.models.eagle3 import Eagle3DraftModel
 

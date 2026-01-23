@@ -7,10 +7,8 @@ from transformers import LlamaConfig
 from transformers.models.auto.configuration_auto import AutoConfig
 
 from speculators.config import SpeculatorsConfig, VerifierConfig
-from speculators.models.eagle3 import Eagle3DraftModel, Eagle3SpeculatorConfig
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 from speculators.train.data import (
-    Eagle3SampleFileDataset,
     create_collate_fn,
     split_files,
     standardize_data_v0,
@@ -20,6 +18,12 @@ from speculators.train.distributed_batch_sampler import (
     MultipackDistributedBatchSamplerV2,
 )
 from speculators.train.logger import setup_metric_logger, setup_root_logger
+from speculators.train.model_registry import (
+    dataset_factories,
+    model_factories,
+    model_kwargs_factories,
+    trainer_kwargs_factories,
+)
 from speculators.train.noise_transforms import AddUniformNoise
 from speculators.train.trainer import Trainer, TrainerConfig
 from speculators.train.utils import maybe_destroy_distributed, maybe_setup_distributed
@@ -37,6 +41,7 @@ def setup_dataloader(
     file_list: list[str],
     world_size: int,
     local_rank: int,
+    dataset_factory,
     add_noise: bool = True,
     data_format_version: int = 1,
 ) -> DataLoader:
@@ -45,6 +50,7 @@ def setup_dataloader(
         file_list: List of file paths to load data from.
         world_size: Number of processes in the distributed training.
         local_rank: Rank of the current process.
+        dataset_factory: Factory function to create the dataset.
         add_noise: Whether to add noise to the data.
         data_format_version: Version of the data format. Default is 1.
     Returns:
@@ -61,7 +67,7 @@ def setup_dataloader(
         standardize_data_v1 if data_format_version == 1 else standardize_data_v0
     )
 
-    dataset = Eagle3SampleFileDataset(
+    dataset = dataset_factory(
         file_list=file_list,
         max_len=args.total_seq_len,
         transform=noise_transform,
@@ -124,35 +130,30 @@ def main(args: argparse.Namespace):
     # Load t2d and d2t tensors
     d2t = torch.from_numpy(np.load(args.d2t_path)).to(device)
     t2d = torch.from_numpy(np.load(args.t2d_path)).to(device)
-    draft_vocab_size = d2t.shape[0]
+
+    # Get factories for the specified speculator type
+    model_factory = model_factories[args.speculator_type]
+    dataset_factory = dataset_factories[args.speculator_type]
 
     # Setup speculator config
     transformer_layer_config = create_transformer_layer_config(
         args.verifier_name_or_path, args.num_layers
     )
 
-    speculator_config = Eagle3SpeculatorConfig(
-        transformer_layer_config=transformer_layer_config,
-        draft_vocab_size=draft_vocab_size,
-        norm_before_residual=NORM_BEFORE_RESIDUAL,
-        speculators_config=SpeculatorsConfig(
-            algorithm="eagle3",
-            proposal_methods=[
-                GreedyTokenProposalConfig(
-                    proposal_type="greedy",
-                    speculative_tokens=args.ttt_steps,
-                )
-            ],
-            default_proposal_method="greedy",
-            verifier=VerifierConfig(
-                name_or_path=args.verifier_name_or_path,
-                architectures=["LlamaForCausalLM"],
-            ),
-        ),
-    )
-
     # Setup draft model
-    draft_model = Eagle3DraftModel(config=speculator_config, t2d=t2d, d2t=d2t)
+    model_kwargs = {
+        "verifier_config": transformer_layer_config,
+        "num_layers": args.num_layers,
+        "norm_before_residual": NORM_BEFORE_RESIDUAL,
+        "t2d": t2d,
+        "d2t": d2t,
+        "verifier_name_or_path": args.verifier_name_or_path,
+    }
+
+    # Add speculator-specific parameters
+    model_kwargs.update(model_kwargs_factories[args.speculator_type](args))
+
+    draft_model = model_factory(**model_kwargs)
 
     # Setup dataloaders
     train_files, val_files = split_files(args.data_path, ratio=0.9)
@@ -160,6 +161,7 @@ def main(args: argparse.Namespace):
         train_files,
         world_size,
         local_rank,
+        dataset_factory,
         add_noise=True,
         data_format_version=args.data_format_version,
     )
@@ -167,11 +169,14 @@ def main(args: argparse.Namespace):
         val_files,
         world_size,
         local_rank,
+        dataset_factory,
         add_noise=False,
         data_format_version=args.data_format_version,
     )
 
-    # Setup trainer
+    # Setup trainer call kwargs based on speculator type
+    train_call_kwargs, val_call_kwargs = trainer_kwargs_factories[args.speculator_type](args)
+
     trainer_config = TrainerConfig(
         num_epochs=args.epochs,
         save_path=args.save_path,
@@ -179,16 +184,8 @@ def main(args: argparse.Namespace):
         resume_from_checkpoint=not args.no_resume_from_checkpoint,
         is_distributed=is_distributed,
         local_rank=local_rank,
-        train_call_kwargs={
-            "use_off_policy_tokens": args.use_off_policy_tokens,
-            "ttt_steps": args.ttt_steps,
-            "ttt_step_loss_decay": args.ttt_step_loss_decay,
-        },
-        val_call_kwargs={
-            "use_off_policy_tokens": False,
-            "ttt_steps": args.ttt_steps,
-            "ttt_step_loss_decay": args.ttt_step_loss_decay,
-        },
+        train_call_kwargs=train_call_kwargs,
+        val_call_kwargs=val_call_kwargs,
     )
     trainer = Trainer(draft_model, trainer_config, train_loader, val_loader)
 
@@ -202,6 +199,12 @@ def main(args: argparse.Namespace):
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--verifier-name-or-path", type=str, required=True)
+    parser.add_argument(
+        "--speculator-type",
+        type=str,
+        default="eagle3",
+        help="Type of speculator model to train (eagle3 or dflash)",
+    )
     parser.add_argument("--data-path", type=str, default="./data")
     parser.add_argument("--save-path", type=str, default="./checkpoints")
     parser.add_argument("--epochs", type=int, default=20)
@@ -220,14 +223,20 @@ def parse_args():
     parser.add_argument("--num-layers", type=int, default=1)
     parser.add_argument("--d2t-path", type=str, default="d2t.npy")
     parser.add_argument("--t2d-path", type=str, default="t2d.npy")
-    parser.add_argument("--ttt-steps", type=int, default=3)
-    parser.add_argument("--ttt-step-loss-decay", type=float, default=1.0)
+
+    # Eagle3-specific arguments
+    parser.add_argument("--ttt-steps", type=int, default=3, help="Eagle3: number of TTT steps")
+    parser.add_argument("--ttt-step-loss-decay", type=float, default=1.0, help="Eagle3: TTT step loss decay")
     parser.add_argument(
         "--use-off-policy-tokens",
         action="store_true",
         default=False,
-        help="Use off-policy tokens during training (required for regenerated data)",
+        help="Eagle3: Use off-policy tokens during training (required for regenerated data)",
     )
+
+    # DFlash-specific arguments
+    parser.add_argument("--block-size", type=int, default=8, help="DFlash: size of the draft block")
+
     return parser.parse_args()
 
 
