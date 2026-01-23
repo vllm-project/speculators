@@ -291,6 +291,7 @@ class DFlashDraftModel(Qwen3PreTrainedModel, SpeculatorModel):
         | None = None,  # shape: [1, total_seq_len, hidden_size]
         **kwargs,
     ):
+        target_hidden=hidden_states
         device = hidden_states.device
         total_seq_len = hidden_states.shape[1]
 
@@ -304,7 +305,7 @@ class DFlashDraftModel(Qwen3PreTrainedModel, SpeculatorModel):
 
         past_key_values = DynamicCache(config=self.config.transformer_layer_config)
 
-        combined_mask_mod = create_combined_mask_mod(lengths.to(device), total_seq_len)
+        combined_mask_mod = create_combined_mask_mod(lengths.to(device), total_seq_len, block_size=8)
         # Note: Attention mask is stored as a BlockMask object
         attention_mask = create_block_mask(
             combined_mask_mod,

@@ -29,10 +29,13 @@ def create_combined_mask_mod(lengths: torch.Tensor, total_seq_len: int, block_si
     ).contiguous()
 
     def block_causal_mask_mod(_b, _h, q_idx, kv_idx):
-        causal= q_idx >= kv_idx
-        dif=q_idx-kv_idx
-        block=(dif<block_size) * (dif>(-1*block_size) )
-        return causal * (1-block)
+        causal = q_idx >= kv_idx  # bool
+        dif = q_idx - kv_idx
+
+        in_range = (dif < block_size) & (dif > (-block_size))
+        # causal * (1 - block)  ==>  causal & (~in_range)
+        return causal & (~in_range)
+
 
     def document_mask_mod(_b, _h, q_idx, kv_idx):
         # Exclude padding tokens in attention mask
@@ -42,50 +45,17 @@ def create_combined_mask_mod(lengths: torch.Tensor, total_seq_len: int, block_si
         )
 
     def diagonal_block_draft_mask_mod(_b, _h, q_idx, kv_idx):
-        dif= kv_idx % total_seq_len - q_idx
-        return (((-1*block_size)>dif) * (block_size<dif))
+        dif = torch.remainder(kv_idx, total_seq_len) - q_idx
+        return ((-block_size) > dif) & (block_size < dif)
 
     return or_masks(
-        and_masks(block_causal_mask_mod, document_mask_mod), diagonal_block_draft_mask_mod
+        and_masks(block_causal_mask_mod, document_mask_mod),
+        diagonal_block_draft_mask_mod,
     )
 
 
 def extend_mask_for_draft_tokens(block_mask):
-    """
-    Extend the block mask to include new draft tokens. Concatenates a diagonal mask for
-    the new draft tokens.
 
-    Assumptions:
-    - block_mask BLOCK_SIZE := KV_BLOCK_SIZE == Q_BLOCK_SIZE
-    - The number of query values is the original total_seq_len (or equivalently the
-    number of query blocks is the original total_seq_len // BLOCK_SIZE)
-
-    i.e. if block_mask is:
-    [
-        [
-            [1, 0, 0],
-            [1, 1, 0],
-            [0, 0, 1],
-        ]
-    ]
-    the result will be:
-    [
-        [
-            [1, 0, 0, 1, 0, 0],
-            [1, 1, 0, 0, 1, 0],
-            [0, 0, 1, 0, 0, 1],
-        ]
-    ]
-    and then calling again will give:
-    [
-        [
-            [1, 0, 0, 1, 0, 0, 1, 0, 0],
-            [1, 1, 0, 0, 1, 0, 0, 1, 0],
-            [0, 0, 1, 0, 0, 1, 0, 0, 1],
-        ]
-    ]
-
-    """
     kv_num_blocks = block_mask.kv_num_blocks
     # shape: [B, H, Q_LEN // BLOCK_SIZE]
 
