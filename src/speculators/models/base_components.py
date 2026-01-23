@@ -3,11 +3,13 @@
 from typing import NamedTuple
 
 from transformers.models.llama.modeling_llama import (
+    LlamaAttention,
     LlamaDecoderLayer,
     LlamaRMSNorm,
     LlamaRotaryEmbedding,
 )
 from transformers.models.qwen3.modeling_qwen3 import (
+    Qwen3Attention,
     Qwen3DecoderLayer,
     Qwen3RMSNorm,
     Qwen3RotaryEmbedding,
