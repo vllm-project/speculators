@@ -73,7 +73,7 @@ def apply_fully_sharded(model: torch.nn.Module):
         param_dtype=torch.bfloat16,
         reduce_dtype=torch.float32,
     )
-    if not (isinstance(model, Eagle3DraftModel) or isinstance(DFlashDraftModel)):
+    if not (isinstance(model, Eagle3DraftModel) or isinstance(model, DFlashDraftModel)):
         # todo: generalize to non-Eagle3DraftModel
         msg = "Only Eagle3DraftModel is supported for sharded training"
         raise ValueError(msg)
