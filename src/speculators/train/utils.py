@@ -17,7 +17,7 @@ except ImportError:
         fully_shard = None
 
 from speculators.models.eagle3 import Eagle3DraftModel
-
+from speculators.models.dflash import DFlashDraftModel
 local_rank = int(os.environ.get("LOCAL_RANK", "0"))
 world_size = int(os.environ.get("WORLD_SIZE", "1"))
 is_distributed = "LOCAL_RANK" in os.environ
@@ -73,7 +73,7 @@ def apply_fully_sharded(model: torch.nn.Module):
         param_dtype=torch.bfloat16,
         reduce_dtype=torch.float32,
     )
-    if not isinstance(model, Eagle3DraftModel):
+    if not (isinstance(model, Eagle3DraftModel) or isinstance(DFlashDraftModel)):
         # todo: generalize to non-Eagle3DraftModel
         msg = "Only Eagle3DraftModel is supported for sharded training"
         raise ValueError(msg)
