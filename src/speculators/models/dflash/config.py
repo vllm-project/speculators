@@ -21,7 +21,6 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
 
     :param transformer_layer_config: Configuration for the transformer decoder layer
     :param draft_vocab_size: Size of draft model vocabulary for speculation
-    :param norm_before_residual: Apply hidden_norm before storing residual
     """
 
     speculators_model_type: Literal["dflash"] = "dflash"
@@ -38,6 +37,11 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
     draft_vocab_size: int = Field(
         default=32000,
         description="Size of draft model vocabulary for speculation",
+    )
+
+    num_hidden_layers: int = Field(
+        default=1,
+        description="Number of hidden layers in the DFlash model",
     )
 
     block_size: int = Field(

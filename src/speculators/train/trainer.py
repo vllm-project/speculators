@@ -8,6 +8,11 @@ from torch.distributed.checkpoint.state_dict import (
     StateDictOptions,
     set_model_state_dict,
 )
+try:
+    from torch.distributed.fsdp import FSDPModule
+except ImportError:
+    # Fallback for newer PyTorch versions where FSDPModule was removed
+    from torch.distributed.fsdp import FullyShardedDataParallel as FSDPModule
 from torch.utils.data import DataLoader
 from tqdm import TqdmExperimentalWarning
 from tqdm.rich import tqdm
@@ -15,12 +20,6 @@ from transformers import (
     get_cosine_schedule_with_warmup,
     get_linear_schedule_with_warmup,
 )
-
-try:
-    from torch.distributed.fsdp import FSDPModule
-except ImportError:
-    # Fallback for newer PyTorch versions where FSDPModule was removed
-    from torch.distributed.fsdp import FullyShardedDataParallel as FSDPModule
 
 from speculators.model import SpeculatorModel
 from speculators.models.eagle3 import Eagle3DraftModel

@@ -22,7 +22,6 @@ def compute_accuracy(
     logits: torch.Tensor,  # shape: [1, total_seq_len, draft_vocab_size]
     targets: torch.Tensor,  # shape: [1, total_seq_len, draft_vocab_size]
     loss_mask: torch.Tensor | None,  # shape: [1, total_seq_len]
-    block_size:int,
 ):
     # Predicted and target token ids
     target_tokens = torch.argmax(targets, dim=-1)
@@ -37,8 +36,6 @@ def compute_accuracy(
     denom_all = valid.sum()
     num_all = (correct & valid).sum()
     absolute_accuracy = (num_all.float() / denom_all.float()).item()
-
-
 
     return absolute_accuracy, 0
 
@@ -95,11 +92,12 @@ def compute_metrics(
     return s_loss, s_metrics
 
 
-from typing import Optional, Callable
+from typing import Optional
 from typing_extensions import Unpack, Tuple
 import torch
 from torch import nn
 from transformers.models.qwen3.modeling_qwen3 import (
+    Qwen3Attention,  # ✅ Import the class, not internal functions
     Qwen3RMSNorm,
     Qwen3RotaryEmbedding,
     Qwen3Config,
@@ -107,21 +105,28 @@ from transformers.models.qwen3.modeling_qwen3 import (
     Qwen3MLP,
     GradientCheckpointingLayer,
     FlashAttentionKwargs,
-    rotate_half,
-    eager_attention_forward,
-    ALL_ATTENTION_FUNCTIONS,
 )
 from transformers import DynamicCache
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.cache_utils import Cache
 from .utils import build_target_layer_ids, extract_context_feature, sample
 
+
+# Local copy of rotate_half to avoid dependency on internal transformers functions
+def _rotate_half(x):
+    """Rotates half the hidden dims of the input (local implementation)."""
+    x1 = x[..., : x.shape[-1] // 2]
+    x2 = x[..., x.shape[-1] // 2 :]
+    return torch.cat((-x2, x1), dim=-1)
+
+
 def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
+    """Apply rotary position embeddings (local implementation)."""
     cos = cos.unsqueeze(unsqueeze_dim)
     sin = sin.unsqueeze(unsqueeze_dim)
     q_len = q.size(-2)
-    q_embed = (q * cos[..., -q_len:, :]) + (rotate_half(q) * sin[..., -q_len:, :])
-    k_embed = (k * cos) + (rotate_half(k) * sin)
+    q_embed = (q * cos[..., -q_len:, :]) + (_rotate_half(q) * sin[..., -q_len:, :])
+    k_embed = (k * cos) + (_rotate_half(k) * sin)
     return q_embed, k_embed
 
 
@@ -151,7 +156,11 @@ class Qwen3DFlashAttention(nn.Module):
         )
         self.q_norm = Qwen3RMSNorm(self.head_dim, eps=config.rms_norm_eps)
         self.k_norm = Qwen3RMSNorm(self.head_dim, eps=config.rms_norm_eps)
-        self.sliding_window = config.sliding_window if config.layer_types[layer_idx] == "sliding_attention" else None
+        self.sliding_window = (
+            config.sliding_window
+            if hasattr(config, "layer_types") and config.layer_types[layer_idx] == "sliding_attention"
+            else None
+        )
 
     def forward(
         self,
@@ -243,21 +252,28 @@ class Qwen3DFlashDecoderLayer(GradientCheckpointingLayer):
         return hidden_states
 
 
-@SpeculatorModel.register("dflash`")
+@SpeculatorModel.register("dflash")
 class DFlashDraftModel(Qwen3PreTrainedModel, SpeculatorModel):
-    config_class = Qwen3Config
+    config_class: ClassVar[type[DFlashSpeculatorConfig]] = DFlashSpeculatorConfig  # type: ignore[misc]
     _no_split_modules = ["Qwen3DFlashDecoderLayer"]
     def __init__(self, config: DFlashSpeculatorConfig, t2d: torch.Tensor, d2t: torch.Tensor) -> None:
-        super().__init__(config)
-        self.config = config
-        self.layers = nn.ModuleList(
-            [Qwen3DFlashDecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
+        super().__init__(
+            config=config,
+            verifier=None,
+            verifier_attachment_mode="train_only",
         )
-        self.target_layer_ids = build_target_layer_ids(config.num_target_layers, config.num_hidden_layers)
-        self.norm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.rotary_emb = Qwen3RotaryEmbedding(config)
-        self.fc = nn.Linear(len(self.target_layer_ids) * config.hidden_size, config.hidden_size, bias=False)
-        self.hidden_norm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.config = config
+        self.register_buffer("t2d", t2d)  # shape: [verifier_vocab_size], bool
+        self.register_buffer("d2t", d2t)  # shape: [draft_vocab_size], int offsets
+        self.draft_vocab_size = config.draft_vocab_size
+        self.layers = nn.ModuleList(
+            [Qwen3DFlashDecoderLayer(config.transformer_layer_config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
+        )
+        self.target_layer_ids = build_target_layer_ids(config.num_hidden_layers, config.num_hidden_layers)
+        self.norm = Qwen3RMSNorm(config.transformer_layer_config.hidden_size, eps=config.transformer_layer_config.rms_norm_eps)
+        self.rotary_emb = Qwen3RotaryEmbedding(config.transformer_layer_config)
+        self.fc = nn.Linear(len(self.target_layer_ids) * config.transformer_layer_config.hidden_size, config.transformer_layer_config.hidden_size, bias=False)
+        self.hidden_norm = Qwen3RMSNorm(config.transformer_layer_config.hidden_size, eps=config.transformer_layer_config.rms_norm_eps)
         self.block_size = config.block_size
         self.post_init()
 
@@ -265,7 +281,7 @@ class DFlashDraftModel(Qwen3PreTrainedModel, SpeculatorModel):
     @torch.compile
     def forward(
         self,
-        target_states: torch.Tensor,  # shape: [1, total_seq_len, 5 * hidden_size] 
+        hidden_states: torch.Tensor,  # shape: [1, total_seq_len, 5 * hidden_size]
         noise_embedding: Optional[torch.Tensor] = None,
         # input_ids: torch.Tensor,  # shape: [1, total_seq_len]
         lengths: torch.Tensor | None = None,  # shape: [batch_size]
@@ -273,11 +289,10 @@ class DFlashDraftModel(Qwen3PreTrainedModel, SpeculatorModel):
         position_ids: torch.Tensor | None = None,  # shape: [1, total_seq_len]
         verifier_last_hidden_states: torch.Tensor
         | None = None,  # shape: [1, total_seq_len, hidden_size]
-        # use_off_policy_tokens: bool = False,
         **kwargs,
     ):
-        device = target_states.device
-        total_seq_len = target_states.shape[1]
+        device = hidden_states.device
+        total_seq_len = hidden_states.shape[1]
 
 
         if lengths is None:
