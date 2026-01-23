@@ -33,8 +33,8 @@ from gen_and_train import (  # noqa: E402
 
 
 if __name__ == "__main__":
-    VERIFIER_NAME_OR_PATH = "Qwen/Qwen3-VL-30B-A3B-Instruct-FP8"
-    OUTPUT_PATH = "./output/Qwen3-VL-30B-A3B-Instruct-FP8"
+    VERIFIER_NAME_OR_PATH = "meta-llama/Llama-3.1-8B-Instruct"
+    OUTPUT_PATH = "./output/llama3_8b_sharegpt_5k"
     TOTAL_SEQ_LEN = 8192
 
     # Data Generation
@@ -55,7 +55,7 @@ if __name__ == "__main__":
         logger="trackio",
         lr=3e-5,
         total_seq_len=TOTAL_SEQ_LEN,
-        run_name="Qwen3-VL-30B-A3B-Instruct-FP8",
+        run_name="llama3_8b_sharegpt_5k",
         epochs=10,
     )
 
