@@ -121,10 +121,19 @@ def main(args: argparse.Namespace):
     local_rank, world_size, rank, is_distributed = maybe_setup_distributed()
     device = torch.device(local_rank)
 
-    # Load t2d and d2t tensors
-    d2t = torch.from_numpy(np.load(args.d2t_path)).to(device)
-    t2d = torch.from_numpy(np.load(args.t2d_path)).to(device)
-    draft_vocab_size = d2t.shape[0]
+    # Load t2d and d2t tensors if provided
+    if args.d2t_path and args.t2d_path:
+        d2t = torch.from_numpy(np.load(args.d2t_path)).to(device)
+        t2d = torch.from_numpy(np.load(args.t2d_path)).to(device)
+        draft_vocab_size = d2t.shape[0]
+    else:
+        d2t = None
+        t2d = None
+        # When vocab mapping is not provided, use the full verifier vocab
+        verifier_config = AutoConfig.from_pretrained(args.verifier_name_or_path)
+        if hasattr(verifier_config, "text_config"):
+            verifier_config = verifier_config.text_config
+        draft_vocab_size = verifier_config.vocab_size
 
     # Setup speculator config
     transformer_layer_config = create_transformer_layer_config(
@@ -222,8 +231,8 @@ def parse_args():
     parser.add_argument("--log-dir", type=str, default="./logs")
     parser.add_argument("--run-name", type=str, default=None)
     parser.add_argument("--num-layers", type=int, default=1)
-    parser.add_argument("--d2t-path", type=str, default="d2t.npy")
-    parser.add_argument("--t2d-path", type=str, default="t2d.npy")
+    parser.add_argument("--d2t-path", type=str, default=None)
+    parser.add_argument("--t2d-path", type=str, default=None)
     parser.add_argument("--ttt-steps", type=int, default=3)
     parser.add_argument("--ttt-step-loss-decay", type=float, default=1.0)
     parser.add_argument(
