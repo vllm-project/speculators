@@ -1,4 +1,5 @@
 # ruff: noqa: ERA001
+import json
 import math
 import os
 import random
@@ -183,7 +184,28 @@ class Eagle3SampleFileDataset(Dataset):
         return len(self.data)
 
     def _compute_approx_lengths(self) -> list[int]:
-        """Approximate lengths of the dataset based on the size of the first file"""
+        """Get lengths of the dataset samples.
+
+        First tries to load exact lengths from sample_lengths.json if available.
+        Falls back to approximation based on file sizes.
+        """
+        # Look for the sample_lengths.json file
+        sample_lengths_path = Path(self.data[0]).parent / "sample_lengths.json"
+        if sample_lengths_path.exists():
+            try:
+                with sample_lengths_path.open() as f:
+                    sample_lengths = json.load(f)
+                # Extract file index from filename (e.g., data_42.pt -> 42)
+                lengths = []
+                for fname in self.data:
+                    file_stem = Path(fname).stem
+                    file_idx = file_stem.split("_")[-1]
+                    lengths.append(sample_lengths[file_idx])
+                return lengths
+            except (KeyError, ValueError):
+                pass
+
+        # Fallback: approximate lengths from file sizes
         lengths_0 = self.__getitem__(0)["lengths"]
         # this is a single sample so there is only one length
         lengths_0 = lengths_0[0].item()
