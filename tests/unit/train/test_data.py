@@ -1,5 +1,6 @@
 """Unit tests for data processing in speculators.train.data."""
 
+import json
 from pathlib import Path
 
 import torch
@@ -405,3 +406,83 @@ def test_dataset_getitem_v1_format(tmp_path: Path):
         assert torch.allclose(value, expected_output[key]), (
             f"Key {key} does not match expected output"
         )
+
+
+def test_dataset_loads_lengths_from_sample_lengths_json(tmp_path: Path):
+    """Test that approx_lengths are loaded from sample_lengths.json when present."""
+    for i in range(3):
+        seq_len = 10 + i * 5  # 10, 15, 20
+        data = {
+            "input_ids": torch.arange(seq_len, dtype=torch.long),
+            "loss_mask": torch.ones(seq_len, dtype=torch.long),
+            "hidden_states": [
+                torch.randn(seq_len, 2, dtype=torch.float32) for _ in range(4)
+            ],
+        }
+        torch.save(data, tmp_path / f"data_{i}.pt")
+
+    # Create sample_lengths.json with exact lengths (after shift_batch reduces by 1)
+    expected_lengths = {"0": 9, "1": 14, "2": 19}
+    with (tmp_path / "sample_lengths.json").open("w") as f:
+        json.dump(expected_lengths, f)
+
+    file_list = sorted([str(f) for f in tmp_path.glob("data_*.pt")])
+    dataset = Eagle3SampleFileDataset(
+        max_len=50,
+        file_list=file_list,
+        standardize_fn=standardize_data_v1,
+    )
+
+    assert dataset.approx_lengths == [9, 14, 19], (
+        f"Expected [9, 14, 19], got {dataset.approx_lengths}"
+    )
+
+
+def test_dataset_fallback_when_sample_lengths_json_missing(tmp_path: Path):
+    """Test fallback to file-size approximation when sample_lengths.json is missing."""
+    seq_len = 10
+    data = {
+        "input_ids": torch.arange(seq_len, dtype=torch.long),
+        "loss_mask": torch.ones(seq_len, dtype=torch.long),
+        "hidden_states": [
+            torch.randn(seq_len, 2, dtype=torch.float32) for _ in range(4)
+        ],
+    }
+    torch.save(data, tmp_path / "data_0.pt")
+
+    file_list = [str(tmp_path / "data_0.pt")]
+    dataset = Eagle3SampleFileDataset(
+        max_len=50,
+        file_list=file_list,
+        standardize_fn=standardize_data_v1,
+    )
+
+    # Should use fallback and return a list with one length
+    assert len(dataset.approx_lengths) == 1
+    assert dataset.approx_lengths[0] == seq_len - 1  # After shift_batch
+
+
+def test_dataset_fallback_when_sample_lengths_json_malformed(tmp_path: Path):
+    """Test fallback when sample_lengths.json has missing keys."""
+    for i in range(2):
+        seq_len = 10
+        data = {
+            "input_ids": torch.arange(seq_len, dtype=torch.long),
+            "loss_mask": torch.ones(seq_len, dtype=torch.long),
+            "hidden_states": [
+                torch.randn(seq_len, 2, dtype=torch.float32) for _ in range(4)
+            ],
+        }
+        torch.save(data, tmp_path / f"data_{i}.pt")
+
+    # Create malformed sample_lengths.json (missing key "1")
+    with (tmp_path / "sample_lengths.json").open("w") as f:
+        json.dump({"0": 9}, f)
+
+    file_list = sorted([str(f) for f in tmp_path.glob("data_*.pt")])
+    dataset = Eagle3SampleFileDataset(
+        max_len=50,
+        file_list=file_list,
+        standardize_fn=standardize_data_v1,
+    )
+    assert len(dataset.approx_lengths) == 2
