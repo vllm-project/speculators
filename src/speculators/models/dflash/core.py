@@ -269,9 +269,11 @@ class DFlashDraftModel(Qwen3PreTrainedModel, SpeculatorModel):
         self.layers = nn.ModuleList(
             [Qwen3DFlashDecoderLayer(config.transformer_layer_config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
         )
-        self.target_layer_ids = build_target_layer_ids(config.num_hidden_layers, config.num_hidden_layers)
+        print("num hidden", config.num_hidden_layers)
+        self.target_layer_ids = build_target_layer_ids(94, config.num_hidden_layers)  #FLAG VERY BAD ACTUALLY PATCH THRU THE # OF HIDDEN LAYERS IN VERIFIER MODEL
         self.norm = Qwen3RMSNorm(config.transformer_layer_config.hidden_size, eps=config.transformer_layer_config.rms_norm_eps)
         self.rotary_emb = Qwen3RotaryEmbedding(config.transformer_layer_config)
+        print("target",self.target_layer_ids)
         self.fc = nn.Linear(len(self.target_layer_ids) * config.transformer_layer_config.hidden_size, config.transformer_layer_config.hidden_size, bias=False)
         self.hidden_norm = Qwen3RMSNorm(config.transformer_layer_config.hidden_size, eps=config.transformer_layer_config.rms_norm_eps)
         self.block_size = config.block_size
@@ -291,6 +293,7 @@ class DFlashDraftModel(Qwen3PreTrainedModel, SpeculatorModel):
         | None = None,  # shape: [1, total_seq_len, hidden_size]
         **kwargs,
     ):
+        print("hidden states",hidden_states.shape, flush=True)
         target_hidden=hidden_states
         device = hidden_states.device
         total_seq_len = hidden_states.shape[1]

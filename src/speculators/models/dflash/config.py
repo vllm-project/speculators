@@ -40,7 +40,7 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
     )
 
     num_hidden_layers: int = Field(
-        default=1,
+        default=3,
         description="Number of hidden layers in the DFlash model",
     )
 
