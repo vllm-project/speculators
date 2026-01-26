@@ -256,6 +256,8 @@ class Qwen3DFlashDecoderLayer(GradientCheckpointingLayer):
 class DFlashDraftModel(Qwen3PreTrainedModel, SpeculatorModel):
     config_class: ClassVar[type[DFlashSpeculatorConfig]] = DFlashSpeculatorConfig  # type: ignore[misc]
     _no_split_modules = ["Qwen3DFlashDecoderLayer"]
+    _keys_to_ignore_on_load_missing: ClassVar[list[str]] = ["embed_tokens.weight"]  # type: ignore[misc]
+
     def __init__(self, config: DFlashSpeculatorConfig, t2d: torch.Tensor, d2t: torch.Tensor) -> None:
         super().__init__(
             config=config,
@@ -266,6 +268,10 @@ class DFlashDraftModel(Qwen3PreTrainedModel, SpeculatorModel):
         self.register_buffer("t2d", t2d)  # shape: [verifier_vocab_size], bool
         self.register_buffer("d2t", d2t)  # shape: [draft_vocab_size], int offsets
         self.draft_vocab_size = config.draft_vocab_size
+
+        # Load verifier embeddings and tokenizer (following Eagle3 pattern)
+        self._setup_embeddings_and_mask_token(config.speculators_config.verifier)
+
         self.layers = nn.ModuleList(
             [Qwen3DFlashDecoderLayer(config.transformer_layer_config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
         )
@@ -279,6 +285,33 @@ class DFlashDraftModel(Qwen3PreTrainedModel, SpeculatorModel):
         self.block_size = config.block_size
         self.post_init()
 
+    def _setup_embeddings_and_mask_token(self, verifier_config):
+        """Setup embeddings and mask_token_id from verifier."""
+        from transformers import AutoTokenizer
+
+        if verifier_config.name_or_path is None:
+            raise ValueError("VerifierConfig `name_or_path` value is required.")
+
+        # Load embedding weights
+        verifier_weights = load_model_layers(
+            ["embed_tokens.weight"],
+            verifier_config.name_or_path,
+        )
+
+        # Create embedding layer (config already available in self.config)
+        self.embed_tokens = nn.Embedding(
+            self.config.transformer_layer_config.vocab_size,
+            self.config.transformer_layer_config.hidden_size,
+            padding_idx=getattr(self.config.transformer_layer_config, 'pad_token_id', None),
+        )
+        self.embed_tokens.load_state_dict({"weight": verifier_weights["embed_tokens.weight"]})
+        self.embed_tokens.weight.requires_grad = False
+
+        # Load tokenizer to get mask_token_id
+        tokenizer = AutoTokenizer.from_pretrained(verifier_config.name_or_path)
+        if tokenizer.mask_token_id is None:
+            tokenizer.add_special_tokens({"mask_token": "<|MASK|>"})
+        self.mask_token_id = tokenizer.mask_token_id
 
     @torch.compile
     def forward(
