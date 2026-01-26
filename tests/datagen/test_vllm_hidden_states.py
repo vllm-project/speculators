@@ -68,9 +68,8 @@ def test_vllm_vs_huggingface_accuracy(model_path, tensor_parallel_size):
     hf_model = AutoModelForCausalLM.from_pretrained(
         model_path,
         torch_dtype=torch.bfloat16,
-        device_map="auto",
         trust_remote_code=True,
-    )
+    ).to("cuda")  # type: ignore[arg-type]
     num_layers = len(hf_model.model.layers)
     logger.info(f"Model has {num_layers} layers")
 
