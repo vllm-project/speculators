@@ -36,24 +36,20 @@ keywords = [
     "inference server"
 ]
 dependencies = [
-    "accelerate",
     "click",
     "datasets>=4.0.0",
-    "deepspeed",
-    "httpx[http2]",
     "huggingface-hub",
     "loguru",
     "numpy",
     "protobuf",
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
-    "pyyaml>=6.0.0",
     "rich",
     "safetensors",
     "setuptools",
-    "torch",
+    "torch<2.10.0",
     "tqdm",
-    "transformers",
+    "transformers<5.0.0",
     "typer-slim>=0.12.0",
 ]
 
