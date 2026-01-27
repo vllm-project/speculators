@@ -112,6 +112,7 @@ def block_mask_to_dense_attention_mask(
     return attention_mask
 
 
+import matplotlib.pyplot as plt
 def flex_attention_forward(
     module: torch.nn.Module,  # noqa: ARG001
     query: torch.Tensor,
@@ -121,7 +122,14 @@ def flex_attention_forward(
     scaling: float | None = None,
     **_kwargs,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
-    print("attn mask", attention_mask.shape, flush=True)
+    print("attn mask", attention_mask, flush=True)
+    dense = block_mask_to_dense_attention_mask(attention_mask, query.device, torch.long)
+
+    # strip batch + head dims
+    img = dense[0, 0].float().cpu().nan_to_num()
+    print(img.shape)
+    plt.imsave("blockmask.png", img, cmap="gray")
+
     num_query_heads = query.shape[1]
     num_key_value_heads = key.shape[1]
     enable_gqa = num_query_heads != num_key_value_heads
