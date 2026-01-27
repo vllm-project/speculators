@@ -31,6 +31,8 @@ ______________________________________________________________________
 - `#speculators`
 - `#feat-spec-decode`
 
+🎥 Watch our Office Hours presentation: [Video](https://www.youtube.com/live/2ISAr_JVGLs) | [Slides](https://docs.google.com/presentation/d/1s4eAb7v-rdZt8smyULBJWGXjJXrgFTZWnwqYa2-h1l4/edit?slide=id.g3365e070742_6_0#slide=id.g3365e070742_6_0)
+
 ______________________________________________________________________
 
 ## Key Features
@@ -39,6 +41,9 @@ ______________________________________________________________________
 - **Draft Model Training Support:** E2E training support of single and multi-layer draft models. Training is supported for both non-MoE and MoE models. VL Training is coming soon.
 - **Standardized, Extensible Format:** Provides a Hugging Face-compatible format for defining speculative models, with tools to convert from external research repositories into a standard speculators format for easy adoption.
 - **Seamless vLLM Integration:** Built for direct deployment into vLLM, enabling low-latency, production-grade inference with minimal overhead.
+
+> [!TIP]
+> Read more about Speculators features in this [vLLM blog post](https://blog.vllm.ai/2025/12/13/speculators-v030.html).
 
 ## Supported Models
 
@@ -95,16 +100,35 @@ The following table summarizes the models that have been trained end-to-end by o
 <td>✅</td>
 </tr>
 <tr>
-<td>Qwen3 MoE</td>
-<td>235B-A22B</td>
-<td><a href="https://huggingface.co/RedHatAI/Qwen3-235B-A22B-Instruct-2507-speculator.eagle3">EAGLE-3</a> ✅</td>
-<td>✅</td>
+  <td rowspan="3">Qwen3 MoE</td>
+  <td>30B-Instruct</td>
+  <td><a href="https://huggingface.co/RedHatAI/Qwen3-30B-A3B-Instruct-2507-speculator.eagle3">
+      EAGLE-3
+    </a> ✅</td>
+  <td>✅</td>
 </tr>
 <tr>
+  <td>235B-Instruct</td>
+  <td>
+    <a href="https://huggingface.co/RedHatAI/Qwen3-235B-A22B-Instruct-2507-speculator.eagle3">
+      EAGLE-3
+    </a> ✅
+  </td>
+  <td>✅</td>
+</tr>
+<tr>
+  <td>235B</td>
+  <td><a href="https://huggingface.co/RedHatAI/Qwen3-235B-A22B-speculator.eagle3">
+      EAGLE-3
+    </a> ✅</td>
+  <td>✅</td>
+</tr>
 <td>Qwen3-VL</td>
 <td>235B-A22B</td>
-<td>EAGLE-3 ⏳</td>
-<td>⏳</td>
+<td><a href="https://huggingface.co/RedHatAI/Qwen3-VL-235B-A22B-Instruct-speculator.eagle3">
+      EAGLE-3
+    </a> ✅</td>
+<td>✅</td>
 </tr>
 <tr>
 <td>Mistral 3 Large</td>

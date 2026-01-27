@@ -36,24 +36,20 @@ keywords = [
     "inference server"
 ]
 dependencies = [
-    "accelerate",
     "click",
     "datasets>=4.0.0",
-    "deepspeed",
-    "httpx[http2]",
     "huggingface-hub",
     "loguru",
     "numpy",
     "protobuf",
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
-    "pyyaml>=6.0.0",
     "rich",
     "safetensors",
     "setuptools",
-    "torch",
+    "torch<2.10.0",
     "tqdm",
-    "transformers",
+    "transformers<5.0.0",
     "typer-slim>=0.12.0",
 ]
 
@@ -81,6 +77,7 @@ dev = [
     "pre-commit~=3.5.0",
     "sphinx~=7.1.2",
     "tox~=4.16.0",
+    "tox-uv", # version is tied to tox version
 
     # testing
     "pytest~=8.2.2",
@@ -99,6 +96,7 @@ dev = [
     "mdformat-footnote~=0.1.1",
     "mdformat-frontmatter~=2.0.8",
     "mdformat-gfm~=0.3.6",
+    "mdformat-gfm-alerts~=2.0.0",
 
     # type-checking
     "types-click~=7.1.8",
@@ -111,7 +109,7 @@ dev = [
     "mkdocs-linkcheck~=1.0.6",
 ]
 
-datagen = ["vllm==0.11.0"]
+datagen = ["vllm>=0.12.0,<=0.14.0"]
 
 [project.entry-points.console_scripts]
 speculators = "speculators.__main__:app"

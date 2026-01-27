@@ -88,6 +88,11 @@ def create_transformer_layer_config(
     verifier_name_or_path: str, num_layers: int
 ) -> LlamaConfig:
     verifier_config = AutoConfig.from_pretrained(verifier_name_or_path)
+
+    # For multimodal models (Qwen3VL, etc.), extract text_config
+    if hasattr(verifier_config, "text_config"):
+        verifier_config = verifier_config.text_config
+
     transformer_layer_config = LlamaConfig(
         vocab_size=verifier_config.vocab_size,
         hidden_size=verifier_config.hidden_size,
@@ -175,7 +180,7 @@ def main(args: argparse.Namespace):
         is_distributed=is_distributed,
         local_rank=local_rank,
         train_call_kwargs={
-            "use_off_policy_tokens": False,
+            "use_off_policy_tokens": args.use_off_policy_tokens,
             "ttt_steps": args.ttt_steps,
             "ttt_step_loss_decay": args.ttt_step_loss_decay,
         },
@@ -184,6 +189,10 @@ def main(args: argparse.Namespace):
             "ttt_steps": args.ttt_steps,
             "ttt_step_loss_decay": args.ttt_step_loss_decay,
         },
+        scheduler_type=args.scheduler_type,
+        scheduler_warmup_steps=args.scheduler_warmup_steps,
+        scheduler_total_steps=args.scheduler_total_steps,
+        scheduler_num_cosine_cycles=args.scheduler_num_cosine_cycles,
     )
     trainer = Trainer(draft_model, trainer_config, train_loader, val_loader)
 
@@ -217,6 +226,17 @@ def parse_args():
     parser.add_argument("--t2d-path", type=str, default="t2d.npy")
     parser.add_argument("--ttt-steps", type=int, default=3)
     parser.add_argument("--ttt-step-loss-decay", type=float, default=1.0)
+    parser.add_argument(
+        "--use-off-policy-tokens",
+        action="store_true",
+        default=False,
+        help="Use off-policy tokens during training (required for regenerated data)",
+    )
+    # lr scheduler
+    parser.add_argument("--scheduler-type", type=str, default="linear")
+    parser.add_argument("--scheduler-warmup-steps", type=int, default=None)
+    parser.add_argument("--scheduler-total-steps", type=int, default=None)
+    parser.add_argument("--scheduler-num-cosine-cycles", type=float, default=0.5)
     return parser.parse_args()
 
 

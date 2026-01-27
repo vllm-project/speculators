@@ -30,10 +30,12 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 import psutil
+import torch
 
 from speculators.train.vocab_mapping import (
     combine_token_frequency_distributions,
 )
+from speculators.utils.util import is_npu_available
 
 
 class _NS(enum.Enum):
@@ -124,6 +126,11 @@ class TrainArgs(NamedTuple):
     no_resume_from_checkpoint: bool | _NS = _NOTSET
     num_layers: int | _NS = _NOTSET
     ttt_step_loss_decay: float | _NS = _NOTSET
+    use_off_policy_tokens: bool | _NS = _NOTSET
+    scheduler_type: str | _NS = _NOTSET
+    scheduler_warmup_steps: int | _NS = _NOTSET
+    scheduler_total_steps: int | _NS = _NOTSET
+    scheduler_num_cosine_cycles: float | _NS = _NOTSET
 
 
 ### END OF SCRIPT ARGUMENTS ###
@@ -136,8 +143,14 @@ def prepare_args(args: dict[str, Any]) -> list[str]:
             continue
         # Convert snake_case to kebab-case for command line arguments.
         dashed_key = key.replace("_", "-")
-        args_list.append(f"--{dashed_key}")
-        args_list.append(str(value))
+        # Handle boolean flags (action="store_true")
+        if isinstance(value, bool):
+            if value:
+                args_list.append(f"--{dashed_key}")
+            # If False, don't add the flag at all
+        else:
+            args_list.append(f"--{dashed_key}")
+            args_list.append(str(value))
     return args_list
 
 
@@ -154,6 +167,16 @@ def print_block(title: str, content: str):
     )
     print(content)
     print("\n", "#" * term_width, "\n", sep="")
+
+
+def npu_command(python_alt, command):
+    if is_npu_available():
+        if python_alt and python_alt.strip():
+            command = []
+            command.extend(python_alt.split())
+        else:
+            command = ["python"]
+    return command
 
 
 def run_script(
@@ -179,6 +202,8 @@ def run_script(
 
     if python_alt:
         command.extend(python_alt.split())
+
+    command = npu_command(python_alt, command)
 
     script_path = (Path(__file__).parent / script_name).absolute()
     command.append(str(script_path))
@@ -275,10 +300,7 @@ def run_e2e(
         token_freq_paths.append(token_freq_path)
         dga_dict["output-dir"] = str(output_path / "gen" / dataset_name)
 
-        del dga_dict["turn_dropout"]  # Don't include in args
         dga_list = prepare_args(dga_dict)
-        if dga_obj.turn_dropout:
-            dga_list.append("--turn-dropout")
         run_script("data_generation_offline.py", dga_list, [".[datagen]"])
 
     # Combine token frequency files from all datasets into a single file.
@@ -321,10 +343,10 @@ def run_e2e(
             loggers = loggers.split(",")
         loggers = [logger.strip() for logger in loggers]
         packages.extend(loggers)
-
+    device_count = torch.accelerator.device_count()
     run_script(
         "train.py",
         ta_list,
         packages,
-        python_alt="torchrun --standalone --nproc_per_node=gpu",
+        python_alt=f"torchrun --standalone --nproc_per_node={device_count}",
     )

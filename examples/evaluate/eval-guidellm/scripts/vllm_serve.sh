@@ -7,7 +7,10 @@ set -euo pipefail
 # Configuration Variables
 # ==============================================================================
 
-MODEL=""
+BASE_MODEL=""
+SPECULATOR_MODEL=""
+NUM_SPEC_TOKENS=""
+METHOD=""
 TENSOR_PARALLEL_SIZE=""
 GPU_MEMORY_UTILIZATION=""
 PORT=""
@@ -23,12 +26,15 @@ readonly SLEEP_INTERVAL=5
 
 show_usage() {
     cat << EOF
-Usage: $0 -m MODEL [OPTIONS]
+Usage: $0 -b BASE_MODEL -s SPECULATOR_MODEL [OPTIONS]
 
 Required:
-  -m MODEL          Speculator model path or HuggingFace ID
+  -b BASE_MODEL              Base model path or HuggingFace ID
+  -s SPECULATOR_MODEL        Speculator model path or HuggingFace ID
 
 Optional:
+  --num-spec-tokens TOKENS       Number of speculative tokens (default: 3)
+  --method METHOD                Speculative decoding method (default: eagle3)
   --tensor-parallel-size SIZE    Number of GPUs (default: 2)
   --gpu-memory-utilization UTIL  GPU memory fraction (default: 0.8)
   --port PORT                    Server port (default: 8000)
@@ -38,14 +44,29 @@ Optional:
   -h, --help                    Show this help message
 
 Example:
-  $0 -m "RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3"
+  $0 -b "RedHatAI/Llama-3.3-70B-Instruct-FP8-dynamic" \\
+     -s "RedHatAI/Llama-3.3-70B-Instruct-speculator.eagle3" \\
+     --num-spec-tokens 3 \\
+     --method eagle3
 EOF
 }
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        -m)
-            MODEL="$2"
+        -b)
+            BASE_MODEL="$2"
+            shift 2
+            ;;
+        -s)
+            SPECULATOR_MODEL="$2"
+            shift 2
+            ;;
+        --num-spec-tokens)
+            NUM_SPEC_TOKENS="$2"
+            shift 2
+            ;;
+        --method)
+            METHOD="$2"
             shift 2
             ;;
         --tensor-parallel-size)
@@ -89,6 +110,8 @@ done
 # ==============================================================================
 
 # Apply defaults for any arguments not provided
+NUM_SPEC_TOKENS="${NUM_SPEC_TOKENS:-3}"
+METHOD="${METHOD:-eagle3}"
 TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-2}"
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.8}"
 PORT="${PORT:-8000}"
@@ -100,8 +123,14 @@ PID_FILE="${PID_FILE:-vllm_server.pid}"
 # Validate Arguments
 # ==============================================================================
 
-if [[ -z "${MODEL}" ]]; then
-    echo "[ERROR] Missing required argument: -m MODEL" >&2
+if [[ -z "${BASE_MODEL}" ]]; then
+    echo "[ERROR] Missing required argument: -b BASE_MODEL" >&2
+    show_usage
+    exit 1
+fi
+
+if [[ -z "${SPECULATOR_MODEL}" ]]; then
+    echo "[ERROR] Missing required argument: -s SPECULATOR_MODEL" >&2
     show_usage
     exit 1
 fi
@@ -110,16 +139,22 @@ fi
 # Start Server
 # ==============================================================================
 
-echo "[INFO] Starting vLLM server: ${MODEL}"
+echo "[INFO] Starting vLLM server with speculative decoding"
+echo "[INFO]   Base model: ${BASE_MODEL}"
+echo "[INFO]   Speculator model: ${SPECULATOR_MODEL}"
+echo "[INFO]   Num speculative tokens: ${NUM_SPEC_TOKENS}"
+echo "[INFO]   Method: ${METHOD}"
 echo "[INFO]   Tensor parallel size: ${TENSOR_PARALLEL_SIZE}"
 echo "[INFO]   GPU memory utilization: ${GPU_MEMORY_UTILIZATION}"
 echo "[INFO]   Port: ${PORT}"
 echo "[INFO]   Log file: ${SERVER_LOG}"
 
-vllm serve "${MODEL}" \
+vllm serve "${BASE_MODEL}" \
+    --seed 42 \
     --tensor-parallel-size "${TENSOR_PARALLEL_SIZE}" \
     --gpu-memory-utilization "${GPU_MEMORY_UTILIZATION}" \
     --port "${PORT}" \
+    --speculative-config "{\"model\": \"${SPECULATOR_MODEL}\", \"num_speculative_tokens\": ${NUM_SPEC_TOKENS}, \"method\": \"${METHOD}\"}" \
     > "${SERVER_LOG}" 2>&1 &
 
 VLLM_PID=$!
