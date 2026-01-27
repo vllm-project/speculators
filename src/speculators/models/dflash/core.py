@@ -14,7 +14,18 @@ from speculators.models.dflash.attention import (
     extend_mask_for_draft_tokens,
 )
 from speculators.utils.loading import load_model_layers
-
+from transformers.models.qwen3.modeling_qwen3 import (
+    Qwen3RMSNorm,
+    Qwen3RotaryEmbedding,
+    Qwen3Config,
+    Qwen3PreTrainedModel,
+    Qwen3MLP,
+    GradientCheckpointingLayer,
+    FlashAttentionKwargs,
+    rotate_half,
+    eager_attention_forward,
+    ALL_ATTENTION_FUNCTIONS,
+)
 
 
 @torch.no_grad()
@@ -122,6 +133,10 @@ def _rotate_half(x):
 
 def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
     """Apply rotary position embeddings (local implementation)."""
+    print("q.shape", q.shape, flush=True)
+    print("k.shape", k.shape, flush=True)
+    print("cos", cos.shape, flush=True)
+    print("sin", sin.shape, flush=True)
     cos = cos.unsqueeze(unsqueeze_dim)
     sin = sin.unsqueeze(unsqueeze_dim)
     q_len = q.size(-2)
@@ -270,7 +285,7 @@ class DFlashDraftModel(Qwen3PreTrainedModel, SpeculatorModel):
         self.draft_vocab_size = config.draft_vocab_size
 
         # Load verifier embeddings and tokenizer (following Eagle3 pattern)
-        self._setup_embeddings_and_mask_token(config.speculators_config.verifier)
+        self._setup_embeddings_and_mask_token(config.speculators_config.verifier, t2d)
 
         self.layers = nn.ModuleList(
             [Qwen3DFlashDecoderLayer(config.transformer_layer_config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
@@ -285,16 +300,16 @@ class DFlashDraftModel(Qwen3PreTrainedModel, SpeculatorModel):
         self.block_size = config.block_size
         self.post_init()
 
-    def _setup_embeddings_and_mask_token(self, verifier_config):
+    def _setup_embeddings_and_mask_token(self, verifier_config, t2d):
         """Setup embeddings and mask_token_id from verifier."""
         from transformers import AutoTokenizer
-
+    
         if verifier_config.name_or_path is None:
             raise ValueError("VerifierConfig `name_or_path` value is required.")
 
         # Load embedding weights
         verifier_weights = load_model_layers(
-            ["embed_tokens.weight"],
+            ["embed_tokens.weight", "lm_head.weight"],
             verifier_config.name_or_path,
         )
 
@@ -307,6 +322,28 @@ class DFlashDraftModel(Qwen3PreTrainedModel, SpeculatorModel):
         self.embed_tokens.load_state_dict({"weight": verifier_weights["embed_tokens.weight"]})
         self.embed_tokens.weight.requires_grad = False
 
+
+
+        lm_head_weight=verifier_weights["lm_head.weight"]
+        
+        self.lm_head = torch.nn.Linear(
+            self.config.transformer_layer_config.hidden_size, self.draft_vocab_size, bias=False
+        )
+        self.verifier_lm_head = torch.nn.Linear(
+            self.config.transformer_layer_config.hidden_size, self.draft_vocab_size, bias=False
+        )
+        masked_lm_head_weight = lm_head_weight.to(
+            device=t2d.device
+        )[t2d.to(torch.bool), :]
+
+        self.lm_head.weight.data = masked_lm_head_weight.detach().clone()
+        self.verifier_lm_head.weight.data = masked_lm_head_weight.detach().clone()
+        self.verifier_lm_head.weight.requires_grad = False
+
+
+
+
+
         # Load tokenizer to get mask_token_id
         tokenizer = AutoTokenizer.from_pretrained(verifier_config.name_or_path)
         if tokenizer.mask_token_id is None:
@@ -316,8 +353,8 @@ class DFlashDraftModel(Qwen3PreTrainedModel, SpeculatorModel):
     @torch.compile
     def forward(
         self,
-        hidden_states: torch.Tensor,  # shape: [1, total_seq_len, 5 * hidden_size]
-        noise_embedding: Optional[torch.Tensor] = None,
+        hidden_states: torch.Tensor,  # shape: [1, total_seq_len, 5 * hidden_size]  #These are the hidden states from the target model.  
+        # noise_embedding: Optional[torch.Tensor] = None,  #This gets created and shouldn't be used.  
         # input_ids: torch.Tensor,  # shape: [1, total_seq_len]
         lengths: torch.Tensor | None = None,  # shape: [batch_size]
         loss_mask: torch.Tensor | None = None,  # shape: [1, total_seq_len]
@@ -327,7 +364,7 @@ class DFlashDraftModel(Qwen3PreTrainedModel, SpeculatorModel):
         **kwargs,
     ):
         print("hidden states",hidden_states.shape, flush=True)
-        target_hidden=hidden_states
+        # target_hidden=hidden_states
         device = hidden_states.device
         total_seq_len = hidden_states.shape[1]
 
@@ -335,10 +372,13 @@ class DFlashDraftModel(Qwen3PreTrainedModel, SpeculatorModel):
         if lengths is None:
             lengths = torch.tensor([total_seq_len], dtype=torch.long, device=device)
         if position_ids is None:
+            print("position ids is none", flush=True)
             position_ids = 1 + torch.arange(  #MEGAN FLAG CHECK THAT THIS SHOULD BE +1
                 total_seq_len, dtype=torch.long, device=device
             ).unsqueeze(0)
-
+        else:
+            print(position_ids)
+        
         past_key_values = DynamicCache(config=self.config.transformer_layer_config)
 
         combined_mask_mod = create_combined_mask_mod(lengths.to(device), total_seq_len, block_size=8)
@@ -351,26 +391,38 @@ class DFlashDraftModel(Qwen3PreTrainedModel, SpeculatorModel):
             KV_LEN=total_seq_len,
             device=device,
         )
-        hidden_states = noise_embedding
+        
 
-        target_hidden = self.hidden_norm(self.fc(target_hidden))
+        mask_token_ids=torch.full((1, total_seq_len), self.mask_token_id, dtype=torch.long, device=device)
+        noise_embedding=self.embed_tokens(mask_token_ids)
+
+
+
+
+        hidden_states = self.hidden_norm(self.fc(hidden_states))
+
+
+        print("ppsition ids", position_ids.shape, flush=True)
+        print("hidden states 388", hidden_states.shape, flush=True)
+        position_ids=position_ids.repeat(1, 2)
+        print("ppsition ids repeated", position_ids.shape, flush=True)
         position_embeddings = self.rotary_emb(hidden_states, position_ids)
-
+        print("after", flush=True)
         return_loss = verifier_last_hidden_states is not None
         if return_loss:
             with torch.no_grad():
                 targets = self.verifier_lm_head(verifier_last_hidden_states)
             loss = torch.tensor(0.0, device=device)
             metrics = {}
-
+        print("first layer, 397", flush=True)
         for layer in self.layers:
             hidden_states = layer(
-                hidden_states=hidden_states,
-                target_hidden=target_hidden,
+                hidden_states=noise_embedding,
+                target_hidden=hidden_states,
                 attention_mask=attention_mask,
                 position_ids=position_ids,
                 past_key_value=past_key_values,
-                use_cache=use_cache,  #FLAG MEGAN 
+                use_cache=False,  #FLAG MEGAN 
                 position_embeddings=position_embeddings,
                 **kwargs,
             )
