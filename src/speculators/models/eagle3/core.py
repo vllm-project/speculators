@@ -162,7 +162,10 @@ class Eagle3DraftModel(SpeculatorModel):
     _keys_to_ignore_on_save: ClassVar[list[str]] = ["verifier_lm_head.weight"]  # type: ignore[misc,assignment]
 
     def __init__(
-        self, config: Eagle3SpeculatorConfig, t2d: torch.Tensor, d2t: torch.Tensor
+        self,
+        config: Eagle3SpeculatorConfig,
+        t2d: torch.Tensor | None,
+        d2t: torch.Tensor | None,
     ):
         super().__init__(
             config=config,
@@ -170,20 +173,36 @@ class Eagle3DraftModel(SpeculatorModel):
             verifier_attachment_mode="train_only",
         )
         self.hidden_size = config.transformer_layer_config.hidden_size
-        self.register_buffer("t2d", t2d)  # shape: [verifier_vocab_size], bool
-        self.register_buffer("d2t", d2t)  # shape: [draft_vocab_size], int offsets
         self.draft_vocab_size = config.draft_vocab_size
 
-        if int(t2d.sum(dtype=torch.long).item()) != self.draft_vocab_size:
+        # Verify that if one mapping tensor is provided, the other is as well
+        if (t2d is None) != (d2t is None):
             raise ValueError(
-                f"t2d has {int(t2d.sum(dtype=torch.long).item())} non-zero values, "
-                f"expected {self.draft_vocab_size}."
+                "Both t2d and d2t must be provided together, or both must be None. "
+                f"Got t2d={'provided' if t2d is not None else 'None'}, "
+                f"d2t={'provided' if d2t is not None else 'None'}"
             )
-        if d2t.shape[0] != self.draft_vocab_size:
-            raise ValueError(
-                f"d2t.shape[0] ({d2t.shape[0]}) must match"
-                f" draft_vocab_size ({self.draft_vocab_size})."
-            )
+
+        # Register buffers - they can be None
+        if t2d is not None:
+            self.register_buffer("t2d", t2d)  # shape: [verifier_vocab_size], bool
+            if int(t2d.sum(dtype=torch.long).item()) != self.draft_vocab_size:
+                raise ValueError(
+                    f"t2d has {int(t2d.sum(dtype=torch.long).item())} non-zero values, "
+                    f"expected {self.draft_vocab_size}."
+                )
+        else:
+            self.register_buffer("t2d", None)
+
+        if d2t is not None:
+            self.register_buffer("d2t", d2t)  # shape: [draft_vocab_size], int offsets
+            if d2t.shape[0] != self.draft_vocab_size:
+                raise ValueError(
+                    f"d2t.shape[0] ({d2t.shape[0]}) must match"
+                    f" draft_vocab_size ({self.draft_vocab_size})."
+                )
+        else:
+            self.register_buffer("d2t", None)
 
         self.fc = torch.nn.Linear(3 * self.hidden_size, self.hidden_size, bias=False)
         self._model_definitions = model_classes[
@@ -227,7 +246,9 @@ class Eagle3DraftModel(SpeculatorModel):
         modified_config.hidden_size = modified_config.hidden_size * 2
         self.rotary_emb = self._model_definitions.rotary_emb_class(modified_config)
 
-    def _setup_embeddings_and_lm_heads(self, config: VerifierConfig, t2d: torch.Tensor):
+    def _setup_embeddings_and_lm_heads(
+        self, config: VerifierConfig, t2d: torch.Tensor | None
+    ):
         if config.name_or_path is None:
             raise ValueError("VerifierConfig `name_or_path` value is required.")
         verifier_model_config = AutoConfig.from_pretrained(config.name_or_path)
@@ -241,7 +262,7 @@ class Eagle3DraftModel(SpeculatorModel):
                 f"Verifier hidden size {verifier_model_config.hidden_size} does not"
                 f" match draft hidden size {self.hidden_size}."
             )
-        if t2d.shape[0] != verifier_model_config.vocab_size:
+        if t2d is not None and t2d.shape[0] != verifier_model_config.vocab_size:
             raise ValueError(
                 f"t2d.shape[0] ({t2d.shape[0]}) must match"
                 f" verifier_vocab_size ({verifier_model_config.vocab_size})."
@@ -285,17 +306,24 @@ class Eagle3DraftModel(SpeculatorModel):
             self.hidden_size, self.draft_vocab_size, bias=False
         )
 
-        masked_lm_head_weight = lm_head_weight.to(
-            device=t2d.device, dtype=default_dtype
-        )[t2d.to(torch.bool), :]
-        if masked_lm_head_weight.shape != self.lm_head.weight.shape:
+        if t2d is not None:
+            # Reduce to limited vocab
+            lm_head_weight = lm_head_weight.to(device=t2d.device, dtype=default_dtype)[
+                t2d.to(torch.bool), :
+            ]
+        else:
+            # Use full verifier vocab (no masking)
+            lm_head_weight = lm_head_weight.to(dtype=default_dtype)
+
+        if lm_head_weight.shape != self.lm_head.weight.shape:
             raise ValueError(
-                f"Masked verifier lm head data shape "
-                f"{masked_lm_head_weight.shape} does not match draft "
+                f"Verifier lm head data shape "
+                f"{lm_head_weight.shape} does not match draft "
                 f"lm head shape {self.lm_head.weight.shape}"
             )
-        self.lm_head.weight.data = masked_lm_head_weight.detach().clone()
-        self.verifier_lm_head.weight.data = masked_lm_head_weight.detach().clone()
+        self.lm_head.weight.data = lm_head_weight.detach().clone()
+        self.verifier_lm_head.weight.data = lm_head_weight.detach().clone()
+
         self.verifier_lm_head.weight.requires_grad = False
 
     @conditional_torch_compile
@@ -410,7 +438,8 @@ class Eagle3DraftModel(SpeculatorModel):
             # Use d2t to map draft tokens to verifier tokens.
             # Must be in verifier vocabulary space because we use the full verifier
             # vocabulary in the embedding.
-            input_ids = input_ids + self.d2t[input_ids]  # type: ignore[index]
+            if self.d2t is not None:
+                input_ids = input_ids + self.d2t[input_ids]  # type: ignore[index]
 
             if use_off_policy_tokens:
                 # Overwrite input_ids with ground truth tokens
