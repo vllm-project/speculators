@@ -92,7 +92,6 @@ def compute_metrics(
     Returns:
         Loss value and metrics dictionary.
     """
-
     s_loss = loss_function(logits, targets, loss_mask)
     s_metrics=0
     s_metrics = {}
@@ -132,10 +131,7 @@ def _rotate_half(x):
 
 def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
     """Apply rotary position embeddings (local implementation)."""
-    print("q.shape", q.shape, flush=True)
-    print("k.shape", k.shape, flush=True)
-    print("cos", cos.shape, flush=True)
-    print("sin", sin.shape, flush=True)
+
     cos = cos.unsqueeze(unsqueeze_dim)
     sin = sin.unsqueeze(unsqueeze_dim)
     q_len = q.size(-2)
@@ -289,11 +285,11 @@ class DFlashDraftModel(Qwen3PreTrainedModel, SpeculatorModel):
         self.layers = nn.ModuleList(
             [Qwen3DFlashDecoderLayer(config.transformer_layer_config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
         )
-        print("num hidden", config.num_hidden_layers)
+
         self.target_layer_ids = build_target_layer_ids(94, config.num_hidden_layers)  #FLAG VERY BAD ACTUALLY PATCH THRU THE # OF HIDDEN LAYERS IN VERIFIER MODEL
         self.norm = Qwen3RMSNorm(config.transformer_layer_config.hidden_size, eps=config.transformer_layer_config.rms_norm_eps)
         self.rotary_emb = Qwen3RotaryEmbedding(config.transformer_layer_config)
-        print("target",self.target_layer_ids)
+
         self.fc = nn.Linear(len(self.target_layer_ids) * config.transformer_layer_config.hidden_size, config.transformer_layer_config.hidden_size, bias=False)
         self.hidden_norm = Qwen3RMSNorm(config.transformer_layer_config.hidden_size, eps=config.transformer_layer_config.rms_norm_eps)
         self.block_size = config.block_size
@@ -362,7 +358,7 @@ class DFlashDraftModel(Qwen3PreTrainedModel, SpeculatorModel):
         | None = None,  # shape: [1, total_seq_len, hidden_size]
         **kwargs,
     ):
-        print("hidden states",hidden_states.shape, flush=True)
+
         # target_hidden=hidden_states
         device = hidden_states.device
         total_seq_len = hidden_states.shape[1]
@@ -371,12 +367,9 @@ class DFlashDraftModel(Qwen3PreTrainedModel, SpeculatorModel):
         if lengths is None:
             lengths = torch.tensor([total_seq_len], dtype=torch.long, device=device)
         if position_ids is None:
-            print("position ids is none", flush=True)
             position_ids = 1 + torch.arange(  #MEGAN FLAG CHECK THAT THIS SHOULD BE +1
                 total_seq_len, dtype=torch.long, device=device
             ).unsqueeze(0)
-        else:
-            print(position_ids)
         
         past_key_values = DynamicCache(config=self.config.transformer_layer_config)
 
@@ -401,19 +394,15 @@ class DFlashDraftModel(Qwen3PreTrainedModel, SpeculatorModel):
         hidden_states = self.hidden_norm(self.fc(hidden_states))
 
 
-        print("ppsition ids", position_ids.shape, flush=True)
-        print("hidden states 388", hidden_states.shape, flush=True)
+
         position_ids=position_ids.repeat(1, 2)
-        print("ppsition ids repeated", position_ids.shape, flush=True)
         position_embeddings = self.rotary_emb(hidden_states, position_ids)
-        print("after", flush=True)
         return_loss = verifier_last_hidden_states is not None
         if return_loss:
             with torch.no_grad():
                 targets = self.verifier_lm_head(verifier_last_hidden_states)
             loss = torch.tensor(0.0, device=device)
             metrics = {}
-        print("first layer, 397", flush=True)
         for layer in self.layers:
             hidden_states = layer(
                 hidden_states=noise_embedding,
