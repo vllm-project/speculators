@@ -307,29 +307,22 @@ class Eagle3DraftModel(SpeculatorModel):
         )
 
         if t2d is not None:
-            # Use masked subset of verifier vocab
-            masked_lm_head_weight = lm_head_weight.to(
-                device=t2d.device, dtype=default_dtype
-            )[t2d.to(torch.bool), :]
-            if masked_lm_head_weight.shape != self.lm_head.weight.shape:
-                raise ValueError(
-                    f"Masked verifier lm head data shape "
-                    f"{masked_lm_head_weight.shape} does not match draft "
-                    f"lm head shape {self.lm_head.weight.shape}"
-                )
-            self.lm_head.weight.data = masked_lm_head_weight.detach().clone()
-            self.verifier_lm_head.weight.data = masked_lm_head_weight.detach().clone()
+            # Reduce to limited vocab
+            lm_head_weight = lm_head_weight.to(device=t2d.device, dtype=default_dtype)[
+                t2d.to(torch.bool), :
+            ]
         else:
             # Use full verifier vocab (no masking)
-            full_lm_head_weight = lm_head_weight.to(dtype=default_dtype)
-            if full_lm_head_weight.shape != self.lm_head.weight.shape:
-                raise ValueError(
-                    f"Verifier lm head data shape "
-                    f"{full_lm_head_weight.shape} does not match draft "
-                    f"lm head shape {self.lm_head.weight.shape}"
-                )
-            self.lm_head.weight.data = full_lm_head_weight.detach().clone()
-            self.verifier_lm_head.weight.data = full_lm_head_weight.detach().clone()
+            lm_head_weight = lm_head_weight.to(dtype=default_dtype)
+
+        if lm_head_weight.shape != self.lm_head.weight.shape:
+            raise ValueError(
+                f"Verifier lm head data shape "
+                f"{lm_head_weight.shape} does not match draft "
+                f"lm head shape {self.lm_head.weight.shape}"
+            )
+        self.lm_head.weight.data = lm_head_weight.detach().clone()
+        self.verifier_lm_head.weight.data = lm_head_weight.detach().clone()
 
         self.verifier_lm_head.weight.requires_grad = False
 
