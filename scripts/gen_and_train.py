@@ -315,34 +315,22 @@ def run_e2e(
         combined_token_freq_path = token_freq_paths[0]
 
     # Vocab Mapping (optional)
+    ta_dict = {
+        **train_args._asdict(),
+        "verifier-name-or-path": verifier_name_or_path,
+        "data-path": str(output_path / "gen"),
+        "save-path": str(output_path / "checkpoints"),
+        "data-format-version": 1,
+        "log-dir": str(output_path / "logs"),
+    }
     if vocab_mapping_args is not None:
         vma_dict = vocab_mapping_args._asdict()
         vma_dict["token-freq-path"] = str(combined_token_freq_path)
         vma_dict["output-path"] = str(output_path / "vocab_mapping")
         vma_list = prepare_args(vma_dict)
         run_script("build_vocab_mapping.py", vma_list, [".[datagen]"])
-
-        # Training with vocab mapping
-        ta_dict = {
-            **train_args._asdict(),
-            "verifier-name-or-path": verifier_name_or_path,
-            "data-path": str(output_path / "gen"),
-            "save-path": str(output_path / "checkpoints"),
-            "data-format-version": 1,
-            "log-dir": str(output_path / "logs"),
-            "d2t-path": str(output_path / "vocab_mapping" / "d2t.npy"),
-            "t2d-path": str(output_path / "vocab_mapping" / "t2d.npy"),
-        }
-    else:
-        # Training without vocab mapping (use full verifier vocab)
-        ta_dict = {
-            **train_args._asdict(),
-            "verifier-name-or-path": verifier_name_or_path,
-            "data-path": str(output_path / "gen"),
-            "save-path": str(output_path / "checkpoints"),
-            "data-format-version": 1,
-            "log-dir": str(output_path / "logs"),
-        }
+        ta_dict["d2t-path"] = str(output_path / "vocab_mapping" / "d2t.npy")
+        ta_dict["t2d-path"] = str(output_path / "vocab_mapping" / "t2d.npy")
 
     ta_list = prepare_args(ta_dict)
 

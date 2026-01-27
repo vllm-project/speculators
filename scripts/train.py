@@ -122,7 +122,13 @@ def main(args: argparse.Namespace):
     device = torch.device(local_rank)
 
     # Load t2d and d2t tensors if provided
-    if args.d2t_path and args.t2d_path:
+    if args.d2t_path or args.t2d_path:
+        if not (args.d2t_path and args.t2d_path):
+            raise ValueError(
+                "Both t2d and d2t must be provided together, or both must be omitted. "
+                f"Got t2d={'provided' if args.t2d_path is not None else 'not provided'}"
+                f"d2t={'provided' if args.d2t_path is not None else 'not provided'}"
+            )
         d2t = torch.from_numpy(np.load(args.d2t_path)).to(device)
         t2d = torch.from_numpy(np.load(args.t2d_path)).to(device)
         draft_vocab_size = d2t.shape[0]
