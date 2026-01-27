@@ -75,7 +75,6 @@ def compute_metrics(
     logits: torch.Tensor,
     targets: torch.Tensor,
     loss_mask: torch.Tensor | None,
-    prev_correct: torch.Tensor | None,
 ) -> tuple[torch.Tensor, dict]:
     """Compute metrics for a given draft.
 
@@ -98,7 +97,7 @@ def compute_metrics(
     s_metrics=0
     s_metrics = {}
     s_metrics[f"loss"] = s_loss.detach().clone()
-    s_metrics[f"full_acc"] = s_full_acc
+    # s_metrics[f"full_acc"] = s_full_acc
 
     return s_loss, s_metrics
 
@@ -388,7 +387,7 @@ class DFlashDraftModel(Qwen3PreTrainedModel, SpeculatorModel):
             B=None,
             H=None,
             Q_LEN=total_seq_len,
-            KV_LEN=total_seq_len,
+            KV_LEN=total_seq_len*2,
             device=device,
         )
         
@@ -428,7 +427,7 @@ class DFlashDraftModel(Qwen3PreTrainedModel, SpeculatorModel):
             )
         hidden_states=self.norm(hidden_states)
 
-        logits=self.verifier.lm_head(hidden_states)
+        logits=self.verifier_lm_head(hidden_states)
         if return_loss:
             s_loss, s_metrics = compute_metrics(
                 logits,
