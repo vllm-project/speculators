@@ -1,4 +1,5 @@
 import argparse
+import random
 
 import numpy as np
 import torch
@@ -35,6 +36,17 @@ NORM_BEFORE_RESIDUAL = True
 NUM_WORKERS = 12
 PREFETCH_FACTOR = 4
 NOISE_STD = 0.05
+
+
+def set_seed(seed: int):
+    """Set random seeds for reproducibility."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    # For deterministic behavior (may impact performance)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 
 def setup_dataloader(
@@ -117,6 +129,9 @@ def create_transformer_layer_config(
 
 
 def main(args: argparse.Namespace):
+    # Set random seed for reproducibility
+    set_seed(args.seed)
+
     # Setup logging
     setup_root_logger()
     setup_metric_logger(
@@ -223,6 +238,7 @@ def parse_args():
     parser.add_argument("--num-layers", type=int, default=1)
     parser.add_argument("--d2t-path", type=str, default="d2t.npy")
     parser.add_argument("--t2d-path", type=str, default="t2d.npy")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
 
     # Eagle3-specific arguments
     parser.add_argument("--ttt-steps", type=int, default=3, help="Eagle3: number of TTT steps")

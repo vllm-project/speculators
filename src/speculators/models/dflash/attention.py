@@ -28,6 +28,9 @@ def create_combined_mask_mod(lengths: torch.Tensor, total_seq_len: int, block_si
         ]
     ).contiguous()
 
+    print(f"DEBUG: document_ids: {document_ids}", flush=True)
+    print(f"DEBUG: lengths: {lengths}, total_seq_len: {total_seq_len}, block_size: {block_size}", flush=True)
+
     def causal_mask_mod(_b, _h, q_idx, kv_idx):
         causal = q_idx >= kv_idx  # bool
         return causal
@@ -122,7 +125,6 @@ def block_mask_to_dense_attention_mask(
     return attention_mask
 
 
-import matplotlib.pyplot as plt
 def flex_attention_forward(
     module: torch.nn.Module,  # noqa: ARG001
     query: torch.Tensor,
@@ -132,7 +134,17 @@ def flex_attention_forward(
     scaling: float | None = None,
     **_kwargs,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
-    print(attention_mask)
+    print(f"DEBUG: Query shape: {query.shape}, Key shape: {key.shape}, Value shape: {value.shape}", flush=True)
+    print(f"DEBUG: BlockMask shape: {attention_mask.shape}", flush=True)
+    print("attn mask", attention_mask, flush=True)
+    dense = block_mask_to_dense_attention_mask(attention_mask, query.device, torch.long)
+    print(f"DEBUG: Dense mask stats - min: {dense.min()}, max: {dense.max()}, has_nan: {torch.isnan(dense).any()}", flush=True)
+
+    # Save mask visualization (disabled - requires matplotlib)
+    # import matplotlib.pyplot as plt
+    # img = dense[0, 0].float().cpu().nan_to_num()
+    # print(img.shape)
+    # plt.imsave("blockmask.png", img, cmap="gray")
 
     num_query_heads = query.shape[1]
     num_key_value_heads = key.shape[1]
