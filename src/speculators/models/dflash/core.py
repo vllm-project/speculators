@@ -60,7 +60,10 @@ def loss_function(
     elementwise_loss = torch.nn.functional.kl_div(
         logits, target_p, reduction="none", log_target=False
     )
-
+    print(logits.shape)
+    print(target_p.shape)
+    print(elementwise_loss)
+    print(elementwise_loss[0, -1])
     if loss_mask is not None:
         elementwise_loss = elementwise_loss * loss_mask.unsqueeze(-1)
         denominator: torch.Tensor | int = loss_mask.sum(dim=1) + 1e-5
