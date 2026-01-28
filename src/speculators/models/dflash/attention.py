@@ -28,13 +28,9 @@ def create_combined_mask_mod(lengths: torch.Tensor, total_seq_len: int, block_si
         ]
     ).contiguous()
 
-    def block_causal_mask_mod(_b, _h, q_idx, kv_idx):
+    def causal_mask_mod(_b, _h, q_idx, kv_idx):
         causal = q_idx >= kv_idx  # bool
-        dif = q_idx - kv_idx
-
-        in_range = (dif < block_size) & (dif > (-block_size))
-        # causal * (1 - block)  ==>  causal & (~in_range)
-        return causal & (~in_range)
+        return causal
 
 
     def document_mask_mod(_b, _h, q_idx, kv_idx):
@@ -43,15 +39,29 @@ def create_combined_mask_mod(lengths: torch.Tensor, total_seq_len: int, block_si
             document_ids[q_idx] != -1,
             document_ids[q_idx] == document_ids[kv_idx % total_seq_len],
         )
-
+    def right_mask_mod(_b, _h, q_idx, kv_idx):
+        return kv_idx>total_seq_len 
     def diagonal_block_draft_mask_mod(_b, _h, q_idx, kv_idx):
-        dif = torch.remainder(kv_idx, total_seq_len) - q_idx
-        return ((-block_size) > dif) & (block_size < dif)
+        k = torch.remainder(kv_idx, total_seq_len)
+        return (q_idx // block_size) == (k // block_size)
+    def not_diagonal_block_draft_mask_mod(_b, _h, q_idx, kv_idx):
+        k = torch.remainder(kv_idx, total_seq_len)
+        return (q_idx // block_size) != (k // block_size)
+    
 
-    return or_masks(
-        and_masks(block_causal_mask_mod, document_mask_mod),
-        diagonal_block_draft_mask_mod,
-    )
+    right=and_masks(diagonal_block_draft_mask_mod, right_mask_mod)
+    left=and_masks(document_mask_mod,and_masks(not_diagonal_block_draft_mask_mod, causal_mask_mod))
+    
+    return or_masks(right, left)
+
+
+
+
+
+# or_masks(
+#         and_masks(block_causal_mask_mod, document_mask_mod),
+#         diagonal_block_draft_mask_mod,
+#     )
 
 
 def extend_mask_for_draft_tokens(block_mask):
@@ -112,7 +122,6 @@ def block_mask_to_dense_attention_mask(
     return attention_mask
 
 
-import matplotlib.pyplot as plt
 def flex_attention_forward(
     module: torch.nn.Module,  # noqa: ARG001
     query: torch.Tensor,
@@ -122,14 +131,6 @@ def flex_attention_forward(
     scaling: float | None = None,
     **_kwargs,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
-    print("attn mask", attention_mask, flush=True)
-    dense = block_mask_to_dense_attention_mask(attention_mask, query.device, torch.long)
-
-    # strip batch + head dims
-    img = dense[0, 0].float().cpu().nan_to_num()
-    print(img.shape)
-    plt.imsave("blockmask.png", img, cmap="gray")
-
     num_query_heads = query.shape[1]
     num_key_value_heads = key.shape[1]
     enable_gqa = num_query_heads != num_key_value_heads
