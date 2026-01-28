@@ -60,10 +60,10 @@ def loss_function(
     elementwise_loss = torch.nn.functional.kl_div(
         logits, target_p, reduction="none", log_target=False
     )
-    print(logits.shape)
-    print(target_p.shape)
+    # print(logits.shape)
+    # print(target_p.shape)
     print(elementwise_loss)
-    print(elementwise_loss[0, -1])
+    # print(elementwise_loss[0, -1])
     if loss_mask is not None:
         elementwise_loss = elementwise_loss * loss_mask.unsqueeze(-1)
         denominator: torch.Tensor | int = loss_mask.sum(dim=1) + 1e-5
@@ -375,8 +375,9 @@ class DFlashDraftModel(Qwen3PreTrainedModel, SpeculatorModel):
             ).unsqueeze(0)
         
         past_key_values = DynamicCache(config=self.config.transformer_layer_config)
-
-        combined_mask_mod = create_combined_mask_mod(lengths.to(device), total_seq_len, block_size=8)
+        with torch.no_grad():
+            padding=torch.sum(lengths)
+        combined_mask_mod = create_combined_mask_mod(lengths.to(device), total_seq_len, block_size=8, padding=padding)
         # Note: Attention mask is stored as a BlockMask object
         attention_mask = create_block_mask(
             combined_mask_mod,
