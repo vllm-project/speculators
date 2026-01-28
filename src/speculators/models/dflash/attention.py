@@ -49,7 +49,9 @@ def create_combined_mask_mod(lengths: torch.Tensor, total_seq_len: int, block_si
         return (q_idx // block_size) != (k // block_size)
     
 
-    right=and_masks(diagonal_block_draft_mask_mod, right_mask_mod)
+    right=and_masks(and_masks(diagonal_block_draft_mask_mod, right_mask_mod), document_mask_mod)
+
+
     left=and_masks(document_mask_mod,and_masks(not_diagonal_block_draft_mask_mod, causal_mask_mod))
     
     return or_masks(right, left)
@@ -122,6 +124,7 @@ def block_mask_to_dense_attention_mask(
     return attention_mask
 
 
+import matplotlib.pyplot as plt
 def flex_attention_forward(
     module: torch.nn.Module,  # noqa: ARG001
     query: torch.Tensor,
@@ -131,6 +134,13 @@ def flex_attention_forward(
     scaling: float | None = None,
     **_kwargs,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
+    print("attn mask", attention_mask, flush=True)
+    dense = block_mask_to_dense_attention_mask(attention_mask, query.device, torch.long)
+
+    img = dense[0, 0].float().cpu().nan_to_num()
+    print(img.shape)
+    plt.imsave("blockmask.png", img, cmap="gray")
+
     num_query_heads = query.shape[1]
     num_key_value_heads = key.shape[1]
     enable_gqa = num_query_heads != num_key_value_heads
