@@ -29,7 +29,7 @@ Speculators standardizes this process by providing a productionized end-to-end f
 
 To try out a speculative decoding model you can get started by running a pre-made one with vLLM. After [installing vLLM](https://docs.vllm.ai/en/latest/getting_started/installation/), run:
 ```bash
-VLLM_USE_V1=1 vllm serve RedHatAI/Qwen3-8B-speculator.eagle3
+vllm serve RedHatAI/Qwen3-8B-speculator.eagle3
 ```
 (Or choose another model from the [RedHatAI/speculator-models](https://huggingface.co/collections/RedHatAI/speculator-models) collection.)
 
