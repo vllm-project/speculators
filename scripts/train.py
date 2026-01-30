@@ -163,13 +163,13 @@ def main(args: argparse.Namespace):
         "t2d": t2d,
         "d2t": d2t,
         "verifier_name_or_path": args.verifier_name_or_path,
+        "draft_vocab_size":d2t.shape[0]
     }
 
     # Add speculator-specific parameters
     model_kwargs.update(model_kwargs_factories[args.speculator_type](args))
 
     draft_model = model_factory(**model_kwargs)
-
     # Setup dataloaders
     train_files, val_files = split_files(args.data_path, ratio=0.9)
     train_loader = setup_dataloader(

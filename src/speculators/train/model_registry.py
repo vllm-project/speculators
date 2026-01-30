@@ -75,7 +75,7 @@ def create_dflash_model(
     from speculators.models.dflash import DFlashDraftModel, DFlashSpeculatorConfig
     from speculators.proposals.greedy import GreedyTokenProposalConfig
 
-    draft_vocab_size = verifier_config.vocab_size
+    draft_vocab_size = d2t.shape[0]
     transformer_layer_config = verifier_config
 
     speculator_config = DFlashSpeculatorConfig(
@@ -99,8 +99,10 @@ def create_dflash_model(
             ),
         ),
     )
-
-    return DFlashDraftModel(config=speculator_config, t2d=t2d, d2t=d2t)
+    print("dflash model")
+    model=DFlashDraftModel(config=speculator_config, t2d=t2d, d2t=d2t)
+    print(model.lm_head.weight.shape)
+    return model
 
 
 def create_dflash_dataset(
