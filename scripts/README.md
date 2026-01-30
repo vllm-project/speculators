@@ -257,8 +257,9 @@ The scripts has the following optional arguments:
 - `--log-dir`: The path to save the logs. Defaults to `./logs`.
 - `--run-name`: The name of the run. Defaults to None.
 - `--num-layers`: The number of layers to use. Defaults to 1.
-- `--d2t-path`: The path to the d2t tensor. Defaults to `d2t.npy`.
-- `--t2d-path`: The path to the t2d tensor. Defaults to `t2d.npy`.
+- `--pretrained-model-path`: Path to a pretrained EAGLE3 model (HuggingFace Hub or local path) for fine-tuning. When specified, vocabulary mappings (`d2t`/`t2d`) are automatically extracted from the model. Cannot be used together with `--d2t-path` and `--t2d-path`.
+- `--d2t-path`: The path to the d2t tensor. Defaults to `d2t.npy`. Not needed when using `--pretrained-model-path`.
+- `--t2d-path`: The path to the t2d tensor. Defaults to `t2d.npy`. Not needed when using `--pretrained-model-path`.
 - `--ttt-steps`: The number of TTT steps to use. Defaults to 3.
 - `--ttt-step-loss-decay`: The loss decay factor to use for the TTT steps. Defaults to 1.0.
 
@@ -283,6 +284,54 @@ torchrun --nnodes=1 --nproc_per_node=8 scripts/train.py \
     --ttt-steps 3 \
     --ttt-step-loss-decay 1.0
 ```
+
+## Fine-tuning from Pretrained Models
+
+Instead of training from scratch, you can fine-tune an existing EAGLE3 model using the `--pretrained-model-path` argument. This is useful when you want to adapt a pretrained speculator to new data or domains.
+
+### Features
+
+- **Load from HuggingFace Hub or local path**: Automatically downloads and loads pretrained models
+- **Automatic vocabulary mapping extraction**: No need to provide `--d2t-path` and `--t2d-path` separately
+- **Automatic draft vocabulary size detection**: The script automatically derives `draft_vocab_size` from the pretrained model
+
+### Usage
+
+When using `--pretrained-model-path`, do not specify `--d2t-path` or `--t2d-path` as these are automatically extracted from the pretrained model.
+
+#### Fine-tune from HuggingFace Hub
+
+```bash
+torchrun --nnodes=1 --nproc_per_node=8 scripts/train.py \
+    --verifier-name-or-path "meta-llama/Llama-3.1-8B-Instruct" \
+    --pretrained-model-path "RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3" \
+    --data-path "./new_data" \
+    --save-path "./checkpoints/llama-3.1-8b.eagle3-finetuned" \
+    --epochs 3 \
+    --lr 5e-5 \
+    --logger "tensorboard" \
+    --log-dir "./logs/llama-3.1-8b.eagle3-finetuned" \
+    --run-name "llama-3.1-8b.eagle3-finetuned"
+```
+
+#### Fine-tune from local checkpoint
+
+```bash
+torchrun --nnodes=1 --nproc_per_node=8 scripts/train.py \
+    --verifier-name-or-path "meta-llama/Llama-3.1-8B-Instruct" \
+    --pretrained-model-path "./checkpoints/my-eagle3-model" \
+    --data-path "./new_data" \
+    --save-path "./checkpoints/llama-3.1-8b.eagle3-finetuned" \
+    --epochs 3 \
+    --lr 5e-5
+```
+
+### Important Notes
+
+- The pretrained model must be compatible with the specified verifier model
+- Vocabulary mappings (`d2t`/`t2d`) are automatically extracted from the pretrained model
+- The optimizer state starts fresh (not loaded from the pretrained model)
+- Use a lower learning rate (e.g., `5e-5`) compared to training from scratch to avoid disrupting learned features
 
 ## E2E Pipeline
 
