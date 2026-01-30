@@ -41,18 +41,19 @@ NOISE_STD = 0.05
 def load_safetensors_state_dict(model_dir: str) -> dict[str, torch.Tensor]:
     """Load state dict from safetensors format (single or sharded).
     
+    Supports both local paths and HuggingFace Hub model IDs.
+    
     Args:
-        model_dir: Path to directory containing model.safetensors or sharded safetensors
+        model_dir: Path to local directory OR HuggingFace Hub model ID 
+                   (e.g., "RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3")
         
     Returns:
         Dictionary mapping parameter names to tensors (on CPU)
         
     Raises:
         FileNotFoundError: If no safetensors files found
-        RuntimeError: If safetensors library not available
+        RuntimeError: If required libraries not available
     """
-    model_path = Path(model_dir)
-    
     # Check for safetensors library
     try:
         from safetensors import safe_open
@@ -61,6 +62,36 @@ def load_safetensors_state_dict(model_dir: str) -> dict[str, torch.Tensor]:
             "safetensors library is required for loading pretrained models. "
             "Install it with: pip install safetensors"
         ) from e
+    
+    # Check if model_dir is a local path or HuggingFace Hub ID
+    model_path = Path(model_dir)
+    
+    # If not a local directory, try to download from HuggingFace Hub
+    if not model_path.exists():
+        logger.info(f"Local path not found. Attempting to download from HuggingFace Hub: {model_dir}")
+        try:
+            from huggingface_hub import snapshot_download
+        except ImportError as e:
+            raise RuntimeError(
+                "huggingface_hub library is required for downloading models from HF Hub. "
+                "Install it with: pip install huggingface_hub"
+            ) from e
+        
+        # Download the model from HuggingFace Hub
+        logger.info(f"Downloading model from HuggingFace Hub: {model_dir}")
+        try:
+            local_dir = snapshot_download(
+                repo_id=model_dir,
+                allow_patterns=["*.safetensors", "*.json"],
+                ignore_patterns=["*.msgpack", "*.h5", "*.bin"],
+            )
+            model_path = Path(local_dir)
+            logger.info(f"Model downloaded to: {local_dir}")
+        except Exception as e:
+            raise FileNotFoundError(
+                f"Failed to download model from HuggingFace Hub: {model_dir}. "
+                f"Error: {e}"
+            ) from e
     
     # Case 1: Single safetensors file
     single_file = model_path / "model.safetensors"
