@@ -1,17 +1,15 @@
 # ruff: noqa: ERA001
-import copy
+
 from typing import ClassVar
 
 import torch
 from torch.nn.attention.flex_attention import create_block_mask
-from transformers import AutoConfig, DynamicCache, PretrainedConfig
+from transformers import DynamicCache
 
-from speculators.config import VerifierConfig
 from speculators.model import SpeculatorModel
 from speculators.models.dflash import DFlashSpeculatorConfig
 from speculators.models.dflash.attention import (
     create_combined_mask_mod,
-    extend_mask_for_draft_tokens,
 )
 from speculators.utils.loading import load_model_layers
 from transformers.models.qwen3.modeling_qwen3 import (
@@ -22,7 +20,6 @@ from transformers.models.qwen3.modeling_qwen3 import (
     Qwen3MLP,
     GradientCheckpointingLayer,
     FlashAttentionKwargs,
-    rotate_half,
     eager_attention_forward,
     ALL_ATTENTION_FUNCTIONS,
 )
@@ -30,48 +27,45 @@ from transformers.models.qwen3.modeling_qwen3 import (
 
 @torch.no_grad()
 def compute_accuracy(
-    logits: torch.Tensor,  # shape: [1, total_seq_len, draft_vocab_size]
-    targets: torch.Tensor,  # shape: [1, total_seq_len, draft_vocab_size]
-    loss_mask: torch.Tensor | None,  # shape: [1, total_seq_len]
+    logits: torch.Tensor,  # shape: [1, total_seq_len - ttt_step, draft_vocab_size]
+    targets: torch.Tensor,  # shape: [1, total_seq_len - ttt_step, draft_vocab_size]
+    loss_mask: torch.Tensor | None,  # shape: [1, total_seq_len - ttt_step]
 ):
-    # Predicted and target token ids
+    # Note: logits, targets, and loss_mask are already aligned for the current ttt_step
     target_tokens = torch.argmax(targets, dim=-1)
     predicted_tokens = torch.argmax(logits, dim=-1)
+    # shape: [1, total_seq_len - ttt_step]
 
     correct = predicted_tokens == target_tokens
+    if loss_mask is not None:
+        correct = torch.masked_select(correct, loss_mask.to(torch.bool))
 
-    if loss_mask is None:
-        valid = torch.ones((logits.shape[0], logits.shape[1]), device=logits.device, dtype=torch.bool)
-    else:
-        valid = loss_mask.to(dtype=torch.bool)
-    denom_all = valid.sum()
-    num_all = (correct & valid).sum()
-    absolute_accuracy = (num_all.float() / denom_all.float()).item()
+    correct_sum = correct.float().sum()
+    full_denom = correct.numel()
 
-    return absolute_accuracy, 0
-
+    return correct_sum / (full_denom + 1e-5)
 def loss_function(
     logits: torch.Tensor,  # shape: [1, total_seq_len , draft_vocab_size]
     targets: torch.Tensor,  # shape: [1, total_seq_len, draft_vocab_size]
     loss_mask: torch.Tensor | None,  # shape: [1, total_seq_len]
 ):
     # Debug: Check raw inputs
-    print(f"DEBUG raw logits - min: {logits.min()}, max: {logits.max()}, has_nan: {torch.isnan(logits).any()}, has_inf: {torch.isinf(logits).any()}")
-    print(f"DEBUG raw targets - min: {targets.min()}, max: {targets.max()}, has_nan: {torch.isnan(targets).any()}, has_inf: {torch.isinf(targets).any()}")
+    # print(f"DEBUG raw logits - min: {logits.min()}, max: {logits.max()}, has_nan: {torch.isnan(logits).any()}, has_inf: {torch.isinf(logits).any()}")
+    # print(f"DEBUG raw targets - min: {targets.min()}, max: {targets.max()}, has_nan: {torch.isnan(targets).any()}, has_inf: {torch.isinf(targets).any()}")
 
     logits = torch.nn.functional.log_softmax(logits, dim=-1)
     target_p = torch.nn.functional.softmax(targets, dim=-1)
 
     # Debug: Check after softmax
-    print(f"DEBUG log_softmax logits - min: {logits.min()}, max: {logits.max()}, has_nan: {torch.isnan(logits).any()}, has_inf: {torch.isinf(logits).any()}")
-    print(f"DEBUG softmax targets - min: {target_p.min()}, max: {target_p.max()}, has_nan: {torch.isnan(target_p).any()}, has_inf: {torch.isinf(target_p).any()}")
+    # print(f"DEBUG log_softmax logits - min: {logits.min()}, max: {logits.max()}, has_nan: {torch.isnan(logits).any()}, has_inf: {torch.isinf(logits).any()}")
+    # print(f"DEBUG softmax targets - min: {target_p.min()}, max: {target_p.max()}, has_nan: {torch.isnan(target_p).any()}, has_inf: {torch.isinf(target_p).any()}")
 
     elementwise_loss = torch.nn.functional.kl_div(
         logits, target_p, reduction="none", log_target=False
     )
     # print(logits.shape)
     # print(target_p.shape)
-    print(elementwise_loss)
+    # print(elementwise_loss)
     # print(elementwise_loss[0, -1])
     if loss_mask is not None:
         elementwise_loss = elementwise_loss * loss_mask.unsqueeze(-1)
@@ -105,10 +99,11 @@ def compute_metrics(
         Loss value and metrics dictionary.
     """
     s_loss = loss_function(logits, targets, loss_mask)
+    s_full_acc=compute_accuracy(logits, targets, loss_mask)
     s_metrics=0
     s_metrics = {}
     s_metrics[f"loss"] = s_loss.detach().clone()
-    # s_metrics[f"full_acc"] = s_full_acc
+    s_metrics[f"full_acc"] = s_full_acc
 
     return s_loss, s_metrics
 
@@ -118,7 +113,6 @@ from typing_extensions import Unpack, Tuple
 import torch
 from torch import nn
 from transformers.models.qwen3.modeling_qwen3 import (
-    Qwen3Attention,  # ✅ Import the class, not internal functions
     Qwen3RMSNorm,
     Qwen3RotaryEmbedding,
     Qwen3Config,
@@ -128,9 +122,8 @@ from transformers.models.qwen3.modeling_qwen3 import (
     FlashAttentionKwargs,
 )
 from transformers import DynamicCache
-from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.cache_utils import Cache
-from .utils import build_target_layer_ids, extract_context_feature, sample
+from .utils import build_target_layer_ids
 
 
 # Local copy of rotate_half to avoid dependency on internal transformers functions
@@ -331,12 +324,12 @@ class DFlashDraftModel(Qwen3PreTrainedModel, SpeculatorModel):
         embed_tokens_weight = verifier_weights["embed_tokens.weight"]
         self.embed_tokens.load_state_dict({"weight": embed_tokens_weight})
         self.embed_tokens.weight.requires_grad = False
-
+        vocab_size=int(t2d.sum().item())
         # Use embed_tokens as fallback for lm_head if not found (tied weights)
         lm_head_weight = verifier_weights.get("lm_head.weight", embed_tokens_weight)
-        
+        print("draft size",self.draft_vocab_size)
         self.lm_head = torch.nn.Linear(
-            self.config.transformer_layer_config.hidden_size, self.draft_vocab_size, bias=False
+            self.config.transformer_layer_config.hidden_size, 64000, bias=False
         )
         self.verifier_lm_head = torch.nn.Linear(
             self.config.transformer_layer_config.hidden_size, self.draft_vocab_size, bias=False
@@ -358,13 +351,12 @@ class DFlashDraftModel(Qwen3PreTrainedModel, SpeculatorModel):
         if tokenizer.mask_token_id is None:
             tokenizer.add_special_tokens({"mask_token": "<|MASK|>"})
         self.mask_token_id = tokenizer.mask_token_id
-
+        print("354", self.lm_head.weight.shape)
     # @torch.compile  # Temporarily disabled - compilation hangs
     def forward(
         self,
         hidden_states: torch.Tensor,  # shape: [1, total_seq_len, 5 * hidden_size]  #These are the hidden states from the target model.  
-        # noise_embedding: Optional[torch.Tensor] = None,  #This gets created and shouldn't be used.  
-        # input_ids: torch.Tensor,  # shape: [1, total_seq_len]
+        input_ids:torch.Tensor, 
         lengths: torch.Tensor | None = None,  # shape: [batch_size]
         loss_mask: torch.Tensor | None = None,  # shape: [1, total_seq_len]
         position_ids: torch.Tensor | None = None,  # shape: [1, total_seq_len]
@@ -373,7 +365,6 @@ class DFlashDraftModel(Qwen3PreTrainedModel, SpeculatorModel):
         **kwargs,
     ):
 
-        # target_hidden=hidden_states
         device = hidden_states.device
         total_seq_len = hidden_states.shape[1]
 
@@ -387,12 +378,12 @@ class DFlashDraftModel(Qwen3PreTrainedModel, SpeculatorModel):
         
         past_key_values = DynamicCache(config=self.config.transformer_layer_config)
 
-        print(f"DEBUG: Creating mask with lengths={lengths}, total_seq_len={total_seq_len}, block_size={self.block_size}", flush=True)
+        # print(f"DEBUG: Creating mask with lengths={lengths}, total_seq_len={total_seq_len}, block_size={self.block_size}", flush=True)
         with torch.no_grad():
             padding=torch.sum(lengths)
         combined_mask_mod = create_combined_mask_mod(lengths.to(device), total_seq_len, block_size=8, padding=padding)
         # Note: Attention mask is stored as a BlockMask object
-        print(f"DEBUG: Creating block_mask with Q_LEN={total_seq_len}, KV_LEN={total_seq_len*2}", flush=True)
+        # print(f"DEBUG: Creating block_mask with Q_LEN={total_seq_len}, KV_LEN={total_seq_len*2}", flush=True)
         attention_mask = create_block_mask(
             combined_mask_mod,
             B=None,
@@ -401,22 +392,24 @@ class DFlashDraftModel(Qwen3PreTrainedModel, SpeculatorModel):
             KV_LEN=total_seq_len*2,
             device=device,
         )
-        print(f"DEBUG: Block mask created: {attention_mask.shape}", flush=True)
+        # print(f"DEBUG: Block mask created: {attention_mask.shape}", flush=True)
         
 
         mask_token_ids=torch.full((1, total_seq_len), self.mask_token_id, dtype=torch.long, device=device)
+        mask_token_ids[:, ::self.block_size] = input_ids[:, ::self.block_size]
+
         noise_embedding=self.embed_tokens(mask_token_ids)
-        print(f"DEBUG: Before FC - has_nan: {torch.isnan(hidden_states).any()}, min: {hidden_states.min()}, max: {hidden_states.max()}, shape: {hidden_states.shape}", flush=True)
+        # print(f"DEBUG: Before FC - has_nan: {torch.isnan(hidden_states).any()}, min: {hidden_states.min()}, max: {hidden_states.max()}, shape: {hidden_states.shape}", flush=True)
 
         fc_output = self.fc(hidden_states)
-        print(f"DEBUG: After FC (before norm) - has_nan: {torch.isnan(fc_output).any()}, min: {fc_output.min()}, max: {fc_output.max()}", flush=True)
+        # print(f"DEBUG: After FC (before norm) - has_nan: {torch.isnan(fc_output).any()}, min: {fc_output.min()}, max: {fc_output.max()}", flush=True)
 
         hidden_states = self.hidden_norm(fc_output)
-        print(f"DEBUG: After FC+norm - has_nan: {torch.isnan(hidden_states).any()}, min: {hidden_states.min()}, max: {hidden_states.max()}", flush=True)
+        # print(f"DEBUG: After FC+norm - has_nan: {torch.isnan(hidden_states).any()}, min: {hidden_states.min()}, max: {hidden_states.max()}", flush=True)
 
 
         position_ids=position_ids.repeat(1, 2)
-        print(f"DEBUG: position_ids shape after repeat: {position_ids.shape}, hidden_states shape: {hidden_states.shape}", flush=True)
+        # print(f"DEBUG: position_ids shape after repeat: {position_ids.shape}, hidden_states shape: {hidden_states.shape}", flush=True)
         position_embeddings = self.rotary_emb(hidden_states, position_ids)
         return_loss = verifier_last_hidden_states is not None
         if return_loss:
@@ -435,12 +428,13 @@ class DFlashDraftModel(Qwen3PreTrainedModel, SpeculatorModel):
                 position_embeddings=position_embeddings,
                 **kwargs,
             )
-            print(f"DEBUG: After layer {i} - has_nan: {torch.isnan(hidden_states).any()}, min: {hidden_states.min()}, max: {hidden_states.max()}", flush=True)
+            # print(f"DEBUG: After layer {i} - has_nan: {torch.isnan(hidden_states).any()}, min: {hidden_states.min()}, max: {hidden_states.max()}", flush=True)
         hidden_states=self.norm(hidden_states)
-        print(f"DEBUG: After final norm - has_nan: {torch.isnan(hidden_states).any()}, min: {hidden_states.min()}, max: {hidden_states.max()}", flush=True)
-
-        logits=self.verifier_lm_head(hidden_states)
-        print(f"DEBUG: After lm_head - has_nan: {torch.isnan(logits).any()}, min: {logits.min()}, max: {logits.max()}", flush=True)
+        # print(f"DEBUG: After final norm - has_nan: {torch.isnan(hidden_states).any()}, min: {hidden_states.min()}, max: {hidden_states.max()}", flush=True)
+        print(self.lm_head.weight.shape)
+        print(self.verifier_lm_head.weight.shape)
+        logits=self.lm_head(hidden_states)
+        # print(f"DEBUG: After lm_head - has_nan: {torch.isnan(logits).any()}, min: {logits.min()}, max: {logits.max()}", flush=True)
         if return_loss:
             s_loss, s_metrics = compute_metrics(
                 logits,

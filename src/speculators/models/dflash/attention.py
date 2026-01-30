@@ -28,8 +28,8 @@ def create_combined_mask_mod(lengths: torch.Tensor, total_seq_len: int, block_si
         ]
     ).contiguous()
 
-    print(f"DEBUG: document_ids: {document_ids}", flush=True)
-    print(f"DEBUG: lengths: {lengths}, total_seq_len: {total_seq_len}, block_size: {block_size}", flush=True)
+    # print(f"DEBUG: document_ids: {document_ids}", flush=True)
+    # print(f"DEBUG: lengths: {lengths}, total_seq_len: {total_seq_len}, block_size: {block_size}", flush=True)
 
     def causal_mask_mod(_b, _h, q_idx, kv_idx):
         causal = q_idx >= kv_idx  # bool
@@ -67,48 +67,6 @@ def create_combined_mask_mod(lengths: torch.Tensor, total_seq_len: int, block_si
 
 
 
-def extend_mask_for_draft_tokens(block_mask):
-
-    kv_num_blocks = block_mask.kv_num_blocks
-    # shape: [B, H, Q_LEN // BLOCK_SIZE]
-
-    kv_indices = block_mask.kv_indices
-    # shape: [B, H, Q_LEN // BLOCK_SIZE, KV_LEN // BLOCK_SIZE]
-    b, h, q_blocks, kv_blocks = kv_indices.shape
-
-    # extend kv indices if needed
-    kv_indices = torch.cat(
-        [kv_indices, kv_indices.new_zeros((b, h, q_blocks, q_blocks))], dim=-1
-    )
-    new_block_indices = torch.arange(
-        kv_blocks,
-        kv_blocks + q_blocks,
-        dtype=kv_indices.dtype,
-        device=kv_indices.device,
-    ).reshape(1, 1, q_blocks, 1)
-    kv_indices.scatter_(
-        dim=-1, index=kv_num_blocks.unsqueeze(-1), src=new_block_indices
-    )
-
-    kv_num_blocks = kv_num_blocks + 1
-    if block_mask.full_kv_indices is not None:
-        extended_full_kv_indices = torch.cat(
-            [
-                block_mask.full_kv_indices,
-                block_mask.full_kv_indices.new_zeros((b, h, q_blocks, q_blocks)),
-            ],
-            dim=-1,
-        )
-    else:
-        extended_full_kv_indices = None
-    return BlockMask.from_kv_blocks(
-        kv_num_blocks,
-        kv_indices,
-        block_mask.full_kv_num_blocks,
-        extended_full_kv_indices,
-        mask_mod=block_mask.mask_mod,
-    )
-
 
 def block_mask_to_dense_attention_mask(
     block_mask: BlockMask, device: torch.device, dtype: torch.dtype
@@ -134,11 +92,11 @@ def flex_attention_forward(
     scaling: float | None = None,
     **_kwargs,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
-    print(f"DEBUG: Query shape: {query.shape}, Key shape: {key.shape}, Value shape: {value.shape}", flush=True)
-    print(f"DEBUG: BlockMask shape: {attention_mask.shape}", flush=True)
-    print("attn mask", attention_mask, flush=True)
-    dense = block_mask_to_dense_attention_mask(attention_mask, query.device, torch.long)
-    print(f"DEBUG: Dense mask stats - min: {dense.min()}, max: {dense.max()}, has_nan: {torch.isnan(dense).any()}", flush=True)
+    # print(f"DEBUG: Query shape: {query.shape}, Key shape: {key.shape}, Value shape: {value.shape}", flush=True)
+    # print(f"DEBUG: BlockMask shape: {attention_mask.shape}", flush=True)
+    # print("attn mask", attention_mask, flush=True)
+    # dense = block_mask_to_dense_attention_mask(attention_mask, query.device, torch.long)
+    # print(f"DEBUG: Dense mask stats - min: {dense.min()}, max: {dense.max()}, has_nan: {torch.isnan(dense).any()}", flush=True)
 
     # Save mask visualization (disabled - requires matplotlib)
     # import matplotlib.pyplot as plt

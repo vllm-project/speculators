@@ -42,7 +42,7 @@ class TrainerConfig(NamedTuple):
     local_rank: int = 0
     train_call_kwargs: dict = {}
     val_call_kwargs: dict = {}
-    scheduler_type: Literal["linear", "cosine", "none"] = "linear"
+    scheduler_type: Literal["linear", "cosine", "none"] = "none"
     scheduler_warmup_steps: int | None = None
     scheduler_total_steps: int | None = None
     scheduler_num_cosine_cycles: float = 0.5
