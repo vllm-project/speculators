@@ -35,14 +35,14 @@ def compute_accuracy(
     target_tokens = torch.argmax(targets, dim=-1)
     predicted_tokens = torch.argmax(logits, dim=-1)
     # shape: [1, total_seq_len - ttt_step]
+    # if (not torch.distributed.is_initialized()) or torch.distributed.get_rank() == 0:
+    #     print(f"predicted {predicted_tokens[0,20:30]}\ntarget {target_tokens[0,20:30]}", flush=True)
 
     correct = predicted_tokens == target_tokens
     if loss_mask is not None:
         correct = torch.masked_select(correct, loss_mask.to(torch.bool))
-
     correct_sum = correct.float().sum()
     full_denom = correct.numel()
-
     return correct_sum / (full_denom + 1e-5)
 def loss_function(
     logits: torch.Tensor,  # shape: [1, total_seq_len , draft_vocab_size]
@@ -357,7 +357,8 @@ class DFlashDraftModel(SpeculatorModel):
         | None = None,  # shape: [1, total_seq_len, hidden_size]
         **kwargs,
     ):
-
+        if (not torch.distributed.is_initialized()) or torch.distributed.get_rank() == 0:
+            print("lengths", lengths, flush=True)
         device = hidden_states.device
         total_seq_len = hidden_states.shape[1]
 
@@ -404,9 +405,14 @@ class DFlashDraftModel(SpeculatorModel):
         if return_loss:
             with torch.no_grad():
                 targets = self.verifier_lm_head(verifier_last_hidden_states)
-
             loss = torch.tensor(0.0, device=device)
             metrics = {}
+        tar_tok=torch.argmax(targets, dim=-1)
+
+        tar_tok=tar_tok+self.d2t[tar_tok]
+        if (not torch.distributed.is_initialized()) or torch.distributed.get_rank() == 0:
+            print(f"tar_tok {tar_tok[0,-20:-1]}, input_ids {input_ids[0,-20:-1]}", flush=True)
+            print((tar_tok[:, :-1] == input_ids[:, 1:]).float().mean())
         for i, layer in enumerate(self.layers):
             hidden_states = layer(
                 hidden_states=noise_embedding,
