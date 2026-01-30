@@ -268,7 +268,7 @@ class Qwen3DFlashDecoderLayer(GradientCheckpointingLayer):
 
 
 @SpeculatorModel.register("dflash")
-class DFlashDraftModel(Qwen3PreTrainedModel, SpeculatorModel):
+class DFlashDraftModel(SpeculatorModel):
     config_class: ClassVar[type[DFlashSpeculatorConfig]] = DFlashSpeculatorConfig  # type: ignore[misc]
     _no_split_modules = ["Qwen3DFlashDecoderLayer"]
     _keys_to_ignore_on_load_missing: ClassVar[list[str]] = ["embed_tokens.weight"]  # type: ignore[misc]
@@ -300,7 +300,7 @@ class DFlashDraftModel(Qwen3PreTrainedModel, SpeculatorModel):
         self.fc = nn.Linear(len(self.target_layer_ids) * config.transformer_layer_config.hidden_size, config.transformer_layer_config.hidden_size, bias=False)
         self.hidden_norm = Qwen3RMSNorm(config.transformer_layer_config.hidden_size, eps=config.transformer_layer_config.rms_norm_eps)
         self.block_size = config.block_size
-        self.post_init()
+        # self.post_init()
 
     def _setup_embeddings_and_mask_token(self, verifier_config, t2d):
         """Setup embeddings and mask_token_id from verifier."""
@@ -415,6 +415,8 @@ class DFlashDraftModel(Qwen3PreTrainedModel, SpeculatorModel):
         if return_loss:
             with torch.no_grad():
                 targets = self.verifier_lm_head(verifier_last_hidden_states)
+            print("targets shape", targets.shape)
+            
             loss = torch.tensor(0.0, device=device)
             metrics = {}
         for i, layer in enumerate(self.layers):
