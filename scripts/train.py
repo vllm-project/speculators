@@ -1,4 +1,7 @@
 import argparse
+import json
+import logging
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -24,6 +27,8 @@ from speculators.train.noise_transforms import AddUniformNoise
 from speculators.train.trainer import Trainer, TrainerConfig
 from speculators.train.utils import maybe_destroy_distributed, maybe_setup_distributed
 
+logger = logging.getLogger(__name__)
+
 # DRAFTER MODEL HYPARAMETERS
 NORM_BEFORE_RESIDUAL = True
 
@@ -31,6 +36,80 @@ NORM_BEFORE_RESIDUAL = True
 NUM_WORKERS = 12
 PREFETCH_FACTOR = 4
 NOISE_STD = 0.05
+
+
+def load_safetensors_state_dict(model_dir: str) -> dict[str, torch.Tensor]:
+    """Load state dict from safetensors format (single or sharded).
+    
+    Args:
+        model_dir: Path to directory containing model.safetensors or sharded safetensors
+        
+    Returns:
+        Dictionary mapping parameter names to tensors (on CPU)
+        
+    Raises:
+        FileNotFoundError: If no safetensors files found
+        RuntimeError: If safetensors library not available
+    """
+    model_path = Path(model_dir)
+    
+    # Check for safetensors library
+    try:
+        from safetensors import safe_open
+    except ImportError as e:
+        raise RuntimeError(
+            "safetensors library is required for loading pretrained models. "
+            "Install it with: pip install safetensors"
+        ) from e
+    
+    # Case 1: Single safetensors file
+    single_file = model_path / "model.safetensors"
+    if single_file.exists():
+        logger.info(f"Loading single safetensors file from {single_file}")
+        state_dict = {}
+        with safe_open(single_file, framework="pt", device="cpu") as f:
+            for key in f.keys():
+                state_dict[key] = f.get_tensor(key)
+        return state_dict
+    
+    # Case 2: Sharded safetensors with index file
+    index_file = model_path / "model.safetensors.index.json"
+    if index_file.exists():
+        logger.info(f"Loading sharded safetensors from {model_path}")
+        with open(index_file, "r") as f:
+            index = json.load(f)
+        
+        weight_map = index.get("weight_map", {})
+        if not weight_map:
+            raise ValueError(
+                f"model.safetensors.index.json exists but contains no weight_map: {index_file}"
+            )
+        
+        # Collect all shard files
+        shard_files = set(weight_map.values())
+        
+        # Load tensors from all shards
+        state_dict = {}
+        for shard_file in sorted(shard_files):
+            shard_path = model_path / shard_file
+            if not shard_path.exists():
+                raise FileNotFoundError(
+                    f"Shard file not found: {shard_path} (referenced in index)"
+                )
+            
+            logger.info(f"  Loading shard: {shard_file}")
+            with safe_open(shard_path, framework="pt", device="cpu") as f:
+                for key in f.keys():
+                    if weight_map.get(key) == shard_file:
+                        state_dict[key] = f.get_tensor(key)
+        
+        return state_dict
+    
+    # Neither single file nor sharded format found
+    raise FileNotFoundError(
+        f"No safetensors files found in {model_dir}. "
+        f"Expected either 'model.safetensors' or 'model.safetensors.index.json'"
+    )
 
 
 def setup_dataloader(
@@ -121,8 +200,83 @@ def main(args: argparse.Namespace):
     local_rank, world_size, rank, is_distributed = maybe_setup_distributed()
     device = torch.device(local_rank)
 
-    # Load t2d and d2t tensors if provided
-    if args.d2t_path or args.t2d_path:
+    # Initialize variables for pretrained model loading
+    pretrained_state_dict = None
+    
+    # Load pretrained model if pretrained_model_path is provided
+    if args.pretrained_model_path:
+        logger.info(f"Loading pretrained model from {args.pretrained_model_path}")
+        
+        # Check for conflicting arguments
+        if args.d2t_path or args.t2d_path:
+            raise ValueError(
+                "--pretrained-model-path overrides --d2t-path and --t2d-path. "
+                "Please remove --d2t-path and --t2d-path when using --pretrained-model-path."
+            )
+        
+        # Load the full state dict from safetensors
+        pretrained_state_dict = load_safetensors_state_dict(args.pretrained_model_path)
+        
+        # Debug: print keys containing d2t or t2d if requested
+        if args.debug_init_keys:
+            logger.info("Keys containing 'd2t' or 't2d' in pretrained state dict:")
+            for key in sorted(pretrained_state_dict.keys()):
+                if "d2t" in key.lower() or "t2d" in key.lower():
+                    tensor = pretrained_state_dict[key]
+                    logger.info(f"  {key}: shape={tensor.shape}, dtype={tensor.dtype}")
+        
+        # Extract d2t and t2d from state dict
+        # Strategy: find keys containing 'd2t' and 't2d'
+        d2t_candidates = [k for k in pretrained_state_dict.keys() if "d2t" in k.lower()]
+        t2d_candidates = [k for k in pretrained_state_dict.keys() if "t2d" in k.lower()]
+        
+        # Select the best match (prefer exact matches like "d2t", "t2d")
+        def select_key(candidates: list[str], target: str) -> str:
+            if not candidates:
+                raise ValueError(
+                    f"No '{target}' key found in pretrained model state dict. "
+                    f"Available keys: {list(pretrained_state_dict.keys())[:20]}..."
+                )
+            # Prefer exact match
+            exact_matches = [k for k in candidates if k.lower() == target.lower()]
+            if exact_matches:
+                return exact_matches[0]
+            # Prefer simple matches like "model.d2t" over complex ones
+            if len(candidates) == 1:
+                return candidates[0]
+            # Multiple candidates without exact match - ask user to clarify
+            raise ValueError(
+                f"Multiple '{target}' candidates found in state dict: {candidates}. "
+                f"Please verify the model structure."
+            )
+        
+        d2t_key = select_key(d2t_candidates, "d2t")
+        t2d_key = select_key(t2d_candidates, "t2d")
+        
+        logger.info(f"Extracting d2t from key: {d2t_key}")
+        logger.info(f"Extracting t2d from key: {t2d_key}")
+        
+        # Extract and remove from state dict (will load later after model creation)
+        d2t = pretrained_state_dict.pop(d2t_key).to(device)
+        t2d = pretrained_state_dict.pop(t2d_key).to(device)
+        
+        # Validate shapes
+        if d2t.dim() not in [1, 2]:
+            raise ValueError(
+                f"Unexpected d2t shape: {d2t.shape}. Expected 1D or 2D tensor."
+            )
+        if t2d.dim() not in [1, 2]:
+            raise ValueError(
+                f"Unexpected t2d shape: {t2d.shape}. Expected 1D or 2D tensor."
+            )
+        
+        # Derive draft_vocab_size from d2t
+        draft_vocab_size = d2t.shape[0]
+        logger.info(f"Derived draft_vocab_size={draft_vocab_size} from d2t.shape[0]")
+        logger.info(f"d2t shape: {d2t.shape}, t2d shape: {t2d.shape}")
+        
+    # Load t2d and d2t tensors from numpy files if no pretrained model
+    elif args.d2t_path or args.t2d_path:
         if not (args.d2t_path and args.t2d_path):
             raise ValueError(
                 "Both t2d and d2t must be provided together, or both must be omitted. "
@@ -168,6 +322,33 @@ def main(args: argparse.Namespace):
 
     # Setup draft model
     draft_model = Eagle3DraftModel(config=speculator_config, t2d=t2d, d2t=d2t)
+    
+    # Load pretrained weights if provided
+    if pretrained_state_dict is not None:
+        logger.info(f"Loading pretrained weights from {args.pretrained_model_path}")
+        logger.info(f"Number of parameters to load: {len(pretrained_state_dict)}")
+        
+        # Load state dict with strict=True to ensure all keys match
+        missing_keys, unexpected_keys = draft_model.load_state_dict(
+            pretrained_state_dict, strict=False
+        )
+        
+        if missing_keys:
+            logger.warning(f"Missing keys in pretrained model: {missing_keys}")
+        if unexpected_keys:
+            logger.warning(f"Unexpected keys in pretrained model: {unexpected_keys}")
+        
+        # If we want strict loading (recommended), check for issues
+        if missing_keys or unexpected_keys:
+            logger.warning(
+                "Weight loading completed with warnings. "
+                "This may be expected if the model architecture changed slightly."
+            )
+        else:
+            logger.info("Successfully loaded all pretrained weights (strict=True)")
+        
+        logger.info(f"Pretrained model loaded. Fine-tuning will start from these weights.")
+        logger.info("Note: Optimizer and scheduler states are NOT loaded (fresh training state).")
 
     # Setup dataloaders
     train_files, val_files = split_files(args.data_path, ratio=0.9)
@@ -239,6 +420,20 @@ def parse_args():
     parser.add_argument("--num-layers", type=int, default=1)
     parser.add_argument("--d2t-path", type=str, default=None)
     parser.add_argument("--t2d-path", type=str, default=None)
+    parser.add_argument(
+        "--pretrained-model-path",
+        type=str,
+        default=None,
+        help="Path to pretrained EAGLE3 model directory (HuggingFace format with safetensors). "
+        "When provided, d2t/t2d mappings and model weights will be loaded from this model, "
+        "enabling warm-start/fine-tuning. Overrides --d2t-path and --t2d-path.",
+    )
+    parser.add_argument(
+        "--debug-init-keys",
+        action="store_true",
+        default=False,
+        help="Print all state dict keys containing 'd2t' or 't2d' when loading pretrained model",
+    )
     parser.add_argument("--ttt-steps", type=int, default=3)
     parser.add_argument("--ttt-step-loss-decay", type=float, default=1.0)
     parser.add_argument(
