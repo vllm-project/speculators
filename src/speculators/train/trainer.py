@@ -97,14 +97,18 @@ class Trainer:
             if self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1:
                 self.checkpointer.load_model_state_dict(self.model)
             else:
+                # Skip verifier-shared layers during reset to preserve pretrained weights
+                skip_modules = {self.model.lm_head, self.model.embed_tokens}
+
                 for m in self.model.layers.children():  # type: ignore[union-attr]
                     if not isinstance(m, FSDPModule):
                         continue
                     m.to_empty(device="cuda")  # type: ignore[attr-defined]
                     for sub_module in m.modules():  # type: ignore[attr-defined]
+                        if sub_module in skip_modules:
+                            continue
                         if hasattr(sub_module, "reset_parameters"):
                             sub_module.reset_parameters()  # type: ignore[operator]
-                # todo: Ensure lm_head and embed_tokens are loaded after reset
         else:
             self.model.to(self.local_rank)  # type: ignore[arg-type]
             if self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1:
