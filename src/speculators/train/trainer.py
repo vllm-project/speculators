@@ -123,7 +123,7 @@ class Trainer:
             # For Eagle3/DFlash models, use custom initialization logic
             if isinstance(self.model, (Eagle3DraftModel, DFlashDraftModel)):
                 # Skip verifier-shared layers during reset to preserve pretrained weights
-                skip_modules = {self.model.lm_head, self.model.embed_tokens, self.model.verifier_lm_head}
+                skip_modules = {self.model.lm_head, self.model.embed_tokens}
 
                 for m in self.model.layers.children():  # type: ignore[union-attr]
                     if not isinstance(m, FSDPModule):
