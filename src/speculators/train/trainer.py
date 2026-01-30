@@ -192,10 +192,11 @@ class Trainer:
                     dist.reduce(v, dst=0, op=dist.ReduceOp.AVG)
 
             metrics = {k: v.item() for k, v in metrics.items()}
-            metric_logger.info(
-                {"train": metrics, "epoch": epoch, "lr": current_lr},
-                extra={"step": self.global_step},
-            )
+            if self.local_rank == 0:
+                metric_logger.info(
+                    {"train": metrics, "epoch": epoch, "lr": current_lr},
+                    extra={"step": self.global_step},
+                )
             self.global_step += 1
 
     @torch.no_grad()
