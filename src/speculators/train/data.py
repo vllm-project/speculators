@@ -8,7 +8,7 @@ from typing import Any
 
 import torch
 import torch.nn.functional as F  # noqa: N812
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset # type: ignore
 
 from speculators.train.noise_transforms import TransformTensors
 
