@@ -30,20 +30,27 @@ def compute_accuracy(
     logits: torch.Tensor,  # shape: [1, total_seq_len - ttt_step, draft_vocab_size]
     targets: torch.Tensor,  # shape: [1, total_seq_len - ttt_step, draft_vocab_size]
     loss_mask: torch.Tensor | None,  # shape: [1, total_seq_len - ttt_step]
+    block_size:int =1,
 ):
     # Note: logits, targets, and loss_mask are already aligned for the current ttt_step
     target_tokens = torch.argmax(targets, dim=-1)
     predicted_tokens = torch.argmax(logits, dim=-1)
-    # shape: [1, total_seq_len - ttt_step]
-    # if (not torch.distributed.is_initialized()) or torch.distributed.get_rank() == 0:
-    #     print(f"predicted {predicted_tokens[0,20:30]}\ntarget {target_tokens[0,20:30]}", flush=True)
-
     correct = predicted_tokens == target_tokens
+
+    if block_size!=1:
+        accs=[]
+        for i in range(block_size):
+            pos_cor=torch.masked_select(correct[:, i::block_size], loss_mask.to(torch.bool)[:, i::block_size])
+            accs.append(pos_cor.float().sum()/(pos_cor.numel()+1e-5)
+
     if loss_mask is not None:
         correct = torch.masked_select(correct, loss_mask.to(torch.bool))
     correct_sum = correct.float().sum()
     full_denom = correct.numel()
-    return correct_sum / (full_denom + 1e-5)
+    if block_size==1:
+        return correct_sum / (full_denom + 1e-5)
+    else: 
+        return correct_sum / (full_denom + 1e-5), accs
 def loss_function(
     logits: torch.Tensor,  # shape: [1, total_seq_len , draft_vocab_size]
     targets: torch.Tensor,  # shape: [1, total_seq_len, draft_vocab_size]
@@ -72,6 +79,7 @@ def compute_metrics(
     logits: torch.Tensor,
     targets: torch.Tensor,
     loss_mask: torch.Tensor | None,
+    block_size: int=1,
 ) -> tuple[torch.Tensor, dict]:
     """Compute metrics for a given draft.
 
@@ -90,12 +98,21 @@ def compute_metrics(
         Loss value and metrics dictionary.
     """
     s_loss = loss_function(logits, targets, loss_mask)
-    s_full_acc=compute_accuracy(logits, targets, loss_mask)
-    s_metrics=0
-    s_metrics = {}
-    s_metrics[f"loss"] = s_loss.detach().clone()
-    s_metrics[f"full_acc"] = s_full_acc
+    if block_size==1:
 
+        s_full_acc=compute_accuracy(logits, targets, loss_mask, block_size)
+        s_metrics=0
+        s_metrics = {}
+        s_metrics[f"loss"] = s_loss.detach().clone()
+        s_metrics[f"full_acc"] = s_full_acc
+    else:
+        s_full_acc, per_position_acc=compute_accuracy(logits, targets, loss_mask, block_size)
+        s_metrics=0
+        s_metrics = {}
+        s_metrics[f"loss"] = s_loss.detach().clone()
+        s_metrics[f"full_acc"] = s_full_acc
+        for pos in range(len(per_position_acc)):
+            s_metrics[f"position {pos} acc"]=per_position_acc[pos]
     return s_loss, s_metrics
 
 
@@ -411,7 +428,7 @@ class DFlashDraftModel(SpeculatorModel):
 
         tar_tok=tar_tok+self.d2t[tar_tok]
         if (not torch.distributed.is_initialized()) or torch.distributed.get_rank() == 0:
-            print(f"tar_tok {tar_tok[0,-20:-1]}, input_ids {input_ids[0,-20:-1]}", flush=True)
+            print(f"tar_tok {tar_tok[0,-20:-1]}, input_ids {input_ids[0,-20:-1]}, loss_mask {loss_mask[0,-20:-1]}", flush=True)
             print((tar_tok[:, :-1] == input_ids[:, 1:]).float().mean())
         for i, layer in enumerate(self.layers):
             hidden_states = layer(
@@ -433,6 +450,7 @@ class DFlashDraftModel(SpeculatorModel):
                 logits,
                 targets,
                 loss_mask,
+                self.block_size
             )
             loss += s_loss
             metrics.update(s_metrics)
