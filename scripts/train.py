@@ -359,26 +359,31 @@ def main(args: argparse.Namespace):
         logger.info(f"Loading pretrained weights from {args.pretrained_model_path}")
         logger.info(f"Number of parameters to load: {len(pretrained_state_dict)}")
         
-        # Load state dict with strict=True to ensure all keys match
+        # Load state dict with strict=False (d2t/t2d already passed to constructor)
         missing_keys, unexpected_keys = draft_model.load_state_dict(
             pretrained_state_dict, strict=False
         )
         
-        if missing_keys:
-            logger.warning(f"Missing keys in pretrained model: {missing_keys}")
+        # Filter out expected missing keys (d2t, t2d are passed to constructor separately)
+        expected_missing = {"t2d", "d2t"}
+        unexpected_missing = [k for k in missing_keys if k not in expected_missing]
+        
+        # Report only unexpected issues
+        if unexpected_missing:
+            logger.warning(f"Unexpected missing keys in pretrained model: {unexpected_missing}")
         if unexpected_keys:
             logger.warning(f"Unexpected keys in pretrained model: {unexpected_keys}")
         
-        # If we want strict loading (recommended), check for issues
-        if missing_keys or unexpected_keys:
+        # Summary message
+        if unexpected_missing or unexpected_keys:
             logger.warning(
                 "Weight loading completed with warnings. "
-                "This may be expected if the model architecture changed slightly."
+                "This may indicate model architecture mismatch."
             )
         else:
-            logger.info("Successfully loaded all pretrained weights (strict=True)")
+            logger.info("✓ Successfully loaded all pretrained weights")
         
-        logger.info(f"Pretrained model loaded. Fine-tuning will start from these weights.")
+        logger.info("Pretrained model loaded. Fine-tuning will start from these weights.")
         logger.info("Note: Optimizer and scheduler states are NOT loaded (fresh training state).")
 
     # Setup dataloaders
