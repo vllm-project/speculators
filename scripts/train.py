@@ -481,12 +481,7 @@ def parse_args():
         "When provided, d2t/t2d mappings and model weights will be loaded from this model, "
         "enabling warm-start/fine-tuning. Overrides --d2t-path and --t2d-path.",
     )
-    parser.add_argument(
-        "--debug-init-keys",
-        action="store_true",
-        default=False,
-        help="Print all state dict keys containing 'd2t' or 't2d' when loading pretrained model",
-    )
+
     parser.add_argument("--ttt-steps", type=int, default=3)
     parser.add_argument("--ttt-step-loss-decay", type=float, default=1.0)
     parser.add_argument(
