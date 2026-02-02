@@ -1,15 +1,11 @@
 # ruff: noqa: ERA001
-from typing import NamedTuple
-
 import torch
 from transformers import Cache, LlamaConfig
-from transformers.models.llama.modeling_llama import (
-    LlamaDecoderLayer,
-    LlamaRMSNorm,
-    LlamaRotaryEmbedding,
-)
+from transformers.models.llama.modeling_llama import LlamaDecoderLayer, LlamaRMSNorm
 from transformers.processing_utils import Unpack
 from transformers.utils.generic import TransformersKwargs
+
+from speculators.models import base_components
 
 
 class LlamaDecoderEagle3FirstLayer(LlamaDecoderLayer):
@@ -94,18 +90,8 @@ class LlamaDecoderEagle3FirstLayer(LlamaDecoderLayer):
         return hidden_states  # noqa: RET504
 
 
-class ModelComponents(NamedTuple):
-    first_layer_class: type
-    decoder_layer_class: type
-    norm_class: type
-    rotary_emb_class: type
-
-
-model_classes: dict[str, ModelComponents] = {
-    "llama": ModelComponents(
-        LlamaDecoderEagle3FirstLayer,
-        LlamaDecoderLayer,
-        LlamaRMSNorm,
-        LlamaRotaryEmbedding,
+model_classes: dict[str, base_components.ModelComponents] = {
+    "llama": base_components.override_components(
+        "llama", first_layer_class=LlamaDecoderEagle3FirstLayer
     ),
 }

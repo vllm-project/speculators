@@ -465,3 +465,73 @@ class Eagle3DraftModel(SpeculatorModel):
             return draft_tokens, loss, metrics
         else:
             return draft_tokens
+
+    @classmethod
+    def from_training_args(
+        cls,
+        verifier_config: PretrainedConfig,
+        num_layers: int,
+        norm_before_residual: bool,
+        t2d: torch.Tensor,
+        d2t: torch.Tensor,
+        args,
+    ) -> "Eagle3DraftModel":
+        """Create Eagle3 model from training arguments.
+
+        Args:
+            verifier_config: Verifier model configuration
+            num_layers: Number of decoder layers
+            norm_before_residual: Whether to normalize before residual connection
+            t2d: Target-to-draft vocabulary mapping tensor
+            d2t: Draft-to-target vocabulary mapping tensor
+            args: Training arguments namespace with Eagle3-specific params
+
+        Returns:
+            Initialized Eagle3DraftModel
+        """
+        from speculators.config import SpeculatorsConfig
+        from speculators.proposals.greedy import GreedyTokenProposalConfig
+
+        config = Eagle3SpeculatorConfig(
+            transformer_layer_config=verifier_config,
+            draft_vocab_size=verifier_config.vocab_size,
+            norm_before_residual=norm_before_residual,
+            num_layers=num_layers,
+            speculators_config=SpeculatorsConfig(
+                algorithm="eagle3",
+                proposal_methods=[
+                    GreedyTokenProposalConfig(
+                        num_draft_tokens=args.ttt_steps,
+                        use_dynamic_branching=False,
+                    )
+                ],
+                default_proposal_method="greedy",
+                verifier=VerifierConfig.from_config(
+                    verifier_config, name_or_path=args.verifier_name_or_path
+                ),
+            ),
+        )
+
+        return cls(config=config, t2d=t2d, d2t=d2t)
+
+    @staticmethod
+    def get_trainer_kwargs(args) -> tuple[dict, dict]:
+        """Get training and validation kwargs for Eagle3.
+
+        Args:
+            args: Training arguments namespace
+
+        Returns:
+            Tuple of (train_call_kwargs, val_call_kwargs)
+        """
+        train_kwargs = {
+            "use_off_policy_tokens": args.use_off_policy_tokens,
+            "ttt_steps": args.ttt_steps,
+            "ttt_step_loss_decay": args.ttt_step_loss_decay,
+        }
+        val_kwargs = {
+            "use_off_policy_tokens": False,
+            "ttt_steps": args.ttt_steps,
+            "ttt_step_loss_decay": args.ttt_step_loss_decay,
+        }
+        return train_kwargs, val_kwargs

@@ -6,9 +6,7 @@ from torch.utils.data import DataLoader
 from transformers import LlamaConfig
 from transformers.models.auto.configuration_auto import AutoConfig
 
-from speculators.config import SpeculatorsConfig, VerifierConfig
-from speculators.models.eagle3 import Eagle3DraftModel, Eagle3SpeculatorConfig
-from speculators.proposals.greedy import GreedyTokenProposalConfig
+from speculators.model import SpeculatorModel
 from speculators.train.data import (
     Eagle3SampleFileDataset,
     create_collate_fn,
@@ -146,28 +144,16 @@ def main(args: argparse.Namespace):
         args.verifier_name_or_path, args.num_layers
     )
 
-    speculator_config = Eagle3SpeculatorConfig(
-        transformer_layer_config=transformer_layer_config,
-        draft_vocab_size=draft_vocab_size,
+    # Get model class from registry and create model using its factory method
+    model_class = SpeculatorModel.get_class(args.speculator_type)
+    draft_model = model_class.from_training_args(
+        verifier_config=transformer_layer_config,
+        num_layers=args.num_layers,
         norm_before_residual=NORM_BEFORE_RESIDUAL,
-        speculators_config=SpeculatorsConfig(
-            algorithm="eagle3",
-            proposal_methods=[
-                GreedyTokenProposalConfig(
-                    proposal_type="greedy",
-                    speculative_tokens=args.ttt_steps,
-                )
-            ],
-            default_proposal_method="greedy",
-            verifier=VerifierConfig(
-                name_or_path=args.verifier_name_or_path,
-                architectures=["LlamaForCausalLM"],
-            ),
-        ),
+        t2d=t2d,
+        d2t=d2t,
+        args=args,
     )
-
-    # Setup draft model
-    draft_model = Eagle3DraftModel(config=speculator_config, t2d=t2d, d2t=d2t)
 
     # Setup dataloaders
     train_files, val_files = split_files(args.data_path, ratio=0.9)
@@ -186,7 +172,9 @@ def main(args: argparse.Namespace):
         data_format_version=args.data_format_version,
     )
 
-    # Setup trainer
+    # Get trainer kwargs from model class
+    train_call_kwargs, val_call_kwargs = model_class.get_trainer_kwargs(args)
+
     trainer_config = TrainerConfig(
         num_epochs=args.epochs,
         save_path=args.save_path,
@@ -194,16 +182,8 @@ def main(args: argparse.Namespace):
         resume_from_checkpoint=not args.no_resume_from_checkpoint,
         is_distributed=is_distributed,
         local_rank=local_rank,
-        train_call_kwargs={
-            "use_off_policy_tokens": args.use_off_policy_tokens,
-            "ttt_steps": args.ttt_steps,
-            "ttt_step_loss_decay": args.ttt_step_loss_decay,
-        },
-        val_call_kwargs={
-            "use_off_policy_tokens": False,
-            "ttt_steps": args.ttt_steps,
-            "ttt_step_loss_decay": args.ttt_step_loss_decay,
-        },
+        train_call_kwargs=train_call_kwargs,
+        val_call_kwargs=val_call_kwargs,
         scheduler_type=args.scheduler_type,
         scheduler_warmup_steps=args.scheduler_warmup_steps,
         scheduler_total_steps=args.scheduler_total_steps,
@@ -221,6 +201,12 @@ def main(args: argparse.Namespace):
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--verifier-name-or-path", type=str, required=True)
+    parser.add_argument(
+        "--speculator-type",
+        type=str,
+        default="eagle3",
+        help="Type of speculator model to train (e.g., eagle3)",
+    )
     parser.add_argument("--data-path", type=str, default="./data")
     parser.add_argument("--save-path", type=str, default="./checkpoints")
     parser.add_argument("--epochs", type=int, default=20)
