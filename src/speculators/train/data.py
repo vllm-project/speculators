@@ -15,8 +15,8 @@ from speculators.train.noise_transforms import TransformTensors
 
 BatchType = dict[str, Any]
 
-
 def list_files(path):
+    # Collect all .pt files from a directory tree.
     datapath = []
     for root, _directories, files in os.walk(path):
         for file in files:
@@ -29,6 +29,7 @@ def list_files(path):
 
 
 def slice_and_pad_to_length(tensor, length):
+    # Slice and pad a tensor along the first dimension to the target length.
     sliced_tensor = tensor[:length]
     padding = [0, 0] * sliced_tensor.dim()
     padding[-1] = length - sliced_tensor.shape[0]
@@ -36,6 +37,7 @@ def slice_and_pad_to_length(tensor, length):
 
 
 def shift_batch(batch: BatchType):
+    # Shift input/target tensors to align next-token prediction.
     input_ids = batch["input_ids"]  # shape: [seq_len]
     # [x0, x1, x2, x3, x4, x5, x6, x7, x8, x9]
     hidden_states = batch["hidden_states"]  # shape: [seq_len, hidden_size]
@@ -74,6 +76,7 @@ def shift_batch(batch: BatchType):
 
 
 def split_files(datapath: str, ratio: float = 0.9, seed: int = 0):
+    # Split data files into train/val sets with a fixed seed.
     """Given a datapath, split the files into a training and validation set
     ratio is the proportion of files to put in the training set
     1 - ratio is the proportion of files to put in the validation set
@@ -93,6 +96,7 @@ StandardizeFnSig = Callable[[dict[str, Any]], dict[str, Any]]
 
 
 def standardize_data_v0(data: dict[str, Any]) -> dict[str, Any]:
+    # Standardize legacy v0 data format to the training schema.
     # v0 data format:
     # {
     #  "input_ids": [seq_len],
@@ -110,6 +114,7 @@ def standardize_data_v0(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def standardize_data_v1(data: dict[str, Any]) -> dict[str, Any]:
+    # Standardize v1 data format to the training schema.
     # v1 data format:
     # {
     #  "input_ids": [seq_len],
@@ -291,3 +296,18 @@ def create_collate_fn(max_len: int):
         return collated_data
 
     return collate_fn
+def get_standardize_fn(data_format: str | int) -> StandardizeFnSig:
+    # Resolve a data format string/version to the correct standardize function.
+    if isinstance(data_format, int):
+        return standardize_data_v1 if data_format == 1 else standardize_data_v0
+
+    normalized = data_format.strip().lower()
+    if normalized in ("v1", "text-v1", "vl-v1"):
+        return standardize_data_v1
+    if normalized in ("v0", "text-v0"):
+        return standardize_data_v0
+
+    raise ValueError(
+        f"Unsupported data_format: {data_format}. "
+        "Use one of: text-v1, vl-v1, v1, text-v0, v0."
+    )

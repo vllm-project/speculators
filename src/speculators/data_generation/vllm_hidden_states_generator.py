@@ -21,6 +21,7 @@ from vllm.v1.core.kv_cache_utils import (
     unify_hybrid_kv_cache_specs,
 )
 from vllm.v1.core.sched.scheduler import Scheduler
+from vllm.v1.engine.input_processor import InputProcessor
 from vllm.v1.executor.multiproc_executor import MultiprocExecutor
 from vllm.v1.request import Request, RequestStatus
 from vllm.v1.structured_output import StructuredOutputManager
@@ -41,6 +42,8 @@ SAMPLING_TEMPERATURE = 0.0  # Temperature for sampling (greedy)
 INITIAL_ARRIVAL_TIME = 0.0  # Initial request arrival time
 
 log = PipelineLogger(__name__)
+
+
 
 
 class VllmHiddenStatesGenerator:
@@ -71,7 +74,7 @@ class VllmHiddenStatesGenerator:
             hidden_states = result["hidden_states"]  # List of tensors per layer`
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0915
         self,
         model_path: str,
         layer_ids: list[int] | None = None,
@@ -82,11 +85,18 @@ class VllmHiddenStatesGenerator:
         self.model_path = model_path
         self.tensor_parallel_size = tensor_parallel_size
         self._request_counter = 0
+        self._input_processor: InputProcessor | None = None
 
         log.info(f"Initializing hidden states generator for {model_path}")
         log.info(f"Tensor parallel size: {tensor_parallel_size}")
 
         self.tokenizer = AutoTokenizer.from_pretrained(model_path)
+        if not hasattr(self.tokenizer, "max_token_id"):
+            try:
+                max_token_id = self.tokenizer.vocab_size - 1
+            except Exception:
+                max_token_id = len(self.tokenizer) - 1
+            self.tokenizer.max_token_id = max_token_id
 
         config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
         if hasattr(config, "num_hidden_layers"):
@@ -224,11 +234,27 @@ class VllmHiddenStatesGenerator:
             args=(self.layer_ids,),
         )
 
-    def generate(self, token_ids: list[list[int]] | torch.Tensor) -> list[dict]:
+    def _get_input_processor(self) -> InputProcessor:
+        # Lazily construct the vLLM input processor for multimodal requests.
+        if self._input_processor is None:
+            self._input_processor = InputProcessor(
+                self.vllm_config, tokenizer=self.tokenizer
+            )
+        return self._input_processor
+
+    def generate(  # noqa: PLR0912, PLR0915
+        self,
+        token_ids: list[list[int]] | torch.Tensor,
+        prompt_texts: list[str] | None = None,
+        multimodal_inputs: list[dict] | None = None,
+        request_ids: list[str] | None = None,
+    ) -> list[dict]:
         """Extract hidden states from prefill phase only.
 
         Args:
             token_ids: Batch of token ID sequences as list[list[int]] or Tensor
+            prompt_texts: Optional prompt strings for multimodal processing
+            multimodal_inputs: Optional multi-modal data aligned to each prompt
 
         Returns:
             List of dicts with keys: input_ids, hidden_states, loss_mask
@@ -240,26 +266,106 @@ class VllmHiddenStatesGenerator:
                 raise ValueError("token_ids cannot be empty")
             input_ids_list = token_ids
 
+        # Guard against multimodal misalignment: prompt text + mm inputs must be
+        # present and batch-aligned with token IDs, or vLLM will mix samples.
+        if multimodal_inputs is not None:
+            if prompt_texts is None:
+                raise ValueError("prompt_texts is required for multimodal inputs")
+            if len(prompt_texts) != len(input_ids_list):
+                raise ValueError(
+                    "prompt_texts length must match token_ids length for multimodal"
+                )
+            if len(multimodal_inputs) != len(input_ids_list):
+                raise ValueError("multimodal_inputs length must match token_ids length")
+
         log.debug(f"Generating hidden states for {len(input_ids_list)} sequences")
         # Account for max_tokens=1 in sampling params
         # (vLLM enforces: len(prompt) + max_tokens <= max_model_len)
         max_len = self.vllm_config.model_config.max_model_len - 1
-        input_ids_list = [ids[:max_len] for ids in input_ids_list]
+        if multimodal_inputs is None:
+            input_ids_list = [ids[:max_len] for ids in input_ids_list]
 
         for i, ids in enumerate(input_ids_list):
             # Ensure ids is a list (not tensor) for vLLM Request
             ids_list = ids.tolist() if isinstance(ids, torch.Tensor) else ids
-            req = Request(
-                request_id=f"req_{self._request_counter}_{i}",
-                prompt_token_ids=ids_list,
-                sampling_params=SamplingParams(
-                    max_tokens=MAX_DECODE_TOKENS, temperature=SAMPLING_TEMPERATURE
-                ),
-                pooling_params=None,
-                eos_token_id=self.tokenizer.eos_token_id,
-                arrival_time=INITIAL_ARRIVAL_TIME,
-                block_hasher=self.block_hasher,
+            if request_ids is not None:
+                request_id = request_ids[i]
+            else:
+                request_id = f"req_{self._request_counter}_{i}"
+            sampling_params = SamplingParams(
+                max_tokens=MAX_DECODE_TOKENS, temperature=SAMPLING_TEMPERATURE
             )
+
+            mm_item = None if multimodal_inputs is None else multimodal_inputs[i]
+            if multimodal_inputs is None or not mm_item:
+                req = Request(
+                    request_id=request_id,
+                    prompt_token_ids=ids_list,
+                    sampling_params=sampling_params,
+                    pooling_params=None,
+                    eos_token_id=self.tokenizer.eos_token_id,
+                    arrival_time=INITIAL_ARRIVAL_TIME,
+                    block_hasher=self.block_hasher,
+                )
+            else:
+                # Provide per-request UUIDs for multimodal items to avoid
+                # cache collisions that can drop mm_feature.data in vLLM.
+                assert prompt_texts is not None
+                prompt = {
+                    "prompt": prompt_texts[i],
+                    "multi_modal_data": mm_item,
+                    "multi_modal_uuids": {"image": [f"{request_id}_img0"]},
+                }
+                processor = self._get_input_processor()
+                engine_req = processor.process_inputs(
+                    request_id=request_id,
+                    prompt=prompt,
+                    params=sampling_params,
+                    arrival_time=INITIAL_ARRIVAL_TIME,
+                )
+                # vLLM should return multimodal features; if missing, the prompt
+                # likely lacks image placeholders or preprocessing failed.
+                if engine_req.mm_features is None:
+                    raise ValueError(
+                        "Multimodal request missing mm_features; "
+                        "prompt may lack multimodal placeholders."
+                    )
+                for mm_index, mm_feature in enumerate(engine_req.mm_features):
+                    mm_data = mm_feature.data
+                    # Guard against empty feature payloads (would crash later).
+                    if mm_data is None:
+                        raise ValueError(
+                            "Multimodal feature data is None; "
+                            f"feature_index={mm_index} modality={mm_feature.modality}"
+                        )
+                    if mm_feature.modality == "image":
+                        # Ensure image preprocessing produced grid sizes.
+                        if (
+                            not hasattr(mm_data, "get")
+                            or mm_data.get("image_grid_thw") is None
+                        ):
+                            keys = (
+                                list(mm_data.keys())
+                                if hasattr(mm_data, "keys")
+                                else type(mm_data)
+                            )
+                            raise ValueError(
+                                "Multimodal image feature missing image_grid_thw; "
+                                f"feature_index={mm_index} keys={keys}"
+                            )
+                prompt_token_ids = engine_req.prompt_token_ids
+                if prompt_token_ids is None:
+                    raise ValueError("Multimodal request missing prompt_token_ids")
+                if len(prompt_token_ids) > max_len:
+                    raise ValueError(
+                        "Multimodal prompt exceeds max_model_len; reduce seq length"
+                    )
+                # Use vLLM tokenization for multimodal prompts to keep
+                # image-expanded tokens consistent with model inputs.
+                input_ids_list[i] = prompt_token_ids
+                req = Request.from_engine_core_request(
+                    engine_req, block_hasher=self.block_hasher
+                )
             self.scheduler.add_request(req)
 
         # Increment to ensure unique request IDs across calls

@@ -16,6 +16,9 @@ Speculators is a unified library for building, training and storing speculative 
 
 Speculators standardizes this process by providing a productionized end-to-end framework to train draft models with reusable formats and tools. Trained models can seamlessly run in vLLM, enabling the deployment of speculative decoding in production-grade inference servers.
 
+<!-- TODO(VL): Clarify current VL training status vs. deployment support and
+add links to multimodal training docs once available. -->
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/vllm-project/speculators/main/docs/assets/branding/speculators-user-flow-dark.svg" />
@@ -38,7 +41,7 @@ ______________________________________________________________________
 ## Key Features
 
 - **Offline Training Data Generation using vLLM:** Enable the generation of hidden states using vLLM. Data samples are saved to disk and can be used for draft model training.
-- **Draft Model Training Support:** E2E training support of single and multi-layer draft models. Training is supported for both non-MoE and MoE models. VL Training is coming soon.
+- **Draft Model Training Support:** E2E training support of single and multi-layer draft models. Training is supported for both non-MoE and MoE models. VL (single image-text) training is supported.
 - **Standardized, Extensible Format:** Provides a Hugging Face-compatible format for defining speculative models, with tools to convert from external research repositories into a standard speculators format for easy adoption.
 - **Seamless vLLM Integration:** Built for direct deployment into vLLM, enabling low-latency, production-grade inference with minimal overhead.
 

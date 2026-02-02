@@ -12,9 +12,8 @@ from speculators.proposals.greedy import GreedyTokenProposalConfig
 from speculators.train.data import (
     Eagle3SampleFileDataset,
     create_collate_fn,
+    get_standardize_fn,
     split_files,
-    standardize_data_v0,
-    standardize_data_v1,
 )
 from speculators.train.distributed_batch_sampler import (
     MultipackDistributedBatchSamplerV2,
@@ -38,7 +37,7 @@ def setup_dataloader(
     world_size: int,
     local_rank: int,
     add_noise: bool = True,
-    data_format_version: int = 1,
+    data_format: str | int = "text-v1",
 ) -> DataLoader:
     """Setup dataloader for training.
     Args:
@@ -46,7 +45,7 @@ def setup_dataloader(
         world_size: Number of processes in the distributed training.
         local_rank: Rank of the current process.
         add_noise: Whether to add noise to the data.
-        data_format_version: Version of the data format. Default is 1.
+        data_format: Data format selector (e.g., text-v1 or vl-v1).
     Returns:
         DataLoader: Dataloader for training.
     """
@@ -57,9 +56,7 @@ def setup_dataloader(
     else:
         noise_transform = None
 
-    standardize_fn = (
-        standardize_data_v1 if data_format_version == 1 else standardize_data_v0
-    )
+    standardize_fn = get_standardize_fn(data_format)
 
     dataset = Eagle3SampleFileDataset(
         file_list=file_list,
@@ -170,20 +167,23 @@ def main(args: argparse.Namespace):
     draft_model = Eagle3DraftModel(config=speculator_config, t2d=t2d, d2t=d2t)
 
     # Setup dataloaders
+    data_format = args.data_format
+    if args.data_format_version is not None:
+        data_format = f"v{args.data_format_version}"
     train_files, val_files = split_files(args.data_path, ratio=0.9)
     train_loader = setup_dataloader(
         train_files,
         world_size,
         local_rank,
         add_noise=True,
-        data_format_version=args.data_format_version,
+        data_format=data_format,
     )
     val_loader = setup_dataloader(
         val_files,
         world_size,
         local_rank,
         add_noise=False,
-        data_format_version=args.data_format_version,
+        data_format=data_format,
     )
 
     # Setup trainer
@@ -233,7 +233,18 @@ def parse_args():
         help="One of 'trackio', 'wandb', 'tensorboard' or comma separated list of them",
     )
     parser.add_argument("--total-seq-len", type=int, default=8192)
-    parser.add_argument("--data-format-version", type=int, default=1)
+    parser.add_argument(
+        "--data-format",
+        type=str,
+        default="text-v1",
+        help="Data format selector (e.g., text-v1 or vl-v1).",
+    )
+    parser.add_argument(
+        "--data-format-version",
+        type=int,
+        default=None,
+        help="Deprecated: numeric data format version (e.g., 1).",
+    )
     parser.add_argument("--log-dir", type=str, default="./logs")
     parser.add_argument("--run-name", type=str, default=None)
     parser.add_argument("--num-layers", type=int, default=1)

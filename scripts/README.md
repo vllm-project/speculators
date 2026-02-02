@@ -6,6 +6,9 @@ Speculators currently supports training of Eagle3 models. This functionality is 
 3. [train.py](/scripts/train.py): Trains an Eagle3 model using the training data and vocabulary mappings.
 4. (Optional) [gen_and_train.py](/scripts/gen_and_train.py): A convenience wrapper around the above scripts that runs the full pipeline in one command.
 
+<!-- TODO(VL): Document multimodal dataset format, required processors, and an
+end-to-end image-text training example once VL support lands. -->
+
 
 ## Table of Contents
 - **[Data Generation](#data-generation)**<br>
@@ -143,6 +146,46 @@ Built-in datasets (can be used directly by name in the `--train-data-path` argum
 
 Alternatively, you can use a different dataset by passing the HuggingFace dataset path or local JSON/JSONL file path in the `--train-data-path` argument.
 
+### Multimodal (VL) Data Generation
+
+This pipeline is compatible with the HuggingFace dataset format used by
+`llamafactory/pokemon-gpt4o-captions` (and similar datasets). The raw dataset
+contains:
+
+```json
+{
+  "conversations": [
+    {"from": "human", "value": "Please describe it.<image>"},
+    {"from": "gpt", "value": "A short description."}
+  ],
+  "images": ["..."]  // HF image column (bytes or file paths)
+}
+```
+
+Convert the HF dataset to speculators JSONL (images are attached to the first user
+turn), then run data generation:
+
+```bash
+python scripts/convert_pokemon_gpt4o_to_jsonl.py \
+    --dataset llamafactory/pokemon-gpt4o-captions \
+    --split train \
+    --output ./data/pokemon_vl.jsonl \
+    --image-output-dir ./pokemon_images
+
+python scripts/data_generation_offline.py \
+    --target-model-path Qwen/Qwen3-VL-8B-Instruct \
+    --train-data-path ./data/pokemon_vl.jsonl \
+    --output-dir ./training_data_vl \
+    --data-mode vl \
+    --image-root ./pokemon_images
+```
+
+If your dataset uses a different multimodal image field name, override it with
+`--image-field`.
+
+Note: the current VL pipeline supports a single image per sample. Multi-image
+support is coming soon.
+
 #### Caching
 
 Preprocessing is automatically cached by HuggingFace datasets using fingerprint-based cache invalidation. The cache automatically updates when:
@@ -214,6 +257,16 @@ Once complete, this step will generate and save `t2d.npy` and `d2t.npy` files to
 ## Training
 
 `scripts/train.py` provides the main entry point for training Eagle3 models.
+
+To train on multimodal-generated data, set `--data-format vl-v1`:
+
+```bash
+python scripts/train.py \
+    --verifier-name-or-path Qwen/Qwen3-VL-8B-Instruct \
+    --data-path ./training_data_vl \
+    --save-path ./checkpoints/qwen3-vl.eagle3 \
+    --data-format vl-v1
+```
 
 ### Quick Start
 
