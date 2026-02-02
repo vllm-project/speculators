@@ -16,7 +16,6 @@ from transformers.models.qwen3.modeling_qwen3 import (
     Qwen3RMSNorm,
     Qwen3RotaryEmbedding,
     Qwen3Config,
-    Qwen3PreTrainedModel,
     Qwen3MLP,
     GradientCheckpointingLayer,
     FlashAttentionKwargs,
@@ -374,8 +373,7 @@ class DFlashDraftModel(SpeculatorModel):
         | None = None,  # shape: [1, total_seq_len, hidden_size]
         **kwargs,
     ):
-        if (not torch.distributed.is_initialized()) or torch.distributed.get_rank() == 0:
-            print("lengths", lengths, flush=True)
+
         device = hidden_states.device
         total_seq_len = hidden_states.shape[1]
 
@@ -413,7 +411,7 @@ class DFlashDraftModel(SpeculatorModel):
 
         fc_output = self.fc(hidden_states)
 
-        hidden_states = self.hidden_norm(fc_output)
+        fc_output = self.hidden_norm(fc_output)
 
         position_ids=position_ids.repeat(1, 2)
 
@@ -427,13 +425,10 @@ class DFlashDraftModel(SpeculatorModel):
         tar_tok=torch.argmax(targets, dim=-1)
 
         tar_tok=tar_tok+self.d2t[tar_tok]
-        if (not torch.distributed.is_initialized()) or torch.distributed.get_rank() == 0:
-            print(f"tar_tok {tar_tok[0,-20:-1]}, input_ids {input_ids[0,-20:-1]}, loss_mask {loss_mask[0,-20:-1]}", flush=True)
-            print((tar_tok[:, :-1] == input_ids[:, 1:]).float().mean())
         for i, layer in enumerate(self.layers):
-            hidden_states = layer(
+            noise_embedding = layer(
                 hidden_states=noise_embedding,
-                target_hidden=hidden_states,
+                target_hidden=fc_output,
                 attention_mask=attention_mask,
                 position_ids=position_ids,
                 past_key_value=past_key_values,
@@ -441,9 +436,9 @@ class DFlashDraftModel(SpeculatorModel):
                 position_embeddings=position_embeddings,
                 **kwargs,
             )
-        hidden_states=self.norm(hidden_states)
+        noise_embedding=self.norm(noise_embedding)
 
-        logits=self.lm_head(hidden_states)
+        logits=self.lm_head(noise_embedding)
 
         if return_loss:
             s_loss, s_metrics = compute_metrics(
