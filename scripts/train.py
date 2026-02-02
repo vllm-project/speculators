@@ -143,8 +143,27 @@ def main(args: argparse.Namespace):
     device = torch.device(local_rank)
 
     # Load t2d and d2t tensors
-    d2t = torch.from_numpy(np.load(args.d2t_path)).to(device)
-    t2d = torch.from_numpy(np.load(args.t2d_path)).to(device)
+
+    # Load t2d and d2t tensors if provided
+    if args.d2t_path or args.t2d_path:
+        if not (args.d2t_path and args.t2d_path):
+            raise ValueError(
+                "Both t2d and d2t must be provided together, or both must be omitted. "
+                f"Got t2d={'provided' if args.t2d_path is not None else 'not provided'}"
+                f"d2t={'provided' if args.d2t_path is not None else 'not provided'}"
+            )
+        d2t = torch.from_numpy(np.load(args.d2t_path)).to(device)
+        t2d = torch.from_numpy(np.load(args.t2d_path)).to(device)
+        draft_vocab_size = d2t.shape[0]
+    else:
+        d2t = None
+        t2d = None
+        # When vocab mapping is not provided, use the full verifier vocab
+        verifier_config = AutoConfig.from_pretrained(args.verifier_name_or_path)
+        if hasattr(verifier_config, "text_config"):
+            verifier_config = verifier_config.text_config
+        draft_vocab_size = verifier_config.vocab_size
+
 
     # Get factories for the specified speculator type
     model_factory = model_factories[args.speculator_type]
@@ -163,7 +182,7 @@ def main(args: argparse.Namespace):
         "t2d": t2d,
         "d2t": d2t,
         "verifier_name_or_path": args.verifier_name_or_path,
-        "draft_vocab_size":d2t.shape[0]
+        "draft_vocab_size":draft_vocab_size
     }
 
     # Add speculator-specific parameters
@@ -177,7 +196,7 @@ def main(args: argparse.Namespace):
         world_size,
         local_rank,
         dataset_factory,
-        add_noise=True,
+        add_noise=False,
         data_format_version=args.data_format_version,
     )
     val_loader = setup_dataloader(

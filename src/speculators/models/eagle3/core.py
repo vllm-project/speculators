@@ -339,7 +339,12 @@ class Eagle3DraftModel(SpeculatorModel):
             with torch.no_grad():
                 targets = self.verifier_lm_head(verifier_last_hidden_states)
                 # shape: [1, total_seq_len, draft_vocab_size]
+            # tar_tok=torch.argmax(targets, dim=-1)
 
+            # tar_tok=tar_tok+self.d2t[tar_tok]
+            # if (not torch.distributed.is_initialized()) or torch.distributed.get_rank() == 0:
+            #     print(f"tar_tok {tar_tok[0,-20:-1]}, input_ids {input_ids[0,-20:-1]}, loss_mask {loss_mask[0,-20:-1]}", flush=True)
+            #     print((tar_tok[:, :-1] == input_ids[:, 1:]).float().mean())
             loss = torch.tensor(0.0, device=device)
 
             # prev_correct is a boolean tensor that is True for tokens that have been
