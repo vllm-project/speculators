@@ -41,7 +41,7 @@ def compute_accuracy(
         accs=[]
         for i in range(block_size):
             pos_cor=torch.masked_select(correct[:, i::block_size], loss_mask.to(torch.bool)[:, i::block_size])
-            accs.append(pos_cor.float().sum()/(pos_cor.numel()+1e-5)
+            accs.append(pos_cor.float().sum()/(pos_cor.numel()+1e-5))
 
     if loss_mask is not None:
         correct = torch.masked_select(correct, loss_mask.to(torch.bool))
