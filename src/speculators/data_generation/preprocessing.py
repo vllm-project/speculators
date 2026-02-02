@@ -1,13 +1,14 @@
 import bisect
 import random
 import re
+from functools import partial
 from re import Pattern
 from typing import Any, cast
 
 import torch
 from datasets import Dataset as HFDataset
 from datasets import load_dataset
-from transformers import AutoTokenizer, PreTrainedTokenizer
+from transformers import AutoProcessor, AutoTokenizer, PreTrainedTokenizer
 
 from speculators.data_generation.configs import DATASET_CONFIGS
 from speculators.data_generation.logging_utils import PipelineLogger
@@ -57,6 +58,145 @@ def _visualize_sample(_dataset, preprocessed, tokenizer, idx: int = 0):
     log.info(highlighted)
 
 
+def _normalize_content(content: Any) -> Any:
+    # Normalize multimodal content into list-of-items when applicable.
+    def _strip_image_tokens(text: str) -> str:
+        # Remove inline image markers to avoid duplicate placeholders.
+        return re.sub(r"<image\s*/?>", "", text, flags=re.IGNORECASE).strip()
+
+    if isinstance(content, list):
+        normalized_items = []
+        for item in content:
+            if isinstance(item, str):
+                normalized_items.append(
+                    {"type": "text", "text": _strip_image_tokens(item)}
+                )
+                continue
+            if isinstance(item, dict):
+                item_type = item.get("type")
+                if item_type in ("image", "image_url"):
+                    image_ref = (
+                        item.get("image") or item.get("image_url") or item.get("url")
+                    )
+                    if image_ref is not None:
+                        normalized_items.append({"type": "image", "image": image_ref})
+                        continue
+                if item_type == "text":
+                    text_val = item.get("text")
+                    if text_val is not None:
+                        normalized_items.append(
+                            {"type": "text", "text": _strip_image_tokens(text_val)}
+                        )
+                        continue
+                if "image" in item or "image_url" in item:
+                    image_ref = (
+                        item.get("image") or item.get("image_url") or item.get("url")
+                    )
+                    if image_ref is not None:
+                        normalized_items.append({"type": "image", "image": image_ref})
+                        continue
+                if "text" in item:
+                    text_val = item.get("text")
+                    if text_val is not None:
+                        normalized_items.append(
+                            {"type": "text", "text": _strip_image_tokens(text_val)}
+                        )
+                        continue
+                normalized_items.append(item)
+                continue
+            normalized_items.append({"type": "text", "text": str(item)})
+        return normalized_items
+    return content
+
+
+def _is_multimodal_content(content: Any) -> bool:
+    # Check whether content list includes image/video items.
+    if not isinstance(content, list):
+        return False
+    for item in content:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") in ("image", "video", "image_url"):
+            return True
+        if (
+            item.get("image") is not None
+            or item.get("image_url") is not None
+            or item.get("video") is not None
+        ):
+            return True
+    return False
+
+
+def _is_multimodal_conversation(conv: Any) -> bool:
+    # Check whether any turn in a conversation contains multimodal content.
+    if not isinstance(conv, list):
+        return False
+    for turn in conv:
+        if not isinstance(turn, dict):
+            continue
+        content = turn.get("content", turn.get("value"))
+        if _is_multimodal_content(content):
+            return True
+    return False
+
+
+def _get_conversations_from_examples(examples: dict) -> list:
+    # Extract batched conversations/messages from dataset examples.
+    if "conversations" in examples:
+        return examples.get("conversations", [])
+    if "messages" in examples:
+        return examples.get("messages", [])
+    return []
+
+
+def _get_conversation_from_row(row: dict) -> Any:
+    # Extract the conversations field from a dataset row.
+    return row.get("conversations") or row.get("messages")
+
+
+def _flatten_singleton_batch(value: Any) -> Any:
+    # Collapse a leading batch dimension if present in tokenizer outputs.
+    if isinstance(value, torch.Tensor):
+        value = value.tolist()
+    if isinstance(value, list) and value and isinstance(value[0], list):
+        return value[0]
+    return value
+
+
+def _get_tokenizer_from_processor(processor: Any) -> PreTrainedTokenizer:
+    # Extract tokenizer from a processor for offset-based tokenization.
+    tokenizer = getattr(processor, "tokenizer", None)
+    if tokenizer is None:
+        raise ValueError("Processor does not provide a tokenizer attribute.")
+    return tokenizer
+
+
+def _extract_multimodal_data_from_conversation(
+    conv: list[dict],
+) -> dict[str, list[Any]]:
+    # Collect multimodal image items from a normalized conversation.
+    mm_data: dict[str, list[Any]] = {}
+    for turn in conv:
+        content = turn.get("content")
+        if not isinstance(content, list):
+            continue
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            item_type = item.get("type")
+            if item_type in ("image", "image_url"):
+                image_ref = item.get("image")
+                if image_ref is None:
+                    image_url = item.get("image_url")
+                    if isinstance(image_url, dict):
+                        image_ref = image_url.get("url")
+                    else:
+                        image_ref = image_url
+                if image_ref is not None:
+                    mm_data.setdefault("image", []).append(image_ref)
+    return mm_data
+
+
 def _normalize_conversation(
     conv: list[dict],
     turn_dropout: bool = False,
@@ -77,6 +217,7 @@ def _normalize_conversation(
     for i, turn in enumerate(conv):
         role = turn.get("from", turn.get("role", ""))
         content = turn.get("value") or turn.get("content") or ""
+        content = _normalize_content(content)
 
         # Map various role names to standard user/assistant
         if role in ("human", "user"):
@@ -106,7 +247,7 @@ def _normalize_conversation(
     return normalized
 
 
-def _supports_assistant_mask(tokenizer: PreTrainedTokenizer) -> bool:
+def _supports_assistant_mask_text(tokenizer: PreTrainedTokenizer) -> bool:
     """Check if tokenizer truly supports HF assistant token mask.
 
     Must return a non-zero mask for a conversation containing an assistant message.
@@ -130,7 +271,25 @@ def _supports_assistant_mask(tokenizer: PreTrainedTokenizer) -> bool:
         return False
 
 
-def _detect_assistant_pattern(tokenizer: PreTrainedTokenizer) -> str:
+def _supports_assistant_mask_multimodal(processor: Any) -> bool:
+    # Check whether processor can emit assistant token masks (multimodal).
+    try:
+        res_any = processor.apply_chat_template(
+            [{"role": "assistant", "content": "test"}],
+            tokenize=True,
+            return_assistant_tokens_mask=True,
+            return_dict=True,
+        )
+        res = cast("dict[str, Any]", res_any)
+        mask = res.get("assistant_masks", res.get("assistant_mask"))
+        if mask is None:
+            return False
+        return any(m == 1 for m in mask)
+    except (TypeError, ValueError, KeyError, AttributeError):
+        return False
+
+
+def _detect_assistant_pattern_text(tokenizer: PreTrainedTokenizer) -> str:
     """Auto-detect the assistant message pattern from the tokenizer's chat template.
 
     Uses multi-turn conversation but extracts pattern from the LAST assistant
@@ -165,6 +324,83 @@ def _detect_assistant_pattern(tokenizer: PreTrainedTokenizer) -> str:
     assistant_pos = prefix.rfind("assistant")
     if assistant_pos != -1:
         # Search for a tag start ('<' or '[') before 'assistant'
+        role_start = -1
+        for char in ["<", "["]:
+            pos = prefix.rfind(char, 0, assistant_pos)
+            role_start = max(role_start, pos)
+        if role_start != -1:
+            role_marker = prefix[role_start:]
+        else:
+            role_marker = prefix[assistant_pos:]
+    else:
+        role_marker = prefix
+
+    # Determine the stable TURN-LEVEL suffix
+    suffix1 = formatted[first_end : formatted.find("USER_MSG_2")]
+    suffix2 = formatted[second_end:]
+
+    # The stable suffix is the common prefix of these two tails
+    common_len = 0
+    for c1, c2 in zip(suffix1, suffix2, strict=False):
+        if c1 == c2:
+            common_len += 1
+        else:
+            break
+    suffix = suffix1[:common_len]
+
+    if not suffix:
+        suffix = suffix1 if suffix1 else "\n"
+
+    # Extract dynamic boundary marker from role_marker
+    boundary_match = re.search(
+        r"((<\|?[a-zA-Z0-9_]+[\|>]?)|(\[[a-zA-Z0-9_]+\]))", role_marker
+    )
+    if boundary_match:
+        boundary = re.escape(boundary_match.group(1))
+        lookahead_pattern = f"(?!{boundary})"
+    else:
+        # Fallback to hardcoded if no clear tag found
+        lookahead_pattern = r"(?!<\|start\|)"
+
+    return (
+        re.escape(role_marker)
+        + r"((?:"
+        + lookahead_pattern
+        + r".)*?)"
+        + re.escape(suffix)
+    )
+
+
+def _detect_assistant_pattern_multimodal(processor: Any) -> str:
+    # Infer assistant span regex from chat template output (multimodal).
+    test_conv = [
+        {"role": "user", "content": "USER_MSG_1"},
+        {"role": "assistant", "content": "ASSISTANT_MSG_1"},
+        {"role": "user", "content": "USER_MSG_2"},
+        {"role": "assistant", "content": "ASSISTANT_MSG_2"},
+    ]
+
+    formatted = processor.apply_chat_template(
+        test_conv, tokenize=False, add_generation_prompt=False
+    )
+    assert isinstance(formatted, str), "Expected string from apply_chat_template"
+
+    # Find the START and END of both assistant messages
+    first_start = formatted.find("ASSISTANT_MSG_1")
+    first_end = first_start + len("ASSISTANT_MSG_1")
+    second_start = formatted.find("ASSISTANT_MSG_2")
+    second_end = second_start + len("ASSISTANT_MSG_2")
+
+    if first_start == -1 or second_start == -1:
+        raise ValueError("Could not detect assistant messages in chat template")
+
+    # Extract role marker from before the second assistant message
+    second_user_end = formatted.find("USER_MSG_2") + len("USER_MSG_2")
+    prefix = formatted[second_user_end:second_start]
+
+    # Find where the assistant role marker starts
+    assistant_pos = prefix.rfind("assistant")
+    if assistant_pos != -1:
         role_start = -1
         for char in ["<", "["]:
             pos = prefix.rfind(char, 0, assistant_pos)
@@ -247,17 +483,20 @@ def _create_loss_mask_from_offsets(
     return loss_mask
 
 
-def _preprocess_batch(
+def _preprocess_batch_text(
     examples: dict,
     tokenizer: PreTrainedTokenizer,
     max_length: int,
     assistant_pattern: str | Pattern[str] | None,
     turn_dropout: bool = False,
 ) -> dict[str, list]:
-    """Process a batch of conversations into tokenized format with loss masks."""
+    """Process a batch of text-only conversations into tokenized format.
+
+    Builds input IDs and loss masks for each conversation.
+    """
 
     results: dict[str, list] = {"input_ids": [], "loss_mask": []}
-    conversations = examples.get("conversations", [])
+    conversations = _get_conversations_from_examples(examples)
 
     if not conversations:
         log.warning(f"No conversations key found. Keys: {list(examples.keys())}")
@@ -285,14 +524,15 @@ def _preprocess_batch(
                 encoded = cast("dict[str, Any]", encoded_any)
 
                 # input IDs and loss mask
-                input_ids = encoded["input_ids"]
+                input_ids = _flatten_singleton_batch(encoded["input_ids"])
                 # HF uses 'assistant_masks' in recent versions
                 mask_key = (
                     "assistant_masks"
                     if "assistant_masks" in encoded
                     else "assistant_mask"
                 )
-                loss_mask = torch.tensor(encoded[mask_key], dtype=torch.long)
+                loss_mask_raw = _flatten_singleton_batch(encoded[mask_key])
+                loss_mask = torch.tensor(loss_mask_raw, dtype=torch.long)
 
             else:
                 # Fallback: regex-based detection
@@ -316,8 +556,8 @@ def _preprocess_batch(
                 )
 
                 # input IDs and loss mask
-                input_ids = encoding["input_ids"]
-                offsets = encoding["offset_mapping"]
+                input_ids = _flatten_singleton_batch(encoding["input_ids"])
+                offsets = _flatten_singleton_batch(encoding["offset_mapping"])
 
                 loss_mask = _create_loss_mask_from_offsets(
                     formatted_raw, offsets, assistant_pattern
@@ -343,6 +583,100 @@ def _preprocess_batch(
     return results
 
 
+def _preprocess_batch_multimodal(
+    examples: dict,
+    processor: Any,
+    max_length: int,
+    assistant_pattern: str | Pattern[str] | None,
+    turn_dropout: bool = False,
+) -> dict[str, list]:
+    # Preprocess a batch of multimodal conversations into token IDs and loss masks.
+
+    results: dict[str, list] = {
+        "input_ids": [],
+        "loss_mask": [],
+        "multi_modal_data": [],
+        "prompt": [],
+    }
+    conversations = _get_conversations_from_examples(examples)
+
+    if not conversations:
+        log.warning(f"No conversations key found. Keys: {list(examples.keys())}")
+        return results
+
+    tokenizer = _get_tokenizer_from_processor(processor)
+
+    for idx, conv in enumerate(conversations):
+        if not conv or not isinstance(conv, list):
+            continue
+
+        normalized_conv = _normalize_conversation(conv, turn_dropout)
+        if not normalized_conv:
+            continue
+
+        try:
+            formatted_raw = processor.apply_chat_template(
+                normalized_conv,
+                tokenize=False,
+                add_generation_prompt=False,
+            )
+            assert isinstance(formatted_raw, str)
+
+            if assistant_pattern is None:
+                encoded_any = processor.apply_chat_template(
+                    normalized_conv,
+                    tokenize=True,
+                    add_generation_prompt=False,
+                    return_assistant_tokens_mask=True,
+                    return_dict=True,
+                )
+                encoded = cast("dict[str, Any]", encoded_any)
+
+                input_ids = _flatten_singleton_batch(encoded["input_ids"])
+                mask_key = (
+                    "assistant_masks"
+                    if "assistant_masks" in encoded
+                    else "assistant_mask"
+                )
+                loss_mask_raw = _flatten_singleton_batch(encoded[mask_key])
+                loss_mask = torch.tensor(loss_mask_raw, dtype=torch.long)
+            else:
+                encoding = tokenizer(
+                    formatted_raw,
+                    return_offsets_mapping=True,
+                    max_length=max_length,
+                    truncation=True,
+                    add_special_tokens=False,
+                )
+
+                input_ids = _flatten_singleton_batch(encoding["input_ids"])
+                offsets = _flatten_singleton_batch(encoding["offset_mapping"])
+                loss_mask = _create_loss_mask_from_offsets(
+                    formatted_raw, offsets, assistant_pattern
+                )
+
+            assert len(input_ids) == len(loss_mask), (
+                f"Shape mismatch: input_ids={len(input_ids)}, "
+                f"loss_mask={len(loss_mask)}"
+            )
+
+            results["input_ids"].append(torch.tensor(input_ids, dtype=torch.long))
+            results["loss_mask"].append(loss_mask)
+            results["multi_modal_data"].append(
+                _extract_multimodal_data_from_conversation(normalized_conv)
+            )
+            results["prompt"].append(formatted_raw)
+
+        except (TypeError, ValueError, KeyError, AttributeError, RuntimeError) as e:
+            log.error(
+                f"Failed to process conversation {idx} "
+                f"(assistant_pattern={assistant_pattern is not None}): {e}"
+            )
+            continue
+
+    return results
+
+
 def build_eagle3_dataset(
     dataset: HFDataset,
     tokenizer: PreTrainedTokenizer,
@@ -350,6 +684,7 @@ def build_eagle3_dataset(
     num_proc: int = 8,
     assistant_pattern: str | Pattern[str] | None = None,
     turn_dropout: bool = False,
+    processor: Any | None = None,
 ) -> HFDataset:
     """Build EAGLE3 dataset by tokenizing conversations and creating loss masks.
 
@@ -366,22 +701,46 @@ def build_eagle3_dataset(
         turn_dropout: If True, randomly keeps first N consecutive turns per
                      conversation
     """
+    is_multimodal = processor is not None
+
     # Detect and use provided assistant message pattern
     if assistant_pattern is not None:
         log.info(f"Using custom assistant pattern: {str(assistant_pattern)[:80]}...")
-    elif _supports_assistant_mask(tokenizer):
-        assistant_pattern = None  # Signal to use HF mask in _preprocess_batch
+    elif is_multimodal:
+        if _supports_assistant_mask_multimodal(processor):
+            assistant_pattern = None
+            log.info("Using HF assistant token mask for loss masking (multimodal)")
+        else:
+            assistant_pattern = _detect_assistant_pattern_multimodal(processor)
+            log.info(f"Detected assistant pattern: {str(assistant_pattern)[:80]}...")
+    elif _supports_assistant_mask_text(tokenizer):
+        assistant_pattern = None
         log.info("Using HF assistant token mask for loss masking")
     else:
-        assistant_pattern = _detect_assistant_pattern(tokenizer)
+        assistant_pattern = _detect_assistant_pattern_text(tokenizer)
         log.info(f"Detected assistant pattern: {str(assistant_pattern)[:80]}...")
 
     original_cols = dataset.column_names
 
+    if is_multimodal:
+        map_fn = partial(
+            _preprocess_batch_multimodal,
+            processor=processor,
+            max_length=max_length,
+            assistant_pattern=assistant_pattern,
+            turn_dropout=turn_dropout,
+        )
+    else:
+        map_fn = partial(
+            _preprocess_batch_text,
+            tokenizer=tokenizer,
+            max_length=max_length,
+            assistant_pattern=assistant_pattern,
+            turn_dropout=turn_dropout,
+        )
+
     dataset = dataset.map(
-        lambda examples: _preprocess_batch(
-            examples, tokenizer, max_length, assistant_pattern, turn_dropout
-        ),
+        map_fn,
         batched=True,
         num_proc=num_proc,
         batch_size=1000,
@@ -389,7 +748,12 @@ def build_eagle3_dataset(
         load_from_cache_file=True,
     )
 
-    dataset.set_format(type="torch")
+    if is_multimodal:
+        dataset.set_format(
+            type="torch", columns=["input_ids", "loss_mask"], output_all_columns=True
+        )
+    else:
+        dataset.set_format(type="torch")
     return dataset
 
 
@@ -455,16 +819,6 @@ def load_and_preprocess_dataset(
     log.section("Starting dataset preprocessing")
 
     log.subsection("Loading tokenizer and dataset")
-    tokenizer = AutoTokenizer.from_pretrained(target_model_path, trust_remote_code=True)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    if not hasattr(tokenizer, "apply_chat_template") or tokenizer.chat_template is None:
-        raise ValueError(
-            f"Tokenizer for {target_model_path} does not support chat templates. "
-            "Please use a model with a pre-configured chat template."
-        )
-
     raw_dataset = load_raw_dataset(
         train_data_path, num_proc=build_dataset_num_proc, cache_dir=cache_dir
     )
@@ -474,6 +828,36 @@ def load_and_preprocess_dataset(
         raw_dataset = raw_dataset.select(range(max_samples))
 
     log.info(f"Loaded {len(raw_dataset)} samples")
+
+    is_multimodal = _dataset_has_multimodal(raw_dataset)
+    if is_multimodal:
+        processor = AutoProcessor.from_pretrained(
+            target_model_path, trust_remote_code=True
+        )
+        tokenizer = _get_tokenizer_from_processor(processor)
+    else:
+        processor = None
+        tokenizer = AutoTokenizer.from_pretrained(
+            target_model_path, trust_remote_code=True
+        )
+
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    if is_multimodal:
+        if not hasattr(processor, "apply_chat_template"):
+            raise ValueError(
+                f"Processor for {target_model_path} does not support "
+                "apply_chat_template. Please use a model with a pre-configured "
+                "chat template."
+            )
+    elif (
+        not hasattr(tokenizer, "apply_chat_template") or tokenizer.chat_template is None
+    ):
+        raise ValueError(
+            f"Tokenizer for {target_model_path} does not support chat templates. "
+            "Please use a model with a pre-configured chat template."
+        )
 
     log.subsection("Tokenizing and building dataset")
     if cache_dir:
@@ -488,6 +872,7 @@ def load_and_preprocess_dataset(
         num_proc=build_dataset_num_proc,
         assistant_pattern=assistant_pattern,
         turn_dropout=turn_dropout,
+        processor=processor,
     )
 
     log.subsection("Computing token frequency distribution")
@@ -502,3 +887,16 @@ def load_and_preprocess_dataset(
     log.section("Dataset preprocessing complete")
 
     return preprocessed_dataset, tokenizer
+
+
+def _dataset_has_multimodal(dataset: HFDataset, sample_size: int = 8) -> bool:
+    # Determine whether a dataset contains multimodal conversations.
+    if len(dataset) == 0:
+        return False
+    sample_size = min(sample_size, len(dataset))
+    for idx in range(sample_size):
+        row = dataset[idx]
+        conv = _get_conversation_from_row(row)
+        if conv and _is_multimodal_conversation(conv):
+            return True
+    return False
