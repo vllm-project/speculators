@@ -17,7 +17,20 @@ from transformers.models.qwen3.modeling_qwen3 import (
 
 
 class ModelComponents(NamedTuple):
-    """Base components for a model architecture."""
+    """Container for the components of a speculators model.
+
+    This groups the building blocks needed to construct a model, enabling
+    architecture-agnostic code and selective component overriding for
+    speculative decoding algorithms.
+
+    Attributes:
+        first_layer_class: Class for the first decoder layer. Can be customized
+            for speculative decoding while keeping other layers standard.
+        decoder_layer_class: Class for standard decoder layers used throughout
+            the rest of the model.
+        norm_class: Normalization layer class (e.g., LlamaRMSNorm, Qwen3RMSNorm).
+        rotary_emb_class: Rotary positional embedding class for the model.
+    """
 
     first_layer_class: type
     decoder_layer_class: type
@@ -42,14 +55,17 @@ model_classes: dict[str, ModelComponents] = {
 
 
 def override_components(model_type: str, **overrides) -> ModelComponents:
-    """Create ModelComponents by overriding specific fields from base model_classes.
+    """Override specific components from a base model architecture.
+
+    Used for speculative decoding to swap custom layers (typically first_layer_class)
+    while inheriting other components from the base model.
 
     Args:
-        model_type: Base model type (e.g., "llama", "qwen3")
-        **overrides: Fields to override (e.g., first_layer_class=MyCustomLayer)
+        model_type: Base model type ("llama" or "qwen3").
+        **overrides: Component fields to override (first_layer_class, decoder_layer_class, etc).
 
     Returns:
-        New ModelComponents with specified overrides
+        ModelComponents with specified overrides applied.
     """
     base = model_classes[model_type]
     return base._replace(**overrides)

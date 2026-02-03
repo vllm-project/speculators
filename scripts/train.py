@@ -22,13 +22,6 @@ from speculators.train.noise_transforms import AddUniformNoise
 from speculators.train.trainer import Trainer, TrainerConfig
 from speculators.train.utils import maybe_destroy_distributed, maybe_setup_distributed
 
-# DRAFTER MODEL HYPARAMETERS
-NORM_BEFORE_RESIDUAL = True
-
-# Dataloader
-NUM_WORKERS = 12
-PREFETCH_FACTOR = 4
-NOISE_STD = 0.05
 
 
 def setup_dataloader(
@@ -37,6 +30,9 @@ def setup_dataloader(
     local_rank: int,
     add_noise: bool = True,
     data_format_version: int = 1,
+    noise_std: float = 0.05,
+    num_workers: int = 12,
+    prefetch_factor: int = 4,
 ) -> DataLoader:
     """Setup dataloader for training.
     Args:
@@ -45,12 +41,15 @@ def setup_dataloader(
         local_rank: Rank of the current process.
         add_noise: Whether to add noise to the data.
         data_format_version: Version of the data format. Default is 1.
+        noise_std: Standard deviation for noise augmentation.
+        num_workers: Number of dataloader workers.
+        prefetch_factor: Dataloader prefetch factor.
     Returns:
         DataLoader: Dataloader for training.
     """
     if add_noise:
         noise_transform = AddUniformNoise(
-            std=NOISE_STD, tensors=("hidden_states", "verifier_last_hidden_states")
+            std=noise_std, tensors=("hidden_states", "verifier_last_hidden_states")
         )
     else:
         noise_transform = None
@@ -74,8 +73,8 @@ def setup_dataloader(
     return DataLoader(
         dataset,
         batch_sampler=batch_sampler,
-        num_workers=NUM_WORKERS,
-        prefetch_factor=PREFETCH_FACTOR,
+        num_workers=num_workers,
+        prefetch_factor=prefetch_factor,
         pin_memory=True,
         collate_fn=create_collate_fn(args.total_seq_len),
         persistent_workers=True,
@@ -144,15 +143,25 @@ def main(args: argparse.Namespace):
         args.verifier_name_or_path, args.num_layers
     )
 
+    # Attach computed values to args for model factory method
+    args.t2d = t2d
+    args.d2t = d2t
+    args.draft_vocab_size = draft_vocab_size
+
     # Get model class from registry and create model using its factory method
-    model_class = SpeculatorModel.get_class(args.speculator_type)
+    if SpeculatorModel.registry_auto_discovery:
+        SpeculatorModel.auto_populate_registry()
+
+    if args.speculator_type not in SpeculatorModel.registry:
+        raise ValueError(
+            f"Unknown speculator type: {args.speculator_type}. "
+            f"Available: {list(SpeculatorModel.registry.keys())}"
+        )
+
+    model_class = SpeculatorModel.registry[args.speculator_type]
     draft_model = model_class.from_training_args(
         verifier_config=transformer_layer_config,
-        num_layers=args.num_layers,
-        norm_before_residual=NORM_BEFORE_RESIDUAL,
-        t2d=t2d,
-        d2t=d2t,
-        args=args,
+        **vars(args),
     )
 
     # Setup dataloaders
@@ -163,6 +172,9 @@ def main(args: argparse.Namespace):
         local_rank,
         add_noise=True,
         data_format_version=args.data_format_version,
+        noise_std=args.noise_std,
+        num_workers=args.num_workers,
+        prefetch_factor=args.prefetch_factor,
     )
     val_loader = setup_dataloader(
         val_files,
@@ -170,6 +182,9 @@ def main(args: argparse.Namespace):
         local_rank,
         add_noise=False,
         data_format_version=args.data_format_version,
+        noise_std=args.noise_std,
+        num_workers=args.num_workers,
+        prefetch_factor=args.prefetch_factor,
     )
 
     # Get trainer kwargs from model class
@@ -233,6 +248,17 @@ def parse_args():
         default=False,
         help="Use off-policy tokens during training (required for regenerated data)",
     )
+    # Model hyperparameters
+    parser.add_argument(
+        "--norm-before-residual",
+        action="store_true",
+        default=True,
+        help="Whether to normalize before residual connection",
+    )
+    # Dataloader parameters
+    parser.add_argument("--num-workers", type=int, default=12, help="Number of dataloader workers")
+    parser.add_argument("--prefetch-factor", type=int, default=4, help="Dataloader prefetch factor")
+    parser.add_argument("--noise-std", type=float, default=0.05, help="Standard deviation for noise augmentation")
     # lr scheduler
     parser.add_argument("--scheduler-type", type=str, default="linear")
     parser.add_argument("--scheduler-warmup-steps", type=int, default=None)

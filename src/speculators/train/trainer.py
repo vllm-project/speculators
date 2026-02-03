@@ -14,6 +14,7 @@ from transformers import (
     get_linear_schedule_with_warmup,
 )
 
+from speculators.model import SpeculatorModel
 from speculators.train.checkpointer import (
     BaseCheckpointer,
     DistributedCheckpointer,
@@ -85,6 +86,19 @@ class Trainer:
         self.global_step = 0
 
     def setup_model(self):
+        # Verify model is a registered SpeculatorModel
+        if not isinstance(self.model, SpeculatorModel):
+            raise TypeError(
+                f"Model must be a SpeculatorModel, got {type(self.model).__name__}"
+            )
+
+        model_class = type(self.model)
+        if model_class not in SpeculatorModel.registry.values():
+            raise ValueError(
+                f"Model {model_class.__name__} is not registered in SpeculatorModel.registry. "
+                f"Available models: {list(SpeculatorModel.registry.keys())}"
+            )
+
         if self.is_distributed:
             apply_fully_sharded(self.model)
 

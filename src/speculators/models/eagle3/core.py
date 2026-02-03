@@ -470,21 +470,19 @@ class Eagle3DraftModel(SpeculatorModel):
     def from_training_args(
         cls,
         verifier_config: PretrainedConfig,
-        num_layers: int,
-        norm_before_residual: bool,
-        t2d: torch.Tensor,
-        d2t: torch.Tensor,
-        args,
+        **kwargs,
     ) -> "Eagle3DraftModel":
         """Create Eagle3 model from training arguments.
 
         Args:
             verifier_config: Verifier model configuration
-            num_layers: Number of decoder layers
-            norm_before_residual: Whether to normalize before residual connection
-            t2d: Target-to-draft vocabulary mapping tensor
-            d2t: Draft-to-target vocabulary mapping tensor
-            args: Training arguments namespace with Eagle3-specific params
+            **kwargs: Training arguments with Eagle3-specific params
+                - num_layers: Number of decoder layers
+                - norm_before_residual: Whether to normalize before residual connection
+                - t2d: Target-to-draft vocabulary mapping tensor
+                - d2t: Draft-to-target vocabulary mapping tensor
+                - ttt_steps: Number of TTT steps
+                - verifier_name_or_path: Path to verifier model
 
         Returns:
             Initialized Eagle3DraftModel
@@ -494,25 +492,25 @@ class Eagle3DraftModel(SpeculatorModel):
 
         config = Eagle3SpeculatorConfig(
             transformer_layer_config=verifier_config,
-            draft_vocab_size=verifier_config.vocab_size,
-            norm_before_residual=norm_before_residual,
-            num_layers=num_layers,
+            draft_vocab_size=kwargs['draft_vocab_size'],
+            norm_before_residual=kwargs['norm_before_residual'],
+            num_layers=kwargs['num_layers'],
             speculators_config=SpeculatorsConfig(
                 algorithm="eagle3",
                 proposal_methods=[
                     GreedyTokenProposalConfig(
-                        num_draft_tokens=args.ttt_steps,
+                        num_draft_tokens=kwargs['ttt_steps'],
                         use_dynamic_branching=False,
                     )
                 ],
                 default_proposal_method="greedy",
                 verifier=VerifierConfig.from_config(
-                    verifier_config, name_or_path=args.verifier_name_or_path
+                    verifier_config, name_or_path=kwargs['verifier_name_or_path']
                 ),
             ),
         )
 
-        return cls(config=config, t2d=t2d, d2t=d2t)
+        return cls(config=config, t2d=kwargs.get('t2d'), d2t=kwargs.get('d2t'))
 
     @staticmethod
     def get_trainer_kwargs(args) -> tuple[dict, dict]:
