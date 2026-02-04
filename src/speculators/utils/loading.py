@@ -149,7 +149,7 @@ def _load_single_safetensors(file_path: Path) -> dict[str, torch.Tensor]:
     std_logger.info(f"Loading single safetensors file: {file_path}")
     state_dict = {}
     with safe_open(str(file_path), framework="pt", device="cpu") as f:
-        for key in f:
+        for key in f.keys():
             state_dict[key] = f.get_tensor(key)
     return state_dict
 
@@ -179,7 +179,7 @@ def _load_sharded_safetensors(
 
         std_logger.info(f"  Loading shard: {shard_file}")
         with safe_open(str(shard_path), framework="pt", device="cpu") as f:
-            for key in f:
+            for key in f.keys():
                 if weight_map.get(key) == shard_file:
                     state_dict[key] = f.get_tensor(key)
 
