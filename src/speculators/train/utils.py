@@ -5,8 +5,6 @@ import torch
 import torch.distributed as dist
 from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
 
-from speculators.model import SpeculatorModel
-
 local_rank = int(os.environ.get("LOCAL_RANK", "0"))
 world_size = int(os.environ.get("WORLD_SIZE", "1"))
 is_distributed = "LOCAL_RANK" in os.environ
@@ -60,20 +58,9 @@ def apply_fully_sharded(model: torch.nn.Module):
     """Applies torch FSDP fully_shard to the model, wrapping layers in FSDPModule.
 
     Assumes the model has a `layers` attribute containing the decoder layers.
+    Model should be validated with SpeculatorModel.verify_training_compatible()
+    before calling this function.
     """
-    # Verify model is a registered SpeculatorModel
-    if not isinstance(model, SpeculatorModel):
-        raise TypeError(f"Model must be a SpeculatorModel, got {type(model).__name__}")
-
-    model_class = type(model)
-    registry = SpeculatorModel.registry
-    if registry is None or model_class not in registry.values():
-        raise ValueError(
-            f"Model {model_class.__name__} is not registered in "
-            f"SpeculatorModel.registry. "
-            f"Available models: {list(registry.keys()) if registry else []}"
-        )
-
     mp_policy = MixedPrecisionPolicy(
         param_dtype=torch.bfloat16,
         reduce_dtype=torch.float32,

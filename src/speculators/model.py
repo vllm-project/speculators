@@ -280,6 +280,43 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel, GenerationMixin):  # 
         )
 
     @classmethod
+    def verify_training_compatible(cls, model: "SpeculatorModel") -> None:
+        """Verify that a model instance is compatible with training infrastructure.
+
+        This method validates that the given model is:
+        1. An instance of SpeculatorModel
+        2. Registered in the SpeculatorModel registry
+        3. Has a `layers` attribute (required for FSDP wrapping)
+
+        Args:
+            model: The model instance to verify
+
+        Raises:
+            TypeError: If model is not a SpeculatorModel instance
+            ValueError: If model's class is not in the registry
+            AttributeError: If model doesn't have a `layers` attribute
+        """
+        if not isinstance(model, SpeculatorModel):
+            raise TypeError(
+                f"Model must be a SpeculatorModel, got {type(model).__name__}"
+            )
+
+        model_class = type(model)
+        registry = cls.registry
+        if registry is None or model_class not in registry.values():
+            raise ValueError(
+                f"Model {model_class.__name__} is not registered in "
+                f"SpeculatorModel.registry. "
+                f"Available models: {list(registry.keys()) if registry else []}"
+            )
+
+        if not hasattr(model, "layers"):
+            raise AttributeError(
+                f"Model {model_class.__name__} must have a 'layers' attribute "
+                f"containing decoder layers for FSDP wrapping"
+            )
+
+    @classmethod
     @abstractmethod
     def from_training_args(
         cls, verifier_config: PretrainedConfig, **kwargs

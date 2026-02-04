@@ -142,11 +142,6 @@ def main(args: argparse.Namespace):
         args.verifier_name_or_path, args.num_layers
     )
 
-    # Attach computed values to args for model factory method
-    args.t2d = t2d
-    args.d2t = d2t
-    args.draft_vocab_size = draft_vocab_size
-
     # Get model class from registry and create model using its factory method
     if SpeculatorModel.registry_auto_discovery:
         SpeculatorModel.auto_populate_registry()
@@ -160,6 +155,9 @@ def main(args: argparse.Namespace):
     model_class = SpeculatorModel.registry[args.speculator_type]
     draft_model = model_class.from_training_args(
         verifier_config=transformer_layer_config,
+        t2d=t2d,
+        d2t=d2t,
+        draft_vocab_size=draft_vocab_size,
         **vars(args),
     )
 
@@ -187,7 +185,7 @@ def main(args: argparse.Namespace):
     )
 
     # Get trainer kwargs from model class
-    train_call_kwargs, val_call_kwargs = model_class.get_trainer_kwargs(args)
+    train_call_kwargs, val_call_kwargs = model_class.get_trainer_kwargs(**vars(args))
 
     trainer_config = TrainerConfig(
         num_epochs=args.epochs,

@@ -86,19 +86,15 @@ class Trainer:
         self.global_step = 0
 
     def setup_model(self):
+        # Verify model is compatible with training infrastructure
+        SpeculatorModel.verify_training_compatible(self.model)
+
         if self.is_distributed:
             apply_fully_sharded(self.model)
 
             if self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1:
                 self.checkpointer.load_model_state_dict(self.model)
             else:
-                model_class = type(self.model)
-                if model_class not in SpeculatorModel.registry.values():  # type: ignore[union-attr]
-                    raise ValueError(
-                        f"Model {model_class.__name__} is not registered in "
-                        f"SpeculatorModel.registry. "
-                        f"Available models: {list(SpeculatorModel.registry.keys())}"  # type: ignore[union-attr]
-                    )
                 for m in self.model.layers.children():  # type: ignore[union-attr]
                     if not isinstance(m, FSDPModule):
                         continue
