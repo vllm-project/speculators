@@ -46,7 +46,7 @@ class TrainerConfig(NamedTuple):
 class Trainer:
     def __init__(
         self,
-        model: PreTrainedModel,
+        model: SpeculatorModel,
         config: TrainerConfig,
         train_loader: DataLoader,
         val_loader: DataLoader | None = None,
