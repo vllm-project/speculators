@@ -62,10 +62,6 @@ Define your algorithm's architecture and training interface. The model class con
 
 In `core.py`, create a model class with the `@register` decorator and required training factory methods.
 
-**`from_training_args()`**: The training script needs a way to build your model from command-line arguments. This classmethod receives training arguments as keyword arguments (**kwargs) and extracts the parameters it needs to construct your model instance. Each algorithm pulls out only the arguments relevant to it. This is similar to how `transformers` uses `.from_pretrained()` - each model knows how to instantiate itself.
-
-**`get_trainer_kwargs()`**: Different algorithms may need different parameters during training vs validation. For example, Eagle3 uses off-policy tokens during training but not validation. This method returns separate kwargs dictionaries for each mode.
-
 **Reference:** See `src/speculators/models/eagle3/core.py` for a complete example.
 
 **Required for the training infrastructure:**
