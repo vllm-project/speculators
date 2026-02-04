@@ -25,6 +25,7 @@ from abc import abstractmethod
 from typing import Any, ClassVar, Literal
 
 from transformers import (
+    AutoModelForCausalLM,
     PretrainedConfig,
     PreTrainedModel,
 )
@@ -120,8 +121,10 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
             constructor.
         :param verifier: Optional verifier model to attach the speculator to.
             Can be a path to a local model directory, a Hugging Face model identifier,
-            or an instance of PreTrainedModel. The speculator will use this
-            verifier for speculative decoding.
+            or an instance of PreTrainedModel. If provided, the speculator will use this
+            verifier for speculative decoding. If None, the speculator will load the
+            verifier from the config if specified, or it must be attached later
+            using the `attach_verifier` method.
         :param verifier_attachment_mode: Optional mode for how the verifier is
             attached to the speculator. If "detached", any verifier passed in or
             resolved from the config will not be ignored.
@@ -360,7 +363,10 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
 
         :param config: The configuration for the speculator model. Must be a
             SpeculatorModelConfig instance containing model hyperparameters and
-            speculative decoding settings.
+            PreTrainedModel. If provided, the speculator will use this verifier for
+            speculative decoding. If None, the speculator will load the verifier from
+            the config if specified, or it must be attached later using the
+            `attach_verifier` method.
         :param verifier: The verifier model to attach. This can be a path to a local
             model directory, a Hugging Face model identifier, or an instance of
             PreTrainedModel. The speculator will use this verifier for
@@ -397,10 +403,7 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
             "detached"
         )
 
-        # Resolve verifier from parameter or config
         verifier = verifier or config.speculators_config.verifier.name_or_path
-
-        # Attach verifier if provided and mode is not "detached"
         if verifier is not None and verifier_attachment_mode != "detached":
             self.attach_verifier(verifier, mode=verifier_attachment_mode)
 
@@ -442,9 +445,11 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
         This method loads the verifier model from a specified path or identifier,
         ensuring it is compatible with the speculator's configuration. If the
         verifier is already attached, it returns the existing verifier instance.
+
         :param verifier: The verifier model to resolve. Can be a path to a local
             model directory, a Hugging Face model identifier, or an instance of
             PreTrainedModel.
+
         :return: The resolved PreTrainedModel instance for the verifier.
         """
         if not verifier:
@@ -461,8 +466,6 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
         if isinstance(verifier, PreTrainedModel):
             return verifier
 
-        from transformers import AutoModelForCausalLM
-
         return AutoModelForCausalLM.from_pretrained(verifier)
 
     def attach_verifier(
@@ -477,14 +480,17 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
         speculative decoding process. It should be compatible
         with the speculator's configuration in terms of vocabulary, architecture,
         and tokenization.
+
         Example:
             ```python
             # Load and attach a verifier
             verifier = AutoModel.from_pretrained("meta-llama/Llama-2-7b-hf")
             speculator.attach_verifier(verifier)
+
             # Now ready for generation
             outputs = speculator.generate(input_ids)
             ```
+
         :param verifier: The verifier model to attach. This can be a path to a local
             model directory, a Hugging Face model identifier, or an instance of
             PreTrainedModel. If a path or identifier is provided, the model will be

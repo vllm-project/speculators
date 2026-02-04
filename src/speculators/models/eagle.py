@@ -28,6 +28,8 @@ from transformers.models.llama.configuration_llama import LlamaConfig
 from typing_extensions import Self
 
 from speculators import SpeculatorModel, SpeculatorModelConfig
+from speculators.config import SpeculatorsConfig, VerifierConfig
+from speculators.proposals.greedy import GreedyTokenProposalConfig
 
 __all__ = [
     "EagleSpeculator",
@@ -256,15 +258,13 @@ class EagleSpeculator(SpeculatorModel):
             **kwargs: Training arguments with EAGLE-specific params
                 - layernorms: Whether to include layer normalization layers
                 - fusion_bias: Whether to add bias to fusion layer
-                - transformer_layer_architecture: Name of transformer decoder layer class
+                - transformer_layer_architecture: Name of transformer decoder layer
+                    class
                 - verifier_name_or_path: Path to verifier model
 
         Returns:
             Initialized EagleSpeculator
         """
-        from speculators.config import SpeculatorsConfig, VerifierConfig
-        from speculators.proposals.greedy import GreedyTokenProposalConfig
-
         config = EagleSpeculatorConfig(
             transformer_layer_config=verifier_config,
             layernorms=kwargs.get("layernorms", False),
@@ -285,14 +285,14 @@ class EagleSpeculator(SpeculatorModel):
         return cls(config=config)
 
     @staticmethod
-    def get_trainer_kwargs(args) -> tuple[dict, dict]:
+    def get_trainer_kwargs(_args) -> tuple[dict, dict]:
         """Get training and validation kwargs for EAGLE.
 
         EAGLE doesn't require any special forward pass arguments during training,
         so this returns empty dictionaries.
 
         Args:
-            args: Training arguments namespace
+            _args: Training arguments namespace (unused)
 
         Returns:
             Tuple of (train_call_kwargs, val_call_kwargs), both empty dicts
