@@ -9,7 +9,6 @@ from torch.utils.data import DataLoader
 from tqdm import TqdmExperimentalWarning
 from tqdm.rich import tqdm
 from transformers import (
-    PreTrainedModel,
     get_cosine_schedule_with_warmup,
     get_linear_schedule_with_warmup,
 )
