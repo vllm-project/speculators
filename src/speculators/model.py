@@ -22,19 +22,27 @@ Functions:
 
 import os
 from abc import abstractmethod
-from typing import Any, ClassVar, Literal
+from collections.abc import Callable
+from typing import Any, ClassVar, Literal, Optional
 
+import torch
 from transformers import (
     AutoModelForCausalLM,
+    GenerationConfig,
+    GenerationMixin,
     PretrainedConfig,
     PreTrainedModel,
 )
+from transformers.generation.logits_process import LogitsProcessorList
+from transformers.generation.stopping_criteria import StoppingCriteriaList
+from transformers.generation.streamers import BaseStreamer
+from transformers.generation.utils import GenerateOutput
 
 from speculators.config import SpeculatorModelConfig
 from speculators.utils import ClassRegistryMixin
 
 
-class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc]
+class SpeculatorModel(ClassRegistryMixin, PreTrainedModel, GenerationMixin):  # type: ignore[misc]
     """
     Abstract base class for all speculator models in the Speculators library.
 
@@ -309,7 +317,7 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
 
     @staticmethod
     @abstractmethod
-    def get_trainer_kwargs(args) -> tuple[dict, dict]:
+    def get_trainer_kwargs(**kwargs) -> tuple[dict, dict]:
         """Get algorithm-specific kwargs for training and validation.
 
         This method extracts algorithm-specific parameters from the training
@@ -317,7 +325,7 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
         validation forward passes.
 
         Args:
-            args: Training arguments namespace containing algorithm-specific parameters.
+            **kwargs: Training arguments containing algorithm-specific parameters.
 
         Returns:
             Tuple of (train_kwargs, val_kwargs) where:
@@ -327,13 +335,13 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
         Example:
             ```python
             @staticmethod
-            def get_trainer_kwargs(args):
+            def get_trainer_kwargs(**kwargs):
                 train_kwargs = {
-                    "num_steps": args.num_steps,
+                    "num_steps": kwargs["num_steps"],
                     "use_special_mode": True,
                 }
                 val_kwargs = {
-                    "num_steps": args.num_steps,
+                    "num_steps": kwargs["num_steps"],
                     "use_special_mode": False,
                 }
                 return train_kwargs, val_kwargs
@@ -363,14 +371,13 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
 
         :param config: The configuration for the speculator model. Must be a
             SpeculatorModelConfig instance containing model hyperparameters and
+            speculative decoding settings.
+        :param verifier: The verifier model to attach. This can be a path to a local
+            model directory, a Hugging Face model identifier, or an instance of
             PreTrainedModel. If provided, the speculator will use this verifier for
             speculative decoding. If None, the speculator will load the verifier from
             the config if specified, or it must be attached later using the
             `attach_verifier` method.
-        :param verifier: The verifier model to attach. This can be a path to a local
-            model directory, a Hugging Face model identifier, or an instance of
-            PreTrainedModel. The speculator will use this verifier for
-            speculative decoding.
         :param verifier_attachment_mode: Optional mode for how the verifier is
             attached to the speculator. If "detach", any verifier passed in or
             resolved from the config will not be attached.
@@ -407,41 +414,12 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
         if verifier is not None and verifier_attachment_mode != "detached":
             self.attach_verifier(verifier, mode=verifier_attachment_mode)
 
-    def state_dict(
-        self,
-        *,
-        destination: dict[str, Any] = None,  # type: ignore[assignment]
-        prefix: str = "",
-        keep_vars: bool = False,
-    ):
-        """
-        Overrides the state_dict method from PyTorch to ensure that save pathways
-        within Transformers PreTrainedModel do not include the verifier model's
-        parameters. This is important to ensure that the speculator model
-        can be saved and loaded without including the verifier's state, which
-        is expected to be managed separately.
-
-        :param destination: Optional dictionary to store the state.
-        :param prefix: Optional prefix for parameter names.
-        :param keep_vars: Whether to keep Variables in the state_dict.
-        :return: A dictionary containing the state of the speculator model,
-            excluding the verifier model's parameters. This dictionary can be used
-            to save the model's state to disk or for further processing.
-        """
-        tmp_verifier = self.verifier
-        self.verifier = None
-        state = super().state_dict(  # type: ignore[misc]
-            destination=destination, prefix=prefix, keep_vars=keep_vars
-        )
-        self.verifier = tmp_verifier
-
-        return state
-
     def resolve_verifier(
         self, verifier: str | os.PathLike | PreTrainedModel
     ) -> PreTrainedModel:
         """
         Resolves the verifier model from a given path or identifier.
+
         This method loads the verifier model from a specified path or identifier,
         ensuring it is compatible with the speculator's configuration. If the
         verifier is already attached, it returns the existing verifier instance.
@@ -449,7 +427,6 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
         :param verifier: The verifier model to resolve. Can be a path to a local
             model directory, a Hugging Face model identifier, or an instance of
             PreTrainedModel.
-
         :return: The resolved PreTrainedModel instance for the verifier.
         """
         if not verifier:
@@ -540,6 +517,36 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
         self.verifier = None
         self.verifier_attachment_mode = "detached"
 
+    def state_dict(
+        self,
+        *,
+        destination: dict[str, Any] = None,  # type: ignore[assignment]
+        prefix: str = "",
+        keep_vars: bool = False,
+    ):
+        """
+        Overrides the state_dict method from PyTorch to ensure that save pathways
+        within Transformers PreTrainedModel do not include the verifier model's
+        parameters. This is important to ensure that the speculator model
+        can be saved and loaded without including the verifier's state, which
+        is expected to be managed separately.
+
+        :param destination: Optional dictionary to store the state.
+        :param prefix: Optional prefix for parameter names.
+        :param keep_vars: Whether to keep Variables in the state_dict.
+        :return: A dictionary containing the state of the speculator model,
+            excluding the verifier model's parameters. This dictionary can be used
+            to save the model's state to disk or for further processing.
+        """
+        tmp_verifier = self.verifier
+        self.verifier = None
+        state = super().state_dict(  # type: ignore[misc]
+            destination=destination, prefix=prefix, keep_vars=keep_vars
+        )
+        self.verifier = tmp_verifier
+
+        return state
+
     def forward(self, *args, **kwargs):
         """
         Defines the forward pass computation for the speculator model.
@@ -561,6 +568,68 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
         raise NotImplementedError(
             "The forward method is only supported on concrete "
             "speculator model subclasses."
+        )
+
+    @torch.no_grad()
+    def generate(
+        self,
+        inputs: torch.Tensor | None = None,  # noqa: ARG002
+        generation_config: GenerationConfig | None = None,  # noqa: ARG002
+        logits_processor: LogitsProcessorList | None = None,  # noqa: ARG002
+        stopping_criteria: StoppingCriteriaList | None = None,  # noqa: ARG002
+        prefix_allowed_tokens_fn: Callable[[int, torch.Tensor], list[int]]  # noqa: ARG002
+        | None = None,
+        synced_gpus: bool | None = None,  # noqa: ARG002
+        assistant_model: Optional["PreTrainedModel"] = None,  # type: ignore[override]  # noqa: ARG002
+        streamer: Optional["BaseStreamer"] = None,  # noqa: ARG002
+        negative_prompt_ids: torch.Tensor | None = None,  # noqa: ARG002
+        negative_prompt_attention_mask: torch.Tensor | None = None,  # noqa: ARG002
+        use_model_defaults: bool | None = None,  # noqa: ARG002
+        custom_generate: str | Callable[..., Any] | None = None,  # noqa: ARG002
+        **kwargs,  # noqa: ARG002
+    ) -> GenerateOutput | torch.LongTensor:
+        """
+        Generate text using speculative decoding with the attached verifier model.
+        The method follows the standard transformers generation interface, making it
+        compatible with existing generation workflows while adding speculative
+        decoding capabilities allowing for faster generation.
+
+        :param inputs: The input token IDs to generate from. Can be None if input_ids
+            are provided in kwargs.
+        :param generation_config: Configuration for generation parameters like
+            max_length, temperature, top_p, etc. If None, uses model defaults.
+        :param logits_processor: List of logits processors to apply during generation
+            for tasks like repetition penalty, top-k filtering, etc.
+        :param stopping_criteria: List of stopping criteria to determine when to
+            stop generation (e.g., max length, end-of-sequence tokens).
+        :param prefix_allowed_tokens_fn: Function to constrain generation to allowed
+            tokens based on the current prefix. Useful for structured generation.
+        :param synced_gpus: Whether to synchronize GPUs during distributed generation.
+            Relevant for multi-GPU setups.
+        :param assistant_model: An assistant model to use for generation. This
+            parameter maintains compatibility with transformers but may not be
+            used in speculative decoding.
+        :param streamer: A streamer to output tokens as they are generated, enabling
+            real-time streaming of the generation process.
+        :param negative_prompt_ids: Token IDs for negative prompting to steer
+            generation away from certain content.
+        :param negative_prompt_attention_mask: Attention mask for negative prompt
+            tokens to properly handle padding.
+        :param use_model_defaults: Whether to use model-specific default generation
+            parameters instead of transformers defaults.
+        :param kwargs: Additional keyword arguments for generation, including
+            input_ids, attention_mask, max_length, etc.
+        :return: Generated token sequences as either a GenerateOutput object
+            (containing additional metadata) or a LongTensor of token IDs.
+        """
+        if self.verifier is None:
+            raise ValueError(
+                "Verifier model is not attached. Please attach a verifier model "
+                "before calling generate."
+            )
+
+        raise NotImplementedError(
+            "The generate method for speculator models is not implemented yet."
         )
 
 

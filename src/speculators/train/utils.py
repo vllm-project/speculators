@@ -66,11 +66,12 @@ def apply_fully_sharded(model: torch.nn.Module):
         raise TypeError(f"Model must be a SpeculatorModel, got {type(model).__name__}")
 
     model_class = type(model)
-    if model_class not in SpeculatorModel.registry.values():
+    registry = SpeculatorModel.registry
+    if registry is None or model_class not in registry.values():
         raise ValueError(
             f"Model {model_class.__name__} is not registered in "
             f"SpeculatorModel.registry. "
-            f"Available models: {list(SpeculatorModel.registry.keys())}"
+            f"Available models: {list(registry.keys()) if registry else []}"
         )
 
     mp_policy = MixedPrecisionPolicy(

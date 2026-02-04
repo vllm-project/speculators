@@ -285,14 +285,14 @@ class EagleSpeculator(SpeculatorModel):
         return cls(config=config)
 
     @staticmethod
-    def get_trainer_kwargs(_args) -> tuple[dict, dict]:
+    def get_trainer_kwargs(**kwargs) -> tuple[dict, dict]:
         """Get training and validation kwargs for EAGLE.
 
         EAGLE doesn't require any special forward pass arguments during training,
         so this returns empty dictionaries.
 
         Args:
-            _args: Training arguments namespace (unused)
+            **kwargs: Training arguments (unused)
 
         Returns:
             Tuple of (train_call_kwargs, val_call_kwargs), both empty dicts

@@ -93,11 +93,12 @@ class Trainer:
             )
 
         model_class = type(self.model)
-        if model_class not in SpeculatorModel.registry.values():
+        registry = SpeculatorModel.registry
+        if registry is None or model_class not in registry.values():
             raise ValueError(
                 f"Model {model_class.__name__} is not registered in "
                 f"SpeculatorModel.registry. "
-                f"Available models: {list(SpeculatorModel.registry.keys())}"
+                f"Available models: {list(registry.keys()) if registry else []}"
             )
 
     def _initialize_fsdp_modules(self):
@@ -107,7 +108,7 @@ class Trainer:
                 continue
             acc = torch.accelerator.current_accelerator()
             if acc is None:
-                m.to_empty(device="cuda")
+                m.to_empty(device="cuda")  # type: ignore[attr-defined]
             else:
                 acc_type = acc.type
                 m.to_empty(device=acc_type)  # type: ignore[attr-defined]
