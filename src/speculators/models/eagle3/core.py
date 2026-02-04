@@ -488,14 +488,8 @@ class Eagle3DraftModel(SpeculatorModel):
         Returns:
             Initialized Eagle3DraftModel
         """
-        # Create a copy of verifier config and set num_hidden_layers
-        import copy
-
-        modified_verifier_config = copy.deepcopy(verifier_config)
-        modified_verifier_config.num_hidden_layers = kwargs["num_layers"]
-
         config = Eagle3SpeculatorConfig(
-            transformer_layer_config=modified_verifier_config,
+            transformer_layer_config=verifier_config,
             draft_vocab_size=kwargs["draft_vocab_size"],
             norm_before_residual=kwargs["norm_before_residual"],
             speculators_config=SpeculatorsConfig(
