@@ -7,9 +7,9 @@ This guide explains how to add a new speculative decoding algorithm to the Specu
 
 Adding a new algorithm requires:
 
-1. **Configuration class** with `@register` decorator. 
+1. **Configuration class** with `@register` decorator.
 
-Note: When Python imports your module, the `@register("myalgo")` decorator adds your class to a global registry dictionary. The training script looks up `"myalgo"` in the registry to find your class. This is helpful because the training script doesn't need to know about every algorithm and adding a new algorithm doesn't require modifying the training script. 
+Note: When Python imports your module, the `@register("myalgo")` decorator adds your class to a global registry dictionary. The training script looks up `"myalgo"` in the registry to find your class. This is helpful because the training script doesn't need to know about every algorithm and adding a new algorithm doesn't require modifying the training script.
 2. **Model class** with `@register` decorator
 3. **Training factory methods** as classmethods on the model
 4. **CLI arguments** in `train.py`

@@ -22,21 +22,12 @@ Functions:
 
 import os
 from abc import abstractmethod
-from collections.abc import Callable
-from typing import Any, ClassVar, Literal, Optional
+from typing import Any, ClassVar, Literal
 
-import torch
 from transformers import (
-    AutoModelForCausalLM,
-    GenerationConfig,
-    GenerationMixin,
     PretrainedConfig,
     PreTrainedModel,
 )
-from transformers.generation.logits_process import LogitsProcessorList
-from transformers.generation.stopping_criteria import StoppingCriteriaList
-from transformers.generation.streamers import BaseStreamer
-from transformers.generation.utils import GenerateOutput
 
 from speculators.config import SpeculatorModelConfig
 from speculators.utils import ClassRegistryMixin
@@ -318,8 +309,9 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
     def get_trainer_kwargs(args) -> tuple[dict, dict]:
         """Get algorithm-specific kwargs for training and validation.
 
-        This method extracts algorithm-specific parameters from the training arguments
-        and returns separate kwargs dictionaries for training and validation forward passes.
+        This method extracts algorithm-specific parameters from the training
+        arguments and returns separate kwargs dictionaries for training and
+        validation forward passes.
 
         Args:
             args: Training arguments namespace containing algorithm-specific parameters.
@@ -353,7 +345,7 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
         self,
         config: SpeculatorModelConfig,
         verifier: str | os.PathLike | PreTrainedModel | None,
-        verifier_attachment_mode: Literal["detached", "full", "train_only"] | None,
+        _verifier_attachment_mode: Literal["detached", "full", "train_only"] | None,
         **kwargs,
     ):
         """
@@ -372,7 +364,7 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
         :param verifier: The verifier model to attach. This can be a path to a local
             model directory, a Hugging Face model identifier, or an instance of
             PreTrainedModel. The speculator will use this verifier for
-            speculative decoding. 
+            speculative decoding.
         :param verifier_attachment_mode: Optional mode for how the verifier is
             attached to the speculator. If "detach", any verifier passed in or
             resolved from the config will not be attached.
@@ -459,6 +451,7 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
             "The forward method is only supported on concrete "
             "speculator model subclasses."
         )
+
 
 def reload_and_populate_models():
     """

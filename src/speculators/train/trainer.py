@@ -85,8 +85,8 @@ class Trainer:
             self.current_epoch = 0
         self.global_step = 0
 
-    def setup_model(self):
-        # Verify model is a registered SpeculatorModel
+    def _verify_model_registration(self):
+        """Verify model is a registered SpeculatorModel."""
         if not isinstance(self.model, SpeculatorModel):
             raise TypeError(
                 f"Model must be a SpeculatorModel, got {type(self.model).__name__}"
@@ -95,9 +95,28 @@ class Trainer:
         model_class = type(self.model)
         if model_class not in SpeculatorModel.registry.values():
             raise ValueError(
-                f"Model {model_class.__name__} is not registered in SpeculatorModel.registry. "
+                f"Model {model_class.__name__} is not registered in "
+                f"SpeculatorModel.registry. "
                 f"Available models: {list(SpeculatorModel.registry.keys())}"
             )
+
+    def _initialize_fsdp_modules(self):
+        """Initialize FSDP modules to empty device with reset parameters."""
+        for m in self.model.layers.children():  # type: ignore[union-attr]
+            if not isinstance(m, FSDPModule):
+                continue
+            acc = torch.accelerator.current_accelerator()
+            if acc is None:
+                m.to_empty(device="cuda")
+            else:
+                acc_type = acc.type
+                m.to_empty(device=acc_type)  # type: ignore[attr-defined]
+            for sub_module in m.modules():  # type: ignore[attr-defined]
+                if hasattr(sub_module, "reset_parameters"):
+                    sub_module.reset_parameters()  # type: ignore[operator]
+
+    def setup_model(self):
+        self._verify_model_registration()
 
         if self.is_distributed:
             apply_fully_sharded(self.model)
@@ -105,18 +124,7 @@ class Trainer:
             if self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1:
                 self.checkpointer.load_model_state_dict(self.model)
             else:
-                for m in self.model.layers.children():  # type: ignore[union-attr]
-                    if not isinstance(m, FSDPModule):
-                        continue
-                    acc = torch.accelerator.current_accelerator()
-                    if acc is None:
-                        m.to_empty(device="cuda")
-                    else:
-                        acc_type = acc.type
-                        m.to_empty(device=acc_type)  # type: ignore[attr-defined]
-                    for sub_module in m.modules():  # type: ignore[attr-defined]
-                        if hasattr(sub_module, "reset_parameters"):
-                            sub_module.reset_parameters()  # type: ignore[operator]
+                self._initialize_fsdp_modules()
         else:
             self.model.to(self.local_rank)  # type: ignore[arg-type]
             if self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1:

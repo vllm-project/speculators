@@ -63,14 +63,13 @@ def apply_fully_sharded(model: torch.nn.Module):
     """
     # Verify model is a registered SpeculatorModel
     if not isinstance(model, SpeculatorModel):
-        raise TypeError(
-            f"Model must be a SpeculatorModel, got {type(model).__name__}"
-        )
+        raise TypeError(f"Model must be a SpeculatorModel, got {type(model).__name__}")
 
     model_class = type(model)
     if model_class not in SpeculatorModel.registry.values():
         raise ValueError(
-            f"Model {model_class.__name__} is not registered in SpeculatorModel.registry. "
+            f"Model {model_class.__name__} is not registered in "
+            f"SpeculatorModel.registry. "
             f"Available models: {list(SpeculatorModel.registry.keys())}"
         )
 

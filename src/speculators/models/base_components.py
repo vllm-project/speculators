@@ -3,13 +3,11 @@
 from typing import NamedTuple
 
 from transformers.models.llama.modeling_llama import (
-    LlamaAttention,
     LlamaDecoderLayer,
     LlamaRMSNorm,
     LlamaRotaryEmbedding,
 )
 from transformers.models.qwen3.modeling_qwen3 import (
-    Qwen3Attention,
     Qwen3DecoderLayer,
     Qwen3RMSNorm,
     Qwen3RotaryEmbedding,
@@ -62,7 +60,8 @@ def override_components(model_type: str, **overrides) -> ModelComponents:
 
     Args:
         model_type: Base model type ("llama" or "qwen3").
-        **overrides: Component fields to override (first_layer_class, decoder_layer_class, etc).
+        **overrides: Component fields to override (first_layer_class,
+            decoder_layer_class, etc).
 
     Returns:
         ModelComponents with specified overrides applied.

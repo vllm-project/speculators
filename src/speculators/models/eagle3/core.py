@@ -6,7 +6,7 @@ import torch
 from torch.nn.attention.flex_attention import create_block_mask
 from transformers import AutoConfig, DynamicCache, PretrainedConfig
 
-from speculators.config import VerifierConfig
+from speculators.config import SpeculatorsConfig, VerifierConfig
 from speculators.model import SpeculatorModel
 from speculators.models.eagle3 import Eagle3SpeculatorConfig
 from speculators.models.eagle3.attention import (
@@ -14,6 +14,7 @@ from speculators.models.eagle3.attention import (
     extend_mask_for_draft_tokens,
 )
 from speculators.models.eagle3.model_definitions import model_classes
+from speculators.proposals.greedy import GreedyTokenProposalConfig
 from speculators.utils.loading import load_model_layers
 
 
@@ -487,30 +488,27 @@ class Eagle3DraftModel(SpeculatorModel):
         Returns:
             Initialized Eagle3DraftModel
         """
-        from speculators.config import SpeculatorsConfig
-        from speculators.proposals.greedy import GreedyTokenProposalConfig
-
         config = Eagle3SpeculatorConfig(
             transformer_layer_config=verifier_config,
-            draft_vocab_size=kwargs['draft_vocab_size'],
-            norm_before_residual=kwargs['norm_before_residual'],
-            num_layers=kwargs['num_layers'],
+            draft_vocab_size=kwargs["draft_vocab_size"],
+            norm_before_residual=kwargs["norm_before_residual"],
+            num_layers=kwargs["num_layers"],
             speculators_config=SpeculatorsConfig(
                 algorithm="eagle3",
                 proposal_methods=[
                     GreedyTokenProposalConfig(
-                        num_draft_tokens=kwargs['ttt_steps'],
+                        num_draft_tokens=kwargs["ttt_steps"],
                         use_dynamic_branching=False,
                     )
                 ],
                 default_proposal_method="greedy",
                 verifier=VerifierConfig.from_config(
-                    verifier_config, name_or_path=kwargs['verifier_name_or_path']
+                    verifier_config, name_or_path=kwargs["verifier_name_or_path"]
                 ),
             ),
         )
 
-        return cls(config=config, t2d=kwargs.get('t2d'), d2t=kwargs.get('d2t'))
+        return cls(config=config, t2d=kwargs.get("t2d"), d2t=kwargs.get("d2t"))
 
     @staticmethod
     def get_trainer_kwargs(args) -> tuple[dict, dict]:

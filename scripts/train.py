@@ -23,7 +23,6 @@ from speculators.train.trainer import Trainer, TrainerConfig
 from speculators.train.utils import maybe_destroy_distributed, maybe_setup_distributed
 
 
-
 def setup_dataloader(
     file_list: list[str],
     world_size: int,
@@ -256,9 +255,18 @@ def parse_args():
         help="Whether to normalize before residual connection",
     )
     # Dataloader parameters
-    parser.add_argument("--num-workers", type=int, default=12, help="Number of dataloader workers")
-    parser.add_argument("--prefetch-factor", type=int, default=4, help="Dataloader prefetch factor")
-    parser.add_argument("--noise-std", type=float, default=0.05, help="Standard deviation for noise augmentation")
+    parser.add_argument(
+        "--num-workers", type=int, default=12, help="Number of dataloader workers"
+    )
+    parser.add_argument(
+        "--prefetch-factor", type=int, default=4, help="Dataloader prefetch factor"
+    )
+    parser.add_argument(
+        "--noise-std",
+        type=float,
+        default=0.05,
+        help="Standard deviation for noise augmentation",
+    )
     # lr scheduler
     parser.add_argument("--scheduler-type", type=str, default="linear")
     parser.add_argument("--scheduler-warmup-steps", type=int, default=None)
