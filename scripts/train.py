@@ -1,4 +1,5 @@
 import argparse
+import random
 
 import numpy as np
 import torch
@@ -31,6 +32,19 @@ NORM_BEFORE_RESIDUAL = True
 NUM_WORKERS = 12
 PREFETCH_FACTOR = 4
 NOISE_STD = 0.05
+
+
+def set_seed(seed: int, deterministic: bool = False):
+    """Set random seeds for reproducibility."""
+    random.seed(seed)
+    np.random.seed(seed)  # noqa: NPY002
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+    if deterministic:
+        # For deterministic behavior (may impact performance)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
 
 def setup_dataloader(
@@ -111,6 +125,9 @@ def create_transformer_layer_config(
 
 
 def main(args: argparse.Namespace):
+    # Set random seed for reproducibility
+    set_seed(args.seed, args.deterministic_cuda)
+
     # Setup logging
     setup_root_logger()
     setup_metric_logger(
@@ -241,6 +258,15 @@ def parse_args():
     parser.add_argument("--t2d-path", type=str, default=None)
     parser.add_argument("--ttt-steps", type=int, default=3)
     parser.add_argument("--ttt-step-loss-decay", type=float, default=1.0)
+    parser.add_argument(
+        "--seed", type=int, default=42, help="Random seed for reproducibility"
+    )
+    parser.add_argument(
+        "--deterministic-cuda",
+        action="store_true",
+        default=False,
+        help="Sets cuda to deterministic mode. This may impact performance.",
+    )
     parser.add_argument(
         "--use-off-policy-tokens",
         action="store_true",
