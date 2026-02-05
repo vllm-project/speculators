@@ -21,6 +21,7 @@ Functions:
 """
 
 import os
+from abc import abstractmethod
 from collections.abc import Callable
 from typing import Any, ClassVar, Literal, Optional
 
@@ -276,6 +277,116 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel, GenerationMixin):  # 
         raise ValueError(
             f"No registered model class found for config type {type(config)}. "
             f"Available registered model classes: {list(cls.registry.keys())}."
+        )
+
+    @classmethod
+    def verify_training_compatible(cls, model: "SpeculatorModel") -> None:
+        """Verify that a model instance is compatible with training infrastructure.
+
+        This method validates that the given model is:
+        1. An instance of SpeculatorModel
+        2. Registered in the SpeculatorModel registry
+        3. Has a `layers` attribute (required for FSDP wrapping)
+
+        Args:
+            model: The model instance to verify
+
+        Raises:
+            TypeError: If model is not a SpeculatorModel instance
+            ValueError: If model's class is not in the registry
+            AttributeError: If model doesn't have a `layers` attribute
+        """
+        if not isinstance(model, SpeculatorModel):
+            raise TypeError(
+                f"Model must be a SpeculatorModel, got {type(model).__name__}"
+            )
+
+        model_class = type(model)
+        registry = cls.registry
+        if registry is None or model_class not in registry.values():
+            raise ValueError(
+                f"Model {model_class.__name__} is not registered in "
+                f"SpeculatorModel.registry. "
+                f"Available models: {list(registry.keys()) if registry else []}"
+            )
+
+        if not hasattr(model, "layers"):
+            raise AttributeError(
+                f"Model {model_class.__name__} must have a 'layers' attribute "
+                f"containing decoder layers for FSDP wrapping"
+            )
+
+    @classmethod
+    @abstractmethod
+    def from_training_args(
+        cls, verifier_config: PretrainedConfig, **kwargs
+    ) -> "SpeculatorModel":
+        """Create model instance from training arguments.
+
+        This factory method is used by the training script to instantiate models
+        from command-line arguments. Each algorithm must implement this to support
+        the training infrastructure.
+
+        Args:
+            verifier_config: Configuration from the verifier/base model.
+            **kwargs: Training arguments as keyword arguments. Each algorithm
+                extracts the parameters it needs.
+
+        Returns:
+            Initialized model instance ready for training.
+
+        Example:
+            ```python
+            @classmethod
+            def from_training_args(cls, verifier_config, **kwargs):
+                config = MySpeculatorConfig(
+                    transformer_layer_config=verifier_config,
+                    num_layers=kwargs['num_layers'],
+                    ...
+                )
+                return cls(config=config, t2d=kwargs.get('t2d'), d2t=kwargs.get('d2t'))
+            ```
+        """
+        raise NotImplementedError(
+            f"{cls.__name__} must implement from_training_args() classmethod "
+            "to support training infrastructure."
+        )
+
+    @staticmethod
+    @abstractmethod
+    def get_trainer_kwargs(**kwargs) -> tuple[dict, dict]:
+        """Get algorithm-specific kwargs for training and validation.
+
+        This method extracts algorithm-specific parameters from the training
+        arguments and returns separate kwargs dictionaries for training and
+        validation forward passes.
+
+        Args:
+            **kwargs: Training arguments containing algorithm-specific parameters.
+
+        Returns:
+            Tuple of (train_kwargs, val_kwargs) where:
+                - train_kwargs: Dict passed to model.forward() during training
+                - val_kwargs: Dict passed to model.forward() during validation
+
+        Example:
+            ```python
+            @staticmethod
+            def get_trainer_kwargs(**kwargs):
+                train_kwargs = {
+                    "num_steps": kwargs["num_steps"],
+                    "use_special_mode": True,
+                }
+                val_kwargs = {
+                    "num_steps": kwargs["num_steps"],
+                    "use_special_mode": False,
+                }
+                return train_kwargs, val_kwargs
+            ```
+        """
+        raise NotImplementedError(
+            "Model must implement get_trainer_kwargs() staticmethod "
+            "to support training infrastructure."
         )
 
     def __init__(

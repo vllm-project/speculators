@@ -9,12 +9,11 @@ from torch.utils.data import DataLoader
 from tqdm import TqdmExperimentalWarning
 from tqdm.rich import tqdm
 from transformers import (
-    PreTrainedModel,
     get_cosine_schedule_with_warmup,
     get_linear_schedule_with_warmup,
 )
 
-from speculators.models.eagle3 import Eagle3DraftModel
+from speculators.model import SpeculatorModel
 from speculators.train.checkpointer import (
     BaseCheckpointer,
     DistributedCheckpointer,
@@ -46,7 +45,7 @@ class TrainerConfig(NamedTuple):
 class Trainer:
     def __init__(
         self,
-        model: PreTrainedModel,
+        model: SpeculatorModel,
         config: TrainerConfig,
         train_loader: DataLoader,
         val_loader: DataLoader | None = None,
@@ -86,24 +85,21 @@ class Trainer:
         self.global_step = 0
 
     def setup_model(self):
+        # Verify model is compatible with training infrastructure
+        SpeculatorModel.verify_training_compatible(self.model)
+
         if self.is_distributed:
             apply_fully_sharded(self.model)
 
             if self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1:
                 self.checkpointer.load_model_state_dict(self.model)
             else:
-                if not isinstance(self.model, Eagle3DraftModel):
-                    # todo: generalize to non-Eagle3DraftModel
-                    # Currently we make assumptions based on the Eagle3DraftModel
-                    # architecture, including the existence of a layers attribute.
-                    msg = "Only Eagle3DraftModel is supported for sharded training"
-                    raise ValueError(msg)
                 for m in self.model.layers.children():  # type: ignore[union-attr]
                     if not isinstance(m, FSDPModule):
                         continue
                     acc = torch.accelerator.current_accelerator()
                     if acc is None:
-                        m.to_empty(device="cuda")
+                        m.to_empty(device="cuda")  # type: ignore[attr-defined]
                     else:
                         acc_type = acc.type
                         m.to_empty(device=acc_type)  # type: ignore[attr-defined]

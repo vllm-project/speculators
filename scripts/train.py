@@ -7,9 +7,7 @@ from torch.utils.data import DataLoader
 from transformers import LlamaConfig
 from transformers.models.auto.configuration_auto import AutoConfig
 
-from speculators.config import SpeculatorsConfig, VerifierConfig
-from speculators.models.eagle3 import Eagle3DraftModel, Eagle3SpeculatorConfig
-from speculators.proposals.greedy import GreedyTokenProposalConfig
+from speculators.model import SpeculatorModel
 from speculators.train.data import (
     Eagle3SampleFileDataset,
     create_collate_fn,
@@ -24,14 +22,6 @@ from speculators.train.logger import setup_metric_logger, setup_root_logger
 from speculators.train.noise_transforms import AddUniformNoise
 from speculators.train.trainer import Trainer, TrainerConfig
 from speculators.train.utils import maybe_destroy_distributed, maybe_setup_distributed
-
-# DRAFTER MODEL HYPARAMETERS
-NORM_BEFORE_RESIDUAL = True
-
-# Dataloader
-NUM_WORKERS = 12
-PREFETCH_FACTOR = 4
-NOISE_STD = 0.05
 
 
 def set_seed(seed: int, deterministic: bool = False):
@@ -53,6 +43,9 @@ def setup_dataloader(
     local_rank: int,
     add_noise: bool = True,
     data_format_version: int = 1,
+    noise_std: float = 0.05,
+    num_workers: int = 12,
+    prefetch_factor: int = 4,
 ) -> DataLoader:
     """Setup dataloader for training.
     Args:
@@ -61,12 +54,15 @@ def setup_dataloader(
         local_rank: Rank of the current process.
         add_noise: Whether to add noise to the data.
         data_format_version: Version of the data format. Default is 1.
+        noise_std: Standard deviation for noise augmentation.
+        num_workers: Number of dataloader workers.
+        prefetch_factor: Dataloader prefetch factor.
     Returns:
         DataLoader: Dataloader for training.
     """
     if add_noise:
         noise_transform = AddUniformNoise(
-            std=NOISE_STD, tensors=("hidden_states", "verifier_last_hidden_states")
+            std=noise_std, tensors=("hidden_states", "verifier_last_hidden_states")
         )
     else:
         noise_transform = None
@@ -90,8 +86,8 @@ def setup_dataloader(
     return DataLoader(
         dataset,
         batch_sampler=batch_sampler,
-        num_workers=NUM_WORKERS,
-        prefetch_factor=PREFETCH_FACTOR,
+        num_workers=num_workers,
+        prefetch_factor=prefetch_factor,
         pin_memory=True,
         collate_fn=create_collate_fn(args.total_seq_len),
         persistent_workers=True,
@@ -163,28 +159,24 @@ def main(args: argparse.Namespace):
         args.verifier_name_or_path, args.num_layers
     )
 
-    speculator_config = Eagle3SpeculatorConfig(
-        transformer_layer_config=transformer_layer_config,
-        draft_vocab_size=draft_vocab_size,
-        norm_before_residual=NORM_BEFORE_RESIDUAL,
-        speculators_config=SpeculatorsConfig(
-            algorithm="eagle3",
-            proposal_methods=[
-                GreedyTokenProposalConfig(
-                    proposal_type="greedy",
-                    speculative_tokens=args.ttt_steps,
-                )
-            ],
-            default_proposal_method="greedy",
-            verifier=VerifierConfig(
-                name_or_path=args.verifier_name_or_path,
-                architectures=["LlamaForCausalLM"],
-            ),
-        ),
-    )
+    # Get model class from registry and create model using its factory method
+    if SpeculatorModel.registry_auto_discovery:
+        SpeculatorModel.auto_populate_registry()
 
-    # Setup draft model
-    draft_model = Eagle3DraftModel(config=speculator_config, t2d=t2d, d2t=d2t)
+    if args.speculator_type not in SpeculatorModel.registry:
+        raise ValueError(
+            f"Unknown speculator type: {args.speculator_type}. "
+            f"Available: {list(SpeculatorModel.registry.keys())}"
+        )
+
+    model_class = SpeculatorModel.registry[args.speculator_type]
+    draft_model = model_class.from_training_args(
+        verifier_config=transformer_layer_config,
+        t2d=t2d,
+        d2t=d2t,
+        draft_vocab_size=draft_vocab_size,
+        **vars(args),
+    )
 
     # Setup dataloaders
     train_files, val_files = split_files(args.data_path, ratio=0.9)
@@ -194,6 +186,9 @@ def main(args: argparse.Namespace):
         local_rank,
         add_noise=True,
         data_format_version=args.data_format_version,
+        noise_std=args.noise_std,
+        num_workers=args.num_workers,
+        prefetch_factor=args.prefetch_factor,
     )
     val_loader = setup_dataloader(
         val_files,
@@ -201,9 +196,14 @@ def main(args: argparse.Namespace):
         local_rank,
         add_noise=False,
         data_format_version=args.data_format_version,
+        noise_std=args.noise_std,
+        num_workers=args.num_workers,
+        prefetch_factor=args.prefetch_factor,
     )
 
-    # Setup trainer
+    # Get trainer kwargs from model class
+    train_call_kwargs, val_call_kwargs = model_class.get_trainer_kwargs(**vars(args))
+
     trainer_config = TrainerConfig(
         num_epochs=args.epochs,
         save_path=args.save_path,
@@ -211,16 +211,8 @@ def main(args: argparse.Namespace):
         resume_from_checkpoint=not args.no_resume_from_checkpoint,
         is_distributed=is_distributed,
         local_rank=local_rank,
-        train_call_kwargs={
-            "use_off_policy_tokens": args.use_off_policy_tokens,
-            "ttt_steps": args.ttt_steps,
-            "ttt_step_loss_decay": args.ttt_step_loss_decay,
-        },
-        val_call_kwargs={
-            "use_off_policy_tokens": False,
-            "ttt_steps": args.ttt_steps,
-            "ttt_step_loss_decay": args.ttt_step_loss_decay,
-        },
+        train_call_kwargs=train_call_kwargs,
+        val_call_kwargs=val_call_kwargs,
         scheduler_type=args.scheduler_type,
         scheduler_warmup_steps=args.scheduler_warmup_steps,
         scheduler_total_steps=args.scheduler_total_steps,
@@ -238,6 +230,12 @@ def main(args: argparse.Namespace):
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--verifier-name-or-path", type=str, required=True)
+    parser.add_argument(
+        "--speculator-type",
+        type=str,
+        default="eagle3",
+        help="Type of speculator model to train (e.g., eagle3)",
+    )
     parser.add_argument("--data-path", type=str, default="./data")
     parser.add_argument("--save-path", type=str, default="./checkpoints")
     parser.add_argument("--epochs", type=int, default=20)
@@ -272,6 +270,26 @@ def parse_args():
         action="store_true",
         default=False,
         help="Use off-policy tokens during training (required for regenerated data)",
+    )
+    # Model hyperparameters
+    parser.add_argument(
+        "--norm-before-residual",
+        action="store_true",
+        default=True,
+        help="Whether to normalize before residual connection",
+    )
+    # Dataloader parameters
+    parser.add_argument(
+        "--num-workers", type=int, default=12, help="Number of dataloader workers"
+    )
+    parser.add_argument(
+        "--prefetch-factor", type=int, default=4, help="Dataloader prefetch factor"
+    )
+    parser.add_argument(
+        "--noise-std",
+        type=float,
+        default=0.05,
+        help="Standard deviation for noise augmentation",
     )
     # lr scheduler
     parser.add_argument("--scheduler-type", type=str, default="linear")

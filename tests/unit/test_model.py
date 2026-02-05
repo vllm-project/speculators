@@ -56,6 +56,26 @@ class SpeculatorTestModel(SpeculatorModel):
         # Simple implementation for testing
         return {"logits": torch.randn(1, 10, 1000)}
 
+    @classmethod
+    def from_training_args(cls, verifier_config, **kwargs):
+        """Create model from training arguments."""
+        config = SpeculatorModelTestConfig(
+            speculators_config=SpeculatorsConfig(
+                algorithm="test_speculator",
+                proposal_methods=[GreedyTokenProposalConfig()],
+                default_proposal_method="greedy",
+                verifier=VerifierConfig.from_config(
+                    verifier_config, name_or_path=kwargs.get("verifier_name_or_path")
+                ),
+            )
+        )
+        return cls(config=config)
+
+    @staticmethod
+    def get_trainer_kwargs(**kwargs):
+        """Get training and validation kwargs."""
+        return {}, {}
+
 
 # Reload registries to include test classes
 reload_and_populate_configs()
@@ -235,13 +255,13 @@ def test_speculator_model_initialization_invalid(
     with pytest.raises(
         ValueError, match="Config must be provided to initialize a SpeculatorModel"
     ):
-        SpeculatorModel(config=None, verifier=None, verifier_attachment_mode=None)  # type: ignore[arg-type]
+        SpeculatorModel(config=None, verifier=None, verifier_attachment_mode=None)  # type: ignore[abstract, arg-type]
 
     # Invalid config type
     with pytest.raises(
         TypeError, match="Expected config to be an instance of SpeculatorModelConfig"
     ):
-        SpeculatorModel(
+        SpeculatorModel(  # type: ignore[abstract]
             config="invalid_config",  # type: ignore[arg-type]
             verifier=None,
             verifier_attachment_mode=None,  # type: ignore[arg-type]
@@ -251,7 +271,7 @@ def test_speculator_model_initialization_invalid(
     with pytest.raises(
         TypeError, match="Expected verifier to be a PreTrainedModel, a string path,"
     ):
-        SpeculatorModel(
+        SpeculatorModel(  # type: ignore[abstract]
             config=speculator_model_test_config,
             verifier=123,  # type: ignore[arg-type]
             verifier_attachment_mode=None,
@@ -259,7 +279,7 @@ def test_speculator_model_initialization_invalid(
 
     # Invalid verifier attachment mode
     with pytest.raises(ValueError, match="Invalid verifier_attachment_mode: "):
-        SpeculatorModel(
+        SpeculatorModel(  # type: ignore[abstract]
             config=speculator_model_test_config,
             verifier=MagicMock(spec=PreTrainedModel),
             verifier_attachment_mode="invalid_mode",  # type: ignore[arg-type]
@@ -417,7 +437,7 @@ def test_speculator_model_forward_concrete(
 
 @pytest.mark.smoke
 def test_speculator_model_forward_abstract(speculator_model_test_config):
-    model = SpeculatorModel(
+    model = SpeculatorModel(  # type: ignore[abstract]
         speculator_model_test_config, verifier=None, verifier_attachment_mode=None
     )
 

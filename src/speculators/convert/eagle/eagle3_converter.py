@@ -173,7 +173,7 @@ class Eagle3Converter:
         reduce_vocab_size: bool,
         has_drafter_embedding: bool,
     ) -> Path:
-        model = Eagle3Speculator(
+        model = Eagle3Speculator(  # type: ignore[abstract]
             config=config,
             verifier=None,
             verifier_attachment_mode="detached",

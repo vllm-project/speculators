@@ -103,7 +103,7 @@ class VerifierConfig(BaseModel):
 
         return cls(
             name_or_path=name_or_path,
-            architectures=config_dict.get("architectures", []),
+            architectures=config_dict.get("architectures") or [],
         )
 
     name_or_path: str | None = Field(

@@ -5,8 +5,6 @@ import torch
 import torch.distributed as dist
 from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
 
-from speculators.models.eagle3 import Eagle3DraftModel
-
 local_rank = int(os.environ.get("LOCAL_RANK", "0"))
 world_size = int(os.environ.get("WORLD_SIZE", "1"))
 is_distributed = "LOCAL_RANK" in os.environ
@@ -57,15 +55,16 @@ def maybe_destroy_distributed():
 
 
 def apply_fully_sharded(model: torch.nn.Module):
-    """Applies torch FSDP fully_shard to the model, wrapping layers in FSDPModule."""
+    """Applies torch FSDP fully_shard to the model, wrapping layers in FSDPModule.
+
+    Assumes the model has a `layers` attribute containing the decoder layers.
+    Model should be validated with SpeculatorModel.verify_training_compatible()
+    before calling this function.
+    """
     mp_policy = MixedPrecisionPolicy(
         param_dtype=torch.bfloat16,
         reduce_dtype=torch.float32,
     )
-    if not isinstance(model, Eagle3DraftModel):
-        # todo: generalize to non-Eagle3DraftModel
-        msg = "Only Eagle3DraftModel is supported for sharded training"
-        raise ValueError(msg)
 
     for layer in model.layers:  # type: ignore[union-attr]
         # we apply fully_shard to each DecoderLayer
