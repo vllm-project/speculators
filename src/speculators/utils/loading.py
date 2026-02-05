@@ -200,15 +200,11 @@ def extract_vocab_mappings(
         Tuple of (d2t, t2d) tensors, moved to specified device
 
     Raises:
-        ValueError: If mappings not found or multiple candidates exist
+        ValueError: If exact match for d2t or t2d not found
     """
-    # Find candidates
-    d2t_candidates = [k for k in state_dict if "d2t" in k.lower()]
-    t2d_candidates = [k for k in state_dict if "t2d" in k.lower()]
-
-    # Select best match
-    d2t_key = _select_mapping_key(d2t_candidates, "d2t", state_dict)
-    t2d_key = _select_mapping_key(t2d_candidates, "t2d", state_dict)
+    # Find exact matches for d2t and t2d
+    d2t_key = _find_exact_key(state_dict, "d2t")
+    t2d_key = _find_exact_key(state_dict, "t2d")
 
     std_logger.info(f"Extracting d2t from: {d2t_key}")
     std_logger.info(f"Extracting t2d from: {t2d_key}")
@@ -225,28 +221,28 @@ def extract_vocab_mappings(
     return d2t, t2d
 
 
-def _select_mapping_key(candidates: list[str], target: str, state_dict: dict) -> str:
-    """Select the best matching key for d2t/t2d from candidates."""
-    if not candidates:
-        available_keys = list(state_dict.keys())[:20]
-        raise ValueError(
-            f"No '{target}' key found in state dict. "
-            f"Available keys sample: {available_keys}..."
-        )
+def _find_exact_key(state_dict: dict, target: str) -> str:
+    """
+    Find exact match for key in state dict (case-insensitive).
 
-    # Prefer exact match
-    exact_matches = [k for k in candidates if k.lower() == target.lower()]
-    if exact_matches:
-        return exact_matches[0]
+    Args:
+        state_dict: Model state dictionary
+        target: Target key name to find
 
-    # Single candidate
-    if len(candidates) == 1:
-        return candidates[0]
+    Returns:
+        Matching key from state dict
 
-    # Multiple candidates - error
+    Raises:
+        ValueError: If exact match not found
+    """
+    for key in state_dict.keys():
+        if key.lower() == target.lower():
+            return key
+
+    available_keys = list(state_dict.keys())[:20]
     raise ValueError(
-        f"Multiple '{target}' candidates found: {candidates}. "
-        "Please verify model structure."
+        f"Key '{target}' not found in state dict. "
+        f"Available keys sample: {available_keys}..."
     )
 
 
