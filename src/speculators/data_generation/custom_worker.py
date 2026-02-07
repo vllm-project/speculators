@@ -19,6 +19,7 @@ def _patched_forward(
     positions,
     intermediate_tensors=None,
     inputs_embeds=None,
+    deepstack_input_embeds=None,
     **_kwargs,
 ):
     """Patched forward pass that captures hidden states from specified layers.
@@ -47,12 +48,25 @@ def _patched_forward(
     # Only capture on TP rank 0 to avoid duplicates
     should_capture = get_tp_group().rank_in_group == 0
     target_layers = extension._layer_ids if should_capture else frozenset()  # noqa: SLF001
+    if get_pp_group().is_first_rank and should_capture:
+        # Capture the exact embeddings consumed by the decoder input.
+        extension._store_input_embeds(hidden_states.clone())  # noqa: SLF001
 
     for idx, layer in enumerate(islice(self.layers, self.start_layer, self.end_layer)):
         hidden_states, residual = layer(
             hidden_states=hidden_states, positions=positions, residual=residual
         )
         absolute_layer_idx = self.start_layer + idx
+
+        # Keep behavior aligned with Qwen3-VL language model when deepstack is enabled.
+        if (
+            deepstack_input_embeds is not None
+            and absolute_layer_idx in range(0, len(deepstack_input_embeds))
+        ):
+            hidden_states = (
+                hidden_states
+                + deepstack_input_embeds[f"deepstack_input_embeds_{absolute_layer_idx}"]
+            )
 
         # Capture intermediate layers (not the last) before norm
         if absolute_layer_idx in target_layers:
@@ -99,10 +113,18 @@ class HiddenStatesWorkerExtension:
             for i, h in enumerate(aux_hidden_states):
                 self._captured_states[i].append(h)
 
+    def _store_input_embeds(self, input_embeds):
+        # Store captured embeddings as chunked tensors to avoid repeated cat operations.
+        if self._captured_input_embeds is None:  # type: ignore[has-type]
+            self._captured_input_embeds = [input_embeds]
+        else:
+            self._captured_input_embeds.append(input_embeds)
+
     def _setup_hidden_states_capture(self, layer_ids: list[int]):
         """Setup model to capture auxiliary hidden states from specific layers"""
         self._layer_ids = frozenset(layer_ids)  # Convert once for O(1) lookup
         self._captured_states = None  # type: ignore[assignment]
+        self._captured_input_embeds = None  # type: ignore[assignment]
 
         model = self.model_runner.model  # type: ignore[attr-defined]
 
@@ -131,6 +153,7 @@ class HiddenStatesWorkerExtension:
                 "Must call _setup_hidden_states_capture before capturing states"
             )
         self._captured_states = None  # type: ignore[assignment]
+        self._captured_input_embeds = None  # type: ignore[assignment]
 
     def _get_captured_states(self):
         """Get the captured hidden states
@@ -146,4 +169,13 @@ class HiddenStatesWorkerExtension:
         ]
         # Clear intermediate storage after concatenating
         self._captured_states = None  # type: ignore[assignment]
+        return result
+
+    def _get_captured_input_embeds(self):
+        """Get the captured input embeddings used by the model."""
+        if self._captured_input_embeds is None:
+            return None
+        # Concatenate captured embedding chunks into a single tensor for RPC transfer.
+        result = torch.cat(self._captured_input_embeds, dim=0)
+        self._captured_input_embeds = None  # type: ignore[assignment]
         return result

@@ -1,6 +1,6 @@
 # ruff: noqa: ERA001
 import copy
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import torch
 from torch.nn.attention.flex_attention import create_block_mask
@@ -148,6 +148,80 @@ def conditional_torch_compile(func):
         return torch.compile(func)
     else:
         return func
+
+
+def _flatten_mm_embeddings(multimodal_embeddings: Any) -> torch.Tensor:
+    # Flatten every multimodal item to token-major layout while preserving hidden dim.
+    if isinstance(multimodal_embeddings, torch.Tensor):
+        return multimodal_embeddings.flatten(0, -2)
+    if isinstance(multimodal_embeddings, (list, tuple)):
+        if len(multimodal_embeddings) == 0:
+            return torch.empty(0)
+        return torch.cat(tuple(_flatten_mm_embeddings(t) for t in multimodal_embeddings))
+    raise TypeError(f"Unsupported multimodal_embeddings type: {type(multimodal_embeddings)}")
+
+
+def _normalize_mm_mask(mask: torch.Tensor, input_embeds: torch.Tensor) -> torch.Tensor:
+    """Normalize is_multimodal to a boolean [batch, seq] mask.
+
+    Accepted input mask shapes:
+    - [seq] when batch size is 1
+    - [batch, seq] (preferred)
+    - [batch, seq, 1] from some model runners
+
+    masked_scatter_ in _merge_multimodal_embeddings expects token positions in
+    [batch, seq], so we normalize to that shape and fail fast on mismatches.
+    """
+    # Keep mask colocated with input embeddings and force bool semantics.
+    mask = mask.to(device=input_embeds.device, dtype=torch.bool)
+    if mask.dim() == 1:
+        # A 1D mask is unambiguous only for single-sample batches.
+        if input_embeds.shape[0] != 1:
+            raise ValueError("1D is_multimodal requires batch size 1")
+        # Convert [seq] -> [1, seq] so downstream logic is shape-stable.
+        mask = mask.unsqueeze(0)
+    if mask.dim() == 3 and mask.shape[-1] == 1:
+        # Convert [batch, seq, 1] -> [batch, seq] from broadcast-style outputs.
+        mask = mask.squeeze(-1)
+    # Final contract: mask must align with token grid of input_embeds [batch, seq, hidden].
+    if mask.shape != input_embeds.shape[:2]:
+        raise ValueError(
+            f"is_multimodal shape {tuple(mask.shape)} does not match "
+            f"input_embeds shape prefix {tuple(input_embeds.shape[:2])}"
+        )
+    return mask
+
+
+def _merge_multimodal_embeddings(
+    input_embeds: torch.Tensor,
+    multimodal_embeddings: Any,
+    is_multimodal: torch.Tensor | None,
+) -> torch.Tensor:
+    # Keep text path untouched when multimodal inputs are not provided.
+    if multimodal_embeddings is None:
+        return input_embeds
+    if hasattr(multimodal_embeddings, "__len__") and len(multimodal_embeddings) == 0:
+        return input_embeds
+    if is_multimodal is None:
+        raise ValueError("is_multimodal is required when multimodal_embeddings is provided")
+
+    mm_flat = _flatten_mm_embeddings(multimodal_embeddings).to(
+        device=input_embeds.device, dtype=input_embeds.dtype
+    )
+    mm_mask = _normalize_mm_mask(is_multimodal, input_embeds)
+    out = input_embeds.clone()
+    try:
+        # Match vLLM multimodal merge behavior with masked_scatter update semantics.
+        out.masked_scatter_(mm_mask.unsqueeze(-1), mm_flat)
+    except RuntimeError as e:
+        expected = int(mm_mask.sum().item())
+        actual = int(mm_flat.shape[0])
+        if expected != actual:
+            raise ValueError(
+                f"Multimodal token count mismatch: placeholders={expected}, mm_tokens={actual}"
+            ) from e
+        raise ValueError("Error during multimodal masked_scatter") from e
+    return out
 
 
 @SpeculatorModel.register("eagle3")
@@ -339,6 +413,9 @@ class Eagle3DraftModel(SpeculatorModel):
         ttt_steps: int = 3,
         ttt_step_loss_decay: float = 1.0,
         use_off_policy_tokens: bool = False,
+        input_embeds_override: torch.Tensor | None = None,
+        multimodal_embeddings: Any | None = None,
+        is_multimodal: torch.Tensor | None = None,
         **kwargs,
     ):
         device = hidden_states.device
@@ -391,7 +468,24 @@ class Eagle3DraftModel(SpeculatorModel):
         draft_tokens = []
         for ttt_step in range(ttt_steps):
             with torch.no_grad():
-                input_embeds = self.embed_tokens(input_ids)
+                if ttt_step == 0 and input_embeds_override is not None:
+                    if input_embeds_override.shape[:2] != input_ids.shape:
+                        raise ValueError(
+                            "input_embeds_override shape prefix "
+                            f"{tuple(input_embeds_override.shape[:2])} "
+                            f"!= input_ids shape {tuple(input_ids.shape)}"
+                        )
+                    # Trust captured prefill embeddings only on the first drafting step.
+                    input_embeds = input_embeds_override.to(
+                        device=device, dtype=hidden_states.dtype
+                    )
+                else:
+                    input_embeds = self.embed_tokens(input_ids)
+                    input_embeds = _merge_multimodal_embeddings(
+                        input_embeds=input_embeds,
+                        multimodal_embeddings=multimodal_embeddings,
+                        is_multimodal=is_multimodal,
+                    )
                 # shape: [1, total_seq_len, hidden_size]
             cache_position = torch.arange(
                 ttt_step * total_seq_len,

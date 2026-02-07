@@ -501,6 +501,13 @@ def generate_and_save_hidden_states(args, dataset):  # noqa: C901, PLR0915
                     "hidden_states": [h.contiguous() for h in result["hidden_states"]],
                     "loss_mask": loss_mask,
                 }
+                if result.get("input_embeds") is not None:
+                    # Save the exact decoder input embeddings captured at prefill time.
+                    # For VL samples this tensor already contains merged vision tokens,
+                    # and later maps to input_embeds_override for draft training.
+                    # hidden_states are intermediate layer outputs and cannot replace it.
+                    # Keep the tensor contiguous to avoid persisting a strided view.
+                    result_cleaned["input_embeds"] = result["input_embeds"].contiguous()
                 output_path = Path(args.output_dir) / f"data_{file_idx}.pt"
                 future = thread_executor.submit(
                     save_sample_to_disk, result_cleaned, output_path

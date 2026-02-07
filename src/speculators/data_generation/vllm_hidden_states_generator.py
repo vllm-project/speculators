@@ -394,6 +394,10 @@ class VllmHiddenStatesGenerator:
             "_get_captured_states",
             unique_reply_rank=0,
         )
+        captured_input_embeds = self.executor.collective_rpc(
+            "_get_captured_input_embeds",
+            unique_reply_rank=0,
+        )
 
         if not aux_hidden_states or len(aux_hidden_states) == 0:
             raise RuntimeError("Failed to capture hidden states from worker")
@@ -401,6 +405,15 @@ class VllmHiddenStatesGenerator:
         log.debug(f"Successfully captured {len(aux_hidden_states)} layers")
 
         seq_lens = [len(ids) for ids in input_ids_list]
+        if captured_input_embeds is not None:
+            expected_num_tokens = sum(seq_lens)
+            actual_num_tokens = int(captured_input_embeds.shape[0])
+            if actual_num_tokens != expected_num_tokens:
+                # Fail fast to avoid silently writing misaligned embeddings to samples.
+                raise RuntimeError(
+                    "Captured input embeddings length mismatch: "
+                    f"expected={expected_num_tokens}, actual={actual_num_tokens}"
+                )
         results = []
         offset = 0
         for i, seq_len in enumerate(seq_lens):
@@ -409,12 +422,19 @@ class VllmHiddenStatesGenerator:
             ]
 
             input_ids_tensor = torch.as_tensor(input_ids_list[i], dtype=torch.long)
+            input_embeds_slice = None
+            if captured_input_embeds is not None:
+                # Slice embeddings per sample to keep sample-level alignment with input_ids.
+                input_embeds_slice = (
+                    captured_input_embeds[offset : offset + seq_len].clone().cpu()
+                )
 
             results.append(
                 {
                     "input_ids": input_ids_tensor,
                     "hidden_states": layer_states,
                     "loss_mask": None,
+                    "input_embeds": input_embeds_slice,
                 }
             )
             offset += seq_len

@@ -53,6 +53,10 @@ def shift_batch(batch: BatchType):
     position_ids = batch["position_ids"]  # shape: [seq_len]
     # [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
 
+    # if it's a VL model
+    input_embeds_override = batch.get("input_embeds_override")
+    
+
     # Need to align (x1, g0, y1, l1)
     # todo: verify loss mask shift is correct
 
@@ -64,8 +68,11 @@ def shift_batch(batch: BatchType):
     loss_mask = loss_mask[1:]
     lengths = lengths - 1
     position_ids = position_ids[1:]  # Note: position_ids now start at 1
+    if input_embeds_override is not None:
+        # Keep embedding override aligned with shifted next-token training layout.
+        input_embeds_override = input_embeds_override[1:]
 
-    return {
+    out = {
         "input_ids": input_ids,
         "hidden_states": hidden_states,
         "verifier_last_hidden_states": verifier_last_hidden_states,
@@ -73,6 +80,10 @@ def shift_batch(batch: BatchType):
         "lengths": lengths,
         "position_ids": position_ids,
     }
+    if input_embeds_override is not None:
+        # Forward this tensor so the model can consume real prefill embeddings.
+        out["input_embeds_override"] = input_embeds_override
+    return out
 
 
 def split_files(datapath: str, ratio: float = 0.9, seed: int = 0):
@@ -127,12 +138,16 @@ def standardize_data_v1(data: dict[str, Any]) -> dict[str, Any]:
     #  ],
     # }
 
-    return {
+    out = {
         "hidden_states": torch.cat(data["hidden_states"][:-1], dim=-1),
         "input_ids": data["input_ids"],
         "verifier_last_hidden_states": data["hidden_states"][-1],
         "loss_mask": data["loss_mask"],
     }
+    if "input_embeds" in data and data["input_embeds"] is not None:
+        # Map serialized input embeddings to the training override key.
+        out["input_embeds_override"] = data["input_embeds"]
+    return out
 
 
 class Eagle3SampleFileDataset(Dataset):
@@ -234,11 +249,15 @@ class Eagle3SampleFileDataset(Dataset):
         #  "loss_mask": [seq_len],
         # }
 
-        # Convert hidden states to the correct dtype
-        data = {
-            k: v.to(self.hidden_states_dtype) if "hidden_states" in k else v
-            for k, v in data.items()
-        }
+        # Convert hidden states to the configured dtype.
+        # Keep input_embeds_override on the same precision policy for consistent training.
+        converted_data = {}
+        for key, value in data.items():
+            if "hidden_states" in key or key == "input_embeds_override":
+                converted_data[key] = value.to(self.hidden_states_dtype)
+            else:
+                converted_data[key] = value
+        data = converted_data
 
         # Add lengths tensor
         seq_len = data["input_ids"].shape[0]
@@ -267,10 +286,20 @@ class Eagle3SampleFileDataset(Dataset):
 
 def create_collate_fn(max_len: int):
     def collate_fn(batch: list[BatchType]) -> BatchType:
+        # Build the union of keys so optional fields in later samples are not ignored.
+        keys = set().union(*(sample.keys() for sample in batch))
         collated_data = {}
-        for key in batch[0]:
+        for key in keys:
+            values = [b.get(key) for b in batch]
+            if any(v is None for v in values):
+                # Fail fast on mixed schema batches to avoid silent training corruption.
+                missing_indices = [i for i, v in enumerate(values) if v is None]
+                raise ValueError(
+                    f"Batch has missing key '{key}' for samples {missing_indices}. "
+                    "Ensure all samples in a batch share the same schema."
+                )
             # Concatenate the tensors along the seq (0th) dimension
-            collated_data[key] = torch.cat([b[key] for b in batch], dim=0)
+            collated_data[key] = torch.cat(values, dim=0)
             # shape: [total_seq_len, ...]
 
             if key != "lengths":

@@ -3,6 +3,7 @@
 import json
 from pathlib import Path
 
+import pytest
 import torch
 
 from speculators.train.data import (
@@ -50,6 +51,34 @@ def test_shift_batch():
 
     for key, value in shifted.items():
         assert torch.allclose(value, expected_output[key])
+
+
+def test_shift_batch_preserves_input_embeds_override():
+    """Test shift_batch keeps input_embeds_override aligned to shifted tokens."""
+    batch = {
+        "input_ids": torch.tensor([0, 1, 2, 3], dtype=torch.long),
+        "hidden_states": torch.randn(4, 3),
+        "verifier_last_hidden_states": torch.randn(4, 2),
+        "loss_mask": torch.tensor([0, 1, 1, 1], dtype=torch.long),
+        "lengths": torch.tensor([4], dtype=torch.long),
+        "position_ids": torch.tensor([0, 1, 2, 3], dtype=torch.long),
+        "input_embeds_override": torch.tensor(
+            [
+                [10.0, 10.1],
+                [11.0, 11.1],
+                [12.0, 12.1],
+                [13.0, 13.1],
+            ]
+        ),
+    }
+
+    shifted = shift_batch(batch)
+
+    # Verify embedding override aligns with shifted token indices.
+    assert torch.equal(
+        shifted["input_embeds_override"],
+        torch.tensor([[11.0, 11.1], [12.0, 12.1], [13.0, 13.1]]),
+    )
 
 
 def test_standardize_data_v0():
@@ -166,6 +195,27 @@ def test_standardize_data_v1():
         assert torch.allclose(value, expected_output[key])
 
 
+def test_standardize_data_v1_with_input_embeds():
+    """Test v1 standardization preserves input_embeds."""
+    v1_data = {
+        "input_ids": torch.tensor([0, 1], dtype=torch.long),
+        "loss_mask": torch.tensor([0, 1], dtype=torch.long),
+        "hidden_states": [
+            torch.tensor([[0.0, 0.1], [1.0, 1.1]]),
+            torch.tensor([[2.0, 2.1], [3.0, 3.1]]),
+        ],
+        "input_embeds": torch.tensor([[9.0, 9.1], [8.0, 8.1]]),
+    }
+
+    standardized = standardize_data_v1(v1_data)
+
+    # Verify auxiliary embeddings are mapped to the training override key.
+    assert torch.equal(
+        standardized["input_embeds_override"],
+        torch.tensor([[9.0, 9.1], [8.0, 8.1]]),
+    )
+
+
 def test_collate_fn_basic():
     """Test basic collation functionality."""
     max_len = 10
@@ -280,6 +330,34 @@ def test_collate_fn_length_truncation():
     ]:
         assert collated[key].shape[0] == 1
         assert collated[key].shape[1] == max_len
+
+
+def test_collate_fn_raises_on_mixed_input_embeds_override_presence():
+    """Test mixed schema batches fail fast instead of dropping override tensors."""
+    collate_fn = create_collate_fn(max_len=8)
+    batch = [
+        {
+            "input_ids": torch.tensor([0, 1], dtype=torch.long),
+            "hidden_states": torch.randn(2, 4),
+            "verifier_last_hidden_states": torch.randn(2, 2),
+            "loss_mask": torch.ones(2, dtype=torch.long),
+            "lengths": torch.tensor([2], dtype=torch.long),
+            "position_ids": torch.tensor([0, 1], dtype=torch.long),
+        },
+        {
+            "input_ids": torch.tensor([2], dtype=torch.long),
+            "hidden_states": torch.randn(1, 4),
+            "verifier_last_hidden_states": torch.randn(1, 2),
+            "loss_mask": torch.ones(1, dtype=torch.long),
+            "lengths": torch.tensor([1], dtype=torch.long),
+            "position_ids": torch.tensor([0], dtype=torch.long),
+            "input_embeds_override": torch.randn(1, 4),
+        },
+    ]
+
+    # Mixed old/new sample schemas should fail fast with a clear error.
+    with pytest.raises(ValueError, match="missing key 'input_embeds_override'"):
+        collate_fn(batch)
 
 
 def test_dataset_getitem_v1_format(tmp_path: Path):
@@ -406,6 +484,37 @@ def test_dataset_getitem_v1_format(tmp_path: Path):
         assert torch.allclose(value, expected_output[key]), (
             f"Key {key} does not match expected output"
         )
+
+
+def test_dataset_getitem_v1_with_input_embeds_override(tmp_path: Path):
+    """Test dataset converts input_embeds_override to hidden_states_dtype."""
+
+    output_dtype = torch.float64
+    file_dtype = torch.float32
+    data = {
+        "input_ids": torch.tensor([0, 1, 2, 3], dtype=torch.long),
+        "loss_mask": torch.tensor([0, 1, 1, 1], dtype=torch.long),
+        "hidden_states": [
+            torch.randn(4, 2, dtype=file_dtype),
+            torch.randn(4, 2, dtype=file_dtype),
+        ],
+        "input_embeds": torch.randn(4, 2, dtype=file_dtype),
+    }
+    file_path = tmp_path / "data_0.pt"
+    torch.save(data, file_path)
+
+    dataset = Eagle3SampleFileDataset(
+        max_len=8,
+        file_list=[str(file_path)],
+        standardize_fn=standardize_data_v1,
+        hidden_states_dtype=output_dtype,
+    )
+    item = dataset[0]
+
+    # Verify override tensor exists, is shifted, and follows configured dtype.
+    assert "input_embeds_override" in item
+    assert item["input_embeds_override"].dtype == output_dtype
+    assert item["input_embeds_override"].shape[0] == 3
 
 
 def test_dataset_loads_lengths_from_sample_lengths_json(tmp_path: Path):

@@ -3,7 +3,7 @@ import argparse
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
-from transformers import LlamaConfig
+from transformers import LlamaConfig, PretrainedConfig
 from transformers.models.auto.configuration_auto import AutoConfig
 
 from speculators.config import SpeculatorsConfig, VerifierConfig
@@ -81,14 +81,18 @@ def setup_dataloader(
     )
 
 
-def create_transformer_layer_config(
-    verifier_name_or_path: str, num_layers: int
-) -> LlamaConfig:
-    verifier_config = AutoConfig.from_pretrained(verifier_name_or_path)
-
-    # For multimodal models (Qwen3VL, etc.), extract text_config
+def _extract_text_config(verifier_config: PretrainedConfig) -> PretrainedConfig:
+    # Use the text backbone config for multimodal verifier models.
     if hasattr(verifier_config, "text_config"):
-        verifier_config = verifier_config.text_config
+        return verifier_config.text_config
+    return verifier_config
+
+
+def create_transformer_layer_config(
+    verifier_text_config: PretrainedConfig, num_layers: int
+) -> LlamaConfig:
+    # Build a Llama-like layer config for Eagle3 draft training.
+    verifier_config = verifier_text_config
 
     transformer_layer_config = LlamaConfig(
         vocab_size=verifier_config.vocab_size,
@@ -118,6 +122,10 @@ def main(args: argparse.Namespace):
     local_rank, world_size, rank, is_distributed = maybe_setup_distributed()
     device = torch.device(local_rank)
 
+    # Load verifier config once to keep architecture metadata consistent in checkpoints.
+    verifier_hf_config = AutoConfig.from_pretrained(args.verifier_name_or_path)
+    verifier_text_config = _extract_text_config(verifier_hf_config)
+
     # Load t2d and d2t tensors if provided
     if args.d2t_path or args.t2d_path:
         if not (args.d2t_path and args.t2d_path):
@@ -133,14 +141,11 @@ def main(args: argparse.Namespace):
         d2t = None
         t2d = None
         # When vocab mapping is not provided, use the full verifier vocab
-        verifier_config = AutoConfig.from_pretrained(args.verifier_name_or_path)
-        if hasattr(verifier_config, "text_config"):
-            verifier_config = verifier_config.text_config
-        draft_vocab_size = verifier_config.vocab_size
+        draft_vocab_size = verifier_text_config.vocab_size
 
     # Setup speculator config
     transformer_layer_config = create_transformer_layer_config(
-        args.verifier_name_or_path, args.num_layers
+        verifier_text_config, args.num_layers
     )
 
     speculator_config = Eagle3SpeculatorConfig(
@@ -156,9 +161,10 @@ def main(args: argparse.Namespace):
                 )
             ],
             default_proposal_method="greedy",
-            verifier=VerifierConfig(
+            # Preserve true verifier architectures so vLLM can route model wrappers correctly.
+            verifier=VerifierConfig.from_config(
+                verifier_hf_config,
                 name_or_path=args.verifier_name_or_path,
-                architectures=["LlamaForCausalLM"],
             ),
         ),
     )
