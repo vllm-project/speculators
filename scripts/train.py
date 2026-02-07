@@ -1,7 +1,6 @@
 import argparse
 import logging
 import random
-from pathlib import Path
 
 import numpy as np
 import torch
@@ -9,7 +8,7 @@ from torch.utils.data import DataLoader
 from transformers import LlamaConfig
 from transformers.models.auto.configuration_auto import AutoConfig
 
-from speculators.config import SpeculatorsConfig, VerifierConfig
+from speculators.config import SpeculatorModelConfig, SpeculatorsConfig, VerifierConfig
 from speculators.models.eagle3 import Eagle3DraftModel, Eagle3SpeculatorConfig
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 from speculators.train.data import (
@@ -243,6 +242,8 @@ def create_transformer_layer_config(
         initializer_range=verifier_config.initializer_range,
         rms_norm_eps=verifier_config.rms_norm_eps,
         head_dim=getattr(verifier_config, "head_dim", None),
+        rope_theta=getattr(verifier_config, "rope_theta", 10000.0),
+        rope_scaling=getattr(verifier_config, "rope_scaling", None),
     )
     transformer_layer_config._attn_implementation = "simple_flex_attention"  # noqa: SLF001
     return transformer_layer_config
@@ -268,9 +269,20 @@ def main(args: argparse.Namespace):
     )
 
     # Setup speculator config
-    transformer_layer_config = create_transformer_layer_config(
-        args.verifier_name_or_path, args.num_layers
-    )
+    # If finetuning, preserve the transformer_layer_config from pretrained model
+    if args.pretrained_model_path:
+        pretrained_config = SpeculatorModelConfig.from_pretrained(
+            args.pretrained_model_path
+        )
+        transformer_layer_config = pretrained_config.transformer_layer_config
+        logger.info(
+            "Using transformer_layer_config from pretrained model "
+            f"(rope_theta={transformer_layer_config.rope_theta})"
+        )
+    else:
+        transformer_layer_config = create_transformer_layer_config(
+            args.verifier_name_or_path, args.num_layers
+        )
 
     speculator_config = Eagle3SpeculatorConfig(
         transformer_layer_config=transformer_layer_config,
