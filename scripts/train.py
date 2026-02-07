@@ -1,4 +1,5 @@
 import argparse
+import logging
 import random
 
 import numpy as np
@@ -7,7 +8,7 @@ from torch.utils.data import DataLoader
 from transformers import LlamaConfig
 from transformers.models.auto.configuration_auto import AutoConfig
 
-from speculators.config import SpeculatorsConfig, VerifierConfig
+from speculators.config import SpeculatorModelConfig, SpeculatorsConfig, VerifierConfig
 from speculators.models.eagle3 import Eagle3DraftModel, Eagle3SpeculatorConfig
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 from speculators.train.data import (
@@ -24,6 +25,9 @@ from speculators.train.logger import setup_metric_logger, setup_root_logger
 from speculators.train.noise_transforms import AddUniformNoise
 from speculators.train.trainer import Trainer, TrainerConfig
 from speculators.train.utils import maybe_destroy_distributed, maybe_setup_distributed
+from speculators.utils.loading import extract_vocab_mappings, load_full_state_dict
+
+logger = logging.getLogger(__name__)
 
 # DRAFTER MODEL HYPARAMETERS
 NORM_BEFORE_RESIDUAL = True
@@ -45,6 +49,125 @@ def set_seed(seed: int, deterministic: bool = False):
         # For deterministic behavior (may impact performance)
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
+
+
+def load_pretrained_model(
+    pretrained_path: str, device: torch.device
+) -> tuple[dict[str, torch.Tensor], torch.Tensor, torch.Tensor, int]:
+    """
+    Load pretrained EAGLE3 model and extract components.
+
+    Returns:
+        Tuple of (state_dict, d2t, t2d, draft_vocab_size)
+    """
+    logger.info(f"Loading pretrained model from {pretrained_path}")
+
+    # Load full state dict
+    state_dict = load_full_state_dict(pretrained_path)
+
+    # Extract vocab mappings
+    d2t, t2d = extract_vocab_mappings(state_dict, device)
+
+    # Derive draft_vocab_size
+    draft_vocab_size = d2t.shape[0]
+    logger.info(f"Derived draft_vocab_size={draft_vocab_size}")
+
+    return state_dict, d2t, t2d, draft_vocab_size
+
+
+def load_vocab_mappings(
+    d2t_path: str, t2d_path: str, device: torch.device
+) -> tuple[torch.Tensor, torch.Tensor, int]:
+    """Load vocabulary mappings from numpy files."""
+    if not (d2t_path and t2d_path):
+        raise ValueError(
+            "Both d2t and t2d paths must be provided together. "
+            f"Got d2t={'provided' if d2t_path else 'missing'}, "
+            f"t2d={'provided' if t2d_path else 'missing'}"
+        )
+
+    d2t = torch.from_numpy(np.load(d2t_path)).to(device)
+    t2d = torch.from_numpy(np.load(t2d_path)).to(device)
+    draft_vocab_size = d2t.shape[0]
+
+    return d2t, t2d, draft_vocab_size
+
+
+def initialize_vocab_config(
+    args: argparse.Namespace, device: torch.device
+) -> tuple[
+    torch.Tensor | None,
+    torch.Tensor | None,
+    int,
+    dict[str, torch.Tensor] | None,
+]:
+    """
+    Initialize vocabulary configuration from args.
+
+    Returns:
+        Tuple of (d2t, t2d, draft_vocab_size, pretrained_state_dict)
+    """
+    # Check for conflicting args
+    if args.pretrained_model_path and (args.d2t_path or args.t2d_path):
+        raise ValueError(
+            "--pretrained-model-path overrides --d2t-path and "
+            "--t2d-path. Please remove --d2t-path and --t2d-path."
+        )
+
+    # Load from pretrained model
+    if args.pretrained_model_path:
+        state_dict, d2t, t2d, vocab_size = load_pretrained_model(
+            args.pretrained_model_path,
+            device,
+        )
+        return d2t, t2d, vocab_size, state_dict
+
+    # Load from numpy files
+    if args.d2t_path or args.t2d_path:
+        d2t, t2d, vocab_size = load_vocab_mappings(args.d2t_path, args.t2d_path, device)
+        return d2t, t2d, vocab_size, None
+
+    # No vocab mapping provided
+    verifier_config = AutoConfig.from_pretrained(args.verifier_name_or_path)
+    if hasattr(verifier_config, "text_config"):
+        verifier_config = verifier_config.text_config
+
+    return None, None, verifier_config.vocab_size, None
+
+
+def load_model_weights(
+    model: Eagle3DraftModel,
+    state_dict: dict[str, torch.Tensor],
+    model_path: str,
+):
+    """Load pretrained weights into model with validation."""
+    logger.info(f"Loading pretrained weights from {model_path}")
+    logger.info(f"Parameters to load: {len(state_dict)}")
+
+    # Load with strict=False (d2t/t2d passed to constructor)
+    missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
+
+    # Filter expected missing keys
+    expected_missing = {"t2d", "d2t", "verifier_lm_head.weight"}
+    unexpected_missing = [k for k in missing_keys if k not in expected_missing]
+
+    # Report issues
+    if unexpected_missing:
+        logger.warning(f"Unexpected missing keys: {unexpected_missing}")
+    if unexpected_keys:
+        logger.warning(f"Unexpected keys: {unexpected_keys}")
+
+    # Summary
+    if unexpected_missing or unexpected_keys:
+        logger.warning(
+            "Weight loading completed with warnings. "
+            "May indicate architecture mismatch."
+        )
+    else:
+        logger.info("✓ Successfully loaded all weights")
+
+    logger.info("Fine-tuning from pretrained weights.")
+    logger.info("Note: Optimizer state starts fresh.")
 
 
 def setup_dataloader(
@@ -119,6 +242,8 @@ def create_transformer_layer_config(
         initializer_range=verifier_config.initializer_range,
         rms_norm_eps=verifier_config.rms_norm_eps,
         head_dim=getattr(verifier_config, "head_dim", None),
+        rope_theta=getattr(verifier_config, "rope_theta", 10000.0),
+        rope_scaling=getattr(verifier_config, "rope_scaling", None),
     )
     transformer_layer_config._attn_implementation = "simple_flex_attention"  # noqa: SLF001
     return transformer_layer_config
@@ -138,30 +263,27 @@ def main(args: argparse.Namespace):
     local_rank, world_size, rank, is_distributed = maybe_setup_distributed()
     device = torch.device(local_rank)
 
-    # Load t2d and d2t tensors if provided
-    if args.d2t_path or args.t2d_path:
-        if not (args.d2t_path and args.t2d_path):
-            raise ValueError(
-                "Both t2d and d2t must be provided together, or both must be omitted. "
-                f"Got t2d={'provided' if args.t2d_path is not None else 'not provided'}"
-                f"d2t={'provided' if args.d2t_path is not None else 'not provided'}"
-            )
-        d2t = torch.from_numpy(np.load(args.d2t_path)).to(device)
-        t2d = torch.from_numpy(np.load(args.t2d_path)).to(device)
-        draft_vocab_size = d2t.shape[0]
-    else:
-        d2t = None
-        t2d = None
-        # When vocab mapping is not provided, use the full verifier vocab
-        verifier_config = AutoConfig.from_pretrained(args.verifier_name_or_path)
-        if hasattr(verifier_config, "text_config"):
-            verifier_config = verifier_config.text_config
-        draft_vocab_size = verifier_config.vocab_size
+    # Initialize vocabulary configuration
+    d2t, t2d, draft_vocab_size, pretrained_state_dict = initialize_vocab_config(
+        args, device
+    )
 
     # Setup speculator config
-    transformer_layer_config = create_transformer_layer_config(
-        args.verifier_name_or_path, args.num_layers
-    )
+    # If finetuning, preserve the transformer_layer_config from pretrained model
+    if args.pretrained_model_path:
+        pretrained_config = SpeculatorModelConfig.from_pretrained(
+            args.pretrained_model_path
+        )
+        transformer_layer_config = pretrained_config.transformer_layer_config
+        transformer_layer_config._attn_implementation = "simple_flex_attention"  # noqa: SLF001
+        logger.info(
+            "Using transformer_layer_config from pretrained model "
+            f"(rope_theta={transformer_layer_config.rope_theta})"
+        )
+    else:
+        transformer_layer_config = create_transformer_layer_config(
+            args.verifier_name_or_path, args.num_layers
+        )
 
     speculator_config = Eagle3SpeculatorConfig(
         transformer_layer_config=transformer_layer_config,
@@ -185,6 +307,12 @@ def main(args: argparse.Namespace):
 
     # Setup draft model
     draft_model = Eagle3DraftModel(config=speculator_config, t2d=t2d, d2t=d2t)
+
+    # Load pretrained weights if provided
+    if pretrained_state_dict is not None:
+        load_model_weights(
+            draft_model, pretrained_state_dict, args.pretrained_model_path
+        )
 
     # Setup dataloaders
     train_files, val_files = split_files(args.data_path, ratio=0.9)
@@ -247,7 +375,9 @@ def parse_args():
         "--logger",
         type=str,
         default="",
-        help="One of 'trackio', 'wandb', 'tensorboard' or comma separated list of them",
+        help=(
+            "One of 'trackio', 'wandb', 'tensorboard' or comma separated list of them"
+        ),
     )
     parser.add_argument("--total-seq-len", type=int, default=8192)
     parser.add_argument("--data-format-version", type=int, default=1)
@@ -256,6 +386,20 @@ def parse_args():
     parser.add_argument("--num-layers", type=int, default=1)
     parser.add_argument("--d2t-path", type=str, default=None)
     parser.add_argument("--t2d-path", type=str, default=None)
+    parser.add_argument(
+        "--pretrained-model-path",
+        type=str,
+        default=None,
+        help=(
+            "Path to pretrained EAGLE3 model directory "
+            "(HuggingFace format with safetensors). "
+            "When provided, d2t/t2d mappings and model weights "
+            "will be loaded from this model, enabling "
+            "warm-start/fine-tuning. Overrides --d2t-path "
+            "and --t2d-path."
+        ),
+    )
+
     parser.add_argument("--ttt-steps", type=int, default=3)
     parser.add_argument("--ttt-step-loss-decay", type=float, default=1.0)
     parser.add_argument(
@@ -271,7 +415,7 @@ def parse_args():
         "--use-off-policy-tokens",
         action="store_true",
         default=False,
-        help="Use off-policy tokens during training (required for regenerated data)",
+        help=("Use off-policy tokens during training (required for regenerated data)"),
     )
     # lr scheduler
     parser.add_argument("--scheduler-type", type=str, default="linear")
