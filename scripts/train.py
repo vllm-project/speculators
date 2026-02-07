@@ -148,7 +148,7 @@ def load_model_weights(
     missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
 
     # Filter expected missing keys
-    expected_missing = {"t2d", "d2t"}
+    expected_missing = {"t2d", "d2t", "verifier_lm_head.weight"}
     unexpected_missing = [k for k in missing_keys if k not in expected_missing]
 
     # Report issues
@@ -275,6 +275,7 @@ def main(args: argparse.Namespace):
             args.pretrained_model_path
         )
         transformer_layer_config = pretrained_config.transformer_layer_config
+        transformer_layer_config._attn_implementation = "simple_flex_attention"  # noqa: SLF001
         logger.info(
             "Using transformer_layer_config from pretrained model "
             f"(rope_theta={transformer_layer_config.rope_theta})"
