@@ -70,7 +70,6 @@ def fastmtp_config_dict():
         },
         "draft_vocab_size": 32000,
         "num_speculative_steps": 3,
-        "mtp_loss_step_weights": [0.51, 0.31, 0.18],
         "speculators_config": {
             "algorithm": "fastmtp",
             "proposal_methods": [
@@ -105,7 +104,6 @@ def test_fastmtp_config_default_initialization():
     assert isinstance(config.transformer_layer_config, LlamaConfig)
     assert config.draft_vocab_size == 32000
     assert config.num_speculative_steps == 3
-    assert config.mtp_loss_step_weights is None
     assert config.model_type == "speculator_model"
     assert config.speculators_config is None
 
@@ -118,7 +116,6 @@ def test_fastmtp_config_custom_initialization(
         transformer_layer_config=sample_llama_config,
         draft_vocab_size=16000,
         num_speculative_steps=5,
-        mtp_loss_step_weights=[0.4, 0.3, 0.15, 0.1, 0.05],
         speculators_config=sample_speculators_config,
     )
 
@@ -126,7 +123,6 @@ def test_fastmtp_config_custom_initialization(
     assert config.transformer_layer_config == sample_llama_config
     assert config.draft_vocab_size == 16000
     assert config.num_speculative_steps == 5
-    assert config.mtp_loss_step_weights == [0.4, 0.3, 0.15, 0.1, 0.05]
     assert config.speculators_config == sample_speculators_config
 
 
@@ -146,7 +142,6 @@ def test_fastmtp_config_with_qwen3():
         transformer_layer_config=qwen_config,
         draft_vocab_size=151680,
         num_speculative_steps=3,
-        mtp_loss_step_weights=[0.51, 0.31, 0.18],
     )
 
     assert isinstance(config.transformer_layer_config, Qwen3Config)
@@ -183,7 +178,6 @@ def test_fastmtp_config_marshalling(sample_speculators_config):
     original_config = FastMTPSpeculatorConfig(
         draft_vocab_size=16000,
         num_speculative_steps=5,
-        mtp_loss_step_weights=[0.4, 0.3, 0.15, 0.1, 0.05],
         speculators_config=sample_speculators_config,
     )
 
@@ -192,7 +186,6 @@ def test_fastmtp_config_marshalling(sample_speculators_config):
     assert config_dict["speculators_model_type"] == "fastmtp"
     assert config_dict["draft_vocab_size"] == 16000
     assert config_dict["num_speculative_steps"] == 5
-    assert config_dict["mtp_loss_step_weights"] == [0.4, 0.3, 0.15, 0.1, 0.05]
 
     recreated_base = SpeculatorModelConfig.model_validate(config_dict)
     assert isinstance(recreated_base, FastMTPSpeculatorConfig)
@@ -230,7 +223,6 @@ def test_fastmtp_config_backwards_compatibility(fastmtp_config_dict):
     assert config_derived.speculators_model_type == "fastmtp"
     assert config_derived.draft_vocab_size == 32000
     assert config_derived.num_speculative_steps == 3
-    assert config_derived.mtp_loss_step_weights == [0.51, 0.31, 0.18]
     assert config_derived.speculators_config.algorithm == "fastmtp"
 
     config_base = SpeculatorModelConfig.model_validate(fastmtp_config_dict)
@@ -273,14 +265,12 @@ def test_fastmtp_config_from_pretrained_local_marshalling(fastmtp_config_dict):
         assert loaded_base.speculators_model_type == "fastmtp"
         assert loaded_base.num_speculative_steps == 3
         assert loaded_base.draft_vocab_size == 32000
-        assert loaded_base.mtp_loss_step_weights == [0.51, 0.31, 0.18]
 
         loaded_derived = FastMTPSpeculatorConfig.from_pretrained(temp_path)
         assert isinstance(loaded_derived, FastMTPSpeculatorConfig)
         assert loaded_derived.speculators_model_type == "fastmtp"
         assert loaded_derived.num_speculative_steps == 3
         assert loaded_derived.draft_vocab_size == 32000
-        assert loaded_derived.mtp_loss_step_weights == [0.51, 0.31, 0.18]
 
 
 @pytest.mark.smoke

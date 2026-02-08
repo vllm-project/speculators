@@ -40,11 +40,6 @@ class FastMTPSpeculatorConfig(SpeculatorModelConfig):
         description="Number of recursive prediction steps (K)",
     )
 
-    mtp_loss_step_weights: list[float] | None = Field(
-        default=None,
-        description="Per-step loss weights; None uses ttt_step_loss_decay",
-    )
-
     @property
     def target_vocab_size(self) -> int:
         return self.transformer_layer_config.vocab_size

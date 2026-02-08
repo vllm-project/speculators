@@ -96,7 +96,7 @@ class FastMTPDraftModel(SpeculatorModel):
         "d2t",
         "t2d",
     ]
-    _keys_to_ignore_on_save: ClassVar[list[str]] = ["verifier_lm_head.weight"]  # type: ignore[misc,assignment]
+    _keys_to_ignore_on_save: ClassVar[list[str]] = []  # type: ignore[misc,assignment]
 
     def __init__(
         self,
@@ -383,7 +383,7 @@ class FastMTPDraftModel(SpeculatorModel):
                 targets = self.verifier_lm_head(verifier_last_hidden_states)
             loss = torch.tensor(0.0, device=device)
             prev_correct = (
-                loss_mask.clone()
+                loss_mask.to(torch.bool).clone()
                 if loss_mask is not None
                 else torch.ones(
                     batch_size, total_seq_len, device=device, dtype=torch.bool
