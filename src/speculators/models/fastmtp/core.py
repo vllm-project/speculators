@@ -86,7 +86,7 @@ class FastMTPDraftModel(SpeculatorModel):
 
     :param config: FastMTP speculator configuration
     :param t2d: Target-to-draft vocabulary mapping (bool mask)
-    :param d2t: Draft-to-target vocabulary mapping (index tensor)
+    :param d2t: Draft-to-target vocabulary mapping (integer offset tensor)
     """
 
     config_class: ClassVar[type[FastMTPSpeculatorConfig]] = FastMTPSpeculatorConfig  # type: ignore[misc]
