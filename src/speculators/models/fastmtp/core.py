@@ -7,7 +7,6 @@ from typing import ClassVar
 import torch
 from torch import nn
 from transformers import AutoConfig, PretrainedConfig
-from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_mask
 from transformers.models.auto.modeling_auto import MODEL_FOR_CAUSAL_LM_MAPPING
 
 from speculators.config import VerifierConfig
@@ -22,6 +21,52 @@ from speculators.utils.loading import load_model_layers
 __all__ = [
     "FastMTPDraftModel",
 ]
+
+
+def _build_block_diagonal_causal_mask(
+    lengths: torch.Tensor,
+    total_seq_len: int,
+    dtype: torch.dtype,
+    device: torch.device,
+) -> torch.Tensor:
+    """Build a 4D block-diagonal causal attention mask from packed sequence lengths.
+
+    For multipack batching where multiple sequences are concatenated into a single
+    row, this ensures each position only attends to causally earlier positions
+    within the same document segment.
+
+    :param lengths: Per-segment lengths that sum to <= total_seq_len
+    :param total_seq_len: Total sequence length (may exceed sum of lengths for padding)
+    :param dtype: Output dtype (float mask: 0.0 = attend, -inf = masked)
+    :param device: Target device
+    :returns: Attention mask of shape ``(1, 1, total_seq_len, total_seq_len)``
+    """
+    document_ids = torch.repeat_interleave(
+        torch.arange(lengths.shape[0], device=device, dtype=torch.long), lengths
+    )
+    if document_ids.shape[0] < total_seq_len:
+        document_ids = torch.cat(
+            [
+                document_ids,
+                document_ids.new_full((total_seq_len - document_ids.shape[0],), -1),
+            ]
+        )
+
+    indices = torch.arange(total_seq_len, device=device)
+    causal = indices.unsqueeze(1) >= indices.unsqueeze(0)
+    same_doc = document_ids.unsqueeze(1) == document_ids.unsqueeze(0)
+    q_valid = (document_ids != -1).unsqueeze(1)
+    allowed = causal & same_doc & q_valid
+
+    return (
+        torch.where(
+            allowed,
+            torch.tensor(0.0, dtype=dtype, device=device),
+            torch.tensor(torch.finfo(dtype).min, dtype=dtype, device=device),
+        )
+        .unsqueeze(0)
+        .unsqueeze(0)
+    )
 
 
 @SpeculatorModel.register("fastmtp")
@@ -327,14 +372,8 @@ class FastMTPDraftModel(SpeculatorModel):
         position_embeddings = self.rotary_emb(current_hidden, position_ids)
 
         batch_size = hidden_states.shape[0]
-        causal_mask_2d = torch.ones(
-            batch_size, total_seq_len, dtype=torch.long, device=device
-        )
-        attention_mask = _prepare_4d_causal_attention_mask(
-            causal_mask_2d,
-            (batch_size, total_seq_len),
-            current_hidden,
-            past_key_values_length=0,
+        attention_mask = _build_block_diagonal_causal_mask(
+            lengths, total_seq_len, current_hidden.dtype, device
         )
 
         original_input_ids = input_ids.detach().clone()
@@ -346,7 +385,9 @@ class FastMTPDraftModel(SpeculatorModel):
             prev_correct = (
                 loss_mask.clone()
                 if loss_mask is not None
-                else torch.ones(1, total_seq_len, device=device, dtype=torch.bool)
+                else torch.ones(
+                    batch_size, total_seq_len, device=device, dtype=torch.bool
+                )
             )
             metrics = {}
 
@@ -391,7 +432,7 @@ class FastMTPDraftModel(SpeculatorModel):
                 input_ids = torch.cat(
                     [
                         original_input_ids[:, 1 + ttt_step :],
-                        original_input_ids.new_zeros(1, 1 + ttt_step),
+                        original_input_ids.new_zeros(batch_size, 1 + ttt_step),
                     ],
                     dim=-1,
                 )

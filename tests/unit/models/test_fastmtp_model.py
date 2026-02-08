@@ -373,3 +373,91 @@ def test_fastmtp_import_model_classes_invalid_config():
 
     with pytest.raises(TypeError, match="is not a valid causal language model"):
         FastMTPDraftModel._import_model_classes(FastMTPDraftModel, invalid_config)
+
+
+@pytest.mark.smoke
+def test_fastmtp_forward_multi_segment_lengths(fastmtp_model):
+    """Test forward pass with packed multi-segment lengths (multipack batching)."""
+    model = fastmtp_model
+    model.eval()
+
+    batch_size = 1
+    seg1_len, seg2_len = 12, 20
+    assert seg1_len + seg2_len == SEQ_LEN
+
+    hidden_states = torch.randn(batch_size, SEQ_LEN, HIDDEN_SIZE)
+    input_ids = torch.randint(0, VOCAB_SIZE, (batch_size, SEQ_LEN))
+    verifier_last_hidden_states = torch.randn(batch_size, SEQ_LEN, HIDDEN_SIZE)
+    lengths = torch.tensor([seg1_len, seg2_len], dtype=torch.long)
+    loss_mask = torch.ones(batch_size, SEQ_LEN)
+
+    with torch.no_grad():
+        result = model(
+            hidden_states=hidden_states,
+            input_ids=input_ids,
+            lengths=lengths,
+            loss_mask=loss_mask,
+            verifier_last_hidden_states=verifier_last_hidden_states,
+            ttt_steps=3,
+        )
+
+    draft_tokens, loss, metrics = result
+    assert len(draft_tokens) == 3
+    for dt in draft_tokens:
+        assert dt.shape == (batch_size, SEQ_LEN)
+    assert torch.isfinite(loss)
+
+
+@pytest.mark.smoke
+def test_fastmtp_forward_batch_size_greater_than_one(fastmtp_model):
+    """Test forward pass with batch_size > 1."""
+    model = fastmtp_model
+    model.eval()
+
+    batch_size = 2
+    hidden_states = torch.randn(batch_size, SEQ_LEN, HIDDEN_SIZE)
+    input_ids = torch.randint(0, VOCAB_SIZE, (batch_size, SEQ_LEN))
+    verifier_last_hidden_states = torch.randn(batch_size, SEQ_LEN, HIDDEN_SIZE)
+    loss_mask = torch.ones(batch_size, SEQ_LEN)
+
+    with torch.no_grad():
+        result = model(
+            hidden_states=hidden_states,
+            input_ids=input_ids,
+            loss_mask=loss_mask,
+            verifier_last_hidden_states=verifier_last_hidden_states,
+            ttt_steps=2,
+        )
+
+    draft_tokens, loss, metrics = result
+    assert len(draft_tokens) == 2
+    for dt in draft_tokens:
+        assert dt.shape == (batch_size, SEQ_LEN)
+    assert torch.isfinite(loss)
+
+
+@pytest.mark.smoke
+def test_fastmtp_forward_off_policy_batch_size_greater_than_one(fastmtp_model):
+    """Test off-policy forward pass with batch_size > 1."""
+    model = fastmtp_model
+    model.eval()
+
+    batch_size = 2
+    hidden_states = torch.randn(batch_size, SEQ_LEN, HIDDEN_SIZE)
+    input_ids = torch.randint(0, VOCAB_SIZE, (batch_size, SEQ_LEN))
+    verifier_last_hidden_states = torch.randn(batch_size, SEQ_LEN, HIDDEN_SIZE)
+
+    with torch.no_grad():
+        result = model(
+            hidden_states=hidden_states,
+            input_ids=input_ids,
+            verifier_last_hidden_states=verifier_last_hidden_states,
+            ttt_steps=3,
+            use_off_policy_tokens=True,
+        )
+
+    draft_tokens, loss, metrics = result
+    assert len(draft_tokens) == 3
+    for dt in draft_tokens:
+        assert dt.shape == (batch_size, SEQ_LEN)
+    assert torch.isfinite(loss)
