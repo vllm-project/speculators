@@ -204,7 +204,7 @@ def test_vllm_vs_huggingface_accuracy(model_path, tensor_parallel_size):
     ("model_path", "tensor_parallel_size"),
     [
         ("Qwen/Qwen2-0.5B", 1),
-        ("meta-llama/Llama-3.1-8B", 1),
+        ("meta-llama/Llama-3.1-8B-Instruct", 1),
     ],
 )
 def test_batch_vs_individual_consistency(  # noqa: C901

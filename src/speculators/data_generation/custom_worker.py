@@ -103,12 +103,12 @@ class HiddenStatesWorkerExtension:
         metadata = getattr(self, "_current_request_metadata", None)
         if metadata is not None:
             # Sort by vLLM's actual batch position (vLLM reorders requests internally)
-            input_batch = self.model_runner.input_batch
+            input_batch = self.model_runner.input_batch  # type: ignore[attr-defined]
             sorted_metadata = sorted(
                 metadata.items(),
                 key=lambda item: input_batch.req_id_to_index.get(item[0], float("inf")),
             )
-            self._request_metadata.append(sorted_metadata)
+            self._request_metadata.append(sorted_metadata)  # type: ignore[has-type]
 
     def _setup_hidden_states_capture(self, layer_ids: list[int]):
         """Setup model to capture auxiliary hidden states from specific layers"""
@@ -171,21 +171,22 @@ class HiddenStatesWorkerExtension:
         ]
 
         # Slice and group by request
-
-        result = defaultdict(lambda: [[] for _ in range(len(concatenated_layers))])
+        request_chunks: dict[str, list[list[torch.Tensor]]] = defaultdict(
+            lambda: [[] for _ in range(len(concatenated_layers))]
+        )
         current_idx = 0
 
         for metadata in self._request_metadata:  # type: ignore[has-type]
             for req_id, num_tok in metadata:
                 for layer_idx, layer_tensor in enumerate(concatenated_layers):
                     chunk = layer_tensor[current_idx : current_idx + num_tok].clone()
-                    result[req_id][layer_idx].append(chunk)
+                    request_chunks[req_id][layer_idx].append(chunk)
                 current_idx += num_tok
 
         # Concatenate chunks for each request
-        result = {
+        result: dict[str, list[torch.Tensor]] = {
             req_id: [torch.cat(chunks, dim=0) for chunks in layer_chunks]
-            for req_id, layer_chunks in result.items()
+            for req_id, layer_chunks in request_chunks.items()
         }
 
         # Clear intermediate storage
