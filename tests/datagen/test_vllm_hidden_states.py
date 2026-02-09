@@ -207,7 +207,9 @@ def test_vllm_vs_huggingface_accuracy(model_path, tensor_parallel_size):
         ("meta-llama/Llama-3.1-8B", 1),
     ],
 )
-def test_batch_vs_individual_consistency(model_path, tensor_parallel_size):
+def test_batch_vs_individual_consistency(  # noqa: C901
+    model_path, tensor_parallel_size
+):
     """Test that batch processing matches individual processing.
 
     Regression test for GitHub issue #279: VllmHiddenStatesGenerator returns
@@ -229,10 +231,7 @@ def test_batch_vs_individual_consistency(model_path, tensor_parallel_size):
         "Describe the process of photosynthesis step by step.",
     ]
 
-    logger.info("=" * 80)
     logger.info(f"Testing batch vs individual consistency: {model_path}")
-    logger.info(f"Sequences: {len(test_prompts)}")
-    logger.info("=" * 80)
 
     # Initialize generator with aggressive chunking to properly test the fix
     # This forces multi-iteration chunked prefill which exposes token ordering bugs
@@ -258,8 +257,11 @@ def test_batch_vs_individual_consistency(model_path, tensor_parallel_size):
                 # Try chat template first (for instruct models)
                 msgs = [{"role": "user", "content": text}]
                 ids = tokenizer.apply_chat_template(
-                    msgs, tokenize=True, add_generation_prompt=True,
-                    return_tensors="pt", padding=False,
+                    msgs,
+                    tokenize=True,
+                    add_generation_prompt=True,
+                    return_tensors="pt",
+                    padding=False,
                 )
                 if isinstance(ids, dict):
                     ids = ids["input_ids"]
@@ -308,23 +310,19 @@ def test_batch_vs_individual_consistency(model_path, tensor_parallel_size):
             if got_shape != expected_shape:
                 misaligned += 1
                 logger.error(
-                    f"  Seq {i}: WRONG SHAPE (got {got_shape}, expected {expected_shape})"
+                    f"  Seq {i}: WRONG SHAPE "
+                    f"(got {got_shape}, expected {expected_shape})"
                 )
                 continue
 
             # Check for value mismatch
             if individual_hs.shape[0] > 0 and batch_hs.shape[0] > 0:
-                max_diff = torch.abs(individual_hs - batch_hs).max().item()
                 mean_diff = torch.abs(individual_hs - batch_hs).mean().item()
 
                 if mean_diff > 0.01:  # Tolerance for numerical differences
                     misaligned += 1
-                    logger.error(
-                        f"  Seq {i}: WRONG VALUES (mean_diff={mean_diff:.6f})"
-                    )
+                    logger.error(f"  Seq {i}: WRONG VALUES (mean_diff={mean_diff:.6f})")
                     continue
-
-            logger.info(f"  Seq {i}: OK")
 
         # Assert no errors
         total_errors = empty + misaligned

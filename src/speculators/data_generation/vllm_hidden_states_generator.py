@@ -186,7 +186,8 @@ class VllmHiddenStatesGenerator:
         cache_config = CacheConfig(
             block_size=VLLM_BLOCK_SIZE,
             gpu_memory_utilization=gpu_memory_utilization,
-            enable_prefix_caching=False,  # Bug #1 fix: Disable to prevent KV cache state leakage
+            # disable to prevent cache state leakage
+            enable_prefix_caching=False,
         )
 
         # For prefill-only workloads, use conservative scheduler limits
@@ -194,10 +195,7 @@ class VllmHiddenStatesGenerator:
         # warmup allocation size (see gpu_worker.py:441-444).
         # We set it to a small value since we only do prefill in batches.
         max_num_seqs = MAX_NUM_SEQS
-        if max_num_batched_tokens is None:
-            max_num_batched_tokens = max(
-                MIN_MAX_BATCHED_TOKENS, max_model_len
-            )  # Reduced from 65536
+        max_num_batched_tokens = max(MIN_MAX_BATCHED_TOKENS, max_model_len)
 
         return VllmConfig(
             model_config=ModelConfig(
@@ -229,7 +227,7 @@ class VllmHiddenStatesGenerator:
             args=(self.layer_ids,),
         )
 
-    def generate(self, token_ids: list[list[int]] | torch.Tensor) -> list[dict]:
+    def generate(self, token_ids: list[list[int]] | torch.Tensor) -> list[dict]:  # noqa: PLR0912, PLR0915
         """Extract hidden states from prefill phase only.
 
         Args:
@@ -246,12 +244,12 @@ class VllmHiddenStatesGenerator:
             input_ids_list = token_ids
 
         log.debug(f"Generating hidden states for {len(input_ids_list)} sequences")
-        # Account for max_tokens in sampling params
+        # Account for max_tokens=1 in sampling params
         # (vLLM enforces: len(prompt) + max_tokens <= max_model_len)
         max_len = self.vllm_config.model_config.max_model_len - MAX_DECODE_TOKENS
         input_ids_list = [ids[:max_len] for ids in input_ids_list]
 
-        # Bug #2 fix: Track request IDs and prompt lengths for proper token attribution
+        # Track request IDs and prompt lengths for proper token attribution
         request_id_to_idx = {}
         request_id_to_prompt_len = {}
 
@@ -276,66 +274,49 @@ class VllmHiddenStatesGenerator:
             self.scheduler.add_request(req)
 
         # Increment to ensure unique request IDs across calls
+        # (prevents KV cache corruption with delayed block freeing)
         self._request_counter += 1
         self.executor.collective_rpc("_reset_capture")
 
         # Track progress for each request to distinguish prefill from decode
-        request_num_computed = {req_id: 0 for req_id in request_id_to_idx}
+        request_num_computed = dict.fromkeys(request_id_to_idx, 0)
         schedule_iterations = 0
-        finished_request_ids = set()
         all_prefill_complete = False
 
         while (
             scheduler_output := self.scheduler.schedule()
         ).total_num_scheduled_tokens > 0 and not all_prefill_complete:
             schedule_iterations += 1
-            log.info(
-                f"Scheduler iteration {schedule_iterations} - "
-                f"total_tokens: {scheduler_output.total_num_scheduled_tokens}"
-            )
 
-            # Determine which tokens are prefill vs decode for each request
-            prefill_metadata = {}  # req_id -> num_prefill_tokens
-
+            # Calculate prefill tokens for each request (ignore decode tokens)
+            prefill_metadata = {}
             for req_id, num_tokens in scheduler_output.num_scheduled_tokens.items():
-                log.info(f"  {req_id}: {num_tokens} tokens")
-
-                num_computed = request_num_computed[req_id]
+                num_already_computed = request_num_computed[req_id]
                 num_prompt = request_id_to_prompt_len[req_id]
+                num_prefill = max(0, min(num_tokens, num_prompt - num_already_computed))
 
-                if num_computed < num_prompt:
-                    # This is prefill - capture these tokens
-                    prefill_tokens_this_iter = min(num_tokens, num_prompt - num_computed)
-                    prefill_metadata[req_id] = prefill_tokens_this_iter
+                if num_prefill > 0:
+                    prefill_metadata[req_id] = num_prefill
 
                 request_num_computed[req_id] += num_tokens
 
-            # Check if all requests have completed prefill
             all_prefill_complete = all(
                 request_num_computed[req_id] >= request_id_to_prompt_len[req_id]
                 for req_id in request_id_to_idx
             )
 
-            # Pass metadata to worker (worker will resolve actual batch order)
             if prefill_metadata:
                 self.executor.collective_rpc(
-                    "_set_request_metadata",
-                    args=(prefill_metadata,),
+                    "_set_request_metadata", args=(prefill_metadata,)
                 )
 
             model_output = self.executor.execute_model(scheduler_output)
             self.executor.sample_tokens(model_output)
 
-            # Track naturally finished requests
-            for req_id in scheduler_output.finished_req_ids:
-                self.scheduler.finish_requests([req_id], RequestStatus.FINISHED_STOPPED)
-                finished_request_ids.add(req_id)
-
-        # Abort unfinished requests (only decode phase remains)
-        unfinished = list(set(request_id_to_idx.keys()) - finished_request_ids)
-        if unfinished:
-            log.info(f"Aborting {len(unfinished)} requests after prefill complete")
-            self.scheduler.finish_requests(unfinished, RequestStatus.FINISHED_ABORTED)
+        # Abort all requests (prefill complete, don't need decode)
+        self.scheduler.finish_requests(
+            list(request_id_to_idx.keys()), RequestStatus.FINISHED_ABORTED
+        )
 
         # Get captured states organized by request ID
         request_states_dict = self.executor.collective_rpc(

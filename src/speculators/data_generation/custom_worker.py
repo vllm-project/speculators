@@ -2,6 +2,7 @@
 
 import logging
 import types
+from collections import defaultdict
 from itertools import islice
 
 import torch
@@ -93,37 +94,21 @@ class HiddenStatesWorkerExtension:
     """
 
     def _store_captured_states(self, aux_hidden_states):
-        """Store captured states with request metadata for proper token attribution.
-
-        During chunked prefill, vLLM processes tokens across multiple scheduler iterations.
-        We tag each batch with request metadata to track which tokens belong to which request.
-        """
         if self._captured_states is None:  # type: ignore[has-type]
             self._captured_states = [[h] for h in aux_hidden_states]
         else:
             for i, h in enumerate(aux_hidden_states):
                 self._captured_states[i].append(h)
 
-        # Store request metadata for this forward pass (skip during warmup)
-        if hasattr(self, '_current_request_metadata') and self._current_request_metadata is not None:  # type: ignore[has-type]
-            if not hasattr(self, '_request_metadata'):
-                self._request_metadata = []  # type: ignore[assignment]
-
-            # Get actual batch order from input_batch (vLLM reorders requests internally)
-            input_batch = self.model_runner.input_batch  # type: ignore[attr-defined]
-            metadata_dict = self._current_request_metadata  # type: ignore[has-type]
-
-            # Sort requests by their batch index
-            ordered_req_ids = sorted(
-                metadata_dict.keys(),
-                key=lambda rid: input_batch.req_id_to_index.get(rid, float('inf'))
+        metadata = getattr(self, "_current_request_metadata", None)
+        if metadata is not None:
+            # Sort by vLLM's actual batch position (vLLM reorders requests internally)
+            input_batch = self.model_runner.input_batch
+            sorted_metadata = sorted(
+                metadata.items(),
+                key=lambda item: input_batch.req_id_to_index.get(item[0], float("inf")),
             )
-            ordered_num_tokens = [metadata_dict[rid] for rid in ordered_req_ids]
-
-            self._request_metadata.append({  # type: ignore[has-type]
-                'request_ids': ordered_req_ids,
-                'num_tokens': ordered_num_tokens,
-            })
+            self._request_metadata.append(sorted_metadata)
 
     def _setup_hidden_states_capture(self, layer_ids: list[int]):
         """Setup model to capture auxiliary hidden states from specific layers"""
@@ -172,11 +157,10 @@ class HiddenStatesWorkerExtension:
         """Get the captured hidden states organized by request ID.
 
         Returns:
-            Dict mapping request_id -> list of tensors (one per layer),
+            Dict mapping request_id to list of tensors (one per layer),
             or None if no states captured.
 
-        This solves the offset-based slicing bug by tracking which tokens belong to
-        which request across chunked prefill iterations.
+        Track which tokens belong to which request across chunked prefill iterations.
         """
         if self._captured_states is None:
             return None
@@ -186,38 +170,23 @@ class HiddenStatesWorkerExtension:
             torch.cat(layer_tensors, dim=0) for layer_tensors in self._captured_states
         ]
 
-        # Build mapping: request_id -> list of (start_idx, end_idx)
-        request_token_ranges = {}
+        # Slice and group by request
+
+        result = defaultdict(lambda: [[] for _ in range(len(concatenated_layers))])
         current_idx = 0
 
         for metadata in self._request_metadata:  # type: ignore[has-type]
-            request_ids = metadata['request_ids']
-            num_tokens = metadata['num_tokens']
-
-            for req_id, num_tok in zip(request_ids, num_tokens):
-                if req_id not in request_token_ranges:
-                    request_token_ranges[req_id] = []
-
-                # Store the index range for this request's tokens in this iteration
-                request_token_ranges[req_id].append((current_idx, current_idx + num_tok))
+            for req_id, num_tok in metadata:
+                for layer_idx, layer_tensor in enumerate(concatenated_layers):
+                    chunk = layer_tensor[current_idx : current_idx + num_tok].clone()
+                    result[req_id][layer_idx].append(chunk)
                 current_idx += num_tok
 
-        # Extract hidden states for each request
-        result = {}
-        for req_id, token_ranges in request_token_ranges.items():
-            # Collect all tokens for this request across all scheduler iterations
-            request_layers = [[] for _ in range(len(concatenated_layers))]
-
-            for start_idx, end_idx in token_ranges:
-                for layer_idx, layer_tensor in enumerate(concatenated_layers):
-                    request_layers[layer_idx].append(
-                        layer_tensor[start_idx:end_idx].clone()
-                    )
-
-            # Concatenate tokens from all iterations for each layer
-            result[req_id] = [
-                torch.cat(layer_parts, dim=0) for layer_parts in request_layers
-            ]
+        # Concatenate chunks for each request
+        result = {
+            req_id: [torch.cat(chunks, dim=0) for chunks in layer_chunks]
+            for req_id, layer_chunks in result.items()
+        }
 
         # Clear intermediate storage
         self._captured_states = None  # type: ignore[assignment]
