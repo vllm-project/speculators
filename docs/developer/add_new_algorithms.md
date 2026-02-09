@@ -2,18 +2,19 @@
 
 This guide explains how to add a new speculative decoding algorithm to the Speculators library.
 
-
 ## Quick Start
 
 Adding a new algorithm requires:
 
 1. **Create algorithm module** under `src/speculators/models`.
+
 2. **Configuration class** with `@register` decorator. When Python imports your module, the `@register("myalgo")` decorator adds your class to a global registry dictionary. The training script looks up `"myalgo"` in the registry to find your class. This is helpful because the training script doesn't need to know about every algorithm and adding a new algorithm doesn't require modifying the training script.
 
 3. **Model class** with `@register` decorator
-4. **Training factory methods** as classmethods on the model
-5. **CLI arguments** in `train.py`
 
+4. **Training factory methods** as classmethods on the model
+
+5. **CLI arguments** in `train.py`
 
 ## Step-by-Step Guide
 
@@ -33,8 +34,7 @@ src/speculators/models
 
 ### 2. Implement Configuration Class
 
-Define how your algorithm is configured. The config stores hyperparameters, architectural choices, and other settings. It's serialized when saving models and deserialized when loading them.
-In `config.py`, create a configuration class with the `@register` decorator, for example:
+Define how your algorithm is configured. The config stores hyperparameters, architectural choices, and other settings. It's serialized when saving models and deserialized when loading them. In `config.py`, create a configuration class with the `@register` decorator, for example:
 
 ```python
 from speculators import SpeculatorModelConfig
@@ -51,6 +51,7 @@ class MyAlgoSpeculatorConfig(SpeculatorModelConfig):
 **Reference:** See `src/speculators/models/eagle3/config.py` for a complete example.
 
 **Key points:**
+
 - Use `@SpeculatorModelConfig.register("myalgo")` decorator
 - Set `speculators_model_type` to match your algorithm name
 - Inherit common fields from `SpeculatorModelConfig`
@@ -67,9 +68,11 @@ In `core.py`, create a model class with the `@register` decorator and required t
 **Required for the training infrastructure:**
 
 Model attributes:
+
 - `layers`: ModuleList of decoder layers (each layer is individually wrapped by FSDP for distributed training)
 
 Methods:
+
 - `from_training_args(cls, verifier_config, **kwargs)`: Factory method to build from CLI args (receives all args as kwargs)
 - `get_trainer_kwargs(**kwargs)`: Returns `(train_kwargs, val_kwargs)` dicts passed to `forward()`
 - `forward(...)`: Must return `(output, loss, metrics)` where metrics includes a `"loss"` key
@@ -80,7 +83,7 @@ Make your classes importable from the package. Python's import system requires e
 
 In `__init__.py`, export your config and model classes.
 
-``` python
+```python
 from speculators.models.eagle3.config import Eagle3SpeculatorConfig
 from speculators.models.eagle3.core import Eagle3DraftModel
 
@@ -137,5 +140,6 @@ Shared transformer layer components that can be reused across algorithms. Many s
 **Available architectures:** `llama`, `qwen3`
 
 **Reference:**
+
 - Component definitions: `src/speculators/models/base_components.py`
 - Usage example: `src/speculators/models/eagle3/model_definitions.py`

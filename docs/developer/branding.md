@@ -16,18 +16,18 @@ Fast, practical guidance and assets for using the Speculators brand in docs, sli
 
 ## Quick Start
 
-1) Pick the correct asset type:
+1. Pick the correct asset type:
    - Logos (wordmark + symbol) for full brand representation
    - Icons (square) for compact usage or avatars
    - Model Icons for architecture/diagram callouts
    - User Flow diagrams for product explaining visuals
-2) Choose the right color for contrast:
+2. Choose the right color for contrast:
    - Black on light backgrounds; White on dark backgrounds
    - Blue/White-Orange are accents
-3) SVG is preferred for quality and scaling; use PNG for raster contexts (e.g., slides)
-4) Maintain clear space and minimum sizes (see below)
-5) Add descriptive alt text for accessibility
-6) Cite the project where appropriate
+3. SVG is preferred for quality and scaling; use PNG for raster contexts (e.g., slides)
+4. Maintain clear space and minimum sizes (see below)
+5. Add descriptive alt text for accessibility
+6. Cite the project where appropriate
 
 ## Project Summary
 
@@ -37,21 +37,21 @@ Speculators is an open, unified library for creating and storing speculative dec
 
 All files reside in `docs/assets/branding`.
 
-| Category | Variant / Name | SVG | PNG | Notes |
-| -------- | -------------- | --- | --- | ----- |
-| Logo | Black | [`speculators-logo-black.svg`](../assets/branding/speculators-logo-black.svg) | [`speculators-logo-black.png`](../assets/branding/speculators-logo-black.png) | Default on light backgrounds |
-| Logo | Blue | [`speculators-logo-blue.svg`](../assets/branding/speculators-logo-blue.svg) | [`speculators-logo-blue.png`](../assets/branding/speculators-logo-blue.png) | Accent / section headers |
-| Logo | White | [`speculators-logo-white.svg`](../assets/branding/speculators-logo-white.svg) | [`speculators-logo-white.png`](../assets/branding/speculators-logo-white.png) | Use on dark imagery/backgrounds |
-| Icon | Black | [`speculators-icon-black.svg`](../assets/branding/speculators-icon-black.svg) | [`speculators-icon-black.png`](../assets/branding/speculators-icon-black.png) | App tile / light UI |
-| Icon | Blue | [`speculators-icon-blue.svg`](../assets/branding/speculators-icon-blue.svg) | [`speculators-icon-blue.png`](../assets/branding/speculators-icon-blue.png) | Accent |
-| Icon | White | [`speculators-icon-white.svg`](../assets/branding/speculators-icon-white.svg) | [`speculators-icon-white.png`](../assets/branding/speculators-icon-white.png) | Dark backgrounds |
-| Icon | White-Orange | [`speculators-icon-white-orange.svg`](../assets/branding/speculators-icon-white-orange.svg) | [`speculators-icon-white-orange.png`](../assets/branding/speculators-icon-white-orange.png) | Limited highlight |
-| Model Icon | Black | [`speculators-model-icon-black.svg`](../assets/branding/speculators-model-icon-black.svg) | [`speculators-model-icon-black.png`](../assets/branding/speculators-model-icon-black.png) | Architecture visuals |
-| Model Icon | Blue | [`speculators-model-icon-blue.svg`](../assets/branding/speculators-model-icon-blue.svg) | [`speculators-model-icon-blue.png`](../assets/branding/speculators-model-icon-blue.png) | Architecture visuals |
-| Model Icon | White | [`speculators-model-icon-white.svg`](../assets/branding/speculators-model-icon-white.svg) | [`speculators-model-icon-white.png`](../assets/branding/speculators-model-icon-white.png) | Dark backgrounds |
-| Model Icon | White-Orange | [`speculators-model-icon-white-orange.svg`](../assets/branding/speculators-model-icon-white-orange.svg) | [`speculators-model-icon-white-orange.png`](../assets/branding/speculators-model-icon-white-orange.png) | Highlight sparingly |
-| Diagram | User Flow (Light) | [`speculators-user-flow-light.svg`](../assets/branding/speculators-user-flow-light.svg) | [`speculators-user-flow-light.png`](../assets/branding/speculators-user-flow-light.png) | Light docs / print |
-| Diagram | User Flow (Dark) | [`speculators-user-flow-dark.svg`](../assets/branding/speculators-user-flow-dark.svg) | [`speculators-user-flow-dark.png`](../assets/branding/speculators-user-flow-dark.png) | Dark slides / sites |
+| Category   | Variant / Name    | SVG                                                                                                     | PNG                                                                                                     | Notes                           |
+| ---------- | ----------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------- |
+| Logo       | Black             | [`speculators-logo-black.svg`](../assets/branding/speculators-logo-black.svg)                           | [`speculators-logo-black.png`](../assets/branding/speculators-logo-black.png)                           | Default on light backgrounds    |
+| Logo       | Blue              | [`speculators-logo-blue.svg`](../assets/branding/speculators-logo-blue.svg)                             | [`speculators-logo-blue.png`](../assets/branding/speculators-logo-blue.png)                             | Accent / section headers        |
+| Logo       | White             | [`speculators-logo-white.svg`](../assets/branding/speculators-logo-white.svg)                           | [`speculators-logo-white.png`](../assets/branding/speculators-logo-white.png)                           | Use on dark imagery/backgrounds |
+| Icon       | Black             | [`speculators-icon-black.svg`](../assets/branding/speculators-icon-black.svg)                           | [`speculators-icon-black.png`](../assets/branding/speculators-icon-black.png)                           | App tile / light UI             |
+| Icon       | Blue              | [`speculators-icon-blue.svg`](../assets/branding/speculators-icon-blue.svg)                             | [`speculators-icon-blue.png`](../assets/branding/speculators-icon-blue.png)                             | Accent                          |
+| Icon       | White             | [`speculators-icon-white.svg`](../assets/branding/speculators-icon-white.svg)                           | [`speculators-icon-white.png`](../assets/branding/speculators-icon-white.png)                           | Dark backgrounds                |
+| Icon       | White-Orange      | [`speculators-icon-white-orange.svg`](../assets/branding/speculators-icon-white-orange.svg)             | [`speculators-icon-white-orange.png`](../assets/branding/speculators-icon-white-orange.png)             | Limited highlight               |
+| Model Icon | Black             | [`speculators-model-icon-black.svg`](../assets/branding/speculators-model-icon-black.svg)               | [`speculators-model-icon-black.png`](../assets/branding/speculators-model-icon-black.png)               | Architecture visuals            |
+| Model Icon | Blue              | [`speculators-model-icon-blue.svg`](../assets/branding/speculators-model-icon-blue.svg)                 | [`speculators-model-icon-blue.png`](../assets/branding/speculators-model-icon-blue.png)                 | Architecture visuals            |
+| Model Icon | White             | [`speculators-model-icon-white.svg`](../assets/branding/speculators-model-icon-white.svg)               | [`speculators-model-icon-white.png`](../assets/branding/speculators-model-icon-white.png)               | Dark backgrounds                |
+| Model Icon | White-Orange      | [`speculators-model-icon-white-orange.svg`](../assets/branding/speculators-model-icon-white-orange.svg) | [`speculators-model-icon-white-orange.png`](../assets/branding/speculators-model-icon-white-orange.png) | Highlight sparingly             |
+| Diagram    | User Flow (Light) | [`speculators-user-flow-light.svg`](../assets/branding/speculators-user-flow-light.svg)                 | [`speculators-user-flow-light.png`](../assets/branding/speculators-user-flow-light.png)                 | Light docs / print              |
+| Diagram    | User Flow (Dark)  | [`speculators-user-flow-dark.svg`](../assets/branding/speculators-user-flow-dark.svg)                   | [`speculators-user-flow-dark.png`](../assets/branding/speculators-user-flow-dark.png)                   | Dark slides / sites             |
 
 ## Usage Guidelines
 
@@ -80,13 +80,14 @@ All files reside in `docs/assets/branding`.
 - Prefer SVG for clarity and printing; scale uniformly
 
 ## Do and Avoid
-| Do | Avoid |
-| --- | ----- |
-| Use supplied SVG for scalable quality | Recreating marks from scratch |
+
+| Do                                    | Avoid                              |
+| ------------------------------------- | ---------------------------------- |
+| Use supplied SVG for scalable quality | Recreating marks from scratch      |
 | Maintain clear space and aspect ratio | Distorting, squeezing, or rotating |
-| Choose color for sufficient contrast | Recoloring to arbitrary hues |
-| Use a single primary mark per surface | Layering multiple logos |
-| Attribute the project when citing | Using assets to imply endorsement |
+| Choose color for sufficient contrast  | Recoloring to arbitrary hues       |
+| Use a single primary mark per surface | Layering multiple logos            |
+| Attribute the project when citing     | Using assets to imply endorsement  |
 
 ## License & Attribution
 

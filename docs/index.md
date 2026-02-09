@@ -28,13 +28,16 @@ Speculators standardizes this process by providing a productionized end-to-end f
 ## Quick Start
 
 To try out a speculative decoding model you can get started by running a pre-made one with vLLM. After [installing vLLM](https://docs.vllm.ai/en/latest/getting_started/installation/), run:
+
 ```bash
 vllm serve RedHatAI/Qwen3-8B-speculator.eagle3
 ```
+
 (Or choose another model from the [RedHatAI/speculator-models](https://huggingface.co/collections/RedHatAI/speculator-models) collection.)
 
 Behind the scenes, this is reading the model from Hugging Face, parsing the `speculators_config` and setting up both the speculator and verifier models to run together.
 
 To create a speculative decoding model for a different verifier model there are two approaches you can choose:
+
 1. Train a new speculative decoding model ([instructions](train.md))([examples](examples/data_generation_and_training.md)).
 2. Convert an existing model from a third-party library to the Speculators format for easy deployment with vLLM ([instructions](convert.md)) ([examples](examples/convert.md)).
