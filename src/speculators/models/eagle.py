@@ -28,6 +28,8 @@ from transformers.models.llama.configuration_llama import LlamaConfig
 from typing_extensions import Self
 
 from speculators import SpeculatorModel, SpeculatorModelConfig
+from speculators.config import SpeculatorsConfig, VerifierConfig
+from speculators.proposals.greedy import GreedyTokenProposalConfig
 
 __all__ = [
     "EagleSpeculator",
@@ -242,6 +244,60 @@ class EagleSpeculator(SpeculatorModel):
         "lm_head.weight",
         "lm_head.bias",
     ]
+
+    @classmethod
+    def from_training_args(
+        cls,
+        verifier_config: PretrainedConfig,
+        **kwargs,
+    ) -> "EagleSpeculator":
+        """Create EAGLE model from training arguments.
+
+        Args:
+            verifier_config: Verifier model configuration
+            **kwargs: Training arguments with EAGLE-specific params
+                - layernorms: Whether to include layer normalization layers
+                - fusion_bias: Whether to add bias to fusion layer
+                - transformer_layer_architecture: Name of transformer decoder layer
+                    class
+                - verifier_name_or_path: Path to verifier model
+
+        Returns:
+            Initialized EagleSpeculator
+        """
+        config = EagleSpeculatorConfig(
+            transformer_layer_config=verifier_config,
+            layernorms=kwargs.get("layernorms", False),
+            fusion_bias=kwargs.get("fusion_bias", False),
+            transformer_layer_architecture=kwargs.get(
+                "transformer_layer_architecture", "auto"
+            ),
+            speculators_config=SpeculatorsConfig(
+                algorithm="eagle",
+                proposal_methods=[GreedyTokenProposalConfig()],
+                default_proposal_method="greedy",
+                verifier=VerifierConfig.from_config(
+                    verifier_config, name_or_path=kwargs["verifier_name_or_path"]
+                ),
+            ),
+        )
+
+        return cls(config=config)
+
+    @staticmethod
+    def get_trainer_kwargs(**kwargs) -> tuple[dict, dict]:  # noqa: ARG004
+        """Get training and validation kwargs for EAGLE.
+
+        EAGLE doesn't require any special forward pass arguments during training,
+        so this returns empty dictionaries.
+
+        Args:
+            **kwargs: Training arguments (unused)
+
+        Returns:
+            Tuple of (train_call_kwargs, val_call_kwargs), both empty dicts
+        """
+        return {}, {}
 
     def __init__(
         self,

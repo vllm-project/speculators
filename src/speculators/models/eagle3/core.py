@@ -6,7 +6,7 @@ import torch
 from torch.nn.attention.flex_attention import create_block_mask
 from transformers import AutoConfig, DynamicCache, PretrainedConfig
 
-from speculators.config import VerifierConfig
+from speculators.config import SpeculatorsConfig, VerifierConfig
 from speculators.model import SpeculatorModel
 from speculators.models.eagle3 import Eagle3SpeculatorConfig
 from speculators.models.eagle3.attention import (
@@ -14,6 +14,7 @@ from speculators.models.eagle3.attention import (
     extend_mask_for_draft_tokens,
 )
 from speculators.models.eagle3.model_definitions import model_classes
+from speculators.proposals.greedy import GreedyTokenProposalConfig
 from speculators.utils.loading import load_model_layers
 
 
@@ -465,3 +466,66 @@ class Eagle3DraftModel(SpeculatorModel):
             return draft_tokens, loss, metrics
         else:
             return draft_tokens
+
+    @classmethod
+    def from_training_args(
+        cls,
+        verifier_config: PretrainedConfig,
+        **kwargs,
+    ) -> "Eagle3DraftModel":
+        """Create Eagle3 model from training arguments.
+
+        Args:
+            verifier_config: Verifier model configuration
+            **kwargs: Training arguments with Eagle3-specific params
+                - num_layers: Number of decoder layers
+                - norm_before_residual: Whether to normalize before residual connection
+                - t2d: Target-to-draft vocabulary mapping tensor
+                - d2t: Draft-to-target vocabulary mapping tensor
+                - ttt_steps: Number of TTT steps
+                - verifier_name_or_path: Path to verifier model
+
+        Returns:
+            Initialized Eagle3DraftModel
+        """
+        config = Eagle3SpeculatorConfig(
+            transformer_layer_config=verifier_config,
+            draft_vocab_size=kwargs["draft_vocab_size"],
+            norm_before_residual=kwargs["norm_before_residual"],
+            speculators_config=SpeculatorsConfig(
+                algorithm="eagle3",
+                proposal_methods=[
+                    GreedyTokenProposalConfig(
+                        speculative_tokens=kwargs["ttt_steps"],
+                    )
+                ],
+                default_proposal_method="greedy",
+                verifier=VerifierConfig.from_config(
+                    verifier_config, name_or_path=kwargs["verifier_name_or_path"]
+                ),
+            ),
+        )
+
+        return cls(config=config, t2d=kwargs.get("t2d"), d2t=kwargs.get("d2t"))
+
+    @staticmethod
+    def get_trainer_kwargs(**kwargs) -> tuple[dict, dict]:
+        """Get training and validation kwargs for Eagle3.
+
+        Args:
+            **kwargs: Training arguments
+
+        Returns:
+            Tuple of (train_call_kwargs, val_call_kwargs)
+        """
+        train_kwargs = {
+            "use_off_policy_tokens": kwargs["use_off_policy_tokens"],
+            "ttt_steps": kwargs["ttt_steps"],
+            "ttt_step_loss_decay": kwargs["ttt_step_loss_decay"],
+        }
+        val_kwargs = {
+            "use_off_policy_tokens": False,
+            "ttt_steps": kwargs["ttt_steps"],
+            "ttt_step_loss_decay": kwargs["ttt_step_loss_decay"],
+        }
+        return train_kwargs, val_kwargs
