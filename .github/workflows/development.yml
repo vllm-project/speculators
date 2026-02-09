@@ -6,7 +6,6 @@ on:
 
 env:
   UV_TORCH_BACKEND: "auto"
-  UV_SYSTEM_PYTHON: 1
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -54,6 +53,8 @@ jobs:
     strategy:
       matrix:
         python: ["3.10", "3.13"]
+    env:
+      UV_SYSTEM_PYTHON: 1
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python

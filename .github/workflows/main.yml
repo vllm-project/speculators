@@ -7,7 +7,6 @@ on:
 
 env:
   UV_TORCH_BACKEND: "auto"
-  UV_SYSTEM_PYTHON: 1
 
 jobs:
   link-checks:
@@ -48,6 +47,8 @@ jobs:
     strategy:
       matrix:
         python: ["3.10", "3.11", "3.12", "3.13"]
+    env:
+      UV_SYSTEM_PYTHON: 1
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
