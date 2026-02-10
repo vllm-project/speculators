@@ -48,6 +48,9 @@ theme:
         icon: material/brightness-4
         name: Switch to system preference
 
+exclude_docs: |
+  developer/branding.md
+
 validation:
   links:
     absolute_links: relative_to_docs

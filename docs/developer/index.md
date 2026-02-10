@@ -34,15 +34,9 @@ Speculators is an open-source project that values community contributions. We ma
 
   Learn how to add a new speculative decoding training algorithm.
 
-  [:octicons-arrow-right-24: Add new algorithms](add_new_algorithms.md)
+  [:octicons-arrow-right-24: Add new algorithms](../algorithms/add_new_algorithms.md)
 
 - :material-palette:{ .lg .middle } Branding Guidelines
-
-  ______________________________________________________________________
-
-  Visual identity and branding guidelines for using Speculators logos, colors, and brand assets in your projects and communications.
-
-  [:octicons-arrow-right-24: Branding Guidelines](branding.md)
 
 </div>
 
