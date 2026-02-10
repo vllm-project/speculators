@@ -75,7 +75,6 @@ dev = [
     "mkdocs-nav-weight~=0.2.0",
 
     # general and configurations
-    "pre-commit~=3.5.0",
     "sphinx~=7.1.2",
     "tox~=4.16.0",
     "tox-uv", # version is tied to tox version
