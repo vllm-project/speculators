@@ -38,12 +38,6 @@ Speculators is an open-source project that values community contributions. We ma
 
 - :material-palette:{ .lg .middle } Branding Guidelines
 
-  ______________________________________________________________________
-
-  Visual identity and branding guidelines for using Speculators logos, colors, and brand assets in your projects and communications.
-
-  [:octicons-arrow-right-24: Branding Guidelines](branding.md)
-
 </div>
 
 ## Getting Started with Development
