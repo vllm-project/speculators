@@ -4,40 +4,30 @@ Thank you for considering contributing to Speculators! We welcome contributions 
 
 ## Claiming Work
 
-**Read this section before starting any significant work.**
+**We value your time and want to ensure your contributions have the greatest impact.**
 
-If you plan to work on a large feature or substantial refactor, the issue **must be officially assigned to you by a maintainer** before you begin implementation.
+To make the contribution process as smooth as possible, we ask that you coordinate with maintainers before diving into significant changes. This helps us:
+* **Avoid duplicate effort** if someone else is already working on a similar solution.
+* **Align on architecture** early on so your PR can be merged quickly.
+* **Protect your time** by ensuring the proposed change fits the project’s long-term roadmap.
 
-Why this policy exists:
+### How to Get Started
 
-- Prevents duplicate effort when multiple contributors work on the same thing
-- Ensures architectural decisions align with project direction before significant code is written
-- Respects your time by avoiding PRs that cannot be merged due to scope or approach mismatches
+1. **Find or create an issue:** Check if your idea is already being discussed. If not, open a new issue to propose the change.
+2. **Start a conversation:** Comment on the issue to let us know you’re interested! A brief outline of your planned approach is always helpful.
+3. **Wait for the "Green Light":** A maintainer will assign the issue to you. This is our signal that the approach looks good and the "floor is yours."
+4. **Build away:** Once assigned, you’re all set to begin implementation.
 
-**Process:**
+### When should you check in?
 
-1. Check if an issue exists for your proposed work. If not, create one.
-2. Comment on the issue expressing interest and briefly outline your approach.
-3. Wait for a maintainer to assign the issue to you.
-4. Once assigned, proceed with implementation.
+| **Let's chat first if...** | **Feel free to dive right in for...** |
+| :--- | :--- |
+| Adding new training algorithms or model support | Fixing typos or improving documentation |
+| Modifying the data pipeline or CLI/API | Small bug fixes (generally < 20 lines) |
+| Large refactors or performance optimizations | Adding missing type annotations |
+| Changes affecting 3+ files | Minor dependency updates |
 
-**What requires assignment:**
-
-- New training algorithms or model architecture support
-- Changes to the data generation pipeline
-- New CLI commands or API modifications
-- Refactoring that spans multiple modules
-- Performance optimizations requiring benchmarking
-- Any change touching more than 3-4 files
-
-**What does NOT require assignment:**
-
-- Typo fixes in documentation
-- Small bug fixes (< 20 lines changed)
-- Adding missing type annotations to existing code
-- Updating dependencies (when explicitly requested in an issue)
-
-Maintainers typically respond within 2-3 business days. If an issue remains unassigned for over a week, feel free to ping the thread.
+*Maintainers typically respond in 2-3 business days. If you haven’t heard from us after a week, please feel free to give the thread a nudge!*
 
 ## How Can You Contribute?
 
