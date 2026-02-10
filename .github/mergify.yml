@@ -37,3 +37,29 @@ pull_request_rules:
       label:
         remove:
           - needs-rebase
+  
+  - name: add quality-failed label
+    conditions:
+      - label != stale
+      - check-failure = quality-check
+      - -closed
+    actions:
+      label:
+        add:
+          - quality-failed
+      comment:
+        message: |
+          The quality checks have failed. Please run `make style` and `make quality` under
+          the root directory to adddress the lint failures. You will need to install the
+          dev optional install to get the required linting packages:
+          https://github.com/vllm-project/speculators/blob/main/CONTRIBUTING.md
+
+  - name: remove quality-failed label
+    conditions:
+      - label != stale
+      - -check-failure = quality-check
+      - -closed
+    actions:
+      label:
+        remove:
+          - quality-failed
