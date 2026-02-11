@@ -2,6 +2,43 @@
 
 Thank you for considering contributing to Speculators! We welcome contributions from the community to help improve and grow this project. This document outlines the process and guidelines for contributing.
 
+## Claiming Work
+
+**Read this section before starting any significant work.**
+
+If you plan to work on a large feature or substantial refactor, the issue **must be officially assigned to you by a maintainer** before you begin implementation.
+
+Why this policy exists:
+
+- Prevents duplicate effort when multiple contributors work on the same thing
+- Ensures architectural decisions align with project direction before significant code is written
+- Respects your time by avoiding PRs that cannot be merged due to scope or approach mismatches
+
+**Process:**
+
+1. Check if an issue exists for your proposed work. If not, create one.
+2. Comment on the issue expressing interest and briefly outline your approach.
+3. Wait for a maintainer to assign the issue to you.
+4. Once assigned, proceed with implementation.
+
+**What requires assignment:**
+
+- New training algorithms or model architecture support
+- Changes to the data generation pipeline
+- New CLI commands or API modifications
+- Refactoring that spans multiple modules
+- Performance optimizations requiring benchmarking
+- Any change touching more than 3-4 files
+
+**What does NOT require assignment:**
+
+- Typo fixes in documentation
+- Small bug fixes (< 20 lines changed)
+- Adding missing type annotations to existing code
+- Updating dependencies (when explicitly requested in an issue)
+
+Maintainers typically respond within 2-3 business days. If an issue remains unassigned for over a week, feel free to ping the thread.
+
 ## How Can You Contribute?
 
 There are many ways to contribute to Speculators:
