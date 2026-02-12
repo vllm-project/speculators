@@ -287,51 +287,26 @@ torchrun --nnodes=1 --nproc_per_node=8 scripts/train.py \
 
 ## Fine-tuning from Pretrained Models
 
-Instead of training from scratch, you can fine-tune an existing EAGLE3 model using the `--pretrained-model-path` argument. This is useful when you want to adapt a pretrained speculator to new data or domains.
+Fine-tune an existing EAGLE3 model using `--pretrained-model-path`. Vocabulary mappings (`d2t`/`t2d`) are automatically extracted - no need to provide them separately.
 
-### Features
-
-- **Load from HuggingFace Hub or local path**: Automatically downloads and loads pretrained models
-- **Automatic vocabulary mapping extraction**: No need to provide `--d2t-path` and `--t2d-path` separately
-- **Automatic draft vocabulary size detection**: The script automatically derives `draft_vocab_size` from the pretrained model
-
-### Usage
-
-When using `--pretrained-model-path`, do not specify `--d2t-path` or `--t2d-path` as these are automatically extracted from the pretrained model.
-
-#### Fine-tune from HuggingFace Hub
+**Example (Single GPU with python):**
 
 ```bash
-torchrun --nnodes=1 --nproc_per_node=8 scripts/train.py \
+python scripts/train.py \
     --verifier-name-or-path "meta-llama/Llama-3.1-8B-Instruct" \
     --pretrained-model-path "RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3" \
     --data-path "./new_data" \
-    --save-path "./checkpoints/llama-3.1-8b.eagle3-finetuned" \
-    --epochs 3 \
-    --lr 5e-5 \
-    --logger "tensorboard" \
-    --log-dir "./logs/llama-3.1-8b.eagle3-finetuned" \
-    --run-name "llama-3.1-8b.eagle3-finetuned"
-```
-
-#### Fine-tune from local checkpoint
-
-```bash
-torchrun --nnodes=1 --nproc_per_node=8 scripts/train.py \
-    --verifier-name-or-path "meta-llama/Llama-3.1-8B-Instruct" \
-    --pretrained-model-path "./checkpoints/my-eagle3-model" \
-    --data-path "./new_data" \
-    --save-path "./checkpoints/llama-3.1-8b.eagle3-finetuned" \
+    --save-path "./checkpoints/finetuned" \
     --epochs 3 \
     --lr 5e-5
 ```
 
-### Important Notes
+**Notes:**
 
-- The pretrained model must be compatible with the specified verifier model
-- Vocabulary mappings (`d2t`/`t2d`) are automatically extracted from the pretrained model
-- The optimizer state starts fresh (not loaded from the pretrained model)
-- Use a lower learning rate (e.g., `5e-5`) compared to training from scratch to avoid disrupting learned features
+- Use HuggingFace Hub model IDs or local paths for `--pretrained-model-path`
+- Cannot use `--d2t-path`/`--t2d-path` with `--pretrained-model-path`
+- Optimizer state starts fresh
+- Use lower learning rate (e.g., 5e-5) for fine-tuning
 
 ## E2E Pipeline
 
