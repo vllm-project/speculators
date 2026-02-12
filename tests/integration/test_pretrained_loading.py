@@ -1,26 +1,31 @@
-"""Integration tests for pretrained EAGLE3 model loading from Hugging Face Hub."""
+"""Integration tests for pretrained speculator model loading from Hugging Face Hub.
+
+These tests use EAGLE3 as the reference implementation, but the loading utilities
+are designed to work with any registered speculator algorithm.
+"""
 
 import pytest
 import torch
 
 from speculators.config import SpeculatorModelConfig
-from speculators.models.eagle3 import Eagle3DraftModel
+from speculators.model import SpeculatorModel
 from speculators.utils.loading import extract_vocab_mappings, load_full_state_dict
 
-# Real model from HF Hub for integration testing
-EAGLE3_MODEL_ID = "RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3"
+# Real model from HF Hub for integration testing (using EAGLE3 as reference)
+TEST_MODEL_ID = "RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3"
+TEST_MODEL_TYPE = "eagle3"
 
 
 @pytest.mark.integration
 def test_load_full_state_dict_from_hub():
     """Test loading complete state dict from HF Hub."""
-    state_dict = load_full_state_dict(EAGLE3_MODEL_ID)
+    state_dict = load_full_state_dict(TEST_MODEL_ID)
 
     # Verify structure
     assert isinstance(state_dict, dict)
     assert len(state_dict) > 0
 
-    # Check for EAGLE3 specific keys
+    # Check for expected keys (vocab mappings may vary by algorithm)
     assert any("d2t" in k.lower() for k in state_dict), "d2t mapping not found"
     assert any("t2d" in k.lower() for k in state_dict), "t2d mapping not found"
     assert any("layers" in k for k in state_dict), "layers not found"
@@ -32,8 +37,8 @@ def test_load_full_state_dict_from_hub():
 
 @pytest.mark.integration
 def test_extract_vocab_mappings_from_real_model():
-    """Test extracting d2t/t2d from real EAGLE3 model."""
-    state_dict = load_full_state_dict(EAGLE3_MODEL_ID)
+    """Test extracting d2t/t2d from real speculator model."""
+    state_dict = load_full_state_dict(TEST_MODEL_ID)
 
     # Count keys before extraction
     keys_before = set(state_dict.keys())
@@ -71,7 +76,7 @@ def test_extract_vocab_mappings_from_real_model():
 @pytest.mark.integration
 def test_load_config_from_pretrained():
     """Test loading SpeculatorModelConfig from pretrained."""
-    config = SpeculatorModelConfig.from_pretrained(EAGLE3_MODEL_ID)
+    config = SpeculatorModelConfig.from_pretrained(TEST_MODEL_ID)
 
     # Verify config structure
     assert config.draft_vocab_size > 0, "draft_vocab_size should be positive"
@@ -102,22 +107,25 @@ def test_load_config_from_pretrained():
 def test_end_to_end_pretrained_loading():
     """Test complete workflow: load state dict → extract mappings → create model."""
     # Load state dict
-    state_dict = load_full_state_dict(EAGLE3_MODEL_ID)
+    state_dict = load_full_state_dict(TEST_MODEL_ID)
 
     # Extract vocab mappings
     device = torch.device("cpu")
     d2t, t2d = extract_vocab_mappings(state_dict, device)
 
     # Load config
-    config = SpeculatorModelConfig.from_pretrained(EAGLE3_MODEL_ID)
+    config = SpeculatorModelConfig.from_pretrained(TEST_MODEL_ID)
 
     # Verify draft_vocab_size consistency
     assert config.draft_vocab_size == d2t.shape[0], (
         f"Config vocab size {config.draft_vocab_size} != d2t shape {d2t.shape[0]}"
     )
 
+    # Get model class from registry
+    model_class = SpeculatorModel.registered_model_class_from_config(config)
+
     # Create model with extracted mappings
-    model = Eagle3DraftModel(config=config, t2d=t2d, d2t=d2t)
+    model = model_class(config=config, t2d=t2d, d2t=d2t)
 
     # Load weights (should work without errors)
     missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
@@ -145,7 +153,7 @@ def test_end_to_end_pretrained_loading():
 @pytest.mark.integration
 def test_pretrained_model_key_structure():
     """Test that pretrained model has expected key structure."""
-    state_dict = load_full_state_dict(EAGLE3_MODEL_ID)
+    state_dict = load_full_state_dict(TEST_MODEL_ID)
 
     # Expected key patterns
     expected_patterns = [
