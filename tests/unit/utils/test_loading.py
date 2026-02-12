@@ -16,6 +16,7 @@ from speculators.utils.loading import (
     extract_vocab_mappings,
     load_full_state_dict,
     load_model_layers,
+    load_pretrained_weights,
 )
 
 # Test model from HuggingFace
@@ -372,3 +373,30 @@ def test_load_full_state_dict_file_not_found(tmp_path):
 
     with pytest.raises(FileNotFoundError):
         load_full_state_dict(str(empty_dir))
+
+
+# load_pretrained_weights Tests
+
+
+def test_load_pretrained_weights_success():
+    """Test loading weights into model."""
+    from unittest.mock import MagicMock
+
+    mock_model = MagicMock()
+    mock_model.load_state_dict.return_value = ([], [])
+    state_dict = {"layer.weight": torch.randn(10, 10)}
+
+    load_pretrained_weights(mock_model, state_dict, "/path/to/model")
+    mock_model.load_state_dict.assert_called_once()
+
+
+def test_load_pretrained_weights_with_expected_missing():
+    """Test loading with expected missing keys."""
+    from unittest.mock import MagicMock
+
+    mock_model = MagicMock()
+    expected_missing = ["d2t", "t2d", "verifier_lm_head.weight"]
+    mock_model.load_state_dict.return_value = (expected_missing, [])
+
+    load_pretrained_weights(mock_model, {"layer.weight": torch.randn(10, 10)}, "/test")
+    # Should not raise

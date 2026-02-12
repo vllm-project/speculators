@@ -1,13 +1,21 @@
+from __future__ import annotations
+
 import json
 import logging
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import torch
 from huggingface_hub import hf_hub_download, snapshot_download
 from huggingface_hub.errors import EntryNotFoundError, RepositoryNotFoundError
 from loguru import logger
 from safetensors import safe_open
+
+# Forward import to avoid circular dependency:
+# speculators.models.eagle3.core imports from this file,
+# and we need SpeculatorModel type for load_pretrained_weights()
+if TYPE_CHECKING:
+    from speculators import SpeculatorModel
 
 std_logger = logging.getLogger(__name__)
 
@@ -258,3 +266,50 @@ def _validate_mapping_tensor(tensor: torch.Tensor, name: str):
         raise ValueError(
             f"Unexpected {name} shape: {tensor.shape}. Expected 1D tensor."
         )
+
+def load_pretrained_weights(
+    model: SpeculatorModel,
+    state_dict: dict[str, torch.Tensor],
+    model_path: str,
+) -> None:
+    """
+    Load pretrained weights into model with validation.
+    
+    Args:
+        model: Model to load weights into
+        state_dict: State dictionary from pretrained model
+        model_path: Path or identifier of the pretrained model (for logging)
+    """
+    std_logger.info(f"Loading pretrained weights from {model_path}")
+    std_logger.info(f"Parameters to load: {len(state_dict)}")
+
+    # Load with strict=False (d2t/t2d passed to constructor)
+    missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
+
+    # Build set of legitimately missing keys
+    expected_missing = {
+        "t2d",
+        "d2t",
+        "verifier_lm_head.weight",
+    }
+    
+    # Honor model's own ignore list
+    model_ignored = getattr(model, "_keys_to_ignore_on_load_missing", [])
+    expected_missing.update(model_ignored)
+
+    # Filter problematic missing keys
+    problematic = [k for k in missing_keys if k not in expected_missing]
+
+    # Report issues
+    if problematic:
+        std_logger.warning(f"Unexpected missing keys: {problematic}")
+    if unexpected_keys:
+        std_logger.warning(f"Unexpected keys in checkpoint: {unexpected_keys}")
+
+    # Summary
+    if problematic or unexpected_keys:
+        std_logger.warning(
+            "Weight loading completed with warnings. May indicate architecture mismatch."
+        )
+    else:
+        std_logger.info("✓ Successfully loaded all weights")
