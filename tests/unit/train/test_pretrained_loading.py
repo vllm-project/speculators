@@ -10,10 +10,10 @@ import torch
 
 from scripts.train import (
     initialize_vocab_config,
-    load_model_weights,
     load_pretrained_model,
     load_vocab_mappings,
 )
+from speculators.utils.loading import load_pretrained_weights
 
 # Test load_vocab_mappings()
 
@@ -47,19 +47,19 @@ def test_load_vocab_mappings_success(tmp_path):
 def test_load_vocab_mappings_missing_d2t():
     """Test error when only t2d provided."""
     with pytest.raises(ValueError, match="Both d2t and t2d paths must be provided"):
-        load_vocab_mappings(None, "/path/to/t2d.npy", torch.device("cpu"))
+        load_vocab_mappings(None, "/path/to/t2d.npy", torch.device("cpu"))  # type: ignore[arg-type]
 
 
 def test_load_vocab_mappings_missing_t2d():
     """Test error when only d2t provided."""
     with pytest.raises(ValueError, match="Both d2t and t2d paths must be provided"):
-        load_vocab_mappings("/path/to/d2t.npy", None, torch.device("cpu"))
+        load_vocab_mappings("/path/to/d2t.npy", None, torch.device("cpu"))  # type: ignore[arg-type]
 
 
 def test_load_vocab_mappings_both_missing():
     """Test error when both paths are None."""
     with pytest.raises(ValueError, match="Both d2t and t2d paths must be provided"):
-        load_vocab_mappings(None, None, torch.device("cpu"))
+        load_vocab_mappings(None, None, torch.device("cpu"))  # type: ignore[arg-type]
 
 
 def test_load_vocab_mappings_empty_strings():
@@ -225,6 +225,8 @@ def test_initialize_vocab_config_from_pretrained(mock_load):
 
     assert vocab_size == 100
     assert state_dict == mock_state
+    assert d2t is not None
+    assert t2d is not None
     assert torch.equal(d2t, mock_d2t)
     assert torch.equal(t2d, mock_t2d)
     mock_load.assert_called_once_with("/path/to/model", torch.device("cpu"))
@@ -250,6 +252,8 @@ def test_initialize_vocab_config_from_numpy(mock_load_vocab):
 
     assert vocab_size == 100
     assert state_dict is None
+    assert d2t is not None
+    assert t2d is not None
     assert torch.equal(d2t, mock_d2t)
     assert torch.equal(t2d, mock_t2d)
     mock_load_vocab.assert_called_once_with(
@@ -307,117 +311,3 @@ def test_initialize_vocab_config_multimodal_verifier(mock_config_class):
     )
 
     assert vocab_size == 32000
-
-
-# Test load_model_weights()
-
-
-def test_load_model_weights_success(caplog):
-    """Test loading weights into model."""
-    # Set logging level to capture INFO logs
-    caplog.set_level(logging.INFO)
-
-    # Create mock model
-    mock_model = MagicMock()
-    mock_model.load_state_dict.return_value = ([], [])  # no missing/unexpected keys
-
-    state_dict = {"layer.weight": torch.randn(10, 10)}
-
-    load_model_weights(mock_model, state_dict, "/path/to/model")
-
-    mock_model.load_state_dict.assert_called_once_with(state_dict, strict=False)
-    assert "✓ Successfully loaded all weights" in caplog.text
-
-
-def test_load_model_weights_with_expected_missing_keys(caplog):
-    """Test loading with expected missing keys (d2t, t2d, lm_head)."""
-    # Set logging level to capture INFO logs
-    caplog.set_level(logging.INFO)
-
-    mock_model = MagicMock()
-    expected_missing = ["d2t", "t2d", "verifier_lm_head.weight"]
-    mock_model.load_state_dict.return_value = (expected_missing, [])
-
-    state_dict = {"layer.weight": torch.randn(10, 10)}
-
-    load_model_weights(mock_model, state_dict, "/path/to/model")
-
-    # Should not warn about expected missing keys
-    assert "Unexpected missing keys" not in caplog.text
-    assert "✓ Successfully loaded all weights" in caplog.text
-
-
-def test_load_model_weights_unexpected_missing_keys(caplog):
-    """Test warning for unexpected missing keys."""
-    # Set logging level to capture WARNING logs
-    caplog.set_level(logging.WARNING)
-
-    mock_model = MagicMock()
-    missing_keys = ["d2t", "unexpected_layer.weight"]
-    mock_model.load_state_dict.return_value = (missing_keys, [])
-
-    state_dict = {"layer.weight": torch.randn(10, 10)}
-
-    load_model_weights(mock_model, state_dict, "/path/to/model")
-
-    assert "Unexpected missing keys" in caplog.text
-    assert "unexpected_layer.weight" in caplog.text
-
-
-def test_load_model_weights_unexpected_keys(caplog):
-    """Test warning for unexpected keys in state dict."""
-    # Set logging level to capture WARNING logs
-    caplog.set_level(logging.WARNING)
-
-    mock_model = MagicMock()
-    unexpected_keys = ["extra_layer.weight"]
-    mock_model.load_state_dict.return_value = ([], unexpected_keys)
-
-    state_dict = {"layer.weight": torch.randn(10, 10)}
-
-    load_model_weights(mock_model, state_dict, "/path/to/model")
-
-    assert "Unexpected keys" in caplog.text
-    assert "extra_layer.weight" in caplog.text
-
-
-def test_load_model_weights_both_issues(caplog):
-    """Test warnings when both missing and unexpected keys present."""
-    # Set logging level to capture WARNING logs
-    caplog.set_level(logging.WARNING)
-
-    mock_model = MagicMock()
-    missing_keys = ["d2t", "missing_layer.weight"]
-    unexpected_keys = ["extra_layer.weight"]
-    mock_model.load_state_dict.return_value = (missing_keys, unexpected_keys)
-
-    state_dict = {"layer.weight": torch.randn(10, 10)}
-
-    load_model_weights(mock_model, state_dict, "/path/to/model")
-
-    assert "Unexpected missing keys" in caplog.text
-    assert "missing_layer.weight" in caplog.text
-    assert "Unexpected keys" in caplog.text
-    assert "extra_layer.weight" in caplog.text
-    assert "completed with warnings" in caplog.text
-
-
-def test_load_model_weights_logging_info(caplog):
-    """Test that informational logging is present."""
-    # Set logging level to capture INFO logs
-    caplog.set_level(logging.INFO)
-
-    mock_model = MagicMock()
-    mock_model.load_state_dict.return_value = ([], [])
-
-    state_dict = {
-        "layer1.weight": torch.randn(10, 10),
-        "layer2.weight": torch.randn(20, 20),
-    }
-
-    load_model_weights(mock_model, state_dict, "/path/to/model")
-
-    assert "Loading pretrained weights from /path/to/model" in caplog.text
-    assert "Parameters to load: 2" in caplog.text
-    assert "Fine-tuning from pretrained weights" in caplog.text
-    assert "Optimizer state starts fresh" in caplog.text

@@ -26,7 +26,11 @@ from speculators.train.logger import setup_metric_logger, setup_root_logger
 from speculators.train.noise_transforms import AddUniformNoise
 from speculators.train.trainer import Trainer, TrainerConfig
 from speculators.train.utils import maybe_destroy_distributed, maybe_setup_distributed
-from speculators.utils.loading import extract_vocab_mappings, load_full_state_dict
+from speculators.utils.loading import (
+    extract_vocab_mappings,
+    load_full_state_dict,
+    load_pretrained_weights,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -133,49 +137,6 @@ def initialize_vocab_config(
     return None, None, verifier_config.vocab_size, None
 
 
-def load_model_weights(
-    model: SpeculatorModel,
-    state_dict: dict[str, torch.Tensor],
-    model_path: str,
-) -> None:
-    """Load pretrained weights into model with validation."""
-    logger.info(f"Loading pretrained weights from {model_path}")
-    logger.info(f"Parameters to load: {len(state_dict)}")
-
-    # Load with strict=False (d2t/t2d passed to constructor)
-    missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
-
-    # Build set of legitimately missing keys
-    expected_missing_keys = {
-        "t2d",  # Passed to constructor
-        "d2t",  # Passed to constructor
-        "verifier_lm_head.weight",  # Verifier head initialized separately
-    }
-
-    # Honor model's own ignore list (e.g., embed_tokens.weight)
-    model_ignored_keys = getattr(model, "_keys_to_ignore_on_load_missing", [])
-    expected_missing_keys.update(model_ignored_keys)
-
-    # Filter to find truly problematic missing keys
-    problematic_missing = [k for k in missing_keys if k not in expected_missing_keys]
-
-    # Report issues
-    if problematic_missing:
-        logger.warning(f"Unexpected missing keys: {problematic_missing}")
-    if unexpected_keys:
-        logger.warning(f"Unexpected keys in checkpoint: {unexpected_keys}")
-
-    # Summary
-    if problematic_missing or unexpected_keys:
-        logger.warning(
-            "Weight loading completed with warnings. "
-            "May indicate architecture mismatch."
-        )
-    else:
-        logger.info("✓ Successfully loaded all weights")
-
-    logger.info("Fine-tuning from pretrained weights.")
-    logger.info("Note: Optimizer state starts fresh.")
 
 
 def setup_dataloader(
@@ -305,7 +266,6 @@ def main(args: argparse.Namespace):
         transformer_layer_config._attn_implementation = "simple_flex_attention"  # noqa: SLF001
         logger.info(
             "Using transformer_layer_config from pretrained model "
-            f"(rope_theta={transformer_layer_config.rope_theta})"
         )
     else:
         transformer_layer_config = create_transformer_layer_config(
@@ -333,7 +293,7 @@ def main(args: argparse.Namespace):
 
     # Load pretrained weights if provided (for fine-tuning)
     if pretrained_state_dict is not None:
-        load_model_weights(
+        load_pretrained_weights(
             draft_model, pretrained_state_dict, args.pretrained_model_path
         )
 
@@ -404,9 +364,7 @@ def parse_args():
         "--logger",
         type=str,
         default="",
-        help=(
-            "One of 'trackio', 'wandb', 'tensorboard' or comma separated list of them"
-        ),
+        help="One of 'trackio', 'wandb', 'tensorboard' or comma separated list of them",
     )
     parser.add_argument("--total-seq-len", type=int, default=8192)
     parser.add_argument("--data-format-version", type=int, default=1)
@@ -452,8 +410,7 @@ def parse_args():
         "--use-off-policy-tokens",
         action="store_true",
         default=False,
-        help=("Use off-policy tokens during training (required for regenerated data)"),
-    )
+        help="Use off-policy tokens during training (required for regenerated data)",
     # Model hyperparameters
     parser.add_argument(
         "--norm-before-residual",
