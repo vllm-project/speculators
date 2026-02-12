@@ -3,6 +3,7 @@ Unit tests for the loading module in the Speculators library.
 """
 
 import json
+from unittest.mock import MagicMock
 
 import pytest
 import torch
@@ -380,8 +381,6 @@ def test_load_full_state_dict_file_not_found(tmp_path):
 
 def test_load_pretrained_weights_success():
     """Test loading weights into model."""
-    from unittest.mock import MagicMock
-
     mock_model = MagicMock()
     mock_model.load_state_dict.return_value = ([], [])
     state_dict = {"layer.weight": torch.randn(10, 10)}
@@ -392,8 +391,6 @@ def test_load_pretrained_weights_success():
 
 def test_load_pretrained_weights_with_expected_missing():
     """Test loading with expected missing keys."""
-    from unittest.mock import MagicMock
-
     mock_model = MagicMock()
     expected_missing = ["d2t", "t2d", "verifier_lm_head.weight"]
     mock_model.load_state_dict.return_value = (expected_missing, [])

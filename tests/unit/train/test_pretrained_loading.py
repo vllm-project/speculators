@@ -1,7 +1,6 @@
 """Unit tests for pretrained model loading functionality in train.py"""
 
 import argparse
-import logging
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -13,7 +12,6 @@ from scripts.train import (
     load_pretrained_model,
     load_vocab_mappings,
 )
-from speculators.utils.loading import load_pretrained_weights
 
 # Test load_vocab_mappings()
 

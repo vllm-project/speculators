@@ -274,7 +274,7 @@ def load_pretrained_weights(
 ) -> None:
     """
     Load pretrained weights into model with validation.
-    
+
     Args:
         model: Model to load weights into
         state_dict: State dictionary from pretrained model
@@ -292,7 +292,7 @@ def load_pretrained_weights(
         "d2t",
         "verifier_lm_head.weight",
     }
-    
+
     # Honor model's own ignore list
     model_ignored = getattr(model, "_keys_to_ignore_on_load_missing", [])
     expected_missing.update(model_ignored)
@@ -309,7 +309,8 @@ def load_pretrained_weights(
     # Summary
     if problematic or unexpected_keys:
         std_logger.warning(
-            "Weight loading completed with warnings. May indicate architecture mismatch."
+            "Weight loading completed with warnings. "
+            "May indicate architecture mismatch."
         )
     else:
         std_logger.info("✓ Successfully loaded all weights")

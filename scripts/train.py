@@ -411,6 +411,7 @@ def parse_args():
         action="store_true",
         default=False,
         help="Use off-policy tokens during training (required for regenerated data)",
+    )
     # Model hyperparameters
     parser.add_argument(
         "--norm-before-residual",
