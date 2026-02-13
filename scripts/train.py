@@ -137,8 +137,6 @@ def initialize_vocab_config(
     return None, None, verifier_config.vocab_size, None
 
 
-
-
 def setup_dataloader(
     file_list: list[str],
     world_size: int,
@@ -264,9 +262,7 @@ def main(args: argparse.Namespace):
         )
         transformer_layer_config = pretrained_config.transformer_layer_config
         transformer_layer_config._attn_implementation = "simple_flex_attention"  # noqa: SLF001
-        logger.info(
-            "Using transformer_layer_config from pretrained model "
-        )
+        logger.info("Using transformer_layer_config from pretrained model ")
     else:
         transformer_layer_config = create_transformer_layer_config(
             args.verifier_name_or_path, args.num_layers, draft_arch=args.draft_arch
