@@ -267,6 +267,7 @@ def _validate_mapping_tensor(tensor: torch.Tensor, name: str):
             f"Unexpected {name} shape: {tensor.shape}. Expected 1D tensor."
         )
 
+
 def load_pretrained_weights(
     model: SpeculatorModel,
     state_dict: dict[str, torch.Tensor],
