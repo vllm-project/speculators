@@ -51,7 +51,7 @@ dependencies = [
     "torch<2.10.0",
     "tqdm",
     "transformers<5.0.0",
-    "typer-slim>=0.12.0",
+    "typer>=0.12.0",
 ]
 
 [project.optional-dependencies]
