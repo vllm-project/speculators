@@ -68,10 +68,12 @@ def loss_function(
 
     t = torch.arange(T, device=logits.device)
     k = t % block_size  # [T]
+    k-=1
     w = torch.exp(-k.to(logits.dtype) / gamma)  # [T]
 
     # broadcast to [B, T, 1]
     w = w.view(1, T, 1)
+    loss_mask[:,::block_size]=0
     elementwise_loss = elementwise_loss * w
 
 
