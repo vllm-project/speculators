@@ -47,48 +47,21 @@ jobs:
     strategy:
       matrix:
         python: ["3.10", "3.11", "3.12", "3.13"]
+    env:
+      UV_SYSTEM_PYTHON: 1
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
       - name: Install dependencies
-        run: pip install tox tox-uv
+        run: uv pip install .[dev]
       - name: Run quality checks
-        run: tox -e quality
+        run: make quality
 
-  type-checks:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python: ["3.10", "3.11", "3.12", "3.13"]
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python }}
-      - name: Install dependencies
-        run: pip install tox tox-uv
-      - name: Run quality checks
-        run: tox -e types
-
-  precommit-checks:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python: ["3.10"]
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python }}
-      - name: Install dependencies
-        run: pip install pre-commit
-      - name: Run pre-commit checks
-        run: pre-commit run --all-files
 
   unit-tests:
     runs-on: ibm-wdc-k8s-vllm-h100-solo

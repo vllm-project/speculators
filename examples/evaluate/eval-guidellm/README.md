@@ -5,11 +5,13 @@ Evaluate speculator models using vLLM and GuideLLM, and extract acceptance lengt
 ## Quick Start
 
 **1. Install dependencies:**
+
 ```bash
 bash setup.sh  # or: bash setup.sh --use-uv for faster installation
 ```
 
 **2. Run evaluation with a pre-configured model:**
+
 ```bash
 # Llama-3.1-8B EAGLE3 on math_reasoning dataset
 ./run_evaluation.sh -c configs/llama-3.1-8b-eagle3.env
@@ -28,6 +30,7 @@ bash setup.sh  # or: bash setup.sh --use-uv for faster installation
 ```
 
 **Or run with custom parameters:**
+
 ```bash
 ./run_evaluation.sh \
   -b "meta-llama/Llama-3.1-8B-Instruct" \
@@ -40,6 +43,7 @@ Results will be in a timestamped directory like `eval_results_20251203_165432/`.
 ## Architecture
 
 This framework uses vLLM's speculative decoding feature to evaluate speculator models. The evaluation setup consists of:
+
 - **Base Model**: The main LLM that performs final token acceptance/rejection
 - **Speculator Model**: A smaller, faster model that generates speculative tokens
 - **Speculative Decoding**: The base model validates tokens proposed by the speculator, speeding up inference
@@ -132,51 +136,57 @@ OUTPUT_DIR="eval_results_$(date +%Y%m%d_%H%M%S)"
 ```
 
 Then run:
+
 ```bash
 ./run_evaluation.sh -c configs/my-model.env
 ```
 
 ### Configuration Options
 
-| Option | Description | Default |
-|--------|-------------|---------|
-| `BASE_MODEL` | Base model path or HuggingFace ID | (required) |
-| `SPECULATOR_MODEL` | Speculator model path or HuggingFace ID | (required) |
-| `NUM_SPEC_TOKENS` | Number of speculative tokens to generate | 3 |
-| `METHOD` | Speculative decoding method | eagle3 |
-| `DATASET` | Dataset for benchmarking (emulated, HF dataset, or file path) | (required) |
-| `TENSOR_PARALLEL_SIZE` | Number of GPUs for tensor parallelism | 2 |
-| `GPU_MEMORY_UTILIZATION` | GPU memory fraction to use | 0.8 |
-| `PORT` | Server port | 8000 |
-| `HEALTH_CHECK_TIMEOUT` | Server startup timeout (seconds) | 300 |
-| `TEMPERATURE` | Sampling temperature | 0.6 |
-| `TOP_P` | Top-p (nucleus) sampling parameter | 0.95 |
-| `TOP_K` | Top-k sampling parameter | 20 |
-| `OUTPUT_DIR` | Output directory | `eval_results_TIMESTAMP` |
+| Option                   | Description                                                   | Default                  |
+| ------------------------ | ------------------------------------------------------------- | ------------------------ |
+| `BASE_MODEL`             | Base model path or HuggingFace ID                             | (required)               |
+| `SPECULATOR_MODEL`       | Speculator model path or HuggingFace ID                       | (required)               |
+| `NUM_SPEC_TOKENS`        | Number of speculative tokens to generate                      | 3                        |
+| `METHOD`                 | Speculative decoding method                                   | eagle3                   |
+| `DATASET`                | Dataset for benchmarking (emulated, HF dataset, or file path) | (required)               |
+| `TENSOR_PARALLEL_SIZE`   | Number of GPUs for tensor parallelism                         | 2                        |
+| `GPU_MEMORY_UTILIZATION` | GPU memory fraction to use                                    | 0.8                      |
+| `PORT`                   | Server port                                                   | 8000                     |
+| `HEALTH_CHECK_TIMEOUT`   | Server startup timeout (seconds)                              | 300                      |
+| `TEMPERATURE`            | Sampling temperature                                          | 0.6                      |
+| `TOP_P`                  | Top-p (nucleus) sampling parameter                            | 0.95                     |
+| `TOP_K`                  | Top-k sampling parameter                                      | 20                       |
+| `OUTPUT_DIR`             | Output directory                                              | `eval_results_TIMESTAMP` |
 
 ### Dataset Options
 
 The framework supports five types of dataset inputs:
 
 1. **Built-in datasets**: `emulated` (included with guidellm)
+
    - Example: `DATASET="emulated"`
 
 2. **HuggingFace datasets (all files)**: `org/dataset-name`
+
    - Automatically downloaded using HuggingFace CLI
    - Runs benchmarks on **all** .jsonl files in the dataset
    - Example: `DATASET="RedHatAI/speculator_benchmarks"`
 
 3. **HuggingFace datasets (specific file)**: `org/dataset-name:filename.jsonl`
+
    - Downloads the dataset and uses only the specified file
    - Use colon (`:`) to separate dataset from filename
    - Example: `DATASET="RedHatAI/speculator_benchmarks:math_reasoning.jsonl"`
 
 4. **Local directory**: Path to a folder containing .jsonl files
+
    - Runs benchmarks on **all** .jsonl files in the directory
    - Results are saved with dataset-specific filenames
    - Example: `DATASET="./my_datasets/"`
 
 5. **Local file**: Path to a single .jsonl file
+
    - Runs benchmark on that specific file
    - Example: `DATASET="./my_data.jsonl"`
 
@@ -240,6 +250,7 @@ eval_results_20251203_165432/
 ### Acceptance Metrics
 
 The `acceptance_analysis.txt` contains:
+
 - **Weighted acceptance rates**: Per-position acceptance rates weighted by draft tokens
 - **Conditional acceptance rates**: Probability of accepting position N given position N-1 was accepted
 
@@ -248,6 +259,7 @@ These metrics help evaluate the effectiveness of speculative decoding.
 ## Examples
 
 ### Using Pre-configured Models
+
 ```bash
 ./run_evaluation.sh -c configs/llama-3.1-8b-eagle3.env
 ./run_evaluation.sh -c configs/llama-3.3-70b-eagle3.env
@@ -257,6 +269,7 @@ These metrics help evaluate the effectiveness of speculative decoding.
 ```
 
 ### Quick Test with Emulated Dataset
+
 ```bash
 ./run_evaluation.sh \
   -b "meta-llama/Llama-3.1-8B-Instruct" \
@@ -265,6 +278,7 @@ These metrics help evaluate the effectiveness of speculative decoding.
 ```
 
 ### HuggingFace Dataset (Specific File)
+
 ```bash
 ./run_evaluation.sh \
   -b "meta-llama/Llama-3.1-8B-Instruct" \
@@ -273,6 +287,7 @@ These metrics help evaluate the effectiveness of speculative decoding.
 ```
 
 ### HuggingFace Dataset (All Files)
+
 ```bash
 ./run_evaluation.sh \
   -b "meta-llama/Llama-3.1-8B-Instruct" \
@@ -281,6 +296,7 @@ These metrics help evaluate the effectiveness of speculative decoding.
 ```
 
 ### Local File or Directory
+
 ```bash
 # Single file
 ./run_evaluation.sh \
@@ -295,22 +311,24 @@ These metrics help evaluate the effectiveness of speculative decoding.
   -d "./my_datasets/"
 ```
 
-
 ## Troubleshooting
 
 **Server won't start:**
+
 ```bash
 tail -n 50 eval_results_*/vllm_server.log  # Check logs
 nvidia-smi                                  # Verify GPU availability
 ```
 
 **Dataset not found:**
+
 ```bash
 hf download DATASET --repo-type dataset  # Test HF dataset download
 ./run_evaluation.sh -m MODEL -d emulated # Use built-in dataset
 ```
 
 **Server cleanup:**
+
 ```bash
 ./scripts/vllm_stop.sh                   # Graceful shutdown
 pkill -9 -f "vllm serve"                 # Force kill if needed

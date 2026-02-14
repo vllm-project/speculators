@@ -14,28 +14,29 @@ Speculators is an open-source project that values community contributions. We ma
 
 - :material-handshake:{ .lg .middle } Code of Conduct
 
-    ---
+  ______________________________________________________________________
 
-    Our community guidelines ensure that participation in the Speculators project is a positive, inclusive, and respectful experience for everyone.
+  Our community guidelines ensure that participation in the Speculators project is a positive, inclusive, and respectful experience for everyone.
 
-    [:octicons-arrow-right-24: Code of Conduct](code-of-conduct.md)
+  [:octicons-arrow-right-24: Code of Conduct](code-of-conduct.md)
 
 - :material-source-pull:{ .lg .middle } Contributing Guide
 
-    ---
+  ______________________________________________________________________
 
-    Learn how to effectively contribute to Speculators, including reporting bugs, suggesting features, improving documentation, and submitting code.
+  Learn how to effectively contribute to Speculators, including reporting bugs, suggesting features, improving documentation, and submitting code.
 
-    [:octicons-arrow-right-24: Contributing Guide](contributing.md)
+  [:octicons-arrow-right-24: Contributing Guide](contributing.md)
 
+- :material-source-pull:{ .lg .middle } Add new algorithms
+
+  ______________________________________________________________________
+
+  Learn how to add a new speculative decoding training algorithm.
+
+  [:octicons-arrow-right-24: Add new algorithms](../algorithms/add_new_algorithms.md)
 
 - :material-palette:{ .lg .middle } Branding Guidelines
-
-    ---
-
-    Visual identity and branding guidelines for using Speculators logos, colors, and brand assets in your projects and communications.
-
-    [:octicons-arrow-right-24: Branding Guidelines](branding.md)
 
 </div>
 
@@ -46,7 +47,7 @@ Speculators is an open-source project that values community contributions. We ma
 1. **Prerequisites**: Ensure you have Python 3.10+ and Git installed
 2. **Clone**: `git clone https://github.com/vllm-project/speculators.git`
 3. **Install**: `pip install -e .[dev]`
-4. **Code Quality**: Run `pre-commit install` to set up code quality checks
+4. **Code Quality**: Run `make quality` to check code quality, or `make style` to auto-fix issues
 
 ## Community and Support
 

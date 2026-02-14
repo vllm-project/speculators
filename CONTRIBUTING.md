@@ -68,46 +68,20 @@ We follow strict coding standards to ensure code quality and maintainability. Pl
 - **Testing**: Write unit tests for new features and bug fixes. Use [pytest](https://docs.pytest.org/) for testing.
 - **Documentation**: Update documentation for any changes to the codebase.
 
-We use Tox to simplify running various tasks in isolated environments. Tox standardizes environments to ensure consistency across local development, CI/CD pipelines, and releases. This guarantees that the code behaves the same regardless of where it is executed.
-
-Additionally, to ensure consistency and quality of the codebase, we use [ruff](https://github.com/astral-sh/ruff) for linting and styling, [mypy](https://github.com/python/mypy) for type checking, and [mdformat](https://github.com/hukkin/mdformat) for formatting Markdown files.
+To ensure consistency and quality of the codebase, we use [ruff](https://github.com/astral-sh/ruff) for linting and styling, [mypy](https://github.com/python/mypy) for type checking, and [mdformat](https://github.com/hukkin/mdformat) for formatting Markdown files.
 
 ### Code Quality and Style
 
-To check code quality, including linting and formatting:
+To run all quality checks (linting, formatting, type checking):
 
 ```bash
-tox -e quality
+make quality
 ```
 
 To automatically fix style issues, use:
 
 ```bash
-tox -e style
-```
-
-### Type Checking
-
-To ensure type safety using Mypy:
-
-```bash
-tox -e types
-```
-
-### Automating Quality Checks with Pre-Commit Hooks (Optional)
-
-We use [pre-commit](https://pre-commit.com/) to automate quality checks before commits. Pre-commit hooks run checks like linting, formatting, and type checking, ensuring that only high-quality code is committed.
-
-To install the pre-commit hooks, run:
-
-```bash
-pre-commit install
-```
-
-This will set up the hooks to run automatically before each commit. To manually run the hooks on all files, use:
-
-```bash
-pre-commit run --all-files
+make style
 ```
 
 ## Running Tests
@@ -219,7 +193,7 @@ We are committed to fostering a welcoming and inclusive community. Please read a
 
 - [CODE_OF_CONDUCT.md](https://github.com/vllm-project/speculators/blob/main/CODE_OF_CONDUCT.md): Our expectations for community behavior.
 - [tox.ini](https://github.com/vllm-project/speculators/blob/main/tox.ini): Configuration for Tox environments.
-- [.pre-commit-config.yaml](https://github.com/vllm-project/speculators/blob/main/.pre-commit-config.yaml): Configuration for pre-commit hooks.
+- [Makefile](https://github.com/vllm-project/speculators/blob/main/Makefile): Quality check and style commands.
 
 ## License
 
