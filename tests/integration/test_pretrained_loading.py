@@ -12,7 +12,8 @@ from speculators.model import SpeculatorModel
 from speculators.utils.loading import extract_vocab_mappings, load_full_state_dict
 
 # Real model from HF Hub for integration testing (using EAGLE3 as reference)
-TEST_MODEL_ID = "RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3"
+# This model uses Qwen/Qwen3-8B as verifier, which is publicly accessible
+TEST_MODEL_ID = "RedHatAI/Qwen3-8B-speculator.eagle3"
 TEST_MODEL_TYPE = "eagle3"
 
 
