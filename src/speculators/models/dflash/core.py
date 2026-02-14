@@ -54,8 +54,9 @@ def loss_function(
     logits: torch.Tensor,  # shape: [1, total_seq_len , draft_vocab_size]
     targets: torch.Tensor,  # shape: [1, total_seq_len, draft_vocab_size]
     loss_mask: torch.Tensor | None,  # shape: [1, total_seq_len]
+    block_size:int = 8,
 ):
-
+    B, T, V = logits.shape
     logits = torch.nn.functional.log_softmax(logits, dim=-1)
     target_p = torch.nn.functional.softmax(targets, dim=-1)
 
@@ -63,6 +64,16 @@ def loss_function(
     elementwise_loss = torch.nn.functional.kl_div(
         logits, target_p, reduction="none", log_target=False
     )
+    gamma=4
+
+    t = torch.arange(T, device=logits.device)
+    k = t % block_size  # [T]
+    w = torch.exp(-k.to(logits.dtype) / gamma)  # [T]
+
+    # broadcast to [B, T, 1]
+    w = w.view(1, T, 1)
+    elementwise_loss = elementwise_loss * w
+
 
     if loss_mask is not None:
         elementwise_loss = elementwise_loss * loss_mask.unsqueeze(-1)
@@ -338,7 +349,7 @@ class DFlashDraftModel(SpeculatorModel):
         
 
         self.lm_head = torch.nn.Linear(
-            self.config.transformer_layer_config.hidden_size, 64000, bias=False
+            self.config.transformer_layer_config.hidden_size, 32000, bias=False
         )
         self.verifier_lm_head = torch.nn.Linear(
             self.config.transformer_layer_config.hidden_size, self.draft_vocab_size, bias=False
@@ -357,9 +368,18 @@ class DFlashDraftModel(SpeculatorModel):
 
         # Load tokenizer to get mask_token_id
         tokenizer = AutoTokenizer.from_pretrained(verifier_config.name_or_path)
-        if tokenizer.mask_token_id is None:
-            tokenizer.add_special_tokens({"mask_token": "<|MASK|>"})
-        self.mask_token_id = tokenizer.mask_token_id
+        # if tokenizer.mask_token_id is None:
+        #     tokenizer.add_special_tokens({"mask_token": "<|MASK|>"})
+        # self.mask_token_id = tokenizer.mask_token_id
+
+
+        if tokenizer.pad_token_id is not None:
+            mask_token_id = tokenizer.pad_token_id
+        elif tokenizer.eos_token_id is not None:
+            mask_token_id = tokenizer.eos_token_id
+        else:
+            mask_token_id = 0
+        self.mask_token_id=mask_token_id
 
     # @torch.compile  # Temporarily disabled - compilation hangs
     def forward(
@@ -385,8 +405,8 @@ class DFlashDraftModel(SpeculatorModel):
                 total_seq_len, dtype=torch.long, device=device
             ).unsqueeze(0)
         
-        past_key_values = DynamicCache(config=self.config.transformer_layer_config)
-
+        #past_key_values = DynamicCache(config=self.config.transformer_layer_config)
+        past_key_values=None
 
         with torch.no_grad():
             padding=torch.sum(lengths)
@@ -419,7 +439,7 @@ class DFlashDraftModel(SpeculatorModel):
         return_loss = verifier_last_hidden_states is not None
         if return_loss:
             with torch.no_grad():
-                targets = self.verifier_lm_head(verifier_last_hidden_states)
+                targets = self.verifier_lm_head(verifier_last_hidden_states).detach()
             loss = torch.tensor(0.0, device=device)
             metrics = {}
         tar_tok=torch.argmax(targets, dim=-1)
