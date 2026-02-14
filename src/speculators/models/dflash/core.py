@@ -469,7 +469,7 @@ class DFlashDraftModel(SpeculatorModel):
             )
             loss += s_loss
             metrics.update(s_metrics)
-        draft_tokens=torch.argmax(logits, dim=1)
+        draft_tokens=torch.argmax(logits, dim=-1)
 
 
         if return_loss:
