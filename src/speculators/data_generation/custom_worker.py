@@ -171,7 +171,7 @@ class HiddenStatesWorkerExtension:
         ]
 
         # Slice and group by request
-        request_chunks: dict[str, list[list[torch.Tensor]]] = defaultdict(
+        request_chunks: defaultdict[str, list[list[torch.Tensor]]] = defaultdict(
             lambda: [[] for _ in range(len(concatenated_layers))]
         )
         current_idx = 0
