@@ -1,30 +1,32 @@
 # Eagle3 Model Production
 
 Speculators currently supports training of Eagle3 models. This functionality is available via the scripts in this directory.
+
 1. [data_generation_offline.py](/scripts/data_generation_offline.py): Generate training data (verifier hidden states) using vLLM. Note: this script will also preprocess the data if it hasn't been already.
 2. [build_vocab_mapping.py](/scripts/build_vocab_mapping.py): Uses the token frequency distribution file to build `d2t` (draft to target) and `t2d` (target to draft) vocabulary mappings.
 3. [train.py](/scripts/train.py): Trains an Eagle3 model using the training data and vocabulary mappings.
 4. (Optional) [gen_and_train.py](/scripts/gen_and_train.py): A convenience wrapper around the above scripts that runs the full pipeline in one command.
 
-
 ## Table of Contents
+
 - **[Data Generation](#data-generation)**<br>
-    - **[Quick Start](#quick-start)**<br>
-    - **[Advanced Usage](#advanced-usage)**<br>
-    - **[Troubleshooting](#troubleshooting)**<br>
+  - **[Quick Start](#quick-start)**<br>
+  - **[Advanced Usage](#advanced-usage)**<br>
+  - **[Troubleshooting](#troubleshooting)**<br>
 - **[Vocab Mapping](#vocab-mapping)**<br>
-    - **[Quick Start](#quick-start-1)**<br>
+  - **[Quick Start](#quick-start-1)**<br>
 - **[Training](#training)**<br>
-    <!-- duplicate subsection name, requires -1 suffix to avoid conflict -->
-    - **[Quick Start](#quick-start-2)**<br>
-    - **[Arguments](#arguments)**<br>
-    - **[Example Command](#example-command)**<br>
+  <!-- duplicate subsection name, requires -1 suffix to avoid conflict -->
+  - **[Quick Start](#quick-start-2)**<br>
+  - **[Arguments](#arguments)**<br>
+  - **[Example Command](#example-command)**<br>
 - **[E2E Pipeline](#e2e-pipeline)**<br>
-    - **[Overview](#overview)**<br>
-    - **[Prerequisites](#prerequisites)**<br>
-    - **[Usage](#usage)**<br>
+  - **[Overview](#overview)**<br>
+  - **[Prerequisites](#prerequisites)**<br>
+  - **[Usage](#usage)**<br>
 
 ## Data Generation
+
 `scripts/data_generation_offline.py` provides the main entry point for generating training data for Eagle3 models. Data generation uses vLLM and requires the optional `datagen` install.
 
 ### Quick Start
@@ -65,6 +67,7 @@ python scripts/data_generation_offline.py \
 The script will produce a `data_config.json` file in the output directory, which contains the configuration used to generate the data, as well as other metadata about the data generation process.
 
 Example file:
+
 ```json
 {
   "version": "2.0",
@@ -131,6 +134,7 @@ Example file:
   }
 }
 ```
+
 ### Token Frequency File
 
 Along with the `data_config.json`, the data generation step will also generate a `token_freq.pt` file containing the token frequencies. If not specified, the default location for the token frequency file is `./token_freq.pt` i.e in the same directory where the script runs. This frequencies will be used to `d2t` i.e `draft-to-target` and `t2d` i.e `target-to-draft` vocabulary mappings.
@@ -138,6 +142,7 @@ Along with the `data_config.json`, the data generation step will also generate a
 #### Datasets
 
 Built-in datasets (can be used directly by name in the `--train-data-path` argument):
+
 - `sharegpt` - ShareGPT Vicuna unfiltered
 - `ultrachat` - HuggingFace UltraChat 200k
 
@@ -153,8 +158,7 @@ Preprocessing is automatically cached by HuggingFace datasets using fingerprint-
 
 **Cache Location:**
 
-Default: `~/.cache/huggingface/datasets`
-(Optional) Use a custom cache directory by setting the `HF_HUB_CACHE` environment variable
+Default: `~/.cache/huggingface/datasets` (Optional) Use a custom cache directory by setting the `HF_HUB_CACHE` environment variable
 
 ```bash
 # Example: Use custom cache directory
@@ -165,23 +169,28 @@ python scripts/data_generation_offline.py ...
 ### Troubleshooting
 
 1. **Out of memory during hidden state extraction**
-    - Reduce `--batch-size`
-    - Reduce `--seq-length`
-    - Increase `--tensor-parallel-size`
+
+   - Reduce `--batch-size`
+   - Reduce `--seq-length`
+   - Increase `--tensor-parallel-size`
 
 2. **Layer index out of bounds**
-    - Check model's actual number of layers
-    - Auto-selection uses: `[2, num_layers // 2, num_layers - 3]`
+
+   - Check model's actual number of layers
+   - Auto-selection uses: `[2, num_layers // 2, num_layers - 3]`
 
 3. **No assistant response spans found**
-    - Ensure tokenizer has a chat template (supports `apply_chat_template`)
-    - Check that conversations have assistant responses in correct format (role/content keys)
+
+   - Ensure tokenizer has a chat template (supports `apply_chat_template`)
+   - Check that conversations have assistant responses in correct format (role/content keys)
 
 4. **Cache invalidation**
-    - Delete cache directory if changing preprocessing parameters
-    - Ensure `--seed` matches between runs for reproducibility
+
+   - Delete cache directory if changing preprocessing parameters
+   - Ensure `--seed` matches between runs for reproducibility
 
 ## Vocab Mapping
+
 `scripts/build_vocab_mapping.py` Uses the token frequency distribution file to build `d2t` (draft to target) and `t2d` (target to draft) vocabulary mappings.
 
 ### Quick Start
@@ -208,8 +217,7 @@ or by using `target-model-path` to automatically infer the target vocab size:
         --output-path ./vocab_mapping
 ```
 
-If not specified, the default location for token frequency file is `./token_freq.pt`. Make sure  `target-vocab-size` match the verifier model vocab size exactly.
-Once complete, this step will generate and save `t2d.npy` and `d2t.npy` files to disk.
+If not specified, the default location for token frequency file is `./token_freq.pt`. Make sure `target-vocab-size` match the verifier model vocab size exactly. Once complete, this step will generate and save `t2d.npy` and `d2t.npy` files to disk.
 
 ## Training
 
@@ -218,11 +226,13 @@ Once complete, this step will generate and save `t2d.npy` and `d2t.npy` files to
 ### Quick Start
 
 To run in a single-node multi-GPU distributed training setup with FSDP, the scripts should be launched with `torchrun`:
+
 ```bash
 torchrun --standalone --nproc_per_node=<num_gpus>  scripts/train.py
 ```
 
 For single GPU training (useful for debugging), the script can be run directly:
+
 ```bash
 python scripts/train.py
 ```
@@ -231,9 +241,11 @@ python scripts/train.py
 > Use `CUDA_VISIBLE_DEVICES=<gpu_ids>` to control which GPUS are visible to the script.
 
 ### Arguments
+
 The scripts has one required argument: `--verifier-name-or-path`, which is the name or path of the verifier model to use.
 
 The scripts has the following optional arguments:
+
 - `--data-path`: The path to the data directory. Defaults to `./data`. The script will collect all `.pt` files in this directory or its subdirectories and use them as training data.
 - `--save-path`: The path to save the checkpoints. Defaults to `./checkpoints`. The script will create subdirectories for each epoch to save the model weights and optimizer states. e.g. `./checkpoints/0/`
 - `--epochs`: The number of epochs to train for. Defaults to 20.
@@ -251,6 +263,7 @@ The scripts has the following optional arguments:
 - `--ttt-step-loss-decay`: The loss decay factor to use for the TTT steps. Defaults to 1.0.
 
 ### Example Command
+
 ```bash
 torchrun --nnodes=1 --nproc_per_node=8 scripts/train.py \
     --verifier-name-or-path "meta-llama/Llama-3.1-8B-Instruct" \
@@ -272,33 +285,38 @@ torchrun --nnodes=1 --nproc_per_node=8 scripts/train.py \
 ```
 
 ## E2E Pipeline
+
 ### Overview
-`scripts/gen_and_train.py` can be used to run the full pipeline in one command. It also ensures each script is
-run with the correct arguments and dependencies.
+
+`scripts/gen_and_train.py` can be used to run the full pipeline in one command. It also ensures each script is run with the correct arguments and dependencies.
 
 Internally it calls the following scripts in order:
-  1. scripts/data_generation_offline.py
-  2. scripts/build_vocab_mapping.py
-  3. scripts/train.py
+
+1. scripts/data_generation_offline.py
+2. scripts/build_vocab_mapping.py
+3. scripts/train.py
 
 Using `uv` to produce ephemeral environments for each script.
 
-
 ### Prerequisites:
-  - python 3.10+
-  - uv (`pip install uv`)
+
+- python 3.10+
+- uv (`pip install uv`)
 
 ### Usage:
+
 > [!IMPORTANT]
 > Update the script arguments section in the script file itself before running.
 
 Then run:
+
 ```bash
 python scripts/gen_and_train.py
 ```
 
 > [!NOTE]
 > You can call the script with environment variables (like `CUDA_VISIBLE_DEVICES` and `HF_HOME`) to control the behavior of the scripts. By default the script will use all available GPUs.
+
 ```bash
 CUDA_VISIBLE_DEVICES=0,1,2,3 python scripts/gen_and_train.py
 ```
