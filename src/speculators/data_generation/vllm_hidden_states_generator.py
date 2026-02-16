@@ -195,7 +195,8 @@ class VllmHiddenStatesGenerator:
         # warmup allocation size (see gpu_worker.py:441-444).
         # We set it to a small value since we only do prefill in batches.
         max_num_seqs = MAX_NUM_SEQS
-        max_num_batched_tokens = max(MIN_MAX_BATCHED_TOKENS, max_model_len)
+        if not max_num_batched_tokens:
+            max_num_batched_tokens = max(MIN_MAX_BATCHED_TOKENS, max_model_len)
 
         return VllmConfig(
             model_config=ModelConfig(
