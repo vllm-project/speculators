@@ -32,8 +32,9 @@ import argparse
 import json
 import logging
 import os
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from queue import Queue
+from threading import Lock, Thread
 from typing import Any
 
 import torch
@@ -60,7 +61,10 @@ from speculators.data_generation.vllm_hidden_states_generator import (  # noqa: 
 )
 
 # Constants
+# Use multiple save workers so disk writes do not serialize behind inference.
 MAX_IO_WORKERS = 4  # Number of parallel file save operations
+# Bounded queue keeps memory stable and applies backpressure when storage slows down.
+SAVE_QUEUE_MAXSIZE = 256  # Producer-consumer queue capacity
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -120,7 +124,7 @@ def parse_args():
     parser.add_argument(
         "--seq-length",
         type=int,
-        default=2048,
+        default=4096,
         help="Maximum sequence length for preprocessing and model (default: 2048)",
     )
     parser.add_argument(
@@ -250,6 +254,40 @@ def save_sample_to_disk(data_dict, output_path):
     """Save a single sample to disk for async execution."""
     torch.save(data_dict, output_path)
     return output_path
+
+
+def _save_worker_loop(
+    save_queue: Queue,
+    stop_token: object,
+    worker_errors: list[Exception],
+    error_lock: Lock,
+):
+    """Consumer loop: persist samples from queue to disk.
+
+    This worker only performs file I/O so the main thread can keep feeding
+    inference work.
+    """
+    while True:
+        item = save_queue.get()
+        try:
+            if item is stop_token:
+                return
+            data_dict, output_path = item
+            save_sample_to_disk(data_dict, output_path)
+        except Exception as exc:  # noqa: BLE001
+            # Preserve the first error and let producer fail fast.
+            with error_lock:
+                if not worker_errors:
+                    worker_errors.append(exc)
+        finally:
+            save_queue.task_done()
+
+
+def _raise_worker_error_if_any(worker_errors: list[Exception], error_lock: Lock) -> None:
+    """Raise the first asynchronous save error, if any."""
+    with error_lock:
+        if worker_errors:
+            raise RuntimeError("Asynchronous save worker failed") from worker_errors[0]
 
 
 def save_config(args, generator, num_samples, output_dir):
@@ -410,6 +448,17 @@ def generate_and_save_hidden_states(args, dataset):  # noqa: C901, PLR0915
         gpu_memory_utilization=args.gpu_memory_utilization,
         tensor_parallel_size=args.tensor_parallel_size,
     )
+    batch_max_tokens = generator.vllm_config.scheduler_config.max_num_batched_tokens
+    seq_len_limit = args.seq_length - 1
+    per_batch_share_limit = batch_max_tokens // max(1, args.batch_size)
+    strict_sample_max_tokens = min(seq_len_limit, per_batch_share_limit)
+    if args.data_mode == "vl":
+        log.info(
+            "Strict VL token policy enabled: "
+            f"sample_max_tokens={strict_sample_max_tokens} "
+            f"(min(seq_length-1={seq_len_limit}, "
+            f"batch_max_tokens/batch_size={per_batch_share_limit}))."
+        )
 
     log.info(f"Processing {num_samples - start_sample_idx}/{num_samples} samples")
     file_idx = start_file_idx
@@ -418,8 +467,21 @@ def generate_and_save_hidden_states(args, dataset):  # noqa: C901, PLR0915
         num_samples - start_sample_idx + args.batch_size - 1
     ) // args.batch_size
 
-    # Use ThreadPoolExecutor for async file I/O
     max_io_workers = MAX_IO_WORKERS
+    stop_token = object()
+    save_queue: Queue = Queue(maxsize=SAVE_QUEUE_MAXSIZE)
+    worker_errors: list[Exception] = []
+    error_lock = Lock()
+    save_workers: list[Thread] = []
+    for worker_idx in range(max_io_workers):
+        worker = Thread(
+            target=_save_worker_loop,
+            args=(save_queue, stop_token, worker_errors, error_lock),
+            name=f"save-worker-{worker_idx}",
+            daemon=True,
+        )
+        worker.start()
+        save_workers.append(worker)
 
     pbar = tqdm(
         range(start_sample_idx, num_samples, args.batch_size),
@@ -429,11 +491,12 @@ def generate_and_save_hidden_states(args, dataset):  # noqa: C901, PLR0915
 
     image_fetcher = None
     image_pad_id = None
+    skipped_multimodal_samples = 0
 
-    with ThreadPoolExecutor(max_workers=max_io_workers) as thread_executor:
-        futures = []
-
+    try:
         for i in pbar:
+            _raise_worker_error_if_any(worker_errors, error_lock)
+
             batch_end = min(i + args.batch_size, num_samples)
             batch = dataset[i:batch_end]
             batch_input_ids = batch["input_ids"]
@@ -458,17 +521,99 @@ def generate_and_save_hidden_states(args, dataset):  # noqa: C901, PLR0915
                     args.image_field,
                 )
                 request_ids = [f"sample_{i + j}" for j in range(len(batch_prompts))]
-                results = generator.generate(
-                    batch_input_ids,
-                    prompt_texts=batch_prompts,
-                    multimodal_inputs=mm_inputs,
-                    request_ids=request_ids,
-                )
+                eligible_indices: list[int] = []
+                for j, (prompt_text, mm_input, request_id) in enumerate(
+                    zip(batch_prompts, mm_inputs, request_ids, strict=True)
+                ):
+                    try:
+                        sample_prompt_tokens = generator.get_multimodal_prompt_token_count(
+                            request_id=request_id,
+                            prompt_text=prompt_text,
+                            multimodal_item=mm_input,
+                        )
+                    except ValueError as exc:
+                        skipped_multimodal_samples += 1
+                        log.warning(
+                            "Skipping VL sample due strict max-length validation: "
+                            f"global_idx={i + j} request_id={request_id} error={exc}"
+                        )
+                        continue
+
+                    if sample_prompt_tokens > strict_sample_max_tokens:
+                        skipped_multimodal_samples += 1
+                        log.warning(
+                            "Skipping VL sample exceeding strict sample token budget: "
+                            f"global_idx={i + j} request_id={request_id} "
+                            f"sample_tokens={sample_prompt_tokens} "
+                            f"sample_max_tokens={strict_sample_max_tokens} "
+                            f"(seq_length-1={seq_len_limit}, "
+                            f"batch_max_tokens/batch_size={per_batch_share_limit})."
+                        )
+                        continue
+
+                    eligible_indices.append(j)
+
+                if not eligible_indices:
+                    log.warning(
+                        "Skipping VL batch because all samples were filtered by strict "
+                        f"token policy. batch_start={i} batch_end={batch_end}"
+                    )
+                    continue
+
+                filtered_input_ids = [batch_input_ids[j] for j in eligible_indices]
+                filtered_prompts = [batch_prompts[j] for j in eligible_indices]
+                filtered_mm_inputs = [mm_inputs[j] for j in eligible_indices]
+                filtered_request_ids = [request_ids[j] for j in eligible_indices]
+                try:
+                    results = generator.generate(
+                        filtered_input_ids,
+                        prompt_texts=filtered_prompts,
+                        multimodal_inputs=filtered_mm_inputs,
+                        request_ids=filtered_request_ids,
+                    )
+                    indexed_results = list(zip(eligible_indices, results, strict=True))
+                except ValueError as exc:
+                    err_msg = str(exc)
+                    needs_fallback = (
+                        "Multimodal feature data is None" in err_msg
+                        or "Multimodal request missing mm_features" in err_msg
+                    )
+                    if not needs_fallback:
+                        raise
+                    log.warning(
+                        "VL batch failed due invalid multimodal features; "
+                        "retrying sample-by-sample and skipping bad samples."
+                    )
+                    indexed_results: list[tuple[int, dict[str, Any]]] = []
+                    for j in eligible_indices:
+                        try:
+                            sample_result = generator.generate(
+                                [batch_input_ids[j]],
+                                prompt_texts=[batch_prompts[j]],
+                                multimodal_inputs=[mm_inputs[j]],
+                                request_ids=[request_ids[j]],
+                            )[0]
+                            indexed_results.append((j, sample_result))
+                        except ValueError as sample_exc:
+                            sample_err = str(sample_exc)
+                            sample_invalid_mm = (
+                                "Multimodal feature data is None" in sample_err
+                                or "Multimodal request missing mm_features"
+                                in sample_err
+                            )
+                            if not sample_invalid_mm:
+                                raise
+                            skipped_multimodal_samples += 1
+                            log.warning(
+                                "Skipping invalid multimodal sample "
+                                f"global_idx={i + j}: {sample_err}"
+                            )
             else:
                 results = generator.generate(batch_input_ids)
+                indexed_results = list(enumerate(results))
 
-            # Submit save operations to thread pool (async I/O)
-            for j, result in enumerate(results):
+            # Producer step: prepare sample payload and enqueue to bounded save queue.
+            for j, result in indexed_results:
                 # Truncate loss_mask to match input_ids length (generator may truncate)
                 input_ids_list = (
                     result["input_ids"].tolist()
@@ -509,19 +654,26 @@ def generate_and_save_hidden_states(args, dataset):  # noqa: C901, PLR0915
                     # Keep the tensor contiguous to avoid persisting a strided view.
                     result_cleaned["input_embeds"] = result["input_embeds"].contiguous()
                 output_path = Path(args.output_dir) / f"data_{file_idx}.pt"
-                future = thread_executor.submit(
-                    save_sample_to_disk, result_cleaned, output_path
-                )
-                futures.append(future)
+                save_queue.put((result_cleaned, output_path))
                 file_idx += 1
 
         log.info("Waiting for remaining file saves to complete...")
-        for future in tqdm(
-            as_completed(futures), total=len(futures), desc="Saving files"
-        ):
-            future.result()
+        save_queue.join()
+        _raise_worker_error_if_any(worker_errors, error_lock)
+    finally:
+        # Always terminate consumers cleanly, even if producer raises.
+        for _ in save_workers:
+            save_queue.put(stop_token)
+        for worker in save_workers:
+            worker.join()
+        _raise_worker_error_if_any(worker_errors, error_lock)
 
     samples_saved = file_idx - start_file_idx
+    if skipped_multimodal_samples > 0:
+        log.warning(
+            "Skipped invalid multimodal samples during generation: "
+            f"{skipped_multimodal_samples}"
+        )
 
     sample_lengths_output_path = Path(args.output_dir) / "sample_lengths.json"
     with open(sample_lengths_output_path, "w") as f:

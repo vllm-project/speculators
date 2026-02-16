@@ -3,7 +3,7 @@ import argparse
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
-from transformers import LlamaConfig, PretrainedConfig
+from transformers import PretrainedConfig
 from transformers.models.auto.configuration_auto import AutoConfig
 
 from speculators.config import SpeculatorsConfig, VerifierConfig
@@ -88,26 +88,37 @@ def _extract_text_config(verifier_config: PretrainedConfig) -> PretrainedConfig:
     return verifier_config
 
 
-def create_transformer_layer_config(
-    verifier_text_config: PretrainedConfig, num_layers: int
-) -> LlamaConfig:
-    # Build a Llama-like layer config for Eagle3 draft training.
-    verifier_config = verifier_text_config
+def _inject_vllm_route_hints(
+    transformer_layer_config: PretrainedConfig,
+    verifier_hf_config: PretrainedConfig,
+) -> None:
+    """Inject extra hints so vLLM can route Eagle3 wrappers correctly."""
+    verifier_model_type = getattr(verifier_hf_config, "model_type", None)
+    if isinstance(verifier_model_type, str) and verifier_model_type:
+        # vLLM speculators routing checks text_model_type/model_type/architectures.
+        setattr(transformer_layer_config, "text_model_type", verifier_model_type)
 
-    transformer_layer_config = LlamaConfig(
-        vocab_size=verifier_config.vocab_size,
-        hidden_size=verifier_config.hidden_size,
-        intermediate_size=verifier_config.intermediate_size,
-        num_hidden_layers=num_layers,
-        num_attention_heads=verifier_config.num_attention_heads,
-        num_key_value_heads=verifier_config.num_key_value_heads,
-        hidden_act=verifier_config.hidden_act,
-        max_position_embeddings=verifier_config.max_position_embeddings,
-        initializer_range=verifier_config.initializer_range,
-        rms_norm_eps=verifier_config.rms_norm_eps,
-        head_dim=getattr(verifier_config, "head_dim", None),
+    verifier_architectures = getattr(verifier_hf_config, "architectures", None)
+    if isinstance(verifier_architectures, list) and verifier_architectures:
+        transformer_layer_config.architectures = [str(x) for x in verifier_architectures]
+
+
+def create_transformer_layer_config(
+    verifier_hf_config: PretrainedConfig,
+    verifier_text_config: PretrainedConfig,
+    num_layers: int,
+) -> PretrainedConfig:
+    # Build draft layer config from verifier text config to avoid hardcoded llama config.
+    transformer_layer_config = verifier_text_config.__class__.from_dict(
+        verifier_text_config.to_dict()
     )
+    transformer_layer_config.num_hidden_layers = num_layers
+    # Keep previous training behavior.
     transformer_layer_config._attn_implementation = "simple_flex_attention"  # noqa: SLF001
+    _inject_vllm_route_hints(
+        transformer_layer_config=transformer_layer_config,
+        verifier_hf_config=verifier_hf_config,
+    )
     return transformer_layer_config
 
 
@@ -145,7 +156,7 @@ def main(args: argparse.Namespace):
 
     # Setup speculator config
     transformer_layer_config = create_transformer_layer_config(
-        verifier_text_config, args.num_layers
+        verifier_hf_config, verifier_text_config, args.num_layers
     )
 
     speculator_config = Eagle3SpeculatorConfig(
@@ -238,7 +249,7 @@ def parse_args():
         default="",
         help="One of 'trackio', 'wandb', 'tensorboard' or comma separated list of them",
     )
-    parser.add_argument("--total-seq-len", type=int, default=8192)
+    parser.add_argument("--total-seq-len", type=int, default=16384)
     parser.add_argument(
         "--data-format",
         type=str,

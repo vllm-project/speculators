@@ -29,6 +29,20 @@ from vllm.v1.structured_output import StructuredOutputManager
 from speculators.utils.util import empty_cache, is_npu_available, mem_get_info
 
 from .logging_utils import PipelineLogger
+from .vllm_hidden_states_utils import (
+    build_generation_results,
+    ensure_tokenizer_max_token_id,
+    get_embed_length_mismatch,
+    get_request_id,
+    infer_num_hidden_layers,
+    normalize_token_ids_batch,
+    resolve_layer_ids,
+    sequence_lengths,
+    to_token_id_list,
+    truncate_text_only_batch,
+    validate_multimodal_batch_alignment,
+    validate_multimodal_engine_features,
+)
 
 __all__ = ["VllmHiddenStatesGenerator"]
 
@@ -36,7 +50,7 @@ __all__ = ["VllmHiddenStatesGenerator"]
 CACHE_MEMORY_FRACTION = 0.2  # Fraction of GPU memory for KV cache
 VLLM_BLOCK_SIZE = 128 if is_npu_available() else 16  # Block size for KV cache
 MAX_NUM_SEQS = 32  # Maximum sequences for prefill-only workload
-MIN_MAX_BATCHED_TOKENS = 8192  # Minimum batched tokens threshold
+MIN_MAX_BATCHED_TOKENS = 32768  # Minimum batched tokens threshold
 MAX_DECODE_TOKENS = 1  # Maximum tokens to generate (prefill only)
 SAMPLING_TEMPERATURE = 0.0  # Temperature for sampling (greedy)
 INITIAL_ARRIVAL_TIME = 0.0  # Initial request arrival time
@@ -78,51 +92,34 @@ class VllmHiddenStatesGenerator:
         self,
         model_path: str,
         layer_ids: list[int] | None = None,
-        max_model_len: int = 2048,
+        max_model_len: int = 4096,
         gpu_memory_utilization: float = 0.8,
         tensor_parallel_size: int = 1,
     ):
         self.model_path = model_path
         self.tensor_parallel_size = tensor_parallel_size
         self._request_counter = 0
+        self._mm_request_counter = 0
         self._input_processor: InputProcessor | None = None
 
         log.info(f"Initializing hidden states generator for {model_path}")
         log.info(f"Tensor parallel size: {tensor_parallel_size}")
 
         self.tokenizer = AutoTokenizer.from_pretrained(model_path)
-        if not hasattr(self.tokenizer, "max_token_id"):
-            try:
-                max_token_id = self.tokenizer.vocab_size - 1
-            except Exception:
-                max_token_id = len(self.tokenizer) - 1
-            self.tokenizer.max_token_id = max_token_id
+        ensure_tokenizer_max_token_id(self.tokenizer)
 
         config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
-        if hasattr(config, "num_hidden_layers"):
-            num_layers = config.num_hidden_layers
-        elif hasattr(config, "text_config"):
-            num_layers = config.text_config.num_hidden_layers
-        else:
-            raise ValueError("Cannot determine num_layers from config")
+        num_layers = infer_num_hidden_layers(config)
 
         log.info(f"Model has {num_layers} layers")
-
+        self.layer_ids = resolve_layer_ids(layer_ids, num_layers)
         if layer_ids is None:
-            self.layer_ids = [2, num_layers // 2, num_layers - 3, num_layers - 1]
             log.info(
                 f"Auto-selected layers: {self.layer_ids} "
                 f"(from {num_layers} total layers)"
             )
         else:
-            self.layer_ids = layer_ids
-            log.info(f"Using specified layers: {layer_ids}")
-
-        for layer_id in self.layer_ids:
-            if layer_id < 0 or layer_id >= num_layers:
-                raise ValueError(
-                    f"Layer index {layer_id} out of bounds [0, {num_layers - 1}]"
-                )
+            log.info(f"Using specified layers: {self.layer_ids}")
 
         self.vllm_config = self._create_vllm_config(
             model_path=model_path,
@@ -216,7 +213,10 @@ class VllmHiddenStatesGenerator:
             cache_config=cache_config,
             parallel_config=ParallelConfig(
                 tensor_parallel_size=tensor_parallel_size,
-                worker_extension_cls="speculators.data_generation.custom_worker.HiddenStatesWorkerExtension",
+                worker_extension_cls=(
+                    "speculators.data_generation.custom_worker."
+                    "HiddenStatesWorkerExtension"
+                ),
             ),
             scheduler_config=SchedulerConfig(
                 max_num_seqs=max_num_seqs,
@@ -238,9 +238,74 @@ class VllmHiddenStatesGenerator:
         # Lazily construct the vLLM input processor for multimodal requests.
         if self._input_processor is None:
             self._input_processor = InputProcessor(
-                self.vllm_config, tokenizer=self.tokenizer
+                self.vllm_config
             )
         return self._input_processor
+
+    def _process_multimodal_inputs_with_truncation(
+        self,
+        *,
+        request_id: str,
+        prompt_text: str,
+        multimodal_item: dict,
+        sampling_params: SamplingParams,
+    ):
+        """Build multimodal engine request and fail fast on max-length overflow."""
+        processor = self._get_input_processor()
+        unique_suffix = f"{self._mm_request_counter}"
+        self._mm_request_counter += 1
+        engine_request_id = f"{request_id}__mm_{unique_suffix}"
+        image_uuid = f"{engine_request_id}_img0"
+
+        prompt = {
+            "prompt": prompt_text,
+            "multi_modal_data": multimodal_item,
+            "multi_modal_uuids": {"image": [image_uuid]},
+        }
+        try:
+            return processor.process_inputs(
+                request_id=engine_request_id,
+                prompt=prompt,
+                params=sampling_params,
+                arrival_time=INITIAL_ARRIVAL_TIME,
+            )
+        except ValueError as exc:
+            msg = str(exc)
+            if "longer than the maximum model length" not in msg:
+                raise
+            raise ValueError(
+                "Multimodal prompt exceeds max_model_len and strict mode is enabled; "
+                f"request_id={request_id}. {msg}"
+            ) from exc
+
+    def get_multimodal_prompt_token_count(
+        self,
+        *,
+        request_id: str,
+        prompt_text: str,
+        multimodal_item: dict,
+    ) -> int:
+        """Return exact multimodal prompt token count for strict pre-check."""
+        sampling_params = SamplingParams(
+            max_tokens=MAX_DECODE_TOKENS, temperature=SAMPLING_TEMPERATURE
+        )
+        engine_req = self._process_multimodal_inputs_with_truncation(
+            request_id=request_id,
+            prompt_text=prompt_text,
+            multimodal_item=multimodal_item,
+            sampling_params=sampling_params,
+        )
+        validate_multimodal_engine_features(engine_req)
+        prompt_token_ids = engine_req.prompt_token_ids
+        if prompt_token_ids is None:
+            raise ValueError("Multimodal request missing prompt_token_ids")
+        max_len = self.vllm_config.model_config.max_model_len - MAX_DECODE_TOKENS
+        if len(prompt_token_ids) > max_len:
+            raise ValueError(
+                "Multimodal prompt token ids exceed prefill-safe limit in strict mode: "
+                f"len={len(prompt_token_ids)} max_len={max_len} request_id={request_id}"
+            )
+        return len(prompt_token_ids)
 
     def generate(  # noqa: PLR0912, PLR0915
         self,
@@ -259,39 +324,24 @@ class VllmHiddenStatesGenerator:
         Returns:
             List of dicts with keys: input_ids, hidden_states, loss_mask
         """
-        if isinstance(token_ids, torch.Tensor):
-            input_ids_list = token_ids.tolist()
-        else:
-            if not token_ids:
-                raise ValueError("token_ids cannot be empty")
-            input_ids_list = token_ids
-
-        # Guard against multimodal misalignment: prompt text + mm inputs must be
-        # present and batch-aligned with token IDs, or vLLM will mix samples.
-        if multimodal_inputs is not None:
-            if prompt_texts is None:
-                raise ValueError("prompt_texts is required for multimodal inputs")
-            if len(prompt_texts) != len(input_ids_list):
-                raise ValueError(
-                    "prompt_texts length must match token_ids length for multimodal"
-                )
-            if len(multimodal_inputs) != len(input_ids_list):
-                raise ValueError("multimodal_inputs length must match token_ids length")
+        input_ids_list = normalize_token_ids_batch(token_ids)
+        validate_multimodal_batch_alignment(
+            input_ids_list,
+            prompt_texts=prompt_texts,
+            multimodal_inputs=multimodal_inputs,
+        )
 
         log.debug(f"Generating hidden states for {len(input_ids_list)} sequences")
-        # Account for max_tokens=1 in sampling params
-        # (vLLM enforces: len(prompt) + max_tokens <= max_model_len)
+        # Account for max_tokens=1 in sampling params for pure text mode.
+        # Multimodal mode is handled in strict mode and raises on overflow.
         max_len = self.vllm_config.model_config.max_model_len - 1
         if multimodal_inputs is None:
-            input_ids_list = [ids[:max_len] for ids in input_ids_list]
+            input_ids_list = truncate_text_only_batch(input_ids_list, max_len=max_len)
 
         for i, ids in enumerate(input_ids_list):
             # Ensure ids is a list (not tensor) for vLLM Request
-            ids_list = ids.tolist() if isinstance(ids, torch.Tensor) else ids
-            if request_ids is not None:
-                request_id = request_ids[i]
-            else:
-                request_id = f"req_{self._request_counter}_{i}"
+            ids_list = to_token_id_list(ids)
+            request_id = get_request_id(request_ids, self._request_counter, i)
             sampling_params = SamplingParams(
                 max_tokens=MAX_DECODE_TOKENS, temperature=SAMPLING_TEMPERATURE
             )
@@ -311,54 +361,21 @@ class VllmHiddenStatesGenerator:
                 # Provide per-request UUIDs for multimodal items to avoid
                 # cache collisions that can drop mm_feature.data in vLLM.
                 assert prompt_texts is not None
-                prompt = {
-                    "prompt": prompt_texts[i],
-                    "multi_modal_data": mm_item,
-                    "multi_modal_uuids": {"image": [f"{request_id}_img0"]},
-                }
-                processor = self._get_input_processor()
-                engine_req = processor.process_inputs(
+                engine_req = self._process_multimodal_inputs_with_truncation(
                     request_id=request_id,
-                    prompt=prompt,
-                    params=sampling_params,
-                    arrival_time=INITIAL_ARRIVAL_TIME,
+                    prompt_text=prompt_texts[i],
+                    multimodal_item=mm_item,
+                    sampling_params=sampling_params,
                 )
-                # vLLM should return multimodal features; if missing, the prompt
-                # likely lacks image placeholders or preprocessing failed.
-                if engine_req.mm_features is None:
-                    raise ValueError(
-                        "Multimodal request missing mm_features; "
-                        "prompt may lack multimodal placeholders."
-                    )
-                for mm_index, mm_feature in enumerate(engine_req.mm_features):
-                    mm_data = mm_feature.data
-                    # Guard against empty feature payloads (would crash later).
-                    if mm_data is None:
-                        raise ValueError(
-                            "Multimodal feature data is None; "
-                            f"feature_index={mm_index} modality={mm_feature.modality}"
-                        )
-                    if mm_feature.modality == "image":
-                        # Ensure image preprocessing produced grid sizes.
-                        if (
-                            not hasattr(mm_data, "get")
-                            or mm_data.get("image_grid_thw") is None
-                        ):
-                            keys = (
-                                list(mm_data.keys())
-                                if hasattr(mm_data, "keys")
-                                else type(mm_data)
-                            )
-                            raise ValueError(
-                                "Multimodal image feature missing image_grid_thw; "
-                                f"feature_index={mm_index} keys={keys}"
-                            )
+                validate_multimodal_engine_features(engine_req)
                 prompt_token_ids = engine_req.prompt_token_ids
                 if prompt_token_ids is None:
                     raise ValueError("Multimodal request missing prompt_token_ids")
                 if len(prompt_token_ids) > max_len:
                     raise ValueError(
-                        "Multimodal prompt exceeds max_model_len; reduce seq length"
+                        "Multimodal prompt token ids exceed prefill-safe limit in "
+                        f"strict mode: len={len(prompt_token_ids)} max_len={max_len} "
+                        f"request_id={request_id}"
                     )
                 # Use vLLM tokenization for multimodal prompts to keep
                 # image-expanded tokens consistent with model inputs.
@@ -404,40 +421,71 @@ class VllmHiddenStatesGenerator:
 
         log.debug(f"Successfully captured {len(aux_hidden_states)} layers")
 
-        seq_lens = [len(ids) for ids in input_ids_list]
-        if captured_input_embeds is not None:
-            expected_num_tokens = sum(seq_lens)
-            actual_num_tokens = int(captured_input_embeds.shape[0])
-            if actual_num_tokens != expected_num_tokens:
-                # Fail fast to avoid silently writing misaligned embeddings to samples.
-                raise RuntimeError(
-                    "Captured input embeddings length mismatch: "
-                    f"expected={expected_num_tokens}, actual={actual_num_tokens}"
-                )
-        results = []
-        offset = 0
-        for i, seq_len in enumerate(seq_lens):
-            layer_states = [
-                h[offset : offset + seq_len].clone().cpu() for h in aux_hidden_states
-            ]
-
-            input_ids_tensor = torch.as_tensor(input_ids_list[i], dtype=torch.long)
-            input_embeds_slice = None
-            if captured_input_embeds is not None:
-                # Slice embeddings per sample to keep sample-level alignment with input_ids.
-                input_embeds_slice = (
-                    captured_input_embeds[offset : offset + seq_len].clone().cpu()
-                )
-
-            results.append(
-                {
-                    "input_ids": input_ids_tensor,
-                    "hidden_states": layer_states,
-                    "loss_mask": None,
-                    "input_embeds": input_embeds_slice,
-                }
+        seq_lens = sequence_lengths(input_ids_list)
+        mismatch, expected_num_tokens, actual_num_tokens = get_embed_length_mismatch(
+            captured_input_embeds,
+            seq_lens,
+        )
+        if mismatch:
+            batch_max_tokens = self.vllm_config.scheduler_config.max_num_batched_tokens
+            max_model_len = self.vllm_config.model_config.max_model_len
+            shortfall = expected_num_tokens - actual_num_tokens
+            expected_exceeds_batch_cap = expected_num_tokens > batch_max_tokens
+            seq_lens_top = sorted(seq_lens, reverse=True)[:8]
+            mismatch_context = (
+                "Mismatch details: "
+                f"num_requests={len(input_ids_list)}, "
+                f"schedule_iterations={schedule_iterations}, "
+                f"max_model_len={max_model_len}, "
+                f"batch_max_tokens={batch_max_tokens}, "
+                f"expected_exceeds_batch_cap={expected_exceeds_batch_cap}, "
+                f"shortfall={shortfall}, "
+                f"min_seq_len={min(seq_lens)}, "
+                f"max_seq_len={max(seq_lens)}, "
+                f"top_seq_lens={seq_lens_top}."
             )
-            offset += seq_len
+            # Fallback: some vLLM schedules chunk prefill when total prompt
+            # tokens exceed max_num_batched_tokens; our prefill-only abort
+            # path can then capture only the first chunk embeddings.
+            # Regenerate this batch sample-by-sample to keep exact alignment.
+            if len(input_ids_list) > 1:
+                log.warning(
+                    "Captured input embeddings length mismatch in batched mode "
+                    f"(expected={expected_num_tokens}, actual={actual_num_tokens}); "
+                    f"{mismatch_context} "
+                    "Try reducing data_generation batch_size or increasing total token "
+                    "budget (max_model_len / max_num_batched_tokens); "
+                    "falling back to per-sample generation for this batch."
+                )
+                fallback_results: list[dict] = []
+                for i in range(len(input_ids_list)):
+                    sample_prompt = None if prompt_texts is None else [prompt_texts[i]]
+                    sample_mm = (
+                        None if multimodal_inputs is None else [multimodal_inputs[i]]
+                    )
+                    sample_req_id = None if request_ids is None else [request_ids[i]]
+                    fallback_results.extend(
+                        self.generate(
+                            [input_ids_list[i]],
+                            prompt_texts=sample_prompt,
+                            multimodal_inputs=sample_mm,
+                            request_ids=sample_req_id,
+                        )
+                    )
+                return fallback_results
+
+            # Single-sample mismatch should not happen; fail fast for visibility.
+            raise RuntimeError(
+                "Captured input embeddings length mismatch: "
+                f"expected={expected_num_tokens}, actual={actual_num_tokens}. "
+                f"{mismatch_context}"
+            )
+
+        results = build_generation_results(
+            aux_hidden_states=aux_hidden_states,
+            input_ids_list=input_ids_list,
+            captured_input_embeds=captured_input_embeds,
+        )
         empty_cache()
 
         return results

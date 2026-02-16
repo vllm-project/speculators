@@ -24,6 +24,7 @@ OUTPUT_DIR=""
 TEMPERATURE=""
 TOP_P=""
 TOP_K=""
+EVAL_MODE=""
 
 # ==============================================================================
 # Helper Functions
@@ -40,6 +41,7 @@ Required (use one):
 
 Optional:
   -o OUTPUT_DIR                        Output directory (default: eval_results_TIMESTAMP)
+  --eval-mode MODE                     Evaluation mode: text or vl (default: text)
   -h, --help                           Show this help message
 
 Examples:
@@ -104,6 +106,10 @@ while [[ $# -gt 0 ]]; do
             OUTPUT_DIR="$2"
             shift 2
             ;;
+        --eval-mode)
+            EVAL_MODE="$2"
+            shift 2
+            ;;
         -h|--help)
             show_usage
             exit 0
@@ -158,6 +164,7 @@ OUTPUT_DIR="${OUTPUT_DIR:-eval_results_$(date +%Y%m%d_%H%M%S)}"
 TEMPERATURE="${TEMPERATURE:-0.6}"
 TOP_P="${TOP_P:-0.95}"
 TOP_K="${TOP_K:-20}"
+EVAL_MODE="${EVAL_MODE:-text}"
 
 # ==============================================================================
 # Validate Configuration
@@ -181,6 +188,11 @@ if [[ -z "${DATASET}" ]]; then
     exit 1
 fi
 
+if [[ "${EVAL_MODE}" != "text" ]] && [[ "${EVAL_MODE}" != "vl" ]]; then
+    echo "[ERROR] EVAL_MODE must be one of: text, vl. Got: ${EVAL_MODE}" >&2
+    exit 1
+fi
+
 if ! check_dependencies; then
     exit 1
 fi
@@ -198,6 +210,7 @@ if ! mkdir -p "${OUTPUT_DIR}"; then
 fi
 
 echo "[INFO] Output directory: ${OUTPUT_DIR}"
+echo "[INFO] Evaluation mode: ${EVAL_MODE}"
 
 # Define output file paths
 SERVER_LOG="${OUTPUT_DIR}/vllm_server.log"
@@ -212,7 +225,7 @@ ACCEPTANCE_RESULTS="${OUTPUT_DIR}/acceptance_analysis.txt"
 
 echo "[INFO] Starting vLLM server..."
 
-"${SCRIPT_DIR}/scripts/vllm_serve.sh" \
+IMAGE_ROOT="${IMAGE_ROOT:-}" "${SCRIPT_DIR}/scripts/vllm_serve.sh" \
     -b "${BASE_MODEL}" \
     -s "${SPECULATOR_MODEL}" \
     --num-spec-tokens "${NUM_SPEC_TOKENS}" \
@@ -230,14 +243,25 @@ echo "[INFO] Starting vLLM server..."
 
 echo "[INFO] Running benchmark..."
 
-"${SCRIPT_DIR}/scripts/run_guidellm.sh" \
-    -d "${DATASET}" \
-    --target "http://localhost:${PORT}/v1" \
-    --output-file "${GUIDELLM_RESULTS}" \
-    --log-file "${GUIDELLM_LOG}" \
-    --temperature "${TEMPERATURE}" \
-    --top-p "${TOP_P}" \
-    --top-k "${TOP_K}"
+if [[ "${EVAL_MODE}" == "vl" ]]; then
+    IMAGE_ROOT="${IMAGE_ROOT:-}" bash "${SCRIPT_DIR}/scripts/run_guidellm_vl.sh" \
+        -d "${DATASET}" \
+        --target "http://localhost:${PORT}/v1" \
+        --output-file "${GUIDELLM_RESULTS}" \
+        --log-file "${GUIDELLM_LOG}" \
+        --temperature "${TEMPERATURE}" \
+        --top-p "${TOP_P}" \
+        --top-k "${TOP_K}"
+else
+    bash "${SCRIPT_DIR}/scripts/run_guidellm.sh" \
+        -d "${DATASET}" \
+        --target "http://localhost:${PORT}/v1" \
+        --output-file "${GUIDELLM_RESULTS}" \
+        --log-file "${GUIDELLM_LOG}" \
+        --temperature "${TEMPERATURE}" \
+        --top-p "${TOP_P}" \
+        --top-k "${TOP_K}"
+fi
 
 # ==============================================================================
 # Parse Acceptance Lengths
@@ -266,5 +290,17 @@ echo "[INFO] Evaluation complete!"
 echo "[INFO] Results saved to: ${OUTPUT_DIR}"
 echo "[INFO]   - Server log:        ${SERVER_LOG}"
 echo "[INFO]   - GuideLLM output:   ${GUIDELLM_LOG}"
-echo "[INFO]   - GuideLLM results:  ${GUIDELLM_RESULTS}"
+if [[ -f "${GUIDELLM_RESULTS}" ]]; then
+    echo "[INFO]   - GuideLLM results:  ${GUIDELLM_RESULTS}"
+fi
+if ls "${OUTPUT_DIR}"/vl_eval_summary*.json >/dev/null 2>&1; then
+    for one in "${OUTPUT_DIR}"/vl_eval_summary*.json; do
+        echo "[INFO]   - VL summary:        ${one}"
+    done
+fi
+if ls "${OUTPUT_DIR}"/vl_eval_results*.jsonl >/dev/null 2>&1; then
+    for one in "${OUTPUT_DIR}"/vl_eval_results*.jsonl; do
+        echo "[INFO]   - VL records:        ${one}"
+    done
+fi
 echo "[INFO]   - Acceptance stats:  ${ACCEPTANCE_RESULTS}"

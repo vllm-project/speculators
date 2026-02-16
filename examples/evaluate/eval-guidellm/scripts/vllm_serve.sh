@@ -17,6 +17,7 @@ PORT=""
 HEALTH_CHECK_TIMEOUT=""
 SERVER_LOG=""
 PID_FILE=""
+IMAGE_ROOT="${IMAGE_ROOT:-}"
 
 readonly SLEEP_INTERVAL=5
 
@@ -112,7 +113,7 @@ done
 # Apply defaults for any arguments not provided
 NUM_SPEC_TOKENS="${NUM_SPEC_TOKENS:-3}"
 METHOD="${METHOD:-eagle3}"
-TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-2}"
+TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-1}"
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.8}"
 PORT="${PORT:-8000}"
 HEALTH_CHECK_TIMEOUT="${HEALTH_CHECK_TIMEOUT:-300}"
@@ -148,14 +149,24 @@ echo "[INFO]   Tensor parallel size: ${TENSOR_PARALLEL_SIZE}"
 echo "[INFO]   GPU memory utilization: ${GPU_MEMORY_UTILIZATION}"
 echo "[INFO]   Port: ${PORT}"
 echo "[INFO]   Log file: ${SERVER_LOG}"
+if [[ -n "${IMAGE_ROOT}" ]]; then
+    echo "[INFO]   Allowed local media path: ${IMAGE_ROOT}"
+fi
 
-vllm serve "${BASE_MODEL}" \
-    --seed 42 \
-    --tensor-parallel-size "${TENSOR_PARALLEL_SIZE}" \
-    --gpu-memory-utilization "${GPU_MEMORY_UTILIZATION}" \
-    --port "${PORT}" \
-    --speculative-config "{\"model\": \"${SPECULATOR_MODEL}\", \"num_speculative_tokens\": ${NUM_SPEC_TOKENS}, \"method\": \"${METHOD}\"}" \
-    > "${SERVER_LOG}" 2>&1 &
+vllm_cmd=(
+    vllm serve "${BASE_MODEL}"
+    --seed 42
+    --tensor-parallel-size "${TENSOR_PARALLEL_SIZE}"
+    --gpu-memory-utilization "${GPU_MEMORY_UTILIZATION}"
+    --port "${PORT}"
+    --speculative-config "{\"model\": \"${SPECULATOR_MODEL}\", \"num_speculative_tokens\": ${NUM_SPEC_TOKENS}, \"method\": \"${METHOD}\"}"
+)
+
+if [[ -n "${IMAGE_ROOT}" ]]; then
+    vllm_cmd+=(--allowed-local-media-path "${IMAGE_ROOT}")
+fi
+
+"${vllm_cmd[@]}" > "${SERVER_LOG}" 2>&1 &
 
 VLLM_PID=$!
 echo "${VLLM_PID}" > "${PID_FILE}"

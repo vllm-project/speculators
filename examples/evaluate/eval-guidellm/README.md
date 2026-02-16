@@ -58,7 +58,8 @@ eval-guidellm/
 ├── scripts/                       # Utility scripts
 │   ├── vllm_serve.sh
 │   ├── vllm_stop.sh
-│   ├── run_guidellm.sh
+│   ├── run_guidellm.sh            # Text benchmark entrypoint
+│   ├── run_guidellm_vl.sh         # VL benchmark entrypoint
 │   └── parse_logs.py
 └── setup.sh                       # Install dependencies
 ```
@@ -99,6 +100,7 @@ Required:
 Optional:
   -c FILE       Config file to use (e.g., configs/llama-eagle3.env)
   -o DIR        Output directory (default: eval_results_TIMESTAMP)
+  --eval-mode MODE   Evaluation mode: `text` or `vl` (default: `text`)
 ```
 
 ### Creating Custom Configs
@@ -136,6 +138,11 @@ Then run:
 ./run_evaluation.sh -c configs/my-model.env
 ```
 
+Or override mode on CLI:
+```bash
+./run_evaluation.sh -c configs/my-model.env --eval-mode vl
+```
+
 ### Configuration Options
 
 | Option | Description | Default |
@@ -145,6 +152,8 @@ Then run:
 | `NUM_SPEC_TOKENS` | Number of speculative tokens to generate | 3 |
 | `METHOD` | Speculative decoding method | eagle3 |
 | `DATASET` | Dataset for benchmarking (emulated, HF dataset, or file path) | (required) |
+| `EVAL_MODE` | Benchmark entrypoint: `text` or `vl` | `text` |
+| `IMAGE_ROOT` | Root directory for image path resolution (VL mode) | unset |
 | `TENSOR_PARALLEL_SIZE` | Number of GPUs for tensor parallelism | 2 |
 | `GPU_MEMORY_UTILIZATION` | GPU memory fraction to use | 0.8 |
 | `PORT` | Server port | 8000 |
@@ -180,6 +189,20 @@ The framework supports five types of dataset inputs:
    - Runs benchmark on that specific file
    - Example: `DATASET="./my_data.jsonl"`
 
+### Separate Text and VL Entrypoints
+
+Evaluation no longer auto-routes text and VL in a single script. Use explicit mode:
+
+- `EVAL_MODE="text"`: calls `scripts/run_guidellm.sh` and runs `guidellm benchmark`.
+- `EVAL_MODE="vl"`: calls `scripts/run_guidellm_vl.sh` and runs `scripts/run_vl_chat_eval.py`.
+
+VL mode outputs:
+
+- `vl_eval_results.jsonl` (or suffixed variant for multi-file datasets)
+- `vl_eval_summary.json` (or suffixed variant for multi-file datasets)
+
+`acceptance_analysis.txt` is still generated from the vLLM server log as before.
+
 ## Advanced Usage
 
 ### Manual Workflow
@@ -198,9 +221,12 @@ For debugging or running multiple benchmarks against the same server:
   --log-file server.log \
   --pid-file server.pid
 
-# Terminal 2: Run benchmarks
+# Terminal 2: Run text benchmark
 ./scripts/run_guidellm.sh -d "dataset1.jsonl" --output-file results1.json
 ./scripts/run_guidellm.sh -d "dataset2.jsonl" --output-file results2.json
+
+# Terminal 2: Run VL benchmark
+./scripts/run_guidellm_vl.sh -d "dataset_vl.jsonl" --output-file results_vl.json --image-root /path/to/images
 
 # Parse acceptance metrics
 python scripts/parse_logs.py server.log -o acceptance_stats.txt
