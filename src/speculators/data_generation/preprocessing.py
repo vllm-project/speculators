@@ -15,6 +15,8 @@ from speculators.train.vocab_mapping import save_token_frequency_distribution
 
 __all__ = [
     "build_eagle3_dataset",
+    "create_loss_mask_from_token_ids",
+    "detect_assistant_token_markers",
     "load_and_preprocess_dataset",
     "load_raw_dataset",
 ]
@@ -245,6 +247,199 @@ def _create_loss_mask_from_offsets(
         log.warning("No assistant response spans found in conversation")
 
     return loss_mask
+
+
+def _find_subsequence(
+    sequence: list[int], subsequence: list[int], start: int = 0
+) -> int:
+    """Find the first occurrence of subsequence in sequence starting from start.
+
+    Returns index or -1.
+    """
+    sub_len = len(subsequence)
+    for i in range(start, len(sequence) - sub_len + 1):
+        if sequence[i : i + sub_len] == subsequence:
+            return i
+    return -1
+
+
+def detect_assistant_token_markers(
+    tokenizer: PreTrainedTokenizer,
+) -> tuple[list[int], list[int]]:
+    """Detect the token ID sequences that mark assistant turn boundaries.
+
+    Uses test conversations to locate content tokens and extract the structural
+    tokens that bracket assistant content. Works across all major chat template
+    families (ChatML, Llama 3, Mistral, Phi-3, GPT-OSS, etc.).
+
+    Args:
+        tokenizer: A tokenizer with a chat template configured.
+
+    Returns:
+        (start_marker_ids, end_marker_ids): Token ID sequences that mark
+        the start and end of assistant content.
+    """
+    # Use multi-word content strings that tokenize independently
+    # (avoids tokenizer merging single chars with adjacent special tokens)
+    conv_long = [
+        {"role": "user", "content": "alpha bravo"},
+        {"role": "assistant", "content": "charlie delta"},
+        {"role": "user", "content": "echo foxtrot"},
+    ]
+    ids_long = list(
+        tokenizer.apply_chat_template(
+            conv_long, tokenize=True, add_generation_prompt=False
+        )
+    )
+
+    user1_ids = tokenizer.encode("alpha bravo", add_special_tokens=False)
+    asst_ids = tokenizer.encode("charlie delta", add_special_tokens=False)
+    user2_ids = tokenizer.encode("echo foxtrot", add_special_tokens=False)
+
+    # Find positions of each content block (in order)
+    user1_pos = _find_subsequence(ids_long, user1_ids)
+    if user1_pos == -1:
+        raise ValueError("Could not find user1 content tokens in templated sequence.")
+
+    asst_pos = _find_subsequence(ids_long, asst_ids, user1_pos + len(user1_ids))
+    if asst_pos == -1:
+        raise ValueError(
+            "Could not find assistant content tokens in templated sequence."
+        )
+
+    user2_pos = _find_subsequence(ids_long, user2_ids, asst_pos + len(asst_ids))
+    if user2_pos == -1:
+        raise ValueError("Could not find user2 content tokens in templated sequence.")
+
+    # Start marker = tokens between user1 content end and assistant content start
+    start_marker_ids = ids_long[user1_pos + len(user1_ids) : asst_pos]
+    if not start_marker_ids:
+        raise ValueError("No tokens found between user and assistant content.")
+
+    # End marker extraction:
+    # Compare the 3-turn (long) conversation with a 2-turn (short) one.
+    # Both share the same tokens up to and including the assistant content
+    # plus the end-of-turn marker. They diverge after that.
+    asst_end = asst_pos + len(asst_ids)
+
+    conv_short = [
+        {"role": "user", "content": "alpha bravo"},
+        {"role": "assistant", "content": "charlie delta"},
+    ]
+    ids_short = list(
+        tokenizer.apply_chat_template(
+            conv_short, tokenize=True, add_generation_prompt=False
+        )
+    )
+
+    # Find longest common prefix between short and long sequences
+    common_len = 0
+    for i in range(min(len(ids_short), len(ids_long))):
+        if ids_short[i] == ids_long[i]:
+            common_len = i + 1
+        else:
+            break
+
+    if common_len > asst_end:
+        # Shared tokens after assistant content = end marker
+        end_marker_ids = ids_long[asst_end:common_len]
+    else:
+        # Short and long conversations use different end-of-turn tokens
+        # (e.g., GPT-OSS uses <|return|> for final turn, <|end|> for mid-turn).
+        # Use the first token after assistant content in the long conversation
+        # as the end marker — this is the mid-turn end token.
+        end_marker_ids = ids_long[asst_end : asst_end + 1]
+
+    if not end_marker_ids:
+        raise ValueError("Could not determine assistant end marker tokens.")
+
+    # Validate: start marker should appear in multi-turn conversations
+    multi_turn = [
+        {"role": "user", "content": "first question"},
+        {"role": "assistant", "content": "first answer"},
+        {"role": "user", "content": "second question"},
+        {"role": "assistant", "content": "second answer"},
+    ]
+    multi_ids = list(
+        tokenizer.apply_chat_template(
+            multi_turn, tokenize=True, add_generation_prompt=False
+        )
+    )
+
+    count = 0
+    pos = 0
+    while True:
+        found = _find_subsequence(multi_ids, start_marker_ids, pos)
+        if found == -1:
+            break
+        count += 1
+        pos = found + 1
+
+    if count < 2:
+        log.warning(
+            f"Expected start marker to appear >= 2 times in multi-turn "
+            f"conversation, found {count}. Masking may be inaccurate."
+        )
+
+    log.info(
+        f"Detected assistant start marker: {start_marker_ids} "
+        f"({len(start_marker_ids)} tokens)"
+    )
+    log.info(
+        f"Detected assistant end marker: {end_marker_ids} "
+        f"({len(end_marker_ids)} tokens)"
+    )
+
+    return start_marker_ids, end_marker_ids
+
+
+def create_loss_mask_from_token_ids(
+    token_ids: list[int] | torch.Tensor,
+    start_marker_ids: list[int],
+    end_marker_ids: list[int],
+) -> torch.Tensor:
+    """Create binary loss mask by scanning token IDs for assistant turn markers.
+
+    Tokens within assistant turns (between start and end markers) get mask=1.
+    Marker tokens themselves get mask=0. All other tokens get mask=0.
+
+    Handles multiple assistant turns, truncated sequences (no end marker marks
+    to end of sequence), and system messages (naturally excluded).
+
+    Args:
+        token_ids: Full token ID sequence.
+        start_marker_ids: Token sequence marking start of assistant content.
+        end_marker_ids: Token sequence marking end of assistant content.
+
+    Returns:
+        Binary tensor of same length as token_ids (dtype=torch.long).
+    """
+    if isinstance(token_ids, torch.Tensor):
+        token_ids = token_ids.tolist()
+
+    n = len(token_ids)
+    mask = [0] * n
+    start_len = len(start_marker_ids)
+    end_len = len(end_marker_ids)
+
+    i = 0
+    while i < n:
+        # Check for start marker
+        if token_ids[i : i + start_len] == start_marker_ids:
+            # Skip past the start marker (don't include it in mask)
+            j = i + start_len
+            # Mark tokens until end marker or end of sequence
+            while j < n:
+                if token_ids[j : j + end_len] == end_marker_ids:
+                    j += end_len  # skip past end marker
+                    break
+                mask[j] = 1
+                j += 1
+            i = j
+        else:
+            i += 1
+
+    return torch.tensor(mask, dtype=torch.long)
 
 
 def _preprocess_batch(
