@@ -2,6 +2,7 @@
 
 import gc
 import logging
+import os
 import time
 
 import pytest
@@ -11,6 +12,10 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from speculators.data_generation import VllmHiddenStatesGenerator
 
 logger = logging.getLogger(__name__)
+
+# Set vLLM multiprocessing method to spawn for CUDA compatibility
+# Must be set before vLLM imports to avoid CUDA re-initialization errors
+os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
 
 
 @pytest.fixture(autouse=True)
@@ -191,3 +196,148 @@ def test_vllm_vs_huggingface_accuracy(model_path, tensor_parallel_size):
         f"Mean difference {mean_diff} too large. "
         f"Expected layer_ids={expected_layer_ids}"
     )
+
+
+@pytest.mark.regression
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.parametrize(
+    ("model_path", "tensor_parallel_size"),
+    [
+        ("Qwen/Qwen2-0.5B", 1),
+    ],
+)
+def test_batch_vs_individual_consistency(  # noqa: C901
+    model_path, tensor_parallel_size
+):
+    """Test that batch processing matches individual processing.
+
+    Regression test for GitHub issue #279: VllmHiddenStatesGenerator returns
+    silently wrong hidden states with batch_size > 1 or repeated calls.
+
+    This test verifies:
+    1. No KV cache state leakage between calls (Bug 1)
+    2. Correct token ordering in chunked prefill (Bug 2)
+    """
+    # 8 distinct prompts of varying length to trigger chunked prefill
+    test_prompts = [
+        "What is 2+2?",
+        "Explain the theory of relativity in simple terms.",
+        "Write a haiku about the ocean.",
+        "What are the main differences between Python and JavaScript?",
+        "Hello!",
+        "Translate 'good morning' to French, Spanish, and German.",
+        "What is the capital of Brazil?",
+        "Describe the process of photosynthesis step by step.",
+    ]
+
+    logger.info(f"Testing batch vs individual consistency: {model_path}")
+
+    # Initialize generator with aggressive chunking to properly test the fix
+    # This forces multi-iteration chunked prefill which exposes token ordering bugs
+    generator = VllmHiddenStatesGenerator(
+        model_path=model_path,
+        layer_ids=[10],  # Single layer for faster testing
+        max_model_len=2048,
+        gpu_memory_utilization=0.3,
+        tensor_parallel_size=tensor_parallel_size,
+        max_num_batched_tokens=100,  # Force chunking: ~212 tokens / 100 = 3 iterations
+    )
+
+    try:
+        # Tokenize prompts
+        tokenizer = AutoTokenizer.from_pretrained(model_path)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+
+        # Use chat template if available, otherwise just tokenize
+        all_ids = []
+        for text in test_prompts:
+            try:
+                # Try chat template first (for instruct models)
+                msgs = [{"role": "user", "content": text}]
+                ids = tokenizer.apply_chat_template(
+                    msgs,
+                    tokenize=True,
+                    add_generation_prompt=True,
+                    return_tensors="pt",
+                    padding=False,
+                )
+                if isinstance(ids, dict):
+                    ids = ids["input_ids"]
+                all_ids.append(ids.squeeze(0).tolist())
+            except (ValueError, AttributeError):
+                # Fallback for base models without chat template
+                ids = tokenizer(text, return_tensors="pt")["input_ids"]
+                all_ids.append(ids.squeeze(0).tolist())
+
+        seq_lens = [len(ids) for ids in all_ids]
+        logger.info(f"Sequence lengths: {seq_lens}")
+        logger.info(f"Total tokens: {sum(seq_lens)}")
+
+        # --- Ground truth: process each sequence individually ---
+        logger.info("Processing sequences individually...")
+        individual_results = []
+        for i, ids in enumerate(all_ids):
+            results = generator.generate([ids])
+            individual_results.append(results[0])
+            hs = results[0]["hidden_states"][0]
+            logger.info(
+                f"  Seq {i}: input_len={seq_lens[i]:3d}, hs_shape={list(hs.shape)}"
+            )
+
+        # --- Batch processing ---
+        logger.info("Processing all sequences as batch...")
+        batch_results = generator.generate(all_ids)
+
+        # --- Verify results match ---
+        misaligned = 0
+        empty = 0
+        for i in range(len(all_ids)):
+            individual_hs = individual_results[i]["hidden_states"][0]
+            batch_hs = batch_results[i]["hidden_states"][0]
+
+            expected_shape = list(individual_hs.shape)
+            got_shape = list(batch_hs.shape)
+
+            # Check for empty results
+            if batch_hs.numel() == 0:
+                empty += 1
+                logger.error(f"  Seq {i}: EMPTY (bug reproduced)")
+                continue
+
+            # Check for shape mismatch
+            if got_shape != expected_shape:
+                misaligned += 1
+                logger.error(
+                    f"  Seq {i}: WRONG SHAPE "
+                    f"(got {got_shape}, expected {expected_shape})"
+                )
+                continue
+
+            # Check for value mismatch
+            if individual_hs.shape[0] > 0 and batch_hs.shape[0] > 0:
+                mean_diff = torch.abs(individual_hs - batch_hs).mean().item()
+
+                if mean_diff > 0.01:  # Tolerance for numerical differences
+                    misaligned += 1
+                    logger.error(f"  Seq {i}: WRONG VALUES (mean_diff={mean_diff:.6f})")
+                    continue
+
+        # Assert no errors
+        total_errors = empty + misaligned
+        assert total_errors == 0, (
+            f"Batch processing returned wrong hidden states: "
+            f"{empty} empty, {misaligned} misaligned out of {len(all_ids)} sequences. "
+            f"This indicates bug #279 regression."
+        )
+
+        logger.info(
+            f"SUCCESS: All {len(all_ids)} sequences matched between "
+            f"individual and batch processing"
+        )
+
+    finally:
+        del generator
+        gc.collect()
+        torch.cuda.empty_cache()
+        time.sleep(1)
