@@ -1,4 +1,5 @@
 # ruff: noqa: ERA001
+import functools
 import json
 import math
 import os
@@ -9,8 +10,17 @@ from typing import Any
 
 import torch
 import torch.nn.functional as F  # noqa: N812
+from openai import OpenAI
+from safetensors import safe_open
 from torch.utils.data import Dataset
+from transformers import AutoTokenizer
 
+from speculators.data_generation.preprocessing import (
+    _normalize_conversation,
+    create_loss_mask_from_token_ids,
+    detect_assistant_token_markers,
+    load_raw_dataset,
+)
 from speculators.train.noise_transforms import TransformTensors
 
 BatchType = dict[str, Any]
@@ -128,6 +138,177 @@ def standardize_data_v1(data: dict[str, Any]) -> dict[str, Any]:
         "verifier_last_hidden_states": data["hidden_states"][-1],
         "loss_mask": data["loss_mask"],
     }
+
+
+def standardize_data_v2(
+    data: dict[str, Any],
+    start_marker_ids: list[int] | None = None,
+    end_marker_ids: list[int] | None = None,
+) -> dict[str, Any]:
+    # v2 data format:
+    # {
+    #  "token_ids": [seq_len],
+    #  "hidden_states": [seq_len, num_hidden_layers, hidden_size],
+    # }
+    # where num_hidden_layers = 4
+
+    token_ids = data["token_ids"]
+
+    if start_marker_ids is not None and end_marker_ids is not None:
+        loss_mask = create_loss_mask_from_token_ids(
+            token_ids, start_marker_ids, end_marker_ids
+        )
+    else:
+        loss_mask = torch.ones_like(token_ids, dtype=torch.bool)
+
+    return {
+        "hidden_states": data["hidden_states"][:, :-1].flatten(1),
+        "input_ids": token_ids,
+        "verifier_last_hidden_states": data["hidden_states"][:, -1],
+        "loss_mask": loss_mask,
+    }
+
+
+def _create_empty_sample():
+    """Creates an empty sample which the collator can ignore. This is useful as a
+    replacement batch if data loading fails for a sample."""
+    return {
+        "hidden_states": torch.empty(0, dtype=torch.float),
+        "input_ids": torch.zeros(0, dtype=torch.long),
+        "verifier_last_hidden_states": torch.empty(0, dtype=torch.float),
+        "loss_mask": torch.zeros(0, dtype=torch.bool),
+        "lengths": torch.zeros(1, dtype=torch.long),
+        "position_ids": torch.zeros(0, dtype=torch.long),
+    }
+
+
+def vllm_generate_hidden_states(
+    vllm_url: str, model: str, conversation: list[dict[str, str]]
+) -> dict[str, torch.Tensor] | None:
+    """Generates hidden states using VLLM."""
+
+    client = OpenAI(base_url=vllm_url, api_key="EMPTY")
+
+    completion = client.chat.completions.create(
+        model=model, messages=conversation, max_tokens=1
+    )
+    hidden_states_path = completion.kv_transfer_params["hidden_states_path"]
+
+    f = safe_open(hidden_states_path, "pt")
+
+    data = {k: f.get_tensor(k) for k in f.keys()}
+
+    # Cleanup file path
+    os.remove(hidden_states_path)
+    return data
+
+
+class Eagle3OnlineVLLMDataset(Dataset):
+    def __init__(
+        self,
+        max_len: int,
+        dataset: str,
+        vllm_url: str,
+        model: str,
+        lengths_file: str,
+        transform: TransformTensors | None = None,
+        hidden_states_dtype=torch.float,
+        standardize_fn: StandardizeFnSig = standardize_data_v2,
+    ):
+        """Initialize the Eagle3OnlineVLLMDataset.
+
+        Args:
+            max_len: The maximum length of the sequence.
+            dataset: The name of the dataset.
+            vllm_url: The URL of the VLLM server to generate hidden states.
+            model: The name of the model to generate hidden states.
+            lengths_file: Path to sample_lengths.json produced by
+                preprocess_data.py. Required for accurate batch packing.
+            transform: The transform to apply to the data.
+            hidden_states_dtype: The dtype of the hidden states.
+            standardize_fn: The function to standardize the data.
+        """
+        self.max_len = max_len
+        self.text_dataset = load_raw_dataset(dataset, num_proc=8, cache_dir=None)
+
+        self.vllm_url = vllm_url
+        self.model = model
+        self.transform = transform
+        self.hidden_states_dtype = hidden_states_dtype
+
+        # Detect assistant token markers for loss masking
+        tokenizer = AutoTokenizer.from_pretrained(model, trust_remote_code=True)
+        start_marker_ids, end_marker_ids = detect_assistant_token_markers(tokenizer)
+
+        # Bind markers into standardize_fn so __getitem__ produces accurate masks
+        self.standardize_fn = functools.partial(
+            standardize_fn,
+            start_marker_ids=start_marker_ids,
+            end_marker_ids=end_marker_ids,
+        )
+
+        self.approx_lengths = self._load_lengths(lengths_file)
+
+    def __len__(self):
+        return len(self.text_dataset)
+
+    def _load_lengths(self, lengths_file: str) -> list[int]:
+        """Load precomputed sample lengths from sample_lengths.json."""
+        sample_lengths_path = Path(lengths_file)
+        if not sample_lengths_path.exists():
+            raise FileNotFoundError(
+                f"Lengths file not found: {lengths_file}. "
+                "Run scripts/preprocess_data.py first to generate it."
+            )
+        with sample_lengths_path.open() as f:
+            return json.load(f)
+
+    def __getitem__(self, index) -> BatchType:
+        conversation = self.text_dataset[index]
+        conversation = _normalize_conversation(conversation["conversations"])
+
+        data = vllm_generate_hidden_states(self.vllm_url, self.model, conversation)
+
+        if data is None:
+            return _create_empty_sample()
+
+        data = self.standardize_fn(data)
+        # data structure: {
+        #  "hidden_states": [seq_len, 3 * hidden_size],
+        #  "input_ids": [seq_len],
+        #  "verifier_last_hidden_states": [seq_len, hidden_size],
+        #  "loss_mask": [seq_len],
+        # }
+
+        # Convert hidden states to the correct dtype
+        data = {
+            k: v.to(self.hidden_states_dtype) if "hidden_states" in k else v
+            for k, v in data.items()
+        }
+
+        # Add lengths tensor
+        seq_len = data["input_ids"].shape[0]
+        data["lengths"] = torch.tensor([seq_len], dtype=torch.long)
+        # shape: [1]
+
+        data["position_ids"] = torch.arange(seq_len, dtype=torch.long)
+        # shape: [seq_len]
+
+        # data structure: {
+        #     "hidden_states": [seq_len, 3 * hidden_size],
+        #     "input_ids": [seq_len],
+        #     "verifier_last_hidden_states": [seq_len, hidden_size],
+        #     "loss_mask": [seq_len],
+        #     "lengths": [1],
+        #     "position_ids": [seq_len],
+        # }
+
+        # Apply transform
+        if self.transform:
+            data = self.transform(data)
+
+        # Note: shift_batch will reduce seq_len by 1
+        return shift_batch(data)
 
 
 class Eagle3SampleFileDataset(Dataset):
@@ -282,6 +463,8 @@ def create_collate_fn(max_len: int):
         new_lengths = []
         cum_length = 0
         for length in lengths:
+            if length == 0:
+                continue
             if length + cum_length >= max_len:
                 new_lengths.append(max_len - cum_length)
                 break

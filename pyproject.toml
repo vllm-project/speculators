@@ -41,6 +41,7 @@ dependencies = [
     "huggingface-hub",
     "loguru",
     "numpy",
+    "openai",
     "protobuf",
     "psutil",
     "pydantic>=2.0.0",
