@@ -1,12 +1,18 @@
 import argparse
+import json
+import logging
 import random
+from pathlib import Path
 
 import numpy as np
 import torch
+import torch.distributed as dist
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 from transformers import LlamaConfig
 from transformers.models.auto.configuration_auto import AutoConfig
 
+from speculators.data_generation.preprocessing import load_and_preprocess_dataset
 from speculators.model import SpeculatorModel
 from speculators.train.data import (
     Eagle3OnlineVLLMDataset,
@@ -19,6 +25,9 @@ from speculators.train.logger import setup_metric_logger, setup_root_logger
 from speculators.train.noise_transforms import AddUniformNoise
 from speculators.train.trainer import Trainer, TrainerConfig
 from speculators.train.utils import maybe_destroy_distributed, maybe_setup_distributed
+from speculators.train.vocab_mapping import build_vocab_mappings_from_distribution
+
+log = logging.getLogger(__name__)
 
 
 def set_seed(seed: int, deterministic: bool = False):
@@ -32,6 +41,114 @@ def set_seed(seed: int, deterministic: bool = False):
         # For deterministic behavior (may impact performance)
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
+
+
+def preprocess_if_needed(
+    preprocess_dir: str,
+    verifier_name_or_path: str,
+    dataset_name: str,
+    total_seq_len: int,
+    preprocess_num_workers: int,
+    overwrite: bool,
+    rank: int,
+    is_distributed: bool,
+) -> str:
+    """Run preprocessing to produce sample_lengths.json and token_freq.pt.
+
+    Only rank 0 performs the work; other ranks wait at a barrier.
+    Returns the path to sample_lengths.json.
+    """
+    preprocess_path = Path(preprocess_dir)
+    lengths_path = preprocess_path / "sample_lengths.json"
+    token_freq_path = preprocess_path / "token_freq.pt"
+
+    needs_preprocessing = (
+        overwrite or not lengths_path.exists() or not token_freq_path.exists()
+    )
+
+    if rank == 0:
+        if needs_preprocessing:
+            log.info("Running preprocessing (tokenization + sample lengths)...")
+            preprocess_path.mkdir(parents=True, exist_ok=True)
+
+            dataset, _tokenizer = load_and_preprocess_dataset(
+                target_model_path=verifier_name_or_path,
+                train_data_path=dataset_name,
+                seq_length=total_seq_len,
+                build_dataset_num_proc=preprocess_num_workers,
+                seed=0,
+                token_freq_path=str(token_freq_path),
+            )
+
+            sample_lengths = [
+                len(dataset[idx]["input_ids"])
+                for idx in tqdm(range(len(dataset)), desc="Computing sample lengths")
+            ]
+            with open(lengths_path, "w") as f:
+                json.dump(sample_lengths, f)
+
+            log.info(
+                f"Preprocessing complete: {len(sample_lengths)} samples saved to "
+                f"{preprocess_dir}"
+            )
+        else:
+            log.info(
+                f"Preprocessing outputs already exist in {preprocess_dir}, skipping."
+            )
+
+    if is_distributed:
+        dist.barrier()
+
+    return str(lengths_path)
+
+
+def build_vocab_mappings_if_needed(
+    preprocess_dir: str,
+    draft_vocab_size: int | None,
+    target_vocab_size: int,
+    overwrite: bool,
+    rank: int,
+    is_distributed: bool,
+    device: torch.device,
+) -> tuple[torch.Tensor | None, torch.Tensor | None, int]:
+    """Build d2t/t2d vocab mappings if --draft-vocab-size is set.
+
+    Returns (d2t, t2d, draft_vocab_size). If draft_vocab_size is None,
+    returns (None, None, target_vocab_size) for full-vocab mode.
+    """
+    if draft_vocab_size is None:
+        return None, None, target_vocab_size
+
+    preprocess_path = Path(preprocess_dir)
+    d2t_path = preprocess_path / "d2t.npy"
+    t2d_path = preprocess_path / "t2d.npy"
+    token_freq_path = preprocess_path / "token_freq.pt"
+
+    needs_build = overwrite or not d2t_path.exists() or not t2d_path.exists()
+
+    if rank == 0 and needs_build:
+        log.info(
+            f"Building vocab mappings (draft_vocab_size={draft_vocab_size}, "
+            f"target_vocab_size={target_vocab_size})..."
+        )
+        token_freq_dict = torch.load(token_freq_path, weights_only=True)
+        d2t, t2d = build_vocab_mappings_from_distribution(
+            token_freq_dict=token_freq_dict,
+            draft_vocab_size=draft_vocab_size,
+            target_vocab_size=target_vocab_size,
+        )
+        np.save(d2t_path, d2t.cpu().numpy())
+        np.save(t2d_path, t2d.cpu().numpy())
+        log.info(f"Saved vocab mappings to {preprocess_dir}")
+    elif rank == 0:
+        log.info(f"Vocab mappings already exist in {preprocess_dir}, skipping.")
+
+    if is_distributed:
+        dist.barrier()
+
+    d2t = torch.from_numpy(np.load(d2t_path)).to(device)
+    t2d = torch.from_numpy(np.load(t2d_path)).to(device)
+    return d2t, t2d, draft_vocab_size
 
 
 def setup_dataloader(
@@ -135,25 +252,34 @@ def main(args: argparse.Namespace):
     local_rank, world_size, rank, is_distributed = maybe_setup_distributed()
     device = torch.device(local_rank)
 
-    # Load t2d and d2t tensors if provided
-    if args.d2t_path or args.t2d_path:
-        if not (args.d2t_path and args.t2d_path):
-            raise ValueError(
-                "Both t2d and d2t must be provided together, or both must be omitted. "
-                f"Got t2d={'provided' if args.t2d_path is not None else 'not provided'}"
-                f"d2t={'provided' if args.d2t_path is not None else 'not provided'}"
-            )
-        d2t = torch.from_numpy(np.load(args.d2t_path)).to(device)
-        t2d = torch.from_numpy(np.load(args.t2d_path)).to(device)
-        draft_vocab_size = d2t.shape[0]
-    else:
-        d2t = None
-        t2d = None
-        # When vocab mapping is not provided, use the full verifier vocab
-        verifier_config = AutoConfig.from_pretrained(args.verifier_name_or_path)
-        if hasattr(verifier_config, "text_config"):
-            verifier_config = verifier_config.text_config
-        draft_vocab_size = verifier_config.vocab_size
+    # Preprocessing: tokenize dataset, compute sample lengths and token frequencies
+    lengths_file = preprocess_if_needed(
+        preprocess_dir=args.preprocess_dir,
+        verifier_name_or_path=args.verifier_name_or_path,
+        dataset_name=args.dataset_name,
+        total_seq_len=args.total_seq_len,
+        preprocess_num_workers=args.preprocess_num_workers,
+        overwrite=args.overwrite_preprocess,
+        rank=rank,
+        is_distributed=is_distributed,
+    )
+
+    # Load verifier config (needed for target_vocab_size and transformer layer config)
+    verifier_config = AutoConfig.from_pretrained(args.verifier_name_or_path)
+    if hasattr(verifier_config, "text_config"):
+        verifier_config = verifier_config.text_config
+    target_vocab_size = verifier_config.vocab_size
+
+    # Build vocab mappings if draft-vocab-size is specified
+    d2t, t2d, draft_vocab_size = build_vocab_mappings_if_needed(
+        preprocess_dir=args.preprocess_dir,
+        draft_vocab_size=args.draft_vocab_size,
+        target_vocab_size=target_vocab_size,
+        overwrite=args.overwrite_preprocess,
+        rank=rank,
+        is_distributed=is_distributed,
+        device=device,
+    )
 
     # Setup speculator config
     transformer_layer_config = create_transformer_layer_config(
@@ -180,12 +306,11 @@ def main(args: argparse.Namespace):
     )
 
     # Setup dataloaders
-    # train_files, val_files = split_files(args.data_path, ratio=0.9)
     train_loader = setup_dataloader(
         args.dataset_name,
         args.verifier_name_or_path,
         args.vllm_url,
-        args.lengths_file,
+        lengths_file,
         args.total_seq_len,
         world_size,
         local_rank,
@@ -198,7 +323,7 @@ def main(args: argparse.Namespace):
         args.dataset_name,
         args.verifier_name_or_path,
         args.vllm_url,
-        args.lengths_file,
+        lengths_file,
         args.total_seq_len,
         world_size,
         local_rank,
@@ -256,11 +381,31 @@ def parse_args():
         default="http://localhost:8000/v1",
         help="URL of the VLLM server",
     )
+    # Preprocessing arguments
     parser.add_argument(
-        "--lengths-file",
+        "--preprocess-dir",
         type=str,
-        required=True,
-        help="Path to sample_lengths.json produced by preprocess_data.py",
+        default="./preprocessed_data",
+        help="Cache directory for preprocessing outputs (sample_lengths.json, "
+        "token_freq.pt, d2t.npy, t2d.npy)",
+    )
+    parser.add_argument(
+        "--preprocess-num-workers",
+        type=int,
+        default=8,
+        help="Number of CPU workers for tokenization during preprocessing",
+    )
+    parser.add_argument(
+        "--overwrite-preprocess",
+        action="store_true",
+        help="Force re-run of preprocessing even if cached outputs exist",
+    )
+    parser.add_argument(
+        "--draft-vocab-size",
+        type=int,
+        default=None,
+        help="If set, builds vocab mappings (d2t/t2d) with this draft vocabulary size. "
+        "If not set, uses the full verifier vocabulary (no mapping).",
     )
     parser.add_argument("--save-path", type=str, default="./checkpoints")
     parser.add_argument("--epochs", type=int, default=20)
@@ -277,8 +422,6 @@ def parse_args():
     parser.add_argument("--log-dir", type=str, default="./logs")
     parser.add_argument("--run-name", type=str, default=None)
     parser.add_argument("--num-layers", type=int, default=1)
-    parser.add_argument("--d2t-path", type=str, default=None)
-    parser.add_argument("--t2d-path", type=str, default=None)
     parser.add_argument("--ttt-steps", type=int, default=3)
     parser.add_argument("--ttt-step-loss-decay", type=float, default=1.0)
     parser.add_argument(
@@ -330,8 +473,8 @@ if __name__ == "__main__":
 
 
 # RUN WITH:
-# torchrun --nnodes=1 --nproc_per_node=<num_gpus>  scripts/train.py
+# torchrun --nnodes=1 --nproc_per_node=<num_gpus>  scripts/train_online.py
 # for FSDP training
 # OR
-# python scripts/train.py
+# python scripts/train_online.py --verifier-name-or-path <model> --dataset-name sharegpt
 # for single GPU training
