@@ -9,8 +9,11 @@ Orchestrates the entire pipeline: starts vLLM servers, processes the dataset, an
 
 **Usage:**
 ```bash
-# Process UltraChat dataset with single server
+# Process UltraChat dataset with single server (auto-detect model)
 ./run_all.sh
+
+# Specify model explicitly
+./run_all.sh --model "meta-llama/Llama-3.3-70B-Instruct" --dataset magpie
 
 # Process Magpie dataset with limit
 ./run_all.sh --dataset magpie --limit 1000
@@ -18,8 +21,12 @@ Orchestrates the entire pipeline: starts vLLM servers, processes the dataset, an
 # Use multiple servers with GPU assignment (one model per GPU pair)
 ./run_all.sh --ports "8000,8001" --gpus "0,1:2,3" --dataset magpie
 
-# Run Llama 3.3 70B on 4 GPU pairs
-./run_all.sh --ports "8000,8001,8002,8003" --gpus "0,1:2,3:4,5:6,7" --dataset magpie
+# Run Llama 3.3 70B on 4 GPU pairs with explicit model
+./run_all.sh \
+  --model "meta-llama/Llama-3.3-70B-Instruct" \
+  --ports "8000,8001,8002,8003" \
+  --gpus "0,1:2,3:4,5:6,7" \
+  --dataset magpie
 
 # Keep servers running after processing
 ./run_all.sh --dataset ultrachat --keep-servers
@@ -62,10 +69,10 @@ python script.py --concurrency 128 --outfile my_results.jsonl
 
 **Arguments:**
 - `--dataset`: Choose `magpie` or `ultrachat` (default: ultrachat)
+- `--model`: Model name (auto-detected from vLLM server if not specified)
 - `--ports`: Comma-separated list of ports for multiple servers
 - `--host`: Base host for servers (default: http://127.0.0.1)
 - `--endpoint`: Single endpoint (used if --ports not set)
-- `--model`: Model name (auto-detected if not specified)
 - `--split`: Dataset split (default: train_sft)
 - `--limit`: Stop after N rows
 - `--concurrency`: Max concurrent requests (default: 64)
@@ -116,6 +123,7 @@ Stops all running vLLM servers.
 ### Llama 3.3 70B on 8 GPUs (4 servers with 2 GPUs each)
 ```bash
 ./run_all.sh \
+  --model "meta-llama/Llama-3.3-70B-Instruct" \
   --ports "8000,8001,8002,8003" \
   --gpus "0,1:2,3:4,5:6,7" \
   --dataset magpie
@@ -124,12 +132,22 @@ Stops all running vLLM servers.
 ### Llama 3.3 70B on 4 GPUs (2 servers with 2 GPUs each)
 ```bash
 ./run_all.sh \
+  --model "meta-llama/Llama-3.3-70B-Instruct" \
   --ports "8000,8001" \
   --gpus "0,1:2,3" \
   --dataset magpie
 ```
 
-### Single server using all available GPUs
+### Qwen 235B on multiple GPU sets
+```bash
+./run_all.sh \
+  --model "Qwen/Qwen3-VL-235B-A22B-Instruct" \
+  --ports "8000,8001" \
+  --gpus "0,1,2,3:4,5,6,7" \
+  --dataset ultrachat
+```
+
+### Single server using all available GPUs (model auto-detected)
 ```bash
 ./run_all.sh --dataset magpie
 ```
@@ -148,11 +166,12 @@ Stops all running vLLM servers.
 
 ### Quick Start (All-in-One)
 ```bash
-# Process 100 rows from Magpie dataset
+# Process 100 rows from Magpie dataset (model auto-detected)
 ./run_all.sh --dataset magpie --limit 100
 
-# Process with GPU assignment for multiple servers
+# Process with specific model and GPU assignment
 ./run_all.sh \
+  --model "meta-llama/Llama-3.3-70B-Instruct" \
   --ports "8000,8001" \
   --gpus "0,1:2,3" \
   --dataset magpie \
@@ -161,11 +180,21 @@ Stops all running vLLM servers.
 
 ### Manual Control
 ```bash
-# 1. Start servers with GPU assignment
-./start_vllm_servers.sh --ports "8000,8001,8002" --gpus "0,1:2,3:4,5"
+# 1. Start servers with model and GPU assignment
+./start_vllm_servers.sh \
+  --model "meta-llama/Llama-3.3-70B-Instruct" \
+  --ports "8000,8001,8002" \
+  --gpus "0,1:2,3:4,5"
 
-# 2. Process dataset
+# 2. Process dataset (model auto-detected from servers)
 python script.py --ports "8000,8001,8002" --dataset magpie --limit 1000
+
+# Or specify model explicitly
+python script.py \
+  --model "meta-llama/Llama-3.3-70B-Instruct" \
+  --ports "8000,8001,8002" \
+  --dataset magpie \
+  --limit 1000
 
 # 3. Stop servers
 ./stop_vllm_servers.sh

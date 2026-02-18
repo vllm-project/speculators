@@ -4,8 +4,9 @@
 #
 # Usage examples:
 #   ./run_all.sh --dataset magpie --limit 100
+#   ./run_all.sh --model "meta-llama/Llama-3.3-70B-Instruct" --dataset magpie
 #   ./run_all.sh --ports "8000,8001" --gpus "0,1:2,3" --dataset ultrachat
-#   ./run_all.sh --ports "8000,8001,8002" --gpus "0,1:2,3:4,5" --dataset magpie
+#   ./run_all.sh --model "Qwen/Qwen3-VL-235B-A22B-Instruct" --ports "8000,8001,8002" --gpus "0,1:2,3:4,5" --dataset magpie
 #   ./run_all.sh --dataset magpie --keep-servers  # Don't stop servers after
 #
 
@@ -14,19 +15,29 @@ set -e  # Exit on error
 # Default configuration
 PORTS="8000"
 GPUS=""
+MODEL=""
 STOP_SERVERS_AFTER=true
 
 # Parse arguments
 PYTHON_ARGS=()
+VLLM_ARGS=()
 while [[ $# -gt 0 ]]; do
     case $1 in
         --ports)
             PORTS="$2"
             PYTHON_ARGS+=("--ports" "$2")
+            VLLM_ARGS+=("--ports" "$2")
             shift 2
             ;;
         --gpus)
             GPUS="$2"
+            VLLM_ARGS+=("--gpus" "$2")
+            shift 2
+            ;;
+        --model)
+            MODEL="$2"
+            VLLM_ARGS+=("--model" "$2")
+            PYTHON_ARGS+=("--model" "$2")
             shift 2
             ;;
         --keep-servers)
@@ -47,12 +58,13 @@ echo ""
 
 # Start vLLM servers
 echo "Step 1: Starting vLLM servers on ports: $PORTS"
+if [ -n "$MODEL" ]; then
+    echo "  Model: $MODEL"
+fi
 if [ -n "$GPUS" ]; then
     echo "  GPU assignment: $GPUS"
-    ./start_vllm_servers.sh --ports "$PORTS" --gpus "$GPUS"
-else
-    ./start_vllm_servers.sh --ports "$PORTS"
 fi
+./start_vllm_servers.sh "${VLLM_ARGS[@]}"
 echo ""
 
 # Wait for servers to be ready

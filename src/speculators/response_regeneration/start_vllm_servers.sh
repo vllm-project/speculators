@@ -3,9 +3,9 @@
 # Start vLLM servers with GPU assignment
 #
 # Usage:
-#   ./start_vllm_servers.sh --ports "8000,8001" --gpus "0,1:2,3"
+#   ./start_vllm_servers.sh --model "meta-llama/Llama-3.3-70B-Instruct" --ports "8000,8001" --gpus "0,1:2,3"
 #   ./start_vllm_servers.sh --ports "8000" --gpus "0,1,2,3"
-#   ./start_vllm_servers.sh  # Single server on port 8000, all GPUs
+#   ./start_vllm_servers.sh  # Single server on port 8000, all GPUs, default model
 #
 
 # Default configuration
