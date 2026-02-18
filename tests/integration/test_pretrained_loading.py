@@ -25,9 +25,9 @@ def test_load_full_state_dict_from_hub():
     assert len(state_dict) > 0
     expected_patterns = ["d2t", "t2d", "layers"]
     for pattern in expected_patterns:
-        assert any(
-            pattern in k.lower() for k in state_dict
-        ), f"Missing pattern: {pattern}"
+        assert any(pattern in k.lower() for k in state_dict), (
+            f"Missing pattern: {pattern}"
+        )
     for key, tensor in state_dict.items():
         assert tensor.device.type == "cpu", f"Tensor {key} not on CPU: {tensor.device}"
 
@@ -83,5 +83,3 @@ def test_end_to_end_pretrained_loading():
     assert hasattr(model, "layers")
     assert hasattr(model, "d2t")
     assert hasattr(model, "t2d")
-
-
