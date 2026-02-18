@@ -145,7 +145,7 @@ def test_extract_vocab_mappings_success():
 
 
 @pytest.mark.parametrize(
-    "state_dict,missing_key",
+    ("state_dict", "missing_key"),
     [
         ({"model.layer1.weight": torch.randn(10, 10), "t2d": torch.randn(100)}, "d2t"),
         ({"model.layer1.weight": torch.randn(10, 10), "d2t": torch.randn(100)}, "t2d"),
@@ -158,7 +158,7 @@ def test_extract_vocab_mappings_missing_key(state_dict, missing_key):
 
 
 @pytest.mark.parametrize(
-    "d2t_tensor,t2d_tensor",
+    ("d2t_tensor", "t2d_tensor"),
     [
         (torch.randn(10, 10, 10), torch.randn(128)),  # 3D d2t (invalid)
         (torch.randn(100, 1), torch.randn(128, 1)),  # 2D both (invalid)
@@ -192,10 +192,18 @@ def test_extract_vocab_mappings_case_insensitive():
 
 
 @pytest.mark.parametrize(
-    "state_dict,lookup_key,expected_key",
+    ("state_dict", "lookup_key", "expected_key"),
     [
-        ({"d2t": torch.randn(100), "model.layer.weight": torch.randn(10, 10)}, "d2t", "d2t"),
-        ({"D2T": torch.randn(100), "model.layer.weight": torch.randn(10, 10)}, "d2t", "D2T"),
+        (
+            {"d2t": torch.randn(100), "model.layer.weight": torch.randn(10, 10)},
+            "d2t",
+            "d2t",
+        ),
+        (
+            {"D2T": torch.randn(100), "model.layer.weight": torch.randn(10, 10)},
+            "d2t",
+            "D2T",
+        ),
     ],
 )
 def test_find_exact_key_match(state_dict, lookup_key, expected_key):

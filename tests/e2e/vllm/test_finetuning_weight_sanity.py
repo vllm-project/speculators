@@ -1,7 +1,8 @@
-"""E2E test: verify finetuning modifies weights but keeps them close (bounded relative L1).
+"""E2E test: verify finetuning modifies weights but keeps them close (bounded rel L1).
 
-Uses relative L1 distance: ||a-b||_1 / (||b||_1 + eps) per tensor. All trainable tensors
-must have rel_l1 <= REL_L1_MAX; at least a few must have rel_l1 > REL_L1_MIN to ensure they changed.
+Uses relative L1 distance: ||a-b||_1 / (||b||_1 + eps) per tensor.
+All trainable tensors must have rel_l1 <= REL_L1_MAX;
+at least a few must have rel_l1 > REL_L1_MIN to ensure they changed.
 
 To see all logs (per-tensor distances, frozen checks, etc.), run:
   pytest tests/e2e/vllm/test_finetuning_weight_sanity.py -s --log-cli-level=INFO
@@ -27,7 +28,8 @@ LR = "1e-4"
 FROZEN_KEY_PATTERNS = ("d2t", "embed_tokens.weight", "t2d")
 
 # Relative distance thresholds: all trainable tensors must have rel_l1 <= REL_L1_MAX;
-# at least MIN_CHANGED tensors must have rel_l1 > REL_L1_MIN to ensure weights actually changed.
+# at least MIN_CHANGED tensors must have rel_l1 > REL_L1_MIN
+# to ensure weights actually changed.
 REL_L1_MAX = 0.05
 REL_L1_MIN = 1e-4
 MIN_CHANGED = 3
@@ -37,7 +39,7 @@ EPS = 1e-12
 @pytest.mark.e2e
 @pytest.mark.slow
 def test_finetuning_weight_sanity(tmp_path: Path):
-    """Verify finetuning changes weights but keeps relative L1 distance bounded (low LR)."""
+    """Verify finetuning changes weights but keeps rel L1 distance bounded (low LR)."""
     # Ensure logs are visible when running with -s (no capture)
     logging.basicConfig(
         level=logging.INFO,
@@ -57,7 +59,9 @@ def test_finetuning_weight_sanity(tmp_path: Path):
     logger.info("Downloading dataset %s", DATASET)
     data_dir = snapshot_download(repo_id=DATASET, repo_type="dataset")
     logger.info("Dataset at %s", data_dir)
-    logger.info("Running training (1 epoch, lr=%s, save_path=%s)", LR, tmp_path / "ckpt")
+    logger.info(
+        "Running training (1 epoch, lr=%s, save_path=%s)", LR, tmp_path / "ckpt"
+    )
     result = subprocess.run(  # noqa: S603
         [
             sys.executable,
@@ -88,12 +92,18 @@ def test_finetuning_weight_sanity(tmp_path: Path):
         check=False,
     )
     if result.returncode != 0:
-        logger.error("Training failed (returncode=%d). stderr:\n%s", result.returncode, result.stderr)
+        logger.error(
+            "Training failed (returncode=%d). stderr:\n%s",
+            result.returncode,
+            result.stderr,
+        )
         if result.stdout:
             logger.debug("Training stdout:\n%s", result.stdout)
     assert result.returncode == 0, f"Training failed:\n{result.stderr}"
 
-    logger.info("Training finished. Loading finetuned weights from %s", tmp_path / "ckpt")
+    logger.info(
+        "Training finished. Loading finetuned weights from %s", tmp_path / "ckpt"
+    )
     ckpt_dir = next((tmp_path / "ckpt").glob("*"))
     finetuned = {}
     for f in ckpt_dir.glob("*.safetensors"):
@@ -121,7 +131,9 @@ def test_finetuning_weight_sanity(tmp_path: Path):
             logger.info("  [frozen] %s: identical", key)
 
     # Relative L1 distance per tensor (skip frozen: they are already checked identical)
-    trainable_keys = [k for k in initial if not any(p in k for p in FROZEN_KEY_PATTERNS)]
+    trainable_keys = [
+        k for k in initial if not any(p in k for p in FROZEN_KEY_PATTERNS)
+    ]
     logger.info(
         "Computing relative L1 distance for %d trainable tensors (skip %d frozen)",
         len(trainable_keys),
@@ -145,7 +157,8 @@ def test_finetuning_weight_sanity(tmp_path: Path):
     # All trainable tensors must have relative L1 distance <= REL_L1_MAX
     for key, rel_l1 in key_to_rel_l1.items():
         assert rel_l1 <= REL_L1_MAX, (
-            f"Tensor {key} has rel_l1={rel_l1:.4e} > {REL_L1_MAX} (weights changed too much)"
+            f"Tensor {key} has rel_l1={rel_l1:.4e} > {REL_L1_MAX} "
+            f"(weights changed too much)"
         )
 
     # At least MIN_CHANGED tensors must have rel_l1 > REL_L1_MIN (actually changed)
