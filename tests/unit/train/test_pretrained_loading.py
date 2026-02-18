@@ -13,7 +13,6 @@ from scripts.train import (
     load_vocab_mappings,
 )
 
-
 # --- load_vocab_mappings ---
 
 
@@ -25,13 +24,17 @@ def test_load_vocab_mappings_success(tmp_path):
     np.save(t2d_path, np.arange(128))
     device = torch.device("cpu")
     d2t, t2d, vocab_size = load_vocab_mappings(str(d2t_path), str(t2d_path), device)
-    assert d2t.shape == (100,) and t2d.shape == (128,) and vocab_size == 100
-    assert d2t.device == device and t2d.device == device
-    assert torch.equal(d2t, torch.arange(100)) and torch.equal(t2d, torch.arange(128))
+    assert d2t.shape == (100,)
+    assert t2d.shape == (128,)
+    assert vocab_size == 100
+    assert d2t.device == device
+    assert t2d.device == device
+    assert torch.equal(d2t, torch.arange(100))
+    assert torch.equal(t2d, torch.arange(128))
 
 
 @pytest.mark.parametrize(
-    "d2t_path,t2d_path",
+    ("d2t_path", "t2d_path"),
     [
         (None, "/path/to/t2d.npy"),
         ("/path/to/d2t.npy", None),
@@ -63,7 +66,9 @@ def test_load_vocab_mappings_2d_arrays(tmp_path):
     d2t, t2d, vocab_size = load_vocab_mappings(
         str(tmp_path / "d2t.npy"), str(tmp_path / "t2d.npy"), torch.device("cpu")
     )
-    assert d2t.shape == (100, 2) and t2d.shape == (128, 2) and vocab_size == 100
+    assert d2t.shape == (100, 2)
+    assert t2d.shape == (128, 2)
+    assert vocab_size == 100
 
 
 # --- load_pretrained_model ---
@@ -80,7 +85,9 @@ def test_load_pretrained_model_success(mock_extract, mock_load_state):
     state_dict, d2t, t2d, vocab_size = load_pretrained_model("/path/to/model", device)
     mock_load_state.assert_called_once_with("/path/to/model")
     mock_extract.assert_called_once()
-    assert torch.equal(d2t, mock_d2t) and torch.equal(t2d, mock_t2d) and vocab_size == 100
+    assert torch.equal(d2t, mock_d2t)
+    assert torch.equal(t2d, mock_t2d)
+    assert vocab_size == 100
 
 
 @patch("scripts.train.load_full_state_dict")
@@ -90,7 +97,9 @@ def test_load_pretrained_model_vocab_size_from_d2t(mock_extract, mock_load_state
     mock_load_state.return_value = {}
     for size in [100, 256, 1024]:
         mock_extract.return_value = (torch.arange(size), torch.arange(size * 2))
-        _, _, _, vocab_size = load_pretrained_model("/path/to/model", torch.device("cpu"))
+        _, _, _, vocab_size = load_pretrained_model(
+            "/path/to/model", torch.device("cpu")
+        )
         assert vocab_size == size
 
 
@@ -98,7 +107,7 @@ def test_load_pretrained_model_vocab_size_from_d2t(mock_extract, mock_load_state
 
 
 @pytest.mark.parametrize(
-    "d2t_path,t2d_path",
+    ("d2t_path", "t2d_path"),
     [
         ("/path/to/d2t.npy", "/path/to/t2d.npy"),
         ("/path/to/d2t.npy", None),
@@ -130,9 +139,13 @@ def test_initialize_vocab_config_from_pretrained(mock_load):
         t2d_path=None,
         verifier_name_or_path="meta-llama/Llama-2-7b",
     )
-    d2t, t2d, vocab_size, state_dict = initialize_vocab_config(args, torch.device("cpu"))
-    assert vocab_size == 100 and state_dict == mock_state
-    assert torch.equal(d2t, mock_d2t) and torch.equal(t2d, mock_t2d)
+    d2t, t2d, vocab_size, state_dict = initialize_vocab_config(
+        args, torch.device("cpu")
+    )
+    assert vocab_size == 100
+    assert state_dict == mock_state
+    assert torch.equal(d2t, mock_d2t)
+    assert torch.equal(t2d, mock_t2d)
     mock_load.assert_called_once_with("/path/to/model", torch.device("cpu"))
 
 
@@ -147,9 +160,13 @@ def test_initialize_vocab_config_from_numpy(mock_load_vocab):
         t2d_path="/path/to/t2d.npy",
         verifier_name_or_path="meta-llama/Llama-2-7b",
     )
-    d2t, t2d, vocab_size, state_dict = initialize_vocab_config(args, torch.device("cpu"))
-    assert vocab_size == 100 and state_dict is None
-    assert torch.equal(d2t, mock_d2t) and torch.equal(t2d, mock_t2d)
+    d2t, t2d, vocab_size, state_dict = initialize_vocab_config(
+        args, torch.device("cpu")
+    )
+    assert vocab_size == 100
+    assert state_dict is None
+    assert torch.equal(d2t, mock_d2t)
+    assert torch.equal(t2d, mock_t2d)
     mock_load_vocab.assert_called_once_with(
         "/path/to/d2t.npy", "/path/to/t2d.npy", torch.device("cpu")
     )
@@ -168,8 +185,13 @@ def test_initialize_vocab_config_no_vocab_mapping(mock_config_class):
         t2d_path=None,
         verifier_name_or_path="meta-llama/Llama-2-7b",
     )
-    d2t, t2d, vocab_size, state_dict = initialize_vocab_config(args, torch.device("cpu"))
-    assert d2t is None and t2d is None and vocab_size == 32000 and state_dict is None
+    d2t, t2d, vocab_size, state_dict = initialize_vocab_config(
+        args, torch.device("cpu")
+    )
+    assert d2t is None
+    assert t2d is None
+    assert vocab_size == 32000
+    assert state_dict is None
     mock_config_class.from_pretrained.assert_called_once_with("meta-llama/Llama-2-7b")
 
 
