@@ -144,35 +144,29 @@ def test_extract_vocab_mappings_success():
     assert "model.layer1.weight" in state_dict
 
 
-def test_extract_vocab_mappings_missing_d2t():
-    """Test error handling when d2t mapping is missing."""
-    state_dict = {
-        "model.layer1.weight": torch.randn(10, 10),
-        "t2d": torch.randn(100),
-    }
-
-    with pytest.raises(ValueError, match="Key 'd2t' not found"):
+@pytest.mark.parametrize(
+    "state_dict,missing_key",
+    [
+        ({"model.layer1.weight": torch.randn(10, 10), "t2d": torch.randn(100)}, "d2t"),
+        ({"model.layer1.weight": torch.randn(10, 10), "d2t": torch.randn(100)}, "t2d"),
+    ],
+)
+def test_extract_vocab_mappings_missing_key(state_dict, missing_key):
+    """Test error handling when d2t or t2d mapping is missing."""
+    with pytest.raises(ValueError, match=f"Key '{missing_key}' not found"):
         extract_vocab_mappings(state_dict, torch.device("cpu"))
 
 
-def test_extract_vocab_mappings_missing_t2d():
-    """Test error handling when t2d mapping is missing."""
-    state_dict = {
-        "model.layer1.weight": torch.randn(10, 10),
-        "d2t": torch.randn(100),
-    }
-
-    with pytest.raises(ValueError, match="Key 't2d' not found"):
-        extract_vocab_mappings(state_dict, torch.device("cpu"))
-
-
-def test_extract_vocab_mappings_invalid_shape():
-    """Test error handling for invalid tensor shapes."""
-    state_dict = {
-        "d2t": torch.randn(10, 10, 10),  # 3D tensor (invalid)
-        "t2d": torch.randn(128),
-    }
-
+@pytest.mark.parametrize(
+    "d2t_tensor,t2d_tensor",
+    [
+        (torch.randn(10, 10, 10), torch.randn(128)),  # 3D d2t (invalid)
+        (torch.randn(100, 1), torch.randn(128, 1)),  # 2D both (invalid)
+    ],
+)
+def test_extract_vocab_mappings_invalid_shape(d2t_tensor, t2d_tensor):
+    """Test error handling for invalid tensor shapes (non-1D d2t/t2d)."""
+    state_dict = {"d2t": d2t_tensor, "t2d": t2d_tensor}
     with pytest.raises(ValueError, match="Unexpected d2t shape"):
         extract_vocab_mappings(state_dict, torch.device("cpu"))
 
@@ -194,41 +188,20 @@ def test_extract_vocab_mappings_case_insensitive():
     assert "T2D" not in state_dict
 
 
-def test_extract_vocab_mappings_2d_tensors():
-    """Test error handling for 2D vocab mapping tensors."""
-    state_dict = {
-        "d2t": torch.randn(100, 1),  # 2D tensor (invalid for 1D lookup)
-        "t2d": torch.randn(128, 1),  # 2D tensor (invalid for 1D mask)
-    }
-
-    device = torch.device("cpu")
-    with pytest.raises(ValueError, match="Unexpected d2t shape"):
-        extract_vocab_mappings(state_dict, device)
-
-
 # _find_exact_key Tests
 
 
-def test_find_exact_key_exact_match():
-    """Test finding exact key in state dict."""
-    state_dict = {
-        "d2t": torch.randn(100),
-        "model.layer.weight": torch.randn(10, 10),
-    }
-
-    result = _find_exact_key(state_dict, "d2t")
-    assert result == "d2t"
-
-
-def test_find_exact_key_case_insensitive():
-    """Test case-insensitive key matching."""
-    state_dict = {
-        "D2T": torch.randn(100),
-        "model.layer.weight": torch.randn(10, 10),
-    }
-
-    result = _find_exact_key(state_dict, "d2t")
-    assert result == "D2T"
+@pytest.mark.parametrize(
+    "state_dict,lookup_key,expected_key",
+    [
+        ({"d2t": torch.randn(100), "model.layer.weight": torch.randn(10, 10)}, "d2t", "d2t"),
+        ({"D2T": torch.randn(100), "model.layer.weight": torch.randn(10, 10)}, "d2t", "D2T"),
+    ],
+)
+def test_find_exact_key_match(state_dict, lookup_key, expected_key):
+    """Test finding key in state dict (exact and case-insensitive)."""
+    result = _find_exact_key(state_dict, lookup_key)
+    assert result == expected_key
 
 
 def test_find_exact_key_not_found():
@@ -261,32 +234,20 @@ def test_find_exact_key_error_message_quality():
 
 
 def test_validate_mapping_tensor_1d():
-    """Test validation of 1D tensors."""
-    tensor = torch.randn(100)
-    # Should not raise
-    _validate_mapping_tensor(tensor, "test_tensor")
+    """Test validation of 1D tensors (should not raise)."""
+    _validate_mapping_tensor(torch.randn(100), "test_tensor")
 
 
-def test_validate_mapping_tensor_2d():
-    """Test that 2D tensors are rejected."""
-    tensor = torch.randn(100, 128)
-
-    with pytest.raises(ValueError, match="Unexpected test_tensor shape"):
-        _validate_mapping_tensor(tensor, "test_tensor")
-
-
-def test_validate_mapping_tensor_3d_fails():
-    """Test that 3D tensors are rejected."""
-    tensor = torch.randn(10, 10, 10)
-
-    with pytest.raises(ValueError, match="Unexpected test_tensor shape"):
-        _validate_mapping_tensor(tensor, "test_tensor")
-
-
-def test_validate_mapping_tensor_0d_fails():
-    """Test that scalar tensors are rejected."""
-    tensor = torch.tensor(5.0)
-
+@pytest.mark.parametrize(
+    "tensor",
+    [
+        torch.randn(100, 128),  # 2D
+        torch.randn(10, 10, 10),  # 3D
+        torch.tensor(5.0),  # 0D scalar
+    ],
+)
+def test_validate_mapping_tensor_invalid_ndim(tensor):
+    """Test that non-1D tensors are rejected."""
     with pytest.raises(ValueError, match="Unexpected test_tensor shape"):
         _validate_mapping_tensor(tensor, "test_tensor")
 
