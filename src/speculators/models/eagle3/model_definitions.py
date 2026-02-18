@@ -1,4 +1,6 @@
 # ruff: noqa: ERA001
+from typing import Any
+
 import torch
 from transformers import Cache, LlamaConfig, PretrainedConfig
 from transformers.models.llama.modeling_llama import LlamaDecoderLayer, LlamaRMSNorm
@@ -16,6 +18,14 @@ class Eagle3FirstLayerMixin:
     Patches q/k/v projections to accept 2x hidden_size input (cat([embeds, hidden]))
     and overrides forward to split, normalize, and recombine before attention.
     """
+
+    # Provided by the decoder layer base class
+    self_attn: Any
+    input_layernorm: Any
+    post_attention_layernorm: Any
+    mlp: Any
+    norm_before_residual: bool
+    hidden_norm: Any
 
     def _patch_eagle3_projections(
         self,
