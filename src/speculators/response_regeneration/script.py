@@ -3,6 +3,7 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import sys
 import time
 from typing import Any, Dict, List
@@ -14,10 +15,12 @@ DATASET_CONFIGS = {
     "magpie": {
         "id": "Magpie-Align/Magpie-Llama-3.1-Pro-300K-Filtered",
         "prompt_field": "instruction",
+        "default_split": "train",
     },
     "ultrachat": {
         "id": "HuggingFaceH4/ultrachat_200k",
         "prompt_field": "prompt",
+        "default_split": "train_sft",
     },
 }
 
@@ -57,7 +60,7 @@ def parse_args():
         choices=["magpie", "ultrachat"],
         help="Dataset to process (magpie or ultrachat)",
     )
-    parser.add_argument("--split", default="train_sft", help="Dataset split")
+    parser.add_argument("--split", default=None, help="Dataset split (defaults to dataset-specific split if not provided)")
     parser.add_argument(
         "--subset",
         default=None,
@@ -78,8 +81,8 @@ def parse_args():
     )
     parser.add_argument(
         "--outfile",
-        default="ultrachat_qwen3_vl.jsonl",
-        help="Where to write JSONL results",
+        default=None,
+        help="Where to write JSONL results (auto-generated from dataset and model if not specified)",
     )
     parser.add_argument(
         "--resume",
@@ -92,6 +95,17 @@ def parse_args():
         help="Only process rows where language==this (e.g., EN)",
     )
     return parser.parse_args()
+
+
+def sanitize_filename(name: str) -> str:
+    """Sanitize a string to be safe for use in filenames."""
+    # Replace slashes and other problematic characters with underscores
+    name = re.sub(r'[/\\:*?"<>|]', '_', name)
+    # Replace spaces with underscores
+    name = name.replace(' ', '_')
+    # Remove any leading/trailing underscores or dots
+    name = name.strip('._')
+    return name
 
 
 def load_seen(path: str):
@@ -249,12 +263,25 @@ async def main():
     dataset_config = DATASET_CONFIGS[args.dataset]
     dataset_id = dataset_config["id"]
     prompt_field = dataset_config["prompt_field"]
+
+    # Use dataset-specific default split if not provided
+    split = args.split if args.split is not None else dataset_config["default_split"]
+
+    # Generate output filename if not specified
+    if args.outfile is None:
+        # Extract simple model name from full path (e.g., "Llama-3.3-70B-Instruct" from "meta-llama/Llama-3.3-70B-Instruct")
+        model_name = args.model.split('/')[-1] if '/' in args.model else args.model
+        model_name = sanitize_filename(model_name)
+        args.outfile = f"{args.dataset}_{model_name}.jsonl"
+
     print(f"Using dataset: {dataset_id}")
+    print(f"Split: {split}")
     print(f"Prompt field: {prompt_field}")
+    print(f"Output file: {args.outfile}")
     print()
 
     seen_ids = load_seen(args.outfile) if args.resume else set()
-    dataset = load_dataset(dataset_id, split=args.split, streaming=True)
+    dataset = load_dataset(dataset_id, split=split, streaming=True)
 
     queue: asyncio.Queue = asyncio.Queue(maxsize=args.concurrency * 4)
     semaphore = asyncio.Semaphore(args.concurrency)

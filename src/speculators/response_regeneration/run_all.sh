@@ -69,24 +69,33 @@ echo ""
 
 # Wait for servers to be ready
 echo "Step 2: Waiting for servers to be ready..."
+echo "  (Large models may take 1-3 minutes to load and compile)"
+
 IFS=',' read -ra PORT_ARRAY <<< "$PORTS"
 for PORT in "${PORT_ARRAY[@]}"; do
     PORT=$(echo "$PORT" | xargs)  # Trim whitespace
     ENDPOINT="http://127.0.0.1:$PORT/v1/models"
     echo "  Checking $ENDPOINT..."
 
-    MAX_RETRIES=30
+    MAX_RETRIES=90  # 90 retries = 3 minutes
     RETRY_COUNT=0
     while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-        if curl -s "$ENDPOINT" > /dev/null 2>&1; then
-            echo "    ✓ Server on port $PORT is ready"
+        # Use longer timeout for curl and suppress all output
+        if curl -s --connect-timeout 5 --max-time 10 "$ENDPOINT" > /dev/null 2>&1; then
+            echo "    ✓ Server on port $PORT is ready (after $((RETRY_COUNT * 2)) seconds)"
             break
         fi
         RETRY_COUNT=$((RETRY_COUNT + 1))
         if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
-            echo "    ✗ Server on port $PORT failed to start"
+            echo "    ✗ Server on port $PORT failed to start after $((MAX_RETRIES * 2)) seconds"
+            echo "    Last 20 lines of log:"
+            tail -20 "vllm_${PORT}.log"
             ./stop_vllm_servers.sh
             exit 1
+        fi
+        # Show progress every 5 retries (10 seconds)
+        if [ $((RETRY_COUNT % 5)) -eq 0 ] && [ $RETRY_COUNT -gt 0 ]; then
+            echo "    Still waiting... ($((RETRY_COUNT * 2))s elapsed)"
         fi
         sleep 2
     done

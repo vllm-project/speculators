@@ -8,6 +8,10 @@
 #   ./start_vllm_servers.sh  # Single server on port 8000, all GPUs, default model
 #
 
+# Get script directory for PID file
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PID_FILE="$SCRIPT_DIR/vllm_pids.txt"
+
 # Default configuration
 MODEL="Qwen/Qwen3-VL-235B-A22B-Instruct"
 HOST="127.0.0.1"
@@ -73,13 +77,16 @@ PIDS=()
 for i in "${!PORT_ARRAY[@]}"; do
     PORT="${PORT_ARRAY[$i]}"
 
-    # Set CUDA_VISIBLE_DEVICES if GPU groups specified
+    # Set CUDA_VISIBLE_DEVICES and tensor parallel size if GPU groups specified
     if [ ${#GPU_GROUPS[@]} -gt 0 ]; then
         GPU_IDS="${GPU_GROUPS[$i]}"
-        echo "Starting vLLM server on port $PORT with GPUs $GPU_IDS..."
+        # Count number of GPUs (count commas and add 1)
+        TP_SIZE=$(echo "$GPU_IDS" | awk -F',' '{print NF}')
+        echo "Starting vLLM server on port $PORT with GPUs $GPU_IDS (TP=$TP_SIZE)..."
         CUDA_VISIBLE_DEVICES="$GPU_IDS" vllm serve "$MODEL" \
             --host "$HOST" \
             --port "$PORT" \
+            --tensor-parallel-size "$TP_SIZE" \
             --api-key="" \
             > "vllm_${PORT}.log" 2>&1 &
     else
@@ -100,10 +107,13 @@ echo ""
 echo "All servers started!"
 echo "PIDs: ${PIDS[*]}"
 echo ""
-echo "To stop all servers, run:"
-echo "  kill ${PIDS[*]}"
+
+# Save PIDs to file
+echo "${PIDS[*]}" > "$PID_FILE"
+echo "Saved PIDs to: $PID_FILE"
 echo ""
-echo "Or save PIDs to file and kill later:"
-echo "${PIDS[*]}" > vllm_pids.txt
-echo "  Saved PIDs to vllm_pids.txt"
-echo "  To stop: kill \$(cat vllm_pids.txt)"
+echo "To stop all servers, run:"
+echo "  ./stop_vllm_servers.sh"
+echo ""
+echo "Or manually:"
+echo "  kill ${PIDS[*]}"

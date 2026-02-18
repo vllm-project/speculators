@@ -31,8 +31,11 @@ Orchestrates the entire pipeline: starts vLLM servers, processes the dataset, an
 # Keep servers running after processing
 ./run_all.sh --dataset ultrachat --keep-servers
 
-# All script.py arguments work
+# All script.py arguments work (output: magpie_Llama-3.3-70B-Instruct.jsonl)
 ./run_all.sh --dataset magpie --limit 500 --concurrency 128 --max-tokens 4096
+
+# Custom output filename
+./run_all.sh --dataset ultrachat --outfile my_custom_output.jsonl
 ```
 
 ### `script.py` - Dataset Processing Script
@@ -73,11 +76,11 @@ python script.py --concurrency 128 --outfile my_results.jsonl
 - `--ports`: Comma-separated list of ports for multiple servers
 - `--host`: Base host for servers (default: http://127.0.0.1)
 - `--endpoint`: Single endpoint (used if --ports not set)
-- `--split`: Dataset split (default: train_sft)
+- `--split`: Dataset split (defaults to `train` for magpie, `train_sft` for ultrachat)
 - `--limit`: Stop after N rows
 - `--concurrency`: Max concurrent requests (default: 64)
 - `--max-tokens`: Max tokens for generation (default: 8192)
-- `--outfile`: Output JSONL file (default: ultrachat_qwen3_vl.jsonl)
+- `--outfile`: Output JSONL file (auto-generated as `{dataset}_{model}.jsonl` if not specified)
 - `--resume`: Skip already processed rows
 - `--language-filter`: Only process specific language (e.g., EN)
 
@@ -92,11 +95,17 @@ Starts one or more vLLM servers on specified ports with GPU assignment.
 # Start single server with specific GPUs
 ./start_vllm_servers.sh --ports "8000" --gpus "0,1,2,3"
 
-# Start multiple servers with GPU assignment
+# Start multiple servers with GPU assignment (TP auto-configured)
 ./start_vllm_servers.sh --ports "8000,8001" --gpus "0,1:2,3"
+# Server on 8000: GPUs 0,1 with TP=2
+# Server on 8001: GPUs 2,3 with TP=2
 
 # Run Llama 3.3 70B on GPU pairs [0,1], [2,3], [4,5], [6,7]
-./start_vllm_servers.sh --ports "8000,8001,8002,8003" --gpus "0,1:2,3:4,5:6,7"
+./start_vllm_servers.sh \
+  --model "meta-llama/Llama-3.3-70B-Instruct" \
+  --ports "8000,8001,8002,8003" \
+  --gpus "0,1:2,3:4,5:6,7"
+# Each server gets TP=2
 
 # Use custom model
 ./start_vllm_servers.sh --ports "8000" --gpus "0,1" --model "meta-llama/Llama-3.3-70B-Instruct"
@@ -107,21 +116,34 @@ Starts one or more vLLM servers on specified ports with GPU assignment.
 - Use `,` to list GPUs within a group
 - Each GPU group is assigned to the corresponding port in order
 - Example: `--gpus "0,1:2,3:4,5"` assigns GPUs 0,1 to first port, 2,3 to second port, 4,5 to third port
+- **Tensor parallelism is automatically configured** based on the number of GPUs per group
+  - `"0,1"` → `--tensor-parallel-size 2`
+  - `"0,1,2,3"` → `--tensor-parallel-size 4`
+  - `"0,1,2,3,4,5,6,7"` → `--tensor-parallel-size 8`
 
-Logs are saved to `vllm_{port}.log` and PIDs to `vllm_pids.txt`.
+**Output files:**
+- Logs: `vllm_{port}.log` (one per server)
+- PIDs: `vllm_pids.txt` (used by `stop_vllm_servers.sh`)
 
 ### `stop_vllm_servers.sh` - Stop vLLM Servers
-Stops all running vLLM servers.
+Stops all vLLM servers started with `start_vllm_servers.sh` using the saved PID file.
 
 **Usage:**
 ```bash
 ./stop_vllm_servers.sh
 ```
 
+**Note:** This script requires the `vllm_pids.txt` file created by `start_vllm_servers.sh`. If you need to manually stop vLLM processes:
+```bash
+ps aux | grep 'vllm serve'
+kill <PID>
+```
+
 ## GPU Configuration Examples
 
 ### Llama 3.3 70B on 8 GPUs (4 servers with 2 GPUs each)
 ```bash
+# Each server gets 2 GPUs with TP=2 (tensor parallel size auto-set)
 ./run_all.sh \
   --model "meta-llama/Llama-3.3-70B-Instruct" \
   --ports "8000,8001,8002,8003" \
@@ -131,6 +153,7 @@ Stops all running vLLM servers.
 
 ### Llama 3.3 70B on 4 GPUs (2 servers with 2 GPUs each)
 ```bash
+# Each server gets 2 GPUs with TP=2
 ./run_all.sh \
   --model "meta-llama/Llama-3.3-70B-Instruct" \
   --ports "8000,8001" \
@@ -138,8 +161,9 @@ Stops all running vLLM servers.
   --dataset magpie
 ```
 
-### Qwen 235B on multiple GPU sets
+### Qwen 235B on multiple GPU sets (4 GPUs per server)
 ```bash
+# Each server gets 4 GPUs with TP=4
 ./run_all.sh \
   --model "Qwen/Qwen3-VL-235B-A22B-Instruct" \
   --ports "8000,8001" \
@@ -157,10 +181,12 @@ Stops all running vLLM servers.
 ### Magpie
 - Dataset ID: `Magpie-Align/Magpie-Llama-3.1-Pro-300K-Filtered`
 - Prompt field: `instruction`
+- Default split: `train`
 
 ### UltraChat
 - Dataset ID: `HuggingFaceH4/ultrachat_200k`
 - Prompt field: `prompt`
+- Default split: `train_sft`
 
 ## Workflow Examples
 
@@ -203,7 +229,11 @@ python script.py \
 ### Resume Interrupted Processing
 ```bash
 # If processing was interrupted, resume from where it left off
+# Make sure to use the same output file (auto-generated or specified)
 python script.py --dataset magpie --resume
+
+# Or with explicit output file
+python script.py --dataset magpie --outfile magpie_Llama-3.3-70B-Instruct.jsonl --resume
 ```
 
 ## Output Format
@@ -236,6 +266,15 @@ Each line contains:
 ```
 
 Note: The `reasoning_content` field in metadata is only included when the model actually provides reasoning content (e.g., with reasoning models). For standard models, this field will not be present.
+
+**Output Filenames:**
+
+If you don't specify `--outfile`, the filename is auto-generated based on dataset and model:
+- `magpie_Llama-3.3-70B-Instruct.jsonl`
+- `ultrachat_Qwen3-VL-235B-A22B-Instruct.jsonl`
+- `magpie_Qwen2.5-72B-Instruct.jsonl`
+
+You can override with `--outfile custom_name.jsonl`.
 
 Errors are logged as:
 ```json
