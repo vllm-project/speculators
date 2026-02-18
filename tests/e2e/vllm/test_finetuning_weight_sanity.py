@@ -151,7 +151,10 @@ def test_finetuning_weight_sanity(tmp_path: Path):
         key_to_rel_l1[key] = rel_l1
         logger.info(
             "  %s: rel_l1=%.3e  max|Δ|=%.3e  mean|Δ|=%.3e",
-            key, rel_l1, max_abs, mean_abs,
+            key,
+            rel_l1,
+            max_abs,
+            mean_abs,
         )
 
     # All trainable tensors must have relative L1 distance <= REL_L1_MAX
@@ -171,7 +174,8 @@ def test_finetuning_weight_sanity(tmp_path: Path):
     logger.info("Summary: %s", summary)
     logger.info(
         "Tensors with rel_l1 > %s (count=%d): %s",
-        REL_L1_MIN, len(changed_keys),
+        REL_L1_MIN,
+        len(changed_keys),
         [(k, key_to_rel_l1[k]) for k in changed_keys],
     )
     assert len(changed_keys) >= MIN_CHANGED, (
