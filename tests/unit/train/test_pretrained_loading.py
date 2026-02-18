@@ -144,6 +144,8 @@ def test_initialize_vocab_config_from_pretrained(mock_load):
     )
     assert vocab_size == 100
     assert state_dict == mock_state
+    assert d2t is not None
+    assert t2d is not None
     assert torch.equal(d2t, mock_d2t)
     assert torch.equal(t2d, mock_t2d)
     mock_load.assert_called_once_with("/path/to/model", torch.device("cpu"))
@@ -165,6 +167,8 @@ def test_initialize_vocab_config_from_numpy(mock_load_vocab):
     )
     assert vocab_size == 100
     assert state_dict is None
+    assert d2t is not None
+    assert t2d is not None
     assert torch.equal(d2t, mock_d2t)
     assert torch.equal(t2d, mock_t2d)
     mock_load_vocab.assert_called_once_with(
