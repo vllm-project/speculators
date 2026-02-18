@@ -73,7 +73,13 @@ def test_end_to_end_pretrained_loading():
 
     assert config.draft_vocab_size == d2t.shape[0]
     model_class = SpeculatorModel.registered_model_class_from_config(config)
-    model = model_class(config=config, t2d=t2d, d2t=d2t)
+    model = model_class(
+        config=config,
+        verifier=None,
+        verifier_attachment_mode=None,
+        t2d=t2d,
+        d2t=d2t,
+    )
     missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
 
     expected_missing = {"t2d", "d2t", "verifier_lm_head.weight"}
