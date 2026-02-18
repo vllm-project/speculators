@@ -73,10 +73,8 @@ def test_end_to_end_pretrained_loading():
 
     assert config.draft_vocab_size == d2t.shape[0]
     model_class = SpeculatorModel.registered_model_class_from_config(config)
-    model = model_class(
+    model = model_class(  # type: ignore[call-arg]
         config=config,
-        verifier=None,
-        verifier_attachment_mode=None,
         t2d=t2d,
         d2t=d2t,
     )
