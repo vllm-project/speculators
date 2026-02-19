@@ -536,8 +536,8 @@ class DFlashDraftModel(SpeculatorModel):
         logits=self.lm_head(noise_embedding)
 
         if return_loss: 
-            aligned_logits = logits[:, :-1]                   
-            aligned_targets = targets[:, 1:]                  
+            aligned_logits = logits[:, 1:]                   
+            aligned_targets = targets[:, :-1]                  
             aligned_loss_mask = loss_mask[:, 1:]
             s_loss, s_metrics = compute_metrics(
                 aligned_logits,
