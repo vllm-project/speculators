@@ -87,6 +87,73 @@ def loss_function(
     return batch_loss.mean()
 
 
+@torch.no_grad()
+def compute_acceptance_rate(
+    draft_logits: torch.Tensor,  # shape: [1, total_seq_len, draft_vocab_size]
+    target_logits: torch.Tensor,  # shape: [1, total_seq_len, draft_vocab_size]
+    loss_mask: torch.Tensor | None,  # shape: [1, total_seq_len]
+    block_size: int = 1,
+):
+    """
+    Compute acceptance rate for each position in the block according to EAGLE 3 criteria.
+
+    EAGLE 3 acceptance formula: acceptance_prob = min(1, p(token) / p_draft(token))
+    where p is the target model's probability and p_draft is the draft model's probability.
+
+    Args:
+        draft_logits: Logits from the draft model
+        target_logits: Logits from the target/verifier model
+        loss_mask: Mask indicating which positions to include in the calculation
+        block_size: Size of each block for position-wise calculation
+
+    Returns:
+        If block_size == 1: overall acceptance rate
+        Otherwise: (overall acceptance rate, list of per-position acceptance rates)
+    """
+    # Convert logits to probabilities
+    draft_probs = torch.nn.functional.softmax(draft_logits, dim=-1)
+    target_probs = torch.nn.functional.softmax(target_logits, dim=-1)
+
+    # Get the draft tokens (what the draft model predicted)
+    draft_tokens = torch.argmax(draft_logits, dim=-1)
+
+    # Gather the probabilities for the draft tokens from both distributions
+    # Shape: [1, total_seq_len]
+    draft_token_probs_from_draft = torch.gather(
+        draft_probs, dim=-1, index=draft_tokens.unsqueeze(-1)
+    ).squeeze(-1)
+
+    draft_token_probs_from_target = torch.gather(
+        target_probs, dim=-1, index=draft_tokens.unsqueeze(-1)
+    ).squeeze(-1)
+
+    # Compute acceptance probability: min(1, p_target / p_draft)
+    # Add epsilon to avoid division by zero
+    acceptance_prob = torch.clamp(
+        draft_token_probs_from_target / (draft_token_probs_from_draft + 1e-10),
+        max=1.0
+    )
+    accepted = acceptance_prob
+
+    if block_size != 1:
+        acc_rates = []
+        for i in range(block_size):
+            pos_accepted = torch.masked_select(
+                accepted[:, i::block_size],
+                loss_mask.to(torch.bool)[:, i::block_size]
+            )
+            acc_rates.append(pos_accepted.float().mean())
+
+    if loss_mask is not None:
+        accepted = torch.masked_select(accepted, loss_mask.to(torch.bool))
+
+    overall_acceptance = accepted.float().mean()
+
+    if block_size == 1:
+        return overall_acceptance
+    else:
+        return overall_acceptance, acc_rates
+
 def compute_metrics(
     logits: torch.Tensor,
     targets: torch.Tensor,
@@ -113,19 +180,25 @@ def compute_metrics(
     if block_size==1:
 
         s_full_acc=compute_accuracy(logits, targets, loss_mask, block_size)
+        s_accept_rate=compute_acceptance_rate(logits, targets, loss_mask, block_size)
         s_metrics=0
         s_metrics = {}
         s_metrics[f"loss"] = s_loss.detach().clone()
         s_metrics[f"full_acc"] = s_full_acc
+        s_metrics[f"accept_rate"] = s_accept_rate
     else:
         s_full_acc, per_position_acc=compute_accuracy(logits, targets, loss_mask, block_size)
+        s_accept_rate, per_position_accept=compute_acceptance_rate(logits, targets, loss_mask, block_size)
         s_metrics=0
         s_metrics = {}
         s_metrics[f"loss"] = s_loss.detach().clone()
         s_metrics[f"full_acc"] = s_full_acc
+        s_metrics[f"accept_rate"] = s_accept_rate
         for pos in range(len(per_position_acc)):
             s_metrics[f"position {pos} acc"]=per_position_acc[pos]
+            s_metrics[f"position {pos} accept"]=per_position_accept[pos]
     return s_loss, s_metrics
+
 
 
 from typing import Optional
@@ -462,11 +535,14 @@ class DFlashDraftModel(SpeculatorModel):
 
         logits=self.lm_head(noise_embedding)
 
-        if return_loss:
+        if return_loss: 
+            aligned_logits = logits[:, :-1]                   
+            aligned_targets = targets[:, 1:]                  
+            aligned_loss_mask = loss_mask[:, 1:]
             s_loss, s_metrics = compute_metrics(
-                logits,
-                targets,
-                loss_mask,
+                aligned_logits,
+                aligned_targets,
+                aligned_loss_mask,
                 self.block_size
             )
             loss += s_loss
