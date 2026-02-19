@@ -1,64 +1,64 @@
-# vLLM Dataset Processing Pipeline
+# Response Regeneration Pipeline
 
-Scripts for processing datasets through vLLM servers with automatic model detection and multi-server support.
+Regenerate assistant responses in existing datasets using a vLLM-served model. Given a dataset containing user prompts (e.g., Magpie, UltraChat), this pipeline extracts the prompts, sends them to a vLLM server, and produces a new dataset with the original prompts paired with freshly generated responses from the target model. This is useful for creating training data where you want a specific model's outputs in place of the original assistant responses.
+
+Uses vLLM's built-in data parallelism (`--data-parallel-size`) for multi-GPU scaling with automatic load balancing.
 
 ## Scripts Overview
 
 ### `run_all.sh` - Complete Pipeline Runner
-Orchestrates the entire pipeline: starts vLLM servers, processes the dataset, and stops servers.
+Orchestrates the entire pipeline: starts a vLLM server (with optional data/tensor parallelism), regenerates responses for the dataset, and stops the server.
 
 **Usage:**
 ```bash
-# Process UltraChat dataset with single server (auto-detect model)
-./run_all.sh
-
-# Specify model explicitly
+# Basic usage
 ./run_all.sh --model "meta-llama/Llama-3.3-70B-Instruct" --dataset magpie
 
 # Process Magpie dataset with limit
-./run_all.sh --dataset magpie --limit 1000
+./run_all.sh --model "Qwen/Qwen2.5-72B-Instruct" --dataset magpie --limit 1000
 
-# Use multiple servers with GPU assignment (one model per GPU pair)
-./run_all.sh --ports "8000,8001" --gpus "0,1:2,3" --dataset magpie
+# Select specific GPUs
+./run_all.sh --model "Qwen/Qwen2.5-72B-Instruct" --gpus 0,1,2,4 --tp-size 4 --dataset magpie
 
-# Run Llama 3.3 70B on 4 GPU pairs with explicit model
-./run_all.sh \
-  --model "meta-llama/Llama-3.3-70B-Instruct" \
-  --ports "8000,8001,8002,8003" \
-  --gpus "0,1:2,3:4,5:6,7" \
-  --dataset magpie
+# Use data parallelism (4 replicas, each with TP=2, uses 8 GPUs)
+./run_all.sh --model "Qwen/Qwen2.5-72B-Instruct" --dp-size 4 --tp-size 2 --dataset magpie
 
-# Keep servers running after processing
-./run_all.sh --dataset ultrachat --keep-servers
+# Keep server running after processing
+./run_all.sh --model "Qwen/Qwen2.5-72B-Instruct" --dataset ultrachat --keep-server
 
 # All script.py arguments work (output: magpie_Llama-3.3-70B-Instruct.jsonl)
-./run_all.sh --dataset magpie --limit 500 --concurrency 128 --max-tokens 4096
+./run_all.sh --model "meta-llama/Llama-3.3-70B-Instruct" --dataset magpie --limit 500 --concurrency 128 --max-tokens 4096
 
 # Custom output filename
-./run_all.sh --dataset ultrachat --outfile my_custom_output.jsonl
+./run_all.sh --model "Qwen/Qwen2.5-72B-Instruct" --dataset ultrachat --outfile my_custom_output.jsonl
 ```
 
-### `script.py` - Dataset Processing Script
-Processes datasets through vLLM chat completion endpoints with automatic model detection.
+**Arguments:**
+- `--model`: Model to serve (required)
+- `--gpus`: Comma-separated GPU IDs (sets `CUDA_VISIBLE_DEVICES`)
+- `--port`: Server port (default: 8000)
+- `--dp-size`: Number of data parallel replicas (maps to `--data-parallel-size`)
+- `--tp-size`: Tensor parallel size per replica (maps to `--tensor-parallel-size`)
+- `--keep-server`: Don't stop the server after processing
+- All other arguments are passed through to `script.py`
+
+### `script.py` - Response Regeneration Script
+Extracts user prompts from a dataset, sends them to a vLLM chat completion endpoint, and writes out new prompt-response pairs with the target model's generated responses.
 
 **Features:**
 - Auto-detects model from vLLM server (no need to specify `--model`)
 - Supports multiple datasets (Magpie and UltraChat)
-- Multi-server load balancing
 - Resume capability to skip already-processed rows
 - Async processing with configurable concurrency
 
 **Usage:**
 ```bash
-# Basic usage (assumes servers already running)
+# Basic usage (assumes server already running)
 python script.py
 
 # Specify dataset
 python script.py --dataset magpie
 python script.py --dataset ultrachat
-
-# Use multiple servers
-python script.py --ports "8000,8001,8002"
 
 # Limit number of rows
 python script.py --dataset magpie --limit 1000
@@ -68,14 +68,15 @@ python script.py --resume
 
 # Custom concurrency and output
 python script.py --concurrency 128 --outfile my_results.jsonl
+
+# Custom endpoint
+python script.py --endpoint http://127.0.0.1:9000/v1/chat/completions
 ```
 
 **Arguments:**
 - `--dataset`: Choose `magpie` or `ultrachat` (default: ultrachat)
 - `--model`: Model name (auto-detected from vLLM server if not specified)
-- `--ports`: Comma-separated list of ports for multiple servers
-- `--host`: Base host for servers (default: http://127.0.0.1)
-- `--endpoint`: Single endpoint (used if --ports not set)
+- `--endpoint`: vLLM chat completions endpoint (default: `http://127.0.0.1:8000/v1/chat/completions`)
 - `--split`: Dataset split (defaults to `train` for magpie, `train_sft` for ultrachat)
 - `--limit`: Stop after N rows
 - `--concurrency`: Max concurrent requests (default: 64)
@@ -84,96 +85,35 @@ python script.py --concurrency 128 --outfile my_results.jsonl
 - `--resume`: Skip already processed rows
 - `--language-filter`: Only process specific language (e.g., EN)
 
-### `start_vllm_servers.sh` - Start vLLM Servers
-Starts one or more vLLM servers on specified ports with GPU assignment.
-
-**Usage:**
-```bash
-# Start single server on port 8000 (uses all GPUs)
-./start_vllm_servers.sh
-
-# Start single server with specific GPUs
-./start_vllm_servers.sh --ports "8000" --gpus "0,1,2,3"
-
-# Start multiple servers with GPU assignment (TP auto-configured)
-./start_vllm_servers.sh --ports "8000,8001" --gpus "0,1:2,3"
-# Server on 8000: GPUs 0,1 with TP=2
-# Server on 8001: GPUs 2,3 with TP=2
-
-# Run Llama 3.3 70B on GPU pairs [0,1], [2,3], [4,5], [6,7]
-./start_vllm_servers.sh \
-  --model "meta-llama/Llama-3.3-70B-Instruct" \
-  --ports "8000,8001,8002,8003" \
-  --gpus "0,1:2,3:4,5:6,7"
-# Each server gets TP=2
-
-# Use custom model
-./start_vllm_servers.sh --ports "8000" --gpus "0,1" --model "meta-llama/Llama-3.3-70B-Instruct"
-```
-
-**GPU Assignment Format:**
-- Use `:` to separate GPU groups for different servers
-- Use `,` to list GPUs within a group
-- Each GPU group is assigned to the corresponding port in order
-- Example: `--gpus "0,1:2,3:4,5"` assigns GPUs 0,1 to first port, 2,3 to second port, 4,5 to third port
-- **Tensor parallelism is automatically configured** based on the number of GPUs per group
-  - `"0,1"` → `--tensor-parallel-size 2`
-  - `"0,1,2,3"` → `--tensor-parallel-size 4`
-  - `"0,1,2,3,4,5,6,7"` → `--tensor-parallel-size 8`
-
-**Output files:**
-- Logs: `vllm_{port}.log` (one per server)
-- PIDs: `vllm_pids.txt` (used by `stop_vllm_servers.sh`)
-
-### `stop_vllm_servers.sh` - Stop vLLM Servers
-Stops all vLLM servers started with `start_vllm_servers.sh` using the saved PID file.
-
-**Usage:**
-```bash
-./stop_vllm_servers.sh
-```
-
-**Note:** This script requires the `vllm_pids.txt` file created by `start_vllm_servers.sh`. If you need to manually stop vLLM processes:
-```bash
-ps aux | grep 'vllm serve'
-kill <PID>
-```
-
 ## GPU Configuration Examples
 
-### Llama 3.3 70B on 8 GPUs (4 servers with 2 GPUs each)
+### Llama 3.3 70B on 8 GPUs (4 data-parallel replicas with TP=2)
 ```bash
-# Each server gets 2 GPUs with TP=2 (tensor parallel size auto-set)
 ./run_all.sh \
   --model "meta-llama/Llama-3.3-70B-Instruct" \
-  --ports "8000,8001,8002,8003" \
-  --gpus "0,1:2,3:4,5:6,7" \
+  --dp-size 4 --tp-size 2 \
   --dataset magpie
 ```
 
-### Llama 3.3 70B on 4 GPUs (2 servers with 2 GPUs each)
+### Llama 3.3 70B on 4 GPUs (2 data-parallel replicas with TP=2)
 ```bash
-# Each server gets 2 GPUs with TP=2
 ./run_all.sh \
   --model "meta-llama/Llama-3.3-70B-Instruct" \
-  --ports "8000,8001" \
-  --gpus "0,1:2,3" \
+  --dp-size 2 --tp-size 2 \
   --dataset magpie
 ```
 
-### Qwen 235B on multiple GPU sets (4 GPUs per server)
+### Qwen 235B on 8 GPUs (2 data-parallel replicas with TP=4)
 ```bash
-# Each server gets 4 GPUs with TP=4
 ./run_all.sh \
   --model "Qwen/Qwen3-VL-235B-A22B-Instruct" \
-  --ports "8000,8001" \
-  --gpus "0,1,2,3:4,5,6,7" \
+  --dp-size 2 --tp-size 4 \
   --dataset ultrachat
 ```
 
-### Single server using all available GPUs (model auto-detected)
+### Single replica using all available GPUs
 ```bash
-./run_all.sh --dataset magpie
+./run_all.sh --model "Qwen/Qwen2.5-72B-Instruct" --dataset magpie
 ```
 
 ## Supported Datasets
@@ -192,44 +132,33 @@ kill <PID>
 
 ### Quick Start (All-in-One)
 ```bash
-# Process 100 rows from Magpie dataset (model auto-detected)
-./run_all.sh --dataset magpie --limit 100
+# Process 100 rows from Magpie dataset
+./run_all.sh --model "Qwen/Qwen2.5-72B-Instruct" --dataset magpie --limit 100
 
-# Process with specific model and GPU assignment
+# Process with specific model and data parallelism
 ./run_all.sh \
   --model "meta-llama/Llama-3.3-70B-Instruct" \
-  --ports "8000,8001" \
-  --gpus "0,1:2,3" \
+  --dp-size 2 --tp-size 2 \
   --dataset magpie \
   --limit 1000
 ```
 
 ### Manual Control
 ```bash
-# 1. Start servers with model and GPU assignment
-./start_vllm_servers.sh \
-  --model "meta-llama/Llama-3.3-70B-Instruct" \
-  --ports "8000,8001,8002" \
-  --gpus "0,1:2,3:4,5"
+# 1. Start server manually with data parallelism
+vllm serve "meta-llama/Llama-3.3-70B-Instruct" \
+  --data-parallel-size 4 --tensor-parallel-size 2 \
+  --port 8000
 
-# 2. Process dataset (model auto-detected from servers)
-python script.py --ports "8000,8001,8002" --dataset magpie --limit 1000
+# 2. Run regeneration (model auto-detected from server)
+python script.py --dataset magpie --limit 1000
 
-# Or specify model explicitly
-python script.py \
-  --model "meta-llama/Llama-3.3-70B-Instruct" \
-  --ports "8000,8001,8002" \
-  --dataset magpie \
-  --limit 1000
-
-# 3. Stop servers
-./stop_vllm_servers.sh
+# 3. Stop server (Ctrl+C or kill the process)
 ```
 
 ### Resume Interrupted Processing
 ```bash
 # If processing was interrupted, resume from where it left off
-# Make sure to use the same output file (auto-generated or specified)
 python script.py --dataset magpie --resume
 
 # Or with explicit output file
@@ -238,7 +167,7 @@ python script.py --dataset magpie --outfile magpie_Llama-3.3-70B-Instruct.jsonl 
 
 ## Output Format
 
-Results are saved as JSONL in a conversations format compatible with fine-tuning datasets. The `id` field uses the dataset's UUID if available, otherwise falls back to `sample_{idx}`.
+Each row in the output pairs the original user prompt with the newly generated response from the target model, saved as JSONL in a conversations format compatible with fine-tuning. The `id` field uses the dataset's UUID if available, otherwise falls back to `sample_{idx}`.
 
 Each line contains:
 ```json

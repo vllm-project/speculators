@@ -6,7 +6,7 @@ import os
 import re
 import sys
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 import aiohttp
 from datasets import load_dataset
@@ -33,21 +33,7 @@ def parse_args():
     parser.add_argument(
         "--endpoint",
         default="http://127.0.0.1:8000/v1/chat/completions",
-        help="vLLM OpenAI-compatible Chat Completions endpoint (used if --ports is not set)",
-    )
-    parser.add_argument(
-        "--host",
-        default="http://127.0.0.1",
-        help="Base host for vLLM servers (used with --ports, e.g. http://127.0.0.1)",
-    )
-    parser.add_argument(
-        "--ports",
-        default=None,
-        help=(
-            "Comma-separated list of ports for multiple vLLM servers "
-            "(e.g. '8000,8001,8002'). If set, overrides --endpoint and "
-            "builds endpoints as {host}:{port}/v1/chat/completions."
-        ),
+        help="vLLM OpenAI-compatible Chat Completions endpoint",
     )
     parser.add_argument(
         "--model",
@@ -71,7 +57,7 @@ def parse_args():
         "--concurrency",
         type=int,
         default=64,
-        help="Max concurrent requests (total across all servers)",
+        help="Max concurrent requests",
     )
     parser.add_argument(
         "--max-tokens",
@@ -150,17 +136,14 @@ async def detect_model(endpoint: str) -> str:
 
 
 async def worker(
-    name: int,
     sem: asyncio.Semaphore,
     session: aiohttp.ClientSession,
     queue: "asyncio.Queue[Dict[str, Any]]",
     args,
     out_fh,
-    endpoints: List[str],
+    endpoint: str,
 ):
-    """Worker that pulls items from queue and sends them to one of multiple endpoints."""
-    endpoint = endpoints[name % len(endpoints)]
-
+    """Worker that pulls items from queue and sends them to the vLLM endpoint."""
     while True:
         item = await queue.get()
         if item is None:
@@ -240,22 +223,12 @@ async def main():
     """Main async function to process dataset through vLLM endpoints."""
     args = parse_args()
 
-    # Build list of endpoints (one per vLLM server)
-    if args.ports:
-        ports = [port.strip() for port in args.ports.split(",") if port.strip()]
-        if not ports:
-            raise ValueError("No valid ports parsed from --ports argument.")
-        endpoints = [f"{args.host}:{port}/v1/chat/completions" for port in ports]
-    else:
-        endpoints = [args.endpoint]
-
-    print("Using endpoints:")
-    for endpoint in endpoints:
-        print(f"  {endpoint}")
+    endpoint = args.endpoint
+    print(f"Using endpoint: {endpoint}")
 
     # Auto-detect model if not specified
     if args.model is None:
-        args.model = await detect_model(endpoints[0])
+        args.model = await detect_model(endpoint)
 
     print(f"Using model: {args.model}")
 
@@ -301,9 +274,9 @@ async def main():
         with open(args.outfile, "a", encoding="utf-8") as output_file:
             workers = [
                 asyncio.create_task(
-                    worker(i, semaphore, session, queue, args, output_file, endpoints)
+                    worker(semaphore, session, queue, args, output_file, endpoint)
                 )
-                for i in range(args.concurrency)
+                for _ in range(args.concurrency)
             ]
 
             processed_count = 0
