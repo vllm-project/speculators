@@ -229,10 +229,20 @@ def generate_and_save_hidden_states(args, dataset):
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
 
     start_file_idx = find_last_checkpoint(args.output_dir)
-    sample_lengths = {}
 
-    if start_file_idx > 0:
-        log.subsection(f"Resuming: {start_file_idx} files already exist")
+    # Load existing sample lengths to preserve them on resume
+    sample_lengths_output_path = Path(args.output_dir) / "sample_lengths.json"
+    if start_file_idx > 0 and sample_lengths_output_path.exists():
+        with open(sample_lengths_output_path) as f:
+            sample_lengths = json.load(f)
+        log.subsection(
+            f"Resuming: {start_file_idx} files already exist, "
+            f"loaded {len(sample_lengths)} existing sample lengths"
+        )
+    else:
+        sample_lengths = {}
+        if start_file_idx > 0:
+            log.subsection(f"Resuming: {start_file_idx} files already exist")
 
     num_samples = len(dataset)
     start_sample_idx = start_file_idx - args.start_idx
@@ -281,7 +291,7 @@ def generate_and_save_hidden_states(args, dataset):
             for j, result in enumerate(results):
                 # Truncate loss_mask to match input_ids length (generator may truncate)
                 input_len = len(result["input_ids"])
-                sample_lengths[file_idx] = input_len
+                sample_lengths[str(file_idx)] = input_len
                 loss_mask = batch_loss_mask[j][:input_len]
 
                 result_cleaned = {
@@ -304,7 +314,6 @@ def generate_and_save_hidden_states(args, dataset):
 
     samples_saved = file_idx - start_file_idx
 
-    sample_lengths_output_path = Path(args.output_dir) / "sample_lengths.json"
     with open(sample_lengths_output_path, "w") as f:
         json.dump(sample_lengths, f, indent=2)
 
