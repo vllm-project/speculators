@@ -187,11 +187,8 @@ def run_script(
             "--no-default-groups",
             "--isolated",
         ]
-        for package in requires[:1]:
-            command.append("--with-editable")
-            command.append(package)
-        for package in requires[1:]:
-            command.append("--with")
+        for i, package in enumerate(requires):
+            command.append("--with-editable" if i == 0 else "--with")
             command.append(package)
 
     command.extend(python_alt.split())
