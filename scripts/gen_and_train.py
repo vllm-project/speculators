@@ -22,6 +22,7 @@ Usage:
 """
 
 import enum
+import os
 import shutil
 import subprocess
 import sys
@@ -169,41 +170,31 @@ def print_block(title: str, content: str):
     print("\n", "#" * term_width, "\n", sep="")
 
 
-def npu_command(python_alt, command):
-    if is_npu_available():
-        if python_alt and python_alt.strip():
-            command = []
-            command.extend(python_alt.split())
-        else:
-            command = ["python"]
-    return command
-
-
 def run_script(
     script_name: str,
     script_args: list[str],
     requires: list[str],
-    python_alt: str | None = None,
+    python_alt: str = "python",
+    use_uv: bool = True,
 ):
-    command = [
-        "uv",
-        "run",
-        "--no-sync",
-        "--no-dev",
-        "--no-default-groups",
-        "--isolated",
-    ]
-    for package in requires[:1]:
-        command.append("--with-editable")
-        command.append(package)
-    for package in requires[1:]:
-        command.append("--with")
-        command.append(package)
+    command = []
+    if use_uv:
+        command = [
+            "uv",
+            "run",
+            "--no-sync",
+            "--no-dev",
+            "--no-default-groups",
+            "--isolated",
+        ]
+        for package in requires[:1]:
+            command.append("--with-editable")
+            command.append(package)
+        for package in requires[1:]:
+            command.append("--with")
+            command.append(package)
 
-    if python_alt:
-        command.extend(python_alt.split())
-
-    command = npu_command(python_alt, command)
+    command.extend(python_alt.split())
 
     script_path = (Path(__file__).parent / script_name).absolute()
     command.append(str(script_path))
@@ -301,7 +292,12 @@ def run_e2e(
         dga_dict["output-dir"] = str(output_path / "gen" / dataset_name)
 
         dga_list = prepare_args(dga_dict)
-        run_script("data_generation_offline.py", dga_list, [".[datagen]"])
+        run_script(
+            "data_generation_offline.py",
+            dga_list,
+            [".[datagen]"],
+            use_uv=not is_npu_available(),
+        )
 
     # Combine token frequency files from all datasets into a single file.
     if num_datasets > 1:
@@ -328,7 +324,12 @@ def run_e2e(
         vma_dict["token-freq-path"] = str(combined_token_freq_path)
         vma_dict["output-path"] = str(output_path / "vocab_mapping")
         vma_list = prepare_args(vma_dict)
-        run_script("build_vocab_mapping.py", vma_list, [".[datagen]"])
+        run_script(
+            "build_vocab_mapping.py",
+            vma_list,
+            [".[datagen]"],
+            use_uv=not is_npu_available(),
+        )
         ta_dict["d2t-path"] = str(output_path / "vocab_mapping" / "d2t.npy")
         ta_dict["t2d-path"] = str(output_path / "vocab_mapping" / "t2d.npy")
 
@@ -343,9 +344,13 @@ def run_e2e(
         loggers = [logger.strip() for logger in loggers]
         packages.extend(loggers)
     device_count = torch.accelerator.device_count()
+
+    local_train_env = is_npu_available() or bool(os.environ.get("LOCAL_TRAIN_ENV", ""))
+
     run_script(
         "train.py",
         ta_list,
         packages,
         python_alt=f"torchrun --standalone --nproc_per_node={device_count}",
+        use_uv=not local_train_env,
     )

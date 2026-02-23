@@ -1,3 +1,4 @@
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -42,6 +43,9 @@ def test_gen_train_acceptance(tmp_path: Path):
         run_name="test_gen_train_acceptance",
         epochs=NUM_EPOCHS,
     )
+
+    # Use local environment for training run
+    os.environ["LOCAL_TRAIN_ENV"] = "1"
 
     run_e2e(
         verifier_name_or_path=VERIFIER_NAME_OR_PATH,
