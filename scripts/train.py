@@ -304,7 +304,7 @@ def parse_args():
     # Model hyperparameters
     parser.add_argument(
         "--norm-before-residual",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=True,
         help="Whether to normalize before residual connection",
     )
