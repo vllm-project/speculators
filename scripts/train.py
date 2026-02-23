@@ -306,7 +306,7 @@ def parse_args():
         "--norm-before-residual",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Whether to normalize before residual connection",
+        help="Toggle normalization before residual connections (default: True)",
     )
     # Dataloader parameters
     parser.add_argument(
