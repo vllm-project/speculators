@@ -2,6 +2,34 @@
 
 Thank you for considering contributing to Speculators! We welcome contributions from the community to help improve and grow this project. This document outlines the process and guidelines for contributing.
 
+## Claiming Work
+
+**We value your time and want to ensure your contributions have the greatest impact.**
+
+To make the contribution process as smooth as possible, we ask that you coordinate with maintainers before diving into significant changes. This helps us:
+
+- **Avoid duplicate effort** if someone else is already working on a similar solution.
+- **Align on architecture** early on so your PR can be merged quickly.
+- **Protect your time** by ensuring the proposed change fits the project’s long-term roadmap.
+
+### How to Get Started
+
+1. **Find or create an issue:** Check if your idea is already being discussed. If not, open a new issue to propose the change.
+2. **Start a conversation:** Comment on the issue to let us know you’re interested! A brief outline of your planned approach is always helpful.
+3. **Wait for the "Green Light":** A maintainer will assign the issue to you. This is our signal that the approach looks good and the "floor is yours."
+4. **Build away:** Once assigned, you’re all set to begin implementation.
+
+### When should you check in?
+
+| **Let's chat first if...**                      | **Feel free to dive right in for...**   |
+| :---------------------------------------------- | :-------------------------------------- |
+| Adding new training algorithms or model support | Fixing typos or improving documentation |
+| Modifying the data pipeline or CLI/API          | Small bug fixes (generally < 20 lines)  |
+| Large refactors or performance optimizations    | Adding missing type annotations         |
+| Changes affecting 3+ files                      | Minor dependency updates                |
+
+*Maintainers typically respond in 2-3 business days. If you haven’t heard from us after a week, please feel free to give the thread a nudge!*
+
 ## How Can You Contribute?
 
 There are many ways to contribute to Speculators:
@@ -142,7 +170,7 @@ We require a DCO signoff for all commits. For more information, see the [DCO Sig
 
 ```bash
 # Sign off a commit as you're making it
-git commit --signoff -m"my commit"
+git commit --signoff -m "my commit"
 
 # Add a signoff to the last commit you made
 git commit --amend --signoff
