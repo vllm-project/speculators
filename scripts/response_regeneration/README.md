@@ -7,9 +7,11 @@ Uses vLLM's built-in data parallelism (`--data-parallel-size`) for multi-GPU sca
 ## Scripts Overview
 
 ### `run_all.sh` - Complete Pipeline Runner
+
 Orchestrates the entire pipeline: starts a vLLM server (with optional data/tensor parallelism), regenerates responses for the dataset, and stops the server.
 
 **Usage:**
+
 ```bash
 # Basic usage
 ./run_all.sh --model "meta-llama/Llama-3.3-70B-Instruct" --dataset magpie
@@ -34,6 +36,7 @@ Orchestrates the entire pipeline: starts a vLLM server (with optional data/tenso
 ```
 
 **Arguments:**
+
 - `--model`: Model to serve (required)
 - `--gpus`: Comma-separated GPU IDs (sets `CUDA_VISIBLE_DEVICES`)
 - `--port`: Server port (default: 8000)
@@ -43,15 +46,18 @@ Orchestrates the entire pipeline: starts a vLLM server (with optional data/tenso
 - All other arguments are passed through to `script.py`
 
 ### `script.py` - Response Regeneration Script
+
 Extracts user prompts from a dataset, sends them to a vLLM chat completion endpoint, and writes out new prompt-response pairs with the target model's generated responses.
 
 **Features:**
+
 - Auto-detects model from vLLM server (no need to specify `--model`)
 - Supports multiple datasets (Magpie and UltraChat)
 - Resume capability to skip already-processed rows
 - Async processing with configurable concurrency
 
 **Usage:**
+
 ```bash
 # Basic usage (assumes server already running)
 python script.py
@@ -74,6 +80,7 @@ python script.py --endpoint http://127.0.0.1:9000/v1/chat/completions
 ```
 
 **Arguments:**
+
 - `--dataset`: Choose `magpie` or `ultrachat` (default: ultrachat)
 - `--model`: Model name (auto-detected from vLLM server if not specified)
 - `--endpoint`: vLLM chat completions endpoint (default: `http://127.0.0.1:8000/v1/chat/completions`)
@@ -88,6 +95,7 @@ python script.py --endpoint http://127.0.0.1:9000/v1/chat/completions
 ## GPU Configuration Examples
 
 ### Llama 3.3 70B on 8 GPUs (4 data-parallel replicas with TP=2)
+
 ```bash
 ./run_all.sh \
   --model "meta-llama/Llama-3.3-70B-Instruct" \
@@ -96,6 +104,7 @@ python script.py --endpoint http://127.0.0.1:9000/v1/chat/completions
 ```
 
 ### Llama 3.3 70B on 4 GPUs (2 data-parallel replicas with TP=2)
+
 ```bash
 ./run_all.sh \
   --model "meta-llama/Llama-3.3-70B-Instruct" \
@@ -104,6 +113,7 @@ python script.py --endpoint http://127.0.0.1:9000/v1/chat/completions
 ```
 
 ### Qwen 235B on 8 GPUs (2 data-parallel replicas with TP=4)
+
 ```bash
 ./run_all.sh \
   --model "Qwen/Qwen3-VL-235B-A22B-Instruct" \
@@ -112,6 +122,7 @@ python script.py --endpoint http://127.0.0.1:9000/v1/chat/completions
 ```
 
 ### Single replica using all available GPUs
+
 ```bash
 ./run_all.sh --model "Qwen/Qwen2.5-72B-Instruct" --dataset magpie
 ```
@@ -119,11 +130,13 @@ python script.py --endpoint http://127.0.0.1:9000/v1/chat/completions
 ## Supported Datasets
 
 ### Magpie
+
 - Dataset ID: `Magpie-Align/Magpie-Llama-3.1-Pro-300K-Filtered`
 - Prompt field: `instruction`
 - Default split: `train`
 
 ### UltraChat
+
 - Dataset ID: `HuggingFaceH4/ultrachat_200k`
 - Prompt field: `prompt`
 - Default split: `train_sft`
@@ -131,6 +144,7 @@ python script.py --endpoint http://127.0.0.1:9000/v1/chat/completions
 ## Workflow Examples
 
 ### Quick Start (All-in-One)
+
 ```bash
 # Process 100 rows from Magpie dataset
 ./run_all.sh --model "Qwen/Qwen2.5-72B-Instruct" --dataset magpie --limit 100
@@ -144,6 +158,7 @@ python script.py --endpoint http://127.0.0.1:9000/v1/chat/completions
 ```
 
 ### Manual Control
+
 ```bash
 # 1. Start server manually with data parallelism
 vllm serve "meta-llama/Llama-3.3-70B-Instruct" \
@@ -157,6 +172,7 @@ python script.py --dataset magpie --limit 1000
 ```
 
 ### Resume Interrupted Processing
+
 ```bash
 # If processing was interrupted, resume from where it left off
 python script.py --dataset magpie --resume
@@ -170,6 +186,7 @@ python script.py --dataset magpie --outfile magpie_Llama-3.3-70B-Instruct.jsonl 
 Each row in the output pairs the original user prompt with the newly generated response from the target model, saved as JSONL in a conversations format compatible with fine-tuning. The `id` field uses the dataset's UUID if available, otherwise falls back to `sample_{idx}`.
 
 Each line contains:
+
 ```json
 {
   "id": "sample_0",
@@ -199,6 +216,7 @@ Note: The `reasoning_content` field in metadata is only included when the model 
 **Output Filenames:**
 
 If you don't specify `--outfile`, the filename is auto-generated based on dataset and model:
+
 - `magpie_Llama-3.3-70B-Instruct.jsonl`
 - `ultrachat_Qwen3-VL-235B-A22B-Instruct.jsonl`
 - `magpie_Qwen2.5-72B-Instruct.jsonl`
@@ -206,6 +224,7 @@ If you don't specify `--outfile`, the filename is auto-generated based on datase
 You can override with `--outfile custom_name.jsonl`.
 
 Errors are logged as:
+
 ```json
 {
   "id": "sample_0",

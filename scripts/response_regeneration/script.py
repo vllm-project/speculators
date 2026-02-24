@@ -6,7 +6,7 @@ import os
 import re
 import sys
 import time
-from typing import Any, Dict
+from typing import Any
 
 import aiohttp
 from datasets import load_dataset
@@ -46,7 +46,11 @@ def parse_args():
         choices=["magpie", "ultrachat"],
         help="Dataset to process (magpie or ultrachat)",
     )
-    parser.add_argument("--split", default=None, help="Dataset split (defaults to dataset-specific split if not provided)")
+    parser.add_argument(
+        "--split",
+        default=None,
+        help="Dataset split (defaults to dataset-specific split)",
+    )
     parser.add_argument(
         "--subset",
         default=None,
@@ -68,7 +72,7 @@ def parse_args():
     parser.add_argument(
         "--outfile",
         default=None,
-        help="Where to write JSONL results (auto-generated from dataset and model if not specified)",
+        help="Output JSONL path (auto-generated if not specified)",
     )
     parser.add_argument(
         "--resume",
@@ -85,30 +89,26 @@ def parse_args():
 
 def sanitize_filename(name: str) -> str:
     """Sanitize a string to be safe for use in filenames."""
-    # Replace slashes and other problematic characters with underscores
-    name = re.sub(r'[/\\:*?"<>|]', '_', name)
-    # Replace spaces with underscores
-    name = name.replace(' ', '_')
-    # Remove any leading/trailing underscores or dots
-    name = name.strip('._')
-    return name
+    name = re.sub(r'[/\\:*?"<>|]', "_", name)
+    name = name.replace(" ", "_")
+    return name.strip("._")
 
 
 def load_seen(path: str):
-    """Load previously processed record IDs from output file for resume functionality."""
+    """Load previously processed record IDs from output file."""
     seen = set()
     if not os.path.isfile(path):
         return seen
 
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             try:
                 obj = json.loads(line)
-                key = obj.get("uuid") or obj.get("idx")
-                if key is not None:
-                    seen.add(str(key))
-            except Exception:
+            except json.JSONDecodeError:
                 continue
+            key = obj.get("uuid") or obj.get("idx")
+            if key is not None:
+                seen.add(str(key))
     return seen
 
 
@@ -118,27 +118,30 @@ async def detect_model(endpoint: str) -> str:
 
     timeout = aiohttp.ClientTimeout(total=10)
     try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(models_endpoint) as response:
-                data = await response.json()
-                models = data.get("data", [])
-                if models:
-                    model_name = models[0]["id"]
-                    print(f"Auto-detected model: {model_name}")
-                    return model_name
-                else:
-                    raise ValueError("No models found at endpoint")
-    except Exception as e:
+        async with (
+            aiohttp.ClientSession(timeout=timeout) as session,
+            session.get(models_endpoint) as response,
+        ):
+            data = await response.json()
+            models = data.get("data", [])
+            if models:
+                model_name = models[0]["id"]
+                print(f"Auto-detected model: {model_name}")
+                return model_name
+            raise ValueError("No models found at endpoint")
+    except ValueError:
+        raise
+    except Exception as e:  # noqa: BLE001
         raise ValueError(
             f"Failed to auto-detect model from {models_endpoint}: {e}\n"
             f"Please specify model with --model argument"
-        )
+        ) from e
 
 
 async def worker(
     sem: asyncio.Semaphore,
     session: aiohttp.ClientSession,
-    queue: "asyncio.Queue[Dict[str, Any]]",
+    queue: "asyncio.Queue[dict[str, Any]]",
     args,
     out_fh,
     endpoint: str,
@@ -159,9 +162,8 @@ async def worker(
 
         start_time = time.time()
         try:
-            async with sem:
-                async with session.post(endpoint, json=payload) as response:
-                    data = await response.json()
+            async with sem, session.post(endpoint, json=payload) as response:
+                data = await response.json()
 
             choice = data["choices"][0]
             generated_text = choice["message"]["content"]
@@ -185,33 +187,22 @@ async def worker(
             output = {
                 "id": item.get("uuid") or f"sample_{idx}",
                 "conversations": [
-                    {
-                        "from": "human",
-                        "value": item["prompt"]
-                    },
-                    {
-                        "from": "gpt",
-                        "value": generated_text
-                    }
+                    {"from": "human", "value": item["prompt"]},
+                    {"from": "gpt", "value": generated_text},
                 ],
-                "metadata": metadata
+                "metadata": metadata,
             }
             out_fh.write(json.dumps(output, ensure_ascii=False) + "\n")
             out_fh.flush()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             error_output = {
                 "id": item.get("uuid") or f"sample_{idx}",
-                "conversations": [
-                    {
-                        "from": "human",
-                        "value": item["prompt"]
-                    }
-                ],
+                "conversations": [{"from": "human", "value": item["prompt"]}],
                 "metadata": {
                     "idx": idx,
                     "error": repr(e),
                     "endpoint": endpoint,
-                }
+                },
             }
             out_fh.write(json.dumps(error_output, ensure_ascii=False) + "\n")
             out_fh.flush()
@@ -242,8 +233,8 @@ async def main():
 
     # Generate output filename if not specified
     if args.outfile is None:
-        # Extract simple model name from full path (e.g., "Llama-3.3-70B-Instruct" from "meta-llama/Llama-3.3-70B-Instruct")
-        model_name = args.model.split('/')[-1] if '/' in args.model else args.model
+        # Extract simple model name from full path
+        model_name = args.model.split("/")[-1] if "/" in args.model else args.model
         model_name = sanitize_filename(model_name)
         args.outfile = f"{args.dataset}_{model_name}.jsonl"
 
@@ -271,7 +262,7 @@ async def main():
     async with aiohttp.ClientSession(
         timeout=timeout, connector=connector, headers=headers
     ) as session:
-        with open(args.outfile, "a", encoding="utf-8") as output_file:
+        with open(args.outfile, "a", encoding="utf-8") as output_file:  # noqa: ASYNC230
             workers = [
                 asyncio.create_task(
                     worker(semaphore, session, queue, args, output_file, endpoint)
@@ -316,4 +307,3 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         sys.exit(130)
-
