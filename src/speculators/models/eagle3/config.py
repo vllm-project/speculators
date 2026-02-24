@@ -45,6 +45,11 @@ class Eagle3SpeculatorConfig(SpeculatorModelConfig):
         description="Apply hidden_norm before storing residual",
     )
 
+    enable_sp_ulysses: bool = Field(
+        default=False,
+        description="Enable SP Ulysses sequence parallelism",
+    )
+
     target_hidden_size: int | None = Field(
         default=None,
         description="Hidden size of the target model (if different from draft model)",
