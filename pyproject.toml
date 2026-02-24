@@ -48,7 +48,7 @@ dependencies = [
     "rich",
     "safetensors",
     "setuptools",
-    "torch<2.10.0",
+    "torch",
     "tqdm",
     "transformers<5.0.0",
     "typer>=0.12.0",

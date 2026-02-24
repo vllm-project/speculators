@@ -81,6 +81,12 @@ class Eagle3FirstLayerMixin:
         if self.norm_before_residual:
             residual = hidden  # set residual to normalized hidden
         hidden_states = torch.cat([embeds, hidden], dim=-1)
+        if torch.__version__ >= "2.10":
+            # As of `torch==2.10`, compile attempts to fuse together too many
+            # ops, resulting in a fused kernel that exceeds shared memory limits
+            # For now, we force a graph break to prevent this
+            # https://github.com/pytorch/pytorch/issues/175250
+            torch._dynamo.graph_break()  # noqa: SLF001
 
         # ##### End of Eagle3 modifications #####
 
