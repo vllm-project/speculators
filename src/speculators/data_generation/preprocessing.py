@@ -1,4 +1,5 @@
 import bisect
+import json
 import random
 import re
 from collections.abc import Callable
@@ -120,6 +121,10 @@ def _normalize_conversation(
         if thinking:
             normalized_turn["thinking"] = thinking
             normalized_turn["reasoning_content"] = thinking
+
+        # Preserve 'tool_calls' field if it exists
+        if "tool_calls" in turn and turn["tool_calls"]:
+            normalized_turn["tool_calls"] = turn["tool_calls"]
 
         normalized.append(normalized_turn)
 
@@ -388,6 +393,7 @@ def _get_input_ids_loss_mask(
     max_length: int,
     assistant_pattern: str | Pattern[str] | None,
     *,
+    tools: list[dict] | None = None,
     # For logging
     conv_idx: int | None = None,
 ):
@@ -398,6 +404,7 @@ def _get_input_ids_loss_mask(
         encoded_any = processor.apply_chat_template(
             hf_conv,
             tokenize=True,
+            tools=tools,
             add_generation_prompt=False,
             return_assistant_tokens_mask=True,
             return_dict=True,
@@ -429,6 +436,7 @@ def _get_input_ids_loss_mask(
             encoded_any = processor.apply_chat_template(
                 hf_conv,
                 tokenize=True,
+                tools=tools,
                 add_generation_prompt=False,
                 return_dict=True,
                 processor_kwargs=processor_kwargs,
@@ -437,6 +445,7 @@ def _get_input_ids_loss_mask(
             encoded_any = processor.apply_chat_template(
                 hf_conv,
                 tokenize=True,
+                tools=tools,
                 add_generation_prompt=False,
                 return_dict=True,
                 **processor_kwargs,
@@ -456,6 +465,7 @@ def _get_input_ids_loss_mask(
         formatted_text = processor.apply_chat_template(
             hf_conv,
             tokenize=False,
+            tools=tools,
             add_generation_prompt=False,
         )
         assert isinstance(formatted_text, str)
@@ -499,7 +509,17 @@ def _preprocess_batch(
         log.warning(f"No conversations key found. Keys: {list(examples.keys())}")
         return results
 
+    tools_col = examples.get("tools")
+    if tools_col is not None and len(tools_col) != len(conversations):
+        log.warning(
+            f"Tools column length ({len(tools_col)}) does not match "
+            f"conversations length ({len(conversations)}), proceeding without tools"
+        )
+        tools_col = None
+
     for idx, conv in enumerate(conversations):
+        conv_tools = tools_col[idx] if tools_col is not None else None
+
         if not conv or not isinstance(conv, list):
             continue
 
@@ -508,12 +528,24 @@ def _preprocess_batch(
         if not normalized_conv:
             continue
 
+        # Parse tools JSON string if present; warn and skip tools on invalid JSON
+        parsed_tools = None
+        if conv_tools:
+            try:
+                parsed_tools = json.loads(conv_tools)
+            except json.JSONDecodeError as e:
+                log.warning(
+                    f"Invalid JSON in tools column for conversation {idx}: {e}, "
+                    "proceeding without tools"
+                )
+
         try:
             input_ids, loss_mask = _get_input_ids_loss_mask(
                 normalized_conv,
                 processor,
                 max_length=max_length,
                 assistant_pattern=assistant_pattern,
+                tools=parsed_tools,
                 conv_idx=idx,
             )
         except (TypeError, ValueError, KeyError, AttributeError, RuntimeError) as e:
