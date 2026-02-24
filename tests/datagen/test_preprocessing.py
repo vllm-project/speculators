@@ -2,6 +2,7 @@
 Unit tests for the preprocessing module in the Speculators data generation.
 """
 
+import json
 import re
 
 import pytest
@@ -643,3 +644,212 @@ def test_build_eagle3_dataset_with_custom_pattern():
     # Should successfully build dataset with custom pattern
     assert isinstance(result, HFDataset)
     assert len(result) > 0
+
+
+# Tests for tool role and tool_calls / thinking field preservation
+
+
+@pytest.mark.sanity
+def test_normalize_conversation_with_tool_role():
+    """Test that 'tool' role is normalised correctly and not skipped."""
+    conv = [
+        {"role": "user", "content": "Call the weather API"},
+        {"role": "assistant", "content": "Sure, calling now."},
+        {"role": "tool", "content": '{"temperature": 20}'},
+        {"role": "assistant", "content": "It is 20 degrees."},
+    ]
+    result = _normalize_conversation(conv)
+
+    roles = [t["role"] for t in result]
+    assert "tool" in roles, "tool role should be preserved"
+    tool_turn = next(t for t in result if t["role"] == "tool")
+    assert tool_turn["content"] == '{"temperature": 20}'
+
+
+@pytest.mark.sanity
+def test_normalize_conversation_preserves_tool_calls_field():
+    """Test that 'tool_calls' field is preserved when present."""
+    tool_calls = [{"id": "call_1", "type": "function", "function": {"name": "get_weather"}}]
+    conv = [
+        {"role": "user", "content": "What's the weather?"},
+        {"role": "assistant", "content": "", "tool_calls": tool_calls},
+    ]
+    result = _normalize_conversation(conv)
+
+    assert len(result) == 2
+    assistant_turn = result[1]
+    assert "tool_calls" in assistant_turn
+    assert assistant_turn["tool_calls"] == tool_calls
+
+
+@pytest.mark.sanity
+def test_preprocess_batch_with_tools():
+    """Test that tools from the dataset are forwarded to apply_chat_template.
+
+    tools must be a list of JSON strings (one per conversation in the batch),
+    matching the HuggingFace datasets batched-column convention.
+    """
+    tokenizer = AutoTokenizer.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
+
+    if not hasattr(tokenizer, "apply_chat_template") or tokenizer.chat_template is None:
+        pytest.skip("Tokenizer does not support chat templates")
+
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    example_tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get the current weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"location": {"type": "string"}},
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+
+    conv = [
+        {"role": "user", "content": "What's the weather in Prague?"},
+        {"role": "assistant", "content": "Let me check."},
+    ]
+    # tools must be a list — one JSON string per conversation
+    examples_with_tools = {
+        "conversations": [conv],
+        "tools": [json.dumps(example_tools)],
+    }
+    examples_without_tools = {
+        "conversations": [conv],
+    }
+
+    assistant_pattern = _detect_assistant_pattern(tokenizer)
+    results_with = _preprocess_batch(
+        examples_with_tools, tokenizer, max_length=512, assistant_pattern=assistant_pattern
+    )
+    results_without = _preprocess_batch(
+        examples_without_tools,
+        tokenizer,
+        max_length=512,
+        assistant_pattern=assistant_pattern,
+    )
+
+    assert "input_ids" in results_with
+    assert "loss_mask" in results_with
+    assert len(results_with["input_ids"]) == 1
+
+    # When the template renders tool definitions the sequence must be strictly
+    # longer than without tools.  Skip the length check if the template silently
+    # ignores the tools kwarg (tool name absent from decoded output).
+    decoded_with = tokenizer.decode(results_with["input_ids"][0])
+    if "get_weather" in decoded_with:
+        assert len(results_with["input_ids"][0]) > len(
+            results_without["input_ids"][0]
+        ), "Token sequence should be longer when tool definitions are included"
+
+
+@pytest.mark.sanity
+def test_preprocess_batch_with_invalid_tools_json():
+    """Test that invalid JSON in the tools column is handled gracefully.
+
+    The pipeline should warn and continue without tools rather than raising.
+    """
+    tokenizer = AutoTokenizer.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
+
+    if not hasattr(tokenizer, "apply_chat_template") or tokenizer.chat_template is None:
+        pytest.skip("Tokenizer does not support chat templates")
+
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    examples = {
+        "conversations": [
+            [
+                {"role": "user", "content": "Hello"},
+                {"role": "assistant", "content": "Hi!"},
+            ]
+        ],
+        "tools": ["this is not valid json"],
+    }
+
+    assistant_pattern = _detect_assistant_pattern(tokenizer)
+    # Must not raise; the bad JSON entry is skipped with a warning
+    results = _preprocess_batch(
+        examples, tokenizer, max_length=512, assistant_pattern=assistant_pattern
+    )
+
+    assert "input_ids" in results
+    assert len(results["input_ids"]) == 1
+
+
+@pytest.mark.sanity
+def test_preprocess_batch_tools_with_hf_assistant_mask():
+    """Test that tools are forwarded when using the HF assistant token mask path."""
+    tokenizer = AutoTokenizer.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
+
+    if not hasattr(tokenizer, "apply_chat_template") or tokenizer.chat_template is None:
+        pytest.skip("Tokenizer does not support chat templates")
+
+    if not _supports_assistant_mask(tokenizer):
+        pytest.skip("Tokenizer does not support HF assistant token mask")
+
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    example_tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get the current weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"location": {"type": "string"}},
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+
+    examples = {
+        "conversations": [
+            [
+                {"role": "user", "content": "What's the weather in Prague?"},
+                {"role": "assistant", "content": "Let me check."},
+            ]
+        ],
+        "tools": [json.dumps(example_tools)],
+    }
+
+    # assistant_pattern=None selects the HF mask path
+    results = _preprocess_batch(
+        examples, tokenizer, max_length=512, assistant_pattern=None
+    )
+
+    assert "input_ids" in results
+    assert "loss_mask" in results
+    assert len(results["input_ids"]) == 1
+    assert torch.any(results["loss_mask"][0] == 1)
+
+
+@pytest.mark.sanity
+def test_normalize_conversation_tool_calls_with_empty_content():
+    """Test that an assistant turn with tool_calls and no text content is normalised."""
+    tool_calls = [
+        {"id": "call_1", "type": "function", "function": {"name": "get_weather"}}
+    ]
+    conv = [
+        {"role": "user", "content": "What's the weather?"},
+        {"role": "assistant", "content": "", "tool_calls": tool_calls},
+        {"role": "tool", "content": '{"temperature": 22}'},
+        {"role": "assistant", "content": "It is 22 degrees outside."},
+    ]
+    result = _normalize_conversation(conv)
+
+    assert len(result) == 4
+    assistant_tool_call_turn = result[1]
+    assert assistant_tool_call_turn["role"] == "assistant"
+    assert assistant_tool_call_turn["content"] == ""
+    assert assistant_tool_call_turn["tool_calls"] == tool_calls

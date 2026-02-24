@@ -1,4 +1,5 @@
 import bisect
+import json
 import random
 import re
 from re import Pattern
@@ -85,6 +86,8 @@ def _normalize_conversation(
             role = "assistant"
         elif role == "system":
             role = "system"
+        elif role == "tool":
+            role = "tool"
         else:
             log.warning(f"Unknown role '{role}', skipping turn")
             continue
@@ -95,6 +98,10 @@ def _normalize_conversation(
         # Preserve 'thinking' field if it exists
         if "thinking" in turn and turn["thinking"]:
             normalized_turn["thinking"] = turn["thinking"]
+
+        # Preserve 'tool_calls' field if it exists
+        if "tool_calls" in turn and turn["tool_calls"]:
+            normalized_turn["tool_calls"] = turn["tool_calls"]
 
         normalized.append(normalized_turn)
 
@@ -263,7 +270,17 @@ def _preprocess_batch(
         log.warning(f"No conversations key found. Keys: {list(examples.keys())}")
         return results
 
+    tools_col = examples.get("tools")
+    if tools_col is not None and len(tools_col) != len(conversations):
+        log.warning(
+            f"Tools column length ({len(tools_col)}) does not match "
+            f"conversations length ({len(conversations)}), proceeding without tools"
+        )
+        tools_col = None
+
     for idx, conv in enumerate(conversations):
+        conv_tools = tools_col[idx] if tools_col is not None else None
+
         if not conv or not isinstance(conv, list):
             continue
 
@@ -272,12 +289,24 @@ def _preprocess_batch(
         if not normalized_conv:
             continue
 
+        # Parse tools JSON string if present; warn and skip tools on invalid JSON
+        parsed_tools = None
+        if conv_tools:
+            try:
+                parsed_tools = json.loads(conv_tools)
+            except json.JSONDecodeError as e:
+                log.warning(
+                    f"Invalid JSON in tools column for conversation {idx}: {e}, "
+                    "proceeding without tools"
+                )
+
         try:
             if assistant_pattern is None:
                 # HF assistant token mask
                 encoded_any = tokenizer.apply_chat_template(
                     normalized_conv,
                     tokenize=True,
+                    tools=parsed_tools,
                     add_generation_prompt=False,
                     return_assistant_tokens_mask=True,
                     return_dict=True,
@@ -301,6 +330,7 @@ def _preprocess_batch(
                 )
                 formatted_raw = tokenizer.apply_chat_template(
                     normalized_conv,
+                    tools=parsed_tools,
                     tokenize=False,
                     add_generation_prompt=False,
                 )
