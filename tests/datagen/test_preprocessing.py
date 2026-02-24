@@ -669,7 +669,9 @@ def test_normalize_conversation_with_tool_role():
 @pytest.mark.sanity
 def test_normalize_conversation_preserves_tool_calls_field():
     """Test that 'tool_calls' field is preserved when present."""
-    tool_calls = [{"id": "call_1", "type": "function", "function": {"name": "get_weather"}}]
+    tool_calls = [
+        {"id": "call_1", "type": "function", "function": {"name": "get_weather"}}
+    ]
     conv = [
         {"role": "user", "content": "What's the weather?"},
         {"role": "assistant", "content": "", "tool_calls": tool_calls},
@@ -727,7 +729,10 @@ def test_preprocess_batch_with_tools():
 
     assistant_pattern = _detect_assistant_pattern(tokenizer)
     results_with = _preprocess_batch(
-        examples_with_tools, tokenizer, max_length=512, assistant_pattern=assistant_pattern
+        examples_with_tools,
+        tokenizer,
+        max_length=512,
+        assistant_pattern=assistant_pattern,
     )
     results_without = _preprocess_batch(
         examples_without_tools,
