@@ -22,7 +22,7 @@ from speculators.train.distributed_batch_sampler import (
 from speculators.train.logger import setup_metric_logger, setup_root_logger
 from speculators.train.noise_transforms import AddUniformNoise
 from speculators.train.trainer import Trainer, TrainerConfig
-from speculators.train.utils import maybe_destroy_distributed, maybe_setup_distributed
+from speculators.train.distributed import maybe_destroy_distributed, maybe_setup_distributed
 
 DRAFT_ARCH_CONFIGS: dict[str, type] = {
     "llama": LlamaConfig,
@@ -148,15 +148,18 @@ def main(args: argparse.Namespace):
     )
 
     # Setup distributed training
-    local_rank, world_size, rank, is_distributed = maybe_setup_distributed()
+    local_rank, world_size, rank, is_distributed = maybe_setup_distributed(
+        args.enable_sp_ulysses, args.sp_ulysses_size, args.sp_ring_size
+    )
     device = torch.device(local_rank)
 
     # Load t2d and d2t tensors if provided
     if args.d2t_path or args.t2d_path:
         if not (args.d2t_path and args.t2d_path):
             raise ValueError(
-                "Both t2d and d2t must be provided together, or both must be omitted. "
-                f"Got t2d={'provided' if args.t2d_path is not None else 'not provided'}"
+                "Both t2d and d2t must be provided together, or both "
+                "must be omitted. Got t2d="
+                f"{'provided' if args.t2d_path is not None else 'not provided'} "
                 f"d2t={'provided' if args.d2t_path is not None else 'not provided'}"
             )
         d2t = torch.from_numpy(np.load(args.d2t_path)).to(device)
@@ -322,6 +325,17 @@ def parse_args():
     parser.add_argument("--scheduler-warmup-steps", type=int, default=None)
     parser.add_argument("--scheduler-total-steps", type=int, default=None)
     parser.add_argument("--scheduler-num-cosine-cycles", type=float, default=0.5)
+
+    # Distributed training
+    parser.add_argument(
+        "--enable-sp-ulysses",
+        action="store_true",
+        default=False,
+        help="Enable SP Ulysses sequence parallelism",
+    )
+    parser.add_argument("--sp-ulysses-size", type=int, default=1)
+    parser.add_argument("--sp-ring-size", type=int, default=1)
+
     return parser.parse_args()
 
 
