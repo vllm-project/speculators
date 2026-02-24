@@ -131,6 +131,11 @@ class TrainArgs(NamedTuple):
     scheduler_warmup_steps: int | _NS = _NOTSET
     scheduler_total_steps: int | _NS = _NOTSET
     scheduler_num_cosine_cycles: float | _NS = _NOTSET
+    nproc_per_node: int | _NS = _NOTSET
+    nnodes: int | _NS = _NOTSET
+    node_rank: int | _NS = _NOTSET
+    master_addr: str | _NS = _NOTSET
+    master_port: int | _NS = _NOTSET
 
 
 ### END OF SCRIPT ARGUMENTS ###
@@ -260,6 +265,39 @@ def run_script(
         raise subprocess.CalledProcessError(process.returncode, command)
 
 
+def build_torchrun_command(
+    nproc_per_node=8,
+    nnodes=1,
+    node_rank=0,
+    master_addr=None,
+    master_port=12345,
+    **additional_args
+):
+    parts = [" torchrun"]
+    if nnodes == 1:
+        parts.append("--standalone")
+        parts.extend(["--nproc_per_node", str(nproc_per_node)])
+    elif nnodes > 1:
+        parts.extend(["--nnodes", str(nnodes)])
+        parts.extend(["--nproc_per_node", str(nproc_per_node)])
+        parts.extend(["--node_rank", str(node_rank)])
+        if master_addr:
+            parts.extend(["--master_addr", master_addr])
+            parts.extend(["--master_port", str(master_port)])
+
+    for key, value in additional_args.items():
+        if key.startswith("--"):
+            parts.append(key)
+            if value is not None and value != "":
+                parts.append(str(value))
+
+    command_result = " ".join(parts)
+    print_block(
+        f"Building TorchRun Command",
+        f"Command: {command_result}",
+    )
+    return command_result
+
 def run_e2e(
     verifier_name_or_path: str,
     output_path: str,
@@ -342,10 +380,15 @@ def run_e2e(
             loggers = loggers.split(",")
         loggers = [logger.strip() for logger in loggers]
         packages.extend(loggers)
-    device_count = torch.accelerator.device_count()
+    #device_count = torch.accelerator.device_count()
     run_script(
         "train.py",
         ta_list,
         packages,
-        python_alt=f"torchrun --standalone --nproc_per_node={device_count}",
+        #python_alt=f"torchrun --standalone --nproc_per_node={device_count}",
+        python_alt=build_torchrun_command(nproc_per_node=train_args.nproc_per_node,
+                               nnodes=train_args.nnodes,
+                               nprocs=train_args.nprocs,
+                               master_addr=train_args.master_addr,
+                               master_port=train_args.master_port,)
     )

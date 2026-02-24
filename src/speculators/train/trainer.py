@@ -2,6 +2,7 @@ import logging
 import warnings
 from typing import Literal, NamedTuple
 
+import os
 import torch
 import torch.distributed as dist
 from torch.distributed.fsdp import FSDPModule
@@ -52,6 +53,7 @@ class Trainer:
     ):
         self.model = model
         self.config = config
+        self.rank = int(os.environ.get("RANK", "0"))
         self.local_rank = config.local_rank
         self.train_loader = train_loader
         self.val_loader = val_loader
@@ -159,7 +161,7 @@ class Trainer:
             self.train_loader.batch_sampler.set_epoch(epoch)  # type: ignore[union-attr]
 
         train_loader = self.train_loader
-        if self.local_rank == 0:
+        if self.rank == 0:
             train_loader = tqdm(train_loader, desc=f"Epoch {epoch}")  # type: ignore[assignment]
 
         for batch in train_loader:
@@ -186,12 +188,12 @@ class Trainer:
             if self.is_distributed:
                 for v in metrics.values():
                     dist.reduce(v, dst=0, op=dist.ReduceOp.AVG)
-
-            metrics = {k: v.item() for k, v in metrics.items()}
-            metric_logger.info(
-                {"train": metrics, "epoch": epoch, "lr": current_lr},
-                extra={"step": self.global_step},
-            )
+            if self.rank == 0:
+                metrics = {k: v.item() for k, v in metrics.items()}
+                metric_logger.info(
+                    {"train": metrics, "epoch": epoch, "lr": current_lr, "global_step": self.global_step},
+                    extra={"step": self.global_step},
+                )
             self.global_step += 1
 
     @torch.no_grad()
@@ -233,7 +235,7 @@ class Trainer:
 
     def save_checkpoint(self, epoch: int):
         self.checkpointer.save_checkpoint(self.model, self.opt, epoch)
-        if self.scheduler is not None:
+        if self.scheduler is not None and self.rank == 0:
             self.checkpointer.save_scheduler_state_dict(self.scheduler, epoch)
 
     def run_training(self):

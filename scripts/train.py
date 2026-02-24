@@ -155,6 +155,10 @@ def main(args: argparse.Namespace):
     # Setup distributed training
     local_rank, world_size, rank, is_distributed = maybe_setup_distributed()
     device = torch.device(local_rank)
+    print(f"Using device: {device}")
+    print(f"Using RANK: {rank}")
+    print(f"Using LOCAL_RANK: {local_rank}")
+    print(f"Using WORLD_SIZE: {world_size}")
 
     # Load t2d and d2t tensors if provided
     if args.d2t_path or args.t2d_path:
@@ -205,7 +209,7 @@ def main(args: argparse.Namespace):
     train_loader = setup_dataloader(
         train_files,
         world_size,
-        local_rank,
+        rank,
         add_noise=True,
         data_format_version=args.data_format_version,
         noise_std=args.noise_std,
@@ -215,7 +219,7 @@ def main(args: argparse.Namespace):
     val_loader = setup_dataloader(
         val_files,
         world_size,
-        local_rank,
+        rank,
         add_noise=False,
         data_format_version=args.data_format_version,
         noise_std=args.noise_std,
@@ -326,6 +330,11 @@ def parse_args():
     parser.add_argument("--scheduler-warmup-steps", type=int, default=None)
     parser.add_argument("--scheduler-total-steps", type=int, default=None)
     parser.add_argument("--scheduler-num-cosine-cycles", type=float, default=0.5)
+    parser.add_argument("--nproc-per-node", type=int, default=8)
+    parser.add_argument("--nnodes", type=int, default=1)
+    parser.add_argument("--node-rank", type=int, default=0)
+    parser.add_argument("--master-addr", type=str, default=None)
+    parser.add_argument("--master-port", type=int, default=12345)
     return parser.parse_args()
 
 
