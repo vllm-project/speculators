@@ -33,22 +33,71 @@ def find_project_root() -> Path:
     )
 
 
-def remap_python_absolute_links(content: str):
-    # Replace links like `/scripts/data_generation_offline.py` with https://github.com/vllm-project/speculators/blob/main/scripts/data_generation_offline.py
-    # Match criteria:
-    # Link starts with `(/` and ends with `.py)`
+GITHUB_BASE = "https://github.com/vllm-project/speculators/blob/main"
 
-    # Uses [^)]+ to allow multiple path segments (e.g., /scripts/file.py)
-    matches = re.findall(r"\((/[^)]+\.py)\)", content)
-    for link in matches:
-        # Remove the leading slash for the GitHub URL (repo root)
-        file_path = link.lstrip("/")
-        new_link = (
-            f"(https://github.com/vllm-project/speculators/blob/main/{file_path})"
-        )
-        # Replace the original link (including parentheses) with the new absolute link
-        content = content.replace(f"({link})", new_link)
-    return content
+
+def remap_links(
+    content: str,
+    source_root_path: Path,
+    files: list[ProcessFile],
+):
+    """Remap relative links to docs pages or GitHub absolute URLs.
+
+    For each markdown link, resolve it relative to the source file's location
+    in the repo. If the resolved path (or a README.md inside it) is a known
+    ProcessFile, rewrite the link to point to the corresponding docs page.
+    Otherwise, rewrite it as an absolute GitHub link.
+    """
+    source_dir = source_root_path.parent
+    root_to_docs = {str(f.root_path): str(f.docs_path) for f in files}
+
+    def resolve_link(link_target: str) -> str | None:
+        # Split off any anchor
+        anchor = ""
+        if "#" in link_target:
+            link_target, anchor = link_target.rsplit("#", 1)
+            anchor = f"#{anchor}"
+
+        if not link_target:
+            return None
+
+        # Resolve the path relative to the source file's directory,
+        # or treat absolute paths (starting with /) as repo-root-relative
+        starts_with_slash = False
+        if link_target.startswith("/"):
+            resolved = Path(link_target.lstrip("/"))
+            starts_with_slash = True
+        else:
+            resolved = source_dir / link_target
+
+        # Normalize (resolve .., etc) without requiring the path to exist
+        resolved = Path(re.sub(r"(^|/)(\./)+", r"\1", str(resolved)))
+
+        # Check if this path maps to a docs page
+        resolved_str = str(resolved)
+        if resolved_str in root_to_docs:
+            resolved_target = root_to_docs[resolved_str] + anchor
+            if starts_with_slash:
+                resolved_target = "/" + resolved_target
+            return resolved_target
+
+        # Otherwise, link to GitHub if the path looks like a real file
+        return f"{GITHUB_BASE}/{resolved_str}{anchor}"
+
+    def replace_match(match: re.Match) -> str:
+        link_text = match.group(1)
+        link_target = match.group(2)
+
+        # Skip absolute URLs and pure anchors
+        if link_target.startswith(("http://", "https://", "#")):
+            return match.group(0)
+
+        new_target = resolve_link(link_target)
+        if new_target is None:
+            return match.group(0)
+        return f"[{link_text}]({new_target})"
+
+    return re.sub(r"\[([^\]]*)\]\(([^)]+)\)", replace_match, content)
 
 
 def process_files(files: list[ProcessFile], project_root: Path):
@@ -64,7 +113,7 @@ def process_files(files: list[ProcessFile], project_root: Path):
 
         frontmatter = f"---\ntitle: {file.title}\nweight: {file.weight}\n---\n\n"
         content = source_path.read_text(encoding="utf-8")
-        content = remap_python_absolute_links(content)
+        content = remap_links(content, file.root_path, files)
 
         with mkdocs_gen_files.open(target_path, "w") as file_handle:
             file_handle.write(frontmatter)
