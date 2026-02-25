@@ -1,68 +1,68 @@
 import sys
 from pathlib import Path
 
-# Add scripts directory to path so we can import the run_e2e function.
+import torch
+from huggingface_hub import snapshot_download
+
+# Add scripts directory to path
 scripts_path = Path(__file__).absolute().parent.parent.parent / "scripts"
 sys.path.append(str(scripts_path))
 
-from gen_and_train import (  # noqa: E402
-    DataGenArgs,
-    TrainArgs,
-    VocabMappingArgs,
-    run_e2e,
-)
+from gen_and_train import prepare_args, run_script  # noqa: E402
 
-### Example E2E run for Llama 3.1 8B on 5k samples from ShareGPT ###
-
-# Note: With just 5k samples, the model performance will not be very good, however there
-# are enough samples to verify that the pipeline is working correctly and that the model
-# is learning something. This is a good sanity check when creating a drafter for a new
-# target model.
-
-# Timing (on 2x NVIDIA H100 80GB GPUs)
-# Data Generation: 839 seconds
-# Vocab Mapping: 6 seconds
-# Training: 1254 seconds
-# Total: 2099 seconds (35 mins)
-
-# Results on MT-Bench:
-# first token accuracy: 0.40
-# second token accuracy: 0.13
-# third token accuracy: 0.04
-# average acceptance length: 1.57
+### Example E2E run for Llama 3.1 8B on 50 samples from ShareGPT ###
 
 
 if __name__ == "__main__":
     VERIFIER_NAME_OR_PATH = "meta-llama/Llama-3.1-8B-Instruct"
-    OUTPUT_PATH = "./output/llama3_8b_sharegpt_5k"
+    HF_DATASET_NAME = "nm-testing/sharegpt_llama3_8b_hidden_states"
+    OUTPUT_PATH = Path("./output/llama3_8b_sharegpt_5k")
     TOTAL_SEQ_LEN = 8192
 
-    # Data Generation
-    data_gen_args_sharegpt = DataGenArgs(
-        train_data_path="sharegpt",
-        seq_length=TOTAL_SEQ_LEN,
-        max_samples=5000,  # Only use 5000 samples from ShareGPT
+    # Download HuggingFace dataset with pre-generated hidden states
+    data_dir = OUTPUT_PATH / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    snapshot_download(
+        repo_id=HF_DATASET_NAME,
+        repo_type="dataset",
+        local_dir=data_dir,
+        local_dir_use_symlinks=False,
     )
 
-    # Vocab Mapping
-    vocab_mapping_args = VocabMappingArgs(
-        draft_vocab_size=8192,  # Use a very small draft vocabulary for this example
-        target_vocab_size=128256,  # From https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct/blob/main/config.json#L37
-    )
+    # Training arguments
+    checkpoint_path = OUTPUT_PATH / "checkpoints"
+    log_path = OUTPUT_PATH / "logs"
 
-    # Training
-    train_args = TrainArgs(
-        logger="trackio",
-        lr=3e-5,
-        total_seq_len=TOTAL_SEQ_LEN,
-        run_name="llama3_8b_sharegpt_5k",
-        epochs=10,
-    )
+    train_args = {
+        "verifier_name_or_path": VERIFIER_NAME_OR_PATH,
+        "data_path": str(data_dir),
+        "save_path": str(checkpoint_path),
+        "log_dir": str(log_path),
+        "total_seq_len": TOTAL_SEQ_LEN,
+        "lr": 3e-5,
+        "epochs": 10,
+        "run_name": "llama3_8b_sharegpt_5k",
+        "logger": "trackio",
+        "data_format_version": 1,
+    }
 
-    run_e2e(
-        verifier_name_or_path=VERIFIER_NAME_OR_PATH,
-        output_path=OUTPUT_PATH,
-        data_gen_args=data_gen_args_sharegpt,
-        vocab_mapping_args=vocab_mapping_args,
-        train_args=train_args,
+    # Prepare command line arguments
+    train_args_list = prepare_args(train_args)
+
+    device_count = torch.accelerator.device_count()
+    python_alt = f"torchrun --standalone --nproc_per_node={device_count}"
+
+    # Resolve logger requirements
+    packages = ["."]
+    if train_args["logger"]:
+        loggers = train_args["logger"].split(",")
+        packages.extend([logger.strip() for logger in loggers])
+
+    # Run training using run_script helper
+    run_script(
+        script_name="train.py",
+        script_args=train_args_list,
+        requires=packages,
+        python_alt=python_alt,
     )
