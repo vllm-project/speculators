@@ -292,13 +292,19 @@ def _preprocess_batch(
         # Parse tools JSON string if present; warn and skip tools on invalid JSON
         parsed_tools = None
         if conv_tools:
-            try:
-                parsed_tools = json.loads(conv_tools)
-            except json.JSONDecodeError as e:
-                log.warning(
-                    f"Invalid JSON in tools column for conversation {idx}: {e}, "
-                    "proceeding without tools"
-                )
+            if isinstance(conv_tools, str):
+                try:
+                    parsed_tools = json.loads(conv_tools)
+                except json.JSONDecodeError as e:
+                    log.warning(
+                        f"Invalid JSON in tools column for conversation {idx}: {e}, "
+                        "proceeding without tools"
+                    )
+                else:
+                    log.warning(
+                        f"Non-string value in tools column for conversation {idx}: "
+                        f"{type(conv_tools).__name__}, proceeding without tools"
+                    )
 
         try:
             if assistant_pattern is None:

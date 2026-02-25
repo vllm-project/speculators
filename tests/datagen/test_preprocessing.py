@@ -651,7 +651,7 @@ def test_build_eagle3_dataset_with_custom_pattern():
 
 @pytest.mark.sanity
 def test_normalize_conversation_with_tool_role():
-    """Test that 'tool' role is normalised correctly and not skipped."""
+    """Test that 'tool' role is normalized correctly and not skipped."""
     conv = [
         {"role": "user", "content": "Call the weather API"},
         {"role": "assistant", "content": "Sure, calling now."},
@@ -841,7 +841,7 @@ def test_preprocess_batch_tools_with_hf_assistant_mask():
 
 @pytest.mark.sanity
 def test_normalize_conversation_tool_calls_with_empty_content():
-    """Test that an assistant turn with tool_calls and no text content is normalised."""
+    """Test that an assistant turn with tool_calls and no text content is normalized."""
     tool_calls = [
         {"id": "call_1", "type": "function", "function": {"name": "get_weather"}}
     ]
