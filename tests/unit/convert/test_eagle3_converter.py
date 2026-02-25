@@ -257,12 +257,14 @@ class TestEagle3ConverterFixes:
 
         converter.convert(
             checkpoint_path,
-            tmp_path / checkpoint_path.split("/")[-1],
+            tmp_path / checkpoint_path.rsplit("/", maxsplit=1)[-1],
             base_model,
             norm_before_residual=False,
         )
 
-        config = load_checkpoint_config(tmp_path / checkpoint_path.split("/")[-1])
+        config = load_checkpoint_config(
+            tmp_path / checkpoint_path.rsplit("/", maxsplit=1)[-1]
+        )
 
         # Verify that num_hidden_layers is correctly set to 2
         assert config["transformer_layer_config"]["num_hidden_layers"] == 2
