@@ -1,4 +1,6 @@
-# Eagle3 Model Production
+# Scripts
+
+## Eagle3 Model Production
 
 Speculators currently supports training of Eagle3 models. This functionality is available via the scripts in this directory.
 
@@ -11,6 +13,7 @@ Speculators currently supports training of Eagle3 models. This functionality is 
 
 - **[Data Generation](#data-generation)**<br>
   - **[Quick Start](#quick-start)**<br>
+  - **[Response Regeneration](#response-regeneration)**<br>
   - **[Advanced Usage](#advanced-usage)**<br>
   - **[Troubleshooting](#troubleshooting)**<br>
 - **[Vocab Mapping](#vocab-mapping)**<br>
@@ -44,6 +47,12 @@ python scripts/data_generation_offline.py \
 The script automatically uses the tokenizer's built-in chat template via `apply_chat_template`. It will use vllm to generate target model hidden states for the training data, and save them to disk alongside the input_ids and loss_mask tensors, as .pt files.
 
 For sample generated data, see: https://huggingface.co/datasets/nm-testing/sharegpt_llama3_8b_hidden_states
+
+### Response Regeneration
+
+The [response_regeneration/](/scripts/response_regeneration/) directory contains scripts for regenerating assistant responses in existing datasets using a vLLM-served model. Given a dataset containing user prompts (e.g., Magpie, UltraChat), the pipeline extracts the prompts, sends them to a vLLM server, and produces a new dataset with freshly generated responses from the target model. Regenerating responses with the target model can improve draft model performance, since the training data distribution better matches the target model's own outputs.
+
+See the [response_regeneration/README.md](/scripts/response_regeneration/README.md) for full usage details.
 
 ### Advanced Usage
 
