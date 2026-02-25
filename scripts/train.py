@@ -1,11 +1,13 @@
 import argparse
 import random
+import warnings
 
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
-from transformers import LlamaConfig
+from transformers import LlamaConfig, PretrainedConfig
 from transformers.models.auto.configuration_auto import AutoConfig
+from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
 from speculators.model import SpeculatorModel
 from speculators.train.data import (
@@ -22,6 +24,11 @@ from speculators.train.logger import setup_metric_logger, setup_root_logger
 from speculators.train.noise_transforms import AddUniformNoise
 from speculators.train.trainer import Trainer, TrainerConfig
 from speculators.train.utils import maybe_destroy_distributed, maybe_setup_distributed
+
+DRAFT_ARCH_CONFIGS: dict[str, type] = {
+    "llama": LlamaConfig,
+    "qwen3": Qwen3Config,
+}
 
 
 def set_seed(seed: int, deterministic: bool = False):
@@ -95,15 +102,30 @@ def setup_dataloader(
 
 
 def create_transformer_layer_config(
-    verifier_name_or_path: str, num_layers: int
-) -> LlamaConfig:
+    verifier_name_or_path: str, num_layers: int, draft_arch: str = "llama"
+) -> PretrainedConfig:
+    if draft_arch not in DRAFT_ARCH_CONFIGS:
+        raise ValueError(
+            f"Unknown draft architecture: {draft_arch}. "
+            f"Available: {list(DRAFT_ARCH_CONFIGS.keys())}"
+        )
+
+    if draft_arch != "llama":
+        warnings.warn(
+            f"Draft architecture '{draft_arch}' is not yet supported in vLLM. "
+            "The trained model may not be usable for inference in vLLM. "
+            "Consider using 'llama' (the default) for full vLLM compatibility.",
+            stacklevel=2,
+        )
+
+    config_class = DRAFT_ARCH_CONFIGS[draft_arch]
     verifier_config = AutoConfig.from_pretrained(verifier_name_or_path)
 
     # For multimodal models (Qwen3VL, etc.), extract text_config
     if hasattr(verifier_config, "text_config"):
         verifier_config = verifier_config.text_config
 
-    transformer_layer_config = LlamaConfig(
+    transformer_layer_config = config_class(
         vocab_size=verifier_config.vocab_size,
         hidden_size=verifier_config.hidden_size,
         intermediate_size=verifier_config.intermediate_size,
@@ -156,7 +178,7 @@ def main(args: argparse.Namespace):
 
     # Setup speculator config
     transformer_layer_config = create_transformer_layer_config(
-        args.verifier_name_or_path, args.num_layers
+        args.verifier_name_or_path, args.num_layers, draft_arch=args.draft_arch
     )
 
     # Get model class from registry and create model using its factory method
@@ -252,6 +274,14 @@ def parse_args():
     parser.add_argument("--log-dir", type=str, default="./logs")
     parser.add_argument("--run-name", type=str, default=None)
     parser.add_argument("--num-layers", type=int, default=1)
+    parser.add_argument(
+        "--draft-arch",
+        type=str,
+        default="llama",
+        choices=list(DRAFT_ARCH_CONFIGS.keys()),
+        help="Architecture for draft decoder layers. Defaults to 'llama'. "
+        "Note: only 'llama' is currently supported in vLLM for inference.",
+    )
     parser.add_argument("--d2t-path", type=str, default=None)
     parser.add_argument("--t2d-path", type=str, default=None)
     parser.add_argument("--ttt-steps", type=int, default=3)
@@ -274,9 +304,9 @@ def parse_args():
     # Model hyperparameters
     parser.add_argument(
         "--norm-before-residual",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=True,
-        help="Whether to normalize before residual connection",
+        help="Toggle normalization before residual connections (default: True)",
     )
     # Dataloader parameters
     parser.add_argument(
