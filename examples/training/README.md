@@ -30,4 +30,4 @@ output/
 └── checkpoints/  # Training checkpoints
 ```
 
-The './data' directory saves the huggingface datasets downloaded and the 'checkpoints' directory saves checkpoints produced by the training scripts. These checkpoints can served in vLLM directly. (Results won't be great since they're only trained on 50 examples)
+The `./data` directory saves the huggingface datasets downloaded and the 'checkpoints' directory saves checkpoints produced by the training scripts. These checkpoints can served in vLLM directly. (Results won't be great since they're only trained on 50 examples)
