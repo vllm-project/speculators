@@ -2,6 +2,16 @@
 
 We provide three example bash scripts that demonstrate the training workflow. Each script downloads one or two small toy datasets of precomputed hidden states (50 samples) and runs `scripts/train.py` to train a EAGLE3 speculator model on the datasets.
 
+## Training Script
+
+Train an Eagle3 draft model or speculator. Currently, training is supported for:
+
+Single-Layer and Multi-Layer Draft Models for Non-MoE models
+Single-Layer and Multi-Layer Draft Models of certain Non-Vision MoEs
+For a full list of models with support, see: https://github.com/vllm-project/speculators/blob/main/README.md
+
+scripts/train.py provides the main entry point for training Eagle3 models with support for single and multi GPU training using FSDP.
+
 ## Commands
 
 To execute the training examples:
@@ -12,7 +22,7 @@ bash examples/training/llama3_8b_sharegpt.sh
 bash examples/training/qwen3_8b_sharegpt_ultrachat.sh
 ```
 
-## Expected logs
+## Expected Logs
 
 When running, you'll see logs containing color-coded information like current epoch, loss, accuracy, conditional accuracy, learning_rate, etc. Example logs:
 
