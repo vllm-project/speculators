@@ -30,14 +30,6 @@ Speculators is an open-source project that values community contributions. We ma
 
 - :material-source-pull:{ .lg .middle } Add new algorithms
 
-  ______________________________________________________________________
-
-  Learn how to add a new speculative decoding training algorithm.
-
-  [:octicons-arrow-right-24: Add new algorithms](../algorithms/add_new_algorithms.md)
-
-- :material-palette:{ .lg .middle } Branding Guidelines
-
 </div>
 
 ## Getting Started with Development

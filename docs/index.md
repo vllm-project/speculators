@@ -20,7 +20,6 @@ Speculators standardizes this process by providing a productionized end-to-end f
 
 ## Key Features
 
-- **Offline Training Data Generation using vLLM:** Enable the generation of hidden states using vLLM. Data samples are saved to disk and can be used for draft model training.
 - **Draft Model Training Support:** E2E training support of single and multi-layer draft models. Training is supported for both non-MoE and MoE models. VL Training is coming soon.
 - **Standardized, Extensible Format:** Provides a Hugging Face-compatible format for defining speculative models, with tools to convert from external research repositories into a standard speculators format for easy adoption.
 - **Seamless vLLM Integration:** Built for direct deployment into vLLM, enabling low-latency, production-grade inference with minimal overhead.
@@ -39,5 +38,5 @@ Behind the scenes, this is reading the model from Hugging Face, parsing the `spe
 
 To create a speculative decoding model for a different verifier model there are two approaches you can choose:
 
-1. Train a new speculative decoding model ([instructions](train.md))([examples](examples/data_generation_and_training.md)).
+1. Train a new speculative decoding model ([instructions](train.md)).
 2. Convert an existing model from a third-party library to the Speculators format for easy deployment with vLLM ([instructions](convert.md)) ([examples](examples/convert.md)).
