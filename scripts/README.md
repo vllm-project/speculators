@@ -4,48 +4,15 @@
 
 Speculators currently supports training of Eagle3 models. This functionality is available via the scripts in this directory.
 
-1. [build_vocab_mapping.py](/scripts/build_vocab_mapping.py): Uses the token frequency distribution file to build `d2t` (draft to target) and `t2d` (target to draft) vocabulary mappings.
-2. [train.py](/scripts/train.py): Trains an Eagle3 model using the training data and vocabulary mappings.
+1. [train.py](/scripts/train.py): Trains an Eagle3 model using the downloaded hidden states training data.
 
 ## Table of Contents
 
-- **[Vocab Mapping](#vocab-mapping)**<br>
-  - **[Quick Start](#quick-start-1)**<br>
 - **[Training](#training)**<br>
   <!-- duplicate subsection name, requires -1 suffix to avoid conflict -->
   - **[Quick Start](#quick-start-2)**<br>
   - **[Arguments](#arguments)**<br>
   - **[Example Command](#example-command)**<br>
-
-## Vocab Mapping
-
-`scripts/build_vocab_mapping.py` Uses the token frequency distribution file to build `d2t` (draft to target) and `t2d` (target to draft) vocabulary mappings.
-
-### Quick Start
-
-Generate vocab mapping using Llama 3.1 8B:
-
-by specifying `target-vocab-size` manually:
-
-```bash
-    python scripts/build_vocab_mapping.py \
-        --token-freq-path ./token_freq.pt \
-        --draft-vocab-size 32000 \
-        --target-vocab-size 128256 \
-        --output-path ./vocab_mapping
-```
-
-or by using `target-model-path` to automatically infer the target vocab size:
-
-```bash
-    python scripts/build_vocab_mapping.py \
-        --token-freq-path ./token_freq.pt \
-        --draft-vocab-size 32000 \
-        --target-model-path meta-llama/Llama-3.1-8B-Instruct \
-        --output-path ./vocab_mapping
-```
-
-If not specified, the default location for token frequency file is `./token_freq.pt`. Make sure `target-vocab-size` match the verifier model vocab size exactly. Once complete, this step will generate and save `t2d.npy` and `d2t.npy` files to disk.
 
 ## Training
 
