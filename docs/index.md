@@ -38,5 +38,5 @@ Behind the scenes, this is reading the model from Hugging Face, parsing the `spe
 
 To create a speculative decoding model for a different verifier model there are two approaches you can choose:
 
-1. Train a new speculative decoding model ([instructions](train.md))([examples](examples/data_generation_and_training.md)).
+1. Train a new speculative decoding model ([instructions](train.md)).
 2. Convert an existing model from a third-party library to the Speculators format for easy deployment with vLLM ([instructions](convert.md)) ([examples](examples/convert.md)).
