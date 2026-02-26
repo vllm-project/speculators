@@ -4,6 +4,7 @@ Unit tests for the preprocessing module in the Speculators data generation.
 
 import json
 import re
+from typing import Any
 
 import pytest
 import torch
@@ -652,7 +653,7 @@ def test_build_eagle3_dataset_with_custom_pattern():
 @pytest.mark.sanity
 def test_normalize_conversation_with_tool_role():
     """Test that 'tool' role is normalized correctly and not skipped."""
-    conv = [
+    conv: list[dict[str, Any]] = [
         {"role": "user", "content": "Call the weather API"},
         {"role": "assistant", "content": "Sure, calling now."},
         {"role": "tool", "content": '{"temperature": 20}'},
@@ -672,7 +673,7 @@ def test_normalize_conversation_preserves_tool_calls_field():
     tool_calls = [
         {"id": "call_1", "type": "function", "function": {"name": "get_weather"}}
     ]
-    conv = [
+    conv: list[dict[str, Any]] = [
         {"role": "user", "content": "What's the weather?"},
         {"role": "assistant", "content": "", "tool_calls": tool_calls},
     ]
@@ -845,7 +846,7 @@ def test_normalize_conversation_tool_calls_with_empty_content():
     tool_calls = [
         {"id": "call_1", "type": "function", "function": {"name": "get_weather"}}
     ]
-    conv = [
+    conv: list[dict[str, Any]] = [
         {"role": "user", "content": "What's the weather?"},
         {"role": "assistant", "content": "", "tool_calls": tool_calls},
         {"role": "tool", "content": '{"temperature": 22}'},
