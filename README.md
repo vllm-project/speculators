@@ -37,7 +37,7 @@ ______________________________________________________________________
 
 ## Key Features
 
-- **Draft Model Training Support:** E2E training support of single and multi-layer draft models. Training is supported for both non-MoE, MoE, and Vision-Language models.
+- **Draft Model Training Support:** E2E training support of single and multi-layer draft models. Training is supported for MoE, non-MoE, and Vision-Language models.
 - **Standardized, Extensible Format:** Provides a Hugging Face-compatible format for defining speculative models, with tools to convert from external research repositories into a standard speculators format for easy adoption.
 - **Seamless vLLM Integration:** Built for direct deployment into vLLM, enabling low-latency, production-grade inference with minimal overhead.
 
