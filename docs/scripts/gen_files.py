@@ -140,12 +140,6 @@ def migrate_developer_docs():
         ),
         # Examples
         ProcessFile(
-            root_path=Path("examples/data_generation_and_training/README.md"),
-            docs_path=Path("examples/data_generation_and_training.md"),
-            title="Train",
-            weight=1,
-        ),
-        ProcessFile(
             root_path=Path("examples/convert/README.md"),
             docs_path=Path("examples/convert.md"),
             title="Convert",
@@ -162,12 +156,6 @@ def migrate_developer_docs():
             docs_path=Path("train.md"),
             title="Train",
             weight=-6,
-        ),
-        ProcessFile(
-            root_path=Path("scripts/response_regeneration/README.md"),
-            docs_path=Path("response-regeneration.md"),
-            title="Response Regeneration",
-            weight=2,
         ),
     ]
     process_files(files, project_root)
