@@ -2,6 +2,8 @@
 
 Evaluate speculator models using vLLM and GuideLLM, and extract acceptance length metrics.
 
+> **Requirements:** vLLM **0.12.1 or greater** is required for running evaluations.
+
 ## Quick Start
 
 **1. Install dependencies:**
@@ -336,7 +338,7 @@ pkill -9 -f "vllm serve"                 # Force kill if needed
 
 ## Dependencies
 
-Required: Python 3.9+, vLLM, GuideLLM, HuggingFace CLI, curl
+Required: Python 3.9+, vLLM >= 0.12.1, GuideLLM, HuggingFace CLI, curl
 
 ```bash
 bash setup.sh              # Install with pip
