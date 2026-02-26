@@ -10,7 +10,7 @@ Train an Eagle3 draft model or speculator. Currently, training is supported for:
 2. Single-Layer and Multi-Layer Draft Models of certain Non-Vision MoEs
 For a full list of models with support, see: https://github.com/vllm-project/speculators/blob/main/README.md
 
-[scripts/train.py](https://github.com/vllm-project/speculators/blob/v0.4.0+rhaiis/scripts/README.md) provides the main entry point for training Eagle3 models with support for single and multi GPU training using FSDP.
+scripts/train.py provides the main entry point for training Eagle3 models with support for single and multi GPU training using FSDP. For more training script details, see: https://github.com/vllm-project/speculators/blob/v0.4.0+rhaiis/scripts/README.md 
 
 ## Commands
 
