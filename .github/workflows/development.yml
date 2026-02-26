@@ -29,21 +29,40 @@ jobs:
         uses: astral-sh/setup-uv@v6
       - name: Generate doc files
         run: uv run --with .[dev] --no-sync --isolated docs/scripts/gen_files.py
-      - name: Link Checker
-        id: lychee
+
+      - name: (DOCS) Link Checker
+        id: lychee_docs
         uses: lycheeverse/lychee-action@v2
         with:
           fail: false
-      - name: Create PR Comment
+          args: --root-dir "$(pwd)/docs" --verbose --no-progress './docs/**/*.md'
+      - name: (DOCS) Create PR Comment
         if: >
-          steps.lychee.outputs.exit_code != '0' &&
+          steps.lychee_docs.outputs.exit_code != '0' &&
           github.event.pull_request.head.repo.full_name == github.repository
         uses: peter-evans/create-or-update-comment@v4
         with:
           issue-number: ${{ github.event.pull_request.number }}
           body-path: ./lychee/out.md
+
+      - name: (REPO) Link Checker
+        id: lychee_repo
+        uses: lycheeverse/lychee-action@v2
+        with:
+          fail: false
+          args: --root-dir "$(pwd)" --verbose --no-progress --exclude-path 'docs' './**/*.md'
+      - name: (REPO) Create PR Comment
+        if: >
+          steps.lychee_repo.outputs.exit_code != '0' &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          body-path: ./lychee/out.md
+
       - name: Fail on Issues
-        if: steps.lychee.outputs.exit_code != '0'
+        if: steps.lychee_docs.outputs.exit_code != '0' ||
+            steps.lychee_repo.outputs.exit_code != '0'
         run: |
           echo "Link Checker found issues. Please check the PR comment for details."
           exit 1

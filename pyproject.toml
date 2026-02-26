@@ -249,6 +249,7 @@ select = [
 "scripts/**/*.py" = [
     "INP001", # allow implicit namespace packages in scripts
     "PTH", # os.path is acceptable in scripts
+    "T201", # print statements are acceptable in scripts
 ]
 
 "examples/**/*.py" = [
