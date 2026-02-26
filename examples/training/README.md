@@ -1,6 +1,6 @@
 # Training Examples
 
-We provide three example bash scripts that demonstrate the training workflow. Each script downloads one or two small toy datasets of precomputed hidden states (50 samples) and runs `scripts/train.py` to train a speculator model on the datasets.
+We provide three example bash scripts that demonstrate the training workflow. Each script downloads one or two small toy datasets of precomputed hidden states (50 samples) and runs `scripts/train.py` to train a EAGLE3 speculator model on the datasets.
 
 ## Commands
 
