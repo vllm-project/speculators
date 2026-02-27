@@ -14,7 +14,6 @@ from speculators.train.data import (
     Eagle3SampleFileDataset,
     create_collate_fn,
     split_files,
-    standardize_data_v0,
     standardize_data_v1,
 )
 from speculators.train.distributed_batch_sampler import (
@@ -49,7 +48,6 @@ def setup_dataloader(
     world_size: int,
     local_rank: int,
     add_noise: bool = True,
-    data_format_version: int = 1,
     noise_std: float = 0.05,
     num_workers: int = 12,
     prefetch_factor: int = 4,
@@ -60,7 +58,6 @@ def setup_dataloader(
         world_size: Number of processes in the distributed training.
         local_rank: Rank of the current process.
         add_noise: Whether to add noise to the data.
-        data_format_version: Version of the data format. Default is 1.
         noise_std: Standard deviation for noise augmentation.
         num_workers: Number of dataloader workers.
         prefetch_factor: Dataloader prefetch factor.
@@ -74,9 +71,7 @@ def setup_dataloader(
     else:
         noise_transform = None
 
-    standardize_fn = (
-        standardize_data_v1 if data_format_version == 1 else standardize_data_v0
-    )
+    standardize_fn = standardize_data_v1
 
     dataset = Eagle3SampleFileDataset(
         file_list=file_list,
@@ -207,7 +202,6 @@ def main(args: argparse.Namespace):
         world_size,
         local_rank,
         add_noise=True,
-        data_format_version=args.data_format_version,
         noise_std=args.noise_std,
         num_workers=args.num_workers,
         prefetch_factor=args.prefetch_factor,
@@ -217,7 +211,6 @@ def main(args: argparse.Namespace):
         world_size,
         local_rank,
         add_noise=False,
-        data_format_version=args.data_format_version,
         noise_std=args.noise_std,
         num_workers=args.num_workers,
         prefetch_factor=args.prefetch_factor,
@@ -270,7 +263,6 @@ def parse_args():
         help="One of 'trackio', 'wandb', 'tensorboard' or comma separated list of them",
     )
     parser.add_argument("--total-seq-len", type=int, default=8192)
-    parser.add_argument("--data-format-version", type=int, default=1)
     parser.add_argument("--log-dir", type=str, default="./logs")
     parser.add_argument("--run-name", type=str, default=None)
     parser.add_argument("--num-layers", type=int, default=1)

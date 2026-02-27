@@ -121,7 +121,6 @@ Example file:
   },
   "format": {
     "file_pattern": "data_{idx}.pt",
-    "data_format_version": 1,
     "schema": {
       "input_ids": {
         "dtype": "torch.long",
