@@ -32,6 +32,8 @@ Speculators currently supports training of Eagle3 models. This functionality is 
 
 `scripts/data_generation_offline.py` provides the main entry point for generating training data for Eagle3 models. Data generation uses vLLM and requires the optional `datagen` install.
 
+The input conversation should be provided in the `conversations` column. The data generation script also supports tool-calling datasets that include separate columns for tools, as demonstrated in [llamafactory/reason-tool-use-demo-1500](https://huggingface.co/datasets/llamafactory/reason-tool-use-demo-1500) and [interstellarninja/hermes_reasoning_tool_use](https://huggingface.co/datasets/interstellarninja/hermes_reasoning_tool_use).
+
 ### Quick Start
 
 Generate training data from ShareGPT using Llama 3.1 8B:
