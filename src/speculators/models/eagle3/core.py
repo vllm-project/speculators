@@ -1,5 +1,6 @@
 # ruff: noqa: ERA001
 import copy
+import warnings
 from typing import ClassVar
 
 import torch
@@ -217,7 +218,9 @@ class Eagle3DraftModel(SpeculatorModel):
             self.hidden_size, eps=config.transformer_layer_config.rms_norm_eps
         )
         self._setup_rotary_embedding(config.transformer_layer_config)
-        self._setup_embeddings_and_lm_heads(config.speculators_config.verifier, t2d)
+        self._setup_embeddings_and_lm_heads(
+            config.speculators_config.verifier, t2d, config.embed_requires_grad
+        )
 
     def _setup_decoder_layers(
         self, transformer_layer_config: PretrainedConfig, norm_before_residual: bool
@@ -249,7 +252,7 @@ class Eagle3DraftModel(SpeculatorModel):
         self.rotary_emb = self._model_definitions.rotary_emb_class(modified_config)
 
     def _setup_embeddings_and_lm_heads(
-        self, config: VerifierConfig, t2d: torch.Tensor | None
+        self, config: VerifierConfig, t2d: torch.Tensor | None, embed_requires_grad: bool
     ):
         if config.name_or_path is None:
             raise ValueError("VerifierConfig `name_or_path` value is required.")
@@ -300,7 +303,7 @@ class Eagle3DraftModel(SpeculatorModel):
 
         embed_tokens_sd = {"weight": embed_tokens_weight.to(default_dtype)}
         self.embed_tokens.load_state_dict(embed_tokens_sd)
-        # self.embed_tokens.weight.requires_grad = False
+        self.embed_tokens.weight.requires_grad = embed_requires_grad
 
         # LM HEADS
         self.lm_head = torch.nn.Linear(
@@ -319,13 +322,6 @@ class Eagle3DraftModel(SpeculatorModel):
         else:
             # Use full verifier vocab (no masking)
             lm_head_weight = lm_head_weight.to(dtype=default_dtype)
-        if "model.norm.weight" not in verifier_weights:
-            raise KeyError(
-                f"Could not find final norm weights in {config.name_or_path}. "
-                "Expected a key ending with 'model.norm.weight'."
-            )
-
-        verifier_norm_weight = verifier_weights["model.norm.weight"]
         if lm_head_weight.shape != self.lm_head.weight.shape:
             raise ValueError(
                 f"Verifier lm head data shape "
@@ -336,8 +332,19 @@ class Eagle3DraftModel(SpeculatorModel):
         self.verifier_lm_head.weight.data = lm_head_weight.detach().clone()
 
         self.verifier_lm_head.weight.requires_grad = False
-        verifier_norm_sd = {"weight": verifier_norm_weight.to(default_dtype)}
-        self.verifier_norm.load_state_dict(verifier_norm_sd)
+
+        if "model.norm.weight" not in verifier_weights:
+            warnings.warn(
+                f"Could not find final norm weights in {config.name_or_path}. "
+                "Using default initialization (weight=1.0).",
+                UserWarning,
+                stacklevel=2,
+            )
+        else:
+            verifier_norm_weight = verifier_weights["model.norm.weight"]
+            verifier_norm_sd = {"weight": verifier_norm_weight.to(default_dtype)}
+            self.verifier_norm.load_state_dict(verifier_norm_sd)
+
         self.verifier_norm.weight.requires_grad = False
 
     @conditional_torch_compile
@@ -387,6 +394,7 @@ class Eagle3DraftModel(SpeculatorModel):
         if return_loss:
             with torch.no_grad():
                 targets = self.verifier_lm_head(self.verifier_norm(verifier_last_hidden_states))
+                # shape: [1, total_seq_len, draft_vocab_size]
             loss = torch.tensor(0.0, device=device)
 
             # prev_correct is a boolean tensor that is True for tokens that have been
@@ -503,6 +511,7 @@ class Eagle3DraftModel(SpeculatorModel):
             transformer_layer_config=verifier_config,
             draft_vocab_size=kwargs["draft_vocab_size"],
             norm_before_residual=kwargs["norm_before_residual"],
+            embed_requires_grad=kwargs.get("embed_requires_grad", True),
             speculators_config=SpeculatorsConfig(
                 algorithm="eagle3",
                 proposal_methods=[

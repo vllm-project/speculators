@@ -300,6 +300,12 @@ def parse_args():
         default=True,
         help="Toggle normalization before residual connections (default: True)",
     )
+    parser.add_argument(
+        "--embed-requires-grad",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Whether to train embedding layer weights (default: True)",
+    )
     # Dataloader parameters
     parser.add_argument(
         "--num-workers", type=int, default=12, help="Number of dataloader workers"
