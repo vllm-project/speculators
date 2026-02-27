@@ -313,7 +313,6 @@ def run_e2e(
         "verifier-name-or-path": verifier_name_or_path,
         "data-path": str(output_path / "gen"),
         "save-path": str(output_path / "checkpoints"),
-        "data-format-version": 1,
         "log-dir": str(output_path / "logs"),
     }
     if vocab_mapping_args is not None:

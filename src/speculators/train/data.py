@@ -91,24 +91,6 @@ def split_files(datapath: str, ratio: float = 0.9, seed: int = 0):
 # Data standardization functions
 StandardizeFnSig = Callable[[dict[str, Any]], dict[str, Any]]
 
-
-def standardize_data_v0(data: dict[str, Any]) -> dict[str, Any]:
-    # v0 data format:
-    # {
-    #  "input_ids": [seq_len],
-    #  "loss_mask": [seq_len],
-    #  "hidden_state": [seq_len, 3 * hidden_size],
-    #  "target": [seq_len, hidden_size],
-    # }
-
-    return {
-        "hidden_states": data["hidden_state"],
-        "input_ids": data["input_ids"],
-        "verifier_last_hidden_states": data["target"],
-        "loss_mask": data["loss_mask"],
-    }
-
-
 def standardize_data_v1(data: dict[str, Any]) -> dict[str, Any]:
     # v1 data format:
     # {

@@ -55,6 +55,11 @@ class Eagle3SpeculatorConfig(SpeculatorModelConfig):
         description="Layer IDs of the Eagle auxiliary hidden state layers",
     )
 
+    embed_requires_grad: bool = Field(
+        default=True,
+        description="Whether embedding layer weights require gradients during training",
+    )
+
     @property
     def target_vocab_size(self) -> int:
         """Get target vocabulary size from transformer config."""
