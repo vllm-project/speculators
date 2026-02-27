@@ -165,7 +165,7 @@ def migrate_developer_docs():
         ),
         ProcessFile(
             root_path=Path("scripts/response_regeneration/README.md"),
-            docs_path=Path("response-regeneration.md"),
+            docs_path=Path("response_regeneration.md"),
             title="Response Regeneration",
             weight=2,
         ),
