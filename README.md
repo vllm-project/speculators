@@ -166,6 +166,11 @@ Served models can then be benchmarked using [GuideLLM](https://github.com/vllm-p
   </picture>
 </p>
 
+## Utility Scripts
+- [Evaluate your trained model using vLLM and GuideLLM](https://github.com/vllm-project/speculators/tree/main/examples/evaluate/eval-guidellm)
+- [Regenerate responses to enhance your training data](https://github.com/vllm-project/speculators/tree/main/scripts/response_regeneration)
+
+
 ## Getting Started
 
 ### Installation
