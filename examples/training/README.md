@@ -39,4 +39,4 @@ output/
 └── checkpoints/  # Training checkpoints
 ```
 
-The `data` directory saves the huggingface datasets downloaded and the `checkpoints` directory saves checkpoints produced by the training script. The trained speculator is saved in the speculator format and can directly be served in vLLM using `vllm serve <path_to_speculator>`. Note: this speculator is only trained on 50 samples so accuracy will not be high.
+The `data` directory saves the huggingface datasets downloaded and the `checkpoints` directory saves checkpoints produced by the training script. The trained speculator is saved in the speculator format and can directly be served in vLLM using `vllm serve <path_to_speculator>`. Note: this speculator is only trained on 50 samples so acceptance rates will not be high.
