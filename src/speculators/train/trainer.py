@@ -58,14 +58,15 @@ def _materialize_fsdp_model(model: torch.nn.Module):
     for name, module in model.named_children():
         if name == "layers":
             continue
-        has_meta = any(
-            p.device.type == "meta" for p in module.parameters(recurse=True)
+        tensors = list(module.parameters(recurse=True)) + list(
+            module.buffers(recurse=True)
         )
+        has_meta = any(t.device.type == "meta" for t in tensors)
         if has_meta:
             module.to_empty(device=device)
             for sub in module.modules():
                 if hasattr(sub, "reset_parameters"):
-                    sub.reset_parameters()
+                    sub.reset_parameters()  # type: ignore[operator]
 
 
 class Trainer:
