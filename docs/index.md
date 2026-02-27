@@ -21,7 +21,7 @@ Speculators standardizes this process by providing a productionized end-to-end f
 ## Key Features
 
 - **Offline Training Data Generation using vLLM:** Enable the generation of hidden states using vLLM. Data samples are saved to disk and can be used for draft model training.
-- **Draft Model Training Support:** E2E training support of single and multi-layer draft models. Training is supported for MoE, non-MoE and Vision Language mdoels.
+- **Draft Model Training Support:** E2E training support of single and multi-layer draft models. Training is supported for MoE, non-MoE and Vision Language models.
 - **Standardized, Extensible Format:** Provides a Hugging Face-compatible format for defining speculative models, with tools to convert from external research repositories into a standard speculators format for easy adoption.
 - **Seamless vLLM Integration:** Built for direct deployment into vLLM, enabling low-latency, production-grade inference with minimal overhead.
 
