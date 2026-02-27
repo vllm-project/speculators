@@ -42,6 +42,32 @@ class TrainerConfig(NamedTuple):
     scheduler_num_cosine_cycles: float = 0.5
 
 
+def _materialize_fsdp_model(model: torch.nn.Module):
+    """Materialize and reset parameters for a freshly sharded FSDP model."""
+    acc = torch.accelerator.current_accelerator()
+    device = "cuda" if acc is None else acc.type
+
+    for m in model.layers.children():  # type: ignore[union-attr]
+        if not isinstance(m, FSDPModule):
+            continue
+        m.to_empty(device=device)  # type: ignore[attr-defined]
+        for sub_module in m.modules():  # type: ignore[attr-defined]
+            if hasattr(sub_module, "reset_parameters"):
+                sub_module.reset_parameters()  # type: ignore[operator]
+
+    for name, module in model.named_children():
+        if name == "layers":
+            continue
+        has_meta = any(
+            p.device.type == "meta" for p in module.parameters(recurse=True)
+        )
+        if has_meta:
+            module.to_empty(device=device)
+            for sub in module.modules():
+                if hasattr(sub, "reset_parameters"):
+                    sub.reset_parameters()
+
+
 class Trainer:
     def __init__(
         self,
@@ -94,19 +120,7 @@ class Trainer:
             if self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1:
                 self.checkpointer.load_model_state_dict(self.model)
             else:
-                for m in self.model.layers.children():  # type: ignore[union-attr]
-                    if not isinstance(m, FSDPModule):
-                        continue
-                    acc = torch.accelerator.current_accelerator()
-                    if acc is None:
-                        m.to_empty(device="cuda")  # type: ignore[attr-defined]
-                    else:
-                        acc_type = acc.type
-                        m.to_empty(device=acc_type)  # type: ignore[attr-defined]
-                    for sub_module in m.modules():  # type: ignore[attr-defined]
-                        if hasattr(sub_module, "reset_parameters"):
-                            sub_module.reset_parameters()  # type: ignore[operator]
-                # todo: Ensure lm_head and embed_tokens are loaded after reset
+                _materialize_fsdp_model(self.model)
         else:
             self.model.to(self.local_rank)  # type: ignore[arg-type]
             if self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1:
