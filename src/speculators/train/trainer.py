@@ -8,6 +8,7 @@ from torch.distributed.checkpoint.state_dict import (
     StateDictOptions,
     set_model_state_dict,
 )
+from torch.distributed.fsdp import FSDPModule
 from torch.utils.data import DataLoader
 from tqdm import TqdmExperimentalWarning
 from tqdm.rich import tqdm
@@ -47,6 +48,32 @@ class TrainerConfig(NamedTuple):
     save_best: bool = False
     hidden_states_dtype: torch.dtype = torch.bfloat16
     log_freq: int = 1
+
+
+def _materialize_fsdp_model(model: torch.nn.Module):
+    """Materialize and reset parameters for a freshly sharded FSDP model."""
+    acc = torch.accelerator.current_accelerator()
+    device = "cuda" if acc is None else acc.type
+
+    for m in model.layers.children():  # type: ignore[union-attr]
+        if not isinstance(m, FSDPModule):
+            continue
+        m.to_empty(device=device)  # type: ignore[attr-defined]
+        for sub_module in m.modules():  # type: ignore[attr-defined]
+            if hasattr(sub_module, "reset_parameters"):
+                sub_module.reset_parameters()  # type: ignore[operator]
+
+    for name, module in model.named_children():
+        if name == "layers":
+            continue
+        has_meta = any(
+            p.device.type == "meta" for p in module.parameters(recurse=True)
+        )
+        if has_meta:
+            module.to_empty(device=device)
+            for sub in module.modules():
+                if hasattr(sub, "reset_parameters"):
+                    sub.reset_parameters()
 
 
 class Trainer:
@@ -127,6 +154,7 @@ class Trainer:
         if load_checkpoint:
             self.checkpointer.load_model_state_dict(self.model)
         else:
+            _materialize_fsdp_model(self.model)
             # Broadcast full state dict from rank 0 to all ranks
             set_model_state_dict(
                 self.model,
