@@ -266,8 +266,9 @@ The scripts has the following optional arguments:
 - `--log-dir`: The path to save the logs. Defaults to `./logs`.
 - `--run-name`: The name of the run. Defaults to None.
 - `--num-layers`: The number of layers to use. Defaults to 1.
-- `--d2t-path`: The path to the d2t tensor. Defaults to `d2t.npy`.
-- `--t2d-path`: The path to the t2d tensor. Defaults to `t2d.npy`.
+- `--pretrained-model-path`: Path to a pretrained EAGLE3 model (HuggingFace Hub or local path) for fine-tuning. When specified, vocabulary mappings (`d2t`/`t2d`) are automatically extracted from the model. Cannot be used together with `--d2t-path` and `--t2d-path`.
+- `--d2t-path`: The path to the d2t tensor. Defaults to `d2t.npy`. Not needed when using `--pretrained-model-path`.
+- `--t2d-path`: The path to the t2d tensor. Defaults to `t2d.npy`. Not needed when using `--pretrained-model-path`.
 - `--ttt-steps`: The number of TTT steps to use. Defaults to 3.
 - `--ttt-step-loss-decay`: The loss decay factor to use for the TTT steps. Defaults to 1.0.
 
@@ -292,6 +293,29 @@ torchrun --nnodes=1 --nproc_per_node=8 scripts/train.py \
     --ttt-steps 3 \
     --ttt-step-loss-decay 1.0
 ```
+
+## Fine-tuning from Pretrained Models
+
+Fine-tune an existing EAGLE3 model using `--pretrained-model-path`. Vocabulary mappings (`d2t`/`t2d`) are automatically extracted - no need to provide them separately.
+
+**Example (Single GPU with python):**
+
+```bash
+python scripts/train.py \
+    --verifier-name-or-path "meta-llama/Llama-3.1-8B-Instruct" \
+    --pretrained-model-path "RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3" \
+    --data-path "./new_data" \
+    --save-path "./checkpoints/finetuned" \
+    --epochs 3 \
+    --lr 5e-5
+```
+
+**Notes:**
+
+- Use HuggingFace Hub model IDs or local paths for `--pretrained-model-path`
+- Cannot use `--d2t-path`/`--t2d-path` with `--pretrained-model-path`
+- Optimizer state starts fresh
+- Use lower learning rate (e.g., 5e-5) for fine-tuning
 
 ## E2E Pipeline
 
