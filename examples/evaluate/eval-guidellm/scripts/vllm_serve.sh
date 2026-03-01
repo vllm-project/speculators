@@ -12,6 +12,7 @@ SPECULATOR_MODEL=""
 NUM_SPEC_TOKENS=""
 METHOD=""
 TENSOR_PARALLEL_SIZE=""
+MAX_MODEL_LEN=""
 GPU_MEMORY_UTILIZATION=""
 PORT=""
 HEALTH_CHECK_TIMEOUT=""
@@ -35,8 +36,9 @@ Required:
 Optional:
   --num-spec-tokens TOKENS       Number of speculative tokens (default: 3)
   --method METHOD                Speculative decoding method (default: eagle3)
-  --tensor-parallel-size SIZE    Number of GPUs (default: 2)
-  --gpu-memory-utilization UTIL  GPU memory fraction (default: 0.8)
+  --tensor-parallel-size SIZE    Number of GPUs (default: 1)
+  --max-model-len LENGTH      Max model length (default: 24000)
+  --gpu-memory-utilization UTIL  GPU memory fraction (default: 0.85)
   --port PORT                    Server port (default: 8000)
   --health-check-timeout SECS    Health check timeout (default: 300)
   --log-file FILE               Log file path (default: vllm_server.log)
@@ -71,6 +73,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --tensor-parallel-size)
             TENSOR_PARALLEL_SIZE="$2"
+            shift 2
+            ;;
+        --max-model-len)
+            MAX_MODEL_LEN="$2"
             shift 2
             ;;
         --gpu-memory-utilization)
@@ -112,8 +118,9 @@ done
 # Apply defaults for any arguments not provided
 NUM_SPEC_TOKENS="${NUM_SPEC_TOKENS:-3}"
 METHOD="${METHOD:-eagle3}"
-TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-2}"
-GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.8}"
+TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-1}"
+MAX_MODEL_LEN="${MAX_MODEL_LEN:-24000}"
+GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.85}"
 PORT="${PORT:-8000}"
 HEALTH_CHECK_TIMEOUT="${HEALTH_CHECK_TIMEOUT:-300}"
 SERVER_LOG="${SERVER_LOG:-vllm_server.log}"
@@ -145,6 +152,7 @@ echo "[INFO]   Speculator model: ${SPECULATOR_MODEL}"
 echo "[INFO]   Num speculative tokens: ${NUM_SPEC_TOKENS}"
 echo "[INFO]   Method: ${METHOD}"
 echo "[INFO]   Tensor parallel size: ${TENSOR_PARALLEL_SIZE}"
+echo "[INFO]   Max model length: ${MAX_MODEL_LEN}"
 echo "[INFO]   GPU memory utilization: ${GPU_MEMORY_UTILIZATION}"
 echo "[INFO]   Port: ${PORT}"
 echo "[INFO]   Log file: ${SERVER_LOG}"
@@ -152,9 +160,10 @@ echo "[INFO]   Log file: ${SERVER_LOG}"
 vllm serve "${BASE_MODEL}" \
     --seed 42 \
     --tensor-parallel-size "${TENSOR_PARALLEL_SIZE}" \
+    --max-model-len "${MAX_MODEL_LEN}" \
     --gpu-memory-utilization "${GPU_MEMORY_UTILIZATION}" \
     --port "${PORT}" \
-    --speculative-config "{\"model\": \"${SPECULATOR_MODEL}\", \"num_speculative_tokens\": ${NUM_SPEC_TOKENS}, \"method\": \"${METHOD}\"}" \
+    --speculative-config "{\"model\": \"${SPECULATOR_MODEL}\", \"num_speculative_tokens\": ${NUM_SPEC_TOKENS}, \"method\": \"${METHOD}\", \"max_model_len\": ${MAX_MODEL_LEN}}" \
     > "${SERVER_LOG}" 2>&1 &
 
 VLLM_PID=$!
