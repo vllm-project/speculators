@@ -79,10 +79,16 @@ class VllmHiddenStatesGenerator:
         gpu_memory_utilization: float = 0.8,
         tensor_parallel_size: int = 1,
         max_num_batched_tokens: int | None = None,
+        max_num_seqs: int = MAX_NUM_SEQS,
+        max_batched_tokens: int = MIN_MAX_BATCHED_TOKENS,
+        output_device: str = "cpu",
     ):
         self.model_path = model_path
         self.tensor_parallel_size = tensor_parallel_size
         self._request_counter = 0
+        self.max_num_seqs = max_num_seqs
+        self.max_batched_tokens = max_batched_tokens
+        self.output_device = output_device
 
         log.info(f"Initializing hidden states generator for {model_path}")
         log.info(f"Tensor parallel size: {tensor_parallel_size}")
@@ -194,9 +200,9 @@ class VllmHiddenStatesGenerator:
         # to reduce warmup memory allocation. max_num_seqs controls the
         # warmup allocation size (see gpu_worker.py:441-444).
         # We set it to a small value since we only do prefill in batches.
-        max_num_seqs = MAX_NUM_SEQS
+        max_num_seqs = self.max_num_seqs
         if not max_num_batched_tokens:
-            max_num_batched_tokens = max(MIN_MAX_BATCHED_TOKENS, max_model_len)
+            max_num_batched_tokens = max(self.max_batched_tokens, max_model_len)
 
         return VllmConfig(
             model_config=ModelConfig(
@@ -341,8 +347,8 @@ class VllmHiddenStatesGenerator:
                     f"Available: {list(request_states_dict.keys())}"
                 )
 
-            layer_states = [h.clone().cpu() for h in request_states_dict[req_id]]
-            input_ids_tensor = torch.as_tensor(input_ids_list[i], dtype=torch.long)
+            layer_states = [h.clone().to(self.output_device) for h in request_states_dict[req_id]]
+            input_ids_tensor = torch.as_tensor(input_ids_list[i], dtype=torch.long).to(self.output_device)
 
             results.append(
                 {

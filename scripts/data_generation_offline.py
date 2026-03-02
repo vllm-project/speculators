@@ -135,6 +135,11 @@ def parse_args():
     parser.add_argument(
         "--output-dir", type=str, required=True, help="Directory to save .pt files"
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Run prefill/hidden-state generation without saving output tensors",
+    )
 
     # Hidden states generation arguments
     parser.add_argument(
@@ -152,6 +157,12 @@ def parse_args():
         type=int,
         default=8,
         help="Batch size for hidden states generation (default: 8)",
+    )
+    parser.add_argument(
+        "--output-device",
+        type=str,
+        default="cpu",
+        help="Device for generated tensors before save (default: cpu)",
     )
 
     # Processing arguments
@@ -226,13 +237,14 @@ def save_config(args, generator, num_samples, output_dir):
 
 def generate_and_save_hidden_states(args, dataset):
     """Generate hidden states and save each sample as a .pt file"""
-    Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+    if not args.dry_run:
+        Path(args.output_dir).mkdir(parents=True, exist_ok=True)
 
-    start_file_idx = find_last_checkpoint(args.output_dir)
+    start_file_idx = find_last_checkpoint(args.output_dir) if not args.dry_run else 0
 
     # Load existing sample lengths to preserve them on resume
     sample_lengths_output_path = Path(args.output_dir) / "sample_lengths.json"
-    if start_file_idx > 0 and sample_lengths_output_path.exists():
+    if not args.dry_run and start_file_idx > 0 and sample_lengths_output_path.exists():
         with open(sample_lengths_output_path) as f:
             sample_lengths = json.load(f)
         log.subsection(
@@ -241,7 +253,7 @@ def generate_and_save_hidden_states(args, dataset):
         )
     else:
         sample_lengths = {}
-        if start_file_idx > 0:
+        if not args.dry_run and start_file_idx > 0:
             log.subsection(f"Resuming: {start_file_idx} files already exist")
 
     num_samples = len(dataset)
@@ -258,6 +270,7 @@ def generate_and_save_hidden_states(args, dataset):
         max_model_len=args.seq_length,
         gpu_memory_utilization=args.gpu_memory_utilization,
         tensor_parallel_size=args.tensor_parallel_size,
+        output_device=args.output_device,
     )
 
     log.info(f"Processing {num_samples - start_sample_idx}/{num_samples} samples")
@@ -276,50 +289,64 @@ def generate_and_save_hidden_states(args, dataset):
         total=num_batches,
     )
 
-    with ThreadPoolExecutor(max_workers=max_io_workers) as thread_executor:
-        futures = []
-
+    if args.dry_run:
+        log.info("Dry run enabled: generating hidden states without saving tensors")
         for i in pbar:
             batch_end = min(i + args.batch_size, num_samples)
             batch = dataset[i:batch_end]
             batch_input_ids = batch["input_ids"]
-            batch_loss_mask = batch["loss_mask"]
-
             results = generator.generate(batch_input_ids)
+            file_idx += len(results)
+    else:
+        with ThreadPoolExecutor(max_workers=max_io_workers) as thread_executor:
+            futures = []
 
-            # Submit save operations to thread pool (async I/O)
-            for j, result in enumerate(results):
-                # Truncate loss_mask to match input_ids length (generator may truncate)
-                input_len = len(result["input_ids"])
-                sample_lengths[str(file_idx)] = input_len
-                loss_mask = batch_loss_mask[j][:input_len]
+            for i in pbar:
+                batch_end = min(i + args.batch_size, num_samples)
+                batch = dataset[i:batch_end]
+                batch_input_ids = batch["input_ids"]
+                batch_loss_mask = batch["loss_mask"]
 
-                result_cleaned = {
-                    "input_ids": result["input_ids"],
-                    "hidden_states": [h.contiguous() for h in result["hidden_states"]],
-                    "loss_mask": loss_mask,
-                }
-                output_path = Path(args.output_dir) / f"data_{file_idx}.pt"
-                future = thread_executor.submit(
-                    save_sample_to_disk, result_cleaned, output_path
-                )
-                futures.append(future)
-                file_idx += 1
+                results = generator.generate(batch_input_ids)
 
-        log.info("Waiting for remaining file saves to complete...")
-        for future in tqdm(
-            as_completed(futures), total=len(futures), desc="Saving files"
-        ):
-            future.result()
+                # Submit save operations to thread pool (async I/O)
+                for j, result in enumerate(results):
+                    # Truncate loss_mask to match input_ids length (generator may truncate)
+                    input_len = len(result["input_ids"])
+                    sample_lengths[str(file_idx)] = input_len
+                    loss_mask = batch_loss_mask[j][:input_len]
+
+                    result_cleaned = {
+                        "input_ids": result["input_ids"],
+                        "hidden_states": [h.contiguous() for h in result["hidden_states"]],
+                        "loss_mask": loss_mask,
+                    }
+                    output_path = Path(args.output_dir) / f"data_{file_idx}.pt"
+                    future = thread_executor.submit(
+                        save_sample_to_disk, result_cleaned, output_path
+                    )
+                    futures.append(future)
+                    file_idx += 1
+
+            log.info("Waiting for remaining file saves to complete...")
+            for future in tqdm(
+                as_completed(futures), total=len(futures), desc="Saving files"
+            ):
+                future.result()
 
     samples_saved = file_idx - start_file_idx
 
-    with open(sample_lengths_output_path, "w") as f:
-        json.dump(sample_lengths, f, indent=2)
+    if not args.dry_run:
+        with open(sample_lengths_output_path, "w") as f:
+            json.dump(sample_lengths, f, indent=2)
 
-    log.info(f"Saved {samples_saved} new data points to {args.output_dir}")
+    if args.dry_run:
+        log.info(f"Dry run complete: generated {samples_saved} data points")
+    else:
+        log.info(f"Saved {samples_saved} new data points to {args.output_dir}")
 
-    save_config(args, generator, num_samples, args.output_dir)
+    if not args.dry_run:
+        save_config(args, generator, num_samples, args.output_dir)
 
     return samples_saved
 
@@ -335,6 +362,8 @@ def main():
             "Output Dir": args.output_dir,
             "Tensor Parallel": args.tensor_parallel_size,
             "Batch Size": args.batch_size,
+            "Output Device": args.output_device,
+            "Dry Run": args.dry_run,
         }
     )
 
@@ -353,7 +382,10 @@ def main():
     num_saved = generate_and_save_hidden_states(args, dataset)
 
     log.section("Data generation complete!")
-    log.info(f"Saved {num_saved} files to {args.output_dir}")
+    if args.dry_run:
+        log.info(f"Dry run generated {num_saved} samples (no files saved)")
+    else:
+        log.info(f"Saved {num_saved} files to {args.output_dir}")
 
 
 if __name__ == "__main__":
