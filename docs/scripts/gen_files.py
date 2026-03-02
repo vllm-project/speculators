@@ -130,13 +130,13 @@ def migrate_developer_docs():
             root_path=Path("CODE_OF_CONDUCT.md"),
             docs_path=Path("developer/code-of-conduct.md"),
             title="Code of Conduct",
-            weight=-10,
+            weight=-12,
         ),
         ProcessFile(
             root_path=Path("CONTRIBUTING.md"),
             docs_path=Path("developer/contributing.md"),
             title="Contributing Guide",
-            weight=-8,
+            weight=-10,
         ),
         # Examples
         ProcessFile(
@@ -144,12 +144,6 @@ def migrate_developer_docs():
             docs_path=Path("examples/data_generation_and_training.md"),
             title="Train",
             weight=1,
-        ),
-        ProcessFile(
-            root_path=Path("scripts/response_regeneration/README.md"),
-            docs_path=Path("response_regeneration.md"),
-            title="Response Regeneration",
-            weight=2,
         ),
         ProcessFile(
             root_path=Path("examples/convert/README.md"),
@@ -168,6 +162,12 @@ def migrate_developer_docs():
             docs_path=Path("train.md"),
             title="Train",
             weight=-6,
+        ),
+        ProcessFile(
+            root_path=Path("scripts/response_regeneration/README.md"),
+            docs_path=Path("response_regeneration.md"),
+            title="Response Regeneration",
+            weight=-8,
         ),
     ]
     process_files(files, project_root)
