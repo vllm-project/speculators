@@ -161,13 +161,13 @@ def migrate_developer_docs():
             root_path=Path("scripts/README.md"),
             docs_path=Path("train.md"),
             title="Train",
-            weight=-6,
+            weight=-8,
         ),
         ProcessFile(
             root_path=Path("scripts/response_regeneration/README.md"),
             docs_path=Path("response_regeneration.md"),
             title="Response Regeneration",
-            weight=-8,
+            weight=-6,
         ),
     ]
     process_files(files, project_root)
