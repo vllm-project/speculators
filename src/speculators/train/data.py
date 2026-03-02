@@ -91,6 +91,7 @@ def split_files(datapath: str, ratio: float = 0.9, seed: int = 0):
 # Data standardization functions
 StandardizeFnSig = Callable[[dict[str, Any]], dict[str, Any]]
 
+
 def standardize_data_v1(data: dict[str, Any]) -> dict[str, Any]:
     # v1 data format:
     # {
