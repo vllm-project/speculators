@@ -162,7 +162,10 @@ class Eagle3DraftModel(SpeculatorModel):
         "d2t",
         "t2d",
     ]
-    _keys_to_ignore_on_save: ClassVar[list[str]] = ["verifier_lm_head.weight","verifier_norm.weight" ]  # type: ignore[misc,assignment]
+    _keys_to_ignore_on_save: ClassVar[list[str]] = [
+        "verifier_lm_head.weight",
+        "verifier_norm.weight",
+    ]  # type: ignore[misc,assignment]
 
     def __init__(
         self,
@@ -252,7 +255,10 @@ class Eagle3DraftModel(SpeculatorModel):
         self.rotary_emb = self._model_definitions.rotary_emb_class(modified_config)
 
     def _setup_embeddings_and_lm_heads(
-        self, config: VerifierConfig, t2d: torch.Tensor | None, embed_requires_grad: bool
+        self,
+        config: VerifierConfig,
+        t2d: torch.Tensor | None,
+        embed_requires_grad: bool,
     ):
         if config.name_or_path is None:
             raise ValueError("VerifierConfig `name_or_path` value is required.")
@@ -393,7 +399,9 @@ class Eagle3DraftModel(SpeculatorModel):
         return_loss = verifier_last_hidden_states is not None
         if return_loss:
             with torch.no_grad():
-                targets = self.verifier_lm_head(self.verifier_norm(verifier_last_hidden_states))
+                targets = self.verifier_lm_head(
+                    self.verifier_norm(verifier_last_hidden_states)
+                )
                 # shape: [1, total_seq_len, draft_vocab_size]
             loss = torch.tensor(0.0, device=device)
 
