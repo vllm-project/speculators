@@ -17,6 +17,7 @@ NUM_SPEC_TOKENS=""
 METHOD=""
 DATASET=""
 TENSOR_PARALLEL_SIZE=""
+MAX_MODEL_LEN=""
 GPU_MEMORY_UTILIZATION=""
 PORT=""
 HEALTH_CHECK_TIMEOUT=""
@@ -150,8 +151,9 @@ fi
 # Apply defaults for any variables not set by CLI args or config file
 NUM_SPEC_TOKENS="${NUM_SPEC_TOKENS:-3}"
 METHOD="${METHOD:-eagle3}"
-TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-2}"
-GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.8}"
+TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-1}"
+MAX_MODEL_LEN="${MAX_MODEL_LEN:-24000}"
+GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.85}"
 PORT="${PORT:-8000}"
 HEALTH_CHECK_TIMEOUT="${HEALTH_CHECK_TIMEOUT:-300}"
 OUTPUT_DIR="${OUTPUT_DIR:-eval_results_$(date +%Y%m%d_%H%M%S)}"
@@ -218,6 +220,7 @@ echo "[INFO] Starting vLLM server..."
     --num-spec-tokens "${NUM_SPEC_TOKENS}" \
     --method "${METHOD}" \
     --tensor-parallel-size "${TENSOR_PARALLEL_SIZE}" \
+    --max-model-len "${MAX_MODEL_LEN}" \
     --gpu-memory-utilization "${GPU_MEMORY_UTILIZATION}" \
     --port "${PORT}" \
     --health-check-timeout "${HEALTH_CHECK_TIMEOUT}" \
