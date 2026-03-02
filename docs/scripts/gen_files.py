@@ -130,13 +130,13 @@ def migrate_developer_docs():
             root_path=Path("CODE_OF_CONDUCT.md"),
             docs_path=Path("developer/code-of-conduct.md"),
             title="Code of Conduct",
-            weight=-12,
+            weight=5,
         ),
         ProcessFile(
             root_path=Path("CONTRIBUTING.md"),
             docs_path=Path("developer/contributing.md"),
             title="Contributing Guide",
-            weight=-10,
+            weight=6,
         ),
         # Examples
         ProcessFile(
