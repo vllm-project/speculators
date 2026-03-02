@@ -61,7 +61,23 @@ def get_next_version(
         build_iteration = int(build_iteration)
 
     if build_type == "release":
-        version = Version(f"{version}+rhaiis")
+        if commits_since_last:
+            # add post since we have commits since last tag
+            version = Version(f"{version.base_version}.post{build_iteration}")
+        return version, tag, build_iteration
+
+    # Keep the same version for rhaiis release
+    version = Version(f"{version.major}.{version.minor}.0")
+
+    if build_type == "candidate":
+        # add 'rc' since we are in candidate pathway
+        version = Version(f"{version}.rc{build_iteration}")
+    elif build_type in ["nightly", "alpha"]:
+        # add 'a' since we are in nightly or alpha pathway
+        version = Version(f"{version}.a{build_iteration}")
+    else:
+        # assume 'dev' if not in any of the above pathways
+        version = Version(f"{version}.dev{build_iteration}")
 
     return version, tag, build_iteration
 
