@@ -161,7 +161,7 @@ class HiddenStatesWorkerExtension:
         """Release tensor references kept alive for CUDA IPC consumers."""
         self._ipc_exporter.release(capture_token)  # type: ignore[attr-defined]
 
-    def _get_captured_states(self, capture_token: str):
+    def _get_captured_states(self, capture_token: str | None = None):
         """Get the captured hidden states organized by request ID.
 
         Returns:
@@ -201,4 +201,6 @@ class HiddenStatesWorkerExtension:
         self._captured_states = None  # type: ignore[assignment]
         self._request_metadata = []  # type: ignore[assignment]
 
+        if capture_token is None:
+            return result
         return self._ipc_exporter.export_capture(capture_token, result)  # type: ignore[attr-defined]
