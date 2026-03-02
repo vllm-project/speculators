@@ -27,9 +27,12 @@ from .config import (
     reload_schemas,
 )
 from .model import SpeculatorModel
+from .models import Eagle3DraftModel, Eagle3SpeculatorConfig
 from .proposals import TokenProposalConfig
 
 __all__ = [
+    "Eagle3DraftModel",
+    "Eagle3SpeculatorConfig",
     "SpeculatorModel",
     "SpeculatorModelConfig",
     "SpeculatorsConfig",

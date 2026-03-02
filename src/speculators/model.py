@@ -42,7 +42,7 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
     config_class: ClassVar[type[SpeculatorModelConfig]] = SpeculatorModelConfig  # type: ignore[assignment,misc]
     base_model_prefix: ClassVar[str] = "model"  # type: ignore[misc]
     main_input_name: ClassVar[str] = "input_ids"  # type: ignore[misc]
-    _keys_to_ignore_on_load_missing: ClassVar[list[str]] = []  # type: ignore[misc]
+    _keys_to_ignore_on_load_missing: ClassVar[list[str]] = []  # type: ignore[assignment,misc]
 
     @classmethod
     def from_pretrained(
