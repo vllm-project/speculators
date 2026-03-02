@@ -114,7 +114,7 @@ class Trainer:
 
     def setup_optimizer(self):
         # Setup optimizer
-        self.opt = torch.optim.AdamW(self.model.named_parameters(), lr=self.config.lr)
+        self.opt = torch.optim.AdamW(self.model.parameters(), lr=self.config.lr)
         last_epoch = -1
         if self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1:
             self.checkpointer.load_optimizer_state_dict(self.model, self.opt)
