@@ -303,7 +303,7 @@ def parse_args():
     parser.add_argument(
         "--embed-requires-grad",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help="Whether to train embedding layer weights (default: True)",
     )
     # Dataloader parameters

@@ -56,7 +56,7 @@ class Eagle3SpeculatorConfig(SpeculatorModelConfig):
     )
 
     embed_requires_grad: bool = Field(
-        default=True,
+        default=False,
         description="Whether embedding layer weights require gradients during training",
     )
 
