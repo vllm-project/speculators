@@ -1,0 +1,1000 @@
+[33m857e7b8[m[33m ([m[1;36mHEAD -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m support sp ulysses.
+[33m1083e59[m[33m ([m[1;31mupstream/main[m[33m, [m[1;32mnew[m[33m)[m Add: Claiming Work section in CONTRIBUTING.md (#287)
+[33m21180f6[m Fix datagen resume losing sample lengths (#295)
+[33mde03273[m bump vllm to latest version (#294)
+[33ma41c572[m Add Qwen3 Eagle3 first layer support (#291)
+[33m9462f99[m Fix offline datagen for chunked prefill (#283)
+[33m1330293[m Update typer-slim dependency to typer (#289)
+[33m2847baa[m [Docs] Move algorithm guide + exclude branding doc (#285)
+[33m2083142[m Remove .beads folder (#286)
+[33m250839b[m Simplify code quality checks (#282)
+[33m661d3ed[m Generalize training framework to support algorithms beyond Eagle 3 (#271)
+[33mab2dc87[m Add seeding to train.py (#278)
+[33m1634ced[m Remove VLLM_USE_V1=1 from docs
+[33mc8a0a60[m Add psutil to deps (#265)
+[33ma741887[m use the full verifier vocab (#261)
+[33m82d524a[m fix: Save and load exact sample lengths for training (#262)
+[33mc6c3926[m updated vllm dependency to latest version (#260)
+[33m24a379f[m Remove unused packages and cap torch & transformers (#264)
+[33m5075e2b[m Added link to qwen3 vl speculator model (#258)
+[33mccfc687[m support ascend npu platform. (#232)
+[33m5ea15ba[m Add lr scheduler options to train.py and gen_and_train.py (#250)
+[33m481efde[m Only apply mixed precision policy to layers (#244)
+[33mc7c5e9a[m Add: links to Office Hours presentation video and slides in `README` (#249)
+[33m64d1aee[m [CI] Update stale PR / Issue conditions  (#247)
+[33m23ef094[m Lower acceptance threshold for flaky test (#246)
+[33m5b5305c[m Fix Verifier stubs in eval examples (#245)
+[33m41be2d4[m Update Qwen3 MoE section in README (#243)
+[33m114d934[m [CI] Add automatic stale PR handling (#240)
+[33m8f95f54[m [Mergify] Enable Automatic PR handling (#239)
+[33m3ad8b60[m Fix failing nightly test by loosening acceptance rate thresholds (#237)
+[33mfa7d0e8[m End to end acceptance rate regression test (#226)
+[33m58a8ce2[m [Enhancement] Add configurable base model and speculative decoding parameters to eval framework (#220)
+[33m8374278[m Added data generation & training support for qwen3 vl model (#228)
+[33m7e12816[m updated vllm version (#236)
+[33m8416f86[m updated test model (#234)
+[33m070eeeb[m feat: added support for hf assistant mask and updated regex detection with fallback (#227)
+[33m21d839d[m Only add comments to non-fork prs (#229)
+[33ma4bb20f[m Add `tox-uv` to dev dependencies (#230)
+[33m052cf48[m Add DCO Signoff info to CONTRIBUTING.md (#224)
+[33me9c160d[m support preprocessing of regenerated gpt-oss data (#223)
+[33me854faf[m bump up vllm version to 0.12.0 (#225)
+[33mb3f6b10[m Link to vLLM blog speculators post in Readme (#222)
+[33m4d41d30[m Bump up version string after 0.3.0 release (#219)
+[33mbe6e86e[m[33m ([m[1;33mtag: v0.3.0[m[33m)[m Restructure documentation (#216)
+[33ma5f079b[m pin datasets version (#217)
+[33mfeb515b[m Update `src/speculators/models/eagle3` to new training implementation (#199)
+[33mb341535[m Add train data tests (#214)
+[33mdd056f6[m [Docs] Update ReadMe (#215)
+[33mf50e1b7[m added gpt-oss example and support (#209)
+[33m798ca63[m [Docs] Update and clean-up README files (#211)
+[33m5d62d49[m [Testing] Add e2e train <> vLLM tests + clean-up test utils (#206)
+[33me13ef26[m Remove Unused Proposals (#213)
+[33m40af3db[m Fix typo in `gen_and_train.py` (#207)
+[33m6a0a9d3[m feat: added target-model-path to args to `scripts/build_vocab_mapping` (#212)
+[33me6c0f19[m Add `GuideLLM+vLLM` Evaluation Scripts for Speculator Models (#203)
+[33m99e0733[m removed max_model_len argument and deleted the separate preprocessing script (#198)
+[33ma844a74[m move vocab mapping file to train folder (#204)
+[33m77e2e84[m Fix link redirects (#205)
+[33m7acd3c5[m Add script for E2E Datagen + training (#191)
+[33m5cb53ce[m Update ReadME with datagen install (#197)
+[33mf49ea1a[m Update link to converted Llama-4-Maverick (#161)
+[33ma0ad50a[m Consolidate `DEVELOPING.md` and `CONTRIBUTING.md` (#181)
+[33m8d66df2[m Delete .MAINTAINERS (#194)
+[33ma5d771d[m Update config for EAGLE data generation (#168)
+[33m08f3aae[m refactor loss mask calculation (#195)
+[33mb20d626[m Add Slack community invitation to README (#187)
+[33m012a7fd[m Use verifier vocab size in transformer_layer_config (#188)
+[33m444db43[m Update: Base llama model to Instruct version (#189)
+[33m2dc8c2e[m Change vllm pin to exact version (#190)
+[33mbc8516c[m Update EAGLE-3 support status in README (#186)
+[33m9c46bea[m Added data generation testing when merging to main (#185)
+[33m4619939[m Fix small model weight loading (#184)
+[33m3186a03[m Add truncate_long_samples option to distributed batch sampler (#183)
+[33mf825e17[m Fix transformer layer config creation (#182)
+[33m8a2d483[m Eagle3 Training (#143)
+[33m751f3a0[m Offline data generation for eagle3 training (#157)
+[33m6c3678f[m remove research docs references (#178)
+[33m718ff10[m Remove `research` folder (#177)
+[33m227b8a1[m switch to H100 runner for the tests (#176)
+[33m467f16d[m [Docs] Remove references to evaluation (#175)
+[33m55611fd[m Use `uv` to speed up `tox` environment installs (#165)
+[33m93774fb[m bump version after v0.2.0 release (#169)
+[33m02212fa[m[33m ([m[1;33mtag: v0.2.0[m[33m)[m bump up version for last release (#167)
+[33m081b2e0[m Fix EAGLE3 vLLM tests by disabling torch compile cache (#166)
+[33m5bb69ec[m Only load Verifier model if attachment_mode is 'full' (#154)
+[33mc5a7112[m Fix dev link checker workflow to comment directly on PRs (#164)
+[33mc99826d[m add back link-checks (#162)
+[33m1ed27bf[m Remove nightly tests badge from README (#163)
+[33m52af530[m Remove nightly in favour of testing repo (#159)
+[33ma21230f[m Extend E2E Tests for EAGLE3 Models (#156)
+[33m660f1b9[m Added loading util tests (#155)
+[33mfc59c6a[m Fix a typo in docs (#107)
+[33md198534[m Remove remaining python 3.9 usages (#152)
+[33m06a30d5[m Refactor e2e tests to support external vLLM (#153)
+[33m6937250[m Remove PyPI publishing steps from nightly workflow (#151)
+[33m7b065f9[m added loading util for specific layers (#144)
+[33m5669b7b[m Update CI Testing (#150)
+[33m6b7b43d[m add num_hidden_layers (#147)
+[33m8af566f[m Update speculator config & converter to support hidden states indexing (#142)
+[33m5017d10[m Set default num of spec tokens to 3 (#146)
+[33m2b2b408[m Prevent forced casting to fp16 dtype (#145)
+[33mdb95321[m Update link checker so that it comments on existing issue (#129)
+[33m74c05b1[m Fix 'test_download_with_cache_dir' (#141)
+[33m94dc409[m Fix install command for dev (#137)
+[33m7d7b0b4[m Fix for draft models always being in fp32 datatype (#136)
+[33mf6745b1[m Fix for Eagle attention arch when head_dim is given in config.json (#134)
+[33mf344dc7[m Update README with new models and their links (#135)
+[33m36501d5[m Fix broken links (#125)
+[33mc116f5f[m Update ReadME feature content (#109)
+[33m9c52479[m Update README.md with badges (#108)
+[33m7958272[m Update mkdocs (#115)
+[33m2e755eb[m Fix type annotation override in SpeculatorModel.generate method (#111)
+[33m287d102[m Model architectures (#90)
+[33mb5030c5[m [Tests][Eagle3] Extend vLLM test cases with conversion step (#93)
+[33m14b3ca5[m Adding .readthedocs.yaml (#92)
+[33m20cdbf9[m [Testing][vLLM] Add vLLM Eagle3 Test Cases (#91)
+[33mef94fc6[m override transformer tie_weights to prevent shape mismatch (#74)
+[33mf8795b1[m Update README install commands now that Speculators is live on PyPi (#89)
+[33m8a49095[m[33m ([m[1;33mtag: v0.1.0[m[33m)[m Add branding assets for speculators including icons, logos, and user flow diagrams (#87)
+[33m2d655f6[m Update README.md (#85)
+[33m4f341a2[m [Docs] Add README.md for the examples dir (#81)
+[33m9505383[m Update README.md (#83)
+[33m2d1d02d[m increase size (#82)
+[33m6cd16ab[m Enhanced Eagle3 Conversion Testing (#76)
+[33mc2b9bd8[m [Docs] Addd vLLM serving instructions (#78)
+[33m5772e19[m Remove mypy from precommit due to numerous issues with not matching tox mypy
+[33md79fe93[m [Docs] Add qwen benchmark result (#77)
+[33m8ae0271[m reformat example  (#75)
+[33mbd5851b[m Feat/converter cli standardization (#72)
+[33mdab39f5[m Pin transformers (#73)
+[33meac751f[m Cleanup/readme documentation updates (#70)
+[33mc2518c3[m added deepspeed dep (#69)
+[33md3555ea[m Added requirements for research code (#67)
+[33m4312a18[m update research eagle3 readme (#64)
+[33ma3538f6[m fix for missing embeddings (#65)
+[33me8aa555[m Training code for Eagle 1 style drafter with multi-step training (#35)
+[33me9c946c[m fix flag name (#58)
+[33m8de12d3[m enable norm_before_residual in cli (#57)
+[33mfce9ca1[m Megan/eagle3 qwen (#55)
+[33mff3e178[m Add Eagle-3 converter (#53)
+[33m5d4ff90[m feat: Eagle-3 speculator implementation (#50)
+[33m5279aa6[m feat: Expand Eagle Speculator to Support Multiple Transformer Layer Types (#49)
+[33mbc53669[m feat: Add Eagle Checkpoint Converter (#39)
+[33me49fcaa[m chore: Update pr comment behavior (#47)
+[33md47e026[m Migrate link checks to GitHub actions only with lychee for main workflows (#45)
+[33m698af1b[m feat: Implement Eagle speculator model (#37)
+[33m3c05f12[m feat: Add config serialization and loading support (#36)
+[33mde9be4d[m Add EagleSpeculatorConfig for EAGLE1 and HASS models with unified architecture support (#34)
+[33m225bfe8[m Add model speculator configs classes and tests for base algorithms with argument names and defaults (#29)
+[33m98cc42a[m Add token proposal config classes and tests for base algorithms with argument names and defaults (#28)
+[33m1d9e297[m Add registry mixin and auto import utils functionality (#27)
+[33mcc09965[m Add base speculators configuration classes and tests (#26)
+[33mac3e95d[m CI/CD fixes for link checking and updating to latest due to mypy issue with latest transformers (#3)
+[33mb1ecb36[m[33m ([m[1;33mtag: v0.0.1[m[33m)[m Enable CI/CD and standardize build system setup (#1)
+[33mf0e2979[m Initial setup and enablement for the speculators repo
+ses",[m
+[32m+[m[32m        action="store_true",[m
+[32m+[m[32m        default=False,[m
+[32m+[m[32m        help="Enable SP Ulysses sequence parallelism",[m
+[32m+[m[32m    )[m
+[32m+[m[32m    parser.add_argument("--sp-ulysses-size", type=int, default=1)[m
+[32m+[m[32m    parser.add_argument("--sp-ring-size", type=int, default=1)[m
+[32m+[m[41m    [m
+     return parser.parse_args()[m
+ [m
+ [m
+[1mdiff --git a/src/speculators/models/eagle3/config.py b/src/speculators/models/eagle3/config.py[m
+[1mindex af6f92a..887f7de 100644[m
+[1m--- a/src/speculators/models/eagle3/config.py[m
+[1m+++ b/src/speculators/models/eagle3/config.py[m
+[36m@@ -45,6 +45,11 @@[m [mclass Eagle3SpeculatorConfig(SpeculatorModelConfig):[m
+         description="Apply hidden_norm before storing residual",[m
+     )[m
+ [m
+[32m+[m[32m    enable_sp_ulysses: bool = Field([m
+[32m+[m[32m        default=False,[m
+[32m+[m[32m        description="Enable SP Ulysses sequence parallelism",[m
+[32m+[m[32m    )[m
+[32m+[m
+     target_hidden_size: int | None = Field([m
+         default=None,[m
+         description="Hidden size of the target model (if different from draft model)",[m
+[1mdiff --git a/src/speculators/models/eagle3/core.py b/src/speculators/models/eagle3/core.py[m
+[1mindex c5d6ab2..86560f3 100644[m
+[1m--- a/src/speculators/models/eagle3/core.py[m
+[1m+++ b/src/speculators/models/eagle3/core.py[m
+[36m@@ -1,6 +1,6 @@[m
+ # ruff: noqa: ERA001[m
+ import copy[m
+[31m-from typing import ClassVar[m
+[32m+[m[32mfrom typing import ClassVar, Optional[m
+ [m
+ import torch[m
+ from torch.nn.attention.flex_attention import create_block_mask[m
+[36m@@ -16,6 +16,7 @@[m [mfrom speculators.models.eagle3.attention import ([m
+ from speculators.models.eagle3.model_definitions import model_classes[m
+ from speculators.proposals.greedy import GreedyTokenProposalConfig[m
+ from speculators.utils.loading import load_model_layers[m
+[32m+[m[32mfrom speculators.train.distributed import get_sp_ring_group, get_sp_ulysses_group, gather_outputs_and_unpad[m
+ [m
+ [m
+ def align_for_step([m
+[36m@@ -150,6 +151,51 @@[m [mdef conditional_torch_compile(func):[m
+     else:[m
+         return func[m
+ [m
+[32m+[m[32m# Copied from transformers.models.bart.modeling_bart._make_causal_mask[m
+[32m+[m[32mdef _make_causal_mask([m
+[32m+[m[32m    input_ids_shape: torch.Size,[m
+[32m+[m[32m    dtype: torch.dtype,[m
+[32m+[m[32m    device: torch.device,[m
+[32m+[m[32m    past_key_values_length: int = 0,[m
+[32m+[m[32m):[m
+[32m+[m[32m    """[m
+[32m+[m[32m    Make causal mask used for bi-directional self-attention.[m
+[32m+[m[32m    """[m
+[32m+[m[32m    bsz, tgt_len = input_ids_shape[m
+[32m+[m[32m    mask = torch.full((tgt_len, tgt_len), torch.finfo(dtype).min, device=device)[m
+[32m+[m[32m    mask_cond = torch.arange(mask.size(-1), device=device)[m
+[32m+[m[32m    mask.masked_fill_(mask_cond < (mask_cond + 1).view(mask.size(-1), 1), 0)[m
+[32m+[m[32m    mask = mask.to(dtype)[m
+[32m+[m
+[32m+[m[32m    if past_key_values_length > 0:[m
+[32m+[m[32m        mask = torch.cat([m
+[32m+[m[32m            [[m
+[32m+[m[32m                torch.zeros([m
+[32m+[m[32m                    tgt_len, past_key_values_length, dtype=dtype, device=device[m
+[32m+[m[32m                ),[m
+[32m+[m[32m                mask,[m
+[32m+[m[32m            ],[m
+[32m+[m[32m            dim=-1,[m
+[32m+[m[32m        )[m
+[32m+[m[32m    return mask[None, None, :, :].expand([m
+[32m+[m[32m        bsz, 1, tgt_len, tgt_len + past_key_values_length[m
+[32m+[m[32m    )[m
+[32m+[m
+[32m+[m
+[32m+[m[32mdef _expand_mask(mask: torch.Tensor, dtype: torch.dtype, tgt_len: Optional[int] = None):[m
+[32m+[m[32m    """[m
+[32m+[m[32m    Expands attention_mask from `[bsz, seq_len]` to `[bsz, 1, tgt_seq_len, src_seq_len]`.[m
+[32m+[m[32m    """[m
+[32m+[m[32m    bsz, src_len = mask.size()[m
+[32m+[m[32m    tgt_len = tgt_len if tgt_len is not None else src_len[m
+[32m+[m
+[32m+[m[32m    expanded_mask = mask[:, None, None, :].expand(bsz, 1, tgt_len, src_len).to(dtype)[m
+[32m+[m
+[32m+[m[32m    inverted_mask = 1.0 - expanded_mask[m
+[32m+[m
+[32m+[m[32m    return inverted_mask.masked_fill([m
+[32m+[m[32m        inverted_mask.to(torch.bool), torch.finfo(dtype).min[m
+[32m+[m[32m    )[m
+ [m
+ @SpeculatorModel.register("eagle3")[m
+ class Eagle3DraftModel(SpeculatorModel):[m
+[36m@@ -217,28 +263,53 @@[m [mclass Eagle3DraftModel(SpeculatorModel):[m
+         )[m
+         self._setup_rotary_embedding(config.transformer_layer_config)[m
+         self._setup_embeddings_and_lm_heads(config.speculators_config.verifier, t2d)[m
+[32m+[m[41m        [m
+[32m+[m[32m        self.sp_ring_degree = torch.distributed.get_world_size(get_sp_ring_group())[m
+[32m+[m[32m        self.sp_ulysses_degree = torch.distributed.get_world_size([m
+[32m+[m[32m            get_sp_ulysses_group()[m
+[32m+[m[32m        )[m
+[32m+[m[32m        self.sp_world_size = self.sp_ring_degree * self.sp_ulysses_degree[m
+[32m+[m[32m        self.sp_rank = torch.distributed.get_rank() % self.sp_world_size[m
+[32m+[m
+ [m
+     def _setup_decoder_layers([m
+         self, transformer_layer_config: PretrainedConfig, norm_before_residual: bool[m
+     ):[m
+         num_hidden_layers = transformer_layer_config.num_hidden_layers[m
+[31m-        # Add first layer[m
+[31m-        layers = [[m
+[31m-            self._model_definitions.first_layer_class([m
+[31m-                transformer_layer_config,[m
+[31m-                layer_idx=0,[m
+[31m-                norm_before_residual=norm_before_residual,[m
+[32m+[m[32m        if self.enable_sp_ulysses:[m
+[32m+[m[32m            layers = [[m
+[32m+[m[32m                self._model_definitions.norm_decoder_layer_class([m
+[32m+[m[32m                    transformer_layer_config,[m
+[32m+[m[32m                    layer_idx=0,[m
+[32m+[m[32m                )[m
+[32m+[m[3[33mcommit 23623491d1244e8f133f82c42d2f6f2382f756aa[m
+Author: wangxiaoxin-sherie <wangxiaoxin7@huawei.com>
+Date:   Tue Feb 24 10:26:17 2026 +0800
+
+    support sp ulysses.
+
+[1mdiff --git a/scripts/train.py b/scripts/train.py[m
+[1mindex 1eb83ce..d8b1ae7 100644[m
+[1m--- a/scripts/train.py[m
+[1m+++ b/scripts/train.py[m
+[36m@@ -23,7 +23,7 @@[m [mfrom speculators.train.distributed_batch_sampler import ([m
+ from speculators.train.logger import setup_metric_logger, setup_root_logger[m
+ from speculators.train.noise_transforms import AddUniformNoise[m
+ from speculators.train.trainer import Trainer, TrainerConfig[m
+[31m-from speculators.train.utils import maybe_destroy_distributed, maybe_setup_distributed[m
+[32m+[m[32mfrom speculators.train.distributed import maybe_destroy_distributed, maybe_setup_distributed[m
+ [m
+ DRAFT_ARCH_CONFIGS: dict[str, type] = {[m
+     "llama": LlamaConfig,[m
+[1mdiff --git a/src/speculators/models/eagle3/core.py b/src/speculators/models/eagle3/core.py[m
+[1mindex c5d6ab2..b35b607 100644[m
+[1m--- a/src/speculators/models/eagle3/core.py[m
+[1m+++ b/src/speculators/models/eagle3/core.py[m
+[36m@@ -1,6 +1,6 @@[m
+ # ruff: noqa: ERA001[m
+ import copy[m
+[31m-from typing import ClassVar[m
+[32m+[m[32mfrom typing import ClassVar, Optional[m
+ [m
+ import torch[m
+ from torch.nn.attention.flex_attention import create_block_mask[m
+[36m@@ -16,6 +16,7 @@[m [mfrom speculators.models.eagle3.attention import ([m
+ from speculators.models.eagle3.model_definitions import model_classes[m
+ from speculators.proposals.greedy import GreedyTokenProposalConfig[m
+ from speculators.utils.loading import load_model_layers[m
+[32m+[m[32mfrom speculators.train.distributed import get_sp_ring_group, get_sp_ulysses_group, gather_outputs_and_unpad[m
+ [m
+ [m
+ def align_for_step([m
+[36m@@ -150,6 +151,51 @@[m [mdef conditional_torch_compile(func):[m
+     else:[m
+         return func[m
+ [m
+[32m+[m[32m# Copied from transformers.models.bart.modeling_bart._make_causal_mask[m
+[32m+[m[32mdef _make_causal_mask([m
+[32m+[m[32m    input_ids_shape: torch.Size,[m
+[32m+[m[32m    dtype: torch.dtype,[m
+[32m+[m[32m    device: torch.device,[m
+[32m+[m[32m    past_key_values_length: int = 0,[m
+[32m+[m[32m):[m
+[32m+[m[32m    """[m
+[32m+[m[32m    Make causal mask used for bi-directional self-attention.[m
+[32m+[m[32m    """[m
+[32m+[m[32m    bsz, tgt_len = input_ids_shape[m
+[32m+[m[32m    mask = torch.full((tgt_len, tgt_len), torch.finfo(dtype).min, device=device)[m
+[32m+[m[32m    mask_cond = torch.arange(mask.size(-1), device=device)[m
+[32m+[m[32m    mask.masked_fill_(mask_cond < (mask_cond + 1).view(mask.size(-1), 1), 0)[m
+[32m+[m[32m    mask = mask.to(dtype)[m
+[32m+[m
+[32m+[m[32m    if past_key_values_length > 0:[m
+[32m+[m[32m        mask = torch.cat([m
+[32m+[m[32m            [[m
+[32m+[m[32m                torch.zeros([m
+[32m+[m[32m                    tgt_len, past_key_values_length, dtype=dtype, device=device[m
+[32m+[m[32m                ),[m
+[32m+[m[32m                mask,[m
+[32m+[m[32m            ],[m
+[32m+[m[32m            dim=-1,[m
+[32m+[m[32m        )[m
+[32m+[m[32m    return mask[None, None, :, :].expand([m
+[32m+[m[32m        bsz, 1, tgt_len, tgt_len + past_key_values_length[m
+[32m+[m[32m    )[m
+[32m+[m
+[32m+[m
+[32m+[m[32mdef _expand_mask(mask: torch.Tensor, dtype: torch.dtype, tgt_len: Optional[int] = None):[m
+[32m+[m[32m    """[m
+[32m+[m[32m    Expands attention_mask from `[bsz, seq_len]` to `[bsz, 1, tgt_seq_len, src_seq_len]`.[m
+[32m+[m[32m    """[m
+[32m+[m[32m    bsz, src_len = mask.size()[m
+[32m+[m[32m    tgt_len = tgt_len if tgt_len is not None else src_len[m
+[32m+[m
+[32m+[m[32m    expanded_mask = mask[:, None, None, :].expand(bsz, 1, tgt_len, src_len).to(dtype)[m
+[32m+[m
+[32m+[m[32m    inverted_mask = 1.0 - expanded_mask[m
+[32m+[m
+[32m+[m[32m    return inverted_mask.masked_fill([m
+[32m+[m[32m        inverted_mask.to(torch.bool), torch.finfo(dtype).min[m
+[32m+[m[32m    )[m
+ [m
+ @SpeculatorModel.register("eagle3")[m
+ class Eagle3DraftModel(SpeculatorModel):[m
+[36m@@ -217,6 +263,14 @@[m [mclass Eagle3DraftModel(SpeculatorModel):[m
+         )[m
+         self._setup_rotary_embedding(config.transformer_layer_config)[m
+         self._setup_embeddings_and_lm_heads(config.speculators_config.verifier, t2d)[m
+[32m+[m[41m        [m
+[32m+[m[32m        self.sp_ring_degree = torch.distributed.get_world_size(get_sp_ring_group())[m
+[32m+[m[32m        self.sp_ulysses_degree = torch.distributed.get_world_size([m
+[32m+[m[32m            get_sp_ulysses_group()[m
+[32m+[m[32m        )[m
+[32m+[m[32m        self.sp_world_size = self.sp_ring_degree * self.sp_ulysses_degree[m
+[32m+[m[32m        self.sp_rank = torch.distributed.get_rank() % self.sp_world_size[m
+[32m+[m
+ [m
+     def _setup_decoder_layers([m
+         self, transformer_layer_config: PretrainedConfig, norm_before_residual: bool[m
+[36m@@ -224,16 +278,15 @@[m [mclass Eagle3DraftModel(SpeculatorModel):[m
+         num_hidden_layers = transformer_layer_config.num_hidden_layers[m
+         # Add first layer[m
+         layers = [[m
+[31m-            self._model_definitions.first_layer_class([m
+[32m+[m[32m            self._model_definitions.norm_decoder_layer_class([m
+                 transformer_layer_config,[m
+                 layer_idx=0,[m
+[31m-                norm_before_residual=norm_before_residual,[m
+             )[m
+         ][m
+         # Add additional regular decoder layers[m
+         layers.extend([m
+             [[m
+[31m-                self._model_definitions.decoder_layer_class([m
+[32m+[m[32m                self._model_definitions.norm_decoder_layer_class([m
+                     transformer_layer_config, layer_idx[m
+                 )[m
+                 for layer_idx in range(1, num_hidden_layers)[m
+[36m@@ -326,7 +379,18 @@[m [mclass Eagle3DraftModel(SpeculatorModel):[m
+         self.verifier_lm_head.weight.data = lm_head_weight.detach().clone()[m
+ [m
+         self.verifier_lm_head.weight.requires_grad = False[m
+[31m-[m
+[32m+[m[41m    [m
+[32m+[m[32m    def basic_extract_local(self, value, rank, world_size, *args, **kwargs):[m
+[32m+[m[32m        return value.chunk(world_size, dim=1)[rank].detach().clone()[m
+[32m+[m[41m    [m
+[32m+[m[32m    def prepare_usp_input(self, full_input):[m
+[32m+[m[32m        shared_input = self.basic_extract_local([m
+[32m+[m[32m            full_input,[m
+[32m+[m[32m            rank=self.sp_rank,[m
+[32m+[m[32m            world_size=self.sp_world_size,[m
+[32m+[m[32m        ).clone()[m
+[32m+[m[32m        return shared_input[m
+[32m+[m[41m    [m
+     @conditional_torch_compile[m
+     def forward([m
+         self,[m
+[36m@@ -344,6 +408,7 @@[m [mclass Eagle3DraftModel(SpeculatorModel):[m
+     ):[m
+         device = hidden_states.device[m
+         total_seq_len = hidden_states.shape[1][m
+[32m+[m[32m        batch_size, seq_length, _ = hidden_states.size()[m
+ [m
+         if lengths is None:[m
+             lengths = torch.tensor([total_seq_len], dtype=torch.long, device=device)[m
+[36m@@ -355,15 +420,38 @@[m [mclass Eagle3DraftModel(SpeculatorModel):[m
+ [m
+         past_key_values = DynamicCache(config=self.config.transformer_layer_config)[m
+ [m
+[31m-        combined_mask_mod = create_combined_mask_mod(lengths.to(device), total_seq_len)[m
+[31m-        # Note: Attention mask is stored as a BlockMask object[m
+[31m-        attention_mask = create_block_mask([m
+[31m-            combined_mask_mod,[m
+[31m-            B=None,[m
+[31m-            H=None,[m
+[31m-            Q_LEN=total_seq_len,[m
+[31m-            KV_LEN=total_seq_len,[m
+[31m-            device=device,[m
+[32m+[m[32m        def prepare_decoder_attention_mask([m
+[32m+[m[32m            attention_mask, input_shape, inputs_embeds, past_key_values_length[m
+[32m+[m[32m        ):[m
+[32m+[m[32m            # create causal mask[m
+[32m+[m[32m            # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len][m
+[32m+[m[32m            combined_attention_mask = None[m
+[32m+[m[32m            if input_shape[-1] > 1:[m
+[32m+[m[32m                combined_attention_mask = _make_causal_mask([m
+[32m+[m[32m                    input_shape,[m
+[32m+[m[32m                    inputs_embeds.dtype,[m
+[32m+[m[32m                    device=inputs_embeds.device,[m
+[32m+[m[32m                    past_key_values_length=past_key_values_length,[m
+[32m+[m[32m                )[m
+[32m+[m
+[32m+[m[32m            if attention_mask is not None:[m
+[32m+[m[32m                # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len][m
+[32m+[m[32m                expanded_attn_mask = _expand_mask([m
+[32m+[m[32m                    attention_mask, inputs_embeds.dtype, tgt_len=input_shape[-1][m
+[32m+[m[32m                ).to(inputs_embeds.device)[m
+[32m+[m[32m                combined_attention_mask = ([m
+[32m+[m[32m                    expanded_attn_mask[m
+[32m+[m[32m                    if combined_attention_mask is None[m
+[32m+[m[32m                    else expanded_attn_mask + combined_attention_mask[m
+[32m+[m[32m                )[m
+[32m+[m
+[32m+[m[32m            return combined_attention_mask[m
+[32m+[m
+[32m+[m[32m        attention_mask = torch.ones([m
+[32m+[m[32m            (batch_size, seq_length), dtype=torch.bool, device=hidden_states.device[m
+[32m+[m[32m        )[m
+[32m+[m[32m        attention_mask = prepare_decoder_attention_mask([m
+[32m+[m[32m            attention_mask, (batch_size, seq_length), hidden_states, 0[m
+         )[m
+ [m
+         hidden_states = self.fc(hidden_states)[m
+[36m@@ -388,9 +476,12 @@[m [mclass Eagle3DraftModel(SpeculatorModel):[m
+                 else torch.ones(1, total_seq_len, device=device, dtype=torch.bool)[m
+             )[m
+             metrics = {}[m
+[31m-[m
+[32m+[m[41m        [m
+[32m+[m[32m        hidden_states = self.prepare_usp_input(hidden_states)[m
+[32m+[m[32m        global_input_ids = input_ids[m
+         draft_tokens = [][m
+         for ttt_step in range(ttt_steps):[m
+[32m+[m[32m            input_ids = self.prepare_usp_input(global_input_ids)[m
+             with torch.no_grad():[m
+                 input_embeds = self.embed_tokens(input_ids)[m
+                 # shape: [1, total_seq_len, hidden_size][m
+[36m@@ -405,21 +496,18 @@[m [mclass Eagle3DraftModel(SpeculatorModel):[m
+             hidden_states = torch.cat([input_embeds, hidden_states], dim=-1)[m
+             # shape: [1, total_seq_len, 2 * hidden_size][m
+ [m
+[31m-            position_embeddings = self.rotary_emb(hidden_states, position_ids)[m
+[31m-[m
+             for decoder_layer in self.layers:[m
+                 hidden_states = decoder_layer([m
+                     hidden_states,[m
+                     attention_mask=attention_mask,[m
+                     position_ids=position_ids,[m
+                     past_key_values=past_key_values,[m
+[31m-                    cache_position=cache_position,[m
+[31m-                    position_embeddings=position_embeddings,[m
+                     **kwargs,[m
+                 )[m
+ [m
+             logits = self.lm_head(self.norm(hidden_states))[m
+             # shape: [1, total_seq_len, draft_vocab_size][m
+[32m+[m[32m            logits = gather_outputs_and_unpad(logits, gather_dim=1)[m
+ [m
+             if return_loss:[m
+                 s_loss, s_metrics = compute_metrics([m
+[36m@@ -456,8 +544,6 @@[m [mclass Eagle3DraftModel(SpeculatorModel):[m
+                     dim=-1,[m
+                 )[m
+                 # shape: [1, total_seq_len][m
+[31m-[m
+[31m-            attention_mask = extend_mask_for_draft_tokens(attention_mask)[m
+             position_ids = position_ids + 1[m
+             # shape: [1, total_seq_len][m
+ [m
+[1mdiff --git a/src/speculators/models/eagle3/model_definitions.py b/src/speculators/models/eagle3/model_definitions.py[m
+[1mindex 3314643..4852e36 100644[m
+[1m--- a/src/speculators/models/eagle3/model_definitions.py[m
+[1m+++ b/src/speculators/models/eagle3/model_definitions.py[m
+[36m@@ -6,10 +6,141 @@[m [mfrom transformers import Cache, LlamaConfig, PretrainedConfig[m
+ from transformers.models.llama.modeling_llama import LlamaDecoderLayer, LlamaRMSNorm[m
+ from transformers.models.qwen3.configuration_qwen3 import Qwen3Config[m
+ from transformers.models.qwen3.modeling_qwen3 import Qwen3DecoderLayer, Qwen3RMSNorm[m
+[32m+[m[32mimport math[m
+[32m+[m[32mfrom typing import NamedTuple[m
+[32m+[m[32mimport copy[m
+[32m+[m
+ from transformers.processing_utils import Unpack[m
+ from transformers.utils.generic import TransformersKwargs[m
+ [m
+ from speculators.models import base_components[m
+[32m+[m[32mfrom typing import Any, Tuple, List, Optional, Tuple[m
+[32m+[m[32mfrom torch import Tensor[m
+[32m+[m[32mfrom torch.nn import Module[m
+[32m+[m
+[32m+[m[32mimport torch.distributed as dist[m
+[32m+[m[32mfrom speculators.train.distributed import get_sp_ring_group, get_sp_ulysses_group[m
+[32m+[m
+[32m+[m[32mdef all_to_all_4D([m
+[32m+[m[32m    input: torch.tensor, scatter_idx: int = 2, gather_idx: int = 1, group=None, use_sync: bool = False[m
+[32m+[m[32m) -> torch.tensor:[m
+[32m+[m[32m    """[m
+[32m+[m[32m    all-to-all for QKV[m
+[32m+[m
+[32m+[m[32m    Args:[m
+[32m+[m[32m        input (torch.tensor): a tensor sharded along dim scatter dim[m
+[32m+[m[32m        scatter_idx (int): default 1[m
+[32m+[m[32m        gather_idx (int): default 2[m
+[32m+[m[32m        group : torch process group[m
+[32m+[m[32m        use_sync (bool): whether to synchronize after all-to-all[m
+[32m+[m
+[32m+[m[32m    Returns:[m
+[32m+[m[32m        torch.tensor: resharded tensor (bs, seqlen/P, hc, hs)[m
+[32m+[m[32m    """[m
+[32m+[m[32m    assert ([m
+[32m+[m[32m        input.dim() == 4[m
+[32m+[m[32m    ), f"input must be 4D tensor, got {input.dim()} and shape {input.shape}"[m
+[32m+[m
+[32m+[m[32m    seq_world_size = dist.get_world_size(group)[m
+[32m+[m
+[32m+[m[32m    if scatter_idx == 2 and gather_idx == 1:[m
+[32m+[m[32m        # input (torch.tensor): a tensor sharded along dim 1 (bs, seqlen/P, hc, hs) output: (bs, seqlen, hc/P, hs)[m
+[32m+[m[32m        bs, shard_seqlen, hc, hs = input.shape[m
+[32m+[m[32m        seqlen = shard_seqlen * seq_world_size[m
+[32m+[m[32m        shard_hc = hc // seq_world_size[m
+[32m+[m
+[32m+[m[32m        # transpose groups of heads with the seq-len parallel dimension, so that we can scatter them![m
+[32m+[m[32m        # (bs, seqlen/P, hc, hs) -reshape-> (bs, seq_len/P, P, hc/P, hs) -transpose(0,2)-> (P, seq_len/P, bs, hc/P, hs)[m
+[32m+[m[32m        input_t = ([m
+[32m+[m[32m            input.reshape(bs, shard_seqlen, seq_world_size, shard_hc, hs)[m
+[32m+[m[32m            .transpose(0, 2)[m
+[32m+[m[32m            .contiguous()[m
+[32m+[m[32m        )[m
+[32m+[m
+[32m+[m[32m        output = torch.empty_like(input_t)[m
+[32m+[m[32m        # https://pytorch.org/docs/stable/distributed.html#torch.distributed.all_to_all_single[m
+[32m+[m[32m        # (P, seq_len/P, bs, hc/P, hs) scatter seqlen -all2all-> (P, seq_len/P, bs, hc/P, hs) scatter head[m
+[32m+[m
+[32m+[m[32m        if seq_world_size > 1:[m
+[32m+[m[32m            dist.all_to_all_single(output, input_t, group=group)[m
+[32m+[m[32m            if use_sync:[m
+[32m+[m[32m                torch.cuda.synchronize()[m
+[32m+[m[32m        else:[m
+[32m+[m[32m            output = input_t[m
+[32m+[m[32m        # if scattering the seq-dim, transpose the heads back to the original dimension[m
+[32m+[m[32m        output = output.reshape(seqlen, bs, shard_hc, hs)[m
+[32m+[m
+[32m+[m[32m        # (seq_len, bs, hc/P, hs) -reshape-> (bs, seq_len, hc/P, hs)[m
+[32m+[m[32m        output = output.transpose(0, 1).contiguous().reshape(bs, seqlen, shard_hc, hs)[m
+[32m+[m
+[32m+[m[32m        return output[m
+[32m+[m
+[32m+[m[32m    elif scatter_idx == 1 and gather_idx == 2:[m
+[32m+[m[32m        # input (torch.tensor): a tensor sharded along dim 1 (bs, seqlen, hc/P, hs) output: (bs, seqlen/P, hc, hs)[m
+[32m+[m[32m        bs, seqlen, shard_hc, hs = input.shape[m
+[32m+[m[32m        hc = shard_hc * seq_world_size[m
+[32m+[m[32m        shard_seqlen = seqlen // seq_world_size[m
+[32m+[m[32m        seq_world_size = dist.get_world_size(group)[m
+[32m+[m
+[32m+[m[32m        # transpose groups of heads with the seq-len parallel dimension, so that we can scatter them![m
+[32m+[m[32m        # (bs, seqlen, hc/P, hs) -reshape-> (bs, P, seq_len/P, hc/P, hs) -transpose(0, 3)-> (hc/P, P, seqlen/P, bs, hs) -transpose(0, 1) -> (P, hc/P, seqlen/P, bs, hs)[m
+[32m+[m[32m        input_t = ([m
+[32m+[m[32m            input.reshape(bs, seq_world_size, shard_seqlen, shard_hc, hs)[m
+[32m+[m[32m            .transpose(0, 3)[m
+[32m+[m[32m            .transpose(0, 1)[m
+[32m+[m[32m            .contiguous()[m
+[32m+[m[32m            .reshape(seq_world_size, shard_hc, shard_seqlen, bs, hs)[m
+[32m+[m[32m        )[m
+[32m+[m
+[32m+[m[32m        output = torch.empty_like(input_t)[m
+[32m+[m[32m        # https://pytorch.org/docs/stable/distributed.html#torch.distributed.all_to_all_single[m
+[32m+[m[32m        # (P, bs x hc/P, seqlen/P, hs) scatter seqlen -all2all-> (P, bs x seq_len/P, hc/P, hs) scatter head[m
+[32m+[m[32m        if seq_world_size > 1:[m
+[32m+[m[32m            dist.all_to_all_single(output, input_t, group=group)[m
+[32m+[m[32m            if use_sync:[m
+[32m+[m[32m                torch.cuda.synchronize()[m
+[32m+[m[32m        else:[m
+[32m+[m[32m            output = input_t[m
+[32m+[m
+[32m+[m[32m        # if scattering the seq-dim, transpose the heads back to the original dimension[m
+[32m+[m[32m        output = output.reshape(hc, shard_seqlen, bs, hs)[m
+[32m+[m
+[32m+[m[32m        # (hc, seqlen/N, bs, hs) -tranpose(0,2)-> (bs, seqlen/N, hc, hs)[m
+[32m+[m[32m        output = output.transpose(0, 2).contiguous().reshape(bs, shard_seqlen, hc, hs)[m
+[32m+[m
+[32m+[m[32m        return output[m
+[32m+[m[32m    else:[m
+[32m+[m[32m        raise RuntimeError("scatter_idx must be 1 or 2 and gather_idx must be 1 or 2")[m
+[32m+[m
+[32m+[m
+[32m+[m[32mclass SeqAllToAll4D(torch.autograd.Function):[m
+[32m+[m[32m    @staticmethod[m
+[32m+[m[32m    def forward([m
+[32m+[m[32m        ctx: Any,[m
+[32m+[m[32m        group: dist.ProcessGroup,[m
+[32m+[m[32m        input: Tensor,[m
+[32m+[m[32m        scatter_idx: int,[m
+[32m+[m[32m        gather_idx: int,[m
+[32m+[m[32m        use_sync: bool = False,[m
+[32m+[m[32m    ) -> Tensor:[m
+[32m+[m
+[32m+[m[32m        ctx.group = group[m
+[32m+[m[32m        ctx.scatter_idx = scatter_idx[m
+[32m+[m[32m        ctx.gather_idx = gather_idx[m
+[32m+[m[32m        ctx.use_sync = use_sync[m
+[32m+[m[32m        return all_to_all_4D(input, scatter_idx, gather_idx, group=group, use_sync=use_sync)[m
+[32m+[m
+[32m+[m[32m    @staticmethod[m
+[32m+[m[32m    def backward(ctx: Any, *grad_output: Tensor) -> Tuple[None, Tensor, None, None]:[m
+[32m+[m[32m        return ([m
+[32m+[m[32m            None,[m
+[32m+[m[32m            SeqAllToAll4D.apply([m
+[32m+[m[32m                ctx.group, *grad_output, ctx.gather_idx, ctx.scatter_idx, ctx.use_sync[m
+[32m+[m[32m            ),[m
+[32m+[m[32m            None,[m
+[32m+[m[32m            None,[m
+[32m+[m[32m            None,[m
+[32m+[m[32m        )[m
+ [m
+ [m
+ class Eagle3FirstLayerMixin:[m
+[36m@@ -78,8 +209,6 @@[m [mclass Eagle3FirstLayerMixin:[m
+         # Apply norms[m
+         embeds = self.input_layernorm(embeds)[m
+         hidden = self.hidden_norm(hidden)[m
+[31m-        if self.norm_before_residual:[m
+[31m-            residual = hidden  # set residual to normalized hidden[m
+         hidden_states = torch.cat([embeds, hidden], dim=-1)[m
+ [m
+         # ##### End of Eagle3 modifications #####[m
+[36m@@ -133,5 +262,486 @@[m [mmodel_classes: dict[st[33mcommit 857e7b899e889eabefff7e26608eed24f06cace5[m[33m ([m[1;36mHEAD -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m
+Author: wangxiaoxin-sherie <wangxiaoxin7@huawei.com>
+Date:   Tue Feb 24 10:26:17 2026 +0800
+
+    support sp ulysses.
+    
+    Signed-off-by: wangxiaoxin-sherie <wangxiaoxin7@huawei.com>
+
+[1mdiff --git a/scripts/train.py b/scripts/train.py[m
+[1mindex 1eb83ce..02792a4 100644[m
+[1m--- a/scripts/train.py[m
+[1m+++ b/scripts/train.py[m
+[36m@@ -23,7 +23,7 @@[m [mfrom speculators.train.distributed_batch_sampler import ([m
+ from speculators.train.logger import setup_metric_logger, setup_root_logger[m
+ from speculators.train.noise_transforms import AddUniformNoise[m
+ from speculators.train.trainer import Trainer, TrainerConfig[m
+[31m-from speculators.train.utils import maybe_destroy_distributed, maybe_setup_distributed[m
+[32m+[m[32mfrom speculators.train.distributed import maybe_destroy_distributed, maybe_setup_distributed, maybe_setup_distributed_sp_ulysses[m
+ [m
+ DRAFT_ARCH_CONFIGS: dict[str, type] = {[m
+     "llama": LlamaConfig,[m
+[36m@@ -152,8 +152,13 @@[m [mdef main(args: argparse.Namespace):[m
+         loggers=args.logger, run_name=args.run_name, output_dir=args.log_dir[m
+     )[m
+ [m
+[31m-    # Setup distributed training[m
+[31m-    local_rank, world_size, rank, is_distributed = maybe_setup_distributed()[m
+[32m+[m[32m    enable_sp_ulysses=args.enable_sp_ulysses[m
+[32m+[m[32m    if enable_sp_ulysses:[m
+[32m+[m[32m        # Setup distributed training[m
+[32m+[m[32m        local_rank, world_size, rank, is_distributed = maybe_setup_distributed_sp_ulysses(args.sp_ulysses_size, args.sp_ring_size)[m
+[32m+[m[32m    else:[m
+[32m+[m[32m        # Setup distributed training[m
+[32m+[m[32m        local_rank, world_size, rank, is_distributed = maybe_setup_distributed()[m
+     device = torch.device(local_rank)[m
+ [m
+     # Load t2d and d2t tensors if provided[m
+[36m@@ -326,6 +331,17 @@[m [mdef parse_args():[m
+     parser.add_argument("--scheduler-warmup-steps", type=int, default=None)[m
+     parser.add_argument("--scheduler-total-steps", type=int, default=None)[m
+     parser.add_argument("--scheduler-num-cosine-cycles", type=float, default=0.5)[m
+[32m+[m[41m    [m
+[32m+[m[32m    # Distributed training[m
+[32m+[m[32m    parser.add_argument([m
+[32m+[m[32m        "--enable-sp-ulysses",[m
+[32m+[m[32m        action="store_true",[m
+[32m+[m[32m        default=False,[m
+[32m+[m[32m        help="Enable SP Ulysses sequence parallelism",[m
+[32m+[m[32m    )[m
+[32m+[m[32m    parser.add_argument("--sp-ulysses-size", type=int, default=1)[m
+[32m+[m[32m    parser.add_argument("--sp-ring-size", type=int, default=1)[m
+[32m+[m[41m    [m
+     return parser.parse_args()[m
+ [m
+ [m
+[1mdiff --git a/src/speculators/models/eagle3/config.py b/src/speculators/models/eagle3/config.py[m
+[1mindex af6f92a..887f7de 100644[m
+[1m--- a/src/speculators/models/eagle3/config.py[m
+[1m+++ b/src/speculators/models/eagle3/config.py[m
+[36m@@ -45,6 +45,11 @@[m [mclass Eagle3SpeculatorConfig(SpeculatorModelConfig):[m
+         description="Apply hidden_norm before storing residual",[m
+     )[m
+ [m
+[32m+[m[32m    enable_sp_ulysses: bool = Field([m
+[32m+[m[32m        default=False,[m
+[32m+[m[32m        description="Enable SP Ulysses sequence parallelism",[m
+[32m+[m[32m    )[m
+[32m+[m
+     target_hidden_size: int | None = Field([m
+         default=None,[m
+         description="Hidden size of the target model (if different from draft model)",[m
+[1mdiff --git a/src/speculators/models/eagle3/core.py b/src/speculators/models/eagle3/core.py[m
+[1mindex c5d6ab2..86560f3 100644[m
+[1m--- a/src/speculators/models/eagle3/core.py[m
+[1m+++ b/src/speculators/models/eagle3/core.py[m
+[36m@@ -1,6 +1,6 @@[m
+ # ruff: noqa: ERA001[m
+ import copy[m
+[31m-from typing import ClassVar[m
+[32m+[m[32mfrom typing import ClassVar, Optional[m
+ [m
+ import torch[m
+ from torch.nn.attention.flex_attention import create_block_mask[m
+[36m@@ -16,6 +16,7 @@[m [mfrom speculators.models.eagle3.attention import ([m
+ from speculators.models.eagle3.model_definitions import model_classes[m
+ from speculators.proposals.greedy import GreedyTokenProposalConfig[m
+ from speculators.utils.loading import load_model_layers[m
+[32m+[m[32mfrom speculators.train.distributed import get_sp_ring_group, get_sp_ulysses_group, gather_outputs_and_unpad[m
+ [m
+ [m
+ def align_for_step([m
+[36m@@ -150,6 +151,51 @@[m [mdef conditional_torch_compile(func):[m
+     else:[m
+         return func[m
+ [m
+[32m+[m[32m# Copied from transformers.models.bart.modeling_bart._make_causal_mask[m
+[32m+[m[32mdef _make_causal_mask([m
+[32m+[m[32m    input_ids_shape: torch.Size,[m
+[32m+[m[32m    dtype: torch.dtype,[m
+[32m+[m[32m    device: torch.device,[m
+[32m+[m[32m    past_key_values_length: int = 0,[m
+[32m+[m[32m):[m
+[32m+[m[32m    """[m
+[32m+[m[32m    Make causal mask used for bi-directional self-attention.[m
+[32m+[m[32m    """[m
+[32m+[m[32m    bsz, tgt_len = input_ids_shape[m
+[32m+[m[32m    mask = torch.full((tgt_len, tgt_len), torch.finfo(dtype).min, device=device)[m
+[32m+[m[32m    mask_cond = torch.arange(mask.size(-1), device=device)[m
+[32m+[m[32m    mask.masked_fill_(mask_cond < (mask_cond + 1).view(mask.size(-1), 1), 0)[m
+[32m+[m[32m    mask = mask.to(dtype)[m
+[32m+[m
+[32m+[m[32m    if past_key_values_length > 0:[m
+[32m+[m[32m        mask = torch.cat([m
+[32m+[m[32m            [[m
+[32m+[m[32m                torch.zeros([m
+[32m+[m[32m                    tgt_len, past_key_values_length, dtype=dtype, device=device[m
+[32m+[m[32m                ),[m
+[32m+[m[32m                mask,[m
+[32m+[m[32m            ],[m
+[32m+[m[32m            dim=-1,[m
+[32m+[m[32m        )[m
+[32m+[m[32m    return mask[None, None, :, :].expand([m
+[32m+[m[32m        bsz, 1, tgt_len, tgt_len + past_key_values_length[m
+[32m+[m[32m    )[m
+[32m+[m
+[32m+[m
+[32m+[m[32mdef _expand_mask(mask: torch.Tensor, dtype: torch.dtype, tgt_len: Optional[int] = None):[m
+[32m+[m[32m    """[m
+[32m+[m[32m    Expands attention_mask from `[bsz, seq_len]` to `[bsz, 1, tgt_seq_len, src_seq_len]`.[m
+[32m+[m[32m    """[m
+[32m+[m[32m    bsz, src_len = mask.size()[m
+[32m+[m[32m    tgt_len = tgt_len if tgt_len is not None else src_len[m
+[32m+[m
+[32m+[m[32m    expanded_mask = mask[:, None, None, :].expand(bsz, 1, tgt_len, src_len).to(dtype)[m
+[32m+[m
+[32m+[m[32m    inverted_mask = 1.0 - expanded_mask[m
+[32m+[m
+[32m+[m[32m    return inverted_mask.masked_fill([m
+[32m+[m[32m        inverted_mask.to(torch.bool), torch.finfo(dtype).min[m
+[32m+[m[32m    )[m
+ [m
+ @SpeculatorModel.register("eagle3")[m
+ class Eagle3DraftModel(SpeculatorModel):[m
+[36m@@ -217,28 +263,53 @@[m [mclass Eagle3DraftModel(SpeculatorModel):[m
+         )[m
+         self._setup_rotary_embedding(config.transformer_layer_config)[m
+         self._setup_embeddings_and_lm_heads(config.speculators_config.verifier, t2d)[m
+[32m+[m[41m        [m
+[32m+[m[32m        self.sp_ring_degree = torch.distributed.get_world_size(get_sp_ring_group())[m
+[32m+[m[32m        self.sp_ulysses_degree = torch.distributed.get_world_size([m
+[32m+[m[32m            get_sp_ulysses_group()[m
+[32m+[m[32m        )[m
+[32m+[m[32m        self.sp_world_size = self.sp_ring_degree * self.sp_ulysses_degree[m
+[32m+[m[32m        self.sp_rank = torch.distributed.get_rank() % self.sp_world_size[m
+[32m+[m
+ [m
+     def _setup_decoder_layers([m
+         self, transformer_layer_config: PretrainedConfig, norm_before_residual: bool[m
+     ):[m
+         num_hidden_layers = transformer_layer_config.num_hidden_layers[m
+[31m-        # Add first layer[m
+[31m-        layers = [[m
+[31m-            self._model_definitions.first_layer_class([m
+[31m-                transformer_layer_config,[m
+[31m-                layer_idx=0,[m
+[31m-                norm_before_residual=norm2m            ][m
+[32m+[m[32m            # Add additional regular decoder layers[m
+[32m+[m[32m            layers.extend([m
+[32m+[m[32m                [[m
+[32m+[m[32m                    self._model_definitions.norm_decoder_layer_class([m
+[32m+[m[32m                        transformer_layer_config, layer_idx[m
+[32m+[m[32m                    )[m
+[32m+[m[32m                    for layer_idx in range(1, num_hidden_layers)[m
+[32m+[m[32m                ][m
+             )[m
+[31m-        ][m
+[31m-        # Add additional regular decoder layers[m
+[31m-        layers.extend([m
+[31m-            [[m
+[31m-                self._model_definitions.decoder_layer_class([m
+[31m-                    transformer_layer_config, layer_idx[m
+[32m+[m[32m        else:[m
+[32m+[m[32m            layers = [[m
+[32m+[m[32m                self._model_definitions.first_layer_class([m
+[32m+[m[32m                    transformer_layer_config,[m
+[32m+[m[32m                    layer_idx=0,[m
+[32m+[m[32m                    norm_before_residual=norm_before_residual,[m
+                 )[m
+[31m-                for layer_idx in range(1, num_hidden_layers)[m
+             ][m
+[31m-        )[m
+[32m+[m[32m            # Add additional regular decoder layers[m
+[32m+[m[32m            layers.extend([m
+[32m+[m[32m                [[m
+[32m+[m[32m                    self._model_definitions.decoder_layer_class([m
+[32m+[m[32m                        transformer_layer_config, layer_idx[m
+[32m+[m[32m                    )[m
+[32m+[m[32m                    for layer_idx in range(1, num_hidden_layers)[m
+[32m+[m[32m                ][m
+[32m+[m[32m            )[m
+[32m+[m[41m        [m
+         self.layers = torch.nn.ModuleList(layers)[m
+ [m
+     def _setup_rotary_embedding(self, transformer_layer_config: PretrainedConfig):[m
+[36m@@ -326,6 +397,184 @@[m [mclass Eagle3DraftModel(SpeculatorModel):[m
+         self.verifier_lm_head.weight.data = lm_head_weight.detach().clone()[m
+ [m
+         self.verifier_lm_head.weight.requires_grad = False[m
+[32m+[m[41m        [m
+[32m+[m[32m        # SP Ulysses configuration[m
+[32m+[m[32m        self.enable_sp_ulysses = config.enable_sp_ulysses[m
+[32m+[m[41m    [m
+[32m+[m[32m    def basic_extract_local(self, value, rank, world_size, *args, **kwargs):[m
+[32m+[m[32m        return value.chunk(world_size, dim=1)[rank].detach().clone()[m
+[32m+[m[41m    [m
+[32m+[m[32m    def prepare_usp_input(self, full_input):[m
+[32m+[m[32m        if self.enable_sp_ulysses:[m
+[32m+[m[32m            shared_input = self.basic_extract_local([m
+[32m+[m[32m                full_input,[m
+[32m+[m[32m                rank=self.sp_rank,[m
+[32m+[m[32m                world_size=self.sp_world_size,[m
+[32m+[m[32m            ).clone()[m
+[32m+[m[32m            return shared_input[m
+[32m+[m[32m        else:[m
+[32m+[m[32m            return full_input[m
+[32m+[m[41m    [m
+[32m+[m[32m    def sp_ulysses_forward([m
+[32m+[m[32m        self,[m
+[32m+[m[32m        hidden_states: torch.Tensor,  # shape: [1, total_seq_len, 3 * hidden_size][m
+[32m+[m[32m        input_ids: torch.Tensor,  # shape: [1, total_seq_len][m
+[32m+[m[32m        lengths: torch.Tensor | None = None,  # shape: [batch_size][m
+[32m+[m[32m        loss_mask: torch.Tensor | None = None,  # shape: [1, total_seq_len][m
+[32m+[m[32m        position_ids: torch.Tensor | None = None,  # shape: [1, total_seq_len][m
+[32m+[m[32m        verifier_last_hidden_states: torch.Tensor[m
+[32m+[m[32m        | None = None,  # shape: [1, total_seq_len, hidden_size][m
+[32m+[m[32m        ttt_steps: int = 3,[m
+[32m+[m[32m        ttt_step_loss_decay: float = 1.0,[m
+[32m+[m[32m        use_off_policy_tokens: bool = False,[m
+[32m+[m[32m        **kwargs,[m
+[32m+[m[32m    ):[m
+[32m+[m[32m        device = hidden_states.device[m
+[32m+[m[32m        total_seq_len = hidden_states.shape[1][m
+[32m+[m[32m        batch_size, seq_length, _ = hidden_states.size()[m
+[32m+[m
+[32m+[m[32m        if lengths is None:[m
+[32m+[m[32m            lengths = torch.tensor([total_seq_len], dtype=torch.long, device=device)[m
+[32m+[m[32m        if position_ids is None:[m
+[32m+[m[32m            position_ids = 1 + torch.arange([m
+[32m+[m[32m                total_seq_len, dtype=torch.long, device=device[m
+[32m+[m[32m            ).unsqueeze(0)[m
+[32m+[m[32m            # shape: [1, total_seq_len][m
+[32m+[m
+[32m+[m[32m        past_key_values = DynamicCache(config=self.config.transformer_layer_config)[m
+[32m+[m
+[32m+[m[32m        def prepare_decoder_attention_mask([m
+[32m+[m[32m            attention_mask, input_shape, inputs_embeds, past_key_values_length[m
+[32m+[m[32m        ):[m
+[32m+[m[32m            # create causal mask[m
+[32m+[m[32m            # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len][m
+[32m+[m[32m            combined_attention_mask = None[m
+[32m+[m[32m            if input_shape[-1] > 1:[m
+[32m+[m[32m                combined_attention_mask = _make_causal_mask([m
+[32m+[m[32m                    input_shape,[m
+[32m+[m[32m                    inputs_embeds.dtype,[m
+[32m+[m[32m                    device=inputs_embeds.device,[m
+[32m+[m[32m                    past_key_values_length=past_key_values_length,[m
+[32m+[m[32m                )[m
+[32m+[m
+[32m+[m[32m            if attention_mask is not None:[m
+[32m+[m[32m                # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len][m
+[32m+[m[32m                expanded_attn_mask = _expand_mask([m
+[32m+[m[32m                    attention_mask, inputs_embeds.dtype, tgt_len=input_shape[-1][m
+[32m+[m[32m                ).to(inputs_embeds.device)[m
+[32m+[m[32m                combined_attention_mask = ([m
+[32m+[m[32m                    expanded_attn_mask[m
+[32m+[m[32m                    if combined_attention_mask is None[m
+[32m+[m[32m                    else expanded_attn_mask + combined_attention_mask[m
+[32m+[m[32m                )[m
+[32m+[m
+[32m+[m[32m            return combined_attention_mask[m
+[32m+[m
+[32m+[m[32m        attention_mask = torch.ones([m
+[32m+[m[32m            (batch_size, seq_length), dtype=torch.bool, device=hidden_states.device[m
+[32m+[m[32m        )[m
+[32m+[m[32m        attention_mask = prepare_decoder_attention_mask([m
+[32m+[m[32m            attention_mask, (batch_size, seq_length), hidden_states, 0[m
+[32m+[m[32m        )[m
+[32m+[m
+[32m+[m[32m        hidden_states = self.fc(hidden_states)[m
+[32m+[m[32m        # shape: [1, total_seq_len, hidden_size][m
+[32m+[m
+[32m+[m[32m        original_input_ids = input_ids.detach().clone()[m
+[32m+[m[32m        return_loss = verifier_last_hidden_states is not None[m
+[32m+[m[32m        if return_loss:[m
+[32m+[m[32m            with torch.no_grad():[m
+[32m+[m[32m                targets = self.verifier_lm_head(verifier_last_hidden_states)[m
+[32m+[m[32m                # shape: [1, total_seq_len, draft_vocab_size][m
+[32m+[m
+[32m+[m[32m            loss = torch.tensor(0.0, device=device)[m
+[32m+[m
+[32m+[m[32m            # prev_correct is a boolean tensor that is True for tokens that have been[m
+[32m+[m[32m            # correctly predicted on all previous ttt_steps.[m
+[32m+[m[32m            # Initialized to True if the token is included in the loss_mask[m
+[32m+[m[32m            # or if there is no loss_mask[m
+[32m+[m[32m            prev_correct = ([m
+[32m+[m[32m                loss_mask.clone()[m
+[32m+[m[32m                if loss_mask is not None[m
+[32m+[m[32m                else torch.ones(1, total_seq_len, device=device, dtype=torch.bool)[m
+[32m+[m[32m            )[m
+[32m+[m[32m            metrics = {}[m
+[32m+[m[41m        [m
+[32m+[m[32m        hidden_states = self.prepare_usp_input(hidden_states)[m
+[32m+[m[32m        global_input_ids = input_ids[m
+[32m+[m[32m        draft_tokens = [][m
+[32m+[m[32m  

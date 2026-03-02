@@ -1,6 +1,6 @@
 # ruff: noqa: ERA001
 import copy
-from typing import ClassVar
+from typing import ClassVar, Optional
 
 import torch
 from torch.nn.attention.flex_attention import create_block_mask
@@ -16,6 +16,7 @@ from speculators.models.eagle3.attention import (
 from speculators.models.eagle3.model_definitions import model_classes
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 from speculators.utils.loading import load_model_layers
+from speculators.train.distributed import get_sp_ring_group, get_sp_ulysses_group, gather_outputs_and_unpad
 
 
 def align_for_step(
@@ -150,6 +151,51 @@ def conditional_torch_compile(func):
     else:
         return func
 
+# Copied from transformers.models.bart.modeling_bart._make_causal_mask
+def _make_causal_mask(
+    input_ids_shape: torch.Size,
+    dtype: torch.dtype,
+    device: torch.device,
+    past_key_values_length: int = 0,
+):
+    """
+    Make causal mask used for bi-directional self-attention.
+    """
+    bsz, tgt_len = input_ids_shape
+    mask = torch.full((tgt_len, tgt_len), torch.finfo(dtype).min, device=device)
+    mask_cond = torch.arange(mask.size(-1), device=device)
+    mask.masked_fill_(mask_cond < (mask_cond + 1).view(mask.size(-1), 1), 0)
+    mask = mask.to(dtype)
+
+    if past_key_values_length > 0:
+        mask = torch.cat(
+            [
+                torch.zeros(
+                    tgt_len, past_key_values_length, dtype=dtype, device=device
+                ),
+                mask,
+            ],
+            dim=-1,
+        )
+    return mask[None, None, :, :].expand(
+        bsz, 1, tgt_len, tgt_len + past_key_values_length
+    )
+
+
+def _expand_mask(mask: torch.Tensor, dtype: torch.dtype, tgt_len: Optional[int] = None):
+    """
+    Expands attention_mask from `[bsz, seq_len]` to `[bsz, 1, tgt_seq_len, src_seq_len]`.
+    """
+    bsz, src_len = mask.size()
+    tgt_len = tgt_len if tgt_len is not None else src_len
+
+    expanded_mask = mask[:, None, None, :].expand(bsz, 1, tgt_len, src_len).to(dtype)
+
+    inverted_mask = 1.0 - expanded_mask
+
+    return inverted_mask.masked_fill(
+        inverted_mask.to(torch.bool), torch.finfo(dtype).min
+    )
 
 @SpeculatorModel.register("eagle3")
 class Eagle3DraftModel(SpeculatorModel):
@@ -218,27 +264,52 @@ class Eagle3DraftModel(SpeculatorModel):
         self._setup_rotary_embedding(config.transformer_layer_config)
         self._setup_embeddings_and_lm_heads(config.speculators_config.verifier, t2d)
 
+        self.sp_ring_degree = torch.distributed.get_world_size(get_sp_ring_group())
+        self.sp_ulysses_degree = torch.distributed.get_world_size(
+            get_sp_ulysses_group()
+        )
+        self.sp_world_size = self.sp_ring_degree * self.sp_ulysses_degree
+        self.sp_rank = torch.distributed.get_rank() % self.sp_world_size
+
+
     def _setup_decoder_layers(
         self, transformer_layer_config: PretrainedConfig, norm_before_residual: bool
     ):
         num_hidden_layers = transformer_layer_config.num_hidden_layers
-        # Add first layer
-        layers = [
-            self._model_definitions.first_layer_class(
-                transformer_layer_config,
-                layer_idx=0,
-                norm_before_residual=norm_before_residual,
-            )
-        ]
-        # Add additional regular decoder layers
-        layers.extend(
-            [
-                self._model_definitions.decoder_layer_class(
-                    transformer_layer_config, layer_idx
+        if self.enable_sp_ulysses:
+            layers = [
+                self._model_definitions.norm_decoder_layer_class(
+                    transformer_layer_config,
+                    layer_idx=0,
                 )
-                for layer_idx in range(1, num_hidden_layers)
             ]
-        )
+            # Add additional regular decoder layers
+            layers.extend(
+                [
+                    self._model_definitions.norm_decoder_layer_class(
+                        transformer_layer_config, layer_idx
+                    )
+                    for layer_idx in range(1, num_hidden_layers)
+                ]
+            )
+        else:
+            layers = [
+                self._model_definitions.first_layer_class(
+                    transformer_layer_config,
+                    layer_idx=0,
+                    norm_before_residual=norm_before_residual,
+                )
+            ]
+            # Add additional regular decoder layers
+            layers.extend(
+                [
+                    self._model_definitions.decoder_layer_class(
+                        transformer_layer_config, layer_idx
+                    )
+                    for layer_idx in range(1, num_hidden_layers)
+                ]
+            )
+
         self.layers = torch.nn.ModuleList(layers)
 
     def _setup_rotary_embedding(self, transformer_layer_config: PretrainedConfig):
@@ -327,6 +398,184 @@ class Eagle3DraftModel(SpeculatorModel):
 
         self.verifier_lm_head.weight.requires_grad = False
 
+        # SP Ulysses configuration
+        self.enable_sp_ulysses = config.enable_sp_ulysses
+
+    def basic_extract_local(self, value, rank, world_size, *args, **kwargs):
+        return value.chunk(world_size, dim=1)[rank].detach().clone()
+
+    def prepare_usp_input(self, full_input):
+        if self.enable_sp_ulysses:
+            shared_input = self.basic_extract_local(
+                full_input,
+                rank=self.sp_rank,
+                world_size=self.sp_world_size,
+            ).clone()
+            return shared_input
+        else:
+            return full_input
+
+    def sp_ulysses_forward(
+        self,
+        hidden_states: torch.Tensor,  # shape: [1, total_seq_len, 3 * hidden_size]
+        input_ids: torch.Tensor,  # shape: [1, total_seq_len]
+        lengths: torch.Tensor | None = None,  # shape: [batch_size]
+        loss_mask: torch.Tensor | None = None,  # shape: [1, total_seq_len]
+        position_ids: torch.Tensor | None = None,  # shape: [1, total_seq_len]
+        verifier_last_hidden_states: torch.Tensor
+        | None = None,  # shape: [1, total_seq_len, hidden_size]
+        ttt_steps: int = 3,
+        ttt_step_loss_decay: float = 1.0,
+        use_off_policy_tokens: bool = False,
+        **kwargs,
+    ):
+        device = hidden_states.device
+        total_seq_len = hidden_states.shape[1]
+        batch_size, seq_length, _ = hidden_states.size()
+
+        if lengths is None:
+            lengths = torch.tensor([total_seq_len], dtype=torch.long, device=device)
+        if position_ids is None:
+            position_ids = 1 + torch.arange(
+                total_seq_len, dtype=torch.long, device=device
+            ).unsqueeze(0)
+            # shape: [1, total_seq_len]
+
+        past_key_values = DynamicCache(config=self.config.transformer_layer_config)
+
+        def prepare_decoder_attention_mask(
+            attention_mask, input_shape, inputs_embeds, past_key_values_length
+        ):
+            # create causal mask
+            # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
+            combined_attention_mask = None
+            if input_shape[-1] > 1:
+                combined_attention_mask = _make_causal_mask(
+                    input_shape,
+                    inputs_embeds.dtype,
+                    device=inputs_embeds.device,
+                    past_key_values_length=past_key_values_length,
+                )
+
+            if attention_mask is not None:
+                # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
+                expanded_attn_mask = _expand_mask(
+                    attention_mask, inputs_embeds.dtype, tgt_len=input_shape[-1]
+                ).to(inputs_embeds.device)
+                combined_attention_mask = (
+                    expanded_attn_mask
+                    if combined_attention_mask is None
+                    else expanded_attn_mask + combined_attention_mask
+                )
+
+            return combined_attention_mask
+
+        attention_mask = torch.ones(
+            (batch_size, seq_length), dtype=torch.bool, device=hidden_states.device
+        )
+        attention_mask = prepare_decoder_attention_mask(
+            attention_mask, (batch_size, seq_length), hidden_states, 0
+        )
+
+        hidden_states = self.fc(hidden_states)
+        # shape: [1, total_seq_len, hidden_size]
+
+        original_input_ids = input_ids.detach().clone()
+        return_loss = verifier_last_hidden_states is not None
+        if return_loss:
+            with torch.no_grad():
+                targets = self.verifier_lm_head(verifier_last_hidden_states)
+                # shape: [1, total_seq_len, draft_vocab_size]
+
+            loss = torch.tensor(0.0, device=device)
+
+            # prev_correct is a boolean tensor that is True for tokens that have been
+            # correctly predicted on all previous ttt_steps.
+            # Initialized to True if the token is included in the loss_mask
+            # or if there is no loss_mask
+            prev_correct = (
+                loss_mask.clone()
+                if loss_mask is not None
+                else torch.ones(1, total_seq_len, device=device, dtype=torch.bool)
+            )
+            metrics = {}
+        
+        hidden_states = self.prepare_usp_input(hidden_states)
+        global_input_ids = input_ids
+        draft_tokens = []
+        for ttt_step in range(ttt_steps):
+            input_ids = self.prepare_usp_input(global_input_ids)
+            with torch.no_grad():
+                input_embeds = self.embed_tokens(input_ids)
+                # shape: [1, total_seq_len, hidden_size]
+            cache_position = torch.arange(
+                ttt_step * total_seq_len,
+                (ttt_step + 1) * total_seq_len,
+                dtype=torch.long,
+                device=device,
+            )
+            # shape: [total_seq_len]
+
+            hidden_states = torch.cat([input_embeds, hidden_states], dim=-1)
+            # shape: [1, total_seq_len, 2 * hidden_size]
+
+            for decoder_layer in self.layers:
+                hidden_states = decoder_layer(
+                    hidden_states,
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                    past_key_values=past_key_values,
+                    **kwargs,
+                )
+
+            logits = self.lm_head(self.norm(hidden_states))
+            # shape: [1, total_seq_len, draft_vocab_size]
+            logits = gather_outputs_and_unpad(logits, gather_dim=1)
+
+            if return_loss:
+                s_loss, s_metrics = compute_metrics(
+                    logits,
+                    targets,
+                    loss_mask,
+                    prev_correct,
+                    ttt_step,
+                    ttt_step_loss_decay,
+                )
+                loss += s_loss
+                metrics.update(s_metrics)
+
+            input_ids = torch.argmax(logits, dim=-1)
+            draft_tokens.append(input_ids.detach().clone())
+            # shape: [1, total_seq_len]
+            # Use d2t to map draft tokens to verifier tokens.
+            # Must be in verifier vocabulary space because we use the full verifier
+            # vocabulary in the embedding.
+            if self.d2t is not None:
+                input_ids = input_ids + self.d2t[input_ids]  # type: ignore[index]
+
+            if use_off_policy_tokens:
+                # Overwrite input_ids with ground truth tokens
+                # shift input_ids by 1 to the left and pad with 0
+                # note: inputs_ids no longer line up with verifier_last_hidden_states
+                # the draft logits generated from the padded tokens are ignored
+                # and sliced out for loss calculation
+                input_ids = torch.cat(
+                    [
+                        original_input_ids[:, 1 + ttt_step :],
+                        original_input_ids.new_zeros(1, 1 + ttt_step),
+                    ],
+                    dim=-1,
+                )
+                # shape: [1, total_seq_len]
+            position_ids = position_ids + 1
+            # shape: [1, total_seq_len]
+
+        if return_loss:
+            metrics["loss"] = loss.detach().clone()
+            return draft_tokens, loss, metrics
+        else:
+            return draft_tokens
+
     @conditional_torch_compile
     def forward(
         self,
@@ -342,6 +591,17 @@ class Eagle3DraftModel(SpeculatorModel):
         use_off_policy_tokens: bool = False,
         **kwargs,
     ):
+        if self.enable_sp_ulysses:
+            self.sp_ulysses_forward(hidden_states,
+                                    input_ids,
+                                    lengths,
+                                    loss_mask,
+                                    position_ids,
+                                    verifier_last_hidden_states,
+                                    ttt_steps,
+                                    ttt_step_loss_decay,
+                                    use_off_policy_tokens,
+                                    **kwargs,)
         device = hidden_states.device
         total_seq_len = hidden_states.shape[1]
 
