@@ -177,8 +177,6 @@ def main(args: argparse.Namespace):
     )
 
     # Get model class from registry and create model using its factory method
-    if SpeculatorModel.registry_auto_discovery:
-        SpeculatorModel.auto_populate_registry()
 
     if args.speculator_type not in SpeculatorModel.registry:
         raise ValueError(

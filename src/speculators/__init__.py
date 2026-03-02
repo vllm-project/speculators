@@ -24,9 +24,9 @@ from .config import (
     SpeculatorModelConfig,
     SpeculatorsConfig,
     VerifierConfig,
-    reload_and_populate_configs,
+    reload_schemas,
 )
-from .model import SpeculatorModel, reload_and_populate_models
+from .model import SpeculatorModel
 from .proposals import TokenProposalConfig
 
 __all__ = [
@@ -35,10 +35,8 @@ __all__ = [
     "SpeculatorsConfig",
     "TokenProposalConfig",
     "VerifierConfig",
-    "reload_and_populate_configs",
-    "reload_and_populate_models",
+    "reload_schemas",
 ]
 
 # base imports complete, run auto loading for base classes
-reload_and_populate_configs()
-reload_and_populate_models()
+reload_schemas()

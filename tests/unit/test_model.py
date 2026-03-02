@@ -17,8 +17,7 @@ from speculators import (
     SpeculatorModelConfig,
     SpeculatorsConfig,
     VerifierConfig,
-    reload_and_populate_configs,
-    reload_and_populate_models,
+    reload_schemas,
 )
 from speculators.proposals import GreedyTokenProposalConfig
 
@@ -78,8 +77,7 @@ class SpeculatorTestModel(SpeculatorModel):
 
 
 # Reload registries to include test classes
-reload_and_populate_configs()
-reload_and_populate_models()
+reload_schemas()
 
 
 @pytest.fixture

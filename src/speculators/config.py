@@ -25,14 +25,14 @@ from typing import Any, ClassVar
 from pydantic import BaseModel, ConfigDict, Field
 from transformers import PretrainedConfig
 
-from speculators.proposals.base import TokenProposalConfig
+from speculators.proposals import TokenProposalConfig
 from speculators.utils import PydanticClassRegistryMixin, ReloadableBaseModel
 
 __all__ = [
     "SpeculatorModelConfig",
     "SpeculatorsConfig",
     "VerifierConfig",
-    "reload_and_populate_configs",
+    "reload_schemas",
 ]
 
 
@@ -298,12 +298,12 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
         return super().to_diff_dict()
 
 
-def reload_and_populate_configs():
+def reload_schemas():
     """
     Automatically populates the registry for all PydanticClassRegistryMixin subclasses
     and reloads schemas for all Config classes to ensure their schemas are up-to-date
     with the current registry state.
     """
-    TokenProposalConfig.auto_populate_registry()
+    TokenProposalConfig.reload_schema()
     SpeculatorsConfig.reload_schema()
-    SpeculatorModelConfig.auto_populate_registry()
+    SpeculatorModelConfig.reload_schema()

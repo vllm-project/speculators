@@ -17,7 +17,7 @@ from speculators import (
     SpeculatorsConfig,
     TokenProposalConfig,
     VerifierConfig,
-    reload_and_populate_configs,
+    reload_schemas,
 )
 
 # ===== TokenProposalConfig Tests =====
@@ -30,7 +30,7 @@ class TokenProposalConfigTest(TokenProposalConfig):
 
 
 # Ensure the schemas are reloaded to include the test proposal type
-reload_and_populate_configs()
+reload_schemas()
 
 
 @pytest.mark.smoke
@@ -237,7 +237,7 @@ class SpeculatorModelConfigTest(SpeculatorModelConfig):
 
 
 # Ensure the schemas are reloaded to include the test proposal type
-reload_and_populate_configs()
+reload_schemas()
 
 
 @pytest.fixture
