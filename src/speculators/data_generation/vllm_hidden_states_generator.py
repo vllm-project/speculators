@@ -1,5 +1,7 @@
 """Extract hidden states from intermediate layers during prefill using vLLM."""
 
+import uuid
+
 import torch
 from transformers import AutoConfig, AutoTokenizer
 from vllm.config import (
@@ -27,6 +29,7 @@ from vllm.v1.structured_output import StructuredOutputManager
 
 from speculators.utils.util import empty_cache, is_npu_available, mem_get_info
 
+from .cuda_ipc import CudaIpcImporter
 from .logging_utils import PipelineLogger
 
 __all__ = ["VllmHiddenStatesGenerator"]
@@ -326,36 +329,61 @@ class VllmHiddenStatesGenerator:
         )
 
         # Get captured states organized by request ID
-        request_states_dict = self.executor.collective_rpc(
+        capture_token = f"capture_{self._request_counter - 1}_{uuid.uuid4().hex[:8]}"
+        request_states_payload = self.executor.collective_rpc(
             "_get_captured_states",
+            args=(capture_token,),
             unique_reply_rank=0,
         )
 
-        if not request_states_dict:
+        if not request_states_payload:
             raise RuntimeError("Failed to capture hidden states from worker")
 
+        if not (
+            isinstance(request_states_payload, dict)
+            and request_states_payload.get("transport") == "torch_cuda_ipc"
+        ):
+            raise RuntimeError(
+                f"Unexpected captured states transport payload: {type(request_states_payload).__name__}"
+            )
+
+        request_states_dict, imported_devices = CudaIpcImporter.open_capture(
+            request_states_payload
+        )
+
         log.debug(f"Captured states for {len(request_states_dict)} requests")
+        try:
+            # Map results back to original input order
+            results = []
+            for req_id in sorted(request_id_to_idx.keys()):
+                i = request_id_to_idx[req_id]
 
-        # Map results back to original input order
-        results = []
-        for req_id in sorted(request_id_to_idx.keys()):
-            i = request_id_to_idx[req_id]
+                if req_id not in request_states_dict:
+                    raise RuntimeError(
+                        f"Request {req_id} not found in captured states. "
+                        f"Available: {list(request_states_dict.keys())}"
+                    )
 
-            if req_id not in request_states_dict:
-                raise RuntimeError(
-                    f"Request {req_id} not found in captured states. "
-                    f"Available: {list(request_states_dict.keys())}"
+                layer_states = [
+                    h.clone().to(self.output_device) for h in request_states_dict[req_id]
+                ]
+                input_ids_tensor = torch.as_tensor(input_ids_list[i], dtype=torch.long).to(
+                    self.output_device
                 )
 
-            layer_states = [h.clone().to(self.output_device) for h in request_states_dict[req_id]]
-            input_ids_tensor = torch.as_tensor(input_ids_list[i], dtype=torch.long).to(self.output_device)
-
-            results.append(
-                {
-                    "input_ids": input_ids_tensor,
-                    "hidden_states": layer_states,
-                    "loss_mask": None,
-                }
+                results.append(
+                    {
+                        "input_ids": input_ids_tensor,
+                        "hidden_states": layer_states,
+                        "loss_mask": None,
+                    }
+                )
+        finally:
+            if imported_devices:
+                for device_index in imported_devices:
+                    torch.cuda.synchronize(device=device_index)
+            self.executor.collective_rpc(
+                "_release_ipc_capture", args=(capture_token,), unique_reply_rank=0
             )
 
         empty_cache()
