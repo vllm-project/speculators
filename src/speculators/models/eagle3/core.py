@@ -162,10 +162,10 @@ class Eagle3DraftModel(SpeculatorModel):
         "d2t",
         "t2d",
     ]
-    _keys_to_ignore_on_save: ClassVar[list[str]] = [
+    _keys_to_ignore_on_save: ClassVar[list[str]] = [  # type: ignore[misc,assignment]
         "verifier_lm_head.weight",
         "verifier_norm.weight",
-    ]  # type: ignore[misc,assignment]
+    ]
 
     def __init__(
         self,
