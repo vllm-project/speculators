@@ -23,11 +23,11 @@ The library offers a modular architecture with components for:
 from .config import (
     SpeculatorModelConfig,
     SpeculatorsConfig,
-    TokenProposalConfig,
     VerifierConfig,
     reload_and_populate_configs,
 )
 from .model import SpeculatorModel, reload_and_populate_models
+from .proposals import TokenProposalConfig
 
 __all__ = [
     "SpeculatorModel",
