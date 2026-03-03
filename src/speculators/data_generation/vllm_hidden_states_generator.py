@@ -379,9 +379,15 @@ class VllmHiddenStatesGenerator:
                         f"Available: {list(request_states_dict.keys())}"
                     )
 
-                layer_states = [
-                    h.clone().to(self.output_device) for h in request_states_dict[req_id]
-                ]
+                layer_states = []
+                for h in request_states_dict[req_id]:
+                    if h.device == torch.device(self.output_device):
+                        # Clone when staying on the same device to decouple from
+                        # IPC-backed or shared storage.
+                        layer_states.append(h.clone())
+                    else:
+                        # Avoid an extra clone when transferring between devices.
+                        layer_states.append(h.to(self.output_device))
                 input_ids_tensor = torch.as_tensor(input_ids_list[i], dtype=torch.long).to(
                     self.output_device
                 )
