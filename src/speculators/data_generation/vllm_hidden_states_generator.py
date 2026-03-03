@@ -368,10 +368,9 @@ class VllmHiddenStatesGenerator:
 
         log.debug(f"Captured states for {len(request_states_dict)} requests")
         try:
-            # Map results back to original input order
-            results = []
-            for req_id in sorted(request_id_to_idx.keys()):
-                i = request_id_to_idx[req_id]
+            # Map results back to original input order.
+            results = [None] * len(input_ids_list)
+            for req_id, i in request_id_to_idx.items():
 
                 if req_id not in request_states_dict:
                     raise RuntimeError(
@@ -392,12 +391,16 @@ class VllmHiddenStatesGenerator:
                     self.output_device
                 )
 
-                results.append(
-                    {
-                        "input_ids": input_ids_tensor,
-                        "hidden_states": layer_states,
-                        "loss_mask": None,
-                    }
+                results[i] = {
+                    "input_ids": input_ids_tensor,
+                    "hidden_states": layer_states,
+                    "loss_mask": None,
+                }
+
+            if any(result is None for result in results):
+                missing_indices = [idx for idx, result in enumerate(results) if result is None]
+                raise RuntimeError(
+                    f"Missing hidden-state results for batch indices: {missing_indices}"
                 )
         finally:
             if imported_devices:

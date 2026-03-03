@@ -301,7 +301,7 @@ def generate_and_save_hidden_states(args, dataset):
                 loss_mask = batch_loss_mask[j][:input_len]
 
                 result_cleaned = {
-                    "input_ids": result["input_ids"],
+                    "input_ids": result["input_ids"].contiguous().cpu(),
                     "hidden_states": [h.contiguous().cpu() for h in result["hidden_states"]],
                     "loss_mask": loss_mask,
                 }
