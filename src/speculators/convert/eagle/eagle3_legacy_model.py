@@ -242,7 +242,7 @@ class Eagle3Speculator(SpeculatorModel):
     """
 
     config_class: ClassVar[type[Eagle3SpeculatorConfig]] = Eagle3SpeculatorConfig  # type: ignore[misc]
-    _keys_to_ignore_on_load_missing: ClassVar[list[str]] = [  # type: ignore[misc]
+    _keys_to_ignore_on_load_missing: ClassVar[list[str]] = [  # type: ignore[assignment,misc]
         "verifier*",
     ]
     _keys_to_ignore_on_save: ClassVar[list[str]] = []  # type: ignore[misc,assignment]

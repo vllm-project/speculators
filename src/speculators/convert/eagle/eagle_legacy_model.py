@@ -239,7 +239,7 @@ class EagleSpeculator(SpeculatorModel):
 
     # PreTrainedModel settings
     config_class: ClassVar[type[EagleSpeculatorConfig]] = EagleSpeculatorConfig  # type: ignore[misc]
-    _keys_to_ignore_on_load_missing: ClassVar[list[str]] = [  # type: ignore[misc]
+    _keys_to_ignore_on_load_missing: ClassVar[list[str]] = [  # type: ignore[assignment,misc]
         "verifier*",
         "embed_tokens*",
         "lm_head*",
