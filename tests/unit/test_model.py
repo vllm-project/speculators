@@ -2,15 +2,12 @@
 Unit tests for the model module in the Speculators library.
 """
 
-import os
 import tempfile
 from typing import Literal
-from unittest.mock import MagicMock
 
 import pytest
 import torch
 from torch import nn
-from transformers import PreTrainedModel
 
 from speculators import (
     SpeculatorModel,
@@ -34,20 +31,8 @@ class SpeculatorModelTestConfig(SpeculatorModelConfig):
 class SpeculatorTestModel(SpeculatorModel):
     config_class = SpeculatorModelTestConfig  # type: ignore[misc]
 
-    def __init__(
-        self,
-        config: SpeculatorModelTestConfig,
-        verifier: str | os.PathLike | PreTrainedModel | None = None,
-        verifier_attachment_mode: Literal["detached", "full", "train_only"]
-        | None = None,
-        **kwargs,
-    ):
-        super().__init__(
-            config,
-            verifier=verifier,
-            verifier_attachment_mode=verifier_attachment_mode,
-            **kwargs,
-        )
+    def __init__(self, config: SpeculatorModelTestConfig, **kwargs):
+        super().__init__(config, **kwargs)
         self.test_module = nn.Linear(10, 10)
         self.post_init()  # type: ignore[attr-defined]
 
@@ -180,80 +165,18 @@ def test_speculator_model_registered_model_class_from_config_invalid():
 
 
 @pytest.mark.smoke
-def test_speculator_model_initialization_without_verifier(speculator_model_test_config):
+def test_speculator_model_initialization(speculator_model_test_config):
     model = SpeculatorTestModel(speculator_model_test_config)
     assert model.config == speculator_model_test_config
-    assert model.verifier is None
-    assert model.verifier_attachment_mode == "detached"
-
-
-@pytest.mark.smoke
-def test_speculator_model_initialization_with_verifier(speculator_model_test_config):
-    verifier = MagicMock(spec=PreTrainedModel)
-    model = SpeculatorTestModel(speculator_model_test_config, verifier=verifier)
-    assert model.config == speculator_model_test_config
-    assert model.verifier == verifier
-    assert model.verifier_attachment_mode == "full"
-
-
-@pytest.mark.smoke
-def test_speculator_model_initialization_with_verifier_path(
-    speculator_model_test_config, monkeypatch
-):
-    mock_model = MagicMock(spec=PreTrainedModel)
-    mock_from_pretrained = MagicMock(return_value=mock_model)
-    monkeypatch.setattr(
-        "transformers.AutoModelForCausalLM.from_pretrained", mock_from_pretrained
-    )
-
-    verifier_path = "path/to/verifier/model"
-    model = SpeculatorTestModel(speculator_model_test_config, verifier=verifier_path)
-
-    mock_from_pretrained.assert_called_once_with(verifier_path)
-    assert model.config == speculator_model_test_config
-    assert model.verifier is mock_model
-    assert model.verifier_attachment_mode == "full"
-
-
-@pytest.mark.smoke
-def test_speculator_model_initialization_with_verifier_train_only(
-    speculator_model_test_config,
-):
-    verifier = MagicMock(spec=PreTrainedModel)
-    model = SpeculatorTestModel(
-        speculator_model_test_config,
-        verifier=verifier,
-        verifier_attachment_mode="train_only",
-    )
-    assert model.config == speculator_model_test_config
-    assert model.verifier is None
-    assert model.verifier_attachment_mode == "train_only"
-
-
-@pytest.mark.smoke
-def test_speculator_model_initialization_with_verifier_detached(
-    speculator_model_test_config,
-):
-    verifier = MagicMock(spec=PreTrainedModel)
-    model = SpeculatorTestModel(
-        speculator_model_test_config,
-        verifier=verifier,
-        verifier_attachment_mode="detached",
-    )
-    assert model.config == speculator_model_test_config
-    assert model.verifier is None
-    assert model.verifier_attachment_mode == "detached"
 
 
 @pytest.mark.sanity
-def test_speculator_model_initialization_invalid(
-    speculator_model_test_config,
-):
+def test_speculator_model_initialization_invalid():
     # No config
     with pytest.raises(
         ValueError, match="Config must be provided to initialize a SpeculatorModel"
     ):
-        SpeculatorModel(config=None, verifier=None, verifier_attachment_mode=None)  # type: ignore[abstract, arg-type]
+        SpeculatorModel(config=None)  # type: ignore[abstract, arg-type]
 
     # Invalid config type
     with pytest.raises(
@@ -261,26 +184,6 @@ def test_speculator_model_initialization_invalid(
     ):
         SpeculatorModel(  # type: ignore[abstract]
             config="invalid_config",  # type: ignore[arg-type]
-            verifier=None,
-            verifier_attachment_mode=None,  # type: ignore[arg-type]
-        )
-
-    # Invalid verifier type
-    with pytest.raises(
-        TypeError, match="Expected verifier to be a PreTrainedModel, a string path,"
-    ):
-        SpeculatorModel(  # type: ignore[abstract]
-            config=speculator_model_test_config,
-            verifier=123,  # type: ignore[arg-type]
-            verifier_attachment_mode=None,
-        )
-
-    # Invalid verifier attachment mode
-    with pytest.raises(ValueError, match="Invalid verifier_attachment_mode: "):
-        SpeculatorModel(  # type: ignore[abstract]
-            config=speculator_model_test_config,
-            verifier=MagicMock(spec=PreTrainedModel),
-            verifier_attachment_mode="invalid_mode",  # type: ignore[arg-type]
         )
 
 
@@ -331,62 +234,14 @@ def test_speculator_model_from_pretrained_local_marshalling(
 
 
 @pytest.mark.smoke
-def test_speculator_model_from_pretrained_verifier(
+def test_speculator_model_from_pretrained(
     speculator_model_test_config,
 ):
     state_dict = SpeculatorTestModel(speculator_model_test_config).state_dict()  # type: ignore[attr-defined]
-    verifier = MagicMock(spec=PreTrainedModel)
     model = SpeculatorModel.from_pretrained(
-        None,
-        config=speculator_model_test_config,
-        verifier=verifier,
-        state_dict=state_dict,
+        None, config=speculator_model_test_config, state_dict=state_dict
     )
     assert isinstance(model, SpeculatorTestModel)
-    assert model.verifier == verifier
-    assert model.verifier_attachment_mode == "full"
-    assert isinstance(model.config, SpeculatorModelTestConfig)
-    assert model.config.speculators_model_type == "test_speculator_model"
-    assert model.config.test_param == 456
-
-
-@pytest.mark.smoke
-def test_speculator_model_from_pretrained_verifier_train_only(
-    speculator_model_test_config,
-):
-    state_dict = SpeculatorTestModel(speculator_model_test_config).state_dict()  # type: ignore[attr-defined]
-    verifier = MagicMock(spec=PreTrainedModel)
-    model = SpeculatorModel.from_pretrained(
-        None,
-        config=speculator_model_test_config,
-        verifier=verifier,
-        verifier_attachment_mode="train_only",
-        state_dict=state_dict,
-    )
-    assert isinstance(model, SpeculatorTestModel)
-    assert model.verifier is None
-    assert model.verifier_attachment_mode == "train_only"
-    assert isinstance(model.config, SpeculatorModelTestConfig)
-    assert model.config.speculators_model_type == "test_speculator_model"
-    assert model.config.test_param == 456
-
-
-@pytest.mark.smoke
-def test_speculator_model_from_pretrained_verifier_detached(
-    speculator_model_test_config,
-):
-    state_dict = SpeculatorTestModel(speculator_model_test_config).state_dict()  # type: ignore[attr-defined]
-    verifier = MagicMock(spec=PreTrainedModel)
-    model = SpeculatorModel.from_pretrained(
-        None,
-        config=speculator_model_test_config,
-        verifier=verifier,
-        verifier_attachment_mode="detached",
-        state_dict=state_dict,
-    )
-    assert isinstance(model, SpeculatorTestModel)
-    assert model.verifier is None
-    assert model.verifier_attachment_mode == "detached"
     assert isinstance(model.config, SpeculatorModelTestConfig)
     assert model.config.speculators_model_type == "test_speculator_model"
     assert model.config.test_param == 456
@@ -443,84 +298,3 @@ def test_speculator_model_forward_abstract(speculator_model_test_config):
         NotImplementedError, match="The forward method is only supported on concrete"
     ):
         model.forward()
-
-
-# ===== SpeculatorModel Verifier Management Tests =====
-
-
-@pytest.mark.smoke
-def test_speculator_model_attachment_lifecycle(speculator_model_test_config):
-    model = SpeculatorTestModel(config=speculator_model_test_config)
-    assert model.verifier is None
-    assert model.verifier_attachment_mode == "detached"
-
-    # Attach a verifier
-    verifier = MagicMock(spec=PreTrainedModel)
-    model.attach_verifier(verifier)
-    assert model.verifier == verifier
-    assert model.verifier_attachment_mode == "full"
-
-    # Ensure attachment before detaching raises an error
-    with pytest.raises(
-        RuntimeError,
-        match="Cannot attach a verifier when the speculator is not in detached mode.",
-    ):
-        model.attach_verifier(verifier)
-
-    # Detach the verifier
-    model.detach_verifier()
-    assert model.verifier is None
-    assert model.verifier_attachment_mode == "detached"
-
-    # Ensure detaching again raises an error
-    with pytest.raises(
-        RuntimeError,
-        match="Verifier is already detached, cannot be called again until",
-    ):
-        model.detach_verifier()
-
-    # Attach train_only verifier
-    model.attach_verifier(verifier, mode="train_only")
-    assert model.verifier is None
-    assert model.verifier_attachment_mode == "train_only"
-
-    # Detach again
-    model.detach_verifier()
-    assert model.verifier is None
-    assert model.verifier_attachment_mode == "detached"
-
-    # Attach different verifier
-    new_verifier = MagicMock(spec=PreTrainedModel)
-    model.attach_verifier(new_verifier, mode="full")
-    assert model.verifier == new_verifier
-    assert model.verifier_attachment_mode == "full"
-    assert model.verifier != verifier
-
-
-@pytest.mark.sanity
-def test_speculator_model_attach_verifier_invalid(
-    speculator_model_test_config,
-):
-    model = SpeculatorTestModel(config=speculator_model_test_config)
-
-    # Invalid verifier type
-    with pytest.raises(
-        TypeError, match="Expected verifier to be a PreTrainedModel, a string path,"
-    ):
-        model.attach_verifier(123)  # type: ignore[arg-type]
-
-    model = SpeculatorTestModel(config=speculator_model_test_config)
-    # Invalid attachment mode
-    with pytest.raises(
-        ValueError, match="Invalid verifier_attachment_mode: invalid_mode"
-    ):
-        model.attach_verifier(verifier=None, mode="invalid_mode")  # type: ignore[arg-type]
-
-    # Attaching when not in detached mode
-    model = SpeculatorTestModel(config=speculator_model_test_config)
-    model.verifier_attachment_mode = "full"
-    with pytest.raises(
-        RuntimeError,
-        match="Cannot attach a verifier when the speculator is not in detached mode.",
-    ):
-        model.attach_verifier(MagicMock(spec=PreTrainedModel))

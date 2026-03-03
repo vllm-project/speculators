@@ -20,7 +20,12 @@ from typing import Any, ClassVar, Literal, cast
 import torch
 from pydantic import Field, field_serializer, field_validator, model_validator
 from torch import nn
-from transformers import AutoConfig, PretrainedConfig, PreTrainedModel
+from transformers import (
+    AutoConfig,
+    AutoModelForCausalLM,
+    PretrainedConfig,
+    PreTrainedModel,
+)
 from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_mask
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.models.auto.modeling_auto import MODEL_FOR_CAUSAL_LM_MAPPING
@@ -239,10 +244,12 @@ class EagleSpeculator(SpeculatorModel):
         "embed_tokens*",
         "lm_head*",
     ]
+
     _keys_to_ignore_on_save: ClassVar[list[str]] = [  # type: ignore[assignment,misc]
         "embed_tokens.weight",
         "lm_head.weight",
         "lm_head.bias",
+        "verifier*",
     ]
 
     @classmethod
@@ -340,12 +347,15 @@ class EagleSpeculator(SpeculatorModel):
         self.rotary_emb: nn.Module | None = None
         self.lm_head: nn.Linear | None = None
 
-        # Delayed initialization to ensure everything needed for attach_verifier is set
-        super().__init__(
-            config=config,
-            verifier=verifier,
-            verifier_attachment_mode=verifier_attachment_mode,
+        super().__init__(config=config)
+        self.verifier: PreTrainedModel | None = None
+        self.verifier_attachment_mode: Literal["detached", "full", "train_only"] = (
+            "detached"
         )
+
+        verifier = verifier or config.speculators_config.verifier.name_or_path
+        if verifier is not None and verifier_attachment_mode != "detached":
+            self.attach_verifier(verifier, mode=verifier_attachment_mode)
 
         self._decoder_class, self._layernorm_class = self._import_model_classes()
         # Initialize layers based on the configuration
@@ -359,6 +369,67 @@ class EagleSpeculator(SpeculatorModel):
         self.pre_lm_head_layernorm: nn.Module | None = self._create_layernorm()
 
         self.post_init()  # type: ignore[attr-defined]
+
+    def resolve_verifier(
+        self, verifier: str | os.PathLike | PreTrainedModel
+    ) -> PreTrainedModel:
+        """
+        Resolves the verifier model from a given path or identifier.
+
+        This method loads the verifier model from a specified path or identifier,
+        ensuring it is compatible with the speculator's configuration. If the
+        verifier is already attached, it returns the existing verifier instance.
+
+        :param verifier: The verifier model to resolve. Can be a path to a local
+            model directory, a Hugging Face model identifier, or an instance of
+            PreTrainedModel.
+        :return: The resolved PreTrainedModel instance for the verifier.
+        """
+        if not verifier:
+            raise ValueError(
+                "Verifier must be provided as a path, identifier, or PreTrainedModel. "
+            )
+
+        if not isinstance(verifier, (str, os.PathLike, PreTrainedModel)):
+            raise TypeError(
+                f"Expected verifier to be a PreTrainedModel, a string path, "
+                f"or an os.PathLike object, got {type(verifier)} {verifier}."
+            )
+
+        if isinstance(verifier, PreTrainedModel):
+            return verifier
+
+        return AutoModelForCausalLM.from_pretrained(verifier)
+
+    def state_dict(
+        self,
+        *,
+        destination: dict[str, Any] = None,  # type: ignore[assignment]
+        prefix: str = "",
+        keep_vars: bool = False,
+    ):
+        """
+        Overrides the state_dict method from PyTorch to ensure that save pathways
+        within Transformers PreTrainedModel do not include the verifier model's
+        parameters. This is important to ensure that the speculator model
+        can be saved and loaded without including the verifier's state, which
+        is expected to be managed separately.
+
+        :param destination: Optional dictionary to store the state.
+        :param prefix: Optional prefix for parameter names.
+        :param keep_vars: Whether to keep Variables in the state_dict.
+        :return: A dictionary containing the state of the speculator model,
+            excluding the verifier model's parameters. This dictionary can be used
+            to save the model's state to disk or for further processing.
+        """
+        tmp_verifier = self.verifier
+        self.verifier = None
+        state = super().state_dict(  # type: ignore[misc]
+            destination=destination, prefix=prefix, keep_vars=keep_vars
+        )
+        self.verifier = tmp_verifier
+
+        return state
 
     def attach_verifier(
         self,
@@ -405,7 +476,24 @@ class EagleSpeculator(SpeculatorModel):
             perform generation until a full verifier is attached.
         :return: The PreTrainedModel instance for the verifier that was attached.
         """
-        super().attach_verifier(verifier=verifier, mode=mode)
+        if self.verifier_attachment_mode != "detached":
+            raise RuntimeError(
+                "Cannot attach a verifier when the speculator is not in detached mode. "
+                "Detach the current verifier first using `detach_verifier()`."
+            )
+
+        if mode not in {"full", "train_only", None}:
+            raise ValueError(
+                f"Invalid verifier_attachment_mode: {mode}. "
+                "Must be one of 'full', 'train_only', or None."
+            )
+
+        self.verifier_attachment_mode = mode or "full"
+        self.verifier = (
+            self.resolve_verifier(verifier)
+            if self.verifier_attachment_mode == "full"
+            else None
+        )  # Expect subclasses to handle references if train_only
 
         if self.verifier_attachment_mode == "train_only":
             verifier_model = self.resolve_verifier(verifier)
@@ -432,7 +520,17 @@ class EagleSpeculator(SpeculatorModel):
         be able to perform forward passes or generation until a new verifier
         is attached.
         """
-        super().detach_verifier()
+        if self.verifier_attachment_mode == "detached":
+            raise RuntimeError(
+                "Verifier is already detached, cannot be called again until "
+                "a new verifier is attached."
+            )
+
+        if self.verifier is not None:
+            del self.verifier
+
+        self.verifier = None
+        self.verifier_attachment_mode = "detached"
 
         del self.embed_tokens
         self.embed_tokens = None
