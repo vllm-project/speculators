@@ -141,6 +141,14 @@ The following table summarizes the models that have been trained end-to-end by o
 
 ✅ = Supported, ⏳ = In Progress, ❌ = Not Yet Supported
 
+## Supported Algorithms
+
+| Algorithm | Description | Training | vLLM Inference | Reference |
+|-----------|-------------|----------|----------------|-----------|
+| **EAGLE-3** | Lightweight decoder with TTT steps for autoregressive draft generation | ✅ | ✅ | [Paper](https://arxiv.org/abs/2401.15077) |
+| **FastMTP** | Multi-token prediction with independent MTP layers per step | ⏳ | ⏳ | [Paper](https://arxiv.org/abs/2509.18362) |
+| **P-EAGLE** | Parallel EAGLE with COD sampling for multi-token prediction | ⏳ | ⏳ | [Paper](https://arxiv.org/abs/2602.01469) |
+
 ## Examples
 
 End-To-End Training Examples:
