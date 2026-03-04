@@ -40,6 +40,9 @@ class TrainerConfig(NamedTuple):
     scheduler_warmup_steps: int | None = None
     scheduler_total_steps: int | None = None
     scheduler_num_cosine_cycles: float = 0.5
+    save_best: bool = False
+    save_optimizer_state: bool = True
+    max_checkpoints: int | None = None
 
 
 class Trainer:
@@ -195,9 +198,14 @@ class Trainer:
             self.global_step += 1
 
     @torch.no_grad()
-    def val_epoch(self, epoch: int):
+    def val_epoch(self, epoch: int) -> float | None:
+        """Run validation epoch and return average validation loss.
+
+        Returns:
+            Average validation loss for the epoch, or None if no val loader.
+        """
         if self.val_loader is None:
-            return
+            return None
         self.model.eval()
         if hasattr(self.val_loader.batch_sampler, "set_epoch"):
             self.val_loader.batch_sampler.set_epoch(epoch)  # type: ignore[union-attr]
@@ -206,6 +214,7 @@ class Trainer:
             val_loader = tqdm(val_loader, desc=f"Epoch {epoch}")  # type: ignore[assignment]
 
         val_metrics: dict[str, float] = {}
+        total_loss = 0.0
         num_batches = len(val_loader)
         for batch in val_loader:
             gpu_batch = {
@@ -220,24 +229,60 @@ class Trainer:
             )
 
             if self.is_distributed:
+                _loss_reduced = _loss.clone()
+                dist.reduce(_loss_reduced, dst=0, op=dist.ReduceOp.AVG)
+                total_loss += _loss_reduced.item()
                 for v in metrics.values():
                     dist.reduce(v, dst=0, op=dist.ReduceOp.AVG)
+            else:
+                total_loss += _loss.item()
 
             for k, v in metrics.items():
                 val_metrics[k] = val_metrics.get(k, 0.0) + v.item()
 
+        avg_val_loss = total_loss / num_batches if num_batches > 0 else 0.0
         val_metrics = {f"{k}_epoch": v / num_batches for k, v in val_metrics.items()}
+        val_metrics["loss_epoch"] = avg_val_loss
         metric_logger.info(
             {"val": val_metrics, "epoch": epoch}, extra={"step": self.global_step}
         )
+        return avg_val_loss
 
-    def save_checkpoint(self, epoch: int):
-        self.checkpointer.save_checkpoint(self.model, self.opt, epoch)
-        if self.scheduler is not None:
+    def save_checkpoint(
+        self,
+        epoch: int,
+        save_optimizer_state: bool = True,
+    ):
+        self.checkpointer.save_checkpoint(
+            self.model,
+            self.opt,
+            epoch,
+            save_optimizer_state=save_optimizer_state,
+        )
+        if save_optimizer_state and self.scheduler is not None:
             self.checkpointer.save_scheduler_state_dict(self.scheduler, epoch)
+
+    def _should_save_checkpoint(
+        self, val_loss: float | None, best_val_loss: float | None
+    ) -> bool:
+        """Determine whether to save a checkpoint for the current epoch.
+
+        If ``save_best`` is enabled, saves only when validation loss improves.
+        Otherwise, always saves.
+        """
+        if not self.config.save_best:
+            return True
+        if val_loss is None:
+            # No validation loss available; always save
+            return True
+        if best_val_loss is None:
+            return True
+        return val_loss < best_val_loss
 
     def run_training(self):
         n_epochs = self.config.num_epochs
+        best_val_loss: float | None = None
+
         for epoch in range(self.current_epoch, n_epochs):
             root_logger.info(f"Training epoch {epoch + 1}/{n_epochs} started")
             self.train_epoch(epoch)
@@ -246,20 +291,44 @@ class Trainer:
             if self.is_distributed:
                 dist.barrier()
 
+            val_loss: float | None = None
             if self.val_loader is None:
                 root_logger.warning("No val loader, skipping validation epoch")
             else:
                 root_logger.info(f"Validation epoch {epoch + 1}/{n_epochs} started")
-                self.val_epoch(epoch)
+                val_loss = self.val_epoch(epoch)
                 root_logger.info(f"Validation epoch {epoch + 1}/{n_epochs} completed")
 
             if self.is_distributed:
                 dist.barrier()
 
-            root_logger.info(
-                f"Started saving checkpoint to {self.checkpointer.path / str(epoch)}"
-            )
-            self.save_checkpoint(epoch)
-            root_logger.info(
-                f"Finished saving checkpoint to {self.checkpointer.path / str(epoch)}"
-            )
+            if self._should_save_checkpoint(val_loss, best_val_loss):
+                root_logger.info(
+                    f"Started saving checkpoint to "
+                    f"{self.checkpointer.path / str(epoch)}"
+                )
+                self.save_checkpoint(
+                    epoch,
+                    save_optimizer_state=self.config.save_optimizer_state,
+                )
+                root_logger.info(
+                    f"Finished saving checkpoint to "
+                    f"{self.checkpointer.path / str(epoch)}"
+                )
+
+                # Cleanup old checkpoints if max_checkpoints is set
+                if self.config.max_checkpoints is not None:
+                    self.checkpointer.cleanup_old_checkpoints(
+                        self.config.max_checkpoints
+                    )
+
+                if val_loss is not None:
+                    best_val_loss = val_loss
+                    root_logger.info(
+                        f"Best validation loss updated to {best_val_loss:.6f}"
+                    )
+            else:
+                root_logger.info(
+                    f"Skipping checkpoint save (val_loss={val_loss:.6f} "
+                    f">= best={best_val_loss:.6f})"
+                )

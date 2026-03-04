@@ -1,3 +1,5 @@
+import logging
+import shutil
 from abc import abstractmethod
 from pathlib import Path
 
@@ -15,6 +17,8 @@ from torch.distributed.checkpoint.state_dict import (
 from transformers.modeling_utils import PreTrainedModel
 
 from speculators.utils.util import get_current_device
+
+logger = logging.getLogger("speculators")
 
 
 class BaseCheckpointer:
@@ -79,8 +83,36 @@ class BaseCheckpointer:
         optimizer: torch.optim.Optimizer,
         epoch: int,
         float_dtype: torch.dtype = torch.bfloat16,
+        save_optimizer_state: bool = True,
     ):
         raise NotImplementedError
+
+    def cleanup_old_checkpoints(self, max_checkpoints: int) -> None:
+        """Remove old checkpoints keeping only the most recent ones.
+
+        Args:
+            max_checkpoints: Maximum number of checkpoints to retain.
+        """
+        if not self.path.exists():
+            return
+
+        checkpoint_dirs: list[tuple[int, Path]] = []
+        for d in self.path.iterdir():
+            if d.is_dir():
+                try:
+                    checkpoint_dirs.append((int(d.name), d))
+                except ValueError:
+                    continue
+
+        checkpoint_dirs.sort(key=lambda x: x[0])
+
+        if len(checkpoint_dirs) <= max_checkpoints:
+            return
+
+        dirs_to_remove = checkpoint_dirs[: len(checkpoint_dirs) - max_checkpoints]
+        for epoch_num, dir_path in dirs_to_remove:
+            logger.info(f"Removing old checkpoint: {dir_path}")
+            shutil.rmtree(dir_path)
 
     def _get_previous_epoch(self) -> int:
         if not self.path.exists():
@@ -162,11 +194,15 @@ class SingleGPUCheckpointer(BaseCheckpointer):
         optimizer: torch.optim.Optimizer,
         epoch: int,
         float_dtype: torch.dtype = torch.bfloat16,
+        save_optimizer_state: bool = True,
     ):
         model_state_dict = convert_float_dtype(model.state_dict(), float_dtype)
         model.save_pretrained(self.path / str(epoch), state_dict=model_state_dict)
-        optimizer_state_dict = convert_float_dtype(optimizer.state_dict(), float_dtype)
-        torch.save(optimizer_state_dict, self.optimizer_path(epoch))
+        if save_optimizer_state:
+            optimizer_state_dict = convert_float_dtype(
+                optimizer.state_dict(), float_dtype
+            )
+            torch.save(optimizer_state_dict, self.optimizer_path(epoch))
 
 
 class DistributedCheckpointer(BaseCheckpointer):
@@ -220,22 +256,27 @@ class DistributedCheckpointer(BaseCheckpointer):
         optimizer: torch.optim.Optimizer,
         epoch: int,
         float_dtype: torch.dtype = torch.bfloat16,
+        save_optimizer_state: bool = True,
     ):
         model_state_dict = get_model_state_dict(
             model, options=StateDictOptions(full_state_dict=True, cpu_offload=True)
         )
         model_state_dict = convert_float_dtype(model_state_dict, float_dtype)
 
-        optimizer_state_dict = get_optimizer_state_dict(
-            model,
-            optimizer,
-            options=StateDictOptions(full_state_dict=True, cpu_offload=True),
-        )
-        optimizer_state_dict = convert_float_dtype(optimizer_state_dict, float_dtype)
+        if save_optimizer_state:
+            optimizer_state_dict = get_optimizer_state_dict(
+                model,
+                optimizer,
+                options=StateDictOptions(full_state_dict=True, cpu_offload=True),
+            )
+            optimizer_state_dict = convert_float_dtype(
+                optimizer_state_dict, float_dtype
+            )
 
         if dist.get_rank() == 0:
             # Only rank 0 saves the checkpoint
             model.save_pretrained(self.path / str(epoch), state_dict=model_state_dict)
-            torch.save(optimizer_state_dict, self.optimizer_path(epoch))
+            if save_optimizer_state:
+                torch.save(optimizer_state_dict, self.optimizer_path(epoch))
 
         dist.barrier()

@@ -232,6 +232,9 @@ def main(args: argparse.Namespace):
         scheduler_warmup_steps=args.scheduler_warmup_steps,
         scheduler_total_steps=args.scheduler_total_steps,
         scheduler_num_cosine_cycles=args.scheduler_num_cosine_cycles,
+        save_best=args.save_best,
+        save_optimizer_state=not args.no_save_optimizer_state,
+        max_checkpoints=args.max_checkpoints,
     )
     trainer = Trainer(draft_model, trainer_config, train_loader, val_loader)
 
@@ -324,6 +327,25 @@ def parse_args():
     parser.add_argument("--scheduler-warmup-steps", type=int, default=None)
     parser.add_argument("--scheduler-total-steps", type=int, default=None)
     parser.add_argument("--scheduler-num-cosine-cycles", type=float, default=0.5)
+    # Checkpoint options
+    parser.add_argument(
+        "--save-best",
+        action="store_true",
+        default=False,
+        help="Only save checkpoint when validation loss improves",
+    )
+    parser.add_argument(
+        "--no-save-optimizer-state",
+        action="store_true",
+        default=False,
+        help="Skip saving optimizer and scheduler state dicts in checkpoints",
+    )
+    parser.add_argument(
+        "--max-checkpoints",
+        type=int,
+        default=None,
+        help="Maximum number of checkpoints to keep (removes oldest)",
+    )
     return parser.parse_args()
 
 
