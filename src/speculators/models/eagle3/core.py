@@ -155,7 +155,7 @@ def conditional_torch_compile(func):
 @SpeculatorModel.register("eagle3")
 class Eagle3DraftModel(SpeculatorModel):
     config_class: ClassVar[type[Eagle3SpeculatorConfig]] = Eagle3SpeculatorConfig  # type: ignore[misc]
-    _keys_to_ignore_on_load_missing: ClassVar[list[str]] = [  # type: ignore[misc]
+    _keys_to_ignore_on_load_missing: ClassVar[list[str]] = [  # type: ignore[misc,assignment]
         "embed_tokens.weight",
         "verifier_norm.weight",
         "verifier_lm_head.weight",
@@ -178,15 +178,15 @@ class Eagle3DraftModel(SpeculatorModel):
 
         # VOCAB MAPPINGS
         self.use_draft_vocab = self.draft_vocab_size != self.verifier_vocab_size
-        t2d = None
-        d2t = None
+        self.t2d: torch.Tensor | None = None
+        self.d2t: torch.Tensor | None = None
         if self.use_draft_vocab:
             # Use NaNs as placeholder so that it's clear if these aren't updated
             # todo(fynn): NaNs might not work with the dtypes here
-            t2d = torch.zeros((self.verifier_vocab_size,), dtype=torch.bool)
-            d2t = torch.zeros((self.draft_vocab_size,), dtype=torch.long)
-        self.register_buffer("t2d", t2d)
-        self.register_buffer("d2t", d2t)
+            self.t2d = torch.zeros((self.verifier_vocab_size,), dtype=torch.bool)
+            self.d2t = torch.zeros((self.draft_vocab_size,), dtype=torch.long)
+        self.register_buffer("t2d", self.t2d)
+        self.register_buffer("d2t", self.d2t)
 
         # FC LAYER
         self.fc = torch.nn.Linear(3 * self.hidden_size, self.hidden_size, bias=False)
@@ -246,7 +246,17 @@ class Eagle3DraftModel(SpeculatorModel):
         torch.nn.init.constant_(self.embed_tokens.weight, torch.nan)
         torch.nn.init.constant_(self.verifier_lm_head.weight, torch.nan)
 
-    def load_vocab_mappings(self, t2d: torch.Tensor, d2t: torch.Tensor):
+    def load_vocab_mappings(self, t2d: torch.Tensor | None, d2t: torch.Tensor | None):
+        if t2d is None and d2t is None:
+            # Nothing to load, return early
+            return
+        elif t2d is None or d2t is None:
+            raise ValueError(
+                "Both t2d and d2t must be provided together, or both must be None. "
+                f"Got t2d={'provided' if t2d is not None else 'None'}, "
+                f"d2t={'provided' if d2t is not None else 'None'}"
+            )
+
         if not self.use_draft_vocab:
             raise RuntimeError(
                 "Vocab mappings were provided but are not needed because verifier "
@@ -273,7 +283,7 @@ class Eagle3DraftModel(SpeculatorModel):
 
         self.load_state_dict({"t2d": t2d, "d2t": d2t}, strict=False)
 
-    def load_verifier_weights(self):
+    def load_verifier_weights(self):  # noqa: C901
         verifier_config = self.config.speculators_config.verifier
         if verifier_config.name_or_path is None:
             raise ValueError("VerifierConfig `name_or_path` value is required.")
@@ -311,7 +321,7 @@ class Eagle3DraftModel(SpeculatorModel):
             self.embed_tokens.load_state_dict(embed_tokens_sd)
 
         if self.use_draft_vocab:
-            if self.t2d is None or not torch.any(self.t2d).item:
+            if self.t2d is None or not torch.any(self.t2d).item():
                 # (not torch.any(self.t2d).item) because t2d is initialized to zeros
                 raise ValueError(
                     "t2d tensor hasn't been set. Please call "
@@ -535,18 +545,8 @@ class Eagle3DraftModel(SpeculatorModel):
                 ),
             ),
         )
-
         model = cls(config=config)
-        # Verify that if one mapping tensor is provided, the other is as well
-        if (t2d is None) != (d2t is None):
-            raise ValueError(
-                "Both t2d and d2t must be provided together, or both must be None. "
-                f"Got t2d={'provided' if t2d is not None else 'None'}, "
-                f"d2t={'provided' if d2t is not None else 'None'}"
-            )
-        elif t2d is not None:
-            model.load_vocab_mappings(t2d, d2t)
-
+        model.load_vocab_mappings(t2d, d2t)
         model.load_verifier_weights()
         return model
 
@@ -558,18 +558,8 @@ class Eagle3DraftModel(SpeculatorModel):
         d2t: torch.Tensor | None = None,
         **kwargs,
     ) -> "Eagle3DraftModel":
-        model: Eagle3DraftModel = super().from_pretrained(*args, **kwargs)
-
-        # Verify that if one mapping tensor is provided, the other is as well
-        if (t2d is None) != (d2t is None):
-            raise ValueError(
-                "Both t2d and d2t must be provided together, or both must be None. "
-                f"Got t2d={'provided' if t2d is not None else 'None'}, "
-                f"d2t={'provided' if d2t is not None else 'None'}"
-            )
-        elif t2d is not None:
-            model.load_vocab_mappings(t2d, d2t)
-
+        model: Eagle3DraftModel = super().from_pretrained(*args, **kwargs)  # type: ignore[assignment]
+        model.load_vocab_mappings(t2d, d2t)
         model.load_verifier_weights()
         return model
 
