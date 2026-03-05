@@ -6,7 +6,7 @@
 
 ## Description
 
-<!--- Link related issue -->
+<!--- Link related issue if applicable -->
 
 ## Related Issue
 
