@@ -72,10 +72,13 @@ TINY_LLAMA_CONFIG = LlamaConfig(
 # ---------------------------------------------------------------------------
 
 
-def _make_eagle3_config() -> Eagle3SpeculatorConfig:
+def _make_eagle3_config(
+    draft_vocab_size: int = 64,
+    verifier_name_or_path: str | None = None,
+) -> Eagle3SpeculatorConfig:
     return Eagle3SpeculatorConfig(
         transformer_layer_config=copy.deepcopy(TINY_LLAMA_CONFIG),
-        draft_vocab_size=64,
+        draft_vocab_size=draft_vocab_size,
         norm_before_residual=False,
         embed_requires_grad=False,
         speculators_config=SpeculatorsConfig(
@@ -83,11 +86,27 @@ def _make_eagle3_config() -> Eagle3SpeculatorConfig:
             proposal_methods=[GreedyTokenProposalConfig(speculative_tokens=1)],
             default_proposal_method="greedy",
             verifier=VerifierConfig(
-                name_or_path=None,
+                name_or_path=verifier_name_or_path,
                 architectures=["LlamaForCausalLM"],
             ),
         ),
     )
+
+
+def _make_vocab_mappings(
+    verifier_vocab_size: int = 64,
+    draft_vocab_size: int = 32,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Create valid t2d and d2t tensors for testing.
+
+    Selects the first `draft_vocab_size` tokens from the verifier vocab.
+    t2d: bool[verifier_vocab_size] — True for tokens included in draft vocab.
+    d2t: long[draft_vocab_size] — maps draft index to verifier index.
+    """
+    t2d = torch.zeros(verifier_vocab_size, dtype=torch.bool)
+    t2d[:draft_vocab_size] = True
+    d2t = torch.arange(draft_vocab_size, dtype=torch.long)
+    return t2d, d2t
 
 
 def _make_tiny_model() -> Eagle3DraftModel:
@@ -647,3 +666,151 @@ def test_distributed_from_pretrained(pretrained_dir, tmp_path):
     assert results["fc_val"] == pytest.approx(66.0, abs=0.5), (
         "Pretrained fc weight not preserved through FSDP broadcast"
     )
+
+
+# ===================================================================
+# Vocab Mapping Loading (t2d / d2t)
+# ===================================================================
+
+DRAFT_VOCAB_SIZE = 32  # < TINY_LLAMA_CONFIG.vocab_size (64)
+
+
+@pytest.fixture
+def draft_vocab_config():
+    """Eagle3 config with draft_vocab_size < verifier_vocab_size."""
+    return _make_eagle3_config(draft_vocab_size=DRAFT_VOCAB_SIZE)
+
+
+@pytest.fixture
+def vocab_mappings():
+    """Valid (t2d, d2t) pair for verifier_vocab=64, draft_vocab=32."""
+    return _make_vocab_mappings(
+        verifier_vocab_size=TINY_LLAMA_CONFIG.vocab_size,
+        draft_vocab_size=DRAFT_VOCAB_SIZE,
+    )
+
+
+def test_load_vocab_mappings(draft_vocab_config, vocab_mappings):
+    """load_vocab_mappings stores t2d/d2t buffers correctly."""
+    t2d, d2t = vocab_mappings
+    model = Eagle3DraftModel(draft_vocab_config)
+
+    # Before loading: buffers exist but are zeros
+    assert model.t2d is not None
+    assert not model.t2d.any(), "t2d should be all zeros before loading"
+    assert model.d2t is not None
+    assert (model.d2t == 0).all(), "d2t should be all zeros before loading"
+
+    model.load_vocab_mappings(t2d, d2t)
+
+    # After loading: buffers match inputs
+    assert torch.equal(model.t2d, t2d), "t2d not loaded correctly"
+    assert torch.equal(model.d2t, d2t), "d2t not loaded correctly"
+
+
+def test_load_vocab_mappings_validation(draft_vocab_config, vocab_mappings):
+    """load_vocab_mappings raises on invalid inputs."""
+    t2d, d2t = vocab_mappings
+    model = Eagle3DraftModel(draft_vocab_config)
+
+    # Only one of t2d/d2t provided
+    with pytest.raises(ValueError, match="Both t2d and d2t must be provided"):
+        model.load_vocab_mappings(t2d, None)
+    with pytest.raises(ValueError, match="Both t2d and d2t must be provided"):
+        model.load_vocab_mappings(None, d2t)
+
+    # Wrong t2d shape
+    with pytest.raises(ValueError, match="t2d.shape"):
+        model.load_vocab_mappings(torch.ones(10, dtype=torch.bool), d2t)
+
+    # Wrong d2t shape
+    with pytest.raises(ValueError, match="d2t.shape"):
+        model.load_vocab_mappings(t2d, torch.zeros(10, dtype=torch.long))
+
+    # Wrong number of True values in t2d
+    bad_t2d = torch.ones(TINY_LLAMA_CONFIG.vocab_size, dtype=torch.bool)
+    with pytest.raises(ValueError, match="non-zero values"):
+        model.load_vocab_mappings(bad_t2d, d2t)
+
+
+def test_load_vocab_mappings_not_needed():
+    """load_vocab_mappings raises when vocab sizes match (no mapping needed)."""
+    config = _make_eagle3_config(draft_vocab_size=64)  # same as verifier
+    model = Eagle3DraftModel(config)
+    t2d, d2t = _make_vocab_mappings(verifier_vocab_size=64, draft_vocab_size=64)
+
+    with pytest.raises(RuntimeError, match="not needed"):
+        model.load_vocab_mappings(t2d, d2t)
+
+
+def test_from_training_args_loads_vocab_mappings(vocab_mappings):
+    """from_training_args passes t2d/d2t through to load_vocab_mappings."""
+    t2d, d2t = vocab_mappings
+
+    with patch.object(Eagle3DraftModel, "load_verifier_weights"):
+        model = Eagle3DraftModel.from_training_args(
+            verifier_config=copy.deepcopy(TINY_LLAMA_CONFIG),
+            t2d=t2d,
+            d2t=d2t,
+            draft_vocab_size=DRAFT_VOCAB_SIZE,
+            norm_before_residual=False,
+            ttt_steps=1,
+            verifier_name_or_path="dummy",
+        )
+
+    assert model.t2d is not None, "t2d is None after from_training_args"
+    assert model.d2t is not None, "d2t is None after from_training_args"
+    assert torch.equal(model.t2d, t2d), "t2d not loaded via from_training_args"
+    assert torch.equal(model.d2t, d2t), "d2t not loaded via from_training_args"
+
+
+def test_from_pretrained_loads_vocab_mappings_from_kwargs(
+    tmp_path, draft_vocab_config, vocab_mappings
+):
+    """from_pretrained loads t2d/d2t passed as kwargs."""
+    t2d, d2t = vocab_mappings
+
+    # Save a model without vocab mappings in the safetensors
+    model = Eagle3DraftModel(draft_vocab_config)
+    _fill_nan_weights(model)
+    model_dir = tmp_path / "pretrained_no_vocab"
+    model.save_pretrained(str(model_dir))
+
+    # Load with t2d/d2t passed as kwargs
+    with patch.object(Eagle3DraftModel, "load_verifier_weights"):
+        loaded = Eagle3DraftModel.from_pretrained(str(model_dir), t2d=t2d, d2t=d2t)
+
+    assert loaded.t2d is not None, "t2d is None after from_pretrained"
+    assert loaded.d2t is not None, "d2t is None after from_pretrained"
+    assert torch.equal(loaded.t2d, t2d), "t2d not loaded from kwargs in from_pretrained"
+    assert torch.equal(loaded.d2t, d2t), "d2t not loaded from kwargs in from_pretrained"
+
+
+def test_from_pretrained_loads_vocab_mappings_from_saved(
+    tmp_path, draft_vocab_config, vocab_mappings
+):
+    """from_pretrained loads t2d/d2t from saved safetensors when not passed
+    as kwargs."""
+    t2d, d2t = vocab_mappings
+
+    # Save model WITH vocab mappings loaded
+    model = Eagle3DraftModel(draft_vocab_config)
+    _fill_nan_weights(model)
+    model.load_vocab_mappings(t2d, d2t)
+    model_dir = tmp_path / "pretrained_with_vocab"
+    model.save_pretrained(str(model_dir))
+
+    # Verify t2d/d2t are in the saved safetensors
+    with safe_open(str(model_dir / "model.safetensors"), framework="pt") as f:
+        saved_keys = set(f.keys())
+    assert "t2d" in saved_keys, "t2d should be saved in safetensors"
+    assert "d2t" in saved_keys, "d2t should be saved in safetensors"
+
+    # Load WITHOUT passing t2d/d2t — should come from safetensors
+    with patch.object(Eagle3DraftModel, "load_verifier_weights"):
+        loaded = Eagle3DraftModel.from_pretrained(str(model_dir))
+
+    assert loaded.t2d is not None, "t2d is None after from_pretrained"
+    assert loaded.d2t is not None, "d2t is None after from_pretrained"
+    assert torch.equal(loaded.t2d, t2d), "t2d not loaded from saved safetensors"
+    assert torch.equal(loaded.d2t, d2t), "d2t not loaded from saved safetensors"
