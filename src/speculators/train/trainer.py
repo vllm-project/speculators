@@ -43,6 +43,8 @@ class TrainerConfig(NamedTuple):
     scheduler_warmup_steps: int | None = None
     scheduler_total_steps: int | None = None
     scheduler_num_cosine_cycles: float = 0.5
+    checkpoint_freq: int = 1
+    save_best: bool = False
 
 
 class Trainer:
@@ -86,6 +88,8 @@ class Trainer:
             root_logger.info("No previous checkpoint found. Starting from scratch.")
             self.current_epoch = 0
         self.global_step = 0
+        self.best_val_loss = float("inf")
+        self.best_epoch = None
 
     def setup_model(self):
         # Verify model is compatible with training infrastructure
@@ -209,7 +213,7 @@ class Trainer:
             self.global_step += 1
 
     @torch.no_grad()
-    def val_epoch(self, epoch: int):
+    def val_epoch(self, epoch: int) -> dict[str, float] | None:
         if self.val_loader is None:
             return
         self.model.eval()
@@ -244,6 +248,7 @@ class Trainer:
         metric_logger.info(
             {"val": val_metrics, "epoch": epoch}, extra={"step": self.global_step}
         )
+        return val_metrics
 
     def save_checkpoint(self, epoch: int):
         self.checkpointer.save_checkpoint(self.model, self.opt, epoch)
@@ -260,20 +265,41 @@ class Trainer:
             if self.is_distributed:
                 dist.barrier()
 
+            val_metrics = None
+
             if self.val_loader is None:
                 root_logger.warning("No val loader, skipping validation epoch")
             else:
                 root_logger.info(f"Validation epoch {epoch + 1}/{n_epochs} started")
-                self.val_epoch(epoch)
+                val_metrics = self.val_epoch(epoch)
                 root_logger.info(f"Validation epoch {epoch + 1}/{n_epochs} completed")
 
             if self.is_distributed:
                 dist.barrier()
 
-            root_logger.info(
-                f"Started saving checkpoint to {self.checkpointer.path / str(epoch)}"
-            )
-            self.save_checkpoint(epoch)
-            root_logger.info(
-                f"Finished saving checkpoint to {self.checkpointer.path / str(epoch)}"
-            )
+            should_save = False
+            if epoch == 0 or (epoch + 1) % self.config.checkpoint_freq == 0:
+                should_save = True
+
+            if should_save:
+                root_logger.info(
+                    f"Saving checkpoint to {self.checkpointer.path / str(epoch)}"
+                )
+                self.save_checkpoint(epoch)
+                root_logger.info(
+                    f"Checkpoint saved to {self.checkpointer.path / str(epoch)}"
+                )
+
+                if (
+                        self.config.save_best
+                        and val_metrics is not None
+                        and "loss_epoch" in val_metrics
+                        and val_metrics["loss_epoch"] < self.best_val_loss
+                ):
+                    self.best_val_loss = val_metrics["loss_epoch"]
+                    self.best_epoch = epoch
+                    self.checkpointer.update_best_symlink(epoch)
+                    root_logger.info(
+                        f"Updated checkpoint_best -> {epoch} "
+                        f"(loss_epoch={self.best_val_loss:.6f})"
+                    )

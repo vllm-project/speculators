@@ -1,6 +1,6 @@
 from abc import abstractmethod
 from pathlib import Path
-
+import shutil
 import torch
 import torch.distributed as dist
 import torch.utils._pytree as pytree
@@ -105,6 +105,21 @@ class BaseCheckpointer:
     def scheduler_path(self, epoch: int):
         scheduler_fname = "scheduler_state_dict.pt"
         return self.path / str(epoch) / scheduler_fname
+
+    def best_path(self) -> Path:
+        return self.path / "checkpoint_best"
+
+    def update_best_symlink(self, epoch: int):
+        best_path = self.best_path()
+        target = Path(str(epoch))  # relative symlink inside checkpoint root
+
+        if best_path.is_symlink() or best_path.exists():
+            if best_path.is_dir() and not best_path.is_symlink():
+                shutil.rmtree(best_path)
+            else:
+                best_path.unlink()
+
+        best_path.symlink_to(target, target_is_directory=True)
 
 
 def convert_float_dtype(sd: pytree.PyTree, dtype: torch.dtype) -> pytree.PyTree:
