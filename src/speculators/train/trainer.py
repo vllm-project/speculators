@@ -204,7 +204,7 @@ class Trainer:
         if hasattr(self.val_loader.batch_sampler, "set_epoch"):
             self.val_loader.batch_sampler.set_epoch(epoch)  # type: ignore[union-attr]
         val_loader = self.val_loader
-        if self.local_rank == 0:
+        if self.rank == 0:
             val_loader = tqdm(val_loader, desc=f"Epoch {epoch}")  # type: ignore[assignment]
 
         val_metrics: dict[str, float] = {}
