@@ -174,3 +174,10 @@ cython_debug/
 
 # Visual Studio Code
 .vscode/
+# IDE/editor
+.idea/
+*.iml
+
+# OS junk
+
+
