@@ -1,4 +1,6 @@
-# Eagle3 Model Production
+# Scripts
+
+## Eagle3 Model Production
 
 Speculators currently supports training of Eagle3 models. This functionality is available via the scripts in this directory.
 
@@ -11,6 +13,7 @@ Speculators currently supports training of Eagle3 models. This functionality is 
 
 - **[Data Generation](#data-generation)**<br>
   - **[Quick Start](#quick-start)**<br>
+  - **[Response Regeneration](#response-regeneration)**<br>
   - **[Advanced Usage](#advanced-usage)**<br>
   - **[Troubleshooting](#troubleshooting)**<br>
 - **[Vocab Mapping](#vocab-mapping)**<br>
@@ -44,6 +47,12 @@ python scripts/data_generation_offline.py \
 The script automatically uses the tokenizer's built-in chat template via `apply_chat_template`. It will use vllm to generate target model hidden states for the training data, and save them to disk alongside the input_ids and loss_mask tensors, as .pt files.
 
 For sample generated data, see: https://huggingface.co/datasets/nm-testing/sharegpt_llama3_8b_hidden_states
+
+### Response Regeneration
+
+The [response_regeneration/](/scripts/response_regeneration/) directory contains scripts for regenerating assistant responses in existing datasets using a vLLM-served model. Given a dataset containing user prompts (e.g., Magpie, UltraChat), the pipeline extracts the prompts, sends them to a vLLM server, and produces a new dataset with freshly generated responses from the target model. Regenerating responses with the target model can improve draft model performance, since the training data distribution better matches the target model's own outputs.
+
+See the [response_regeneration/README.md](/scripts/response_regeneration/README.md) for full usage details.
 
 ### Advanced Usage
 
@@ -112,7 +121,6 @@ Example file:
   },
   "format": {
     "file_pattern": "data_{idx}.pt",
-    "data_format_version": 1,
     "schema": {
       "input_ids": {
         "dtype": "torch.long",
@@ -253,7 +261,6 @@ The scripts has the following optional arguments:
 - `--no-resume-from-checkpoint`: If set, the script will not resume from the last checkpoint if it exists, and will instead start from scratch and overwrite existing checkpoints.
 - `--logger`: The logger to use. Defaults to empty string, which means no logging. Supported loggers are `trackio`, `wandb`, and `tensorboard`.
 - `--total-seq-len`: The total sequence length to use. Defaults to 8192.
-- `--data-format-version`: The version of the data format to use. Defaults to 1. The structure of the data to train on. `1` is the default and is the structure produced by Speculators generation scripts. `0` exists for backwards compatibility with the old data format.
 - `--log-dir`: The path to save the logs. Defaults to `./logs`.
 - `--run-name`: The name of the run. Defaults to None.
 - `--num-layers`: The number of layers to use. Defaults to 1.
@@ -274,7 +281,6 @@ torchrun --nnodes=1 --nproc_per_node=8 scripts/train.py \
     --no-resume-from-checkpoint \
     --logger "tensorboard" \
     --total-seq-len 8192 \
-    --data-format-version 1 \
     --log-dir "./logs/llama-3.1-8b.eagle3" \
     --run-name "llama-3.1-8b.eagle3" \
     --num-layers 1 \

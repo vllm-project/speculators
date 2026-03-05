@@ -77,7 +77,6 @@ class TestTrainvLLM:
             "verifier-name-or-path": MODEL_PATH,
             "data-path": local_dir,
             "save-path": SAVE_PATH,
-            "data-format-version": 1,
             "log-dir": str(tmp_path / "logs"),
             "d2t-path": str(tmp_path / "d2t.npy"),
             "t2d-path": str(tmp_path / "t2d.npy"),

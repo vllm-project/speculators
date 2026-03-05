@@ -22,6 +22,7 @@ Usage:
 """
 
 import enum
+import os
 import shutil
 import subprocess
 import sys
@@ -174,41 +175,28 @@ def print_block(title: str, content: str):
     print("\n", "#" * term_width, "\n", sep="")
 
 
-def npu_command(python_alt, command):
-    if is_npu_available():
-        if python_alt and python_alt.strip():
-            command = []
-            command.extend(python_alt.split())
-        else:
-            command = ["python"]
-    return command
-
-
 def run_script(
     script_name: str,
     script_args: list[str],
     requires: list[str],
-    python_alt: str | None = None,
+    python_alt: str = "python",
+    use_uv: bool = True,
 ):
-    command = [
-        "uv",
-        "run",
-        "--no-sync",
-        "--no-dev",
-        "--no-default-groups",
-        "--isolated",
-    ]
-    for package in requires[:1]:
-        command.append("--with-editable")
-        command.append(package)
-    for package in requires[1:]:
-        command.append("--with")
-        command.append(package)
+    command = []
+    if use_uv:
+        command = [
+            "uv",
+            "run",
+            "--no-sync",
+            "--no-dev",
+            "--no-default-groups",
+            "--isolated",
+        ]
+        for i, package in enumerate(requires):
+            command.append("--with-editable" if i == 0 else "--with")
+            command.append(package)
 
-    if python_alt:
-        command.extend(python_alt.split())
-
-    command = npu_command(python_alt, command)
+    command.extend(python_alt.split())
 
     script_path = (Path(__file__).parent / script_name).absolute()
     command.append(str(script_path))
@@ -265,39 +253,6 @@ def run_script(
         raise subprocess.CalledProcessError(process.returncode, command)
 
 
-def build_torchrun_command(
-    nproc_per_node=8,
-    nnodes=1,
-    node_rank=0,
-    master_addr=None,
-    master_port=12345,
-    **additional_args
-):
-    parts = [" torchrun"]
-    if nnodes == 1:
-        parts.append("--standalone")
-        parts.extend(["--nproc_per_node", str(nproc_per_node)])
-    elif nnodes > 1:
-        parts.extend(["--nnodes", str(nnodes)])
-        parts.extend(["--nproc_per_node", str(nproc_per_node)])
-        parts.extend(["--node_rank", str(node_rank)])
-        if master_addr:
-            parts.extend(["--master_addr", master_addr])
-            parts.extend(["--master_port", str(master_port)])
-
-    for key, value in additional_args.items():
-        if key.startswith("--"):
-            parts.append(key)
-            if value is not None and value != "":
-                parts.append(str(value))
-
-    command_result = " ".join(parts)
-    print_block(
-        f"Building TorchRun Command",
-        f"Command: {command_result}",
-    )
-    return command_result
-
 def run_e2e(
     verifier_name_or_path: str,
     output_path: str,
@@ -339,7 +294,12 @@ def run_e2e(
         dga_dict["output-dir"] = str(output_path / "gen" / dataset_name)
 
         dga_list = prepare_args(dga_dict)
-        run_script("data_generation_offline.py", dga_list, [".[datagen]"])
+        run_script(
+            "data_generation_offline.py",
+            dga_list,
+            [".[datagen]"],
+            use_uv=not is_npu_available(),
+        )
 
     # Combine token frequency files from all datasets into a single file.
     if num_datasets > 1:
@@ -358,7 +318,6 @@ def run_e2e(
         "verifier-name-or-path": verifier_name_or_path,
         "data-path": str(output_path / "gen"),
         "save-path": str(output_path / "checkpoints"),
-        "data-format-version": 1,
         "log-dir": str(output_path / "logs"),
     }
     if vocab_mapping_args is not None:
@@ -366,7 +325,12 @@ def run_e2e(
         vma_dict["token-freq-path"] = str(combined_token_freq_path)
         vma_dict["output-path"] = str(output_path / "vocab_mapping")
         vma_list = prepare_args(vma_dict)
-        run_script("build_vocab_mapping.py", vma_list, [".[datagen]"])
+        run_script(
+            "build_vocab_mapping.py",
+            vma_list,
+            [".[datagen]"],
+            use_uv=not is_npu_available(),
+        )
         ta_dict["d2t-path"] = str(output_path / "vocab_mapping" / "d2t.npy")
         ta_dict["t2d-path"] = str(output_path / "vocab_mapping" / "t2d.npy")
 
@@ -380,15 +344,14 @@ def run_e2e(
             loggers = loggers.split(",")
         loggers = [logger.strip() for logger in loggers]
         packages.extend(loggers)
-    #device_count = torch.accelerator.device_count()
+    device_count = torch.accelerator.device_count()
+
+    local_train_env = is_npu_available() or bool(os.environ.get("LOCAL_TRAIN_ENV", ""))
+
     run_script(
         "train.py",
         ta_list,
         packages,
-        #python_alt=f"torchrun --standalone --nproc_per_node={device_count}",
-        python_alt=build_torchrun_command(nproc_per_node=train_args.nproc_per_node,
-                               nnodes=train_args.nnodes,
-                               nprocs=train_args.nprocs,
-                               master_addr=train_args.master_addr,
-                               master_port=train_args.master_port,)
+        python_alt=f"torchrun --standalone --nproc_per_node={device_count}",
+        use_uv=not local_train_env,
     )

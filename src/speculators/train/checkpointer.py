@@ -14,6 +14,8 @@ from torch.distributed.checkpoint.state_dict import (
 )
 from transformers.modeling_utils import PreTrainedModel
 
+from speculators.utils.util import get_current_device
+
 
 class BaseCheckpointer:
     """Helper class to save and load checkpoints.
@@ -126,16 +128,10 @@ class SingleGPUCheckpointer(BaseCheckpointer):
     def load_model_state_dict(
         self, model: PreTrainedModel, float_dtype: torch.dtype | None = None
     ):
-        acc = torch.accelerator.current_accelerator()
-        if acc is None:
-            device = "cuda:0"
-        else:
-            acc_type = acc.type
-            device_idx = torch.accelerator.current_device_index()
-            device = f"{acc_type}:{device_idx}"
+        device = get_current_device()
         full_state_dict = load_safetensors_state_dict(
             self.model_path(self.previous_epoch),
-            device,  # todo: generalize
+            device,
         )
         full_state_dict = convert_float_dtype(
             full_state_dict, float_dtype or model.dtype
@@ -149,17 +145,11 @@ class SingleGPUCheckpointer(BaseCheckpointer):
         optimizer: torch.optim.Optimizer,
         float_dtype: torch.dtype | None = None,
     ):
-        acc = torch.accelerator.current_accelerator()
-        if acc is None:
-            device = "cuda:0"
-        else:
-            acc_type = acc.type
-            device_idx = torch.accelerator.current_device_index()
-            device = f"{acc_type}:{device_idx}"
+        device = get_current_device()
         full_state_dict = torch.load(
             self.optimizer_path(self.previous_epoch),
             weights_only=True,
-            map_location=device,  # todo: generalize
+            map_location=device,
         )
         full_state_dict = convert_float_dtype(
             full_state_dict, float_dtype or model.dtype
