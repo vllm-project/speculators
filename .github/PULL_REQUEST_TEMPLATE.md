@@ -2,7 +2,7 @@
 
 ## Purpose
 
-<!--- Summarize your changes -->
+<!--- High-level concise summary of changes -->
 
 ## Description
 
