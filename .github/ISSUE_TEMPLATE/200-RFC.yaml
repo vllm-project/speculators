@@ -19,23 +19,9 @@ body:
   attributes:
     label: Proposed Change.
     description: >
-      The proposed change of the RFC.
+      The proposed change of the RFC. This should be a clear and concise description of the changes from a high-level. Please do not just list every file that will be modified/added.
   validations:
     required: true
-- type: textarea
-  attributes:
-    label: Work Breakdown.
-    description: >
-      The work breakdown and implementation plan of the RFC.
-  validations:
-    required: true
-- type: textarea
-  attributes:
-    label: CC List.
-    description: >
-      The list of people you want to CC.
-  validations:
-    required: false
 - type: textarea
   attributes:
     label: Any Other Things.
