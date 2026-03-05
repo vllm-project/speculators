@@ -120,7 +120,7 @@ def create_transformer_layer_config(
     if hasattr(verifier_config, "text_config"):
         verifier_config = verifier_config.text_config
 
-    transformer_layer_config = config_class(
+    return config_class(
         vocab_size=verifier_config.vocab_size,
         hidden_size=verifier_config.hidden_size,
         intermediate_size=verifier_config.intermediate_size,
@@ -134,8 +134,6 @@ def create_transformer_layer_config(
         head_dim=getattr(verifier_config, "head_dim", None),
         tie_word_embeddings=False,
     )
-    transformer_layer_config._attn_implementation = "simple_flex_attention"  # noqa: SLF001
-    return transformer_layer_config
 
 
 def main(args: argparse.Namespace):
