@@ -274,7 +274,7 @@ def test_speculator_model_config_auto_registry():
     classes = SpeculatorModelConfig.registered_classes()
     class_names = [cls.__name__ for cls in classes]
     assert len(class_names) > 0
-    assert "EagleSpeculatorConfig" in class_names
+    assert "Eagle3SpeculatorConfig" in class_names
 
 
 @pytest.mark.smoke

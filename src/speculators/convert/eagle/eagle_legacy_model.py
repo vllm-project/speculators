@@ -55,28 +55,6 @@ class EagleSpeculatorConfig(SpeculatorModelConfig):
         - EAGLE1: layernorms=False, fusion_bias=False
         - EAGLE2: layernorms=False, fusion_bias=False
         - HASS: layernorms=False, fusion_bias=True
-
-    Example:
-        ```python
-        from speculators import SpeculatorsConfig, VerifierConfig
-        from speculators.models import EagleSpeculatorConfig
-        from speculators.proposals import GreedyTokenProposalConfig
-        from transformers import AutoConfig
-
-        config = EagleSpeculatorConfig(
-            transformer_layer_config=AutoConfig.from_pretrained("meta-llama/Llama-3.1-8B-Instruct"),
-            speculators_config=SpeculatorsConfig(
-                algorithm="eagle",
-                proposal_methods=[
-                    GreedyTokenProposalConfig(),
-                ],
-                default_proposal_method="greedy",
-                verifier=VerifierConfig(
-                    name_or_path="meta-llama/Llama-3.1-8B-Instruct",
-                    architectures=["LlamaForCausalLM"],
-                )
-        )
-        ```
     """
 
     speculators_model_type: Literal["eagle"] = "eagle"
@@ -210,31 +188,6 @@ class EagleSpeculator(SpeculatorModel):
         4. Verifier validates candidates and accepts/rejects based on probability
            thresholds
         5. Process continues iteratively for multi-token speculation
-
-    Example:
-        ```python
-        from speculators import SpeculatorsConfig, VerifierConfig
-        from speculators.models import EagleSpeculator, EagleSpeculatorConfig
-        from speculators.proposals import GreedyTokenProposalConfig
-        from transformers import AutoConfig, AutoTokenizer
-
-        config = EagleSpeculatorConfig(
-            transformer_layer_config=AutoConfig.from_pretrained("meta-llama/Llama-3.1-8B-Instruct"),
-            speculators_config=SpeculatorsConfig(
-                algorithm="eagle",
-                proposal_methods=[
-                    GreedyTokenProposalConfig(),
-                ],
-                default_proposal_method="greedy",
-                verifier=VerifierConfig(
-                    name_or_path="meta-llama/Llama-3.1-8B-Instruct",
-                    architectures=["LlamaForCausalLM"],
-                )
-        )
-        speculator = EagleSpeculator(
-            config, verifier=verifier, verifier_attachment_mode="full"
-        )
-        ```
     """
 
     # PreTrainedModel settings
