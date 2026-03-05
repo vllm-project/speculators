@@ -168,8 +168,15 @@ class Eagle3DraftModel(SpeculatorModel):
         "verifier_norm.weight",
     ]
 
+    t2d: torch.Tensor | None
+    d2t: torch.Tensor | None
+
     def __init__(self, config: Eagle3SpeculatorConfig):
+        # Forcibly override config settings
+        config.tie_word_embeddings = False
+        config.transformer_layer_config._attn_implementation = "simple_flex_attention"  # noqa: SLF001
         super().__init__(config=config)
+
         self.hidden_size = config.transformer_layer_config.hidden_size
         self.draft_vocab_size = config.draft_vocab_size
         self.verifier_vocab_size = config.transformer_layer_config.vocab_size
@@ -179,15 +186,13 @@ class Eagle3DraftModel(SpeculatorModel):
 
         # VOCAB MAPPINGS
         self.use_draft_vocab = self.draft_vocab_size != self.verifier_vocab_size
-        self.t2d: torch.Tensor | None = None
-        self.d2t: torch.Tensor | None = None
+        t2d: torch.Tensor | None = None
+        d2t: torch.Tensor | None = None
         if self.use_draft_vocab:
-            # Use NaNs as placeholder so that it's clear if these aren't updated
-            # todo(fynn): NaNs might not work with the dtypes here
-            self.t2d = torch.zeros((self.verifier_vocab_size,), dtype=torch.bool)
-            self.d2t = torch.zeros((self.draft_vocab_size,), dtype=torch.long)
-        self.register_buffer("t2d", self.t2d)
-        self.register_buffer("d2t", self.d2t)
+            t2d = torch.zeros((self.verifier_vocab_size,), dtype=torch.bool)
+            d2t = torch.zeros((self.draft_vocab_size,), dtype=torch.long)
+        self.register_buffer("t2d", t2d)
+        self.register_buffer("d2t", d2t)
 
         # FC LAYER
         self.fc = torch.nn.Linear(3 * self.hidden_size, self.hidden_size, bias=False)
