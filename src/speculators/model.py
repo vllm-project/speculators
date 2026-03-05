@@ -141,9 +141,6 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
                 "provided to load a SpeculatorModel."
             )
 
-        config.tie_word_embeddings = False
-        config.transformer_layer_config._attn_implementation = "simple_flex_attention"  # noqa: SLF001
-
         if cls is SpeculatorModel:
             # generic call to from_pretrained on this class, need to resolve the
             # specific model class to use for loading based on the config and registry
