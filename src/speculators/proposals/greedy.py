@@ -16,7 +16,7 @@ from typing import Literal
 
 from pydantic import Field
 
-from speculators.config import TokenProposalConfig
+from speculators.proposals.base import TokenProposalConfig
 
 __all__ = ["GreedyTokenProposalConfig"]
 

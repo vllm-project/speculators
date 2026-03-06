@@ -17,7 +17,7 @@ from speculators import (
     SpeculatorsConfig,
     TokenProposalConfig,
     VerifierConfig,
-    reload_and_populate_configs,
+    reload_schemas,
 )
 
 # ===== TokenProposalConfig Tests =====
@@ -30,7 +30,7 @@ class TokenProposalConfigTest(TokenProposalConfig):
 
 
 # Ensure the schemas are reloaded to include the test proposal type
-reload_and_populate_configs()
+reload_schemas()
 
 
 @pytest.mark.smoke
@@ -237,7 +237,7 @@ class SpeculatorModelConfigTest(SpeculatorModelConfig):
 
 
 # Ensure the schemas are reloaded to include the test proposal type
-reload_and_populate_configs()
+reload_schemas()
 
 
 @pytest.fixture
@@ -274,9 +274,7 @@ def test_speculator_model_config_auto_registry():
     classes = SpeculatorModelConfig.registered_classes()
     class_names = [cls.__name__ for cls in classes]
     assert len(class_names) > 0
-    assert "EagleSpeculatorConfig" in class_names
-    assert "IndependentSpeculatorConfig" in class_names
-    assert "MLPSpeculatorConfig" in class_names
+    assert "Eagle3SpeculatorConfig" in class_names
 
 
 @pytest.mark.smoke

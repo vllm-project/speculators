@@ -173,11 +173,7 @@ class Eagle3DraftModel(SpeculatorModel):
         t2d: torch.Tensor | None,
         d2t: torch.Tensor | None,
     ):
-        super().__init__(
-            config=config,
-            verifier=None,
-            verifier_attachment_mode="train_only",
-        )
+        super().__init__(config=config)
         self.hidden_size = config.transformer_layer_config.hidden_size
         self.draft_vocab_size = config.draft_vocab_size
 
