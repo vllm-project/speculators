@@ -43,7 +43,7 @@ def create_combined_mask_mod(lengths: torch.Tensor, total_seq_len: int, block_si
             document_ids[q_idx] == document_ids[kv_idx % total_seq_len],
         )
     def right_mask_mod(_b, _h, q_idx, kv_idx):
-        return kv_idx>total_seq_len 
+        return kv_idx>=total_seq_len 
     def diagonal_block_draft_mask_mod(_b, _h, q_idx, kv_idx):
         k = torch.remainder(kv_idx, total_seq_len)
         return (q_idx // block_size) == (k // block_size)
