@@ -188,12 +188,11 @@ class Trainer:
             if self.is_distributed:
                 for v in metrics.values():
                     dist.reduce(v, dst=0, op=dist.ReduceOp.AVG)
-            if self.rank == 0:
-                metrics = {k: v.item() for k, v in metrics.items()}
-                metric_logger.info(
-                    {"train": metrics, "epoch": epoch, "lr": current_lr, "global_step": self.global_step},
-                    extra={"step": self.global_step},
-                )
+            metrics = {k: v.item() for k, v in metrics.items()}
+            metric_logger.info(
+                {"train": metrics, "epoch": epoch, "lr": current_lr},
+                extra={"step": self.global_step},
+            )
             self.global_step += 1
 
     @torch.no_grad()
