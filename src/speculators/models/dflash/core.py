@@ -4,13 +4,13 @@ from typing import ClassVar
 
 import torch
 from torch.nn.attention.flex_attention import create_block_mask
-from transformers import DynamicCache
 
 from speculators.model import SpeculatorModel
 from speculators.models.dflash import DFlashSpeculatorConfig
 from speculators.models.dflash.attention import (
-    create_combined_mask_mod,
+    create_anchor_block_mask_mod
 )
+
 from speculators.utils.loading import load_model_layers
 from transformers.models.qwen3.modeling_qwen3 import (
     Qwen3RMSNorm,
@@ -24,6 +24,7 @@ from transformers.models.qwen3.modeling_qwen3 import (
 )
 
 
+
 @torch.no_grad()
 def compute_accuracy(
     logits: torch.Tensor,  # shape: [1, total_seq_len - ttt_step, draft_vocab_size]
@@ -32,7 +33,8 @@ def compute_accuracy(
     block_size:int =1,
 ):
     # Note: logits, targets, and loss_mask are already aligned for the current ttt_step
-    target_tokens = torch.argmax(targets, dim=-1)
+    # target_tokens = torch.argmax(targets, dim=-1)
+    target_tokens=targets
     predicted_tokens = torch.argmax(logits, dim=-1)
     correct = predicted_tokens == target_tokens
 
@@ -50,42 +52,93 @@ def compute_accuracy(
         return correct_sum / (full_denom + 1e-5)
     else: 
         return correct_sum / (full_denom + 1e-5), accs
-def loss_function(
-    logits: torch.Tensor,  # shape: [1, total_seq_len , draft_vocab_size]
-    targets: torch.Tensor,  # shape: [1, total_seq_len, draft_vocab_size]
-    loss_mask: torch.Tensor | None,  # shape: [1, total_seq_len]
-    block_size:int = 8,
-):
-    B, T, V = logits.shape
-    logits = torch.nn.functional.log_softmax(logits, dim=-1)
-    target_p = torch.nn.functional.softmax(targets, dim=-1)
+import torch
 
+def build_kv_position_ids(
+    base_position_ids: torch.Tensor,   # [B, total_seq_len]
+    anchor_positions: torch.Tensor,    # [B, n] or [n] (indices into base seq)
+    block_size: int,
+) -> torch.Tensor:
+    """
+    Construct position_ids for KV = [base | anchor_blocks].
 
-    elementwise_loss = torch.nn.functional.kl_div(
-        logits, target_p, reduction="none", log_target=False
-    )
-    gamma=4
+    Appended block for anchor a gets positions:
+        base_position_ids[..., a] + [0..block_size-1]
+    """
+    B, T = base_position_ids.shape
+    device = base_position_ids.device
 
-    t = torch.arange(T, device=logits.device)
-    k = t % block_size  # [T]
-    k-=1
-    w = torch.exp(-k.to(logits.dtype) / gamma)  # [T]
-
-    # broadcast to [B, T, 1]
-    w = w.view(1, T, 1)
-    loss_mask[:,::block_size]=0
-    elementwise_loss = elementwise_loss * w
-
-
-    if loss_mask is not None:
-        elementwise_loss = elementwise_loss * loss_mask.unsqueeze(-1)
-        denominator: torch.Tensor | int = loss_mask.sum(dim=1) + 1e-5
+    # Normalize anchor_positions to [B, n]
+    if anchor_positions.ndim == 1:
+        anchor_positions = anchor_positions.to(device=device, dtype=torch.long).unsqueeze(0).expand(B, -1)
+    elif anchor_positions.ndim == 2:
+        anchor_positions = anchor_positions.to(device=device, dtype=torch.long)
+        if anchor_positions.shape[0] != B:
+            raise ValueError(f"anchor_positions batch {anchor_positions.shape[0]} != {B}")
     else:
-        denominator = logits.shape[1]  # total_seq_len
-    batch_loss = torch.sum(elementwise_loss, dim=(1, 2)) / denominator
-    # shape: [1]
-    return batch_loss.mean()
+        raise ValueError(f"anchor_positions must be [n] or [B, n], got {anchor_positions.shape}")
 
+    n = anchor_positions.shape[1]
+
+    # Position id at each anchor: [B, n]
+    anchor_pos_ids = torch.gather(base_position_ids.to(torch.long), dim=1, index=anchor_positions)
+
+    # Offsets within each block: [1, 1, block_size]
+    offsets = torch.arange(block_size, device=device, dtype=torch.long).view(1, 1, block_size)
+
+    # [B, n, block_size] -> [B, n*block_size]
+    appended_pos_ids = (anchor_pos_ids.unsqueeze(-1) + offsets).reshape(B, n * block_size)
+
+    return torch.cat([base_position_ids.to(torch.long), appended_pos_ids], dim=1)
+
+
+
+
+def gather_anchor_spans(input_ids: torch.Tensor, anchor_positions: torch.Tensor, block_size: int) -> torch.Tensor:
+    """
+    input_ids: [T]
+    anchor_positions: [n] (positions into input_ids)
+    returns: [n*block_size] = input_ids[anchor_i + 0 .. anchor_i + block_size-1] concatenated
+    """
+    input_ids = input_ids.view(-1)
+    anchor_positions = anchor_positions.to(dtype=torch.long).view(-1)
+
+    offsets = torch.arange(block_size, device=input_ids.device, dtype=torch.long)  # [block_size]
+    idx = anchor_positions[:, None] + offsets[None, :]                              # [n, block_size]
+
+    if (idx < 0).any() or (idx >= input_ids.numel()).any():
+        raise ValueError("Some anchor_positions + offsets are out of range for input_ids.")
+
+    return input_ids[idx.reshape(-1)]
+
+def loss_function(logits, target_ids, loss_mask, block_size=8, gamma=4.0):
+    """
+    logits:     [B, T, V]  (draft vocab)
+    target_ids: [B, T]     (int64, in [0..V-1] or -100 for ignore)
+    loss_mask:  [B, T]     (0/1)
+    """
+    B, T, V = logits.shape
+
+    # per-token CE (no reduction yet)
+    ce = torch.nn.functional.cross_entropy(
+        logits.reshape(B * T, V),
+        target_ids.reshape(B * T),
+        reduction="none",
+        ignore_index=-100,
+    ).view(B, T)  # [B,T]
+
+    # aligned t -> original p=t+1 ; k = p % b (0 means anchor)
+    idx = torch.arange(T, device=logits.device)
+    k = (idx + 1) % block_size
+    w = torch.exp(-((k - 1).clamp(min=0)).to(logits.dtype) / gamma)
+    w = (w * (k != 0).to(logits.dtype)).view(1, T)  # anchors weight 0
+
+    m = loss_mask.to(logits.dtype).view(B, T)
+
+    ce = ce * w * m
+
+    denom = (m * w).sum(dim=1) + 1e-5
+    return (ce.sum(dim=1) / denom).mean()
 
 @torch.no_grad()
 def compute_acceptance_rate(
@@ -180,23 +233,23 @@ def compute_metrics(
     if block_size==1:
 
         s_full_acc=compute_accuracy(logits, targets, loss_mask, block_size)
-        s_accept_rate=compute_acceptance_rate(logits, targets, loss_mask, block_size)
+        # s_accept_rate=compute_acceptance_rate(logits, targets, loss_mask, block_size)
         s_metrics=0
         s_metrics = {}
         s_metrics[f"loss"] = s_loss.detach().clone()
         s_metrics[f"full_acc"] = s_full_acc
-        s_metrics[f"accept_rate"] = s_accept_rate
+        # s_metrics[f"accept_rate"] = s_accept_rate
     else:
         s_full_acc, per_position_acc=compute_accuracy(logits, targets, loss_mask, block_size)
-        s_accept_rate, per_position_accept=compute_acceptance_rate(logits, targets, loss_mask, block_size)
+        # s_accept_rate, per_position_accept=compute_acceptance_rate(logits, targets, loss_mask, block_size)
         s_metrics=0
         s_metrics = {}
         s_metrics[f"loss"] = s_loss.detach().clone()
         s_metrics[f"full_acc"] = s_full_acc
-        s_metrics[f"accept_rate"] = s_accept_rate
+        # s_metrics[f"accept_rate"] = s_accept_rate
         for pos in range(len(per_position_acc)):
             s_metrics[f"position {pos} acc"]=per_position_acc[pos]
-            s_metrics[f"position {pos} accept"]=per_position_accept[pos]
+            # s_metrics[f"position {pos} accept"]=per_position_accept[pos]
     return s_loss, s_metrics
 
 
@@ -209,7 +262,6 @@ from transformers.models.qwen3.modeling_qwen3 import (
     Qwen3RMSNorm,
     Qwen3RotaryEmbedding,
     Qwen3Config,
-    Qwen3PreTrainedModel,
     Qwen3MLP,
     GradientCheckpointingLayer,
     FlashAttentionKwargs,
@@ -360,6 +412,30 @@ class Qwen3DFlashDecoderLayer(GradientCheckpointingLayer):
         return hidden_states
 
 
+def _select_anchors(loss_mask: torch.Tensor, n: int, block_size: int) -> torch.Tensor:
+    if loss_mask.ndim != 2:
+        raise ValueError(f"Expected [B, T], got {loss_mask.shape}")
+
+    B, T = loss_mask.shape
+    valid_mask = loss_mask.bool().clone()
+
+    if block_size > 0:
+        valid_mask[:, T - block_size:] = False
+
+    out = []
+    for b in range(B):
+        valid_indices = torch.nonzero(valid_mask[b], as_tuple=False).squeeze(1)
+        if valid_indices.numel() < n:
+            # raise ValueError(f"Row {b} has only {valid_indices.numel()} valid positions, need {n}")
+            n=valid_indices.numel()
+        perm = torch.randperm(valid_indices.numel(), device=loss_mask.device)
+        out.append(valid_indices[perm[:n]])
+
+    return torch.stack(out, dim=0)
+    
+    
+
+
 @SpeculatorModel.register("dflash")
 class DFlashDraftModel(SpeculatorModel):
     config_class: ClassVar[type[DFlashSpeculatorConfig]] = DFlashSpeculatorConfig  # type: ignore[misc]
@@ -414,17 +490,18 @@ class DFlashDraftModel(SpeculatorModel):
             self.config.transformer_layer_config.hidden_size,
             padding_idx=getattr(self.config.transformer_layer_config, 'pad_token_id', None),
         )
+
         default_dtype = self.embed_tokens.weight.dtype
         embed_tokens_weight = verifier_weights["embed_tokens.weight"]
         self.embed_tokens.load_state_dict({"weight": embed_tokens_weight.to(dtype=default_dtype)})
-        self.embed_tokens.weight.requires_grad = False
+        self.embed_tokens.weight.requires_grad_(False)
         vocab_size=int(t2d.sum().item())
         # Use embed_tokens as fallback for lm_head if not found (tied weights)
         lm_head_weight = verifier_weights['lm_head.weight']
         
 
         self.lm_head = torch.nn.Linear(
-            self.config.transformer_layer_config.hidden_size, 32000, bias=False
+            self.config.transformer_layer_config.hidden_size, self.draft_vocab_size, bias=False
         )
         self.verifier_lm_head = torch.nn.Linear(
             self.config.transformer_layer_config.hidden_size, self.draft_vocab_size, bias=False
@@ -436,25 +513,16 @@ class DFlashDraftModel(SpeculatorModel):
         self.lm_head.weight.data = masked_lm_head_weight.detach().clone()
         self.verifier_lm_head.weight.data = masked_lm_head_weight.detach().clone()
         self.verifier_lm_head.weight.requires_grad = False
-
-
-
-
-
+        print("lm head shape", self.lm_head.weight.shape, flush=True)
+        self.lm_head.weight.requires_grad=False
         # Load tokenizer to get mask_token_id
         tokenizer = AutoTokenizer.from_pretrained(verifier_config.name_or_path)
-        # if tokenizer.mask_token_id is None:
-        #     tokenizer.add_special_tokens({"mask_token": "<|MASK|>"})
-        # self.mask_token_id = tokenizer.mask_token_id
+        if tokenizer.mask_token_id is None:
+            tokenizer.add_special_tokens({"mask_token": "<|MASK|>"})
+        self.mask_token_id = tokenizer.mask_token_id
 
+        print("mask token id:", self.mask_token_id, flush=True)
 
-        if tokenizer.pad_token_id is not None:
-            mask_token_id = tokenizer.pad_token_id
-        elif tokenizer.eos_token_id is not None:
-            mask_token_id = tokenizer.eos_token_id
-        else:
-            mask_token_id = 0
-        self.mask_token_id=mask_token_id
 
     # @torch.compile  # Temporarily disabled - compilation hangs
     def forward(
@@ -482,39 +550,49 @@ class DFlashDraftModel(SpeculatorModel):
         
         #past_key_values = DynamicCache(config=self.config.transformer_layer_config)
         past_key_values=None
+        anchor_positions=_select_anchors(loss_mask, 512, self.block_size)
+
 
         with torch.no_grad():
             padding=torch.sum(lengths)
-        combined_mask_mod = create_combined_mask_mod(lengths.to(device), total_seq_len, block_size=8, padding=padding)
-        # Note: Attention mask is stored as a BlockMask object
+        # combined_mask_mod = create_combined_mask_mod(lengths.to(device), total_seq_len, block_size=8, padding=padding)
+
+        mask_mod, q_len, kv_len = create_anchor_block_mask_mod(
+            lengths=lengths.to(device),
+            total_seq_len=total_seq_len,
+            anchor_positions=anchor_positions[0],
+            block_size=self.block_size,
+        )
 
         attention_mask = create_block_mask(
-            combined_mask_mod,
+            mask_mod,
             B=None,
             H=None,
-            Q_LEN=total_seq_len,
-            KV_LEN=total_seq_len*2,
+            Q_LEN=q_len,
+            KV_LEN=kv_len,
             device=device,
         )
 
-        
+        mask_tokens_size=self.block_size*len(anchor_positions[0])
 
-        mask_token_ids=torch.full((1, total_seq_len), self.mask_token_id, dtype=torch.long, device=device)
-        mask_token_ids[:, ::self.block_size] = input_ids[:, ::self.block_size]
-
+        mask_token_ids=torch.full((1,mask_tokens_size ), self.mask_token_id, dtype=torch.long, device=device)
+        mask_token_ids[:, ::self.block_size] = input_ids[:, anchor_positions[0]]
+        # print(mask_token_ids)
         noise_embedding=self.embed_tokens(mask_token_ids)
 
         fc_output = self.fc(hidden_states)
 
         fc_output = self.hidden_norm(fc_output)
 
-        position_ids=position_ids.repeat(1, 2)
-
+        position_ids = build_kv_position_ids(position_ids, anchor_positions, block_size=self.block_size)
         position_embeddings = self.rotary_emb(hidden_states, position_ids)
         return_loss = verifier_last_hidden_states is not None
         if return_loss:
-            with torch.no_grad():
-                targets = self.verifier_lm_head(verifier_last_hidden_states).detach()
+            # with torch.no_grad():
+            #     targets = self.verifier_lm_head(verifier_last_hidden_states).detach()
+            # targets=input_ids
+            targets=gather_anchor_spans( input_ids.clone(),anchor_positions,self.block_size).unsqueeze(0)
+
             loss = torch.tensor(0.0, device=device)
             metrics = {}
         tar_tok=torch.argmax(targets, dim=-1)
@@ -525,7 +603,7 @@ class DFlashDraftModel(SpeculatorModel):
                 hidden_states=noise_embedding,
                 target_hidden=fc_output,
                 attention_mask=attention_mask,
-                position_ids=position_ids,
+                position_ids=position_ids, 
                 past_key_value=past_key_values,
                 use_cache=False,  #FLAG MEGAN
                 position_embeddings=position_embeddings,
@@ -536,9 +614,15 @@ class DFlashDraftModel(SpeculatorModel):
         logits=self.lm_head(noise_embedding)
 
         if return_loss: 
-            aligned_logits = logits[:, 1:]                   
-            aligned_targets = targets[:, :-1]                  
-            aligned_loss_mask = loss_mask[:, 1:]
+            aligned_logits = logits#[:, 1:]                   
+            aligned_targets = targets#[:, :-1]        
+
+            aligned_loss_mask = gather_anchor_spans(loss_mask.clone(), anchor_positions[0],self.block_size).unsqueeze(0) #[:, 1:].clone()
+
+            b = self.block_size
+            anchor_aligned = (((torch.arange(aligned_logits.shape[1], device=device) ) % b) == 0)  # t=7,15,23,...
+
+            aligned_loss_mask[:, anchor_aligned] = 0    
             s_loss, s_metrics = compute_metrics(
                 aligned_logits,
                 aligned_targets,
@@ -548,12 +632,8 @@ class DFlashDraftModel(SpeculatorModel):
             loss += s_loss
             metrics.update(s_metrics)
         draft_tokens=torch.argmax(logits, dim=-1)
-
-
         if return_loss:
             metrics["loss"] = loss.detach().clone()
             return draft_tokens, loss, metrics
         else:
             return draft_tokens
-
-

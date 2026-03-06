@@ -219,6 +219,7 @@ def main(args: argparse.Namespace):
         is_distributed=is_distributed,
         local_rank=local_rank,
         train_call_kwargs=train_call_kwargs,
+        scheduler_type="cosine",
         val_call_kwargs=val_call_kwargs,
     )
     trainer = Trainer(draft_model, trainer_config, train_loader, val_loader)
