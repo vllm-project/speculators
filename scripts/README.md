@@ -266,6 +266,7 @@ The scripts has the following optional arguments:
 - `--num-layers`: The number of layers to use. Defaults to 1.
 - `--d2t-path`: The path to the d2t tensor. Defaults to `d2t.npy`.
 - `--t2d-path`: The path to the t2d tensor. Defaults to `t2d.npy`.
+- `--pretrained-model-path`: Path to a pretrained speculator model directory or HuggingFace Hub ID for warm-start/fine-tuning. When provided, d2t/t2d mappings, model config, and weights are loaded from this model. Overrides `--d2t-path` and `--t2d-path`.
 - `--ttt-steps`: The number of TTT steps to use. Defaults to 3.
 - `--ttt-step-loss-decay`: The loss decay factor to use for the TTT steps. Defaults to 1.0.
 
@@ -289,6 +290,26 @@ torchrun --nnodes=1 --nproc_per_node=8 scripts/train.py \
     --ttt-steps 3 \
     --ttt-step-loss-decay 1.0
 ```
+
+### Fine-tuning from Pretrained
+
+To fine-tune an existing speculator model (e.g., from HuggingFace Hub) on new domain-specific data:
+
+```bash
+python scripts/train.py \
+    --verifier-name-or-path meta-llama/Llama-3.1-8B-Instruct \
+    --pretrained-model-path RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3 \
+    --data-path ./new_domain_data \
+    --save-path ./checkpoints/finetuned \
+    --epochs 5 \
+    --lr 5e-5
+```
+
+When `--pretrained-model-path` is provided:
+- Vocabulary mappings (`d2t`/`t2d`) are automatically extracted from the pretrained model
+- The model architecture config is preserved from the pretrained model
+- Model weights are loaded for warm-start, while optimizer/scheduler states start fresh
+- `--d2t-path` and `--t2d-path` are not needed (and will be rejected if also specified)
 
 ## E2E Pipeline
 
