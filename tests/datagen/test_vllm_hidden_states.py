@@ -341,3 +341,75 @@ def test_batch_vs_individual_consistency(  # noqa: C901
         gc.collect()
         torch.cuda.empty_cache()
         time.sleep(1)
+
+
+@pytest.mark.regression
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@pytest.mark.parametrize(
+    ("model_path", "tensor_parallel_size"),
+    [
+        ("Qwen/Qwen2-0.5B", 1),
+    ],
+)
+def test_output_device_cuda_matches_cpu(model_path, tensor_parallel_size):
+    """Regression test for CUDA output_device transport and device placement."""
+    test_prompts = [
+        "Summarize why deterministic inference helps regression testing.",
+        "List two properties of stable API contracts.",
+    ]
+
+    tokenizer = AutoTokenizer.from_pretrained(model_path)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    input_ids = tokenizer(
+        test_prompts,
+        return_tensors="pt",
+        padding=True,
+        truncation=True,
+        max_length=1024,
+    )["input_ids"].tolist()
+
+    common_kwargs = dict(
+        model_path=model_path,
+        layer_ids=[2],
+        max_model_len=1024,
+        gpu_memory_utilization=0.3,
+        tensor_parallel_size=tensor_parallel_size,
+    )
+
+    cpu_generator = VllmHiddenStatesGenerator(output_device="cpu", **common_kwargs)
+    try:
+        cpu_results = cpu_generator.generate(input_ids)
+    finally:
+        del cpu_generator
+        gc.collect()
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+        time.sleep(1)
+
+    cuda_generator = VllmHiddenStatesGenerator(output_device="cuda:0", **common_kwargs)
+    try:
+        cuda_results = cuda_generator.generate(input_ids)
+    finally:
+        del cuda_generator
+        gc.collect()
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+        time.sleep(1)
+
+    assert len(cpu_results) == len(cuda_results)
+    for cpu_result, cuda_result in zip(cpu_results, cuda_results, strict=True):
+        assert cpu_result["input_ids"].device.type == "cpu"
+        assert cuda_result["input_ids"].device.type == "cuda"
+        assert torch.equal(cpu_result["input_ids"], cuda_result["input_ids"].cpu())
+
+        assert len(cpu_result["hidden_states"]) == len(cuda_result["hidden_states"])
+        for cpu_layer, cuda_layer in zip(
+            cpu_result["hidden_states"], cuda_result["hidden_states"], strict=True
+        ):
+            assert cpu_layer.device.type == "cpu"
+            assert cuda_layer.device.type == "cuda"
+            assert cpu_layer.shape == cuda_layer.shape
+            assert torch.allclose(
+                cpu_layer.float(), cuda_layer.cpu().float(), atol=1e-3, rtol=1e-3
+            )
