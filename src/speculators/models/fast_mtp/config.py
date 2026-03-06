@@ -15,27 +15,18 @@ __all__ = ["FastMTPConfig"]
 class FastMTPConfig(SpeculatorModelConfig):
     """Configuration for FastMTP (Multi-Token Prediction) speculator.
 
-    FastMTP predicts multiple future tokens per forward pass using a single layer
-    with weighted multi-step loss for training.
+    FastMTP predicts multiple future tokens per forward pass using a single MTP layer
+    with teacher-forced multi-step loss for training.
 
-    Architecture components:
-    - Single MTP layer with attention and MLP
-    - Input projection combines hidden states + token embeddings
-    - Shared lm_head with verifier model
-    - Multi-step prediction with step-wise loss weighting
+    Architecture: a single MTP layer with attention and MLP, combining verifier hidden
+    states with token embeddings via an explicit input projection. embed_tokens and
+    lm_head are shared with the verifier model.
 
-    :param transformer_config: Configuration for transformer architecture
-        (e.g., Qwen2Config)
-    :param num_speculative_steps: Number of future tokens to predict per forward pass
-    :param num_nextn_predict_layers: Number of MTP layers (currently only 1 supported)
-    :param mtp_loss_step_weights: Loss weights for each prediction step
-    :param hidden_size: Hidden dimension size
-    :param intermediate_size: FFN intermediate size
-    :param num_attention_heads: Number of attention heads
-    :param num_key_value_heads: Number of key-value heads for grouped query attention
-    :param vocab_size: Vocabulary size
-    :param max_position_embeddings: Maximum sequence length
-    :param rms_norm_eps: Epsilon for RMS normalization
+    :param transformer_layer_config: Configuration for the transformer architecture
+        (e.g., Qwen2Config). All architecture dimensions are derived from this.
+    :param num_nextn_predict_layers: Number of MTP prediction heads in the checkpoint.
+        vLLM reads this field directly to instantiate the correct number of MTP head
+        instances. Currently only 1 is supported.
     """
 
     speculators_model_type: Literal["mtp"] = "mtp"
@@ -44,64 +35,33 @@ class FastMTPConfig(SpeculatorModelConfig):
         description="Model architectures that can load these weights",
     )
 
-    transformer_config: PretrainedConfig = Field(
+    transformer_layer_config: PretrainedConfig = Field(
         default_factory=Qwen2Config,
-        description=(
-            "Configuration for the transformer architecture (e.g., Qwen2Config)"
-        ),
-    )
-
-    num_speculative_steps: int = Field(
-        default=3,
-        ge=1,
-        le=10,
-        description="Number of future tokens to predict per forward pass",
+        description="Configuration for the transformer architecture (e.g., Qwen2Config)",  # noqa: E501
     )
 
     num_nextn_predict_layers: int = Field(
         default=1,
-        description="Number of MTP layers (currently only 1 is supported)",
+        description=(
+            "Number of MTP prediction heads in the checkpoint. vLLM reads this "
+            "field to create the correct number of speculator head instances."
+        ),
     )
 
-    mtp_loss_step_weights: list[float] = Field(
-        default=[0.51, 0.31, 0.18],
-        description="Loss weights for each prediction step",
-    )
+    @property
+    def hidden_size(self) -> int:
+        """Hidden dimension size, derived from transformer_layer_config."""
+        return self.transformer_layer_config.hidden_size  # type: ignore[return-value]
 
-    hidden_size: int = Field(
-        default=4096,
-        description="Hidden dimension size",
-    )
+    @property
+    def vocab_size(self) -> int:
+        """Vocabulary size, derived from transformer_layer_config."""
+        return self.transformer_layer_config.vocab_size  # type: ignore[return-value]
 
-    intermediate_size: int = Field(
-        default=11008,
-        description="FFN intermediate size",
-    )
-
-    num_attention_heads: int = Field(
-        default=32,
-        description="Number of attention heads",
-    )
-
-    num_key_value_heads: int = Field(
-        default=8,
-        description="Number of key-value heads for grouped query attention",
-    )
-
-    vocab_size: int = Field(
-        default=151680,
-        description="Vocabulary size",
-    )
-
-    max_position_embeddings: int = Field(
-        default=32768,
-        description="Maximum sequence length",
-    )
-
-    rms_norm_eps: float = Field(
-        default=1e-6,
-        description="Epsilon for RMS normalization",
-    )
+    @property
+    def num_speculative_steps(self) -> int:
+        """Number of teacher-forced prediction steps, from the proposal config."""
+        return self.speculators_config.proposal_methods[0].speculative_tokens  # type: ignore[union-attr,attr-defined]
 
     @field_validator("num_nextn_predict_layers")
     @classmethod
@@ -114,51 +74,15 @@ class FastMTPConfig(SpeculatorModelConfig):
             )
         return value
 
-    @field_validator("mtp_loss_step_weights")
-    @classmethod
-    def validate_mtp_loss_step_weights(cls, value: list[float]) -> list[float]:
-        """Validate FastMTP loss step weights.
-
-        Weights should have length matching num_speculative_steps (validated in model),
-        all be non-negative, and sum to a reasonable value (warning if far from 1.0).
-
-        :param value: List of loss weights
-        :return: Validated weights
-        :raises ValueError: If weights are invalid
-        """
-        if not all(w >= 0 for w in value):
-            raise ValueError(
-                f"All FastMTP loss step weights must be non-negative, got {value}"
-            )
-
-        min_weight_sum = 0.1
-        max_weight_sum = 10.0
-        weight_sum = sum(value)
-        if not (min_weight_sum <= weight_sum <= max_weight_sum):
-            raise ValueError(
-                f"Sum of FastMTP loss step weights should be between 0.1 and 10.0, "
-                f"got {weight_sum:.2f}. Weights: {value}"
-            )
-
-        return value
-
-    @field_serializer("transformer_config")
-    def serialize_transformer_config(self, value: PretrainedConfig) -> dict:
-        """Serialize transformer_config to dict for JSON storage.
-
-        :param value: Transformer config object
-        :return: Dictionary representation
-        """
+    @field_serializer("transformer_layer_config")
+    def serialize_transformer_layer_config(self, value: PretrainedConfig) -> dict:
+        """Serialize transformer_layer_config to dict for JSON storage."""
         return value.to_diff_dict()
 
-    @field_validator("transformer_config", mode="before")
+    @field_validator("transformer_layer_config", mode="before")
     @classmethod
-    def validate_transformer_config(cls, value: Any) -> PretrainedConfig:
-        """Validate and convert transformer config.
-
-        :param value: Either a PretrainedConfig or dict
-        :return: PretrainedConfig object
-        """
+    def validate_transformer_layer_config(cls, value: Any) -> PretrainedConfig:
+        """Validate and convert transformer config from dict or PretrainedConfig."""
         if isinstance(value, dict):
             config_class: type[PretrainedConfig] = Qwen2Config
             if "model_type" in value:
