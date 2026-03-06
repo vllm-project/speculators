@@ -1,10 +1,9 @@
 import logging
 import os
-from typing import Any, Optional
+from typing import Any
 
 import torch
 import torch.distributed as dist
-
 
 local_rank = int(os.environ.get("LOCAL_RANK", "0"))
 world_size = int(os.environ.get("WORLD_SIZE", "1"))
@@ -14,27 +13,19 @@ logger = logging.getLogger("speculators")
 
 
 def get_draft_dp_group():
-    global _DRAFT_DP_GROUP
-    draft_dp_group = _DRAFT_DP_GROUP
-    return draft_dp_group
+    return _DRAFT_DP_GROUP
 
 
 def get_draft_sp_group():
-    global _DRAFT_SP_GROUP
-    draft_sp_group = _DRAFT_SP_GROUP
-    return draft_sp_group
+    return _DRAFT_SP_GROUP
 
 
 def get_sp_ulysses_group():
-    global _SP_ULYSSES_GROUP
-    sp_ulysses_group = _SP_ULYSSES_GROUP
-    return sp_ulysses_group
+    return _SP_ULYSSES_GROUP
 
 
 def get_sp_ring_group():
-    global _SP_RING_GROUP
-    sp_ring_group = _SP_RING_GROUP
-    return sp_ring_group
+    return _SP_RING_GROUP
 
 
 def maybe_setup_distributed_sp_ulysses(
@@ -66,12 +57,11 @@ def maybe_setup_distributed_sp_ulysses(
 
     rank = dist.get_rank()
     world_size = dist.get_world_size()
-    assert (
-        world_size % (sp_ulysses_size * sp_ring_size) == 0
-    ), (
-        f"World size ({world_size}) cannot be evenly divided by total SP size "
-        f"({sp_ulysses_size*sp_ring_size})"
-    )
+    if world_size % (sp_ulysses_size * sp_ring_size) != 0:
+        raise ValueError(
+            f"World size ({world_size}) cannot be evenly divided by total SP size "
+            f"({sp_ulysses_size * sp_ring_size})"
+        )
 
     draft_dp_size = world_size // (sp_ulysses_size * sp_ring_size)
     draft_device_mesh = dist.device_mesh.init_device_mesh(
@@ -84,9 +74,10 @@ def maybe_setup_distributed_sp_ulysses(
     sp_degree = sp_ring_degree * sp_ulysses_degree
     dp_degree = world_size // sp_degree
 
-    assert (
-        world_size % sp_degree == 0
-    ), f"world_size {world_size} % sp_degree {sp_ulysses_degree} == 0"
+    if world_size % sp_degree != 0:
+        raise ValueError(
+            f"world_size {world_size} % sp_degree {sp_ulysses_degree} == 0"
+        )
 
     num_ulysses_pgs = sp_ring_degree  # world_size // sp_ulysses_degree
     num_ring_pgs = sp_ulysses_degree  # world_size // sp_ring_degree
@@ -112,6 +103,7 @@ def maybe_setup_distributed_sp_ulysses(
     sp_ulysses_group = ulyssess_pg
     sp_ring_group = ring_pg
 
+    # Update module-level variables directly
     global _SP_RING_GROUP, _SP_ULYSSES_GROUP, _DRAFT_DP_GROUP, _DRAFT_SP_GROUP
     _SP_ULYSSES_GROUP = sp_ulysses_group
     _SP_RING_GROUP = sp_ring_group
@@ -123,6 +115,7 @@ def maybe_setup_distributed_sp_ulysses(
         extra={"override_rank0_filter": True},
     )
     return local_rank, world_size, rank, True
+
 
 def maybe_setup_distributed(
     enable_sp_ulysses: bool = False,
@@ -182,7 +175,7 @@ def maybe_destroy_distributed():
 
 def all_gather_tensor(
     local_tensor: torch.Tensor,
-    group: Optional[dist.ProcessGroup] = None,
+    group: dist.ProcessGroup | None = None,
     async_op: bool = False,
 ):
     sp_world_size = dist.get_world_size(group=group)
@@ -239,11 +232,12 @@ class Gather(torch.autograd.Function):
             None,
         )
 
+
 def gather_outputs_and_unpad(
     x: torch.Tensor,
     gather_dim: int,
     grad_scaler: bool = True,
-    group: Optional[dist.ProcessGroup] = None,
+    group: dist.ProcessGroup | None = None,
 ):
     """
     Gather a tensor across a process group and optionally unpad its padded
@@ -265,5 +259,4 @@ def gather_outputs_and_unpad(
         group = get_draft_sp_group()
     if torch.distributed.get_world_size(group) == 1:
         return x
-    x = Gather.apply(group, x, gather_dim, grad_scaler)
-    return x
+    return Gather.apply(group, x, gather_dim, grad_scaler)

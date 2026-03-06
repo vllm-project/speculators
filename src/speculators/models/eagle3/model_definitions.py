@@ -1,15 +1,12 @@
 # ruff: noqa: ERA001
-import copy
 import math
-from typing import Any, List, NamedTuple, Optional, Tuple
+from typing import Any, NamedTuple
 
 import torch
 import torch.distributed as dist
-import torch.nn as nn
-from torch import Tensor
+from torch import Tensor, nn
 from transformers import Cache, LlamaConfig
 from transformers.models.llama.modeling_llama import (
-    LlamaAttention,
     LlamaDecoderLayer,
     LlamaRMSNorm,
     LlamaRotaryEmbedding,
@@ -18,6 +15,7 @@ from transformers.processing_utils import Unpack
 from transformers.utils.generic import TransformersKwargs
 
 from speculators.train.distributed import get_sp_ring_group, get_sp_ulysses_group
+
 
 def all_to_all_4d(
     x: torch.tensor,
@@ -73,9 +71,7 @@ def all_to_all_4d(
         output = output.reshape(seqlen, bs, shard_hc, hs)
 
         # (seq_len, bs, hc/P, hs) -reshape-> (bs, seq_len, hc/P, hs)
-        output = output.transpose(0, 1).contiguous().reshape(bs, seqlen, shard_hc, hs)
-
-        return output
+        return output.transpose(0, 1).contiguous().reshape(bs, seqlen, shard_hc, hs)
 
     elif scatter_idx == 1 and gather_idx == 2:
         # input (torch.tensor): a tensor sharded along dim 1
@@ -113,9 +109,7 @@ def all_to_all_4d(
         output = output.reshape(hc, shard_seqlen, bs, hs)
 
         # (hc, seqlen/N, bs, hs) -tranpose(0,2)-> (bs, seqlen/N, hc, hs)
-        output = output.transpose(0, 2).contiguous().reshape(bs, shard_seqlen, hc, hs)
-
-        return output
+        return output.transpose(0, 2).contiguous().reshape(bs, shard_seqlen, hc, hs)
     else:
         raise RuntimeError("scatter_idx must be 1 or 2 and gather_idx must be 1 or 2")
 
@@ -125,7 +119,7 @@ class SeqAllToAll4D(torch.autograd.Function):
     def forward(
         ctx: Any,
         group: dist.ProcessGroup,
-        input: Tensor,
+        input_tensor: Tensor,
         scatter_idx: int,
         gather_idx: int,
         use_sync: bool = False,
@@ -134,10 +128,12 @@ class SeqAllToAll4D(torch.autograd.Function):
         ctx.scatter_idx = scatter_idx
         ctx.gather_idx = gather_idx
         ctx.use_sync = use_sync
-        return all_to_all_4d(input, scatter_idx, gather_idx, group=group, use_sync=use_sync)
+        return all_to_all_4d(
+            input_tensor, scatter_idx, gather_idx, group=group, use_sync=use_sync
+        )
 
     @staticmethod
-    def backward(ctx: Any, *grad_output: Tensor) -> Tuple[None, Tensor, None, None]:
+    def backward(ctx: Any, *grad_output: Tensor) -> tuple[None, Tensor, None, None]:
         return (
             None,
             SeqAllToAll4D.apply(
@@ -189,7 +185,6 @@ class LlamaDecoderEagle3FirstLayer(LlamaDecoderLayer):
         position_embeddings: tuple[torch.Tensor, torch.Tensor] | None = None,
         **kwargs: Unpack[TransformersKwargs],  # type: ignore[valid-type]
     ) -> torch.Tensor:
-
         # ##### Start of Eagle3 modifications #####
 
         # hidden_states are cat([embeds, hidden], dim=-1)
@@ -232,7 +227,7 @@ class LlamaDecoderEagle3FirstLayer(LlamaDecoderLayer):
         return hidden_states  # noqa: RET504
 
 
-def basic_extract_local(value, rank, world_size, *args, **kwargs):
+def basic_extract_local(value, rank, world_size, *_args, **_kwargs):
     return value.chunk(world_size, dim=1)[rank].detach().clone()
 
 
@@ -329,6 +324,7 @@ class NormLlamaRotaryEmbedding(torch.nn.Module):
             self.sin_cached[:, :, :seq_len, ...].to(dtype=x.dtype),
         )
 
+
 def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     """
     This is the equivalent of torch.repeat_interleave(x, dim=1, repeats=n_rep). The hidden states go from (batch,
@@ -368,9 +364,10 @@ class LlamaUSPFlashAttention(nn.Module):
 
     def __init__(self, config):
         super().__init__()
-        assert (
-            dist.is_initialized()
-        ), f"LlamaUSPAttention requires torch.distributed; call init_distributed first."
+        if not dist.is_initialized():
+            raise RuntimeError(
+                "LlamaUSPAttention requires torch.distributed; call init_distributed first."
+            )
         self.rank = torch.distributed.get_rank()
         self.ring_pg = get_sp_ring_group()
         self.ulysses_pg = get_sp_ulysses_group()
@@ -413,13 +410,13 @@ class LlamaUSPFlashAttention(nn.Module):
             max_position_embeddings=self.max_position_embeddings,
             base=getattr(self.config, "rope_theta", 10000),
         )
-    
+
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+        attention_mask: torch.Tensor | None = None,
+        position_ids: torch.LongTensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None, tuple[torch.Tensor] | None]:
         bsz, q_len, _ = hidden_states.size()  # bs, seq_len, hidden_size
         local_q_len = q_len
         query_states = self.q_proj(hidden_states)
@@ -458,7 +455,6 @@ class LlamaUSPFlashAttention(nn.Module):
         q_len = q_len * self.sp_ring_degree * self.sp_ulysses_degree
 
         if self.sp_ring_degree > 1:
-            
             # Standard RoPE: [bs, seq_len] -> split dim 1
             position_ids = position_ids.chunk(self.sp_ring_degree, dim=1)[
                 self.ring_rank
@@ -489,15 +485,14 @@ class LlamaUSPFlashAttention(nn.Module):
         attn_output = attn_output.reshape(
             bsz, local_q_len, self.head_dim * self.num_heads
         )
-        attn_output = self.o_proj(attn_output)
-        return attn_output
+        return self.o_proj(attn_output)
 
     def ring_attention_hybrid_masked(
         self,
         local_q: torch.Tensor,  # [1, H, Local_S, D]
         attention_mask: torch.Tensor,  # [1, 1, Global_S, Global_S] (global Mask)
-        cache_k: List[torch.Tensor],
-        cache_v: List[torch.Tensor],
+        cache_k: list[torch.Tensor],
+        cache_v: list[torch.Tensor],
     ):
         group = self.ring_pg
         rank = self.ring_rank
@@ -524,7 +519,9 @@ class LlamaUSPFlashAttention(nn.Module):
             (1, hidden_size, local_seq_len), device=local_q.device, dtype=torch.float32
         )
         acc = torch.zeros(
-            (1, hidden_size, local_seq_len, head_dim), device=local_q.device, dtype=torch.float32
+            (1, hidden_size, local_seq_len, head_dim),
+            device=local_q.device,
+            dtype=torch.float32,
         )
 
         # =============================================================
@@ -645,18 +642,16 @@ class NormLlamaDecoderLayer(LlamaDecoderLayer):
         self.post_attention_layernorm = LlamaRMSNorm(
             config.hidden_size, eps=config.rms_norm_eps
         )
-    
+
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[Cache] = None,
-        output_attentions: Optional[bool] = False,
-        use_cache: Optional[bool] = False,
-    ) -> Tuple[
-        torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]
-    ]:
+        attention_mask: torch.Tensor | None = None,
+        position_ids: torch.LongTensor | None = None,
+        past_key_values: Cache | None = None,
+        output_attentions: bool | None = False,
+        use_cache: bool | None = False,
+    ) -> tuple[torch.FloatTensor, tuple[torch.FloatTensor, torch.FloatTensor] | None]:
         """
         Args:
             hidden_states (`torch.FloatTensor`): input to the layer of shape `(batch, seq_len, embed_dim)`
@@ -679,7 +674,7 @@ class NormLlamaDecoderLayer(LlamaDecoderLayer):
         embeds = self.input_layernorm(embeds)
         hidden = self.hidden_norm(hidden)
         hidden_states = torch.cat([embeds, hidden], dim=-1)
-        
+
         # Self Attention
         hidden_states = self.self_attn(
             hidden_states=hidden_states,

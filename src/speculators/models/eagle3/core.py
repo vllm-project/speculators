@@ -2,7 +2,6 @@
 import copy
 import warnings
 from typing import ClassVar
-from typing import ClassVar, Optional
 
 import torch
 from torch.nn.attention.flex_attention import create_block_mask
@@ -17,8 +16,12 @@ from speculators.models.eagle3.attention import (
 )
 from speculators.models.eagle3.model_definitions import model_classes
 from speculators.proposals.greedy import GreedyTokenProposalConfig
+from speculators.train.distributed import (
+    gather_outputs_and_unpad,
+    get_sp_ring_group,
+    get_sp_ulysses_group,
+)
 from speculators.utils.loading import load_model_layers
-from speculators.train.distributed import get_sp_ring_group, get_sp_ulysses_group, gather_outputs_and_unpad
 
 
 def align_for_step(
@@ -153,6 +156,7 @@ def conditional_torch_compile(func):
     else:
         return func
 
+
 # Copied from transformers.models.bart.modeling_bart._make_causal_mask
 def _make_causal_mask(
     input_ids_shape: torch.Size,
@@ -184,9 +188,7 @@ def _make_causal_mask(
     )
 
 
-def _expand_mask(
-    mask: torch.Tensor, dtype: torch.dtype, tgt_len: Optional[int] = None
-):
+def _expand_mask(mask: torch.Tensor, dtype: torch.dtype, tgt_len: int | None = None):
     """
     Expands attention_mask from `[bsz, seq_len]` to
     `[bsz, 1, tgt_seq_len, src_seq_len]`.
@@ -201,6 +203,7 @@ def _expand_mask(
     return inverted_mask.masked_fill(
         inverted_mask.to(torch.bool), torch.finfo(dtype).min
     )
+
 
 @SpeculatorModel.register("eagle3")
 class Eagle3DraftModel(SpeculatorModel):
@@ -277,7 +280,6 @@ class Eagle3DraftModel(SpeculatorModel):
         )
         self.sp_world_size = self.sp_ring_degree * self.sp_ulysses_degree
         self.sp_rank = torch.distributed.get_rank() % self.sp_world_size
-
 
     def _setup_decoder_layers(
         self, transformer_layer_config: PretrainedConfig, norm_before_residual: bool
@@ -432,37 +434,35 @@ class Eagle3DraftModel(SpeculatorModel):
     def prepare_usp_input(self, full_input):
         if self.enable_sp_ulysses:
             return self.basic_extract_local(
-                        full_input,
-                        rank=self.sp_rank,
-                        world_size=self.sp_world_size,
-                    ).clone()
+                full_input,
+                rank=self.sp_rank,
+                world_size=self.sp_world_size,
+            ).clone()
         else:
             return full_input
 
     def prepare_decoder_attention_mask(
-            self, attention_mask, input_shape, inputs_embeds, past_key_values_length
-        ):
-            # create causal mask
-            # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
-            combined_attention_mask = None
-            if input_shape[-1] > 1:
-                combined_attention_mask = _make_causal_mask(
-                    input_shape,
-                    inputs_embeds.dtype,
-                    device=inputs_embeds.device,
-                    past_key_values_length=past_key_values_length,
-                )
-
-            expanded_attn_mask = _expand_mask(
-                attention_mask, inputs_embeds.dtype, tgt_len=input_shape[-1]
-            ).to(inputs_embeds.device)
-            combined_attention_mask = (
-                expanded_attn_mask
-                if combined_attention_mask is None
-                else expanded_attn_mask + combined_attention_mask
+        self, attention_mask, input_shape, inputs_embeds, past_key_values_length
+    ):
+        # create causal mask
+        # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
+        combined_attention_mask = None
+        if input_shape[-1] > 1:
+            combined_attention_mask = _make_causal_mask(
+                input_shape,
+                inputs_embeds.dtype,
+                device=inputs_embeds.device,
+                past_key_values_length=past_key_values_length,
             )
 
-            return combined_attention_mask
+        expanded_attn_mask = _expand_mask(
+            attention_mask, inputs_embeds.dtype, tgt_len=input_shape[-1]
+        ).to(inputs_embeds.device)
+        return (
+            expanded_attn_mask
+            if combined_attention_mask is None
+            else expanded_attn_mask + combined_attention_mask
+        )
 
     def sp_ulysses_forward(
         self,
@@ -521,7 +521,7 @@ class Eagle3DraftModel(SpeculatorModel):
                 else torch.ones(1, total_seq_len, device=device, dtype=torch.bool)
             )
             metrics = {}
-        
+
         hidden_states = self.prepare_usp_input(hidden_states)
         global_input_ids = input_ids
         draft_tokens = []
@@ -607,16 +607,18 @@ class Eagle3DraftModel(SpeculatorModel):
         **kwargs,
     ):
         if self.enable_sp_ulysses:
-            self.sp_ulysses_forward(hidden_states,
-                                    input_ids,
-                                    lengths,
-                                    loss_mask,
-                                    position_ids,
-                                    verifier_last_hidden_states,
-                                    ttt_steps,
-                                    ttt_step_loss_decay,
-                                    use_off_policy_tokens,
-                                    **kwargs,)
+            self.sp_ulysses_forward(
+                hidden_states,
+                input_ids,
+                lengths,
+                loss_mask,
+                position_ids,
+                verifier_last_hidden_states,
+                ttt_steps,
+                ttt_step_loss_decay,
+                use_off_policy_tokens,
+                **kwargs,
+            )
         device = hidden_states.device
         total_seq_len = hidden_states.shape[1]
 
