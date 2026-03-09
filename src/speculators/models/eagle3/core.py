@@ -359,7 +359,7 @@ class Eagle3DraftModel(SpeculatorModel):
         self.verifier_norm.weight.requires_grad = False
 
     @conditional_torch_compile
-    def forward(
+    def forward(  # noqa: C901
         self,
         hidden_states: torch.Tensor,  # shape: [1, total_seq_len, 3 * hidden_size]
         input_ids: torch.Tensor,  # shape: [1, total_seq_len]
