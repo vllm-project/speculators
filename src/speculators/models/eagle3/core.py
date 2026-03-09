@@ -161,6 +161,7 @@ class Eagle3DraftModel(SpeculatorModel):
         "verifier_lm_head.weight",
         "d2t",
         "t2d",
+        "input_norm.weight",
     ]
     _keys_to_ignore_on_save: ClassVar[list[str]] = [  # type: ignore[misc,assignment]
         "verifier_lm_head.weight",
@@ -210,6 +211,14 @@ class Eagle3DraftModel(SpeculatorModel):
         self._model_definitions = model_classes[
             config.transformer_layer_config.model_type
         ]
+        # Normalize draft path input (gpt-oss only); runs at train and inference so no distribution shift.
+        if config.norm_before_fc:
+            self.input_norm = self._model_definitions.norm_class(
+                3 * self.hidden_size,
+                eps=config.transformer_layer_config.rms_norm_eps,
+            )
+        else:
+            self.input_norm = None
         self._setup_decoder_layers(
             config.transformer_layer_config, config.norm_before_residual
         )
@@ -388,6 +397,8 @@ class Eagle3DraftModel(SpeculatorModel):
             device=device,
         )
 
+        if self.input_norm is not None:
+            hidden_states = self.input_norm(hidden_states)
         hidden_states = self.fc(hidden_states)
         # shape: [1, total_seq_len, hidden_size]
 
