@@ -211,7 +211,7 @@ class Eagle3DraftModel(SpeculatorModel):
         self._model_definitions = model_classes[
             config.transformer_layer_config.model_type
         ]
-        # Normalize draft path input (gpt-oss only); runs at train and inference so no distribution shift.
+        # Normalize draft path input (gpt-oss only)
         if config.norm_before_fc:
             self.input_norm = self._model_definitions.norm_class(
                 3 * self.hidden_size,
