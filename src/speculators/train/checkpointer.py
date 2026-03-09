@@ -109,6 +109,34 @@ class BaseCheckpointer:
     def best_path(self) -> Path:
         return self.path / "checkpoint_best"
 
+    def read_best_epoch(self) -> int | None:
+        """Return the epoch that `checkpoint_best` points to."""
+        best_path = self.best_path()
+        if not best_path.exists() or not best_path.is_symlink():
+            return None
+        try:
+            target = best_path.readlink()
+        except OSError:
+            return None
+        try:
+            return int(Path(target).name)
+        except ValueError:
+            return None
+
+    def load_model_state_dict_for_epoch(
+            self,
+            model: PreTrainedModel,
+            epoch: int,
+            float_dtype: torch.dtype | None = None
+    ):
+        """Temporarily load weights for a specific epoch."""
+        old_epoch = self.previous_epoch
+        try:
+            self.previous_epoch = epoch
+            self.load_model_state_dict(model, float_dtype=float_dtype)
+        finally:
+            self.previous_epoch = old_epoch
+
     def update_best_symlink(self, epoch: int):
         best_path = self.best_path()
         target = Path(str(epoch))  # relative symlink inside checkpoint root
@@ -121,6 +149,34 @@ class BaseCheckpointer:
 
         best_path.symlink_to(target, target_is_directory=True)
 
+    def cleanup_keep_only_best(self, best_epoch: int) -> None:
+        """
+        Delete all epoch dir. except best_epoch, and keep best_checkpoint symlink.
+        """
+        keep_dir = self.path / str(best_epoch)
+        best_link = self.best_path()
+
+        # Safety checks
+        if not keep_dir.exists() or not keep_dir.is_dir():
+            raise FileNotFoundError(f"Best epoch dir does not exist: {keep_dir}")
+
+        for child in self.path.iterdir():
+            # Keep the symlink itself
+            if child == best_link:
+                continue
+
+            # Keep the best epoch directory
+            if child == keep_dir:
+                continue
+
+            # Delete numbered epoch directories and any other stray dirs/files
+            try:
+                if child.is_symlink() or child.is_file():
+                    child.unlink()
+                elif child.is_dir():
+                    shutil.rmtree(child)
+            except (FileNotFoundError, PermissionError, OSError) as exc:
+                raise RuntimeError(f"Failed to delete {child}") from exc
 
 def convert_float_dtype(sd: pytree.PyTree, dtype: torch.dtype) -> pytree.PyTree:
     def convert_fn(x):

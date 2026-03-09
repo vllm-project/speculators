@@ -1,7 +1,7 @@
 import logging
 import warnings
 from typing import Literal, NamedTuple
-
+import math
 import torch
 import torch.distributed as dist
 from torch.distributed.checkpoint.state_dict import (
@@ -89,7 +89,6 @@ class Trainer:
             self.current_epoch = 0
         self.global_step = 0
         self.best_val_loss = float("inf")
-        self.best_epoch = None
 
     def setup_model(self):
         # Verify model is compatible with training infrastructure
@@ -129,6 +128,73 @@ class Trainer:
             )
             del full_state_dict
             dist.barrier()
+
+        if self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1:
+            self.init_best_val_loss_from_checkpoint_best()
+
+    def init_best_val_loss_from_checkpoint_best(self) -> None:
+        """
+        If resuming and checkpoint_best exists, initialize self.best_val_loss.
+        If checkpoint_best is missing or broken, keep best_val_loss as inf).
+        """
+        best_epoch = self.checkpointer.read_best_epoch()
+        if best_epoch is None:
+            return
+
+        if self.val_loader is None:
+            root_logger.warning(
+                f"Found checkpoint_best -> {best_epoch} but no val_loader; "
+                f"leaving best_val_loss=inf."
+            )
+            return
+
+        last_epoch = self.checkpointer.previous_epoch  # Epoch to resume from
+
+        root_logger.info(
+            f"Initializing best_val_loss from checkpoint_best -> {best_epoch} "
+            f"(will resume from epoch {last_epoch})"
+        )
+
+        self.checkpointer.load_model_state_dict_for_epoch(self.model, best_epoch)
+        val_metrics = self.val_epoch(best_epoch)
+
+        val_loss = None
+        if (
+            val_metrics is not None
+            and "loss_epoch" in val_metrics
+            and ((not self.is_distributed) or dist.get_rank() == 0)
+        ):
+            val_loss = float(val_metrics["loss_epoch"])
+
+        # Make all ranks agree on val_loss
+        if self.is_distributed:
+            device = (
+                torch.device("cuda", self.local_rank)
+                if torch.cuda.is_available()
+                else torch.device("cpu")
+            )
+            t = torch.tensor(
+                [val_loss if val_loss is not None else float("nan")], device=device)
+            dist.broadcast(t, src=0)
+            val_loss = float(t.item())
+
+            if math.isnan(val_loss):  # NaN is the only float where x != x
+                val_loss = None
+
+        if val_loss is None:
+            root_logger.warning(
+                f"Could not compute loss_epoch for checkpoint_best -> {best_epoch}; "
+                "leaving best_val_loss=inf."
+            )
+        else:
+            self.best_val_loss = val_loss
+            root_logger.info(
+                f"Restored best_val_loss={self.best_val_loss:.6f} "
+                f"from checkpoint_best -> {best_epoch}"
+            )
+
+        # Restore LAST weights so training resumes normally
+        self.checkpointer.load_model_state_dict_for_epoch(self.model, last_epoch)
 
     def setup_optimizer(self):
         # Setup optimizer
@@ -277,11 +343,25 @@ class Trainer:
             if self.is_distributed:
                 dist.barrier()
 
-            should_save = False
-            if epoch == 0 or (epoch + 1) % self.config.checkpoint_freq == 0:
-                should_save = True
+            if (
+                    self.config.save_best
+                    and val_metrics is not None
+                    and "loss_epoch" in val_metrics
+            ):
+                if val_metrics["loss_epoch"] < self.best_val_loss:
+                    self.best_val_loss = val_metrics["loss_epoch"]
+                    root_logger.info(f"Saving new best checkpoint at epoch {epoch} "
+                                     f"(loss_epoch={self.best_val_loss:.6f})")
+                    self.save_checkpoint(epoch)
+                    self.checkpointer.update_best_symlink(epoch)
+                    root_logger.info(
+                        f"Updated checkpoint_best -> {epoch} "
+                        f"(loss_epoch={self.best_val_loss:.6f})"
+                    )
+                    # Keep ONLY the best checkpoint folder + best_checkpoint symlink
+                    self.checkpointer.cleanup_keep_only_best(best_epoch=epoch)
 
-            if should_save:
+            elif epoch == 0 or (epoch + 1) % self.config.checkpoint_freq == 0:
                 root_logger.info(
                     f"Saving checkpoint to {self.checkpointer.path / str(epoch)}"
                 )
@@ -289,17 +369,19 @@ class Trainer:
                 root_logger.info(
                     f"Checkpoint saved to {self.checkpointer.path / str(epoch)}"
                 )
-
                 if (
-                        self.config.save_best
-                        and val_metrics is not None
+                        val_metrics is not None
                         and "loss_epoch" in val_metrics
                         and val_metrics["loss_epoch"] < self.best_val_loss
                 ):
                     self.best_val_loss = val_metrics["loss_epoch"]
-                    self.best_epoch = epoch
+                    root_logger.info(
+                        f"Updating new best checkpoint symlink at epoch {epoch} "
+                        f"(loss_epoch={self.best_val_loss:.6f})")
                     self.checkpointer.update_best_symlink(epoch)
                     root_logger.info(
                         f"Updated checkpoint_best -> {epoch} "
                         f"(loss_epoch={self.best_val_loss:.6f})"
                     )
+            if self.is_distributed:
+                dist.barrier()
