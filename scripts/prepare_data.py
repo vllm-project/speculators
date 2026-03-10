@@ -54,6 +54,7 @@ def parse_args():
     parser.add_argument(
         "--data",
         type=str,
+        action="append",
         required=True,
         help="Path to training data (same as used in preprocessing)",
     )
@@ -155,7 +156,7 @@ def main():
 
     dataset, _ = load_and_preprocess_dataset(
         target_model_path=args.model,
-        train_data_path=args.data,
+        train_data_paths=args.data,
         seq_length=args.seq_length,
         build_dataset_num_proc=args.num_preprocessing_workers,
         seed=args.seed,

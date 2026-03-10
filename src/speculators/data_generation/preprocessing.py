@@ -7,7 +7,7 @@ from typing import Any, cast
 
 import torch
 from datasets import Dataset as HFDataset
-from datasets import load_dataset
+from datasets import concatenate_datasets, load_dataset
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 from speculators.data_generation.configs import DATASET_CONFIGS
@@ -23,7 +23,7 @@ __all__ = [
 log = PipelineLogger(__name__)
 
 
-def _visualize_sample(_dataset, preprocessed, tokenizer, idx: int = 0):
+def _visualize_sample(preprocessed, tokenizer, idx: int = 0):
     """Visualize a single sample with color-coded trainable regions."""
     # Get preprocessed sample
     prep_sample = preprocessed[idx]
@@ -424,7 +424,7 @@ def load_raw_dataset(train_data_path: str, num_proc: int = 8) -> HFDataset:
 
 def load_and_preprocess_dataset(
     target_model_path: str,
-    train_data_path: str,
+    train_data_paths: list[str],
     seq_length: int,
     build_dataset_num_proc: int = 8,
     seed: int = 0,
@@ -458,7 +458,7 @@ def load_and_preprocess_dataset(
     """
     log.section("Starting dataset preprocessing")
 
-    log.subsection("Loading tokenizer and dataset")
+    log.subsection("Loading tokenizer")
     tokenizer = AutoTokenizer.from_pretrained(target_model_path, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -469,36 +469,47 @@ def load_and_preprocess_dataset(
             "Please use a model with a pre-configured chat template."
         )
 
-    raw_dataset = load_raw_dataset(train_data_path, num_proc=build_dataset_num_proc)
-    raw_dataset = raw_dataset.shuffle(seed=seed)
+    processed_datasets = []
+    for train_data_path in train_data_paths:
+        log.subsection(f"Processing {train_data_path}")
+        raw_dataset = load_raw_dataset(train_data_path, num_proc=build_dataset_num_proc)
+        # raw_dataset = raw_dataset.shuffle(seed=seed)
 
+        if max_samples is not None and len(raw_dataset) > 3 * max_samples:
+            # Reduce size to 3 * max_samples to reduce processing
+            # This will then be reduced further to max_samples
+            # after combining datasets and shuffling
+            raw_dataset = raw_dataset.select(range(3 * max_samples))
+
+        log.info(f"Loaded {len(raw_dataset)} samples")
+
+        if turn_dropout:
+            log.info("Turn dropout enabled: randomly keeping N consecutive turns")
+
+        preprocessed_dataset = build_eagle3_dataset(
+            dataset=raw_dataset,
+            tokenizer=tokenizer,
+            max_length=seq_length,
+            num_proc=build_dataset_num_proc,
+            assistant_pattern=assistant_pattern,
+            turn_dropout=turn_dropout,
+        )
+        processed_datasets.append(preprocessed_dataset)
+
+    combined_dataset = concatenate_datasets(processed_datasets)
+    combined_dataset.shuffle(seed=seed)
     if max_samples is not None and len(raw_dataset) > max_samples:
-        raw_dataset = raw_dataset.select(range(max_samples))
-
-    log.info(f"Loaded {len(raw_dataset)} samples")
-
-    log.subsection("Tokenizing and building dataset")
-    if turn_dropout:
-        log.info("Turn dropout enabled: randomly keeping N consecutive turns")
-
-    preprocessed_dataset = build_eagle3_dataset(
-        dataset=raw_dataset,
-        tokenizer=tokenizer,
-        max_length=seq_length,
-        num_proc=build_dataset_num_proc,
-        assistant_pattern=assistant_pattern,
-        turn_dropout=turn_dropout,
-    )
+        combined_dataset = combined_dataset.select(range(max_samples))
 
     log.subsection("Computing token frequency distribution")
     save_token_frequency_distribution(
-        dataset=preprocessed_dataset,
+        dataset=combined_dataset,
         output_path=token_freq_path,
     )
 
     log.subsection("Visualizing sample")
-    _visualize_sample(raw_dataset, preprocessed_dataset, tokenizer, idx=0)
+    _visualize_sample(combined_dataset, tokenizer, idx=0)
 
     log.section("Dataset preprocessing complete")
 
-    return preprocessed_dataset, tokenizer
+    return combined_dataset, tokenizer
