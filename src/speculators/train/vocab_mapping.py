@@ -15,8 +15,8 @@ __all__ = [
 
 def save_token_frequency_distribution(
     dataset: HFDataset,
-    output_path: str = "./token_freq.pt",
-) -> str:
+    output_path: Path | str = "./token_freq.pt",
+):
     """Save token frequency distribution from the dataset.
 
     Args:
@@ -28,7 +28,7 @@ def save_token_frequency_distribution(
     """
     path = Path(output_path)
     if path.exists():
-        return output_path
+        return
 
     token_freq: Counter[int] = Counter()
     for item in tqdm(dataset, desc="Counting token frequencies"):
@@ -43,8 +43,6 @@ def save_token_frequency_distribution(
     token_freq_dict = dict(token_freq)
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     torch.save(token_freq_dict, path)
-
-    return output_path
 
 
 def combine_token_frequency_distributions(

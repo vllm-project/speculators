@@ -1,5 +1,7 @@
 """Extract hidden states from intermediate layers during prefill using vLLM."""
 
+import warnings
+
 import torch
 from transformers import AutoConfig, AutoTokenizer
 from vllm.config import (
@@ -80,6 +82,12 @@ class VllmHiddenStatesGenerator:
         tensor_parallel_size: int = 1,
         max_num_batched_tokens: int | None = None,
     ):
+        warnings.warn(
+            "VllmHiddenStatesGenerator and the associated data_generation_offline.py"
+            " script are deprecatd and will be removed shortly.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.model_path = model_path
         self.tensor_parallel_size = tensor_parallel_size
         self._request_counter = 0
