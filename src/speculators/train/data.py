@@ -214,6 +214,7 @@ class Eagle3ArrowDataset(BaseEagle3Dataset):
         vllm_endpoint: str = "http://localhost:8000/v1",
         on_missing: Literal["generate", "skip", "warn", "raise"] = "generate",
         on_generate: Literal["cache", "delete"] = "delete",
+        split_ratio: float = 1.0,
         transform: TransformTensors | None = None,
         hidden_states_dtype=torch.float,
         model: str | None = None,
@@ -227,6 +228,19 @@ class Eagle3ArrowDataset(BaseEagle3Dataset):
             hidden_states_dtype: The dtype of the hidden states.
         """
         self.data = load_from_disk(datapath)
+        if split_ratio == 1.0:
+            pass
+        elif 1.0 > split_ratio > 0:
+            self.start_file_idx = 0
+            split_idx = int(len(self.data) * split_ratio)
+            self.data = self.data.select(range(split_idx))
+        elif -1.0 < split_ratio < 0:
+            split_idx = int(len(self.data) * (1.0 + split_ratio))
+            self.start_file_idx = split_idx
+            self.data = self.data.select(range(split_idx, len(self.data)))
+        else:
+            raise ValueError("split_ratio must be in range (-1.0, 1.0] excluding 0.0.")
+
         self.hidden_states_path: Path = (
             Path(datapath) / "hidden_states"
             if hidden_states_path is None
@@ -240,6 +254,9 @@ class Eagle3ArrowDataset(BaseEagle3Dataset):
 
         # Delay super init so that `_compute_approx_lengths` has required data
         super().__init__(max_len, transform, hidden_states_dtype)
+
+    def _map_to_file_idx(self, index: int):
+        return index + self.start_file_idx
 
     def _setup_client(self):
         # Delay client setup so it runs in dataloader thread if on_missing="generate"
@@ -262,7 +279,8 @@ class Eagle3ArrowDataset(BaseEagle3Dataset):
         return list(self.data.with_format(None)["seq_len"])
 
     def _maybe_load_hs_file(self, index: int) -> dict[str, torch.Tensor] | None:
-        candidate_path = self.hidden_states_path / f"hs_{index}.safetensors"
+        file_idx = self._map_to_file_idx(index)
+        candidate_path = self.hidden_states_path / f"hs_{file_idx}.safetensors"
         if candidate_path.exists():
             return load_file(candidate_path)
 
@@ -272,9 +290,9 @@ class Eagle3ArrowDataset(BaseEagle3Dataset):
         if not self.client:
             self._setup_client()
 
-        input_ids = self.data[index]["input_ids"]
+        input_ids = self.data[index]["input_ids"].tolist()
         try:
-            hs_filepath = generate_hidden_states(self.client, self.model, input_ids)
+            hs_filepath = generate_hidden_states(self.client, self.model, input_ids)  # type:ignore[arg-type]
         except InvalidResponseError as e:
             warnings.warn(str(e), stacklevel=1)
             return None
@@ -283,7 +301,8 @@ class Eagle3ArrowDataset(BaseEagle3Dataset):
 
         match self.on_generate:
             case "cache":
-                target_path = self.hidden_states_path / f"hs_{index}.safetensors"
+                file_idx = self._map_to_file_idx(index)
+                target_path = self.hidden_states_path / f"hs_{file_idx}.safetensors"
                 shutil.move(hs_filepath, target_path)
             case "delete":
                 Path(hs_filepath).unlink()
