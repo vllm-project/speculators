@@ -1,26 +1,32 @@
 #!/usr/bin/env python3
 """
-Offline EAGLE Training Data Generation Pipeline
+Prepare data for speculator training
 
-This script generates training data for EAGLE models by:
-1. Automatically preprocessing data if needed (or loading from cache)
-2. Using vLLM to extract hidden states from target model
-3. Saving each data point as a separate .pt file
+This script processes an input dataset and:
+1. Applies chat template + tokenizes each sample
+2. Produces a loss/assistant mask for each sample
+3. Records token frequency statistics
 
-Preprocessing is cached automatically by HuggingFace datasets.
-Token frequencies are saved in the current directory by default.
+The output of this script is:
+1. Processed dataset ready for online training or offline datagen in output_dir
+2. Token frequency statistics file at token_freq_path
+
+Preprocessing will be skipped if the dataset already exists at the output directory.
+Token frequencies are saved in the output directory by default.
 
 Usage:
-    python data_generation_offline.py \
-        --target-model-path meta-llama/Llama-3.1-8B-Instruct \
-        --train-data-path sharegpt \
-        --output-dir ./training_data \
-        --hf-cache-dir /path/to/cache \
+    python prepare_data.py \
+        --model meta-llama/Llama-3.1-8B-Instruct \
+        --data sharegpt \
+        --output ./training_data \
         --max-samples 5000
 """
 
 import argparse
+import glob
 import logging
+import sys
+from pathlib import Path
 
 from speculators.data_generation.logging_utils import PipelineLogger  # noqa: E402
 from speculators.data_generation.preprocessing import (  # noqa: E402
@@ -34,11 +40,11 @@ log = PipelineLogger(__name__)
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Generate EAGLE training data offline")
+    parser = argparse.ArgumentParser(description="Prepare data for speculator training")
 
     # Model arguments
     parser.add_argument(
-        "--target-model-path",
+        "--model",
         type=str,
         required=True,
         help="HuggingFace model ID or local path for target model",
@@ -46,7 +52,7 @@ def parse_args():
 
     # Data arguments
     parser.add_argument(
-        "--train-data-path",
+        "--data",
         type=str,
         required=True,
         help="Path to training data (same as used in preprocessing)",
@@ -66,17 +72,10 @@ def parse_args():
     parser.add_argument(
         "--token-freq-path",
         type=str,
-        default="./token_freq.pt",
-        help="Path to save token frequency distribution (default: ./token_freq.pt)",
-    )
-    parser.add_argument(
-        "--hf-cache-dir",
-        type=str,
         default=None,
         help=(
-            "Directory for HuggingFace datasets cache. "
-            "If not specified, uses HF_DATASETS_CACHE env var or default location. "
-            "(default: None)"
+            "Path to save token frequency distribution"
+            "(default: args.output / 'token_freq.pt')"
         ),
     )
     parser.add_argument(
@@ -99,7 +98,14 @@ def parse_args():
 
     # Output arguments
     parser.add_argument(
-        "--output-dir", type=str, required=True, help="Directory to save .pt files"
+        "--output", type=str, required=True, help="Directory to save output dataset"
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help=(
+            "Forcibly rerun `prepare_data.py`.Deletes existing content in output dir"
+        ),
     )
 
     # Processing arguments
@@ -121,27 +127,47 @@ def parse_args():
 def main():
     args = parse_args()
 
-    log.section("EAGLE Offline Data Generation")
+    log.section("Preparing data")
     log.config(
         {
-            "Target Model": args.target_model_path,
-            "Dataset": args.train_data_path,
-            "Output Dir": args.output_dir,
+            "Target Model": args.model,
+            "Dataset": args.data,
+            "Output Dir": args.output,
         }
     )
 
+    output = Path(args.output)
+    if output.exists():
+        if not args.overwrite and glob.glob(str(output / "*.arrow")):
+            log.warning(
+                "Dataset files already exists in output directory, skipping "
+                "preprocessing. To existing overwrite files use --overwrite."
+            )
+            sys.exit(0)
+    else:
+        output.mkdir(parents=True)
+
+    token_freq_path = (
+        output / "token_freq.pt"
+        if args.token_freq_path is None
+        else Path(args.token_freq_path)
+    )
+
     dataset, _ = load_and_preprocess_dataset(
-        target_model_path=args.target_model_path,
-        train_data_path=args.train_data_path,
+        target_model_path=args.model,
+        train_data_path=args.data,
         seq_length=args.seq_length,
         build_dataset_num_proc=args.num_preprocessing_workers,
         seed=args.seed,
         max_samples=args.max_samples,
-        token_freq_path=args.token_freq_path,
-        cache_dir=args.hf_cache_dir,
+        token_freq_path=token_freq_path,
         assistant_pattern=args.assistant_pattern,
         turn_dropout=args.turn_dropout,
     )
+
+    log.info("Done preparing data")
+    log.section(f"Writing dataset to {args.output}")
+    dataset.save_to_disk(args.output)
 
 
 if __name__ == "__main__":

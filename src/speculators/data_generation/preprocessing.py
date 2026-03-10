@@ -1,6 +1,7 @@
 import bisect
 import random
 import re
+from pathlib import Path
 from re import Pattern
 from typing import Any, cast
 
@@ -225,7 +226,7 @@ def _create_loss_mask_from_offsets(
     assistant_pattern: str | Pattern[str],
 ) -> torch.Tensor:
     """Create loss mask by finding assistant response spans in formatted text."""
-    loss_mask = torch.zeros(len(offsets), dtype=torch.long)
+    loss_mask = torch.zeros(len(offsets), dtype=torch.bool)
 
     matches_found = 0
     token_starts = [offset[0] for offset in offsets]
@@ -263,7 +264,7 @@ def _preprocess_batch(
 ) -> dict[str, list]:
     """Process a batch of conversations into tokenized format with loss masks."""
 
-    results: dict[str, list] = {"input_ids": [], "loss_mask": []}
+    results: dict[str, list] = {"input_ids": [], "loss_mask": [], "seq_len": []}
     conversations = examples.get("conversations", [])
 
     if not conversations:
@@ -339,6 +340,7 @@ def _preprocess_batch(
             # Append to results
             results["input_ids"].append(torch.tensor(input_ids, dtype=torch.long))
             results["loss_mask"].append(loss_mask)
+            results["seq_len"].append(len(input_ids))
 
         except (TypeError, ValueError, KeyError, AttributeError, RuntimeError) as e:
             log.error(
@@ -393,21 +395,17 @@ def build_eagle3_dataset(
         num_proc=num_proc,
         batch_size=1000,
         remove_columns=original_cols,
-        load_from_cache_file=True,
+        keep_in_memory=True,  # skip caching
     )
 
     dataset.set_format(type="torch")
     return dataset
 
 
-def load_raw_dataset(
-    train_data_path: str, num_proc: int = 8, cache_dir: str | None = None
-) -> HFDataset:
+def load_raw_dataset(train_data_path: str, num_proc: int = 8) -> HFDataset:
     """Load raw dataset from local file or HuggingFace."""
     if train_data_path.endswith((".jsonl", ".json")):
-        return load_dataset(
-            "json", data_files=train_data_path, split="train", cache_dir=cache_dir
-        )
+        return load_dataset("json", data_files=train_data_path, split="train")
 
     if train_data_path not in DATASET_CONFIGS:
         raise ValueError(
@@ -416,7 +414,7 @@ def load_raw_dataset(
         )
 
     config = DATASET_CONFIGS[train_data_path]
-    raw_dataset = load_dataset(config.hf_path, split=config.split, cache_dir=cache_dir)
+    raw_dataset = load_dataset(config.hf_path, split=config.split)
 
     if config.normalize_fn is not None:
         raw_dataset = raw_dataset.map(config.normalize_fn, num_proc=num_proc)
@@ -431,8 +429,7 @@ def load_and_preprocess_dataset(
     build_dataset_num_proc: int = 8,
     seed: int = 0,
     max_samples: int | None = None,
-    token_freq_path: str = "./token_freq.pt",  # noqa: S107
-    cache_dir: str | None = None,
+    token_freq_path: Path | str = "./token_freq.pt",  # noqa: S107
     assistant_pattern: str | None = None,
     turn_dropout: bool = False,
 ) -> tuple[HFDataset, PreTrainedTokenizer]:
@@ -472,9 +469,7 @@ def load_and_preprocess_dataset(
             "Please use a model with a pre-configured chat template."
         )
 
-    raw_dataset = load_raw_dataset(
-        train_data_path, num_proc=build_dataset_num_proc, cache_dir=cache_dir
-    )
+    raw_dataset = load_raw_dataset(train_data_path, num_proc=build_dataset_num_proc)
     raw_dataset = raw_dataset.shuffle(seed=seed)
 
     if max_samples is not None and len(raw_dataset) > max_samples:
@@ -483,8 +478,6 @@ def load_and_preprocess_dataset(
     log.info(f"Loaded {len(raw_dataset)} samples")
 
     log.subsection("Tokenizing and building dataset")
-    if cache_dir:
-        log.info(f"Preprocessed data will be cached at: {cache_dir}")
     if turn_dropout:
         log.info("Turn dropout enabled: randomly keeping N consecutive turns")
 
