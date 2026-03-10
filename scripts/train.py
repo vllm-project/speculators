@@ -46,7 +46,7 @@ def set_seed(seed: int, deterministic: bool = False):
 def setup_dataloader(
     file_list: list[str],
     world_size: int,
-    local_rank: int,
+    rank: int,
     add_noise: bool = True,
     noise_std: float = 0.05,
     num_workers: int = 12,
@@ -56,7 +56,7 @@ def setup_dataloader(
     Args:
         file_list: List of file paths to load data from.
         world_size: Number of processes in the distributed training.
-        local_rank: Rank of the current process.
+        rank: Global rank of the current process.
         add_noise: Whether to add noise to the data.
         noise_std: Standard deviation for noise augmentation.
         num_workers: Number of dataloader workers.
@@ -83,7 +83,7 @@ def setup_dataloader(
         batch_max_length=args.total_seq_len,
         lengths=dataset.approx_lengths,
         num_replicas=world_size,
-        rank=local_rank,
+        rank=rank,
     )
     return DataLoader(
         dataset,
