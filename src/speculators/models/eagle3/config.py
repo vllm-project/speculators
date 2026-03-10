@@ -55,6 +55,15 @@ class Eagle3SpeculatorConfig(SpeculatorModelConfig):
         description="Layer IDs of the Eagle auxiliary hidden state layers",
     )
 
+    norm_before_fc: bool = Field(
+        default=False,
+        description=(
+            "If True, vLLM will add and apply RMSNorm before the fc layer when loading "
+            "this draft model (e.g. for gpt-oss draft checkpoints). Set in config when "
+            "converting or saving gpt-oss draft models."
+        ),
+    )
+
     embed_requires_grad: bool = Field(
         default=False,
         description="Whether embedding layer weights require gradients during training",
