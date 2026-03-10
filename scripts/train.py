@@ -11,10 +11,11 @@ from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
 from speculators.model import SpeculatorModel
 from speculators.train.data import (
+    BaseEagle3Dataset,
+    Eagle3ArrowDataset,
     Eagle3SampleFileDataset,
     create_collate_fn,
     split_files,
-    standardize_data_v1,
 )
 from speculators.train.distributed_batch_sampler import (
     MultipackDistributedBatchSamplerV2,
@@ -44,14 +45,12 @@ def set_seed(seed: int, deterministic: bool = False):
 
 
 def setup_dataloader(
-    file_list: list[str],
+    dataset: BaseEagle3Dataset,
     world_size: int,
     local_rank: int,
-    add_noise: bool = True,
-    noise_std: float = 0.05,
+    hidden_size: int,
     num_workers: int = 12,
     prefetch_factor: int = 4,
-    hidden_states_dtype: torch.dtype = torch.bfloat16,
 ) -> DataLoader:
     """Setup dataloader for training.
     Args:
@@ -65,22 +64,6 @@ def setup_dataloader(
     Returns:
         DataLoader: Dataloader for training.
     """
-    if add_noise:
-        noise_transform = AddUniformNoise(
-            std=noise_std, tensors=("hidden_states", "verifier_last_hidden_states")
-        )
-    else:
-        noise_transform = None
-
-    standardize_fn = standardize_data_v1
-
-    dataset = Eagle3SampleFileDataset(
-        file_list=file_list,
-        max_len=args.total_seq_len,
-        transform=noise_transform,
-        standardize_fn=standardize_fn,
-        hidden_states_dtype=hidden_states_dtype,
-    )
     batch_sampler = MultipackDistributedBatchSamplerV2(
         batch_max_length=args.total_seq_len,
         lengths=dataset.approx_lengths,
@@ -93,7 +76,7 @@ def setup_dataloader(
         num_workers=num_workers,
         prefetch_factor=prefetch_factor,
         pin_memory=True,
-        collate_fn=create_collate_fn(args.total_seq_len),
+        collate_fn=create_collate_fn(args.total_seq_len, hidden_size),
         persistent_workers=True,
     )
 
@@ -203,26 +186,53 @@ def main(args: argparse.Namespace):
         )
 
     # Setup dataloaders
-    train_files, val_files = split_files(args.data_path, ratio=0.9)
+    noise_transform = AddUniformNoise(std=args.noise_std)
+    if args.legacy_data:
+        train_files, val_files = split_files(args.data_path, ratio=0.9)
+        train_dataset = Eagle3SampleFileDataset(
+            file_list=train_files, max_len=args.total_seq_len, transform=noise_transform
+        )
+        val_dataset = Eagle3SampleFileDataset(
+            file_list=val_files, max_len=args.total_seq_len
+        )
+    else:
+        train_dataset = Eagle3ArrowDataset(
+            datapath=args.data_path,
+            max_len=args.total_seq_len,
+            hidden_states_path=args.hidden_states_path,
+            vllm_endpoint=args.vllm_endpoint,
+            on_missing=args.on_missing,
+            on_generate=args.on_generate,
+            transform=noise_transform,
+            split_ratio=0.9,
+            model=args.verifier_name_or_path,
+        )
+        val_dataset = Eagle3ArrowDataset(
+            datapath=args.data_path,
+            max_len=args.total_seq_len,
+            hidden_states_path=args.hidden_states_path,
+            vllm_endpoint=args.vllm_endpoint,
+            on_missing=args.on_missing,
+            on_generate=args.on_generate,
+            split_ratio=-0.1,
+            model=args.verifier_name_or_path,
+        )
+
     train_loader = setup_dataloader(
-        train_files,
+        train_dataset,
         world_size,
         local_rank,
-        add_noise=True,
-        noise_std=args.noise_std,
+        transformer_layer_config.hidden_size,
         num_workers=args.num_workers,
         prefetch_factor=args.prefetch_factor,
-        hidden_states_dtype=hidden_states_dtype,
     )
     val_loader = setup_dataloader(
-        val_files,
+        val_dataset,
         world_size,
         local_rank,
-        add_noise=False,
-        noise_std=args.noise_std,
+        transformer_layer_config.hidden_size,
         num_workers=args.num_workers,
         prefetch_factor=args.prefetch_factor,
-        hidden_states_dtype=hidden_states_dtype,
     )
 
     # Get trainer kwargs from model class
@@ -277,6 +287,15 @@ def parse_args():
         help="The pretrained draft model to finetune",
     )
     parser.add_argument("--data-path", type=str, default="./data")
+    parser.add_argument("--hidden-states-path", type=str, default=None)
+    parser.add_argument("--vllm-endpoint", type=str, default="http://localhost:8000/v1")
+    parser.add_argument(
+        "--on-missing",
+        choices=["generate", "skip", "warn", "raise"],
+        default="generate",
+    )
+    parser.add_argument("--on-generate", choices=["cache", "delete"], default="delete")
+    parser.add_argument("--legacy-data", action="store_true")
     parser.add_argument("--save-path", type=str, default="./checkpoints")
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--lr", type=float, default=1e-4)
