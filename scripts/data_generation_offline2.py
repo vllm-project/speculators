@@ -39,7 +39,7 @@ def parse_args():
         type=str,
         default=None,
         help=(
-            "HuggingFace model ID or local path for target model (default auto select). "
+            "HuggingFace model ID or local path for target model (default auto select)."
             "For verification purposes only."
         ),
     )
@@ -73,7 +73,10 @@ def parse_args():
         "--output",
         type=str,
         default=None,
-        help="Directory to generated hidden states files (default args.preprocessed_data / 'hidden_states')",
+        help=(
+            "Directory to generated hidden states files "
+            "(default args.preprocessed_data / 'hidden_states')"
+        ),
     )
 
     # Hidden states generation arguments

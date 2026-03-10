@@ -9,7 +9,9 @@ import pytest
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from speculators.data_generation import VllmHiddenStatesGenerator
+from speculators.data_generation.vllm_hidden_states_generator import (
+    VllmHiddenStatesGenerator,
+)
 
 logger = logging.getLogger(__name__)
 
