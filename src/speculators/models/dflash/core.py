@@ -48,10 +48,8 @@ def compute_accuracy(
         correct = torch.masked_select(correct, loss_mask.to(torch.bool))
     correct_sum = correct.float().sum()
     full_denom = correct.numel()
-    if block_size==1:
-        return correct_sum / (full_denom + 1e-5)
-    else: 
-        return correct_sum / (full_denom + 1e-5), accs
+    
+    return correct_sum / (full_denom + 1e-5), accs
 import torch
 
 def build_kv_position_ids(
@@ -230,26 +228,17 @@ def compute_metrics(
         Loss value and metrics dictionary.
     """
     s_loss = loss_function(logits, targets, loss_mask)
-    if block_size==1:
 
-        s_full_acc=compute_accuracy(logits, targets, loss_mask, block_size)
-        # s_accept_rate=compute_acceptance_rate(logits, targets, loss_mask, block_size)
-        s_metrics=0
-        s_metrics = {}
-        s_metrics[f"loss"] = s_loss.detach().clone()
-        s_metrics[f"full_acc"] = s_full_acc
-        # s_metrics[f"accept_rate"] = s_accept_rate
-    else:
-        s_full_acc, per_position_acc=compute_accuracy(logits, targets, loss_mask, block_size)
-        # s_accept_rate, per_position_accept=compute_acceptance_rate(logits, targets, loss_mask, block_size)
-        s_metrics=0
-        s_metrics = {}
-        s_metrics[f"loss"] = s_loss.detach().clone()
-        s_metrics[f"full_acc"] = s_full_acc
-        # s_metrics[f"accept_rate"] = s_accept_rate
-        for pos in range(len(per_position_acc)):
-            s_metrics[f"position {pos} acc"]=per_position_acc[pos]
-            # s_metrics[f"position {pos} accept"]=per_position_accept[pos]
+    s_full_acc, per_position_acc=compute_accuracy(logits, targets, loss_mask, block_size)
+    # s_accept_rate, per_position_accept=compute_acceptance_rate(logits, targets, loss_mask, block_size)
+    s_metrics=0
+    s_metrics = {}
+    s_metrics[f"loss"] = s_loss.detach().clone()
+    s_metrics[f"full_acc"] = s_full_acc
+    # s_metrics[f"accept_rate"] = s_accept_rate
+    for pos in range(len(per_position_acc)):
+        s_metrics[f"position {pos} acc"]=per_position_acc[pos]
+        # s_metrics[f"position {pos} accept"]=per_position_accept[pos]
     return s_loss, s_metrics
 
 
@@ -550,11 +539,10 @@ class DFlashDraftModel(SpeculatorModel):
         
         #past_key_values = DynamicCache(config=self.config.transformer_layer_config)
         past_key_values=None
-        anchor_positions=_select_anchors(loss_mask, 512, self.block_size)
+        anchor_positions=_select_anchors(loss_mask, 256, self.block_size)
 
 
-        with torch.no_grad():
-            padding=torch.sum(lengths)
+
         # combined_mask_mod = create_combined_mask_mod(lengths.to(device), total_seq_len, block_size=8, padding=padding)
 
         mask_mod, q_len, kv_len = create_anchor_block_mask_mod(
@@ -579,7 +567,7 @@ class DFlashDraftModel(SpeculatorModel):
         mask_token_ids[:, ::self.block_size] = input_ids[:, anchor_positions[0]]
         # print(mask_token_ids)
         noise_embedding=self.embed_tokens(mask_token_ids)
-
+        print("equal size", hidden_states.shape, self.fc.weight.shape, flush=True)
         fc_output = self.fc(hidden_states)
 
         fc_output = self.hidden_norm(fc_output)
