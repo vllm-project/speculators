@@ -8,6 +8,7 @@ research repositories:
 - EAGLE2
 - EAGLE3
 - HASS
+- MTP (FastMTP — Qwen3-Next / TencentBAC MiMo)
 
 Functions:
     convert_model: Converts a model checkpoint to the Speculators format.
@@ -17,6 +18,7 @@ from typing import Literal
 
 from speculators.convert.eagle.eagle3_converter import Eagle3Converter
 from speculators.convert.eagle.eagle_converter import EagleConverter
+from speculators.convert.fast_mtp.converter import FastMTPConverter
 
 __all__ = ["convert_model"]
 
@@ -24,7 +26,7 @@ __all__ = ["convert_model"]
 def convert_model(
     model: str,
     verifier: str,
-    algorithm: Literal["eagle", "eagle3"],
+    algorithm: Literal["eagle", "eagle3", "mtp"],
     output_path: str = "converted",
     validate_device: str | None = None,
     **kwargs,
@@ -69,15 +71,25 @@ def convert_model(
             norm_before_residual=True,
         )
 
+    algorithm=="mtp":
+        FastMTP (Qwen3-Next / TencentBAC MiMo): https://arxiv.org/abs/2509.18362
+        ::
+        convert_model(
+            model="Qwen/Qwen3-Next-80B-A3B-Instruct",
+            verifier="Qwen/Qwen3-Next-80B-A3B-Instruct",
+            algorithm="mtp",
+        )
+
     :param model: Path to the input model checkpoint or Hugging Face model ID.
     :param verifier: Verifier model checkpoint or Hugging Face model ID
         to attach as the verification/base model for speculative decoding
-    :param algorithm: The conversion algorithm to use, either "eagle" or "eagle3".
+    :param algorithm: The conversion algorithm to use: "eagle", "eagle3", or "mtp".
     :param output_path: Directory path where the converted model will be saved.
     :param kwargs: Additional keyword arguments for the conversion algorithm.
         Options for Eagle: {"layernorms": true, "fusion_bias": true}.
         Options for Eagle3: {"norm_before_residual": true,
         "eagle_aux_hidden_state_layer_ids": [1,23,44]}.
+        Options for MTP: {"num_speculative_steps": 3}.
     """
 
     if algorithm == "eagle":
@@ -90,6 +102,14 @@ def convert_model(
         )
     elif algorithm == "eagle3":
         Eagle3Converter().convert(
+            model,
+            output_path,
+            verifier,
+            validate=validate_device is not None,
+            **kwargs,
+        )
+    elif algorithm == "mtp":
+        FastMTPConverter().convert(
             model,
             output_path,
             verifier,

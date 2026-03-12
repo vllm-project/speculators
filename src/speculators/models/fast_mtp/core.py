@@ -49,7 +49,7 @@ class FastMTPSpeculator(SpeculatorModel):
         self._setup_embeddings_and_lm_head()
 
     def _setup_embeddings_and_lm_head(self) -> None:
-        """Overwrite embed_tokens and lm_head from the verifier checkpoint if configured."""
+        """Overwrite embed_tokens and lm_head from the verifier if configured."""
         if (
             self.config.speculators_config is None
             or self.config.speculators_config.verifier is None
