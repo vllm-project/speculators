@@ -1,5 +1,7 @@
 """Extract hidden states from intermediate layers during prefill using vLLM."""
 
+import uuid
+
 import torch
 from transformers import AutoConfig, AutoTokenizer
 from vllm.config import (
@@ -27,6 +29,7 @@ from vllm.v1.structured_output import StructuredOutputManager
 
 from speculators.utils.util import empty_cache, is_npu_available, mem_get_info
 
+from .cuda_ipc import CudaIpcImporter
 from .logging_utils import PipelineLogger
 
 __all__ = ["VllmHiddenStatesGenerator"]
@@ -79,10 +82,17 @@ class VllmHiddenStatesGenerator:
         gpu_memory_utilization: float = 0.8,
         tensor_parallel_size: int = 1,
         max_num_batched_tokens: int | None = None,
+        max_num_seqs: int = MAX_NUM_SEQS,
+        max_batched_tokens: int = MIN_MAX_BATCHED_TOKENS,
+        output_device: str = "cpu",
     ):
         self.model_path = model_path
         self.tensor_parallel_size = tensor_parallel_size
         self._request_counter = 0
+        self.max_num_seqs = max_num_seqs
+        self.max_batched_tokens = max_batched_tokens
+        self.output_device = output_device
+        self._use_torch_cuda_ipc = torch.device(output_device).type == "cuda"
 
         log.info(f"Initializing hidden states generator for {model_path}")
         log.info(f"Tensor parallel size: {tensor_parallel_size}")
@@ -194,9 +204,9 @@ class VllmHiddenStatesGenerator:
         # to reduce warmup memory allocation. max_num_seqs controls the
         # warmup allocation size (see gpu_worker.py:441-444).
         # We set it to a small value since we only do prefill in batches.
-        max_num_seqs = MAX_NUM_SEQS
+        max_num_seqs = self.max_num_seqs
         if not max_num_batched_tokens:
-            max_num_batched_tokens = max(MIN_MAX_BATCHED_TOKENS, max_model_len)
+            max_num_batched_tokens = max(self.max_batched_tokens, max_model_len)
 
         return VllmConfig(
             model_config=ModelConfig(
@@ -319,38 +329,87 @@ class VllmHiddenStatesGenerator:
             list(request_id_to_idx.keys()), RequestStatus.FINISHED_ABORTED
         )
 
-        # Get captured states organized by request ID
-        request_states_dict = self.executor.collective_rpc(
-            "_get_captured_states",
-            unique_reply_rank=0,
-        )
-
-        if not request_states_dict:
-            raise RuntimeError("Failed to capture hidden states from worker")
-
-        log.debug(f"Captured states for {len(request_states_dict)} requests")
-
-        # Map results back to original input order
-        results = []
-        for req_id in sorted(request_id_to_idx.keys()):
-            i = request_id_to_idx[req_id]
-
-            if req_id not in request_states_dict:
+        capture_token = None
+        imported_devices: set[int] = set()
+        if self._use_torch_cuda_ipc:
+            # Get captured states organized by request ID using torch CUDA IPC.
+            capture_token = f"capture_{self._request_counter - 1}_{uuid.uuid4().hex[:8]}"
+            request_states_payload = self.executor.collective_rpc(
+                "_get_captured_states",
+                args=(capture_token,),
+                unique_reply_rank=0,
+            )
+            if not request_states_payload:
+                raise RuntimeError("Failed to capture hidden states from worker")
+            if not (
+                isinstance(request_states_payload, dict)
+                and request_states_payload.get("transport") == "torch_cuda_ipc"
+            ):
                 raise RuntimeError(
-                    f"Request {req_id} not found in captured states. "
-                    f"Available: {list(request_states_dict.keys())}"
+                    "Unexpected captured states transport payload for CUDA output: "
+                    f"{type(request_states_payload).__name__}"
+                )
+            request_states_dict, imported_devices = CudaIpcImporter.open_capture(
+                request_states_payload
+            )
+        else:
+            # Non-CUDA output devices use vLLM collective_rpc's standard transport.
+            request_states_dict = self.executor.collective_rpc(
+                "_get_captured_states",
+                unique_reply_rank=0,
+            )
+            if not request_states_dict:
+                raise RuntimeError("Failed to capture hidden states from worker")
+            if not isinstance(request_states_dict, dict):
+                raise RuntimeError(
+                    "Unexpected captured states payload for non-CUDA output: "
+                    f"{type(request_states_dict).__name__}"
                 )
 
-            layer_states = [h.clone().cpu() for h in request_states_dict[req_id]]
-            input_ids_tensor = torch.as_tensor(input_ids_list[i], dtype=torch.long)
+        log.debug(f"Captured states for {len(request_states_dict)} requests")
+        try:
+            # Map results back to original input order.
+            results = [None] * len(input_ids_list)
+            for req_id, i in request_id_to_idx.items():
 
-            results.append(
-                {
+                if req_id not in request_states_dict:
+                    raise RuntimeError(
+                        f"Request {req_id} not found in captured states. "
+                        f"Available: {list(request_states_dict.keys())}"
+                    )
+
+                layer_states = []
+                for h in request_states_dict[req_id]:
+                    if h.device == torch.device(self.output_device):
+                        # Clone when staying on the same device to decouple from
+                        # IPC-backed or shared storage.
+                        layer_states.append(h.clone())
+                    else:
+                        # Avoid an extra clone when transferring between devices.
+                        layer_states.append(h.to(self.output_device))
+                input_ids_tensor = torch.as_tensor(input_ids_list[i], dtype=torch.long).to(
+                    self.output_device
+                )
+
+                results[i] = {
                     "input_ids": input_ids_tensor,
                     "hidden_states": layer_states,
                     "loss_mask": None,
                 }
-            )
+
+            if any(result is None for result in results):
+                missing_indices = [idx for idx, result in enumerate(results) if result is None]
+                raise RuntimeError(
+                    f"Missing hidden-state results for batch indices: {missing_indices}"
+                )
+        finally:
+            if imported_devices:
+                for device_index in imported_devices:
+                    torch.cuda.synchronize(device=device_index)
+            if capture_token is not None:
+                self.executor.collective_rpc(
+                    "_release_ipc_capture", args=(capture_token,), unique_reply_rank=0
+                )
 
         empty_cache()
         return results

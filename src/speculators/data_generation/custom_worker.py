@@ -9,6 +9,8 @@ import torch
 from vllm.distributed import get_pp_group, get_tp_group
 from vllm.sequence import IntermediateTensors
 
+from .cuda_ipc import CudaIpcExporter
+
 __all__ = ["HiddenStatesWorkerExtension"]
 
 logger = logging.getLogger(__name__)
@@ -114,6 +116,7 @@ class HiddenStatesWorkerExtension:
         """Setup model to capture auxiliary hidden states from specific layers"""
         self._layer_ids = frozenset(layer_ids)  # Convert once for O(1) lookup
         self._captured_states = None  # type: ignore[assignment]
+        self._ipc_exporter = CudaIpcExporter()  # type: ignore[assignment]
 
         model = self.model_runner.model  # type: ignore[attr-defined]
 
@@ -152,8 +155,13 @@ class HiddenStatesWorkerExtension:
         self._captured_states = None  # type: ignore[assignment]
         self._request_metadata = []  # type: ignore[assignment]
         self._current_request_metadata = None  # type: ignore[assignment]
+        self._ipc_exporter.reset()  # type: ignore[attr-defined]
 
-    def _get_captured_states(self):
+    def _release_ipc_capture(self, capture_token: str):
+        """Release tensor references kept alive for CUDA IPC consumers."""
+        self._ipc_exporter.release(capture_token)  # type: ignore[attr-defined]
+
+    def _get_captured_states(self, capture_token: str | None = None):
         """Get the captured hidden states organized by request ID.
 
         Returns:
@@ -192,4 +200,7 @@ class HiddenStatesWorkerExtension:
         # Clear intermediate storage
         self._captured_states = None  # type: ignore[assignment]
         self._request_metadata = []  # type: ignore[assignment]
-        return result
+
+        if capture_token is None:
+            return result
+        return self._ipc_exporter.export_capture(capture_token, result)  # type: ignore[attr-defined]

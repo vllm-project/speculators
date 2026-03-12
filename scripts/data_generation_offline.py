@@ -135,7 +135,6 @@ def parse_args():
     parser.add_argument(
         "--output-dir", type=str, required=True, help="Directory to save .pt files"
     )
-
     # Hidden states generation arguments
     parser.add_argument(
         "--layer-ids",
@@ -152,6 +151,12 @@ def parse_args():
         type=int,
         default=8,
         help="Batch size for hidden states generation (default: 8)",
+    )
+    parser.add_argument(
+        "--output-device",
+        type=str,
+        default="cpu",
+        help="Device for generated tensors before save (default: cpu)",
     )
 
     # Processing arguments
@@ -258,6 +263,7 @@ def generate_and_save_hidden_states(args, dataset):
         max_model_len=args.seq_length,
         gpu_memory_utilization=args.gpu_memory_utilization,
         tensor_parallel_size=args.tensor_parallel_size,
+        output_device=args.output_device,
     )
 
     log.info(f"Processing {num_samples - start_sample_idx}/{num_samples} samples")
@@ -295,8 +301,8 @@ def generate_and_save_hidden_states(args, dataset):
                 loss_mask = batch_loss_mask[j][:input_len]
 
                 result_cleaned = {
-                    "input_ids": result["input_ids"],
-                    "hidden_states": [h.contiguous() for h in result["hidden_states"]],
+                    "input_ids": result["input_ids"].contiguous().cpu(),
+                    "hidden_states": [h.contiguous().cpu() for h in result["hidden_states"]],
                     "loss_mask": loss_mask,
                 }
                 output_path = Path(args.output_dir) / f"data_{file_idx}.pt"
@@ -307,9 +313,7 @@ def generate_and_save_hidden_states(args, dataset):
                 file_idx += 1
 
         log.info("Waiting for remaining file saves to complete...")
-        for future in tqdm(
-            as_completed(futures), total=len(futures), desc="Saving files"
-        ):
+        for future in tqdm(as_completed(futures), total=len(futures), desc="Saving files"):
             future.result()
 
     samples_saved = file_idx - start_file_idx
@@ -318,7 +322,6 @@ def generate_and_save_hidden_states(args, dataset):
         json.dump(sample_lengths, f, indent=2)
 
     log.info(f"Saved {samples_saved} new data points to {args.output_dir}")
-
     save_config(args, generator, num_samples, args.output_dir)
 
     return samples_saved
@@ -335,6 +338,7 @@ def main():
             "Output Dir": args.output_dir,
             "Tensor Parallel": args.tensor_parallel_size,
             "Batch Size": args.batch_size,
+            "Output Device": args.output_device,
         }
     )
 
