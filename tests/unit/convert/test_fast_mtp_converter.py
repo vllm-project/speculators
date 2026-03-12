@@ -18,7 +18,7 @@ def _make_weights() -> dict[str, torch.Tensor]:
     """Minimal checkpoint matching the real Qwen3-Next key layout (mtp.* prefix)."""
     return {
         "model.embed_tokens.weight": torch.randn(V, H),
-        "model.lm_head.weight": torch.randn(V, H),
+        "lm_head.weight": torch.randn(V, H),
         "mtp.pre_fc_norm_hidden.weight": torch.ones(H),
         "mtp.pre_fc_norm_embedding.weight": torch.ones(H),
         "mtp.fc.weight": torch.randn(H, 2 * H),

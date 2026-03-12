@@ -78,13 +78,13 @@ class FastMTPLayerMixin:
         return self.final_layernorm(hidden_states)
 
 
-class Qwen2FastMTPLayer(FastMTPLayerMixin, Qwen2DecoderLayer):
+class Qwen2FastMTPLayer(FastMTPLayerMixin, Qwen2DecoderLayer):  # type: ignore[misc]
     """FastMTP layer for Qwen2-based checkpoints."""
 
     def __init__(self, config: PretrainedConfig, layer_idx: int = 0) -> None:
         modified = copy.copy(config)
         modified._attn_implementation = "eager"  # noqa: SLF001
-        super().__init__(modified, layer_idx)
+        super().__init__(modified, layer_idx)  # type: ignore[arg-type]
         self._setup_fastmtp_modules(modified, Qwen2RMSNorm)
 
 
@@ -117,13 +117,13 @@ if base_components.HAS_QWEN3_NEXT:
                 return i
         return 0
 
-    class Qwen3NextFastMTPLayer(FastMTPLayerMixin, Qwen3NextDecoderLayer):  # type: ignore[valid-type]
+    class Qwen3NextFastMTPLayer(FastMTPLayerMixin, Qwen3NextDecoderLayer):  # type: ignore[misc]
         """FastMTP layer for Qwen3-Next (sparse MoE) checkpoints."""
 
         def __init__(self, config: PretrainedConfig, layer_idx: int = 0) -> None:  # noqa: ARG002
             modified = copy.copy(config)
             modified._attn_implementation = "eager"  # noqa: SLF001
-            super().__init__(modified, _last_full_attention_idx(modified))
+            super().__init__(modified, _last_full_attention_idx(modified))  # type: ignore[arg-type]
             self._setup_fastmtp_modules(modified, Qwen3NextRMSNorm)
 
     fast_mtp_model_classes["qwen3_next"] = base_components.override_components(
