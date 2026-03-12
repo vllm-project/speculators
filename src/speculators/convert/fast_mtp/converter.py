@@ -30,7 +30,7 @@ __all__ = ["FastMTPConverter"]
 
 _MTP_PREFIX = "mtp."
 _EMBED_KEY = "model.embed_tokens.weight"
-_LM_HEAD_KEY = "model.lm_head.weight"
+_LM_HEAD_KEY = "lm_head.weight"  # stored without "model." prefix in Qwen3-Next
 
 
 class FastMTPConverter:
@@ -219,17 +219,8 @@ class FastMTPConverter:
                 "layer_idx for Qwen3-Next (full_attention vs linear_attention). "
                 f"Unexpected keys: {unexpected}"
             )
-        # Qwen3-Next ties lm_head to embed_tokens (no separate lm_head tensor).
-        if "lm_head.weight" not in weights and "embed_tokens.weight" in weights:
-            logger.debug("lm_head not in checkpoint; tying to embed_tokens.weight")
-            with torch.no_grad():
-                model.lm_head.weight.copy_(weights["embed_tokens.weight"])
-
-        missing_non_tied = [k for k in missing if k != "lm_head.weight"]
-        if missing_non_tied:
-            logger.debug(
-                f"Keys not in extracted weights (filled by init): {missing_non_tied}"
-            )
+        if missing:
+            logger.debug(f"Keys not in extracted weights (filled by init): {missing}")
 
         float_dtypes = {t.dtype for t in weights.values() if t.is_floating_point()}
         if float_dtypes:
