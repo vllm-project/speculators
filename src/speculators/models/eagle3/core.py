@@ -234,7 +234,7 @@ class Eagle3DraftModel(SpeculatorModel):
                 eps=config.transformer_layer_config.rms_norm_eps,
             )
         else:
-            self.input_norm = None
+            self.input_norm = None  # type: ignore[assignment]
 
         # TOKEN EMBEDDINGS
         self.embed_tokens = torch.nn.Embedding(

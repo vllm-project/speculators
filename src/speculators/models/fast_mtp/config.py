@@ -15,11 +15,8 @@ __all__ = ["FastMTPConfig"]
 class FastMTPConfig(SpeculatorModelConfig):
     """Configuration for FastMTP (Multi-Token Prediction) speculator.
 
-    Targets two checkpoint families:
-    - **MiMo (TencentBAC/FastMTP)**: Qwen2-based, ``model_type="mimo"``, hidden=4096,
-      32 attention heads, 8 KV heads, vocab=151680, rope_theta=640000.
-    - **Qwen3-Next**: sparse MoE, ``model_type="qwen3_next"``, hidden=2048, 16 heads,
-      2 KV heads, vocab=151936, rope_theta=10000000.
+    Targets Qwen3-Next checkpoints: sparse MoE, ``model_type="qwen3_next"``,
+    hidden=2048, 16 attention heads, 2 KV heads, vocab=151936.
 
     Architecture: a single MTP layer with attention and MLP, combining verifier hidden
     states with token embeddings via an explicit input projection. ``embed_tokens`` and

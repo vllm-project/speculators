@@ -78,13 +78,13 @@ class FastMTPLayerMixin:
         return self.final_layernorm(hidden_states)
 
 
-class Qwen2FastMTPLayer(FastMTPLayerMixin, Qwen2DecoderLayer):
+class Qwen2FastMTPLayer(FastMTPLayerMixin, Qwen2DecoderLayer):  # type: ignore[misc]
     """FastMTP layer for Qwen2-based checkpoints."""
 
     def __init__(self, config: PretrainedConfig, layer_idx: int = 0) -> None:
         modified = copy.copy(config)
         modified._attn_implementation = "eager"  # noqa: SLF001
-        super().__init__(modified, layer_idx)
+        super().__init__(modified, layer_idx)  # type: ignore[arg-type]
         self._setup_fastmtp_modules(modified, Qwen2RMSNorm)
 
 
@@ -94,19 +94,36 @@ fast_mtp_model_classes: dict[str, base_components.ModelComponents] = {
     ),
 }
 
+
 if base_components.HAS_QWEN3_NEXT:
     from transformers.models.qwen3_next.modeling_qwen3_next import (
         Qwen3NextDecoderLayer,
         Qwen3NextRMSNorm,
     )
 
-    class Qwen3NextFastMTPLayer(FastMTPLayerMixin, Qwen3NextDecoderLayer):  # type: ignore[valid-type]
+    def _last_full_attention_idx(config: PretrainedConfig) -> int:
+        """Return the last layer index whose type is ``full_attention``.
+
+        Qwen3-Next alternates linear_attention and full_attention layers.  The
+        MTP head in the checkpoint always uses full_attention (standard
+        self-attn), so we must instantiate the decoder layer with an index that
+        maps to full_attention — otherwise Qwen3NextDecoderLayer creates
+        linear_attn (SSM/GatedDeltaNet) instead, leaving the attention weights
+        at random init.
+        """
+        layer_types: list[str] = getattr(config, "layer_types", [])
+        for i in reversed(range(len(layer_types))):
+            if layer_types[i] == "full_attention":
+                return i
+        return 0
+
+    class Qwen3NextFastMTPLayer(FastMTPLayerMixin, Qwen3NextDecoderLayer):  # type: ignore[misc]
         """FastMTP layer for Qwen3-Next (sparse MoE) checkpoints."""
 
-        def __init__(self, config: PretrainedConfig, layer_idx: int = 0) -> None:
+        def __init__(self, config: PretrainedConfig, layer_idx: int = 0) -> None:  # noqa: ARG002
             modified = copy.copy(config)
             modified._attn_implementation = "eager"  # noqa: SLF001
-            super().__init__(modified, layer_idx)
+            super().__init__(modified, _last_full_attention_idx(modified))  # type: ignore[arg-type]
             self._setup_fastmtp_modules(modified, Qwen3NextRMSNorm)
 
     fast_mtp_model_classes["qwen3_next"] = base_components.override_components(

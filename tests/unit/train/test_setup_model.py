@@ -122,8 +122,8 @@ def _fill_nan_weights(model: Eagle3DraftModel):
     with torch.no_grad():
         torch.nn.init.ones_(model.embed_tokens.weight)
         torch.nn.init.ones_(model.lm_head.weight)
-        torch.nn.init.ones_(model.verifier_lm_head.weight)
-        torch.nn.init.ones_(model.verifier_norm.weight)
+        torch.nn.init.ones_(model.verifier_lm_head.weight)  # type: ignore[arg-type]
+        torch.nn.init.ones_(model.verifier_norm.weight)  # type: ignore[arg-type]
 
 
 def _make_trainer_no_init(
@@ -256,8 +256,8 @@ def test_single_gpu_resume(checkpoint_dir):
     preserved (not overwritten by checkpoint since they're not saved)."""
     model = _make_tiny_model()
     with torch.no_grad():
-        model.verifier_norm.weight.fill_(77.0)
-        model.verifier_lm_head.weight.fill_(88.0)
+        model.verifier_norm.weight.fill_(77.0)  # type: ignore[operator]
+        model.verifier_lm_head.weight.fill_(88.0)  # type: ignore[operator]
 
     trainer = _make_trainer_no_init(
         model,
@@ -277,10 +277,12 @@ def test_single_gpu_resume(checkpoint_dir):
 
     # Verifier weights should be preserved (not in checkpoint)
     assert torch.allclose(
-        model.verifier_norm.weight.cpu().float(), torch.tensor(77.0)
+        model.verifier_norm.weight.cpu().float(),  # type: ignore[arg-type]
+        torch.tensor(77.0),
     ), "verifier_norm overwritten by checkpoint"
     assert torch.allclose(
-        model.verifier_lm_head.weight.cpu().float(), torch.tensor(88.0)
+        model.verifier_lm_head.weight.cpu().float(),  # type: ignore[arg-type]
+        torch.tensor(88.0),
     ), "verifier_lm_head overwritten by checkpoint"
 
 
@@ -549,8 +551,8 @@ def _worker_distributed_resume(rank, world_size, ckpt_dir, results_dir):
         model = _make_tiny_model()
         # Set verifier weights to known value before FSDP
         with torch.no_grad():
-            model.verifier_norm.weight.fill_(77.0)
-            model.verifier_lm_head.weight.fill_(88.0)
+            model.verifier_norm.weight.fill_(77.0)  # type: ignore[operator]
+            model.verifier_lm_head.weight.fill_(88.0)  # type: ignore[operator]
 
         trainer = _make_trainer_no_init(
             model,

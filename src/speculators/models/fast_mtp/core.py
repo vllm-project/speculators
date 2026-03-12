@@ -49,7 +49,7 @@ class FastMTPSpeculator(SpeculatorModel):
         self._setup_embeddings_and_lm_head()
 
     def _setup_embeddings_and_lm_head(self) -> None:
-        """Overwrite embed_tokens and lm_head from the verifier checkpoint if configured."""
+        """Overwrite embed_tokens and lm_head from the verifier if configured."""
         if (
             self.config.speculators_config is None
             or self.config.speculators_config.verifier is None
@@ -86,7 +86,7 @@ class FastMTPSpeculator(SpeculatorModel):
         At step k, uses ground-truth input_ids[t+k+1] as the embedding input and
         the MTP output from step k-1 (or verifier hidden states for step 0) as the
         hidden state input. Hidden states are passed recursively: each step's MTP
-        output feeds the next step, matching the MiMo training procedure.
+        output feeds the next step, matching the paper's training procedure.
 
         :param input_ids: Token IDs [batch, seq_len]
         :param hidden_states: Hidden states from verifier [batch, seq_len, hidden_size]
@@ -167,34 +167,6 @@ class FastMTPSpeculator(SpeculatorModel):
             }
         return (all_logits, total_loss, metrics)
 
-    @staticmethod
-    def _fix_state_dict_key_on_load(key: str) -> tuple[str, bool]:  # noqa: PLR0911
-        """Remap checkpoint keys to model parameter names for HF weight loading.
-
-        HF calls this per-key before resolving missing/unexpected keys. The model's
-        base_model_prefix is "model", so speculators keys (model.mtp_layers.0.*) are
-        handled by HF's built-in prefix-stripping — only external formats need
-        remapping. The deepseek catch-all (mtp.<rest> → mtp_layers.0.<rest>) must
-        remain last.
-        """
-        if key.startswith("mtp.layers.0."):
-            return key.replace("mtp.layers.0.", "mtp_layers.0.", 1), True
-        if key.startswith("mtp.fc."):
-            return key.replace("mtp.fc.", "mtp_layers.0.input_proj.", 1), True
-        if key == "mtp.norm.weight":
-            return "mtp_layers.0.final_layernorm.weight", True
-        if key.startswith("mtp.pre_fc_norm_hidden."):
-            return key.replace(
-                "mtp.pre_fc_norm_hidden.", "mtp_layers.0.hidden_layernorm."
-            ), True
-        if key.startswith("mtp.pre_fc_norm_embedding."):
-            return key.replace(
-                "mtp.pre_fc_norm_embedding.", "mtp_layers.0.token_layernorm."
-            ), True
-        if key.startswith("mtp.") and not key.startswith("mtp.layers"):
-            return key.replace("mtp.", "mtp_layers.0.", 1), True
-        return key, False
-
     @classmethod
     def from_training_args(  # type: ignore[override]
         cls,
@@ -234,7 +206,7 @@ class FastMTPSpeculator(SpeculatorModel):
         """Get training and validation kwargs for FastMTP.
 
         Pass ``step_weights`` to override the default exponential-decay weights
-        ``[0.51, 0.31, 0.18]`` (β=0.6, normalized, matching TencentBAC/Qwen3-Next).
+        ``[0.51, 0.31, 0.18]`` (β=0.6, normalized, matching Qwen3-Next defaults).
 
         :param kwargs: Training arguments
         :return: Tuple of (train_kwargs, val_kwargs)

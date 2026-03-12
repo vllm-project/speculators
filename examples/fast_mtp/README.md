@@ -30,14 +30,31 @@ flowchart LR
 
 **Training objective** (from the FastMTP paper):
 
-$$\mathcal{L}_{\text{mtp}} = \sum_{k=0}^{K-1} \alpha_k \cdot \text{CE}(\text{logits}_k,\ \text{tokens}_{t+k+2})$$
+$$\\mathcal{L}_{\\text{mtp}} = \\sum_{k=0}^{K-1} \\alpha_k \\cdot \\text{CE}(\\text{logits}_k,\\ \\text{tokens}_{t+k+2})$$
 
-Default weights $\alpha = [0.51, 0.31, 0.18]$ use exponential decay ($\beta=0.6$, normalized). Loss is computed only on response tokens via `loss_mask`.
+Default weights $\\alpha = [0.51, 0.31, 0.18]$ use exponential decay ($\\beta=0.6$, normalized). Loss is computed only on response tokens via `loss_mask`.
+
+## Convert a Checkpoint
+
+Edit the constants at the top of `examples/fast_mtp/convert_qwen3_next.py` (`MODEL`, `OUTPUT`, `NUM_STEPS`) and run:
+
+```bash
+python examples/fast_mtp/convert_qwen3_next.py
+```
+
+Or use the `speculators convert` CLI directly:
+
+```bash
+speculators convert Qwen/Qwen3-Next-80B-A3B-Instruct \
+    --algorithm mtp \
+    --verifier  Qwen/Qwen3-Next-80B-A3B-Instruct \
+    --output-path ./qwen3_next_mtp_speculators
+```
 
 ## Supported Checkpoints
 
-| Model | model_type |
-| ----- | ---------- |
+| Model                                                                           | model_type   |
+| ------------------------------------------------------------------------------- | ------------ |
 | [Qwen3-Next](https://huggingface.co/Qwen/Qwen3-Next-80B-A3B-Instruct/tree/main) | `qwen3_next` |
 
 ## Paper
