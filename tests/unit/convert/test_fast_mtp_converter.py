@@ -9,19 +9,12 @@ from safetensors.torch import save_file
 from speculators.convert.fast_mtp.converter import FastMTPConverter
 from speculators.models.fast_mtp import FastMTPSpeculator
 
-# Tiny architecture dims used across all fixtures and weight builders.
-H = 64  # hidden_size
-V = 256  # vocab_size
-INT = 128  # intermediate_size
+H = 64
+V = 256
+INT = 128
 
 
-# ---------------------------------------------------------------------------
-# Synthetic weight builders
-# ---------------------------------------------------------------------------
-
-
-def _make_native_hf_weights() -> dict[str, torch.Tensor]:
-    """Minimal checkpoint in Qwen3-Next native_hf format."""
+def _make_weights() -> dict[str, torch.Tensor]:
     return {
         "model.embed_tokens.weight": torch.randn(V, H),
         "model.lm_head.weight": torch.randn(V, H),
@@ -44,35 +37,6 @@ def _make_native_hf_weights() -> dict[str, torch.Tensor]:
     }
 
 
-def _make_tencentbac_weights() -> dict[str, torch.Tensor]:
-    """Minimal checkpoint in TencentBAC/MiMo format."""
-    return {
-        "model.embed_tokens.weight": torch.randn(V, H),
-        "model.lm_head.weight": torch.randn(V, H),
-        "mtp.pre_fc_norm_hidden.weight": torch.ones(H),
-        "mtp.pre_fc_norm_embedding.weight": torch.ones(H),
-        "mtp.fc.weight": torch.randn(H, 2 * H),
-        "mtp.norm.weight": torch.ones(H),
-        "mtp.layers.0.input_layernorm.weight": torch.ones(H),
-        "mtp.layers.0.post_attention_layernorm.weight": torch.ones(H),
-        "mtp.layers.0.self_attn.q_proj.weight": torch.randn(H, H),
-        "mtp.layers.0.self_attn.q_proj.bias": torch.zeros(H),
-        "mtp.layers.0.self_attn.k_proj.weight": torch.randn(H, H),
-        "mtp.layers.0.self_attn.k_proj.bias": torch.zeros(H),
-        "mtp.layers.0.self_attn.v_proj.weight": torch.randn(H, H),
-        "mtp.layers.0.self_attn.v_proj.bias": torch.zeros(H),
-        "mtp.layers.0.self_attn.o_proj.weight": torch.randn(H, H),
-        "mtp.layers.0.mlp.gate_proj.weight": torch.randn(INT, H),
-        "mtp.layers.0.mlp.up_proj.weight": torch.randn(INT, H),
-        "mtp.layers.0.mlp.down_proj.weight": torch.randn(H, INT),
-    }
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-
 @pytest.fixture
 def tiny_qwen2_config_dict():
     return {
@@ -86,13 +50,12 @@ def tiny_qwen2_config_dict():
         "max_position_embeddings": 64,
         "rms_norm_eps": 1e-6,
         "rope_theta": 10000.0,
-        "attention_bias": True,  # Qwen2 uses attention bias for q/k/v
+        "attention_bias": True,
     }
 
 
 @pytest.fixture
 def base_model_dir(tmp_path, tiny_qwen2_config_dict):
-    """Minimal local verifier directory with config + embed/lm_head weights."""
     d = tmp_path / "base_model"
     d.mkdir()
     config = {**tiny_qwen2_config_dict, "architectures": ["Qwen2ForCausalLM"]}
@@ -108,22 +71,11 @@ def base_model_dir(tmp_path, tiny_qwen2_config_dict):
 
 
 @pytest.fixture
-def native_hf_checkpoint(tmp_path, tiny_qwen2_config_dict):
-    """Minimal checkpoint directory in native_hf format."""
-    d = tmp_path / "native_hf"
+def checkpoint(tmp_path, tiny_qwen2_config_dict):
+    d = tmp_path / "source"
     d.mkdir()
     (d / "config.json").write_text(json.dumps(tiny_qwen2_config_dict))
-    save_file(_make_native_hf_weights(), str(d / "model.safetensors"))
-    return d
-
-
-@pytest.fixture
-def tencentbac_checkpoint(tmp_path, tiny_qwen2_config_dict):
-    """Minimal checkpoint directory in tencentbac format."""
-    d = tmp_path / "tencentbac"
-    d.mkdir()
-    (d / "config.json").write_text(json.dumps(tiny_qwen2_config_dict))
-    save_file(_make_tencentbac_weights(), str(d / "model.safetensors"))
+    save_file(_make_weights(), str(d / "model.safetensors"))
     return d
 
 
@@ -133,11 +85,10 @@ def converter():
 
 
 @pytest.fixture
-def converted_output(converter, native_hf_checkpoint, base_model_dir, tmp_path):
-    """Standard converted checkpoint (native_hf, 3 steps, no validation)."""
+def converted_output(converter, checkpoint, base_model_dir, tmp_path):
     output = tmp_path / "converted"
     converter.convert(
-        input_path=native_hf_checkpoint,
+        input_path=checkpoint,
         output_path=output,
         base_model=str(base_model_dir),
         validate=False,
@@ -145,80 +96,37 @@ def converted_output(converter, native_hf_checkpoint, base_model_dir, tmp_path):
     return output
 
 
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.smoke
-class TestDetectFormat:
-    def test_native_hf_detected(self, converter):
-        assert converter._detect_format(list(_make_native_hf_weights())) == "native_hf"
+class TestVerifyFormat:
+    def test_valid_checkpoint_passes(self, converter):
+        converter._verify_qwen3_next_format(list(_make_weights()))
 
-    def test_tencentbac_detected(self, converter):
-        assert (
-            converter._detect_format(list(_make_tencentbac_weights())) == "tencentbac"
-        )
-
-    def test_unknown_raises_value_error(self, converter):
-        with pytest.raises(ValueError, match="Cannot detect"):
-            converter._detect_format(["unrelated.weight", "also.unrelated"])
-
-    def test_error_includes_sample_keys(self, converter):
-        bad_keys = [f"layer.{i}.weight" for i in range(5)]
-        with pytest.raises(ValueError, match="layer.0.weight"):
-            converter._detect_format(bad_keys)
+    def test_missing_mtp_prefix_raises(self, converter):
+        with pytest.raises(ValueError, match="No MTP layer keys"):
+            converter._verify_qwen3_next_format(["unrelated.weight", "also.unrelated"])
 
 
 @pytest.mark.smoke
 @pytest.mark.parametrize(
-    ("key", "fmt", "expected"),
+    ("key", "expected"),
     [
-        # native_hf: strip "model." prefix
-        ("model.embed_tokens.weight", "native_hf", "embed_tokens.weight"),
-        ("model.lm_head.weight", "native_hf", "lm_head.weight"),
+        ("model.embed_tokens.weight", "embed_tokens.weight"),
+        ("model.lm_head.weight", "lm_head.weight"),
         (
             "model.mtp_layers.0.self_attn.q_proj.weight",
-            "native_hf",
             "mtp_layers.0.self_attn.q_proj.weight",
         ),
-        ("embed_tokens.weight", "native_hf", "embed_tokens.weight"),
-        # tencentbac: embed / lm_head (with and without "model." prefix)
-        ("model.embed_tokens.weight", "tencentbac", "embed_tokens.weight"),
-        ("embed_tokens.weight", "tencentbac", "embed_tokens.weight"),
-        ("model.lm_head.weight", "tencentbac", "lm_head.weight"),
-        ("lm_head.weight", "tencentbac", "lm_head.weight"),
-        # tencentbac: MTP-specific key remapping
-        ("mtp.fc.weight", "tencentbac", "mtp_layers.0.input_proj.weight"),
-        ("mtp.norm.weight", "tencentbac", "mtp_layers.0.final_layernorm.weight"),
-        (
-            "mtp.pre_fc_norm_hidden.weight",
-            "tencentbac",
-            "mtp_layers.0.hidden_layernorm.weight",
-        ),
-        (
-            "mtp.pre_fc_norm_embedding.weight",
-            "tencentbac",
-            "mtp_layers.0.token_layernorm.weight",
-        ),
-        (
-            "mtp.layers.0.self_attn.q_proj.weight",
-            "tencentbac",
-            "mtp_layers.0.self_attn.q_proj.weight",
-        ),
+        ("embed_tokens.weight", "embed_tokens.weight"),
     ],
 )
-def test_remap_key(converter, key, fmt, expected):
-    assert converter._remap_key(key, fmt) == expected
+def test_remap_key(converter, key, expected):
+    assert converter._remap_key(key) == expected
 
 
 @pytest.mark.smoke
 class TestExtractWeights:
-    def test_native_hf_all_keys_remapped(self, converter, native_hf_checkpoint):
-        all_keys = list(_make_native_hf_weights())
-        weights = converter._extract_weights(
-            native_hf_checkpoint, all_keys, "native_hf"
-        )
+    def test_all_keys_remapped(self, converter, checkpoint):
+        weights = converter._extract_weights(checkpoint, list(_make_weights()))
 
         assert all(not k.startswith("model.") for k in weights)
         assert "embed_tokens.weight" in weights
@@ -229,40 +137,18 @@ class TestExtractWeights:
             for k in weights
         )
 
-    def test_native_hf_shapes_preserved(self, converter, native_hf_checkpoint):
-        all_keys = list(_make_native_hf_weights())
-        weights = converter._extract_weights(
-            native_hf_checkpoint, all_keys, "native_hf"
-        )
+    def test_shapes_preserved(self, converter, checkpoint):
+        weights = converter._extract_weights(checkpoint, list(_make_weights()))
 
         assert weights["embed_tokens.weight"].shape == (V, H)
         assert weights["mtp_layers.0.input_proj.weight"].shape == (H, 2 * H)
 
-    def test_tencentbac_all_keys_remapped(self, converter, tencentbac_checkpoint):
-        all_keys = list(_make_tencentbac_weights())
-        weights = converter._extract_weights(
-            tencentbac_checkpoint, all_keys, "tencentbac"
-        )
-
-        assert all(not k.startswith("mtp.") for k in weights)
-        assert "embed_tokens.weight" in weights
-        assert "mtp_layers.0.input_proj.weight" in weights
-        assert "mtp_layers.0.final_layernorm.weight" in weights
-
-    def test_tencentbac_shapes_preserved(self, converter, tencentbac_checkpoint):
-        all_keys = list(_make_tencentbac_weights())
-        weights = converter._extract_weights(
-            tencentbac_checkpoint, all_keys, "tencentbac"
-        )
-        assert weights["mtp_layers.0.input_proj.weight"].shape == (H, 2 * H)
-
     def test_sharded_checkpoint(self, converter, tmp_path, tiny_qwen2_config_dict):
-        """Weights split across two shards are streamed correctly."""
         shard_dir = tmp_path / "sharded"
         shard_dir.mkdir()
         (shard_dir / "config.json").write_text(json.dumps(tiny_qwen2_config_dict))
 
-        all_weights = _make_native_hf_weights()
+        all_weights = _make_weights()
         keys = list(all_weights)
         mid = len(keys) // 2
 
@@ -281,7 +167,7 @@ class TestExtractWeights:
             json.dumps({"metadata": {}, "weight_map": weight_map})
         )
 
-        extracted = converter._extract_weights(shard_dir, keys, "native_hf")
+        extracted = converter._extract_weights(shard_dir, keys)
         assert "embed_tokens.weight" in extracted or "lm_head.weight" in extracted
         assert all(not k.startswith("model.") for k in extracted)
 
@@ -323,11 +209,11 @@ class TestFullConvert:
         assert saved["speculators_model_type"] == "mtp"
 
     def test_saved_checkpoint_loadable(
-        self, converter, native_hf_checkpoint, base_model_dir, tmp_path
+        self, converter, checkpoint, base_model_dir, tmp_path
     ):
         output = tmp_path / "converted_validated"
         converter.convert(
-            input_path=native_hf_checkpoint,
+            input_path=checkpoint,
             output_path=output,
             base_model=str(base_model_dir),
             validate=True,
@@ -337,20 +223,6 @@ class TestFullConvert:
         assert model.lm_head is not None
         assert model.mtp_layers[0] is not None  # type: ignore[index]
 
-    def test_tencentbac_convert(
-        self, converter, tencentbac_checkpoint, base_model_dir, tmp_path
-    ):
-        output = tmp_path / "converted_tbc"
-        converter.convert(
-            input_path=tencentbac_checkpoint,
-            output_path=output,
-            base_model=str(base_model_dir),
-            validate=False,
-        )
-        saved = json.loads((output / "config.json").read_text())
-        assert saved["speculators_model_type"] == "mtp"
-
     def test_num_speculative_steps_in_output(self, converted_output):
-        # The shared fixture uses default num_speculative_steps=3.
         model = FastMTPSpeculator.from_pretrained(str(converted_output))
         assert model.config.num_speculative_steps == 3

@@ -8,7 +8,7 @@ format.
 Supported Research Repositories:
     - Eagle v1, v2, and v3: https://github.com/SafeAILab/EAGLE
     - HASS: https://github.com/HArmonizedSS/HASS
-    - FastMTP (Qwen3-Next / TencentBAC MiMo): https://arxiv.org/abs/2509.18362
+    - FastMTP (Qwen3-Next): https://arxiv.org/abs/2509.18362
 """
 
 from .entrypoints import convert_model

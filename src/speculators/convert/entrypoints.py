@@ -8,7 +8,7 @@ research repositories:
 - EAGLE2
 - EAGLE3
 - HASS
-- MTP (FastMTP — Qwen3-Next / TencentBAC MiMo)
+- MTP (FastMTP — Qwen3-Next)
 
 Functions:
     convert_model: Converts a model checkpoint to the Speculators format.
@@ -72,7 +72,7 @@ def convert_model(
         )
 
     algorithm=="mtp":
-        FastMTP (Qwen3-Next / TencentBAC MiMo): https://arxiv.org/abs/2509.18362
+        FastMTP (Qwen3-Next): https://arxiv.org/abs/2509.18362
         ::
         convert_model(
             model="Qwen/Qwen3-Next-80B-A3B-Instruct",
