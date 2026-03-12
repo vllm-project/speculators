@@ -4,7 +4,7 @@ Extracts the MTP layer (plus embed_tokens and lm_head) from a Qwen3-Next
 checkpoint and saves a self-contained Speculators checkpoint that loads with
 ``FastMTPSpeculator.from_pretrained(path)`` without the full base model.
 
-Qwen3-Next stores its MTP layer under ``model.mtp_layers.0.*``, alongside the
+Qwen3-Next stores its MTP layer under the ``mtp.*`` key prefix, alongside the
 main model weights.  Only that subtree — plus ``embed_tokens`` and ``lm_head``
 — is read from the (potentially sharded) safetensors file; the rest of the
 model is never loaded into memory.
@@ -28,7 +28,7 @@ from speculators.proposals.greedy import GreedyTokenProposalConfig
 
 __all__ = ["FastMTPConverter"]
 
-_MTP_PREFIX = "model.mtp_layers.0."
+_MTP_PREFIX = "mtp."
 _EMBED_KEY = "model.embed_tokens.weight"
 _LM_HEAD_KEY = "model.lm_head.weight"
 
@@ -105,7 +105,8 @@ class FastMTPConverter:
         if not any(k.startswith(_MTP_PREFIX) for k in keys):
             raise ValueError(
                 f"No MTP layer keys found (expected prefix '{_MTP_PREFIX}'). "
-                "This converter supports Qwen3-Next checkpoints only."
+                "This converter supports Qwen3-Next checkpoints only. "
+                "Ensure the checkpoint is Qwen/Qwen3-Next-80B-A3B-Instruct or similar."
             )
 
     def _should_extract(self, key: str) -> bool:
@@ -113,8 +114,23 @@ class FastMTPConverter:
         return key in {_EMBED_KEY, _LM_HEAD_KEY} or key.startswith(_MTP_PREFIX)
 
     def _remap_key(self, key: str) -> str:
-        """Strip the ``model.`` prefix to match FastMTPSpeculator parameter names."""
-        return key.removeprefix("model.")
+        """Map a source checkpoint key to the FastMTPSpeculator parameter name."""
+        _exact = {
+            "mtp.fc.weight": "mtp_layers.0.input_proj.weight",
+            "mtp.norm.weight": "mtp_layers.0.final_layernorm.weight",
+        }
+        _prefixes = {
+            "model.": "",
+            "mtp.pre_fc_norm_hidden.": "mtp_layers.0.hidden_layernorm.",
+            "mtp.pre_fc_norm_embedding.": "mtp_layers.0.token_layernorm.",
+            "mtp.layers.0.": "mtp_layers.0.",
+        }
+        if key in _exact:
+            return _exact[key]
+        for src, dst in _prefixes.items():
+            if key.startswith(src):
+                return dst + key[len(src) :]
+        return key
 
     def _extract_weights(
         self, checkpoint_dir: Path, all_keys: list[str]
@@ -203,8 +219,17 @@ class FastMTPConverter:
                 "layer_idx for Qwen3-Next (full_attention vs linear_attention). "
                 f"Unexpected keys: {unexpected}"
             )
-        if missing:
-            logger.debug(f"Keys not in extracted weights (filled by init): {missing}")
+        # Qwen3-Next ties lm_head to embed_tokens (no separate lm_head tensor).
+        if "lm_head.weight" not in weights and "embed_tokens.weight" in weights:
+            logger.debug("lm_head not in checkpoint; tying to embed_tokens.weight")
+            with torch.no_grad():
+                model.lm_head.weight.copy_(weights["embed_tokens.weight"])
+
+        missing_non_tied = [k for k in missing if k != "lm_head.weight"]
+        if missing_non_tied:
+            logger.debug(
+                f"Keys not in extracted weights (filled by init): {missing_non_tied}"
+            )
 
         float_dtypes = {t.dtype for t in weights.values() if t.is_floating_point()}
         if float_dtypes:

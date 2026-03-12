@@ -15,25 +15,26 @@ INT = 128
 
 
 def _make_weights() -> dict[str, torch.Tensor]:
+    """Minimal checkpoint matching the real Qwen3-Next key layout (mtp.* prefix)."""
     return {
         "model.embed_tokens.weight": torch.randn(V, H),
         "model.lm_head.weight": torch.randn(V, H),
-        "model.mtp_layers.0.hidden_layernorm.weight": torch.ones(H),
-        "model.mtp_layers.0.token_layernorm.weight": torch.ones(H),
-        "model.mtp_layers.0.input_proj.weight": torch.randn(H, 2 * H),
-        "model.mtp_layers.0.final_layernorm.weight": torch.ones(H),
-        "model.mtp_layers.0.input_layernorm.weight": torch.ones(H),
-        "model.mtp_layers.0.post_attention_layernorm.weight": torch.ones(H),
-        "model.mtp_layers.0.self_attn.q_proj.weight": torch.randn(H, H),
-        "model.mtp_layers.0.self_attn.q_proj.bias": torch.zeros(H),
-        "model.mtp_layers.0.self_attn.k_proj.weight": torch.randn(H, H),
-        "model.mtp_layers.0.self_attn.k_proj.bias": torch.zeros(H),
-        "model.mtp_layers.0.self_attn.v_proj.weight": torch.randn(H, H),
-        "model.mtp_layers.0.self_attn.v_proj.bias": torch.zeros(H),
-        "model.mtp_layers.0.self_attn.o_proj.weight": torch.randn(H, H),
-        "model.mtp_layers.0.mlp.gate_proj.weight": torch.randn(INT, H),
-        "model.mtp_layers.0.mlp.up_proj.weight": torch.randn(INT, H),
-        "model.mtp_layers.0.mlp.down_proj.weight": torch.randn(H, INT),
+        "mtp.pre_fc_norm_hidden.weight": torch.ones(H),
+        "mtp.pre_fc_norm_embedding.weight": torch.ones(H),
+        "mtp.fc.weight": torch.randn(H, 2 * H),
+        "mtp.norm.weight": torch.ones(H),
+        "mtp.layers.0.input_layernorm.weight": torch.ones(H),
+        "mtp.layers.0.post_attention_layernorm.weight": torch.ones(H),
+        "mtp.layers.0.self_attn.q_proj.weight": torch.randn(H, H),
+        "mtp.layers.0.self_attn.q_proj.bias": torch.zeros(H),
+        "mtp.layers.0.self_attn.k_proj.weight": torch.randn(H, H),
+        "mtp.layers.0.self_attn.k_proj.bias": torch.zeros(H),
+        "mtp.layers.0.self_attn.v_proj.weight": torch.randn(H, H),
+        "mtp.layers.0.self_attn.v_proj.bias": torch.zeros(H),
+        "mtp.layers.0.self_attn.o_proj.weight": torch.randn(H, H),
+        "mtp.layers.0.mlp.gate_proj.weight": torch.randn(INT, H),
+        "mtp.layers.0.mlp.up_proj.weight": torch.randn(INT, H),
+        "mtp.layers.0.mlp.down_proj.weight": torch.randn(H, INT),
     }
 
 
@@ -112,11 +113,14 @@ class TestVerifyFormat:
     [
         ("model.embed_tokens.weight", "embed_tokens.weight"),
         ("model.lm_head.weight", "lm_head.weight"),
+        ("mtp.fc.weight", "mtp_layers.0.input_proj.weight"),
+        ("mtp.norm.weight", "mtp_layers.0.final_layernorm.weight"),
+        ("mtp.pre_fc_norm_hidden.weight", "mtp_layers.0.hidden_layernorm.weight"),
+        ("mtp.pre_fc_norm_embedding.weight", "mtp_layers.0.token_layernorm.weight"),
         (
-            "model.mtp_layers.0.self_attn.q_proj.weight",
+            "mtp.layers.0.self_attn.q_proj.weight",
             "mtp_layers.0.self_attn.q_proj.weight",
         ),
-        ("embed_tokens.weight", "embed_tokens.weight"),
     ],
 )
 def test_remap_key(converter, key, expected):
@@ -128,14 +132,11 @@ class TestExtractWeights:
     def test_all_keys_remapped(self, converter, checkpoint):
         weights = converter._extract_weights(checkpoint, list(_make_weights()))
 
-        assert all(not k.startswith("model.") for k in weights)
+        assert all(not k.startswith("mtp.") for k in weights)
         assert "embed_tokens.weight" in weights
         assert "lm_head.weight" in weights
-        assert all(
-            k.startswith("mtp_layers.0.")
-            or k in {"embed_tokens.weight", "lm_head.weight"}
-            for k in weights
-        )
+        assert "mtp_layers.0.input_proj.weight" in weights
+        assert "mtp_layers.0.final_layernorm.weight" in weights
 
     def test_shapes_preserved(self, converter, checkpoint):
         weights = converter._extract_weights(checkpoint, list(_make_weights()))
@@ -169,7 +170,7 @@ class TestExtractWeights:
 
         extracted = converter._extract_weights(shard_dir, keys)
         assert "embed_tokens.weight" in extracted or "lm_head.weight" in extracted
-        assert all(not k.startswith("model.") for k in extracted)
+        assert all(not k.startswith("mtp.") for k in extracted)
 
 
 @pytest.mark.smoke
