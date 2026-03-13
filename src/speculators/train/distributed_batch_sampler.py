@@ -232,9 +232,10 @@ class MultipackDistributedBatchSamplerV2(Sampler):
         # self.lengths array.
         batches = [indices[batch] for batch in batches]
 
-        # CRITICAL FIX: Synchronize batch count across all ranks to prevent NCCL deadlock
-        # Different ranks can generate different numbers of batches due to LPT packing.
-        # Truncate all ranks to the minimum batch count to ensure equal iterations.
+        # CRITICAL FIX: Synchronize batch count across all ranks to prevent
+        # NCCL deadlock. Different ranks can generate different numbers of
+        # batches due to LPT packing. Truncate all ranks to the minimum
+        # batch count to ensure equal iterations.
         if self.num_replicas > 1 and dist.is_available() and dist.is_initialized():
             # Create tensor on CUDA device (required for NCCL backend)
             device = torch.device(f"cuda:{torch.cuda.current_device()}")
