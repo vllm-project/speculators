@@ -104,7 +104,7 @@ def create_peagle_mask_mod(
     return peagle_mask_mod
 
 
-def _peagle_flex_attention_impl(
+def peagle_flex_attention_forward(
     module: torch.nn.Module,  # noqa: ARG001
     query: torch.Tensor,
     key: torch.Tensor,
@@ -114,9 +114,21 @@ def _peagle_flex_attention_impl(
     **_kwargs,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     """
-    Flex attention forward pass implementation for P-EAGLE.
+    Flex attention forward pass for P-EAGLE.
 
-    This is the actual implementation that gets compiled.
+    Uses flex_attention with block-sparse masks for memory efficiency.
+
+    Args:
+        module: The attention module (unused, for interface compatibility)
+        query: Query tensor [batch, num_heads, seq_len, head_dim]
+        key: Key tensor [batch, num_kv_heads, seq_len, head_dim]
+        value: Value tensor [batch, num_kv_heads, seq_len, head_dim]
+        attention_mask: BlockMask object from create_block_mask()
+        scaling: Optional attention scaling factor
+        **_kwargs: Additional arguments (unused)
+
+    Returns:
+        Tuple of (attention_output, None)
     """
     num_query_heads = query.shape[1]
     num_key_value_heads = key.shape[1]
@@ -138,14 +150,6 @@ def _peagle_flex_attention_impl(
     attention_output: torch.Tensor = cast("torch.Tensor", flex_attention_output)
     attention_output = attention_output.transpose(1, 2).contiguous()
     return attention_output, None
-
-
-# Compile the entire forward function with fullgraph=True to ensure flex_attention is compiled
-peagle_flex_attention_forward = torch.compile(
-    _peagle_flex_attention_impl,
-    fullgraph=True,
-    dynamic=True,
-)
 
 
 # Register P-EAGLE flex attention with transformers AttentionInterface
