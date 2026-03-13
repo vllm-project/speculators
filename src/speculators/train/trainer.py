@@ -177,20 +177,12 @@ class Trainer:
             train_loader = tqdm(train_loader, desc=f"Epoch {epoch}")  # type: ignore[assignment]
 
         for batch in train_loader:
-            # Move batch to GPU, handling both tensors and lists of tensors
-            gpu_batch: dict = {}
-            for k, v in batch.items():
-                if isinstance(v, torch.Tensor):
-                    gpu_batch[k] = v.to(self.local_rank, non_blocking=True)
-                elif (
-                    isinstance(v, list)
-                    and len(v) > 0
-                    and isinstance(v[0], torch.Tensor)
-                ):
-                    # Handle list of tensors (e.g., hidden_states in P-EAGLE)
-                    gpu_batch[k] = [t.to(self.local_rank, non_blocking=True) for t in v]
-                else:
-                    gpu_batch[k] = v
+            gpu_batch = {
+                k: v.to(self.local_rank, non_blocking=True)
+                if isinstance(v, torch.Tensor)
+                else v
+                for k, v in batch.items()
+            }
 
             _draft_tokens, loss, metrics = self.model(
                 **gpu_batch, **self.config.train_call_kwargs
@@ -205,54 +197,37 @@ class Trainer:
             if self.scheduler is not None:
                 self.scheduler.step()
 
-            # Get num_depths from model config for metric handling
-            unwrapped_model = (
-                self.model.module if hasattr(self.model, "module") else self.model
-            )
-            num_depths = getattr(unwrapped_model.config, "para_depths", 4)  # type: ignore[union-attr]
-
             if self.is_distributed:
-                # Only reduce base metrics that are always present
-                # Per-depth metrics may vary between ranks due to COD sampling
-                base_metric_keys = ["loss", "prediction_loss", "accuracy", "num_tokens"]
-                for key in base_metric_keys:
-                    if key in metrics:
-                        dist.reduce(metrics[key], dst=0, op=dist.ReduceOp.AVG)
+                # Reduce only metrics that exist on all ranks
+                for k in list(metrics.keys()):
+                    if k.startswith("accuracy_depth_"):
+                        # Per-depth metrics may not exist on all ranks, skip
+                        continue
+                    dist.reduce(metrics[k], dst=0, op=dist.ReduceOp.AVG)
 
-                # For depth metrics, pad missing ones with zeros to ensure consistency
-                for i in range(num_depths):
-                    key = f"accuracy_depth_{i}"
-                    if key not in metrics:
-                        metrics[key] = torch.tensor(0.0, device=loss.device)
-                    dist.reduce(metrics[key], dst=0, op=dist.ReduceOp.AVG)
+            metrics_dict = {k: v.item() for k, v in metrics.items()}
 
-            metrics = {k: v.item() for k, v in metrics.items()}
-
-            # Separate per-depth accuracies for cleaner logging
-            per_depth_metrics = {
-                k: v for k, v in metrics.items() if k.startswith("accuracy_depth_")
+            # Separate per-depth metrics for compact logging
+            depth_metrics = {
+                k: v for k, v in metrics_dict.items() if k.startswith("accuracy_depth_")
             }
             base_metrics = {
-                k: v for k, v in metrics.items() if not k.startswith("accuracy_depth_")
+                k: v
+                for k, v in metrics_dict.items()
+                if not k.startswith("accuracy_depth_")
             }
 
-            # Log base metrics
             metric_logger.info(
                 {"train": base_metrics, "epoch": epoch, "lr": current_lr},
                 extra={"step": self.global_step},
             )
 
-            # Log per-depth accuracies in a compact format
-            if per_depth_metrics:
-                depth_acc_list = []
-                for i in range(num_depths):
-                    key = f"accuracy_depth_{i}"
-                    if key in per_depth_metrics:
-                        depth_acc_list.append(f"d{i}:{per_depth_metrics[key]:.3f}")
-                if depth_acc_list:
-                    root_logger.info(
-                        f"    Depth accuracy: [{', '.join(depth_acc_list)}]"
-                    )
+            if depth_metrics and self.local_rank == 0:
+                depth_items = sorted(depth_metrics.items())
+                depth_str = ", ".join(
+                    f"d{k.split('_')[-1]}:{v:.3f}" for k, v in depth_items
+                )
+                root_logger.info(f"    Depth accuracy: [{depth_str}]")
 
             self.global_step += 1
 
@@ -270,74 +245,45 @@ class Trainer:
         val_metrics: dict[str, float] = {}
         num_batches = len(val_loader)
         for batch in val_loader:
-            # Move batch to GPU, handling both tensors and lists of tensors
-            gpu_batch: dict = {}
-            for k, v in batch.items():
-                if isinstance(v, torch.Tensor):
-                    gpu_batch[k] = v.to(self.local_rank, non_blocking=True)
-                elif (
-                    isinstance(v, list)
-                    and len(v) > 0
-                    and isinstance(v[0], torch.Tensor)
-                ):
-                    gpu_batch[k] = [t.to(self.local_rank, non_blocking=True) for t in v]
-                else:
-                    gpu_batch[k] = v
+            gpu_batch = {
+                k: v.to(self.local_rank, non_blocking=True)
+                if isinstance(v, torch.Tensor)
+                else v
+                for k, v in batch.items()
+            }
 
             _draft_tokens, _loss, metrics = self.model(
                 **gpu_batch, **self.config.val_call_kwargs
             )
 
-            # Get num_depths from model config for metric handling
-            unwrapped_model = (
-                self.model.module if hasattr(self.model, "module") else self.model
-            )
-            num_depths = getattr(unwrapped_model.config, "para_depths", 4)  # type: ignore[union-attr]
-
             if self.is_distributed:
-                # Only reduce base metrics that are always present
-                # Per-depth metrics may vary between ranks due to COD sampling
-                base_metric_keys = ["loss", "prediction_loss", "accuracy", "num_tokens"]
-                for key in base_metric_keys:
-                    if key in metrics:
-                        dist.reduce(metrics[key], dst=0, op=dist.ReduceOp.AVG)
-
-                # For depth metrics, pad missing ones with zeros to ensure consistency
-                for i in range(num_depths):
-                    key = f"accuracy_depth_{i}"
-                    if key not in metrics:
-                        metrics[key] = torch.tensor(0.0, device=_loss.device)
-                    dist.reduce(metrics[key], dst=0, op=dist.ReduceOp.AVG)
+                # Reduce only metrics that exist on all ranks
+                for k in list(metrics.keys()):
+                    if k.startswith("accuracy_depth_"):
+                        # Per-depth metrics may not exist on all ranks, skip
+                        continue
+                    dist.reduce(metrics[k], dst=0, op=dist.ReduceOp.AVG)
 
             for k, v in metrics.items():
                 val_metrics[k] = val_metrics.get(k, 0.0) + v.item()
 
         val_metrics = {f"{k}_epoch": v / num_batches for k, v in val_metrics.items()}
 
-        # Separate per-depth accuracies for cleaner logging
-        per_depth_metrics = {
-            k: v for k, v in val_metrics.items() if "accuracy_depth_" in k
-        }
+        depth_metrics = {k: v for k, v in val_metrics.items() if "accuracy_depth_" in k}
         base_metrics = {
             k: v for k, v in val_metrics.items() if "accuracy_depth_" not in k
         }
 
-        # Log base metrics
         metric_logger.info(
             {"val": base_metrics, "epoch": epoch}, extra={"step": self.global_step}
         )
 
-        # Log per-depth accuracies in a compact format
-        if per_depth_metrics:
-            depth_acc_list = []
-            for i in range(10):  # Up to 10 depths
-                key = f"accuracy_depth_{i}_epoch"
-                if key in per_depth_metrics:
-                    depth_acc_list.append(f"d{i}:{per_depth_metrics[key]:.3f}")
-            if depth_acc_list:
-                root_logger.info(
-                    f"    Validation depth accuracy: [{', '.join(depth_acc_list)}]"
-                )
+        if depth_metrics and self.local_rank == 0:
+            depth_items = sorted(depth_metrics.items())
+            depth_str = ", ".join(
+                f"d{k.split('_')[-2]}:{v:.3f}" for k, v in depth_items
+            )
+            root_logger.info(f"    Validation depth accuracy: [{depth_str}]")
 
     def save_checkpoint(self, epoch: int):
         self.checkpointer.save_checkpoint(self.model, self.opt, epoch)

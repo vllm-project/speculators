@@ -282,9 +282,9 @@ class PEagleDraftModel(Eagle3DraftModel):
 
         # Single loop for both loss and accuracy computation
         # Each depth contributes equally to gradient
-        prediction_loss = torch.tensor(0.0, device=device)
-        total_correct = torch.tensor(0.0, device=device)
-        total_tokens = torch.tensor(0.0, device=device)
+        prediction_loss = 0.0
+        total_correct = 0.0
+        total_tokens = 0.0
         start_idx = 0
 
         for _depth, indices in enumerate(sample_indices):
@@ -344,7 +344,9 @@ class PEagleDraftModel(Eagle3DraftModel):
 
         metrics = {
             "loss": loss.detach(),
-            "prediction_loss": prediction_loss.detach(),
+            "prediction_loss": prediction_loss.detach()
+            if isinstance(prediction_loss, torch.Tensor)
+            else torch.tensor(prediction_loss, device=loss.device),
             "accuracy": accuracy.detach(),
             "num_tokens": num_tokens.detach()
             if isinstance(num_tokens, torch.Tensor)
@@ -413,7 +415,9 @@ class PEagleDraftModel(Eagle3DraftModel):
             ),
         )
 
-        return cls(config=config, t2d=t2d, d2t=d2t)
+        model = cls(config=config, t2d=t2d, d2t=d2t)
+        model.load_verifier_weights()
+        return model
 
     @staticmethod
     def get_trainer_kwargs(**kwargs) -> tuple[dict, dict]:  # noqa: ARG004

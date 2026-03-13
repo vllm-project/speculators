@@ -140,6 +140,18 @@ follow_imports = 'silent'
 module = ["datasets.*", "transformers.*", "setuptools.*", "setuptools_git_versioning.*", "vllm.*"]
 ignore_missing_imports=true
 
+[[tool.mypy.overrides]]
+module = "speculators.train.trainer"
+disable_error_code = ["assignment", "union-attr"]
+
+[[tool.mypy.overrides]]
+module = "speculators.data_generation.*"
+disable_error_code = ["arg-type", "dict-item"]
+
+[[tool.mypy.overrides]]
+module = "speculators.models.peagle.attention"
+disable_error_code = ["union-attr"]
+
 [tool.ruff]
 line-length = 88
 indent-width = 4
@@ -264,6 +276,10 @@ select = [
     "C901", # forward() complexity is acceptable
     "PLR0912", # forward() branch count is acceptable
     "PLR0915", # forward() statement count is acceptable
+]
+
+"src/speculators/models/peagle/attention.py" = [
+    "S101", # assert for type narrowing is acceptable
 ]
 
 "src/speculators/train/trainer.py" = [
