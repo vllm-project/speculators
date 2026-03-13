@@ -25,7 +25,7 @@ class PEagleSpeculatorConfig(Eagle3SpeculatorConfig):
     :param max_seq_len: Maximum sequence length for attention mask construction
     """
 
-    speculators_model_type: Literal["peagle"] = "peagle"
+    speculators_model_type: Literal["peagle"] = "peagle"  # type: ignore[assignment]
     architectures: list[str] = Field(
         default_factory=lambda: ["PEagleSpeculator"],
         description="Model architectures that can load these weights",
