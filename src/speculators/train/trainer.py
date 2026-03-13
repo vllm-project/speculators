@@ -191,20 +191,12 @@ class Trainer:
             train_loader = tqdm(train_loader, desc=f"Epoch {epoch}")  # type: ignore[assignment]
 
         for batch in train_loader:
-            # Move batch to GPU, handling both tensors and lists of tensors
-            gpu_batch: dict = {}
-            for k, v in batch.items():
-                if isinstance(v, torch.Tensor):
-                    gpu_batch[k] = v.to(self.local_rank, non_blocking=True)
-                elif (
-                    isinstance(v, list)
-                    and len(v) > 0
-                    and isinstance(v[0], torch.Tensor)
-                ):
-                    # Handle list of tensors (e.g., hidden_states in P-EAGLE)
-                    gpu_batch[k] = [t.to(self.local_rank, non_blocking=True) for t in v]
-                else:
-                    gpu_batch[k] = v
+            gpu_batch = {
+                k: v.to(self.local_rank, non_blocking=True)
+                if isinstance(v, torch.Tensor)
+                else v
+                for k, v in batch.items()
+            }
 
             _draft_tokens, loss, metrics = self.model(
                 **gpu_batch, **self.config.train_call_kwargs
@@ -251,19 +243,12 @@ class Trainer:
         val_metrics: dict[str, float] = {}
         num_batches = len(val_loader)
         for batch in val_loader:
-            # Move batch to GPU, handling both tensors and lists of tensors
-            gpu_batch: dict = {}
-            for k, v in batch.items():
-                if isinstance(v, torch.Tensor):
-                    gpu_batch[k] = v.to(self.local_rank, non_blocking=True)
-                elif (
-                    isinstance(v, list)
-                    and len(v) > 0
-                    and isinstance(v[0], torch.Tensor)
-                ):
-                    gpu_batch[k] = [t.to(self.local_rank, non_blocking=True) for t in v]
-                else:
-                    gpu_batch[k] = v
+            gpu_batch = {
+                k: v.to(self.local_rank, non_blocking=True)
+                if isinstance(v, torch.Tensor)
+                else v
+                for k, v in batch.items()
+            }
 
             _draft_tokens, _loss, metrics = self.model(
                 **gpu_batch, **self.config.val_call_kwargs

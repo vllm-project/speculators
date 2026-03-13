@@ -44,6 +44,7 @@ def create_peagle_mask_mod(
         original_positions[full_idx] = original_pos
         depth_assignments[full_idx] = depth
 
+    assert sample_ids is not None, "sample_ids must be provided"
     sample_ids_repeated = sample_ids.squeeze(0).repeat(para_depth)  # [total_length]
 
     def peagle_mask_mod(_b, _h, q_idx, kv_idx):
@@ -103,10 +104,6 @@ def create_peagle_mask_mod(
     return peagle_mask_mod
 
 
-# Compile flex_attention for efficient block-sparse attention
-_compiled_flex_attention = torch.compile(flex_attention)
-
-
 def peagle_flex_attention_forward(
     module: torch.nn.Module,  # noqa: ARG001
     query: torch.Tensor,
@@ -119,7 +116,7 @@ def peagle_flex_attention_forward(
     """
     Flex attention forward pass for P-EAGLE.
 
-    Uses compiled flex_attention with block-sparse masks for memory efficiency.
+    Uses flex_attention with block-sparse masks for memory efficiency.
 
     Args:
         module: The attention module (unused, for interface compatibility)
@@ -141,7 +138,7 @@ def peagle_flex_attention_forward(
     key = key.contiguous()
     value = value.contiguous()
 
-    flex_attention_output = _compiled_flex_attention(
+    flex_attention_output = flex_attention(
         query,
         key,
         value,
