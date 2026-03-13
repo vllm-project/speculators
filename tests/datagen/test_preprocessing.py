@@ -9,11 +9,12 @@ import torch
 from datasets import Dataset as HFDataset
 from transformers import AutoTokenizer
 
+import speculators.data_generation.preprocessing as preprocessing
 from speculators.data_generation.preprocessing import (
     _create_loss_mask_from_offsets,
-    _detect_assistant_pattern,
+    _detect_assistant_pattern_from_template,
     _normalize_conversation,
-    _preprocess_batch,
+    _preprocess_batch_text,
     _supports_assistant_mask,
     build_eagle3_dataset,
 )
@@ -77,6 +78,65 @@ def test_normalize_conversation_unknown_role():
     assert result[1]["role"] == "assistant"
 
 
+@pytest.mark.sanity
+def test_load_and_preprocess_dataset_defaults_to_text_mode(monkeypatch):
+    """Test that omitted multimodal flag falls back to text-only processing."""
+
+    raw_dataset = HFDataset.from_dict(
+        {
+            "conversations": [
+                [
+                    {"role": "user", "content": "Hello"},
+                    {"role": "assistant", "content": "Hi!"},
+                ]
+            ]
+        }
+    )
+
+    class DummyTokenizer:
+        def __init__(self):
+            self.pad_token = None
+            self.eos_token = "<eos>"
+            self.chat_template = "dummy-template"
+
+        def apply_chat_template(self, *args, **kwargs):
+            return "formatted"
+
+    dummy_tokenizer = DummyTokenizer()
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(preprocessing, "load_raw_dataset", lambda *args, **kwargs: raw_dataset)
+    monkeypatch.setattr(
+        preprocessing.AutoTokenizer,
+        "from_pretrained",
+        lambda *args, **kwargs: dummy_tokenizer,
+    )
+    monkeypatch.setattr(
+        preprocessing,
+        "build_eagle3_dataset",
+        lambda *args, **kwargs: captured.setdefault("processor", kwargs.get("processor")) or raw_dataset,
+    )
+    monkeypatch.setattr(
+        preprocessing,
+        "save_token_frequency_distribution",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(preprocessing, "_visualize_sample", lambda *args, **kwargs: None)
+
+    dataset, tokenizer = preprocessing.load_and_preprocess_dataset(
+        target_model_path="dummy-model",
+        train_data_path="dummy-data",
+        seq_length=128,
+        build_dataset_num_proc=1,
+        is_multimodal=None,
+    )
+
+    assert dataset is raw_dataset
+    assert tokenizer is dummy_tokenizer
+    assert captured["processor"] is None
+    assert dummy_tokenizer.pad_token == dummy_tokenizer.eos_token
+
+
 # Tests for _detect_assistant_pattern
 @pytest.mark.sanity
 def test_detect_assistant_pattern_structure():
@@ -86,7 +146,7 @@ def test_detect_assistant_pattern_structure():
     if not hasattr(tokenizer, "apply_chat_template") or tokenizer.chat_template is None:
         pytest.skip("Tokenizer does not support chat templates")
 
-    pattern = _detect_assistant_pattern(tokenizer)
+    pattern = _detect_assistant_pattern_from_template(tokenizer)
 
     # Pattern should be a valid regex string
     assert isinstance(pattern, str)
@@ -111,7 +171,7 @@ def test_detect_assistant_pattern_correctly_identifies_assistant_vs_user():
         pytest.skip("Tokenizer does not support chat templates")
 
     # Get the pattern
-    pattern = _detect_assistant_pattern(tokenizer)
+    pattern = _detect_assistant_pattern_from_template(tokenizer)
 
     # Format a conversation manually to test the pattern
     test_conv = [
@@ -146,7 +206,7 @@ def test_detect_assistant_pattern_extracts_correct_content():
     if not hasattr(tokenizer, "apply_chat_template") or tokenizer.chat_template is None:
         pytest.skip("Tokenizer does not support chat templates")
 
-    pattern = _detect_assistant_pattern(tokenizer)
+    pattern = _detect_assistant_pattern_from_template(tokenizer)
 
     # Test with a multi-turn conversation
     test_conv = [
@@ -282,8 +342,8 @@ def test_preprocess_batch_basic():
         ]
     }
 
-    assistant_pattern = _detect_assistant_pattern(tokenizer)
-    results = _preprocess_batch(
+    assistant_pattern = _detect_assistant_pattern_from_template(tokenizer)
+    results = _preprocess_batch_text(
         examples, tokenizer, max_length=512, assistant_pattern=assistant_pattern
     )
 
@@ -308,8 +368,8 @@ def test_preprocess_batch_empty_conversations():
         pytest.skip("Tokenizer does not support chat templates")
 
     examples: dict[str, list] = {"conversations": []}
-    assistant_pattern = _detect_assistant_pattern(tokenizer)
-    results = _preprocess_batch(
+    assistant_pattern = _detect_assistant_pattern_from_template(tokenizer)
+    results = _preprocess_batch_text(
         examples, tokenizer, max_length=512, assistant_pattern=assistant_pattern
     )
 
@@ -336,8 +396,8 @@ def test_preprocess_batch_invalid_conversation():
         ]
     }
 
-    assistant_pattern = _detect_assistant_pattern(tokenizer)
-    results = _preprocess_batch(
+    assistant_pattern = _detect_assistant_pattern_from_template(tokenizer)
+    results = _preprocess_batch_text(
         examples, tokenizer, max_length=512, assistant_pattern=assistant_pattern
     )
 
@@ -370,8 +430,8 @@ def test_preprocess_batch_truncation():
     }
 
     max_length = 100
-    assistant_pattern = _detect_assistant_pattern(tokenizer)
-    results = _preprocess_batch(
+    assistant_pattern = _detect_assistant_pattern_from_template(tokenizer)
+    results = _preprocess_batch_text(
         examples, tokenizer, max_length=max_length, assistant_pattern=assistant_pattern
     )
 
@@ -406,7 +466,7 @@ def test_preprocess_batch_uses_hf_assistant_mask():
     }
 
     # Pass None to trigger masking path
-    results = _preprocess_batch(
+    results = _preprocess_batch_text(
         examples,
         tokenizer,
         max_length=128,
@@ -454,9 +514,9 @@ def test_preprocess_batch_falls_back_to_regex():
         ]
     }
 
-    assistant_pattern = _detect_assistant_pattern(tokenizer)
+    assistant_pattern = _detect_assistant_pattern_from_template(tokenizer)
 
-    results = _preprocess_batch(
+    results = _preprocess_batch_text(
         examples,
         tokenizer,
         max_length=128,
@@ -594,8 +654,8 @@ def test_preprocess_batch_with_turn_dropout():
         ]
     }
 
-    assistant_pattern = _detect_assistant_pattern(tokenizer)
-    results = _preprocess_batch(
+    assistant_pattern = _detect_assistant_pattern_from_template(tokenizer)
+    results = _preprocess_batch_text(
         examples,
         tokenizer,
         max_length=512,

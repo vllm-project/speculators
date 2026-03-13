@@ -9,8 +9,8 @@ from loguru import logger as log
 from transformers import AutoTokenizer
 
 from speculators.data_generation.preprocessing import (
-    _detect_assistant_pattern,
-    _preprocess_batch,
+    _detect_assistant_pattern_from_template,
+    _preprocess_batch_text,
 )
 
 # Test models covering major template families
@@ -42,7 +42,7 @@ def tokenizer(request):
 
 def test_regex_detection_across_models(tokenizer):
     """
-    Verify that _detect_assistant_pattern and _preprocess_batch (regex path)
+    Verify that _detect_assistant_pattern_text and _preprocess_batch_text (regex path)
     work correctly for a variety of model families.
     """
     model_name = tokenizer.name_or_path
@@ -50,7 +50,7 @@ def test_regex_detection_across_models(tokenizer):
 
     # 1. Detect pattern
     try:
-        pattern = _detect_assistant_pattern(tokenizer)
+        pattern = _detect_assistant_pattern_from_template(tokenizer)
     except (ValueError, RuntimeError) as e:
         pytest.fail(f"Failed to detect assistant pattern for {model_name}: {e}")
 
@@ -70,7 +70,7 @@ def test_regex_detection_across_models(tokenizer):
     }
 
     # Regex path by passing the explicit pattern
-    results = _preprocess_batch(
+    results = _preprocess_batch_text(
         examples, tokenizer, max_length=512, assistant_pattern=pattern
     )
 
