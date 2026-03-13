@@ -155,114 +155,153 @@ def conditional_torch_compile(func):
 @SpeculatorModel.register("eagle3")
 class Eagle3DraftModel(SpeculatorModel):
     config_class: ClassVar[type[Eagle3SpeculatorConfig]] = Eagle3SpeculatorConfig  # type: ignore[misc]
-    _keys_to_ignore_on_load_missing: ClassVar[list[str]] = [  # type: ignore[misc]
+    _keys_to_ignore_on_load_missing: ClassVar[list[str]] = [  # type: ignore[misc,assignment]
         "embed_tokens.weight",
         "verifier_norm.weight",
         "verifier_lm_head.weight",
         "d2t",
         "t2d",
+        "input_norm.weight",
     ]
     _keys_to_ignore_on_save: ClassVar[list[str]] = [  # type: ignore[misc,assignment]
         "verifier_lm_head.weight",
         "verifier_norm.weight",
     ]
 
-    def __init__(
-        self,
-        config: Eagle3SpeculatorConfig,
-        t2d: torch.Tensor | None,
-        d2t: torch.Tensor | None,
-    ):
-        super().__init__(
-            config=config,
-            verifier=None,
-            verifier_attachment_mode="train_only",
-        )
+    t2d: torch.Tensor | None
+    d2t: torch.Tensor | None
+
+    def __init__(self, config: Eagle3SpeculatorConfig):
+        # Forcibly override config settings
+        config.tie_word_embeddings = False
+        config.transformer_layer_config._attn_implementation = "simple_flex_attention"  # noqa: SLF001
+        super().__init__(config=config)
+
         self.hidden_size = config.transformer_layer_config.hidden_size
         self.draft_vocab_size = config.draft_vocab_size
+        self.verifier_vocab_size = config.transformer_layer_config.vocab_size
 
-        # Verify that if one mapping tensor is provided, the other is as well
-        if (t2d is None) != (d2t is None):
+        tl_config = self.config.transformer_layer_config
+        self._model_definitions = model_classes[tl_config.model_type]
+
+        # VOCAB MAPPINGS
+        self.use_draft_vocab = self.draft_vocab_size != self.verifier_vocab_size
+        t2d: torch.Tensor | None = None
+        d2t: torch.Tensor | None = None
+        if self.use_draft_vocab:
+            t2d = torch.zeros((self.verifier_vocab_size,), dtype=torch.bool)
+            d2t = torch.zeros((self.draft_vocab_size,), dtype=torch.long)
+        self.register_buffer("t2d", t2d)
+        self.register_buffer("d2t", d2t)
+
+        # FC LAYER
+        self.fc = torch.nn.Linear(3 * self.hidden_size, self.hidden_size, bias=False)
+
+        # DECODER LAYERS
+        num_layers = tl_config.num_hidden_layers
+        fl_class = self._model_definitions.first_layer_class
+        dl_class = self._model_definitions.decoder_layer_class
+        layers = [
+            fl_class(  # first layer
+                tl_config,
+                layer_idx=0,
+                norm_before_residual=self.config.norm_before_residual,
+            )
+        ]
+        layers.extend(  # remaining layers
+            [dl_class(tl_config, layer_idx) for layer_idx in range(1, num_layers)]
+        )
+        self.layers = torch.nn.ModuleList(layers)
+
+        # ROTARY EMBEDDINGS
+        # Create a modified config for the rotary embedding to use 2x the hidden size
+        modified_tl_config = copy.copy(config.transformer_layer_config)
+        modified_tl_config.hidden_size *= 2
+        self.rotary_emb = self._model_definitions.rotary_emb_class(modified_tl_config)
+
+        # LAYER NORMS
+        norm_class = self._model_definitions.norm_class
+        self.norm = norm_class(
+            self.hidden_size, eps=config.transformer_layer_config.rms_norm_eps
+        )
+        self.verifier_norm = norm_class(self.hidden_size, eps=tl_config.rms_norm_eps)
+        self.verifier_norm.weight.requires_grad = False
+
+        # Normalize draft path input (gpt-oss only)
+        if config.norm_before_fc:
+            self.input_norm = self._model_definitions.norm_class(
+                3 * self.hidden_size,
+                eps=config.transformer_layer_config.rms_norm_eps,
+            )
+        else:
+            self.input_norm = None
+
+        # TOKEN EMBEDDINGS
+        self.embed_tokens = torch.nn.Embedding(
+            self.verifier_vocab_size,
+            self.hidden_size,
+            padding_idx=tl_config.pad_token_id,
+        )
+        self.embed_tokens.weight.requires_grad = self.config.embed_requires_grad
+
+        # LM HEADS
+        self.lm_head = torch.nn.Linear(
+            self.hidden_size, self.draft_vocab_size, bias=False
+        )
+        self.verifier_lm_head = torch.nn.Linear(
+            self.hidden_size, self.draft_vocab_size, bias=False
+        )
+        self.verifier_lm_head.weight.requires_grad = False
+
+        # Initialize weights to nan
+        # This ensures it will be easy to detect if the weights are never
+        # loaded from the verifier model
+        torch.nn.init.constant_(self.lm_head.weight, torch.nan)
+        torch.nn.init.constant_(self.embed_tokens.weight, torch.nan)
+        torch.nn.init.constant_(self.verifier_lm_head.weight, torch.nan)
+
+    def load_vocab_mappings(self, t2d: torch.Tensor | None, d2t: torch.Tensor | None):
+        if t2d is None and d2t is None:
+            # Nothing to load, return early
+            return
+        elif t2d is None or d2t is None:
             raise ValueError(
                 "Both t2d and d2t must be provided together, or both must be None. "
                 f"Got t2d={'provided' if t2d is not None else 'None'}, "
                 f"d2t={'provided' if d2t is not None else 'None'}"
             )
 
-        # Register buffers - they can be None
-        if t2d is not None:
-            self.register_buffer("t2d", t2d)  # shape: [verifier_vocab_size], bool
-            if int(t2d.sum(dtype=torch.long).item()) != self.draft_vocab_size:
-                raise ValueError(
-                    f"t2d has {int(t2d.sum(dtype=torch.long).item())} non-zero values, "
-                    f"expected {self.draft_vocab_size}."
-                )
-        else:
-            self.register_buffer("t2d", None)
-
-        if d2t is not None:
-            self.register_buffer("d2t", d2t)  # shape: [draft_vocab_size], int offsets
-            if d2t.shape[0] != self.draft_vocab_size:
-                raise ValueError(
-                    f"d2t.shape[0] ({d2t.shape[0]}) must match"
-                    f" draft_vocab_size ({self.draft_vocab_size})."
-                )
-        else:
-            self.register_buffer("d2t", None)
-
-        self.fc = torch.nn.Linear(3 * self.hidden_size, self.hidden_size, bias=False)
-        self._model_definitions = model_classes[
-            config.transformer_layer_config.model_type
-        ]
-        self._setup_decoder_layers(
-            config.transformer_layer_config, config.norm_before_residual
-        )
-        self.norm = self._model_definitions.norm_class(
-            self.hidden_size, eps=config.transformer_layer_config.rms_norm_eps
-        )
-        self._setup_rotary_embedding(config.transformer_layer_config)
-        self._setup_embeddings_and_lm_heads(
-            config.speculators_config.verifier, t2d, config.embed_requires_grad
-        )
-
-    def _setup_decoder_layers(
-        self, transformer_layer_config: PretrainedConfig, norm_before_residual: bool
-    ):
-        num_hidden_layers = transformer_layer_config.num_hidden_layers
-        # Add first layer
-        layers = [
-            self._model_definitions.first_layer_class(
-                transformer_layer_config,
-                layer_idx=0,
-                norm_before_residual=norm_before_residual,
+        if not self.use_draft_vocab:
+            raise RuntimeError(
+                "Vocab mappings were provided but are not needed because verifier "
+                "vocab size equals draft vocab size. Vocab mappings are only required "
+                "when using a reduced vocab."
             )
-        ]
-        # Add additional regular decoder layers
-        layers.extend(
-            [
-                self._model_definitions.decoder_layer_class(
-                    transformer_layer_config, layer_idx
-                )
-                for layer_idx in range(1, num_hidden_layers)
-            ]
-        )
-        self.layers = torch.nn.ModuleList(layers)
 
-    def _setup_rotary_embedding(self, transformer_layer_config: PretrainedConfig):
-        # Create a modified config for the rotary embedding to use 2x the hidden size
-        modified_config = copy.copy(transformer_layer_config)
-        modified_config.hidden_size = modified_config.hidden_size * 2
-        self.rotary_emb = self._model_definitions.rotary_emb_class(modified_config)
+        if t2d.shape[0] != self.verifier_vocab_size:
+            raise ValueError(
+                f"t2d.shape[0] ({t2d.shape[0]}) must match"
+                f" verifier_vocab_size ({self.verifier_vocab_size})."
+            )
+        if int(t2d.sum(dtype=torch.long).item()) != self.draft_vocab_size:
+            raise ValueError(
+                f"t2d has {int(t2d.sum(dtype=torch.long).item())} non-zero values, "
+                f"expected {self.draft_vocab_size}."
+            )
 
-    def _setup_embeddings_and_lm_heads(
-        self,
-        config: VerifierConfig,
-        t2d: torch.Tensor | None,
-        embed_requires_grad: bool,
-    ):
-        if config.name_or_path is None:
+        if d2t.shape[0] != self.draft_vocab_size:
+            raise ValueError(
+                f"d2t.shape[0] ({d2t.shape[0]}) must match"
+                f" draft_vocab_size ({self.draft_vocab_size})."
+            )
+
+        self.load_state_dict({"t2d": t2d, "d2t": d2t}, strict=False)
+
+    def load_verifier_weights(self):  # noqa: C901
+        verifier_config = self.config.speculators_config.verifier
+        if verifier_config.name_or_path is None:
             raise ValueError("VerifierConfig `name_or_path` value is required.")
-        verifier_model_config = AutoConfig.from_pretrained(config.name_or_path)
+        verifier_model_config = AutoConfig.from_pretrained(verifier_config.name_or_path)
 
         # For multimodal models (Qwen3VL, etc.), extract text_config
         if hasattr(verifier_model_config, "text_config"):
@@ -273,88 +312,73 @@ class Eagle3DraftModel(SpeculatorModel):
                 f"Verifier hidden size {verifier_model_config.hidden_size} does not"
                 f" match draft hidden size {self.hidden_size}."
             )
-        if t2d is not None and t2d.shape[0] != verifier_model_config.vocab_size:
-            raise ValueError(
-                f"t2d.shape[0] ({t2d.shape[0]}) must match"
-                f" verifier_vocab_size ({verifier_model_config.vocab_size})."
-            )
 
-        # Load embedding and lm_head weights using suffix patterns (model-agnostic)
+        # Load embedding, lm_head, and norm weights using suffix names (model-agnostic)
         verifier_weights = load_model_layers(
             ["embed_tokens.weight", "lm_head.weight", "model.norm.weight"],
-            config.name_or_path,
+            verifier_config.name_or_path,
         )
 
         if "embed_tokens.weight" not in verifier_weights:
             raise KeyError(
-                f"Could not find embedding weights in {config.name_or_path}. "
+                f"Could not find embedding weights in {verifier_config.name_or_path}. "
                 "Expected a key ending with 'embed_tokens.weight'."
             )
 
         embed_tokens_weight = verifier_weights["embed_tokens.weight"]
         # Use embed_tokens as fallback for lm_head if not found (tied weights)
         lm_head_weight = verifier_weights.get("lm_head.weight", embed_tokens_weight)
-        self.verifier_norm = self._model_definitions.norm_class(
-            self.hidden_size,
-            eps=verifier_model_config.rms_norm_eps,
-        )
-        # EMBEDDINGS
-        self.embed_tokens = torch.nn.Embedding(
-            verifier_model_config.vocab_size,
-            self.hidden_size,
-            padding_idx=verifier_model_config.pad_token_id,
-        )
-        # shape: [verifier_vocab_size, hidden_size]
-        default_dtype = self.embed_tokens.weight.dtype
 
-        embed_tokens_sd = {"weight": embed_tokens_weight.to(default_dtype)}
-        self.embed_tokens.load_state_dict(embed_tokens_sd)
-        self.embed_tokens.weight.requires_grad = embed_requires_grad
+        # Check that embed_tokens hasn't been initialized yet (e.g. by from_pretrained)
+        if self.embed_tokens.weight.isnan().any():
+            embed_tokens_sd = {"weight": embed_tokens_weight}
+            self.embed_tokens.load_state_dict(embed_tokens_sd)
 
-        # LM HEADS
-        self.lm_head = torch.nn.Linear(
-            self.hidden_size, self.draft_vocab_size, bias=False
-        )
-        # shape: [hidden_size, draft_vocab_size]
-        self.verifier_lm_head = torch.nn.Linear(
-            self.hidden_size, self.draft_vocab_size, bias=False
-        )
+        if self.use_draft_vocab:
+            if self.t2d is None or not torch.any(self.t2d).item():
+                # (not torch.any(self.t2d).item) because t2d is initialized to zeros
+                raise ValueError(
+                    "t2d tensor hasn't been set. Please call "
+                    "`.load_vocab_mappings(t2d, d2t)` before `.load_verifier_weights()`"
+                )
 
-        if t2d is not None:
             # Reduce to limited vocab
-            lm_head_weight = lm_head_weight.to(device=t2d.device, dtype=default_dtype)[
-                t2d.to(torch.bool), :
+            lm_head_weight = lm_head_weight[
+                self.t2d.to(device=lm_head_weight.device, dtype=torch.bool), :
             ]
-        else:
-            # Use full verifier vocab (no masking)
-            lm_head_weight = lm_head_weight.to(dtype=default_dtype)
+
         if lm_head_weight.shape != self.lm_head.weight.shape:
             raise ValueError(
                 f"Verifier lm head data shape "
                 f"{lm_head_weight.shape} does not match draft "
                 f"lm head shape {self.lm_head.weight.shape}"
             )
-        self.lm_head.weight.data = lm_head_weight.detach().clone()
-        self.verifier_lm_head.weight.data = lm_head_weight.detach().clone()
 
-        self.verifier_lm_head.weight.requires_grad = False
+        # Check that lm_head hasn't been initialized yet (e.g. by from_pretrained)
+        if self.lm_head.weight.isnan().any():
+            self.lm_head.load_state_dict(
+                {"weight": lm_head_weight.detach().clone()}, strict=False
+            )
+
+        # Always safe to overwrite verifier_lm_head
+        self.verifier_lm_head.load_state_dict(
+            {"weight": lm_head_weight.detach().clone()}, strict=False
+        )
 
         if "model.norm.weight" not in verifier_weights:
             warnings.warn(
-                f"Could not find final norm weights in {config.name_or_path}. "
+                f"Could not find final norm weights in {verifier_config.name_or_path}. "
                 "Using default initialization (weight=1.0).",
                 UserWarning,
                 stacklevel=2,
             )
         else:
-            verifier_norm_weight = verifier_weights["model.norm.weight"]
-            verifier_norm_sd = {"weight": verifier_norm_weight.to(default_dtype)}
+            # Always safe to overwrite verifier_norm
+            verifier_norm_sd = {"weight": verifier_weights["model.norm.weight"]}
             self.verifier_norm.load_state_dict(verifier_norm_sd)
 
-        self.verifier_norm.weight.requires_grad = False
-
     @conditional_torch_compile
-    def forward(
+    def forward(  # noqa: C901
         self,
         hidden_states: torch.Tensor,  # shape: [1, total_seq_len, 3 * hidden_size]
         input_ids: torch.Tensor,  # shape: [1, total_seq_len]
@@ -392,6 +416,8 @@ class Eagle3DraftModel(SpeculatorModel):
             device=device,
         )
 
+        if self.input_norm is not None:
+            hidden_states = self.input_norm(hidden_states)
         hidden_states = self.fc(hidden_states)
         # shape: [1, total_seq_len, hidden_size]
 
@@ -498,6 +524,8 @@ class Eagle3DraftModel(SpeculatorModel):
     def from_training_args(
         cls,
         verifier_config: PretrainedConfig,
+        t2d: torch.Tensor | None = None,
+        d2t: torch.Tensor | None = None,
         **kwargs,
     ) -> "Eagle3DraftModel":
         """Create Eagle3 model from training arguments.
@@ -533,8 +561,23 @@ class Eagle3DraftModel(SpeculatorModel):
                 ),
             ),
         )
+        model = cls(config=config)
+        model.load_vocab_mappings(t2d, d2t)
+        model.load_verifier_weights()
+        return model
 
-        return cls(config=config, t2d=kwargs.get("t2d"), d2t=kwargs.get("d2t"))
+    @classmethod
+    def from_pretrained(
+        cls,
+        *args,
+        t2d: torch.Tensor | None = None,
+        d2t: torch.Tensor | None = None,
+        **kwargs,
+    ) -> "Eagle3DraftModel":
+        model: Eagle3DraftModel = super().from_pretrained(*args, **kwargs)  # type: ignore[assignment]
+        model.load_vocab_mappings(t2d, d2t)
+        model.load_verifier_weights()
+        return model
 
     @staticmethod
     def get_trainer_kwargs(**kwargs) -> tuple[dict, dict]:

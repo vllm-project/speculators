@@ -4,7 +4,10 @@ from typing import Literal, NamedTuple
 
 import torch
 import torch.distributed as dist
-from torch.distributed.fsdp import FSDPModule
+from torch.distributed.checkpoint.state_dict import (
+    StateDictOptions,
+    set_model_state_dict,
+)
 from torch.utils.data import DataLoader
 from tqdm import TqdmExperimentalWarning
 from tqdm.rich import tqdm
@@ -88,29 +91,40 @@ class Trainer:
         # Verify model is compatible with training infrastructure
         SpeculatorModel.verify_training_compatible(self.model)
 
-        if self.is_distributed:
-            apply_fully_sharded(self.model)
+        load_checkpoint = (
+            self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1
+        )
 
-            if self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1:
-                self.checkpointer.load_model_state_dict(self.model)
-            else:
-                for m in self.model.layers.children():  # type: ignore[union-attr]
-                    if not isinstance(m, FSDPModule):
-                        continue
-                    acc = torch.accelerator.current_accelerator()
-                    if acc is None:
-                        m.to_empty(device="cuda")  # type: ignore[attr-defined]
-                    else:
-                        acc_type = acc.type
-                        m.to_empty(device=acc_type)  # type: ignore[attr-defined]
-                    for sub_module in m.modules():  # type: ignore[attr-defined]
-                        if hasattr(sub_module, "reset_parameters"):
-                            sub_module.reset_parameters()  # type: ignore[operator]
-                # todo: Ensure lm_head and embed_tokens are loaded after reset
-        else:
+        if not self.is_distributed:
+            # Single device case
             self.model.to(self.local_rank)  # type: ignore[arg-type]
-            if self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1:
+            if load_checkpoint:
                 self.checkpointer.load_model_state_dict(self.model)
+            return
+
+        # Distributed case
+        # Capture full state dict on rank 0 before FSDP sharding
+        full_state_dict = {}
+        if not load_checkpoint and dist.get_rank() == 0:
+            full_state_dict = self.model.state_dict()
+
+        apply_fully_sharded(self.model)
+
+        if load_checkpoint:
+            self.checkpointer.load_model_state_dict(self.model)
+        else:
+            # Broadcast full state dict from rank 0 to all ranks
+            set_model_state_dict(
+                self.model,
+                full_state_dict,
+                options=StateDictOptions(
+                    full_state_dict=True,
+                    broadcast_from_rank0=True,
+                    strict=False,
+                ),
+            )
+            del full_state_dict
+            dist.barrier()
 
     def setup_optimizer(self):
         # Setup optimizer

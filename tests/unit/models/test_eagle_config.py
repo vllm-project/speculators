@@ -21,7 +21,7 @@ from speculators import (
     SpeculatorsConfig,
     VerifierConfig,
 )
-from speculators.models import EagleSpeculatorConfig
+from speculators.convert.eagle.eagle_legacy_model import EagleSpeculatorConfig
 from speculators.proposals import GreedyTokenProposalConfig
 
 # ===== Fixtures =====

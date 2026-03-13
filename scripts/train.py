@@ -120,7 +120,7 @@ def create_transformer_layer_config(
     if hasattr(verifier_config, "text_config"):
         verifier_config = verifier_config.text_config
 
-    transformer_layer_config = config_class(
+    return config_class(
         vocab_size=verifier_config.vocab_size,
         hidden_size=verifier_config.hidden_size,
         intermediate_size=verifier_config.intermediate_size,
@@ -132,9 +132,8 @@ def create_transformer_layer_config(
         initializer_range=verifier_config.initializer_range,
         rms_norm_eps=verifier_config.rms_norm_eps,
         head_dim=getattr(verifier_config, "head_dim", None),
+        tie_word_embeddings=False,
     )
-    transformer_layer_config._attn_implementation = "simple_flex_attention"  # noqa: SLF001
-    return transformer_layer_config
 
 
 def main(args: argparse.Namespace):
@@ -176,10 +175,6 @@ def main(args: argparse.Namespace):
         args.verifier_name_or_path, args.num_layers, draft_arch=args.draft_arch
     )
 
-    # Get model class from registry and create model using its factory method
-    if SpeculatorModel.registry_auto_discovery:
-        SpeculatorModel.auto_populate_registry()
-
     if args.speculator_type not in SpeculatorModel.registry:
         raise ValueError(
             f"Unknown speculator type: {args.speculator_type}. "
@@ -187,21 +182,25 @@ def main(args: argparse.Namespace):
         )
 
     model_class = SpeculatorModel.registry[args.speculator_type]
-
-    # Set attention implementation from model class
-    if hasattr(model_class, "_attn_implementation_name"):
-        # noqa: SLF001
-        transformer_layer_config._attn_implementation = (
-            model_class._attn_implementation_name  # noqa: SLF001
+    if args.from_pretrained:
+        draft_model = model_class.from_pretrained(
+            args.from_pretrained, t2d=t2d, d2t=d2t
         )
+    else:
+        # Set attention implementation from model class
+        if hasattr(model_class, "_attn_implementation_name"):
+            # noqa: SLF001
+            transformer_layer_config._attn_implementation = (
+                model_class._attn_implementation_name  # noqa: SLF001
+            )
 
-    draft_model = model_class.from_training_args(
-        verifier_config=transformer_layer_config,
-        t2d=t2d,
-        d2t=d2t,
-        draft_vocab_size=draft_vocab_size,
-        **vars(args),
-    )
+        draft_model = model_class.from_training_args(
+            verifier_config=transformer_layer_config,
+            t2d=t2d,
+            d2t=d2t,
+            draft_vocab_size=draft_vocab_size,
+            **vars(args),
+        )
 
     # Setup dataloaders
     train_files, val_files = split_files(args.data_path, ratio=0.9)
@@ -259,6 +258,12 @@ def parse_args():
         default="eagle3",
         help="Type of speculator model to train (e.g., eagle3)",
     )
+    parser.add_argument(
+        "--from-pretrained",
+        type=str,
+        default="",
+        help="The pretrained draft model to finetune",
+    )
     parser.add_argument("--data-path", type=str, default="./data")
     parser.add_argument("--save-path", type=str, default="./checkpoints")
     parser.add_argument("--epochs", type=int, default=20)
@@ -312,7 +317,7 @@ def parse_args():
         "--embed-requires-grad",
         action=argparse.BooleanOptionalAction,
         default=False,
-        help="Whether to train embedding layer weights (default: True)",
+        help="Whether to train embedding layer weights (default: False)",
     )
     # P-EAGLE specific parameters
     parser.add_argument(
@@ -381,7 +386,7 @@ if __name__ == "__main__":
 
 
 # RUN WITH:
-# torchrun --nnodes=1 --nproc_per_node=<num_gpus>  scripts/train.py
+# torchrun --standalone --nproc_per_node=<num_gpus>  scripts/train.py
 # for FSDP training
 # OR
 # python scripts/train.py
