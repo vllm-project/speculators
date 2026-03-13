@@ -132,6 +132,14 @@ class TrainArgs(NamedTuple):
     scheduler_warmup_steps: int | _NS = _NOTSET
     scheduler_total_steps: int | _NS = _NOTSET
     scheduler_num_cosine_cycles: float | _NS = _NOTSET
+    # Model type selection
+    speculator_type: str | _NS = _NOTSET
+    # P-EAGLE specific parameters
+    para_depths: int | _NS = _NOTSET
+    down_sample_ratio: float | _NS = _NOTSET
+    down_sample_ratio_min: float | _NS = _NOTSET
+    max_seq_len: int | _NS = _NOTSET
+    ptd_token_id: int | _NS = _NOTSET
 
 
 ### END OF SCRIPT ARGUMENTS ###
