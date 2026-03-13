@@ -152,6 +152,10 @@ disable_error_code = ["arg-type", "dict-item"]
 module = "speculators.models.peagle.attention"
 disable_error_code = ["union-attr"]
 
+[[tool.mypy.overrides]]
+module = "speculators.models.peagle.core"
+disable_error_code = ["assignment", "attr-defined"]
+
 [tool.ruff]
 line-length = 88
 indent-width = 4
