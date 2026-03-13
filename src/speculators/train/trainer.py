@@ -192,7 +192,7 @@ class Trainer:
 
         for batch in train_loader:
             # Move batch to GPU, handling both tensors and lists of tensors
-            gpu_batch = {}
+            gpu_batch: dict = {}
             for k, v in batch.items():
                 if isinstance(v, torch.Tensor):
                     gpu_batch[k] = v.to(self.local_rank, non_blocking=True)
@@ -252,7 +252,7 @@ class Trainer:
         num_batches = len(val_loader)
         for batch in val_loader:
             # Move batch to GPU, handling both tensors and lists of tensors
-            gpu_batch = {}
+            gpu_batch: dict = {}
             for k, v in batch.items():
                 if isinstance(v, torch.Tensor):
                     gpu_batch[k] = v.to(self.local_rank, non_blocking=True)

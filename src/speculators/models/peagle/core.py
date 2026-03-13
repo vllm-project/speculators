@@ -34,9 +34,9 @@ class PEagleDraftModel(Eagle3DraftModel):
     # Epsilon for numerical stability in loss normalization
     LOSS_EPSILON: ClassVar[float] = 1e-5
 
-    config_class: ClassVar[type[PEagleSpeculatorConfig]] = PEagleSpeculatorConfig
+    config_class: ClassVar[type[PEagleSpeculatorConfig]] = PEagleSpeculatorConfig  # type: ignore[misc]
     _attn_implementation_name: ClassVar[str] = "peagle_flex_attention"
-    _keys_to_ignore_on_load_missing: ClassVar[list[str]] = [
+    _keys_to_ignore_on_load_missing: ClassVar[list[str]] = [  # type: ignore[misc]
         *Eagle3DraftModel._keys_to_ignore_on_load_missing,
         "mask_hidden",
     ]
@@ -44,10 +44,12 @@ class PEagleDraftModel(Eagle3DraftModel):
     def __init__(
         self,
         config: PEagleSpeculatorConfig,
-        t2d: torch.Tensor | None,
-        d2t: torch.Tensor | None,
+        t2d: torch.Tensor | None = None,
+        d2t: torch.Tensor | None = None,
     ):
-        super().__init__(config=config, t2d=t2d, d2t=d2t)
+        super().__init__(config=config)
+        if t2d is not None or d2t is not None:
+            self.load_vocab_mappings(t2d, d2t)
 
         self.para_depths = config.para_depths
         self.down_sample_ratio = config.down_sample_ratio
@@ -165,7 +167,7 @@ class PEagleDraftModel(Eagle3DraftModel):
         ]
 
         # Pad each sampled group to seq_length
-        index = []
+        index: list[int] = []
         padded_hidden_states = [
             self._pad_hidden_states(item, seq_length, self.mask_hidden, index)
             for item in hidden_states_list
@@ -205,7 +207,7 @@ class PEagleDraftModel(Eagle3DraftModel):
             sample_ids=sample_ids,
         )
 
-        attention_mask = create_block_mask(
+        attention_mask = create_block_mask(  # type: ignore[assignment]
             mask_mod,
             B=None,
             H=None,
@@ -281,9 +283,9 @@ class PEagleDraftModel(Eagle3DraftModel):
 
         # Single loop for both loss and accuracy computation
         # Each depth contributes equally to gradient
-        prediction_loss = 0.0
-        total_correct = 0.0
-        total_tokens = 0.0
+        prediction_loss = torch.tensor(0.0, device=device)
+        total_correct = torch.tensor(0.0, device=device)
+        total_tokens = torch.tensor(0.0, device=device)
         start_idx = 0
 
         for _depth, indices in enumerate(sample_indices):
@@ -350,6 +352,8 @@ class PEagleDraftModel(Eagle3DraftModel):
     def from_training_args(
         cls,
         verifier_config: PretrainedConfig,
+        t2d: torch.Tensor | None = None,
+        d2t: torch.Tensor | None = None,
         **kwargs,
     ) -> "PEagleDraftModel":
         """
@@ -395,7 +399,7 @@ class PEagleDraftModel(Eagle3DraftModel):
             ),
         )
 
-        return cls(config=config, t2d=kwargs.get("t2d"), d2t=kwargs.get("d2t"))
+        return cls(config=config, t2d=t2d, d2t=d2t)
 
     @staticmethod
     def get_trainer_kwargs(**kwargs) -> tuple[dict, dict]:  # noqa: ARG004
