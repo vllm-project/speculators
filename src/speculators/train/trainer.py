@@ -22,7 +22,7 @@ from speculators.train.checkpointer import (
     DistributedCheckpointer,
     SingleGPUCheckpointer,
 )
-from speculators.train.utils import apply_fully_sharded
+from speculators.train.utils import apply_fully_sharded, normalize_counted_metrics
 
 root_logger = logging.getLogger("speculators")
 metric_logger = logging.getLogger("speculators.metrics")
@@ -191,12 +191,20 @@ class Trainer:
             train_loader = tqdm(train_loader, desc=f"Epoch {epoch}")  # type: ignore[assignment]
 
         for batch in train_loader:
-            gpu_batch = {
-                k: v.to(self.local_rank, non_blocking=True)
-                if isinstance(v, torch.Tensor)
-                else v
-                for k, v in batch.items()
-            }
+            # Move batch to GPU, handling both tensors and lists of tensors
+            gpu_batch = {}
+            for k, v in batch.items():
+                if isinstance(v, torch.Tensor):
+                    gpu_batch[k] = v.to(self.local_rank, non_blocking=True)
+                elif (
+                    isinstance(v, list)
+                    and len(v) > 0
+                    and isinstance(v[0], torch.Tensor)
+                ):
+                    # Handle list of tensors (e.g., hidden_states in P-EAGLE)
+                    gpu_batch[k] = [t.to(self.local_rank, non_blocking=True) for t in v]
+                else:
+                    gpu_batch[k] = v
 
             _draft_tokens, loss, metrics = self.model(
                 **gpu_batch, **self.config.train_call_kwargs
@@ -217,6 +225,7 @@ class Trainer:
                         dist.reduce(v, dst=0, op=dist.ReduceOp.AVG)
 
                 metrics = {k: v.item() for k, v in metrics.items()}
+                metrics = normalize_counted_metrics(metrics)
                 metric_logger.info(
                     {
                         "train": metrics,
@@ -242,29 +251,45 @@ class Trainer:
         val_metrics: dict[str, float] = {}
         num_batches = len(val_loader)
         for batch in val_loader:
-            gpu_batch = {
-                k: v.to(self.local_rank, non_blocking=True)
-                if isinstance(v, torch.Tensor)
-                else v
-                for k, v in batch.items()
-            }
+            # Move batch to GPU, handling both tensors and lists of tensors
+            gpu_batch = {}
+            for k, v in batch.items():
+                if isinstance(v, torch.Tensor):
+                    gpu_batch[k] = v.to(self.local_rank, non_blocking=True)
+                elif (
+                    isinstance(v, list)
+                    and len(v) > 0
+                    and isinstance(v[0], torch.Tensor)
+                ):
+                    gpu_batch[k] = [t.to(self.local_rank, non_blocking=True) for t in v]
+                else:
+                    gpu_batch[k] = v
 
             _draft_tokens, _loss, metrics = self.model(
                 **gpu_batch, **self.config.val_call_kwargs
             )
 
             if self.is_distributed:
-                for m in metrics.values():
-                    dist.all_reduce(m, op=dist.ReduceOp.AVG)
+                for v in metrics.values():
+                    dist.reduce(v, dst=0, op=dist.ReduceOp.AVG)
 
             for k, v in metrics.items():
                 val_metrics[k] = val_metrics.get(k, 0.0) + v.item()
 
-        val_metrics = {f"{k}_epoch": v / num_batches for k, v in val_metrics.items()}
+        val_metrics = {k: v / num_batches for k, v in val_metrics.items()}
+        val_metrics = normalize_counted_metrics(val_metrics)
+        val_metrics = {f"{k}_epoch": v for k, v in val_metrics.items()}
+
         metric_logger.info(
             {"val": val_metrics, "epoch": epoch}, extra={"step": self.global_step}
         )
+
         return val_metrics
+
+    def save_checkpoint(self, epoch: int):
+        self.checkpointer.save_checkpoint(self.model, self.opt, epoch)
+        if self.scheduler is not None:
+            self.checkpointer.save_scheduler_state_dict(self.scheduler, epoch)
 
     def maybe_save_checkpoint(self, epoch: int, val_metrics: dict | None):
         if (

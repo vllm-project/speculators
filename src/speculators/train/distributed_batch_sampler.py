@@ -30,6 +30,8 @@ from heapq import heapreplace
 from typing import NamedTuple
 
 import numpy as np
+import torch
+import torch.distributed as dist
 
 # Third Party
 from numpy.typing import ArrayLike, NDArray
@@ -229,6 +231,23 @@ class MultipackDistributedBatchSamplerV2(Sampler):
         # Translate them so that they are instead relative to the overall unshuffled
         # self.lengths array.
         batches = [indices[batch] for batch in batches]
+
+        # CRITICAL FIX: Synchronize batch count across all ranks to prevent NCCL deadlock
+        # Different ranks can generate different numbers of batches due to LPT packing.
+        # Truncate all ranks to the minimum batch count to ensure equal iterations.
+        if self.num_replicas > 1 and dist.is_available() and dist.is_initialized():
+            # Create tensor on CUDA device (required for NCCL backend)
+            device = torch.device(f"cuda:{torch.cuda.current_device()}")
+            local_batch_count = torch.tensor(
+                len(batches), dtype=torch.long, device=device
+            )
+            # All-reduce to find minimum batch count across all ranks
+            dist.all_reduce(local_batch_count, op=dist.ReduceOp.MIN)
+            min_batch_count = local_batch_count.item()
+
+            # Truncate to minimum to ensure all ranks have same batch count
+            if len(batches) > min_batch_count:
+                batches = batches[:min_batch_count]
 
         # Cache result
         self._cached_generated_batches = (epoch, batches)

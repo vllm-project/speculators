@@ -104,6 +104,22 @@ def resolve_mask_token_id(
     )
 
 
+def normalize_counted_metrics(metrics: dict[str, float]) -> dict[str, float]:
+    """Normalize metrics that have a companion count key.
+
+    For any key ending in ' count', divides the matching ' acc' metric
+    by the count (to correct for zero-padded depths in distributed reduce),
+    then removes the count key.
+    """
+    count_suffix = " count"
+    for ck in [k for k in metrics if k.endswith(count_suffix)]:
+        acc_key = ck.removesuffix(count_suffix) + " acc"
+        if acc_key in metrics and metrics[ck] > 0:
+            metrics[acc_key] /= metrics[ck]
+        del metrics[ck]
+    return metrics
+
+
 def apply_fully_sharded(model: torch.nn.Module):
     """Applies torch FSDP fully_shard to the model, wrapping layers in FSDPModule.
 
@@ -119,6 +135,6 @@ def apply_fully_sharded(model: torch.nn.Module):
     for layer in model.layers:  # type: ignore[union-attr]
         fully_shard(layer, mp_policy=mp_policy)
 
-    fully_shard(model)
+    fully_shard(model, mp_policy=mp_policy)
 
     return model

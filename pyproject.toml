@@ -145,7 +145,7 @@ ignore_missing_imports=true
 [tool.ruff]
 line-length = 88
 indent-width = 4
-exclude = ["build", "dist", "env", ".venv"]
+exclude = ["build", "dist", "env", ".venv", "output"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -252,12 +252,26 @@ select = [
     "INP001", # allow implicit namespace packages in scripts
     "PTH", # os.path is acceptable in scripts
     "T201", # print statements are acceptable in scripts
+    "SLF001", # allow private member access for model configuration
 ]
 
 "examples/**/*.py" = [
     "INP001", # allow implicit namespace packages in examples
 ]
 
+"src/speculators/models/peagle/core.py" = [
+    "SLF001", # accessing parent class private attributes for inheritance
+    "S101", # assert for training validation is acceptable
+    "PLR2004", # magic value 2 in ndim comparison is clear
+    "C901", # forward() complexity is acceptable
+    "PLR0912", # forward() branch count is acceptable
+    "PLR0915", # forward() statement count is acceptable
+]
+
+"src/speculators/train/trainer.py" = [
+    "C901", # train/val epoch complexity is acceptable
+    "PLR0912", # train/val epoch branch count is acceptable
+]
 
 [tool.ruff.lint.isort]
 known-first-party = ["speculators", "tests"]
