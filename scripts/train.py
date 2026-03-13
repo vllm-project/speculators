@@ -233,18 +233,25 @@ def main(args: argparse.Namespace):
         )
 
     model_class = SpeculatorModel.registry[args.speculator_type]
+
+    # Set attention implementation from model class
+    if hasattr(model_class, "_attn_implementation_name"):
+        # noqa: SLF001
+        transformer_layer_config._attn_implementation = (
+            model_class._attn_implementation_name  # noqa: SLF001
+        )
+
     if args.from_pretrained:
         draft_model = model_class.from_pretrained(
             args.from_pretrained, t2d=t2d, d2t=d2t
         )
     else:
-        args_dict = vars(args)
-        args_dict["draft_vocab_size"] = draft_vocab_size
         draft_model = model_class.from_training_args(
             verifier_config=transformer_layer_config,
             t2d=t2d,
             d2t=d2t,
-            **args_dict,
+            draft_vocab_size=draft_vocab_size,
+            **vars(args),
         )
 
     # Setup dataloaders
@@ -502,6 +509,46 @@ def parse_args():
         action="store_true",
         help="Use RMSNorm before fc in Eagle3 draft path "
         "(e.g. for gpt-oss). Omit for other models.",
+    )
+    # P-EAGLE specific parameters
+    parser.add_argument(
+        "--para-depths",
+        type=int,
+        default=8,
+        help="Number of parallel prediction groups for P-EAGLE (default: 8)",
+    )
+    parser.add_argument(
+        "--down-sample-ratio",
+        type=float,
+        default=0.7,
+        help="Geometric decay ratio for COD sampling in P-EAGLE (default: 0.7)",
+    )
+    parser.add_argument(
+        "--down-sample-ratio-min",
+        type=float,
+        default=0.2,
+        help="Minimum retention ratio for COD sampling in P-EAGLE (default: 0.2)",
+    )
+    parser.add_argument(
+        "--max-seq-len",
+        type=int,
+        default=2048,
+        help="Maximum sequence length for attention mask construction (default: 2048)",
+    )
+    parser.add_argument(
+        "--ptd-token-id",
+        type=int,
+        default=0,
+        help="Token ID for predicted token dropout padding in P-EAGLE (default: 0)",
+    )
+    parser.add_argument(
+        "--prediction-loss-weight",
+        type=float,
+        default=1.0,
+        help=(
+            "Weight for prediction loss (cross-entropy on logits) "
+            "in P-EAGLE (default: 1.0)"
+        ),
     )
     # Dataloader parameters
     parser.add_argument(
