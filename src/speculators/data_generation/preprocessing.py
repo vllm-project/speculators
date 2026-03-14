@@ -176,6 +176,13 @@ def _detect_assistant_pattern(tokenizer: PreTrainedTokenizer) -> str:
     else:
         role_marker = prefix
 
+    # Strip <think>...</think> blocks from the role marker. Thinking model
+    # templates wrap assistant content in these tags, but the test messages
+    # can produce empty blocks (e.g. "<think>\n\n</think>\n") with reasoning models,
+    # which then get baked into the regex as literals. Removing them ensures
+    # that reasoning stays within the assistant content group.
+    role_marker = re.sub(r"<think>.*?</think>\s*", "", role_marker, flags=re.DOTALL)
+
     # Determine the stable TURN-LEVEL suffix
     suffix1 = formatted[first_end : formatted.find("USER_MSG_2")]
     suffix2 = formatted[second_end:]
@@ -242,7 +249,8 @@ def _create_loss_mask_from_offsets(
                 loss_mask[idx] = 1
 
     if matches_found == 0:
-        log.warning("No assistant response spans found in conversation")
+        raise ValueError("No matches found for assistant pattern. "
+                         f"Could not create loss mask for conversation: '{text}'")
 
     return loss_mask
 
