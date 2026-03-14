@@ -249,8 +249,7 @@ def _create_loss_mask_from_offsets(
                 loss_mask[idx] = 1
 
     if matches_found == 0:
-        raise ValueError("No matches found for assistant pattern. "
-                         f"Could not create loss mask for conversation: '{text}'")
+        log.warning("No assistant response spans found in conversation")
 
     return loss_mask
 
