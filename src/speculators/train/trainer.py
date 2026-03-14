@@ -102,7 +102,9 @@ class Trainer:
             # Single device case
             self.model.to(self.local_rank)  # type: ignore[arg-type]
             if load_checkpoint:
-                self.checkpointer.load_model_state_dict(self.model)
+                restored_from_best = self.init_best_val_loss_from_checkpoint_best()
+                if not restored_from_best:
+                    self.checkpointer.load_model_state_dict(self.model)
             return
 
         # Distributed case
@@ -114,7 +116,9 @@ class Trainer:
         apply_fully_sharded(self.model)
 
         if load_checkpoint:
-            self.checkpointer.load_model_state_dict(self.model)
+            restored_from_best = self.init_best_val_loss_from_checkpoint_best()
+            if not restored_from_best:
+                self.checkpointer.load_model_state_dict(self.model)
         else:
             # Broadcast full state dict from rank 0 to all ranks
             set_model_state_dict(
@@ -129,24 +133,22 @@ class Trainer:
             del full_state_dict
             dist.barrier()
 
-        if self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1:
-            self.init_best_val_loss_from_checkpoint_best()
-
-    def init_best_val_loss_from_checkpoint_best(self) -> None:
+    def init_best_val_loss_from_checkpoint_best(self) -> bool:
         """
         If resuming and checkpoint_best exists, initialize self.best_val_loss.
         If checkpoint_best is missing or broken, keep best_val_loss as inf).
         """
         best_epoch = self.checkpointer.read_best_epoch()
+
         if best_epoch is None:
-            return
+            return False
 
         if self.val_loader is None:
             root_logger.warning(
                 f"Found checkpoint_best -> {best_epoch} but no val_loader; "
                 f"leaving best_val_loss=inf."
             )
-            return
+            return False
 
         last_epoch = self.checkpointer.previous_epoch  # Epoch to resume from
 
@@ -194,7 +196,11 @@ class Trainer:
             )
 
         # Restore LAST weights so training resumes normally
-        self.checkpointer.load_model_state_dict_for_epoch(self.model, last_epoch)
+        if last_epoch != best_epoch:
+            self.checkpointer.load_model_state_dict_for_epoch(self.model, last_epoch)
+
+        return True
+
 
     def setup_optimizer(self):
         # Setup optimizer
@@ -304,8 +310,9 @@ class Trainer:
             )
 
             if self.is_distributed:
-                for v in metrics.values():
-                    dist.reduce(v, dst=0, op=dist.ReduceOp.AVG)
+                for m in metrics.values():
+                    dist.all_reduce(m, op=dist.ReduceOp.SUM)
+                    m.div_(dist.get_world_size())
 
             for k, v in metrics.items():
                 val_metrics[k] = val_metrics.get(k, 0.0) + v.item()

@@ -310,3 +310,23 @@ class DistributedCheckpointer(BaseCheckpointer):
             torch.save(optimizer_state_dict, self.optimizer_path(epoch))
 
         dist.barrier()
+
+    def update_best_symlink(self, epoch: int):
+        if dist.get_rank() == 0:
+            super().update_best_symlink(epoch)
+
+        dist.barrier()
+
+    def cleanup_keep_only_best(self, best_epoch: int) -> None:
+        if dist.get_rank() == 0:
+            super().cleanup_keep_only_best(best_epoch)
+
+        dist.barrier()
+
+    def save_scheduler_state_dict(
+            self, scheduler: torch.optim.lr_scheduler.LRScheduler, epoch: int
+    ):
+        if dist.get_rank() == 0:
+            super().save_scheduler_state_dict(scheduler, epoch)
+
+        dist.barrier()
