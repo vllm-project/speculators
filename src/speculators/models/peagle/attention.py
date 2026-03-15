@@ -104,6 +104,10 @@ def create_peagle_mask_mod(
     return peagle_mask_mod
 
 
+# Compile flex_attention for efficient block-sparse attention
+_compiled_flex_attention = torch.compile(flex_attention)
+
+
 def peagle_flex_attention_forward(
     module: torch.nn.Module,  # noqa: ARG001
     query: torch.Tensor,
@@ -116,7 +120,7 @@ def peagle_flex_attention_forward(
     """
     Flex attention forward pass for P-EAGLE.
 
-    Uses flex_attention with block-sparse masks for memory efficiency.
+    Uses compiled flex_attention with block-sparse masks for memory efficiency.
 
     Args:
         module: The attention module (unused, for interface compatibility)
@@ -138,7 +142,7 @@ def peagle_flex_attention_forward(
     key = key.contiguous()
     value = value.contiguous()
 
-    flex_attention_output = flex_attention(
+    flex_attention_output = _compiled_flex_attention(
         query,
         key,
         value,

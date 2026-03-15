@@ -48,6 +48,9 @@ class PEagleDraftModel(Eagle3DraftModel):
         d2t: torch.Tensor | None = None,
     ):
         super().__init__(config=config)
+
+        config.transformer_layer_config._attn_implementation = "peagle_flex_attention"  # noqa: SLF001
+
         if t2d is not None or d2t is not None:
             self.load_vocab_mappings(t2d, d2t)
 
