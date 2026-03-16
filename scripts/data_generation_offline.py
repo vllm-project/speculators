@@ -262,6 +262,7 @@ def generate_and_save_hidden_states(args, dataset):
 
     log.info(f"Processing {num_samples - start_sample_idx}/{num_samples} samples")
     file_idx = start_file_idx
+    num_skipped_nan = 0  # Track samples skipped due to NaN
 
     num_batches = (
         num_samples - start_sample_idx + args.batch_size - 1
@@ -294,6 +295,26 @@ def generate_and_save_hidden_states(args, dataset):
                 sample_lengths[str(file_idx)] = input_len
                 loss_mask = batch_loss_mask[j][:input_len]
 
+                # Check for NaN values before saving
+                has_nan = False
+                for layer_idx, hidden_state in enumerate(result["hidden_states"]):
+                    if torch.isnan(hidden_state).any():
+                        num_nans = torch.isnan(hidden_state).sum().item()
+                        total_elements = hidden_state.numel()
+                        nan_percentage = (num_nans / total_elements) * 100
+                        log.warning(
+                            f"NaN in data_{file_idx}.pt, layer {layer_idx}: "
+                            f"{num_nans}/{total_elements} ({nan_percentage:.2f}%) NaN, "
+                            f"shape: {hidden_state.shape}"
+                        )
+                        has_nan = True
+
+                if has_nan:
+                    log.warning(f"Skipping data_{file_idx}.pt due to NaN values")
+                    num_skipped_nan += 1
+                    file_idx += 1
+                    continue
+
                 result_cleaned = {
                     "input_ids": result["input_ids"],
                     "hidden_states": [h.contiguous() for h in result["hidden_states"]],
@@ -312,11 +333,15 @@ def generate_and_save_hidden_states(args, dataset):
         ):
             future.result()
 
-    samples_saved = file_idx - start_file_idx
+    samples_saved = file_idx - start_file_idx - num_skipped_nan
 
     with open(sample_lengths_output_path, "w") as f:
         json.dump(sample_lengths, f, indent=2)
 
+    if num_skipped_nan > 0:
+        log.warning(
+            f"Skipped {num_skipped_nan} samples due to NaN values in hidden states"
+        )
     log.info(f"Saved {samples_saved} new data points to {args.output_dir}")
 
     save_config(args, generator, num_samples, args.output_dir)
