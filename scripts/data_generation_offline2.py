@@ -25,6 +25,7 @@ from datasets import load_from_disk
 from safetensors import safe_open
 from tqdm import tqdm
 
+from speculators.data_generation.vllm_client import generate_hidden_states_async
 from speculators.train.logger import setup_root_logger
 
 logger = logging.getLogger(__name__)
@@ -179,38 +180,6 @@ def get_indices_to_process(
         cur += 1
 
     return to_process
-
-
-class InvalidResponseError(Exception):
-    pass
-
-
-def extract_output(completion, token_ids) -> str:
-    prompt_token_ids = getattr(completion.choices[0], "prompt_token_ids", None)
-
-    if prompt_token_ids is None:
-        raise InvalidResponseError("Response missing prompt_token_ids")
-
-    if prompt_token_ids != token_ids:
-        raise InvalidResponseError(
-            f"Prompt token IDs mismatch: expected {token_ids}, got {prompt_token_ids}"
-        )
-
-    if not hasattr(completion, "kv_transfer_params"):
-        raise InvalidResponseError("Response missing kv_transfer_params")
-
-    return completion.kv_transfer_params.get("hidden_states_path")
-
-
-async def generate_hidden_states_async(client, model, token_ids) -> str:
-    completion = await client.completions.create(
-        model=model,
-        prompt=token_ids,
-        max_tokens=1,
-        extra_body={"return_token_ids": True},
-    )
-
-    return extract_output(completion, token_ids)
 
 
 def check_safetensors_file(path: Path, tokens: list[int]):
