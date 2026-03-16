@@ -23,8 +23,6 @@ from transformers.models.qwen3.modeling_qwen3 import (
     ALL_ATTENTION_FUNCTIONS,
 )
 
-
-
 @torch.no_grad()
 def compute_accuracy(
     logits: torch.Tensor,  # shape: [1, total_seq_len - ttt_step, draft_vocab_size]
