@@ -21,6 +21,10 @@ def _make_minimal_trainer(tmp_path: Path, checkpoint_freq: int, save_best: bool)
     trainer.is_distributed = False
     trainer.val_loader = object()
     trainer.checkpointer = SingleGPUCheckpointer(str(tmp_path))
+
+    trainer.model = object()
+    trainer.opt = object()
+    trainer.scheduler = None
     return trainer
 
 
@@ -70,13 +74,14 @@ def test_run_training_updates_checkpoint_best_among_saved_checkpoints_save_best_
     def fake_val_epoch(epoch: int):
         return {"loss_epoch": val_losses[epoch]}
 
-    def fake_save_checkpoint(epoch: int):
+    def fake_cp_save_checkpoint(_model, _opt, epoch: int):
         saved_epochs.append(epoch)
         (tmp_path / str(epoch)).mkdir(exist_ok=True)
 
     trainer.train_epoch = fake_train_epoch
     trainer.val_epoch = fake_val_epoch
-    trainer.save_checkpoint = fake_save_checkpoint
+    trainer.checkpointer.save_checkpoint = fake_cp_save_checkpoint
+    trainer.checkpointer.save_scheduler_state_dict = lambda *_args, **_kwargs: None
 
     trainer.run_training()
 
@@ -131,11 +136,12 @@ def test_save_best_flag_changes_checkpoint_behavior(
     trainer.train_epoch = lambda _epoch: None
     trainer.val_epoch = lambda epoch: {"loss_epoch": val_losses[epoch]}
 
-    def fake_save_checkpoint(epoch: int):
+    def fake_cp_save_checkpoint(_model, _opt, epoch: int):
         saved_epochs.append(epoch)
         (case_dir / str(epoch)).mkdir(exist_ok=True)
 
-    trainer.save_checkpoint = fake_save_checkpoint
+    trainer.checkpointer.save_checkpoint = fake_cp_save_checkpoint
+    trainer.checkpointer.save_scheduler_state_dict = lambda *_args, **_kwargs: None
 
     trainer.run_training()
 
@@ -163,11 +169,12 @@ def test_checkpoint_freq_flag_controls_saves(tmp_path: Path):
     trainer.train_epoch = lambda _epoch: None
     trainer.val_epoch = lambda epoch: {"loss_epoch": val_losses[epoch]}
 
-    def fake_save_checkpoint(epoch: int):
+    def fake_cp_save_checkpoint(_model, _opt, epoch: int):
         saved_epochs.append(epoch)
         (tmp_path / str(epoch)).mkdir(exist_ok=True)
 
-    trainer.save_checkpoint = fake_save_checkpoint
+    trainer.checkpointer.save_checkpoint = fake_cp_save_checkpoint
+    trainer.checkpointer.save_scheduler_state_dict = lambda *_args, **_kwargs: None
 
     trainer.run_training()
 

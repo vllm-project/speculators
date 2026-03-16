@@ -1,6 +1,7 @@
+import shutil
 from abc import abstractmethod
 from pathlib import Path
-import shutil
+
 import torch
 import torch.distributed as dist
 import torch.utils._pytree as pytree
