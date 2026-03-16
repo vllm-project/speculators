@@ -581,7 +581,6 @@ class DFlashDraftModel(SpeculatorModel):
         mask_token_ids[:, ::self.block_size] = input_ids[:, anchor_positions[0]]
         # print(mask_token_ids)
         noise_embedding=self.embed_tokens(mask_token_ids)
-        print("equal size", hidden_states.shape, self.fc.weight.shape, flush=True)
         fc_output = self.fc(hidden_states)
 
         fc_output = self.hidden_norm(fc_output)
