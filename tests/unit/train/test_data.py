@@ -128,7 +128,8 @@ def test_standardize_data_v1():
 def test_collate_fn_basic():
     """Test basic collation functionality."""
     max_len = 10
-    collate_fn = create_collate_fn(max_len)
+    hidden_size = 1
+    collate_fn = create_collate_fn(max_len, hidden_size)
 
     batch = [
         {
@@ -202,21 +203,22 @@ def test_collate_fn_basic():
 def test_collate_fn_length_truncation():
     """Test that lengths are truncated when they exceed max_len."""
     max_len = 11
-    collate_fn = create_collate_fn(max_len)
+    hidden_size = 8
+    collate_fn = create_collate_fn(max_len, hidden_size)
 
     batch = [
         {
             "input_ids": torch.arange(5, dtype=torch.long),
-            "hidden_states": torch.randn(5, 24),
-            "verifier_last_hidden_states": torch.randn(5, 8),
+            "hidden_states": torch.randn(5, 3 * hidden_size),
+            "verifier_last_hidden_states": torch.randn(5, hidden_size),
             "loss_mask": torch.ones(5, dtype=torch.long),
             "lengths": torch.tensor([5], dtype=torch.long),
             "position_ids": torch.arange(5, dtype=torch.long),
         },
         {
             "input_ids": torch.arange(7, dtype=torch.long),
-            "hidden_states": torch.randn(7, 24),
-            "verifier_last_hidden_states": torch.randn(7, 8),
+            "hidden_states": torch.randn(7, 3 * hidden_size),
+            "verifier_last_hidden_states": torch.randn(7, hidden_size),
             "loss_mask": torch.ones(7, dtype=torch.long),
             "lengths": torch.tensor([7], dtype=torch.long),
             "position_ids": torch.arange(7, dtype=torch.long),
@@ -353,13 +355,11 @@ def test_dataset_getitem_v1_format(tmp_path: Path):
     torch.save(data, file_path)
 
     dataset = Eagle3SampleFileDataset(
-        max_len=12,
-        file_list=[str(file_path)],
-        standardize_fn=standardize_data_v1,
-        hidden_states_dtype=output_dtype,
+        max_len=12, file_list=[str(file_path)], hidden_states_dtype=output_dtype
     )
 
     item = dataset[0]
+    assert item is not None
 
     for key, value in item.items():
         assert torch.allclose(value, expected_output[key]), (
@@ -386,11 +386,7 @@ def test_dataset_loads_lengths_from_sample_lengths_json(tmp_path: Path):
         json.dump(expected_lengths, f)
 
     file_list = sorted([str(f) for f in tmp_path.glob("data_*.pt")])
-    dataset = Eagle3SampleFileDataset(
-        max_len=50,
-        file_list=file_list,
-        standardize_fn=standardize_data_v1,
-    )
+    dataset = Eagle3SampleFileDataset(max_len=50, file_list=file_list)
 
     assert dataset.approx_lengths == [9, 14, 19], (
         f"Expected [9, 14, 19], got {dataset.approx_lengths}"
@@ -410,11 +406,7 @@ def test_dataset_fallback_when_sample_lengths_json_missing(tmp_path: Path):
     torch.save(data, tmp_path / "data_0.pt")
 
     file_list = [str(tmp_path / "data_0.pt")]
-    dataset = Eagle3SampleFileDataset(
-        max_len=50,
-        file_list=file_list,
-        standardize_fn=standardize_data_v1,
-    )
+    dataset = Eagle3SampleFileDataset(max_len=50, file_list=file_list)
 
     # Should use fallback and return a list with one length
     assert len(dataset.approx_lengths) == 1
@@ -439,9 +431,5 @@ def test_dataset_fallback_when_sample_lengths_json_malformed(tmp_path: Path):
         json.dump({"0": 9}, f)
 
     file_list = sorted([str(f) for f in tmp_path.glob("data_*.pt")])
-    dataset = Eagle3SampleFileDataset(
-        max_len=50,
-        file_list=file_list,
-        standardize_fn=standardize_data_v1,
-    )
+    dataset = Eagle3SampleFileDataset(max_len=50, file_list=file_list)
     assert len(dataset.approx_lengths) == 2
