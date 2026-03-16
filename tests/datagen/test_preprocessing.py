@@ -621,27 +621,27 @@ def test_detect_assistant_pattern_thinking_model():
     but the pattern must still match real conversations where the think block
     contains substantial content.
     """
-    tokenizer = AutoTokenizer.from_pretrained(
-        "Qwen/Qwen3-8B", trust_remote_code=True
-    )
+    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-8B", trust_remote_code=True)
     pattern = _detect_assistant_pattern(tokenizer)
 
     # Format a multi-turn conversation with thinking content injected
     # directly into the formatted string (as it would appear in real data)
     test_conv = [
         {"role": "user", "content": "What is 2+2?"},
-        {"role": "assistant", "content": "The answer is 4."},
+        {
+            "role": "assistant",
+            "content": "The answer is 4.",
+            "reasoning_content": "We are adding 2 and 2.",
+        },
         {"role": "user", "content": "What is 3+3?"},
-        {"role": "assistant", "content": "The answer is 6."},
+        {
+            "role": "assistant",
+            "content": "The answer is 6.",
+            "reasoning_content": "We are adding 3 and 3.",
+        },
     ]
     formatted = tokenizer.apply_chat_template(
-        test_conv, tokenize=False, add_generation_prompt=False
-    )
-
-    # Simulate real thinking content by replacing empty think blocks
-    formatted = formatted.replace(
-        "<think>\n\n</think>",
-        "<think>\nLet me think step by step.\nThis is a math problem.\n</think>",
+        test_conv, tokenize=False, add_generation_prompt=False, enable_thinking=True
     )
 
     matches = list(re.finditer(pattern, formatted, re.DOTALL))
@@ -659,13 +659,19 @@ def test_detect_assistant_pattern_thinking_model():
     for m in matches:
         assert "What is" not in m.group(1)
 
+    # Reasoning content should be stripped from context turns
+    assert "2 and 2" not in matches[0].group(1)
+
+    # Reasoning content should be present in the final turn
+    assert "3 and 3" in matches[1].group(1)
+
 
 @pytest.mark.sanity
 @pytest.mark.parametrize(
     "thinking_content",
     [
         "",
-        "Let me think step by step.\nThe user asked about France.\nParis is the capital.",
+        "Let me think step by step.\nThe user asked about France.",
     ],
     ids=["no_thinking", "with_thinking"],
 )
@@ -675,9 +681,7 @@ def test_create_loss_mask_thinking_model(thinking_content):
     Verifies correct masking both with and without thinking content in the
     <think> block.
     """
-    tokenizer = AutoTokenizer.from_pretrained(
-        "Qwen/Qwen3-8B", trust_remote_code=True
-    )
+    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-8B", trust_remote_code=True)
     pattern = _detect_assistant_pattern(tokenizer)
 
     # Build formatted text using the real chat template
@@ -685,19 +689,13 @@ def test_create_loss_mask_thinking_model(thinking_content):
         {"role": "user", "content": "What is the capital of France?"},
         {"role": "assistant", "content": "Paris is the capital."},
     ]
-    formatted = tokenizer.apply_chat_template(
-        conv, tokenize=False, add_generation_prompt=False
-    )
-
-    # Inject thinking content into the empty <think> block
+    tokenizer_kwargs = {}
     if thinking_content:
-        formatted_before = formatted
-        formatted = formatted.replace(
-            "<think>\n\n</think>",
-            f"<think>\n{thinking_content}\n</think>",
-        )
-        assert formatted != formatted_before, \
-            "Thinking content was not injected properly"
+        conv[-1]["reasoning_content"] = thinking_content
+        tokenizer_kwargs["enable_thinking"] = True
+    formatted = tokenizer.apply_chat_template(
+        conv, tokenize=False, add_generation_prompt=False, **tokenizer_kwargs
+    )
 
     # Tokenize with offsets
     encoding = tokenizer(
