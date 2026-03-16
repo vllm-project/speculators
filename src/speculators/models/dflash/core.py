@@ -127,7 +127,7 @@ def loss_function(logits, target_ids, loss_mask, block_size=8, gamma=4.0):
 
     # aligned t -> original p=t+1 ; k = p % b (0 means anchor)
     idx = torch.arange(T, device=logits.device)
-    k = (idx + 1) % block_size
+    k = (idx + 1) % block_size 
     w = torch.exp(-((k - 1).clamp(min=0)).to(logits.dtype) / gamma)
     w = (w * (k != 0).to(logits.dtype)).view(1, T)  # anchors weight 0
 
@@ -281,7 +281,7 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
 
 class Qwen3DFlashAttention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
-
+    #Implements the custom attention which injects the target models hidden states into the kv cache.  
     def __init__(self, config: Qwen3Config, layer_idx: int):
         super().__init__()
         self.config = config
@@ -321,16 +321,19 @@ class Qwen3DFlashAttention(nn.Module):
         cache_position: Optional[torch.LongTensor] = None,
         **kwargs: Unpack[FlashAttentionKwargs],
     ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
+        #Instead of computing the k and v matricies from the hidden states, the target_hidden is injected 
+        #into the kv cache, (shape is context length + block size)
         bsz, q_len = hidden_states.shape[:-1]
         ctx_len = target_hidden.shape[1]
         q = self.q_proj(hidden_states)
         q = q.view(bsz, q_len, -1, self.head_dim)
         q = self.q_norm(q).transpose(1, 2)
-        k_ctx = self.k_proj(target_hidden)
+        k_ctx = self.k_proj(target_hidden)  #This is the main difference from the usual attention mechanism.  
         k_noise = self.k_proj(hidden_states)
         v_ctx = self.v_proj(target_hidden)
         v_noise = self.v_proj(hidden_states)
-        k = torch.cat([k_ctx, k_noise], dim=1).view(bsz, ctx_len + q_len, -1, self.head_dim)
+        k = torch.cat([k_ctx, k_noise], dim=1).view(bsz, ctx_len + q_len, -1, self.head_dim) 
+        #note the length becomes context length + block size
         v = torch.cat([v_ctx, v_noise], dim=1).view(bsz, ctx_len + q_len, -1, self.head_dim)
         k = self.k_norm(k).transpose(1, 2)
         v = v.transpose(1, 2)
@@ -379,6 +382,9 @@ class Qwen3DFlashDecoderLayer(GradientCheckpointingLayer):
         position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,  # necessary, but kept here for BC
         **kwargs: Unpack[FlashAttentionKwargs],
     ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
+    #The main difference between this method and the qwen 3 layer it is built from is that it 
+    #passes the extra hidden states to the self attention from the verifier model. 
+    #Note that target_hidden is not modified here.   
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
         hidden_states = self.self_attn(
@@ -401,7 +407,7 @@ class Qwen3DFlashDecoderLayer(GradientCheckpointingLayer):
         return hidden_states
 
 
-def _select_anchors(loss_mask: torch.Tensor, n: int, block_size: int) -> torch.Tensor:
+def _select_anchors(loss_mask: torch.Tensor, n: int, block_size: int) -> tuple[torch.Tensor, torch.Tensor]:
     if loss_mask.ndim != 2:
         raise ValueError(f"Expected [B, T], got {loss_mask.shape}")
 
@@ -412,15 +418,23 @@ def _select_anchors(loss_mask: torch.Tensor, n: int, block_size: int) -> torch.T
         valid_mask[:, T - block_size:] = False
 
     out = []
+    out_valid = []
     for b in range(B):
         valid_indices = torch.nonzero(valid_mask[b], as_tuple=False).squeeze(1)
-        if valid_indices.numel() < n:
-            # raise ValueError(f"Row {b} has only {valid_indices.numel()} valid positions, need {n}")
-            n=valid_indices.numel()
-        perm = torch.randperm(valid_indices.numel(), device=loss_mask.device)
-        out.append(valid_indices[perm[:n]])
 
-    return torch.stack(out, dim=0)
+        anchors = torch.zeros(n, dtype=torch.long, device=loss_mask.device)
+        anchor_valid = torch.zeros(n, dtype=torch.bool, device=loss_mask.device)
+
+        k = min(n, valid_indices.numel())
+        if k > 0:
+            perm = torch.randperm(valid_indices.numel(), device=loss_mask.device)
+            anchors[:k] = valid_indices[perm[:k]]
+            anchor_valid[:k] = True
+
+        out.append(anchors)
+        out_valid.append(anchor_valid)
+
+    return torch.stack(out, dim=0), torch.stack(out_valid, dim=0)
     
     
 
@@ -539,7 +553,7 @@ class DFlashDraftModel(SpeculatorModel):
         
         #past_key_values = DynamicCache(config=self.config.transformer_layer_config)
         past_key_values=None
-        anchor_positions=_select_anchors(loss_mask, 256, self.block_size)
+        anchor_positions, anchor_valid = _select_anchors(loss_mask, 256, self.block_size)
 
 
 
@@ -605,12 +619,17 @@ class DFlashDraftModel(SpeculatorModel):
             aligned_logits = logits#[:, 1:]                   
             aligned_targets = targets#[:, :-1]        
 
-            aligned_loss_mask = gather_anchor_spans(loss_mask.clone(), anchor_positions[0],self.block_size).unsqueeze(0) #[:, 1:].clone()
+            aligned_loss_mask = gather_anchor_spans(
+                loss_mask.clone(), anchor_positions[0], self.block_size
+            ).unsqueeze(0)
+
+            # zero out any padded anchor blocks
+            aligned_loss_mask = aligned_loss_mask * anchor_valid[0].repeat_interleave(self.block_size).unsqueeze(0).to(aligned_loss_mask.dtype)
 
             b = self.block_size
-            anchor_aligned = (((torch.arange(aligned_logits.shape[1], device=device) ) % b) == 0)  # t=7,15,23,...
+            anchor_aligned = ((torch.arange(aligned_logits.shape[1], device=device) % b) == 0)
 
-            aligned_loss_mask[:, anchor_aligned] = 0    
+            aligned_loss_mask[:, anchor_aligned] = 0  
             s_loss, s_metrics = compute_metrics(
                 aligned_logits,
                 aligned_targets,
