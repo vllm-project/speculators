@@ -156,7 +156,7 @@ def generate_and_save_fast_mtp(
         )
 
         log.info(
-            f"Processing sequences {chunk_start}–{chunk_end - 1} of {total - 1} "
+            f"Processing sequences {chunk_start + 1}–{chunk_end} of {total} "
             f"(chunk size {len(chunk_tids)})"
         )
 

@@ -68,7 +68,7 @@ class VllmHiddenStatesGenerator:
         results = generator.generate(token_ids)
         for result in results:
             input_ids = result["input_ids"]
-            hidden_states = result["hidden_states"]  # List of tensors per layer`
+            hidden_states = result["hidden_states"]  # list of tensors, one per layer
     """
 
     def __init__(

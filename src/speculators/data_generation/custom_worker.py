@@ -83,13 +83,13 @@ class HiddenStatesWorkerExtension:
     - Only captures on tensor parallel (TP) rank 0 to avoid duplicate data when
       using tensor parallelism. All TP ranks compute the same hidden states, so
       capturing from rank 0 is sufficient.
-    - Stores captured states in GPU memory during batch processing as lists of
-      tensors, concatenating them only when retrieved via _get_captured_states().
+    - Stores captured states on CPU between batches (moved immediately after each
+      forward pass) so GPU memory stays bounded regardless of dataset size.
     - Supports pipeline parallelism by handling IntermediateTensors correctly.
 
     Attributes:
         _layer_ids: Frozenset of layer indices for O(1) lookup during capture
-        _captured_states: Accumulated hidden states per layer (GPU tensors)
+        _captured_states: Accumulated hidden states per layer (CPU tensors)
         model_runner: Reference to the VLLM model runner
     """
 
@@ -164,8 +164,6 @@ class HiddenStatesWorkerExtension:
         Returns:
             Dict mapping request_id to list of tensors (one per layer),
             or None if no states captured.
-
-        Track which tokens belong to which request across chunked prefill iterations.
         """
         if self._captured_states is None:
             return None

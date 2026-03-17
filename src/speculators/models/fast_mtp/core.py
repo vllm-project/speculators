@@ -106,6 +106,8 @@ class FastMTPSpeculator(SpeculatorModel):
             0=ignore. Positions with mask==0 have their label set to -100 so the
             cross-entropy ignores them. Aligned with labels using the same step+2
             offset. Training only.
+        :param lengths: Unused; accepted so the collate-fn output can be forwarded
+            as ``**batch`` without filtering.
         :param step_weights: Per-step loss weights (None = uniform). Training only.
         :param return_dict: Whether to return dict or tuple
         :return: Dictionary with logits_list, loss (if labels), and metrics (if labels)
