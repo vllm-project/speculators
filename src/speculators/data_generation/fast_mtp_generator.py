@@ -61,6 +61,7 @@ def generate_and_save_fast_mtp(
     max_model_len: int = 4096,
     gpu_memory_utilization: float = 0.8,
     tensor_parallel_size: int = 1,
+    max_num_batched_tokens: int | None = None,
     loss_masks: list[list[int]] | None = None,
     loss_mask_fn: Callable[[list[int]], list[int]] | None = None,
 ) -> None:
@@ -84,6 +85,11 @@ def generate_and_save_fast_mtp(
     :param max_model_len: Maximum sequence length passed to vLLM.
     :param gpu_memory_utilization: Fraction of GPU memory vLLM may use.
     :param tensor_parallel_size: Number of GPUs for tensor parallelism.
+    :param max_num_batched_tokens: Maximum tokens processed in one forward pass.
+        Defaults to ``max(8192, max_model_len)``. Reducing this value (e.g. to
+        4096) lowers peak activation memory, which is useful for large models
+        that use memory-intensive attention kernels (e.g. Qwen3-Next's GDN
+        linear attention). Has no effect on output quality.
     :param loss_masks: Pre-computed 0/1 masks, one list per sequence (parallel
         to *token_ids*). Preferred when masks are already available (e.g. from
         :func:`~speculators.data_generation.preprocessing.tokenize_conversations`).
@@ -126,6 +132,7 @@ def generate_and_save_fast_mtp(
         max_model_len=max_model_len,
         gpu_memory_utilization=gpu_memory_utilization,
         tensor_parallel_size=tensor_parallel_size,
+        max_num_batched_tokens=max_num_batched_tokens,
     )
 
     output_dir = Path(output_dir)

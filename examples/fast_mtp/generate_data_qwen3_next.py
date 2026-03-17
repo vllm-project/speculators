@@ -29,12 +29,16 @@ from speculators.data_generation.preprocessing import tokenize_conversations
 # ── Configuration ─────────────────────────────────────────────────────────────
 
 MODEL = "Qwen/Qwen3-Next-80B-A3B-Instruct"
-OUTPUT_DIR = Path("./output/Qwen3-Next-80B-A3B-Instruct_ultrachat")
+OUTPUT_DIR = Path("/mnt/data/rahul-tuli/datasets/Qwen3-Next-80B-A3B-Instruct_ultrachat")
 DATASET = "HuggingFaceH4/ultrachat_200k"
-NUM_SAMPLES = 100
+NUM_SAMPLES = 50_000
 MAX_SEQ_LEN = 4096
 TENSOR_PARALLEL_SIZE = 4  # match the number of GPUs in CUDA_VISIBLE_DEVICES
-GPU_MEMORY_UTILIZATION = 0.85
+GPU_MEMORY_UTILIZATION = 0.7
+# Qwen3-Next's GDN linear attention allocates activation memory proportional to
+# this value. Reducing it from the default (max(8192, MAX_SEQ_LEN)) prevents
+# CUDA OOM on H100s where the 80B model shard already uses ~37 GiB per GPU.
+MAX_NUM_BATCHED_TOKENS = 2048
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -84,6 +88,7 @@ if __name__ == "__main__":
         max_model_len=MAX_SEQ_LEN,
         gpu_memory_utilization=GPU_MEMORY_UTILIZATION,
         tensor_parallel_size=TENSOR_PARALLEL_SIZE,
+        max_num_batched_tokens=MAX_NUM_BATCHED_TOKENS,
     )
 
     print(f"\nDone. {NUM_SAMPLES} samples saved to {OUTPUT_DIR}")
