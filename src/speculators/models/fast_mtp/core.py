@@ -70,6 +70,11 @@ class FastMTPSpeculator(SpeculatorModel):
             lm_head_weight.detach().clone(), requires_grad=False
         )
 
+    @property
+    def layers(self) -> nn.ModuleList:
+        """Alias for mtp_layers; required by the training infrastructure."""
+        return self.mtp_layers
+
     def forward(
         self,
         input_ids: torch.Tensor,
@@ -78,6 +83,7 @@ class FastMTPSpeculator(SpeculatorModel):
         position_ids: torch.Tensor | None = None,
         labels: torch.Tensor | None = None,
         loss_mask: torch.Tensor | None = None,
+        lengths: torch.Tensor | None = None,  # noqa: ARG002
         step_weights: list[float] | None = None,
         return_dict: bool = True,
     ) -> dict[str, Any] | tuple:
@@ -114,7 +120,7 @@ class FastMTPSpeculator(SpeculatorModel):
         total_loss: torch.Tensor | None = (
             torch.tensor(0.0, device=device) if labels is not None else None
         )
-        metrics: dict[str, float] = {}
+        metrics: dict[str, torch.Tensor] = {}
 
         current_hidden = hidden_states  # recursive: updated each step with MTP output
         for step in range(num_steps):
@@ -155,7 +161,7 @@ class FastMTPSpeculator(SpeculatorModel):
                     ignore_index=-100,
                 )
                 total_loss = total_loss + step_loss  # type: ignore[operator]
-                metrics[f"loss_step_{step}"] = step_loss.item()
+                metrics[f"loss_step_{step}"] = step_loss.detach()
 
             current_hidden = mtp_output  # feed MTP output as hidden for next step
 
@@ -213,6 +219,7 @@ class FastMTPSpeculator(SpeculatorModel):
         """
         train_kwargs = {
             "step_weights": kwargs.get("step_weights", [0.51, 0.31, 0.18]),
+            "return_dict": False,
         }
         val_kwargs = train_kwargs.copy()
 
