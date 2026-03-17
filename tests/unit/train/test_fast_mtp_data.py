@@ -88,11 +88,12 @@ def ds(tmp_path: Path) -> FastMTPSampleFileDataset:
 
 class TestFastMTPSampleFileDataset:
     def test_getitem_returns_expected_keys(self, ds: FastMTPSampleFileDataset) -> None:
-        """Key contract for the trainer: exactly these five keys, nothing else."""
+        """Key contract for the trainer: exactly these keys, nothing else."""
         assert set(ds[0].keys()) == {
             "input_ids",
             "hidden_states",
             "loss_mask",
+            "labels",
             "lengths",
             "position_ids",
         }

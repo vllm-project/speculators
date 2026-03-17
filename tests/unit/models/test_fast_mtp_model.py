@@ -78,6 +78,15 @@ def test_mtp_layers_initialized(model):
 
 
 @pytest.mark.smoke
+def test_embed_tokens_and_lm_head_frozen(model):
+    """embed_tokens and lm_head must always be frozen; only mtp_layers are trained."""
+    assert not model.embed_tokens.weight.requires_grad
+    assert not model.lm_head.weight.requires_grad
+    trainable = [n for n, p in model.named_parameters() if p.requires_grad]
+    assert all("mtp_layers" in n for n in trainable)
+
+
+@pytest.mark.smoke
 def test_registry():
     assert SpeculatorModel.registry is not None
     assert "mtp" in SpeculatorModel.registry

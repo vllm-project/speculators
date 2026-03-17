@@ -106,7 +106,11 @@ class FastMTPSampleFileDataset(Dataset):
         data["lengths"] = torch.tensor([seq_len], dtype=torch.long)
         data["position_ids"] = torch.arange(seq_len, dtype=torch.long)
 
-        return _shift_batch_fastmtp(data)
+        batch = _shift_batch_fastmtp(data)
+        # labels = shifted input_ids; forward() uses the step+2 offset internally
+        # to align each prediction target with the corresponding hidden state.
+        batch["labels"] = batch["input_ids"]
+        return batch
 
 
 def make_fast_mtp_dataloader(
