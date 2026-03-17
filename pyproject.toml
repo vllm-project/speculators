@@ -143,7 +143,7 @@ ignore_missing_imports=true
 [tool.ruff]
 line-length = 88
 indent-width = 4
-exclude = ["build", "dist", "env", ".venv"]
+exclude = ["build", "dist", "env", ".venv", "local", "*_speculator", "*_speculators"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -254,6 +254,7 @@ select = [
 
 "examples/**/*.py" = [
     "INP001", # allow implicit namespace packages in examples
+    "T201",   # print statements are acceptable in examples
 ]
 
 "scripts/gen_and_train.py" = [

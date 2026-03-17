@@ -1,7 +1,7 @@
 """Extract hidden states from intermediate layers during prefill using vLLM."""
 
 import torch
-from transformers import AutoConfig, AutoTokenizer
+from transformers import AutoTokenizer
 from vllm.config import (
     CacheConfig,
     DeviceConfig,
@@ -14,17 +14,17 @@ from vllm.config import (
 from vllm.sampling_params import SamplingParams
 from vllm.utils.hashing import get_hash_fn_by_name
 from vllm.v1.core.kv_cache_utils import (
-    _get_kv_cache_groups_uniform_spec,
-    get_kv_cache_config_from_groups,
+    generate_scheduler_kv_cache_config,
+    get_kv_cache_configs,
     get_request_block_hasher,
     init_none_hash,
-    unify_hybrid_kv_cache_specs,
 )
 from vllm.v1.core.sched.scheduler import Scheduler
 from vllm.v1.executor.multiproc_executor import MultiprocExecutor
 from vllm.v1.request import Request, RequestStatus
 from vllm.v1.structured_output import StructuredOutputManager
 
+from speculators.data_generation._model_utils import num_hidden_layers
 from speculators.utils.util import empty_cache, is_npu_available, mem_get_info
 
 from .logging_utils import PipelineLogger
@@ -89,13 +89,7 @@ class VllmHiddenStatesGenerator:
 
         self.tokenizer = AutoTokenizer.from_pretrained(model_path)
 
-        config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
-        if hasattr(config, "num_hidden_layers"):
-            num_layers = config.num_hidden_layers
-        elif hasattr(config, "text_config"):
-            num_layers = config.text_config.num_hidden_layers
-        else:
-            raise ValueError("Cannot determine num_layers from config")
+        num_layers = num_hidden_layers(model_path)
 
         log.info(f"Model has {num_layers} layers")
 
@@ -130,23 +124,8 @@ class VllmHiddenStatesGenerator:
         self._setup_capture()
 
         log.info("Creating scheduler...")
-        kv_cache_spec_list = self.executor.collective_rpc("get_kv_cache_spec")
-        kv_cache_spec = kv_cache_spec_list[0]
-        # Normalize hybrid KV cache specs for models with non-uniform attention
-        # (e.g., GPT-OSS with sliding/full attention layers)
-        unify_hybrid_kv_cache_specs(kv_cache_spec)
-        kv_cache_groups = _get_kv_cache_groups_uniform_spec(kv_cache_spec)
+        kv_cache_config = self._initialize_kv_caches(gpu_memory_utilization)
 
-        free_memory, _ = mem_get_info()
-        cache_memory = int(free_memory * gpu_memory_utilization * CACHE_MEMORY_FRACTION)
-
-        kv_cache_config = get_kv_cache_config_from_groups(
-            vllm_config=self.vllm_config,
-            kv_cache_groups=kv_cache_groups,
-            available_memory=cache_memory,
-        )
-
-        self.vllm_config.cache_config.num_gpu_blocks = kv_cache_config.num_blocks
         structured_output_manager = StructuredOutputManager(
             vllm_config=self.vllm_config
         )
@@ -157,10 +136,6 @@ class VllmHiddenStatesGenerator:
             structured_output_manager=structured_output_manager,
             block_size=VLLM_BLOCK_SIZE,
         )
-
-        log.info("Initializing KV cache on all workers...")
-        kv_cache_configs = [kv_cache_config] * tensor_parallel_size
-        self.executor.initialize_from_config(kv_cache_configs)
 
         # Create block hasher for request KV cache management
         # Following vLLM's pattern in v1/engine/core.py
@@ -222,6 +197,35 @@ class VllmHiddenStatesGenerator:
             load_config=LoadConfig(),
         )
 
+    def _initialize_kv_caches(self, gpu_memory_utilization: float):
+        """Mirror EngineCore._initialize_kv_caches() to handle hybrid models.
+
+        Using get_kv_cache_configs() (plural) instead of the private
+        unify_hybrid_kv_cache_specs() + _get_kv_cache_groups_uniform_spec()
+        pair is necessary for models like Qwen3-Next that mix FullAttentionSpec
+        and ChunkedLocalAttentionSpec layers — the private path unconditionally
+        forces spec unification and raises for non-uniform models.
+
+        Returns:
+            kv_cache_config: the merged scheduler view used to create the Scheduler.
+        """
+        kv_cache_spec_list = self.executor.collective_rpc("get_kv_cache_spec")
+
+        free_memory, _ = mem_get_info()
+        cache_memory = int(free_memory * gpu_memory_utilization * CACHE_MEMORY_FRACTION)
+        available_memory = [cache_memory] * len(kv_cache_spec_list)
+
+        kv_cache_configs = get_kv_cache_configs(
+            self.vllm_config, kv_cache_spec_list, available_memory
+        )
+        kv_cache_config = generate_scheduler_kv_cache_config(kv_cache_configs)
+        self.vllm_config.cache_config.num_gpu_blocks = kv_cache_config.num_blocks
+
+        log.info("Initializing KV cache on all workers...")
+        self.executor.initialize_from_config(kv_cache_configs)
+
+        return kv_cache_config
+
     def _setup_capture(self):
         self.executor.collective_rpc(
             "_setup_hidden_states_capture",
@@ -279,16 +283,13 @@ class VllmHiddenStatesGenerator:
         self._request_counter += 1
         self.executor.collective_rpc("_reset_capture")
 
-        # Track progress for each request to distinguish prefill from decode
+        # Track how many tokens have been processed per request so we can
+        # distinguish prefill tokens from the single decode token (max_tokens=1).
         request_num_computed = dict.fromkeys(request_id_to_idx, 0)
-        schedule_iterations = 0
-        all_prefill_complete = False
 
         while (
             scheduler_output := self.scheduler.schedule()
-        ).total_num_scheduled_tokens > 0 and not all_prefill_complete:
-            schedule_iterations += 1
-
+        ).total_num_scheduled_tokens > 0:
             # Calculate prefill tokens for each request (ignore decode tokens)
             prefill_metadata = {}
             for req_id, num_tokens in scheduler_output.num_scheduled_tokens.items():
@@ -301,20 +302,23 @@ class VllmHiddenStatesGenerator:
 
                 request_num_computed[req_id] += num_tokens
 
-            all_prefill_complete = all(
-                request_num_computed[req_id] >= request_id_to_prompt_len[req_id]
-                for req_id in request_id_to_idx
-            )
-
             if prefill_metadata:
                 self.executor.collective_rpc(
                     "_set_request_metadata", args=(prefill_metadata,)
                 )
 
             model_output = self.executor.execute_model(scheduler_output)
-            self.executor.sample_tokens(model_output)
+            sampled = self.executor.sample_tokens(model_output)  # type: ignore[arg-type]
 
-        # Abort all requests (prefill complete, don't need decode)
+            # Drive the scheduler's request state machine so it marks requests
+            # that have exhausted max_tokens=1 as FINISHED_STOPPED and frees
+            # their running slots.  Without this call the scheduler never learns
+            # that tokens were generated, slots are never released, and any
+            # requests beyond MAX_NUM_SEQS stay stuck in WAITING forever.
+            if sampled is not None:
+                self.scheduler.update_from_output(scheduler_output, sampled)  # type: ignore[arg-type]
+
+        # Abort remaining requests (finish_requests safely skips already-finished ones)
         self.scheduler.finish_requests(
             list(request_id_to_idx.keys()), RequestStatus.FINISHED_ABORTED
         )
@@ -330,9 +334,11 @@ class VllmHiddenStatesGenerator:
 
         log.debug(f"Captured states for {len(request_states_dict)} requests")
 
-        # Map results back to original input order
+        # Map results back to original input order.
+        # Sort by original index (not lexicographically by req_id string, which
+        # would mis-order batches ≥ 10: "req_0_10" < "req_0_2" lexicographically).
         results = []
-        for req_id in sorted(request_id_to_idx.keys()):
+        for req_id in sorted(request_id_to_idx, key=request_id_to_idx.__getitem__):
             i = request_id_to_idx[req_id]
 
             if req_id not in request_states_dict:

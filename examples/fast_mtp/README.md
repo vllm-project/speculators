@@ -51,6 +51,45 @@ speculators convert Qwen/Qwen3-Next-80B-A3B-Instruct \
     --output-path ./qwen3_next_mtp_speculators
 ```
 
+## Generate Training Data
+
+Before finetuning you need to generate hidden-state training data from the verifier. Edit the constants at the top of `examples/fast_mtp/generate_data_qwen3_next.py` and run:
+
+```bash
+# 4 GPUs — adjust CUDA_VISIBLE_DEVICES and TENSOR_PARALLEL_SIZE to match your setup
+CUDA_VISIBLE_DEVICES=0,1,2,3 python examples/fast_mtp/generate_data_qwen3_next.py
+```
+
+The script will:
+
+1. Load `HuggingFaceH4/ultrachat_200k` (`train_sft` split) and tokenize it with `build_eagle3_dataset`, which computes the `loss_mask` (1 on response tokens, 0 on prompt/system tokens).
+2. Run prefill-only inference on `Qwen/Qwen3-Next-80B-A3B-Instruct` via vLLM and capture the **last verifier hidden layer** (`[seq_len, H]`) for each sequence — half the storage of Eagle3's multi-layer capture.
+3. Save one `.pt` file per sequence to `OUTPUT_DIR`:
+
+```python
+{
+    "input_ids":     Tensor[seq_len],      # long
+    "hidden_states": Tensor[seq_len, H],   # float32, last verifier layer
+    "loss_mask":     Tensor[seq_len],      # 1 = compute loss here
+}
+```
+
+4. Write a `sample_lengths.json` index for fast length look-ups during training.
+
+**Hardware requirements:** ~81 GB VRAM per GPU (4 × H100 80 GB recommended for `Qwen3-Next-80B-A3B-Instruct`).
+
+Configurable constants at the top of the script:
+
+| Constant                 | Default                            | Description                             |
+| ------------------------ | ---------------------------------- | --------------------------------------- |
+| `MODEL`                  | `Qwen/Qwen3-Next-80B-A3B-Instruct` | Verifier model (Hub ID or local path)   |
+| `OUTPUT_DIR`             | `./output/…_ultrachat`             | Destination for `.pt` files             |
+| `DATASET`                | `HuggingFaceH4/ultrachat_200k`     | HuggingFace dataset to tokenize         |
+| `NUM_SAMPLES`            | `5_000`                            | Number of sequences to generate         |
+| `MAX_SEQ_LEN`            | `4096`                             | Maximum sequence length                 |
+| `TENSOR_PARALLEL_SIZE`   | `4`                                | Must match `CUDA_VISIBLE_DEVICES` count |
+| `GPU_MEMORY_UTILIZATION` | `0.85`                             | Fraction of GPU memory vLLM may use     |
+
 ## Supported Checkpoints
 
 | Model                                                                           | model_type   |
