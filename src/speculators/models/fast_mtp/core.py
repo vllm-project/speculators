@@ -47,6 +47,9 @@ class FastMTPSpeculator(SpeculatorModel):
             self.config.hidden_size, self.config.vocab_size, bias=False
         )
         self._setup_embeddings_and_lm_head()
+        # embed_tokens and lm_head are always frozen: only mtp_layers are trained.
+        self.embed_tokens.requires_grad_(False)
+        self.lm_head.requires_grad_(False)
 
     def _setup_embeddings_and_lm_head(self) -> None:
         """Overwrite embed_tokens and lm_head from the verifier if configured."""
