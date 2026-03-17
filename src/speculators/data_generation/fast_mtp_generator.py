@@ -62,6 +62,7 @@ def generate_and_save_fast_mtp(
     gpu_memory_utilization: float = 0.8,
     tensor_parallel_size: int = 1,
     max_num_batched_tokens: int | None = None,
+    generate_batch_size: int = 500,
     loss_masks: list[list[int]] | None = None,
     loss_mask_fn: Callable[[list[int]], list[int]] | None = None,
 ) -> None:
@@ -87,9 +88,14 @@ def generate_and_save_fast_mtp(
     :param tensor_parallel_size: Number of GPUs for tensor parallelism.
     :param max_num_batched_tokens: Maximum tokens processed in one forward pass.
         Defaults to ``max(8192, max_model_len)``. Reducing this value (e.g. to
-        4096) lowers peak activation memory, which is useful for large models
+        2048) lowers peak activation memory, which is useful for large models
         that use memory-intensive attention kernels (e.g. Qwen3-Next's GDN
         linear attention). Has no effect on output quality.
+    :param generate_batch_size: Number of sequences passed to the generator per
+        call. Hidden states are collected, saved to disk, and freed between
+        batches, keeping CPU memory bounded. At mean seq_len 1184 and hidden_dim
+        7168, each batch of 500 sequences uses ~8.5 GB of CPU RAM. Lower this
+        value if you see CPU OOM; raise it to reduce per-batch overhead.
     :param loss_masks: Pre-computed 0/1 masks, one list per sequence (parallel
         to *token_ids*). Preferred when masks are already available (e.g. from
         :func:`~speculators.data_generation.preprocessing.tokenize_conversations`).
@@ -138,28 +144,44 @@ def generate_and_save_fast_mtp(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    total = len(token_ids)
     sample_lengths: dict[str, int] = {}
-    for i, item in enumerate(generator.generate(token_ids)):
-        input_ids: torch.Tensor = item["input_ids"]
-        # VllmHiddenStatesGenerator returns hidden_states as list[Tensor], one
-        # per requested layer. We requested exactly one (the last layer).
-        hs = item["hidden_states"]
-        hidden_states: torch.Tensor = hs[0] if isinstance(hs, list) else hs
-        precomputed = loss_masks[i] if loss_masks is not None else None
-        loss_mask = _resolve_loss_mask(
-            input_ids, item["loss_mask"], precomputed, loss_mask_fn
+    global_idx = 0
+
+    for chunk_start in range(0, total, generate_batch_size):
+        chunk_end = min(chunk_start + generate_batch_size, total)
+        chunk_tids = token_ids[chunk_start:chunk_end]
+        chunk_masks = (
+            loss_masks[chunk_start:chunk_end] if loss_masks is not None else None
         )
-        torch.save(
-            {
-                "input_ids": input_ids,
-                "hidden_states": hidden_states,
-                "loss_mask": loss_mask,
-            },
-            str(output_dir / f"data_{i}.pt"),
+
+        log.info(
+            f"Processing sequences {chunk_start}–{chunk_end - 1} of {total - 1} "
+            f"(chunk size {len(chunk_tids)})"
         )
-        sample_lengths[str(i)] = len(input_ids)
+
+        for i, item in enumerate(generator.generate(chunk_tids)):
+            input_ids: torch.Tensor = item["input_ids"]
+            # VllmHiddenStatesGenerator returns hidden_states as list[Tensor], one
+            # per requested layer. We requested exactly one (the last layer).
+            hs = item["hidden_states"]
+            hidden_states: torch.Tensor = hs[0] if isinstance(hs, list) else hs
+            precomputed = chunk_masks[i] if chunk_masks is not None else None
+            loss_mask = _resolve_loss_mask(
+                input_ids, item["loss_mask"], precomputed, loss_mask_fn
+            )
+            torch.save(
+                {
+                    "input_ids": input_ids,
+                    "hidden_states": hidden_states,
+                    "loss_mask": loss_mask,
+                },
+                str(output_dir / f"data_{global_idx}.pt"),
+            )
+            sample_lengths[str(global_idx)] = len(input_ids)
+            global_idx += 1
 
     with (output_dir / "sample_lengths.json").open("w") as fh:
         json.dump(sample_lengths, fh)
 
-    log.info(f"Saved {len(token_ids)} samples to {output_dir}")
+    log.info(f"Saved {total} samples to {output_dir}")

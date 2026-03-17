@@ -39,6 +39,9 @@ GPU_MEMORY_UTILIZATION = 0.7
 # this value. Reducing it from the default (max(8192, MAX_SEQ_LEN)) prevents
 # CUDA OOM on H100s where the 80B model shard already uses ~37 GiB per GPU.
 MAX_NUM_BATCHED_TOKENS = 2048
+# Hidden states are collected, saved, and freed between batches to keep memory
+# bounded. At mean seq_len ~1184 and hidden_dim 7168, 500 seqs ≈ 8.5 GB CPU RAM.
+GENERATE_BATCH_SIZE = 500
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -89,6 +92,7 @@ if __name__ == "__main__":
         gpu_memory_utilization=GPU_MEMORY_UTILIZATION,
         tensor_parallel_size=TENSOR_PARALLEL_SIZE,
         max_num_batched_tokens=MAX_NUM_BATCHED_TOKENS,
+        generate_batch_size=GENERATE_BATCH_SIZE,
     )
 
     print(f"\nDone. {NUM_SAMPLES} samples saved to {OUTPUT_DIR}")

@@ -347,7 +347,9 @@ class VllmHiddenStatesGenerator:
                     f"Available: {list(request_states_dict.keys())}"
                 )
 
-            layer_states = [h.clone().cpu() for h in request_states_dict[req_id]]
+            # States are already on CPU (moved in _store_captured_states);
+            # they arrive here as new objects via IPC so no clone needed.
+            layer_states = list(request_states_dict[req_id])
             input_ids_tensor = torch.as_tensor(input_ids_list[i], dtype=torch.long)
 
             results.append(

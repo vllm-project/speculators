@@ -94,10 +94,15 @@ class HiddenStatesWorkerExtension:
     """
 
     def _store_captured_states(self, aux_hidden_states):
+        # Move to CPU immediately to avoid accumulating GPU tensors across many
+        # forward passes. For large runs (e.g. 50k sequences) keeping the tensors
+        # on GPU until _get_captured_states is called would grow GPU memory
+        # continuously until OOM.
+        cpu_states = [h.cpu() for h in aux_hidden_states]
         if self._captured_states is None:  # type: ignore[has-type]
-            self._captured_states = [[h] for h in aux_hidden_states]
+            self._captured_states = [[h] for h in cpu_states]
         else:
-            for i, h in enumerate(aux_hidden_states):
+            for i, h in enumerate(cpu_states):
                 self._captured_states[i].append(h)
 
         metadata = getattr(self, "_current_request_metadata", None)
@@ -165,25 +170,28 @@ class HiddenStatesWorkerExtension:
         if self._captured_states is None:
             return None
 
-        # Concatenate captured states from all scheduler iterations
-        concatenated_layers = [
-            torch.cat(layer_tensors, dim=0) for layer_tensors in self._captured_states
-        ]
+        num_layers = len(self._captured_states)
 
-        # Slice and group by request
+        # Slice directly from per-iteration tensors rather than concatenating
+        # everything first. This avoids allocating a second full-sized buffer
+        # equal to the total token count × hidden_dim before we even start
+        # distributing tokens to requests.
         request_chunks: defaultdict[str, list[list[torch.Tensor]]] = defaultdict(
-            lambda: [[] for _ in range(len(concatenated_layers))]
+            lambda: [[] for _ in range(num_layers)]
         )
-        current_idx = 0
 
-        for metadata in self._request_metadata:  # type: ignore[has-type]
+        for iter_idx, metadata in enumerate(self._request_metadata):  # type: ignore[has-type]
+            current_idx = 0
             for req_id, num_tok in metadata:
-                for layer_idx, layer_tensor in enumerate(concatenated_layers):
-                    chunk = layer_tensor[current_idx : current_idx + num_tok].clone()
+                for layer_idx in range(num_layers):
+                    # Slice is a view — no allocation; torch.cat below creates
+                    # the final contiguous tensor for this request.
+                    iter_tensor = self._captured_states[layer_idx][iter_idx]  # type: ignore[index]
+                    chunk = iter_tensor[current_idx : current_idx + num_tok]
                     request_chunks[req_id][layer_idx].append(chunk)
                 current_idx += num_tok
 
-        # Concatenate chunks for each request
+        # Concatenate per-request chunks (one allocation per request per layer)
         result: dict[str, list[torch.Tensor]] = {
             req_id: [torch.cat(chunks, dim=0) for chunks in layer_chunks]
             for req_id, layer_chunks in request_chunks.items()
