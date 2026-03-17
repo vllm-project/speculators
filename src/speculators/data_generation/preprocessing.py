@@ -14,9 +14,10 @@ from speculators.data_generation.logging_utils import PipelineLogger
 from speculators.train.vocab_mapping import save_token_frequency_distribution
 
 __all__ = [
-    "build_eagle3_dataset",
+    "build_eagle3_dataset",  # deprecated alias — use tokenize_conversations
     "load_and_preprocess_dataset",
     "load_raw_dataset",
+    "tokenize_conversations",
 ]
 
 log = PipelineLogger(__name__)
@@ -343,7 +344,7 @@ def _preprocess_batch(
     return results
 
 
-def build_eagle3_dataset(
+def tokenize_conversations(
     dataset: HFDataset,
     tokenizer: PreTrainedTokenizer,
     max_length: int = 2048,
@@ -351,7 +352,11 @@ def build_eagle3_dataset(
     assistant_pattern: str | Pattern[str] | None = None,
     turn_dropout: bool = False,
 ) -> HFDataset:
-    """Build EAGLE3 dataset by tokenizing conversations and creating loss masks.
+    """Tokenize a conversation dataset and compute per-token loss masks.
+
+    Produces a dataset with ``input_ids`` (long) and ``loss_mask`` (long, 1 on
+    assistant response tokens) for any chat-template-capable tokenizer.
+    Algorithm-agnostic — suitable for Eagle3, FastMTP, and future methods.
 
     Uses the tokenizer's built-in chat template via apply_chat_template.
 
@@ -391,6 +396,29 @@ def build_eagle3_dataset(
 
     dataset.set_format(type="torch")
     return dataset
+
+
+def build_eagle3_dataset(
+    dataset: HFDataset,
+    tokenizer: PreTrainedTokenizer,
+    max_length: int = 2048,
+    num_proc: int = 8,
+    assistant_pattern: str | Pattern[str] | None = None,
+    turn_dropout: bool = False,
+) -> HFDataset:
+    """Deprecated. Use :func:`tokenize_conversations` instead."""
+    log.warning(
+        "build_eagle3_dataset is deprecated and will be removed in a future release. "
+        "Use tokenize_conversations instead."
+    )
+    return tokenize_conversations(
+        dataset=dataset,
+        tokenizer=tokenizer,
+        max_length=max_length,
+        num_proc=num_proc,
+        assistant_pattern=assistant_pattern,
+        turn_dropout=turn_dropout,
+    )
 
 
 def load_raw_dataset(
@@ -481,7 +509,7 @@ def load_and_preprocess_dataset(
     if turn_dropout:
         log.info("Turn dropout enabled: randomly keeping N consecutive turns")
 
-    preprocessed_dataset = build_eagle3_dataset(
+    preprocessed_dataset = tokenize_conversations(
         dataset=raw_dataset,
         tokenizer=tokenizer,
         max_length=seq_length,
