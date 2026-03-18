@@ -1,6 +1,8 @@
 import argparse
+import logging
 import random
 import warnings
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -24,6 +26,12 @@ from speculators.train.logger import setup_metric_logger, setup_root_logger
 from speculators.train.noise_transforms import AddUniformNoise
 from speculators.train.trainer import Trainer, TrainerConfig
 from speculators.train.utils import maybe_destroy_distributed, maybe_setup_distributed
+from speculators.train.vocab_mapping import (
+    build_vocab_mappings_from_distribution,
+    get_target_vocab_size,
+)
+
+logger = logging.getLogger(__name__)
 
 DRAFT_ARCH_CONFIGS: dict[str, type] = {
     "llama": LlamaConfig,
@@ -121,6 +129,78 @@ def create_transformer_layer_config(
     )
 
 
+def _load_mappings(d2t_path, t2d_path, expected_draft_vocab_size: int | None):
+    logger.info(f"Loading vocab mappings from '{d2t_path}' and '{t2d_path}'")
+    # Load d2t and t2d tensors if provided
+    d2t = torch.from_numpy(np.load(d2t_path))
+    t2d = torch.from_numpy(np.load(t2d_path))
+    draft_vocab_size = d2t.shape[0]
+    if expected_draft_vocab_size and expected_draft_vocab_size != draft_vocab_size:
+        raise ValueError(
+            f"Explicit vocab mapping (t2d & d2t) files were provided, but don't"
+            f"match the provided --draft-vocab-size {draft_vocab_size}."
+            f"d2t.shape={d2t.shape}, dim 0 should match provided value."
+        )
+    return d2t, t2d, draft_vocab_size
+
+
+def parse_vocab_mappings(args: argparse.Namespace):
+    if args.d2t_path or args.t2d_path:
+        if not (args.d2t_path and args.t2d_path):
+            raise ValueError(
+                "Both t2d and d2t must be provided together, or both must be omitted. "
+                f"Got t2d={'provided' if args.t2d_path is not None else 'not provided'}"
+                f"d2t={'provided' if args.d2t_path is not None else 'not provided'}"
+            )
+
+        return _load_mappings(args.d2t_path, args.t2d_path, args.draft_vocab_size)
+
+    data_path = Path(args.data_path)
+    default_t2d_path = data_path / "t2d.npy"
+    default_d2t_path = data_path / "d2t.npy"
+
+    if default_t2d_path.exists() and default_d2t_path.exists():
+        return _load_mappings(default_d2t_path, default_t2d_path, args.draft_vocab_size)
+
+    token_freq_path = args.token_freq_path or data_path / "token_freq.pt"
+    token_freq_path = Path(token_freq_path)
+    if token_freq_path.exists() and args.draft_vocab_size is not None:
+        logger.info("No vocab mappings provided. Regenerating from token frequencies")
+        token_freq_dict = torch.load(token_freq_path, weights_only=True)
+
+        target_vocab_size = get_target_vocab_size(None, args.verifier_name_or_path)
+
+        d2t, t2d = build_vocab_mappings_from_distribution(
+            token_freq_dict=token_freq_dict,
+            draft_vocab_size=args.draft_vocab_size,
+            target_vocab_size=target_vocab_size,
+        )
+        draft_vocab_size = d2t.shape[0]
+        if args.draft_vocab_size and args.draft_vocab_size != draft_vocab_size:
+            raise ValueError(
+                f"Explicit vocab mapping (t2d & d2t) files were provided, but don't"
+                f"match the provided --draft-vocab-size {draft_vocab_size}."
+                f"d2t.shape={d2t.shape}, dim 0 should match provided value."
+            )
+
+        logger.info(f"Caching vocab mapping files to '{data_path}'")
+        np.save(data_path / "d2t.npy", d2t.cpu().numpy())
+        np.save(data_path / "t2d.npy", t2d.cpu().numpy())
+
+        return d2t, t2d, draft_vocab_size
+
+    logger.warning(
+        "No vocab mappings found, and can't generate new ones because either "
+        f"token_freq_path='{token_freq_path}' doesn't exist or --draft-vocab-size is "
+        "None. Using full verifier vocab"
+    )
+    # When vocab mapping is not provided, use the full verifier vocab
+    verifier_config = AutoConfig.from_pretrained(args.verifier_name_or_path)
+    if hasattr(verifier_config, "text_config"):
+        verifier_config = verifier_config.text_config
+    return None, None, verifier_config.vocab_size
+
+
 def main(args: argparse.Namespace):
     # Set random seed for reproducibility
     set_seed(args.seed, args.deterministic_cuda)
@@ -133,32 +213,13 @@ def main(args: argparse.Namespace):
 
     # Setup distributed training
     local_rank, world_size, rank, is_distributed = maybe_setup_distributed()
-    device = torch.device(local_rank)
     if not hasattr(torch, args.hidden_states_dtype):
         raise ValueError(
             "--hidden-states-dtype must be a dtype attribute of torch. e.g. `bfloat16`"
         )
     hidden_states_dtype = getattr(torch, args.hidden_states_dtype)
 
-    # Load t2d and d2t tensors if provided
-    if args.d2t_path or args.t2d_path:
-        if not (args.d2t_path and args.t2d_path):
-            raise ValueError(
-                "Both t2d and d2t must be provided together, or both must be omitted. "
-                f"Got t2d={'provided' if args.t2d_path is not None else 'not provided'}"
-                f"d2t={'provided' if args.d2t_path is not None else 'not provided'}"
-            )
-        d2t = torch.from_numpy(np.load(args.d2t_path)).to(device)
-        t2d = torch.from_numpy(np.load(args.t2d_path)).to(device)
-        draft_vocab_size = d2t.shape[0]
-    else:
-        d2t = None
-        t2d = None
-        # When vocab mapping is not provided, use the full verifier vocab
-        verifier_config = AutoConfig.from_pretrained(args.verifier_name_or_path)
-        if hasattr(verifier_config, "text_config"):
-            verifier_config = verifier_config.text_config
-        draft_vocab_size = verifier_config.vocab_size
+    d2t, t2d, draft_vocab_size = parse_vocab_mappings(args)
 
     # Setup speculator config
     transformer_layer_config = create_transformer_layer_config(
@@ -177,12 +238,13 @@ def main(args: argparse.Namespace):
             args.from_pretrained, t2d=t2d, d2t=d2t
         )
     else:
+        args_dict = vars(args)
+        args_dict["draft_vocab_size"] = draft_vocab_size
         draft_model = model_class.from_training_args(
             verifier_config=transformer_layer_config,
             t2d=t2d,
             d2t=d2t,
-            draft_vocab_size=draft_vocab_size,
-            **vars(args),
+            **args_dict,
         )
 
     # Setup dataloaders
@@ -317,6 +379,19 @@ def parse_args():
         choices=list(DRAFT_ARCH_CONFIGS.keys()),
         help="Architecture for draft decoder layers. Defaults to 'llama'. "
         "Note: only 'llama' is currently supported in vLLM for inference.",
+    )
+
+    parser.add_argument(
+        "--token-freq-path",
+        type=str,
+        default=None,
+        help="Path to token frequency distribution file (.pt)",
+    )
+    parser.add_argument(
+        "--draft-vocab-size",
+        type=int,
+        default=None,
+        help="Vocabulary size for the draft model",
     )
     parser.add_argument("--d2t-path", type=str, default=None)
     parser.add_argument("--t2d-path", type=str, default=None)

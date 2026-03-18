@@ -6,6 +6,7 @@ from pathlib import Path
 import torch
 from datasets import Dataset as HFDataset
 from tqdm import tqdm  # type: ignore[import-untyped]
+from transformers import AutoConfig
 
 __all__ = [
     "build_vocab_mappings_from_distribution",
@@ -93,3 +94,25 @@ def build_vocab_mappings_from_distribution(
     target_to_draft[selected_token_ids] = True
 
     return draft_to_target, target_to_draft
+
+
+def get_target_vocab_size(target_vocab_size, target_model_path):
+    has_vocab = target_vocab_size is not None
+    has_model = target_model_path is not None
+
+    if has_vocab and has_model:
+        raise ValueError("Cannot specify both target-vocab-size and target-model-path")
+
+    if not has_vocab and not has_model:
+        raise ValueError("Must specify either target-vocab-size or target-model-path")
+
+    if has_vocab:
+        return target_vocab_size
+
+    config = AutoConfig.from_pretrained(target_model_path)
+
+    # For multimodal models (Qwen3VL, etc.), extract text_config
+    if hasattr(config, "text_config"):
+        config = config.text_config
+
+    return config.vocab_size
