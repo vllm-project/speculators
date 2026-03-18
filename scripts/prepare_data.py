@@ -60,8 +60,8 @@ def parse_args():
     parser.add_argument(
         "--seq-length",
         type=int,
-        default=2048,
-        help="Maximum sequence length for preprocessing and model (default: 2048)",
+        default=8192,
+        help="Maximum sequence length for preprocessing and model (default: 8192)",
     )
     parser.add_argument(
         "--max-samples",
