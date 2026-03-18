@@ -305,9 +305,6 @@ def main():
     args = parse_args()
     setup_root_logger()
 
-    # Disable verbose HTTP reponse logs
-    logging.getLogger("httpx").propagate = False
-
     logger.info("EAGLE Offline Data Generation")
 
     dataset = load_from_disk(args.preprocessed_data)
