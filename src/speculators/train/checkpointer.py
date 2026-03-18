@@ -125,10 +125,7 @@ class BaseCheckpointer:
             return None
 
     def load_model_state_dict_for_epoch(
-            self,
-            model: PreTrainedModel,
-            epoch: int,
-            float_dtype: torch.dtype | None = None
+        self, model: PreTrainedModel, epoch: int, float_dtype: torch.dtype | None = None
     ):
         """Temporarily load weights for a specific epoch."""
         old_epoch = self.previous_epoch
@@ -178,6 +175,7 @@ class BaseCheckpointer:
                     shutil.rmtree(child)
             except (FileNotFoundError, PermissionError, OSError) as exc:
                 raise RuntimeError(f"Failed to delete {child}") from exc
+
 
 def convert_float_dtype(sd: pytree.PyTree, dtype: torch.dtype) -> pytree.PyTree:
     def convert_fn(x):
@@ -325,7 +323,7 @@ class DistributedCheckpointer(BaseCheckpointer):
         dist.barrier()
 
     def save_scheduler_state_dict(
-            self, scheduler: torch.optim.lr_scheduler.LRScheduler, epoch: int
+        self, scheduler: torch.optim.lr_scheduler.LRScheduler, epoch: int
     ):
         if dist.get_rank() == 0:
             super().save_scheduler_state_dict(scheduler, epoch)

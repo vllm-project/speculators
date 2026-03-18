@@ -161,10 +161,7 @@ class Trainer:
         val_metrics = self.val_epoch(best_epoch)
 
         val_loss = None
-        if (
-            val_metrics is not None
-            and "loss_epoch" in val_metrics
-        ):
+        if val_metrics is not None and "loss_epoch" in val_metrics:
             val_loss = float(val_metrics["loss_epoch"])
 
         if val_loss is None:
@@ -184,7 +181,6 @@ class Trainer:
             self.checkpointer.load_model_state_dict_for_epoch(self.model, last_epoch)
 
         return True
-
 
     def setup_optimizer(self):
         # Setup optimizer
@@ -306,17 +302,18 @@ class Trainer:
         )
         return val_metrics
 
-    def maybe_save_checkpoint(self, epoch: int,
-                        val_metrics: dict | None):
+    def maybe_save_checkpoint(self, epoch: int, val_metrics: dict | None):
         if (
-                self.config.save_best
-                and val_metrics is not None
-                and "loss_epoch" in val_metrics
+            self.config.save_best
+            and val_metrics is not None
+            and "loss_epoch" in val_metrics
         ):
             if val_metrics["loss_epoch"] < self.best_val_loss:
                 self.best_val_loss = val_metrics["loss_epoch"]
-                root_logger.info(f"Saving new best checkpoint at epoch {epoch} "
-                                 f"(loss_epoch={self.best_val_loss:.6f})")
+                root_logger.info(
+                    f"Saving new best checkpoint at epoch {epoch} "
+                    f"(loss_epoch={self.best_val_loss:.6f})"
+                )
                 self.checkpointer.save_checkpoint(self.model, self.opt, epoch)
                 if self.scheduler is not None:
                     self.checkpointer.save_scheduler_state_dict(self.scheduler, epoch)
@@ -339,14 +336,15 @@ class Trainer:
                 f"Checkpoint saved to {self.checkpointer.path / str(epoch)}"
             )
             if (
-                    val_metrics is not None
-                    and "loss_epoch" in val_metrics
-                    and val_metrics["loss_epoch"] < self.best_val_loss
+                val_metrics is not None
+                and "loss_epoch" in val_metrics
+                and val_metrics["loss_epoch"] < self.best_val_loss
             ):
                 self.best_val_loss = val_metrics["loss_epoch"]
                 root_logger.info(
                     f"Updating new best checkpoint symlink at epoch {epoch} "
-                    f"(loss_epoch={self.best_val_loss:.6f})")
+                    f"(loss_epoch={self.best_val_loss:.6f})"
+                )
                 self.checkpointer.update_best_symlink(epoch)
                 root_logger.info(
                     f"Updated checkpoint_best -> {epoch} "

@@ -243,11 +243,13 @@ def main(args: argparse.Namespace):
     # Cleanup
     maybe_destroy_distributed()
 
+
 def _checkpoint_freq(value: str) -> int:
     ivalue = int(value)
     if ivalue < 1:
         raise argparse.ArgumentTypeError("--checkpoint-freq must be >= 1")
     return ivalue
+
 
 def parse_args():
     parser = argparse.ArgumentParser()
