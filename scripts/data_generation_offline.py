@@ -347,7 +347,6 @@ def main():
         seed=args.seed,
         max_samples=args.max_samples,
         token_freq_path=args.token_freq_path,
-        cache_dir=args.hf_cache_dir,
         assistant_pattern=args.assistant_pattern,
         turn_dropout=args.turn_dropout,
     )

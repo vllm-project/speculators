@@ -246,10 +246,10 @@ def main(args: argparse.Namespace):
     noise_transform = AddUniformNoise(std=args.noise_std)
     if args.legacy_data:
         train_files, val_files = split_files(args.data_path, ratio=0.9)
-        train_dataset = Eagle3SampleFileDataset(
+        train_dataset: BaseEagle3Dataset = Eagle3SampleFileDataset(
             file_list=train_files, max_len=args.total_seq_len, transform=noise_transform
         )
-        val_dataset = Eagle3SampleFileDataset(
+        val_dataset: BaseEagle3Dataset = Eagle3SampleFileDataset(
             file_list=val_files, max_len=args.total_seq_len
         )
     else:
