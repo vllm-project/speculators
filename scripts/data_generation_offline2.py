@@ -14,7 +14,9 @@ Usage:
 
 import argparse
 import asyncio
+import fcntl
 import logging
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -219,13 +221,22 @@ async def worker(
         idx = item["idx"]
         input_ids = item["input_ids"].tolist()
 
-        target_hidden_states_path = hidden_states_output_dir / f"hs_{idx}.safetensors"
-
         try:
             async with vllm_semaphore:  # Limit number of active generate calls
                 hidden_states_path = await generate_hidden_states_async(
                     client, model, input_ids
                 )
+
+            lock_path = hidden_states_path + ".lock"
+            if Path(lock_path).exists():
+                await wait_for_lock(lock_path)
+
+            hidden_states_path = Path(hidden_states_path)
+            target_hidden_states_path = (
+                hidden_states_output_dir
+                / f"hs_{idx}{''.join(hidden_states_path.suffixes)}"
+            )
+
             async with write_semaphore:  # Limit number of active disk writes
                 await asyncio.to_thread(
                     shutil.move, hidden_states_path, target_hidden_states_path
@@ -237,6 +248,23 @@ async def worker(
         finally:
             pbar.update(1)
             queue.task_done()
+
+
+async def _poll_lock(fd, poll_interval):
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except BlockingIOError:
+            await asyncio.sleep(poll_interval)
+
+
+async def wait_for_lock(lock_path, timeout=10.0, poll_interval=0.1):
+    fd = os.open(lock_path, os.O_RDONLY)
+    try:
+        await asyncio.wait_for(_poll_lock(fd, poll_interval), timeout=timeout)
+    finally:
+        os.close(fd)
 
 
 async def generate_and_save_hidden_states(args, dataset):
