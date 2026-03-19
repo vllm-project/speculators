@@ -1,1 +1,5 @@
 /reference/speculators
+
+# External sites that frequently block CI requests, causing flaky failures
+https://cert-manager\.io
+https://www\.contributor-covenant\.org

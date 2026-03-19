@@ -1,18 +1,19 @@
 import argparse
 import random
+import warnings
 
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
-from transformers import LlamaConfig
+from transformers import LlamaConfig, PretrainedConfig
 from transformers.models.auto.configuration_auto import AutoConfig
+from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
 from speculators.model import SpeculatorModel
 from speculators.train.data import (
     Eagle3SampleFileDataset,
     create_collate_fn,
     split_files,
-    standardize_data_v0,
     standardize_data_v1,
 )
 from speculators.train.distributed_batch_sampler import (
@@ -22,6 +23,11 @@ from speculators.train.logger import setup_metric_logger, setup_root_logger
 from speculators.train.noise_transforms import AddUniformNoise
 from speculators.train.trainer import Trainer, TrainerConfig
 from speculators.train.utils import maybe_destroy_distributed, maybe_setup_distributed
+
+DRAFT_ARCH_CONFIGS: dict[str, type] = {
+    "llama": LlamaConfig,
+    "qwen3": Qwen3Config,
+}
 
 
 def set_seed(seed: int, deterministic: bool = False):
@@ -42,7 +48,6 @@ def setup_dataloader(
     world_size: int,
     local_rank: int,
     add_noise: bool = True,
-    data_format_version: int = 1,
     noise_std: float = 0.05,
     num_workers: int = 12,
     prefetch_factor: int = 4,
@@ -53,7 +58,6 @@ def setup_dataloader(
         world_size: Number of processes in the distributed training.
         local_rank: Rank of the current process.
         add_noise: Whether to add noise to the data.
-        data_format_version: Version of the data format. Default is 1.
         noise_std: Standard deviation for noise augmentation.
         num_workers: Number of dataloader workers.
         prefetch_factor: Dataloader prefetch factor.
@@ -67,9 +71,7 @@ def setup_dataloader(
     else:
         noise_transform = None
 
-    standardize_fn = (
-        standardize_data_v1 if data_format_version == 1 else standardize_data_v0
-    )
+    standardize_fn = standardize_data_v1
 
     dataset = Eagle3SampleFileDataset(
         file_list=file_list,
@@ -95,15 +97,30 @@ def setup_dataloader(
 
 
 def create_transformer_layer_config(
-    verifier_name_or_path: str, num_layers: int
-) -> LlamaConfig:
+    verifier_name_or_path: str, num_layers: int, draft_arch: str = "llama"
+) -> PretrainedConfig:
+    if draft_arch not in DRAFT_ARCH_CONFIGS:
+        raise ValueError(
+            f"Unknown draft architecture: {draft_arch}. "
+            f"Available: {list(DRAFT_ARCH_CONFIGS.keys())}"
+        )
+
+    if draft_arch != "llama":
+        warnings.warn(
+            f"Draft architecture '{draft_arch}' is not yet supported in vLLM. "
+            "The trained model may not be usable for inference in vLLM. "
+            "Consider using 'llama' (the default) for full vLLM compatibility.",
+            stacklevel=2,
+        )
+
+    config_class = DRAFT_ARCH_CONFIGS[draft_arch]
     verifier_config = AutoConfig.from_pretrained(verifier_name_or_path)
 
     # For multimodal models (Qwen3VL, etc.), extract text_config
     if hasattr(verifier_config, "text_config"):
         verifier_config = verifier_config.text_config
 
-    transformer_layer_config = LlamaConfig(
+    return config_class(
         vocab_size=verifier_config.vocab_size,
         hidden_size=verifier_config.hidden_size,
         intermediate_size=verifier_config.intermediate_size,
@@ -115,9 +132,8 @@ def create_transformer_layer_config(
         initializer_range=verifier_config.initializer_range,
         rms_norm_eps=verifier_config.rms_norm_eps,
         head_dim=getattr(verifier_config, "head_dim", None),
+        tie_word_embeddings=False,
     )
-    transformer_layer_config._attn_implementation = "simple_flex_attention"  # noqa: SLF001
-    return transformer_layer_config
 
 
 def main(args: argparse.Namespace):
@@ -156,12 +172,8 @@ def main(args: argparse.Namespace):
 
     # Setup speculator config
     transformer_layer_config = create_transformer_layer_config(
-        args.verifier_name_or_path, args.num_layers
+        args.verifier_name_or_path, args.num_layers, draft_arch=args.draft_arch
     )
-
-    # Get model class from registry and create model using its factory method
-    if SpeculatorModel.registry_auto_discovery:
-        SpeculatorModel.auto_populate_registry()
 
     if args.speculator_type not in SpeculatorModel.registry:
         raise ValueError(
@@ -170,13 +182,18 @@ def main(args: argparse.Namespace):
         )
 
     model_class = SpeculatorModel.registry[args.speculator_type]
-    draft_model = model_class.from_training_args(
-        verifier_config=transformer_layer_config,
-        t2d=t2d,
-        d2t=d2t,
-        draft_vocab_size=draft_vocab_size,
-        **vars(args),
-    )
+    if args.from_pretrained:
+        draft_model = model_class.from_pretrained(
+            args.from_pretrained, t2d=t2d, d2t=d2t
+        )
+    else:
+        draft_model = model_class.from_training_args(
+            verifier_config=transformer_layer_config,
+            t2d=t2d,
+            d2t=d2t,
+            draft_vocab_size=draft_vocab_size,
+            **vars(args),
+        )
 
     # Setup dataloaders
     train_files, val_files = split_files(args.data_path, ratio=0.9)
@@ -185,7 +202,6 @@ def main(args: argparse.Namespace):
         world_size,
         local_rank,
         add_noise=True,
-        data_format_version=args.data_format_version,
         noise_std=args.noise_std,
         num_workers=args.num_workers,
         prefetch_factor=args.prefetch_factor,
@@ -195,7 +211,6 @@ def main(args: argparse.Namespace):
         world_size,
         local_rank,
         add_noise=False,
-        data_format_version=args.data_format_version,
         noise_std=args.noise_std,
         num_workers=args.num_workers,
         prefetch_factor=args.prefetch_factor,
@@ -236,6 +251,12 @@ def parse_args():
         default="eagle3",
         help="Type of speculator model to train (e.g., eagle3)",
     )
+    parser.add_argument(
+        "--from-pretrained",
+        type=str,
+        default="",
+        help="The pretrained draft model to finetune",
+    )
     parser.add_argument("--data-path", type=str, default="./data")
     parser.add_argument("--save-path", type=str, default="./checkpoints")
     parser.add_argument("--epochs", type=int, default=20)
@@ -248,10 +269,17 @@ def parse_args():
         help="One of 'trackio', 'wandb', 'tensorboard' or comma separated list of them",
     )
     parser.add_argument("--total-seq-len", type=int, default=8192)
-    parser.add_argument("--data-format-version", type=int, default=1)
     parser.add_argument("--log-dir", type=str, default="./logs")
     parser.add_argument("--run-name", type=str, default=None)
     parser.add_argument("--num-layers", type=int, default=1)
+    parser.add_argument(
+        "--draft-arch",
+        type=str,
+        default="llama",
+        choices=list(DRAFT_ARCH_CONFIGS.keys()),
+        help="Architecture for draft decoder layers. Defaults to 'llama'. "
+        "Note: only 'llama' is currently supported in vLLM for inference.",
+    )
     parser.add_argument("--d2t-path", type=str, default=None)
     parser.add_argument("--t2d-path", type=str, default=None)
     parser.add_argument("--ttt-steps", type=int, default=3)
@@ -274,9 +302,21 @@ def parse_args():
     # Model hyperparameters
     parser.add_argument(
         "--norm-before-residual",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=True,
-        help="Whether to normalize before residual connection",
+        help="Toggle normalization before residual connections (default: True)",
+    )
+    parser.add_argument(
+        "--embed-requires-grad",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Whether to train embedding layer weights (default: False)",
+    )
+    parser.add_argument(
+        "--norm-before-fc",
+        action="store_true",
+        help="Use RMSNorm before fc in Eagle3 draft path "
+        "(e.g. for gpt-oss). Omit for other models.",
     )
     # Dataloader parameters
     parser.add_argument(
@@ -305,7 +345,7 @@ if __name__ == "__main__":
 
 
 # RUN WITH:
-# torchrun --nnodes=1 --nproc_per_node=<num_gpus>  scripts/train.py
+# torchrun --standalone --nproc_per_node=<num_gpus>  scripts/train.py
 # for FSDP training
 # OR
 # python scripts/train.py

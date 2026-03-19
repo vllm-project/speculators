@@ -1,26 +1,41 @@
 # ruff: noqa: ERA001
+from typing import Any
+
 import torch
-from transformers import Cache, LlamaConfig
+from transformers import Cache, LlamaConfig, PretrainedConfig
 from transformers.models.llama.modeling_llama import LlamaDecoderLayer, LlamaRMSNorm
+from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
+from transformers.models.qwen3.modeling_qwen3 import Qwen3DecoderLayer, Qwen3RMSNorm
 from transformers.processing_utils import Unpack
 from transformers.utils.generic import TransformersKwargs
 
 from speculators.models import base_components
 
 
-class LlamaDecoderEagle3FirstLayer(LlamaDecoderLayer):
-    def __init__(
-        self,
-        config: LlamaConfig,
-        layer_idx: int,
-        norm_before_residual: bool = False,
-    ):
-        # Run original init
-        super().__init__(config, layer_idx)
+class Eagle3FirstLayerMixin:
+    """Shared Eagle3 first-layer modifications for any decoder layer.
 
-        # Apply Eagle3 modifications
+    Patches q/k/v projections to accept 2x hidden_size input (cat([embeds, hidden]))
+    and overrides forward to split, normalize, and recombine before attention.
+    """
+
+    # Provided by the decoder layer base class
+    self_attn: Any
+    input_layernorm: Any
+    post_attention_layernorm: Any
+    mlp: Any
+    norm_before_residual: bool
+    hidden_norm: Any
+
+    def _patch_eagle3_projections(
+        self,
+        config: PretrainedConfig,
+        norm_class: type[torch.nn.Module],
+        norm_before_residual: bool,
+    ):
+        """Replace q/k/v projections with 2x hidden_size input and add hidden_norm."""
         self.norm_before_residual = norm_before_residual
-        self.hidden_norm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.hidden_norm = norm_class(config.hidden_size, eps=config.rms_norm_eps)
         self.self_attn.q_proj = torch.nn.Linear(
             2 * config.hidden_size,  # previous: config.hidden_size
             config.num_attention_heads * config.head_dim,
@@ -48,7 +63,7 @@ class LlamaDecoderEagle3FirstLayer(LlamaDecoderLayer):
         position_embeddings: tuple[torch.Tensor, torch.Tensor] | None = None,
         **kwargs: Unpack[TransformersKwargs],  # type: ignore[valid-type]
     ) -> torch.Tensor:
-        # Previously in LlamaDecoderLayer:
+        # Previously in the parent DecoderLayer:
         #   residual = hidden_states
         #   hidden_states = self.input_layernorm(hidden_states)
 
@@ -66,6 +81,12 @@ class LlamaDecoderEagle3FirstLayer(LlamaDecoderLayer):
         if self.norm_before_residual:
             residual = hidden  # set residual to normalized hidden
         hidden_states = torch.cat([embeds, hidden], dim=-1)
+        if torch.__version__ >= "2.10":
+            # As of `torch==2.10`, compile attempts to fuse together too many
+            # ops, resulting in a fused kernel that exceeds shared memory limits
+            # For now, we force a graph break to prevent this
+            # https://github.com/pytorch/pytorch/issues/175250
+            torch._dynamo.graph_break()  # noqa: SLF001
 
         # ##### End of Eagle3 modifications #####
 
@@ -90,8 +111,33 @@ class LlamaDecoderEagle3FirstLayer(LlamaDecoderLayer):
         return hidden_states  # noqa: RET504
 
 
+class LlamaDecoderEagle3FirstLayer(Eagle3FirstLayerMixin, LlamaDecoderLayer):
+    def __init__(
+        self,
+        config: LlamaConfig,
+        layer_idx: int,
+        norm_before_residual: bool = False,
+    ):
+        super().__init__(config, layer_idx)
+        self._patch_eagle3_projections(config, LlamaRMSNorm, norm_before_residual)
+
+
+class Qwen3DecoderEagle3FirstLayer(Eagle3FirstLayerMixin, Qwen3DecoderLayer):
+    def __init__(
+        self,
+        config: Qwen3Config,
+        layer_idx: int,
+        norm_before_residual: bool = False,
+    ):
+        super().__init__(config, layer_idx)
+        self._patch_eagle3_projections(config, Qwen3RMSNorm, norm_before_residual)
+
+
 model_classes: dict[str, base_components.ModelComponents] = {
     "llama": base_components.override_components(
         "llama", first_layer_class=LlamaDecoderEagle3FirstLayer
+    ),
+    "qwen3": base_components.override_components(
+        "qwen3", first_layer_class=Qwen3DecoderEagle3FirstLayer
     ),
 }

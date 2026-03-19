@@ -9,7 +9,6 @@ from speculators.train.data import (
     Eagle3SampleFileDataset,
     create_collate_fn,
     shift_batch,
-    standardize_data_v0,
     standardize_data_v1,
 )
 
@@ -49,46 +48,6 @@ def test_shift_batch():
     shifted = shift_batch(batch)
 
     for key, value in shifted.items():
-        assert torch.allclose(value, expected_output[key])
-
-
-def test_standardize_data_v0():
-    """Test v0 data format standardization."""
-    v0_data = {
-        "input_ids": torch.tensor([0, 1, 2, 3, 4], dtype=torch.long),
-        "loss_mask": torch.tensor([0, 0, 1, 1, 1], dtype=torch.long),
-        "hidden_state": torch.tensor(
-            [
-                [0.0, 0.1, 0.2],
-                [1.0, 1.1, 1.2],
-                [2.0, 2.1, 2.2],
-                [3.0, 3.1, 3.2],
-                [4.0, 4.1, 4.2],
-            ]
-        ),
-        "target": torch.tensor([[10.0], [11.0], [12.0], [13.0], [14.0]]),
-    }
-
-    expected_output = {
-        "hidden_states": torch.tensor(
-            [
-                [0.0, 0.1, 0.2],
-                [1.0, 1.1, 1.2],
-                [2.0, 2.1, 2.2],
-                [3.0, 3.1, 3.2],
-                [4.0, 4.1, 4.2],
-            ]
-        ),
-        "input_ids": torch.tensor([0, 1, 2, 3, 4], dtype=torch.long),
-        "verifier_last_hidden_states": torch.tensor(
-            [[10.0], [11.0], [12.0], [13.0], [14.0]]
-        ),
-        "loss_mask": torch.tensor([0, 0, 1, 1, 1], dtype=torch.long),
-    }
-
-    standardized = standardize_data_v0(v0_data)
-
-    for key, value in standardized.items():
         assert torch.allclose(value, expected_output[key])
 
 

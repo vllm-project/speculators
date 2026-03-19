@@ -78,6 +78,7 @@ class VllmHiddenStatesGenerator:
         max_model_len: int = 2048,
         gpu_memory_utilization: float = 0.8,
         tensor_parallel_size: int = 1,
+        max_num_batched_tokens: int | None = None,
     ):
         self.model_path = model_path
         self.tensor_parallel_size = tensor_parallel_size
@@ -119,6 +120,7 @@ class VllmHiddenStatesGenerator:
             max_model_len=max_model_len,
             gpu_memory_utilization=gpu_memory_utilization,
             tensor_parallel_size=tensor_parallel_size,
+            max_num_batched_tokens=max_num_batched_tokens,
         )
 
         log.info("Initializing executor...")
@@ -178,11 +180,14 @@ class VllmHiddenStatesGenerator:
         max_model_len: int,
         gpu_memory_utilization: float,
         tensor_parallel_size: int,
+        max_num_batched_tokens: int | None = None,
     ) -> VllmConfig:
         """Create VllmConfig with hidden states worker extension"""
         cache_config = CacheConfig(
             block_size=VLLM_BLOCK_SIZE,
             gpu_memory_utilization=gpu_memory_utilization,
+            # disable to prevent cache state leakage
+            enable_prefix_caching=False,
         )
 
         # For prefill-only workloads, use conservative scheduler limits
@@ -190,9 +195,8 @@ class VllmHiddenStatesGenerator:
         # warmup allocation size (see gpu_worker.py:441-444).
         # We set it to a small value since we only do prefill in batches.
         max_num_seqs = MAX_NUM_SEQS
-        max_num_batched_tokens = max(
-            MIN_MAX_BATCHED_TOKENS, max_model_len
-        )  # Reduced from 65536
+        if not max_num_batched_tokens:
+            max_num_batched_tokens = max(MIN_MAX_BATCHED_TOKENS, max_model_len)
 
         return VllmConfig(
             model_config=ModelConfig(
@@ -224,7 +228,7 @@ class VllmHiddenStatesGenerator:
             args=(self.layer_ids,),
         )
 
-    def generate(self, token_ids: list[list[int]] | torch.Tensor) -> list[dict]:
+    def generate(self, token_ids: list[list[int]] | torch.Tensor) -> list[dict]:  # noqa: PLR0912, PLR0915
         """Extract hidden states from prefill phase only.
 
         Args:
@@ -243,14 +247,22 @@ class VllmHiddenStatesGenerator:
         log.debug(f"Generating hidden states for {len(input_ids_list)} sequences")
         # Account for max_tokens=1 in sampling params
         # (vLLM enforces: len(prompt) + max_tokens <= max_model_len)
-        max_len = self.vllm_config.model_config.max_model_len - 1
+        max_len = self.vllm_config.model_config.max_model_len - MAX_DECODE_TOKENS
         input_ids_list = [ids[:max_len] for ids in input_ids_list]
+
+        # Track request IDs and prompt lengths for proper token attribution
+        request_id_to_idx = {}
+        request_id_to_prompt_len = {}
 
         for i, ids in enumerate(input_ids_list):
             # Ensure ids is a list (not tensor) for vLLM Request
             ids_list = ids.tolist() if isinstance(ids, torch.Tensor) else ids
+            req_id = f"req_{self._request_counter}_{i}"
+            request_id_to_idx[req_id] = i
+            request_id_to_prompt_len[req_id] = len(ids_list)
+
             req = Request(
-                request_id=f"req_{self._request_counter}_{i}",
+                request_id=req_id,
                 prompt_token_ids=ids_list,
                 sampling_params=SamplingParams(
                     max_tokens=MAX_DECODE_TOKENS, temperature=SAMPLING_TEMPERATURE
@@ -267,41 +279,69 @@ class VllmHiddenStatesGenerator:
         self._request_counter += 1
         self.executor.collective_rpc("_reset_capture")
 
+        # Track progress for each request to distinguish prefill from decode
+        request_num_computed = dict.fromkeys(request_id_to_idx, 0)
         schedule_iterations = 0
+        all_prefill_complete = False
+
         while (
             scheduler_output := self.scheduler.schedule()
-        ).total_num_scheduled_tokens > 0:
+        ).total_num_scheduled_tokens > 0 and not all_prefill_complete:
             schedule_iterations += 1
-            log.debug(
-                f"Scheduler iteration {schedule_iterations} - tokens: "
-                f"{scheduler_output.total_num_scheduled_tokens}"
+
+            # Calculate prefill tokens for each request (ignore decode tokens)
+            prefill_metadata = {}
+            for req_id, num_tokens in scheduler_output.num_scheduled_tokens.items():
+                num_already_computed = request_num_computed[req_id]
+                num_prompt = request_id_to_prompt_len[req_id]
+                num_prefill = max(0, min(num_tokens, num_prompt - num_already_computed))
+
+                if num_prefill > 0:
+                    prefill_metadata[req_id] = num_prefill
+
+                request_num_computed[req_id] += num_tokens
+
+            all_prefill_complete = all(
+                request_num_computed[req_id] >= request_id_to_prompt_len[req_id]
+                for req_id in request_id_to_idx
             )
+
+            if prefill_metadata:
+                self.executor.collective_rpc(
+                    "_set_request_metadata", args=(prefill_metadata,)
+                )
 
             model_output = self.executor.execute_model(scheduler_output)
             self.executor.sample_tokens(model_output)
 
-            for req_id in scheduler_output.num_scheduled_tokens:
-                self.scheduler.finish_requests([req_id], RequestStatus.FINISHED_ABORTED)
+        # Abort all requests (prefill complete, don't need decode)
+        self.scheduler.finish_requests(
+            list(request_id_to_idx.keys()), RequestStatus.FINISHED_ABORTED
+        )
 
-        # Get captured states from driver worker
-        aux_hidden_states = self.executor.collective_rpc(
+        # Get captured states organized by request ID
+        request_states_dict = self.executor.collective_rpc(
             "_get_captured_states",
             unique_reply_rank=0,
         )
 
-        if not aux_hidden_states or len(aux_hidden_states) == 0:
+        if not request_states_dict:
             raise RuntimeError("Failed to capture hidden states from worker")
 
-        log.debug(f"Successfully captured {len(aux_hidden_states)} layers")
+        log.debug(f"Captured states for {len(request_states_dict)} requests")
 
-        seq_lens = [len(ids) for ids in input_ids_list]
+        # Map results back to original input order
         results = []
-        offset = 0
-        for i, seq_len in enumerate(seq_lens):
-            layer_states = [
-                h[offset : offset + seq_len].clone().cpu() for h in aux_hidden_states
-            ]
+        for req_id in sorted(request_id_to_idx.keys()):
+            i = request_id_to_idx[req_id]
 
+            if req_id not in request_states_dict:
+                raise RuntimeError(
+                    f"Request {req_id} not found in captured states. "
+                    f"Available: {list(request_states_dict.keys())}"
+                )
+
+            layer_states = [h.clone().cpu() for h in request_states_dict[req_id]]
             input_ids_tensor = torch.as_tensor(input_ids_list[i], dtype=torch.long)
 
             results.append(
@@ -311,9 +351,8 @@ class VllmHiddenStatesGenerator:
                     "loss_mask": None,
                 }
             )
-            offset += seq_len
-        empty_cache()
 
+        empty_cache()
         return results
 
     def __del__(self):

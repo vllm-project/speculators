@@ -37,10 +37,10 @@ keywords = [
 ]
 dependencies = [
     "click",
-    "datasets>=4.0.0",
+    "datasets>=4.0.0,<=4.6.0",
     "huggingface-hub",
-    "loguru",
-    "numpy",
+    "loguru>=0.7.2,<=0.7.3",
+    "numpy>=2.0.0,<=2.4.2",
     "protobuf",
     "psutil",
     "pydantic>=2.0.0",
@@ -48,10 +48,10 @@ dependencies = [
     "rich",
     "safetensors",
     "setuptools",
-    "torch<2.10.0",
-    "tqdm",
-    "transformers<5.0.0",
-    "typer-slim>=0.12.0",
+    "torch>=2.9.0,<=2.10.0",
+    "tqdm>=4.66.3,<=4.67.3",
+    "transformers>=4.56.1,<=4.57.6",
+    "typer>=0.12.0",
 ]
 
 [project.optional-dependencies]
@@ -109,7 +109,7 @@ dev = [
     "mkdocs-linkcheck~=1.0.6",
 ]
 
-datagen = ["vllm>=0.12.0,<=0.14.0"]
+datagen = ["vllm>=0.12.0,<=0.16.0"]
 
 [project.entry-points.console_scripts]
 speculators = "speculators.__main__:app"
@@ -249,6 +249,7 @@ select = [
 "scripts/**/*.py" = [
     "INP001", # allow implicit namespace packages in scripts
     "PTH", # os.path is acceptable in scripts
+    "T201", # print statements are acceptable in scripts
 ]
 
 "examples/**/*.py" = [

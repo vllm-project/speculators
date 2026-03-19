@@ -16,7 +16,7 @@ from gen_and_train import (  # type: ignore[import-not-found] # noqa: E402
 from tests.e2e.vllm.utils import run_vllm_engine  # noqa: E402
 
 
-def test_gen_train_acceptance(tmp_path: Path):
+def test_gen_train_acceptance(tmp_path: Path, monkeypatch):
     VERIFIER_NAME_OR_PATH = "meta-llama/Llama-3.1-8B-Instruct"
     OUTPUT_PATH = tmp_path / "llama3_8b_sharegpt_5k"
     TOTAL_SEQ_LEN = 8192
@@ -42,6 +42,9 @@ def test_gen_train_acceptance(tmp_path: Path):
         run_name="test_gen_train_acceptance",
         epochs=NUM_EPOCHS,
     )
+
+    # Use local environment for training run
+    monkeypatch.setenv("LOCAL_TRAIN_ENV", "1")
 
     run_e2e(
         verifier_name_or_path=VERIFIER_NAME_OR_PATH,

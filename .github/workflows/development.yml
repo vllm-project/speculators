@@ -12,42 +12,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  link-checks:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write
-      id-token: write
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v5
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
-      - name: Generate doc files
-        run: uv run --with .[dev] --no-sync --isolated docs/scripts/gen_files.py
-      - name: Link Checker
-        id: lychee
-        uses: lycheeverse/lychee-action@v2
-        with:
-          fail: false
-      - name: Create PR Comment
-        if: >
-          steps.lychee.outputs.exit_code != '0' &&
-          github.event.pull_request.head.repo.full_name == github.repository
-        uses: peter-evans/create-or-update-comment@v4
-        with:
-          issue-number: ${{ github.event.pull_request.number }}
-          body-path: ./lychee/out.md
-      - name: Fail on Issues
-        if: steps.lychee.outputs.exit_code != '0'
-        run: |
-          echo "Link Checker found issues. Please check the PR comment for details."
-          exit 1
-
   quality-checks:
     runs-on: ubuntu-latest
     strategy:

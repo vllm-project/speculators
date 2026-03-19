@@ -10,6 +10,15 @@ def is_npu_available() -> bool:
         return False
 
 
+def get_current_device() -> str:
+    """Get the current accelerator device string (e.g. 'cuda:0', 'npu:0')."""
+    acc = torch.accelerator.current_accelerator()
+    if acc is None:
+        return "cuda:0"
+    device_idx = torch.accelerator.current_device_index()
+    return f"{acc.type}:{device_idx}"
+
+
 def get_device_name(idx: int) -> str:
     acc = torch.accelerator.current_accelerator()
     if acc is None:

@@ -19,12 +19,10 @@ Classes:
 from collections.abc import Callable
 from typing import Any, ClassVar
 
-from speculators.utils.auto_importer import AutoImporterMixin
-
 __all__ = ["ClassRegistryMixin"]
 
 
-class ClassRegistryMixin(AutoImporterMixin):
+class ClassRegistryMixin:
     """
     A mixin class that provides a registration system for tracking class
     implementations with optional auto-discovery capabilities.
@@ -165,37 +163,6 @@ class ClassRegistryMixin(AutoImporterMixin):
         return clazz
 
     @classmethod
-    def auto_populate_registry(cls) -> bool:
-        """
-        Ensures that all modules in the specified auto_package are imported.
-
-        This method is called automatically by registered_classes when
-        registry_auto_discovery==True to ensure that all available implementations are
-        discovered and registered before returning the list of registered classes.
-
-        To enable auto-discovery:
-        1. Set registry_auto_discovery = True on the class
-        2. Define an auto_package class variable with the package path to import
-
-        :return: True if the registry was populated, False if it was already populated.
-        :raises ValueError: If called when registry_auto_discovery is False
-        """
-        if not cls.registry_auto_discovery:
-            raise ValueError(
-                "ClassRegistryMixin.auto_populate_registry() cannot be called "
-                "because registry_auto_discovery is set to False. "
-                "Set registry_auto_discovery to True to enable auto-discovery."
-            )
-
-        if cls.registry_populated:
-            return False
-
-        cls.auto_import_package_modules()
-        cls.registry_populated = True
-
-        return True
-
-    @classmethod
     def registered_classes(cls) -> tuple[type[Any], ...]:
         """
         Returns a tuple of all classes that have been registered with this registry.
@@ -209,8 +176,6 @@ class ClassRegistryMixin(AutoImporterMixin):
             those discovered through auto-importing when registry_auto_discovery==True.
         :raises ValueError: If called before any classes have been registered.
         """
-        if cls.registry_auto_discovery:
-            cls.auto_populate_registry()
 
         if cls.registry is None:
             raise ValueError(

@@ -5,8 +5,7 @@ Unit tests for the greedy proposal module in the Speculators library.
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from speculators.config import TokenProposalConfig
-from speculators.proposals import GreedyTokenProposalConfig
+from speculators.proposals import GreedyTokenProposalConfig, TokenProposalConfig
 
 # ===== GreedyTokenProposalConfig Tests =====
 

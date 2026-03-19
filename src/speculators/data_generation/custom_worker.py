@@ -2,6 +2,7 @@
 
 import logging
 import types
+from collections import defaultdict
 from itertools import islice
 
 import torch
@@ -99,6 +100,16 @@ class HiddenStatesWorkerExtension:
             for i, h in enumerate(aux_hidden_states):
                 self._captured_states[i].append(h)
 
+        metadata = getattr(self, "_current_request_metadata", None)
+        if metadata is not None:
+            # Sort by vLLM's actual batch position (vLLM reorders requests internally)
+            input_batch = self.model_runner.input_batch  # type: ignore[attr-defined]
+            sorted_metadata = sorted(
+                metadata.items(),
+                key=lambda item: input_batch.req_id_to_index.get(item[0], float("inf")),
+            )
+            self._request_metadata.append(sorted_metadata)  # type: ignore[has-type]
+
     def _setup_hidden_states_capture(self, layer_ids: list[int]):
         """Setup model to capture auxiliary hidden states from specific layers"""
         self._layer_ids = frozenset(layer_ids)  # Convert once for O(1) lookup
@@ -124,6 +135,14 @@ class HiddenStatesWorkerExtension:
         base_model.forward = types.MethodType(_patched_forward, base_model)
         logger.info(f"Hidden states capture setup complete for layers {layer_ids}")
 
+    def _set_request_metadata(self, request_metadata: dict[str, int]):
+        """Set request metadata for the next forward pass.
+
+        Args:
+            request_metadata: Dict mapping request_id -> num_prefill_tokens
+        """
+        self._current_request_metadata = request_metadata  # type: ignore[assignment]
+
     def _reset_capture(self):
         """Reset captured states before starting a new batch"""
         if not hasattr(self, "_layer_ids"):
@@ -131,19 +150,46 @@ class HiddenStatesWorkerExtension:
                 "Must call _setup_hidden_states_capture before capturing states"
             )
         self._captured_states = None  # type: ignore[assignment]
+        self._request_metadata = []  # type: ignore[assignment]
+        self._current_request_metadata = None  # type: ignore[assignment]
 
     def _get_captured_states(self):
-        """Get the captured hidden states
+        """Get the captured hidden states organized by request ID.
 
         Returns:
-            List of tensors, one per target layer, or None if no states captured
+            Dict mapping request_id to list of tensors (one per layer),
+            or None if no states captured.
+
+        Track which tokens belong to which request across chunked prefill iterations.
         """
         if self._captured_states is None:
             return None
-        # Concatenate lists of tensors into single tensors
-        result = [
+
+        # Concatenate captured states from all scheduler iterations
+        concatenated_layers = [
             torch.cat(layer_tensors, dim=0) for layer_tensors in self._captured_states
         ]
-        # Clear intermediate storage after concatenating
+
+        # Slice and group by request
+        request_chunks: defaultdict[str, list[list[torch.Tensor]]] = defaultdict(
+            lambda: [[] for _ in range(len(concatenated_layers))]
+        )
+        current_idx = 0
+
+        for metadata in self._request_metadata:  # type: ignore[has-type]
+            for req_id, num_tok in metadata:
+                for layer_idx, layer_tensor in enumerate(concatenated_layers):
+                    chunk = layer_tensor[current_idx : current_idx + num_tok].clone()
+                    request_chunks[req_id][layer_idx].append(chunk)
+                current_idx += num_tok
+
+        # Concatenate chunks for each request
+        result: dict[str, list[torch.Tensor]] = {
+            req_id: [torch.cat(chunks, dim=0) for chunks in layer_chunks]
+            for req_id, layer_chunks in request_chunks.items()
+        }
+
+        # Clear intermediate storage
         self._captured_states = None  # type: ignore[assignment]
+        self._request_metadata = []  # type: ignore[assignment]
         return result

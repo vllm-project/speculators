@@ -1,6 +1,6 @@
 # Data Generation and Training
 
-Speculators currently supports training of Eagle3 speculative decoders. For full details on all the steps described below, see [README.md](../../scripts/README.md)
+Speculators currently supports training of Eagle3 speculative decoders. For full details on all the steps described below, see [README.md](/scripts/README.md)
 
 This process is currently broken down into three key steps:
 
