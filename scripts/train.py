@@ -227,7 +227,6 @@ def main(args: argparse.Namespace):
         is_distributed=is_distributed,
         local_rank=local_rank,
         train_call_kwargs=train_call_kwargs,
-        scheduler_type="cosine",
         val_call_kwargs=val_call_kwargs,
         scheduler_type=args.scheduler_type,
         scheduler_warmup_steps=args.scheduler_warmup_steps,
