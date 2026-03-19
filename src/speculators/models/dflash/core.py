@@ -1,6 +1,6 @@
 # ruff: noqa: ERA001
 
-from typing import ClassVar
+from typing import Callable, ClassVar
 
 import torch
 from torch.nn.attention.flex_attention import create_block_mask
@@ -341,7 +341,7 @@ class Qwen3DFlashAttention(nn.Module):
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
             k, v = past_key_values.update(k, v, self.layer_idx, cache_kwargs)
         attn_fn: Callable = eager_attention_forward
-        if self.config._attn_implementation != "eager":
+        if self.config._attn_implementation is not None and self.config._attn_implementation != "eager":
             attn_fn = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
         attn_output, attn_weights = attn_fn(
             self,
@@ -450,6 +450,9 @@ class DFlashDraftModel(SpeculatorModel):
             verifier_attachment_mode="train_only",
         )
         self.config = config
+        # Set attention implementation to simple_flex_attention to support BlockMask
+        if self.config.transformer_layer_config._attn_implementation is None:
+            self.config.transformer_layer_config._attn_implementation = "simple_flex_attention"
         self.register_buffer("t2d", t2d)  # shape: [verifier_vocab_size], bool
         self.register_buffer("d2t", d2t)  # shape: [draft_vocab_size], int offsets
         self.draft_vocab_size = config.draft_vocab_size
@@ -471,6 +474,71 @@ class DFlashDraftModel(SpeculatorModel):
         self.hidden_norm = Qwen3RMSNorm(config.transformer_layer_config.hidden_size, eps=config.transformer_layer_config.rms_norm_eps)
         self.block_size = config.block_size
         # self.post_init()
+
+    @classmethod
+    def from_training_args(
+        cls,
+        verifier_config: "PretrainedConfig",
+        t2d: torch.Tensor | None = None,
+        d2t: torch.Tensor | None = None,
+        **kwargs,
+    ) -> "DFlashDraftModel":
+        """Create DFlash model from training arguments.
+
+        Args:
+            verifier_config: Verifier model configuration
+            t2d: Target-to-draft vocabulary mapping tensor
+            d2t: Draft-to-target vocabulary mapping tensor
+            **kwargs: Training arguments with DFlash-specific params
+                - num_layers: Number of decoder layers
+                - draft_vocab_size: Size of draft vocabulary
+                - block_size: Block size for draft predictions (default: 8)
+                - verifier_name_or_path: Path to verifier model
+
+        Returns:
+            Initialized DFlashDraftModel
+        """
+        from speculators.config import SpeculatorsConfig, VerifierConfig
+        from speculators.proposals.greedy import GreedyTokenProposalConfig
+
+        config = DFlashSpeculatorConfig(
+            transformer_layer_config=verifier_config,
+            draft_vocab_size=kwargs["draft_vocab_size"],
+            num_hidden_layers=kwargs.get("num_layers", 3),
+            block_size=kwargs.get("block_size", 8),
+            speculators_config=SpeculatorsConfig(
+                algorithm="dflash",
+                proposal_methods=[
+                    GreedyTokenProposalConfig(
+                        speculative_tokens=kwargs.get("block_size", 8),
+                    )
+                ],
+                default_proposal_method="greedy",
+                verifier=VerifierConfig.from_config(
+                    verifier_config, name_or_path=kwargs["verifier_name_or_path"]
+                ),
+            ),
+        )
+
+        if t2d is None or d2t is None:
+            raise ValueError("t2d and d2t must be provided for DFlash model")
+
+        model = cls(config=config, t2d=t2d, d2t=d2t)
+        return model
+
+    @staticmethod
+    def get_trainer_kwargs(**kwargs) -> tuple[dict, dict]:
+        """Get training and validation kwargs for DFlash.
+
+        Args:
+            **kwargs: Training arguments
+
+        Returns:
+            Tuple of (train_call_kwargs, val_call_kwargs)
+        """
+        train_kwargs = {}
+        val_kwargs = {}
+        return train_kwargs, val_kwargs
 
     def _setup_embeddings_and_mask_token(self, verifier_config, t2d):
         """Setup embeddings and mask_token_id from verifier."""
@@ -612,9 +680,19 @@ class DFlashDraftModel(SpeculatorModel):
 
         logits=self.lm_head(noise_embedding)
 
-        if return_loss: 
-            aligned_logits = logits#[:, 1:]                   
-            aligned_targets = targets#[:, :-1]        
+        if return_loss:
+            # Convert targets from verifier vocab to draft vocab
+            # t2d is a boolean mask [verifier_vocab_size] - True where verifier token exists in draft
+            # cumsum gives us the draft index for each verifier token
+            draft_indices = torch.cumsum(self.t2d.long(), dim=0) - 1
+            targets_draft = torch.where(
+                self.t2d[targets],  # mask: is this verifier token in draft vocab?
+                draft_indices[targets],  # yes: get draft index
+                torch.tensor(-100, dtype=torch.long, device=device)  # no: ignore in loss
+            )
+
+            aligned_logits = logits#[:, 1:]
+            aligned_targets = targets_draft#[:, :-1]
 
             aligned_loss_mask = gather_anchor_spans(
                 loss_mask.clone(), anchor_positions[0], self.block_size
