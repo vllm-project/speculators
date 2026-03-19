@@ -214,7 +214,7 @@ def test_create_loss_mask_simple():
     mask = _create_loss_mask_from_offsets(text, offsets, pattern)
 
     assert len(mask) == len(offsets)
-    assert mask.dtype == torch.long
+    assert mask.dtype == torch.bool
 
     # Tokens in assistant responses should have mask = 1
     # "Hi there!" is at positions 6-8 (indices in offsets)
