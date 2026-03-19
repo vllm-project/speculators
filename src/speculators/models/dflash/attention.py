@@ -4,13 +4,10 @@ from typing import cast
 import torch
 from torch.nn.attention.flex_attention import (
     BlockMask,
-    and_masks,
     flex_attention,
     or_masks,
 )
 from transformers.modeling_utils import AttentionInterface
-
-from torch.nn.attention.flex_attention import or_masks
 
 
 def create_anchor_block_mask_mod(

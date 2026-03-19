@@ -3,7 +3,9 @@ from typing import Any, Literal
 from pydantic import Field, field_serializer, field_validator
 from transformers import AutoConfig, PretrainedConfig
 from transformers.models.qwen3.modeling_qwen3 import (
-    Qwen3Config,)
+    Qwen3Config,
+)
+
 from speculators import SpeculatorModelConfig
 
 __all__ = [

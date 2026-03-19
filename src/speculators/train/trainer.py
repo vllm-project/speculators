@@ -8,6 +8,7 @@ from torch.distributed.checkpoint.state_dict import (
     StateDictOptions,
     set_model_state_dict,
 )
+
 try:
     from torch.distributed.fsdp import FSDPModule
 except ImportError:
@@ -22,8 +23,8 @@ from transformers import (
 )
 
 from speculators.model import SpeculatorModel
-from speculators.models.eagle3 import Eagle3DraftModel
 from speculators.models.dflash import DFlashDraftModel
+from speculators.models.eagle3 import Eagle3DraftModel
 from speculators.train.checkpointer import (
     BaseCheckpointer,
     DistributedCheckpointer,
@@ -75,7 +76,7 @@ class Trainer:
 
         self.setup_trainer()
         self.setup_model()
-       
+
         self.setup_optimizer()
 
     def setup_trainer(self):
