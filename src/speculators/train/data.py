@@ -21,6 +21,7 @@ from speculators.data_generation.vllm_client import (
     DEFAULT_REQUEST_TIMEOUT,
     ClientItem,
     generate_hidden_states,
+    wait_for_lock,
 )
 from speculators.train.noise_transforms import TransformTensors
 
@@ -259,6 +260,11 @@ class ArrowDataset(BaseDataset):
     def _maybe_load_hs_file(self, index: int) -> dict[str, torch.Tensor] | None:
         file_idx = self._map_to_file_idx(index)
         candidate_path = self.hidden_states_path / f"hs_{file_idx}.safetensors"
+
+        lock_path = str(candidate_path) + ".lock"
+        if Path(lock_path).exists():
+            wait_for_lock(lock_path)
+
         if candidate_path.exists():
             return load_file(candidate_path)
 

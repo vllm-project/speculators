@@ -30,6 +30,7 @@ from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_REQUEST_TIMEOUT,
     generate_hidden_states_async,
+    wait_for_lock_async,
 )
 from speculators.train.data import build_client_item
 from speculators.train.logger import setup_root_logger
@@ -288,6 +289,10 @@ async def worker(
                     timeout=request_timeout,
                     max_retries=max_retries,
                 )
+            lock_path = hidden_states_path + ".lock"
+            if Path(lock_path).exists():
+                await wait_for_lock_async(lock_path)
+
             async with write_semaphore:  # Limit number of active disk writes
                 await asyncio.to_thread(
                     shutil.move, hidden_states_path, target_hidden_states_path
