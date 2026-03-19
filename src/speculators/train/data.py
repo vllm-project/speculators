@@ -20,6 +20,7 @@ from torch.utils.data import Dataset
 from speculators.data_generation.vllm_client import (
     InvalidResponseError,
     generate_hidden_states,
+    wait_for_lock,
 )
 from speculators.train.noise_transforms import TransformTensors
 
@@ -239,11 +240,22 @@ class ArrowDataset(BaseDataset):
         """Get lengths of the dataset samples."""
         return list(self.data.with_format(None)["seq_len"])
 
+    @staticmethod
+    def _load_hs_file(path: Path) -> dict[str, torch.Tensor]:
+        lock_path = str(path) + ".lock"
+        if Path(lock_path).exists():
+            wait_for_lock(lock_path)
+
+        if path.suffix == ".safetensors":
+            return load_file(path)
+        return torch.load(path, weights_only=True, map_location="cpu")
+
     def _maybe_load_hs_file(self, index: int) -> dict[str, torch.Tensor] | None:
         file_idx = self._map_to_file_idx(index)
-        candidate_path = self.hidden_states_path / f"hs_{file_idx}.safetensors"
-        if candidate_path.exists():
-            return load_file(candidate_path)
+        for ext in (".safetensors", ".pt"):
+            candidate_path = self.hidden_states_path / f"hs_{file_idx}{ext}"
+            if candidate_path.exists():
+                return self._load_hs_file(candidate_path)
 
         return None
 
@@ -258,15 +270,16 @@ class ArrowDataset(BaseDataset):
             warnings.warn(str(e), stacklevel=1)
             return None
 
-        loaded_hs = load_file(hs_filepath)
+        hs_path = Path(hs_filepath)
+        loaded_hs = self._load_hs_file(hs_path)
 
         match self.on_generate:
             case "cache":
                 file_idx = self._map_to_file_idx(index)
-                target_path = self.hidden_states_path / f"hs_{file_idx}.safetensors"
+                target_path = self.hidden_states_path / f"hs_{file_idx}{hs_path.suffix}"
                 shutil.move(hs_filepath, target_path)
             case "delete":
-                Path(hs_filepath).unlink()
+                hs_path.unlink()
 
         return loaded_hs
 

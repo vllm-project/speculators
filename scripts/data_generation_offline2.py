@@ -21,11 +21,15 @@ from pathlib import Path
 from typing import Any
 
 import openai
+import torch
 from datasets import load_from_disk
 from safetensors import safe_open
 from tqdm import tqdm
 
-from speculators.data_generation.vllm_client import generate_hidden_states_async
+from speculators.data_generation.vllm_client import (
+    generate_hidden_states_async,
+    wait_for_lock_async,
+)
 from speculators.train.logger import setup_root_logger
 
 logger = logging.getLogger(__name__)
@@ -120,15 +124,16 @@ def parse_args():
 
 
 def get_existing_hidden_state_indices(output_path: Path) -> list[int]:
-    """Find existing `hs_i.safetensors` files (where i is the file index)"""
+    """Find existing `hs_i.safetensors` or `hs_i.pt` files (where i is file index)"""
 
     existing_file_indices = []
 
     if not output_path.exists():
         return existing_file_indices
 
+    valid_extensions = {".safetensors", ".pt"}
     for file_path in output_path.iterdir():
-        if file_path.name.startswith("hs_") and file_path.name.endswith(".safetensors"):
+        if file_path.name.startswith("hs_") and file_path.suffix in valid_extensions:
             index_str = file_path.stem[3:]  # Remove "hs_" prefix
             try:
                 file_index = int(index_str)
@@ -182,21 +187,26 @@ def get_indices_to_process(
     return to_process
 
 
-def check_safetensors_file(path: Path, tokens: list[int]):
-    with safe_open(path, "pt") as f:
-        t_ids = f.get_tensor("token_ids").tolist()
-        if t_ids != tokens:
-            raise ValueError(
-                f"Token ids in {path} don't match expected token ids {tokens}"
-            )
+def check_hidden_states_file(path: Path, tokens: list[int]):
+    if path.suffix == ".safetensors":
+        with safe_open(path, "pt") as f:
+            t_ids = f.get_tensor("token_ids").tolist()
+            hs_shape = list(f.get_slice("hidden_states").get_shape())
+    elif path.suffix == ".pt":
+        data = torch.load(path, weights_only=True, map_location="cpu")
+        t_ids = data["token_ids"].tolist()
+        hs_shape = list(data["hidden_states"].shape)
+    else:
+        raise ValueError(f"Unsupported file format: {path.suffix}")
 
-        hs_slice = f.get_slice("hidden_states")
-        hs_shape = list(hs_slice.get_shape())
-        if len(tokens) != hs_shape[0]:
-            raise ValueError(
-                f"Sequence length of hidden states {hs_shape[0]} in {path}"
-                f" doesn't match num tokens {len(tokens)}"
-            )
+    if t_ids != tokens:
+        raise ValueError(f"Token ids in {path} don't match expected token ids {tokens}")
+
+    if len(tokens) != hs_shape[0]:
+        raise ValueError(
+            f"Sequence length of hidden states {hs_shape[0]} in {path}"
+            f" doesn't match num tokens {len(tokens)}"
+        )
 
 
 async def worker(
@@ -219,20 +229,29 @@ async def worker(
         idx = item["idx"]
         input_ids = item["input_ids"].tolist()
 
-        target_hidden_states_path = hidden_states_output_dir / f"hs_{idx}.safetensors"
-
         try:
             async with vllm_semaphore:  # Limit number of active generate calls
                 hidden_states_path = await generate_hidden_states_async(
                     client, model, input_ids
                 )
+
+            lock_path = hidden_states_path + ".lock"
+            if Path(lock_path).exists():
+                await wait_for_lock_async(lock_path)
+
+            hidden_states_path = Path(hidden_states_path)
+            target_hidden_states_path = (
+                hidden_states_output_dir
+                / f"hs_{idx}{''.join(hidden_states_path.suffixes)}"
+            )
+
             async with write_semaphore:  # Limit number of active disk writes
                 await asyncio.to_thread(
                     shutil.move, hidden_states_path, target_hidden_states_path
                 )
                 if validate_outputs:
                     await asyncio.to_thread(
-                        check_safetensors_file, target_hidden_states_path, input_ids
+                        check_hidden_states_file, target_hidden_states_path, input_ids
                     )
         finally:
             pbar.update(1)

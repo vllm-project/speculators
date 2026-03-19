@@ -1,3 +1,8 @@
+import asyncio
+import fcntl
+import os
+import time
+
 import openai
 
 
@@ -20,6 +25,43 @@ def extract_output(completion, token_ids) -> str:
         raise InvalidResponseError("Response missing kv_transfer_params")
 
     return completion.kv_transfer_params.get("hidden_states_path")
+
+
+async def _poll_lock_async(fd, poll_interval):
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except BlockingIOError:
+            await asyncio.sleep(poll_interval)
+
+
+async def wait_for_lock_async(lock_path, timeout=10.0, poll_interval=0.1):
+    fd = os.open(lock_path, os.O_RDONLY)
+    try:
+        await asyncio.wait_for(_poll_lock_async(fd, poll_interval), timeout=timeout)
+    finally:
+        os.close(fd)
+        os.remove(lock_path)
+
+
+def wait_for_lock(lock_path, timeout=10.0, poll_interval=0.1):
+    fd = os.open(lock_path, os.O_RDONLY)
+    try:
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        f"Timed out waiting for lock: {lock_path}"
+                    ) from None
+                time.sleep(poll_interval)
+    finally:
+        os.close(fd)
+        os.remove(lock_path)
 
 
 async def generate_hidden_states_async(
