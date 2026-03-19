@@ -50,7 +50,7 @@ pull_request_rules:
       comment:
         message: |
           The quality checks have failed. Please run `make style` and `make quality` under
-          the root directory to adddress the lint failures. You will need to install the
+          the root directory to address the lint failures. You will need to install the
           dev optional install to get the required linting packages:
           https://github.com/vllm-project/speculators/blob/main/CONTRIBUTING.md
 
