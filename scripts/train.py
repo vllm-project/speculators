@@ -321,6 +321,12 @@ def parse_args():
         default=False,
         help="Whether to train embedding layer weights (default: False)",
     )
+    parser.add_argument(
+        "--norm-before-fc",
+        action="store_true",
+        help="Use RMSNorm before fc in Eagle3 draft path "
+        "(e.g. for gpt-oss). Omit for other models.",
+    )
     # Dataloader parameters
     parser.add_argument(
         "--num-workers", type=int, default=12, help="Number of dataloader workers"

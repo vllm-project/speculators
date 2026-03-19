@@ -56,13 +56,14 @@ if __name__ == "__main__":
         target_vocab_size=201088,  # From https://huggingface.co/openai/gpt-oss-20b/blob/main/config.json
     )
 
-    # Training
+    # Training (norm_before_fc=True for gpt-oss to stabilize draft path)
     train_args = TrainArgs(
         logger="tensorboard",
         lr=3e-5,
         total_seq_len=TOTAL_SEQ_LEN,
         run_name="gpt_oss_20b_ultrachat_5k",
         epochs=10,
+        norm_before_fc=True,
     )
 
     run_e2e(

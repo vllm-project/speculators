@@ -547,6 +547,7 @@ class Eagle3DraftModel(SpeculatorModel):
             transformer_layer_config=verifier_config,
             draft_vocab_size=kwargs["draft_vocab_size"],
             norm_before_residual=kwargs["norm_before_residual"],
+            norm_before_fc=kwargs.get("norm_before_fc", False),
             embed_requires_grad=kwargs.get("embed_requires_grad", False),
             speculators_config=SpeculatorsConfig(
                 algorithm="eagle3",
