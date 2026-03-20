@@ -1,6 +1,6 @@
 # ruff: noqa: ERA001
 
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import torch
 from torch import nn
@@ -40,6 +40,7 @@ def compute_accuracy(
 
     if block_size != 1:
         accs = []
+        assert loss_mask is not None  # noqa: S101
         for i in range(block_size):
             pos_cor = torch.masked_select(
                 correct[:, i::block_size],
@@ -215,6 +216,7 @@ def compute_acceptance_rate(
 
     if block_size != 1:
         acc_rates = []
+        assert loss_mask is not None  # noqa: S101
         for i in range(block_size):
             pos_accepted = torch.masked_select(
                 accepted[:, i::block_size], loss_mask.to(torch.bool)[:, i::block_size]
@@ -262,8 +264,7 @@ def compute_metrics(
     # s_accept_rate, per_position_accept = compute_acceptance_rate(
     #     logits, targets, loss_mask, block_size
     # )
-    s_metrics = 0
-    s_metrics = {}
+    s_metrics: dict[str, Any] = {}
     s_metrics["loss"] = s_loss.detach().clone()
     s_metrics["full_acc"] = s_full_acc
     # s_metrics[f"accept_rate"] = s_accept_rate
@@ -444,6 +445,7 @@ class Qwen3DFlashDecoderLayer(GradientCheckpointingLayer):
         # built from is that it
         # passes the extra hidden states to the self attention from the verifier model.
         # Note that target_hidden is not modified here.
+        assert hidden_states is not None  # noqa: S101
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
         hidden_states = self.self_attn(
@@ -458,11 +460,11 @@ class Qwen3DFlashDecoderLayer(GradientCheckpointingLayer):
             position_embeddings=position_embeddings,
             **kwargs,
         )[0]
-        hidden_states = residual + hidden_states
+        hidden_states = residual + hidden_states  # type: ignore[operator]
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
         hidden_states = self.mlp(hidden_states)
-        return residual + hidden_states
+        return residual + hidden_states  # type: ignore[operator,return-value]
 
 
 def _select_anchors(
@@ -529,7 +531,7 @@ class DFlashDraftModel(SpeculatorModel):
 
         self.layers = nn.ModuleList(
             [
-                Qwen3DFlashDecoderLayer(config.transformer_layer_config, layer_idx)
+                Qwen3DFlashDecoderLayer(config.transformer_layer_config, layer_idx)  # type: ignore[arg-type]
                 for layer_idx in range(config.num_hidden_layers)
             ]
         )
@@ -543,7 +545,7 @@ class DFlashDraftModel(SpeculatorModel):
             config.transformer_layer_config.hidden_size,
             eps=config.transformer_layer_config.rms_norm_eps,
         )
-        self.rotary_emb = Qwen3RotaryEmbedding(config.transformer_layer_config)
+        self.rotary_emb = Qwen3RotaryEmbedding(config.transformer_layer_config)  # type: ignore[arg-type]
 
         self.fc = nn.Linear(
             len(self.target_layer_ids) * config.transformer_layer_config.hidden_size,
@@ -622,8 +624,8 @@ class DFlashDraftModel(SpeculatorModel):
         Returns:
             Tuple of (train_call_kwargs, val_call_kwargs)
         """
-        train_kwargs = {}
-        val_kwargs = {}
+        train_kwargs: dict[str, Any] = {}
+        val_kwargs: dict[str, Any] = {}
         return train_kwargs, val_kwargs
 
     def _setup_embeddings_and_mask_token(self, verifier_config, t2d):
@@ -710,6 +712,7 @@ class DFlashDraftModel(SpeculatorModel):
         #     config=self.config.transformer_layer_config
         # )
         past_key_values = None
+        assert loss_mask is not None  # noqa: S101
         anchor_positions, anchor_valid = _select_anchors(
             loss_mask, 256, self.block_size
         )
@@ -768,7 +771,7 @@ class DFlashDraftModel(SpeculatorModel):
             metrics = {}
         tar_tok = torch.argmax(targets, dim=-1)
 
-        tar_tok = tar_tok + self.d2t[tar_tok]
+        tar_tok = tar_tok + self.d2t[tar_tok]  # type: ignore[index]
         for _i, layer in enumerate(self.layers):
             noise_embedding = layer(
                 hidden_states=noise_embedding,
@@ -789,10 +792,10 @@ class DFlashDraftModel(SpeculatorModel):
             # t2d is a boolean mask [verifier_vocab_size] - True where
             # verifier token exists in draft
             # cumsum gives us the draft index for each verifier token
-            draft_indices = torch.cumsum(self.t2d.long(), dim=0) - 1
+            draft_indices = torch.cumsum(self.t2d.long(), dim=0) - 1  # type: ignore[operator]
             targets_draft = torch.where(
                 # mask: is this verifier token in draft vocab?
-                self.t2d[targets],
+                self.t2d[targets],  # type: ignore[index]
                 # yes: get draft index
                 draft_indices[targets],
                 # no: ignore in loss
@@ -803,7 +806,9 @@ class DFlashDraftModel(SpeculatorModel):
             aligned_targets = targets_draft  # [:, :-1]
 
             aligned_loss_mask = gather_anchor_spans(
-                loss_mask.clone(), anchor_positions[0], self.block_size
+                loss_mask.clone(),
+                anchor_positions[0],
+                self.block_size,  # type: ignore[union-attr]
             ).unsqueeze(0)
 
             # zero out any padded anchor blocks

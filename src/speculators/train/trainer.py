@@ -13,7 +13,9 @@ try:
     from torch.distributed.fsdp import FSDPModule
 except ImportError:
     # Fallback for newer PyTorch versions where FSDPModule was removed
-    from torch.distributed.fsdp import FullyShardedDataParallel as FSDPModule
+    from torch.distributed.fsdp import (  # type: ignore[assignment]
+        FullyShardedDataParallel as FSDPModule,
+    )
 from torch.utils.data import DataLoader
 from tqdm import TqdmExperimentalWarning
 from tqdm.rich import tqdm
@@ -201,13 +203,11 @@ class Trainer:
     def train_epoch(self, epoch: int):
         self.model.train()
         if hasattr(self.train_loader.batch_sampler, "set_epoch"):
-            # type: ignore[union-attr]
-            self.train_loader.batch_sampler.set_epoch(epoch)
+            self.train_loader.batch_sampler.set_epoch(epoch)  # type: ignore[union-attr]
 
         train_loader = self.train_loader
         if self.local_rank == 0:
-            # type: ignore[assignment]
-            train_loader = tqdm(train_loader, desc=f"Epoch {epoch}")
+            train_loader = tqdm(train_loader, desc=f"Epoch {epoch}")  # type: ignore[assignment]
 
         for batch in train_loader:
             gpu_batch = {
@@ -248,12 +248,10 @@ class Trainer:
             return
         self.model.eval()
         if hasattr(self.val_loader.batch_sampler, "set_epoch"):
-            # type: ignore[union-attr]
-            self.val_loader.batch_sampler.set_epoch(epoch)
+            self.val_loader.batch_sampler.set_epoch(epoch)  # type: ignore[union-attr]
         val_loader = self.val_loader
         if self.local_rank == 0:
-            # type: ignore[assignment]
-            val_loader = tqdm(val_loader, desc=f"Epoch {epoch}")
+            val_loader = tqdm(val_loader, desc=f"Epoch {epoch}")  # type: ignore[assignment]
 
         val_metrics: dict[str, float] = {}
         num_batches = len(val_loader)
