@@ -695,7 +695,6 @@ class DFlashDraftModel(SpeculatorModel):
         | None = None,  # shape: [1, total_seq_len, hidden_size]
         **kwargs,
     ):
-
         device = hidden_states.device
         total_seq_len = hidden_states.shape[1]
 
