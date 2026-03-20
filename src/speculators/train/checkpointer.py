@@ -1,3 +1,4 @@
+import shutil
 from abc import abstractmethod
 from pathlib import Path
 
@@ -105,6 +106,75 @@ class BaseCheckpointer:
     def scheduler_path(self, epoch: int):
         scheduler_fname = "scheduler_state_dict.pt"
         return self.path / str(epoch) / scheduler_fname
+
+    def best_path(self) -> Path:
+        return self.path / "checkpoint_best"
+
+    def read_best_epoch(self) -> int | None:
+        """Return the epoch that `checkpoint_best` points to."""
+        best_path = self.best_path()
+        if not best_path.exists() or not best_path.is_symlink():
+            return None
+        try:
+            target = best_path.readlink()
+        except OSError:
+            return None
+        try:
+            return int(Path(target).name)
+        except ValueError:
+            return None
+
+    def load_model_state_dict_for_epoch(
+        self, model: PreTrainedModel, epoch: int, float_dtype: torch.dtype | None = None
+    ):
+        """Temporarily load weights for a specific epoch."""
+        old_epoch = self.previous_epoch
+        try:
+            self.previous_epoch = epoch
+            self.load_model_state_dict(model, float_dtype=float_dtype)
+        finally:
+            self.previous_epoch = old_epoch
+
+    def update_best_symlink(self, epoch: int):
+        best_path = self.best_path()
+        target = Path(str(epoch))  # relative symlink inside checkpoint root
+
+        if best_path.is_symlink() or best_path.exists():
+            if best_path.is_dir() and not best_path.is_symlink():
+                shutil.rmtree(best_path)
+            else:
+                best_path.unlink()
+
+        best_path.symlink_to(target, target_is_directory=True)
+
+    def cleanup_keep_only_best(self, best_epoch: int) -> None:
+        """
+        Delete all epoch dir. except best_epoch, and keep best_checkpoint symlink.
+        """
+        keep_dir = self.path / str(best_epoch)
+        best_link = self.best_path()
+
+        # Safety checks
+        if not keep_dir.exists() or not keep_dir.is_dir():
+            raise FileNotFoundError(f"Best epoch dir does not exist: {keep_dir}")
+
+        for child in self.path.iterdir():
+            # Keep the symlink itself
+            if child == best_link:
+                continue
+
+            # Keep the best epoch directory
+            if child == keep_dir:
+                continue
+
+            # Delete numbered epoch directories and any other stray dirs/files
+            try:
+                if child.is_symlink() or child.is_file():
+                    child.unlink()
+                elif child.is_dir():
+                    shutil.rmtree(child)
+            except (FileNotFoundError, PermissionError, OSError) as exc:
+                raise RuntimeError(f"Failed to delete {child}") from exc
 
 
 def convert_float_dtype(sd: pytree.PyTree, dtype: torch.dtype) -> pytree.PyTree:
@@ -237,5 +307,25 @@ class DistributedCheckpointer(BaseCheckpointer):
             # Only rank 0 saves the checkpoint
             model.save_pretrained(self.path / str(epoch), state_dict=model_state_dict)
             torch.save(optimizer_state_dict, self.optimizer_path(epoch))
+
+        dist.barrier()
+
+    def update_best_symlink(self, epoch: int):
+        if dist.get_rank() == 0:
+            super().update_best_symlink(epoch)
+
+        dist.barrier()
+
+    def cleanup_keep_only_best(self, best_epoch: int) -> None:
+        if dist.get_rank() == 0:
+            super().cleanup_keep_only_best(best_epoch)
+
+        dist.barrier()
+
+    def save_scheduler_state_dict(
+        self, scheduler: torch.optim.lr_scheduler.LRScheduler, epoch: int
+    ):
+        if dist.get_rank() == 0:
+            super().save_scheduler_state_dict(scheduler, epoch)
 
         dist.barrier()
