@@ -48,7 +48,9 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
 
     block_size: int = Field(
         default=8,
-        description="Default size of the draft block predicted with a forward pass of the model",
+        description=(
+            "Default size of the draft block predicted with a forward pass of the model"
+        ),
     )
 
     target_hidden_size: int | None = Field(

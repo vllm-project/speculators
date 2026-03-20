@@ -227,8 +227,9 @@ class FormatDictFilter(logging.Filter):
     - Integers are formatted as decimal numbers
     - Other types are converted to their string representation
 
-    Note: This is not a true filter, but a processing step as described in the
-    Python logging cookbook: https://docs.python.org/3/howto/logging-cookbook.html#using-filters-to-impart-contextual-information
+    Note: This is not a true filter, but a processing step as described in
+    the Python logging cookbook:
+    https://docs.python.org/3/howto/logging-cookbook.html#using-filters-to-impart-contextual-information
     """  # noqa: E501
 
     @staticmethod

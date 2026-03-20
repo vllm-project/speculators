@@ -27,7 +27,8 @@ def create_anchor_block_mask_mod(
         [ original packed sequence | synthetic anchor blocks ]
 
     For queries in block j:
-        - may attend to base tokens in the same document with position < anchor_positions[j]
+        - may attend to base tokens in the same document with
+          position < anchor_positions[j]
         - may attend to all tokens in their own synthetic block j
         - may not attend to other synthetic blocks or later base tokens
 
@@ -65,7 +66,8 @@ def create_anchor_block_mask_mod(
         document_ids = torch.cat(
             [
                 document_ids,
-                -1 * torch.ones(
+                -1
+                * torch.ones(
                     total_seq_len - document_ids.numel(),
                     device=device,
                     dtype=torch.long,
@@ -82,9 +84,7 @@ def create_anchor_block_mask_mod(
     anchor_docs = document_ids[anchor_positions]
     if (anchor_docs == -1).any():
         bad = anchor_positions[anchor_docs == -1]
-        raise ValueError(
-            f"anchor_positions include padding locations: {bad.tolist()}"
-        )
+        raise ValueError(f"anchor_positions include padding locations: {bad.tolist()}")
 
     # For each query position, which anchor does it belong to?
     # query q in [j*block_size, (j+1)*block_size) belongs to anchor_positions[j]
@@ -94,11 +94,13 @@ def create_anchor_block_mask_mod(
         """
         Queries may see base-sequence tokens in the same document before the anchor.
         """
-        q_anchor = query_anchor_positions[q_idx]                    # absolute base position
-        q_doc = document_ids[q_anchor]                              # doc id for this query block
+        # absolute base position
+        q_anchor = query_anchor_positions[q_idx]
+        # doc id for this query block
+        q_doc = document_ids[q_anchor]
 
         kv_is_base = kv_idx < total_seq_len
-        kv_base_pos = torch.remainder(kv_idx, total_seq_len)        # safe indexing
+        kv_base_pos = torch.remainder(kv_idx, total_seq_len)  # safe indexing
         kv_doc = document_ids[kv_base_pos]
 
         same_doc = (q_doc == kv_doc) & (q_doc != -1)
@@ -117,8 +119,6 @@ def create_anchor_block_mask_mod(
         return kv_is_block & (q_block == kv_block)
 
     return or_masks(base_prefix_mod, same_block_mod), q_len, kv_len
-
-
 
 
 def block_mask_to_dense_attention_mask(

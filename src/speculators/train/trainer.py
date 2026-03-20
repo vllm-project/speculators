@@ -97,7 +97,7 @@ class Trainer:
             self.current_epoch = 0
         self.global_step = 0
 
-    def setup_model(self):
+    def setup_model(self):  # noqa: C901
         # Verify model is compatible with training infrastructure
         SpeculatorModel.verify_training_compatible(self.model)
 
@@ -125,8 +125,13 @@ class Trainer:
         else:
             # For Eagle3/DFlash models, use custom initialization logic
             if isinstance(self.model, (Eagle3DraftModel, DFlashDraftModel)):
-                # Skip verifier-shared layers during reset to preserve pretrained weights
-                skip_modules = {self.model.lm_head, self.model.embed_tokens, self.model.verifier_lm_head}
+                # Skip verifier-shared layers during reset to preserve
+                # pretrained weights
+                skip_modules = {
+                    self.model.lm_head,
+                    self.model.embed_tokens,
+                    self.model.verifier_lm_head,
+                }
 
                 for m in self.model.layers.children():  # type: ignore[union-attr]
                     if not isinstance(m, FSDPModule):
@@ -138,7 +143,8 @@ class Trainer:
                         if hasattr(sub_module, "reset_parameters"):
                             sub_module.reset_parameters()  # type: ignore[operator]
             else:
-                # Standard FSDP initialization - broadcast full state dict from rank 0 to all ranks
+                # Standard FSDP initialization - broadcast full state dict
+                # from rank 0 to all ranks
                 set_model_state_dict(
                     self.model,
                     full_state_dict,
@@ -195,11 +201,13 @@ class Trainer:
     def train_epoch(self, epoch: int):
         self.model.train()
         if hasattr(self.train_loader.batch_sampler, "set_epoch"):
-            self.train_loader.batch_sampler.set_epoch(epoch)  # type: ignore[union-attr]
+            # type: ignore[union-attr]
+            self.train_loader.batch_sampler.set_epoch(epoch)
 
         train_loader = self.train_loader
         if self.local_rank == 0:
-            train_loader = tqdm(train_loader, desc=f"Epoch {epoch}")  # type: ignore[assignment]
+            # type: ignore[assignment]
+            train_loader = tqdm(train_loader, desc=f"Epoch {epoch}")
 
         for batch in train_loader:
             gpu_batch = {
@@ -240,10 +248,12 @@ class Trainer:
             return
         self.model.eval()
         if hasattr(self.val_loader.batch_sampler, "set_epoch"):
-            self.val_loader.batch_sampler.set_epoch(epoch)  # type: ignore[union-attr]
+            # type: ignore[union-attr]
+            self.val_loader.batch_sampler.set_epoch(epoch)
         val_loader = self.val_loader
         if self.local_rank == 0:
-            val_loader = tqdm(val_loader, desc=f"Epoch {epoch}")  # type: ignore[assignment]
+            # type: ignore[assignment]
+            val_loader = tqdm(val_loader, desc=f"Epoch {epoch}")
 
         val_metrics: dict[str, float] = {}
         num_batches = len(val_loader)
