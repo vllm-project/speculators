@@ -4,7 +4,10 @@ from typing import Literal, NamedTuple
 
 import torch
 import torch.distributed as dist
-from torch.distributed.fsdp import FSDPModule
+from torch.distributed.checkpoint.state_dict import (
+    StateDictOptions,
+    set_model_state_dict,
+)
 from torch.utils.data import DataLoader
 from tqdm import TqdmExperimentalWarning
 from tqdm.rich import tqdm
@@ -40,6 +43,8 @@ class TrainerConfig(NamedTuple):
     scheduler_warmup_steps: int | None = None
     scheduler_total_steps: int | None = None
     scheduler_num_cosine_cycles: float = 0.5
+    checkpoint_freq: int = 1
+    save_best: bool = False
 
 
 class Trainer:
@@ -83,34 +88,99 @@ class Trainer:
             root_logger.info("No previous checkpoint found. Starting from scratch.")
             self.current_epoch = 0
         self.global_step = 0
+        self.best_val_loss = float("inf")
 
     def setup_model(self):
         # Verify model is compatible with training infrastructure
         SpeculatorModel.verify_training_compatible(self.model)
 
-        if self.is_distributed:
-            apply_fully_sharded(self.model)
+        load_checkpoint = (
+            self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1
+        )
 
-            if self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1:
-                self.checkpointer.load_model_state_dict(self.model)
-            else:
-                for m in self.model.layers.children():  # type: ignore[union-attr]
-                    if not isinstance(m, FSDPModule):
-                        continue
-                    acc = torch.accelerator.current_accelerator()
-                    if acc is None:
-                        m.to_empty(device="cuda")  # type: ignore[attr-defined]
-                    else:
-                        acc_type = acc.type
-                        m.to_empty(device=acc_type)  # type: ignore[attr-defined]
-                    for sub_module in m.modules():  # type: ignore[attr-defined]
-                        if hasattr(sub_module, "reset_parameters"):
-                            sub_module.reset_parameters()  # type: ignore[operator]
-                # todo: Ensure lm_head and embed_tokens are loaded after reset
-        else:
+        if not self.is_distributed:
+            # Single device case
             self.model.to(self.local_rank)  # type: ignore[arg-type]
-            if self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1:
+            if load_checkpoint:
+                restored_from_best = self.init_best_val_loss_from_checkpoint_best()
+                if not restored_from_best:
+                    self.checkpointer.load_model_state_dict(self.model)
+            return
+
+        # Distributed case
+        # Capture full state dict on rank 0 before FSDP sharding
+        full_state_dict = {}
+        if not load_checkpoint and dist.get_rank() == 0:
+            full_state_dict = self.model.state_dict()
+
+        apply_fully_sharded(self.model)
+
+        if load_checkpoint:
+            restored_from_best = self.init_best_val_loss_from_checkpoint_best()
+            if not restored_from_best:
                 self.checkpointer.load_model_state_dict(self.model)
+        else:
+            # Broadcast full state dict from rank 0 to all ranks
+            set_model_state_dict(
+                self.model,
+                full_state_dict,
+                options=StateDictOptions(
+                    full_state_dict=True,
+                    broadcast_from_rank0=True,
+                    strict=False,
+                ),
+            )
+            del full_state_dict
+            dist.barrier()
+
+    def init_best_val_loss_from_checkpoint_best(self) -> bool:
+        """
+        If resuming and checkpoint_best exists, initialize self.best_val_loss.
+        If checkpoint_best is missing or broken, keep best_val_loss as inf).
+        """
+        best_epoch = self.checkpointer.read_best_epoch()
+
+        if best_epoch is None:
+            return False
+
+        if self.val_loader is None:
+            root_logger.warning(
+                f"Found checkpoint_best -> {best_epoch} but no val_loader; "
+                f"leaving best_val_loss=inf."
+            )
+            return False
+
+        last_epoch = self.checkpointer.previous_epoch  # Epoch to resume from
+
+        root_logger.info(
+            f"Initializing best_val_loss from checkpoint_best -> {best_epoch} "
+            f"(will resume from epoch {last_epoch})"
+        )
+
+        self.checkpointer.load_model_state_dict_for_epoch(self.model, best_epoch)
+        val_metrics = self.val_epoch(best_epoch)
+
+        val_loss = None
+        if val_metrics is not None and "loss_epoch" in val_metrics:
+            val_loss = float(val_metrics["loss_epoch"])
+
+        if val_loss is None:
+            root_logger.warning(
+                f"Could not compute loss_epoch for checkpoint_best -> {best_epoch}; "
+                "leaving best_val_loss=inf."
+            )
+        else:
+            self.best_val_loss = val_loss
+            root_logger.info(
+                f"Restored best_val_loss={self.best_val_loss:.6f} "
+                f"from checkpoint_best -> {best_epoch}"
+            )
+
+        # Restore LAST weights so training resumes normally
+        if last_epoch != best_epoch:
+            self.checkpointer.load_model_state_dict_for_epoch(self.model, last_epoch)
+
+        return True
 
     def setup_optimizer(self):
         # Setup optimizer
@@ -195,9 +265,9 @@ class Trainer:
             self.global_step += 1
 
     @torch.no_grad()
-    def val_epoch(self, epoch: int):
+    def val_epoch(self, epoch: int) -> dict[str, float] | None:
         if self.val_loader is None:
-            return
+            return None
         self.model.eval()
         if hasattr(self.val_loader.batch_sampler, "set_epoch"):
             self.val_loader.batch_sampler.set_epoch(epoch)  # type: ignore[union-attr]
@@ -220,8 +290,8 @@ class Trainer:
             )
 
             if self.is_distributed:
-                for v in metrics.values():
-                    dist.reduce(v, dst=0, op=dist.ReduceOp.AVG)
+                for m in metrics.values():
+                    dist.all_reduce(m, op=dist.ReduceOp.AVG)
 
             for k, v in metrics.items():
                 val_metrics[k] = val_metrics.get(k, 0.0) + v.item()
@@ -230,11 +300,56 @@ class Trainer:
         metric_logger.info(
             {"val": val_metrics, "epoch": epoch}, extra={"step": self.global_step}
         )
+        return val_metrics
 
-    def save_checkpoint(self, epoch: int):
-        self.checkpointer.save_checkpoint(self.model, self.opt, epoch)
-        if self.scheduler is not None:
-            self.checkpointer.save_scheduler_state_dict(self.scheduler, epoch)
+    def maybe_save_checkpoint(self, epoch: int, val_metrics: dict | None):
+        if (
+            self.config.save_best
+            and val_metrics is not None
+            and "loss_epoch" in val_metrics
+        ):
+            if val_metrics["loss_epoch"] < self.best_val_loss:
+                self.best_val_loss = val_metrics["loss_epoch"]
+                root_logger.info(
+                    f"Saving new best checkpoint at epoch {epoch} "
+                    f"(loss_epoch={self.best_val_loss:.6f})"
+                )
+                self.checkpointer.save_checkpoint(self.model, self.opt, epoch)
+                if self.scheduler is not None:
+                    self.checkpointer.save_scheduler_state_dict(self.scheduler, epoch)
+                self.checkpointer.update_best_symlink(epoch)
+                root_logger.info(
+                    f"Updated checkpoint_best -> {epoch} "
+                    f"(loss_epoch={self.best_val_loss:.6f})"
+                )
+                # Keep ONLY the best checkpoint folder + best_checkpoint symlink
+                self.checkpointer.cleanup_keep_only_best(best_epoch=epoch)
+
+        elif epoch == 0 or (epoch + 1) % self.config.checkpoint_freq == 0:
+            root_logger.info(
+                f"Saving checkpoint to {self.checkpointer.path / str(epoch)}"
+            )
+            self.checkpointer.save_checkpoint(self.model, self.opt, epoch)
+            if self.scheduler is not None:
+                self.checkpointer.save_scheduler_state_dict(self.scheduler, epoch)
+            root_logger.info(
+                f"Checkpoint saved to {self.checkpointer.path / str(epoch)}"
+            )
+            if (
+                val_metrics is not None
+                and "loss_epoch" in val_metrics
+                and val_metrics["loss_epoch"] < self.best_val_loss
+            ):
+                self.best_val_loss = val_metrics["loss_epoch"]
+                root_logger.info(
+                    f"Updating new best checkpoint symlink at epoch {epoch} "
+                    f"(loss_epoch={self.best_val_loss:.6f})"
+                )
+                self.checkpointer.update_best_symlink(epoch)
+                root_logger.info(
+                    f"Updated checkpoint_best -> {epoch} "
+                    f"(loss_epoch={self.best_val_loss:.6f})"
+                )
 
     def run_training(self):
         n_epochs = self.config.num_epochs
@@ -246,20 +361,19 @@ class Trainer:
             if self.is_distributed:
                 dist.barrier()
 
+            val_metrics = None
+
             if self.val_loader is None:
                 root_logger.warning("No val loader, skipping validation epoch")
             else:
                 root_logger.info(f"Validation epoch {epoch + 1}/{n_epochs} started")
-                self.val_epoch(epoch)
+                val_metrics = self.val_epoch(epoch)
                 root_logger.info(f"Validation epoch {epoch + 1}/{n_epochs} completed")
 
             if self.is_distributed:
                 dist.barrier()
 
-            root_logger.info(
-                f"Started saving checkpoint to {self.checkpointer.path / str(epoch)}"
-            )
-            self.save_checkpoint(epoch)
-            root_logger.info(
-                f"Finished saving checkpoint to {self.checkpointer.path / str(epoch)}"
-            )
+            self.maybe_save_checkpoint(epoch, val_metrics)
+
+            if self.is_distributed:
+                dist.barrier()
