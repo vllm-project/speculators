@@ -473,7 +473,7 @@ def load_and_preprocess_dataset(
     for train_data_path in train_data_paths:
         log.subsection(f"Processing {train_data_path}")
         raw_dataset = load_raw_dataset(train_data_path, num_proc=build_dataset_num_proc)
-        # raw_dataset = raw_dataset.shuffle(seed=seed)
+        raw_dataset = raw_dataset.shuffle(seed=seed)
 
         if max_samples is not None and len(raw_dataset) > 3 * max_samples:
             # Reduce size to 3 * max_samples to reduce processing
