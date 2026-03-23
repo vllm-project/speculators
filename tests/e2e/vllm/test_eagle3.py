@@ -7,56 +7,46 @@ from tests.e2e.vllm.utils import run_vllm_engine
 class TestEagle3vLLM:
     @pytest.mark.smoke
     @pytest.mark.parametrize(
-        (
-            "unconverted_model",
-            "base_model",
-            "norm_before_residual",
-            "disable_compile_cache",
-            "acceptance_thresholds",
-            "eagle_aux_hidden_state_layer_ids",
-        ),
+        "model_info",
         [
             pytest.param(
-                "yuhuili/EAGLE3-LLaMA3.1-Instruct-8B",
-                "unsloth/Meta-Llama-3.1-8B-Instruct",
-                False,
-                False,
-                [0.4, 0.2, 0.1],
-                None,
+                {
+                    "unconverted_model": "yuhuili/EAGLE3-LLaMA3.1-Instruct-8B",
+                    "base_model": "meta-llama/Meta-Llama-3.1-8B-Instruct",
+                    "acceptance_thresholds": [0.4, 0.2, 0.1],
+                },
                 id="llama3-8b",
             ),
             pytest.param(
-                "nm-testing/Speculator-Qwen3-8B-Eagle3",
-                "Qwen/Qwen3-8B",
-                True,
-                False,
-                [0.3, 0.2, 0.02],
-                None,
+                {
+                    "unconverted_model": "nm-testing/Speculator-Qwen3-8B-Eagle3",
+                    "base_model": "Qwen/Qwen3-8B",
+                    "norm_before_residual": True,
+                    "acceptance_thresholds": [0.3, 0.2, 0.02],
+                },
                 id="qwen3-8b",
             ),
             pytest.param(
-                "nm-testing/random-weights-llama3.1.8b-2layer-eagle3-unconverted",
-                "unsloth/Meta-Llama-3.1-8B-Instruct",
-                True,
-                True,
-                None,
-                None,
+                {
+                    "unconverted_model": (
+                        "nm-testing/random-weights-llama3.1.8b-2layer-eagle3-unconverted"
+                    ),
+                    "base_model": "meta-llama/Meta-Llama-3.1-8B-Instruct",
+                    "norm_before_residual": True,
+                    "disable_compile_cache": True,
+                },
                 id="llama3-2layer",
             ),
         ],
     )
     def test_convert_run_vllm_engine_eagle3(
-        self,
-        unconverted_model,
-        base_model,
-        norm_before_residual,
-        disable_compile_cache,
-        acceptance_thresholds,
-        eagle_aux_hidden_state_layer_ids,
-        temp_cache_dir,
-        prompts,
-        tmp_path,
+        self, model_info, temp_cache_dir, prompts, tmp_path
     ):
+        unconverted_model = model_info.get("unconverted_model")
+        base_model = model_info.get("base_model")
+        norm_before_residual = model_info.get("norm_before_residual", False)
+        disable_compile_cache = model_info.get("disable_compile_cache", False)
+        acceptance_thresholds = model_info.get("acceptance_thresholds", None)
         converted_path = tmp_path / unconverted_model.split("/")[-1]
         converter = Eagle3Converter()
 
@@ -68,10 +58,10 @@ class TestEagle3vLLM:
             "norm_before_residual": norm_before_residual,
         }
 
-        if eagle_aux_hidden_state_layer_ids is not None:
-            convert_kwargs["eagle_aux_hidden_state_layer_ids"] = (
-                eagle_aux_hidden_state_layer_ids
-            )
+        if "eagle_aux_hidden_state_layer_ids" in model_info:
+            convert_kwargs["eagle_aux_hidden_state_layer_ids"] = model_info[
+                "eagle_aux_hidden_state_layer_ids"
+            ]
 
         converter.convert(**convert_kwargs)
         run_vllm_engine(
