@@ -133,6 +133,7 @@ def _make_trainer_no_init(
     resume_from_checkpoint=False,
     local_rank=0,
     save_path="/tmp/test_ckpt",
+    hidden_states_dtype=torch.bfloat16,
 ):
     """Create a Trainer instance bypassing __init__ to control setup order."""
     config = TrainerConfig(
@@ -142,6 +143,7 @@ def _make_trainer_no_init(
         resume_from_checkpoint=resume_from_checkpoint,
         is_distributed=is_distributed,
         local_rank=local_rank,
+        hidden_states_dtype=hidden_states_dtype,
     )
     trainer = Trainer.__new__(Trainer)
     trainer.model = model
@@ -230,7 +232,9 @@ def test_single_gpu_fresh_init(tiny_model, mock_checkpointer):
     no checkpoint loading."""
     state_before = {k: v.clone() for k, v in tiny_model.state_dict().items()}
 
-    trainer = _make_trainer_no_init(tiny_model, is_distributed=False)
+    trainer = _make_trainer_no_init(
+        tiny_model, is_distributed=False, hidden_states_dtype=torch.float
+    )
     trainer.checkpointer = mock_checkpointer
 
     trainer.setup_model()

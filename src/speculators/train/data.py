@@ -120,7 +120,7 @@ class Eagle3SampleFileDataset(Dataset):
         datapath: str | None = None,
         file_list: list[str] | None = None,
         transform: TransformTensors | None = None,
-        hidden_states_dtype=torch.float,
+        hidden_states_dtype=None,
         standardize_fn: StandardizeFnSig = standardize_data_v1,
     ):
         """Initialize the Eagle3SampleFileDataset.
@@ -212,11 +212,12 @@ class Eagle3SampleFileDataset(Dataset):
         #  "loss_mask": [seq_len],
         # }
 
-        # Convert hidden states to the correct dtype
-        data = {
-            k: v.to(self.hidden_states_dtype) if "hidden_states" in k else v
-            for k, v in data.items()
-        }
+        if self.hidden_states_dtype is not None:
+            # Convert hidden states to the correct dtype
+            data = {
+                k: v.to(self.hidden_states_dtype) if "hidden_states" in k else v
+                for k, v in data.items()
+            }
 
         # Add lengths tensor
         seq_len = data["input_ids"].shape[0]
