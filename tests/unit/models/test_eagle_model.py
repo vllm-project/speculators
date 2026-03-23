@@ -786,6 +786,7 @@ def test_eagle_speculator_auto_architecture_error_handling():
             self.num_hidden_layers = 12
             self.num_attention_heads = 12
             self.max_position_embeddings = 2048
+            self.pad_token_id = 0
 
     # This config is not in MODEL_FOR_CAUSAL_LM_MAPPING, so it should fail
     custom_config = CustomConfig()
