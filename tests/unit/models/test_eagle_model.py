@@ -47,7 +47,10 @@ from speculators import (
     SpeculatorsConfig,
     VerifierConfig,
 )
-from speculators.models import EagleSpeculator, EagleSpeculatorConfig
+from speculators.convert.eagle.eagle_legacy_model import (
+    EagleSpeculator,
+    EagleSpeculatorConfig,
+)
 from speculators.proposals import GreedyTokenProposalConfig
 
 # ===== Layer Types Constants =====

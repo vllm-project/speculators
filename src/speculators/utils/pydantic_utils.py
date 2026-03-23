@@ -189,23 +189,3 @@ class PydanticClassRegistryMixin(ReloadableBaseModel, ABC, ClassRegistryMixin):
         :return: A CoreSchema object representing the base schema
         """
         return core_schema.any_schema()
-
-    @classmethod
-    def auto_populate_registry(cls) -> bool:
-        """
-        Ensures that all registered classes in the registry are properly initialized.
-
-        This method is called automatically by Pydantic when the model is instantiated
-        or validated. It ensures that all classes in the registry are loaded and ready
-        for use.
-
-        This is particularly useful for ensuring that all subclasses are registered
-        before any validation occurs.
-
-        :return: True if the registry was populated, False if it was already populated
-        :raises ValueError: If called when registry_auto_discovery is False
-        """
-        populated = super().auto_populate_registry()
-        cls.reload_schema()
-
-        return populated

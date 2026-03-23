@@ -120,7 +120,7 @@ def create_transformer_layer_config(
     if hasattr(verifier_config, "text_config"):
         verifier_config = verifier_config.text_config
 
-    transformer_layer_config = config_class(
+    return config_class(
         vocab_size=verifier_config.vocab_size,
         hidden_size=verifier_config.hidden_size,
         intermediate_size=verifier_config.intermediate_size,
@@ -132,9 +132,8 @@ def create_transformer_layer_config(
         initializer_range=verifier_config.initializer_range,
         rms_norm_eps=verifier_config.rms_norm_eps,
         head_dim=getattr(verifier_config, "head_dim", None),
+        tie_word_embeddings=False,
     )
-    transformer_layer_config._attn_implementation = "simple_flex_attention"  # noqa: SLF001
-    return transformer_layer_config
 
 
 def main(args: argparse.Namespace):
@@ -180,10 +179,6 @@ def main(args: argparse.Namespace):
         args.verifier_name_or_path, args.num_layers, draft_arch=args.draft_arch
     )
 
-    # Get model class from registry and create model using its factory method
-    if SpeculatorModel.registry_auto_discovery:
-        SpeculatorModel.auto_populate_registry()
-
     if args.speculator_type not in SpeculatorModel.registry:
         raise ValueError(
             f"Unknown speculator type: {args.speculator_type}. "
@@ -191,13 +186,18 @@ def main(args: argparse.Namespace):
         )
 
     model_class = SpeculatorModel.registry[args.speculator_type]
-    draft_model = model_class.from_training_args(
-        verifier_config=transformer_layer_config,
-        t2d=t2d,
-        d2t=d2t,
-        draft_vocab_size=draft_vocab_size,
-        **vars(args),
-    )
+    if args.from_pretrained:
+        draft_model = model_class.from_pretrained(
+            args.from_pretrained, t2d=t2d, d2t=d2t
+        )
+    else:
+        draft_model = model_class.from_training_args(
+            verifier_config=transformer_layer_config,
+            t2d=t2d,
+            d2t=d2t,
+            draft_vocab_size=draft_vocab_size,
+            **vars(args),
+        )
 
     # Setup dataloaders
     train_files, val_files = split_files(args.data_path, ratio=0.9)
@@ -236,6 +236,8 @@ def main(args: argparse.Namespace):
         scheduler_warmup_steps=args.scheduler_warmup_steps,
         scheduler_total_steps=args.scheduler_total_steps,
         scheduler_num_cosine_cycles=args.scheduler_num_cosine_cycles,
+        checkpoint_freq=args.checkpoint_freq,
+        save_best=args.save_best,
     )
     trainer = Trainer(draft_model, trainer_config, train_loader, val_loader)
 
@@ -246,6 +248,13 @@ def main(args: argparse.Namespace):
     maybe_destroy_distributed()
 
 
+def _checkpoint_freq(value: str) -> int:
+    ivalue = int(value)
+    if ivalue < 1:
+        raise argparse.ArgumentTypeError("--checkpoint-freq must be >= 1")
+    return ivalue
+
+
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--verifier-name-or-path", type=str, required=True)
@@ -254,6 +263,12 @@ def parse_args():
         type=str,
         default="eagle3",
         help="Type of speculator model to train (e.g., eagle3)",
+    )
+    parser.add_argument(
+        "--from-pretrained",
+        type=str,
+        default="",
+        help="The pretrained draft model to finetune",
     )
     parser.add_argument("--data-path", type=str, default="./data")
     parser.add_argument("--save-path", type=str, default="./checkpoints")
@@ -310,6 +325,12 @@ def parse_args():
         default=False,
         help="Whether to train embedding layer weights (default: False)",
     )
+    parser.add_argument(
+        "--norm-before-fc",
+        action="store_true",
+        help="Use RMSNorm before fc in Eagle3 draft path "
+        "(e.g. for gpt-oss). Omit for other models.",
+    )
     # Dataloader parameters
     parser.add_argument(
         "--num-workers", type=int, default=12, help="Number of dataloader workers"
@@ -323,6 +344,20 @@ def parse_args():
         default=0.05,
         help="Standard deviation for noise augmentation",
     )
+    # Checkpoint Parameters
+    parser.add_argument(
+        "--checkpoint-freq",
+        type=_checkpoint_freq,
+        default=1,
+        help="Save a checkpoint every N epochs.",
+    )
+    parser.add_argument(
+        "--save-best",
+        action="store_true",
+        default=False,
+        help="Pointing to checkpoint with lowest validation loss.",
+    )
+
     # lr scheduler
     parser.add_argument("--scheduler-type", type=str, default="linear")
     parser.add_argument("--scheduler-warmup-steps", type=int, default=None)
@@ -342,7 +377,7 @@ if __name__ == "__main__":
 
 
 # RUN WITH:
-# torchrun --nnodes=1 --nproc_per_node=<num_gpus>  scripts/train.py
+# torchrun --standalone --nproc_per_node=<num_gpus>  scripts/train.py
 # for FSDP training
 # OR
 # python scripts/train.py

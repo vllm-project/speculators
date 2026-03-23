@@ -132,6 +132,7 @@ class TrainArgs(NamedTuple):
     scheduler_warmup_steps: int | _NS = _NOTSET
     scheduler_total_steps: int | _NS = _NOTSET
     scheduler_num_cosine_cycles: float | _NS = _NOTSET
+    norm_before_fc: bool | _NS = _NOTSET
     nproc_per_node: int | _NS = _NOTSET
     nnodes: int | _NS = _NOTSET
     node_rank: int | _NS = _NOTSET

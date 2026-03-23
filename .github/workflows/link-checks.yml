@@ -1,0 +1,148 @@
+name: Link Checks
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_TORCH_BACKEND: "cpu"
+
+jobs:
+  link-checks:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+      - name: Generate doc files
+        run: uv run --with .[dev] --no-sync --isolated docs/scripts/gen_files.py
+
+      - name: (DOCS) Link Checker
+        id: lychee_docs
+        uses: lycheeverse/lychee-action@v2
+        with:
+          fail: false
+          args: --root-dir "$(pwd)/docs" --verbose --no-progress './docs/**/*.md'
+      - name: (DOCS) Find existing comment
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        uses: peter-evans/find-comment@v3
+        id: find_docs_comment
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: "github-actions[bot]"
+          body-includes: "Link Check Results (DOCS)"
+      - name: (DOCS) Prepare failure comment
+        if: steps.lychee_docs.outputs.exit_code != '0'
+        run: |
+          {
+            echo "**Link Check Results (DOCS)**"
+            echo ""
+            cat ./lychee/out.md
+            echo ""
+            echo "---"
+            echo "*Last updated: ${{ github.event.pull_request.head.sha }}*"
+          } > ./lychee/docs_comment.md
+      - name: (DOCS) Create or update failure comment
+        if: >
+          steps.lychee_docs.outputs.exit_code != '0' &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          comment-id: ${{ steps.find_docs_comment.outputs.comment-id }}
+          issue-number: ${{ github.event.pull_request.number }}
+          body-path: ./lychee/docs_comment.md
+          edit-mode: replace
+      - name: (DOCS) Mark previous failure as resolved
+        if: >
+          steps.lychee_docs.outputs.exit_code == '0' &&
+          steps.find_docs_comment.outputs.comment-id != '' &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          comment-id: ${{ steps.find_docs_comment.outputs.comment-id }}
+          issue-number: ${{ github.event.pull_request.number }}
+          body: |
+            ~~**Link Check Results (DOCS)**~~
+
+            **All links are now valid** - this issue has been resolved.
+
+            ---
+            *Marked as resolved: ${{ github.event.pull_request.head.sha }}*
+          edit-mode: replace
+
+      - name: (REPO) Link Checker
+        id: lychee_repo
+        uses: lycheeverse/lychee-action@v2
+        with:
+          fail: false
+          args: --root-dir "$(pwd)" --verbose --no-progress --exclude-path 'docs' './**/*.md'
+      - name: (REPO) Find existing comment
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        uses: peter-evans/find-comment@v3
+        id: find_repo_comment
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: "github-actions[bot]"
+          body-includes: "Link Check Results (REPO)"
+      - name: (REPO) Prepare failure comment
+        if: steps.lychee_repo.outputs.exit_code != '0'
+        run: |
+          {
+            echo "**Link Check Results (REPO)**"
+            echo ""
+            cat ./lychee/out.md
+            echo ""
+            echo "---"
+            echo "*Last updated: ${{ github.event.pull_request.head.sha }}*"
+          } > ./lychee/repo_comment.md
+      - name: (REPO) Create or update failure comment
+        if: >
+          steps.lychee_repo.outputs.exit_code != '0' &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          comment-id: ${{ steps.find_repo_comment.outputs.comment-id }}
+          issue-number: ${{ github.event.pull_request.number }}
+          body-path: ./lychee/repo_comment.md
+          edit-mode: replace
+      - name: (REPO) Mark previous failure as resolved
+        if: >
+          steps.lychee_repo.outputs.exit_code == '0' &&
+          steps.find_repo_comment.outputs.comment-id != '' &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          comment-id: ${{ steps.find_repo_comment.outputs.comment-id }}
+          issue-number: ${{ github.event.pull_request.number }}
+          body: |
+            ~~**Link Check Results (REPO)**~~
+
+            **All links are now valid** - this issue has been resolved.
+
+            ---
+            *Marked as resolved: ${{ github.event.pull_request.head.sha }}*
+          edit-mode: replace
+
+      - name: Fail on Issues
+        if: steps.lychee_docs.outputs.exit_code != '0' ||
+            steps.lychee_repo.outputs.exit_code != '0'
+        run: |
+          echo "Link Checker found issues. Please check the PR comment for details."
+          exit 1

@@ -1,0 +1,31 @@
+name: 💬 Request for comments (RFC).
+description: Ask for feedback on major architectural changes or design choices.
+title: "[RFC]: "
+labels: ["RFC"]
+
+body:
+- type: markdown
+  attributes:
+    value: >
+      #### Please take a look at previous [RFCs](https://github.com/vllm-project/speculators/issues?q=label%3ARFC%20sort%3Aupdated-desc) for reference.
+- type: textarea
+  attributes:
+    label: Motivation.
+    description: >
+      The motivation of the RFC.
+  validations:
+    required: true
+- type: textarea
+  attributes:
+    label: Proposed Change.
+    description: >
+      The proposed change of the RFC. This should be a clear and concise description of the changes from a high-level. Please do not just list every file that will be modified/added.
+  validations:
+    required: true
+- type: textarea
+  attributes:
+    label: Any Other Things.
+    description: >
+      Any other things you would like to mention.
+  validations:
+    required: false

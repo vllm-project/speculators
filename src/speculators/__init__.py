@@ -23,22 +23,23 @@ The library offers a modular architecture with components for:
 from .config import (
     SpeculatorModelConfig,
     SpeculatorsConfig,
-    TokenProposalConfig,
     VerifierConfig,
-    reload_and_populate_configs,
+    reload_schemas,
 )
-from .model import SpeculatorModel, reload_and_populate_models
+from .model import SpeculatorModel
+from .models import Eagle3DraftModel, Eagle3SpeculatorConfig
+from .proposals import TokenProposalConfig
 
 __all__ = [
+    "Eagle3DraftModel",
+    "Eagle3SpeculatorConfig",
     "SpeculatorModel",
     "SpeculatorModelConfig",
     "SpeculatorsConfig",
     "TokenProposalConfig",
     "VerifierConfig",
-    "reload_and_populate_configs",
-    "reload_and_populate_models",
+    "reload_schemas",
 ]
 
 # base imports complete, run auto loading for base classes
-reload_and_populate_configs()
-reload_and_populate_models()
+reload_schemas()
