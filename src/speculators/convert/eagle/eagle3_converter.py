@@ -184,14 +184,16 @@ class Eagle3Converter:
         # Remap midlayer.* to layers.0.*
         remapped_weights = {}
         for key, value in weights.items():
-            if key.startswith('midlayer.'):
-                new_key = key.replace('midlayer.', 'layers.0.')
+            if key.startswith("midlayer."):
+                new_key = key.replace("midlayer.", "layers.0.")
                 remapped_weights[new_key] = value
                 logger.debug(f"Remapped weight key: {key} -> {new_key}")
             else:
                 remapped_weights[key] = value
 
-        missing_keys, unexpected_keys = model.load_state_dict(remapped_weights, strict=False)  # type: ignore[attr-defined]
+        missing_keys, unexpected_keys = model.load_state_dict(
+            remapped_weights, strict=False
+        )  # type: ignore[attr-defined]
 
         if missing_keys:
             logger.warning(f"Missing keys in checkpoint: {missing_keys}")

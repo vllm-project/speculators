@@ -76,7 +76,7 @@ class TestEagle3vLLM:
 
     @pytest.mark.smoke
     @pytest.mark.parametrize(
-        "model_path,acceptance_thresholds",
+        ("model_path", "acceptance_thresholds"),
         [
             pytest.param(
                 "nm-testing/SpeculatorLlama3-1-8B-Eagle3-converted-0717-quantized",
@@ -90,7 +90,9 @@ class TestEagle3vLLM:
             ),
         ],
     )
-    def test_vllm_engine_eagle3(self, model_path, acceptance_thresholds, prompts, tmp_path):
+    def test_vllm_engine_eagle3(
+        self, model_path, acceptance_thresholds, prompts, tmp_path
+    ):
         run_vllm_engine(
             model_path=model_path,
             tmp_path=tmp_path,
