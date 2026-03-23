@@ -13,6 +13,7 @@ class TestEagle3vLLM:
                 {
                     "unconverted_model": "yuhuili/EAGLE3-LLaMA3.1-Instruct-8B",
                     "base_model": "meta-llama/Meta-Llama-3.1-8B-Instruct",
+                    "acceptance_thresholds": [0.4, 0.2, 0.1],
                 },
                 id="llama3-8b",
             ),
@@ -21,6 +22,7 @@ class TestEagle3vLLM:
                     "unconverted_model": "nm-testing/Speculator-Qwen3-8B-Eagle3",
                     "base_model": "Qwen/Qwen3-8B",
                     "norm_before_residual": True,
+                    "acceptance_thresholds": [0.3, 0.2, 0.02],
                 },
                 id="qwen3-8b",
             ),
@@ -32,6 +34,7 @@ class TestEagle3vLLM:
                     "base_model": "meta-llama/Meta-Llama-3.1-8B-Instruct",
                     "norm_before_residual": True,
                     "disable_compile_cache": True,
+                    "acceptance_thresholds": [0.4, 0.2, 0.1],
                 },
                 id="llama3-2layer",
             ),
@@ -68,21 +71,29 @@ class TestEagle3vLLM:
             tmp_path=tmp_path,
             disable_compile_cache=disable_compile_cache,
             prompts=prompts,
+            acceptance_thresholds=model_info.get("acceptance_thresholds"),
         )
 
     @pytest.mark.smoke
     @pytest.mark.parametrize(
-        "model_path",
+        "model_path,acceptance_thresholds",
         [
             pytest.param(
                 "nm-testing/SpeculatorLlama3-1-8B-Eagle3-converted-0717-quantized",
+                [0.3, 0.06, 0.00],
                 id="llama3-converted-quantized",
             ),
             pytest.param(
                 "RedHatAI/Qwen3-8B-speculator.eagle3",
+                [0.42, 0.2, 0.02],
                 id="qwen3-converted-quantized",
             ),
         ],
     )
-    def test_vllm_engine_eagle3(self, model_path, prompts, tmp_path):
-        run_vllm_engine(model_path=model_path, tmp_path=tmp_path, prompts=prompts)
+    def test_vllm_engine_eagle3(self, model_path, acceptance_thresholds, prompts, tmp_path):
+        run_vllm_engine(
+            model_path=model_path,
+            tmp_path=tmp_path,
+            prompts=prompts,
+            acceptance_thresholds=acceptance_thresholds,
+        )
