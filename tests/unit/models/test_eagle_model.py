@@ -100,7 +100,7 @@ def sample_llama_config():
         attention_bias=False,
         attention_dropout=0.0,
         bos_token_id=128000,
-        eos_token_id=[128001, 128008, 128009],
+        eos_token_id=128001,
         head_dim=128,
         hidden_act="silu",
         hidden_size=4096,
@@ -112,7 +112,7 @@ def sample_llama_config():
         num_hidden_layers=32,
         num_key_value_heads=8,
         pretraining_tp=1,
-        rms_norm_eps=1e-5,
+        rms_norm_eps=1e-5,  # type: ignore[arg-type] # (bad transformer's type hint, int instead of float)
         rope_scaling={
             "factor": 8.0,
             "high_freq_factor": 4.0,
@@ -483,6 +483,7 @@ def test_eagle_speculator_architecture_hass(
     assert model.embedding_layernorm.weight.shape == (llama_config.hidden_size,)
     assert model.fusion_fc is not None
     assert isinstance(model.fusion_fc, nn.Linear)
+    assert llama_config.hidden_size is not None  # typing
     assert model.fusion_fc.weight.shape == (
         llama_config.hidden_size,
         2 * llama_config.hidden_size,

@@ -7,7 +7,7 @@ from typing import Any, cast
 import torch
 from datasets import Dataset as HFDataset
 from datasets import load_dataset
-from transformers import AutoTokenizer, PreTrainedTokenizer
+from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 from speculators.data_generation.configs import DATASET_CONFIGS
 from speculators.data_generation.logging_utils import PipelineLogger
@@ -106,7 +106,7 @@ def _normalize_conversation(
     return normalized
 
 
-def _supports_assistant_mask(tokenizer: PreTrainedTokenizer) -> bool:
+def _supports_assistant_mask(tokenizer: PreTrainedTokenizerBase) -> bool:
     """Check if tokenizer truly supports HF assistant token mask.
 
     Must return a non-zero mask for a conversation containing an assistant message.
@@ -130,7 +130,7 @@ def _supports_assistant_mask(tokenizer: PreTrainedTokenizer) -> bool:
         return False
 
 
-def _detect_assistant_pattern(tokenizer: PreTrainedTokenizer) -> str:
+def _detect_assistant_pattern(tokenizer: PreTrainedTokenizerBase) -> str:
     """Auto-detect the assistant message pattern from the tokenizer's chat template.
 
     Uses multi-turn conversation but extracts pattern from the LAST assistant
@@ -256,7 +256,7 @@ def _create_loss_mask_from_offsets(
 
 def _preprocess_batch(
     examples: dict,
-    tokenizer: PreTrainedTokenizer,
+    tokenizer: PreTrainedTokenizerBase,
     max_length: int,
     assistant_pattern: str | Pattern[str] | None,
     turn_dropout: bool = False,
@@ -352,7 +352,7 @@ def _preprocess_batch(
 
 def build_eagle3_dataset(
     dataset: HFDataset,
-    tokenizer: PreTrainedTokenizer,
+    tokenizer: PreTrainedTokenizerBase,
     max_length: int = 2048,
     num_proc: int = 8,
     assistant_pattern: str | Pattern[str] | None = None,
@@ -435,7 +435,7 @@ def load_and_preprocess_dataset(
     cache_dir: str | None = None,
     assistant_pattern: str | None = None,
     turn_dropout: bool = False,
-) -> tuple[HFDataset, PreTrainedTokenizer]:
+) -> tuple[HFDataset, PreTrainedTokenizerBase]:
     """Load, tokenize, and preprocess a dataset for EAGLE3 training.
 
     Uses the tokenizer's built-in chat template via apply_chat_template.

@@ -259,9 +259,9 @@ class Eagle3DraftModel(SpeculatorModel):
         torch.nn.init.constant_(self.lm_head.weight, torch.nan)
         torch.nn.init.constant_(self.embed_tokens.weight, torch.nan)
         torch.nn.init.constant_(self.verifier_lm_head.weight, torch.nan)
-        self.lm_head._is_hf_initialized = True  # noqa: SLF001
-        self.embed_tokens._is_hf_initialized = True  # noqa: SLF001
-        self.verifier_lm_head._is_hf_initialized = True  # noqa: SLF001
+        self.lm_head._is_hf_initialized = True  # type: ignore[assignment] # noqa: SLF001
+        self.embed_tokens._is_hf_initialized = True  # type: ignore[assignment] # noqa: SLF001
+        self.verifier_lm_head._is_hf_initialized = True  # type: ignore[assignment] # noqa: SLF001
 
         self.post_init()
 

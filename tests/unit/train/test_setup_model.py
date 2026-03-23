@@ -61,7 +61,7 @@ TINY_LLAMA_CONFIG = LlamaConfig(
     num_key_value_heads=4,
     head_dim=8,
     max_position_embeddings=32,
-    rms_norm_eps=1e-6,
+    rms_norm_eps=1e-6,  # type: ignore[arg-type] # (bad transformer's type hint, int instead of float)
     tie_word_embeddings=False,
     _attn_implementation="eager",
 )
@@ -684,6 +684,7 @@ def draft_vocab_config():
 @pytest.fixture
 def vocab_mappings():
     """Valid (t2d, d2t) pair for verifier_vocab=64, draft_vocab=32."""
+    assert TINY_LLAMA_CONFIG.vocab_size is not None  # typing
     return _make_vocab_mappings(
         verifier_vocab_size=TINY_LLAMA_CONFIG.vocab_size,
         draft_vocab_size=DRAFT_VOCAB_SIZE,
@@ -728,6 +729,7 @@ def test_load_vocab_mappings_validation(draft_vocab_config, vocab_mappings):
         model.load_vocab_mappings(t2d, torch.zeros(10, dtype=torch.long))
 
     # Wrong number of True values in t2d
+    assert TINY_LLAMA_CONFIG.vocab_size is not None  # typing
     bad_t2d = torch.ones(TINY_LLAMA_CONFIG.vocab_size, dtype=torch.bool)
     with pytest.raises(ValueError, match="non-zero values"):
         model.load_vocab_mappings(bad_t2d, d2t)
