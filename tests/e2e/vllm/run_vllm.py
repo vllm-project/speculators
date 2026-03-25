@@ -1,9 +1,60 @@
 import argparse
+import importlib
 import json
+import types
 from pathlib import Path
 
-from vllm import LLM, SamplingParams  # type: ignore[import-not-found]
-from vllm.v1.metrics.reader import Counter, Metric, Vector
+
+def _workaround_vllm_torch210() -> None:
+    """Patch torch 2.10.0 / vLLM nightly incompatibility before loading vLLM.
+
+    In torch 2.10.0, ``torch._inductor`` exposes ``standalone_compile`` as a
+    wrapper function that shadows the submodule of the same name.  vLLM nightly
+    patches ``torch._inductor.standalone_compile.FakeTensorMode`` via
+    ``unittest.mock.patch``, but ``mock`` resolves the dotted path through
+    ``getattr``, landing on the wrapper function rather than the module.
+    Functions have no ``FakeTensorMode`` attribute, so ``mock`` raises
+    ``AttributeError`` and vLLM fails to start.
+
+    Fix: replace the attribute with a callable subclass of the actual submodule
+    so that ``mock.patch`` patches ``FakeTensorMode`` in the correct module
+    namespace (which the submodule reads at runtime via ``LOAD_GLOBAL``) while
+    callers that invoke ``standalone_compile(graph, ...)`` still reach the
+    original wrapper via ``__call__``.
+
+    Upstream issue: https://github.com/pytorch/pytorch/issues/176562
+    """
+    try:
+        import torch._inductor as _ti  # noqa: PLC0415
+    except ImportError:
+        return
+
+    sc_fn = getattr(_ti, "standalone_compile", None)
+    if not callable(sc_fn) or hasattr(sc_fn, "FakeTensorMode"):
+        return  # not affected or already patched
+
+    try:
+        sc_mod = importlib.import_module("torch._inductor.standalone_compile")
+    except ImportError:
+        return
+
+    if not hasattr(sc_mod, "FakeTensorMode"):
+        return  # unexpected module layout — leave untouched
+
+    class _CallableModule(types.ModuleType):
+        def __call__(self, *args, **kwargs):
+            return sc_fn(*args, **kwargs)  # type: ignore[misc]
+
+    sc_mod.__class__ = _CallableModule
+    _ti.standalone_compile = sc_mod  # type: ignore[assignment]
+
+
+# Apply the workaround before importing vLLM: the fix must be in place before
+# vLLM's compilation backend resolves torch._inductor.standalone_compile.
+_workaround_vllm_torch210()
+
+from vllm import LLM, SamplingParams  # type: ignore[import-not-found]  # noqa: E402
+from vllm.v1.metrics.reader import Counter, Metric, Vector  # noqa: E402
 
 
 def parse_args():
@@ -64,14 +115,13 @@ def extract_metrics(
     for i in range(len(acceptance_counts)):
         acceptance_rate = acceptance_counts[i] / num_drafts if num_drafts > 0 else 0
         metrics_dict[f"acceptance_at_token_{i}"] = acceptance_rate
-
     return metrics_dict
 
 
 def run_vllm(args: argparse.Namespace):
     sampling_params = SamplingParams(**json.loads(args.sampling_params_args))
     llm = LLM(**json.loads(args.llm_args), disable_log_stats=False)
-    outputs = llm.generate(json.loads(args.prompts), sampling_params)
+    outputs = llm.chat(json.loads(args.prompts), sampling_params)
     total_num_output_tokens = sum(
         len(output.outputs[0].token_ids) for output in outputs
     )

@@ -180,7 +180,27 @@ class Eagle3Converter:
             reduce_vocab_size=reduce_vocab_size,
             has_drafter_embedding=has_drafter_embedding,
         )
-        model.load_state_dict(weights, strict=False)  # type: ignore[attr-defined]
+
+        # Remap midlayer.* to layers.0.*
+        remapped_weights = {}
+        for key, value in weights.items():
+            if key.startswith("midlayer."):
+                new_key = key.replace("midlayer.", "layers.0.")
+                remapped_weights[new_key] = value
+                logger.debug(f"Remapped weight key: {key} -> {new_key}")
+            else:
+                remapped_weights[key] = value
+
+        missing_keys, unexpected_keys = model.load_state_dict(
+            remapped_weights, strict=False
+        )  # type: ignore[attr-defined]
+
+        if missing_keys:
+            logger.warning(f"Missing keys in checkpoint: {missing_keys}")
+
+        if unexpected_keys:
+            logger.warning(f"Unexpected keys in checkpoint: {unexpected_keys}")
+
         weights_dtype = getattr(config.transformer_layer_config, "torch_dtype", None)
         # .to() wont convert d2t/t2d buffers as they are not fp tensors
         model.to(dtype=weights_dtype)  # type: ignore[call-arg]

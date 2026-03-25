@@ -233,6 +233,8 @@ def main(args: argparse.Namespace):
         scheduler_warmup_steps=args.scheduler_warmup_steps,
         scheduler_total_steps=args.scheduler_total_steps,
         scheduler_num_cosine_cycles=args.scheduler_num_cosine_cycles,
+        checkpoint_freq=args.checkpoint_freq,
+        save_best=args.save_best,
     )
     trainer = Trainer(draft_model, trainer_config, train_loader, val_loader)
 
@@ -241,6 +243,13 @@ def main(args: argparse.Namespace):
 
     # Cleanup
     maybe_destroy_distributed()
+
+
+def _checkpoint_freq(value: str) -> int:
+    ivalue = int(value)
+    if ivalue < 1:
+        raise argparse.ArgumentTypeError("--checkpoint-freq must be >= 1")
+    return ivalue
 
 
 def parse_args():
@@ -344,6 +353,20 @@ def parse_args():
         default=0.05,
         help="Standard deviation for noise augmentation",
     )
+    # Checkpoint Parameters
+    parser.add_argument(
+        "--checkpoint-freq",
+        type=_checkpoint_freq,
+        default=1,
+        help="Save a checkpoint every N epochs.",
+    )
+    parser.add_argument(
+        "--save-best",
+        action="store_true",
+        default=False,
+        help="Pointing to checkpoint with lowest validation loss.",
+    )
+
     # lr scheduler
     parser.add_argument("--scheduler-type", type=str, default="linear")
     parser.add_argument("--scheduler-warmup-steps", type=int, default=None)

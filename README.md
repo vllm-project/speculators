@@ -96,7 +96,9 @@ The following table summarizes the models that have been trained end-to-end by o
 </tr>
 <tr>
 <td>120b</td>
-<td>EAGLE-3 ✅</td>
+<td><a href="https://huggingface.co/RedHatAI/gpt-oss-120b-speculator.eagle3">
+      EAGLE-3
+    </a> ✅</td>
 <td>✅</td>
 </tr>
 <tr>
