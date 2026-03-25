@@ -22,6 +22,12 @@ DATASET_CONFIGS = {
         "prompt_field": "prompt",
         "default_split": "train_sft",
     },
+    "gsm8k": {
+        "id": "openai/gsm8k",
+        "subset": "main",
+        "prompt_field": "question",
+        "default_split": "train",
+    },
 }
 
 
@@ -43,8 +49,8 @@ def parse_args():
     parser.add_argument(
         "--dataset",
         default="ultrachat",
-        choices=["magpie", "ultrachat"],
-        help="Dataset to process (magpie or ultrachat)",
+        choices=list(DATASET_CONFIGS),
+        help="Dataset to process",
     )
     parser.add_argument(
         "--split",
@@ -54,7 +60,7 @@ def parse_args():
     parser.add_argument(
         "--subset",
         default=None,
-        help="(unused) kept for symmetry with other scripts",
+        help="Dataset subset/config name (overrides dataset default if set)",
     )
     parser.add_argument("--limit", type=int, default=None, help="Stop after N rows")
     parser.add_argument(
@@ -227,6 +233,7 @@ async def main():
     dataset_config = DATASET_CONFIGS[args.dataset]
     dataset_id = dataset_config["id"]
     prompt_field = dataset_config["prompt_field"]
+    subset = args.subset or dataset_config.get("subset")
 
     # Use dataset-specific default split if not provided
     split = args.split if args.split is not None else dataset_config["default_split"]
@@ -245,7 +252,10 @@ async def main():
     print()
 
     seen_ids = load_seen(args.outfile) if args.resume else set()
-    dataset = load_dataset(dataset_id, split=split, streaming=True)
+    load_kwargs = {"split": split, "streaming": True}
+    if subset:
+        load_kwargs["name"] = subset
+    dataset = load_dataset(dataset_id, **load_kwargs)
 
     queue: asyncio.Queue = asyncio.Queue(maxsize=args.concurrency * 4)
     semaphore = asyncio.Semaphore(args.concurrency)
