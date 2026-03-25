@@ -14,10 +14,10 @@ __all__ = ["run_vllm_engine"]
 def run_vllm_engine(
     model_path: str,
     tmp_path: Path,
-    prompts: list[str],
+    prompts: list[list[dict[str, str]]],
     disable_compile_cache: bool = False,
-    max_tokens: int = 20,
-    ignore_eos: bool = False,
+    max_tokens: int = 50,
+    ignore_eos: bool = True,
     acceptance_thresholds: Iterable[float] | None = None,
 ):
     VLLM_PYTHON = os.environ.get("VLLM_PYTHON", sys.executable)
@@ -32,8 +32,8 @@ def run_vllm_engine(
         "--sampling-params-args",
         json.dumps(
             {
-                "temperature": 0.8,
-                "top_p": 0.95,
+                "temperature": 0,
+                "top_p": 0.9,
                 "max_tokens": max_tokens,
                 "ignore_eos": ignore_eos,
             }
