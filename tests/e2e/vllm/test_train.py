@@ -54,7 +54,9 @@ class TestTrainvLLM:
         )
 
     @pytest.mark.smoke
-    def test_train_vllm_engine(self, tmp_path: Path, prompts: list[list[dict[str, str]]]):
+    def test_train_vllm_engine(
+        self, tmp_path: Path, prompts: list[list[dict[str, str]]]
+    ):
         MODEL_PATH = "meta-llama/Llama-3.1-8B-Instruct"
         DATASET_PATH = "nm-testing/sharegpt_llama3_8b_hidden_states"
         TOKEN_FREQ_PATH = "nm-testing/sharegpt_llama3_8b_token_freq"
