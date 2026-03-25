@@ -54,7 +54,6 @@ class Trainer:
         val_loader: DataLoader | None = None,
     ):
         self.model = model
-
         self.config = config
         self.local_rank = config.local_rank
         self.train_loader = train_loader
@@ -68,7 +67,6 @@ class Trainer:
 
         self.setup_trainer()
         self.setup_model()
-
         self.setup_optimizer()
 
     def setup_trainer(self):
@@ -89,7 +87,7 @@ class Trainer:
             self.current_epoch = 0
         self.global_step = 0
 
-    def setup_model(self):  # noqa: C901
+    def setup_model(self):
         # Verify model is compatible with training infrastructure
         SpeculatorModel.verify_training_compatible(self.model)
 
