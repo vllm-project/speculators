@@ -172,9 +172,10 @@ output/qwen3next_gsm8k_finetuned/epoch_N/model.safetensors
 ## Step 4 — Stitch weights
 
 Remaps trained MTP keys from speculators namespace (`mtp_layers.0.*`) to
-Qwen3-Next native namespace (`model.mtp_layers.0.*`), symlinks the original
-verifier shards (no copying), and writes a single new shard plus an updated
-`model.safetensors.index.json`.
+Qwen3-Next native namespace (`model.mtp_layers.0.*`), copies all original
+verifier shards into the output directory, and writes a single new shard plus
+an updated `model.safetensors.index.json`. The result is a self-contained
+directory that can be uploaded directly to HuggingFace.
 
 ```bash
 python examples/fast_mtp/stitch_weights.py \
@@ -187,11 +188,18 @@ Output layout:
 
 ```
 output/qwen3next_gsm8k_stitched/
-    model.safetensors.index.json    # updated to point MTP keys at new shard
-    mtp_finetuned.safetensors       # finetuned MTP weights only (~300 MB)
-    config.json                     # verifier config (copied, unchanged)
-    model-00001-of-00041.safetensors -> <verifier shard>  # symlinks, no disk cost
+    model.safetensors.index.json      # updated to point MTP keys at new shard
+    mtp_finetuned.safetensors         # finetuned MTP weights only (~300 MB)
+    config.json                       # verifier config (copied, unchanged)
+    model-00001-of-00041.safetensors  # full copies of all verifier shards
     ...
+```
+
+The output is a self-contained model directory — upload it directly to HuggingFace:
+
+```bash
+huggingface-cli upload <your-org>/Qwen3-Next-80B-A3B-Instruct-FastMTP \
+    output/qwen3next_gsm8k_stitched
 ```
 
 ---
