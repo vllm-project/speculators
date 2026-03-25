@@ -14,7 +14,7 @@ __all__ = ["run_vllm_engine"]
 def run_vllm_engine(
     model_path: str,
     tmp_path: Path,
-    prompts: list[str],
+    prompts: list[list[dict[str, str]]],
     disable_compile_cache: bool = False,
     max_tokens: int = 50,
     ignore_eos: bool = True,
