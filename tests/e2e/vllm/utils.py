@@ -17,7 +17,7 @@ def run_vllm_engine(
     prompts: list[str],
     disable_compile_cache: bool = False,
     max_tokens: int = 50,
-    ignore_eos: bool = False,
+    ignore_eos: bool = True,
     acceptance_thresholds: Iterable[float] | None = None,
 ):
     VLLM_PYTHON = os.environ.get("VLLM_PYTHON", sys.executable)
