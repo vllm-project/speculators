@@ -64,14 +64,13 @@ def extract_metrics(
     for i in range(len(acceptance_counts)):
         acceptance_rate = acceptance_counts[i] / num_drafts if num_drafts > 0 else 0
         metrics_dict[f"acceptance_at_token_{i}"] = acceptance_rate
-
     return metrics_dict
 
 
 def run_vllm(args: argparse.Namespace):
     sampling_params = SamplingParams(**json.loads(args.sampling_params_args))
     llm = LLM(**json.loads(args.llm_args), disable_log_stats=False)
-    outputs = llm.generate(json.loads(args.prompts), sampling_params)
+    outputs = llm.chat(json.loads(args.prompts), sampling_params)
     total_num_output_tokens = sum(
         len(output.outputs[0].token_ids) for output in outputs
     )
