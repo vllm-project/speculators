@@ -179,8 +179,7 @@ def main(args: argparse.Namespace):
     if registry is None or args.speculator_type not in registry:
         available = list(registry.keys()) if registry else []
         raise ValueError(
-            f"Unknown speculator type: {args.speculator_type}. "
-            f"Available: {available}"
+            f"Unknown speculator type: {args.speculator_type}. Available: {available}"
         )
 
     model_class = registry[args.speculator_type]
