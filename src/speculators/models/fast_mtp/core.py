@@ -1,6 +1,6 @@
 """FastMTP speculator model implementation."""
 
-from typing import Any, ClassVar
+from typing import Any, ClassVar  # noqa: F401 (Any used in forward **kwargs type)
 
 import torch
 from torch import nn
@@ -84,31 +84,46 @@ class FastMTPSpeculator(SpeculatorModel):
         labels: torch.Tensor | None = None,
         loss_mask: torch.Tensor | None = None,
         step_weights: list[float] | None = None,
-        return_dict: bool = True,
-    ) -> dict[str, Any] | tuple:
+        lengths: torch.Tensor | None = None,  # noqa: ARG002 — collation metadata
+        **_kwargs: Any,
+    ) -> tuple[list[torch.Tensor], torch.Tensor | None, dict[str, float]]:
         """Forward pass for FastMTP multi-token prediction (teacher-forced).
 
-        At step k, uses ground-truth input_ids[t+k+1] as the embedding input and
+        Returns a 3-tuple ``(logits_list, loss, metrics)`` compatible with the
+        speculators ``Trainer`` (which unpacks ``_draft_tokens, loss, metrics``).
+
+        At step k, uses ground-truth ``input_ids[t+k+1]`` as the embedding input and
         the MTP output from step k-1 (or verifier hidden states for step 0) as the
         hidden state input. Hidden states are passed recursively: each step's MTP
         output feeds the next step, matching the paper's training procedure.
+
+        When ``labels`` is ``None``, ``input_ids`` is used as labels — this is correct
+        because :func:`~speculators.train.fast_mtp_data._shift_batch_fastmtp` has
+        already aligned ``input_ids[i] = x_{i+1}``, so ``input_ids`` is the right
+        supervision signal.
 
         :param input_ids: Token IDs [batch, seq_len]
         :param hidden_states: Hidden states from verifier [batch, seq_len, hidden_size]
         :param attention_mask: Optional attention mask [batch, seq_len]
         :param position_ids: Optional position IDs [batch, seq_len]
-        :param labels: Optional ground truth labels [batch, seq_len]
+        :param labels: Ground truth labels [batch, seq_len]; defaults to input_ids
         :param loss_mask: Optional binary mask [batch, seq_len]; 1=compute loss,
             0=ignore. Positions with mask==0 have their label set to -100 so the
             cross-entropy ignores them. Aligned with labels using the same step+2
             offset. Training only.
         :param step_weights: Per-step loss weights (None = uniform). Training only.
-        :param return_dict: Whether to return dict or tuple
-        :return: Dictionary with logits_list, loss (if labels), and metrics (if labels)
+        :param lengths: Sequence lengths from collation — unused in forward, accepted
+            to absorb the batch field without error.
+        :param kwargs: Additional batch fields forwarded by the Trainer (ignored).
+        :return: ``(logits_list, loss, metrics)``
         """
         device = input_ids.device
         batch_size, seq_len = input_ids.shape
         num_steps = self.config.num_speculative_steps
+
+        # Default: use input_ids as labels (already shifted by _shift_batch_fastmtp)
+        if labels is None:
+            labels = input_ids
 
         if position_ids is None:
             position_ids = (
@@ -116,9 +131,7 @@ class FastMTPSpeculator(SpeculatorModel):
             )
 
         all_logits: list[torch.Tensor] = []
-        total_loss: torch.Tensor | None = (
-            torch.tensor(0.0, device=device) if labels is not None else None
-        )
+        total_loss: torch.Tensor = torch.tensor(0.0, device=device)
         metrics: dict[str, float] = {}
 
         current_hidden = hidden_states  # recursive: updated each step with MTP output
@@ -147,29 +160,22 @@ class FastMTPSpeculator(SpeculatorModel):
             logits = self.lm_head(mtp_output)
             all_logits.append(logits)
 
-            if labels is not None:
-                step_labels = labels[:, step + 2 : step + 2 + valid_len]
-                if loss_mask is not None:
-                    step_mask = loss_mask[:, step + 2 : step + 2 + valid_len]
-                    step_labels = step_labels.clone()
-                    step_labels[step_mask == 0] = -100
-                weight = step_weights[step] if step_weights is not None else 1.0
-                step_loss = weight * nn.functional.cross_entropy(
-                    logits.reshape(-1, self.config.vocab_size),
-                    step_labels.reshape(-1),
-                    ignore_index=-100,
-                )
-                total_loss = total_loss + step_loss  # type: ignore[operator]
-                metrics[f"loss_step_{step}"] = step_loss.item()
+            step_labels = labels[:, step + 2 : step + 2 + valid_len]
+            if loss_mask is not None:
+                step_mask = loss_mask[:, step + 2 : step + 2 + valid_len]
+                step_labels = step_labels.clone()
+                step_labels[step_mask == 0] = -100
+            weight = step_weights[step] if step_weights is not None else 1.0
+            step_loss = weight * nn.functional.cross_entropy(
+                logits.reshape(-1, self.config.vocab_size),
+                step_labels.reshape(-1),
+                ignore_index=-100,
+            )
+            total_loss = total_loss + step_loss
+            metrics[f"loss_step_{step}"] = step_loss.item()
 
             current_hidden = mtp_output  # feed MTP output as hidden for next step
 
-        if return_dict:
-            return {
-                "logits_list": all_logits,
-                "loss": total_loss,
-                "metrics": metrics,
-            }
         return (all_logits, total_loss, metrics)
 
     @classmethod
