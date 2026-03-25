@@ -230,7 +230,7 @@ class VllmHiddenStatesGenerator:
             args=(self.layer_ids,),
         )
 
-    def generate(self, token_ids: list[list[int]] | torch.Tensor) -> list[dict]:  # noqa: PLR0912, PLR0915
+    def generate(self, token_ids: list[list[int]] | torch.Tensor) -> list[dict]:
         """Extract hidden states from prefill phase only.
 
         Args:
@@ -252,12 +252,23 @@ class VllmHiddenStatesGenerator:
         max_len = self.vllm_config.model_config.max_model_len - MAX_DECODE_TOKENS
         input_ids_list = [ids[:max_len] for ids in input_ids_list]
 
-        # Track request IDs and prompt lengths for proper token attribution
-        request_id_to_idx = {}
-        request_id_to_prompt_len = {}
+        # Process in chunks: the scheduler can only run MAX_NUM_SEQS requests
+        # concurrently. Once a batch finishes its single decode step, finished
+        # requests still occupy slots until explicitly aborted, preventing new
+        # requests from being admitted. Processing in chunks and aborting after
+        # each chunk avoids this starvation.
+        results = []
+        for chunk_start in range(0, len(input_ids_list), MAX_NUM_SEQS):
+            chunk = input_ids_list[chunk_start : chunk_start + MAX_NUM_SEQS]
+            results.extend(self._generate_chunk(chunk))
+        return results
+
+    def _generate_chunk(self, input_ids_list: list[list[int]]) -> list[dict]:  # noqa: PLR0912, PLR0915
+        """Process one chunk (≤ MAX_NUM_SEQS) through the scheduling loop."""
+        request_id_to_idx: dict[str, int] = {}
+        request_id_to_prompt_len: dict[str, int] = {}
 
         for i, ids in enumerate(input_ids_list):
-            # Ensure ids is a list (not tensor) for vLLM Request
             ids_list = ids.tolist() if isinstance(ids, torch.Tensor) else ids
             req_id = f"req_{self._request_counter}_{i}"
             request_id_to_idx[req_id] = i
@@ -283,14 +294,11 @@ class VllmHiddenStatesGenerator:
 
         # Track progress for each request to distinguish prefill from decode
         request_num_computed = dict.fromkeys(request_id_to_idx, 0)
-        schedule_iterations = 0
         all_prefill_complete = False
 
         while (
             scheduler_output := self.scheduler.schedule()
         ).total_num_scheduled_tokens > 0 and not all_prefill_complete:
-            schedule_iterations += 1
-
             # Calculate prefill tokens for each request (ignore decode tokens)
             prefill_metadata = {}
             for req_id, num_tokens in scheduler_output.num_scheduled_tokens.items():
