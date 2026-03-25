@@ -16,7 +16,7 @@ def run_vllm_engine(
     tmp_path: Path,
     prompts: list[str],
     disable_compile_cache: bool = False,
-    max_tokens: int = 20,
+    max_tokens: int = 50,
     ignore_eos: bool = False,
     acceptance_thresholds: Iterable[float] | None = None,
 ):
@@ -32,8 +32,8 @@ def run_vllm_engine(
         "--sampling-params-args",
         json.dumps(
             {
-                "temperature": 0.8,
-                "top_p": 0.95,
+                "temperature": 0,
+                "top_p": 0.9,
                 "max_tokens": max_tokens,
                 "ignore_eos": ignore_eos,
             }

@@ -12,7 +12,7 @@ def temp_cache_dir(tmp_path, monkeypatch):
 @pytest.fixture
 def prompts():
     return [
-        "The capital of France is",
-        "The president of the US is",
-        "My name is",
+        [{"role": "user", "content": "The president of United States is"}],
+        [{"role": "user", "content": "The capital of France is"}],
+        [{"role": "user", "content": "My name is"}],
     ]

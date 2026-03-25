@@ -70,6 +70,7 @@ class TestEagle3vLLM:
             disable_compile_cache=disable_compile_cache,
             prompts=prompts,
             acceptance_thresholds=acceptance_thresholds,
+            ignore_eos=True,
         )
 
     @pytest.mark.smoke
@@ -96,4 +97,5 @@ class TestEagle3vLLM:
             tmp_path=tmp_path,
             prompts=prompts,
             acceptance_thresholds=acceptance_thresholds,
+            ignore_eos=True,
         )
