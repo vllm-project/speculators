@@ -17,11 +17,10 @@ from vllm.config import (
 from vllm.sampling_params import SamplingParams
 from vllm.utils.hashing import get_hash_fn_by_name
 from vllm.v1.core.kv_cache_utils import (
-    _get_kv_cache_groups_uniform_spec,
-    get_kv_cache_config_from_groups,
+    generate_scheduler_kv_cache_config,
+    get_kv_cache_configs,
     get_request_block_hasher,
     init_none_hash,
-    unify_hybrid_kv_cache_specs,
 )
 from vllm.v1.core.sched.scheduler import Scheduler
 from vllm.v1.executor.multiproc_executor import MultiprocExecutor
@@ -142,20 +141,13 @@ class VllmHiddenStatesGenerator:
 
         log.info("Creating scheduler...")
         kv_cache_spec_list = self.executor.collective_rpc("get_kv_cache_spec")
-        kv_cache_spec = kv_cache_spec_list[0]
-        # Normalize hybrid KV cache specs for models with non-uniform attention
-        # (e.g., GPT-OSS with sliding/full attention layers)
-        unify_hybrid_kv_cache_specs(kv_cache_spec)
-        kv_cache_groups = _get_kv_cache_groups_uniform_spec(kv_cache_spec)
-
         free_memory, _ = mem_get_info()
         cache_memory = int(free_memory * gpu_memory_utilization * CACHE_MEMORY_FRACTION)
-
-        kv_cache_config = get_kv_cache_config_from_groups(
-            vllm_config=self.vllm_config,
-            kv_cache_groups=kv_cache_groups,
-            available_memory=cache_memory,
+        available_memory = [cache_memory] * len(kv_cache_spec_list)
+        kv_cache_configs = get_kv_cache_configs(
+            self.vllm_config, kv_cache_spec_list, available_memory
         )
+        kv_cache_config = generate_scheduler_kv_cache_config(kv_cache_configs)
 
         self.vllm_config.cache_config.num_gpu_blocks = kv_cache_config.num_blocks
         structured_output_manager = StructuredOutputManager(
@@ -170,7 +162,6 @@ class VllmHiddenStatesGenerator:
         )
 
         log.info("Initializing KV cache on all workers...")
-        kv_cache_configs = [kv_cache_config] * tensor_parallel_size
         self.executor.initialize_from_config(kv_cache_configs)
 
         # Create block hasher for request KV cache management
