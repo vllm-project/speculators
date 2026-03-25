@@ -58,9 +58,9 @@ def test_gen_train_acceptance(tmp_path: Path, monkeypatch):
     FINAL_CHECKPOINT_PATH = OUTPUT_PATH / "checkpoints" / str(NUM_EPOCHS - 1)
 
     prompts = [
-        "Write a binary search algorithm in Python",
-        "Explain the concept of quantum computing",
-        "Code a simple web server in Python",
+        [{"role": "user", "content": "Write a binary search algorithm in Python"}],
+        [{"role": "user", "content": "Explain the concept of quantum computing"}],
+        [{"role": "user", "content": "Code a simple web server in Python"}],
     ]
 
     run_vllm_engine(
