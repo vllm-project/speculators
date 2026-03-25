@@ -274,17 +274,12 @@ class Eagle3DraftModel(SpeculatorModel):
 
         if not self.use_draft_vocab:
             # Vocab mappings provided but not needed (vocab sizes are equal)
-            # This is common when using full vocabulary - silently skip
-            warnings.warn(
-                "Vocab mappings (t2d/d2t) were provided but are not needed "
-                "because draft vocab size equals verifier vocab size. "
-                "Skipping vocab mapping load. "
-                "To avoid this warning, set draft_vocab_size < target_vocab_size "
-                "or omit vocab mapping arguments.",
-                UserWarning,
-                stacklevel=2,
+            raise RuntimeError(
+                "Vocab mappings (t2d/d2t) are not needed because "
+                "draft_vocab_size equals verifier vocab_size. "
+                "Set draft_vocab_size < verifier_vocab_size or "
+                "omit t2d/d2t arguments."
             )
-            return
 
         if t2d.shape[0] != self.verifier_vocab_size:
             raise ValueError(
