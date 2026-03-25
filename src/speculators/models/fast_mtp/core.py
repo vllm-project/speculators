@@ -92,15 +92,18 @@ class FastMTPSpeculator(SpeculatorModel):
         Returns a 3-tuple ``(logits_list, loss, metrics)`` compatible with the
         speculators ``Trainer`` (which unpacks ``_draft_tokens, loss, metrics``).
 
-        At step k, uses ground-truth ``input_ids[t+k+1]`` as the embedding input and
-        the MTP output from step k-1 (or verifier hidden states for step 0) as the
-        hidden state input. Hidden states are passed recursively: each step's MTP
-        output feeds the next step, matching the paper's training procedure.
+        At step k, position t: uses ``embed(input_ids[t+k])`` (= embed of token
+        t+k+1 in the original sequence, since the dataset shift makes
+        ``input_ids[i] = x_{i+1}``) as the token embedding input, and the MTP output
+        from step k-1 (or verifier hidden states for step 0) as the hidden state.
+        Hidden states are passed recursively: each step's MTP output feeds the next.
+        Target at step k, position t: ``labels[t+k+1]`` = token t+k+2.
+        This matches the reference (Tencent-BAC/FastMTP): roll input_ids and labels
+        by k+1 positions, predict k+2 tokens ahead at each position.
 
-        When ``labels`` is ``None``, ``input_ids`` is used as labels — this is correct
-        because :func:`~speculators.train.fast_mtp_data._shift_batch_fastmtp` has
-        already aligned ``input_ids[i] = x_{i+1}``, so ``input_ids`` is the right
-        supervision signal.
+        When ``labels`` is ``None``, ``input_ids`` is used as labels — correct because
+        :func:`~speculators.train.fast_mtp_data._shift_batch_fastmtp` has already
+        aligned ``input_ids[i] = x_{i+1}``.
 
         :param input_ids: Token IDs [batch, seq_len]
         :param hidden_states: Hidden states from verifier [batch, seq_len, hidden_size]
@@ -136,13 +139,15 @@ class FastMTPSpeculator(SpeculatorModel):
 
         current_hidden = hidden_states  # recursive: updated each step with MTP output
         for step in range(num_steps):
-            valid_len = seq_len - step - 2
+            # valid_len: positions where both the token embedding (input_ids[t+step])
+            # and the target label (labels[t+step+1]) are in bounds.
+            # Matches the reference: at position t, step k uses embed(t_{t+k+1}) and
+            # predicts t_{t+k+2} (same as rolling input_ids / labels by k+1).
+            valid_len = seq_len - step - 1
             if valid_len <= 0:
                 break
             step_hidden = current_hidden[:, :valid_len]
-            step_embeds = self.embed_tokens(
-                input_ids[:, step + 1 : step + 1 + valid_len]
-            )
+            step_embeds = self.embed_tokens(input_ids[:, step : step + valid_len])
             step_pos_ids = position_ids[:, :valid_len]
             step_pos_emb = self.rotary_emb(step_hidden, step_pos_ids)
             step_attn_mask = (
@@ -160,9 +165,9 @@ class FastMTPSpeculator(SpeculatorModel):
             logits = self.lm_head(mtp_output)
             all_logits.append(logits)
 
-            step_labels = labels[:, step + 2 : step + 2 + valid_len]
+            step_labels = labels[:, step + 1 : step + 1 + valid_len]
             if loss_mask is not None:
-                step_mask = loss_mask[:, step + 2 : step + 2 + valid_len]
+                step_mask = loss_mask[:, step + 1 : step + 1 + valid_len]
                 step_labels = step_labels.clone()
                 step_labels[step_mask == 0] = -100
             weight = step_weights[step] if step_weights is not None else 1.0
