@@ -41,15 +41,18 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
         description="Size of draft model vocabulary for speculation",
     )
 
-    num_hidden_layers: int = Field(
-        default=3,
-        description="Number of hidden layers in the DFlash model",
-    )
-
     block_size: int = Field(
         default=8,
         description=(
             "Default size of the draft block predicted with a forward pass of the model"
+        ),
+    )
+
+    max_anchors: int = Field(
+        default=256,
+        description=(
+            "Maximum number of anchor positions to sample during training "
+            "(controls memory usage and training efficiency)"
         ),
     )
 

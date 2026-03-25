@@ -529,17 +529,28 @@ class DFlashDraftModel(SpeculatorModel):
         # Load verifier embeddings and tokenizer (following Eagle3 pattern)
         self._setup_embeddings_and_mask_token(config.speculators_config.verifier, t2d)
 
+        # Number of draft layers is encoded in transformer_layer_config
+        num_draft_layers = config.transformer_layer_config.num_hidden_layers
         self.layers = nn.ModuleList(
             [
                 Qwen3DFlashDecoderLayer(config.transformer_layer_config, layer_idx)  # type: ignore[arg-type]
-                for layer_idx in range(config.num_hidden_layers)
+                for layer_idx in range(num_draft_layers)
             ]
         )
 
-        # Use the actual number of layers from the verifier model config
-        num_verifier_layers = config.transformer_layer_config.num_hidden_layers
+        # Load actual verifier config to get the real verifier layer count
+        from transformers import AutoConfig  # noqa: PLC0415
+
+        verifier_name_or_path = config.speculators_config.verifier.name_or_path
+        if verifier_name_or_path is None:
+            raise ValueError("Verifier name_or_path must be set in speculators_config")
+        verifier_config = AutoConfig.from_pretrained(verifier_name_or_path)
+        if hasattr(verifier_config, "text_config"):
+            verifier_config = verifier_config.text_config
+        num_verifier_layers = verifier_config.num_hidden_layers
+
         self.target_layer_ids = build_target_layer_ids(
-            num_verifier_layers, config.num_hidden_layers
+            num_verifier_layers, num_draft_layers
         )
         self.norm = Qwen3RMSNorm(
             config.transformer_layer_config.hidden_size,
@@ -570,17 +581,25 @@ class DFlashDraftModel(SpeculatorModel):
         """Create DFlash model from training arguments.
 
         Args:
-            verifier_config: Verifier model configuration
-            t2d: Target-to-draft vocabulary mapping tensor
-            d2t: Draft-to-target vocabulary mapping tensor
+            verifier_config: Verifier model configuration. This should be a config
+                with num_hidden_layers set to the number of DRAFT layers (created
+                by create_transformer_layer_config in train.py).
+            t2d: Target-to-draft vocabulary mapping tensor (optional, creates
+                identity mapping if None)
+            d2t: Draft-to-target vocabulary mapping tensor (optional, creates
+                identity mapping if None)
             **kwargs: Training arguments with DFlash-specific params
-                - num_layers: Number of decoder layers
                 - draft_vocab_size: Size of draft vocabulary
                 - block_size: Block size for draft predictions (default: 8)
+                - max_anchors: Max anchor positions during training (default: 256)
                 - verifier_name_or_path: Path to verifier model
 
         Returns:
             Initialized DFlashDraftModel
+
+        Note:
+            The number of draft layers is encoded in verifier_config.num_hidden_layers,
+            following the same pattern as EAGLE3.
         """
         from speculators.config import (  # noqa: PLC0415
             SpeculatorsConfig,
@@ -593,8 +612,8 @@ class DFlashDraftModel(SpeculatorModel):
         config = DFlashSpeculatorConfig(
             transformer_layer_config=verifier_config,
             draft_vocab_size=kwargs["draft_vocab_size"],
-            num_hidden_layers=kwargs.get("num_layers", 3),
             block_size=kwargs.get("block_size", 8),
+            max_anchors=kwargs.get("max_anchors", 256),
             speculators_config=SpeculatorsConfig(
                 algorithm="dflash",
                 proposal_methods=[
@@ -609,8 +628,13 @@ class DFlashDraftModel(SpeculatorModel):
             ),
         )
 
+        # Create identity mappings if t2d/d2t not provided (no vocab reduction)
         if t2d is None or d2t is None:
-            raise ValueError("t2d and d2t must be provided for DFlash model")
+            vocab_size = kwargs["draft_vocab_size"]
+            # t2d: all tokens in target vocab are in draft vocab
+            t2d = torch.ones(vocab_size, dtype=torch.bool)
+            # d2t: identity mapping (zero offset for all tokens)
+            d2t = torch.zeros(vocab_size, dtype=torch.long)
 
         return cls(config=config, t2d=t2d, d2t=d2t)
 
@@ -714,7 +738,7 @@ class DFlashDraftModel(SpeculatorModel):
         past_key_values = None
         assert loss_mask is not None  # noqa: S101
         anchor_positions, anchor_valid = _select_anchors(
-            loss_mask, 256, self.block_size
+            loss_mask, self.config.max_anchors, self.block_size
         )
 
         # combined_mask_mod = create_combined_mask_mod(

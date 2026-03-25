@@ -174,7 +174,8 @@ class Eagle3DraftModel(SpeculatorModel):
     def __init__(self, config: Eagle3SpeculatorConfig):
         # Forcibly override config settings
         config.tie_word_embeddings = False
-        config.transformer_layer_config._attn_implementation = "simple_flex_attention"  # noqa: SLF001
+        impl = "simple_flex_attention"
+        config.transformer_layer_config._attn_implementation = impl  # noqa: SLF001
         super().__init__(config=config)
 
         self.hidden_size = config.transformer_layer_config.hidden_size
@@ -272,11 +273,18 @@ class Eagle3DraftModel(SpeculatorModel):
             )
 
         if not self.use_draft_vocab:
-            raise RuntimeError(
-                "Vocab mappings were provided but are not needed because verifier "
-                "vocab size equals draft vocab size. Vocab mappings are only required "
-                "when using a reduced vocab."
+            # Vocab mappings provided but not needed (vocab sizes are equal)
+            # This is common when using full vocabulary - silently skip
+            warnings.warn(
+                "Vocab mappings (t2d/d2t) were provided but are not needed "
+                "because draft vocab size equals verifier vocab size. "
+                "Skipping vocab mapping load. "
+                "To avoid this warning, set draft_vocab_size < target_vocab_size "
+                "or omit vocab mapping arguments.",
+                UserWarning,
+                stacklevel=2,
             )
+            return
 
         if t2d.shape[0] != self.verifier_vocab_size:
             raise ValueError(

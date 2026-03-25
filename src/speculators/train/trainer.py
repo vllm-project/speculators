@@ -8,14 +8,6 @@ from torch.distributed.checkpoint.state_dict import (
     StateDictOptions,
     set_model_state_dict,
 )
-
-try:
-    from torch.distributed.fsdp import FSDPModule
-except ImportError:
-    # Fallback for newer PyTorch versions where FSDPModule was removed
-    from torch.distributed.fsdp import (  # type: ignore[assignment]
-        FullyShardedDataParallel as FSDPModule,
-    )
 from torch.utils.data import DataLoader
 from tqdm import TqdmExperimentalWarning
 from tqdm.rich import tqdm
@@ -25,8 +17,6 @@ from transformers import (
 )
 
 from speculators.model import SpeculatorModel
-from speculators.models.dflash import DFlashDraftModel
-from speculators.models.eagle3 import Eagle3DraftModel
 from speculators.train.checkpointer import (
     BaseCheckpointer,
     DistributedCheckpointer,
@@ -49,7 +39,7 @@ class TrainerConfig(NamedTuple):
     local_rank: int = 0
     train_call_kwargs: dict = {}
     val_call_kwargs: dict = {}
-    scheduler_type: Literal["linear", "cosine", "none"] = "cosine"
+    scheduler_type: Literal["linear", "cosine", "none"] = "linear"
     scheduler_warmup_steps: int | None = None
     scheduler_total_steps: int | None = None
     scheduler_num_cosine_cycles: float = 0.5
@@ -125,37 +115,16 @@ class Trainer:
         if load_checkpoint:
             self.checkpointer.load_model_state_dict(self.model)
         else:
-            # For Eagle3/DFlash models, use custom initialization logic
-            if isinstance(self.model, (Eagle3DraftModel, DFlashDraftModel)):
-                # Skip verifier-shared layers during reset to preserve
-                # pretrained weights
-                skip_modules = {
-                    self.model.lm_head,
-                    self.model.embed_tokens,
-                    self.model.verifier_lm_head,
-                }
-
-                for m in self.model.layers.children():  # type: ignore[union-attr]
-                    if not isinstance(m, FSDPModule):
-                        continue
-                    m.to_empty(device="cuda")  # type: ignore[attr-defined]
-                    for sub_module in m.modules():  # type: ignore[attr-defined]
-                        if sub_module in skip_modules:
-                            continue
-                        if hasattr(sub_module, "reset_parameters"):
-                            sub_module.reset_parameters()  # type: ignore[operator]
-            else:
-                # Standard FSDP initialization - broadcast full state dict
-                # from rank 0 to all ranks
-                set_model_state_dict(
-                    self.model,
-                    full_state_dict,
-                    options=StateDictOptions(
-                        full_state_dict=True,
-                        broadcast_from_rank0=True,
-                        strict=False,
-                    ),
-                )
+            # Broadcast full state dict from rank 0 to all ranks
+            set_model_state_dict(
+                self.model,
+                full_state_dict,
+                options=StateDictOptions(
+                    full_state_dict=True,
+                    broadcast_from_rank0=True,
+                    strict=False,
+                ),
+            )
             del full_state_dict
             dist.barrier()
 
@@ -235,11 +204,10 @@ class Trainer:
                     dist.reduce(v, dst=0, op=dist.ReduceOp.AVG)
 
             metrics = {k: v.item() for k, v in metrics.items()}
-            if self.local_rank == 0:
-                metric_logger.info(
-                    {"train": metrics, "epoch": epoch, "lr": current_lr},
-                    extra={"step": self.global_step},
-                )
+            metric_logger.info(
+                {"train": metrics, "epoch": epoch, "lr": current_lr},
+                extra={"step": self.global_step},
+            )
             self.global_step += 1
 
     @torch.no_grad()
