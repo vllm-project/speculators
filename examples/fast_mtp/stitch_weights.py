@@ -6,7 +6,7 @@ This script extracts those weights, re-keys them to match Qwen3-Next's native
 vLLM can load directly alongside the original verifier weights.
 
 The output directory contains:
-  - Symlinks to all original verifier safetensors shards (no copying)
+  - Full copies of all original verifier safetensors shards
   - A new shard ``mtp_finetuned.safetensors`` with the updated MTP head weights
   - An updated ``model.safetensors.index.json`` that routes MTP keys to the new shard
   - The verifier config.json (unchanged)
@@ -168,13 +168,13 @@ def main() -> None:
     print(f"Saving MTP shard: {mtp_shard_path}")
     save_file(remapped, str(mtp_shard_path))
 
-    # Symlink all original verifier files into output directory
-    print(f"Symlinking verifier files from {verifier_dir}")
+    # Copy all original verifier files into output directory
+    print(f"Copying verifier files from {verifier_dir}")
     for src in verifier_dir.iterdir():
         dst = output_dir / src.name
         if dst.exists() or dst.is_symlink():
             continue  # don't overwrite the MTP shard or existing files
-        dst.symlink_to(src.resolve())
+        shutil.copy2(src, dst)
 
     # Update the weight index to include the new MTP shard
     update_weight_index(
@@ -183,14 +183,6 @@ def main() -> None:
         mtp_keys=list(remapped.keys()),
         new_shard_name=args.shard_name,
     )
-
-    # Copy verifier config (the stitched model is still a Qwen3-Next model)
-    verifier_config_src = verifier_dir / "config.json"
-    if verifier_config_src.exists():
-        dst_config = output_dir / "config.json"
-        if dst_config.is_symlink():
-            dst_config.unlink()
-        shutil.copy2(verifier_config_src, dst_config)
 
     print(f"\nStitched model saved to: {output_dir}")
     print("  To load with vLLM:")
