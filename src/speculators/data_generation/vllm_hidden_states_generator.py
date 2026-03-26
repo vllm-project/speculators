@@ -340,7 +340,7 @@ class VllmHiddenStatesGenerator:
                     f"Available: {list(request_states_dict.keys())}"
                 )
 
-            layer_states = [h.clone().cpu() for h in request_states_dict[req_id]]
+            layer_states = [h.cpu() for h in request_states_dict[req_id]]
             input_ids_tensor = torch.as_tensor(input_ids_list[i], dtype=torch.long)
 
             results.append(
@@ -354,9 +354,26 @@ class VllmHiddenStatesGenerator:
         empty_cache()
         return results
 
-    def __del__(self):
+    def __enter__(self) -> "VllmHiddenStatesGenerator":
+        """Support use as a context manager for guaranteed cleanup."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+        """Shut down the executor on context manager exit."""
+        self._cleanup()
+        return False  # do not suppress exceptions
+
+    def _cleanup(self) -> None:
+        """Shut down the vLLM executor and release GPU resources."""
         if hasattr(self, "executor"):
             try:
                 self.executor.shutdown()
             except Exception:
-                log.warning("Exception during executor shutdown")
+                log.warning("Exception during executor shutdown", exc_info=True)
+
+    def __del__(self) -> None:
+        """Fallback cleanup when the object is garbage collected."""
+        try:
+            self._cleanup()
+        except Exception:  # noqa: BLE001
+            pass  # suppress all exceptions in __del__ to avoid interpreter warnings
