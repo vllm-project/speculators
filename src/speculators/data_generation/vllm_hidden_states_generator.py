@@ -186,7 +186,7 @@ class VllmHiddenStatesGenerator:
     ) -> VllmConfig:
         """Create VllmConfig with hidden states worker extension"""
         cache_config = CacheConfig(
-            block_size=VLLM_BLOCK_SIZE,
+            block_size=VLLM_BLOCK_SIZE,  # type: ignore[arg-type]
             gpu_memory_utilization=gpu_memory_utilization,
             # disable to prevent cache state leakage
             enable_prefix_caching=False,
@@ -322,7 +322,7 @@ class VllmHiddenStatesGenerator:
                 )
 
             model_output = self.executor.execute_model(scheduler_output)
-            self.executor.sample_tokens(model_output)
+            self.executor.sample_tokens(model_output)  # type: ignore[arg-type]
 
         # Abort all requests (prefill complete, don't need decode)
         self.scheduler.finish_requests(
@@ -381,9 +381,7 @@ class VllmHiddenStatesGenerator:
             except Exception:
                 # Use the underlying stdlib logger so exc_info is supported
                 # (PipelineLogger.warning accepts only a plain message string).
-                log.logger.warning(
-                    "Exception during executor shutdown", exc_info=True
-                )
+                log.logger.warning("Exception during executor shutdown", exc_info=True)
 
     def __del__(self) -> None:
         """Fallback cleanup when the object is garbage collected."""
