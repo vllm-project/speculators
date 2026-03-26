@@ -133,11 +133,6 @@ class TrainArgs(NamedTuple):
     scheduler_total_steps: int | _NS = _NOTSET
     scheduler_num_cosine_cycles: float | _NS = _NOTSET
     norm_before_fc: bool | _NS = _NOTSET
-    nproc_per_node: int | _NS = _NOTSET
-    nnodes: int | _NS = _NOTSET
-    node_rank: int | _NS = _NOTSET
-    master_addr: str | _NS = _NOTSET
-    master_port: int | _NS = _NOTSET
 
 
 ### END OF SCRIPT ARGUMENTS ###

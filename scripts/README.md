@@ -272,18 +272,24 @@ The scripts has the following optional arguments:
 - `--scheduler-warmup-steps`: The number of warmup steps for the learning rate scheduler. Defaults to None.
 - `--scheduler-total-steps`: The total number of steps for the learning rate scheduler. Defaults to None.
 - `--scheduler-num-cosine-cycles`: The number of cosine cycles for the cosine scheduler. Defaults to 0.5.
-- `--nproc-per-node`: Number of processes per node. Defaults to 8.
+### Distributed Training with torchrun
+
+For distributed training, use `torchrun` with the following parameters:
+
+- `--nproc_per_node`: Number of processes per node. Defaults to 8.
 - `--nnodes`: Number of nodes to use for distributed training. Defaults to 1.
-- `--node-rank`: Rank of the current node. Defaults to 0.
-- `--master-addr`: Address of the master node. Defaults to None.
-- `--master-port`: Port of the master node. Defaults to 12345.
+- `--node_rank`: Rank of the current node. Defaults to 0.
+- `--master_addr`: Address of the master node. Defaults to localhost.
+- `--master_port`: Port of the master node. Defaults to 12345.
+
+These parameters are passed to `torchrun` before the script name, not as script arguments.
 
 ### Example Command
 
 #### Single Node Training
 
 ```bash
-torchrun --nnodes=1 --nproc_per_node=8 scripts/train.py \
+torchrun --standalone --nproc_per_node=8 scripts/train.py \
     --verifier-name-or-path "meta-llama/Llama-3.1-8B-Instruct" \
     --data-path "./data/llama-3.1-8b_sharegpt/gen/" \
     --save-path "./checkpoints/llama-3.1-8b.eagle3" \
@@ -305,7 +311,7 @@ torchrun --nnodes=1 --nproc_per_node=8 scripts/train.py \
 
 ```bash
 # On node 0 (master node)
-torchrun --nnodes=2 --nproc_per_node=8 --node_rank=0 --master_addr="192.168.1.100" --master_port=12345 scripts/train.py \
+torchrun --nproc_per_node=8 --nnodes=2 --node_rank=0 --master_addr="192.168.1.100" --master_port=12345 scripts/train.py \
     --verifier-name-or-path "meta-llama/Llama-3.1-8B-Instruct" \
     --data-path "./data/llama-3.1-8b_sharegpt/gen/" \
     --save-path "./checkpoints/llama-3.1-8b.eagle3" \
@@ -323,7 +329,7 @@ torchrun --nnodes=2 --nproc_per_node=8 --node_rank=0 --master_addr="192.168.1.10
     --ttt-step-loss-decay 1.0
 
 # On node 1
-torchrun --nnodes=2 --nproc_per_node=8 --node_rank=1 --master_addr="192.168.1.100" --master_port=12345 scripts/train.py \
+torchrun --nproc_per_node=8 --nnodes=2 --node_rank=1 --master_addr="192.168.1.100" --master_port=12345 scripts/train.py \
     --verifier-name-or-path "meta-llama/Llama-3.1-8B-Instruct" \
     --data-path "./data/llama-3.1-8b_sharegpt/gen/" \
     --save-path "./checkpoints/llama-3.1-8b.eagle3" \
