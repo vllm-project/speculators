@@ -265,12 +265,6 @@ select = [
     "T201", # allow print in scripts
 ]
 
-"local/scripts/**/*.py" = [
-    "INP001",  # allow implicit namespace packages
-    "T201",    # print statements are acceptable
-    "PLR2004", # magic values are fine
-]
-
 [tool.ruff.lint.isort]
 known-first-party = ["speculators", "tests"]
 

@@ -124,9 +124,9 @@ def test_fast_mtp_config_transformer_layer_config_survives_roundtrip(
 
 def test_fast_mtp_config_dict_without_model_type_raises() -> None:
     with pytest.raises(ValueError, match="model_type"):
-        FastMTPConfig(transformer_layer_config={"hidden_size": 128})
+        FastMTPConfig(transformer_layer_config={"hidden_size": 128})  # type: ignore[arg-type]
 
 
 def test_fast_mtp_config_dict_with_model_type_accepted() -> None:
-    config = FastMTPConfig(transformer_layer_config={"model_type": "qwen3_next"})
+    config = FastMTPConfig(transformer_layer_config={"model_type": "qwen3_next"})  # type: ignore[arg-type]
     assert config.transformer_layer_config.model_type == "qwen3_next"
