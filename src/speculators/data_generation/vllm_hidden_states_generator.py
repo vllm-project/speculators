@@ -358,10 +358,9 @@ class VllmHiddenStatesGenerator:
         """Support use as a context manager for guaranteed cleanup."""
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         """Shut down the executor on context manager exit."""
         self._cleanup()
-        return False  # do not suppress exceptions
 
     def _cleanup(self) -> None:
         """Shut down the vLLM executor and release GPU resources."""
@@ -369,7 +368,11 @@ class VllmHiddenStatesGenerator:
             try:
                 self.executor.shutdown()
             except Exception:
-                log.warning("Exception during executor shutdown", exc_info=True)
+                # Use the underlying stdlib logger so exc_info is supported
+                # (PipelineLogger.warning accepts only a plain message string).
+                log.logger.warning(
+                    "Exception during executor shutdown", exc_info=True
+                )
 
     def __del__(self) -> None:
         """Fallback cleanup when the object is garbage collected."""
