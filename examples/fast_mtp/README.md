@@ -1,13 +1,10 @@
 # FastMTP End-to-End Guide
 
-FastMTP finetunes the MTP (Multi-Token Prediction) head already present in
-Qwen3-Next using a lightweight teacher-forcing loss, then stitches the updated
-weights back into the verifier so vLLM can load them without any extra
-configuration.
+FastMTP finetunes the MTP (Multi-Token Prediction) head already present in Qwen3-Next using a lightweight teacher-forcing loss, then stitches the updated weights back into the verifier so vLLM can load them without any extra configuration.
 
 All commands are run from the repo root unless noted otherwise.
 
----
+______________________________________________________________________
 
 ## Overview
 
@@ -31,13 +28,11 @@ FINETUNED=output/qwen3next_gsm8k_finetuned
 STITCHED=output/qwen3next_gsm8k_stitched
 ```
 
----
+______________________________________________________________________
 
 ## Step 0 — Convert checkpoint (one-time)
 
-Extracts the MTP head from Qwen3-Next-80B-A3B-Instruct and wraps it in the
-speculators config format. Only needs to be done once; the result is already
-committed at `Qwen3-Next-80B-A3B-Instruct_mtp_speculator/`.
+Extracts the MTP head from Qwen3-Next-80B-A3B-Instruct and wraps it in the speculators config format. Only needs to be done once; the result is already committed at `Qwen3-Next-80B-A3B-Instruct_mtp_speculator/`.
 
 **From HuggingFace (downloads automatically):**
 
@@ -57,20 +52,18 @@ python examples/fast_mtp/convert_checkpoint.py \
     --output-dir Qwen3-Next-80B-A3B-Instruct_mtp_speculator
 ```
 
-The `--model` argument accepts either a HuggingFace repo ID (default:
-`Qwen/Qwen3-Next-80B-A3B-Instruct`) or a local directory path. Use
-`--cache-dir` to control where HF downloads are stored.
+The `--model` argument accepts either a HuggingFace repo ID (default: `Qwen/Qwen3-Next-80B-A3B-Instruct`) or a local directory path. Use `--cache-dir` to control where HF downloads are stored.
 
 The output directory contains:
+
 - `config.json` — `FastMTPConfig` with full `transformer_layer_config`
 - `model.safetensors` — extracted MTP layer weights
 
----
+______________________________________________________________________
 
 ## Step 1 — Generate responses
 
-Serves the verifier via vLLM and regenerates answers for every GSM8K train
-question. Skip if you already have the JSONL.
+Serves the verifier via vLLM and regenerates answers for every GSM8K train question. Skip if you already have the JSONL.
 
 ```bash
 cd scripts/response_regeneration && \
@@ -84,15 +77,13 @@ cd scripts/response_regeneration && \
     2>&1 | tee local/logs/gsm8k_step1_regeneration.log
 ```
 
-Output: `$RESPONSES` — JSONL in ShareGPT conversations format
-(7 473 samples for GSM8K train).
+Output: `$RESPONSES` — JSONL in ShareGPT conversations format (7 473 samples for GSM8K train).
 
----
+______________________________________________________________________
 
 ## Step 2 — Capture hidden states
 
-Tokenizes the JSONL, builds loss masks, then runs a prefill-only vLLM pass to
-capture the last verifier hidden layer for every token.
+Tokenizes the JSONL, builds loss masks, then runs a prefill-only vLLM pass to capture the last verifier hidden layer for every token.
 
 ```bash
 CUDA_VISIBLE_DEVICES=0,1,2,3 python examples/fast_mtp/generate_dataset.py \
@@ -104,8 +95,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 python examples/fast_mtp/generate_dataset.py \
     2>&1 | tee local/logs/gsm8k_step2_hidden_states.log
 ```
 
-Output: `$HIDDEN_STATES/` — one `data_N.pt` per sample plus a
-`sample_lengths.json` index. Each `.pt` file contains:
+Output: `$HIDDEN_STATES/` — one `data_N.pt` per sample plus a `sample_lengths.json` index. Each `.pt` file contains:
 
 ```python
 {
@@ -117,7 +107,7 @@ Output: `$HIDDEN_STATES/` — one `data_N.pt` per sample plus a
 
 A symlink is created at `local/dataset/qwen3next-gsm8k-hidden-states`.
 
----
+______________________________________________________________________
 
 ## Step 3 — Finetune
 
@@ -160,17 +150,17 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun \
 
 Key arguments:
 
-| Argument | Default | Notes |
-|---|---|---|
-| `--lr` | `5e-5` | Learning rate |
-| `--num-epochs` | `3` | Epochs to train |
-| `--batch-size` | `1` | Per-GPU batch size |
-| `--train-ratio` | `0.9` | Train/val split |
-| `--scheduler-type` | `cosine` | LR schedule (`cosine`, `linear`, `none`) |
-| `--scheduler-warmup-steps` | `None` (no warmup) | Steps for LR warmup |
-| `--step-weights` | `0.51 0.31 0.18` | Per-step MTP loss weights |
-| `--save-best` | off | Keep only the best val-loss checkpoint |
-| `--checkpoint-freq` | `1` | Save every N epochs |
+| Argument                   | Default            | Notes                                    |
+| -------------------------- | ------------------ | ---------------------------------------- |
+| `--lr`                     | `5e-5`             | Learning rate                            |
+| `--num-epochs`             | `3`                | Epochs to train                          |
+| `--batch-size`             | `1`                | Per-GPU batch size                       |
+| `--train-ratio`            | `0.9`              | Train/val split                          |
+| `--scheduler-type`         | `cosine`           | LR schedule (`cosine`, `linear`, `none`) |
+| `--scheduler-warmup-steps` | `None` (no warmup) | Steps for LR warmup                      |
+| `--step-weights`           | `0.51 0.31 0.18`   | Per-step MTP loss weights                |
+| `--save-best`              | off                | Keep only the best val-loss checkpoint   |
+| `--checkpoint-freq`        | `1`                | Save every N epochs                      |
 
 With `--save-best` the best checkpoint is at:
 
@@ -184,15 +174,11 @@ Without it, each epoch saves to:
 output/qwen3next_gsm8k_finetuned/epoch_N/model.safetensors
 ```
 
----
+______________________________________________________________________
 
 ## Step 4 — Stitch weights
 
-Remaps trained MTP keys from speculators namespace (`mtp_layers.0.*`) to
-Qwen3-Next native namespace (`mtp.*`), copies all original
-verifier shards into the output directory, and writes a single new shard plus
-an updated `model.safetensors.index.json`. The result is a self-contained
-directory that can be uploaded directly to HuggingFace.
+Remaps trained MTP keys from speculators namespace (`mtp_layers.0.*`) to Qwen3-Next native namespace (`mtp.*`), copies all original verifier shards into the output directory, and writes a single new shard plus an updated `model.safetensors.index.json`. The result is a self-contained directory that can be uploaded directly to HuggingFace.
 
 ```bash
 python examples/fast_mtp/stitch_weights.py \
@@ -219,13 +205,11 @@ huggingface-cli upload <your-org>/Qwen3-Next-80B-A3B-Instruct-FastMTP \
     output/qwen3next_gsm8k_stitched
 ```
 
----
+______________________________________________________________________
 
 ## Step 5 — Deploy with vLLM
 
-The stitched directory is a standard Qwen3-Next model directory. vLLM loads
-it as-is and picks up the finetuned MTP head automatically via the
-`num_nextn_predict_layers` field in `config.json`.
+The stitched directory is a standard Qwen3-Next model directory. vLLM loads it as-is and picks up the finetuned MTP head automatically via the `num_nextn_predict_layers` field in `config.json`.
 
 ### Offline inference
 
@@ -256,19 +240,14 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 vllm serve output/qwen3next_gsm8k_stitched \
     --speculative-config '{"method": "mtp", "num_speculative_tokens": 3}'
 ```
 
----
+______________________________________________________________________
 
 ## Resuming / re-running individual steps
 
-- **Step 1** (response generation): pass `--resume` to `run_all.sh` to skip
-  rows already written to the JSONL.
-- **Step 2** (hidden states): re-running overwrites existing `.pt` files.
-  The `token_freq.pt` and `sample_lengths.json` are regenerated each run.
-- **Step 3** (finetune): pass `--checkpoint-freq N` to checkpoint every N
-  epochs; `--save-best` keeps only the lowest-val-loss checkpoint.
+- **Step 1** (response generation): pass `--resume` to `run_all.sh` to skip rows already written to the JSONL.
+- **Step 2** (hidden states): re-running overwrites existing `.pt` files. The `token_freq.pt` and `sample_lengths.json` are regenerated each run.
+- **Step 3** (finetune): pass `--checkpoint-freq N` to checkpoint every N epochs; `--save-best` keeps only the lowest-val-loss checkpoint.
 
 ## Adapting to a different dataset
 
-Replace Step 1 with any ShareGPT-format JSONL (fields: `conversations` list
-of `{"from": "human"/"gpt", "value": "..."}`). Pass the path to
-`--data-path` in Step 2. Everything downstream is dataset-agnostic.
+Replace Step 1 with any ShareGPT-format JSONL (fields: `conversations` list of `{"from": "human"/"gpt", "value": "..."}`). Pass the path to `--data-path` in Step 2. Everything downstream is dataset-agnostic.
