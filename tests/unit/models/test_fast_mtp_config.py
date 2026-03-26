@@ -128,7 +128,5 @@ def test_fast_mtp_config_dict_without_model_type_raises() -> None:
 
 
 def test_fast_mtp_config_dict_with_model_type_accepted() -> None:
-    config = FastMTPConfig(
-        transformer_layer_config={"model_type": "qwen3_next"}
-    )
+    config = FastMTPConfig(transformer_layer_config={"model_type": "qwen3_next"})
     assert config.transformer_layer_config.model_type == "qwen3_next"

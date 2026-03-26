@@ -132,8 +132,10 @@ def main() -> None:
 
     print(f"\nStitched model saved to: {output_dir}")
     print("  To load with vLLM:")
-    print(f"    llm = LLM(model='{output_dir}', "
-          'speculative_config={"method": "mtp", "num_speculative_tokens": 3})')
+    print(
+        f"    llm = LLM(model='{output_dir}', "
+        'speculative_config={"method": "mtp", "num_speculative_tokens": 3})'
+    )
 
 
 if __name__ == "__main__":

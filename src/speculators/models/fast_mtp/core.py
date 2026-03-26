@@ -188,17 +188,17 @@ class FastMTPSpeculator(SpeculatorModel):
                 )
                 break
 
-            step_hidden = current_hidden[:, :valid_len]    # [B, valid_len, H]
-            step_embeds = self.embed_tokens(               # [B, valid_len, H]
+            step_hidden = current_hidden[:, :valid_len]  # [B, valid_len, H]
+            step_embeds = self.embed_tokens(  # [B, valid_len, H]
                 input_ids[:, step : step + valid_len]
             )
-            step_pos_ids = position_ids[:, :valid_len]     # [B, valid_len]
+            step_pos_ids = position_ids[:, :valid_len]  # [B, valid_len]
             step_pos_emb = self.rotary_emb(step_hidden, step_pos_ids)
             step_attn_mask = (
                 attention_mask[:, :valid_len] if attention_mask is not None else None
             )
 
-            mtp_output = self.mtp_layers[0](                       # [B, valid_len, H]
+            mtp_output = self.mtp_layers[0](  # [B, valid_len, H]
                 hidden_states=step_hidden,
                 token_embeddings=step_embeds,
                 attention_mask=step_attn_mask,
@@ -206,7 +206,7 @@ class FastMTPSpeculator(SpeculatorModel):
                 position_embeddings=step_pos_emb,
             )
 
-            logits = self.lm_head(mtp_output)                      # [B, valid_len, V]
+            logits = self.lm_head(mtp_output)  # [B, valid_len, V]
             all_logits.append(logits)
 
             step_labels = labels[:, step + 1 : step + 1 + valid_len]  # [B, valid_len]
