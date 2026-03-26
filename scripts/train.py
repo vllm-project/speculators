@@ -51,6 +51,7 @@ def setup_dataloader(
     noise_std: float = 0.05,
     num_workers: int = 12,
     prefetch_factor: int = 4,
+    hidden_states_dtype: torch.dtype = torch.bfloat16,
 ) -> DataLoader:
     """Setup dataloader for training.
     Args:
@@ -78,6 +79,7 @@ def setup_dataloader(
         max_len=args.total_seq_len,
         transform=noise_transform,
         standardize_fn=standardize_fn,
+        hidden_states_dtype=hidden_states_dtype,
     )
     batch_sampler = MultipackDistributedBatchSamplerV2(
         batch_max_length=args.total_seq_len,
@@ -149,6 +151,11 @@ def main(args: argparse.Namespace):
     # Setup distributed training
     local_rank, world_size, rank, is_distributed = maybe_setup_distributed()
     device = torch.device(local_rank)
+    if not hasattr(torch, args.hidden_states_dtype):
+        raise ValueError(
+            "--hidden-states-dtype must be a dtype attribute of torch. e.g. `bfloat16`"
+        )
+    hidden_states_dtype = getattr(torch, args.hidden_states_dtype)
 
     # Load t2d and d2t tensors if provided
     if args.d2t_path or args.t2d_path:
@@ -205,6 +212,7 @@ def main(args: argparse.Namespace):
         noise_std=args.noise_std,
         num_workers=args.num_workers,
         prefetch_factor=args.prefetch_factor,
+        hidden_states_dtype=hidden_states_dtype,
     )
     val_loader = setup_dataloader(
         val_files,
@@ -214,6 +222,7 @@ def main(args: argparse.Namespace):
         noise_std=args.noise_std,
         num_workers=args.num_workers,
         prefetch_factor=args.prefetch_factor,
+        hidden_states_dtype=hidden_states_dtype,
     )
 
     # Get trainer kwargs from model class
@@ -234,6 +243,7 @@ def main(args: argparse.Namespace):
         scheduler_num_cosine_cycles=args.scheduler_num_cosine_cycles,
         checkpoint_freq=args.checkpoint_freq,
         save_best=args.save_best,
+        hidden_states_dtype=hidden_states_dtype,
     )
     trainer = Trainer(draft_model, trainer_config, train_loader, val_loader)
 
@@ -295,6 +305,12 @@ def parse_args():
     parser.add_argument("--ttt-step-loss-decay", type=float, default=1.0)
     parser.add_argument(
         "--seed", type=int, default=42, help="Random seed for reproducibility"
+    )
+    parser.add_argument(
+        "--hidden-states-dtype",
+        type=str,
+        default="bfloat16",
+        help="The dtype to initialize model weights and dataloader hidden states to",
     )
     parser.add_argument(
         "--deterministic-cuda",

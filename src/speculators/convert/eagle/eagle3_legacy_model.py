@@ -339,7 +339,7 @@ class Eagle3Speculator(SpeculatorModel):
             self.t2d: torch.Tensor
         self.post_init()  # type: ignore[attr-defined]
 
-    def tie_weights(self):
+    def tie_weights(self, *_args, **_kwargs):
         """
         Override tie_weights to prevent vocabulary corruption in transformers 4.54.1+
 

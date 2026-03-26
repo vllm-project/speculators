@@ -250,24 +250,28 @@ def test_batch_vs_individual_consistency(  # noqa: C901
             tokenizer.pad_token = tokenizer.eos_token
 
         # Use chat template if available, otherwise just tokenize
-        all_ids = []
+        all_ids: list[list[int]] = []
         for text in test_prompts:
             try:
                 # Try chat template first (for instruct models)
                 msgs = [{"role": "user", "content": text}]
-                ids = tokenizer.apply_chat_template(
-                    msgs,
-                    tokenize=True,
-                    add_generation_prompt=True,
-                    return_tensors="pt",
-                    padding=False,
+                ids: torch.Tensor | dict[str, torch.Tensor] = (
+                    tokenizer.apply_chat_template(
+                        msgs,
+                        tokenize=True,
+                        add_generation_prompt=True,
+                        return_tensors="pt",
+                        padding=False,
+                    )  # type: ignore[assignment]
                 )
                 if isinstance(ids, dict):
                     ids = ids["input_ids"]
+                assert isinstance(ids, torch.Tensor)  # typing
                 all_ids.append(ids.squeeze(0).tolist())
             except (ValueError, AttributeError):
                 # Fallback for base models without chat template
                 ids = tokenizer(text, return_tensors="pt")["input_ids"]
+                assert isinstance(ids, torch.Tensor)  # typing
                 all_ids.append(ids.squeeze(0).tolist())
 
         seq_lens = [len(ids) for ids in all_ids]
@@ -277,8 +281,8 @@ def test_batch_vs_individual_consistency(  # noqa: C901
         # --- Ground truth: process each sequence individually ---
         logger.info("Processing sequences individually...")
         individual_results = []
-        for i, ids in enumerate(all_ids):
-            results = generator.generate([ids])
+        for i, i_ids in enumerate(all_ids):
+            results = generator.generate([i_ids])
             individual_results.append(results[0])
             hs = results[0]["hidden_states"][0]
             logger.info(

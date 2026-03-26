@@ -1,5 +1,7 @@
 """Extract hidden states from intermediate layers during prefill using vLLM."""
 
+from typing import Literal
+
 import torch
 from transformers import AutoConfig, AutoTokenizer
 from vllm.config import (
@@ -33,7 +35,9 @@ __all__ = ["VllmHiddenStatesGenerator"]
 
 # Constants
 CACHE_MEMORY_FRACTION = 0.2  # Fraction of GPU memory for KV cache
-VLLM_BLOCK_SIZE = 128 if is_npu_available() else 16  # Block size for KV cache
+VLLM_BLOCK_SIZE: Literal[1, 8, 16, 32, 64, 128, 256] = (
+    128 if is_npu_available() else 16
+)  # Block size for KV cache
 MAX_NUM_SEQS = 32  # Maximum sequences for prefill-only workload
 MIN_MAX_BATCHED_TOKENS = 8192  # Minimum batched tokens threshold
 MAX_DECODE_TOKENS = 1  # Maximum tokens to generate (prefill only)
