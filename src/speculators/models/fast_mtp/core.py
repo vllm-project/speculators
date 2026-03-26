@@ -1,6 +1,7 @@
 """FastMTP speculator model implementation."""
 
-from typing import Any, ClassVar  # noqa: F401 (Any used in forward **kwargs type)
+import logging
+from typing import Any, ClassVar, TypeAlias
 
 import torch
 from torch import nn
@@ -14,6 +15,20 @@ from speculators.proposals.greedy import GreedyTokenProposalConfig
 from speculators.utils.loading import load_model_layers
 
 __all__ = ["FastMTPSpeculator"]
+
+log = logging.getLogger(__name__)
+
+# MTP step loss weights: exponential decay β=0.6, normalized to sum=1.
+# Source: Qwen3-Next reference implementation (Tencent-BAC/FastMTP).
+_MTP_STEP_DECAY_BETA: float = 0.6
+_DEFAULT_STEP_WEIGHTS: tuple[float, ...] = (0.51, 0.31, 0.18)
+
+# Forward returns (logits_list, loss, metrics). Loss is always a scalar tensor
+# (never None — the model always computes loss during training). Metrics values
+# are tensors so the Trainer can call .item() on them uniformly.
+ForwardOutput: TypeAlias = tuple[
+    list[torch.Tensor], torch.Tensor, dict[str, torch.Tensor]
+]
 
 
 @SpeculatorModel.register("mtp")
@@ -39,12 +54,15 @@ class FastMTPSpeculator(SpeculatorModel):
 
     def __init__(self, config: FastMTPConfig) -> None:
         super().__init__(config=config)
-        tc = config.transformer_layer_config
-        self._model_definitions = fast_mtp_model_classes[tc.model_type]
+        transformer_config = config.transformer_layer_config
+        self._model_definitions = fast_mtp_model_classes[transformer_config.model_type]
+        # mtp_layers is a single-element ModuleList so state-dict keys are
+        # "mtp_layers.0.*" — the format checkpoint.py maps FROM when stitching.
+        # Renaming to a singular attribute would silently change the key format.
         self.mtp_layers = nn.ModuleList(
-            [self._model_definitions.first_layer_class(tc, layer_idx=0)]
+            [self._model_definitions.first_layer_class(transformer_config, layer_idx=0)]
         )
-        self.rotary_emb = self._model_definitions.rotary_emb_class(tc)
+        self.rotary_emb = self._model_definitions.rotary_emb_class(transformer_config)
         self.embed_tokens = nn.Embedding(
             self.config.vocab_size, self.config.hidden_size
         )
@@ -52,6 +70,11 @@ class FastMTPSpeculator(SpeculatorModel):
             self.config.hidden_size, self.config.vocab_size, bias=False
         )
         self._setup_embeddings_and_lm_head()
+
+    @property
+    def layers(self) -> nn.ModuleList:
+        """Alias for mtp_layers — required by FSDP wrapping infrastructure."""
+        return self.mtp_layers
 
     def _setup_embeddings_and_lm_head(self) -> None:
         """Overwrite embed_tokens and lm_head from the verifier if configured."""
@@ -86,7 +109,7 @@ class FastMTPSpeculator(SpeculatorModel):
         step_weights: list[float] | None = None,
         lengths: torch.Tensor | None = None,  # noqa: ARG002 — collation metadata
         **_kwargs: Any,
-    ) -> tuple[list[torch.Tensor], torch.Tensor | None, dict[str, float]]:
+    ) -> ForwardOutput:
         """Forward pass for FastMTP multi-token prediction (teacher-forced).
 
         Returns a 3-tuple ``(logits_list, loss, metrics)`` compatible with the
@@ -120,9 +143,21 @@ class FastMTPSpeculator(SpeculatorModel):
         :param kwargs: Additional batch fields forwarded by the Trainer (ignored).
         :return: ``(logits_list, loss, metrics)``
         """
+        if input_ids.shape[:2] != hidden_states.shape[:2]:
+            raise ValueError(
+                f"input_ids shape {input_ids.shape[:2]} does not match "
+                f"hidden_states batch/seq shape {hidden_states.shape[:2]}"
+            )
+
         device = input_ids.device
         batch_size, seq_len = input_ids.shape
         num_steps = self.config.num_speculative_steps
+
+        if step_weights is not None and len(step_weights) != num_steps:
+            raise ValueError(
+                f"step_weights has {len(step_weights)} elements but "
+                f"num_speculative_steps={num_steps}. They must match."
+            )
 
         # Default: use input_ids as labels (already shifted by _shift_batch_fastmtp)
         if labels is None:
@@ -135,26 +170,35 @@ class FastMTPSpeculator(SpeculatorModel):
 
         all_logits: list[torch.Tensor] = []
         total_loss: torch.Tensor = torch.tensor(0.0, device=device)
-        metrics: dict[str, float] = {}
+        metrics: dict[str, torch.Tensor] = {}
 
         current_hidden = hidden_states  # recursive: updated each step with MTP output
         for step in range(num_steps):
-            # valid_len: positions where both the token embedding (input_ids[t+step])
-            # and the target label (labels[t+step+1]) are in bounds.
-            # Matches the reference: at position t, step k uses embed(t_{t+k+1}) and
-            # predicts t_{t+k+2} (same as rolling input_ids / labels by k+1).
+            # At step k, valid positions are [0, seq_len-k-2]. Beyond that there is
+            # no target label in bounds. Matches the reference: roll input_ids and
+            # labels by k+1 positions, predicting k+2 tokens ahead at each position.
             valid_len = seq_len - step - 1
             if valid_len <= 0:
+                log.warning(
+                    "valid_len <= 0 at step %d (seq_len=%d); "
+                    "stopping early — fewer than %d steps computed.",
+                    step,
+                    seq_len,
+                    num_steps,
+                )
                 break
-            step_hidden = current_hidden[:, :valid_len]
-            step_embeds = self.embed_tokens(input_ids[:, step : step + valid_len])
-            step_pos_ids = position_ids[:, :valid_len]
+
+            step_hidden = current_hidden[:, :valid_len]    # [B, valid_len, H]
+            step_embeds = self.embed_tokens(               # [B, valid_len, H]
+                input_ids[:, step : step + valid_len]
+            )
+            step_pos_ids = position_ids[:, :valid_len]     # [B, valid_len]
             step_pos_emb = self.rotary_emb(step_hidden, step_pos_ids)
             step_attn_mask = (
                 attention_mask[:, :valid_len] if attention_mask is not None else None
             )
 
-            mtp_output = self.mtp_layers[0](
+            mtp_output = self.mtp_layers[0](                       # [B, valid_len, H]
                 hidden_states=step_hidden,
                 token_embeddings=step_embeds,
                 attention_mask=step_attn_mask,
@@ -162,22 +206,23 @@ class FastMTPSpeculator(SpeculatorModel):
                 position_embeddings=step_pos_emb,
             )
 
-            logits = self.lm_head(mtp_output)
+            logits = self.lm_head(mtp_output)                      # [B, valid_len, V]
             all_logits.append(logits)
 
-            step_labels = labels[:, step + 1 : step + 1 + valid_len]
+            step_labels = labels[:, step + 1 : step + 1 + valid_len]  # [B, valid_len]
             if loss_mask is not None:
                 step_mask = loss_mask[:, step + 1 : step + 1 + valid_len]
                 step_labels = step_labels.clone()
                 step_labels[step_mask == 0] = -100
-            weight = step_weights[step] if step_weights is not None else 1.0
-            step_loss = weight * nn.functional.cross_entropy(
+            default_weight = _DEFAULT_STEP_WEIGHTS[step]
+            weight = step_weights[step] if step_weights is not None else default_weight
+            step_loss: torch.Tensor = weight * nn.functional.cross_entropy(
                 logits.reshape(-1, self.config.vocab_size),
                 step_labels.reshape(-1),
                 ignore_index=-100,
             )
             total_loss = total_loss + step_loss
-            metrics[f"loss_step_{step}"] = step_loss.item()
+            metrics[f"loss_step_{step}"] = step_loss
 
             current_hidden = mtp_output  # feed MTP output as hidden for next step
 
@@ -218,7 +263,9 @@ class FastMTPSpeculator(SpeculatorModel):
         return cls(config=config)
 
     @staticmethod
-    def get_trainer_kwargs(**kwargs) -> tuple[dict, dict]:
+    def get_trainer_kwargs(
+        **kwargs: Any,
+    ) -> tuple[dict[str, list[float]], dict[str, list[float]]]:
         """Get training and validation kwargs for FastMTP.
 
         Pass ``step_weights`` to override the default exponential-decay weights
@@ -227,8 +274,8 @@ class FastMTPSpeculator(SpeculatorModel):
         :param kwargs: Training arguments
         :return: Tuple of (train_kwargs, val_kwargs)
         """
-        train_kwargs = {
-            "step_weights": kwargs.get("step_weights", [0.51, 0.31, 0.18]),
+        train_kwargs: dict[str, list[float]] = {
+            "step_weights": kwargs.get("step_weights", list(_DEFAULT_STEP_WEIGHTS)),
         }
         val_kwargs = train_kwargs.copy()
 
