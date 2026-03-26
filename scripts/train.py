@@ -250,6 +250,11 @@ def main(args: argparse.Namespace):
     # Setup dataloaders
     noise_transform = AddUniformNoise(std=args.noise_std)
     if args.legacy_data:
+        warnings.warn(
+            "Using '--legacy-data' is deprecated and will be removed soon.",
+            category=DeprecationWarning,
+            stacklevel=2,
+        )
         train_files, val_files = split_files(args.data_path, ratio=0.9)
         train_dataset: BaseEagle3Dataset = Eagle3SampleFileDataset(
             file_list=train_files, max_len=args.total_seq_len, transform=noise_transform
@@ -349,15 +354,60 @@ def parse_args():
         help="The pretrained draft model to finetune",
     )
     parser.add_argument("--data-path", type=str, default="./data")
-    parser.add_argument("--hidden-states-path", type=str, default=None)
-    parser.add_argument("--vllm-endpoint", type=str, default="http://localhost:8000/v1")
+    parser.add_argument(
+        "--hidden-states-path",
+        type=str,
+        default=None,
+        help=(
+            "The path where cached hidden states files are stored. (Default: "
+            "args.data_path / 'hidden_states')"
+        ),
+    )
+    parser.add_argument(
+        "--vllm-endpoint",
+        type=str,
+        default="http://localhost:8000/v1",
+        help=(
+            "vLLM endpoint address to use if generating hidden states on-demand."
+            " Only required if `--on-missing=generate` and samples are missing."
+            " Note: the vLLM instance must be configured to cache hidden states"
+            " to a location that is accessible from the training instance. i.e."
+            " on the same node, or a shared network drive. (Default: 'http://localhost:8000/v1')"
+        ),
+    )
     parser.add_argument(
         "--on-missing",
         choices=["generate", "skip", "warn", "raise"],
         default="generate",
+        help=(
+            "Dataloader behaviour when there are no cached hidden states for a sample."
+            "Default: 'generate', which attempts to generate the hidden states on-"
+            "demand using the provided vLLM endpoint. The other options skip the sample"
+            ", skip and warn, or raise an error respectively."
+        ),
     )
-    parser.add_argument("--on-generate", choices=["cache", "delete"], default="delete")
-    parser.add_argument("--legacy-data", action="store_true")
+    parser.add_argument(
+        "--on-generate",
+        choices=["cache", "delete"],
+        default="delete",
+        help=(
+            "Dataloader behaviour when a new hidden state has been generated"
+            " (only applies if args.on_missing=='generate'). Default: 'delete', "
+            "deletes hidden states once they are loaded. 'cache' will instead store"
+            "the hidden states in the args.hidden_states_path. This can be used to "
+            "enable hybrid online/offline training, with hidden states generated on the"
+            "first epoch, and reused on subsequent epochs."
+        ),
+    )
+    parser.add_argument(
+        "--legacy-data",
+        action="store_true",
+        help=(
+            "DEPRECATED. Use the old data format which stores hidden states alongside "
+            "token_ids and assistant_masks, in data_i.pt files. This option will be "
+            "removed soon."
+        ),
+    )
     parser.add_argument("--save-path", type=str, default="./checkpoints")
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--lr", type=float, default=1e-4)
