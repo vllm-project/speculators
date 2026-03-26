@@ -38,11 +38,11 @@ class FastMTPBatch(TypedDict):
     ``seq_len`` is the original sequence length minus 1 (from the shift).
     """
 
-    input_ids: torch.Tensor      # [seq_len]     — long
+    input_ids: torch.Tensor  # [seq_len]     — long
     hidden_states: torch.Tensor  # [seq_len, H]  — float (dtype from dataset config)
-    loss_mask: torch.Tensor      # [seq_len]     — long, 1 = compute loss
-    lengths: torch.Tensor        # [1]           — long, equals seq_len
-    position_ids: torch.Tensor   # [seq_len]     — long, 0…seq_len-1
+    loss_mask: torch.Tensor  # [seq_len]     — long, 1 = compute loss
+    lengths: torch.Tensor  # [1]           — long, equals seq_len
+    position_ids: torch.Tensor  # [seq_len]     — long, 0…seq_len-1
 
 
 def _shift_batch_fastmtp(

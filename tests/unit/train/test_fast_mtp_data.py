@@ -177,7 +177,7 @@ def test_make_dataloader_train_val_split(tmp_path: Path) -> None:
         data_dir=tmp_path, max_len=64, batch_size=1, train_ratio=0.8, seed=0
     )
     assert len(train_loader.dataset) == 8  # type: ignore[arg-type]
-    assert len(val_loader.dataset) == 2    # type: ignore[arg-type]
+    assert len(val_loader.dataset) == 2  # type: ignore[arg-type]
 
 
 def test_make_dataloader_seed_reproducible(tmp_path: Path) -> None:

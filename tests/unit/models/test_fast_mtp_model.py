@@ -52,7 +52,10 @@ def batch():
 def test_fast_mtp_speculator_registered_as_mtp() -> None:
     """FastMTPSpeculator must declare 'mtp' as its speculators_model_type."""
     # The registry key is the value of speculators_model_type on the config class.
-    assert FastMTPSpeculator.config_class.model_fields["speculators_model_type"].default == "mtp"  # noqa: E501
+    assert (
+        FastMTPSpeculator.config_class.model_fields["speculators_model_type"].default
+        == "mtp"
+    )  # noqa: E501
 
 
 # ---------------------------------------------------------------------------
@@ -165,9 +168,7 @@ def test_step_weights_change_loss_value(model, batch) -> None:
 
 def test_loss_mask_zeros_reduce_loss(model, batch) -> None:
     torch.manual_seed(1)
-    _, loss_all_ones, _ = model(
-        **batch, loss_mask=torch.ones_like(batch["input_ids"])
-    )
+    _, loss_all_ones, _ = model(**batch, loss_mask=torch.ones_like(batch["input_ids"]))
     _, loss_some_zeros, _ = model(
         **batch,
         loss_mask=torch.cat(

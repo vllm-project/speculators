@@ -118,7 +118,7 @@ def test_remap_keys_complete_state_dict() -> None:
         "mtp_layers.0.self_attn.q_proj.weight": torch.zeros(8, 8),
         "mtp_layers.0.mlp.gate_proj.weight": torch.zeros(16, 8),
         "embed_tokens.weight": torch.zeros(100, 8),  # must be skipped
-        "lm_head.weight": torch.zeros(100, 8),       # must be skipped
+        "lm_head.weight": torch.zeros(100, 8),  # must be skipped
     }
     result = remap_keys(state_dict)
 

@@ -80,11 +80,11 @@ def remap_key(key: str) -> str:
     """
     if key.startswith(_MTP_LAYERS_PREFIX):
         # mtp.layers.0.<rest> → mtp_layers.0.<rest>
-        return _SPECULATORS_PREFIX + key[len(_MTP_LAYERS_PREFIX):]
+        return _SPECULATORS_PREFIX + key[len(_MTP_LAYERS_PREFIX) :]
     # mtp.<suffix> where suffix is a top-level mixin weight → mtp_layers.0.<suffix>
     # FastMTPLayerMixin attributes are named to match Qwen3-Next originals, so
     # the suffix is identical in both directions.
-    suffix = key[len(MTP_PREFIX):]
+    suffix = key[len(MTP_PREFIX) :]
     if suffix in _MTP_TOP_LEVEL_SUFFIXES:
         return _SPECULATORS_PREFIX + suffix
     raise ValueError(f"Unexpected MTP key with no remapping rule: {key!r}")
