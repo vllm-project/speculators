@@ -13,6 +13,7 @@ class TestEagle3vLLM:
                 {
                     "unconverted_model": "yuhuili/EAGLE3-LLaMA3.1-Instruct-8B",
                     "base_model": "meta-llama/Meta-Llama-3.1-8B-Instruct",
+                    "acceptance_thresholds": [0.4, 0.2, 0.1],
                 },
                 id="llama3-8b",
             ),
@@ -21,6 +22,7 @@ class TestEagle3vLLM:
                     "unconverted_model": "nm-testing/Speculator-Qwen3-8B-Eagle3",
                     "base_model": "Qwen/Qwen3-8B",
                     "norm_before_residual": True,
+                    "acceptance_thresholds": [0.3, 0.2, 0.02],
                 },
                 id="qwen3-8b",
             ),
@@ -44,6 +46,7 @@ class TestEagle3vLLM:
         base_model = model_info.get("base_model")
         norm_before_residual = model_info.get("norm_before_residual", False)
         disable_compile_cache = model_info.get("disable_compile_cache", False)
+        acceptance_thresholds = model_info.get("acceptance_thresholds", None)
         converted_path = tmp_path / unconverted_model.split("/")[-1]
         converter = Eagle3Converter()
 
@@ -55,8 +58,6 @@ class TestEagle3vLLM:
             "norm_before_residual": norm_before_residual,
         }
 
-        # including eagle_aux_hidden_state_layer_ids
-        #  if specified
         if "eagle_aux_hidden_state_layer_ids" in model_info:
             convert_kwargs["eagle_aux_hidden_state_layer_ids"] = model_info[
                 "eagle_aux_hidden_state_layer_ids"
@@ -68,21 +69,33 @@ class TestEagle3vLLM:
             tmp_path=tmp_path,
             disable_compile_cache=disable_compile_cache,
             prompts=prompts,
+            acceptance_thresholds=acceptance_thresholds,
+            ignore_eos=True,
         )
 
     @pytest.mark.smoke
     @pytest.mark.parametrize(
-        "model_path",
+        ("model_path", "acceptance_thresholds"),
         [
             pytest.param(
                 "nm-testing/SpeculatorLlama3-1-8B-Eagle3-converted-0717-quantized",
+                [0.3, 0.06, 0.00],
                 id="llama3-converted-quantized",
             ),
             pytest.param(
                 "RedHatAI/Qwen3-8B-speculator.eagle3",
+                [0.42, 0.2, 0.02],
                 id="qwen3-converted-quantized",
             ),
         ],
     )
-    def test_vllm_engine_eagle3(self, model_path, prompts, tmp_path):
-        run_vllm_engine(model_path=model_path, tmp_path=tmp_path, prompts=prompts)
+    def test_vllm_engine_eagle3(
+        self, model_path, acceptance_thresholds, prompts, tmp_path
+    ):
+        run_vllm_engine(
+            model_path=model_path,
+            tmp_path=tmp_path,
+            prompts=prompts,
+            acceptance_thresholds=acceptance_thresholds,
+            ignore_eos=True,
+        )
