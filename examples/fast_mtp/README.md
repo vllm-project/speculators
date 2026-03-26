@@ -39,10 +39,27 @@ Extracts the MTP head from Qwen3-Next-80B-A3B-Instruct and wraps it in the
 speculators config format. Only needs to be done once; the result is already
 committed at `Qwen3-Next-80B-A3B-Instruct_mtp_speculator/`.
 
+**From HuggingFace (downloads automatically):**
+
 ```bash
-python local/scripts/convert_checkpoints.py \
+python examples/fast_mtp/convert_checkpoint.py \
     --output-dir Qwen3-Next-80B-A3B-Instruct_mtp_speculator
 ```
+
+**From a local snapshot:**
+
+```bash
+SNAP=9c7f2fbe84465e40164a94cc16cd30b6999b0cc7
+MODEL=/mnt/data/engine/hub_cache/models--Qwen--Qwen3-Next-80B-A3B-Instruct/snapshots/$SNAP
+
+python examples/fast_mtp/convert_checkpoint.py \
+    --model $MODEL \
+    --output-dir Qwen3-Next-80B-A3B-Instruct_mtp_speculator
+```
+
+The `--model` argument accepts either a HuggingFace repo ID (default:
+`Qwen/Qwen3-Next-80B-A3B-Instruct`) or a local directory path. Use
+`--cache-dir` to control where HF downloads are stored.
 
 The output directory contains:
 - `config.json` — `FastMTPConfig` with full `transformer_layer_config`
@@ -150,7 +167,7 @@ Key arguments:
 | `--batch-size` | `1` | Per-GPU batch size |
 | `--train-ratio` | `0.9` | Train/val split |
 | `--scheduler-type` | `cosine` | LR schedule (`cosine`, `linear`, `none`) |
-| `--warmup-steps` | auto | Steps for LR warmup |
+| `--scheduler-warmup-steps` | `None` (no warmup) | Steps for LR warmup |
 | `--step-weights` | `0.51 0.31 0.18` | Per-step MTP loss weights |
 | `--save-best` | off | Keep only the best val-loss checkpoint |
 | `--checkpoint-freq` | `1` | Save every N epochs |
@@ -172,7 +189,7 @@ output/qwen3next_gsm8k_finetuned/epoch_N/model.safetensors
 ## Step 4 — Stitch weights
 
 Remaps trained MTP keys from speculators namespace (`mtp_layers.0.*`) to
-Qwen3-Next native namespace (`model.mtp_layers.0.*`), copies all original
+Qwen3-Next native namespace (`mtp.*`), copies all original
 verifier shards into the output directory, and writes a single new shard plus
 an updated `model.safetensors.index.json`. The result is a self-contained
 directory that can be uploaded directly to HuggingFace.

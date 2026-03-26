@@ -24,10 +24,13 @@ Output (one .pt file per sample):
 """
 
 import argparse
+import logging
 from pathlib import Path
 
 from speculators.data_generation.fast_mtp_generator import generate_and_save_fast_mtp
 from speculators.data_generation.preprocessing import load_and_preprocess_dataset
+
+log = logging.getLogger(__name__)
 
 
 def parse_args() -> argparse.Namespace:
@@ -53,7 +56,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--symlink-dir",
         default="local/dataset",
-        help="Relative path for a symlink pointing to output-dir",
+        help="Relative path for a symlink pointing to output-dir "
+        "(ignored when --no-symlink is set)",
+    )
+    p.add_argument(
+        "--no-symlink",
+        action="store_true",
+        help="Skip creating a symlink to the output directory",
     )
     p.add_argument("--tensor-parallel-size", type=int, default=8)
     p.add_argument("--max-model-len", type=int, default=4096)
@@ -78,11 +87,16 @@ def ensure_symlink(target: Path, link_path: Path) -> None:
 
 def main() -> None:
     args = parse_args()
+
+    data_path = Path(args.data_path)
+    if not data_path.exists():
+        raise FileNotFoundError(f"Data file not found: {data_path}")
+
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Step 1: tokenize conversations + build loss mask via existing pipeline
-    print(f"Preprocessing {args.data_path} ...")
+    log.info("Preprocessing %s ...", args.data_path)
     dataset, _ = load_and_preprocess_dataset(
         target_model_path=args.model,
         train_data_path=args.data_path,
@@ -91,21 +105,33 @@ def main() -> None:
         max_samples=args.max_samples,
         token_freq_path=str(output_dir / "token_freq.pt"),
     )
-    print(f"  {len(dataset)} samples after preprocessing")
+    log.info("  %d samples after preprocessing", len(dataset))
 
     # Step 2: prefill-only vLLM pass to capture last hidden layer
     token_ids: list[list[int]] = dataset["input_ids"]
     loss_masks: list[list[int]] = dataset["loss_mask"]
 
     loss_mask_map = {
-        tuple(ids): mask
-        for ids, mask in zip(token_ids, loss_masks, strict=True)
+        tuple(ids): mask for ids, mask in zip(token_ids, loss_masks, strict=True)
     }
 
-    def loss_mask_fn(ids: list[int]) -> list[int]:
-        return loss_mask_map.get(tuple(ids), [1] * len(ids))
+    _missing_mask_count = 0
 
-    print(f"Capturing hidden states → {output_dir} ...")
+    def loss_mask_fn(ids: list[int]) -> list[int]:
+        nonlocal _missing_mask_count
+        result = loss_mask_map.get(tuple(ids))
+        if result is None:
+            _missing_mask_count += 1
+            log.warning(
+                "No loss mask found for sequence (len=%d); defaulting to all-ones. "
+                "Total missing so far: %d",
+                len(ids),
+                _missing_mask_count,
+            )
+            return [1] * len(ids)
+        return result
+
+    log.info("Capturing hidden states → %s ...", output_dir)
     generate_and_save_fast_mtp(
         model_path=args.model,
         token_ids=token_ids,
@@ -116,14 +142,14 @@ def main() -> None:
         loss_mask_fn=loss_mask_fn,
     )
 
-    # Symlink for easy access
-    repo_root = Path(__file__).resolve().parent.parent.parent
-    symlink_path = repo_root / args.symlink_dir / output_dir.name
-    ensure_symlink(output_dir, symlink_path)
-
     n_files = len(list(output_dir.glob("data_*.pt")))
-    print(f"\nDone. {n_files} .pt files saved to {output_dir}")
-    print(f"Symlink: {symlink_path}")
+    log.info("Done. %d .pt files saved to %s", n_files, output_dir)
+
+    if not args.no_symlink:
+        repo_root = Path(__file__).resolve().parent.parent.parent
+        symlink_path = repo_root / args.symlink_dir / output_dir.name
+        ensure_symlink(output_dir, symlink_path)
+        log.info("Symlink: %s", symlink_path)
 
 
 if __name__ == "__main__":
