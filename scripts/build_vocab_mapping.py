@@ -20,10 +20,10 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from transformers import AutoConfig
 
 from speculators.train.vocab_mapping import (
     build_vocab_mappings_from_distribution,
+    get_target_vocab_size,
 )
 
 logging.basicConfig(
@@ -71,29 +71,6 @@ def parse_args():
     return parser.parse_args()
 
 
-def get_target_vocab_size(args):
-    has_vocab = args.target_vocab_size is not None
-    has_model = args.target_model_path is not None
-
-    if has_vocab and has_model:
-        raise ValueError("Cannot specify both target-vocab-size and target-model-path")
-
-    if not has_vocab and not has_model:
-        raise ValueError("Must specify either target-vocab-size or target-model-path")
-
-    if has_vocab:
-        return args.target_vocab_size
-
-    logger.info(f"Loading target model config from {args.target_model_path}")
-    config = AutoConfig.from_pretrained(args.target_model_path)
-
-    # For multimodal models (Qwen3VL, etc.), extract text_config
-    if hasattr(config, "text_config"):
-        config = config.text_config
-
-    return config.vocab_size
-
-
 def main():
     args = parse_args()
 
@@ -103,7 +80,9 @@ def main():
 
     token_freq_dict = torch.load(token_freq_path, weights_only=True)
 
-    target_vocab_size = get_target_vocab_size(args)
+    target_vocab_size = get_target_vocab_size(
+        args.target_vocab_size, args.target_model_path
+    )
 
     d2t, t2d = build_vocab_mappings_from_distribution(
         token_freq_dict=token_freq_dict,

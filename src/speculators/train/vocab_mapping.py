@@ -6,6 +6,7 @@ from pathlib import Path
 import torch
 from datasets import Dataset as HFDataset
 from tqdm import tqdm  # type: ignore[import-untyped]
+from transformers import AutoConfig
 
 __all__ = [
     "build_vocab_mappings_from_distribution",
@@ -15,8 +16,8 @@ __all__ = [
 
 def save_token_frequency_distribution(
     dataset: HFDataset,
-    output_path: str = "./token_freq.pt",
-) -> str:
+    output_path: Path | str = "./token_freq.pt",
+):
     """Save token frequency distribution from the dataset.
 
     Args:
@@ -28,7 +29,7 @@ def save_token_frequency_distribution(
     """
     path = Path(output_path)
     if path.exists():
-        return output_path
+        return
 
     token_freq: Counter[int] = Counter()
     for item in tqdm(dataset, desc="Counting token frequencies"):
@@ -43,8 +44,6 @@ def save_token_frequency_distribution(
     token_freq_dict = dict(token_freq)
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     torch.save(token_freq_dict, path)
-
-    return output_path
 
 
 def combine_token_frequency_distributions(
@@ -95,3 +94,25 @@ def build_vocab_mappings_from_distribution(
     target_to_draft[selected_token_ids] = True
 
     return draft_to_target, target_to_draft
+
+
+def get_target_vocab_size(target_vocab_size, target_model_path):
+    has_vocab = target_vocab_size is not None
+    has_model = target_model_path is not None
+
+    if has_vocab and has_model:
+        raise ValueError("Cannot specify both target-vocab-size and target-model-path")
+
+    if not has_vocab and not has_model:
+        raise ValueError("Must specify either target-vocab-size or target-model-path")
+
+    if has_vocab:
+        return target_vocab_size
+
+    config = AutoConfig.from_pretrained(target_model_path)
+
+    # For multimodal models (Qwen3VL, etc.), extract text_config
+    if hasattr(config, "text_config"):
+        config = config.text_config
+
+    return config.vocab_size
