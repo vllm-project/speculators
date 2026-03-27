@@ -94,7 +94,12 @@ class TestEagle3ConverterFixes:
         assert llama_config.hidden_size == 4096
         assert llama_config.num_attention_heads == 32
         # rope_theta comes from Eagle3 config, not verifier
-        assert llama_config.rope_theta == 10000.0
+        if hasattr(llama_config, "rope_parameters"):
+            # Transformers v5
+            assert llama_config.rope_parameters is not None
+            assert llama_config.rope_parameters.get("rope_theta") == 10000.0
+        else:
+            assert llama_config.rope_theta == 10000.0
 
     @pytest.mark.sanity
     @patch(

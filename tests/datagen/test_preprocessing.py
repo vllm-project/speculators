@@ -118,7 +118,7 @@ def test_detect_assistant_pattern_correctly_identifies_assistant_vs_user():
         {"role": "user", "content": "USER_MSG"},
         {"role": "assistant", "content": "ASSISTANT_MSG"},
     ]
-    formatted = tokenizer.apply_chat_template(
+    formatted: str = tokenizer.apply_chat_template(  # type: ignore[assignment]
         test_conv, tokenize=False, add_generation_prompt=False
     )
 
@@ -156,7 +156,7 @@ def test_detect_assistant_pattern_extracts_correct_content():
         {"role": "assistant", "content": "Second answer"},
     ]
 
-    formatted = tokenizer.apply_chat_template(
+    formatted: str = tokenizer.apply_chat_template(  # type: ignore [assignment]
         test_conv, tokenize=False, add_generation_prompt=False
     )
 
@@ -214,7 +214,7 @@ def test_create_loss_mask_simple():
     mask = _create_loss_mask_from_offsets(text, offsets, pattern)
 
     assert len(mask) == len(offsets)
-    assert mask.dtype == torch.long
+    assert mask.dtype == torch.bool
 
     # Tokens in assistant responses should have mask = 1
     # "Hi there!" is at positions 6-8 (indices in offsets)
@@ -443,7 +443,7 @@ def test_preprocess_batch_falls_back_to_regex():
             raise ValueError("Forcing fallback to regex path")
         return original_apply_chat_template(*args, **kwargs)
 
-    tokenizer.apply_chat_template = patched_apply_chat_template
+    tokenizer.apply_chat_template = patched_apply_chat_template  # type: ignore [method-assign]
 
     examples = {
         "conversations": [
@@ -640,7 +640,7 @@ def test_detect_assistant_pattern_thinking_model():
             "reasoning_content": "We are adding 3 and 3.",
         },
     ]
-    formatted = tokenizer.apply_chat_template(
+    formatted: str = tokenizer.apply_chat_template(  # type: ignore[assignment]
         test_conv, tokenize=False, add_generation_prompt=False, enable_thinking=True
     )
 
@@ -689,12 +689,13 @@ def test_create_loss_mask_thinking_model(thinking_content):
         {"role": "user", "content": "What is the capital of France?"},
         {"role": "assistant", "content": "Paris is the capital."},
     ]
-    tokenizer_kwargs = {}
     if thinking_content:
         conv[-1]["reasoning_content"] = thinking_content
-        tokenizer_kwargs["enable_thinking"] = True
-    formatted = tokenizer.apply_chat_template(
-        conv, tokenize=False, add_generation_prompt=False, **tokenizer_kwargs
+    formatted: str = tokenizer.apply_chat_template(  # type: ignore[assignment]
+        conv,
+        tokenize=False,
+        add_generation_prompt=False,
+        enable_thinking=bool(thinking_content),
     )
 
     # Tokenize with offsets

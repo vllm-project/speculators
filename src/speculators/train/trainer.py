@@ -46,6 +46,7 @@ class TrainerConfig(NamedTuple):
     scheduler_num_cosine_cycles: float = 0.5
     checkpoint_freq: int = 1
     save_best: bool = False
+    hidden_states_dtype: torch.dtype = torch.bfloat16
 
 
 class Trainer:
@@ -96,6 +97,7 @@ class Trainer:
         # Verify model is compatible with training infrastructure
         SpeculatorModel.verify_training_compatible(self.model)
 
+        self.model.to(self.config.hidden_states_dtype)  # type: ignore[arg-type]
         load_checkpoint = (
             self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1
         )

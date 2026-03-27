@@ -82,6 +82,7 @@ def parse_args():
     parser.add_argument(
         "--train-data-path",
         type=str,
+        action="append",
         required=True,
         help="Path to training data (same as used in preprocessing)",
     )
@@ -340,13 +341,12 @@ def main():
 
     dataset, _ = load_and_preprocess_dataset(
         target_model_path=args.target_model_path,
-        train_data_path=args.train_data_path,
+        train_data_paths=args.train_data_path,
         seq_length=args.seq_length,
         build_dataset_num_proc=args.num_preprocessing_workers,
         seed=args.seed,
         max_samples=args.max_samples,
         token_freq_path=args.token_freq_path,
-        cache_dir=args.hf_cache_dir,
         assistant_pattern=args.assistant_pattern,
         turn_dropout=args.turn_dropout,
     )

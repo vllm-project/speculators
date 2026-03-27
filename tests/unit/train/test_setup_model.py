@@ -61,7 +61,7 @@ TINY_LLAMA_CONFIG = LlamaConfig(
     num_key_value_heads=4,
     head_dim=8,
     max_position_embeddings=32,
-    rms_norm_eps=1e-6,
+    rms_norm_eps=1e-6,  # type: ignore[arg-type] # (bad transformer's type hint, int instead of float)
     tie_word_embeddings=False,
     _attn_implementation="eager",
 )
@@ -133,6 +133,7 @@ def _make_trainer_no_init(
     resume_from_checkpoint=False,
     local_rank=0,
     save_path="/tmp/test_ckpt",
+    hidden_states_dtype=torch.bfloat16,
 ):
     """Create a Trainer instance bypassing __init__ to control setup order."""
     config = TrainerConfig(
@@ -142,6 +143,7 @@ def _make_trainer_no_init(
         resume_from_checkpoint=resume_from_checkpoint,
         is_distributed=is_distributed,
         local_rank=local_rank,
+        hidden_states_dtype=hidden_states_dtype,
     )
     trainer = Trainer.__new__(Trainer)
     trainer.model = model
@@ -230,7 +232,9 @@ def test_single_gpu_fresh_init(tiny_model, mock_checkpointer):
     no checkpoint loading."""
     state_before = {k: v.clone() for k, v in tiny_model.state_dict().items()}
 
-    trainer = _make_trainer_no_init(tiny_model, is_distributed=False)
+    trainer = _make_trainer_no_init(
+        tiny_model, is_distributed=False, hidden_states_dtype=torch.float
+    )
     trainer.checkpointer = mock_checkpointer
 
     trainer.setup_model()
@@ -684,6 +688,7 @@ def draft_vocab_config():
 @pytest.fixture
 def vocab_mappings():
     """Valid (t2d, d2t) pair for verifier_vocab=64, draft_vocab=32."""
+    assert TINY_LLAMA_CONFIG.vocab_size is not None  # typing
     return _make_vocab_mappings(
         verifier_vocab_size=TINY_LLAMA_CONFIG.vocab_size,
         draft_vocab_size=DRAFT_VOCAB_SIZE,
@@ -728,6 +733,7 @@ def test_load_vocab_mappings_validation(draft_vocab_config, vocab_mappings):
         model.load_vocab_mappings(t2d, torch.zeros(10, dtype=torch.long))
 
     # Wrong number of True values in t2d
+    assert TINY_LLAMA_CONFIG.vocab_size is not None  # typing
     bad_t2d = torch.ones(TINY_LLAMA_CONFIG.vocab_size, dtype=torch.bool)
     with pytest.raises(ValueError, match="non-zero values"):
         model.load_vocab_mappings(bad_t2d, d2t)

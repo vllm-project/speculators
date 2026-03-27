@@ -1,13 +1,14 @@
 import bisect
 import random
 import re
+from pathlib import Path
 from re import Pattern
 from typing import Any, cast
 
 import torch
 from datasets import Dataset as HFDataset
-from datasets import load_dataset
-from transformers import AutoTokenizer, PreTrainedTokenizer
+from datasets import concatenate_datasets, load_dataset
+from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 from speculators.data_generation.configs import DATASET_CONFIGS
 from speculators.data_generation.logging_utils import PipelineLogger
@@ -22,7 +23,7 @@ __all__ = [
 log = PipelineLogger(__name__)
 
 
-def _visualize_sample(_dataset, preprocessed, tokenizer, idx: int = 0):
+def _visualize_sample(preprocessed, tokenizer, idx: int = 0):
     """Visualize a single sample with color-coded trainable regions."""
     # Get preprocessed sample
     prep_sample = preprocessed[idx]
@@ -106,7 +107,7 @@ def _normalize_conversation(
     return normalized
 
 
-def _supports_assistant_mask(tokenizer: PreTrainedTokenizer) -> bool:
+def _supports_assistant_mask(tokenizer: PreTrainedTokenizerBase) -> bool:
     """Check if tokenizer truly supports HF assistant token mask.
 
     Must return a non-zero mask for a conversation containing an assistant message.
@@ -130,7 +131,7 @@ def _supports_assistant_mask(tokenizer: PreTrainedTokenizer) -> bool:
         return False
 
 
-def _detect_assistant_pattern(tokenizer: PreTrainedTokenizer) -> str:
+def _detect_assistant_pattern(tokenizer: PreTrainedTokenizerBase) -> str:
     """Auto-detect the assistant message pattern from the tokenizer's chat template.
 
     Uses multi-turn conversation but extracts pattern from the LAST assistant
@@ -225,7 +226,7 @@ def _create_loss_mask_from_offsets(
     assistant_pattern: str | Pattern[str],
 ) -> torch.Tensor:
     """Create loss mask by finding assistant response spans in formatted text."""
-    loss_mask = torch.zeros(len(offsets), dtype=torch.long)
+    loss_mask = torch.zeros(len(offsets), dtype=torch.bool)
 
     matches_found = 0
     token_starts = [offset[0] for offset in offsets]
@@ -256,14 +257,14 @@ def _create_loss_mask_from_offsets(
 
 def _preprocess_batch(
     examples: dict,
-    tokenizer: PreTrainedTokenizer,
+    tokenizer: PreTrainedTokenizerBase,
     max_length: int,
     assistant_pattern: str | Pattern[str] | None,
     turn_dropout: bool = False,
 ) -> dict[str, list]:
     """Process a batch of conversations into tokenized format with loss masks."""
 
-    results: dict[str, list] = {"input_ids": [], "loss_mask": []}
+    results: dict[str, list] = {"input_ids": [], "loss_mask": [], "seq_len": []}
     conversations = examples.get("conversations", [])
 
     if not conversations:
@@ -339,6 +340,7 @@ def _preprocess_batch(
             # Append to results
             results["input_ids"].append(torch.tensor(input_ids, dtype=torch.long))
             results["loss_mask"].append(loss_mask)
+            results["seq_len"].append(len(input_ids))
 
         except (TypeError, ValueError, KeyError, AttributeError, RuntimeError) as e:
             log.error(
@@ -352,7 +354,7 @@ def _preprocess_batch(
 
 def build_eagle3_dataset(
     dataset: HFDataset,
-    tokenizer: PreTrainedTokenizer,
+    tokenizer: PreTrainedTokenizerBase,
     max_length: int = 2048,
     num_proc: int = 8,
     assistant_pattern: str | Pattern[str] | None = None,
@@ -393,21 +395,17 @@ def build_eagle3_dataset(
         num_proc=num_proc,
         batch_size=1000,
         remove_columns=original_cols,
-        load_from_cache_file=True,
+        keep_in_memory=True,  # skip caching
     )
 
     dataset.set_format(type="torch")
     return dataset
 
 
-def load_raw_dataset(
-    train_data_path: str, num_proc: int = 8, cache_dir: str | None = None
-) -> HFDataset:
+def load_raw_dataset(train_data_path: str, num_proc: int = 8) -> HFDataset:
     """Load raw dataset from local file or HuggingFace."""
     if train_data_path.endswith((".jsonl", ".json")):
-        return load_dataset(
-            "json", data_files=train_data_path, split="train", cache_dir=cache_dir
-        )
+        return load_dataset("json", data_files=train_data_path, split="train")
 
     if train_data_path not in DATASET_CONFIGS:
         raise ValueError(
@@ -416,7 +414,7 @@ def load_raw_dataset(
         )
 
     config = DATASET_CONFIGS[train_data_path]
-    raw_dataset = load_dataset(config.hf_path, split=config.split, cache_dir=cache_dir)
+    raw_dataset = load_dataset(config.hf_path, split=config.split)
 
     if config.normalize_fn is not None:
         raw_dataset = raw_dataset.map(config.normalize_fn, num_proc=num_proc)
@@ -426,16 +424,15 @@ def load_raw_dataset(
 
 def load_and_preprocess_dataset(
     target_model_path: str,
-    train_data_path: str,
+    train_data_paths: list[str],
     seq_length: int,
     build_dataset_num_proc: int = 8,
     seed: int = 0,
     max_samples: int | None = None,
-    token_freq_path: str = "./token_freq.pt",  # noqa: S107
-    cache_dir: str | None = None,
+    token_freq_path: Path | str = "./token_freq.pt",  # noqa: S107
     assistant_pattern: str | None = None,
     turn_dropout: bool = False,
-) -> tuple[HFDataset, PreTrainedTokenizer]:
+) -> tuple[HFDataset, PreTrainedTokenizerBase]:
     """Load, tokenize, and preprocess a dataset for EAGLE3 training.
 
     Uses the tokenizer's built-in chat template via apply_chat_template.
@@ -461,7 +458,7 @@ def load_and_preprocess_dataset(
     """
     log.section("Starting dataset preprocessing")
 
-    log.subsection("Loading tokenizer and dataset")
+    log.subsection("Loading tokenizer")
     tokenizer = AutoTokenizer.from_pretrained(target_model_path, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -472,40 +469,47 @@ def load_and_preprocess_dataset(
             "Please use a model with a pre-configured chat template."
         )
 
-    raw_dataset = load_raw_dataset(
-        train_data_path, num_proc=build_dataset_num_proc, cache_dir=cache_dir
-    )
-    raw_dataset = raw_dataset.shuffle(seed=seed)
+    processed_datasets = []
+    for train_data_path in train_data_paths:
+        log.subsection(f"Processing {train_data_path}")
+        raw_dataset = load_raw_dataset(train_data_path, num_proc=build_dataset_num_proc)
+        raw_dataset = raw_dataset.shuffle(seed=seed)
 
+        if max_samples is not None and len(raw_dataset) > 3 * max_samples:
+            # Reduce size to 3 * max_samples to reduce processing
+            # This will then be reduced further to max_samples
+            # after combining datasets and shuffling
+            raw_dataset = raw_dataset.select(range(3 * max_samples))
+
+        log.info(f"Loaded {len(raw_dataset)} samples")
+
+        if turn_dropout:
+            log.info("Turn dropout enabled: randomly keeping N consecutive turns")
+
+        preprocessed_dataset = build_eagle3_dataset(
+            dataset=raw_dataset,
+            tokenizer=tokenizer,
+            max_length=seq_length,
+            num_proc=build_dataset_num_proc,
+            assistant_pattern=assistant_pattern,
+            turn_dropout=turn_dropout,
+        )
+        processed_datasets.append(preprocessed_dataset)
+
+    combined_dataset = concatenate_datasets(processed_datasets)
+    combined_dataset.shuffle(seed=seed)
     if max_samples is not None and len(raw_dataset) > max_samples:
-        raw_dataset = raw_dataset.select(range(max_samples))
-
-    log.info(f"Loaded {len(raw_dataset)} samples")
-
-    log.subsection("Tokenizing and building dataset")
-    if cache_dir:
-        log.info(f"Preprocessed data will be cached at: {cache_dir}")
-    if turn_dropout:
-        log.info("Turn dropout enabled: randomly keeping N consecutive turns")
-
-    preprocessed_dataset = build_eagle3_dataset(
-        dataset=raw_dataset,
-        tokenizer=tokenizer,
-        max_length=seq_length,
-        num_proc=build_dataset_num_proc,
-        assistant_pattern=assistant_pattern,
-        turn_dropout=turn_dropout,
-    )
+        combined_dataset = combined_dataset.select(range(max_samples))
 
     log.subsection("Computing token frequency distribution")
     save_token_frequency_distribution(
-        dataset=preprocessed_dataset,
+        dataset=combined_dataset,
         output_path=token_freq_path,
     )
 
     log.subsection("Visualizing sample")
-    _visualize_sample(raw_dataset, preprocessed_dataset, tokenizer, idx=0)
+    _visualize_sample(combined_dataset, tokenizer, idx=0)
 
     log.section("Dataset preprocessing complete")
 
-    return preprocessed_dataset, tokenizer
+    return combined_dataset, tokenizer
