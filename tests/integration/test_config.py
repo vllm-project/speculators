@@ -17,10 +17,17 @@ from speculators import (
 @pytest.mark.smoke
 def test_verifier_config_from_verifier_config():
     with tempfile.TemporaryDirectory() as tmp_dir:
-        pretrained_config = PretrainedConfig.from_pretrained(
-            pretrained_model_name_or_path="RedHatAI/Llama-3.1-8B-Instruct",
+        config_dict, _ = PretrainedConfig.get_config_dict(
+            "RedHatAI/Llama-3.1-8B-Instruct",
             cache_dir=tmp_dir,
         )
+
+    # transformers v5 validates rope_scaling strictly and requires rope_theta inside
+    # rope_scaling for rope_type=llama3. RedHatAI/Llama-3.1-8B-Instruct's Hub config
+    # predates that requirement. Drop rope_scaling before constructing PretrainedConfig
+    # — VerifierConfig.from_config only reads architectures, not rope parameters.
+    config_dict.pop("rope_scaling", None)
+    pretrained_config = PretrainedConfig(**config_dict)
 
     config = VerifierConfig.from_config(
         pretrained_config, name_or_path="RedHatAI/Llama-3.1-8B-Instruct"
