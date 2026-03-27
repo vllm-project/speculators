@@ -3,6 +3,7 @@ Eagle checkpoint converter with loguru logging.
 """
 
 from pathlib import Path
+from typing import Any
 
 import torch
 from loguru import logger
@@ -140,28 +141,33 @@ class EagleConverter:
         :param eagle_config: Original Eagle checkpoint config
         :return: LlamaConfig for the transformer layer
         """
-        return LlamaConfig(
-            vocab_size=eagle_config.get("vocab_size", 32000),
-            hidden_size=eagle_config.get("hidden_size", 4096),
-            intermediate_size=eagle_config.get("intermediate_size", 11008),
-            num_hidden_layers=1,  # Eagle always uses a single decoder layer
-            num_attention_heads=eagle_config.get("num_attention_heads", 32),
-            num_key_value_heads=eagle_config.get("num_key_value_heads"),
-            hidden_act=eagle_config.get("hidden_act", "silu"),
-            max_position_embeddings=eagle_config.get("max_position_embeddings", 4096),
-            initializer_range=eagle_config.get("initializer_range", 0.02),
-            rms_norm_eps=eagle_config.get("rms_norm_eps", 1e-6),
-            use_cache=eagle_config.get("use_cache", True),
-            pad_token_id=eagle_config.get("pad_token_id"),
-            bos_token_id=eagle_config.get("bos_token_id", 1),
-            eos_token_id=eagle_config.get("eos_token_id", 2),
-            tie_word_embeddings=False,  # Eagle uses separate embed_tokens from verifier
-            rope_theta=eagle_config.get("rope_theta", 10000.0),
-            rope_scaling=eagle_config.get("rope_scaling"),
-            attention_bias=eagle_config.get("attention_bias", False),
-            attention_dropout=eagle_config.get("attention_dropout", 0.0),
-            mlp_bias=eagle_config.get("mlp_bias", False),
-        )
+        # Use dict unpacking (dict[str, Any]) to work around transformers v5's
+        # @strict decorator which wraps __init__ and hides LlamaConfig fields from mypy
+        llama_kwargs: dict[str, Any] = {
+            "vocab_size": eagle_config.get("vocab_size", 32000),
+            "hidden_size": eagle_config.get("hidden_size", 4096),
+            "intermediate_size": eagle_config.get("intermediate_size", 11008),
+            "num_hidden_layers": 1,  # Eagle always uses a single decoder layer
+            "num_attention_heads": eagle_config.get("num_attention_heads", 32),
+            "num_key_value_heads": eagle_config.get("num_key_value_heads"),
+            "hidden_act": eagle_config.get("hidden_act", "silu"),
+            "max_position_embeddings": eagle_config.get(
+                "max_position_embeddings", 4096
+            ),
+            "initializer_range": eagle_config.get("initializer_range", 0.02),
+            "rms_norm_eps": eagle_config.get("rms_norm_eps", 1e-6),
+            "use_cache": eagle_config.get("use_cache", True),
+            "pad_token_id": eagle_config.get("pad_token_id"),
+            "bos_token_id": eagle_config.get("bos_token_id", 1),
+            "eos_token_id": eagle_config.get("eos_token_id", 2),
+            "tie_word_embeddings": False,  # Eagle uses separate embed_tokens
+            "rope_theta": eagle_config.get("rope_theta", 10000.0),
+            "rope_scaling": eagle_config.get("rope_scaling"),
+            "attention_bias": eagle_config.get("attention_bias", False),
+            "attention_dropout": eagle_config.get("attention_dropout", 0.0),
+            "mlp_bias": eagle_config.get("mlp_bias", False),
+        }
+        return LlamaConfig(**llama_kwargs)
 
     def _build_eagle_speculator_config(
         self,

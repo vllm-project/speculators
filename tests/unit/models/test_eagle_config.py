@@ -4,6 +4,7 @@ Unit tests for the eagle model module in the Speculators library.
 
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import BaseModel, ValidationError
@@ -56,14 +57,17 @@ def sample_speculators_config(sample_token_proposal_config, sample_verifier_conf
 
 @pytest.fixture
 def sample_llama_config():
-    return LlamaConfig(
-        vocab_size=32000,
-        hidden_size=768,
-        intermediate_size=3072,
-        num_hidden_layers=12,
-        num_attention_heads=12,
-        max_position_embeddings=2048,
-    )
+    # Use dict unpacking to work around transformers v5 @strict decorator
+    # hiding LlamaConfig fields from mypy's __init__ resolution
+    llama_kwargs: dict[str, Any] = {
+        "vocab_size": 32000,
+        "hidden_size": 768,
+        "intermediate_size": 3072,
+        "num_hidden_layers": 12,
+        "num_attention_heads": 12,
+        "max_position_embeddings": 2048,
+    }
+    return LlamaConfig(**llama_kwargs)
 
 
 @pytest.fixture

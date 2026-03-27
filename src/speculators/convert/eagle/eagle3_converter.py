@@ -3,6 +3,7 @@ Eagle-3 checkpoint converter with loguru logging.
 """
 
 from pathlib import Path
+from typing import Any
 
 import torch
 from loguru import logger
@@ -141,29 +142,32 @@ class Eagle3Converter:
                 f"Failed to load config for base model {base_model}: {e}"
             ) from e
 
-        return LlamaConfig(
-            vocab_size=eagle_config.get("target_vocab_size", 128000),
-            hidden_size=eagle_config.get("hidden_size", 4096),
-            intermediate_size=eagle_config.get("intermediate_size", 11008),
-            num_hidden_layers=eagle_config.get("num_hidden_layers", 1),
-            num_attention_heads=eagle_config.get("num_attention_heads", 32),
-            num_key_value_heads=eagle_config.get("num_key_value_heads", 8),
-            hidden_act=eagle_config.get("hidden_act", "silu"),
+        # Use dict unpacking (dict[str, Any]) to work around transformers v5's
+        # @strict decorator which wraps __init__ and hides LlamaConfig fields from mypy
+        llama_kwargs: dict[str, Any] = {
+            "vocab_size": eagle_config.get("target_vocab_size", 128000),
+            "hidden_size": eagle_config.get("hidden_size", 4096),
+            "intermediate_size": eagle_config.get("intermediate_size", 11008),
+            "num_hidden_layers": eagle_config.get("num_hidden_layers", 1),
+            "num_attention_heads": eagle_config.get("num_attention_heads", 32),
+            "num_key_value_heads": eagle_config.get("num_key_value_heads", 8),
+            "hidden_act": eagle_config.get("hidden_act", "silu"),
             # Ensure max_position_embeddings match between Eagle3 and target configs
-            max_position_embeddings=max(
+            "max_position_embeddings": max(
                 eagle_config.get("max_position_embeddings", 4096),
                 target_config_dict.get("max_position_embeddings", 4096),
             ),
-            initializer_range=eagle_config.get("initializer_range", 0.02),
-            rms_norm_eps=eagle_config.get("rms_norm_eps", 1e-6),
-            use_cache=True,
-            attention_bias=eagle_config.get("attention_bias", False),
-            rope_theta=eagle_config.get("rope_theta", 10000.0),
-            mlp_bias=eagle_config.get("mlp_bias", False),
-            tie_word_embeddings=False,
-            torch_dtype=eagle_config.get("torch_dtype"),
-            head_dim=eagle_config.get("head_dim"),
-        )
+            "initializer_range": eagle_config.get("initializer_range", 0.02),
+            "rms_norm_eps": eagle_config.get("rms_norm_eps", 1e-6),
+            "use_cache": True,
+            "attention_bias": eagle_config.get("attention_bias", False),
+            "rope_theta": eagle_config.get("rope_theta", 10000.0),
+            "mlp_bias": eagle_config.get("mlp_bias", False),
+            "tie_word_embeddings": False,
+            "torch_dtype": eagle_config.get("torch_dtype"),
+            "head_dim": eagle_config.get("head_dim"),
+        }
+        return LlamaConfig(**llama_kwargs)
 
     def _save_converted_checkpoint(
         self,

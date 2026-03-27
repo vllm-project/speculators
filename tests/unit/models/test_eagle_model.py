@@ -4,6 +4,7 @@ Unit tests for the EagleSpeculator model in the Speculators library.
 
 import copy
 import tempfile
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -96,37 +97,40 @@ class MockVerifier(PreTrainedModel):
 
 @pytest.fixture
 def sample_llama_config():
-    return LlamaConfig(
-        attention_bias=False,
-        attention_dropout=0.0,
-        bos_token_id=128000,
-        eos_token_id=128001,
-        head_dim=128,
-        hidden_act="silu",
-        hidden_size=4096,
-        initializer_range=0.02,
-        intermediate_size=14336,
-        max_position_embeddings=131072,
-        mlp_bias=False,
-        num_attention_heads=32,
-        num_hidden_layers=32,
-        num_key_value_heads=8,
-        pretraining_tp=1,
-        rms_norm_eps=1e-5,  # type: ignore[arg-type] # (bad transformer's type hint, int instead of float)
-        rope_scaling={
+    # Use dict unpacking to work around transformers v5 @strict decorator
+    # hiding LlamaConfig fields from mypy's __init__ resolution
+    llama_kwargs: dict[str, Any] = {
+        "attention_bias": False,
+        "attention_dropout": 0.0,
+        "bos_token_id": 128000,
+        "eos_token_id": 128001,
+        "head_dim": 128,
+        "hidden_act": "silu",
+        "hidden_size": 4096,
+        "initializer_range": 0.02,
+        "intermediate_size": 14336,
+        "max_position_embeddings": 131072,
+        "mlp_bias": False,
+        "num_attention_heads": 32,
+        "num_hidden_layers": 32,
+        "num_key_value_heads": 8,
+        "pretraining_tp": 1,
+        "rms_norm_eps": 1e-5,
+        "rope_scaling": {
             "factor": 8.0,
             "high_freq_factor": 4.0,
             "low_freq_factor": 1.0,
             "original_max_position_embeddings": 8192,
             "rope_type": "llama3",
         },
-        rope_theta=500000.0,
-        tie_word_embeddings=False,
-        torch_dtype="float32",
-        transformers_version="4.46.0",
-        use_cache=True,
-        vocab_size=128256,
-    )
+        "rope_theta": 500000.0,
+        "tie_word_embeddings": False,
+        "torch_dtype": "float32",
+        "transformers_version": "4.46.0",
+        "use_cache": True,
+        "vocab_size": 128256,
+    }
+    return LlamaConfig(**llama_kwargs)
 
 
 # ===== Config Helper Function =====

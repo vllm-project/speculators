@@ -14,6 +14,7 @@ Covers:
 import copy
 import os
 import tempfile
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -52,19 +53,22 @@ requires_multi_gpu = pytest.mark.skipif(
 # Tiny model constants
 # ---------------------------------------------------------------------------
 
-TINY_LLAMA_CONFIG = LlamaConfig(
-    vocab_size=64,
-    hidden_size=32,
-    intermediate_size=128,
-    num_hidden_layers=2,
-    num_attention_heads=4,
-    num_key_value_heads=4,
-    head_dim=8,
-    max_position_embeddings=32,
-    rms_norm_eps=1e-6,  # type: ignore[arg-type] # (bad transformer's type hint, int instead of float)
-    tie_word_embeddings=False,
-    _attn_implementation="eager",
-)
+# Use dict unpacking to work around transformers v5 @strict decorator
+# hiding LlamaConfig fields from mypy's __init__ resolution
+_tiny_llama_kwargs: dict[str, Any] = {
+    "vocab_size": 64,
+    "hidden_size": 32,
+    "intermediate_size": 128,
+    "num_hidden_layers": 2,
+    "num_attention_heads": 4,
+    "num_key_value_heads": 4,
+    "head_dim": 8,
+    "max_position_embeddings": 32,
+    "rms_norm_eps": 1e-6,
+    "tie_word_embeddings": False,
+    "_attn_implementation": "eager",
+}
+TINY_LLAMA_CONFIG = LlamaConfig(**_tiny_llama_kwargs)
 
 
 # ---------------------------------------------------------------------------
