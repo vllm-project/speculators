@@ -283,9 +283,12 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
         # Pydantic's BaseModel.validate() classmethod shadows it in our MRO,
         # causing save_pretrained() to fail with a TypeError on self.validate().
         # Delegate explicitly to PretrainedConfig so validators run correctly.
+        # Guard: transformers < 5.x (e.g. 4.57.x) does not add validate() to
+        # PretrainedConfig — skip delegation there to avoid AttributeError.
         # [override]: intentional signature change from BaseModel.validate classmethod
         # [attr-defined]: @strict adds validate() to PretrainedConfig dynamically
-        PretrainedConfig.validate(self)  # type: ignore[attr-defined]
+        if hasattr(PretrainedConfig, "validate"):
+            PretrainedConfig.validate(self)  # type: ignore[attr-defined]
 
     def __init__(self, **kwargs):
         # initialize the Pydantic arguments first to set all valid fields
