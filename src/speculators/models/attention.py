@@ -7,7 +7,7 @@ speculator architectures (EAGLE3, DFlash, etc.) to avoid code duplication.
 from typing import cast
 
 import torch
-from torch.nn.attention.flex_attention import flex_attention
+from torch.nn.attention.flex_attention import BlockMask, flex_attention
 from transformers.modeling_utils import AttentionInterface
 
 
@@ -58,6 +58,20 @@ def flex_attention_forward(
     attention_output: torch.Tensor = cast("torch.Tensor", flex_attention_output)
     attention_output = attention_output.transpose(1, 2).contiguous()
     return attention_output, None
+
+def block_mask_to_dense_attention_mask(
+    block_mask: BlockMask, device: torch.device, dtype: torch.dtype
+):
+    attention_mask = torch.ones(block_mask.shape, device=device, dtype=dtype)
+
+    for q_idx in range(attention_mask.shape[2]):
+        attention_mask[0, 0, q_idx, :] = block_mask.mask_mod(
+            torch.zeros(1, device=device, dtype=torch.long),
+            torch.zeros(1, device=device, dtype=torch.long),
+            torch.ones(1, device=device, dtype=torch.long) * q_idx,
+            torch.arange(attention_mask.shape[3], device=device, dtype=torch.long),
+        )
+    return attention_mask
 
 
 # Singleton registry for attention functions (shared across all models)

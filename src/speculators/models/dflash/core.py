@@ -568,7 +568,7 @@ class DFlashDraftModel(SpeculatorModel):
             eps=config.transformer_layer_config.rms_norm_eps,
         )
         self.block_size = config.block_size
-        # self.post_init()
+        self.post_init()
 
     @classmethod
     def from_training_args(
@@ -707,7 +707,7 @@ class DFlashDraftModel(SpeculatorModel):
             tokenizer.add_special_tokens({"mask_token": "<|MASK|>"})
         self.mask_token_id = tokenizer.mask_token_id
 
-    # @torch.compile  # Temporarily disabled - compilation hangs
+    @torch.compile
     def forward(
         self,
         # shape: [1, total_seq_len, 5 * hidden_size]
@@ -732,18 +732,11 @@ class DFlashDraftModel(SpeculatorModel):
                 total_seq_len, dtype=torch.long, device=device
             ).unsqueeze(0)
 
-        # past_key_values = DynamicCache(
-        #     config=self.config.transformer_layer_config
-        # )
         past_key_values = None
         assert loss_mask is not None  # noqa: S101
         anchor_positions, anchor_valid = _select_anchors(
             loss_mask, self.config.max_anchors, self.block_size
         )
-
-        # combined_mask_mod = create_combined_mask_mod(
-        #     lengths.to(device), total_seq_len, block_size=8, padding=padding
-        # )
 
         mask_mod, q_len, kv_len = create_anchor_block_mask_mod(
             lengths=lengths.to(device),
@@ -770,7 +763,6 @@ class DFlashDraftModel(SpeculatorModel):
             device=device,
         )
         mask_token_ids[:, :: self.block_size] = input_ids[:, anchor_positions[0]]
-        # print(mask_token_ids)
         noise_embedding = self.embed_tokens(mask_token_ids)
         fc_output = self.fc(hidden_states)
 
@@ -782,11 +774,6 @@ class DFlashDraftModel(SpeculatorModel):
         position_embeddings = self.rotary_emb(hidden_states, position_ids)
         return_loss = verifier_last_hidden_states is not None
         if return_loss:
-            # with torch.no_grad():
-            #     targets = self.verifier_lm_head(
-            #         verifier_last_hidden_states
-            #     ).detach()
-            # targets=input_ids
             targets = gather_anchor_spans(
                 input_ids.clone(), anchor_positions, self.block_size
             ).unsqueeze(0)
