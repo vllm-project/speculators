@@ -276,13 +276,13 @@ The scripts has the following optional arguments:
 
 For distributed training, use `torchrun` with the following parameters:
 
-- `--nproc_per_node`: Number of processes per node. Defaults to 8.
-- `--nnodes`: Number of nodes to use for distributed training. Defaults to 1.
-- `--node_rank`: Rank of the current node. Defaults to 0.
-- `--master_addr`: Address of the master node. Defaults to localhost.
-- `--master_port`: Port of the master node. Defaults to 12345.
+- `--nproc_per_node`: Number of processes per node.
+- `--nnodes`: Number of nodes to use for distributed training.
+- `--node_rank`: Rank of the current node.
+- `--master_addr`: Address of the master node.
+- `--master_port`: Port of the master node.
 
-These parameters are passed to `torchrun` before the script name, not as script arguments.
+These parameters are passed to `torchrun` before the script.
 
 ### Example Command
 
