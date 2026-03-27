@@ -25,6 +25,8 @@ OUTPUT_DIR=""
 TEMPERATURE=""
 TOP_P=""
 TOP_K=""
+TOKENIZER_MODE=""
+NO_CHUNKED_PREFILL=""
 
 # ==============================================================================
 # Helper Functions
@@ -35,20 +37,22 @@ show_usage() {
 Usage: $0 [OPTIONS]
 
 Required (use one):
-  -c, --config FILE                    Config file (e.g., configs/llama-eagle3.env)
-  -b BASE_MODEL -s SPECULATOR_MODEL    Base model, speculator, and dataset via command line
-     -d DATASET
+  -c, --config FILE    Config file (e.g., configs/llama-eagle3.env)
+  -b BASE_MODEL        Base model path or HuggingFace ID
+     -d DATASET        Dataset for benchmarking
 
 Optional:
-  -o OUTPUT_DIR                        Output directory (default: eval_results_TIMESTAMP)
-  -h, --help                           Show this help message
+  -s SPECULATOR_MODEL  Speculator model (omit for built-in MTP heads)
+  -o OUTPUT_DIR        Output directory (default: eval_results_TIMESTAMP)
+  -h, --help           Show this help message
 
 Examples:
-  $0 -c configs/llama-3.3-70b-eagle3.env                      # Use config file
+  $0 -c configs/llama-3.3-70b-eagle3.env              # EAGLE3 via config file
+  $0 -c configs/qwen3-next-80b-mtp.env                 # MTP via config file
   $0 -b "RedHatAI/Llama-3.3-70B-Instruct-FP8-dynamic" \\
      -s "RedHatAI/Llama-3.3-70B-Instruct-speculator.eagle3" \\
-     -d "emulated"                                             # Use command line
-  $0 -c configs/llama-eagle3.env -d "different-dataset"       # Override dataset
+     -d "emulated"                                     # EAGLE3 via command line
+  $0 -c configs/llama-eagle3.env -d "other.jsonl"     # Override dataset
 EOF
 }
 
@@ -171,12 +175,6 @@ if [[ -z "${BASE_MODEL}" ]]; then
     exit 1
 fi
 
-if [[ -z "${SPECULATOR_MODEL}" ]]; then
-    echo "[ERROR] SPECULATOR_MODEL is required (set in config file or via -s)" >&2
-    show_usage
-    exit 1
-fi
-
 if [[ -z "${DATASET}" ]]; then
     echo "[ERROR] DATASET is required (set in config file or via -d)" >&2
     show_usage
@@ -214,18 +212,23 @@ ACCEPTANCE_RESULTS="${OUTPUT_DIR}/acceptance_analysis.txt"
 
 echo "[INFO] Starting vLLM server..."
 
-"${SCRIPT_DIR}/scripts/vllm_serve.sh" \
-    -b "${BASE_MODEL}" \
-    -s "${SPECULATOR_MODEL}" \
-    --num-spec-tokens "${NUM_SPEC_TOKENS}" \
-    --method "${METHOD}" \
-    --tensor-parallel-size "${TENSOR_PARALLEL_SIZE}" \
-    --max-model-len "${MAX_MODEL_LEN}" \
-    --gpu-memory-utilization "${GPU_MEMORY_UTILIZATION}" \
-    --port "${PORT}" \
-    --health-check-timeout "${HEALTH_CHECK_TIMEOUT}" \
-    --log-file "${SERVER_LOG}" \
+SERVE_ARGS=(
+    -b "${BASE_MODEL}"
+    --num-spec-tokens "${NUM_SPEC_TOKENS}"
+    --method "${METHOD}"
+    --tensor-parallel-size "${TENSOR_PARALLEL_SIZE}"
+    --max-model-len "${MAX_MODEL_LEN}"
+    --gpu-memory-utilization "${GPU_MEMORY_UTILIZATION}"
+    --port "${PORT}"
+    --health-check-timeout "${HEALTH_CHECK_TIMEOUT}"
+    --log-file "${SERVER_LOG}"
     --pid-file "${SERVER_PID}"
+)
+[[ -n "${SPECULATOR_MODEL}" ]] && SERVE_ARGS+=(-s "${SPECULATOR_MODEL}")
+[[ -n "${TOKENIZER_MODE}" ]] && SERVE_ARGS+=(--tokenizer-mode "${TOKENIZER_MODE}")
+[[ "${NO_CHUNKED_PREFILL}" == "true" ]] && SERVE_ARGS+=(--no-enable-chunked-prefill)
+
+"${SCRIPT_DIR}/scripts/vllm_serve.sh" "${SERVE_ARGS[@]}"
 
 # ==============================================================================
 # Run GuideLLM Benchmark
