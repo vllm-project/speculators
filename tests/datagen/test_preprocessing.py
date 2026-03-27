@@ -9,7 +9,7 @@ import torch
 from datasets import Dataset as HFDataset
 from transformers import AutoTokenizer
 
-import speculators.data_generation.preprocessing as preprocessing
+from speculators.data_generation import preprocessing
 from speculators.data_generation.preprocessing import (
     _create_loss_mask_from_offsets,
     _detect_assistant_pattern_from_template,
@@ -105,7 +105,11 @@ def test_load_and_preprocess_dataset_defaults_to_text_mode(monkeypatch):
     dummy_tokenizer = DummyTokenizer()
     captured: dict[str, object] = {}
 
-    monkeypatch.setattr(preprocessing, "load_raw_dataset", lambda *args, **kwargs: raw_dataset)
+    monkeypatch.setattr(
+        preprocessing,
+        "load_raw_dataset",
+        lambda *args, **kwargs: raw_dataset,
+    )
     monkeypatch.setattr(
         preprocessing.AutoTokenizer,
         "from_pretrained",
@@ -114,14 +118,20 @@ def test_load_and_preprocess_dataset_defaults_to_text_mode(monkeypatch):
     monkeypatch.setattr(
         preprocessing,
         "build_eagle3_dataset",
-        lambda *args, **kwargs: captured.setdefault("processor", kwargs.get("processor")) or raw_dataset,
+        lambda *args, **kwargs: (
+            captured.setdefault("processor", kwargs.get("processor")) or raw_dataset
+        ),
     )
     monkeypatch.setattr(
         preprocessing,
         "save_token_frequency_distribution",
         lambda *args, **kwargs: None,
     )
-    monkeypatch.setattr(preprocessing, "_visualize_sample", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        preprocessing,
+        "_visualize_sample",
+        lambda *args, **kwargs: None,
+    )
 
     dataset, tokenizer = preprocessing.load_and_preprocess_dataset(
         target_model_path="dummy-model",
@@ -682,7 +692,7 @@ def test_detect_assistant_pattern_thinking_model():
     contains substantial content.
     """
     tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-8B", trust_remote_code=True)
-    pattern = _detect_assistant_pattern(tokenizer)
+    pattern = _detect_assistant_pattern_from_template(tokenizer)
 
     # Format a multi-turn conversation with thinking content injected
     # directly into the formatted string (as it would appear in real data)
@@ -742,7 +752,7 @@ def test_create_loss_mask_thinking_model(thinking_content):
     <think> block.
     """
     tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-8B", trust_remote_code=True)
-    pattern = _detect_assistant_pattern(tokenizer)
+    pattern = _detect_assistant_pattern_from_template(tokenizer)
 
     # Build formatted text using the real chat template
     conv = [

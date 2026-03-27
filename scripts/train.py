@@ -271,6 +271,7 @@ def main(args: argparse.Namespace):
             on_missing=args.on_missing,
             on_generate=args.on_generate,
             transform=noise_transform,
+            hidden_states_dtype=hidden_states_dtype,
             split_ratio=0.9,
             model=args.verifier_name_or_path,
         )
@@ -281,6 +282,7 @@ def main(args: argparse.Namespace):
             vllm_endpoint=args.vllm_endpoint,
             on_missing=args.on_missing,
             on_generate=args.on_generate,
+            hidden_states_dtype=hidden_states_dtype,
             split_ratio=-0.1,
             model=args.verifier_name_or_path,
         )

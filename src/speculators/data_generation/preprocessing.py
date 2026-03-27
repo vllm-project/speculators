@@ -1,15 +1,15 @@
 import bisect
 import random
 import re
-from pathlib import Path
 from functools import partial
+from pathlib import Path
 from re import Pattern
 from typing import Any, cast
 
 import torch
 from datasets import Dataset as HFDataset
 from datasets import concatenate_datasets, load_dataset
-from transformers import AutoProcessor, AutoTokenizer, PreTrainedTokenizerBase
+from transformers import AutoProcessor, AutoTokenizer, PreTrainedTokenizer
 
 from speculators.data_generation.configs import DATASET_CONFIGS
 from speculators.data_generation.logging_utils import PipelineLogger
@@ -151,7 +151,6 @@ def _extract_multimodal_data_from_conversation(
             if image_ref is not None:
                 mm_data.setdefault("image", []).append(image_ref)
     return mm_data
-
 
 
 def _normalize_conversation(
@@ -355,7 +354,7 @@ def _create_loss_mask_from_offsets(
 
 def _preprocess_batch_text(  # noqa: PLR0912, PLR0915
     examples: dict,
-    tokenizer: PreTrainedTokenizerBase,
+    tokenizer: PreTrainedTokenizer,
     max_length: int,
     assistant_pattern: str | Pattern[str] | None,
     turn_dropout: bool = False,
@@ -574,7 +573,7 @@ def _preprocess_batch_multimodal(  # noqa: PLR0912, PLR0915
 
 def build_eagle3_dataset(
     dataset: HFDataset,
-    tokenizer: PreTrainedTokenizerBase,
+    tokenizer: PreTrainedTokenizer,
     max_length: int = 2048,
     num_proc: int = 8,
     assistant_pattern: str | Pattern[str] | None = None,
