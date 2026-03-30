@@ -17,11 +17,10 @@ from vllm.config import (
 from vllm.sampling_params import SamplingParams
 from vllm.utils.hashing import get_hash_fn_by_name
 from vllm.v1.core.kv_cache_utils import (
-    _get_kv_cache_groups_uniform_spec,
-    get_kv_cache_config_from_groups,
+    generate_scheduler_kv_cache_config,
+    get_kv_cache_configs,
     get_request_block_hasher,
     init_none_hash,
-    unify_hybrid_kv_cache_specs,
 )
 from vllm.v1.core.sched.scheduler import Scheduler
 from vllm.v1.executor.multiproc_executor import MultiprocExecutor
@@ -142,20 +141,13 @@ class VllmHiddenStatesGenerator:
 
         log.info("Creating scheduler...")
         kv_cache_spec_list = self.executor.collective_rpc("get_kv_cache_spec")
-        kv_cache_spec = kv_cache_spec_list[0]
-        # Normalize hybrid KV cache specs for models with non-uniform attention
-        # (e.g., GPT-OSS with sliding/full attention layers)
-        unify_hybrid_kv_cache_specs(kv_cache_spec)
-        kv_cache_groups = _get_kv_cache_groups_uniform_spec(kv_cache_spec)
-
         free_memory, _ = mem_get_info()
         cache_memory = int(free_memory * gpu_memory_utilization * CACHE_MEMORY_FRACTION)
-
-        kv_cache_config = get_kv_cache_config_from_groups(
-            vllm_config=self.vllm_config,
-            kv_cache_groups=kv_cache_groups,
-            available_memory=cache_memory,
+        available_memory = [cache_memory] * len(kv_cache_spec_list)
+        kv_cache_configs = get_kv_cache_configs(
+            self.vllm_config, kv_cache_spec_list, available_memory
         )
+        kv_cache_config = generate_scheduler_kv_cache_config(kv_cache_configs)
 
         self.vllm_config.cache_config.num_gpu_blocks = kv_cache_config.num_blocks
         structured_output_manager = StructuredOutputManager(
@@ -170,7 +162,6 @@ class VllmHiddenStatesGenerator:
         )
 
         log.info("Initializing KV cache on all workers...")
-        kv_cache_configs = [kv_cache_config] * tensor_parallel_size
         self.executor.initialize_from_config(kv_cache_configs)
 
         # Create block hasher for request KV cache management
@@ -195,7 +186,7 @@ class VllmHiddenStatesGenerator:
     ) -> VllmConfig:
         """Create VllmConfig with hidden states worker extension"""
         cache_config = CacheConfig(
-            block_size=VLLM_BLOCK_SIZE,
+            block_size=VLLM_BLOCK_SIZE,  # type: ignore[arg-type]
             gpu_memory_utilization=gpu_memory_utilization,
             # disable to prevent cache state leakage
             enable_prefix_caching=False,
@@ -239,7 +230,7 @@ class VllmHiddenStatesGenerator:
             args=(self.layer_ids,),
         )
 
-    def generate(self, token_ids: list[list[int]] | torch.Tensor) -> list[dict]:  # noqa: PLR0912, PLR0915
+    def generate(self, token_ids: list[list[int]] | torch.Tensor) -> list[dict]:
         """Extract hidden states from prefill phase only.
 
         Args:
@@ -261,12 +252,23 @@ class VllmHiddenStatesGenerator:
         max_len = self.vllm_config.model_config.max_model_len - MAX_DECODE_TOKENS
         input_ids_list = [ids[:max_len] for ids in input_ids_list]
 
-        # Track request IDs and prompt lengths for proper token attribution
-        request_id_to_idx = {}
-        request_id_to_prompt_len = {}
+        # Process in chunks: the scheduler can only run MAX_NUM_SEQS requests
+        # concurrently. Once a batch finishes its single decode step, finished
+        # requests still occupy slots until explicitly aborted, preventing new
+        # requests from being admitted. Processing in chunks and aborting after
+        # each chunk avoids this starvation.
+        results = []
+        for chunk_start in range(0, len(input_ids_list), MAX_NUM_SEQS):
+            chunk = input_ids_list[chunk_start : chunk_start + MAX_NUM_SEQS]
+            results.extend(self._generate_chunk(chunk))
+        return results
+
+    def _generate_chunk(self, input_ids_list: list[list[int]]) -> list[dict]:  # noqa: PLR0912, PLR0915
+        """Process one chunk (≤ MAX_NUM_SEQS) through the scheduling loop."""
+        request_id_to_idx: dict[str, int] = {}
+        request_id_to_prompt_len: dict[str, int] = {}
 
         for i, ids in enumerate(input_ids_list):
-            # Ensure ids is a list (not tensor) for vLLM Request
             ids_list = ids.tolist() if isinstance(ids, torch.Tensor) else ids
             req_id = f"req_{self._request_counter}_{i}"
             request_id_to_idx[req_id] = i
@@ -292,14 +294,11 @@ class VllmHiddenStatesGenerator:
 
         # Track progress for each request to distinguish prefill from decode
         request_num_computed = dict.fromkeys(request_id_to_idx, 0)
-        schedule_iterations = 0
         all_prefill_complete = False
 
         while (
             scheduler_output := self.scheduler.schedule()
         ).total_num_scheduled_tokens > 0 and not all_prefill_complete:
-            schedule_iterations += 1
-
             # Calculate prefill tokens for each request (ignore decode tokens)
             prefill_metadata = {}
             for req_id, num_tokens in scheduler_output.num_scheduled_tokens.items():
@@ -323,7 +322,7 @@ class VllmHiddenStatesGenerator:
                 )
 
             model_output = self.executor.execute_model(scheduler_output)
-            self.executor.sample_tokens(model_output)
+            self.executor.sample_tokens(model_output)  # type: ignore[arg-type]
 
         # Abort all requests (prefill complete, don't need decode)
         self.scheduler.finish_requests(
@@ -343,7 +342,9 @@ class VllmHiddenStatesGenerator:
 
         # Map results back to original input order
         results = []
-        for req_id in sorted(request_id_to_idx.keys()):
+        for req_id in sorted(
+            request_id_to_idx.keys(), key=lambda r: request_id_to_idx[r]
+        ):
             i = request_id_to_idx[req_id]
 
             if req_id not in request_states_dict:
@@ -352,7 +353,7 @@ class VllmHiddenStatesGenerator:
                     f"Available: {list(request_states_dict.keys())}"
                 )
 
-            layer_states = [h.clone().cpu() for h in request_states_dict[req_id]]
+            layer_states = [h.cpu() for h in request_states_dict[req_id]]
             input_ids_tensor = torch.as_tensor(input_ids_list[i], dtype=torch.long)
 
             results.append(
@@ -366,9 +367,29 @@ class VllmHiddenStatesGenerator:
         empty_cache()
         return results
 
-    def __del__(self):
-        if hasattr(self, "executor"):
+    def __enter__(self) -> "VllmHiddenStatesGenerator":
+        """Support use as a context manager for guaranteed cleanup."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Shut down the executor on context manager exit."""
+        self._cleanup()
+
+    def _cleanup(self) -> None:
+        """Shut down the vLLM executor and release GPU resources."""
+        executor = getattr(self, "executor", None)
+        if executor is not None:
+            self.executor = None  # type: ignore[assignment]  # Guard against double-cleanup
             try:
-                self.executor.shutdown()
+                executor.shutdown()
             except Exception:
-                log.warning("Exception during executor shutdown")
+                # Use the underlying stdlib logger so exc_info is supported
+                # (PipelineLogger.warning accepts only a plain message string).
+                log.logger.warning("Exception during executor shutdown", exc_info=True)
+
+    def __del__(self) -> None:
+        """Fallback cleanup when the object is garbage collected."""
+        try:
+            self._cleanup()
+        except Exception:  # noqa: BLE001
+            pass  # suppress all exceptions in __del__ to avoid interpreter warnings
