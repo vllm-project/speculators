@@ -1,22 +1,21 @@
 """Stitch finetuned FastMTP weights back into the Qwen3-Next verifier.
 
 After finetuning, the trained MTP head weights live in a speculators checkpoint.
-This script extracts those weights, re-keys them back to the original Qwen3-Next
-``mtp.*`` key namespace (the inverse of what convert_checkpoint.py does), and
-writes a new model directory that vLLM can load directly.
+This script extracts those weights and writes a new model directory that vLLM
+can load directly.
 
 The output directory contains:
   - Full copies of all original verifier safetensors shards
   - A new shard ``mtp_finetuned.safetensors`` with the updated MTP head weights
-    stored under the original ``mtp.*`` key names that vLLM expects
-  - An updated ``model.safetensors.index.json`` that routes ``mtp.*`` keys to
+  - An updated ``model.safetensors.index.json`` routing ``mtp.*`` keys to
     the new shard (replacing the original shard's entries)
-  - The verifier config.json (unchanged)
+  - The verifier ``config.json`` (unchanged)
 
-Key remapping is handled by :mod:`speculators.models.fast_mtp.checkpoint`.
-Because the four :class:`FastMTPLayerMixin` attributes are named to match
-Qwen3-Next originals exactly, no explicit rename dict is required — the namespace
-is determined by frozenset membership alone.
+No key renaming is needed: the ``MTPBlock`` module layout produces ``mtp.*``
+keys that already match vLLM's expected format.  The only transformation is
+filtering out the frozen verifier weights (``embed_tokens.weight``,
+``lm_head.weight``) that are present in training checkpoints but already
+covered by the verifier shards.
 
 Usage:
     python examples/fast_mtp/stitch_weights.py \\
@@ -24,10 +23,8 @@ Usage:
         --verifier /path/to/Qwen3-Next-80B-A3B-Instruct \\
         --output-dir output/stitched_model
 
-Note: if the output directory already exists, existing files are skipped (the script
-is idempotent). Use ``--overwrite`` to force replacement of existing files.
-
-vLLM loads the full model from the output directory using the combined index.
+Note: existing files are skipped by default (idempotent). Use ``--overwrite``
+to force replacement.
 """
 
 import argparse
@@ -36,7 +33,7 @@ from pathlib import Path
 
 from safetensors.torch import load_file, save_file
 
-from speculators.models.fast_mtp.checkpoint import remap_keys, update_weight_index
+from speculators.models.fast_mtp.checkpoint import filter_mtp_keys, update_weight_index
 
 
 def parse_args() -> argparse.Namespace:
@@ -87,26 +84,22 @@ def main() -> None:
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Load finetuned speculator weights
     print(f"Loading finetuned checkpoint: {checkpoint_path}")
     state_dict = load_file(str(checkpoint_path))
     print(f"  Keys in checkpoint: {len(state_dict)}")
 
-    # Remap keys to Qwen3-Next namespace
-    remapped = remap_keys(state_dict)
-    print(f"  MTP keys after remapping: {len(remapped)}")
+    mtp_weights = filter_mtp_keys(state_dict)
+    print(f"  MTP keys (verifier weights excluded): {len(mtp_weights)}")
     preview = 5
-    for k in sorted(remapped)[:preview]:
+    for k in sorted(mtp_weights)[:preview]:
         print(f"    {k}")
-    if len(remapped) > preview:
-        print(f"    ... and {len(remapped) - preview} more")
+    if len(mtp_weights) > preview:
+        print(f"    ... and {len(mtp_weights) - preview} more")
 
-    # Save MTP shard
     mtp_shard_path = output_dir / args.shard_name
     print(f"Saving MTP shard: {mtp_shard_path}")
-    save_file(remapped, str(mtp_shard_path))
+    save_file(mtp_weights, str(mtp_shard_path))
 
-    # Copy all original verifier files into output directory
     print(f"Copying verifier files from {verifier_dir}")
     for src in sorted(verifier_dir.iterdir()):
         dst = output_dir / src.name
@@ -119,14 +112,11 @@ def main() -> None:
         shutil.copy2(src, dst)
         print(f"  Copied: {src.name}")
 
-    # Update the weight index to route mtp.* keys to the new shard.
-    # Raises FileNotFoundError if the verifier has no model.safetensors.index.json
-    # (single-shard models are not supported).
     print("Updating model.safetensors.index.json")
     update_weight_index(
         verifier_dir=verifier_dir,
         output_dir=output_dir,
-        mtp_keys=list(remapped.keys()),
+        mtp_keys=list(mtp_weights.keys()),
         new_shard_name=args.shard_name,
     )
 

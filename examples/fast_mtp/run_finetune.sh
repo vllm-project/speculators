@@ -28,7 +28,7 @@ mkdir -p local/logs
 CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun \
     --standalone \
     --nproc_per_node="${NUM_GPUS}" \
-    examples/fast_mtp/04_finetune.py \
+    examples/fast_mtp/finetune.py \
     --speculator-path "${SPECULATOR_PATH}" \
     --data-dir "${DATA_DIR}" \
     --output-dir "${OUTPUT_DIR}" \

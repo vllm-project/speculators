@@ -141,6 +141,7 @@ def make_fast_mtp_dataloader(
     data_dir: str | Path,
     max_len: int,
     batch_size: int,
+    hidden_size: int,
     train_ratio: float = 0.9,
     hidden_states_dtype: torch.dtype = torch.bfloat16,
     seed: int = 0,
@@ -150,6 +151,8 @@ def make_fast_mtp_dataloader(
     :param data_dir: Directory containing ``data_*.pt`` files.
     :param max_len: Collation target length; sequences are sliced/padded here.
     :param batch_size: Number of samples per batch.
+    :param hidden_size: Hidden state dimension; used to construct empty fallback
+        samples when an entire batch is filtered out.
     :param train_ratio: Fraction of files used for training (rest = validation).
     :param hidden_states_dtype: dtype for hidden states tensors.
     :param seed: Random seed for the train/val shuffle split.
@@ -160,7 +163,7 @@ def make_fast_mtp_dataloader(
     random.shuffle(all_files)
     split = int(len(all_files) * train_ratio)
     train_files, val_files = all_files[:split], all_files[split:]
-    collate_fn = create_collate_fn(max_len)
+    collate_fn = create_collate_fn(max_len, hidden_size)
 
     def _make_loader(files: list, shuffle: bool) -> DataLoader:
         ds = FastMTPSampleFileDataset(

@@ -165,7 +165,7 @@ def _write_samples(data_dir: Path, n: int, seq_len: int = 10) -> None:
 def test_make_dataloader_returns_two_loaders(tmp_path: Path) -> None:
     _write_samples(tmp_path, n=10)
     train_loader, val_loader = make_fast_mtp_dataloader(
-        data_dir=tmp_path, max_len=64, batch_size=2, seed=42
+        data_dir=tmp_path, max_len=64, batch_size=2, hidden_size=16, seed=42
     )
     assert train_loader is not None
     assert val_loader is not None
@@ -174,7 +174,12 @@ def test_make_dataloader_returns_two_loaders(tmp_path: Path) -> None:
 def test_make_dataloader_train_val_split(tmp_path: Path) -> None:
     _write_samples(tmp_path, n=10)
     train_loader, val_loader = make_fast_mtp_dataloader(
-        data_dir=tmp_path, max_len=64, batch_size=1, train_ratio=0.8, seed=0
+        data_dir=tmp_path,
+        max_len=64,
+        batch_size=1,
+        hidden_size=16,
+        train_ratio=0.8,
+        seed=0,
     )
     assert len(train_loader.dataset) == 8  # type: ignore[arg-type]
     assert len(val_loader.dataset) == 2  # type: ignore[arg-type]
@@ -183,10 +188,10 @@ def test_make_dataloader_train_val_split(tmp_path: Path) -> None:
 def test_make_dataloader_seed_reproducible(tmp_path: Path) -> None:
     _write_samples(tmp_path, n=10)
     loader_a, _ = make_fast_mtp_dataloader(
-        data_dir=tmp_path, max_len=64, batch_size=1, seed=42
+        data_dir=tmp_path, max_len=64, batch_size=1, hidden_size=16, seed=42
     )
     loader_b, _ = make_fast_mtp_dataloader(
-        data_dir=tmp_path, max_len=64, batch_size=1, seed=42
+        data_dir=tmp_path, max_len=64, batch_size=1, hidden_size=16, seed=42
     )
     files_a = loader_a.dataset.file_paths  # type: ignore[attr-defined]
     files_b = loader_b.dataset.file_paths  # type: ignore[attr-defined]
@@ -196,10 +201,10 @@ def test_make_dataloader_seed_reproducible(tmp_path: Path) -> None:
 def test_make_dataloader_different_seeds_differ(tmp_path: Path) -> None:
     _write_samples(tmp_path, n=20)
     loader_a, _ = make_fast_mtp_dataloader(
-        data_dir=tmp_path, max_len=64, batch_size=1, seed=0
+        data_dir=tmp_path, max_len=64, batch_size=1, hidden_size=16, seed=0
     )
     loader_b, _ = make_fast_mtp_dataloader(
-        data_dir=tmp_path, max_len=64, batch_size=1, seed=99
+        data_dir=tmp_path, max_len=64, batch_size=1, hidden_size=16, seed=99
     )
     files_a = loader_a.dataset.file_paths  # type: ignore[attr-defined]
     files_b = loader_b.dataset.file_paths  # type: ignore[attr-defined]

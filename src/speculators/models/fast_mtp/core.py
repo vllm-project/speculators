@@ -10,7 +10,10 @@ from transformers import PretrainedConfig
 from speculators import SpeculatorModel
 from speculators.config import SpeculatorsConfig, VerifierConfig
 from speculators.models.fast_mtp.config import FastMTPConfig
-from speculators.models.fast_mtp.model_definitions import fast_mtp_model_classes
+from speculators.models.fast_mtp.model_definitions import (
+    MTPBlock,
+    fast_mtp_model_classes,
+)
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 from speculators.utils.loading import load_model_layers
 
@@ -24,8 +27,7 @@ _MTP_STEP_DECAY_BETA: float = 0.6
 _DEFAULT_STEP_WEIGHTS: tuple[float, ...] = (0.51, 0.31, 0.18)
 
 # Forward returns (logits_list, loss, metrics). Loss is always a scalar tensor
-# (never None — the model always computes loss during training). Metrics values
-# are tensors so the Trainer can call .item() on them uniformly.
+# (never None). Metrics values are tensors so the Trainer can call .item() uniformly.
 ForwardOutput: TypeAlias = tuple[
     list[torch.Tensor], torch.Tensor, dict[str, torch.Tensor]
 ]
@@ -33,21 +35,25 @@ ForwardOutput: TypeAlias = tuple[
 
 @SpeculatorModel.register("mtp")
 class FastMTPSpeculator(SpeculatorModel):
-    """FastMTP speculator model for multi-token prediction.
+    """FastMTP speculator for multi-token prediction.
 
     FastMTP predicts multiple future tokens (default: 3) per forward pass using
-    a single shared MTP layer applied recursively with weighted multi-step loss.
+    a single shared ``MTPBlock`` applied recursively with weighted multi-step loss.
 
-    The single MTP layer is applied K times with different token embeddings and
-    the recursively updated hidden state. This matches the paper's design and keeps
+    The block is applied K times with different token embeddings and the
+    recursively updated hidden state.  This matches the paper's design and keeps
     parameter count low while remaining compatible with vLLM (which reads
     ``num_nextn_predict_layers=1``).
 
-    embed_tokens and lm_head are always initialized with random weights in __init__.
-    When speculators_config.verifier.name_or_path is set, _setup_embeddings_and_lm_head
-    overwrites them with weights from the verifier checkpoint. When loading a
-    self-contained checkpoint (embed_tokens + lm_head weights present in the file),
-    from_pretrained fills them directly.
+    State-dict keys use the ``mtp.*`` namespace, matching the Qwen3-Next
+    checkpoint layout and vLLM's expected format — no remapping is required
+    between training, conversion, and inference.
+
+    ``embed_tokens`` and ``lm_head`` are always initialised with random weights
+    in ``__init__``.  When ``speculators_config.verifier.name_or_path`` is set,
+    ``_setup_embeddings_and_lm_head`` overwrites them with verifier weights.
+    When loading a self-contained checkpoint (embed_tokens + lm_head weights
+    present in the file), ``from_pretrained`` fills them directly.
     """
 
     config_class: ClassVar[type[FastMTPConfig]] = FastMTPConfig  # type: ignore[misc]
@@ -56,11 +62,10 @@ class FastMTPSpeculator(SpeculatorModel):
         super().__init__(config=config)
         transformer_config = config.transformer_layer_config
         self._model_definitions = fast_mtp_model_classes[transformer_config.model_type]
-        # mtp_layers is a single-element ModuleList so state-dict keys are
-        # "mtp_layers.0.*" — the format checkpoint.py maps FROM when stitching.
-        # Renaming to a singular attribute would silently change the key format.
-        self.mtp_layers = nn.ModuleList(
-            [self._model_definitions.first_layer_class(transformer_config, layer_idx=0)]
+        self.mtp = MTPBlock(
+            layer_class=self._model_definitions.first_layer_class,
+            norm_class=self._model_definitions.norm_class,
+            config=transformer_config,
         )
         self.rotary_emb = self._model_definitions.rotary_emb_class(transformer_config)
         self.embed_tokens = nn.Embedding(
@@ -73,8 +78,8 @@ class FastMTPSpeculator(SpeculatorModel):
 
     @property
     def layers(self) -> nn.ModuleList:
-        """Alias for mtp_layers — required by FSDP wrapping infrastructure."""
-        return self.mtp_layers
+        """Alias for mtp.layers — required by FSDP wrapping infrastructure."""
+        return self.mtp.layers
 
     def _setup_embeddings_and_lm_head(self) -> None:
         """Overwrite embed_tokens and lm_head from the verifier if configured."""
@@ -110,38 +115,32 @@ class FastMTPSpeculator(SpeculatorModel):
         lengths: torch.Tensor | None = None,  # noqa: ARG002 — collation metadata
         **_kwargs: Any,
     ) -> ForwardOutput:
-        """Forward pass for FastMTP multi-token prediction (teacher-forced).
+        """Teacher-forced multi-token prediction forward pass.
 
         Returns a 3-tuple ``(logits_list, loss, metrics)`` compatible with the
-        speculators ``Trainer`` (which unpacks ``_draft_tokens, loss, metrics``).
+        speculators ``Trainer``.
 
-        At step k, position t: uses ``embed(input_ids[t+k])`` (= embed of token
-        t+k+1 in the original sequence, since the dataset shift makes
-        ``input_ids[i] = x_{i+1}``) as the token embedding input, and the MTP output
-        from step k-1 (or verifier hidden states for step 0) as the hidden state.
-        Hidden states are passed recursively: each step's MTP output feeds the next.
-        Target at step k, position t: ``labels[t+k+1]`` = token t+k+2.
-        This matches the reference (Tencent-BAC/FastMTP): roll input_ids and labels
-        by k+1 positions, predict k+2 tokens ahead at each position.
+        At step k, position t:
+        - Token embedding: ``embed(input_ids[t+k])``
+        - Hidden state: MTP output from step k-1 (or verifier hidden states for k=0)
+        - Target label: ``labels[t+k+1]``
 
-        When ``labels`` is ``None``, ``input_ids`` is used as labels — correct because
+        This matches the Tencent-BAC/FastMTP reference: roll input_ids and
+        labels by k+1 positions, predicting k+2 tokens ahead at each position.
+
+        When ``labels`` is ``None``, ``input_ids`` is used — correct because
         :func:`~speculators.train.fast_mtp_data._shift_batch_fastmtp` has already
         aligned ``input_ids[i] = x_{i+1}``.
 
-        :param input_ids: Token IDs [batch, seq_len]
-        :param hidden_states: Hidden states from verifier [batch, seq_len, hidden_size]
-        :param attention_mask: Optional attention mask [batch, seq_len]
-        :param position_ids: Optional position IDs [batch, seq_len]
-        :param labels: Ground truth labels [batch, seq_len]; defaults to input_ids
-        :param loss_mask: Optional binary mask [batch, seq_len]; 1=compute loss,
-            0=ignore. Positions with mask==0 have their label set to -100 so the
-            cross-entropy ignores them. Aligned with labels using the same step+2
-            offset. Training only.
-        :param step_weights: Per-step loss weights (None = uniform). Training only.
-        :param lengths: Sequence lengths from collation — unused in forward, accepted
-            to absorb the batch field without error.
-        :param kwargs: Additional batch fields forwarded by the Trainer (ignored).
-        :return: ``(logits_list, loss, metrics)``
+        :param input_ids: Token IDs ``[batch, seq_len]``.
+        :param hidden_states: Verifier last-layer output ``[batch, seq_len, H]``.
+        :param attention_mask: Optional attention mask ``[batch, seq_len]``.
+        :param position_ids: Optional position IDs ``[batch, seq_len]``.
+        :param labels: Ground-truth labels ``[batch, seq_len]``; defaults to input_ids.
+        :param loss_mask: Binary mask ``[batch, seq_len]``; 1=compute loss, 0=ignore.
+        :param step_weights: Per-step loss weights; defaults to ``(0.51, 0.31, 0.18)``.
+        :param lengths: Sequence lengths from collation — unused in forward.
+        :returns: ``(logits_list, total_loss, metrics)``
         """
         if input_ids.shape[:2] != hidden_states.shape[:2]:
             raise ValueError(
@@ -159,7 +158,6 @@ class FastMTPSpeculator(SpeculatorModel):
                 f"num_speculative_steps={num_steps}. They must match."
             )
 
-        # Default: use input_ids as labels (already shifted by _shift_batch_fastmtp)
         if labels is None:
             labels = input_ids
 
@@ -172,11 +170,10 @@ class FastMTPSpeculator(SpeculatorModel):
         total_loss: torch.Tensor = torch.tensor(0.0, device=device)
         metrics: dict[str, torch.Tensor] = {}
 
-        current_hidden = hidden_states  # recursive: updated each step with MTP output
+        current_hidden = hidden_states
         for step in range(num_steps):
-            # At step k, valid positions are [0, seq_len-k-2]. Beyond that there is
-            # no target label in bounds. Matches the reference: roll input_ids and
-            # labels by k+1 positions, predicting k+2 tokens ahead at each position.
+            # Valid positions at step k: [0, seq_len-k-2]. Beyond that there is
+            # no target label in bounds.
             valid_len = seq_len - step - 1
             if valid_len <= 0:
                 log.warning(
@@ -188,17 +185,15 @@ class FastMTPSpeculator(SpeculatorModel):
                 )
                 break
 
-            step_hidden = current_hidden[:, :valid_len]  # [B, valid_len, H]
-            step_embeds = self.embed_tokens(  # [B, valid_len, H]
-                input_ids[:, step : step + valid_len]
-            )
-            step_pos_ids = position_ids[:, :valid_len]  # [B, valid_len]
+            step_hidden = current_hidden[:, :valid_len]
+            step_embeds = self.embed_tokens(input_ids[:, step : step + valid_len])
+            step_pos_ids = position_ids[:, :valid_len]
             step_pos_emb = self.rotary_emb(step_hidden, step_pos_ids)
             step_attn_mask = (
                 attention_mask[:, :valid_len] if attention_mask is not None else None
             )
 
-            mtp_output = self.mtp_layers[0](  # [B, valid_len, H]
+            mtp_output = self.mtp(
                 hidden_states=step_hidden,
                 token_embeddings=step_embeds,
                 attention_mask=step_attn_mask,
@@ -206,16 +201,19 @@ class FastMTPSpeculator(SpeculatorModel):
                 position_embeddings=step_pos_emb,
             )
 
-            logits = self.lm_head(mtp_output)  # [B, valid_len, V]
+            logits = self.lm_head(mtp_output)
             all_logits.append(logits)
 
-            step_labels = labels[:, step + 1 : step + 1 + valid_len]  # [B, valid_len]
+            step_labels = labels[:, step + 1 : step + 1 + valid_len]
             if loss_mask is not None:
                 step_mask = loss_mask[:, step + 1 : step + 1 + valid_len]
                 step_labels = step_labels.clone()
                 step_labels[step_mask == 0] = -100
-            default_weight = _DEFAULT_STEP_WEIGHTS[step]
-            weight = step_weights[step] if step_weights is not None else default_weight
+            weight = (
+                step_weights[step]
+                if step_weights is not None
+                else _DEFAULT_STEP_WEIGHTS[step]
+            )
             step_loss: torch.Tensor = weight * nn.functional.cross_entropy(
                 logits.reshape(-1, self.config.vocab_size),
                 step_labels.reshape(-1),
@@ -224,7 +222,7 @@ class FastMTPSpeculator(SpeculatorModel):
             total_loss = total_loss + step_loss
             metrics[f"loss_step_{step}"] = step_loss
 
-            current_hidden = mtp_output  # feed MTP output as hidden for next step
+            current_hidden = mtp_output
 
         return (all_logits, total_loss, metrics)
 
@@ -236,12 +234,12 @@ class FastMTPSpeculator(SpeculatorModel):
         num_speculative_steps: int = 3,
         verifier_name_or_path: str | None = None,
     ) -> "FastMTPSpeculator":
-        """Create FastMTP model from training arguments.
+        """Create a FastMTP model from training arguments.
 
-        :param verifier_config: Verifier model configuration
-        :param num_speculative_steps: Number of future tokens to predict per step
-        :param verifier_name_or_path: Path or repo ID for loading embed/lm_head weights
-        :return: FastMTP model instance
+        :param verifier_config: Verifier model configuration.
+        :param num_speculative_steps: Number of future tokens to predict per step.
+        :param verifier_name_or_path: Path or repo ID for loading embed/lm_head weights.
+        :returns: Initialised ``FastMTPSpeculator``.
         """
         config = FastMTPConfig(
             transformer_layer_config=verifier_config,
@@ -259,24 +257,21 @@ class FastMTPSpeculator(SpeculatorModel):
                 ),
             ),
         )
-
         return cls(config=config)
 
     @staticmethod
     def get_trainer_kwargs(
         **kwargs: Any,
     ) -> tuple[dict[str, list[float]], dict[str, list[float]]]:
-        """Get training and validation kwargs for FastMTP.
+        """Return training and validation kwargs for FastMTP.
 
         Pass ``step_weights`` to override the default exponential-decay weights
         ``[0.51, 0.31, 0.18]`` (β=0.6, normalized, matching Qwen3-Next defaults).
 
-        :param kwargs: Training arguments
-        :return: Tuple of (train_kwargs, val_kwargs)
+        :returns: ``(train_kwargs, val_kwargs)``
         """
         train_kwargs: dict[str, list[float]] = {
             "step_weights": kwargs.get("step_weights", list(_DEFAULT_STEP_WEIGHTS)),
         }
         val_kwargs = train_kwargs.copy()
-
         return train_kwargs, val_kwargs

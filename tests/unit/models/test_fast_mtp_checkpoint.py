@@ -1,4 +1,4 @@
-"""Unit tests for FastMTP checkpoint key remapping."""
+"""Unit tests for FastMTP checkpoint utilities."""
 
 import json
 from pathlib import Path
@@ -7,122 +7,65 @@ import pytest
 import torch
 
 from speculators.models.fast_mtp.checkpoint import (
-    _MTP_TOP_LEVEL_SUFFIXES,
-    _SPECULATORS_PREFIX,
     SKIP_KEYS,
-    remap_key,
-    remap_keys,
+    filter_mtp_keys,
     update_weight_index,
 )
 
 # ---------------------------------------------------------------------------
-# remap_key — top-level mixin weights (mtp.<suffix>)
+# filter_mtp_keys
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "suffix",
-    list(_MTP_TOP_LEVEL_SUFFIXES),
-)
-def test_remap_key_top_level_mixin(suffix: str) -> None:
-    """Top-level mixin suffixes map to mtp.{suffix} (not mtp.layers.0.{suffix})."""
-    key = _SPECULATORS_PREFIX + suffix
-    result = remap_key(key)
-    assert result == f"mtp.{suffix}"
-    assert "layers.0" not in result
-
-
-def test_remap_key_pre_fc_norm_hidden() -> None:
-    result = remap_key("mtp_layers.0.pre_fc_norm_hidden.weight")
-    assert result == "mtp.pre_fc_norm_hidden.weight"
-
-
-def test_remap_key_pre_fc_norm_embedding() -> None:
-    result = remap_key("mtp_layers.0.pre_fc_norm_embedding.weight")
-    assert result == "mtp.pre_fc_norm_embedding.weight"
-
-
-def test_remap_key_fc() -> None:
-    result = remap_key("mtp_layers.0.fc.weight")
-    assert result == "mtp.fc.weight"
-
-
-def test_remap_key_norm() -> None:
-    result = remap_key("mtp_layers.0.norm.weight")
-    assert result == "mtp.norm.weight"
-
-
-# ---------------------------------------------------------------------------
-# remap_key — decoder layer weights (mtp.layers.0.{suffix})
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "suffix",
-    [
-        "self_attn.q_proj.weight",
-        "self_attn.k_proj.weight",
-        "self_attn.v_proj.weight",
-        "self_attn.o_proj.weight",
-        "mlp.gate_proj.weight",
-        "mlp.up_proj.weight",
-        "mlp.down_proj.weight",
-        "input_layernorm.weight",
-        "post_attention_layernorm.weight",
-    ],
-)
-def test_remap_key_decoder_layer_passthrough(suffix: str) -> None:
-    """Non-mixin MTP weights map to mtp.layers.0.{suffix}."""
-    key = _SPECULATORS_PREFIX + suffix
-    result = remap_key(key)
-    assert result == f"mtp.layers.0.{suffix}"
-
-
-def test_remap_key_bad_prefix_raises() -> None:
-    with pytest.raises(ValueError, match="expected prefix"):
-        remap_key("model.mtp_layers.0.fc.weight")
-
-
-# ---------------------------------------------------------------------------
-# remap_keys — full state dict
-# ---------------------------------------------------------------------------
-
-
-def test_remap_keys_skips_embed_tokens() -> None:
+def test_filter_mtp_keys_excludes_embed_tokens() -> None:
     state_dict = {
-        "mtp_layers.0.fc.weight": torch.zeros(4, 8),
+        "mtp.fc.weight": torch.zeros(4, 8),
         "embed_tokens.weight": torch.zeros(100, 8),
     }
-    result = remap_keys(state_dict)
+    result = filter_mtp_keys(state_dict)
     assert "embed_tokens.weight" not in result
     assert "mtp.fc.weight" in result
 
 
-def test_remap_keys_skips_lm_head() -> None:
+def test_filter_mtp_keys_excludes_lm_head() -> None:
     state_dict = {
-        "mtp_layers.0.norm.weight": torch.zeros(8),
+        "mtp.norm.weight": torch.zeros(8),
         "lm_head.weight": torch.zeros(100, 8),
     }
-    result = remap_keys(state_dict)
+    result = filter_mtp_keys(state_dict)
     assert "lm_head.weight" not in result
     assert "mtp.norm.weight" in result
 
 
-def test_remap_keys_complete_state_dict() -> None:
-    """A complete MTP state dict remaps all 4 mixin + layer keys correctly."""
-    state_dict = {
-        "mtp_layers.0.pre_fc_norm_hidden.weight": torch.zeros(8),
-        "mtp_layers.0.pre_fc_norm_embedding.weight": torch.zeros(8),
-        "mtp_layers.0.fc.weight": torch.zeros(4, 8),
-        "mtp_layers.0.norm.weight": torch.zeros(8),
-        "mtp_layers.0.self_attn.q_proj.weight": torch.zeros(8, 8),
-        "mtp_layers.0.mlp.gate_proj.weight": torch.zeros(16, 8),
-        "embed_tokens.weight": torch.zeros(100, 8),  # must be skipped
-        "lm_head.weight": torch.zeros(100, 8),  # must be skipped
-    }
-    result = remap_keys(state_dict)
+def test_filter_mtp_keys_keys_are_unchanged() -> None:
+    """All mtp.* keys pass through with identical names — no renaming."""
+    mtp_keys = [
+        "mtp.pre_fc_norm_hidden.weight",
+        "mtp.pre_fc_norm_embedding.weight",
+        "mtp.fc.weight",
+        "mtp.norm.weight",
+        "mtp.layers.0.self_attn.q_proj.weight",
+        "mtp.layers.0.mlp.gate_proj.weight",
+    ]
+    state_dict = {k: torch.zeros(1) for k in mtp_keys}
+    result = filter_mtp_keys(state_dict)
+    assert set(result.keys()) == set(mtp_keys)
 
-    assert len(result) == 6  # 4 mixin + 2 layer, 2 embed/lm_head skipped
+
+def test_filter_mtp_keys_complete_state_dict() -> None:
+    """A complete MTP training state dict: 6 mtp.* keys kept, SKIP_KEYS excluded."""
+    state_dict = {
+        "mtp.pre_fc_norm_hidden.weight": torch.zeros(8),
+        "mtp.pre_fc_norm_embedding.weight": torch.zeros(8),
+        "mtp.fc.weight": torch.zeros(4, 8),
+        "mtp.norm.weight": torch.zeros(8),
+        "mtp.layers.0.self_attn.q_proj.weight": torch.zeros(8, 8),
+        "mtp.layers.0.mlp.gate_proj.weight": torch.zeros(16, 8),
+        "embed_tokens.weight": torch.zeros(100, 8),
+        "lm_head.weight": torch.zeros(100, 8),
+    }
+    result = filter_mtp_keys(state_dict)
+    assert len(result) == 6
     assert "mtp.pre_fc_norm_hidden.weight" in result
     assert "mtp.pre_fc_norm_embedding.weight" in result
     assert "mtp.fc.weight" in result
@@ -131,13 +74,11 @@ def test_remap_keys_complete_state_dict() -> None:
     assert "mtp.layers.0.mlp.gate_proj.weight" in result
 
 
-def test_remap_keys_skips_all_skip_keys() -> None:
-    """All keys in SKIP_KEYS are dropped."""
-    state_dict = {k: torch.zeros(1) for k in SKIP_KEYS}
-    state_dict["mtp_layers.0.fc.weight"] = torch.zeros(4, 8)
-    result = remap_keys(state_dict)
-    for skip_key in SKIP_KEYS:
-        assert skip_key not in result
+@pytest.mark.parametrize("skip_key", list(SKIP_KEYS))
+def test_filter_mtp_keys_skips_all_skip_keys(skip_key: str) -> None:
+    state_dict = {skip_key: torch.zeros(1), "mtp.fc.weight": torch.zeros(4, 8)}
+    result = filter_mtp_keys(state_dict)
+    assert skip_key not in result
     assert "mtp.fc.weight" in result
 
 
@@ -196,7 +137,6 @@ def test_update_weight_index_adds_new_shard_entries(tmp_path: Path) -> None:
 def test_update_weight_index_missing_index_raises(tmp_path: Path) -> None:
     verifier_dir = tmp_path / "verifier"
     verifier_dir.mkdir()
-    # No model.safetensors.index.json
 
     output_dir = tmp_path / "output"
     output_dir.mkdir()

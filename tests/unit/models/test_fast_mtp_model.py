@@ -2,6 +2,7 @@
 
 import pytest
 import torch
+from torch import nn
 from transformers.models.qwen3_next.configuration_qwen3_next import Qwen3NextConfig
 
 from speculators.models.fast_mtp import FastMTPSpeculator
@@ -181,6 +182,43 @@ def test_loss_mask_zeros_reduce_loss(model, batch) -> None:
     )
     # More positions excluded → fewer non-(-100) targets → different loss value
     assert not torch.allclose(loss_all_ones, loss_some_zeros)
+
+
+# ---------------------------------------------------------------------------
+# State-dict key format
+# ---------------------------------------------------------------------------
+
+
+def test_state_dict_keys_match_vllm_format(model) -> None:
+    """State-dict keys must use mtp.* format — no legacy mtp_layers.* keys."""
+    sd = model.state_dict()
+    old_keys = [k for k in sd if k.startswith("mtp_layers.")]
+    assert old_keys == [], f"Legacy mtp_layers.* keys found: {old_keys}"
+    mtp_keys = [k for k in sd if k.startswith("mtp.")]
+    assert len(mtp_keys) > 0, "No mtp.* keys found in state dict"
+
+
+def test_state_dict_has_mtp_top_level_keys(model) -> None:
+    sd = model.state_dict()
+    for key in (
+        "mtp.pre_fc_norm_hidden.weight",
+        "mtp.pre_fc_norm_embedding.weight",
+        "mtp.fc.weight",
+        "mtp.norm.weight",
+    ):
+        assert key in sd, f"Expected key {key!r} not found in state dict"
+
+
+def test_state_dict_has_mtp_layers_decoder_keys(model) -> None:
+    sd = model.state_dict()
+    decoder_keys = [k for k in sd if k.startswith("mtp.layers.0.")]
+    assert len(decoder_keys) > 0, "No mtp.layers.0.* decoder keys found"
+
+
+def test_layers_property_returns_modulelist_of_length_one(model) -> None:
+    """layers property must return a single-element ModuleList for FSDP wrapping."""
+    assert isinstance(model.layers, nn.ModuleList)
+    assert len(model.layers) == 1
 
 
 # ---------------------------------------------------------------------------

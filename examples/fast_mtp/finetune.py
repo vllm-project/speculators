@@ -5,7 +5,7 @@ head), trains it on .pt files produced by generate_dataset.py, and saves
 checkpoints after each epoch.
 
 Usage (single GPU):
-    python examples/fast_mtp/04_finetune.py \\
+    python examples/fast_mtp/finetune.py \\
         --speculator-path Qwen3-Next-80B-A3B-Instruct_mtp_speculator \\
         --data-dir /mnt/data/rahul-tuli/datasets/qwen3next-gsm8k-hidden-states \\
         --output-dir output/qwen3next_gsm8k_finetuned \\
@@ -13,7 +13,7 @@ Usage (single GPU):
 
 Usage (multi-GPU with torchrun):
     torchrun --standalone --nproc_per_node=4 \\
-        examples/fast_mtp/04_finetune.py \\
+        examples/fast_mtp/finetune.py \\
         --speculator-path Qwen3-Next-80B-A3B-Instruct_mtp_speculator \\
         --data-dir /mnt/data/rahul-tuli/datasets/qwen3next-gsm8k-hidden-states \\
         --output-dir output/qwen3next_gsm8k_finetuned \\
@@ -142,6 +142,7 @@ def main() -> None:
         data_dir=args.data_dir,
         max_len=args.max_len,
         batch_size=args.batch_size,
+        hidden_size=model.config.hidden_size,
         train_ratio=args.train_ratio,
     )
 
