@@ -102,6 +102,7 @@ class HiddenStatesWorkerExtension:
 
         metadata = getattr(self, "_current_request_metadata", None)
         if metadata is not None:
+            self._current_request_metadata = None  # type: ignore[assignment]
             # Sort by vLLM's actual batch position (vLLM reorders requests internally)
             input_batch = self.model_runner.input_batch  # type: ignore[attr-defined]
             sorted_metadata = sorted(

@@ -342,7 +342,9 @@ class VllmHiddenStatesGenerator:
 
         # Map results back to original input order
         results = []
-        for req_id in sorted(request_id_to_idx.keys()):
+        for req_id in sorted(
+            request_id_to_idx.keys(), key=lambda r: request_id_to_idx[r]
+        ):
             i = request_id_to_idx[req_id]
 
             if req_id not in request_states_dict:
@@ -375,9 +377,11 @@ class VllmHiddenStatesGenerator:
 
     def _cleanup(self) -> None:
         """Shut down the vLLM executor and release GPU resources."""
-        if hasattr(self, "executor"):
+        executor = getattr(self, "executor", None)
+        if executor is not None:
+            self.executor = None  # type: ignore[assignment]  # Guard against double-cleanup
             try:
-                self.executor.shutdown()
+                executor.shutdown()
             except Exception:
                 # Use the underlying stdlib logger so exc_info is supported
                 # (PipelineLogger.warning accepts only a plain message string).
