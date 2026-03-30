@@ -34,11 +34,6 @@ def test_filter_mtp_keys_no_renaming() -> None:
     assert set(result.keys()) == set(keys)
 
 
-# ---------------------------------------------------------------------------
-# update_weight_index
-# ---------------------------------------------------------------------------
-
-
 def _make_index(mtp_shard: str, other_shard: str) -> dict:
     return {
         "metadata": {"total_size": 1000},

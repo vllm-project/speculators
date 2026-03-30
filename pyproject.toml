@@ -144,7 +144,7 @@ ignore_missing_imports=true
 [tool.ruff]
 line-length = 88
 indent-width = 4
-exclude = ["build", "dist", "env", ".venv", "local", "output"]
+exclude = ["build", "dist", "env", ".venv"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -255,10 +255,6 @@ select = [
 
 "examples/**/*.py" = [
     "INP001", # allow implicit namespace packages in examples
-    "T201", # print statements are acceptable in example scripts
-    "PLC0415", # lazy imports inside functions are intentional (vLLM GPU init)
-    "B905", # zip without strict= is fine in example scripts
-    "PLR2004", # magic values are fine in example scripts
 ]
 
 "scripts/gen_and_train.py" = [

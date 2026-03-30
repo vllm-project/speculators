@@ -39,11 +39,6 @@ def batch():
     }
 
 
-# ---------------------------------------------------------------------------
-# Forward output contract
-# ---------------------------------------------------------------------------
-
-
 def test_forward_output_shapes(model, batch) -> None:
     logits_list, loss, metrics = model(**batch)
     B, L = batch["input_ids"].shape
@@ -57,11 +52,6 @@ def test_forward_output_shapes(model, batch) -> None:
     assert torch.isfinite(loss)
     for step in range(3):
         assert f"loss_step_{step}" in metrics
-
-
-# ---------------------------------------------------------------------------
-# State-dict key format (matches vLLM's expected mtp.* layout)
-# ---------------------------------------------------------------------------
 
 
 def test_state_dict_keys(model) -> None:
@@ -82,11 +72,6 @@ def test_layers_property(model) -> None:
     assert len(model.layers) == 1
 
 
-# ---------------------------------------------------------------------------
-# Input validation
-# ---------------------------------------------------------------------------
-
-
 def test_batch_size_mismatch_raises(model) -> None:
     with pytest.raises(ValueError, match="does not match"):
         model(
@@ -97,11 +82,6 @@ def test_batch_size_mismatch_raises(model) -> None:
 def test_step_weights_wrong_length_raises(model, batch) -> None:
     with pytest.raises(ValueError, match="step_weights"):
         model(**batch, step_weights=[0.5, 0.5])
-
-
-# ---------------------------------------------------------------------------
-# get_trainer_kwargs
-# ---------------------------------------------------------------------------
 
 
 def test_get_trainer_kwargs_default_weights() -> None:
