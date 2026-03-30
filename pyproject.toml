@@ -255,6 +255,7 @@ select = [
 
 "examples/**/*.py" = [
     "INP001", # allow implicit namespace packages in examples
+    "T201", # print statements are acceptable in example scripts
 ]
 
 "scripts/gen_and_train.py" = [
