@@ -86,6 +86,7 @@ def test_finetuning_weight_sanity(tmp_path: Path):
             "2048",
             "--num-workers",
             "2",
+            "--legacy-data",
         ],
         capture_output=True,
         text=True,
