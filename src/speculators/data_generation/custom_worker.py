@@ -24,12 +24,8 @@ def _patched_forward(
 ):
     """Patched forward pass that captures hidden states from specified layers.
 
-    This function is bound to base_model instances via types.MethodType.
-    It expects base_model to have an _extension attribute pointing to the
-    HiddenStatesWorkerExtension instance.
-
-    Args:
-        deepstack_input_embeds: For multimodal models with deepstack (Qwen3VL)
+    Bound to base_model instances via types.MethodType. Expects base_model to
+    have an _extension attribute pointing to HiddenStatesWorkerExtension.
     """
     if get_pp_group().is_first_rank:
         hidden_states = (

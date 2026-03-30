@@ -86,7 +86,7 @@ class VllmHiddenStatesGenerator:
     ):
         warnings.warn(
             "VllmHiddenStatesGenerator and the associated data_generation_offline.py"
-            " script are deprecatd and will be removed shortly.",
+            " script are deprecated and will be removed shortly.",
             DeprecationWarning,
             stacklevel=2,
         )
@@ -302,6 +302,8 @@ class VllmHiddenStatesGenerator:
             # Calculate prefill tokens for each request (ignore decode tokens)
             prefill_metadata = {}
             for req_id, num_tokens in scheduler_output.num_scheduled_tokens.items():
+                if req_id not in request_num_computed:
+                    continue  # stale ID from a previous chunk; ignore
                 num_already_computed = request_num_computed[req_id]
                 num_prompt = request_id_to_prompt_len[req_id]
                 num_prefill = max(0, min(num_tokens, num_prompt - num_already_computed))
