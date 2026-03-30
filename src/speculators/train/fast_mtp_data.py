@@ -141,7 +141,7 @@ def make_fast_mtp_dataloader(
     data_dir: str | Path,
     max_len: int,
     batch_size: int,
-    hidden_size: int,
+    hidden_size: int | None = None,
     train_ratio: float = 0.9,
     hidden_states_dtype: torch.dtype = torch.bfloat16,
     seed: int = 0,
@@ -152,13 +152,19 @@ def make_fast_mtp_dataloader(
     :param max_len: Collation target length; sequences are sliced/padded here.
     :param batch_size: Number of samples per batch.
     :param hidden_size: Hidden state dimension; used to construct empty fallback
-        samples when an entire batch is filtered out.
+        samples when an entire batch is filtered out.  If ``None``, inferred
+        from the first sample file in ``data_dir``.
     :param train_ratio: Fraction of files used for training (rest = validation).
     :param hidden_states_dtype: dtype for hidden states tensors.
     :param seed: Random seed for the train/val shuffle split.
     :return: ``(train_loader, val_loader)``
     """
     all_files = sorted(Path(data_dir).glob("data_*.pt"))
+    if hidden_size is None:
+        if not all_files:
+            raise ValueError(f"No data_*.pt files found in {data_dir}")
+        sample = torch.load(all_files[0], weights_only=False)
+        hidden_size = sample["hidden_states"].shape[-1]
     random.seed(seed)
     random.shuffle(all_files)
     split = int(len(all_files) * train_ratio)
