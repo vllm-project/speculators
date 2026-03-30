@@ -75,6 +75,7 @@ class FastMTPSpeculator(SpeculatorModel):
             self.config.hidden_size, self.config.vocab_size, bias=False
         )
         self._setup_embeddings_and_lm_head()
+        self.post_init()
 
     @property
     def layers(self) -> nn.ModuleList:
