@@ -29,6 +29,9 @@ bash setup.sh  # or: bash setup.sh --use-uv for faster installation
 
 # Qwen3-32B EAGLE3 on math_reasoning dataset
 ./run_evaluation.sh -c configs/qwen3-32b-eagle3.env
+
+# Qwen3-Next-80B with GSM8K-finetuned MTP head (built-in, no separate speculator)
+./run_evaluation.sh -c configs/qwen3-next-80b-mtp.env
 ```
 
 **Or run with custom parameters:**
@@ -47,8 +50,9 @@ Results will be in a timestamped directory like `eval_results_20251203_165432/`.
 This framework uses vLLM's speculative decoding feature to evaluate speculator models. The evaluation setup consists of:
 
 - **Base Model**: The main LLM that performs final token acceptance/rejection
-- **Speculator Model**: A smaller, faster model that generates speculative tokens
-- **Speculative Decoding**: The base model validates tokens proposed by the speculator, speeding up inference
+- **Speculator** (EAGLE3): A separate, smaller model that proposes speculative tokens — loaded via `SPECULATOR_MODEL`
+- **Built-in MTP head**: Some models (e.g. Qwen3-Next) ship the speculative head inside the base checkpoint; no separate speculator is needed
+- **Speculative Decoding**: The base model validates speculative tokens, speeding up inference
 
 The framework consists of modular scripts organized in a clean directory structure:
 
@@ -56,11 +60,12 @@ The framework consists of modular scripts organized in a clean directory structu
 eval-guidellm/
 ├── run_evaluation.sh              # Main controller
 ├── configs/                       # Pre-configured evaluations
-│   ├── llama-3.1-8b-eagle3.env    # Llama-3.1-8B
-│   ├── llama-3.3-70b-eagle3.env   # Llama-3.3-70B
-│   ├── gpt-oss-20b-eagle3.env     # GPT-OSS-20B
-│   ├── qwen3-8b-eagle3.env        # Qwen3-8B
-│   └── qwen3-32b-eagle3.env       # Qwen3-32B
+│   ├── llama-3.1-8b-eagle3.env    # Llama-3.1-8B (EAGLE3)
+│   ├── llama-3.3-70b-eagle3.env   # Llama-3.3-70B (EAGLE3)
+│   ├── gpt-oss-20b-eagle3.env     # GPT-OSS-20B (EAGLE3)
+│   ├── qwen3-8b-eagle3.env        # Qwen3-8B (EAGLE3)
+│   ├── qwen3-32b-eagle3.env       # Qwen3-32B (EAGLE3)
+│   └── qwen3-next-80b-mtp.env     # Qwen3-Next-80B (built-in MTP head)
 ├── scripts/                       # Utility scripts
 │   ├── vllm_serve.sh
 │   ├── vllm_stop.sh
@@ -76,20 +81,15 @@ eval-guidellm/
 The framework includes configs for common models:
 
 ```bash
-# Llama-3.1-8B EAGLE3 on math_reasoning
+# EAGLE3 (separate speculator)
 ./run_evaluation.sh -c configs/llama-3.1-8b-eagle3.env
-
-# Llama-3.3-70B EAGLE3 on math_reasoning
 ./run_evaluation.sh -c configs/llama-3.3-70b-eagle3.env
-
-# GPT-OSS-20B EAGLE3 on math_reasoning
 ./run_evaluation.sh -c configs/gpt-oss-20b-eagle3.env
-
-# Qwen3-8B EAGLE3 on math_reasoning
 ./run_evaluation.sh -c configs/qwen3-8b-eagle3.env
-
-# Qwen3-32B EAGLE3 on math_reasoning
 ./run_evaluation.sh -c configs/qwen3-32b-eagle3.env
+
+# MTP (built-in head — no separate speculator)
+./run_evaluation.sh -c configs/qwen3-next-80b-mtp.env
 ```
 
 ### Command Line Usage
@@ -148,14 +148,16 @@ Then run:
 | Option                   | Description                                                   | Default                  |
 | ------------------------ | ------------------------------------------------------------- | ------------------------ |
 | `BASE_MODEL`             | Base model path or HuggingFace ID                             | (required)               |
-| `SPECULATOR_MODEL`       | Speculator model path or HuggingFace ID                       | (required)               |
+| `SPECULATOR_MODEL`       | Speculator model path or HuggingFace ID (omit for MTP)        | (optional)               |
 | `NUM_SPEC_TOKENS`        | Number of speculative tokens to generate                      | 3                        |
-| `METHOD`                 | Speculative decoding method                                   | eagle3                   |
+| `METHOD`                 | Speculative decoding method (`eagle3` or `mtp`)               | eagle3                   |
 | `DATASET`                | Dataset for benchmarking (emulated, HF dataset, or file path) | (required)               |
 | `TENSOR_PARALLEL_SIZE`   | Number of GPUs for tensor parallelism                         | 2                        |
 | `GPU_MEMORY_UTILIZATION` | GPU memory fraction to use                                    | 0.8                      |
 | `PORT`                   | Server port                                                   | 8000                     |
 | `HEALTH_CHECK_TIMEOUT`   | Server startup timeout (seconds)                              | 300                      |
+| `TOKENIZER_MODE`         | vLLM tokenizer mode (set to `auto` for MTP models)            | (unset)                  |
+| `NO_CHUNKED_PREFILL`     | Set to `true` to disable chunked prefill (required for MTP)   | (unset)                  |
 | `TEMPERATURE`            | Sampling temperature                                          | 0.6                      |
 | `TOP_P`                  | Top-p (nucleus) sampling parameter                            | 0.95                     |
 | `TOP_K`                  | Top-k sampling parameter                                      | 20                       |
@@ -191,6 +193,26 @@ The framework supports five types of dataset inputs:
 
    - Runs benchmark on that specific file
    - Example: `DATASET="./my_data.jsonl"`
+
+## MTP (Built-in Head) Models
+
+Some models ship with a speculative head baked directly into the model checkpoint — there is no separate speculator to load. Qwen3-Next is one example: its MTP head is part of the verifier weights and driven by vLLM's native `--speculative-config '{"method": "mtp", ...}'`. See the Configuration Options table for the relevant settings (`METHOD`, `TOKENIZER_MODE`, `NO_CHUNKED_PREFILL`).
+
+### Reproducible benchmark: Qwen3-Next-80B finetuned MTP head
+
+The config `configs/qwen3-next-80b-mtp.env` points to a publicly available checkpoint finetuned on GSM8K math reasoning data. Anyone with 4× H100s can run this to reproduce the published results:
+
+```bash
+# Run on GPUs 0–3 (adjust CUDA_VISIBLE_DEVICES as needed)
+CUDA_VISIBLE_DEVICES=0,1,2,3 ./run_evaluation.sh -c configs/qwen3-next-80b-mtp.env
+```
+
+**Results** (benchmark: `RedHatAI/speculator_benchmarks:math_reasoning.jsonl`, `num_speculative_tokens=3`):
+
+| Checkpoint      | Pos0  | Pos1  | Pos2  | MeanAccepted  |
+| --------------- | ----- | ----- | ----- | ------------- |
+| Base MTP head   | 0.873 | 0.778 | 0.675 | 2.01          |
+| GSM8K finetuned | 0.934 | 0.891 | 0.838 | 2.46 (+22.5%) |
 
 ## Advanced Usage
 
