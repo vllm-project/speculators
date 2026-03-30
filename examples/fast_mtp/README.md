@@ -1,16 +1,12 @@
 # FastMTP Finetuning Guide — Qwen3-Next
 
-FastMTP finetunes the Multi-Token Prediction (MTP) head that Qwen3-Next ships with,
-using a lightweight teacher-forcing loss on captured verifier hidden states.
-The finetuned weights are stitched back into the original model so vLLM can load
-the result without any extra configuration.
+FastMTP finetunes the Multi-Token Prediction (MTP) head that Qwen3-Next ships with, using a lightweight teacher-forcing loss on captured verifier hidden states. The finetuned weights are stitched back into the original model so vLLM can load the result without any extra configuration.
 
-On GSM8K, one epoch of finetuning raises mean accepted tokens from **2.01 → 2.46
-(+22.5%)**.
+On GSM8K, one epoch of finetuning raises mean accepted tokens from **2.01 → 2.46 (+22.5%)**.
 
 All commands are run from the repo root.
 
----
+______________________________________________________________________
 
 ## Prerequisites
 
@@ -21,16 +17,16 @@ pip install -e '.[datagen]'
 
 GPU requirements by step:
 
-| Step | Minimum | Notes |
-|------|---------|-------|
-| 0 — Convert | CPU only | Extracts ~300 MB of weights |
-| 1 — Responses | 4–8× A100 80 GB | vLLM with tensor parallelism |
-| 2 — Hidden states | 4–8× A100 80 GB | Prefill-only, same TP setup |
-| 3 — Finetune | 1–4× A100 80 GB | Single-GPU or FSDP |
-| 4 — Stitch | CPU only | File copies + index update |
-| 5 — Deploy | 4× A100 80 GB | vLLM speculative decoding |
+| Step              | Minimum         | Notes                        |
+| ----------------- | --------------- | ---------------------------- |
+| 0 — Convert       | CPU only        | Extracts ~300 MB of weights  |
+| 1 — Responses     | 4–8× A100 80 GB | vLLM with tensor parallelism |
+| 2 — Hidden states | 4–8× A100 80 GB | Prefill-only, same TP setup  |
+| 3 — Finetune      | 1–4× A100 80 GB | Single-GPU or FSDP           |
+| 4 — Stitch        | CPU only        | File copies + index update   |
+| 5 — Deploy        | 4× A100 80 GB   | vLLM speculative decoding    |
 
----
+______________________________________________________________________
 
 ## Overview
 
@@ -54,13 +50,11 @@ FINETUNED=output/qwen3next_gsm8k_finetuned
 STITCHED=output/qwen3next_gsm8k_stitched
 ```
 
----
+______________________________________________________________________
 
 ## Step 0 — Convert checkpoint (one-time)
 
-Extracts the MTP layer weights from the Qwen3-Next checkpoint and wraps them in a
-speculators config. The extracted weights keep their original key names, so no
-remapping is needed at any later stage.
+Extracts the MTP layer weights from the Qwen3-Next checkpoint and wraps them in a speculators config. The extracted weights keep their original key names, so no remapping is needed at any later stage.
 
 **From HuggingFace (downloads automatically):**
 
@@ -87,12 +81,11 @@ $SPECULATOR/
     model.safetensors    # MTP layer weights only (~300 MB)
 ```
 
----
+______________________________________________________________________
 
 ## Step 1 — Generate responses
 
-Serves Qwen3-Next via vLLM and regenerates answers for every GSM8K train question.
-Skip this step if you already have a JSONL file.
+Serves Qwen3-Next via vLLM and regenerates answers for every GSM8K train question. Skip this step if you already have a JSONL file.
 
 ```bash
 cd scripts/response_regeneration && \
@@ -106,15 +99,13 @@ cd scripts/response_regeneration && \
     2>&1 | tee local/logs/gsm8k_step1_regeneration.log
 ```
 
-Output: `$RESPONSES` — JSONL in ShareGPT conversations format (7 473 samples for
-GSM8K train).
+Output: `$RESPONSES` — JSONL in ShareGPT conversations format (7 473 samples for GSM8K train).
 
----
+______________________________________________________________________
 
 ## Step 2 — Capture hidden states
 
-Tokenizes the JSONL, builds per-token loss masks, then runs a prefill-only vLLM
-pass to capture the last verifier hidden layer for every token position.
+Tokenizes the JSONL, builds per-token loss masks, then runs a prefill-only vLLM pass to capture the last verifier hidden layer for every token position.
 
 ```bash
 CUDA_VISIBLE_DEVICES=0,1,2,3 python examples/fast_mtp/generate_dataset.py \
@@ -126,8 +117,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 python examples/fast_mtp/generate_dataset.py \
     2>&1 | tee local/logs/gsm8k_step2_hidden_states.log
 ```
 
-Output: `$HIDDEN_STATES/` — one `data_N.pt` file per sample plus a
-`sample_lengths.json` index. Each `.pt` file contains:
+Output: `$HIDDEN_STATES/` — one `data_N.pt` file per sample plus a `sample_lengths.json` index. Each `.pt` file contains:
 
 ```python
 {
@@ -137,7 +127,7 @@ Output: `$HIDDEN_STATES/` — one `data_N.pt` file per sample plus a
 }
 ```
 
----
+______________________________________________________________________
 
 ## Step 3 — Finetune
 
@@ -180,17 +170,17 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun \
 
 Key arguments:
 
-| Argument | Default | Notes |
-|----------|---------|-------|
-| `--lr` | `5e-5` | Learning rate |
-| `--num-epochs` | `3` | Epochs to train |
-| `--batch-size` | `1` | Per-GPU batch size |
-| `--train-ratio` | `0.9` | Train / val split |
-| `--scheduler-type` | `cosine` | `cosine`, `linear`, or `none` |
-| `--scheduler-warmup-steps` | `None` | Steps for LR warmup |
-| `--step-weights` | `0.51 0.31 0.18` | Per-step MTP loss weights (β=0.6 decay) |
-| `--save-best` | off | Keep only the lowest-val-loss checkpoint |
-| `--checkpoint-freq` | `1` | Save every N epochs |
+| Argument                   | Default          | Notes                                    |
+| -------------------------- | ---------------- | ---------------------------------------- |
+| `--lr`                     | `5e-5`           | Learning rate                            |
+| `--num-epochs`             | `3`              | Epochs to train                          |
+| `--batch-size`             | `1`              | Per-GPU batch size                       |
+| `--train-ratio`            | `0.9`            | Train / val split                        |
+| `--scheduler-type`         | `cosine`         | `cosine`, `linear`, or `none`            |
+| `--scheduler-warmup-steps` | `None`           | Steps for LR warmup                      |
+| `--step-weights`           | `0.51 0.31 0.18` | Per-step MTP loss weights (β=0.6 decay)  |
+| `--save-best`              | off              | Keep only the lowest-val-loss checkpoint |
+| `--checkpoint-freq`        | `1`              | Save every N epochs                      |
 
 With `--save-best`, the best checkpoint is written to:
 
@@ -204,13 +194,11 @@ Without it, each epoch saves to:
 $FINETUNED/epoch_N/model.safetensors
 ```
 
----
+______________________________________________________________________
 
 ## Step 4 — Stitch weights
 
-Writes the finetuned MTP weights (already in vLLM-compatible `mtp.*` key format)
-into a new shard, copies all original verifier shards into the output directory,
-and updates `model.safetensors.index.json` to route `mtp.*` keys to the new shard.
+Writes the finetuned MTP weights (already in vLLM-compatible `mtp.*` key format) into a new shard, copies all original verifier shards into the output directory, and updates `model.safetensors.index.json` to route `mtp.*` keys to the new shard.
 
 ```bash
 python examples/fast_mtp/stitch_weights.py \
@@ -236,12 +224,11 @@ The output is a self-contained model directory — upload directly to HuggingFac
 huggingface-cli upload <your-org>/Qwen3-Next-80B-A3B-Instruct-FastMTP $STITCHED
 ```
 
----
+______________________________________________________________________
 
 ## Step 5 — Deploy with vLLM
 
-The stitched directory is a standard Qwen3-Next model. vLLM picks up the finetuned
-MTP head automatically via the `num_nextn_predict_layers` field in `config.json`.
+The stitched directory is a standard Qwen3-Next model. vLLM picks up the finetuned MTP head automatically via the `num_nextn_predict_layers` field in `config.json`.
 
 > **Required vLLM flags:** `--tokenizer-mode auto` and `--no-enable-chunked-prefill`
 
@@ -278,10 +265,8 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 vllm serve output/qwen3next_gsm8k_stitched \
     --speculative-config '{"method": "mtp", "num_speculative_tokens": 3}'
 ```
 
----
+______________________________________________________________________
 
 ## Adapting to a different dataset
 
-Replace Step 1 with any ShareGPT-format JSONL (each record has a `conversations`
-list of `{"from": "human"/"gpt", "value": "..."}` objects). Pass the path to
-`--data-path` in Step 2. Everything downstream is dataset-agnostic.
+Replace Step 1 with any ShareGPT-format JSONL (each record has a `conversations` list of `{"from": "human"/"gpt", "value": "..."}` objects). Pass the path to `--data-path` in Step 2. Everything downstream is dataset-agnostic.
