@@ -74,6 +74,7 @@ dev = [
     "mkdocstrings-python~=1.16.12",
     "mkdocs-gen-files~=0.5.0",
     "mkdocs-nav-weight~=0.2.0",
+    "pygments<2.20.0",
 
     # general and configurations
     "sphinx~=7.1.2",
