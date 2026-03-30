@@ -174,6 +174,12 @@ def parse_args():
         default=8,
         help="Number of CPU processes for dataset preprocessing (default: 8)",
     )
+    parser.add_argument(
+        "--multimodal",
+        action="store_true",
+        default=False,
+        help="Enable multimodal mode (uses AutoProcessor instead of AutoTokenizer)",
+    )
     return parser.parse_args()
 
 
@@ -349,6 +355,7 @@ def main():
         token_freq_path=args.token_freq_path,
         assistant_pattern=args.assistant_pattern,
         turn_dropout=args.turn_dropout,
+        is_multimodal=args.multimodal,
     )
     num_saved = generate_and_save_hidden_states(args, dataset)
 
