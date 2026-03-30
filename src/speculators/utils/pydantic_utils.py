@@ -32,7 +32,9 @@ class ReloadableBaseModel(BaseModel):
         This method is useful when the registry has been modified or when the
         class needs to be re-validated with the latest schema.
         """
-        cls.model_rebuild(force=True)
+        import torch  # noqa: PLC0415
+
+        cls.model_rebuild(force=True, _types_namespace={"torch": torch})
 
 
 class PydanticClassRegistryMixin(ReloadableBaseModel, ABC, ClassRegistryMixin):
