@@ -82,6 +82,7 @@ class TestTrainvLLM:
             "log-dir": str(tmp_path / "logs"),
             "d2t-path": str(tmp_path / "d2t.npy"),
             "t2d-path": str(tmp_path / "t2d.npy"),
+            "legacy-data": True,
         }
         # 3. Train draft model for one epoch
         p = self._run_training("scripts/train.py", training_args)

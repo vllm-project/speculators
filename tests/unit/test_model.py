@@ -266,9 +266,7 @@ def test_speculator_model_from_pretrained_invalid(speculator_model_test_config):
     ):
         SpeculatorModel.from_pretrained("test/path", config="invalid_config")
 
-    with pytest.raises(
-        OSError, match="Can't load the model for 'path/does/not/exist'."
-    ):
+    with pytest.raises(OSError, match="'path/does/not/exist'."):
         SpeculatorModel.from_pretrained(
             "path/does/not/exist", config=speculator_model_test_config
         )

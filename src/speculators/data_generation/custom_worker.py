@@ -18,7 +18,7 @@ def _patched_forward(
     self,
     input_ids,
     positions,
-    intermediate_tensors=None,
+    intermediate_tensors: dict[str, torch.Tensor] | None = None,
     inputs_embeds=None,
     **_kwargs,
 ):
@@ -62,7 +62,7 @@ def _patched_forward(
     # Return early if not last PP rank
     if not get_pp_group().is_last_rank:
         return IntermediateTensors(
-            {"hidden_states": hidden_states, "residual": residual}
+            {"hidden_states": hidden_states, "residual": residual}  # type: ignore[dict-item]
         )
 
     hidden_states, _ = self.norm(hidden_states, residual)

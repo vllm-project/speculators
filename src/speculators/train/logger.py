@@ -497,6 +497,9 @@ def setup_root_logger(level="INFO"):
         level=level, format="%(message)s", datefmt="[%X]", handlers=[handler]
     )
 
+    # Disable verbose HTTP response logs from httpx
+    logging.getLogger("httpx").propagate = False
+
 
 def setup_metric_logger(loggers, run_name, output_dir):
     """Configure the metric logging system with specified backends.
