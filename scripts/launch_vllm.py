@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import sys
 
 
 def parse_args():
@@ -34,15 +35,13 @@ def parse_args():
         action="store_true",
         help="Print the command that would be executed without running it",
     )
-    parser.add_argument(
-        "vllm_args", nargs=argparse.REMAINDER, help="Arguments to be passed to vLLM"
-    )
-
-    return parser.parse_args()
+    return parser.parse_known_args()
 
 
 def main():
-    args = parse_args()
+    args, vllm_args = parse_args()
+    if "--" in vllm_args:
+        vllm_args.remove("--")
 
     if args.layers:
         layers = args.layers
@@ -71,14 +70,16 @@ def main():
     }
 
     cmd = [
-        "vllm",
+        sys.executable,
+        "-m",
+        "vllm.entrypoints.cli.main",
         "serve",
         args.model,
         "--speculative_config",
         json.dumps(speculative_config),
         "--kv_transfer_config",
         json.dumps(kv_transfer_config),
-        *args.vllm_args,
+        *vllm_args,
     ]
 
     print("Running command:")
