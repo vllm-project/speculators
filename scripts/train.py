@@ -257,10 +257,15 @@ def main(args: argparse.Namespace):
         )
         train_files, val_files = split_files(args.data_path, ratio=0.9)
         train_dataset: BaseEagle3Dataset = Eagle3SampleFileDataset(
-            file_list=train_files, max_len=args.total_seq_len, transform=noise_transform
+            file_list=train_files,
+            max_len=args.total_seq_len,
+            transform=noise_transform,
+            hidden_states_dtype=hidden_states_dtype,
         )
         val_dataset: BaseEagle3Dataset = Eagle3SampleFileDataset(
-            file_list=val_files, max_len=args.total_seq_len
+            file_list=val_files,
+            max_len=args.total_seq_len,
+            hidden_states_dtype=hidden_states_dtype,
         )
     else:
         train_dataset = Eagle3ArrowDataset(
@@ -273,6 +278,7 @@ def main(args: argparse.Namespace):
             transform=noise_transform,
             split_ratio=0.9,
             model=args.verifier_name_or_path,
+            hidden_states_dtype=hidden_states_dtype,
         )
         val_dataset = Eagle3ArrowDataset(
             datapath=args.data_path,
@@ -283,6 +289,7 @@ def main(args: argparse.Namespace):
             on_generate=args.on_generate,
             split_ratio=-0.1,
             model=args.verifier_name_or_path,
+            hidden_states_dtype=hidden_states_dtype,
         )
 
     train_loader = setup_dataloader(
