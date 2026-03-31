@@ -59,6 +59,7 @@ def flex_attention_forward(
     attention_output = attention_output.transpose(1, 2).contiguous()
     return attention_output, None
 
+
 def block_mask_to_dense_attention_mask(
     block_mask: BlockMask, device: torch.device, dtype: torch.dtype
 ):
