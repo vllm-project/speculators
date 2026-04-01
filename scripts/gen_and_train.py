@@ -331,6 +331,7 @@ def run_e2e(
         ta_dict["t2d-path"] = str(output_path / "vocab_mapping" / "t2d.npy")
 
     ta_list = prepare_args(ta_dict)
+    ta_list.append("--legacy-data")
 
     # Get additional packages to install if loggers are specified.
     packages = ["."]
