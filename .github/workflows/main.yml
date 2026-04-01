@@ -35,6 +35,10 @@ jobs:
     strategy:
       matrix:
         python: ["3.10", "3.13"]
+        transformers: ["<5.0.0", ""] # empty string means latest version
+        exclude:                                                                                                                                                                                                                                                                        
+            - python: "3.13"                                                                                                                                                                                                                                                              
+              transformers-version: "<5.0.0"
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
@@ -43,6 +47,8 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Install dependencies
         run: pip install tox tox-uv
+      - name: Install transformers version
+        run: pip install "transformers${{ matrix.transformers }}"
       - name: Run unit tests
         run: tox -e test-unit
 
@@ -51,6 +57,10 @@ jobs:
     strategy:
       matrix:
         python: ["3.10", "3.13"]
+        transformers: ["<5.0.0", ""]
+        exclude:                                                                                                                                                                                                                                                                        
+            - python: "3.13"                                                                                                                                                                                                                                                              
+              transformers-version: "<5.0.0"
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
@@ -59,6 +69,8 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Install dependencies
         run: pip install tox tox-uv
+      - name: Install transformers version
+        run: pip install "transformers${{ matrix.transformers }}"
       - name: Run integration tests
         run: tox -e test-integration
 
