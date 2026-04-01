@@ -69,7 +69,9 @@ class Qwen3DFlashAttention(nn.Module):
         self.config = config
         self.layer_idx = layer_idx
         self.head_dim = getattr(
-            config, "head_dim", config.hidden_size // config.num_attention_heads  # type: ignore[operator]
+            config,
+            "head_dim",
+            config.hidden_size // config.num_attention_heads,  # type: ignore[operator]
         )
         self.num_key_value_groups = (
             config.num_attention_heads // config.num_key_value_heads  # type: ignore[operator]
@@ -176,7 +178,8 @@ class Qwen3DFlashDecoderLayer(GradientCheckpointingLayer):
         self.mlp = Qwen3MLP(config)
         self.input_layernorm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)  # type: ignore[arg-type]
         self.post_attention_layernorm = Qwen3RMSNorm(
-            config.hidden_size, eps=config.rms_norm_eps  # type: ignore[arg-type]
+            config.hidden_size,
+            eps=config.rms_norm_eps,  # type: ignore[arg-type]
         )
 
     def forward(
