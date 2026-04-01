@@ -8,7 +8,7 @@ def parse_args():
         description="Launch vLLM for hidden states extraction",
         usage=(
             "launch_vllm.py [-h] MODEL [--hidden-states-path HIDDEN_STATES_PATH] "
-            "[--layers LAYERS [LAYERS ...]] -- *VLLM_ARGS"
+            "[--layers LAYERS [LAYERS ...]] [VLLM_ARGS ...]"
         ),
     )
     parser.add_argument(
@@ -29,15 +29,11 @@ def parse_args():
             "[2, num_hidden_layers // 2, num_hidden_layers - 3, num_hidden_layers]."
         ),
     )
-    parser.add_argument(
-        "vllm_args", nargs=argparse.REMAINDER, help="Arguments to be passed to vLLM"
-    )
-
-    return parser.parse_args()
+    return parser
 
 
 def main():
-    args = parse_args()
+    args, vllm_args = parse_args().parse_known_args()
 
     if args.layers:
         layers = args.layers
@@ -73,7 +69,7 @@ def main():
         json.dumps(speculative_config),
         "--kv_transfer_config",
         json.dumps(kv_transfer_config),
-        *args.vllm_args,
+        *vllm_args,
     ]
 
     print("Running command:")

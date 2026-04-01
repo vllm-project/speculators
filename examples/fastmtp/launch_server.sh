@@ -45,7 +45,6 @@ exec python "$REPO_ROOT/scripts/launch_vllm.py" \
     "$MODEL" \
     --hidden-states-path "$HIDDEN_STATES_PATH" \
     --layers "$LAST_LAYER" \
-    -- \
     --tensor-parallel-size "$TP_SIZE" \
     --max-model-len "$MAX_MODEL_LEN" \
     --tokenizer-mode auto \
