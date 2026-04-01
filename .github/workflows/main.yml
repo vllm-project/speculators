@@ -38,7 +38,7 @@ jobs:
         transformers: ["<5.0.0", ""] # empty string means latest version
         exclude:                                                                                                                                                                                                                                                                        
             - python: "3.13"                                                                                                                                                                                                                                                              
-              transformers-version: "<5.0.0"
+              transformers: "<5.0.0"
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
@@ -60,7 +60,7 @@ jobs:
         transformers: ["<5.0.0", ""]
         exclude:                                                                                                                                                                                                                                                                        
             - python: "3.13"                                                                                                                                                                                                                                                              
-              transformers-version: "<5.0.0"
+              transformers: "<5.0.0"
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
