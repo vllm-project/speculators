@@ -30,6 +30,11 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the command that would be executed without running it",
+    )
+    parser.add_argument(
         "vllm_args", nargs=argparse.REMAINDER, help="Arguments to be passed to vLLM"
     )
 
@@ -79,7 +84,8 @@ def main():
     print("Running command:")
     print(" ".join(cmd))
 
-    os.execvp(cmd[0], cmd)  # noqa: S606
+    if not args.dry_run:
+        os.execvp(cmd[0], cmd)  # noqa: S606
 
 
 if __name__ == "__main__":
