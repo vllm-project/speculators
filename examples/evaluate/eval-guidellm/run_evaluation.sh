@@ -185,6 +185,12 @@ if ! check_dependencies; then
     exit 1
 fi
 
+# eagle3 requires an external speculator; mtp uses the built-in head
+if [[ "${METHOD}" == "eagle3" && -z "${SPECULATOR_MODEL}" ]]; then
+    echo "[ERROR] METHOD=eagle3 requires SPECULATOR_MODEL to be set (use -s or set it in the config file)" >&2
+    exit 1
+fi
+
 # Setup cleanup handler
 trap cleanup EXIT INT TERM
 

@@ -187,6 +187,12 @@ EXTRA_FLAGS=()
 [[ -n "${TOKENIZER_MODE}" ]] && EXTRA_FLAGS+=(--tokenizer-mode "${TOKENIZER_MODE}")
 [[ "${NO_CHUNKED_PREFILL}" == "true" ]] && EXTRA_FLAGS+=(--no-enable-chunked-prefill)
 
+# Fail fast if the port is already in use rather than burying the error in vLLM logs
+if ss -tlnp 2>/dev/null | grep -q ":${PORT} " || nc -z 127.0.0.1 "${PORT}" 2>/dev/null; then
+    echo "[ERROR] Port ${PORT} is already in use. Stop the existing process or set PORT to a different value." >&2
+    exit 1
+fi
+
 vllm serve "${BASE_MODEL}" \
     --seed 42 \
     --tensor-parallel-size "${TENSOR_PARALLEL_SIZE}" \

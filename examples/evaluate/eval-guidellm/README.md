@@ -209,10 +209,10 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 ./run_evaluation.sh -c configs/qwen3-next-80b-mtp.e
 
 **Results** (benchmark: `RedHatAI/speculator_benchmarks:math_reasoning.jsonl`, `num_speculative_tokens=3`):
 
-| Checkpoint      | Pos0  | Pos1  | Pos2  | MeanAccepted  |
-| --------------- | ----- | ----- | ----- | ------------- |
-| Base MTP head   | 0.873 | 0.778 | 0.675 | 2.01          |
-| GSM8K finetuned | 0.934 | 0.891 | 0.838 | 2.46 (+22.5%) |
+| Checkpoint      | Pos0  | Pos1  | Pos2  | MeanAccepted |
+| --------------- | ----- | ----- | ----- | ------------ |
+| Base MTP head   | 0.873 | 0.778 | 0.675 | 2.01         |
+| GSM8K finetuned | 0.934 | 0.891 | 0.838 | 2.46         |
 
 ## Advanced Usage
 
