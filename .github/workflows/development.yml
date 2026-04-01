@@ -50,10 +50,10 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Install dependencies
         run: pip install tox tox-uv
-      - name: Install transformers version
-        run: pip install "transformers${{ matrix.transformers }}"
       - name: Run unit tests
         run: tox -e test-unit
+        env:
+          TRANSFORMERS_VERSION: ${{ matrix.transformers }}
 
   integration-tests:
     runs-on: ibm-wdc-k8s-vllm-h100-solo
@@ -72,10 +72,10 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Install dependencies
         run: pip install tox tox-uv
-      - name: Install transformers version
-        run: pip install "transformers${{ matrix.transformers }}"
       - name: Run integration tests
         run: tox -e test-integration
+        env:
+          TRANSFORMERS_VERSION: ${{ matrix.transformers }}
 
   datagen-tests:
     runs-on: ibm-wdc-k8s-vllm-h100-solo
