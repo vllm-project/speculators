@@ -5,11 +5,10 @@ Offline Hidden States Generation Pipeline
 This script generates hidden states and saves them to disk for offline training.
 
 Usage:
-    python data_generation_offline.py \
-        --model meta-llama/Llama-3.1-8B-Instruct \
-        --preprocessed-data sharegpt \
+    python data_generation_offline2.py \
+        --preprocessed-data ./training_data_preprocessed \
         --output ./training_data \
-        --max-samples 5000
+        --endpoint http://localhost:8000/v1
 """
 
 import argparse

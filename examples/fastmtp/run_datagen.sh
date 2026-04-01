@@ -39,7 +39,7 @@ echo "  Concurrency:   $CONCURRENCY"
 echo ""
 
 # Step 2: Tokenize JSONL → Arrow dataset (mtp mode skips token_freq.pt)
-echo "--- Step 1: Preprocessing (tokenization) ---"
+echo "--- Step 2: Preprocessing (tokenization) ---"
 python "$REPO_ROOT/scripts/prepare_data.py" \
     --model "$MODEL" \
     --data "$DATA" \
@@ -48,7 +48,7 @@ python "$REPO_ROOT/scripts/prepare_data.py" \
 
 # Step 3: Extract hidden states via the running vLLM server
 echo ""
-echo "--- Step 2: Hidden States Extraction ---"
+echo "--- Step 3: Hidden States Extraction ---"
 echo "Waiting for vLLM server at $ENDPOINT..."
 until curl -sf "${ENDPOINT}/models" > /dev/null 2>&1; do
     sleep 5
