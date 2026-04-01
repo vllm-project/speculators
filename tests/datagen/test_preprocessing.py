@@ -15,7 +15,7 @@ from speculators.data_generation.preprocessing import (
     _normalize_conversation,
     _preprocess_batch,
     _supports_assistant_mask,
-    build_eagle3_dataset,
+    build_speculator_dataset,
 )
 
 # Test model from HuggingFace with chat template
@@ -472,11 +472,11 @@ def test_preprocess_batch_falls_back_to_regex():
     assert torch.any(results["loss_mask"][0] == 1)
 
 
-# Tests for build_eagle3_dataset
+# Tests for build_speculator_dataset
 
 
 @pytest.mark.sanity
-def test_build_eagle3_dataset_basic():
+def test_build_speculator_dataset_basic():
     """Test building EAGLE3 dataset from a simple HuggingFace dataset."""
     tokenizer = AutoTokenizer.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
 
@@ -501,7 +501,7 @@ def test_build_eagle3_dataset_basic():
     }
 
     dataset = HFDataset.from_dict(data)
-    result = build_eagle3_dataset(dataset, tokenizer, max_length=512, num_proc=1)
+    result = build_speculator_dataset(dataset, tokenizer, max_length=512, num_proc=1)
 
     assert isinstance(result, HFDataset)
     assert len(result) <= len(dataset)
@@ -513,8 +513,8 @@ def test_build_eagle3_dataset_basic():
 
 
 @pytest.mark.sanity
-def test_build_eagle3_dataset_preserves_format():
-    """Test that build_eagle3_dataset sets the correct format."""
+def test_build_speculator_dataset_preserves_format():
+    """Test that build_speculator_dataset sets the correct format."""
     tokenizer = AutoTokenizer.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
 
     if not hasattr(tokenizer, "apply_chat_template") or tokenizer.chat_template is None:
@@ -533,14 +533,14 @@ def test_build_eagle3_dataset_preserves_format():
     }
 
     dataset = HFDataset.from_dict(data)
-    result = build_eagle3_dataset(dataset, tokenizer, max_length=512, num_proc=1)
+    result = build_speculator_dataset(dataset, tokenizer, max_length=512, num_proc=1)
 
     # Dataset should be in torch format
     assert result.format["type"] == "torch"
 
 
 @pytest.mark.sanity
-def test_build_eagle3_dataset_removes_original_columns():
+def test_build_speculator_dataset_removes_original_columns():
     """Test that original columns are removed after processing."""
     tokenizer = AutoTokenizer.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
 
@@ -561,7 +561,7 @@ def test_build_eagle3_dataset_removes_original_columns():
     }
 
     dataset = HFDataset.from_dict(data)
-    result = build_eagle3_dataset(dataset, tokenizer, max_length=512, num_proc=1)
+    result = build_speculator_dataset(dataset, tokenizer, max_length=512, num_proc=1)
 
     # Original columns should be removed
     if len(result) > 0:
@@ -729,7 +729,7 @@ def test_create_loss_mask_thinking_model(thinking_content):
 
 
 @pytest.mark.sanity
-def test_build_eagle3_dataset_with_custom_pattern():
+def test_build_speculator_dataset_with_custom_pattern():
     """Test building dataset with custom assistant pattern."""
     tokenizer = AutoTokenizer.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
 
@@ -752,7 +752,7 @@ def test_build_eagle3_dataset_with_custom_pattern():
     custom_pattern = r"<\|im_start\|>assistant\s*(.*?)<\|im_end\|>"
 
     dataset = HFDataset.from_dict(data)
-    result = build_eagle3_dataset(
+    result = build_speculator_dataset(
         dataset, tokenizer, max_length=512, num_proc=1, assistant_pattern=custom_pattern
     )
 

@@ -15,7 +15,7 @@ from speculators.data_generation.logging_utils import PipelineLogger
 from speculators.train.vocab_mapping import save_token_frequency_distribution
 
 __all__ = [
-    "build_eagle3_dataset",
+    "build_speculator_dataset",
     "load_and_preprocess_dataset",
     "load_raw_dataset",
 ]
@@ -352,7 +352,7 @@ def _preprocess_batch(
     return results
 
 
-def build_eagle3_dataset(
+def build_speculator_dataset(
     dataset: HFDataset,
     tokenizer: PreTrainedTokenizerBase,
     max_length: int = 2048,
@@ -360,7 +360,7 @@ def build_eagle3_dataset(
     assistant_pattern: str | Pattern[str] | None = None,
     turn_dropout: bool = False,
 ) -> HFDataset:
-    """Build EAGLE3 dataset by tokenizing conversations and creating loss masks.
+    """Tokenize conversations and build a speculator training dataset with loss masks.
 
     Uses the tokenizer's built-in chat template via apply_chat_template.
 
@@ -489,7 +489,7 @@ def load_and_preprocess_dataset(
         if turn_dropout:
             log.info("Turn dropout enabled: randomly keeping N consecutive turns")
 
-        preprocessed_dataset = build_eagle3_dataset(
+        preprocessed_dataset = build_speculator_dataset(
             dataset=raw_dataset,
             tokenizer=tokenizer,
             max_length=seq_length,
