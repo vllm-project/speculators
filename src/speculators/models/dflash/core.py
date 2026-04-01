@@ -69,40 +69,41 @@ class Qwen3DFlashAttention(nn.Module):
         self.config = config
         self.layer_idx = layer_idx
         self.head_dim = getattr(
-            config, "head_dim", config.hidden_size // config.num_attention_heads
+            config, "head_dim", config.hidden_size // config.num_attention_heads  # type: ignore[operator]
         )
         self.num_key_value_groups = (
-            config.num_attention_heads // config.num_key_value_heads
+            config.num_attention_heads // config.num_key_value_heads  # type: ignore[operator]
         )
         self.scaling = self.head_dim**-0.5
         self.attention_dropout = config.attention_dropout
         self.is_causal = False
         self.q_proj = nn.Linear(
-            config.hidden_size,
-            config.num_attention_heads * self.head_dim,
-            bias=config.attention_bias,
+            config.hidden_size,  # type: ignore[arg-type]
+            config.num_attention_heads * self.head_dim,  # type: ignore[operator]
+            bias=config.attention_bias,  # type: ignore[arg-type]
         )
         self.k_proj = nn.Linear(
-            config.hidden_size,
-            config.num_key_value_heads * self.head_dim,
-            bias=config.attention_bias,
+            config.hidden_size,  # type: ignore[arg-type]
+            config.num_key_value_heads * self.head_dim,  # type: ignore[operator]
+            bias=config.attention_bias,  # type: ignore[arg-type]
         )
         self.v_proj = nn.Linear(
-            config.hidden_size,
-            config.num_key_value_heads * self.head_dim,
-            bias=config.attention_bias,
+            config.hidden_size,  # type: ignore[arg-type]
+            config.num_key_value_heads * self.head_dim,  # type: ignore[operator]
+            bias=config.attention_bias,  # type: ignore[arg-type]
         )
         self.o_proj = nn.Linear(
-            config.num_attention_heads * self.head_dim,
-            config.hidden_size,
-            bias=config.attention_bias,
+            config.num_attention_heads * self.head_dim,  # type: ignore[operator]
+            config.hidden_size,  # type: ignore[arg-type]
+            bias=config.attention_bias,  # type: ignore[arg-type]
         )
-        self.q_norm = Qwen3RMSNorm(self.head_dim, eps=config.rms_norm_eps)
-        self.k_norm = Qwen3RMSNorm(self.head_dim, eps=config.rms_norm_eps)
+        self.q_norm = Qwen3RMSNorm(self.head_dim, eps=config.rms_norm_eps)  # type: ignore[arg-type]
+        self.k_norm = Qwen3RMSNorm(self.head_dim, eps=config.rms_norm_eps)  # type: ignore[arg-type]
         self.sliding_window = (
             config.sliding_window
             if hasattr(config, "layer_types")
-            and config.layer_types[layer_idx] == "sliding_attention"
+            and config.layer_types is not None
+            and config.layer_types[layer_idx] == "sliding_attention"  # type: ignore[index]
             else None
         )
 
@@ -173,9 +174,9 @@ class Qwen3DFlashDecoderLayer(GradientCheckpointingLayer):
         self.hidden_size = config.hidden_size
         self.self_attn = Qwen3DFlashAttention(config=config, layer_idx=layer_idx)
         self.mlp = Qwen3MLP(config)
-        self.input_layernorm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.input_layernorm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)  # type: ignore[arg-type]
         self.post_attention_layernorm = Qwen3RMSNorm(
-            config.hidden_size, eps=config.rms_norm_eps
+            config.hidden_size, eps=config.rms_norm_eps  # type: ignore[arg-type]
         )
 
     def forward(
@@ -220,11 +221,9 @@ class Qwen3DFlashDecoderLayer(GradientCheckpointingLayer):
 
 @SpeculatorModel.register("dflash")
 class DFlashDraftModel(SpeculatorModel):
-    # type: ignore[misc]
-    config_class: ClassVar[type[DFlashSpeculatorConfig]] = DFlashSpeculatorConfig
+    config_class: ClassVar[type[DFlashSpeculatorConfig]] = DFlashSpeculatorConfig  # type: ignore[misc]
     _no_split_modules = ["Qwen3DFlashDecoderLayer"]
-    # type: ignore[misc]
-    _keys_to_ignore_on_load_missing: ClassVar[list[str]] = ["embed_tokens.weight"]
+    _keys_to_ignore_on_load_missing: ClassVar[list[str]] = ["embed_tokens.weight"]  # type: ignore[misc]
 
     def __init__(
         self,
@@ -259,8 +258,7 @@ class DFlashDraftModel(SpeculatorModel):
         num_draft_layers = config.transformer_layer_config.num_hidden_layers
         self.layers = nn.ModuleList(
             [
-                # type: ignore[arg-type]
-                Qwen3DFlashDecoderLayer(config.transformer_layer_config, layer_idx)
+                Qwen3DFlashDecoderLayer(config.transformer_layer_config, layer_idx)  # type: ignore[arg-type]
                 for layer_idx in range(num_draft_layers)
             ]
         )
@@ -281,10 +279,9 @@ class DFlashDraftModel(SpeculatorModel):
         )
         self.norm = Qwen3RMSNorm(
             config.transformer_layer_config.hidden_size,
-            eps=config.transformer_layer_config.rms_norm_eps,
+            eps=config.transformer_layer_config.rms_norm_eps,  # type: ignore[arg-type]
         )
-        # type: ignore[arg-type]
-        self.rotary_emb = Qwen3RotaryEmbedding(config.transformer_layer_config)
+        self.rotary_emb = Qwen3RotaryEmbedding(config.transformer_layer_config)  # type: ignore[arg-type]
 
         self.fc = nn.Linear(
             len(self.target_layer_ids) * config.transformer_layer_config.hidden_size,
@@ -293,7 +290,7 @@ class DFlashDraftModel(SpeculatorModel):
         )
         self.hidden_norm = Qwen3RMSNorm(
             config.transformer_layer_config.hidden_size,
-            eps=config.transformer_layer_config.rms_norm_eps,
+            eps=config.transformer_layer_config.rms_norm_eps,  # type: ignore[arg-type]
         )
         self.block_size = config.block_size
         self.post_init()
@@ -528,11 +525,10 @@ class DFlashDraftModel(SpeculatorModel):
             # t2d is a boolean mask [verifier_vocab_size] - True where
             # verifier token exists in draft
             # cumsum gives us the draft index for each verifier token
-            # type: ignore[operator]
-            draft_indices = torch.cumsum(self.t2d.long(), dim=0) - 1
+            draft_indices = torch.cumsum(self.t2d.long(), dim=0) - 1  # type: ignore[operator]
             targets_draft = torch.where(
                 self.t2d[targets],  # type: ignore[index]
-                draft_indices[targets],
+                draft_indices[targets],  # type: ignore[index]
                 torch.tensor(-100, dtype=torch.long, device=device),
             )
 
