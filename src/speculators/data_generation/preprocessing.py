@@ -432,26 +432,29 @@ def load_and_preprocess_dataset(
     token_freq_path: Path | str = "./token_freq.pt",  # noqa: S107
     assistant_pattern: str | None = None,
     turn_dropout: bool = False,
+    method: str = "eagle3",
 ) -> tuple[HFDataset, PreTrainedTokenizerBase]:
-    """Load, tokenize, and preprocess a dataset for EAGLE3 training.
+    """Load, tokenize, and preprocess a dataset for speculator training.
 
     Uses the tokenizer's built-in chat template via apply_chat_template.
     Caching is handled automatically by HuggingFace datasets.
 
     Args:
         target_model_path: HuggingFace model ID or local path
-        train_data_path: Dataset name or path to JSON/JSONL file
+        train_data_paths: Dataset name(s) or path(s) to JSON/JSONL file(s)
         seq_length: Maximum sequence length
         build_dataset_num_proc: Number of processes for dataset building
         seed: Random seed for shuffling
         max_samples: Optional limit on number of samples
         token_freq_path: Path to save token frequency distribution
-        cache_dir: Directory to cache HuggingFace datasets (optional)
         assistant_pattern: Optional custom regex pattern for matching assistant
                           responses. If None, pattern will be auto-detected from
                           chat template.
         turn_dropout: If True, randomly keeps first N consecutive turns per
                      conversation
+        method: Training method. 'eagle3' (default) saves token frequency
+                distribution for vocabulary mapping. 'mtp' skips token
+                frequency computation (not needed for MTP-head finetuning).
 
     Returns:
         Tuple of (preprocessed_dataset, tokenizer)
@@ -501,11 +504,12 @@ def load_and_preprocess_dataset(
     if max_samples is not None and len(raw_dataset) > max_samples:
         combined_dataset = combined_dataset.select(range(max_samples))
 
-    log.subsection("Computing token frequency distribution")
-    save_token_frequency_distribution(
-        dataset=combined_dataset,
-        output_path=token_freq_path,
-    )
+    if method == "eagle3":
+        log.subsection("Computing token frequency distribution")
+        save_token_frequency_distribution(
+            dataset=combined_dataset,
+            output_path=token_freq_path,
+        )
 
     log.subsection("Visualizing sample")
     _visualize_sample(combined_dataset, tokenizer, idx=0)

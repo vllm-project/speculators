@@ -122,6 +122,19 @@ def parse_args():
         default=8,
         help="Number of CPU processes for dataset preprocessing (default: 8)",
     )
+    parser.add_argument(
+        "--method",
+        type=str,
+        default="eagle3",
+        choices=["eagle3", "mtp"],
+        help=(
+            "Training method the prepared data will be used for. "
+            "'eagle3' (default): tokenizes data and saves token frequency distribution "
+            "for vocabulary mapping. "
+            "'mtp': tokenizes data only; skips token frequency computation (not needed "
+            "for MTP-head finetuning)."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -134,6 +147,7 @@ def main():
             "Target Model": args.model,
             "Dataset": args.data,
             "Output Dir": args.output,
+            "Method": args.method,
         }
     )
 
@@ -164,6 +178,7 @@ def main():
         token_freq_path=token_freq_path,
         assistant_pattern=args.assistant_pattern,
         turn_dropout=args.turn_dropout,
+        method=args.method,
     )
 
     log.info("Done preparing data")

@@ -272,7 +272,7 @@ class VllmHiddenStatesGenerator:
             request_id_to_idx[req_id] = i
             request_id_to_prompt_len[req_id] = len(ids_list)
 
-            req = Request(
+            req = Request(  # type: ignore[call-arg]
                 request_id=req_id,
                 prompt_token_ids=ids_list,
                 sampling_params=SamplingParams(
@@ -323,7 +323,7 @@ class VllmHiddenStatesGenerator:
                 )
 
             model_output = self.executor.execute_model(scheduler_output)
-            self.executor.sample_tokens(model_output)
+            self.executor.sample_tokens(model_output)  # type: ignore[arg-type]
 
         # Abort all requests (prefill complete, don't need decode)
         self.scheduler.finish_requests(

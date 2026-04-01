@@ -32,7 +32,9 @@ logger = logging.getLogger(__name__)
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Generate EAGLE training data offline")
+    parser = argparse.ArgumentParser(
+        description="Generate hidden states offline for speculator training"
+    )
 
     # Model arguments
     parser.add_argument(
@@ -305,7 +307,7 @@ def main():
     args = parse_args()
     setup_root_logger()
 
-    logger.info("EAGLE Offline Data Generation")
+    logger.info("Offline Hidden States Generation")
 
     dataset = load_from_disk(args.preprocessed_data)
 
