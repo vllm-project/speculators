@@ -17,11 +17,10 @@ from vllm.config import (
 from vllm.sampling_params import SamplingParams
 from vllm.utils.hashing import get_hash_fn_by_name
 from vllm.v1.core.kv_cache_utils import (
-    _get_kv_cache_groups_uniform_spec,
     get_kv_cache_config_from_groups,
+    get_kv_cache_groups,
     get_request_block_hasher,
     init_none_hash,
-    unify_hybrid_kv_cache_specs,
 )
 from vllm.v1.core.sched.scheduler import Scheduler
 from vllm.v1.executor.multiproc_executor import MultiprocExecutor
@@ -143,10 +142,8 @@ class VllmHiddenStatesGenerator:
         log.info("Creating scheduler...")
         kv_cache_spec_list = self.executor.collective_rpc("get_kv_cache_spec")
         kv_cache_spec = kv_cache_spec_list[0]
-        # Normalize hybrid KV cache specs for models with non-uniform attention
-        # (e.g., GPT-OSS with sliding/full attention layers)
-        unify_hybrid_kv_cache_specs(kv_cache_spec)
-        kv_cache_groups = _get_kv_cache_groups_uniform_spec(kv_cache_spec)
+        # Get KV cache groups - handles both uniform and hybrid cases automatically
+        kv_cache_groups = get_kv_cache_groups(self.vllm_config, kv_cache_spec)
 
         free_memory, _ = mem_get_info()
         cache_memory = int(free_memory * gpu_memory_utilization * CACHE_MEMORY_FRACTION)
@@ -228,6 +225,7 @@ class VllmHiddenStatesGenerator:
                 max_model_len=max_model_len,
                 max_num_batched_tokens=max_num_batched_tokens,
                 is_encoder_decoder=False,
+                disable_hybrid_kv_cache_manager=False,
             ),
             device_config=DeviceConfig(),
             load_config=LoadConfig(),
@@ -256,6 +254,7 @@ class VllmHiddenStatesGenerator:
             input_ids_list = token_ids
 
         log.debug(f"Generating hidden states for {len(input_ids_list)} sequences")
+        
         # Account for max_tokens=1 in sampling params
         # (vLLM enforces: len(prompt) + max_tokens <= max_model_len)
         max_len = self.vllm_config.model_config.max_model_len - MAX_DECODE_TOKENS
@@ -279,7 +278,6 @@ class VllmHiddenStatesGenerator:
                     max_tokens=MAX_DECODE_TOKENS, temperature=SAMPLING_TEMPERATURE
                 ),
                 pooling_params=None,
-                eos_token_id=self.tokenizer.eos_token_id,
                 arrival_time=INITIAL_ARRIVAL_TIME,
                 block_hasher=self.block_hasher,
             )
