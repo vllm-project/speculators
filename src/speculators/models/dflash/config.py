@@ -66,6 +66,11 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
         description="Layer IDs of the DFlash auxiliary hidden state layers",
     )
 
+    mask_token_id: int | None = Field(
+        default=None,
+        description="Token ID used for masking",
+    )
+
     @property
     def target_vocab_size(self) -> int:
         """Get target vocabulary size from transformer config."""

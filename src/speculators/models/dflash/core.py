@@ -434,6 +434,8 @@ class DFlashDraftModel(SpeculatorModel):
         if tokenizer.mask_token_id is None:
             tokenizer.add_special_tokens({"mask_token": "<|MASK|>"})
         self.mask_token_id = tokenizer.mask_token_id
+        # Save to config so it persists when saved
+        self.config.mask_token_id = self.mask_token_id
 
     @torch.compile
     def forward(
