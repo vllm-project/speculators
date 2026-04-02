@@ -35,6 +35,10 @@ jobs:
     strategy:
       matrix:
         python: ["3.10", "3.13"]
+        transformers: ["<5.0.0", ""] # empty string means latest version
+        exclude:                                                                                                                                                                                                                                                                        
+            - python: "3.13"                                                                                                                                                                                                                                                              
+              transformers: "<5.0.0"
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
@@ -45,12 +49,18 @@ jobs:
         run: pip install tox tox-uv
       - name: Run unit tests
         run: tox -e test-unit
+        env:
+          TRANSFORMERS_VERSION: ${{ matrix.transformers }}
 
   integration-tests:
     runs-on: ibm-wdc-k8s-vllm-h100-solo
     strategy:
       matrix:
         python: ["3.10", "3.13"]
+        transformers: ["<5.0.0", ""]
+        exclude:                                                                                                                                                                                                                                                                        
+            - python: "3.13"                                                                                                                                                                                                                                                              
+              transformers: "<5.0.0"
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
@@ -61,6 +71,8 @@ jobs:
         run: pip install tox tox-uv
       - name: Run integration tests
         run: tox -e test-integration
+        env:
+          TRANSFORMERS_VERSION: ${{ matrix.transformers }}
 
   datagen-tests:
     runs-on: ibm-wdc-k8s-vllm-h100-solo
