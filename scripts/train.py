@@ -226,13 +226,14 @@ def main(args: argparse.Namespace):
         args.verifier_name_or_path, args.num_layers, draft_arch=args.draft_arch
     )
 
-    if args.speculator_type not in SpeculatorModel.registry:
+    registry = SpeculatorModel.registry
+    if registry is None or args.speculator_type not in registry:
+        available = list(registry.keys()) if registry else []
         raise ValueError(
-            f"Unknown speculator type: {args.speculator_type}. "
-            f"Available: {list(SpeculatorModel.registry.keys())}"
+            f"Unknown speculator type: {args.speculator_type}. Available: {available}"
         )
 
-    model_class = SpeculatorModel.registry[args.speculator_type]
+    model_class = registry[args.speculator_type]
     if args.from_pretrained:
         draft_model = model_class.from_pretrained(
             args.from_pretrained, t2d=t2d, d2t=d2t
@@ -486,6 +487,18 @@ def parse_args():
         action="store_true",
         help="Use RMSNorm before fc in Eagle3 draft path "
         "(e.g. for gpt-oss). Omit for other models.",
+    )
+    parser.add_argument(
+        "--block-size",
+        type=int,
+        default=8,
+        help="Block size for DFlash model (default: 8)",
+    )
+    parser.add_argument(
+        "--max-anchors",
+        type=int,
+        default=256,
+        help="Maximum anchor positions for DFlash training (default: 256)",
     )
     # Dataloader parameters
     parser.add_argument(
