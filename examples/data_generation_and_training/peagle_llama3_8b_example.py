@@ -19,7 +19,7 @@ from gen_and_train import (  # noqa: E402
 
 if __name__ == "__main__":
     VERIFIER_NAME_OR_PATH = "meta-llama/Llama-3.1-8B-Instruct"
-    OUTPUT_PATH = "./output/peagle_llama3_8b_sharegpt_5k"
+    OUTPUT_PATH = "/mnt/solo-4-training/peagle"
     # Use smaller sequence length for initial testing to avoid OOM
     TOTAL_SEQ_LEN = 2048
 
@@ -27,7 +27,7 @@ if __name__ == "__main__":
     data_gen_args_sharegpt = DataGenArgs(
         train_data_path="sharegpt",
         seq_length=TOTAL_SEQ_LEN,
-        max_samples=5000,  # Only use 5000 samples from ShareGPT
+        max_samples=60000,  # Only use 5000 samples from ShareGPT
     )
 
     # Vocab Mapping - set to None to use full vocabulary (no reduction)
@@ -37,12 +37,12 @@ if __name__ == "__main__":
         logger="trackio",
         lr=3e-5,
         total_seq_len=TOTAL_SEQ_LEN,
-        run_name="peagle_llama3_8b_sharegpt_5k",
+        run_name="peagle_llama3_8b_sharegpt_20k",
         epochs=10,
         num_layers=4,
         speculator_type="peagle",  # Use P-EAGLE instead of EAGLE-3
-        para_depths=10,
-        down_sample_ratio=0.7,
+        para_depths=2,
+        down_sample_ratio=1.0,
         down_sample_ratio_min=0.2,
         max_seq_len=2048,
         ptd_token_id=128255,

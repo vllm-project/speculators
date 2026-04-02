@@ -63,6 +63,7 @@ def compute_accuracy(
 ):
     # Note: logits, targets, and loss_mask are already aligned for the current ttt_step
     target_tokens = torch.argmax(targets, dim=-1)
+    print(target_tokens)
     predicted_tokens = torch.argmax(logits, dim=-1)
     # shape: [1, total_seq_len - ttt_step]
 
@@ -242,7 +243,7 @@ class Eagle3DraftModel(SpeculatorModel):
             self.hidden_size,
             padding_idx=tl_config.pad_token_id,
         )
-        self.embed_tokens.weight.requires_grad = self.config.embed_requires_grad
+        self.embed_tokens.weight.requires_grad = False#self.config.embed_requires_grad
 
         # LM HEADS
         self.lm_head = torch.nn.Linear(

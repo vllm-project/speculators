@@ -5,16 +5,20 @@ from typing import ClassVar
 import torch
 from torch.nn.attention.flex_attention import create_block_mask
 from transformers import PretrainedConfig
-
+torch.set_printoptions(profile="full")
 from speculators.config import SpeculatorsConfig, VerifierConfig
 from speculators.model import SpeculatorModel
 from speculators.models.eagle3.core import Eagle3DraftModel
-from speculators.models.peagle.attention import create_peagle_mask_mod
+from speculators.models.peagle.attention import create_peagle_mask_mod, block_mask_to_dense_attention_mask
 from speculators.models.peagle.config import PEagleSpeculatorConfig
 from speculators.models.peagle.data import generate_cod_sample_indices
 from speculators.proposals.greedy import GreedyTokenProposalConfig
+import torch.distributed as dist
+is_rank0 = (not dist.is_available()) or (not dist.is_initialized()) or dist.get_rank() == 0
 
+from pathlib import Path
 
+import random
 @SpeculatorModel.register("peagle")
 class PEagleDraftModel(Eagle3DraftModel):
     """
@@ -140,6 +144,8 @@ class PEagleDraftModel(Eagle3DraftModel):
             down_sample_ratio_min=self.down_sample_ratio_min,
         )
 
+        sample_indices=[torch.arange(2048, dtype=torch.long, device=loss_mask.device), torch.arange(2048, dtype=torch.long, device=loss_mask.device)]
+
         # Use actual number of depths returned (may be less than para_depths
         # if sampling stopped early)
         para_depth = len(sample_indices)
@@ -164,19 +170,42 @@ class PEagleDraftModel(Eagle3DraftModel):
         sample_ids = torch.cat(sample_ids_list, dim=0).unsqueeze(0)  # [1, seq_len]
 
         # Create list of hidden states by sampling from full tensor
-        hidden_states_list = [
-            hidden_states[:, indices, :] for indices in sample_indices
-        ]
+
+        # hidden_states_list = [
+        #     hidden_states[:, indices, :] for indices in sample_indices
+        # ]
 
         # Pad each sampled group to seq_length
-        index: list[int] = []
-        padded_hidden_states = [
-            self._pad_hidden_states(item, seq_length, self.mask_hidden, index)
-            for item in hidden_states_list
-        ]
-        hidden_states_tensor = torch.cat(padded_hidden_states, dim=1)
+        # index: list[int] = []
+        # padded_hidden_states = [
+        #     self._pad_hidden_states(item, seq_length, self.mask_hidden, index)
+        #     for item in hidden_states_list
+        # ]
+        # hidden_states_tensor = torch.cat(padded_hidden_states, dim=1)
+        # print("input_ids shape", input_ids.shape)
+        target_len = sum(len(x) for x in sample_indices)
 
-        input_ids = input_ids.repeat(1, para_depth)
+        batch_size, current_len, hidden_size = hidden_states.shape
+        pad_len = target_len - current_len
+
+        if pad_len > 0:
+            padding = self.mask_hidden.to(
+                device=hidden_states.device,
+                dtype=hidden_states.dtype,
+            ).expand(batch_size, pad_len, hidden_size)
+
+            hidden_states_tensor = torch.cat([hidden_states, padding], dim=1)
+
+
+
+        pad = torch.full(
+            (input_ids.shape[0], input_ids.shape[1] * (para_depth - 1)),
+            self.ptd_token_id,
+            dtype=input_ids.dtype,
+            device=input_ids.device,
+        )
+
+        input_ids = torch.cat([input_ids, pad], dim=1)
         inputs_embeds = self.embed_tokens(input_ids)
 
         single_pos = torch.arange(0, seq_length, dtype=torch.long, device=device)
@@ -196,7 +225,7 @@ class PEagleDraftModel(Eagle3DraftModel):
             all_indices_list.append(encoded_indices)
 
         all_indices = torch.cat(all_indices_list, dim=0)  # [total_sampled_length]
-
+        
         layer_input = layer_input[:, all_indices, :]
         position_ids = position_ids[:, all_indices]
 
@@ -218,6 +247,13 @@ class PEagleDraftModel(Eagle3DraftModel):
             device=device,
         )
 
+        # if is_rank0:
+        #     block_mask=block_mask_to_dense_attention_mask(attention_mask, hidden_states.device, torch.bfloat16)
+        #     torch.save(block_mask.detach().cpu(), "mask.pt")
+
+        if is_rank0:
+            if random.random() < 0.01:
+                torch.save(layer_input.detach().cpu(), "layer_input.pt")
         layer_outputs = self.layers[0](
             layer_input,
             attention_mask=attention_mask,
@@ -254,6 +290,10 @@ class PEagleDraftModel(Eagle3DraftModel):
             targets = self.verifier_lm_head(verifier_last_hidden_states)
 
         targets_full = targets.repeat(1, para_depth, 1)
+
+
+
+
         targets = targets_full[:, all_indices, :]
 
         # Use per-depth normalization, each depth should contribute equally to gradient
@@ -274,6 +314,11 @@ class PEagleDraftModel(Eagle3DraftModel):
         )  # [1, len(all_indices)]
 
         # Pre-compute correctness for accuracy (no gradients needed)
+
+
+        # if is_rank0:
+        #     if random.random() < 0.01:
+        #         torch.save(logits.detach().cpu(), "logits.pt")
         with torch.no_grad():
             pred_tokens = torch.argmax(logits, dim=-1)
             target_tokens = torch.argmax(target_probs, dim=-1)
@@ -399,7 +444,7 @@ class PEagleDraftModel(Eagle3DraftModel):
             draft_vocab_size=kwargs["draft_vocab_size"],
             norm_before_residual=kwargs.get("norm_before_residual", False),
             para_depths=kwargs.get("para_depths", 8),
-            down_sample_ratio=kwargs.get("down_sample_ratio", 0.7),
+            down_sample_ratio=kwargs.get("down_sample_ratio", 1.0),
             down_sample_ratio_min=kwargs.get("down_sample_ratio_min", 0.2),
             ptd_token_id=kwargs.get("ptd_token_id", 0),
             max_seq_len=kwargs.get("max_seq_len", 2048),
