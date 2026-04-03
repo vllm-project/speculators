@@ -297,6 +297,8 @@ def run_e2e(
         dga_dict["output-dir"] = str(output_path / "gen" / dataset_name)
 
         dga_list = prepare_args(dga_dict)
+        dga_list.append('--assistant-pattern')
+        dga_list.append("<\|im_start\|>assistant\s*([\s\S]*?)<\|im_end\|>")
         run_script(
             "data_generation_offline.py",
             dga_list,

@@ -41,7 +41,7 @@ class PEagleDraftModel(Eagle3DraftModel):
     _attn_implementation_name: ClassVar[str] = "peagle_flex_attention"
     _keys_to_ignore_on_load_missing: ClassVar[list[str]] = [  # type: ignore[misc]
         *Eagle3DraftModel._keys_to_ignore_on_load_missing,
-        "mask_hidden",
+        # "mask_hidden",
     ]
 
     def __init__(
@@ -169,20 +169,6 @@ class PEagleDraftModel(Eagle3DraftModel):
 
         sample_ids = torch.cat(sample_ids_list, dim=0).unsqueeze(0)  # [1, seq_len]
 
-        # Create list of hidden states by sampling from full tensor
-
-        # hidden_states_list = [
-        #     hidden_states[:, indices, :] for indices in sample_indices
-        # ]
-
-        # Pad each sampled group to seq_length
-        # index: list[int] = []
-        # padded_hidden_states = [
-        #     self._pad_hidden_states(item, seq_length, self.mask_hidden, index)
-        #     for item in hidden_states_list
-        # ]
-        # hidden_states_tensor = torch.cat(padded_hidden_states, dim=1)
-        # print("input_ids shape", input_ids.shape)
         target_len = sum(len(x) for x in sample_indices)
 
         batch_size, current_len, hidden_size = hidden_states.shape
@@ -195,7 +181,6 @@ class PEagleDraftModel(Eagle3DraftModel):
             ).expand(batch_size, pad_len, hidden_size)
 
             hidden_states_tensor = torch.cat([hidden_states, padding], dim=1)
-
 
 
         pad = torch.full(
@@ -246,10 +231,6 @@ class PEagleDraftModel(Eagle3DraftModel):
             KV_LEN=len(all_indices),
             device=device,
         )
-
-        # if is_rank0:
-        #     block_mask=block_mask_to_dense_attention_mask(attention_mask, hidden_states.device, torch.bfloat16)
-        #     torch.save(block_mask.detach().cpu(), "mask.pt")
 
         if is_rank0:
             if random.random() < 0.01:
