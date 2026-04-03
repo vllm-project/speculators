@@ -548,12 +548,27 @@ class Eagle3DraftModel(SpeculatorModel):
         Returns:
             Initialized Eagle3DraftModel
         """
+        target_layer_ids = kwargs.get("target_layer_ids")
+        if target_layer_ids is None:
+            unmodified_verifier_config = AutoConfig.from_pretrained(
+                kwargs["verifier_name_or_path"]
+            )
+            num_target_layers = unmodified_verifier_config.num_hidden_layers
+            target_layer_ids = [2, num_target_layers // 2, num_target_layers - 3]
+            warnings.warn(
+                "--target-layer-ids is not explicitly set. Setting target "
+                f"layers to {target_layer_ids}. If custom target layers were used "
+                "when launching vllm datagen, please set them explicitly.",
+                stacklevel=2,
+            )
+
         config = Eagle3SpeculatorConfig(
             transformer_layer_config=verifier_config,
             draft_vocab_size=kwargs["draft_vocab_size"],
             norm_before_residual=kwargs["norm_before_residual"],
             norm_before_fc=kwargs.get("norm_before_fc", False),
             embed_requires_grad=kwargs.get("embed_requires_grad", False),
+            eagle_aux_hidden_state_layer_ids=target_layer_ids,
             speculators_config=SpeculatorsConfig(
                 algorithm="eagle3",
                 proposal_methods=[
