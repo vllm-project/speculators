@@ -32,7 +32,11 @@ def vllm_server(tmp_path):
     hidden_states_path = str(tmp_path / "hidden_states")
     process = launch_vllm_server(MODEL, VLLM_PORT, hidden_states_path)
 
-    yield {"port": VLLM_PORT, "hidden_states_path": hidden_states_path, "process": process}
+    yield {
+        "port": VLLM_PORT,
+        "hidden_states_path": hidden_states_path,
+        "process": process,
+    }
 
     stop_vllm_server(process)
 

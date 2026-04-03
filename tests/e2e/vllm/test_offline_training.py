@@ -34,7 +34,11 @@ def vllm_server(tmp_path):
     hidden_states_path = str(tmp_path / "hidden_states")
     process = launch_vllm_server(MODEL, VLLM_PORT, hidden_states_path)
 
-    yield {"port": VLLM_PORT, "hidden_states_path": hidden_states_path, "process": process}
+    yield {
+        "port": VLLM_PORT,
+        "hidden_states_path": hidden_states_path,
+        "process": process,
+    }
 
     stop_vllm_server(process)
 
@@ -72,9 +76,9 @@ def test_offline_training(
     result = subprocess.run(  # noqa: S603
         datagen_cmd, stderr=subprocess.PIPE, text=True, check=False
     )
-    assert (
-        result.returncode == 0
-    ), f"data_generation_offline2.py failed:\n{result.stderr}"
+    assert result.returncode == 0, (
+        f"data_generation_offline2.py failed:\n{result.stderr}"
+    )
 
     # Step 3: Stop the vLLM server to free GPU memory before training
     stop_vllm_server(vllm_server["process"])
