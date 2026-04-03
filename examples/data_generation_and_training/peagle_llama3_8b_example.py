@@ -25,9 +25,9 @@ if __name__ == "__main__":
     # Data Generation (same as EAGLE-3)
     data_gen_args_sharegpt = DataGenArgs(
         dataset_name="magpie",
-        train_data_path="/home/MeganEFlynn/Speculators-DEMO-Qwen3_8b/magpie_Qwen3-8B.jsonl",
+        train_data_path="/home/MeganEFlynn/Speculators-DEMO-Qwen3_8b/ultrachat_Qwen3-8B.jsonl",
         seq_length=TOTAL_SEQ_LEN,
-        max_samples=10000,
+        max_samples=20000,
     )
 
     # Vocab Mapping - set to None to use full vocabulary (no reduction)
@@ -46,6 +46,7 @@ if __name__ == "__main__":
         down_sample_ratio_min=0.2,
         max_seq_len=2048,
         ptd_token_id=151643,
+
     )
 
     run_e2e(

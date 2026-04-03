@@ -243,7 +243,7 @@ class Eagle3DraftModel(SpeculatorModel):
             self.hidden_size,
             padding_idx=tl_config.pad_token_id,
         )
-        self.embed_tokens.weight.requires_grad = False#self.config.embed_requires_grad
+        self.embed_tokens.weight.requires_grad = True#self.config.embed_requires_grad
 
         # LM HEADS
         self.lm_head = torch.nn.Linear(

@@ -352,7 +352,7 @@ def run_e2e(
     device_count = torch.accelerator.device_count()
 
     local_train_env = is_npu_available() or bool(os.environ.get("LOCAL_TRAIN_ENV", ""))
-
+    ta_list.append("--no-norm-before-residual")
     run_script(
         "train.py",
         ta_list,
