@@ -25,7 +25,7 @@ from speculators.models.dflash.utils import (
     _select_anchors,
     build_kv_position_ids,
     build_target_layer_ids,
-    gather_anchor_spans,
+    get_base_indices_for_anchored_blocks,
 )
 from speculators.utils.loading import load_model_layers
 
@@ -500,10 +500,13 @@ class DFlashDraftModel(SpeculatorModel):
         )
         position_embeddings = self.rotary_emb(hidden_states, position_ids)
         return_loss = verifier_last_hidden_states is not None
+
+        anchored_block_indices = get_base_indices_for_anchored_blocks(
+            anchor_positions, self.block_size, input_ids.numel()
+        )  # shape: [num_anchors*block_size]
+
         if return_loss:
-            targets = gather_anchor_spans(
-                input_ids.clone(), anchor_positions, self.block_size
-            ).unsqueeze(0)
+            targets = input_ids.clone()[anchored_block_indices].unsqueeze(0)
 
             loss = torch.tensor(0.0, device=device)
             metrics = {}
@@ -540,11 +543,7 @@ class DFlashDraftModel(SpeculatorModel):
             aligned_logits = logits  # [:, 1:]
             aligned_targets = targets_draft  # [:, :-1]
 
-            aligned_loss_mask = gather_anchor_spans(
-                loss_mask.clone(),
-                anchor_positions[0],
-                self.block_size,  # type: ignore[union-attr]
-            ).unsqueeze(0)
+            aligned_loss_mask = loss_mask.clone()[anchored_block_indices].unsqueeze(0)
 
             # zero out any padded anchor blocks
             aligned_loss_mask = aligned_loss_mask * (

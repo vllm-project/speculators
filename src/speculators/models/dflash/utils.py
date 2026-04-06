@@ -59,33 +59,26 @@ def build_kv_position_ids(
     return torch.cat([base_position_ids.to(torch.long), appended_pos_ids], dim=1)
 
 
-def gather_anchor_spans(
-    input_ids: torch.Tensor,
-    anchor_positions: torch.Tensor,
+def get_base_indices_for_anchored_blocks(
+    anchor_positions: torch.Tensor,  # shape: [1, num_anchors]
     block_size: int,
-) -> torch.Tensor:
-    """Gather spans of tokens starting at anchor positions.
-
-    Args:
-        input_ids: Input token IDs [T]
-        anchor_positions: Anchor indices [n]
-        block_size: Number of tokens per span
-
-    Returns:
-        Concatenated spans [n*block_size]
-    """
-    input_ids = input_ids.view(-1)
+    total_seq_len: int | None = None,
+) -> torch.Tensor:  # shape: [num_anchors*block_size]
     anchor_positions = anchor_positions.to(dtype=torch.long).view(-1)
+    # dtype: long, shape: [num_anchors]
 
-    offsets = torch.arange(block_size, device=input_ids.device, dtype=torch.long)
-    idx = anchor_positions[:, None] + offsets[None, :]
+    offsets = torch.arange(block_size, device=anchor_positions.device, dtype=torch.long)
+    idx = (
+        anchor_positions[:, None] + offsets[None, :]
+    )  # shape: [num_anchors, block_size]
 
-    if (idx < 0).any() or (idx >= input_ids.numel()).any():
+    if (idx < 0).any() or (total_seq_len and (idx >= total_seq_len).any()):
         raise ValueError(
-            "Some anchor_positions + offsets are out of range for input_ids."
+            "Some anchor_positions + offsets are out of range for total_seq_len"
+            f"={total_seq_len}. Max={idx.max().item()}, min={idx.min().item()}"
         )
 
-    return input_ids[idx.reshape(-1)]
+    return idx.reshape(-1)
 
 
 def build_target_layer_ids(num_target_layers: int, num_draft_layers: int):
