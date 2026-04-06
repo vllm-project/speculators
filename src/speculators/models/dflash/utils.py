@@ -103,44 +103,44 @@ def build_target_layer_ids(num_target_layers: int, num_draft_layers: int):
 
 
 def _select_anchors(
-    loss_mask: torch.Tensor, n: int, block_size: int
+    loss_mask: torch.Tensor,  # shape: [1, total_seq_len]
+    num_anchors: int,
+    block_size: int,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Randomly select anchor positions from valid tokens in sequence.
 
     Args:
-        loss_mask: Binary mask indicating valid positions [B, T]
+        loss_mask: Binary mask indicating valid positions [1, total_seq_len]
         n: Number of anchors to select per batch item
         block_size: Block size (last block_size positions excluded)
 
     Returns:
         tuple: (anchors, anchor_valid)
-            - anchors: Selected anchor indices [B, n]
-            - anchor_valid: Boolean mask for valid anchors [B, n]
+            - anchors: Selected anchor indices [1, num_anchors]
+            - anchor_valid: Boolean mask for valid anchors [1, num_anchors]
     """
     if loss_mask.ndim != 2:  # noqa: PLR2004
         raise ValueError(f"Expected [B, T], got {loss_mask.shape}")
 
-    B, T = loss_mask.shape  # noqa: N806
+    if block_size <= 0:
+        raise ValueError(f"Expected block size >= 0, got {block_size}")
+
     valid_mask = loss_mask.bool().clone()
+    valid_mask[:, -block_size + 1 :] = False
 
-    if block_size > 0:
-        valid_mask[:, T - block_size :] = False
+    valid_indices = torch.nonzero(valid_mask.squeeze(0), as_tuple=False).squeeze(
+        -1
+    )  # shape: [num_non_zero]
 
-    out = []
-    out_valid = []
-    for b in range(B):
-        valid_indices = torch.nonzero(valid_mask[b], as_tuple=False).squeeze(1)
+    device = loss_mask.device
+    anchors = torch.zeros(num_anchors, dtype=torch.long, device=device)
+    anchor_valid = torch.zeros(num_anchors, dtype=torch.bool, device=device)
 
-        anchors = torch.zeros(n, dtype=torch.long, device=loss_mask.device)
-        anchor_valid = torch.zeros(n, dtype=torch.bool, device=loss_mask.device)
+    k = min(num_anchors, valid_indices.numel())
+    if k > 0:
+        perm = torch.randperm(valid_indices.numel(), device=loss_mask.device)
+        anchors[:k] = valid_indices[perm[:k]]
+        anchor_valid[:k] = True
 
-        k = min(n, valid_indices.numel())
-        if k > 0:
-            perm = torch.randperm(valid_indices.numel(), device=loss_mask.device)
-            anchors[:k] = valid_indices[perm[:k]]
-            anchor_valid[:k] = True
-
-        out.append(anchors)
-        out_valid.append(anchor_valid)
-
-    return torch.stack(out, dim=0), torch.stack(out_valid, dim=0)
+    return anchors, anchor_valid
+    # shape: [num_anchors], [num_anchors]
