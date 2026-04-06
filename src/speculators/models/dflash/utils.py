@@ -3,62 +3,6 @@
 import torch
 
 
-def build_kv_position_ids(
-    base_position_ids: torch.Tensor,
-    anchor_positions: torch.Tensor,
-    block_size: int,
-) -> torch.Tensor:
-    """Construct position_ids for KV = [base | anchor_blocks].
-
-    Appended block for anchor a gets positions:
-        base_position_ids[..., a] + [0..block_size-1]
-
-    Args:
-        base_position_ids: Base position IDs [B, total_seq_len]
-        anchor_positions: Anchor indices [B, n] or [n]
-        block_size: Size of each anchor block
-
-    Returns:
-        Combined position IDs [B, total_seq_len + n*block_size]
-    """
-    B, T = base_position_ids.shape  # noqa: N806
-    device = base_position_ids.device
-
-    # Normalize anchor_positions to [B, n]
-    if anchor_positions.ndim == 1:  # noqa: PLR2004
-        anchor_positions = (
-            anchor_positions.to(device=device, dtype=torch.long)
-            .unsqueeze(0)
-            .expand(B, -1)
-        )
-    elif anchor_positions.ndim == 2:  # noqa: PLR2004
-        anchor_positions = anchor_positions.to(device=device, dtype=torch.long)
-        if anchor_positions.shape[0] != B:
-            raise ValueError(
-                f"anchor_positions batch {anchor_positions.shape[0]} != {B}"
-            )
-    else:
-        raise ValueError(
-            f"anchor_positions must be [n] or [B, n], got {anchor_positions.shape}"
-        )
-
-    n = anchor_positions.shape[1]
-
-    anchor_pos_ids = torch.gather(
-        base_position_ids.to(torch.long), dim=1, index=anchor_positions
-    )
-
-    offsets = torch.arange(block_size, device=device, dtype=torch.long).view(
-        1, 1, block_size
-    )
-
-    appended_pos_ids = (anchor_pos_ids.unsqueeze(-1) + offsets).reshape(
-        B, n * block_size
-    )
-
-    return torch.cat([base_position_ids.to(torch.long), appended_pos_ids], dim=1)
-
-
 def get_base_indices_for_anchored_blocks(
     anchor_positions: torch.Tensor,  # shape: [1, num_anchors]
     block_size: int,
@@ -102,7 +46,7 @@ def build_target_layer_ids(num_target_layers: int, num_draft_layers: int):
     ]
 
 
-def _select_anchors(
+def select_anchors(
     loss_mask: torch.Tensor,  # shape: [1, total_seq_len]
     num_anchors: int,
     block_size: int,

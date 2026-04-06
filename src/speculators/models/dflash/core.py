@@ -3,7 +3,10 @@ from typing import TYPE_CHECKING, Any, ClassVar
 import torch
 from torch import nn
 from torch.nn.attention.flex_attention import create_block_mask
-from transformers import PretrainedConfig
+from transformers import (
+    AutoTokenizer,  # noqa: PLC0415
+    PretrainedConfig,
+)
 from transformers.cache_utils import Cache
 from transformers.models.qwen3.modeling_qwen3 import (
     ALL_ATTENTION_FUNCTIONS,
@@ -22,10 +25,9 @@ from speculators.models.dflash import DFlashSpeculatorConfig
 from speculators.models.dflash.attention import create_anchor_block_mask_mod
 from speculators.models.dflash.metrics import compute_metrics
 from speculators.models.dflash.utils import (
-    _select_anchors,
-    build_kv_position_ids,
     build_target_layer_ids,
     get_base_indices_for_anchored_blocks,
+    select_anchors,
 )
 from speculators.utils.loading import load_model_layers
 
@@ -382,7 +384,6 @@ class DFlashDraftModel(SpeculatorModel):
 
     def _setup_embeddings_and_mask_token(self, verifier_config, t2d):
         """Setup embeddings and mask_token_id from verifier."""
-        from transformers import AutoTokenizer  # noqa: PLC0415
 
         if verifier_config.name_or_path is None:
             raise ValueError("VerifierConfig `name_or_path` value is required.")
@@ -440,17 +441,17 @@ class DFlashDraftModel(SpeculatorModel):
     @torch.compile
     def forward(
         self,
-        hidden_states: torch.Tensor,
-        input_ids: torch.Tensor,
+        hidden_states: torch.Tensor,  # shape: [1,total_seq_len,num_hidden*hidden_size]
+        input_ids: torch.Tensor,  # shape: [1, total_seq_len]
+        loss_mask: torch.Tensor,  # shape: [1, total_seq_len]
+        verifier_last_hidden_states: torch.Tensor,  # shape: [1, total_seq_len, hidden_size]
         lengths: torch.Tensor | None = None,  # shape: [batch_size]
-        loss_mask: torch.Tensor | None = None,  # shape: [1, total_seq_len]
         position_ids: torch.Tensor | None = None,  # shape: [1, total_seq_len]
-        verifier_last_hidden_states: torch.Tensor
-        | None = None,  # shape: [1, total_seq_len, hidden_size]
         **kwargs,
     ):
         device = hidden_states.device
         total_seq_len = hidden_states.shape[1]
+        num_anchors = self.config.max_anchors
 
         if lengths is None:
             lengths = torch.tensor([total_seq_len], dtype=torch.long, device=device)
@@ -459,16 +460,15 @@ class DFlashDraftModel(SpeculatorModel):
                 total_seq_len, dtype=torch.long, device=device
             ).unsqueeze(0)
 
-        past_key_values = None
-        assert loss_mask is not None  # noqa: S101
-        anchor_positions, anchor_valid = _select_anchors(
-            loss_mask, self.config.max_anchors, self.block_size
+        anchor_positions, anchor_valid = select_anchors(
+            loss_mask, num_anchors, self.block_size
         )
+        # shape: [num_anchors], [num_anchors]
 
         mask_mod, q_len, kv_len = create_anchor_block_mask_mod(
             lengths=lengths.to(device),
             total_seq_len=total_seq_len,
-            anchor_positions=anchor_positions[0],
+            anchor_positions=anchor_positions,
             block_size=self.block_size,
         )
 
@@ -481,92 +481,78 @@ class DFlashDraftModel(SpeculatorModel):
             device=device,
         )
 
-        mask_tokens_size = self.block_size * len(anchor_positions[0])
+        mask_tokens_size = num_anchors * self.block_size
 
         mask_token_ids = torch.full(
             (1, mask_tokens_size),
             self.mask_token_id,
             dtype=torch.long,
             device=device,
-        )
-        mask_token_ids[:, :: self.block_size] = input_ids[:, anchor_positions[0]]
+        )  # shape: [1, num_anchors*block_size]
+        mask_token_ids[:, :: self.block_size] = input_ids[:, anchor_positions]
         noise_embedding = self.embed_tokens(mask_token_ids)
+        # shape: [1, num_anchors*block_size, hidden_size]
+
         fc_output = self.fc(hidden_states)
-
         fc_output = self.hidden_norm(fc_output)
+        # shape: [1, total_seq_len, hidden_size]
 
-        position_ids = build_kv_position_ids(
-            position_ids, anchor_positions, block_size=self.block_size
+        mask_position_ids = get_base_indices_for_anchored_blocks(
+            position_ids[:, anchor_positions], self.block_size, input_ids.numel()
         )
+        position_ids = torch.cat([position_ids, mask_position_ids], dim=1)
+        # shape: [1, total_seq_len + num_anchors*block_size]
+
+        # the hidden_states shape doesn't match position_ids but doesn't need
+        # to, as hidden_states is only used to set dtype and device in rotary_emb
         position_embeddings = self.rotary_emb(hidden_states, position_ids)
-        return_loss = verifier_last_hidden_states is not None
 
         anchored_block_indices = get_base_indices_for_anchored_blocks(
             anchor_positions, self.block_size, input_ids.numel()
         )  # shape: [num_anchors*block_size]
 
-        if return_loss:
-            targets = input_ids.clone()[anchored_block_indices].unsqueeze(0)
+        targets = input_ids.clone()[anchored_block_indices].unsqueeze(0)
+        # shape: [1, num_anchors*block_size]
 
-            loss = torch.tensor(0.0, device=device)
-            metrics = {}
-        tar_tok = torch.argmax(targets, dim=-1)
-
-        tar_tok = tar_tok + self.d2t[tar_tok]  # type: ignore[index]
-        for _i, layer in enumerate(self.layers):
+        for layer in self.layers:
             noise_embedding = layer(
                 hidden_states=noise_embedding,
                 target_hidden=fc_output,
                 attention_mask=attention_mask,
                 position_ids=position_ids,
-                past_key_value=past_key_values,
                 use_cache=False,
                 position_embeddings=position_embeddings,
                 **kwargs,
             )
-        noise_embedding = self.norm(noise_embedding)
 
-        logits = self.lm_head(noise_embedding)
+        logits = self.lm_head(self.norm(noise_embedding))
+        # shape: [1, num_anchors*block_size, vocab_size]
 
-        if return_loss:
-            # Convert targets from verifier vocab to draft vocab
-            # t2d is a boolean mask [verifier_vocab_size] - True where
-            # verifier token exists in draft
-            # cumsum gives us the draft index for each verifier token
-            draft_indices = torch.cumsum(self.t2d.long(), dim=0) - 1  # type: ignore[operator]
-            targets_draft = torch.where(
-                self.t2d[targets],  # type: ignore[index]
-                draft_indices[targets],  # type: ignore[index]
-                torch.tensor(-100, dtype=torch.long, device=device),
-            )
+        # Convert targets from verifier vocab to draft vocab
+        # t2d is a boolean mask [verifier_vocab_size] - True where
+        # verifier token exists in draft
+        # cumsum gives us the draft index for each verifier token
+        draft_indices = torch.cumsum(self.t2d.long(), dim=0) - 1  # type: ignore[operator]
+        targets_draft = torch.where(
+            self.t2d[targets],  # type: ignore[index]
+            draft_indices[targets],  # type: ignore[index]
+            torch.tensor(-100, dtype=torch.long, device=device),
+        )
 
-            aligned_logits = logits  # [:, 1:]
-            aligned_targets = targets_draft  # [:, :-1]
+        aligned_loss_mask = loss_mask.clone()[:, anchored_block_indices]
+        # shape: [1, num_anchors*block_size]
 
-            aligned_loss_mask = loss_mask.clone()[anchored_block_indices].unsqueeze(0)
+        # zero out any padded anchor blocks
+        aligned_loss_mask = aligned_loss_mask * (
+            anchor_valid.repeat_interleave(self.block_size)
+            .unsqueeze(0)
+            .to(aligned_loss_mask.dtype)
+        )  # shape: [1, num_anchors*block_size]
 
-            # zero out any padded anchor blocks
-            aligned_loss_mask = aligned_loss_mask * (
-                anchor_valid[0]
-                .repeat_interleave(self.block_size)
-                .unsqueeze(0)
-                .to(aligned_loss_mask.dtype)
-            )
-
-            b = self.block_size
-            anchor_aligned = (
-                torch.arange(aligned_logits.shape[1], device=device) % b
-            ) == 0
-
-            aligned_loss_mask[:, anchor_aligned] = 0
-            s_loss, s_metrics = compute_metrics(
-                aligned_logits, aligned_targets, aligned_loss_mask, self.block_size
-            )
-            loss += s_loss
-            metrics.update(s_metrics)
+        aligned_loss_mask[:, :: self.block_size] = 0
+        loss, metrics = compute_metrics(
+            logits, targets_draft, aligned_loss_mask, self.block_size
+        )
         draft_tokens = torch.argmax(logits, dim=-1)
-        if return_loss:
-            metrics["loss"] = loss.detach().clone()
-            return draft_tokens, loss, metrics
-        else:
-            return draft_tokens
+
+        return draft_tokens, loss, metrics
