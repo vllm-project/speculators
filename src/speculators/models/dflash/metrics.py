@@ -7,55 +7,61 @@ import torch
 
 @torch.no_grad()
 def compute_accuracy(
-    logits: torch.Tensor,
-    targets: torch.Tensor,
-    loss_mask: torch.Tensor | None,
+    logits: torch.Tensor,  # shape: [1, num_anchors * block_size, vocab_size]
+    targets: torch.Tensor,  # shape: [1, num_anchors * block_size]
+    loss_mask: torch.Tensor,  # shape: [1, num_anchors * block_size]
     block_size: int = 1,
-):
-    """Compute token prediction accuracy with optional block-wise breakdown.
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compute token prediction accuracy with block-wise breakdown.
 
     Compares predicted tokens (argmax of logits) against ground truth targets,
-    optionally masked by loss_mask. Computes per-position
-    accuracy within each block (useful for analyzing positional biases in
-    block-based draft models like DFlash).
+    masked by loss_mask. Computes per-position accuracy within each block
+    (useful for analyzing positional biases in block-based draft models
+    like DFlash).
 
     Args:
-        logits: Model predictions [batch, seq_len, vocab_size]
-        targets: Ground truth token IDs
-            [batch, seq_len, vocab_size] or [batch, seq_len]
-        loss_mask: Optional binary mask for positions to include
-            [batch, seq_len]
+        logits: Model predictions [1, num_anchors * block_size, vocab_size]
+        targets: Ground truth token IDs [1, num_anchors * block_size]
+        loss_mask: Binary mask for positions to include
+            [1, num_anchors * block_size]
         block_size: Size of blocks for positional accuracy breakdown (default: 1)
 
     Returns:
-        tuple: (overall_accuracy, block_position_accuracies)
-            - overall_accuracy: Float tensor, fraction correct
-            - block_position_accuracies: List of per-position accuracies
-              within blocks (only when block_size > 1)
+        tuple: (overall_accuracy, per_position_accuracies)
+            - overall_accuracy: Scalar float tensor, fraction correct
+            - per_position_accuracies: Float tensor of shape [block_size]
+              with accuracy at each position within the block
     """
-    target_tokens = targets
-    predicted_tokens = torch.argmax(logits, dim=-1)
-    correct = predicted_tokens == target_tokens
+    predicted_tokens = torch.argmax(
+        logits, dim=-1
+    )  # shape: [1, num_anchors * block_size]
+    correct = predicted_tokens == targets
+    correct = torch.logical_and(correct, loss_mask)
 
-    if block_size != 1:
-        accs = []
-        assert loss_mask is not None  # noqa: S101
-        for i in range(block_size):
-            pos_cor = torch.masked_select(
-                correct[:, i::block_size],
-                loss_mask.to(torch.bool)[:, i::block_size],
-            )
-            accs.append(pos_cor.float().sum() / (pos_cor.numel() + 1e-5))
+    correct = correct.reshape(1, -1, block_size)  # shape: [1, num_anchors, block_size]
+    loss_mask = loss_mask.reshape(
+        1, -1, block_size
+    )  # shape: [1, num_anchors, block_size]
 
-    if loss_mask is not None:
-        correct = torch.masked_select(correct, loss_mask.to(torch.bool))
-    correct_sum = correct.float().sum()
-    full_denom = correct.numel()
+    per_block_idx_sum = correct.float().sum(dim=1)  # shape: [1, block_size]
+    per_block_idx_denom = loss_mask.float().sum(dim=1)  # shape: [1, block_size]
 
-    return correct_sum / (full_denom + 1e-5), accs
+    total_sum = per_block_idx_sum.sum()  # shape: [1]
+    total_denom = per_block_idx_denom.sum()  # shape: [1]
+
+    return total_sum / (total_denom + 1e-5), (
+        per_block_idx_sum / (per_block_idx_denom + 1e-5)
+    ).reshape(-1)
+    # shape: [1], [block_size]
 
 
-def loss_function(logits, target_ids, loss_mask, block_size=8, gamma=4.0):
+def loss_function(
+    logits,  # shape: [1, num_anchors*block_size, vocab_size]
+    target_ids,  # shape: [1, num_anchors*block_size]
+    loss_mask,  # shape: [1, num_anchors*block_size]
+    block_size=8,
+    gamma=4.0,
+):
     """Compute weighted cross-entropy loss for DFlash draft model.
 
     Applies exponential decay weighting based on position within blocks,
@@ -80,10 +86,12 @@ def loss_function(logits, target_ids, loss_mask, block_size=8, gamma=4.0):
         ignore_index=-100,
     ).view(B, T)
 
-    idx = torch.arange(T, device=logits.device)
-    k = (idx + 1) % block_size
-    w = torch.exp(-((k - 1).clamp(min=0)).to(logits.dtype) / gamma)
-    w = (w * (k != 0).to(logits.dtype)).view(1, T)
+    in_block_idx = torch.arange(T, device=logits.device) % block_size
+    # in_block_idx = 0 1 2 3 0 1 2 3, block_size = 4
+    w = torch.exp(-((in_block_idx - 1).clamp(min=0)).to(logits.dtype) / gamma)
+    # w = e^-(0 0 1 2 0 0 1 2) / gamma
+    w = (w * (in_block_idx != 0).to(logits.dtype)).view(1, T)
+    # w = 0 1 e^-1/gamma e^-2/gamma 0 1 e^-1/gamma e^-2/gamma
 
     m = loss_mask.to(logits.dtype).view(B, T)
 
@@ -159,7 +167,7 @@ def compute_acceptance_rate(
 def compute_metrics(
     logits: torch.Tensor,
     targets: torch.Tensor,
-    loss_mask: torch.Tensor | None,
+    loss_mask: torch.Tensor,
     block_size: int = 1,
 ) -> tuple[torch.Tensor, dict]:
     """Compute loss and accuracy metrics for draft model predictions.
@@ -176,16 +184,16 @@ def compute_metrics(
             - full_acc: Overall accuracy
             - position {i} acc: Accuracy at position i within blocks
     """
-    s_loss = loss_function(logits, targets, loss_mask)
+    loss = loss_function(logits, targets, loss_mask)
 
-    s_full_acc, per_position_acc = compute_accuracy(
+    full_acc, per_position_acc = compute_accuracy(
         logits, targets, loss_mask, block_size
     )
 
-    s_metrics: dict[str, Any] = {}
-    s_metrics["loss"] = s_loss.detach().clone()
-    s_metrics["full_acc"] = s_full_acc
+    metrics: dict[str, Any] = {}
+    metrics["loss"] = loss.detach().clone()
+    metrics["full_acc"] = full_acc
 
     for pos in range(len(per_position_acc)):
-        s_metrics[f"position {pos} acc"] = per_position_acc[pos]
-    return s_loss, s_metrics
+        metrics[f"position {pos} acc"] = per_position_acc[pos]
+    return loss, metrics
