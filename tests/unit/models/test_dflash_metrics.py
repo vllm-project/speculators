@@ -120,12 +120,7 @@ class TestLossFunction:
 
     def test_anchor_positions_have_zero_weight(self):
         """Position 0 in each block (anchor) should have zero weight."""
-        B, T, V = 1, 8, 10
-        logits = torch.randn(B, T, V)
-        loss_mask = torch.ones(B, T)
-
-        # Create targets that are wrong everywhere
-        target_ids = torch.zeros(B, T, dtype=torch.long)
+        T = 8
 
         # Compute weight for each position
         idx = torch.arange(T)

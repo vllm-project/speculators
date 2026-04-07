@@ -444,7 +444,7 @@ class DFlashDraftModel(SpeculatorModel):
         hidden_states: torch.Tensor,  # shape: [1,total_seq_len,num_hidden*hidden_size]
         input_ids: torch.Tensor,  # shape: [1, total_seq_len]
         loss_mask: torch.Tensor,  # shape: [1, total_seq_len]
-        verifier_last_hidden_states: torch.Tensor,  # shape: [1, total_seq_len, hidden_size]
+        verifier_last_hidden_states: torch.Tensor,  # shape: [1, total_seq_len, hidden_size] # noqa: ARG002, E501
         lengths: torch.Tensor | None = None,  # shape: [batch_size]
         position_ids: torch.Tensor | None = None,  # shape: [1, total_seq_len]
         **kwargs,
@@ -491,17 +491,17 @@ class DFlashDraftModel(SpeculatorModel):
         )  # shape: [1, num_anchors*block_size]
         mask_token_ids[:, :: self.block_size] = input_ids[:, anchor_positions]
         noise_embedding = self.embed_tokens(mask_token_ids)
-        # shape: [1, num_anchors*block_size, hidden_size]
+        # shape: [1, num_anchors*block_size, hidden_size] # noqa: ERA001
 
         fc_output = self.fc(hidden_states)
         fc_output = self.hidden_norm(fc_output)
-        # shape: [1, total_seq_len, hidden_size]
+        # shape: [1, total_seq_len, hidden_size] # noqa: ERA001
 
         mask_position_ids = get_base_indices_for_anchored_blocks(
             position_ids[:, anchor_positions], self.block_size, input_ids.numel()
         )
         position_ids = torch.cat([position_ids, mask_position_ids.unsqueeze(0)], dim=1)
-        # shape: [1, total_seq_len + num_anchors*block_size]
+        # shape: [1, total_seq_len + num_anchors*block_size] # noqa: ERA001
 
         # the hidden_states shape doesn't match position_ids but doesn't need
         # to, as hidden_states is only used to set dtype and device in rotary_emb
@@ -512,7 +512,7 @@ class DFlashDraftModel(SpeculatorModel):
         )  # shape: [num_anchors*block_size]
 
         targets = input_ids.clone()[:, anchored_block_indices]
-        # shape: [1, num_anchors*block_size]
+        # shape: [1, num_anchors*block_size] # noqa: ERA001
 
         for layer in self.layers:
             noise_embedding = layer(
@@ -526,7 +526,7 @@ class DFlashDraftModel(SpeculatorModel):
             )
 
         logits = self.lm_head(self.norm(noise_embedding))
-        # shape: [1, num_anchors*block_size, vocab_size]
+        # shape: [1, num_anchors*block_size, vocab_size] # noqa: ERA001
 
         # Convert targets from verifier vocab to draft vocab
         # t2d is a boolean mask [verifier_vocab_size] - True where
@@ -540,7 +540,7 @@ class DFlashDraftModel(SpeculatorModel):
         )
 
         aligned_loss_mask = loss_mask.clone()[:, anchored_block_indices]
-        # shape: [1, num_anchors*block_size]
+        # shape: [1, num_anchors*block_size] # noqa: ERA001
 
         # zero out any padded anchor blocks
         aligned_loss_mask = aligned_loss_mask * (
