@@ -100,6 +100,7 @@ class DataGenArgs(NamedTuple):
  output path generation. If None and train_data_path is sharegpt or ultrachat, the
  dataset name will be inferred from the train_data_path."""
     turn_dropout: bool = False
+    assistant_pattern: str | _NS = _NOTSET
     seq_length: int | _NS = _NOTSET
     max_samples: int | _NS = _NOTSET
     tensor_parallel_size: int | _NS = _NOTSET
@@ -133,6 +134,7 @@ class TrainArgs(NamedTuple):
     scheduler_total_steps: int | _NS = _NOTSET
     scheduler_num_cosine_cycles: float | _NS = _NOTSET
     norm_before_fc: bool | _NS = _NOTSET
+    no_norm_before_residual: bool | _NS = _NOTSET
     # Model type selection
     speculator_type: str | _NS = _NOTSET
     # P-EAGLE specific parameters
@@ -298,8 +300,6 @@ def run_e2e(
         dga_dict["output-dir"] = str(output_path / "gen" / dataset_name)
 
         dga_list = prepare_args(dga_dict)
-        dga_list.append('--assistant-pattern')
-        dga_list.append("<\|im_start\|>assistant\s*([\s\S]*?)<\|im_end\|>")
         run_script(
             "data_generation_offline.py",
             dga_list,
@@ -354,7 +354,6 @@ def run_e2e(
     device_count = torch.accelerator.device_count()
 
     local_train_env = is_npu_available() or bool(os.environ.get("LOCAL_TRAIN_ENV", ""))
-    ta_list.append("--no-norm-before-residual")
     run_script(
         "train.py",
         ta_list,

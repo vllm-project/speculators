@@ -246,11 +246,11 @@ def main(args: argparse.Namespace):
             args.from_pretrained, t2d=t2d, d2t=d2t
         )
     else:
+        args.draft_vocab_size = draft_vocab_size
         draft_model = model_class.from_training_args(
             verifier_config=transformer_layer_config,
             t2d=t2d,
             d2t=d2t,
-            draft_vocab_size=draft_vocab_size,
             **vars(args),
         )
 

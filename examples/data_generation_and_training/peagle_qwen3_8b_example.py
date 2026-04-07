@@ -26,6 +26,7 @@ if __name__ == "__main__":
     data_gen_args_sharegpt = DataGenArgs(
         dataset_name="magpie",
         train_data_path="/home/MeganEFlynn/Speculators-DEMO-Qwen3_8b/combined.jsonl",
+        assistant_pattern=r"<\|im_start\|>assistant\s*([\s\S]*?)<\|im_end\|>",
         seq_length=TOTAL_SEQ_LEN,
         max_samples=500000,
     )
@@ -37,7 +38,7 @@ if __name__ == "__main__":
         logger="trackio",
         lr=1e-4,
         total_seq_len=TOTAL_SEQ_LEN,
-        run_name="peagle_qwen3_8b_sharegpt_500k",
+        run_name="peagle_qwen3_8b_ultrachat_500k",
         epochs=4,
         num_layers=4,
         speculator_type="peagle",
@@ -46,7 +47,7 @@ if __name__ == "__main__":
         down_sample_ratio_min=0.2,
         max_seq_len=2048,
         ptd_token_id=151643,
-
+        no_norm_before_residual=True,
     )
 
     run_e2e(
@@ -56,37 +57,3 @@ if __name__ == "__main__":
         vocab_mapping_args=vocab_mapping_args,
         train_args=train_args,
     )
-
-
-    # # Data Generation (same as EAGLE-3)
-    # data_gen_args_sharegpt = DataGenArgs(
-    #     train_data_path="sharegpt",
-    #     seq_length=TOTAL_SEQ_LEN,
-    #     max_samples=60000,  # Only use 5000 samples from ShareGPT
-    # )
-
-    # # Vocab Mapping - set to None to use full vocabulary (no reduction)
-    # vocab_mapping_args = None
-
-    # train_args = TrainArgs(
-    #     logger="trackio",
-    #     lr=3e-5,
-    #     total_seq_len=TOTAL_SEQ_LEN,
-    #     run_name="peagle_llama3_8b_sharegpt_20k",
-    #     epochs=10,
-    #     num_layers=4,
-    #     speculator_type="peagle",  # Use P-EAGLE instead of EAGLE-3
-    #     para_depths=2,
-    #     down_sample_ratio=1.0,
-    #     down_sample_ratio_min=0.2,
-    #     max_seq_len=2048,
-    #     ptd_token_id=128255,
-    # )
-
-    # run_e2e(
-    #     verifier_name_or_path=VERIFIER_NAME_OR_PATH,
-    #     output_path=OUTPUT_PATH,
-    #     data_gen_args=data_gen_args_sharegpt,
-    #     vocab_mapping_args=vocab_mapping_args,
-    #     train_args=train_args,
-    # )
