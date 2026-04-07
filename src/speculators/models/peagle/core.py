@@ -164,9 +164,6 @@ class PEagleDraftModel(Eagle3DraftModel):
 
         sample_ids = torch.cat(sample_ids_list, dim=0).unsqueeze(0)  # [1, seq_len]
 
-
-        index: list[int] = []
-        
         target_len = input_ids.shape[1]*para_depth
 
         batch_size, current_len, hidden_size = hidden_states.shape
@@ -180,11 +177,7 @@ class PEagleDraftModel(Eagle3DraftModel):
 
             hidden_states_tensor = torch.cat([hidden_states, padding], dim=1)
         else:
-            print("input ids",input_ids.shape)
-            print("para ", para_depth)
-            print("target",target_len)
-            print("hidden",hidden_states.shape)
-            hidden_states_tensor=hidden_states
+            hidden_states_tensor = hidden_states
 
         pad = torch.full(
             (input_ids.shape[0], input_ids.shape[1] * (para_depth - 1)),
