@@ -1,0 +1,60 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: "en"
+early_access: false
+reviews:
+  request_changes_workflow: false # Prevent coderabbit from approving the PR
+  high_level_summary: true
+  high_level_summary_in_walkthrough: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: false
+  auto_apply_labels: true
+  path_filters:
+    - "!**/*.pyc"
+    - "!**/build/**"
+    - "!**/.pytest_cache/**"
+    - "!**/.ruff_cache/**"
+    - "!**/__pycache__/**"
+    - "!**/*.egg-info/**"
+  path_instructions:
+    - path: "**/*.py"
+      instructions: "Focus on code correctness, speculative decoding algorithm implementation, and tensor operations. Check for major PEP 8 violations and Python best practices. Verify type annotations are consistent with mypy requirements. Ignore trivial formatting issues."
+    - path: "src/speculators/train/**/*.py"
+      instructions: "Pay close attention to distributed training correctness: verify barrier syncs are placed appropriately, device placement is consistent, and FSDP wrapping is correct. Check learning rate scheduler logic, checkpoint save/resume behavior, and that loss computation handles padding masks properly. Verify multi-step (TTT) loss aggregation and decay factors are applied correctly. Ensure bfloat16 mixed precision is handled safely."
+    - path: "src/speculators/models/**/*.py"
+      instructions: "Review model architecture implementations carefully. Verify attention mask construction is correct for speculative token positions. Check that vocabulary mapping (draft vocab → target vocab) is applied consistently in forward passes and loss computation. Ensure KL divergence loss is computed between properly aligned logit/target distributions. Confirm Pydantic config fields serialize and deserialize correctly to/from Hugging Face config.json format."
+    - path: "src/speculators/data_generation/**/*.py"
+      instructions: "Review hidden state extraction pipeline for correctness. Verify that shift-based alignment of hidden states to target tokens is correct (off-by-one errors are a common bug here). Check that loss masks are applied before hidden state storage. Ensure vLLM client interactions handle errors gracefully and that deprecated code paths are not being reintroduced."
+    - path: "src/speculators/convert/**/*.py"
+      instructions: "Verify weight mapping and shape compatibility between source and target architectures. Check that all required keys are present and correctly renamed during conversion. Ensure that legacy model format assumptions do not silently break for new architectures."
+    - path: "src/speculators/config.py"
+      instructions: "Check that new config fields have correct Pydantic validators, are serialized/deserialized correctly, and maintain backward compatibility with existing saved checkpoints. Verify that registry auto-discovery patterns are not broken by new config additions."
+    - path: "tests/**/*.py"
+      instructions: "Ensure PyTest tests are clear, comprehensive, and cover edge cases specific to speculative decoding (e.g., vocab mapping boundaries, multi-step loss edge cases, distributed vs. single-GPU checkpoint behavior). Verify proper mocking of vLLM and GPU-dependent components in unit tests. Check that new code paths introduced in the PR are covered."
+    - path: "examples/**/*.py"
+      instructions: "Review for clarity, correctness, and educational value. Ensure examples are end-to-end runnable, configurations match current API, and comments explain speculative decoding-specific concepts for users new to the algorithm."
+    - path: "scripts/**/*.py"
+      instructions: "Check that scripts handle argument parsing robustly, log progress clearly, and are safe to run in multi-GPU environments. Verify that gen_and_train.py pipeline orchestration correctly sequences data generation before training."
+    - path: "docs/**/*.md"
+      instructions: "Check for clarity, accuracy, and completeness. Ensure code examples match the current API and that speculative decoding concepts are explained correctly."
+    - path: "**/README.md"
+      instructions: "Review for clarity, accuracy, and up-to-date information. Ensure installation instructions, vLLM integration steps, and training examples are correct and reflect the current state of the library."
+  auto_review:
+    enabled: true
+    ignore_title_keywords:
+      - "WIP"
+      - "DO NOT MERGE"
+      - "DRAFT"
+    drafts: false
+    auto_incremental_review: false
+    base_branches:
+      - "main"
+knowledge_base:
+  linked_repositories:
+    - repository: "vllm-project/vllm"
+      instructions: "vLLM is used for hidden state extraction during data generation and as the inference backend for speculative decoding. Useful for understanding hidden state APIs, speculative decoding integration points, and how draft models are loaded and executed."
+chat:
+  auto_reply: true
+issue_enrichment:
+  auto_enrich:
+    enabled: true
