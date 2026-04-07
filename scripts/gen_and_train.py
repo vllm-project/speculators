@@ -298,6 +298,8 @@ def run_e2e(
         dga_dict["output-dir"] = str(output_path / "gen" / dataset_name)
 
         dga_list = prepare_args(dga_dict)
+        dga_list.append('--assistant-pattern')
+        dga_list.append("<\|im_start\|>assistant\s*([\s\S]*?)<\|im_end\|>")
         run_script(
             "data_generation_offline.py",
             dga_list,
@@ -352,7 +354,7 @@ def run_e2e(
     device_count = torch.accelerator.device_count()
 
     local_train_env = is_npu_available() or bool(os.environ.get("LOCAL_TRAIN_ENV", ""))
-
+    ta_list.append("--no-norm-before-residual")
     run_script(
         "train.py",
         ta_list,

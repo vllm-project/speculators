@@ -163,20 +163,36 @@ class PEagleDraftModel(Eagle3DraftModel):
 
         sample_ids = torch.cat(sample_ids_list, dim=0).unsqueeze(0)  # [1, seq_len]
 
-        # Create list of hidden states by sampling from full tensor
-        hidden_states_list = [
-            hidden_states[:, indices, :] for indices in sample_indices
-        ]
 
-        # Pad each sampled group to seq_length
         index: list[int] = []
-        padded_hidden_states = [
-            self._pad_hidden_states(item, seq_length, self.mask_hidden, index)
-            for item in hidden_states_list
-        ]
-        hidden_states_tensor = torch.cat(padded_hidden_states, dim=1)
+        
+        target_len = input_ids.shape[1]*para_depth
 
-        input_ids = input_ids.repeat(1, para_depth)
+        batch_size, current_len, hidden_size = hidden_states.shape
+        pad_len = target_len - current_len
+
+        if pad_len > 0:
+            padding = self.mask_hidden.to(
+                device=hidden_states.device,
+                dtype=hidden_states.dtype,
+            ).expand(batch_size, pad_len, hidden_size)
+
+            hidden_states_tensor = torch.cat([hidden_states, padding], dim=1)
+        else:
+            print("input ids",input_ids.shape)
+            print("para ", para_depth)
+            print("target",target_len)
+            print("hidden",hidden_states.shape)
+            hidden_states_tensor=hidden_states
+
+        pad = torch.full(
+            (input_ids.shape[0], input_ids.shape[1] * (para_depth - 1)),
+            self.ptd_token_id,
+            dtype=input_ids.dtype,
+            device=input_ids.device,
+        )
+
+        input_ids = torch.cat([input_ids, pad], dim=1)
         inputs_embeds = self.embed_tokens(input_ids)
 
         single_pos = torch.arange(0, seq_length, dtype=torch.long, device=device)
@@ -251,7 +267,9 @@ class PEagleDraftModel(Eagle3DraftModel):
             "verifier_last_hidden_states required for training"
         )
         with torch.no_grad():
-            targets = self.verifier_lm_head(verifier_last_hidden_states)
+            targets = self.verifier_lm_head(
+                self.verifier_norm(verifier_last_hidden_states)
+            )
 
         targets_full = targets.repeat(1, para_depth, 1)
         targets = targets_full[:, all_indices, :]
