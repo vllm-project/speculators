@@ -500,7 +500,7 @@ class DFlashDraftModel(SpeculatorModel):
         mask_position_ids = get_base_indices_for_anchored_blocks(
             position_ids[:, anchor_positions], self.block_size, input_ids.numel()
         )
-        position_ids = torch.cat([position_ids, mask_position_ids], dim=1)
+        position_ids = torch.cat([position_ids, mask_position_ids.unsqueeze(0)], dim=1)
         # shape: [1, total_seq_len + num_anchors*block_size]
 
         # the hidden_states shape doesn't match position_ids but doesn't need
@@ -511,7 +511,7 @@ class DFlashDraftModel(SpeculatorModel):
             anchor_positions, self.block_size, input_ids.numel()
         )  # shape: [num_anchors*block_size]
 
-        targets = input_ids.clone()[anchored_block_indices].unsqueeze(0)
+        targets = input_ids.clone()[:, anchored_block_indices]
         # shape: [1, num_anchors*block_size]
 
         for layer in self.layers:

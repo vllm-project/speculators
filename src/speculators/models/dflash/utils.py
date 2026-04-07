@@ -70,7 +70,7 @@ def select_anchors(
         raise ValueError(f"Expected block size >= 0, got {block_size}")
 
     valid_mask = loss_mask.bool().clone()
-    valid_mask[:, -block_size + 1 :] = False
+    valid_mask[:, -block_size:] = False
 
     valid_indices = torch.nonzero(valid_mask.squeeze(0), as_tuple=False).squeeze(
         -1
