@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 from loguru import logger
 
-from tests.e2e.vllm.utils import (
+from tests.e2e.utils import (
     SCRIPTS_DIR,
     launch_vllm_server,
     prepare_data,
