@@ -85,3 +85,5 @@ merge_protections:
       - label = two-reviews
     success_conditions:
       - "#approved-reviews-by >= 2"
+merge_protections_settings:
+  reporting_method: check-runs
