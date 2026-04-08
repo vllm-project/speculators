@@ -14,6 +14,7 @@ Classes:
 from abc import ABC, abstractmethod
 from typing import Any, ClassVar
 
+import torch
 from pydantic import BaseModel, GetCoreSchemaHandler
 from pydantic_core import CoreSchema, core_schema
 
@@ -32,7 +33,7 @@ class ReloadableBaseModel(BaseModel):
         This method is useful when the registry has been modified or when the
         class needs to be re-validated with the latest schema.
         """
-        cls.model_rebuild(force=True)
+        cls.model_rebuild(force=True, _types_namespace={"torch": torch})
 
 
 class PydanticClassRegistryMixin(ReloadableBaseModel, ABC, ClassRegistryMixin):
