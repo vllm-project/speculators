@@ -445,7 +445,7 @@ class DFlashDraftModel(SpeculatorModel):
                 ("eos_token_id", tokenizer.eos_token_id),
                 ("unk_token_id", tokenizer.unk_token_id),
             ]
-            for (token_name, token_id) in token_options:
+            for token_name, token_id in token_options:
                 if token_id is not None:
                     self.mask_token_id = token_id
                     warnings.warn(
