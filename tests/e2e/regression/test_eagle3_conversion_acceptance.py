@@ -99,4 +99,3 @@ class TestEagle3vLLM:
             acceptance_thresholds=acceptance_thresholds,
             ignore_eos=True,
         )
-        

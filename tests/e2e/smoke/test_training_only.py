@@ -99,4 +99,3 @@ class TestTrainvLLM:
         # 4. Run trained speculator in vLLM
         # TODO: is there a way to get the checkpoint folder directly?
         run_vllm_engine(model_path=SAVE_PATH + "/0", tmp_path=tmp_path, prompts=prompts)
-        
