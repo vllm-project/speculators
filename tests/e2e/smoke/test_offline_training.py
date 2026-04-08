@@ -9,109 +9,85 @@ Exercises the full offline pipeline:
   6. Validate the trained checkpoint via vLLM inference (run_vllm_engine)
 """
 
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
-from loguru import logger
 
 from tests.e2e.utils import (
-    SCRIPTS_DIR,
-    launch_vllm_server,
-    prepare_data,
+    launch_vllm_server_context,
+    run_data_generation_offline2,
+    run_prepare_data,
+    run_training,
     run_vllm_engine,
-    stop_vllm_server,
 )
 
 MODEL = "Qwen/Qwen3-0.6B"
-VLLM_PORT = 8322
-
-
-@pytest.fixture
-def vllm_server(tmp_path):
-    """Launch a vLLM server configured for hidden-state extraction."""
-    hidden_states_path = str(tmp_path / "hidden_states")
-    process = launch_vllm_server(MODEL, VLLM_PORT, hidden_states_path)
-
-    yield {
-        "port": VLLM_PORT,
-        "hidden_states_path": hidden_states_path,
-        "process": process,
-    }
-
-    stop_vllm_server(process)
 
 
 @pytest.mark.e2e
 @pytest.mark.slow
-def test_offline_training(
-    tmp_path: Path, prompts: list[list[dict[str, str]]], vllm_server
+def test_offline_smoke(tmp_path: Path, prompts: list[list[dict[str, str]]]):
+    run_offline_e2e(tmp_path, MODEL, prompts=prompts, vllm_gpu_util=0.9)
+
+
+def run_offline_e2e(
+    tmp_path: Path,
+    model: str,
+    max_samples: int = 50,
+    seq_length: int = 512,
+    vllm_gpu_util: float = 0.5,
+    port: int = 8321,
+    draft_vocab_size: int = 8192,
+    epochs: int = 1,
+    lr: float = 3e-4,
+    prompts: list[list[dict[str, str]]] | None = None,
+    disable_compile_cache: bool = False,
+    max_tokens: int = 50,
+    ignore_eos: bool = True,
+    acceptance_thresholds: list[float] | None = None,
 ):
     data_path = tmp_path / "data"
-    hidden_states_path = tmp_path / "offline_hidden_states"
+    offline_hidden_states = tmp_path / "offline_hidden_states"
     save_path = tmp_path / "checkpoints"
-    port = vllm_server["port"]
 
     # Step 1: Prepare data
-    prepare_data(MODEL, data_path)
+    run_prepare_data(model, data_path, max_samples, seq_length)
 
-    # Step 2: Generate hidden states offline
-    datagen_cmd = [
-        sys.executable,
-        str(SCRIPTS_DIR / "data_generation_offline2.py"),
-        "--preprocessed-data",
-        str(data_path),
-        "--endpoint",
-        f"http://localhost:{port}/v1",
-        "--output",
-        str(hidden_states_path),
-        "--max-samples",
-        "50",
-        "--concurrency",
-        "4",
-        "--validate-outputs",
-    ]
-    logger.info("Generating hidden states offline: {}", " ".join(datagen_cmd))
-    result = subprocess.run(  # noqa: S603
-        datagen_cmd, stderr=subprocess.PIPE, text=True, check=False
+    with launch_vllm_server_context(
+        model,
+        port,
+        tmp_path / "vllm_hidden_states",
+        max_model_len=seq_length + 1,
+        gpu_memory_utilization=vllm_gpu_util,
+    ):
+        # Step 2: Generate hidden states offline
+        run_data_generation_offline2(
+            data_path, offline_hidden_states, port, max_samples
+        )
+
+    # Step 3: Train using pre-generated hidden states (no live server needed)
+    run_training(
+        model,
+        data_path,
+        save_path,
+        seq_length,
+        port,
+        draft_vocab_size,
+        epochs,
+        lr,
+        online=False,
+        hidden_states_path=offline_hidden_states,
     )
-    assert result.returncode == 0, (
-        f"data_generation_offline2.py failed:\n{result.stderr}"
-    )
 
-    # Step 3: Stop the vLLM server to free GPU memory before training
-    stop_vllm_server(vllm_server["process"])
-
-    # Step 4: Train using pre-generated hidden states (no live server needed)
-    train_cmd = [
-        sys.executable,
-        str(SCRIPTS_DIR / "train.py"),
-        "--verifier-name-or-path",
-        MODEL,
-        "--data-path",
-        str(data_path),
-        "--hidden-states-path",
-        str(hidden_states_path),
-        "--save-path",
-        str(save_path),
-        "--draft-vocab-size",
-        "8192",
-        "--epochs",
-        "1",
-        "--lr",
-        "3e-4",
-        "--total-seq-len",
-        "512",
-        "--on-missing",
-        "raise",
-    ]
-    logger.info("Running training: {}", " ".join(train_cmd))
-    result = subprocess.run(  # noqa: S603
-        train_cmd, stderr=subprocess.PIPE, text=True, check=False
-    )
-    assert result.returncode == 0, f"train.py failed:\n{result.stderr}"
-
-    # Step 5: Validate trained checkpoint with vLLM inference
-    checkpoint_path = str(save_path / "0")
-    run_vllm_engine(model_path=checkpoint_path, tmp_path=tmp_path, prompts=prompts)
+    # Step 4: Validate trained checkpoint with vLLM inference
+    if prompts is not None:
+        checkpoint_path = str(save_path / "checkpoint_best")
+        run_vllm_engine(
+            model_path=checkpoint_path,
+            tmp_path=tmp_path,
+            prompts=prompts,
+            disable_compile_cache=disable_compile_cache,
+            max_tokens=max_tokens,
+            ignore_eos=ignore_eos,
+            acceptance_thresholds=acceptance_thresholds,
+        )
