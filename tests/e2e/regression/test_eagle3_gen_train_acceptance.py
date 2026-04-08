@@ -3,8 +3,9 @@ import sys
 from pathlib import Path
 
 # Add scripts directory to path so we can import the run_e2e function.
-scripts_path = Path(__file__).absolute().parent.parent.parent.parent / "scripts"
+scripts_path = Path(__file__).absolute().parent.parent.parent.parent.parent / "scripts"
 sys.path.append(str(scripts_path))
+
 
 from gen_and_train import (  # type: ignore[import-not-found] # noqa: E402
     DataGenArgs,
@@ -39,7 +40,7 @@ def test_gen_train_acceptance(tmp_path: Path, monkeypatch):
     train_args = TrainArgs(
         lr=3e-4,
         total_seq_len=TOTAL_SEQ_LEN,
-        run_name="test_gen_train_acceptance",
+        run_name="test_eagle3_gen_train_acceptance",
         epochs=NUM_EPOCHS,
     )
 
