@@ -1,6 +1,8 @@
 import argparse
 import json
 import os
+import sys
+import warnings
 
 
 def parse_args():
@@ -8,7 +10,7 @@ def parse_args():
         description="Launch vLLM for hidden states extraction",
         usage=(
             "launch_vllm.py [-h] MODEL [--hidden-states-path HIDDEN_STATES_PATH] "
-            "[--layers LAYERS [LAYERS ...]] -- *VLLM_ARGS"
+            "[--target-layer-ids TARGET_LAYER_IDS [TARGET_LAYER_IDS ...]] -- *VLLM_ARGS"
         ),
     )
     parser.add_argument(
@@ -21,12 +23,13 @@ def parse_args():
         help="The directory to save hidden states to. Default '/tmp/hidden_states'.",
     )
     parser.add_argument(
-        "--layers",
+        "--target-layer-ids",
         type=int,
         nargs="+",
         help=(
-            "(Optional) A (space separated) list of integer layer ids. Default layers "
-            "[2, num_hidden_layers // 2, num_hidden_layers - 3, num_hidden_layers]."
+            "(Optional) A (space separated) list of integer layer ids. Defaults to "
+            "[2, num_hidden_layers // 2, num_hidden_layers - 3, num_hidden_layers]. "
+            "Note: if set, you must also pass the same value into the training process"
         ),
     )
     parser.add_argument(
@@ -34,20 +37,23 @@ def parse_args():
         action="store_true",
         help="Print the command that would be executed without running it",
     )
-    parser.add_argument(
-        "vllm_args", nargs=argparse.REMAINDER, help="Arguments to be passed to vLLM"
-    )
-
-    return parser.parse_args()
+    return parser.parse_known_args()
 
 
 def main():
-    args = parse_args()
+    args, vllm_args = parse_args()
+    if "--" in vllm_args:
+        vllm_args.remove("--")
 
-    if args.layers:
-        layers = args.layers
+    if args.target_layer_ids:
+        target_layer_ids = args.target_layer_ids
+        warnings.warn(
+            f"Using custom target layer ids {args.target_layer_ids}. These "
+            "must also be explicitly passed into the training script.",
+            stacklevel=2,
+        )
     else:
-        # Import here so that it isn't required if layers passed explicitly
+        # Import here so that it isn't required if target_layer_ids passed explicitly
         from transformers import AutoConfig  # noqa: PLC0415
 
         config = AutoConfig.from_pretrained(args.model)
@@ -55,13 +61,18 @@ def main():
             config = config.text_config
 
         num_hidden_layers = config.num_hidden_layers
-        layers = [2, num_hidden_layers // 2, num_hidden_layers - 3, num_hidden_layers]
+        target_layer_ids = [
+            2,
+            num_hidden_layers // 2,
+            num_hidden_layers - 3,
+            num_hidden_layers,
+        ]
 
     speculative_config = {
         "method": "extract_hidden_states",
         "num_speculative_tokens": 1,
         "draft_model_config": {
-            "hf_config": {"eagle_aux_hidden_state_layer_ids": layers}
+            "hf_config": {"eagle_aux_hidden_state_layer_ids": target_layer_ids}
         },
     }
     kv_transfer_config = {
@@ -71,14 +82,16 @@ def main():
     }
 
     cmd = [
-        "vllm",
+        sys.executable,
+        "-m",
+        "vllm.entrypoints.cli.main",
         "serve",
         args.model,
         "--speculative_config",
         json.dumps(speculative_config),
         "--kv_transfer_config",
         json.dumps(kv_transfer_config),
-        *args.vllm_args,
+        *vllm_args,
     ]
 
     print("Running command:")

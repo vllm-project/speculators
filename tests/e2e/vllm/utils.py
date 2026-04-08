@@ -2,13 +2,137 @@ import json
 import os
 import subprocess
 import sys
+import time
+import urllib.error
+import urllib.request
 from collections.abc import Iterable
 from pathlib import Path
 from textwrap import indent
 
 from loguru import logger
 
-__all__ = ["run_vllm_engine"]
+__all__ = [
+    "SCRIPTS_DIR",
+    "VLLM_PYTHON",
+    "launch_vllm_server",
+    "prepare_data",
+    "run_vllm_engine",
+    "stop_vllm_server",
+    "wait_for_server",
+]
+
+VLLM_PYTHON = os.environ.get("VLLM_PYTHON", sys.executable)
+SCRIPTS_DIR = Path(__file__).resolve().parent.parent.parent.parent / "scripts"
+
+
+def wait_for_server(
+    port: int,
+    timeout: float = 180.0,
+    poll_interval: float = 2.0,
+    process: subprocess.Popen | None = None,
+):
+    """Poll vLLM server health endpoint until ready or timeout.
+
+    If *process* is provided, checks whether it has exited between polls
+    so that startup failures are reported immediately instead of waiting
+    for the full timeout.
+    """
+
+    logger.info("Waiting for server")
+    url = f"http://localhost:{port}/health"
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if process is not None and process.poll() is not None:
+            raise RuntimeError(
+                f"vLLM server process exited with code {process.returncode} "
+                "before becoming ready"
+            )
+        try:
+            with urllib.request.urlopen(url, timeout=5) as resp:  # noqa: S310
+                if resp.status == 200:
+                    return
+        except (urllib.error.URLError, ConnectionError, OSError):
+            pass
+        time.sleep(poll_interval)
+    raise TimeoutError(f"vLLM server on port {port} not ready after {timeout}s")
+
+
+def launch_vllm_server(
+    model: str,
+    port: int,
+    hidden_states_path: str,
+    max_model_len: int = 513,
+    gpu_memory_utilization: float = 0.5,
+) -> subprocess.Popen:
+    """Launch a vLLM server configured for hidden-state extraction.
+
+    Returns the server subprocess. Caller is responsible for stopping it
+    via stop_vllm_server().
+    """
+    cmd = [
+        VLLM_PYTHON,
+        str(SCRIPTS_DIR / "launch_vllm.py"),
+        model,
+        "--hidden-states-path",
+        hidden_states_path,
+        "--",
+        "--port",
+        str(port),
+        "--max-model-len",
+        str(max_model_len),
+        "--gpu-memory-utilization",
+        str(gpu_memory_utilization),
+    ]
+    logger.info("Starting vLLM server: {}", " ".join(cmd))
+
+    process = subprocess.Popen(cmd)  # noqa: S603
+
+    try:
+        wait_for_server(port, process=process)
+        logger.info("vLLM server ready on port {}", port)
+    except Exception:
+        process.terminate()
+        process.wait(timeout=30)
+        raise
+
+    return process
+
+
+def stop_vllm_server(process: subprocess.Popen):
+    """Gracefully stop a vLLM server subprocess."""
+    if process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=10)
+    logger.info("vLLM server stopped")
+
+
+def prepare_data(
+    model: str, data_path: Path, max_samples: int = 50, seq_length: int = 512
+):
+    """Tokenize ShareGPT data using prepare_data.py."""
+    cmd = [
+        sys.executable,
+        str(SCRIPTS_DIR / "prepare_data.py"),
+        "--model",
+        model,
+        "--data",
+        "sharegpt",
+        "--output",
+        str(data_path),
+        "--max-samples",
+        str(max_samples),
+        "--seq-length",
+        str(seq_length),
+    ]
+    logger.info("Preparing data: {}", " ".join(cmd))
+    result = subprocess.run(  # noqa: S603
+        cmd, stderr=subprocess.PIPE, text=True, check=False
+    )
+    assert result.returncode == 0, f"prepare_data.py failed:\n{result.stderr}"
 
 
 def run_vllm_engine(
