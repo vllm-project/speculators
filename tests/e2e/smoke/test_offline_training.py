@@ -62,7 +62,11 @@ def run_offline_e2e(
     ):
         # Step 2: Generate hidden states offline
         run_data_generation_offline2(
-            data_path, offline_hidden_states, port, max_samples
+            data_path,
+            offline_hidden_states,
+            port,
+            max_samples,
+            timeout=25 * 60,  # 25 mins
         )
 
     # Step 3: Train using pre-generated hidden states (no live server needed)
