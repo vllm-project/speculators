@@ -1,5 +1,5 @@
-from typing import TYPE_CHECKING, Any, ClassVar
 import warnings
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import torch
 from torch import nn
@@ -445,11 +445,12 @@ class DFlashDraftModel(SpeculatorModel):
                 ("eos_token_id", tokenizer.eos_token_id),
                 ("unk_token_id", tokenizer.unk_token_id),
             ]
-            for i, (token_name, token_id) in enumerate(token_options):
+            for (token_name, token_id) in token_options:
                 if token_id is not None:
                     self.mask_token_id = token_id
                     warnings.warn(
-                        f"Tokenizer does not have mask_token. Using {token_name}={token_id} as fallback.",
+                        f"Tokenizer does not have mask_token. "
+                        f"Using {token_name}={token_id} as fallback.",
                         stacklevel=2,
                     )
                     break
