@@ -90,3 +90,4 @@ def test_online_training(
     # Step 3: Validate trained checkpoint with vLLM inference
     checkpoint_path = str(save_path / "0")
     run_vllm_engine(model_path=checkpoint_path, tmp_path=tmp_path, prompts=prompts)
+  
