@@ -437,7 +437,16 @@ def parse_args():
         help="Architecture for draft decoder layers. Defaults to 'llama'. "
         "Note: only 'llama' is currently supported in vLLM for inference.",
     )
-
+    parser.add_argument(
+        "--target-layer-ids",
+        type=int,
+        nargs="+",
+        help=(
+            "(Optional) A (space separated) list of integer layer ids. Defaults to"
+            "[2, num_hidden_layers // 2, num_hidden_layers - 3, num_hidden_layers]. "
+            "Note: must be set explicitly if custom values were used to launch vllm"
+        ),
+    )
     parser.add_argument(
         "--token-freq-path",
         type=str,

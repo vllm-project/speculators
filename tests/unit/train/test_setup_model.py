@@ -761,7 +761,7 @@ def test_from_training_args_loads_vocab_mappings(vocab_mappings):
             draft_vocab_size=DRAFT_VOCAB_SIZE,
             norm_before_residual=False,
             ttt_steps=1,
-            verifier_name_or_path="dummy",
+            verifier_name_or_path="nm-testing/tinysmokellama-3.2",
         )
 
     assert model.t2d is not None, "t2d is None after from_training_args"
