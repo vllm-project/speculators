@@ -1,4 +1,5 @@
 from typing import TYPE_CHECKING, Any, ClassVar
+import warnings
 
 import torch
 from torch import nn
@@ -229,6 +230,9 @@ class DFlashDraftModel(SpeculatorModel):
     config_class: ClassVar[type[DFlashSpeculatorConfig]] = DFlashSpeculatorConfig  # type: ignore[misc]
     _no_split_modules = ["Qwen3DFlashDecoderLayer"]
     _keys_to_ignore_on_load_missing: ClassVar[list[str]] = ["embed_tokens.weight"]  # type: ignore[misc]
+    _keys_to_ignore_on_save: ClassVar[list[str]] = [  # type: ignore[misc,assignment]
+        "verifier_lm_head.weight",
+    ]
 
     def __init__(
         self,
@@ -430,11 +434,27 @@ class DFlashDraftModel(SpeculatorModel):
         self.verifier_lm_head.weight.data = masked_lm_head_weight.detach().clone()
         self.verifier_lm_head.weight.requires_grad = False
         self.lm_head.weight.requires_grad = False
-        # Load tokenizer to get mask_token_id
+        # Load tokenizer to get mask_token_id with fallbacks
         tokenizer = AutoTokenizer.from_pretrained(verifier_config.name_or_path)
-        if tokenizer.mask_token_id is None:
-            tokenizer.add_special_tokens({"mask_token": "<|MASK|>"})
-        self.mask_token_id = tokenizer.mask_token_id
+        if tokenizer.mask_token_id is not None:
+            self.mask_token_id = tokenizer.mask_token_id
+        else:
+            # Try special tokens in order of preference
+            token_options = [
+                ("pad_token_id", tokenizer.pad_token_id),
+                ("eos_token_id", tokenizer.eos_token_id),
+                ("unk_token_id", tokenizer.unk_token_id),
+            ]
+            for i, (token_name, token_id) in enumerate(token_options):
+                if token_id is not None:
+                    self.mask_token_id = token_id
+                    warnings.warn(
+                        f"Tokenizer does not have mask_token. Using {token_name}={token_id} as fallback.",
+                        stacklevel=2,
+                    )
+                    break
+            else:
+                raise ValueError("No suitable special token found in tokenizer")
         # Save to config so it persists when saved
         self.config.mask_token_id = self.mask_token_id
 
