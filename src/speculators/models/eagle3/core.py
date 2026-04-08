@@ -553,7 +553,7 @@ class Eagle3DraftModel(SpeculatorModel):
             unmodified_verifier_config = AutoConfig.from_pretrained(
                 kwargs["verifier_name_or_path"]
             )
-            num_target_layers = unmodified_verifier_config.num_hidden_layers
+            num_target_layers = unmodified_verifier_config.text_config.num_hidden_layers
             target_layer_ids = [2, num_target_layers // 2, num_target_layers - 3]
             warnings.warn(
                 "--target-layer-ids is not explicitly set. Setting target "

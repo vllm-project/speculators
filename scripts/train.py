@@ -120,7 +120,7 @@ def create_transformer_layer_config(
         num_hidden_layers=num_layers,
         num_attention_heads=verifier_config.num_attention_heads,
         num_key_value_heads=verifier_config.num_key_value_heads,
-        hidden_act=verifier_config.hidden_act,
+        hidden_act="silu",#verifier_config.hidden_activation,
         max_position_embeddings=verifier_config.max_position_embeddings,
         initializer_range=verifier_config.initializer_range,
         rms_norm_eps=verifier_config.rms_norm_eps,
