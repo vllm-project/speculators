@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 
 # Add scripts directory to path so we can import the run_e2e function.
-scripts_path = Path(__file__).absolute().parent.parent.parent.parent.parent / "scripts"
+scripts_path = Path(__file__).absolute().parent.parent.parent.parent / "scripts"
 sys.path.append(str(scripts_path))
 
 
@@ -14,7 +14,7 @@ from gen_and_train import (  # type: ignore[import-not-found] # noqa: E402
     run_e2e,
 )
 
-from tests.e2e.vllm.utils import run_vllm_engine  # noqa: E402
+from tests.e2e.utils import run_vllm_engine  # noqa: E402
 
 
 def test_gen_train_acceptance(tmp_path: Path, monkeypatch):
