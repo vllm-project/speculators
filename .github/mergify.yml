@@ -63,3 +63,13 @@ pull_request_rules:
       label:
         remove:
           - quality-failed
+
+merge_protections:
+  - name: Require two reviews
+    description: >-
+      PRs labelled "two-reviews" must have at least two approving reviews
+      before merging.
+    if:
+      - label = two-reviews
+    success_conditions:
+      - "#approved-reviews-by >= 2"
