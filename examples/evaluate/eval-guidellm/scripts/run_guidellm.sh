@@ -226,9 +226,9 @@ for dataset_file in "${DATASET_FILES[@]}"; do
     guidellm benchmark \
       --target "${TARGET}" \
       --data "${dataset_file}" \
-      --rate-type throughput \
+      --profile throughput \
       --output-path "${output_file}" \
-      --backend-args "{\"extra_body\": {\"chat_completions\": {\"temperature\":${TEMPERATURE}, \"top_p\":${TOP_P}, \"top_k\":${TOP_K}}}}" \
+      --backend-args "{\"extras\": {\"body\": {\"temperature\":${TEMPERATURE}, \"top_p\":${TOP_P}, \"top_k\":${TOP_K}}}}" \
       | tee "${log_file}"
 
     echo "[INFO] Benchmark complete for: ${dataset_file}"
