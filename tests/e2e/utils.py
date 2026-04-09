@@ -22,7 +22,7 @@ __all__ = [
 ]
 
 VLLM_PYTHON = os.environ.get("VLLM_PYTHON", sys.executable)
-SCRIPTS_DIR = Path(__file__).resolve().parent.parent.parent.parent / "scripts"
+SCRIPTS_DIR = Path(__file__).resolve().parent.parent.parent / "scripts"
 
 
 def wait_for_server(

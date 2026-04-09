@@ -6,6 +6,7 @@ from pathlib import Path
 scripts_path = Path(__file__).absolute().parent.parent.parent.parent / "scripts"
 sys.path.append(str(scripts_path))
 
+
 from gen_and_train import (  # type: ignore[import-not-found] # noqa: E402
     DataGenArgs,
     TrainArgs,
@@ -13,7 +14,7 @@ from gen_and_train import (  # type: ignore[import-not-found] # noqa: E402
     run_e2e,
 )
 
-from tests.e2e.vllm.utils import run_vllm_engine  # noqa: E402
+from tests.e2e.utils import run_vllm_engine  # noqa: E402
 
 
 def test_gen_train_acceptance(tmp_path: Path, monkeypatch):
@@ -39,7 +40,7 @@ def test_gen_train_acceptance(tmp_path: Path, monkeypatch):
     train_args = TrainArgs(
         lr=3e-4,
         total_seq_len=TOTAL_SEQ_LEN,
-        run_name="test_gen_train_acceptance",
+        run_name="test_eagle3_gen_train_acceptance",
         epochs=NUM_EPOCHS,
     )
 

@@ -10,7 +10,7 @@ from loguru import logger
 from speculators.train.vocab_mapping import (
     build_vocab_mappings_from_distribution,
 )
-from tests.e2e.vllm.utils import run_vllm_engine
+from tests.e2e.utils import run_vllm_engine
 
 
 class TestTrainvLLM:
