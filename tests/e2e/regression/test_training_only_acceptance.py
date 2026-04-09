@@ -48,7 +48,7 @@ def _build_vocab_mappings(
 def _resolve_repo(repo_id: str, repo_type: str = "dataset") -> Path:
     """Return a local Path for a repo, downloading from HuggingFace if needed."""
     path = Path(repo_id)
-    if path.is_absolute() or repo_id.startswith("./") or repo_id.startswith("../"):
+    if path.is_absolute() or repo_id.startswith(("./", "../")):
         return path
     return Path(snapshot_download(repo_id=repo_id, repo_type=repo_type))
 
@@ -91,8 +91,7 @@ def _run_training(args: dict) -> subprocess.CompletedProcess:
     logger.info("Training command: {}", " ".join(cmd))
     return subprocess.run(  # noqa: S603
         cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
         check=False,
     )
@@ -100,7 +99,9 @@ def _run_training(args: dict) -> subprocess.CompletedProcess:
 
 @pytest.mark.regression
 @pytest.mark.parametrize("config", _CONFIGS, ids=[c["name"] for c in _CONFIGS])
-def test_training_acceptance(config: dict, tmp_path: Path):
+def test_training_acceptance(
+    config: dict, tmp_path: Path, prompts: list[list[dict[str:str]]]
+):
     save_path = tmp_path / "checkpoints"
 
     # 1. Fetch precomputed hidden states
@@ -135,14 +136,11 @@ def test_training_acceptance(config: dict, tmp_path: Path):
     # 4. Validate trained model meets acceptance thresholds in vLLM
     epochs = training_cfg["epochs"]
     final_checkpoint = str(save_path / str(epochs - 1))
-    print(final_checkpoint)
-
-    """
     run_vllm_engine(
         model_path=final_checkpoint,
         tmp_path=tmp_path,
         max_tokens=512,
         ignore_eos=True,
+        prompts=prompts,
         acceptance_thresholds=config["acceptance_thresholds"],
     )
-    """
