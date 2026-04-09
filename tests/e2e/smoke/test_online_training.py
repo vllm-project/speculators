@@ -64,7 +64,15 @@ def run_online_e2e(
     ):
         # Step 2: Train against live vLLM server
         run_training(
-            model, data_path, save_path, seq_length, port, draft_vocab_size, epochs, lr
+            model,
+            data_path,
+            save_path,
+            seq_length,
+            port,
+            draft_vocab_size,
+            epochs,
+            lr,
+            timeout=30 * 60,  # 30 mins
         )
 
     # Step 3: Validate trained checkpoint with vLLM inference
