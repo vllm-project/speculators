@@ -1,14 +1,14 @@
 {
     "name": "eagle3_llama3_8b_sharegpt",
     "verifier_model": "meta-llama/Llama-3.1-8B-Instruct",
-    "hidden_states_repo": "nm-testing/sharegpt_llama3_8b_hidden_states",
-    "token_freq_repo": "nm-testing/sharegpt_llama3_8b_token_freq",
+    "hidden_states_repo": "/mnt/nvme_stripe/playground/fynnsu/output/llama3_8b_sharegpt_5k/gen",
+    "token_freq_repo": "/mnt/nvme_stripe/playground/fynnsu/output/llama3_8b_sharegpt_5k/vocab_mapping",
     "draft_vocab_size": 8192,
     "target_vocab_size": 128256,
     "training": {
-        "lr": 3e-5,
+        "lr": 3e-4,
         "total_seq_len": 8192,
-        "epochs": 1,
+        "epochs": 5,
         "legacy_data": true
     },
     "acceptance_thresholds": [0.30, 0.07, 0.01]
