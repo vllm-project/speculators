@@ -163,7 +163,7 @@ def run_prepare_data(
     result = subprocess.run(  # noqa: S603
         cmd, check=False, timeout=timeout
     )
-    assert result.returncode == 0, f"prepare_data.py failed:\n{result.stderr}"
+    assert result.returncode == 0, "prepare_data.py failed"
 
 
 def run_data_generation_offline2(
