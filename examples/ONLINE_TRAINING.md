@@ -2,6 +2,8 @@
 
 This readme walks through the process of online training an Eagle3 draft model.
 
+For offline training (where hidden states are pre-computed before training), see [OFFLINE_TRAINING.md](OFFLINE_TRAINING.md).
+
 ## Prepare data
 
 In a python environment with `speculators` installed, prepare the training dataset. Pass in the target model name/path, dataset name/path (you can pass in multiple datasets), and the output directory.
@@ -39,10 +41,10 @@ Note: anything that comes after the `--` will be passed directly to vllm. The `-
 In a python environment with `speculators` installed, launch the training process. `torchrun` (and the arguments to it) are used to launch a multi-gpu training job. These can be omitted if training on a single gpu.
 
 ```
-CUDA_VISIBLE_DEVICES=4,5,6,7 torchrun --standalone --nproc_per_node 4 scripts/train.py --verifier-name-or-path Qwen/Qwen3-8B --data-path ./output --vllm-endpoint http://localhost:8000/v1 --save-path ./output/checkpoint --draft-model-size 32000
+CUDA_VISIBLE_DEVICES=4,5,6,7 torchrun --standalone --nproc_per_node 4 scripts/train.py --verifier-name-or-path Qwen/Qwen3-8B --data-path ./output --vllm-endpoint http://localhost:8000/v1 --save-path ./output/checkpoint --draft-vocab-size 32000
 ```
 
-**Produces:** If `--draft-model-size` is set, vocab mappings will be generated and cached to the `--data-path` directory.
+**Produces:** If `--draft-vocab-size` is set, vocab mappings will be generated and cached to the `--data-path` directory.
 
 ```
 ./output/
