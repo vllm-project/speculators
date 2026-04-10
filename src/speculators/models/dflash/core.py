@@ -229,9 +229,14 @@ class Qwen3DFlashDecoderLayer(GradientCheckpointingLayer):
 class DFlashDraftModel(SpeculatorModel):
     config_class: ClassVar[type[DFlashSpeculatorConfig]] = DFlashSpeculatorConfig  # type: ignore[misc]
     _no_split_modules = ["Qwen3DFlashDecoderLayer"]
-    _keys_to_ignore_on_load_missing: ClassVar[list[str]] = ["embed_tokens.weight"]  # type: ignore[misc]
+    _keys_to_ignore_on_load_missing: ClassVar[list[str]] = [  # type: ignore[misc]
+        "embed_tokens.weight",
+        "t2d",
+        "d2t",
+    ]
     _keys_to_ignore_on_save: ClassVar[list[str]] = [  # type: ignore[misc,assignment]
         "verifier_lm_head.weight",
+        "verifier_norm.weight",
     ]
 
     def __init__(
@@ -246,6 +251,8 @@ class DFlashDraftModel(SpeculatorModel):
             verifier_attachment_mode="train_only",
         )
         self.config = config
+        # Forcibly override config settings
+        config.tie_word_embeddings = False
         # Set attention implementation to simple_flex_attention
         # to support BlockMask
         if (
@@ -283,9 +290,13 @@ class DFlashDraftModel(SpeculatorModel):
             verifier_config = verifier_config.text_config
         num_verifier_layers = verifier_config.num_hidden_layers
 
-        self.target_layer_ids = build_target_layer_ids(
-            num_verifier_layers, num_draft_layers
-        )
+        # Use aux_hidden_state_layer_ids from config if present
+        if config.aux_hidden_state_layer_ids is not None:
+            self.target_layer_ids = config.aux_hidden_state_layer_ids
+        else:
+            self.target_layer_ids = build_target_layer_ids(
+                num_verifier_layers, num_draft_layers
+            )
         self.norm = Qwen3RMSNorm(
             config.transformer_layer_config.hidden_size,
             eps=config.transformer_layer_config.rms_norm_eps,  # type: ignore[arg-type]
@@ -293,7 +304,7 @@ class DFlashDraftModel(SpeculatorModel):
         self.rotary_emb = Qwen3RotaryEmbedding(config.transformer_layer_config)  # type: ignore[arg-type]
 
         self.fc = nn.Linear(
-            len(self.target_layer_ids) * config.transformer_layer_config.hidden_size,
+            num_draft_layers * config.transformer_layer_config.hidden_size,
             config.transformer_layer_config.hidden_size,
             bias=False,
         )
@@ -348,6 +359,7 @@ class DFlashDraftModel(SpeculatorModel):
             draft_vocab_size=kwargs["draft_vocab_size"],
             block_size=kwargs.get("block_size", 8),
             max_anchors=kwargs.get("max_anchors", 256),
+            aux_hidden_state_layer_ids=kwargs.get("target_layer_ids"),
             speculators_config=SpeculatorsConfig(
                 algorithm="dflash",
                 proposal_methods=[
