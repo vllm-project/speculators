@@ -163,7 +163,7 @@ class PEagleDraftModel(Eagle3DraftModel):
 
         sample_ids = torch.cat(sample_ids_list, dim=0).unsqueeze(0)  # [1, seq_len]
 
-        target_len = input_ids.shape[1]*para_depth
+        target_len = input_ids.shape[1] * para_depth
 
         batch_size, current_len, hidden_size = hidden_states.shape
         pad_len = target_len - current_len
