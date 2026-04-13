@@ -83,9 +83,7 @@ def test_resume_after_checkpoint_best(tmp_path: Path):
     run_prepare_data(MODEL, data_path)
 
     # Step 2: Generate hidden states offline
-    with launch_vllm_server_context(
-        MODEL, VLLM_PORT, str(tmp_path / "hidden_states")
-    ):
+    with launch_vllm_server_context(MODEL, VLLM_PORT, str(tmp_path / "hidden_states")):
         run_data_generation_offline2(data_path, hidden_states_path, port=VLLM_PORT)
 
     # Step 3: Train 1 epoch with --save-best
