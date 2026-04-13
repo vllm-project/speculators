@@ -83,9 +83,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def extract_metrics(
-    raw_metrics: list[Metric], total_num_output_tokens: int
-) -> dict:
+def extract_metrics(raw_metrics: list[Metric], total_num_output_tokens: int) -> dict:
     metrics_dict: dict[str, int | float] = {}
     num_drafts = 0
     num_draft_tokens = 0

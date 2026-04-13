@@ -341,9 +341,7 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
             "to support training infrastructure."
         )
 
-    def load_vocab_mappings(
-        self, t2d: torch.Tensor | None, d2t: torch.Tensor | None
-    ):
+    def load_vocab_mappings(self, t2d: torch.Tensor | None, d2t: torch.Tensor | None):
         """Load target-to-draft and draft-to-target vocabulary mapping tensors.
 
         Args:
