@@ -77,7 +77,7 @@ dev = [
     "pygments<2.20.0",
 
     # general and configurations
-    "sphinx~=7.1.2",
+    "sphinx>=7.1.2,<8.2.0",
     "tox~=4.16.0",
     "tox-uv", # version is tied to tox version
 
