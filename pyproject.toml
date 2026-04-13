@@ -37,7 +37,7 @@ keywords = [
 ]
 dependencies = [
     "click",
-    "datasets>=4.0.0,<=4.6.0",
+    "datasets>=4.0.0,<=4.8.4",
     "huggingface-hub",
     "loguru>=0.7.2,<=0.7.3",
     "numpy>=2.0.0,<=2.4.2",
