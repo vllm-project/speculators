@@ -358,8 +358,9 @@ def test_dataset_getitem_v1_format(tmp_path: Path):
         max_len=12, file_list=[str(file_path)], hidden_states_dtype=output_dtype
     )
 
-    item = shift_batch(dataset[0])
-    assert item is not None
+    raw_item = dataset[0]
+    assert raw_item is not None
+    item = shift_batch(raw_item)
 
     for key, value in item.items():
         assert torch.allclose(value, expected_output[key]), (

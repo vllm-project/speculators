@@ -394,9 +394,12 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
         """
         from speculators.utils.loading import load_model_layers  # noqa: PLC0415
 
-        verifier_config = self.config.speculators_config.verifier
+        speculators_config = getattr(self.config, "speculators_config", None)
+        if speculators_config is None:
+            return
+        verifier_config = speculators_config.verifier
         if verifier_config.name_or_path is None:
-            raise ValueError("VerifierConfig `name_or_path` value is required.")
+            return
 
         verifier_weights = load_model_layers(
             ["embed_tokens.weight", "lm_head.weight"],
@@ -411,13 +414,13 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
             self.embed_tokens.load_state_dict({"weight": embed_tokens_weight})
 
         if self.use_draft_vocab:
-            if self.t2d is None or not torch.any(self.t2d).item():
+            if self.t2d is None or not torch.any(self.t2d).item():  # type: ignore[arg-type]
                 raise ValueError(
                     "t2d tensor hasn't been set. Please call "
                     "`.load_vocab_mappings(t2d, d2t)` before `.load_verifier_weights()`"
                 )
             lm_head_weight = lm_head_weight[
-                self.t2d.to(device=lm_head_weight.device, dtype=torch.bool), :
+                self.t2d.to(device=lm_head_weight.device, dtype=torch.bool), :  # type: ignore[union-attr,index]
             ]
 
         if self.lm_head.weight.isnan().any():
@@ -450,6 +453,7 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
                 f"got {type(config)} {config}."
             )
 
+        config.tie_word_embeddings = False
         super().__init__(config, **kwargs)
         self.config: SpeculatorModelConfig = config
 

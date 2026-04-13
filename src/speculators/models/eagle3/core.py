@@ -173,7 +173,6 @@ class Eagle3DraftModel(SpeculatorModel):
 
     def __init__(self, config: Eagle3SpeculatorConfig):
         # Forcibly override config settings
-        config.tie_word_embeddings = False
         impl = "simple_flex_attention"
         config.transformer_layer_config._attn_implementation = impl  # noqa: SLF001
         super().__init__(config=config)
@@ -232,7 +231,7 @@ class Eagle3DraftModel(SpeculatorModel):
         super().load_verifier_weights()
 
         verifier_config = self.config.speculators_config.verifier
-        verifier_model_config = AutoConfig.from_pretrained(verifier_config.name_or_path)
+        verifier_model_config = AutoConfig.from_pretrained(verifier_config.name_or_path)  # type: ignore[arg-type]
 
         # For multimodal models (Qwen3VL, etc.), extract text_config
         if hasattr(verifier_model_config, "text_config"):
@@ -247,7 +246,7 @@ class Eagle3DraftModel(SpeculatorModel):
         # Load verifier norm weights
         verifier_weights = load_model_layers(
             ["model.norm.weight"],
-            verifier_config.name_or_path,
+            verifier_config.name_or_path,  # type: ignore[arg-type]
         )
 
         if "model.norm.weight" not in verifier_weights:

@@ -18,10 +18,9 @@ import warnings
 from typing import Any, ClassVar, Literal, cast
 
 import torch
-from pydantic import Field, field_serializer, field_validator, model_validator
+from pydantic import Field, model_validator
 from torch import nn
 from transformers import (
-    AutoConfig,
     AutoModelForCausalLM,
     PretrainedConfig,
     PreTrainedModel,
@@ -124,42 +123,6 @@ class EagleSpeculatorConfig(SpeculatorModelConfig):
             self.architectures.append(self.transformer_layer_architecture)
 
         return self
-
-    @field_serializer("transformer_layer_config")
-    def serialize_transformer_layer_config(self, value: PretrainedConfig) -> dict:
-        """
-        Serialize the transformer_layer_config to a dictionary for JSON storage.
-
-        Converts the PretrainedConfig object to its dictionary representation
-        using to_diff_dict() to only include non-default values.
-
-        :param value: The PretrainedConfig instance to serialize
-        :return: Dictionary representation of the transformer layer configuration
-        """
-        return value.to_diff_dict()
-
-    @field_validator("transformer_layer_config", mode="before")
-    @classmethod
-    def validate_transformer_layer_config(cls, value: Any) -> PretrainedConfig:
-        """
-        Validate and convert transformer_layer_config to a PretrainedConfig instance.
-
-        Accepts either a dictionary that can be converted to a PretrainedConfig
-        or an existing PretrainedConfig instance.
-
-        :param value: The value to validate (dict or PretrainedConfig)
-        :return: A validated PretrainedConfig instance
-        :raises ValueError: If the value cannot be converted to a PretrainedConfig
-        """
-        if isinstance(value, dict):
-            return AutoConfig.for_model(**value)
-        if isinstance(value, PretrainedConfig):
-            return value
-
-        raise ValueError(
-            "transformer_layer_config must be a PretrainedConfig instance or a "
-            "dictionary that can be converted to a PretrainedConfig."
-        )
 
 
 @SpeculatorModel.register("eagle")
@@ -295,12 +258,12 @@ class EagleSpeculator(SpeculatorModel):
         self.hidden_size = config.transformer_layer_config.hidden_size
         self.padding_idx = config.transformer_layer_config.pad_token_id
 
-        # Set layers pulled from the verifier to None until attach is called
-        self.embed_tokens: nn.Embedding | None = None
-        self.rotary_emb: nn.Module | None = None
-        self.lm_head: nn.Linear | None = None
-
         super().__init__(config=config)
+
+        # Set layers pulled from the verifier to None until attach is called
+        self.embed_tokens: nn.Embedding | None = None  # type: ignore[assignment]
+        self.rotary_emb: nn.Module | None = None
+        self.lm_head: nn.Linear | None = None  # type: ignore[assignment]
         self.verifier: PreTrainedModel | None = None
         self.verifier_attachment_mode: Literal["detached", "full", "train_only"] = (
             "detached"
@@ -322,6 +285,9 @@ class EagleSpeculator(SpeculatorModel):
         self.pre_lm_head_layernorm: nn.Module | None = self._create_layernorm()
 
         self.post_init()  # type: ignore[attr-defined]
+
+    def load_verifier_weights(self):
+        """No-op: legacy Eagle loads verifier weights via attach_verifier."""
 
     def resolve_verifier(
         self, verifier: str | os.PathLike | PreTrainedModel

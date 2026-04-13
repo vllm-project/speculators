@@ -407,14 +407,14 @@ def test_weight_precedence(eagle3_config, pretrained_dir, tmp_path):
     assert torch.allclose(loaded.lm_head.weight.float(), torch.tensor(55.0)), (
         "pretrained lm_head should not be overwritten by verifier"
     )
-    assert torch.allclose(loaded.fc.weight.float(), torch.tensor(66.0)), (
+    assert torch.allclose(loaded.fc.weight.float(), torch.tensor(66.0)), (  # type: ignore[union-attr,arg-type]
         "pretrained fc should be preserved"
     )
 
     # --- Level 1: Checkpoint overrides everything ---
     loaded.to("cuda:0")  # type: ignore[arg-type]
     with torch.no_grad():
-        loaded.fc.weight.fill_(99.0)  # checkpoint value
+        loaded.fc.weight.fill_(99.0)  # type: ignore[union-attr,operator]  # checkpoint value
     ckpt_dir = str(tmp_path / "ckpt")
     checkpointer = SingleGPUCheckpointer(ckpt_dir)
     optimizer = torch.optim.AdamW(loaded.parameters(), lr=1e-4)
@@ -428,7 +428,9 @@ def test_weight_precedence(eagle3_config, pretrained_dir, tmp_path):
     checkpointer2.load_model_state_dict(model3)
 
     assert torch.allclose(
-        model3.fc.weight.cpu().float(), torch.tensor(99.0), atol=0.5
+        model3.fc.weight.cpu().float(),
+        torch.tensor(99.0),
+        atol=0.5,  # type: ignore[union-attr,arg-type]
     ), "checkpoint fc should override pretrained"
 
 
@@ -626,7 +628,7 @@ def _worker_distributed_from_pretrained(rank, world_size, model_dir, results_dir
         # Load model from pretrained (mock verifier loading)
         with patch.object(Eagle3DraftModel, "load_verifier_weights"):
             model = Eagle3DraftModel.from_pretrained(model_dir)
-        _fill_nan_weights(model)  # fill verifier weights post-load
+        _fill_nan_weights(model)  # type: ignore[arg-type]  # fill verifier weights post-load
 
         trainer = _make_trainer_no_init(model, is_distributed=True, local_rank=rank)
         trainer.checkpointer = MagicMock()
@@ -788,8 +790,8 @@ def test_from_pretrained_loads_vocab_mappings_from_kwargs(
 
     assert loaded.t2d is not None, "t2d is None after from_pretrained"
     assert loaded.d2t is not None, "d2t is None after from_pretrained"
-    assert torch.equal(loaded.t2d, t2d), "t2d not loaded from kwargs in from_pretrained"
-    assert torch.equal(loaded.d2t, d2t), "d2t not loaded from kwargs in from_pretrained"
+    assert torch.equal(loaded.t2d, t2d), "t2d not loaded from kwargs in from_pretrained"  # type: ignore[arg-type]
+    assert torch.equal(loaded.d2t, d2t), "d2t not loaded from kwargs in from_pretrained"  # type: ignore[arg-type]
 
 
 def test_from_pretrained_loads_vocab_mappings_from_saved(
@@ -818,5 +820,5 @@ def test_from_pretrained_loads_vocab_mappings_from_saved(
 
     assert loaded.t2d is not None, "t2d is None after from_pretrained"
     assert loaded.d2t is not None, "d2t is None after from_pretrained"
-    assert torch.equal(loaded.t2d, t2d), "t2d not loaded from saved safetensors"
-    assert torch.equal(loaded.d2t, d2t), "d2t not loaded from saved safetensors"
+    assert torch.equal(loaded.t2d, t2d), "t2d not loaded from saved safetensors"  # type: ignore[arg-type]
+    assert torch.equal(loaded.d2t, d2t), "d2t not loaded from saved safetensors"  # type: ignore[arg-type]

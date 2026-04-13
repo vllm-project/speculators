@@ -47,7 +47,6 @@ class DFlashDraftModel(SpeculatorModel):
         config: DFlashSpeculatorConfig,
     ) -> None:
         # Forcibly override config settings
-        config.tie_word_embeddings = False
         if config.transformer_layer_config._attn_implementation is None:  # noqa: SLF001
             config.transformer_layer_config._attn_implementation = (  # noqa: SLF001
                 "simple_flex_attention"
@@ -309,7 +308,7 @@ class DFlashDraftModel(SpeculatorModel):
         # t2d is a boolean mask [verifier_vocab_size] - True where
         # verifier token exists in draft
         # cumsum gives us the draft index for each verifier token
-        draft_indices = torch.cumsum(self.t2d.long(), dim=0) - 1  # type: ignore[operator]
+        draft_indices = torch.cumsum(self.t2d.long(), dim=0) - 1  # type: ignore[union-attr,operator]
         targets_draft = torch.where(
             self.t2d[targets],  # type: ignore[index]
             draft_indices[targets],  # type: ignore[index]
