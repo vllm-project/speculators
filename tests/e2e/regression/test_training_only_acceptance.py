@@ -1,5 +1,4 @@
 import json
-import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -8,6 +7,7 @@ import numpy as np
 import pytest
 import torch
 from huggingface_hub import snapshot_download
+from huggingface_hub.utils import LocalEntryNotFoundError
 from loguru import logger
 
 from speculators.train.vocab_mapping import build_vocab_mappings_from_distribution
@@ -47,38 +47,67 @@ def _build_vocab_mappings(
 
 
 def _resolve_repo(repo_id: str, repo_type: str = "dataset") -> Path:
-    """Return a local Path for a repo, downloading from HuggingFace if needed."""
+    """Return a local Path for a repo, downloading from HuggingFace if needed.
+
+    Tries the local cache first (no network call) and falls back to a full
+    download only when the data is not already cached.
+    """
     path = Path(repo_id)
     if path.is_absolute() or repo_id.startswith(("./", "../")):
         return path
-    return Path(snapshot_download(repo_id=repo_id, repo_type=repo_type))
+    try:
+        return Path(
+            snapshot_download(
+                repo_id=repo_id, repo_type=repo_type, local_files_only=True
+            )
+        )
+    except LocalEntryNotFoundError:
+        return Path(snapshot_download(repo_id=repo_id, repo_type=repo_type))
 
 
 def _resolve_vocab_mappings(config: dict, tmp_path: Path) -> tuple[Path, Path]:
     """Return (d2t_path, t2d_path).
 
-    If the config provides a ``vocab_mapping_repo``, the pre-computed files are
-    downloaded directly.  Otherwise they are built from the token-frequency
-    distribution in ``token_freq_repo``.
+    If pre-computed files exist in ``hidden_states_repo``, use them directly.
+    Otherwise build them from ``token_freq_sharegpt.pt`` in the same repo.
     """
+    hidden_states_dir = _resolve_repo(config["hidden_states_repo"])
+    d2t_path = hidden_states_dir / "vocab_mapping" / "d2t.npy"
+    t2d_path = hidden_states_dir / "vocab_mapping" / "t2d.npy"
+
+    if d2t_path.exists() and t2d_path.exists():
+        return d2t_path, t2d_path
+
     d2t_path = tmp_path / "d2t.npy"
     t2d_path = tmp_path / "t2d.npy"
-
-    if "vocab_mapping_repo" in config:
-        mapping_dir = _resolve_repo(config["vocab_mapping_repo"])
-        shutil.copy(mapping_dir / "d2t.npy", d2t_path)
-        shutil.copy(mapping_dir / "t2d.npy", t2d_path)
-    else:
-        token_freq_dir = _resolve_repo(config["token_freq_repo"])
-        _build_vocab_mappings(
-            token_freq_dir=token_freq_dir,
-            d2t_path=d2t_path,
-            t2d_path=t2d_path,
-            draft_vocab_size=config["draft_vocab_size"],
-            target_vocab_size=config["target_vocab_size"],
-        )
-
+    _build_vocab_mappings(
+        token_freq_dir=hidden_states_dir,
+        d2t_path=d2t_path,
+        t2d_path=t2d_path,
+        draft_vocab_size=config["draft_vocab_size"],
+        target_vocab_size=config["target_vocab_size"],
+    )
     return d2t_path, t2d_path
+
+
+def _make_training_data_dir(hidden_states_dir: Path, tmp_path: Path) -> Path:
+    """Return a directory containing only the top-level .pt training files.
+
+    ``list_files`` in the training script walks subdirectories, which would
+    pick up non-training files such as ``vocab_mapping/token_freq_sharegpt.pt``.
+    This creates a flat directory of symlinks to avoid that.
+    """
+    data_dir = tmp_path / "training_data"
+    data_dir.mkdir()
+    for item in hidden_states_dir.iterdir():
+        if (
+            item.is_file()
+            and item.suffix == ".pt"
+            or item.is_file()
+            and item.name == "sample_lengths.json"
+        ):
+            (data_dir / item.name).symlink_to(item)
+    return data_dir
 
 
 def _run_training(args: dict) -> subprocess.CompletedProcess:
@@ -115,7 +144,7 @@ def test_training_acceptance(
     training_cfg = config["training"]
     training_args = {
         "verifier-name-or-path": config["verifier_model"],
-        "data-path": hidden_states_dir,
+        "data-path": _make_training_data_dir(hidden_states_dir, tmp_path),
         "save-path": str(save_path),
         "log-dir": str(tmp_path / "logs"),
         "d2t-path": str(d2t_path),

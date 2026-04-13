@@ -1,8 +1,7 @@
 {
     "name": "eagle3_llama3_8b_sharegpt",
     "verifier_model": "meta-llama/Llama-3.1-8B-Instruct",
-    "hidden_states_repo": "/mnt/nvme_stripe/playground/fynnsu/output/llama3_8b_sharegpt_5k/gen",
-    "token_freq_repo": "/mnt/nvme_stripe/playground/fynnsu/output/llama3_8b_sharegpt_5k/vocab_mapping",
+    "hidden_states_repo": "inference-optimization/llama3-8b-sharegpt-5k-gen",
     "draft_vocab_size": 8192,
     "target_vocab_size": 128256,
     "training": {
