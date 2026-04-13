@@ -78,7 +78,7 @@ dev = [
 
     # general and configurations
     "sphinx~=7.1.2",
-    "tox~=4.16.0",
+    "tox>=4.16,<4.53",
     "tox-uv", # version is tied to tox version
 
     # testing
