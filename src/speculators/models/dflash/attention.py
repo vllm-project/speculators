@@ -70,16 +70,17 @@ def create_anchor_block_mask_mod(
             ]
         ).contiguous()
 
-    if ((anchor_positions < 0) | (anchor_positions >= total_seq_len)).any():
-        bad = anchor_positions[
-            (anchor_positions < 0) | (anchor_positions >= total_seq_len)
-        ]
-        raise ValueError(f"anchor_positions out of range: {bad.tolist()}")
+    if (oob := (anchor_positions < 0) | (anchor_positions >= total_seq_len)).any():
+        raise ValueError(
+            f"anchor_positions out of range: {anchor_positions[oob].tolist()}"
+        )
 
     anchor_docs = document_ids[anchor_positions]
-    if (anchor_docs == -1).any():
-        bad = anchor_positions[anchor_docs == -1]
-        raise ValueError(f"anchor_positions include padding locations: {bad.tolist()}")
+    if (pad_mask := anchor_docs == -1).any():
+        raise ValueError(
+            f"anchor_positions include padding locations:"
+            f" {anchor_positions[pad_mask].tolist()}"
+        )
 
     # For each query position, which anchor does it belong to?
     # query q in [j*block_size, (j+1)*block_size) belongs to anchor_positions[j]

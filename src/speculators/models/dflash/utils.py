@@ -67,7 +67,7 @@ def select_anchors(
         raise ValueError(f"Expected [B, T], got {loss_mask.shape}")
 
     if block_size <= 0:
-        raise ValueError(f"Expected block size >= 0, got {block_size}")
+        raise ValueError(f"Expected block size > 0, got {block_size}")
 
     valid_mask = loss_mask.bool().clone()
     valid_mask[:, -block_size:] = False
