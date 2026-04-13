@@ -20,7 +20,7 @@ jobs:
     env:
       UV_SYSTEM_PYTHON: 1
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -43,7 +43,7 @@ jobs:
             - python: "3.13"                                                                                                                                                                                                                                                              
               transformers: "<5.0.0"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -65,7 +65,7 @@ jobs:
             - python: "3.13"                                                                                                                                                                                                                                                              
               transformers: "<5.0.0"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -83,7 +83,7 @@ jobs:
       matrix:
         python: ["3.10"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
