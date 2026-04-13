@@ -428,9 +428,9 @@ def test_weight_precedence(eagle3_config, pretrained_dir, tmp_path):
     checkpointer2.load_model_state_dict(model3)
 
     assert torch.allclose(
-        model3.fc.weight.cpu().float(),
+        model3.fc.weight.cpu().float(),  # type: ignore[union-attr,arg-type]
         torch.tensor(99.0),
-        atol=0.5,  # type: ignore[union-attr,arg-type]
+        atol=0.5,
     ), "checkpoint fc should override pretrained"
 
 
