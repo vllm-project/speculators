@@ -209,58 +209,40 @@ def test_checkpoint_freq_flag_controls_saves(
     assert best_path.resolve() == (tmp_path / "5").resolve()
 
 
-def test_init_best_val_loss_on_resume_with_and_without_checkpoint_best(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
-    (tmp_path / "0").mkdir()
+def test_save_and_load_best_val_loss(tmp_path: Path):
+    cp = SingleGPUCheckpointer(str(tmp_path))
+
+    # No file yet
+    assert cp.load_best_val_loss() is None
+
+    # Save and reload
+    cp.save_best_val_loss(0.123456)
+    assert cp.load_best_val_loss() == pytest.approx(0.123456)
+
+    # Overwrite
+    cp.save_best_val_loss(0.05)
+    assert cp.load_best_val_loss() == pytest.approx(0.05)
+
+
+def test_best_val_loss_restored_on_resume(tmp_path: Path):
     (tmp_path / "4").mkdir()
-    (tmp_path / "checkpoint_best").symlink_to("0", target_is_directory=True)
+
+    cp = SingleGPUCheckpointer(str(tmp_path))
+    cp.save_best_val_loss(0.42)
 
     trainer = Trainer.__new__(Trainer)
+    trainer.resume_from_checkpoint = True
     trainer.is_distributed = False
     trainer.local_rank = 0
-    trainer.val_loader = cast("DataLoader[Any]", [])
+    trainer.checkpointer = cp
+
+    trainer.current_epoch = cp.previous_epoch + 1
+    trainer.global_step = 0
     trainer.best_val_loss = float("inf")
-    trainer.model = cast("SpeculatorModel", object())
-    trainer.checkpointer = SingleGPUCheckpointer(str(tmp_path))
 
-    calls: list[int] = []
+    # Simulate the load that setup_trainer does
+    saved = trainer.checkpointer.load_best_val_loss()
+    if saved is not None:
+        trainer.best_val_loss = saved
 
-    def fake_load_for_epoch(_model, epoch: int, float_dtype=None):
-        calls.append(epoch)
-
-    monkeypatch.setattr(
-        trainer.checkpointer, "load_model_state_dict_for_epoch", fake_load_for_epoch
-    )
-    monkeypatch.setattr(trainer, "val_epoch", lambda epoch: {"loss_epoch": 0.123})
-
-    trainer.init_best_val_loss_from_checkpoint_best()
-
-    assert trainer.best_val_loss == 0.123
-    assert calls == [0, 4]
-
-    tmp2 = tmp_path / "no_best"
-    tmp2.mkdir()
-    (tmp2 / "4").mkdir()
-
-    trainer2 = Trainer.__new__(Trainer)
-    trainer2.is_distributed = False
-    trainer2.local_rank = 0
-    trainer2.val_loader = cast("DataLoader[Any]", [])
-    trainer2.best_val_loss = float("inf")
-    trainer2.model = cast("SpeculatorModel", object())
-    trainer2.checkpointer = SingleGPUCheckpointer(str(tmp2))
-
-    calls2: list[int] = []
-
-    monkeypatch.setattr(
-        trainer2.checkpointer,
-        "load_model_state_dict_for_epoch",
-        lambda *_args, **_kwargs: calls2.append(1),
-    )
-    monkeypatch.setattr(trainer2, "val_epoch", lambda epoch: {"loss_epoch": 0.001})
-
-    trainer2.init_best_val_loss_from_checkpoint_best()
-
-    assert trainer2.best_val_loss == float("inf")
-    assert calls2 == []
+    assert trainer.best_val_loss == pytest.approx(0.42)

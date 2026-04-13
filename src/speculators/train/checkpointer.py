@@ -1,3 +1,4 @@
+import json
 import shutil
 from abc import abstractmethod
 from pathlib import Path
@@ -110,6 +111,23 @@ class BaseCheckpointer:
     def best_path(self) -> Path:
         return self.path / "checkpoint_best"
 
+    def best_val_loss_path(self) -> Path:
+        return self.path / "best_val_loss.json"
+
+    def save_best_val_loss(self, val_loss: float):
+        self.path.mkdir(parents=True, exist_ok=True)
+        self.best_val_loss_path().write_text(json.dumps({"best_val_loss": val_loss}))
+
+    def load_best_val_loss(self) -> float | None:
+        p = self.best_val_loss_path()
+        if not p.exists():
+            return None
+        try:
+            data = json.loads(p.read_text())
+            return float(data["best_val_loss"])
+        except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+            return None
+
     def read_best_epoch(self) -> int | None:
         """Return the epoch that `checkpoint_best` points to."""
         best_path = self.best_path()
@@ -158,6 +176,8 @@ class BaseCheckpointer:
         if not keep_dir.exists() or not keep_dir.is_dir():
             raise FileNotFoundError(f"Best epoch dir does not exist: {keep_dir}")
 
+        val_loss_file = self.best_val_loss_path()
+
         for child in self.path.iterdir():
             # Keep the symlink itself
             if child == best_link:
@@ -165,6 +185,10 @@ class BaseCheckpointer:
 
             # Keep the best epoch directory
             if child == keep_dir:
+                continue
+
+            # Keep the best_val_loss file
+            if child == val_loss_file:
                 continue
 
             # Delete numbered epoch directories and any other stray dirs/files
@@ -282,6 +306,12 @@ class DistributedCheckpointer(BaseCheckpointer):
             full_state_dict,
             options=StateDictOptions(full_state_dict=True, broadcast_from_rank0=True),
         )
+
+        # Cast step counters back to float32
+        for state in optimizer.state.values():
+            if "step" in state and isinstance(state["step"], torch.Tensor):
+                state["step"] = state["step"].float()
+
         dist.barrier()
 
     def save_checkpoint(
@@ -320,6 +350,11 @@ class DistributedCheckpointer(BaseCheckpointer):
         if dist.get_rank() == 0:
             super().cleanup_keep_only_best(best_epoch)
 
+        dist.barrier()
+
+    def save_best_val_loss(self, val_loss: float):
+        if dist.get_rank() == 0:
+            super().save_best_val_loss(val_loss)
         dist.barrier()
 
     def save_scheduler_state_dict(
