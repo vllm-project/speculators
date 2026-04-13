@@ -5,6 +5,19 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 10
+    versioning-strategy: "widen"
+    allow:
+      - dependency-type: "production"
+
+  - package-ecosystem: "pip"
+    directory: "/"
+    target-branch: "main"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    versioning-strategy: "increase"
+    allow:
+      - dependency-type: "development"
 
   - package-ecosystem: "github-actions"
     directory: "/"
