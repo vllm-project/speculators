@@ -2,6 +2,7 @@ import json
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -100,7 +101,7 @@ def _run_training(args: dict) -> subprocess.CompletedProcess:
 @pytest.mark.regression
 @pytest.mark.parametrize("config", _CONFIGS, ids=[c["name"] for c in _CONFIGS])
 def test_training_acceptance(
-    config: dict, tmp_path: Path, prompts: list[list[dict[str:str]]]
+    config: dict[str, Any], tmp_path: Path, prompts: list[list[dict[str, str]]]
 ):
     save_path = tmp_path / "checkpoints"
 
