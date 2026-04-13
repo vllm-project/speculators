@@ -1,5 +1,5 @@
 import warnings
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import Any, ClassVar
 
 import torch
 from torch import nn
@@ -8,221 +8,21 @@ from transformers import (
     AutoTokenizer,  # noqa: PLC0415
     PretrainedConfig,
 )
-from transformers.cache_utils import Cache
 from transformers.models.qwen3.modeling_qwen3 import (
-    ALL_ATTENTION_FUNCTIONS,
-    FlashAttentionKwargs,
-    GradientCheckpointingLayer,
-    Qwen3Config,
-    Qwen3MLP,
     Qwen3RMSNorm,
     Qwen3RotaryEmbedding,
-    eager_attention_forward,
 )
-from typing_extensions import Unpack
 
 from speculators.model import SpeculatorModel
 from speculators.models.dflash import DFlashSpeculatorConfig
 from speculators.models.dflash.attention import create_anchor_block_mask_mod
 from speculators.models.dflash.metrics import compute_metrics
+from speculators.models.dflash.model_definitions import Qwen3DFlashDecoderLayer
 from speculators.models.dflash.utils import (
     build_target_layer_ids,
     get_base_indices_for_anchored_blocks,
     select_anchors,
 )
-from speculators.utils.loading import load_model_layers
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
-
-
-# Local copy of rotate_half to avoid dependency on internal transformers functions
-def _rotate_half(x):
-    """Rotates half the hidden dims of the input (local implementation)."""
-    x1 = x[..., : x.shape[-1] // 2]
-    x2 = x[..., x.shape[-1] // 2 :]
-    return torch.cat((-x2, x1), dim=-1)
-
-
-def apply_rotary_pos_emb(
-    q,
-    k,
-    cos,
-    sin,
-    position_ids=None,  # noqa: ARG001
-    unsqueeze_dim=1,
-):
-    """Apply rotary position embeddings (local implementation)."""
-
-    cos = cos.unsqueeze(unsqueeze_dim)
-    sin = sin.unsqueeze(unsqueeze_dim)
-    q_len = q.size(-2)
-    q_embed = (q * cos[..., -q_len:, :]) + (_rotate_half(q) * sin[..., -q_len:, :])
-    k_embed = (k * cos) + (_rotate_half(k) * sin)
-    return q_embed, k_embed
-
-
-class Qwen3DFlashAttention(nn.Module):
-    """Multi-headed attention from 'Attention Is All You Need' paper"""
-
-    # Implements the custom attention which injects the target models
-    # hidden states into the kv cache.
-    def __init__(self, config: Qwen3Config, layer_idx: int):
-        super().__init__()
-        self.config = config
-        self.layer_idx = layer_idx
-        self.head_dim = getattr(
-            config,
-            "head_dim",
-            config.hidden_size // config.num_attention_heads,  # type: ignore[operator]
-        )
-        self.num_key_value_groups = (
-            config.num_attention_heads // config.num_key_value_heads  # type: ignore[operator]
-        )
-        self.scaling = self.head_dim**-0.5
-        self.attention_dropout = config.attention_dropout
-        self.is_causal = False
-        self.q_proj = nn.Linear(
-            config.hidden_size,  # type: ignore[arg-type]
-            config.num_attention_heads * self.head_dim,  # type: ignore[operator]
-            bias=config.attention_bias,  # type: ignore[arg-type]
-        )
-        self.k_proj = nn.Linear(
-            config.hidden_size,  # type: ignore[arg-type]
-            config.num_key_value_heads * self.head_dim,  # type: ignore[operator]
-            bias=config.attention_bias,  # type: ignore[arg-type]
-        )
-        self.v_proj = nn.Linear(
-            config.hidden_size,  # type: ignore[arg-type]
-            config.num_key_value_heads * self.head_dim,  # type: ignore[operator]
-            bias=config.attention_bias,  # type: ignore[arg-type]
-        )
-        self.o_proj = nn.Linear(
-            config.num_attention_heads * self.head_dim,  # type: ignore[operator]
-            config.hidden_size,  # type: ignore[arg-type]
-            bias=config.attention_bias,  # type: ignore[arg-type]
-        )
-        self.q_norm = Qwen3RMSNorm(self.head_dim, eps=config.rms_norm_eps)  # type: ignore[arg-type]
-        self.k_norm = Qwen3RMSNorm(self.head_dim, eps=config.rms_norm_eps)  # type: ignore[arg-type]
-        self.sliding_window = (
-            config.sliding_window
-            if hasattr(config, "layer_types")
-            and config.layer_types is not None
-            and config.layer_types[layer_idx] == "sliding_attention"  # type: ignore[index]
-            else None
-        )
-
-    def forward(
-        self,
-        hidden_states: torch.Tensor,
-        target_hidden: torch.Tensor,
-        position_embeddings: tuple[torch.Tensor, torch.Tensor],
-        attention_mask: torch.Tensor | None,
-        past_key_values: Cache | None = None,
-        cache_position: torch.LongTensor | None = None,
-        **kwargs: Unpack[FlashAttentionKwargs],
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        # Instead of computing the k and v matricies from the hidden states,
-        # the target_hidden is injected into the kv cache, (shape is context
-        # length + block size)
-        bsz, q_len = hidden_states.shape[:-1]
-        ctx_len = target_hidden.shape[1]
-        q = self.q_proj(hidden_states)
-        q = q.view(bsz, q_len, -1, self.head_dim)
-        q = self.q_norm(q).transpose(1, 2)
-        # This is the main difference from the usual attention mechanism.
-        k_ctx = self.k_proj(target_hidden)
-        k_noise = self.k_proj(hidden_states)
-        v_ctx = self.v_proj(target_hidden)
-        v_noise = self.v_proj(hidden_states)
-        k = torch.cat([k_ctx, k_noise], dim=1).view(
-            bsz, ctx_len + q_len, -1, self.head_dim
-        )
-        # note the length becomes context length + block size
-        v = torch.cat([v_ctx, v_noise], dim=1).view(
-            bsz, ctx_len + q_len, -1, self.head_dim
-        )
-        k = self.k_norm(k).transpose(1, 2)
-        v = v.transpose(1, 2)
-        cos, sin = position_embeddings
-        q, k = apply_rotary_pos_emb(q, k, cos, sin)
-        if past_key_values is not None:
-            cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
-            k, v = past_key_values.update(k, v, self.layer_idx, cache_kwargs)
-        attn_fn: Callable = eager_attention_forward
-        if (
-            self.config._attn_implementation is not None  # noqa: SLF001
-            and self.config._attn_implementation != "eager"  # noqa: SLF001
-        ):
-            attn_fn = ALL_ATTENTION_FUNCTIONS[
-                self.config._attn_implementation  # noqa: SLF001
-            ]
-        attn_output, attn_weights = attn_fn(
-            self,
-            q,
-            k,
-            v,
-            attention_mask,
-            dropout=0.0 if not self.training else self.attention_dropout,
-            scaling=self.scaling,
-            sliding_window=self.sliding_window,
-            **kwargs,
-        )
-        attn_output = attn_output.reshape(bsz, q_len, -1)
-        attn_output = self.o_proj(attn_output)
-        return attn_output, attn_weights
-
-
-class Qwen3DFlashDecoderLayer(GradientCheckpointingLayer):
-    def __init__(self, config: Qwen3Config, layer_idx: int):
-        super().__init__()
-        self.hidden_size = config.hidden_size
-        self.self_attn = Qwen3DFlashAttention(config=config, layer_idx=layer_idx)
-        self.mlp = Qwen3MLP(config)
-        self.input_layernorm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)  # type: ignore[arg-type]
-        self.post_attention_layernorm = Qwen3RMSNorm(
-            config.hidden_size,
-            eps=config.rms_norm_eps,  # type: ignore[arg-type]
-        )
-
-    def forward(
-        self,
-        target_hidden: torch.Tensor | None = None,
-        hidden_states: torch.Tensor | None = None,
-        attention_mask: torch.Tensor | None = None,
-        position_ids: torch.LongTensor | None = None,
-        past_key_value: Cache | None = None,
-        output_attentions: bool | None = False,
-        use_cache: bool | None = False,
-        cache_position: torch.LongTensor | None = None,
-        # necessary, but kept here for BC
-        position_embeddings: tuple[torch.Tensor, torch.Tensor] | None = None,
-        **kwargs: Unpack[FlashAttentionKwargs],
-    ) -> tuple[torch.FloatTensor, tuple[torch.FloatTensor, torch.FloatTensor] | None]:
-        # The main difference between this method and the qwen 3 layer it is
-        # built from is that it
-        # passes the extra hidden states to the self attention from the verifier model.
-        # Note that target_hidden is not modified here.
-        assert hidden_states is not None  # noqa: S101
-        residual = hidden_states
-        hidden_states = self.input_layernorm(hidden_states)
-        hidden_states = self.self_attn(
-            hidden_states=hidden_states,
-            target_hidden=target_hidden,
-            attention_mask=attention_mask,
-            position_ids=position_ids,
-            past_key_values=past_key_value,
-            output_attentions=output_attentions,
-            use_cache=use_cache,
-            cache_position=cache_position,
-            position_embeddings=position_embeddings,
-            **kwargs,
-        )[0]
-        hidden_states = residual + hidden_states  # type: ignore[operator]
-        residual = hidden_states
-        hidden_states = self.post_attention_layernorm(hidden_states)
-        hidden_states = self.mlp(hidden_states)
-        return residual + hidden_states  # type: ignore[operator,return-value]
 
 
 @SpeculatorModel.register("dflash")
@@ -239,39 +39,25 @@ class DFlashDraftModel(SpeculatorModel):
         "verifier_norm.weight",
     ]
 
+    t2d: torch.Tensor | None
+    d2t: torch.Tensor | None
+
     def __init__(
         self,
         config: DFlashSpeculatorConfig,
-        t2d: torch.Tensor,
-        d2t: torch.Tensor,
     ) -> None:
-        super().__init__(
-            config=config,
-            verifier=None,
-            verifier_attachment_mode="train_only",
-        )
-        self.config = config
         # Forcibly override config settings
         config.tie_word_embeddings = False
-        # Set attention implementation to simple_flex_attention
-        # to support BlockMask
-        if (
-            self.config.transformer_layer_config._attn_implementation  # noqa: SLF001
-            is None
-        ):
-            impl = "simple_flex_attention"
-            self.config.transformer_layer_config._attn_implementation = (  # noqa: SLF001
-                impl
+        if config.transformer_layer_config._attn_implementation is None:  # noqa: SLF001
+            config.transformer_layer_config._attn_implementation = (  # noqa: SLF001
+                "simple_flex_attention"
             )
-        self.register_buffer("t2d", t2d)  # shape: [verifier_vocab_size], bool
-        self.register_buffer("d2t", d2t)  # shape: [draft_vocab_size], int offsets
-        self.draft_vocab_size = config.draft_vocab_size
+        super().__init__(config=config)
 
-        # Load verifier embeddings and tokenizer (following Eagle3 pattern)
-        self._setup_embeddings_and_mask_token(config.speculators_config.verifier, t2d)
+        tl_config = config.transformer_layer_config
 
         # Number of draft layers is encoded in transformer_layer_config
-        num_draft_layers = config.transformer_layer_config.num_hidden_layers
+        num_draft_layers = tl_config.num_hidden_layers
         self.layers = nn.ModuleList(
             [
                 Qwen3DFlashDecoderLayer(config.transformer_layer_config, layer_idx)  # type: ignore[arg-type]
@@ -382,7 +168,10 @@ class DFlashDraftModel(SpeculatorModel):
             # d2t: identity mapping (zero offset for all tokens)
             d2t = torch.zeros(vocab_size, dtype=torch.long)
 
-        return cls(config=config, t2d=t2d, d2t=d2t)
+        model = cls(config=config)
+        model.load_vocab_mappings(t2d, d2t)
+        model.load_verifier_weights()
+        return model
 
     @staticmethod
     def get_trainer_kwargs(**kwargs) -> tuple[dict, dict]:  # noqa: ARG004
@@ -398,60 +187,16 @@ class DFlashDraftModel(SpeculatorModel):
         val_kwargs: dict[str, Any] = {}
         return train_kwargs, val_kwargs
 
-    def _setup_embeddings_and_mask_token(self, verifier_config, t2d):
-        """Setup embeddings and mask_token_id from verifier."""
+    def load_verifier_weights(self):
+        """Load verifier weights and mask_token_id from tokenizer."""
+        super().load_verifier_weights()
 
-        if verifier_config.name_or_path is None:
-            raise ValueError("VerifierConfig `name_or_path` value is required.")
-
-        # Load embedding weights
-        verifier_weights = load_model_layers(
-            ["embed_tokens.weight", "lm_head.weight"],
-            verifier_config.name_or_path,
-        )
-
-        # Create embedding layer (config already available in self.config)
-        self.embed_tokens = nn.Embedding(
-            self.config.transformer_layer_config.vocab_size,
-            self.config.transformer_layer_config.hidden_size,
-            padding_idx=getattr(
-                self.config.transformer_layer_config, "pad_token_id", None
-            ),
-        )
-
-        default_dtype = self.embed_tokens.weight.dtype
-        embed_tokens_weight = verifier_weights["embed_tokens.weight"]
-        self.embed_tokens.load_state_dict(
-            {"weight": embed_tokens_weight.to(dtype=default_dtype)}
-        )
-        self.embed_tokens.weight.requires_grad_(False)
-        # Use embed_tokens as fallback for lm_head if not found (tied weights)
-        lm_head_weight = verifier_weights["lm_head.weight"]
-
-        self.lm_head = torch.nn.Linear(
-            self.config.transformer_layer_config.hidden_size,
-            self.draft_vocab_size,
-            bias=False,
-        )
-        self.verifier_lm_head = torch.nn.Linear(
-            self.config.transformer_layer_config.hidden_size,
-            self.draft_vocab_size,
-            bias=False,
-        )
-        masked_lm_head_weight = lm_head_weight.to(
-            device=t2d.device, dtype=default_dtype
-        )[t2d.to(torch.bool), :]
-
-        self.lm_head.weight.data = masked_lm_head_weight.detach().clone()
-        self.verifier_lm_head.weight.data = masked_lm_head_weight.detach().clone()
-        self.verifier_lm_head.weight.requires_grad = False
-        self.lm_head.weight.requires_grad = False
         # Load tokenizer to get mask_token_id with fallbacks
+        verifier_config = self.config.speculators_config.verifier
         tokenizer = AutoTokenizer.from_pretrained(verifier_config.name_or_path)
         if tokenizer.mask_token_id is not None:
             self.mask_token_id = tokenizer.mask_token_id
         else:
-            # Try special tokens in order of preference
             token_options = [
                 ("pad_token_id", tokenizer.pad_token_id),
                 ("eos_token_id", tokenizer.eos_token_id),
@@ -468,7 +213,6 @@ class DFlashDraftModel(SpeculatorModel):
                     break
             else:
                 raise ValueError("No suitable special token found in tokenizer")
-        # Save to config so it persists when saved
         self.config.mask_token_id = self.mask_token_id
 
     @torch.compile

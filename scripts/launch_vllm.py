@@ -54,7 +54,6 @@ def main():
     if "--" in vllm_args:
         vllm_args.remove("--")
 
-    # Import here so that it isn't required if target_layer_ids passed explicitly
     from transformers import AutoConfig  # noqa: PLC0415
 
     config = AutoConfig.from_pretrained(args.model)

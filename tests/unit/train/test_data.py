@@ -5,10 +5,10 @@ from pathlib import Path
 
 import torch
 
+from speculators.models.eagle3.data import shift_batch
 from speculators.train.data import (
-    Eagle3SampleFileDataset,
+    SampleFileDataset,
     create_collate_fn,
-    shift_batch,
     standardize_data_v1,
 )
 
@@ -354,11 +354,11 @@ def test_dataset_getitem_v1_format(tmp_path: Path):
     file_path = tmp_path / f"data_{0}.pt"
     torch.save(data, file_path)
 
-    dataset = Eagle3SampleFileDataset(
+    dataset = SampleFileDataset(
         max_len=12, file_list=[str(file_path)], hidden_states_dtype=output_dtype
     )
 
-    item = dataset[0]
+    item = shift_batch(dataset[0])
     assert item is not None
 
     for key, value in item.items():
@@ -386,7 +386,7 @@ def test_dataset_loads_lengths_from_sample_lengths_json(tmp_path: Path):
         json.dump(expected_lengths, f)
 
     file_list = sorted([str(f) for f in tmp_path.glob("data_*.pt")])
-    dataset = Eagle3SampleFileDataset(max_len=50, file_list=file_list)
+    dataset = SampleFileDataset(max_len=50, file_list=file_list)
 
     assert dataset.approx_lengths == [9, 14, 19], (
         f"Expected [9, 14, 19], got {dataset.approx_lengths}"
@@ -406,11 +406,11 @@ def test_dataset_fallback_when_sample_lengths_json_missing(tmp_path: Path):
     torch.save(data, tmp_path / "data_0.pt")
 
     file_list = [str(tmp_path / "data_0.pt")]
-    dataset = Eagle3SampleFileDataset(max_len=50, file_list=file_list)
+    dataset = SampleFileDataset(max_len=50, file_list=file_list)
 
     # Should use fallback and return a list with one length
     assert len(dataset.approx_lengths) == 1
-    assert dataset.approx_lengths[0] == seq_len - 1  # After shift_batch
+    assert dataset.approx_lengths[0] == seq_len
 
 
 def test_dataset_fallback_when_sample_lengths_json_malformed(tmp_path: Path):
@@ -431,5 +431,5 @@ def test_dataset_fallback_when_sample_lengths_json_malformed(tmp_path: Path):
         json.dump({"0": 9}, f)
 
     file_list = sorted([str(f) for f in tmp_path.glob("data_*.pt")])
-    dataset = Eagle3SampleFileDataset(max_len=50, file_list=file_list)
+    dataset = SampleFileDataset(max_len=50, file_list=file_list)
     assert len(dataset.approx_lengths) == 2

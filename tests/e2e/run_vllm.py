@@ -84,13 +84,13 @@ def parse_args():
 
 
 def extract_metrics(
-    raw_metrics: list[Metric], total_num_output_tokens: int, num_spec_tokens: int = 3
+    raw_metrics: list[Metric], total_num_output_tokens: int
 ) -> dict:
     metrics_dict: dict[str, int | float] = {}
     num_drafts = 0
     num_draft_tokens = 0
     num_accepted_tokens = 0
-    acceptance_counts = [0] * num_spec_tokens
+    acceptance_counts: list[float] = []
     for metric in raw_metrics:
         if metric.name == "vllm:spec_decode_num_drafts":
             assert isinstance(metric, Counter)
@@ -103,6 +103,9 @@ def extract_metrics(
             num_accepted_tokens += metric.value
         elif metric.name == "vllm:spec_decode_num_accepted_tokens_per_pos":
             assert isinstance(metric, Vector)
+            # Grow acceptance_counts to fit the metric values
+            while len(acceptance_counts) < len(metric.values):
+                acceptance_counts.append(0)
             for pos in range(len(metric.values)):
                 acceptance_counts[pos] += metric.values[pos]
 

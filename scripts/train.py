@@ -12,10 +12,11 @@ from transformers.models.auto.configuration_auto import AutoConfig
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
 from speculators.model import SpeculatorModel
+from speculators.models.eagle3.data import shift_batch
 from speculators.train.data import (
-    BaseEagle3Dataset,
-    Eagle3ArrowDataset,
-    Eagle3SampleFileDataset,
+    ArrowDataset,
+    BaseDataset,
+    SampleFileDataset,
     create_collate_fn,
     split_files,
 )
@@ -53,12 +54,13 @@ def set_seed(seed: int, deterministic: bool = False):
 
 
 def setup_dataloader(
-    dataset: BaseEagle3Dataset,
+    dataset: BaseDataset,
     world_size: int,
     local_rank: int,
     hidden_size: int,
     num_workers: int = 12,
     prefetch_factor: int = 4,
+    preprocess=None,
 ) -> DataLoader:
     """Setup dataloader for training.
     Args:
@@ -69,6 +71,8 @@ def setup_dataloader(
         noise_std: Standard deviation for noise augmentation.
         num_workers: Number of dataloader workers.
         prefetch_factor: Dataloader prefetch factor.
+        preprocess: Optional per-sample preprocessing function applied
+            before collation (e.g. shift_batch for Eagle3).
     Returns:
         DataLoader: Dataloader for training.
     """
@@ -84,7 +88,7 @@ def setup_dataloader(
         num_workers=num_workers,
         prefetch_factor=prefetch_factor,
         pin_memory=True,
-        collate_fn=create_collate_fn(args.total_seq_len, hidden_size),
+        collate_fn=create_collate_fn(args.total_seq_len, hidden_size, preprocess),
         persistent_workers=True,
     )
 
@@ -249,6 +253,8 @@ def main(args: argparse.Namespace):
         )
 
     # Setup dataloaders
+    preprocess = shift_batch if args.speculator_type == "eagle3" else None
+
     noise_transform = AddUniformNoise(std=args.noise_std)
     if args.legacy_data:
         warnings.warn(
@@ -257,19 +263,19 @@ def main(args: argparse.Namespace):
             stacklevel=2,
         )
         train_files, val_files = split_files(args.data_path, ratio=0.9)
-        train_dataset: BaseEagle3Dataset = Eagle3SampleFileDataset(
+        train_dataset: BaseDataset = SampleFileDataset(
             file_list=train_files,
             max_len=args.total_seq_len,
             transform=noise_transform,
             hidden_states_dtype=hidden_states_dtype,
         )
-        val_dataset: BaseEagle3Dataset = Eagle3SampleFileDataset(
+        val_dataset: BaseDataset = SampleFileDataset(
             file_list=val_files,
             max_len=args.total_seq_len,
             hidden_states_dtype=hidden_states_dtype,
         )
     else:
-        train_dataset = Eagle3ArrowDataset(
+        train_dataset = ArrowDataset(
             datapath=args.data_path,
             max_len=args.total_seq_len,
             hidden_states_path=args.hidden_states_path,
@@ -281,7 +287,7 @@ def main(args: argparse.Namespace):
             model=args.verifier_name_or_path,
             hidden_states_dtype=hidden_states_dtype,
         )
-        val_dataset = Eagle3ArrowDataset(
+        val_dataset = ArrowDataset(
             datapath=args.data_path,
             max_len=args.total_seq_len,
             hidden_states_path=args.hidden_states_path,
@@ -300,6 +306,7 @@ def main(args: argparse.Namespace):
         transformer_layer_config.hidden_size,
         num_workers=args.num_workers,
         prefetch_factor=args.prefetch_factor,
+        preprocess=preprocess,
     )
     val_loader = setup_dataloader(
         val_dataset,
@@ -308,6 +315,7 @@ def main(args: argparse.Namespace):
         transformer_layer_config.hidden_size,
         num_workers=args.num_workers,
         prefetch_factor=args.prefetch_factor,
+        preprocess=preprocess,
     )
 
     # Get trainer kwargs from model class
