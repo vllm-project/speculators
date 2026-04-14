@@ -421,12 +421,8 @@ def create_collate_fn(
     preprocess: Callable[[BatchType], BatchType] | None = None,
 ):
     def collate_fn(batch: list[BatchType | None]) -> BatchType:
-        # Apply per-sample preprocessing (e.g. shift_batch for Eagle3)
-        if preprocess:
-            batch = [preprocess(b) if b is not None else b for b in batch]
-
-        # Filter failed samples
-        batch = [b for b in batch if b is not None]
+        # Apply per-sample preprocessing and filter failed samples
+        batch = [preprocess(b) if preprocess else b for b in batch if b is not None]
 
         if not batch:
             # Create empty sample which then gets padded to full

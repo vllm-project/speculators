@@ -101,9 +101,10 @@ def extract_metrics(raw_metrics: list[Metric], total_num_output_tokens: int) -> 
             num_accepted_tokens += metric.value
         elif metric.name == "vllm:spec_decode_num_accepted_tokens_per_pos":
             assert isinstance(metric, Vector)
-            # Grow acceptance_counts to fit the metric values
-            while len(acceptance_counts) < len(metric.values):
-                acceptance_counts.append(0)
+            if len(acceptance_counts) < len(metric.values):
+                acceptance_counts = acceptance_counts + [0.0] * (
+                    len(metric.values) - len(acceptance_counts)
+                )
             for pos in range(len(metric.values)):
                 acceptance_counts[pos] += metric.values[pos]
 
@@ -135,9 +136,7 @@ if __name__ == "__main__":
     outputs, metrics_dict = run_vllm(args)
 
     # only token IDs (presence, count, type) were validated, so serialize/return those
-    output_token_ids = []
-    for output in outputs:
-        output_token_ids.append(output.outputs[0].token_ids)
+    output_token_ids = [output.outputs[0].token_ids for output in outputs]
 
     results_dict = {
         "outputs": output_token_ids,
