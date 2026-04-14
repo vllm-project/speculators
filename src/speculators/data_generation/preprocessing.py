@@ -261,6 +261,7 @@ def _preprocess_batch(
     max_length: int,
     assistant_pattern: str | Pattern[str] | None,
     turn_dropout: bool = False,
+    minimum_valid_tokens: int | None = None,
 ) -> dict[str, list]:
     """Process a batch of conversations into tokenized format with loss masks."""
 
@@ -337,6 +338,12 @@ def _preprocess_batch(
                 f"loss_mask={len(loss_mask)}"
             )
 
+            # Filtering samples out with too few valid tokens
+            if minimum_valid_tokens is not None:
+                num_valid_tokens = int(loss_mask.sum().item())
+                if num_valid_tokens < minimum_valid_tokens:
+                    continue
+
             # Append to results
             results["input_ids"].append(torch.tensor(input_ids, dtype=torch.long))
             results["loss_mask"].append(loss_mask)
@@ -359,6 +366,7 @@ def build_eagle3_dataset(
     num_proc: int = 8,
     assistant_pattern: str | Pattern[str] | None = None,
     turn_dropout: bool = False,
+    minimum_valid_tokens: int | None = None,
 ) -> HFDataset:
     """Build EAGLE3 dataset by tokenizing conversations and creating loss masks.
 
@@ -374,6 +382,7 @@ def build_eagle3_dataset(
                           chat template.
         turn_dropout: If True, randomly keeps first N consecutive turns per
                      conversation
+        minimum_valid_tokens: Number of tokens to consider for a valid sample
     """
     # Detect and use provided assistant message pattern
     if assistant_pattern is not None:
@@ -389,7 +398,12 @@ def build_eagle3_dataset(
 
     dataset = dataset.map(
         lambda examples: _preprocess_batch(
-            examples, tokenizer, max_length, assistant_pattern, turn_dropout
+            examples,
+            tokenizer,
+            max_length,
+            assistant_pattern,
+            turn_dropout,
+            minimum_valid_tokens,
         ),
         batched=True,
         num_proc=num_proc,
@@ -432,6 +446,7 @@ def load_and_preprocess_dataset(
     token_freq_path: Path | str = "./token_freq.pt",  # noqa: S107
     assistant_pattern: str | None = None,
     turn_dropout: bool = False,
+    minimum_valid_tokens: int | None = None,
 ) -> tuple[HFDataset, PreTrainedTokenizerBase]:
     """Load, tokenize, and preprocess a dataset for EAGLE3 training.
 
@@ -452,11 +467,18 @@ def load_and_preprocess_dataset(
                           chat template.
         turn_dropout: If True, randomly keeps first N consecutive turns per
                      conversation
+        minimum_valid_tokens: Number of tokens to consider for a valid sample
 
     Returns:
         Tuple of (preprocessed_dataset, tokenizer)
     """
+    if minimum_valid_tokens is not None and minimum_valid_tokens < 0:
+        raise ValueError("minimum_valid_tokens must be >= 0")
     log.section("Starting dataset preprocessing")
+    if minimum_valid_tokens is not None:
+        log.info(
+            f"Filtering samples with fewer than {minimum_valid_tokens} valid tokens"
+        )
 
     log.subsection("Loading tokenizer")
     tokenizer = AutoTokenizer.from_pretrained(target_model_path, trust_remote_code=True)
@@ -493,12 +515,15 @@ def load_and_preprocess_dataset(
             num_proc=build_dataset_num_proc,
             assistant_pattern=assistant_pattern,
             turn_dropout=turn_dropout,
+            minimum_valid_tokens=minimum_valid_tokens,
         )
+        if minimum_valid_tokens is not None:
+            log.info(f"Kept {len(preprocessed_dataset)} samples after filtering")
         processed_datasets.append(preprocessed_dataset)
 
     combined_dataset = concatenate_datasets(processed_datasets)
     combined_dataset.shuffle(seed=seed)
-    if max_samples is not None and len(raw_dataset) > max_samples:
+    if max_samples is not None and len(combined_dataset) > max_samples:
         combined_dataset = combined_dataset.select(range(max_samples))
 
     log.subsection("Computing token frequency distribution")
