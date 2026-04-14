@@ -1,4 +1,5 @@
 import logging
+import time
 import warnings
 from typing import Literal, NamedTuple
 
@@ -22,6 +23,7 @@ from speculators.train.checkpointer import (
     DistributedCheckpointer,
     SingleGPUCheckpointer,
 )
+from speculators.train.profiling import GpuUtilSampler, StepTimer
 from speculators.train.utils import apply_fully_sharded
 
 root_logger = logging.getLogger("speculators")
@@ -46,6 +48,8 @@ class TrainerConfig(NamedTuple):
     checkpoint_freq: int = 1
     save_best: bool = False
     hidden_states_dtype: torch.dtype = torch.bfloat16
+    log_interval: int = 10
+    profile_warmup_steps: int = 10
 
 
 class Trainer:
@@ -71,6 +75,9 @@ class Trainer:
         self.setup_trainer()
         self.setup_model()
         self.setup_optimizer()
+
+        self.step_timer = StepTimer(warmup_steps=config.profile_warmup_steps)
+        self.gpu_sampler = GpuUtilSampler(device=self.local_rank)
 
     def setup_trainer(self):
         if self.checkpointer.previous_epoch != -1:
@@ -234,35 +241,74 @@ class Trainer:
         if self.local_rank == 0:
             train_loader = tqdm(train_loader, desc=f"Epoch {epoch}")  # type: ignore[assignment]
 
+        world_size = dist.get_world_size() if self.is_distributed else 1
+
+        torch.cuda.synchronize(self.local_rank)
+        t_prev = time.perf_counter()
+
         for batch in train_loader:
+            t_fetch = time.perf_counter()
+
             gpu_batch = {
                 k: v.to(self.local_rank, non_blocking=True)
                 if isinstance(v, torch.Tensor)
                 else v
                 for k, v in batch.items()
             }
+            torch.cuda.synchronize(self.local_rank)
+            t_h2d = time.perf_counter()
 
             _draft_tokens, loss, metrics = self.model(
                 **gpu_batch, **self.config.train_call_kwargs
             )
+            torch.cuda.synchronize(self.local_rank)
+            t_fwd = time.perf_counter()
 
             self.opt.zero_grad()
             loss.backward()
+            torch.cuda.synchronize(self.local_rank)
+            t_bwd = time.perf_counter()
+
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
             self.opt.step()
 
             current_lr = self.opt.param_groups[0]["lr"]
             if self.scheduler is not None:
                 self.scheduler.step()
+            torch.cuda.synchronize(self.local_rank)
+            t_opt = time.perf_counter()
+
+            tokens = int(batch["input_ids"].numel()) * world_size
+            self.step_timer.record(
+                {
+                    "fetch": t_fetch - t_prev,
+                    "h2d": t_h2d - t_fetch,
+                    "fwd": t_fwd - t_h2d,
+                    "bwd": t_bwd - t_fwd,
+                    "opt": t_opt - t_bwd,
+                },
+                tokens=tokens,
+            )
+            t_prev = t_opt
 
             if self.is_distributed:
                 for v in metrics.values():
                     dist.reduce(v, dst=0, op=dist.ReduceOp.AVG)
 
             metrics = {k: v.item() for k, v in metrics.items()}
+            log_payload: dict = {
+                "train": metrics,
+                "epoch": epoch,
+                "lr": current_lr,
+            }
+            if (self.global_step + 1) % self.config.log_interval == 0:
+                profile_snap = self.step_timer.window_snapshot()
+                gpu_util = self.gpu_sampler.pop_mean()
+                if gpu_util is not None:
+                    profile_snap["gpu_util_pct"] = gpu_util
+                log_payload["profile"] = profile_snap
             metric_logger.info(
-                {"train": metrics, "epoch": epoch, "lr": current_lr},
-                extra={"step": self.global_step},
+                log_payload, extra={"step": self.global_step}
             )
             self.global_step += 1
 
@@ -355,27 +401,39 @@ class Trainer:
 
     def run_training(self):
         n_epochs = self.config.num_epochs
-        for epoch in range(self.current_epoch, n_epochs):
-            root_logger.info(f"Training epoch {epoch + 1}/{n_epochs} started")
-            self.train_epoch(epoch)
-            root_logger.info(f"Training epoch {epoch + 1}/{n_epochs} completed")
+        self.gpu_sampler.start()
+        try:
+            for epoch in range(self.current_epoch, n_epochs):
+                root_logger.info(f"Training epoch {epoch + 1}/{n_epochs} started")
+                self.train_epoch(epoch)
+                root_logger.info(f"Training epoch {epoch + 1}/{n_epochs} completed")
 
-            if self.is_distributed:
-                dist.barrier()
+                if self.is_distributed:
+                    dist.barrier()
 
-            val_metrics = None
+                val_metrics = None
 
-            if self.val_loader is None:
-                root_logger.warning("No val loader, skipping validation epoch")
-            else:
-                root_logger.info(f"Validation epoch {epoch + 1}/{n_epochs} started")
-                val_metrics = self.val_epoch(epoch)
-                root_logger.info(f"Validation epoch {epoch + 1}/{n_epochs} completed")
+                if self.val_loader is None:
+                    root_logger.warning("No val loader, skipping validation epoch")
+                else:
+                    root_logger.info(f"Validation epoch {epoch + 1}/{n_epochs} started")
+                    val_metrics = self.val_epoch(epoch)
+                    root_logger.info(
+                        f"Validation epoch {epoch + 1}/{n_epochs} completed"
+                    )
 
-            if self.is_distributed:
-                dist.barrier()
+                if self.is_distributed:
+                    dist.barrier()
 
-            self.maybe_save_checkpoint(epoch, val_metrics)
+                self.maybe_save_checkpoint(epoch, val_metrics)
 
-            if self.is_distributed:
-                dist.barrier()
+                if self.is_distributed:
+                    dist.barrier()
+        finally:
+            self.gpu_sampler.stop()
+            sustained = self.step_timer.sustained_snapshot()
+            if sustained:
+                root_logger.info(f"Sustained throughput: {sustained}")
+                metric_logger.info(
+                    {"profile": sustained}, extra={"step": self.global_step}
+                )

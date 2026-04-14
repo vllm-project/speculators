@@ -328,6 +328,7 @@ def main(args: argparse.Namespace):
         checkpoint_freq=args.checkpoint_freq,
         save_best=args.save_best,
         hidden_states_dtype=hidden_states_dtype,
+        log_interval=args.log_interval,
     )
     trainer = Trainer(draft_model, trainer_config, train_loader, val_loader)
 
@@ -528,6 +529,12 @@ def parse_args():
         action="store_true",
         default=False,
         help="Pointing to checkpoint with lowest validation loss.",
+    )
+    parser.add_argument(
+        "--log-interval",
+        type=int,
+        default=10,
+        help="Log per-phase profile metrics every N steps.",
     )
 
     # lr scheduler
