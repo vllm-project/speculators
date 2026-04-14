@@ -109,24 +109,6 @@ class EagleSpeculatorConfig(SpeculatorModelConfig):
         ),
     )
 
-    @field_serializer("transformer_layer_config")
-    def serialize_transformer_config(self, value: PretrainedConfig) -> dict:
-        """Serialize transformer config to dict."""
-        return value.to_diff_dict()
-
-    @field_validator("transformer_layer_config", mode="before")
-    @classmethod
-    def validate_transformer_config(cls, value: Any) -> PretrainedConfig:
-        """Validate and convert transformer config."""
-        if isinstance(value, dict):
-            config_class: type[PretrainedConfig] = LlamaConfig
-            if "model_type" in value:
-                config_class = AutoConfig.for_model(
-                    model_type=value["model_type"]
-                ).__class__
-            return config_class(**value)
-        return value
-
     @model_validator(mode="after")
     def check_add_architectures(self) -> Self:
         """
@@ -142,6 +124,42 @@ class EagleSpeculatorConfig(SpeculatorModelConfig):
             self.architectures.append(self.transformer_layer_architecture)
 
         return self
+
+    @field_serializer("transformer_layer_config")
+    def serialize_transformer_layer_config(self, value: PretrainedConfig) -> dict:
+        """
+        Serialize the transformer_layer_config to a dictionary for JSON storage.
+
+        Converts the PretrainedConfig object to its dictionary representation
+        using to_diff_dict() to only include non-default values.
+
+        :param value: The PretrainedConfig instance to serialize
+        :return: Dictionary representation of the transformer layer configuration
+        """
+        return value.to_diff_dict()
+
+    @field_validator("transformer_layer_config", mode="before")
+    @classmethod
+    def validate_transformer_layer_config(cls, value: Any) -> PretrainedConfig:
+        """
+        Validate and convert transformer_layer_config to a PretrainedConfig instance.
+
+        Accepts either a dictionary that can be converted to a PretrainedConfig
+        or an existing PretrainedConfig instance.
+
+        :param value: The value to validate (dict or PretrainedConfig)
+        :return: A validated PretrainedConfig instance
+        :raises ValueError: If the value cannot be converted to a PretrainedConfig
+        """
+        if isinstance(value, dict):
+            return AutoConfig.for_model(**value)
+        if isinstance(value, PretrainedConfig):
+            return value
+
+        raise ValueError(
+            "transformer_layer_config must be a PretrainedConfig instance or a "
+            "dictionary that can be converted to a PretrainedConfig."
+        )
 
 
 @SpeculatorModel.register("eagle")
@@ -277,12 +295,12 @@ class EagleSpeculator(SpeculatorModel):
         self.hidden_size = config.transformer_layer_config.hidden_size
         self.padding_idx = config.transformer_layer_config.pad_token_id
 
-        super().__init__(config=config)
-
         # Set layers pulled from the verifier to None until attach is called
-        self.embed_tokens: nn.Embedding | None = None  # type: ignore[assignment]
+        self.embed_tokens: nn.Embedding | None = None
         self.rotary_emb: nn.Module | None = None
-        self.lm_head: nn.Linear | None = None  # type: ignore[assignment]
+        self.lm_head: nn.Linear | None = None
+
+        super().__init__(config=config)
         self.verifier: PreTrainedModel | None = None
         self.verifier_attachment_mode: Literal["detached", "full", "train_only"] = (
             "detached"
