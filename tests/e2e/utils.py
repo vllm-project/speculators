@@ -6,6 +6,7 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Iterable
+from contextlib import contextmanager
 from pathlib import Path
 from textwrap import indent
 
@@ -15,7 +16,10 @@ __all__ = [
     "SCRIPTS_DIR",
     "VLLM_PYTHON",
     "launch_vllm_server",
-    "prepare_data",
+    "launch_vllm_server_context",
+    "run_data_generation_offline2",
+    "run_prepare_data",
+    "run_training",
     "run_vllm_engine",
     "stop_vllm_server",
     "wait_for_server",
@@ -74,7 +78,7 @@ def launch_vllm_server(
         str(SCRIPTS_DIR / "launch_vllm.py"),
         model,
         "--hidden-states-path",
-        hidden_states_path,
+        str(hidden_states_path),
         "--",
         "--port",
         str(port),
@@ -85,12 +89,18 @@ def launch_vllm_server(
     ]
     logger.info("Starting vLLM server: {}", " ".join(cmd))
 
-    process = subprocess.Popen(cmd)  # noqa: S603
+    process = subprocess.Popen(  # noqa: S603
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
+    )
 
     try:
         wait_for_server(port, process=process)
         logger.info("vLLM server ready on port {}", port)
     except Exception:
+        # Dump captured output to help debug startup failures
+        output = process.stdout.read().decode() if process.stdout else ""
+        if output:
+            logger.error("vLLM server output:\n{}", indent(output, "    "))
         process.terminate()
         process.wait(timeout=30)
         raise
@@ -107,11 +117,32 @@ def stop_vllm_server(process: subprocess.Popen):
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait(timeout=10)
-    logger.info("vLLM server stopped")
+    if process.returncode not in (0, -15):  # -15 = SIGTERM (expected)
+        output = process.stdout.read().decode() if process.stdout else ""
+        if output:
+            logger.error(
+                "vLLM server exited with code {}. Output:\n{}",
+                process.returncode,
+                indent(output, "    "),
+            )
+    logger.info("vLLM server stopped (exit code {})", process.returncode)
 
 
-def prepare_data(
-    model: str, data_path: Path, max_samples: int = 50, seq_length: int = 512
+@contextmanager
+def launch_vllm_server_context(*args, **kwargs):
+    process = launch_vllm_server(*args, **kwargs)
+    try:
+        yield
+    finally:
+        stop_vllm_server(process)
+
+
+def run_prepare_data(
+    model: str,
+    data_path: Path,
+    max_samples: int = 50,
+    seq_length: int = 512,
+    timeout: float | None = None,
 ):
     """Tokenize ShareGPT data using prepare_data.py."""
     cmd = [
@@ -130,9 +161,100 @@ def prepare_data(
     ]
     logger.info("Preparing data: {}", " ".join(cmd))
     result = subprocess.run(  # noqa: S603
-        cmd, stderr=subprocess.PIPE, text=True, check=False
+        cmd, check=False, timeout=timeout
     )
-    assert result.returncode == 0, f"prepare_data.py failed:\n{result.stderr}"
+    assert result.returncode == 0, "prepare_data.py failed"
+
+
+def run_data_generation_offline2(
+    data_path: Path,
+    hidden_states_path: Path | None = None,
+    port: int = 8321,
+    max_samples: int = 50,
+    concurrency: int = 4,
+    validate_outputs: bool = True,
+    timeout: float | None = None,
+):
+    datagen_cmd = [
+        sys.executable,
+        str(SCRIPTS_DIR / "data_generation_offline2.py"),
+        "--preprocessed-data",
+        str(data_path),
+        "--endpoint",
+        f"http://localhost:{port}/v1",
+        "--max-samples",
+        str(max_samples),
+        "--concurrency",
+        str(concurrency),
+    ]
+    if validate_outputs:
+        datagen_cmd.append("--validate-outputs")
+
+    if hidden_states_path is not None:
+        datagen_cmd += ["--output", str(hidden_states_path)]
+
+    logger.info("Generating hidden states offline: {}", " ".join(datagen_cmd))
+    result = subprocess.run(  # noqa: S603
+        datagen_cmd, stderr=subprocess.PIPE, text=True, check=False, timeout=timeout
+    )
+    assert result.returncode == 0, (
+        f"data_generation_offline2.py failed:\n{result.stderr}"
+    )
+
+
+def run_training(
+    model: str,
+    data_path: Path,
+    save_path: Path,
+    seq_length: int = 512,
+    port: int = 8321,
+    draft_vocab_size: int = 8192,
+    epochs: int = 1,
+    lr: float = 3e-4,
+    online: bool = True,
+    hidden_states_path: Path | None = None,
+    timeout: float | None = None,
+):
+    train_cmd = [
+        sys.executable,
+        str(SCRIPTS_DIR / "train.py"),
+        "--verifier-name-or-path",
+        model,
+        "--data-path",
+        str(data_path),
+        "--vllm-endpoint",
+        f"http://localhost:{port}/v1",
+        "--save-path",
+        str(save_path),
+        "--draft-vocab-size",
+        str(draft_vocab_size),
+        "--epochs",
+        str(epochs),
+        "--lr",
+        str(lr),
+        "--total-seq-len",
+        str(seq_length),
+    ]
+    if online:
+        train_cmd += [
+            "--on-missing",
+            "generate",
+            "--on-generate",
+            "delete",
+        ]
+    else:
+        train_cmd += [
+            "--on-missing",
+            "raise",
+        ]
+    if hidden_states_path is not None:
+        train_cmd += ["--hidden-states-path", str(hidden_states_path)]
+
+    logger.info("Running training: {}", " ".join(train_cmd))
+    result = subprocess.run(  # noqa: S603
+        train_cmd, stderr=subprocess.PIPE, text=True, check=False, timeout=timeout
+    )
+    assert result.returncode == 0, f"train.py failed:\n{result.stderr}"
 
 
 def run_vllm_engine(
@@ -143,6 +265,7 @@ def run_vllm_engine(
     max_tokens: int = 50,
     ignore_eos: bool = True,
     acceptance_thresholds: Iterable[float] | None = None,
+    timeout: float | None = None,
 ):
     VLLM_PYTHON = os.environ.get("VLLM_PYTHON", sys.executable)
     logger.info("vLLM Python executable: {}", VLLM_PYTHON)
@@ -190,6 +313,7 @@ def run_vllm_engine(
         text=True,
         check=False,
         env=env,
+        timeout=timeout,
     )
     logger.info("run_vllm.py output:\n{}", indent(result.stdout, "    "))
 
@@ -204,6 +328,7 @@ def run_vllm_engine(
     outputs_token_ids = results_dict["outputs"]
     metrics_dict = results_dict["metrics"]
     logger.info("outputs_token_ids: {}", outputs_token_ids)
+    logger.info("metrics_dict: {}", metrics_dict)
 
     for output_token_ids in outputs_token_ids:
         # If max_tokens is 100 or less, make sure the output length is max_tokens
