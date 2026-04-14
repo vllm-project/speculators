@@ -82,7 +82,7 @@ dev = [
     "tox-uv", # version is tied to tox version
 
     # testing
-    "pytest~=8.2.2",
+    "pytest~=9.0.3",
     "pytest-asyncio~=0.23.8",
     "pytest-cov~=7.1.0",
     "pytest-mock~=3.15.1",
