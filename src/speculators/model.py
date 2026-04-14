@@ -17,7 +17,7 @@ from speculators.config import SpeculatorModelConfig
 from speculators.utils import ClassRegistryMixin
 
 
-class DraftVocabMixin:
+class DraftVocabMixin(nn.Module):
     """
     Mixin for speculator models that use draft vocabulary mapping.
 
@@ -27,6 +27,12 @@ class DraftVocabMixin:
     Requires the config to have ``transformer_layer_config`` and
     ``draft_vocab_size`` fields.
     """
+
+    t2d: torch.Tensor | None
+    d2t: torch.Tensor | None
+    embed_tokens: nn.Embedding
+    lm_head: nn.Linear
+    verifier_lm_head: nn.Linear
 
     def _init_vocab(self, config):
         """Initialize vocab mappings, token embeddings, and LM heads.
@@ -125,7 +131,9 @@ class DraftVocabMixin:
         """
         from speculators.utils.loading import load_model_layers  # noqa: PLC0415
 
-        speculators_config = getattr(self.config, "speculators_config", None)
+        speculators_config = getattr(
+            getattr(self, "config", None), "speculators_config", None
+        )
         if speculators_config is None:
             return
         verifier_config = speculators_config.verifier
@@ -327,9 +335,9 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
             **kwargs,
         )
         if hasattr(model, "load_vocab_mappings"):
-            model.load_vocab_mappings(t2d, d2t)
+            model.load_vocab_mappings(t2d, d2t)  # type: ignore[operator,attr-defined]
         if hasattr(model, "load_verifier_weights"):
-            model.load_verifier_weights()
+            model.load_verifier_weights()  # type: ignore[operator,attr-defined]
         return model
 
     @classmethod
