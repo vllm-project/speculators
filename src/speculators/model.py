@@ -17,6 +17,152 @@ from speculators.config import SpeculatorModelConfig
 from speculators.utils import ClassRegistryMixin
 
 
+class DraftVocabMixin:
+    """
+    Mixin for speculator models that use draft vocabulary mapping.
+
+    Initializes vocab mapping buffers, token embeddings, and LM heads
+    for models that implement draft-to-target vocabulary speculation.
+
+    Requires the config to have ``transformer_layer_config`` and
+    ``draft_vocab_size`` fields.
+    """
+
+    def _init_vocab(self, config):
+        """Initialize vocab mappings, token embeddings, and LM heads.
+
+        Must be called after ``super().__init__(config=config)`` in the
+        concrete model's ``__init__``.
+        """
+        # VOCAB MAPPINGS
+        tl_config = config.transformer_layer_config
+        self.draft_vocab_size = config.draft_vocab_size
+        self.verifier_vocab_size = tl_config.vocab_size
+        self.hidden_size = tl_config.hidden_size
+        self.use_draft_vocab = self.draft_vocab_size != self.verifier_vocab_size
+        t2d: torch.Tensor | None = None
+        d2t: torch.Tensor | None = None
+        if self.use_draft_vocab:
+            t2d = torch.zeros((self.verifier_vocab_size,), dtype=torch.bool)
+            d2t = torch.zeros((self.draft_vocab_size,), dtype=torch.long)
+        self.register_buffer("t2d", t2d)
+        self.register_buffer("d2t", d2t)
+
+        # TOKEN EMBEDDINGS
+        self.embed_tokens = nn.Embedding(
+            self.verifier_vocab_size,
+            self.hidden_size,
+            padding_idx=getattr(tl_config, "pad_token_id", None),
+        )
+        self.embed_tokens.weight.requires_grad_(False)
+
+        # LM HEADS
+        self.lm_head = nn.Linear(self.hidden_size, self.draft_vocab_size, bias=False)
+        self.verifier_lm_head = nn.Linear(
+            self.hidden_size, self.draft_vocab_size, bias=False
+        )
+        self.verifier_lm_head.weight.requires_grad = False
+        self.lm_head.weight.requires_grad = False
+
+        # Initialize weights to nan so it's easy to detect if they're never loaded
+        torch.nn.init.constant_(self.lm_head.weight, torch.nan)
+        torch.nn.init.constant_(self.embed_tokens.weight, torch.nan)
+        torch.nn.init.constant_(self.verifier_lm_head.weight, torch.nan)
+        self.lm_head._is_hf_initialized = True  # type: ignore[assignment] # noqa: SLF001
+        self.embed_tokens._is_hf_initialized = True  # type: ignore[assignment] # noqa: SLF001
+        self.verifier_lm_head._is_hf_initialized = True  # type: ignore[assignment] # noqa: SLF001
+
+    def load_vocab_mappings(self, t2d: torch.Tensor | None, d2t: torch.Tensor | None):
+        """Load target-to-draft and draft-to-target vocabulary mapping tensors.
+
+        Args:
+            t2d: Target-to-draft vocabulary mapping tensor.
+            d2t: Draft-to-target vocabulary mapping tensor.
+        """
+        if t2d is None and d2t is None:
+            return
+        elif t2d is None or d2t is None:
+            raise ValueError(
+                "Both t2d and d2t must be provided together, or both must be None. "
+                f"Got t2d={'provided' if t2d is not None else 'None'}, "
+                f"d2t={'provided' if d2t is not None else 'None'}"
+            )
+
+        if not self.use_draft_vocab:
+            raise RuntimeError(
+                "Vocab mappings (t2d/d2t) are not needed because "
+                "draft_vocab_size equals verifier vocab_size. "
+                "Set draft_vocab_size < verifier_vocab_size or "
+                "omit t2d/d2t arguments."
+            )
+
+        if t2d.shape[0] != self.verifier_vocab_size:
+            raise ValueError(
+                f"t2d.shape[0] ({t2d.shape[0]}) must match"
+                f" verifier_vocab_size ({self.verifier_vocab_size})."
+            )
+        if int(t2d.sum(dtype=torch.long).item()) != self.draft_vocab_size:
+            raise ValueError(
+                f"t2d has {int(t2d.sum(dtype=torch.long).item())} non-zero values, "
+                f"expected {self.draft_vocab_size}."
+            )
+
+        if d2t.shape[0] != self.draft_vocab_size:
+            raise ValueError(
+                f"d2t.shape[0] ({d2t.shape[0]}) must match"
+                f" draft_vocab_size ({self.draft_vocab_size})."
+            )
+
+        self.load_state_dict({"t2d": t2d, "d2t": d2t}, strict=False)
+
+    def load_verifier_weights(self):
+        """Load verifier model weights (embeddings, lm_head, etc.).
+
+        Loads embed_tokens, lm_head, and verifier_lm_head weights from the
+        verifier model. Handles draft vocab masking via t2d when use_draft_vocab
+        is True. Subclasses can override to load additional weights (e.g. norms,
+        tokenizer) by calling super().load_verifier_weights() first.
+        """
+        from speculators.utils.loading import load_model_layers  # noqa: PLC0415
+
+        speculators_config = getattr(self.config, "speculators_config", None)
+        if speculators_config is None:
+            return
+        verifier_config = speculators_config.verifier
+        if verifier_config.name_or_path is None:
+            return
+
+        verifier_weights = load_model_layers(
+            ["embed_tokens.weight", "lm_head.weight"],
+            verifier_config.name_or_path,
+        )
+
+        embed_tokens_weight = verifier_weights["embed_tokens.weight"]
+        lm_head_weight = verifier_weights.get("lm_head.weight", embed_tokens_weight)
+
+        # Load embed_tokens if not already loaded (NaN means uninitialized)
+        if self.embed_tokens.weight.isnan().any():
+            self.embed_tokens.load_state_dict({"weight": embed_tokens_weight})
+
+        if self.use_draft_vocab:
+            if self.t2d is None or not torch.any(self.t2d).item():  # type: ignore[arg-type]
+                raise ValueError(
+                    "t2d tensor hasn't been set. Please call "
+                    "`.load_vocab_mappings(t2d, d2t)` before `.load_verifier_weights()`"
+                )
+            lm_head_weight = lm_head_weight[
+                self.t2d.to(device=lm_head_weight.device, dtype=torch.bool), :  # type: ignore[union-attr,index]
+            ]
+
+        if self.lm_head.weight.isnan().any():
+            self.lm_head.load_state_dict(
+                {"weight": lm_head_weight.detach().clone()}, strict=False
+            )
+        self.verifier_lm_head.load_state_dict(
+            {"weight": lm_head_weight.detach().clone()}, strict=False
+        )
+
+
 class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc]
     """
     Abstract base class for all speculator models in the Speculators library.
@@ -180,8 +326,10 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
             weights_only=weights_only,
             **kwargs,
         )
-        model.load_vocab_mappings(t2d, d2t)
-        model.load_verifier_weights()
+        if hasattr(model, "load_vocab_mappings"):
+            model.load_vocab_mappings(t2d, d2t)
+        if hasattr(model, "load_verifier_weights"):
+            model.load_verifier_weights()
         return model
 
     @classmethod
@@ -339,96 +487,6 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
             "to support training infrastructure."
         )
 
-    def load_vocab_mappings(self, t2d: torch.Tensor | None, d2t: torch.Tensor | None):
-        """Load target-to-draft and draft-to-target vocabulary mapping tensors.
-
-        Args:
-            t2d: Target-to-draft vocabulary mapping tensor.
-            d2t: Draft-to-target vocabulary mapping tensor.
-        """
-        if t2d is None and d2t is None:
-            return
-        elif t2d is None or d2t is None:
-            raise ValueError(
-                "Both t2d and d2t must be provided together, or both must be None. "
-                f"Got t2d={'provided' if t2d is not None else 'None'}, "
-                f"d2t={'provided' if d2t is not None else 'None'}"
-            )
-
-        if not self.use_draft_vocab:
-            raise RuntimeError(
-                "Vocab mappings (t2d/d2t) are not needed because "
-                "draft_vocab_size equals verifier vocab_size. "
-                "Set draft_vocab_size < verifier_vocab_size or "
-                "omit t2d/d2t arguments."
-            )
-
-        if t2d.shape[0] != self.verifier_vocab_size:
-            raise ValueError(
-                f"t2d.shape[0] ({t2d.shape[0]}) must match"
-                f" verifier_vocab_size ({self.verifier_vocab_size})."
-            )
-        if int(t2d.sum(dtype=torch.long).item()) != self.draft_vocab_size:
-            raise ValueError(
-                f"t2d has {int(t2d.sum(dtype=torch.long).item())} non-zero values, "
-                f"expected {self.draft_vocab_size}."
-            )
-
-        if d2t.shape[0] != self.draft_vocab_size:
-            raise ValueError(
-                f"d2t.shape[0] ({d2t.shape[0]}) must match"
-                f" draft_vocab_size ({self.draft_vocab_size})."
-            )
-
-        self.load_state_dict({"t2d": t2d, "d2t": d2t}, strict=False)
-
-    def load_verifier_weights(self):
-        """Load verifier model weights (embeddings, lm_head, etc.).
-
-        Loads embed_tokens, lm_head, and verifier_lm_head weights from the
-        verifier model. Handles draft vocab masking via t2d when use_draft_vocab
-        is True. Subclasses can override to load additional weights (e.g. norms,
-        tokenizer) by calling super().load_verifier_weights() first.
-        """
-        from speculators.utils.loading import load_model_layers  # noqa: PLC0415
-
-        speculators_config = getattr(self.config, "speculators_config", None)
-        if speculators_config is None:
-            return
-        verifier_config = speculators_config.verifier
-        if verifier_config.name_or_path is None:
-            return
-
-        verifier_weights = load_model_layers(
-            ["embed_tokens.weight", "lm_head.weight"],
-            verifier_config.name_or_path,
-        )
-
-        embed_tokens_weight = verifier_weights["embed_tokens.weight"]
-        lm_head_weight = verifier_weights.get("lm_head.weight", embed_tokens_weight)
-
-        # Load embed_tokens if not already loaded (NaN means uninitialized)
-        if self.embed_tokens.weight.isnan().any():
-            self.embed_tokens.load_state_dict({"weight": embed_tokens_weight})
-
-        if self.use_draft_vocab:
-            if self.t2d is None or not torch.any(self.t2d).item():  # type: ignore[arg-type]
-                raise ValueError(
-                    "t2d tensor hasn't been set. Please call "
-                    "`.load_vocab_mappings(t2d, d2t)` before `.load_verifier_weights()`"
-                )
-            lm_head_weight = lm_head_weight[
-                self.t2d.to(device=lm_head_weight.device, dtype=torch.bool), :  # type: ignore[union-attr,index]
-            ]
-
-        if self.lm_head.weight.isnan().any():
-            self.lm_head.load_state_dict(
-                {"weight": lm_head_weight.detach().clone()}, strict=False
-            )
-        self.verifier_lm_head.load_state_dict(
-            {"weight": lm_head_weight.detach().clone()}, strict=False
-        )
-
     def __init__(self, config: SpeculatorModelConfig, **kwargs):
         """
         Initialize a SpeculatorModel instance.
@@ -454,44 +512,6 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
         config.tie_word_embeddings = False
         super().__init__(config, **kwargs)
         self.config: SpeculatorModelConfig = config
-
-        # VOCAB MAPPINGS
-        tl_config = config.transformer_layer_config
-        self.draft_vocab_size = config.draft_vocab_size
-        self.verifier_vocab_size = tl_config.vocab_size
-        self.hidden_size = tl_config.hidden_size
-        self.use_draft_vocab = self.draft_vocab_size != self.verifier_vocab_size
-        t2d: torch.Tensor | None = None
-        d2t: torch.Tensor | None = None
-        if self.use_draft_vocab:
-            t2d = torch.zeros((self.verifier_vocab_size,), dtype=torch.bool)
-            d2t = torch.zeros((self.draft_vocab_size,), dtype=torch.long)
-        self.register_buffer("t2d", t2d)
-        self.register_buffer("d2t", d2t)
-
-        # TOKEN EMBEDDINGS
-        self.embed_tokens = nn.Embedding(
-            self.verifier_vocab_size,
-            self.hidden_size,
-            padding_idx=getattr(tl_config, "pad_token_id", None),
-        )
-        self.embed_tokens.weight.requires_grad_(False)
-
-        # LM HEADS
-        self.lm_head = nn.Linear(self.hidden_size, self.draft_vocab_size, bias=False)
-        self.verifier_lm_head = nn.Linear(
-            self.hidden_size, self.draft_vocab_size, bias=False
-        )
-        self.verifier_lm_head.weight.requires_grad = False
-        self.lm_head.weight.requires_grad = False
-
-        # Initialize weights to nan so it's easy to detect if they're never loaded
-        torch.nn.init.constant_(self.lm_head.weight, torch.nan)
-        torch.nn.init.constant_(self.embed_tokens.weight, torch.nan)
-        torch.nn.init.constant_(self.verifier_lm_head.weight, torch.nan)
-        self.lm_head._is_hf_initialized = True  # type: ignore[assignment] # noqa: SLF001
-        self.embed_tokens._is_hf_initialized = True  # type: ignore[assignment] # noqa: SLF001
-        self.verifier_lm_head._is_hf_initialized = True  # type: ignore[assignment] # noqa: SLF001
 
     def forward(self, *args, **kwargs):
         raise NotImplementedError(

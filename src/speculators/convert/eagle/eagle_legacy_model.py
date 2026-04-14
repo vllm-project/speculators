@@ -18,9 +18,10 @@ import warnings
 from typing import Any, ClassVar, Literal, cast
 
 import torch
-from pydantic import Field, model_validator
+from pydantic import Field, field_serializer, field_validator, model_validator
 from torch import nn
 from transformers import (
+    AutoConfig,
     AutoModelForCausalLM,
     PretrainedConfig,
     PreTrainedModel,
@@ -107,6 +108,24 @@ class EagleSpeculatorConfig(SpeculatorModelConfig):
             "use False, while HASS uses True."
         ),
     )
+
+    @field_serializer("transformer_layer_config")
+    def serialize_transformer_config(self, value: PretrainedConfig) -> dict:
+        """Serialize transformer config to dict."""
+        return value.to_diff_dict()
+
+    @field_validator("transformer_layer_config", mode="before")
+    @classmethod
+    def validate_transformer_config(cls, value: Any) -> PretrainedConfig:
+        """Validate and convert transformer config."""
+        if isinstance(value, dict):
+            config_class: type[PretrainedConfig] = LlamaConfig
+            if "model_type" in value:
+                config_class = AutoConfig.for_model(
+                    model_type=value["model_type"]
+                ).__class__
+            return config_class(**value)
+        return value
 
     @model_validator(mode="after")
     def check_add_architectures(self) -> Self:
@@ -285,9 +304,6 @@ class EagleSpeculator(SpeculatorModel):
         self.pre_lm_head_layernorm: nn.Module | None = self._create_layernorm()
 
         self.post_init()  # type: ignore[attr-defined]
-
-    def load_verifier_weights(self):
-        """No-op: legacy Eagle loads verifier weights via attach_verifier."""
 
     def resolve_verifier(
         self, verifier: str | os.PathLike | PreTrainedModel

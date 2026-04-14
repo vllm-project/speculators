@@ -13,7 +13,7 @@ from transformers.models.qwen3.modeling_qwen3 import (
     Qwen3RotaryEmbedding,
 )
 
-from speculators.model import SpeculatorModel
+from speculators.model import DraftVocabMixin, SpeculatorModel
 from speculators.models.dflash import DFlashSpeculatorConfig
 from speculators.models.dflash.attention import create_anchor_block_mask_mod
 from speculators.models.dflash.metrics import compute_metrics
@@ -25,7 +25,7 @@ from speculators.models.dflash.utils import (
 
 
 @SpeculatorModel.register("dflash")
-class DFlashDraftModel(SpeculatorModel):
+class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
     config_class: ClassVar[type[DFlashSpeculatorConfig]] = DFlashSpeculatorConfig  # type: ignore[misc]
     _no_split_modules = ["Qwen3DFlashDecoderLayer"]
     _keys_to_ignore_on_load_missing: ClassVar[list[str]] = [  # type: ignore[misc]
@@ -51,6 +51,7 @@ class DFlashDraftModel(SpeculatorModel):
                 "simple_flex_attention"
             )
         super().__init__(config=config)
+        self._init_vocab(config)
 
         tl_config = config.transformer_layer_config
 

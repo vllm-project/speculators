@@ -22,9 +22,8 @@ import os
 from importlib.metadata import version
 from typing import Any, ClassVar
 
-from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
-from transformers import AutoConfig, PretrainedConfig
-from transformers.models.llama.configuration_llama import LlamaConfig
+from pydantic import BaseModel, ConfigDict, Field
+from transformers import PretrainedConfig
 
 from speculators.proposals import TokenProposalConfig
 from speculators.utils import PydanticClassRegistryMixin, ReloadableBaseModel
@@ -240,14 +239,6 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
         default=version("speculators"),
         description="Version of the speculators library",
     )
-    transformer_layer_config: PretrainedConfig = Field(
-        default_factory=LlamaConfig,
-        description="Configuration for the transformer decoder layer",
-    )
-    draft_vocab_size: int = Field(
-        default=32000,
-        description="Size of draft model vocabulary for speculation",
-    )
     speculators_config: SpeculatorsConfig = Field(  # type: ignore[assignment]
         default=None,
         description=(
@@ -255,24 +246,6 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
             "Contains information about the algorithm, proposal methods, and verifier."
         ),
     )
-
-    @field_serializer("transformer_layer_config")
-    def serialize_transformer_config(self, value: PretrainedConfig) -> dict:
-        """Serialize transformer config to dict."""
-        return value.to_diff_dict()
-
-    @field_validator("transformer_layer_config", mode="before")
-    @classmethod
-    def validate_transformer_config(cls, value: Any) -> PretrainedConfig:
-        """Validate and convert transformer config."""
-        if isinstance(value, dict):
-            config_class: type[PretrainedConfig] = LlamaConfig
-            if "model_type" in value:
-                config_class = AutoConfig.for_model(
-                    model_type=value["model_type"]
-                ).__class__
-            return config_class(**value)
-        return value
 
     def __init__(self, **kwargs):
         # initialize the Pydantic arguments first to set all valid fields

@@ -8,7 +8,7 @@ from torch.nn.attention.flex_attention import create_block_mask
 from transformers import AutoConfig, DynamicCache, PretrainedConfig
 
 from speculators.config import SpeculatorsConfig, VerifierConfig
-from speculators.model import SpeculatorModel
+from speculators.model import DraftVocabMixin, SpeculatorModel
 from speculators.models.eagle3 import Eagle3SpeculatorConfig
 from speculators.models.eagle3.attention import (
     create_combined_mask_mod,
@@ -153,7 +153,7 @@ def conditional_torch_compile(func):
 
 
 @SpeculatorModel.register("eagle3")
-class Eagle3DraftModel(SpeculatorModel):
+class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
     config_class: ClassVar[type[Eagle3SpeculatorConfig]] = Eagle3SpeculatorConfig  # type: ignore[misc]
     _keys_to_ignore_on_load_missing: ClassVar[list[str]] = [  # type: ignore[misc,assignment]
         "embed_tokens.weight",
@@ -176,6 +176,7 @@ class Eagle3DraftModel(SpeculatorModel):
         impl = "simple_flex_attention"
         config.transformer_layer_config._attn_implementation = impl  # noqa: SLF001
         super().__init__(config=config)
+        self._init_vocab(config)
 
         tl_config = self.config.transformer_layer_config
         self._model_definitions = model_classes[tl_config.model_type]
