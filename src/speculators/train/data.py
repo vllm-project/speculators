@@ -226,7 +226,9 @@ class ArrowDataset(BaseDataset):
 
     def _setup_client(self):
         # Delay client setup so it runs in dataloader thread if on_missing="generate"
-        self.client = openai.OpenAI(base_url=self.vllm_endpoint, api_key="EMPTY")
+        self.client = openai.OpenAI(
+            base_url=self.vllm_endpoint, api_key="EMPTY", max_retries=0
+        )
         list_models = self.client.models.list()
         model_id = list_models.data[0].id
         if self.model and self.model != model_id:
