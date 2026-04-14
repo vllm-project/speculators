@@ -256,14 +256,37 @@ class Trainer:
                 self.scheduler.step()
 
             if self.is_distributed:
-                for v in metrics.values():
-                    dist.reduce(v, dst=0, op=dist.ReduceOp.AVG)
+                # Reduce only metrics that exist on all ranks
+                for k in list(metrics.keys()):
+                    if k.startswith("accuracy_depth_"):
+                        # Per-depth metrics may not exist on all ranks, skip
+                        continue
+                    dist.reduce(metrics[k], dst=0, op=dist.ReduceOp.AVG)
 
-            metrics = {k: v.item() for k, v in metrics.items()}
+            metrics_dict = {k: v.item() for k, v in metrics.items()}
+
+            # Separate per-depth metrics for compact logging
+            depth_metrics = {
+                k: v for k, v in metrics_dict.items() if k.startswith("accuracy_depth_")
+            }
+            base_metrics = {
+                k: v
+                for k, v in metrics_dict.items()
+                if not k.startswith("accuracy_depth_")
+            }
+
             metric_logger.info(
-                {"train": metrics, "epoch": epoch, "lr": current_lr},
+                {"train": base_metrics, "epoch": epoch, "lr": current_lr},
                 extra={"step": self.global_step},
             )
+
+            if depth_metrics and self.local_rank == 0:
+                depth_items = sorted(depth_metrics.items())
+                depth_str = ", ".join(
+                    f"d{k.split('_')[-1]}:{v:.3f}" for k, v in depth_items
+                )
+                root_logger.info(f"    Depth accuracy: [{depth_str}]")
+
             self.global_step += 1
 
     @torch.no_grad()
@@ -292,17 +315,40 @@ class Trainer:
             )
 
             if self.is_distributed:
-                for m in metrics.values():
-                    dist.all_reduce(m, op=dist.ReduceOp.AVG)
+                # Reduce only metrics that exist on all ranks
+                for k in list(metrics.keys()):
+                    if k.startswith("accuracy_depth_"):
+                        # Per-depth metrics may not exist on all ranks, skip
+                        continue
+                    dist.reduce(metrics[k], dst=0, op=dist.ReduceOp.AVG)
 
             for k, v in metrics.items():
                 val_metrics[k] = val_metrics.get(k, 0.0) + v.item()
 
         val_metrics = {f"{k}_epoch": v / num_batches for k, v in val_metrics.items()}
+
+        depth_metrics = {k: v for k, v in val_metrics.items() if "accuracy_depth_" in k}
+        base_metrics = {
+            k: v for k, v in val_metrics.items() if "accuracy_depth_" not in k
+        }
+
         metric_logger.info(
-            {"val": val_metrics, "epoch": epoch}, extra={"step": self.global_step}
+            {"val": base_metrics, "epoch": epoch}, extra={"step": self.global_step}
         )
+
+        if depth_metrics and self.local_rank == 0:
+            depth_items = sorted(depth_metrics.items())
+            depth_str = ", ".join(
+                f"d{k.split('_')[-2]}:{v:.3f}" for k, v in depth_items
+            )
+            root_logger.info(f"    Validation depth accuracy: [{depth_str}]")
+
         return val_metrics
+
+    def save_checkpoint(self, epoch: int):
+        self.checkpointer.save_checkpoint(self.model, self.opt, epoch)
+        if self.scheduler is not None:
+            self.checkpointer.save_scheduler_state_dict(self.scheduler, epoch)
 
     def maybe_save_checkpoint(self, epoch: int, val_metrics: dict | None):
         if (
