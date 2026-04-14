@@ -179,6 +179,7 @@ def run_data_generation_offline2(
     concurrency: int = 4,
     validate_outputs: bool = True,
     timeout: float | None = None,
+    fail_on_error: bool = True,
 ):
     datagen_cmd = [
         sys.executable,
@@ -194,6 +195,8 @@ def run_data_generation_offline2(
     ]
     if validate_outputs:
         datagen_cmd.append("--validate-outputs")
+    if fail_on_error:
+        datagen_cmd.append("--fail-on-error")
 
     if hidden_states_path is not None:
         datagen_cmd += ["--output", str(hidden_states_path)]
