@@ -285,19 +285,22 @@ class ArrowDataset(BaseDataset):
                 timeout=self.request_timeout,
                 max_retries=self.max_retries,
             )
+
+            loaded_hs = load_file(hs_filepath)
+
+            match self.on_generate:
+                case "cache":
+                    file_idx = self._map_to_file_idx(index)
+                    target_path = self.hidden_states_path / f"hs_{file_idx}.safetensors"
+                    shutil.move(hs_filepath, target_path)
+                case "delete":
+                    Path(hs_filepath).unlink()
         except Exception as e:  # noqa: BLE001
-            warnings.warn(str(e), stacklevel=1)
+            warnings.warn(
+                f"Failed to load/cache hidden states for sample {index}: {e}",
+                stacklevel=1,
+            )
             return None
-
-        loaded_hs = load_file(hs_filepath)
-
-        match self.on_generate:
-            case "cache":
-                file_idx = self._map_to_file_idx(index)
-                target_path = self.hidden_states_path / f"hs_{file_idx}.safetensors"
-                shutil.move(hs_filepath, target_path)
-            case "delete":
-                Path(hs_filepath).unlink()
 
         return loaded_hs
 
