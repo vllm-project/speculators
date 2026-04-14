@@ -266,20 +266,28 @@ class ArrowDataset(BaseDataset):
         input_ids = self.data[index]["input_ids"].tolist()
         try:
             hs_filepath = generate_hidden_states(self.client, self.model, input_ids)  # type:ignore[arg-type]
+
+            hs_path = Path(hs_filepath)
+            loaded_hs = self._load_hs_file(hs_path)
+
+            match self.on_generate:
+                case "cache":
+                    file_idx = self._map_to_file_idx(index)
+                    target_path = (
+                        self.hidden_states_path / f"hs_{file_idx}{hs_path.suffix}"
+                    )
+                    shutil.move(hs_filepath, target_path)
+                case "delete":
+                    hs_path.unlink()
         except InvalidResponseError as e:
             warnings.warn(str(e), stacklevel=1)
             return None
-
-        hs_path = Path(hs_filepath)
-        loaded_hs = self._load_hs_file(hs_path)
-
-        match self.on_generate:
-            case "cache":
-                file_idx = self._map_to_file_idx(index)
-                target_path = self.hidden_states_path / f"hs_{file_idx}{hs_path.suffix}"
-                shutil.move(hs_filepath, target_path)
-            case "delete":
-                hs_path.unlink()
+        except Exception as e:  # noqa: BLE001
+            warnings.warn(
+                f"Failed to load/cache hidden states for sample {index}: {e}",
+                stacklevel=1,
+            )
+            return None
 
         return loaded_hs
 

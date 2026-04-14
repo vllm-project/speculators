@@ -126,10 +126,10 @@ def parse_args():
 def get_existing_hidden_state_indices(output_path: Path) -> list[int]:
     """Find existing `hs_i.safetensors` or `hs_i.pt` files (where i is file index)"""
 
-    existing_file_indices = []
+    existing_file_indices_set: set[int] = set()
 
     if not output_path.exists():
-        return existing_file_indices
+        return []
 
     valid_extensions = {".safetensors", ".pt"}
     for file_path in output_path.iterdir():
@@ -137,11 +137,11 @@ def get_existing_hidden_state_indices(output_path: Path) -> list[int]:
             index_str = file_path.stem[3:]  # Remove "hs_" prefix
             try:
                 file_index = int(index_str)
-                existing_file_indices.append(file_index)
+                existing_file_indices_set.add(file_index)
             except ValueError:
                 continue
 
-    return sorted(existing_file_indices)
+    return sorted(existing_file_indices_set)
 
 
 def get_indices_to_process(

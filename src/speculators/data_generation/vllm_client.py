@@ -40,9 +40,11 @@ async def wait_for_lock_async(lock_path, timeout=10.0, poll_interval=0.1):
     fd = os.open(lock_path, os.O_RDONLY)
     try:
         await asyncio.wait_for(_poll_lock_async(fd, poll_interval), timeout=timeout)
-    finally:
+    except BaseException:
         os.close(fd)
-        os.remove(lock_path)
+        raise
+    os.close(fd)
+    os.remove(lock_path)
 
 
 def wait_for_lock(lock_path, timeout=10.0, poll_interval=0.1):
@@ -52,16 +54,18 @@ def wait_for_lock(lock_path, timeout=10.0, poll_interval=0.1):
         while True:
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                return
+                break
             except BlockingIOError:
                 if time.monotonic() >= deadline:
                     raise TimeoutError(
                         f"Timed out waiting for lock: {lock_path}"
                     ) from None
                 time.sleep(poll_interval)
-    finally:
+    except BaseException:
         os.close(fd)
-        os.remove(lock_path)
+        raise
+    os.close(fd)
+    os.remove(lock_path)
 
 
 async def generate_hidden_states_async(
