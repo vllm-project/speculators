@@ -333,6 +333,45 @@ async def worker(
             queue.task_done()
 
 
+async def _feed_queue(to_process, dataset, queue, cancel_event):
+    """Feed dataset items into the worker queue, respecting cancellation."""
+    for i in to_process:
+        if cancel_event.is_set():
+            break
+        item = dataset[i]
+        # Check cancel_event while waiting for queue space to avoid
+        # deadlocking when all workers have died.
+        while not cancel_event.is_set():
+            try:
+                queue.put_nowait({"idx": i, "input_ids": item["input_ids"]})
+                break
+            except asyncio.QueueFull:
+                await asyncio.sleep(0.1)
+
+
+async def _shutdown_workers(workers, queue, cancel_event):
+    """Shut down workers and propagate the first real exception."""
+    logger.info("Waiting for remaining file saves to complete...")
+    if cancel_event.is_set():
+        # Workers may be dead or draining — cancel any that are
+        # still alive so we don't deadlock on sentinel puts.
+        for w in workers:
+            if not w.done():
+                w.cancel()
+    else:
+        # Normal shutdown: send sentinel values so workers exit
+        for _ in range(len(workers)):
+            await queue.put(None)
+    results = await asyncio.gather(*workers, return_exceptions=True)
+
+    # Propagate the first real worker exception (skip CancelledError)
+    for result in results:
+        if isinstance(result, Exception) and not isinstance(
+            result, asyncio.CancelledError
+        ):
+            raise result
+
+
 async def generate_and_save_hidden_states(args, dataset):
     if args.output is None:
         hidden_states_dir = Path(args.preprocessed_data) / "hidden_states"
@@ -396,38 +435,8 @@ async def generate_and_save_hidden_states(args, dataset):
                 for _ in range(args.concurrency * 2)
             ]
 
-            for i in to_process:
-                if cancel_event.is_set():
-                    break
-                item = dataset[i]
-                # Check cancel_event while waiting for queue space to avoid
-                # deadlocking when all workers have died.
-                while not cancel_event.is_set():
-                    try:
-                        queue.put_nowait({"idx": i, "input_ids": item["input_ids"]})
-                        break
-                    except asyncio.QueueFull:
-                        await asyncio.sleep(0.1)
-
-            logger.info("Waiting for remaining file saves to complete...")
-            if cancel_event.is_set():
-                # Workers may be dead or draining — cancel any that are
-                # still alive so we don't deadlock on sentinel puts.
-                for w in workers:
-                    if not w.done():
-                        w.cancel()
-            else:
-                # Normal shutdown: send sentinel values so workers exit
-                for _ in range(len(workers)):
-                    await queue.put(None)
-            results = await asyncio.gather(*workers, return_exceptions=True)
-
-    # Propagate the first real worker exception (skip CancelledError)
-    for result in results:
-        if isinstance(result, Exception) and not isinstance(
-            result, asyncio.CancelledError
-        ):
-            raise result
+            await _feed_queue(to_process, dataset, queue, cancel_event)
+            await _shutdown_workers(workers, queue, cancel_event)
 
     num_saved = len(to_process) - len(skipped_indices)
     logger.info(f"Saved {num_saved} new data points to {args.output}")
