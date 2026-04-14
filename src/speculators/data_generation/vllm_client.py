@@ -50,8 +50,9 @@ async def generate_hidden_states_async(
         timeout: Timeout in seconds for each request attempt. None for no timeout.
         max_retries: Maximum number of retry attempts on failure.
     """
+    total_attempts = max_retries + 1
     last_error: Exception | None = None
-    for attempt in range(1, max_retries + 1):
+    for attempt in range(1, total_attempts + 1):
         try:
             coro = client.completions.create(
                 model=model,
@@ -70,12 +71,12 @@ async def generate_hidden_states_async(
             raise
         except Exception as e:
             last_error = e
-            if attempt < max_retries:
+            if attempt < total_attempts:
                 backoff = RETRY_BACKOFF_BASE**attempt
                 logger.warning(
                     "Request failed (attempt %d/%d): %s. Retrying in %ds...",
                     attempt,
-                    max_retries,
+                    total_attempts,
                     e,
                     backoff,
                 )
@@ -83,7 +84,7 @@ async def generate_hidden_states_async(
             else:
                 logger.error(
                     "Request failed after %d attempts: %s",
-                    max_retries,
+                    total_attempts,
                     e,
                 )
 
@@ -97,8 +98,9 @@ def generate_hidden_states(
     timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
     max_retries: int = DEFAULT_MAX_RETRIES,
 ) -> str:
+    total_attempts = max_retries + 1
     last_error: Exception | None = None
-    for attempt in range(1, max_retries + 1):
+    for attempt in range(1, total_attempts + 1):
         try:
             completion = client.completions.create(
                 model=model,
@@ -112,12 +114,12 @@ def generate_hidden_states(
             raise
         except Exception as e:
             last_error = e
-            if attempt < max_retries:
+            if attempt < total_attempts:
                 backoff = RETRY_BACKOFF_BASE**attempt
                 logger.warning(
                     "Request failed (attempt %d/%d): %s. Retrying in %ds...",
                     attempt,
-                    max_retries,
+                    total_attempts,
                     e,
                     backoff,
                 )
@@ -125,7 +127,7 @@ def generate_hidden_states(
             else:
                 logger.error(
                     "Request failed after %d attempts: %s",
-                    max_retries,
+                    total_attempts,
                     e,
                 )
 

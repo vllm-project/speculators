@@ -402,7 +402,9 @@ async def generate_and_save_hidden_states(args, dataset):
         max_consec = args.concurrency
     failure_tracker = _FailureTracker(max_consec) if not args.fail_on_error else None
 
-    async with openai.AsyncOpenAI(base_url=args.endpoint, api_key="EMPTY") as client:
+    async with openai.AsyncOpenAI(
+        base_url=args.endpoint, api_key="EMPTY", max_retries=0
+    ) as client:
         list_models = await client.models.list()
         model_id = list_models.data[0].id
         if args.model and args.model != model_id:
