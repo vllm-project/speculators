@@ -19,7 +19,6 @@ from speculators.models.dflash.attention import create_anchor_block_mask_mod
 from speculators.models.dflash.metrics import compute_metrics
 from speculators.models.dflash.model_definitions import Qwen3DFlashDecoderLayer
 from speculators.models.dflash.utils import (
-    build_target_layer_ids,
     get_base_indices_for_anchored_blocks,
     select_anchors,
 )
@@ -79,9 +78,8 @@ class DFlashDraftModel(SpeculatorModel):
         if config.aux_hidden_state_layer_ids is not None:
             self.target_layer_ids = config.aux_hidden_state_layer_ids
         else:
-            self.target_layer_ids = build_target_layer_ids(
-                num_verifier_layers, num_draft_layers
-            )
+            self.target_layer_ids = [2, num_verifier_layers // 2, num_verifier_layers - 3]
+
         self.norm = Qwen3RMSNorm(
             config.transformer_layer_config.hidden_size,
             eps=config.transformer_layer_config.rms_norm_eps,  # type: ignore[arg-type]
@@ -89,7 +87,7 @@ class DFlashDraftModel(SpeculatorModel):
         self.rotary_emb = Qwen3RotaryEmbedding(config.transformer_layer_config)  # type: ignore[arg-type]
 
         self.fc = nn.Linear(
-            num_draft_layers * config.transformer_layer_config.hidden_size,
+            len(self.target_layer_ids) * config.transformer_layer_config.hidden_size,
             config.transformer_layer_config.hidden_size,
             bias=False,
         )

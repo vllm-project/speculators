@@ -60,6 +60,8 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
         revision: str = "main",
         use_safetensors: bool | None = None,
         weights_only: bool = True,
+        t2d: torch.Tensor | None = None,
+        d2t: torch.Tensor | None = None,
         **kwargs,
     ) -> "SpeculatorModel":
         """
@@ -114,10 +116,6 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
         :return: A SpeculatorModel instance of the appropriate subclass, loaded with
             the pretrained weights and configuration.
         """
-        # Extract vocab mapping tensors before passing to HF's from_pretrained
-        t2d = kwargs.pop("t2d", None)
-        d2t = kwargs.pop("d2t", None)
-
         if not config:
             if not pretrained_model_name_or_path:
                 raise ValueError(

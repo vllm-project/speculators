@@ -1,6 +1,8 @@
 # ruff: noqa: ERA001
 from speculators.train.data import BatchType
 
+__all__ = ["shift_batch"]
+
 
 def shift_batch(batch: BatchType):
     input_ids = batch["input_ids"]  # shape: [seq_len]
@@ -19,7 +21,6 @@ def shift_batch(batch: BatchType):
     # [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
 
     # Need to align (x1, g0, y1, l1)
-    # todo: verify loss mask shift is correct
 
     # Drop x0, g(-1), y0, l0, reduce seq_len by 1
 
