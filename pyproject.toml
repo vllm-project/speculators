@@ -97,7 +97,7 @@ dev = [
     "mdformat~=0.7.17",
     "mdformat-footnote~=0.1.1",
     "mdformat-frontmatter~=2.0.8",
-    "mdformat-gfm~=0.3.6",
+    "mdformat-gfm~=1.0.0",
     "mdformat-gfm-alerts~=2.0.0",
 
     # type-checking
