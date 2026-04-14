@@ -112,7 +112,7 @@ class BaseCheckpointer:
         return self.path / "checkpoint_best"
 
     def best_val_loss_path(self) -> Path:
-        return self.path / "best_val_loss.json"
+        return self.path / "checkpoint_best" / "metrics.json"
 
     def save_best_val_loss(self, val_loss: float):
         self.path.mkdir(parents=True, exist_ok=True)
