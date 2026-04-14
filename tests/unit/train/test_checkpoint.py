@@ -209,18 +209,22 @@ def test_checkpoint_freq_flag_controls_saves(
     assert best_path.resolve() == (tmp_path / "5").resolve()
 
 
-def test_save_and_load_best_val_loss(tmp_path: Path):
+def test_save_and_load_val_metrics(tmp_path: Path):
     cp = SingleGPUCheckpointer(str(tmp_path))
 
     # No file yet
     assert cp.load_best_val_loss() is None
 
-    # Save and reload
-    cp.save_best_val_loss(0.123456)
+    # Save val_metrics for epoch 0 and point checkpoint_best at it
+    (tmp_path / "0").mkdir()
+    cp.save_val_metrics(0, {"loss_epoch": 0.123456, "full_acc_0_epoch": 0.5})
+    cp.update_best_symlink(0)
     assert cp.load_best_val_loss() == pytest.approx(0.123456)
 
-    # Overwrite
-    cp.save_best_val_loss(0.05)
+    # Save better metrics for epoch 1 and update best
+    (tmp_path / "1").mkdir()
+    cp.save_val_metrics(1, {"loss_epoch": 0.05, "full_acc_0_epoch": 0.7})
+    cp.update_best_symlink(1)
     assert cp.load_best_val_loss() == pytest.approx(0.05)
 
 
@@ -228,7 +232,8 @@ def test_best_val_loss_restored_on_resume(tmp_path: Path):
     (tmp_path / "4").mkdir()
 
     cp = SingleGPUCheckpointer(str(tmp_path))
-    cp.save_best_val_loss(0.42)
+    cp.save_val_metrics(4, {"loss_epoch": 0.42, "full_acc_0_epoch": 0.6})
+    cp.update_best_symlink(4)
 
     trainer = Trainer.__new__(Trainer)
     trainer.resume_from_checkpoint = True

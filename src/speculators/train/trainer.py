@@ -274,8 +274,8 @@ class Trainer:
                 self.checkpointer.save_checkpoint(self.model, self.opt, epoch)
                 if self.scheduler is not None:
                     self.checkpointer.save_scheduler_state_dict(self.scheduler, epoch)
+                self.checkpointer.save_val_metrics(epoch, val_metrics)
                 self.checkpointer.update_best_symlink(epoch)
-                self.checkpointer.save_best_val_loss(self.best_val_loss)
                 root_logger.info(
                     f"Updated checkpoint_best -> {epoch} "
                     f"(loss_epoch={self.best_val_loss:.6f})"
@@ -290,6 +290,8 @@ class Trainer:
             self.checkpointer.save_checkpoint(self.model, self.opt, epoch)
             if self.scheduler is not None:
                 self.checkpointer.save_scheduler_state_dict(self.scheduler, epoch)
+            if val_metrics is not None:
+                self.checkpointer.save_val_metrics(epoch, val_metrics)
             root_logger.info(
                 f"Checkpoint saved to {self.checkpointer.path / str(epoch)}"
             )
@@ -304,7 +306,6 @@ class Trainer:
                     f"(loss_epoch={self.best_val_loss:.6f})"
                 )
                 self.checkpointer.update_best_symlink(epoch)
-                self.checkpointer.save_best_val_loss(self.best_val_loss)
                 root_logger.info(
                     f"Updated checkpoint_best -> {epoch} "
                     f"(loss_epoch={self.best_val_loss:.6f})"

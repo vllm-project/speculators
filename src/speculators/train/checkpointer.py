@@ -111,20 +111,24 @@ class BaseCheckpointer:
     def best_path(self) -> Path:
         return self.path / "checkpoint_best"
 
-    def best_val_loss_path(self) -> Path:
-        return self.path / "checkpoint_best" / "metrics.json"
+    def val_metrics_path(self, epoch: int) -> Path:
+        return self.path / str(epoch) / "val_metrics.json"
 
-    def save_best_val_loss(self, val_loss: float):
-        self.path.mkdir(parents=True, exist_ok=True)
-        self.best_val_loss_path().write_text(json.dumps({"best_val_loss": val_loss}))
+    def save_val_metrics(self, epoch: int, val_metrics: dict[str, float]):
+        path = self.val_metrics_path(epoch)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(val_metrics))
 
     def load_best_val_loss(self) -> float | None:
-        p = self.best_val_loss_path()
+        best_epoch = self.read_best_epoch()
+        if best_epoch is None:
+            return None
+        p = self.val_metrics_path(best_epoch)
         if not p.exists():
             return None
         try:
             data = json.loads(p.read_text())
-            return float(data["best_val_loss"])
+            return float(data["loss_epoch"])
         except (json.JSONDecodeError, KeyError, ValueError, TypeError):
             return None
 
@@ -176,8 +180,6 @@ class BaseCheckpointer:
         if not keep_dir.exists() or not keep_dir.is_dir():
             raise FileNotFoundError(f"Best epoch dir does not exist: {keep_dir}")
 
-        val_loss_file = self.best_val_loss_path()
-
         for child in self.path.iterdir():
             # Keep the symlink itself
             if child == best_link:
@@ -185,10 +187,6 @@ class BaseCheckpointer:
 
             # Keep the best epoch directory
             if child == keep_dir:
-                continue
-
-            # Keep the best_val_loss file
-            if child == val_loss_file:
                 continue
 
             # Delete numbered epoch directories and any other stray dirs/files
@@ -352,9 +350,9 @@ class DistributedCheckpointer(BaseCheckpointer):
 
         dist.barrier()
 
-    def save_best_val_loss(self, val_loss: float):
+    def save_val_metrics(self, epoch: int, val_metrics: dict[str, float]):
         if dist.get_rank() == 0:
-            super().save_best_val_loss(val_loss)
+            super().save_val_metrics(epoch, val_metrics)
         dist.barrier()
 
     def save_scheduler_state_dict(
