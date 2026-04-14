@@ -25,27 +25,6 @@ def get_base_indices_for_anchored_blocks(
     return idx.reshape(-1)
 
 
-def build_target_layer_ids(num_target_layers: int, num_draft_layers: int):
-    """Calculate which target model layers to use for DFlash draft model.
-
-    Args:
-        num_target_layers: Total number of layers in target model
-        num_draft_layers: Number of layers in draft model
-
-    Returns:
-        List of target layer indices to extract hidden states from
-    """
-    if num_draft_layers == 1:
-        return [(num_target_layers // 2)]
-    start = 1
-    end = num_target_layers - 3
-    span = end - start
-    return [
-        int(round(start + (i * span) / (num_draft_layers - 1)))
-        for i in range(num_draft_layers)
-    ]
-
-
 def select_anchors(
     loss_mask: torch.Tensor,  # shape: [1, total_seq_len]
     num_anchors: int,

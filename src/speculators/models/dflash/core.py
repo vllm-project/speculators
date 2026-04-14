@@ -78,7 +78,11 @@ class DFlashDraftModel(SpeculatorModel):
         if config.aux_hidden_state_layer_ids is not None:
             self.target_layer_ids = config.aux_hidden_state_layer_ids
         else:
-            self.target_layer_ids = [2, num_verifier_layers // 2, num_verifier_layers - 3]
+            self.target_layer_ids = [
+                2,
+                num_verifier_layers // 2,
+                num_verifier_layers - 3,
+            ]
 
         self.norm = Qwen3RMSNorm(
             config.transformer_layer_config.hidden_size,
