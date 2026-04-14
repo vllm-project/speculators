@@ -5,6 +5,7 @@ import torch
 from torch import nn
 from torch.nn.attention.flex_attention import create_block_mask
 from transformers import (
+    AutoConfig,
     AutoTokenizer,  # noqa: PLC0415
     PretrainedConfig,
 )
@@ -63,9 +64,6 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 for layer_idx in range(num_draft_layers)
             ]
         )
-
-        # Load actual verifier config to get the real verifier layer count
-        from transformers import AutoConfig  # noqa: PLC0415
 
         verifier_name_or_path = config.speculators_config.verifier.name_or_path
         if verifier_name_or_path is None:

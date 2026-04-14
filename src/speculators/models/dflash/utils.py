@@ -39,8 +39,8 @@ def select_anchors(
 
     Returns:
         tuple: (anchors, anchor_valid)
-            - anchors: Selected anchor indices [1, num_anchors]
-            - anchor_valid: Boolean mask for valid anchors [1, num_anchors]
+            - anchors: Selected anchor indices [num_anchors]
+            - anchor_valid: Boolean mask for valid anchors [num_anchors]
     """
     if loss_mask.ndim != 2:  # noqa: PLR2004
         raise ValueError(f"Expected [B, T], got {loss_mask.shape}")
