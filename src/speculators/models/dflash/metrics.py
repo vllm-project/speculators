@@ -113,6 +113,7 @@ def compute_acceptance_rate(
     EAGLE 3 acceptance formula: acceptance_prob = min(1, p / p_draft)
     where p is the target model's probability and p_draft is the draft
     model's probability.
+    TODO: Properly refactor this function to be more modular and reusable
 
     Args:
         draft_logits: Logits from the draft model [1, seq_len, vocab_size]

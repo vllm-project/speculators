@@ -113,7 +113,7 @@ def run_offline_e2e(
 
     # Step 4: Validate trained checkpoint with vLLM inference
     if prompts is not None:
-        checkpoint_path = str(save_path / "0")
+        checkpoint_path = str(save_path / "checkpoint_best")
         run_vllm_engine(
             model_path=checkpoint_path,
             tmp_path=tmp_path,
