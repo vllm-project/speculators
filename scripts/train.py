@@ -55,7 +55,7 @@ def set_seed(seed: int, deterministic: bool = False):
 def setup_dataloader(
     dataset: BaseEagle3Dataset,
     world_size: int,
-    local_rank: int,
+    rank: int,
     hidden_size: int,
     num_workers: int = 12,
     prefetch_factor: int = 4,
@@ -64,7 +64,7 @@ def setup_dataloader(
     Args:
         file_list: List of file paths to load data from.
         world_size: Number of processes in the distributed training.
-        local_rank: Rank of the current process.
+        rank: Global rank of the current process.
         add_noise: Whether to add noise to the data.
         noise_std: Standard deviation for noise augmentation.
         num_workers: Number of dataloader workers.
@@ -76,7 +76,7 @@ def setup_dataloader(
         batch_max_length=args.total_seq_len,
         lengths=dataset.approx_lengths,
         num_replicas=world_size,
-        rank=local_rank,
+        rank=rank,
     )
     return DataLoader(
         dataset,
@@ -213,6 +213,9 @@ def main(args: argparse.Namespace):
 
     # Setup distributed training
     local_rank, world_size, rank, is_distributed = maybe_setup_distributed()
+    logger.info(
+        f"Using RANK: {rank}, LOCAL_RANK: {local_rank}, WORLD_SIZE: {world_size}"
+    )
     if not hasattr(torch, args.hidden_states_dtype):
         raise ValueError(
             "--hidden-states-dtype must be a dtype attribute of torch. e.g. `bfloat16`"
@@ -295,7 +298,7 @@ def main(args: argparse.Namespace):
     train_loader = setup_dataloader(
         train_dataset,
         world_size,
-        local_rank,
+        rank,
         transformer_layer_config.hidden_size,
         num_workers=args.num_workers,
         prefetch_factor=args.prefetch_factor,
@@ -303,7 +306,7 @@ def main(args: argparse.Namespace):
     val_loader = setup_dataloader(
         val_dataset,
         world_size,
-        local_rank,
+        rank,
         transformer_layer_config.hidden_size,
         num_workers=args.num_workers,
         prefetch_factor=args.prefetch_factor,
