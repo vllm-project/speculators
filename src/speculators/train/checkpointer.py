@@ -1,3 +1,4 @@
+import json
 import shutil
 from abc import abstractmethod
 from pathlib import Path
@@ -109,6 +110,27 @@ class BaseCheckpointer:
 
     def best_path(self) -> Path:
         return self.path / "checkpoint_best"
+
+    def val_metrics_path(self, epoch: int) -> Path:
+        return self.path / str(epoch) / "val_metrics.json"
+
+    def save_val_metrics(self, epoch: int, val_metrics: dict[str, float]):
+        path = self.val_metrics_path(epoch)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(val_metrics))
+
+    def load_best_val_loss(self) -> float | None:
+        best_epoch = self.read_best_epoch()
+        if best_epoch is None:
+            return None
+        p = self.val_metrics_path(best_epoch)
+        if not p.exists():
+            return None
+        try:
+            data = json.loads(p.read_text())
+            return float(data["loss_epoch"])
+        except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+            return None
 
     def read_best_epoch(self) -> int | None:
         """Return the epoch that `checkpoint_best` points to."""
@@ -282,6 +304,12 @@ class DistributedCheckpointer(BaseCheckpointer):
             full_state_dict,
             options=StateDictOptions(full_state_dict=True, broadcast_from_rank0=True),
         )
+
+        # Cast step counters back to float32
+        for state in optimizer.state.values():
+            if "step" in state and isinstance(state["step"], torch.Tensor):
+                state["step"] = state["step"].float()
+
         dist.barrier()
 
     def save_checkpoint(
@@ -320,6 +348,11 @@ class DistributedCheckpointer(BaseCheckpointer):
         if dist.get_rank() == 0:
             super().cleanup_keep_only_best(best_epoch)
 
+        dist.barrier()
+
+    def save_val_metrics(self, epoch: int, val_metrics: dict[str, float]):
+        if dist.get_rank() == 0:
+            super().save_val_metrics(epoch, val_metrics)
         dist.barrier()
 
     def save_scheduler_state_dict(
