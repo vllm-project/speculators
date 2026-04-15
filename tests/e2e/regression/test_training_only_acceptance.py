@@ -12,6 +12,7 @@ from loguru import logger
 
 from speculators.train.vocab_mapping import build_vocab_mappings_from_distribution
 from tests.e2e.utils import run_vllm_engine
+from tests.utils import requires_cadence
 
 _CONFIGS_DIR = Path(__file__).parent / "configs" / "training"
 
@@ -127,6 +128,7 @@ def _run_training(args: dict) -> subprocess.CompletedProcess:
     )
 
 
+@requires_cadence("weekly")
 @pytest.mark.regression
 @pytest.mark.parametrize("config", _CONFIGS, ids=[c["name"] for c in _CONFIGS])
 def test_training_acceptance(
