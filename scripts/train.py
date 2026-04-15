@@ -235,7 +235,9 @@ def main(args: argparse.Namespace):
     )
 
     args.mask_token_id = resolve_mask_token_id(
-        args, transformer_layer_config.vocab_size
+        args.verifier_name_or_path,
+        transformer_layer_config.vocab_size,
+        args.mask_token_id,
     )
 
     registry = SpeculatorModel.registry

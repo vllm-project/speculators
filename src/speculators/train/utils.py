@@ -1,4 +1,3 @@
-import argparse
 import logging
 import os
 import warnings
@@ -57,20 +56,24 @@ def maybe_destroy_distributed():
     )
 
 
-def resolve_mask_token_id(args: argparse.Namespace, vocab_size: int) -> int:
-    """Resolve mask_token_id from args, tokenizer, or fallback.
+def resolve_mask_token_id(
+    verifier_name_or_path: str,
+    vocab_size: int,
+    mask_token_id: int | None = None,
+) -> int:
+    """Resolve mask_token_id from explicit value, tokenizer, or fallback.
 
     Resolution order:
-        1. Explicit --mask-token-id argument
+        1. Explicit mask_token_id if provided
         2. Tokenizer's existing mask_token_id
         3. Add <|MASK|> to tokenizer if embed_tokens has unused slots
         4. Fallback to pad/eos/unk token
     """
-    if args.mask_token_id is not None:
-        logger.info(f"Using explicit mask_token_id={args.mask_token_id}")
-        return args.mask_token_id
+    if mask_token_id is not None:
+        logger.info(f"Using explicit mask_token_id={mask_token_id}")
+        return mask_token_id
 
-    tokenizer = AutoTokenizer.from_pretrained(args.verifier_name_or_path)
+    tokenizer = AutoTokenizer.from_pretrained(verifier_name_or_path)
 
     if tokenizer.mask_token_id is not None:
         logger.info(f"Using tokenizer mask_token_id={tokenizer.mask_token_id}")
@@ -78,12 +81,12 @@ def resolve_mask_token_id(args: argparse.Namespace, vocab_size: int) -> int:
 
     if len(tokenizer) < vocab_size:
         tokenizer.add_special_tokens({"mask_token": "<|MASK|>"})
-        mask_token_id: int = tokenizer.mask_token_id  # type: ignore[assignment]
-        logger.info(
-            f"Added <|MASK|> to tokenizer, mask_token_id={mask_token_id} "
+        added_id: int = tokenizer.mask_token_id  # type: ignore[assignment]
+        logger.warning(
+            f"Added <|MASK|> to tokenizer, mask_token_id={added_id} "
             f"(tokenizer len={len(tokenizer)}, vocab_size={vocab_size})"
         )
-        return mask_token_id
+        return added_id
 
     for token_name in ("pad_token_id", "eos_token_id", "unk_token_id"):
         token_id = getattr(tokenizer, token_name, None)
