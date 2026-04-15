@@ -71,7 +71,7 @@ dev = [
     "mkdocs-section-index~=0.3.10",
     "mkdocs-minify-plugin~=0.8.0",
     "mkdocs-api-autonav~=0.3.1",
-    "mkdocstrings-python~=1.16.12",
+    "mkdocstrings-python~=2.0.3",
     "mkdocs-gen-files~=0.5.0",
     "mkdocs-nav-weight~=0.2.0",
     "pygments<2.20.0",
