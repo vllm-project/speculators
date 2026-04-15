@@ -1,4 +1,3 @@
-import warnings
 from typing import Any, ClassVar
 
 import torch
@@ -6,7 +5,6 @@ from torch import nn
 from torch.nn.attention.flex_attention import create_block_mask
 from transformers import (
     AutoConfig,
-    AutoTokenizer,  # noqa: PLC0415
     PretrainedConfig,
 )
 from transformers.models.qwen3.modeling_qwen3 import (
@@ -144,8 +142,9 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             transformer_layer_config=verifier_config,
             draft_vocab_size=kwargs["draft_vocab_size"],
             block_size=kwargs.get("block_size", 8),
-            max_anchors=kwargs.get("max_anchors", 256),
+            max_anchors=kwargs.get("max_anchors", 3072),
             aux_hidden_state_layer_ids=kwargs.get("target_layer_ids"),
+            mask_token_id=kwargs.get("mask_token_id"),
             speculators_config=SpeculatorsConfig(
                 algorithm="dflash",
                 proposal_methods=[
@@ -187,33 +186,15 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         val_kwargs: dict[str, Any] = {}
         return train_kwargs, val_kwargs
 
-    def load_verifier_weights(self):
-        """Load verifier weights and mask_token_id from tokenizer."""
-        super().load_verifier_weights()
-
-        # Load tokenizer to get mask_token_id with fallbacks
-        verifier_config = self.config.speculators_config.verifier
-        tokenizer = AutoTokenizer.from_pretrained(verifier_config.name_or_path)
-        if tokenizer.mask_token_id is not None:
-            self.mask_token_id = tokenizer.mask_token_id
-        else:
-            token_options = [
-                ("pad_token_id", tokenizer.pad_token_id),
-                ("eos_token_id", tokenizer.eos_token_id),
-                ("unk_token_id", tokenizer.unk_token_id),
-            ]
-            for token_name, token_id in token_options:
-                if token_id is not None:
-                    self.mask_token_id = token_id
-                    warnings.warn(
-                        f"Tokenizer does not have mask_token. "
-                        f"Using {token_name}={token_id} as fallback.",
-                        stacklevel=2,
-                    )
-                    break
-            else:
-                raise ValueError("No suitable special token found in tokenizer")
-        self.config.mask_token_id = self.mask_token_id
+    @property
+    def mask_token_id(self) -> int:
+        if self.config.mask_token_id is None:
+            raise ValueError(
+                "mask_token_id is not set on the config. "
+                "Pass --mask-token-id during training or ensure the config "
+                "was saved with mask_token_id set."
+            )
+        return self.config.mask_token_id
 
     @torch.compile
     def forward(

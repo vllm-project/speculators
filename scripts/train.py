@@ -26,7 +26,11 @@ from speculators.train.distributed_batch_sampler import (
 from speculators.train.logger import setup_metric_logger, setup_root_logger
 from speculators.train.noise_transforms import AddUniformNoise
 from speculators.train.trainer import Trainer, TrainerConfig
-from speculators.train.utils import maybe_destroy_distributed, maybe_setup_distributed
+from speculators.train.utils import (
+    maybe_destroy_distributed,
+    maybe_setup_distributed,
+    resolve_mask_token_id,
+)
 from speculators.train.vocab_mapping import (
     build_vocab_mappings_from_distribution,
     get_target_vocab_size,
@@ -228,6 +232,10 @@ def main(args: argparse.Namespace):
     # Setup speculator config
     transformer_layer_config = create_transformer_layer_config(
         args.verifier_name_or_path, args.num_layers, draft_arch=args.draft_arch
+    )
+
+    args.mask_token_id = resolve_mask_token_id(
+        args, transformer_layer_config.vocab_size
     )
 
     registry = SpeculatorModel.registry
@@ -470,6 +478,7 @@ def parse_args():
     )
     parser.add_argument("--d2t-path", type=str, default=None)
     parser.add_argument("--t2d-path", type=str, default=None)
+    parser.add_argument("--mask-token-id", type=int, default=None)
     parser.add_argument("--ttt-steps", type=int, default=3)
     parser.add_argument("--ttt-step-loss-decay", type=float, default=1.0)
     parser.add_argument(

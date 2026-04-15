@@ -28,7 +28,7 @@ def parse_args():
         nargs="+",
         help=(
             "(Optional) A (space separated) list of integer layer ids. Defaults to "
-            "[2, num_hidden_layers // 2, num_hidden_layers - 3, num_hidden_layers]. "
+            "[2, num_hidden_layers // 2, num_hidden_layers - 3]. "
             "Note: if set, you must also pass the same value into the training process"
         ),
     )

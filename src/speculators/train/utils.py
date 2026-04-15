@@ -1,9 +1,12 @@
+import argparse
 import logging
 import os
+import warnings
 
 import torch
 import torch.distributed as dist
 from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
+from transformers import AutoTokenizer
 
 local_rank = int(os.environ.get("LOCAL_RANK", "0"))
 world_size = int(os.environ.get("WORLD_SIZE", "1"))
@@ -51,6 +54,50 @@ def maybe_destroy_distributed():
     logger.info(
         f"Destroyed distributed with local_rank={local_rank}, world_size={world_size}",
         extra={"override_rank0_filter": True},
+    )
+
+
+def resolve_mask_token_id(args: argparse.Namespace, vocab_size: int) -> int:
+    """Resolve mask_token_id from args, tokenizer, or fallback.
+
+    Resolution order:
+        1. Explicit --mask-token-id argument
+        2. Tokenizer's existing mask_token_id
+        3. Add <|MASK|> to tokenizer if embed_tokens has unused slots
+        4. Fallback to pad/eos/unk token
+    """
+    if args.mask_token_id is not None:
+        logger.info(f"Using explicit mask_token_id={args.mask_token_id}")
+        return args.mask_token_id
+
+    tokenizer = AutoTokenizer.from_pretrained(args.verifier_name_or_path)
+
+    if tokenizer.mask_token_id is not None:
+        logger.info(f"Using tokenizer mask_token_id={tokenizer.mask_token_id}")
+        return tokenizer.mask_token_id
+
+    if len(tokenizer) < vocab_size:
+        tokenizer.add_special_tokens({"mask_token": "<|MASK|>"})
+        mask_token_id = tokenizer.mask_token_id
+        logger.info(
+            f"Added <|MASK|> to tokenizer, mask_token_id={mask_token_id} "
+            f"(tokenizer len={len(tokenizer)}, vocab_size={vocab_size})"
+        )
+        return mask_token_id
+
+    for token_name in ("pad_token_id", "eos_token_id", "unk_token_id"):
+        token_id = getattr(tokenizer, token_name, None)
+        if token_id is not None:
+            warnings.warn(
+                f"Tokenizer does not have mask_token and no unused embedding slots. "
+                f"Using {token_name}={token_id} as fallback.",
+                stacklevel=2,
+            )
+            return token_id
+
+    raise ValueError(
+        "Could not resolve mask_token_id: no --mask-token-id provided, tokenizer has "
+        "no mask_token, no unused embedding slots, and no pad/eos/unk fallback tokens."
     )
 
 
