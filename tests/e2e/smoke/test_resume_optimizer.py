@@ -74,6 +74,7 @@ def _run_distributed_training(
 
 @pytest.mark.e2e
 @pytest.mark.slow
+@requires_multi_gpu
 def test_resume_after_checkpoint_best(tmp_path: Path):
     data_path = tmp_path / "data"
     hidden_states_path = tmp_path / "offline_hidden_states"
