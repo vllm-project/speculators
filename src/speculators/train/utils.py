@@ -78,8 +78,7 @@ def resolve_mask_token_id(args: argparse.Namespace, vocab_size: int) -> int:
 
     if len(tokenizer) < vocab_size:
         tokenizer.add_special_tokens({"mask_token": "<|MASK|>"})
-        mask_token_id = tokenizer.mask_token_id
-        assert mask_token_id is not None
+        mask_token_id: int = tokenizer.mask_token_id  # type: ignore[assignment]
         logger.info(
             f"Added <|MASK|> to tokenizer, mask_token_id={mask_token_id} "
             f"(tokenizer len={len(tokenizer)}, vocab_size={vocab_size})"
