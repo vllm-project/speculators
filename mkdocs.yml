@@ -21,6 +21,9 @@ theme:
     - navigation.indexes
     - navigation.instant
     - navigation.path
+    - navigation.sections
+    - navigation.tabs
+    - navigation.tabs.sticky
     - navigation.top
     - navigation.tracking
     - search.highlight
@@ -95,6 +98,7 @@ markdown_extensions:
 plugins:
   - api-autonav:
       modules: ['src/speculators']
+  - awesome-nav
   - gen-files:
       scripts:
         - docs/scripts/gen_files.py
