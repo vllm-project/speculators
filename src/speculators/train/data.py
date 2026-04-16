@@ -18,7 +18,8 @@ from safetensors.torch import load_file
 from torch.utils.data import Dataset
 
 from speculators.data_generation.vllm_client import (
-    InvalidResponseError,
+    DEFAULT_MAX_RETRIES,
+    DEFAULT_REQUEST_TIMEOUT,
     generate_hidden_states,
 )
 from speculators.train.noise_transforms import TransformTensors
@@ -179,6 +180,8 @@ class ArrowDataset(BaseDataset):
         transform: TransformTensors | None = None,
         hidden_states_dtype=torch.float,
         model: str | None = None,
+        request_timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
+        max_retries: int = DEFAULT_MAX_RETRIES,
     ):
         """Initialize the ArrowDataset.
         Args:
@@ -212,6 +215,8 @@ class ArrowDataset(BaseDataset):
         self.on_generate = on_generate
         self.client: openai.OpenAI | None = None
         self.model = model
+        self.request_timeout = request_timeout
+        self.max_retries = max_retries
 
         # Delay super init so that `_compute_approx_lengths` has required data
         super().__init__(max_len, transform, hidden_states_dtype)
@@ -221,7 +226,9 @@ class ArrowDataset(BaseDataset):
 
     def _setup_client(self):
         # Delay client setup so it runs in dataloader thread if on_missing="generate"
-        self.client = openai.OpenAI(base_url=self.vllm_endpoint, api_key="EMPTY")
+        self.client = openai.OpenAI(
+            base_url=self.vllm_endpoint, api_key="EMPTY", max_retries=0
+        )
         list_models = self.client.models.list()
         model_id = list_models.data[0].id
         if self.model and self.model != model_id:
@@ -253,8 +260,14 @@ class ArrowDataset(BaseDataset):
 
         input_ids = self.data[index]["input_ids"].tolist()
         try:
-            hs_filepath = generate_hidden_states(self.client, self.model, input_ids)  # type:ignore[arg-type]
-        except InvalidResponseError as e:
+            hs_filepath = generate_hidden_states(
+                self.client,  # type:ignore[arg-type]
+                self.model,  # type:ignore[arg-type]
+                input_ids,
+                timeout=self.request_timeout,
+                max_retries=self.max_retries,
+            )
+        except Exception as e:  # noqa: BLE001
             warnings.warn(str(e), stacklevel=1)
             return None
 

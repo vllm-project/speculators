@@ -11,6 +11,10 @@ from transformers import LlamaConfig, PretrainedConfig
 from transformers.models.auto.configuration_auto import AutoConfig
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
+from speculators.data_generation.vllm_client import (
+    DEFAULT_MAX_RETRIES,
+    DEFAULT_REQUEST_TIMEOUT,
+)
 from speculators.model import SpeculatorModel
 from speculators.models.eagle3.data import shift_batch
 from speculators.train.data import (
@@ -296,6 +300,8 @@ def main(args: argparse.Namespace):
             split_ratio=0.9,
             model=args.verifier_name_or_path,
             hidden_states_dtype=hidden_states_dtype,
+            request_timeout=args.request_timeout,
+            max_retries=args.max_retries,
         )
         val_dataset = ArrowDataset(
             datapath=args.data_path,
@@ -307,6 +313,8 @@ def main(args: argparse.Namespace):
             split_ratio=-0.1,
             model=args.verifier_name_or_path,
             hidden_states_dtype=hidden_states_dtype,
+            request_timeout=args.request_timeout,
+            max_retries=args.max_retries,
         )
 
     train_loader = setup_dataloader(
@@ -423,6 +431,26 @@ def parse_args():
             "the hidden states in the args.hidden_states_path. This can be used to "
             "enable hybrid online/offline training, with hidden states generated on the"
             "first epoch, and reused on subsequent epochs."
+        ),
+    )
+    parser.add_argument(
+        "--request-timeout",
+        type=float,
+        default=DEFAULT_REQUEST_TIMEOUT,
+        help=(
+            "Timeout in seconds for each individual vLLM request "
+            f"(default: {DEFAULT_REQUEST_TIMEOUT}). "
+            "Only applies if --on-missing=generate."
+        ),
+    )
+    parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=DEFAULT_MAX_RETRIES,
+        help=(
+            "Maximum number of retry attempts per vLLM request on failure "
+            f"(default: {DEFAULT_MAX_RETRIES}). "
+            "Only applies if --on-missing=generate."
         ),
     )
     parser.add_argument(
