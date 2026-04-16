@@ -39,26 +39,7 @@ reviews:
       instructions: "Check for clarity, accuracy, and completeness. Ensure code examples match the current API and that speculative decoding concepts are explained correctly."
     - path: "**/README.md"
       instructions: "Review for clarity, accuracy, and up-to-date information. Ensure installation instructions, vLLM integration steps, and training examples are correct and reflect the current state of the library."
-  auto_review:
-    enabled: true
-    ignore_title_keywords:
-      - "WIP"
-      - "DO NOT MERGE"
-      - "DRAFT"
-    drafts: false
-    auto_incremental_review: false
-    base_branches:
-      - "main"
-knowledge_base:
-  linked_repositories:
-    - repository: "vllm-project/vllm"
-      instructions: "vLLM is used for hidden state extraction during data generation and as the inference backend for speculative decoding. Useful for understanding hidden state APIs, speculative decoding integration points, and how draft models are loaded and executed."
-chat:
-  auto_reply: true
-issue_enrichment:
-  auto_enrich:
-    enabled: true
-  labeling_rules:
+  labeling_instructions:
     - label: "bug"
       instructions: "Indicates a bug in the code that needs to be fixed. Match case-insensitively (e.g., 'Bug', 'BUG', 'bug' all qualify)."
     - label: "enhancement"
@@ -79,3 +60,23 @@ issue_enrichment:
       instructions: "Apply to PRs that affect Multi-Token Prediction (MTP) support, including evaluation configs and scripts under examples/evaluate/eval-guidellm/ that set METHOD=mtp or reference MTP models, or any vLLM integration changes specific to MTP-based speculative decoding. Match case-insensitively — 'mtp', 'MTP', 'Mtp' all qualify."
     - label: "two-reviews"
       instructions: "Apply to PRs that make substantial changes warranting more than one reviewer. This includes: updates to critical dependencies such as torch or transformers in pyproject.toml or requirements files; broad changes to core shared infrastructure (src/speculators/model.py, src/speculators/config.py, src/speculators/models/base_components.py, src/speculators/models/attention.py); changes that span multiple subsystems (e.g., training + data generation, or multiple model architectures); or any PR flagged as high-risk due to distributed training correctness, checkpoint format changes, or vocabulary mapping logic."
+  auto_review:
+    enabled: true
+    ignore_title_keywords:
+      - "WIP"
+      - "DO NOT MERGE"
+      - "DRAFT"
+    drafts: false
+    auto_incremental_review: false
+    base_branches:
+      - "main"
+knowledge_base:
+  linked_repositories:
+    - repository: "vllm-project/vllm"
+      instructions: "vLLM is used for hidden state extraction during data generation and as the inference backend for speculative decoding. Useful for understanding hidden state APIs, speculative decoding integration points, and how draft models are loaded and executed."
+chat:
+  auto_reply: true
+issue_enrichment:
+  auto_enrich:
+    enabled: true
+    
