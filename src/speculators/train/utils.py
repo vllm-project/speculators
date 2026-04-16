@@ -122,3 +122,10 @@ def apply_fully_sharded(model: torch.nn.Module):
     fully_shard(model)
 
     return model
+
+
+def apply_ddp(model: torch.nn.Module, local_rank: int):
+    """Applies DDP to the model. Better than FSDP for small models that fit on one GPU."""
+    from torch.nn.parallel import DistributedDataParallel as DDP  # noqa: PLC0415
+
+    return DDP(model, device_ids=[local_rank])

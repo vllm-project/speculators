@@ -22,7 +22,7 @@ from speculators.train.checkpointer import (
     DistributedCheckpointer,
     SingleGPUCheckpointer,
 )
-from speculators.train.utils import apply_fully_sharded
+from speculators.train.utils import apply_ddp, apply_fully_sharded
 
 root_logger = logging.getLogger("speculators")
 metric_logger = logging.getLogger("speculators.metrics")
@@ -46,6 +46,7 @@ class TrainerConfig(NamedTuple):
     checkpoint_freq: int = 1
     save_best: bool = False
     hidden_states_dtype: torch.dtype = torch.bfloat16
+    use_ddp: bool = False
 
 
 class Trainer:
@@ -63,14 +64,23 @@ class Trainer:
         self.val_loader = val_loader
         self.is_distributed = config.is_distributed
         self.resume_from_checkpoint = config.resume_from_checkpoint
-        checkpointer_class = (
-            DistributedCheckpointer if self.is_distributed else SingleGPUCheckpointer
-        )
+        self.use_ddp = config.use_ddp
+        if self.is_distributed and not self.use_ddp:
+            checkpointer_class = DistributedCheckpointer
+        else:
+            checkpointer_class = SingleGPUCheckpointer
         self.checkpointer: BaseCheckpointer = checkpointer_class(self.config.save_path)
 
         self.setup_trainer()
         self.setup_model()
         self.setup_optimizer()
+
+    @property
+    def unwrapped_model(self):
+        """Return the underlying model, unwrapping DDP if needed."""
+        if self.use_ddp and hasattr(self.model, "module"):
+            return self.model.module
+        return self.model
 
     def setup_trainer(self):
         if self.checkpointer.previous_epoch != -1:
@@ -115,7 +125,15 @@ class Trainer:
                 self.checkpointer.load_model_state_dict(self.model)
             return
 
-        # Distributed case
+        if self.use_ddp:
+            # DDP: replicate full model on each GPU (better for small models)
+            self.model.to(self.local_rank)  # type: ignore[arg-type]
+            if load_checkpoint:
+                self.checkpointer.load_model_state_dict(self.model)
+            self.model = apply_ddp(self.model, self.local_rank)
+            return
+
+        # FSDP case
         # Capture full state dict on rank 0 before FSDP sharding
         full_state_dict = {}
         if not load_checkpoint and dist.get_rank() == 0:
@@ -259,7 +277,14 @@ class Trainer:
         )
         return val_metrics
 
+    def _should_save(self) -> bool:
+        """Only rank 0 saves for DDP; FSDP checkpointer handles rank internally."""
+        if self.use_ddp and self.is_distributed:
+            return dist.get_rank() == 0
+        return True
+
     def maybe_save_checkpoint(self, epoch: int, val_metrics: dict | None):
+        save_model = self.unwrapped_model
         if (
             self.config.save_best
             and val_metrics is not None
@@ -271,27 +296,29 @@ class Trainer:
                     f"Saving new best checkpoint at epoch {epoch} "
                     f"(loss_epoch={self.best_val_loss:.6f})"
                 )
-                self.checkpointer.save_checkpoint(self.model, self.opt, epoch)
-                if self.scheduler is not None:
-                    self.checkpointer.save_scheduler_state_dict(self.scheduler, epoch)
-                self.checkpointer.save_val_metrics(epoch, val_metrics)
-                self.checkpointer.update_best_symlink(epoch)
+                if self._should_save():
+                    self.checkpointer.save_checkpoint(save_model, self.opt, epoch)
+                    if self.scheduler is not None:
+                        self.checkpointer.save_scheduler_state_dict(self.scheduler, epoch)
+                    self.checkpointer.save_val_metrics(epoch, val_metrics)
+                    self.checkpointer.update_best_symlink(epoch)
                 root_logger.info(
                     f"Updated checkpoint_best -> {epoch} "
                     f"(loss_epoch={self.best_val_loss:.6f})"
                 )
-                # Keep ONLY the best checkpoint folder + best_checkpoint symlink
-                self.checkpointer.cleanup_keep_only_best(best_epoch=epoch)
+                if self._should_save():
+                    self.checkpointer.cleanup_keep_only_best(best_epoch=epoch)
 
         elif epoch == 0 or (epoch + 1) % self.config.checkpoint_freq == 0:
             root_logger.info(
                 f"Saving checkpoint to {self.checkpointer.path / str(epoch)}"
             )
-            self.checkpointer.save_checkpoint(self.model, self.opt, epoch)
-            if self.scheduler is not None:
-                self.checkpointer.save_scheduler_state_dict(self.scheduler, epoch)
-            if val_metrics is not None:
-                self.checkpointer.save_val_metrics(epoch, val_metrics)
+            if self._should_save():
+                self.checkpointer.save_checkpoint(save_model, self.opt, epoch)
+                if self.scheduler is not None:
+                    self.checkpointer.save_scheduler_state_dict(self.scheduler, epoch)
+                if val_metrics is not None:
+                    self.checkpointer.save_val_metrics(epoch, val_metrics)
             root_logger.info(
                 f"Checkpoint saved to {self.checkpointer.path / str(epoch)}"
             )
@@ -305,11 +332,14 @@ class Trainer:
                     f"Updating new best checkpoint symlink at epoch {epoch} "
                     f"(loss_epoch={self.best_val_loss:.6f})"
                 )
-                self.checkpointer.update_best_symlink(epoch)
+                if self._should_save():
+                    self.checkpointer.update_best_symlink(epoch)
                 root_logger.info(
                     f"Updated checkpoint_best -> {epoch} "
                     f"(loss_epoch={self.best_val_loss:.6f})"
                 )
+        if self.use_ddp and self.is_distributed:
+            dist.barrier()
 
     def run_training(self):
         n_epochs = self.config.num_epochs
