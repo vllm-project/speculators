@@ -1,4 +1,5 @@
 import asyncio
+import functools
 import logging
 import time
 
@@ -13,6 +14,72 @@ RETRY_BACKOFF_BASE = 2  # seconds
 
 class InvalidResponseError(Exception):
     pass
+
+
+def _handle_retry_error(
+    error: Exception, attempt: int, total_attempts: int
+) -> float | None:
+    """Handle a retry-eligible error.
+
+    Returns backoff seconds if the caller should retry, or ``None`` on the
+    final attempt.  Raises ``InvalidResponseError`` immediately.
+    """
+    if isinstance(error, InvalidResponseError):
+        raise error
+    if attempt < total_attempts:
+        backoff = RETRY_BACKOFF_BASE**attempt
+        logger.warning(
+            "Request failed (attempt %d/%d): %s. Retrying in %ds...",
+            attempt,
+            total_attempts,
+            error,
+            backoff,
+        )
+        return backoff
+    logger.error("Request failed after %d attempts: %s", total_attempts, error)
+    return None
+
+
+def with_retries(fn):
+    """Decorator that adds retry logic with exponential backoff.
+
+    The decorated function gains a ``max_retries`` keyword argument
+    (default ``DEFAULT_MAX_RETRIES``). ``InvalidResponseError`` is never
+    retried. Works for both sync and async functions.
+    """
+    if asyncio.iscoroutinefunction(fn):
+
+        @functools.wraps(fn)
+        async def async_wrapper(*args, max_retries=DEFAULT_MAX_RETRIES, **kwargs):
+            total_attempts = max_retries + 1
+            last_error: Exception | None = None
+            for attempt in range(1, total_attempts + 1):
+                try:
+                    return await fn(*args, **kwargs)
+                except Exception as e:
+                    last_error = e
+                    backoff = _handle_retry_error(e, attempt, total_attempts)
+                    if backoff is not None:
+                        await asyncio.sleep(backoff)
+            raise last_error  # type: ignore[misc]
+
+        return async_wrapper
+
+    @functools.wraps(fn)
+    def sync_wrapper(*args, max_retries=DEFAULT_MAX_RETRIES, **kwargs):
+        total_attempts = max_retries + 1
+        last_error: Exception | None = None
+        for attempt in range(1, total_attempts + 1):
+            try:
+                return fn(*args, **kwargs)
+            except Exception as e:
+                last_error = e
+                backoff = _handle_retry_error(e, attempt, total_attempts)
+                if backoff is not None:
+                    time.sleep(backoff)
+        raise last_error  # type: ignore[misc]
+
+    return sync_wrapper
 
 
 def extract_output(completion, token_ids) -> str:
@@ -32,12 +99,12 @@ def extract_output(completion, token_ids) -> str:
     return completion.kv_transfer_params.get("hidden_states_path")
 
 
+@with_retries
 async def generate_hidden_states_async(
     client: openai.AsyncClient,
     model: str,
     token_ids: list[int],
     timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
-    max_retries: int = DEFAULT_MAX_RETRIES,
 ) -> str:
     """
     Runs decode w/ max_tokens 1 to generate hidden states and returns path to
@@ -48,87 +115,38 @@ async def generate_hidden_states_async(
         model: The model ID.
         token_ids: The input token IDs.
         timeout: Timeout in seconds for each request attempt. None for no timeout.
-        max_retries: Maximum number of retry attempts on failure.
     """
-    total_attempts = max_retries + 1
-    last_error: Exception | None = None
-    for attempt in range(1, total_attempts + 1):
-        try:
-            coro = client.completions.create(
-                model=model,
-                prompt=token_ids,
-                max_tokens=1,
-                extra_body={"return_token_ids": True},
-                timeout=timeout,
-            )
-            if timeout is not None:
-                completion = await asyncio.wait_for(coro, timeout=timeout)
-            else:
-                completion = await coro
+    coro = client.completions.create(
+        model=model,
+        prompt=token_ids,
+        max_tokens=1,
+        extra_body={"return_token_ids": True},
+        timeout=timeout,
+    )
+    if timeout is not None:
+        completion = await asyncio.wait_for(coro, timeout=timeout)
+    else:
+        completion = await coro
 
-            return extract_output(completion, token_ids)
-        except InvalidResponseError:
-            raise
-        except Exception as e:
-            last_error = e
-            if attempt < total_attempts:
-                backoff = RETRY_BACKOFF_BASE**attempt
-                logger.warning(
-                    "Request failed (attempt %d/%d): %s. Retrying in %ds...",
-                    attempt,
-                    total_attempts,
-                    e,
-                    backoff,
-                )
-                await asyncio.sleep(backoff)
-            else:
-                logger.error(
-                    "Request failed after %d attempts: %s",
-                    total_attempts,
-                    e,
-                )
-
-    raise last_error  # type: ignore[misc]
+    return extract_output(completion, token_ids)
 
 
+@with_retries
 def generate_hidden_states(
     client: openai.Client,
     model: str,
     token_ids: list[int],
     timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
-    max_retries: int = DEFAULT_MAX_RETRIES,
 ) -> str:
-    total_attempts = max_retries + 1
-    last_error: Exception | None = None
-    for attempt in range(1, total_attempts + 1):
-        try:
-            completion = client.completions.create(
-                model=model,
-                prompt=token_ids,
-                max_tokens=1,
-                extra_body={"return_token_ids": True},
-                timeout=timeout,
-            )
-            return extract_output(completion, token_ids)
-        except InvalidResponseError:
-            raise
-        except Exception as e:
-            last_error = e
-            if attempt < total_attempts:
-                backoff = RETRY_BACKOFF_BASE**attempt
-                logger.warning(
-                    "Request failed (attempt %d/%d): %s. Retrying in %ds...",
-                    attempt,
-                    total_attempts,
-                    e,
-                    backoff,
-                )
-                time.sleep(backoff)
-            else:
-                logger.error(
-                    "Request failed after %d attempts: %s",
-                    total_attempts,
-                    e,
-                )
-
-    raise last_error  # type: ignore[misc]
+    """
+    Runs decode w/ max_tokens 1 to generate hidden states and returns path to
+    hidden states file.
+    """
+    completion = client.completions.create(
+        model=model,
+        prompt=token_ids,
+        max_tokens=1,
+        extra_body={"return_token_ids": True},
+        timeout=timeout,
+    )
+    return extract_output(completion, token_ids)
