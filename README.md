@@ -35,6 +35,15 @@ ______________________________________________________________________
 
 ______________________________________________________________________
 
+## Supported Algorithms
+
+| Algorithm | Registry Key | Status | Description |
+| --- | --- | --- | --- |
+| [EAGLE-3](https://github.com/vllm-project/speculators/tree/main/src/speculators/models/eagle3) | `eagle3` | ✅ Supported | Feature-level draft model with vocabulary mapping between draft and target tokenizers |
+| [FastMTP](https://arxiv.org/abs/2509.18362) | `mtp` | 🚧 In Progress | Multi-token prediction using a single recursive MTP layer (Cai et al., 2025) |
+
+✅ = Supported, 🚧 = In Progress
+
 ## Key Features
 
 - **Offline Training Data Generation using vLLM:** Enable the generation of hidden states using vLLM. Data samples are saved to disk and can be used for draft model training.
