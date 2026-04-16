@@ -24,7 +24,7 @@ from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
 from transformers import PretrainedConfig
-
+import torch
 from speculators.proposals import TokenProposalConfig
 from speculators.utils import PydanticClassRegistryMixin, ReloadableBaseModel
 
@@ -296,7 +296,23 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
             or set, along with all Pydantic fields.
         """
         return super().to_diff_dict()
+    @classmethod
+    def __init_subclass__(cls, **kwargs):
+        # Prevent newer transformers from replacing the inherited Pydantic-aware
+        # __init__ on subclasses like Eagle3SpeculatorConfig.
+        if cls is not SpeculatorModelConfig and "__init__" not in cls.__dict__:
+            cls.__init__ = SpeculatorModelConfig.__init__  # type: ignore[method-assign]
+        super().__init_subclass__(**kwargs)
 
+    @classmethod
+    def reload_schema(cls):
+        cls.model_rebuild(force=True, _types_namespace={"torch": torch})
+        for subcls in cls.registry.values():
+            subcls.model_rebuild(force=True, _types_namespace={"torch": torch})
+
+    def validate(self) -> None:                                                                                    
+        """Override to prevent Pydantic v2 validate() conflict with transformers."""                               
+        pass  
 
 def reload_schemas():
     """
