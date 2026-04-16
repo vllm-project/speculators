@@ -19,9 +19,11 @@ Classes:
 """
 
 import os
+from collections.abc import Sequence
 from importlib.metadata import version
 from typing import Any, ClassVar
 
+import torch
 from pydantic import BaseModel, ConfigDict, Field
 from transformers import PretrainedConfig
 
@@ -139,6 +141,14 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
     This is the main config which maps to the config.json file for saved speculators.
     """
 
+    def __init_subclass__(cls, **kwargs):
+        # Preserve Pydantic's __init__ in each subclass's __dict__ so that
+        # newer transformers' __init_subclass__ (which applies @dataclass to
+        # subclasses lacking __init__ in cls.__dict__) does not replace it.
+        if "__init__" not in cls.__dict__:
+            cls.__init__ = SpeculatorModelConfig.__init__  # type: ignore[method-assign]
+        super().__init_subclass__(**kwargs)
+
     @classmethod
     def from_pretrained(
         cls,
@@ -227,7 +237,7 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
     is_composition: ClassVar[bool] = False  # type: ignore[misc]
     attribute_map: ClassVar[dict[str, str]] = {}  # type: ignore[misc]
     base_model_tp_plan: ClassVar[dict[str, Any] | None] = None  # type: ignore[misc]
-    base_model_pp_plan: ClassVar[dict[str, tuple[list[str]]] | None] = None  # type: ignore[misc]
+    base_model_pp_plan: ClassVar[dict[str, Sequence[list[str]]] | None] = None  # type: ignore[misc]
     _auto_class: ClassVar[str | None] = ""  # type: ignore[misc]
 
     # Speculator model instance attributes
@@ -260,6 +270,32 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
 
         # ensure we always update the transformers version
         self.transformers_version = version("transformers")
+
+    def validate(self) -> None:
+        """Resolve MRO conflict between BaseModel.validate (classmethod) and
+        PretrainedConfig.validate (instance method added in transformers v5).
+
+        Without this, ``save_pretrained`` calls ``self.validate()`` and hits
+        Pydantic's classmethod which expects a ``value`` argument.
+        """
+        if hasattr(PretrainedConfig, "validate"):
+            PretrainedConfig.validate(self)
+
+    @classmethod
+    def reload_schema(cls):
+        """Rebuild Pydantic schemas with ``torch`` in the type namespace.
+
+        Newer transformers annotate ``PretrainedConfig.dtype`` with a
+        ``torch.dtype`` forward reference.  Pydantic needs ``torch`` in the
+        evaluation namespace to resolve it during ``model_rebuild``.
+        """
+        ns = {"torch": torch}
+        cls.model_rebuild(force=True, _types_namespace=ns)
+        # Parent rebuild does not propagate to registered subclasses.
+        if cls.registry:
+            for subclass in cls.registry.values():
+                if hasattr(subclass, "model_rebuild"):
+                    subclass.model_rebuild(force=True, _types_namespace=ns)
 
     def to_dict(self) -> dict[str, Any]:
         """
