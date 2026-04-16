@@ -67,6 +67,7 @@ def launch_vllm_server(
     hidden_states_path: str,
     max_model_len: int = 513,
     gpu_memory_utilization: float = 0.5,
+    target_layer_ids: list[int] | None = None,
 ) -> subprocess.Popen:
     """Launch a vLLM server configured for hidden-state extraction.
 
@@ -79,6 +80,10 @@ def launch_vllm_server(
         model,
         "--hidden-states-path",
         str(hidden_states_path),
+    ]
+    if target_layer_ids is not None:
+        cmd += ["--target-layer-ids"] + [str(lid) for lid in target_layer_ids]
+    cmd += [
         "--",
         "--port",
         str(port),
@@ -214,6 +219,9 @@ def run_training(
     online: bool = True,
     hidden_states_path: Path | None = None,
     timeout: float | None = None,
+    speculator_type: str = "eagle3",
+    extra_train_args: list[str] | None = None,
+    target_layer_ids: list[int] | None = None,
 ):
     train_cmd = [
         sys.executable,
@@ -234,6 +242,8 @@ def run_training(
         str(lr),
         "--total-seq-len",
         str(seq_length),
+        "--speculator-type",
+        speculator_type,
     ]
     if online:
         train_cmd += [
@@ -249,6 +259,10 @@ def run_training(
         ]
     if hidden_states_path is not None:
         train_cmd += ["--hidden-states-path", str(hidden_states_path)]
+    if target_layer_ids is not None:
+        train_cmd += ["--target-layer-ids"] + [str(lid) for lid in target_layer_ids]
+    if extra_train_args:
+        train_cmd += extra_train_args
 
     logger.info("Running training: {}", " ".join(train_cmd))
     result = subprocess.run(  # noqa: S603
