@@ -153,7 +153,7 @@ The following table summarizes the models that have been trained end-to-end by o
 <tr>
 <td>Gemma 4</td>
 <td>31B-it</td>
-<td><a href="https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.eagle3">EAGLE-3</a> ✅<br/><a href="https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.dflash">dFlash</a> ✅</td>
+<td><a href="https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.eagle3">EAGLE-3</a> ✅<br/><a href="https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.dflash">DFlash</a> ✅</td>
 <td>✅</td>
 </tr>
 <tr>
