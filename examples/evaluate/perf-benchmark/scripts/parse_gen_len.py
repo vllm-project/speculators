@@ -40,7 +40,7 @@ def next_power_of_two(value: float) -> int:
 
 def parse_gen_len_file(filepath: Path) -> dict:
     """Parse a single gen-len JSON and return statistics."""
-    with open(filepath) as f:
+    with filepath.open() as f:
         data = json.load(f)
 
     benchmarks = data.get("benchmarks", [])
@@ -64,6 +64,15 @@ def parse_gen_len_file(filepath: Path) -> dict:
     }
 
 
+def _print_header() -> None:
+    header = (
+        f"{'Subset':<20} {'Count':>6} {'Median':>8}"
+        f" {'Min':>8} {'Max':>8} {'max_tokens':>12}"
+    )
+    print(header)  # noqa: T201
+    print("-" * 70)  # noqa: T201
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Parse gen-len outputs and compute max_tokens per subset."
@@ -85,37 +94,46 @@ def main() -> None:
 
     max_tokens_map: dict[str, int] = {}
 
-    print(f"{'Subset':<20} {'Count':>6} {'Median':>8} {'Min':>8} {'Max':>8} {'max_tokens':>12}")
-    print("-" * 70)
+    _print_header()
 
     for filepath in args.files:
         if not filepath.exists():
-            print(f"[WARN] File not found, skipping: {filepath}", file=sys.stderr)
+            print(  # noqa: T201
+                f"[WARN] File not found, skipping: {filepath}",
+                file=sys.stderr,
+            )
             continue
 
         subset = extract_subset_name(filepath)
         try:
             stats = parse_gen_len_file(filepath)
         except (ValueError, KeyError, json.JSONDecodeError) as e:
-            print(f"[WARN] Failed to parse {filepath}: {e}", file=sys.stderr)
+            print(  # noqa: T201
+                f"[WARN] Failed to parse {filepath}: {e}",
+                file=sys.stderr,
+            )
             continue
 
         max_tokens_map[subset] = stats["max_tokens"]
 
-        print(
+        print(  # noqa: T201
             f"{subset:<20} {stats['count']:>6} {stats['median']:>8.0f} "
-            f"{stats['min']:>8} {stats['max']:>8} {stats['max_tokens']:>12}"
+            f"{stats['min']:>8} {stats['max']:>8} "
+            f"{stats['max_tokens']:>12}"
         )
 
     if not max_tokens_map:
-        print("[ERROR] No files were successfully parsed", file=sys.stderr)
+        print(  # noqa: T201
+            "[ERROR] No files were successfully parsed",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    with open(args.output, "w") as f:
+    with args.output.open("w") as f:
         json.dump(max_tokens_map, f, indent=2)
 
-    print(f"\nmax_tokens mapping written to: {args.output}")
+    print(f"\nmax_tokens mapping written to: {args.output}")  # noqa: T201
 
 
 if __name__ == "__main__":

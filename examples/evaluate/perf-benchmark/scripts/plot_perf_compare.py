@@ -21,7 +21,6 @@ from collections import defaultdict
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-
 from perf_utils import (
     METRICS,
     load_data,
@@ -31,13 +30,20 @@ from perf_utils import (
 )
 
 COLOR_CYCLE = [
-    "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728",
-    "#9467bd", "#8c564b", "#e377c2", "#7f7f7f",
-    "#bcbd22", "#17becf",
+    "#1f77b4",
+    "#ff7f0e",
+    "#2ca02c",
+    "#d62728",
+    "#9467bd",
+    "#8c564b",
+    "#e377c2",
+    "#7f7f7f",
+    "#bcbd22",
+    "#17becf",
 ]
 
 
-def main() -> None:
+def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Multi-version performance comparison plots."
     )
@@ -48,7 +54,8 @@ def main() -> None:
         metavar="LABEL=PATH",
         help=(
             "Version data source as 'Label=path/to/file'. "
-            "Repeatable; same label with multiple paths pools repetitions."
+            "Repeatable; same label with multiple paths pools "
+            "repetitions."
         ),
     )
     parser.add_argument(
@@ -56,12 +63,12 @@ def main() -> None:
         action="append",
         choices=list(METRICS.keys()),
         metavar="METRIC",
-        help=f"Metric(s) to plot (default: latency). Choices: {', '.join(METRICS)}",
+        help=(f"Metric(s) to plot (default: latency). Choices: {', '.join(METRICS)}"),
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("."),
+        default=Path(),
         help="Directory for output PNGs (default: current directory)",
     )
     parser.add_argument(
@@ -70,7 +77,67 @@ def main() -> None:
         default=None,
         help="Comma-separated subset filter (default: all found in data)",
     )
-    args = parser.parse_args()
+    return parser.parse_args()
+
+
+def _collect_all_data(
+    sources: dict[str, list[Path]],
+    metric_name: str,
+) -> dict[str, dict[str, list[tuple[float, float]]]]:
+    """Load data from all sources for a given metric."""
+    all_data: dict[str, dict[str, list[tuple[float, float]]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    for label, paths in sources.items():
+        for path in paths:
+            try:
+                file_data = load_data(path, metric_name)
+            except (ValueError, FileNotFoundError) as e:
+                print(f"[WARN] {e}", file=sys.stderr)  # noqa: T201
+                continue
+            for subset, points in file_data.items():
+                all_data[label][subset].extend(points)
+    return all_data
+
+
+def _plot_subset(
+    ax: plt.Axes,
+    subset: str,
+    all_data: dict[str, dict[str, list[tuple[float, float]]]],
+    source_labels: list[str],
+    *,
+    increasing: bool,
+) -> None:
+    """Plot all versions for a single subset onto *ax*."""
+    for i, label in enumerate(source_labels):
+        points = all_data[label].get(subset, [])
+        if not points:
+            continue
+
+        color = COLOR_CYCLE[i % len(COLOR_CYCLE)]
+        points.sort(key=lambda p: p[0])
+        xs = [p[0] for p in points]
+        ys = [p[1] for p in points]
+
+        ax.scatter(xs, ys, color=color, alpha=0.35, s=25, zorder=3)
+
+        x_smooth, y_smooth = smooth_curve(
+            xs,
+            ys,
+            increasing=increasing,
+        )
+        ax.plot(
+            x_smooth,
+            y_smooth,
+            color=color,
+            linewidth=2,
+            label=label,
+            zorder=4,
+        )
+
+
+def main() -> None:
+    args = _parse_args()
 
     metrics = args.metric or ["latency"]
     subset_filter = set(args.subsets.split(",")) if args.subsets else None
@@ -78,29 +145,17 @@ def main() -> None:
     try:
         sources = parse_source_args(args.source)
     except (ValueError, FileNotFoundError) as e:
-        print(f"[ERROR] {e}", file=sys.stderr)
+        print(f"[ERROR] {e}", file=sys.stderr)  # noqa: T201
         sys.exit(1)
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    source_labels = list(sources.keys())
 
     for metric_name in metrics:
         metric_cfg = METRICS[metric_name]
         increasing = metric_cfg["increasing"]
 
-        # {label: {subset: [(rps, y), ...]}}
-        all_data: dict[str, dict[str, list[tuple[float, float]]]] = defaultdict(
-            lambda: defaultdict(list)
-        )
-
-        for label, paths in sources.items():
-            for path in paths:
-                try:
-                    file_data = load_data(path, metric_name)
-                except (ValueError, FileNotFoundError) as e:
-                    print(f"[WARN] {e}", file=sys.stderr)
-                    continue
-                for subset, points in file_data.items():
-                    all_data[label][subset].extend(points)
+        all_data = _collect_all_data(sources, metric_name)
 
         all_subsets: set[str] = set()
         for label_data in all_data.values():
@@ -110,29 +165,22 @@ def main() -> None:
             all_subsets &= subset_filter
 
         if not all_subsets:
-            print(f"[WARN] No data found for metric '{metric_name}'", file=sys.stderr)
+            print(  # noqa: T201
+                f"[WARN] No data found for metric '{metric_name}'",
+                file=sys.stderr,
+            )
             continue
 
         for subset in sorted(all_subsets):
             fig, ax = plt.subplots(figsize=(8, 5))
 
-            for i, label in enumerate(sources.keys()):
-                points = all_data[label].get(subset, [])
-                if not points:
-                    continue
-
-                color = COLOR_CYCLE[i % len(COLOR_CYCLE)]
-                points.sort(key=lambda p: p[0])
-                xs = [p[0] for p in points]
-                ys = [p[1] for p in points]
-
-                ax.scatter(xs, ys, color=color, alpha=0.35, s=25, zorder=3)
-
-                x_smooth, y_smooth = smooth_curve(xs, ys, increasing=increasing)
-                ax.plot(
-                    x_smooth, y_smooth,
-                    color=color, linewidth=2, label=label, zorder=4,
-                )
+            _plot_subset(
+                ax,
+                subset,
+                all_data,
+                source_labels,
+                increasing=increasing,
+            )
 
             title = f"{pretty_subset(subset)} - {metric_cfg['label']}"
             ax.set_title(title, fontsize=14, fontweight="bold")
@@ -145,7 +193,7 @@ def main() -> None:
             outpath = args.output_dir / f"compare_{subset}_{metric_name}.png"
             fig.savefig(outpath, dpi=150)
             plt.close(fig)
-            print(f"[INFO] Saved {outpath}")
+            print(f"[INFO] Saved {outpath}")  # noqa: T201
 
 
 if __name__ == "__main__":

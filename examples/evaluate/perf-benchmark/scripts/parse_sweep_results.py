@@ -50,7 +50,7 @@ def extract_subset_name(filepath: Path) -> str:
 
 def parse_sweep_file(filepath: Path) -> list[dict]:
     """Parse a single sweep JSON and return rows for the CSV."""
-    with open(filepath) as f:
+    with filepath.open() as f:
         data = json.load(f)
 
     benchmarks = data.get("benchmarks", [])
@@ -110,28 +110,41 @@ def main() -> None:
 
     for filepath in args.files:
         if not filepath.exists():
-            print(f"[WARN] File not found, skipping: {filepath}", file=sys.stderr)
+            print(  # noqa: T201
+                f"[WARN] File not found, skipping: {filepath}",
+                file=sys.stderr,
+            )
             continue
 
         try:
             rows = parse_sweep_file(filepath)
             all_rows.extend(rows)
-            print(f"[INFO] Parsed {len(rows)} entries from {filepath.name}")
+            print(  # noqa: T201
+                f"[INFO] Parsed {len(rows)} entries from {filepath.name}"
+            )
         except (ValueError, KeyError, json.JSONDecodeError) as e:
-            print(f"[WARN] Failed to parse {filepath}: {e}", file=sys.stderr)
+            print(  # noqa: T201
+                f"[WARN] Failed to parse {filepath}: {e}",
+                file=sys.stderr,
+            )
             continue
 
     if not all_rows:
-        print("[ERROR] No data was successfully parsed", file=sys.stderr)
+        print(  # noqa: T201
+            "[ERROR] No data was successfully parsed",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    with open(args.output, "w", newline="") as f:
+    with args.output.open("w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=CSV_COLUMNS)
         writer.writeheader()
         writer.writerows(all_rows)
 
-    print(f"\n[INFO] CSV written to: {args.output} ({len(all_rows)} rows)")
+    print(  # noqa: T201
+        f"\n[INFO] CSV written to: {args.output} ({len(all_rows)} rows)"
+    )
 
 
 if __name__ == "__main__":
