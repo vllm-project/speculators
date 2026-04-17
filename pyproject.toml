@@ -258,9 +258,6 @@ select = [
     "INP001", # allow implicit namespace packages in examples
 ]
 
-"scripts/gen_and_train.py" = [
-    "T201", # allow print in scripts
-]
 
 [tool.ruff.lint.isort]
 known-first-party = ["speculators", "tests"]

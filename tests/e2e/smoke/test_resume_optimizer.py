@@ -21,7 +21,7 @@ from tests.conftest import requires_multi_gpu
 from tests.e2e.utils import (
     SCRIPTS_DIR,
     launch_vllm_server_context,
-    run_data_generation_offline2,
+    run_data_generation_offline,
     run_prepare_data,
 )
 
@@ -86,7 +86,7 @@ def test_resume_after_checkpoint_best(tmp_path: Path):
 
     # Step 2: Generate hidden states offline
     with launch_vllm_server_context(MODEL, VLLM_PORT, str(tmp_path / "hidden_states")):
-        run_data_generation_offline2(data_path, hidden_states_path, port=VLLM_PORT)
+        run_data_generation_offline(data_path, hidden_states_path, port=VLLM_PORT)
 
     # Step 3: Train 1 epoch with --save-best
     result = _run_distributed_training(

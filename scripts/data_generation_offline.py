@@ -1,58 +1,60 @@
 #!/usr/bin/env python3
 """
-Offline EAGLE Training Data Generation Pipeline
+Offline Hidden States Generation Pipeline
 
-This script generates training data for EAGLE models by:
-1. Automatically preprocessing data if needed (or loading from cache)
-2. Using vLLM to extract hidden states from target model
-3. Saving each data point as a separate .pt file
-
-Preprocessing is cached automatically by HuggingFace datasets.
-Token frequencies are saved in the current directory by default.
+This script generates hidden states and saves them to disk for offline training.
 
 Usage:
     python data_generation_offline.py \
-        --target-model-path meta-llama/Llama-3.1-8B-Instruct \
-        --train-data-path sharegpt \
-        --output-dir ./training_data \
-        --hf-cache-dir /path/to/cache \
+        --model meta-llama/Llama-3.1-8B-Instruct \
+        --preprocessed-data sharegpt \
+        --output ./training_data \
         --max-samples 5000
 """
 
 import argparse
-import json
+import asyncio
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import os
+import shutil
+import sys
 from pathlib import Path
+from typing import Any
 
-import torch
-from datasets import config as datasets_config
-from tqdm import tqdm  # type: ignore[import-untyped]
+import openai
+from datasets import load_from_disk
+from safetensors import safe_open
+from tqdm import tqdm
 
-# Set vLLM to use 'spawn' instead of 'fork'
-# to prevent "Cannot re-initialize CUDA in forked subprocess" errors
-from vllm import envs
-
-envs.VLLM_WORKER_MULTIPROC_METHOD = "spawn"
-
-from speculators.data_generation.config_generator import (  # noqa: E402
-    DataGenerationConfig,
+from speculators.data_generation.vllm_client import (
+    DEFAULT_MAX_RETRIES,
+    DEFAULT_REQUEST_TIMEOUT,
+    generate_hidden_states_async,
 )
-from speculators.data_generation.logging_utils import PipelineLogger  # noqa: E402
-from speculators.data_generation.preprocessing import (  # noqa: E402
-    load_and_preprocess_dataset,
-)
-from speculators.data_generation.vllm_hidden_states_generator import (  # noqa: E402
-    VllmHiddenStatesGenerator,
-)
+from speculators.train.logger import setup_root_logger
 
-# Constants
-MAX_IO_WORKERS = 4  # Number of parallel file save operations
+logger = logging.getLogger(__name__)
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
-log = PipelineLogger(__name__)
+
+class _FailureTracker:
+    """Tracks consecutive sample failures across async workers.
+
+    When the number of consecutive failures (with no successes in between)
+    reaches ``threshold``, the tracker signals that the run should abort.
+    Because asyncio is single-threaded, no locking is needed.
+    """
+
+    def __init__(self, threshold: int):
+        self.threshold = threshold
+        self._consecutive = 0
+
+    def record_success(self) -> None:
+        self._consecutive = 0
+
+    def record_failure(self) -> bool:
+        """Record a failure. Returns True when the threshold is reached."""
+        self._consecutive += 1
+        return self._consecutive >= self.threshold
 
 
 def parse_args():
@@ -60,37 +62,31 @@ def parse_args():
 
     # Model arguments
     parser.add_argument(
-        "--target-model-path",
+        "--model",
         type=str,
-        required=True,
-        help="HuggingFace model ID or local path for target model",
+        default=None,
+        help=(
+            "HuggingFace model ID or local path for target model (default auto select)."
+            "For verification purposes only."
+        ),
     )
     parser.add_argument(
-        "--tensor-parallel-size",
-        type=int,
-        default=torch.accelerator.device_count(),
-        help="Tensor parallel size for target model (default: 1)",
-    )
-    parser.add_argument(
-        "--gpu-memory-utilization",
-        type=float,
-        default=0.8,
-        help="Target GPU memory utilization (default: 0.8)",
+        "--endpoint",
+        type=str,
+        default="http://localhost:8000/v1",
+        help=(
+            "The address of the vLLM instance to use for hidden states generation "
+            "(default: 'http://localhost:8000/v1'). "
+            "Note: the vLLM instance must be configured for hidden states extraction."
+        ),
     )
 
     # Data arguments
     parser.add_argument(
-        "--train-data-path",
+        "--preprocessed-data",
         type=str,
-        action="append",
         required=True,
-        help="Path to training data (same as used in preprocessing)",
-    )
-    parser.add_argument(
-        "--seq-length",
-        type=int,
-        default=2048,
-        help="Maximum sequence length for preprocessing and model (default: 2048)",
+        help="Path to preprocessed dataset (dataset produced by prepare_data.py)",
     )
     parser.add_argument(
         "--max-samples",
@@ -98,43 +94,16 @@ def parse_args():
         default=None,
         help="Maximum number of samples to process (default: None, process all)",
     )
-    parser.add_argument(
-        "--token-freq-path",
-        type=str,
-        default="./token_freq.pt",
-        help="Path to save token frequency distribution (default: ./token_freq.pt)",
-    )
-    parser.add_argument(
-        "--hf-cache-dir",
-        type=str,
-        default=None,
-        help=(
-            "Directory for HuggingFace datasets cache. "
-            "If not specified, uses HF_DATASETS_CACHE env var or default location. "
-            "(default: None)"
-        ),
-    )
-    parser.add_argument(
-        "--assistant-pattern",
-        type=str,
-        default=None,
-        help=(
-            "Custom regex pattern for matching assistant responses. "
-            "If not provided, auto-detected from chat template."
-        ),
-    )
-    parser.add_argument(
-        "--turn-dropout",
-        action="store_true",
-        help=(
-            "Enable turn dropout: randomly keeps first N consecutive turns "
-            "per conversation for data augmentation."
-        ),
-    )
 
     # Output arguments
     parser.add_argument(
-        "--output-dir", type=str, required=True, help="Directory to save .pt files"
+        "--output",
+        type=str,
+        default=None,
+        help=(
+            "Directory to generated hidden states files "
+            "(default args.preprocessed_data / 'hidden_states')"
+        ),
     )
 
     # Hidden states generation arguments
@@ -149,221 +118,357 @@ def parse_args():
         ),
     )
     parser.add_argument(
-        "--batch-size",
+        "--concurrency",
         type=int,
-        default=8,
-        help="Batch size for hidden states generation (default: 8)",
+        default=32,
+        help=(
+            "Number of active vLLM requests at a time."
+            "Note: number of async workers set to 2*concurrency"
+        ),
+    )
+    parser.add_argument(
+        "--validate-outputs",
+        action="store_true",
+        help=(
+            "Load generated safetensor files and check output token ids match prompt"
+            " tokens and hidden states seq_len matches num tokens"
+        ),
+    )
+    parser.add_argument(
+        "--request-timeout",
+        type=float,
+        default=DEFAULT_REQUEST_TIMEOUT,
+        help=(
+            "Timeout in seconds for each individual vLLM request "
+            f"(default: {DEFAULT_REQUEST_TIMEOUT})"
+        ),
+    )
+    parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=DEFAULT_MAX_RETRIES,
+        help=(
+            "Maximum number of retry attempts per request on failure "
+            f"(default: {DEFAULT_MAX_RETRIES})"
+        ),
+    )
+    parser.add_argument(
+        "--fail-on-error",
+        action="store_true",
+        help=(
+            "Abort when a request fails after all retries. "
+            "By default, failed samples are skipped."
+        ),
+    )
+    parser.add_argument(
+        "--max-consecutive-errors",
+        type=int,
+        default=None,
+        help=(
+            "Abort after this many consecutive sample failures (each sample "
+            "already retried --max-retries times). Prevents silently churning "
+            "through the entire dataset when the server is down. "
+            "Ignored when --fail-on-error is set. "
+            "(default: value of --concurrency)"
+        ),
     )
 
     # Processing arguments
-    parser.add_argument(
-        "--seed",
-        type=int,
-        default=0,
-        help="Random seed (must match preprocessing seed, default: 0)",
-    )
     parser.add_argument(
         "--start-idx",
         type=int,
         default=0,
         help="Starting index for output files (default: 0)",
     )
-    parser.add_argument(
-        "--num-preprocessing-workers",
-        type=int,
-        default=8,
-        help="Number of CPU processes for dataset preprocessing (default: 8)",
-    )
-    parser.add_argument(
-        "--minimum-valid-tokens",
-        type=int,
-        default=None,
-        help=(
-            "Drop samples whose loss mask contains fewer than this many "
-            "trainable tokens."
-        ),
-    )
     return parser.parse_args()
 
 
-def find_last_checkpoint(output_dir: str) -> int:
-    """Find the last successfully saved file index by scanning existing files."""
-    output_path = Path(output_dir)
-    if not output_path.exists():
-        return 0
+def get_existing_hidden_state_indices(output_path: Path) -> list[int]:
+    """Find existing `hs_i.safetensors` files (where i is the file index)"""
 
-    max_index = -1
+    existing_file_indices = []
+
+    if not output_path.exists():
+        return existing_file_indices
+
     for file_path in output_path.iterdir():
-        if file_path.name.startswith("data_") and file_path.name.endswith(".pt"):
-            index_str = file_path.stem[5:]  # Remove "data_" prefix
+        if file_path.name.startswith("hs_") and file_path.name.endswith(".safetensors"):
+            index_str = file_path.stem[3:]  # Remove "hs_" prefix
             try:
-                index = int(index_str)
-                max_index = max(max_index, index)
+                file_index = int(index_str)
+                existing_file_indices.append(file_index)
             except ValueError:
                 continue
 
-    return max_index + 1
+    return sorted(existing_file_indices)
 
 
-def save_sample_to_disk(data_dict, output_path):
-    """Save a single sample to disk for async execution."""
-    torch.save(data_dict, output_path)
-    return output_path
+def get_indices_to_process(
+    num_samples: int, max_samples: int | None, existing: list[int]
+) -> list[int]:
+    """Determines which indices should be processed. If max_samples is None
+    returns all dataset indices not in existing. Otherwise gets the first
+    `max_samples - len(existing)` samples not already in existing.
+
+    Args:
+        num_samples: Total size of preprocessed dataset
+        max_samples: (Optional) limit for number of samples to process
+        existing: list of ids that have already been processed
+
+    Returns:
+        list of dataset indices to process
+    """
+
+    if len(existing) >= num_samples:
+        logger.info("All samples already processed!")
+        return []
+    if max_samples and len(existing) >= max_samples:
+        logger.info("At least max_samples already processed!")
+        return []
+
+    if len(existing) > 0:
+        logger.info(f"Found {len(existing)} existing samples.")
+
+    existing_s = set(existing)
+    if max_samples is None:
+        return [i for i in range(num_samples) if i not in existing_s]
+
+    num_remaining = min(max_samples, num_samples) - len(existing)
+    to_process = []
+    cur = 0
+    while num_remaining > 0 and cur < num_samples:
+        if cur not in existing_s:
+            to_process.append(cur)
+            num_remaining -= 1
+
+        cur += 1
+
+    return to_process
 
 
-def save_config(args, generator, num_samples, output_dir):
-    """Save metadata config file for reproducibility."""
-    log.subsection("Saving configuration metadata")
+def check_safetensors_file(path: Path, tokens: list[int]):
+    with safe_open(path, "pt") as f:
+        t_ids = f.get_tensor("token_ids").tolist()
+        if t_ids != tokens:
+            raise ValueError(
+                f"Token ids in {path} don't match expected token ids {tokens}"
+            )
 
-    cache_dir = (
-        args.hf_cache_dir if args.hf_cache_dir else datasets_config.HF_DATASETS_CACHE
-    )
-
-    config = DataGenerationConfig.from_generator(
-        generator=generator,
-        train_data_path=args.train_data_path,
-        seq_length=args.seq_length,
-        cache_dir=str(cache_dir),
-        num_samples=num_samples,
-        max_samples=args.max_samples,
-        seed=args.seed,
-    )
-
-    config_path = Path(output_dir) / "data_config.json"
-    config_path.write_text(json.dumps(config.to_dict(), indent=2))
-    log.info(f"Saved config v{config.version} to {config_path}")
+        hs_slice = f.get_slice("hidden_states")
+        hs_shape = list(hs_slice.get_shape())
+        if len(tokens) != hs_shape[0]:
+            raise ValueError(
+                f"Sequence length of hidden states {hs_shape[0]} in {path}"
+                f" doesn't match num tokens {len(tokens)}"
+            )
 
 
-def generate_and_save_hidden_states(args, dataset):
-    """Generate hidden states and save each sample as a .pt file"""
-    Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+async def worker(
+    client,
+    model: str,
+    queue: "asyncio.Queue[dict[str, Any]]",
+    pbar: tqdm,
+    vllm_semaphore: asyncio.Semaphore,
+    write_semaphore: asyncio.Semaphore,
+    hidden_states_output_dir: Path,
+    validate_outputs: bool,
+    request_timeout: float | None,
+    max_retries: int,
+    fail_on_error: bool,
+    skipped_indices: list[int],
+    cancel_event: asyncio.Event,
+    failure_tracker: _FailureTracker | None,
+):
+    """Worker that pulls items from queue and sends them to the vLLM endpoint."""
+    while True:
+        item = await queue.get()
+        if item is None:
+            queue.task_done()
+            return
 
-    start_file_idx = find_last_checkpoint(args.output_dir)
+        idx = item["idx"]
 
-    # Load existing sample lengths to preserve them on resume
-    sample_lengths_output_path = Path(args.output_dir) / "sample_lengths.json"
-    if start_file_idx > 0 and sample_lengths_output_path.exists():
-        with open(sample_lengths_output_path) as f:
-            sample_lengths = json.load(f)
-        log.subsection(
-            f"Resuming: {start_file_idx} files already exist, "
-            f"loaded {len(sample_lengths)} existing sample lengths"
-        )
-    else:
-        sample_lengths = {}
-        if start_file_idx > 0:
-            log.subsection(f"Resuming: {start_file_idx} files already exist")
+        # Drain remaining items quickly after cancellation
+        if cancel_event.is_set():
+            queue.task_done()
+            continue
 
-    num_samples = len(dataset)
-    start_sample_idx = start_file_idx - args.start_idx
+        input_ids = item["input_ids"].tolist()
 
-    if start_sample_idx >= num_samples:
-        log.info("All samples already processed!")
-        return 0
+        target_hidden_states_path = hidden_states_output_dir / f"hs_{idx}.safetensors"
 
-    log.subsection("Initializing vLLM hidden states generator")
-    generator = VllmHiddenStatesGenerator(
-        model_path=args.target_model_path,
-        layer_ids=args.layer_ids,
-        max_model_len=args.seq_length,
-        gpu_memory_utilization=args.gpu_memory_utilization,
-        tensor_parallel_size=args.tensor_parallel_size,
-    )
-
-    log.info(f"Processing {num_samples - start_sample_idx}/{num_samples} samples")
-    file_idx = start_file_idx
-
-    num_batches = (
-        num_samples - start_sample_idx + args.batch_size - 1
-    ) // args.batch_size
-
-    # Use ThreadPoolExecutor for async file I/O
-    max_io_workers = MAX_IO_WORKERS
-
-    pbar = tqdm(
-        range(start_sample_idx, num_samples, args.batch_size),
-        desc="Generating hidden states",
-        total=num_batches,
-    )
-
-    with ThreadPoolExecutor(max_workers=max_io_workers) as thread_executor:
-        futures = []
-
-        for i in pbar:
-            batch_end = min(i + args.batch_size, num_samples)
-            batch = dataset[i:batch_end]
-            batch_input_ids = batch["input_ids"]
-            batch_loss_mask = batch["loss_mask"]
-
-            results = generator.generate(batch_input_ids)
-
-            # Submit save operations to thread pool (async I/O)
-            for j, result in enumerate(results):
-                # Truncate loss_mask to match input_ids length (generator may truncate)
-                input_len = len(result["input_ids"])
-                sample_lengths[str(file_idx)] = input_len
-                loss_mask = batch_loss_mask[j][:input_len]
-
-                result_cleaned = {
-                    "input_ids": result["input_ids"],
-                    "hidden_states": [h.contiguous() for h in result["hidden_states"]],
-                    "loss_mask": loss_mask,
-                }
-                output_path = Path(args.output_dir) / f"data_{file_idx}.pt"
-                future = thread_executor.submit(
-                    save_sample_to_disk, result_cleaned, output_path
+        try:
+            async with vllm_semaphore:  # Limit number of active generate calls
+                hidden_states_path = await generate_hidden_states_async(
+                    client,
+                    model,
+                    input_ids,
+                    timeout=request_timeout,
+                    max_retries=max_retries,
                 )
-                futures.append(future)
-                file_idx += 1
+            async with write_semaphore:  # Limit number of active disk writes
+                await asyncio.to_thread(
+                    shutil.move, hidden_states_path, target_hidden_states_path
+                )
+                if validate_outputs:
+                    await asyncio.to_thread(
+                        check_safetensors_file, target_hidden_states_path, input_ids
+                    )
+        except Exception as e:
+            if fail_on_error:
+                logger.exception(
+                    "Fatal: sample %d failed with --fail-on-error: %s", idx, e
+                )
+                logging.shutdown()
+                os._exit(1)
+            logger.warning("Skipping sample %d due to error: %s", idx, e)
+            skipped_indices.append(idx)
+            if failure_tracker is not None and failure_tracker.record_failure():
+                cancel_event.set()
+                raise RuntimeError(
+                    f"Aborting: {failure_tracker.threshold} consecutive samples "
+                    "failed. The vLLM server may be unreachable."
+                ) from e
+        else:
+            if failure_tracker is not None:
+                failure_tracker.record_success()
+        finally:
+            pbar.update(1)
+            queue.task_done()
 
-        log.info("Waiting for remaining file saves to complete...")
-        for future in tqdm(
-            as_completed(futures), total=len(futures), desc="Saving files"
+
+async def _feed_queue(to_process, dataset, queue, cancel_event):
+    """Feed dataset items into the worker queue, respecting cancellation."""
+    for i in to_process:
+        if cancel_event.is_set():
+            break
+        item = dataset[i]
+        # Check cancel_event while waiting for queue space to avoid
+        # deadlocking when all workers have died.
+        while not cancel_event.is_set():
+            try:
+                queue.put_nowait({"idx": i, "input_ids": item["input_ids"]})
+                break
+            except asyncio.QueueFull:
+                await asyncio.sleep(0.1)
+
+
+async def _shutdown_workers(workers, queue, cancel_event):
+    """Shut down workers and propagate the first real exception."""
+    logger.info("Waiting for remaining file saves to complete...")
+    if cancel_event.is_set():
+        # Workers may be dead or draining — cancel any that are
+        # still alive so we don't deadlock on sentinel puts.
+        for w in workers:
+            if not w.done():
+                w.cancel()
+    else:
+        # Normal shutdown: send sentinel values so workers exit
+        for _ in range(len(workers)):
+            await queue.put(None)
+    results = await asyncio.gather(*workers, return_exceptions=True)
+
+    # Propagate the first real worker exception (skip CancelledError)
+    for result in results:
+        if isinstance(result, Exception) and not isinstance(
+            result, asyncio.CancelledError
         ):
-            future.result()
+            raise result
 
-    samples_saved = file_idx - start_file_idx
 
-    with open(sample_lengths_output_path, "w") as f:
-        json.dump(sample_lengths, f, indent=2)
+async def generate_and_save_hidden_states(args, dataset):
+    if args.output is None:
+        hidden_states_dir = Path(args.preprocessed_data) / "hidden_states"
+    else:
+        hidden_states_dir = Path(args.output)
+    hidden_states_dir.mkdir(parents=True, exist_ok=True)
 
-    log.info(f"Saved {samples_saved} new data points to {args.output_dir}")
+    existing_file_indices = get_existing_hidden_state_indices(hidden_states_dir)
+    num_samples = len(dataset)
 
-    save_config(args, generator, num_samples, args.output_dir)
+    to_process = get_indices_to_process(
+        num_samples, args.max_samples, existing_file_indices
+    )
+    if not to_process:
+        return
 
-    return samples_saved
+    logger.info(f"Processing {len(to_process)} samples")
+
+    queue: asyncio.Queue = asyncio.Queue(maxsize=args.concurrency * 4)
+    vllm_semaphore = asyncio.Semaphore(args.concurrency)
+    write_semaphore = asyncio.Semaphore(args.concurrency)
+
+    skipped_indices: list[int] = []
+    cancel_event = asyncio.Event()
+
+    max_consec = args.max_consecutive_errors
+    if max_consec is None:
+        max_consec = args.concurrency
+    failure_tracker = _FailureTracker(max_consec) if not args.fail_on_error else None
+
+    async with openai.AsyncOpenAI(
+        base_url=args.endpoint, api_key="EMPTY", max_retries=0
+    ) as client:
+        list_models = await client.models.list()
+        model_id = list_models.data[0].id
+        if args.model and args.model != model_id:
+            raise ValueError(
+                f"An explicit model name was passed ({args.model}) which doesn't match"
+                "found model_id {model_id}."
+                "Please make sure --endpoint is set to the correct vllm instance."
+            )
+
+        with tqdm(total=len(to_process)) as pbar:
+            workers = [
+                asyncio.create_task(
+                    worker(
+                        client,
+                        model_id,
+                        queue,
+                        pbar,
+                        vllm_semaphore,
+                        write_semaphore,
+                        hidden_states_dir,
+                        args.validate_outputs,
+                        args.request_timeout,
+                        args.max_retries,
+                        args.fail_on_error,
+                        skipped_indices,
+                        cancel_event,
+                        failure_tracker,
+                    )
+                )
+                for _ in range(args.concurrency * 2)
+            ]
+
+            await _feed_queue(to_process, dataset, queue, cancel_event)
+            await _shutdown_workers(workers, queue, cancel_event)
+
+    num_saved = len(to_process) - len(skipped_indices)
+    logger.info(f"Saved {num_saved} new data points to {args.output}")
+    if skipped_indices:
+        logger.warning(
+            f"Skipped {len(skipped_indices)} samples due to errors: {skipped_indices}"
+        )
 
 
 def main():
     args = parse_args()
+    setup_root_logger()
 
-    log.section("EAGLE Offline Data Generation")
-    log.config(
-        {
-            "Target Model": args.target_model_path,
-            "Dataset": args.train_data_path,
-            "Output Dir": args.output_dir,
-            "Tensor Parallel": args.tensor_parallel_size,
-            "Batch Size": args.batch_size,
-        }
-    )
+    logger.info("EAGLE Offline Data Generation")
 
-    dataset, _ = load_and_preprocess_dataset(
-        target_model_path=args.target_model_path,
-        train_data_paths=args.train_data_path,
-        seq_length=args.seq_length,
-        build_dataset_num_proc=args.num_preprocessing_workers,
-        seed=args.seed,
-        max_samples=args.max_samples,
-        token_freq_path=args.token_freq_path,
-        assistant_pattern=args.assistant_pattern,
-        turn_dropout=args.turn_dropout,
-        minimum_valid_tokens=args.minimum_valid_tokens,
-    )
-    num_saved = generate_and_save_hidden_states(args, dataset)
+    dataset = load_from_disk(args.preprocessed_data)
 
-    log.section("Data generation complete!")
-    log.info(f"Saved {num_saved} files to {args.output_dir}")
+    try:
+        asyncio.run(generate_and_save_hidden_states(args, dataset))
+    except KeyboardInterrupt:
+        sys.exit(130)
+    except Exception:
+        logger.exception("Data generation failed")
+        sys.exit(1)
+
+    logger.info("Data generation complete!")
 
 
 if __name__ == "__main__":

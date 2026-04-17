@@ -17,7 +17,7 @@ __all__ = [
     "VLLM_PYTHON",
     "launch_vllm_server",
     "launch_vllm_server_context",
-    "run_data_generation_offline2",
+    "run_data_generation_offline",
     "run_prepare_data",
     "run_training",
     "run_vllm_engine",
@@ -164,7 +164,7 @@ def run_prepare_data(
     assert result.returncode == 0, "prepare_data.py failed"
 
 
-def run_data_generation_offline2(
+def run_data_generation_offline(
     data_path: Path,
     hidden_states_path: Path | None = None,
     port: int = 8321,
@@ -176,7 +176,7 @@ def run_data_generation_offline2(
 ):
     datagen_cmd = [
         sys.executable,
-        str(SCRIPTS_DIR / "data_generation_offline2.py"),
+        str(SCRIPTS_DIR / "data_generation_offline.py"),
         "--preprocessed-data",
         str(data_path),
         "--endpoint",
@@ -199,7 +199,7 @@ def run_data_generation_offline2(
         datagen_cmd, stderr=subprocess.PIPE, text=True, check=False, timeout=timeout
     )
     assert result.returncode == 0, (
-        f"data_generation_offline2.py failed:\n{result.stderr}"
+        f"data_generation_offline.py failed:\n{result.stderr}"
     )
 
 
