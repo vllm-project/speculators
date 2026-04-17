@@ -37,4 +37,8 @@ nav:
     - reference/speculators
   - CLI Reference:
     - cli/README.md
+    - prepare_data.py: cli/prepare_data.md
+    - data_generation_offline.py: cli/data_generation_offline.md
+    - launch_vllm.py: cli/launch_vllm.md
+    - train.py: cli/train.md
   - Community: community.md
