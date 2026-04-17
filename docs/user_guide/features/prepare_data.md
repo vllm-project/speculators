@@ -25,6 +25,7 @@ python scripts/prepare_data.py \
 ```
 
 This command:
+
 1. Loads the ShareGPT dataset from HuggingFace
 2. Tokenizes using Llama 3.1's tokenizer and chat template
 3. Generates loss masks for assistant responses
@@ -37,10 +38,12 @@ This command:
 Speculators includes pre-configured loaders for popular datasets:
 
 - **`sharegpt`** - ShareGPT Vicuna unfiltered dataset
+
   - Path: `Aeala/ShareGPT_Vicuna_unfiltered`
   - High-quality conversational data
 
 - **`ultrachat`** - UltraChat 200K dataset
+
   - Path: `HuggingFaceH4/ultrachat_200k`
   - Large-scale multi-turn conversations
 
@@ -93,10 +96,12 @@ The `token_freq.pt` file contains a dictionary mapping token IDs to their occurr
 ### Required Arguments
 
 - `--model` - HuggingFace model ID or local path
+
   - Example: `meta-llama/Llama-3.1-8B-Instruct`
   - Used for tokenizer and chat template
 
 - `--data` - Dataset path(s), can be specified multiple times
+
   - Built-in: `sharegpt`, `ultrachat`
   - HF dataset: `allenai/tulu-v2-sft-mixture`
   - Local file: `./my_data.jsonl`
@@ -106,37 +111,46 @@ The `token_freq.pt` file contains a dictionary mapping token IDs to their occurr
 ### Optional Arguments
 
 - `--max-samples` - Limit number of samples to process
+
   - Default: Process all samples
   - Useful for testing or creating smaller datasets
 
 - `--seq-length` - Maximum sequence length
+
   - Default: 8192
   - Sequences longer than this are truncated
 
 - `--token-freq-path` - Custom path for token frequency file
+
   - Default: `{output}/token_freq.pt`
 
 - `--assistant-pattern` - Custom regex for identifying assistant responses
+
   - Default: Auto-detected from chat template
   - Advanced use only
 
 - `--turn-dropout` - Enable turn dropout augmentation
+
   - Randomly keeps first N consecutive turns per conversation
   - Increases dataset diversity
 
 - `--minimum-valid-tokens` - Filter samples with too few trainable tokens
+
   - Example: `--minimum-valid-tokens 10`
   - Removes samples where assistant responses are too short
 
 - `--num-preprocessing-workers` - CPU processes for parallel processing
+
   - Default: 8
   - Increase for faster processing on machines with many cores
 
 - `--seed` - Random seed for reproducibility
+
   - Default: 0
   - Must match seed used in training
 
 - `--overwrite` - Force reprocess existing data
+
   - Default: Skip if output already exists
 
 ## Data Preprocessing Pipeline
@@ -225,6 +239,7 @@ python scripts/prepare_data.py \
 This creates multiple training examples from a single conversation by keeping only the first N turns (where N is randomly selected).
 
 Benefits:
+
 - Increases effective dataset size
 - Improves model robustness
 - Helps with shorter conversations

@@ -7,6 +7,7 @@ This tutorial shows you how to deploy your trained speculator model for producti
 After training a speculator, deploying it with vLLM is straightforward. vLLM automatically recognizes the `speculators_config` in your model and enables speculative decoding.
 
 **What you'll learn:**
+
 - How to serve speculator models with vLLM
 - How to customize speculative decoding parameters
 - How to optimize for production
@@ -21,6 +22,7 @@ vllm serve ./checkpoints/best
 ```
 
 That's it! vLLM will:
+
 1. Load your speculator model
 2. Read the `speculators_config` from config.json
 3. Load the target/verifier model
@@ -47,6 +49,7 @@ print(response.choices[0].message.content)
 ```
 
 Check vLLM logs for speculative decoding metrics:
+
 ```
 INFO: Speculative decoding enabled
 INFO: Average acceptance: 2.3 tokens
@@ -132,6 +135,7 @@ vllm serve ./checkpoints/best --enable-metrics
 Access metrics at: `http://localhost:8000/metrics`
 
 Key metrics:
+
 - `vllm:spec_decode_draft_acceptance_rate`
 - `vllm:spec_decode_efficiency`
 - `vllm:request_latency_seconds`
@@ -233,11 +237,13 @@ vllm serve ./checkpoints/best --trust-remote-code
 ### Speculative Decoding Not Enabled
 
 **Check logs for:**
+
 ```
 WARNING: Speculative decoding disabled
 ```
 
 **Solutions:**
+
 1. Verify `speculators_config` exists in config.json
 2. Check verifier model is accessible
 3. Ensure vocab mappings (d2t.pt, t2d.pt) are present
@@ -245,16 +251,19 @@ WARNING: Speculative decoding disabled
 ### Low Acceptance Rates in Production
 
 **Monitor:**
+
 ```
 Average acceptance: 0.8 tokens  # Too low!
 ```
 
 **Possible causes:**
+
 1. Different data distribution than training
 2. Model not properly loaded
 3. Incorrect target layers
 
 **Solutions:**
+
 1. Retrain on production-like data
 2. Verify model integrity
 3. Check configuration matches training
@@ -262,26 +271,31 @@ Average acceptance: 0.8 tokens  # Too low!
 ## Performance Tips
 
 1. **Use tensor parallelism for large models:**
+
    ```bash
    --tensor-parallel-size 8
    ```
 
 2. **Tune batch size for your workload:**
+
    ```bash
    --max-num-seqs 64  # Adjust based on latency/throughput trade-off
    ```
 
 3. **Optimize speculative tokens:**
+
    ```bash
    --speculative-tokens 5  # Sweet spot often 3-7
    ```
 
 4. **Enable KV cache optimization:**
+
    ```bash
    --enable-prefix-caching
    ```
 
 5. **Use appropriate dtype:**
+
    ```bash
    --dtype bfloat16  # Or float16
    ```
@@ -289,6 +303,7 @@ Average acceptance: 0.8 tokens  # Too low!
 ## Summary
 
 You've learned how to:
+
 - ✅ Serve speculator models with vLLM
 - ✅ Configure for production
 - ✅ Monitor performance

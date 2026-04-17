@@ -73,23 +73,28 @@ Main entry point for model conversion.
 **Parameters:**
 
 - `model` (str, required) - Source model to convert
+
   - HuggingFace model ID (e.g., `yuhuili/EAGLE3-LLaMA3.1-Instruct-8B`)
   - Local path to checkpoint directory
 
 - `verifier` (str, required) - Target/verifier model
+
   - HuggingFace model ID (e.g., `meta-llama/Llama-3.1-8B-Instruct`)
   - Local path to verifier model
   - This model is referenced in the `speculators_config`
 
 - `algorithm` (str, required) - Conversion algorithm
+
   - `"eagle"` - For EAGLE v1/v2/HASS models
   - `"eagle3"` - For EAGLE-3 models
 
 - `output_path` (str, optional) - Output directory
+
   - Default: `"converted"`
   - Converted model saved to this directory
 
 - `validate_device` (str, optional) - Device for validation
+
   - Default: `None` (no validation)
   - Example: `"cuda:0"` to validate on GPU 0
   - Runs a test forward pass to verify conversion
@@ -97,20 +102,24 @@ Main entry point for model conversion.
 **EAGLE-specific kwargs:**
 
 - `layernorms` (bool) - Include layer normalization layers
+
   - Default: Auto-detected from checkpoint
   - Set explicitly if auto-detection fails
 
 - `fusion_bias` (bool) - Include fusion bias parameters
+
   - Default: Auto-detected from checkpoint
   - Set explicitly if auto-detection fails
 
 **EAGLE-3 specific kwargs:**
 
 - `norm_before_residual` (bool) - Normalization before residual connection
+
   - Default: `True`
   - Set to `False` for models without this feature
 
 - `eagle_aux_hidden_state_layer_ids` (list[int]) - Auxiliary hidden state layers
+
   - Default: Auto-selected based on model depth
   - Example: `[1, 23, 44]` for custom layer selection
 
@@ -248,6 +257,7 @@ Validation performs a test forward pass to ensure the conversion was successful.
 For scripted conversions, use Python scripts:
 
 **eagle3_convert.py:**
+
 ```python
 #!/usr/bin/env python3
 from speculators.convert import convert_model
@@ -264,6 +274,7 @@ print("vllm serve ./converted_model")
 ```
 
 Run with:
+
 ```bash
 python eagle3_convert.py
 ```
@@ -319,11 +330,13 @@ api.upload_folder(
 ## Conversion vs Training
 
 **When to convert:**
+
 - You have an existing trained model from a research repository
 - You want to quickly test speculative decoding
 - The existing model quality is sufficient
 
 **When to train from scratch:**
+
 - You need a speculator for a new target model
 - You want to customize training data or hyperparameters
 - You need specific vocabulary mappings
@@ -366,6 +379,7 @@ convert_model(
 If converted model doesn't work with vLLM:
 
 1. **Verify conversion completed successfully**
+
    ```python
    import json
    with open("./converted_model/config.json") as f:
@@ -374,12 +388,14 @@ If converted model doesn't work with vLLM:
    ```
 
 2. **Check vLLM version**
+
    ```bash
    pip show vllm
    # Ensure vLLM version supports speculators
    ```
 
 3. **Validate model architecture**
+
    ```python
    convert_model(
        ...,
@@ -411,11 +427,11 @@ convert_model(
 
 ## Supported Research Repositories
 
-| Repository | Algorithm | Converter | Notes |
-|-----------|-----------|-----------|-------|
-| [SafeAILab/EAGLE](https://github.com/SafeAILab/EAGLE) | EAGLE v1/v2 | `eagle` | Original EAGLE implementation |
-| [SafeAILab/EAGLE](https://github.com/SafeAILab/EAGLE) | EAGLE v3 | `eagle3` | Latest with vocab mapping |
-| [HArmonizedSS/HASS](https://github.com/HArmonizedSS/HASS) | HASS | `eagle` | EAGLE variant |
+| Repository                                                | Algorithm   | Converter | Notes                         |
+| --------------------------------------------------------- | ----------- | --------- | ----------------------------- |
+| [SafeAILab/EAGLE](https://github.com/SafeAILab/EAGLE)     | EAGLE v1/v2 | `eagle`   | Original EAGLE implementation |
+| [SafeAILab/EAGLE](https://github.com/SafeAILab/EAGLE)     | EAGLE v3    | `eagle3`  | Latest with vocab mapping     |
+| [HArmonizedSS/HASS](https://github.com/HArmonizedSS/HASS) | HASS        | `eagle`   | EAGLE variant                 |
 
 ## See Also
 
