@@ -19,63 +19,23 @@ Speculators provides four main CLI scripts for different stages of the speculati
 
 ```bash
 # Step 1: Prepare data
-python scripts/prepare_data.py \
-  --model meta-llama/Llama-3.1-8B-Instruct \
-  --data sharegpt \
-  --output ./prepared_data \
-  --max-samples 10000
-
-# Step 2: Generate hidden states offline
-python scripts/data_generation_offline.py \
-  --target-model-path meta-llama/Llama-3.1-8B-Instruct \
-  --train-data-path sharegpt \
-  --output-dir ./hidden_states \
-  --tensor-parallel-size 2 \
-  --batch-size 16
-
-# Step 3: Train the speculator
-python scripts/train.py \
-  --verifier-name-or-path meta-llama/Llama-3.1-8B-Instruct \
-  --data-path ./prepared_data \
-  --hidden-states-path ./hidden_states \
-  --on-missing raise \
-  --save-path ./checkpoints \
-  --draft-vocab-size 32000 \
-  --epochs 10
+python scripts/prepare_data.py ...
+# Step 2: Launch vLLM server
+python scripts/launch_vllm.py ...
+# Step 3: Generate hidden states offline
+python scripts/data_generation_offline.py ...
+# Step 4: Stop vLLM server
+# Step 5: Train the speculator
+python scripts/train.py ...
 ```
 
 ### Full Training Pipeline (Online)
 
 ```bash
 # Step 1: Prepare data
-python scripts/prepare_data.py \
-  --model meta-llama/Llama-3.1-8B-Instruct \
-  --data sharegpt \
-  --output ./prepared_data \
-  --max-samples 10000
-
+python scripts/prepare_data.py ...
 # Step 2: Launch vLLM server
-python scripts/launch_vllm.py \
-  meta-llama/Llama-3.1-8B-Instruct \
-  --hidden-states-path /tmp/hidden_states \
-  -- --port 8000 --tensor-parallel-size 2
-
+python scripts/launch_vllm.py ...
 # Step 3: Train with online hidden states generation
-python scripts/train.py \
-  --verifier-name-or-path meta-llama/Llama-3.1-8B-Instruct \
-  --data-path ./prepared_data \
-  --vllm-endpoint http://localhost:8000/v1 \
-  --on-missing generate \
-  --on-generate delete \
-  --save-path ./checkpoints \
-  --draft-vocab-size 32000 \
-  --epochs 10
+python scripts/train.py ...
 ```
-
-## See Also
-
-- [Getting Started Guide](../user_guide/getting_started.md)
-- [Training Tutorial](../user_guide/tutorials/train_eagle3_online.md)
-- [Features: Training](../user_guide/features/training.md)
-- [Features: Data Preparation](../user_guide/features/prepare_data.md)
-- [vLLM CLI Reference](https://docs.vllm.ai/en/latest/cli/)
