@@ -18,7 +18,7 @@ Speculators is an open-source project that values community contributions. We ma
 
   Our community guidelines ensure that participation in the Speculators project is a positive, inclusive, and respectful experience for everyone.
 
-  [:octicons-arrow-right-24: Code of Conduct](code-of-conduct.md)
+  [:octicons-arrow-right-24: Code of Conduct](code_of_conduct.md)
 
 - :material-source-pull:{ .lg .middle } Contributing Guide
 
