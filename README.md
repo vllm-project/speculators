@@ -35,6 +35,18 @@ ______________________________________________________________________
 
 ______________________________________________________________________
 
+## 🚀 What's New!
+
+Big updates have landed in Speculators! To get a more in-depth look, check out the [Speculators documentation](https://docs.vllm.ai/projects/speculators/en/latest/).
+
+Some of the exciting new features include:
+
+- **Gemma 4 Speculators**: The RedHat team published speculators for Gemma 4 31B-it, including both [DFlash](https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.dflash) and [EAGLE-3](https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.eagle3) checkpoints, enabling production-grade speculative decoding for Gemma 4 models.
+- **DFlash Training Algorithm**: Added support for the DFlash training algorithm with anchored-block drafting, using auxiliary hidden states from multiple verifier layers. Includes CLI options for block size and max anchors, plus DFlash metrics, utilities, and draft model. DFlash models trained through Speculators can now run seamlessly in vLLM as of [vLLM PR #38300](https://github.com/vllm-project/vllm/pull/38300).
+- **Online Training Support**: Added support for online training using the new [vLLM hidden extraction system](https://github.com/vllm-project/vllm/pull/33736), enabling real-time hidden state generation during training without requiring separate offline data generation steps.
+
+______________________________________________________________________
+
 ## Key Features
 
 - **Offline Training Data Generation using vLLM:** Enable the generation of hidden states using vLLM. Data samples are saved to disk and can be used for draft model training.
@@ -137,6 +149,18 @@ The following table summarizes the models that have been trained end-to-end by o
 <td>675B-Instruct</td>
 <td>EAGLE-3 ⏳</td>
 <td>⏳</td>
+</tr>
+<tr>
+<td>Gemma 4</td>
+<td>31B-it</td>
+<td><a href="https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.eagle3">EAGLE-3</a> ✅<br/><a href="https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.dflash">DFlash</a> ✅</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>Gemma 4 MoE</td>
+<td>26B-A4B-it</td>
+<td><a href="https://huggingface.co/RedHatAI/gemma-4-26B-A4B-it-speculator.eagle3">EAGLE-3</a> ✅</td>
+<td>✅</td>
 </tr>
 </tbody>
 </table>
