@@ -15,6 +15,8 @@ from pathlib import Path
 import numpy as np
 from scipy.interpolate import PchipInterpolator
 
+_MIN_POINTS_FOR_INTERP = 2
+
 # ---------------------------------------------------------------------------
 # Metric definitions
 # ---------------------------------------------------------------------------
@@ -67,13 +69,16 @@ PRETTY_SUBSET_NAMES: dict[str, str] = {
 # ---------------------------------------------------------------------------
 
 
-def _load_csv(filepath: Path, metric_name: str) -> dict[str, list[tuple[float, float]]]:
+def _load_csv(
+    filepath: Path,
+    metric_name: str,
+) -> dict[str, list[tuple[float, float]]]:
     """Load constant-rate data points from a CSV file."""
     metric_cfg = METRICS[metric_name]
     csv_col = metric_cfg["csv_col"]
 
     result: dict[str, list[tuple[float, float]]] = defaultdict(list)
-    with open(filepath, newline="") as f:
+    with filepath.open(newline="") as f:
         reader = csv.DictReader(f)
         for row in reader:
             if row.get("strategy") != "constant":
@@ -89,13 +94,16 @@ def _load_csv(filepath: Path, metric_name: str) -> dict[str, list[tuple[float, f
     return dict(result)
 
 
-def _load_json(filepath: Path, metric_name: str) -> dict[str, list[tuple[float, float]]]:
+def _load_json(
+    filepath: Path,
+    metric_name: str,
+) -> dict[str, list[tuple[float, float]]]:
     """Load constant-rate data points from a GuideLLM sweep JSON."""
     metric_cfg = METRICS[metric_name]
     json_key = metric_cfg["json_key"]
     stat = metric_cfg["stat"]
 
-    with open(filepath) as f:
+    with filepath.open() as f:
         data = json.load(f)
 
     subset = _extract_subset_from_json(data)
@@ -122,7 +130,10 @@ def _extract_subset_from_json(data: dict) -> str:
     return Path(data_files).stem
 
 
-def load_data(filepath: Path, metric_name: str) -> dict[str, list[tuple[float, float]]]:
+def load_data(
+    filepath: Path,
+    metric_name: str,
+) -> dict[str, list[tuple[float, float]]]:
     """Load data from a CSV or JSON file, auto-detected by extension.
 
     Returns ``{subset_name: [(rps, y_value), ...]}``.
@@ -132,7 +143,9 @@ def load_data(filepath: Path, metric_name: str) -> dict[str, list[tuple[float, f
     elif filepath.suffix == ".json":
         return _load_json(filepath, metric_name)
     else:
-        raise ValueError(f"Unsupported file type: {filepath.suffix} (expected .csv or .json)")
+        raise ValueError(
+            f"Unsupported file type: {filepath.suffix} (expected .csv or .json)"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -148,9 +161,7 @@ def parse_source_args(source_args: list[str]) -> dict[str, list[Path]]:
     result: dict[str, list[Path]] = defaultdict(list)
     for arg in source_args:
         if "=" not in arg:
-            raise ValueError(
-                f"Invalid source format: '{arg}'. Expected 'LABEL=PATH'."
-            )
+            raise ValueError(f"Invalid source format: '{arg}'. Expected 'LABEL=PATH'.")
         label, path_str = arg.split("=", 1)
         label = label.strip()
         path = Path(path_str.strip())
@@ -182,7 +193,9 @@ def isotonic(y: np.ndarray, increasing: bool = True) -> np.ndarray:
         nxt = blocks[i + 1]
         if target[cur] > target[nxt]:
             w_sum = weight[cur] + weight[nxt]
-            target[cur] = (weight[cur] * target[cur] + weight[nxt] * target[nxt]) / w_sum
+            target[cur] = (
+                weight[cur] * target[cur] + weight[nxt] * target[nxt]
+            ) / w_sum
             weight[cur] = w_sum
             blocks.pop(i + 1)
             if i > 0:
@@ -214,7 +227,7 @@ def smooth_curve(
     order = np.argsort(x)
     x, y = x[order], y[order]
 
-    if len(x) < 2:
+    if len(x) < _MIN_POINTS_FOR_INTERP:
         return x, y
 
     x_min, x_max = x.min(), x.max()
@@ -222,7 +235,7 @@ def smooth_curve(
     n_bins = max(min(len(x) // 3, 15), 4)
     edges = np.linspace(x_min, x_max, n_bins + 1)
     bx, by = [], []
-    for lo, hi in zip(edges[:-1], edges[1:]):
+    for lo, hi in zip(edges[:-1], edges[1:], strict=False):
         mask = (x >= lo) & (x < hi) if hi < edges[-1] else (x >= lo) & (x <= hi)
         if mask.any():
             bx.append(x[mask].mean())
@@ -234,7 +247,7 @@ def smooth_curve(
     _, unique_idx = np.unique(bx, return_index=True)
     bx, by = bx[unique_idx], by[unique_idx]
 
-    if len(bx) < 2:
+    if len(bx) < _MIN_POINTS_FOR_INTERP:
         return bx, by
 
     interp = PchipInterpolator(bx, by)
