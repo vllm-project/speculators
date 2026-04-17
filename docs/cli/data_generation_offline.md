@@ -1,14 +1,21 @@
-# data_generation_offline.py
+# data_generation_offline2.py
 
-Generates training data for speculator models by extracting hidden states from the target model using vLLM. The output is saved as individual `.pt` files for offline training.
+Generates training data for speculator models by extracting hidden states from a running vLLM server. Connects to a vLLM endpoint via the OpenAI-compatible API and saves output as individual `.safetensors` files for offline training. 
+
+## Features
+
+- **Automatic resumption** — Detects existing `.safetensors` files in the output directory and skips already-completed samples, so interrupted runs can be resumed without reprocessing.
+- **Error handling with auto-retries** — Failed requests are automatically retried up to `--max-retries` times. Samples that still fail are skipped by default, allowing the rest of the dataset to complete.
+- **Consecutive failure detection** — Aborts early after `--max-consecutive-errors` consecutive failures to avoid silently churning through the dataset when the server is unreachable.
+- **Async concurrency** — Sends multiple requests to the vLLM server in parallel, controlled by `--concurrency`, for high throughput.
+- **Output validation** — Optional `--validate-outputs` flag verifies that saved hidden states match expected token IDs and sequence lengths.
 
 ## Basic Usage
 
 ```bash
-python scripts/data_generation_offline.py \
-  --target-model-path meta-llama/Llama-3.1-8B-Instruct \
-  --train-data-path sharegpt \
-  --output-dir ./training_data \
+python scripts/data_generation_offline2.py \
+  --preprocessed-data ./preprocessed_dataset \
+  --output ./training_data \
   --max-samples 5000
 ```
 
@@ -16,85 +23,52 @@ python scripts/data_generation_offline.py \
 
 ### Model Arguments
 
-- **`--target-model-path`** (str, required)
-  HuggingFace model ID or local path for the target model.
+- **`--endpoint`** (str, default: `http://localhost:8000/v1`)
+  The address of the vLLM instance to use for hidden states generation. The vLLM instance must be configured for hidden states extraction (see [launch_vllm.py](launch_vllm.md)).
 
-- **`--tensor-parallel-size`** (int, default: GPU count)
-  Tensor parallel size for the target model. Defaults to the number of available GPUs.
-
-- **`--gpu-memory-utilization`** (float, default: `0.8`)
-  Target GPU memory utilization (0.0 to 1.0).
+- **`--model`** (str, default: `None`)
+  HuggingFace model ID or local path for the target model. Used for verification only - the model is auto-detected from the vLLM endpoint.
 
 ### Data Arguments
 
-- **`--train-data-path`** (str, required, repeatable)
-  Path to training data (same as used in preprocessing). Can be specified multiple times.
-
-- **`--seq-length`** (int, default: `2048`)
-  Maximum sequence length for preprocessing and model.
+- **`--preprocessed-data`** (str, required)
+  Path to preprocessed dataset (produced by [prepare_data.py](prepare_data.md)).
 
 - **`--max-samples`** (int, default: `None`)
   Maximum number of samples to process. If `None`, processes all samples.
 
-- **`--token-freq-path`** (str, default: `./token_freq.pt`)
-  Path to save token frequency distribution.
-
-- **`--hf-cache-dir`** (str, default: `None`)
-  Directory for HuggingFace datasets cache. If not specified, uses `HF_DATASETS_CACHE` environment variable or default location.
-
-- **`--assistant-pattern`** (str, default: `None`)
-  Custom regex pattern for matching assistant responses. If not provided, auto-detected from chat template.
-
-- **`--turn-dropout`** (flag)
-  Enable turn dropout for data augmentation.
-
-- **`--minimum-valid-tokens`** (int, default: `None`)
-  Drop samples whose loss mask contains fewer than this many trainable tokens.
-
 ### Output Arguments
 
-- **`--output-dir`** (str, required)
-  Directory to save `.pt` files containing hidden states.
+- **`--output`** (str, default: `None`)
+  Directory to save generated `.safetensors` files. Defaults to `<preprocessed-data>/hidden_states`.
 
 ### Hidden States Generation Arguments
 
-- **`--layer-ids`** (int list, default: auto-select)
-  List of layer IDs from which to capture hidden states.
-  Default: `[2, num_layers//2, num_layers-3, num_layers]`
+- **`--concurrency`** (int, default: `32`)
+  Number of active vLLM requests at a time. The number of async workers is set to `2 * concurrency`.
 
-  Example: `--layer-ids 2 16 30 32`
+- **`--validate-outputs`** (flag)
+  Load generated safetensor files and verify that output token IDs match prompt tokens and hidden states sequence length matches the number of tokens.
 
-- **`--batch-size`** (int, default: `8`)
-  Batch size for hidden states generation.
+- **`--request-timeout`** (float)
+  Timeout in seconds for each individual vLLM request.
 
-### Processing Arguments
+- **`--max-retries`** (int)
+  Maximum number of retry attempts per request on failure.
 
-- **`--seed`** (int, default: `0`)
-  Random seed for reproducibility.
+- **`--fail-on-error`** (flag)
+  Abort when a request fails after all retries. By default, failed samples are skipped.
 
-- **`--start-idx`** (int, default: `0`)
-  Starting index for output files. Useful for resuming interrupted runs.
+- **`--max-consecutive-errors`** (int, default: value of `--concurrency`)
+  Abort after this many consecutive sample failures (each sample already retried `--max-retries` times). Prevents silently churning through the entire dataset when the server is down. Ignored when `--fail-on-error` is set.
 
-- **`--num-preprocessing-workers`** (int, default: `8`)
-  Number of CPU processes for dataset preprocessing.
-
-## Example
+## Full Example
 
 ```bash
-python scripts/data_generation_offline.py \
-  --target-model-path meta-llama/Llama-3.1-70B-Instruct \
-  --train-data-path sharegpt \
-  --output-dir ./hidden_states \
-  --tensor-parallel-size 4 \
-  --batch-size 16 \
-  --layer-ids 2 20 40 80 \
-  --max-samples 50000 \
-  --seq-length 4096
+python scripts/data_generation_offline2.py \
+  --endpoint http://localhost:8000/v1 \
+  --preprocessed-data ./preprocessed_dataset \
+  --output ./hidden_states \
+  --concurrency 64 \
+  --validate-outputs
 ```
-
-## See Also
-
-- [CLI Reference Overview](README.md)
-- [Previous Step: Prepare Data](prepare_data.md)
-- [Next Step: Train Model](train.md)
-- [Offline Hidden States Feature Guide](../user_guide/features/offline_hidden_states.md)
