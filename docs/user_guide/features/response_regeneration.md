@@ -60,6 +60,7 @@ cd scripts/response_regeneration
 ```
 
 This script automatically:
+
 1. Starts a vLLM server with the specified model
 2. Runs the regeneration pipeline
 3. Stops the server when complete (unless `--keep-server` is used)
@@ -89,6 +90,7 @@ python script.py \
 ```
 
 The script will:
+
 - Auto-detect the model from the vLLM server
 - Extract prompts from the dataset
 - Generate responses asynchronously
@@ -136,6 +138,7 @@ For maximum throughput on multi-GPU systems, use data parallelism:
 ```
 
 Benefits:
+
 - Automatic load balancing across GPUs
 - Linear scaling with number of replicas
 - No code changes required
@@ -151,6 +154,7 @@ Adjust `--concurrency` based on your setup:
 ### GPU Configuration Examples
 
 **Llama 3.3 70B on 8 GPUs:**
+
 ```bash
 ./run_all.sh --model "meta-llama/Llama-3.3-70B-Instruct" \
   --dp-size 4 \
@@ -160,6 +164,7 @@ Adjust `--concurrency` based on your setup:
 ```
 
 **Qwen 2.5 72B on 4 GPUs:**
+
 ```bash
 ./run_all.sh --model "Qwen/Qwen2.5-72B-Instruct" \
   --tp-size 4 \

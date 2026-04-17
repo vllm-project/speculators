@@ -5,12 +5,14 @@ This tutorial walks you through training an EAGLE-3 speculator model using **onl
 ## Overview
 
 Online training is ideal for:
+
 - Quick experimentation and iteration
 - Smaller datasets (< 50K samples)
 - Limited disk space
 - Development and prototyping
 
 **What you'll learn:**
+
 - How to prepare training data
 - How to launch vLLM for hidden states extraction
 - How to train an EAGLE-3 model with online generation
@@ -19,6 +21,7 @@ Online training is ideal for:
 **Time required:** ~1-2 hours (including training)
 
 **Prerequisites:**
+
 - Python 3.10+
 - CUDA-capable GPU(s)
 - `speculators` installed with `[datagen]` extras
@@ -37,12 +40,14 @@ python scripts/prepare_data.py \
 ```
 
 **Parameters explained:**
+
 - `--model` - The target model you want to accelerate
 - `--data` - Dataset to use (`sharegpt`, `ultrachat`, or custom path)
 - `--output` - Where to save preprocessed data
 - `--max-samples` - Limit samples (optional, good for testing)
 
 **Expected output:**
+
 ```
 training_data/
 ├── data-00000-of-00002.arrow
@@ -68,20 +73,22 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 python scripts/launch_vllm.py \
   -- --data-parallel-size 4 --port 8000
 ```
 
-**The `--` separator:**
-Anything after `--` is passed directly to vLLM. Common options:
+**The `--` separator:** Anything after `--` is passed directly to vLLM. Common options:
+
 - `--data-parallel-size 4` - Use 4 GPUs for data parallelism
 - `--tensor-parallel-size 2` - Use 2 GPUs for tensor parallelism
 - `--port 8000` - Specify port (default: 8000)
 - `--gpu-memory-utilization 0.9` - GPU memory to use
 
 **Wait for server to start:**
+
 ```
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://0.0.0.0:8000
 ```
 
 **Verify server is running:**
+
 ```bash
 curl http://localhost:8000/v1/models
 ```
@@ -126,6 +133,7 @@ CUDA_VISIBLE_DEVICES=4,5,6,7 torchrun \
 ```
 
 **Key parameters:**
+
 - `--vllm-endpoint` - vLLM server URL (enables online generation)
 - `--draft-vocab-size 32000` - Reduced vocabulary size
 - `--epochs 10` - Number of training epochs
@@ -133,6 +141,7 @@ CUDA_VISIBLE_DEVICES=4,5,6,7 torchrun \
 - `--logger tensorboard` - Enable TensorBoard logging
 
 **Expected training output:**
+
 ```
 Epoch 1/10: 100%|███████████| 156/156 [03:21<00:00,  1.29s/it]
 Train Loss: 2.3456 | Val Loss: 2.2891 | LR: 3.00e-05
@@ -145,6 +154,7 @@ Saved checkpoint to ./checkpoints/1
 ```
 
 **Training time:**
+
 - 5K samples, 10 epochs, 1 GPU: ~30-40 minutes
 - 5K samples, 10 epochs, 4 GPUs: ~15-20 minutes
 
@@ -159,6 +169,7 @@ tensorboard --logdir ./logs
 ```
 
 Open http://localhost:6006 to view:
+
 - Training and validation loss curves
 - Learning rate schedule
 - Token prediction accuracy
@@ -178,6 +189,7 @@ python scripts/train.py \
 ### Console Output
 
 Watch for:
+
 - **Decreasing loss** - Model is learning
 - **Validation loss** - Should decrease without overfitting
 - **Learning rate** - Should decay according to schedule
@@ -257,6 +269,7 @@ print(response.choices[0].message.content)
 ### Verify Speculative Decoding
 
 Check vLLM logs for speculative decoding metrics:
+
 ```
 Average acceptance rate: 1.8 tokens
 Speculative tokens proposed: 5
@@ -288,11 +301,13 @@ See [Evaluating Performance Tutorial](evaluating_performance.md) for detailed be
 ### Issue: vLLM Connection Timeout
 
 **Error:**
+
 ```
 TimeoutError: Request to vLLM timed out
 ```
 
 **Solution:**
+
 ```bash
 # Increase timeout in training
 python scripts/train.py \
@@ -304,11 +319,13 @@ python scripts/train.py \
 ### Issue: Out of Memory (Training)
 
 **Error:**
+
 ```
 torch.cuda.OutOfMemoryError
 ```
 
 **Solutions:**
+
 ```bash
 # Reduce sequence length
 python scripts/train.py --total-seq-len 4096 ...
@@ -323,11 +340,13 @@ python scripts/train.py --num-workers 4 ...
 ### Issue: Out of Memory (vLLM)
 
 **Error:**
+
 ```
 vLLM: CUDA out of memory
 ```
 
 **Solutions:**
+
 ```bash
 # Reduce GPU memory utilization
 python scripts/launch_vllm.py model -- --gpu-memory-utilization 0.7
@@ -341,46 +360,51 @@ python scripts/launch_vllm.py model -- --tensor-parallel-size 2
 
 ### Issue: Training Loss Not Decreasing
 
-**Symptoms:**
-Loss plateaus or increases
+**Symptoms:** Loss plateaus or increases
 
 **Solutions:**
+
 1. **Lower learning rate:**
+
    ```bash
    --lr 1e-5  # Try lower LR
    ```
 
 2. **Check data quality:**
+
    ```bash
    # Verify preprocessing succeeded
    ls -lh ./training_data/
    ```
 
 3. **Increase training time:**
+
    ```bash
    --epochs 20  # Train longer
    ```
 
 4. **Verify vLLM is working:**
+
    ```bash
    curl http://localhost:8000/v1/models
    ```
 
 ### Issue: Slow Training
 
-**Symptoms:**
-Very slow iteration speed
+**Symptoms:** Very slow iteration speed
 
 **Solutions:**
-1. **Increase vLLM concurrency (implicitly via batch size):**
-   vLLM will handle more requests in parallel
+
+1. **Increase vLLM concurrency (implicitly via batch size):** vLLM will handle more requests in parallel
 
 2. **Use more vLLM GPUs:**
+
    ```bash
    --data-parallel-size 4  # More vLLM replicas
    ```
 
 3. **Reduce dataloader workers:**
+
    ```bash
    --num-workers 8  # Instead of default 12
    ```
@@ -402,8 +426,7 @@ python scripts/train.py \
   --epochs 10
 ```
 
-**First epoch:** Generates and caches hidden states to `./hidden_states/`
-**Subsequent epochs:** Uses cached hidden states (faster)
+**First epoch:** Generates and caches hidden states to `./hidden_states/` **Subsequent epochs:** Uses cached hidden states (faster)
 
 ## Next Steps
 
@@ -465,6 +488,7 @@ echo "Training complete! Checkpoints saved to ./checkpoints/"
 ## Summary
 
 You've learned how to:
+
 - ✅ Prepare training data
 - ✅ Launch vLLM for online hidden states generation
 - ✅ Train an EAGLE-3 model with online generation

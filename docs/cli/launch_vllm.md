@@ -12,25 +12,19 @@ python scripts/launch_vllm.py meta-llama/Llama-3.1-8B-Instruct
 
 ### Positional Arguments
 
-- **`model`** (str, required)
-  Model name or path to extract hidden states from.
+- **`model`** (str, required) Model name or path to extract hidden states from.
 
 ### Speculators Arguments
 
-- **`--hidden-states-path`** (str, default: `/tmp/hidden_states`)
-  The directory to initially cache hidden states to. Note: hidden states may then be moved or deleted by training/offline data generation.
+- **`--hidden-states-path`** (str, default: `/tmp/hidden_states`) The directory to initially cache hidden states to. Note: hidden states may then be moved or deleted by training/offline data generation.
 
-- **`--target-layer-ids`** (int list, default: auto-select)
-  Space-separated list of integer layer IDs from which to capture hidden states. Note: if `--include-last-layer` is enabled (default), the model's last layer will be appended to this list.
-  Default: `[2, num_layers//2, num_layers-3]`
+- **`--target-layer-ids`** (int list, default: auto-select) Space-separated list of integer layer IDs from which to capture hidden states. Note: if `--include-last-layer` is enabled (default), the model's last layer will be appended to this list. Default: `[2, num_layers//2, num_layers-3]`
 
   **Important:** If set, you must also pass the same layer ids to the training script using `--target-layer-ids`.
 
-- **`--include-last-layer` / `--no-include-last-layer`** (flag, default: `True`)
-  For DFlash models, append the last layer (`num_hidden_layers`) to `target_layer_ids` for verifier hidden states extraction.
+- **`--include-last-layer` / `--no-include-last-layer`** (flag, default: `True`) For DFlash models, append the last layer (`num_hidden_layers`) to `target_layer_ids` for verifier hidden states extraction.
 
-- **`--dry-run`** (flag)
-  Print the command that would be executed without running it.
+- **`--dry-run`** (flag) Print the command that would be executed without running it.
 
 ### vLLM Arguments
 
@@ -46,6 +40,7 @@ All arguments after `--` are passed directly to vLLM. Common vLLM arguments incl
 See [vLLM CLI documentation](https://docs.vllm.ai/en/latest/cli/) for full list of options.
 
 ## Full Example
+
 ```bash
 python scripts/launch_vllm.py \
   meta-llama/Llama-3.1-70B-Instruct \

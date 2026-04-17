@@ -11,6 +11,7 @@ The primary place for Speculators discussions is the vLLM Community Slack:
 **[Join vLLM Developers Slack →](https://communityinviter.com/apps/vllm-dev/join-vllm-developers-slack)**
 
 **Relevant Channels:**
+
 - **`#speculators`** - General Speculators library discussions
 - **`#feat-spec-decode`** - Speculative decoding features and algorithms
 - **`#general`** - vLLM general discussions
@@ -107,10 +108,12 @@ Conducted benchmarks or research? We'd love to hear about it:
 ### Research
 
 **EAGLE Papers:**
+
 - [EAGLE: Speculative Sampling Requires Rethinking Feature Uncertainty](https://arxiv.org/abs/2401.15077)
 - SafeAI Lab research
 
 **Related Work:**
+
 - [Speculative Decoding Overview](https://arxiv.org/abs/2211.17192)
 - vLLM speculative decoding blog posts
 
@@ -162,6 +165,7 @@ We are committed to providing a welcoming and inclusive community. Please read a
 ### Release Notes
 
 Check our [Roadmap](roadmap.md) for:
+
 - Upcoming features
 - Release plans
 - Changelog
@@ -187,6 +191,7 @@ Projects using Speculators:
 ### Maintainers
 
 Speculators is maintained by:
+
 - Red Hat AI Team
 - vLLM Community Contributors
 
@@ -202,11 +207,12 @@ Speculators is maintained by:
 Thank you to all our contributors and community members! Speculators is built by the community, for the community.
 
 Special thanks to:
+
 - vLLM team for the amazing inference engine
 - SafeAI Lab for EAGLE research
 - All our contributors and early adopters
 
----
+______________________________________________________________________
 
 **Ready to get started?**
 

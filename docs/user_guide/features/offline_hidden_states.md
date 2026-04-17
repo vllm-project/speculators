@@ -129,6 +129,7 @@ hidden_states/
 ```
 
 Each file contains:
+
 - `hidden_states` - Tensor of shape `[seq_len, num_layers, hidden_size]`
 - `prompt_token_ids` - Token IDs used for verification
 
@@ -171,6 +172,7 @@ python scripts/data_generation_offline2.py \
 ```
 
 **Recommendations:**
+
 - **Small models (8B):** 32-64 concurrent requests
 - **Medium models (70B):** 16-32 concurrent requests
 - **Large models (400B+):** 8-16 concurrent requests
@@ -317,8 +319,7 @@ torchrun --standalone --nproc_per_node 4 scripts/train.py \
   --epochs 10
 ```
 
-First epoch: Generates and caches hidden states
-Subsequent epochs: Uses cached hidden states
+First epoch: Generates and caches hidden states Subsequent epochs: Uses cached hidden states
 
 ## Disk Space Requirements
 
@@ -338,6 +339,7 @@ For 1K samples: ~260 GB
 ```
 
 **Recommendations:**
+
 - Use fast storage (NVMe SSD preferred)
 - Consider compression for long-term storage
 - Clean up hidden states after successful training if disk space is limited

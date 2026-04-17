@@ -5,6 +5,7 @@ This tutorial walks you through training an EAGLE-3 speculator model using **off
 ## Overview
 
 Offline training is ideal for:
+
 - Production training runs
 - Large datasets (50K+ samples)
 - Repeated experimentation (multiple training runs on same data)
@@ -12,6 +13,7 @@ Offline training is ideal for:
 - Faster training iterations
 
 **What you'll learn:**
+
 - How to prepare and preprocess training data
 - How to generate hidden states offline
 - How to train using cached hidden states
@@ -20,6 +22,7 @@ Offline training is ideal for:
 **Time required:** ~2-4 hours (including data generation)
 
 **Prerequisites:**
+
 - Python 3.10+
 - CUDA-capable GPU(s)
 - `speculators` installed with `[datagen]` extras
@@ -40,6 +43,7 @@ python scripts/prepare_data.py \
 ```
 
 **For production training:**
+
 ```bash
 python scripts/prepare_data.py \
   --model meta-llama/Llama-3.1-8B-Instruct \
@@ -51,6 +55,7 @@ python scripts/prepare_data.py \
 ```
 
 **Expected output:**
+
 ```
 training_data/
 ├── data-*.arrow files (preprocessed dataset)
@@ -78,6 +83,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 python scripts/launch_vllm.py \
 ```
 
 **Verify server is ready:**
+
 ```bash
 curl http://localhost:8000/v1/models
 ```
@@ -97,12 +103,14 @@ python scripts/data_generation_offline2.py \
 ```
 
 **Key parameters:**
+
 - `--preprocessed-data` - Path to prepared data from Step 1
 - `--output` - Where to save hidden states
 - `--concurrency 32` - Number of parallel requests (tune based on GPU memory)
 - `--validate-outputs` - Verify file integrity (recommended for production)
 
 **Expected output:**
+
 ```
 Processing samples: 100%|███████████| 50000/50000 [45:23<00:00, 18.4it/s]
 Generated 50000 hidden state files
@@ -110,6 +118,7 @@ Validation: 50000/50000 files OK
 ```
 
 **Output structure:**
+
 ```
 hidden_states/
 ├── hs_0.safetensors
@@ -120,23 +129,27 @@ hidden_states/
 ```
 
 **Generation time:**
+
 - 8B model, 50K samples, 4 GPUs (DP): ~45-60 minutes
 - 70B model, 50K samples, 8 GPUs (TP): ~90-120 minutes
 
 ### Optimizing Generation Speed
 
 **Increase concurrency:**
+
 ```bash
 --concurrency 64  # Higher throughput, needs more GPU memory
 ```
 
 **Use more GPUs:**
+
 ```bash
 # 8 GPUs with DP=8
 python scripts/launch_vllm.py model -- --data-parallel-size 8
 ```
 
 **Skip validation (faster, less safe):**
+
 ```bash
 # Omit --validate-outputs for faster generation
 ```
@@ -204,15 +217,17 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun \
 ```
 
 **Critical parameters:**
+
 - `--hidden-states-path` - Points to cached hidden states
 - `--on-missing raise` - Fail if any hidden states are missing (recommended)
 
-**Training speed:**
-Offline training is **significantly faster** than online:
+**Training speed:** Offline training is **significantly faster** than online:
+
 - 50K samples, 10 epochs, 4 GPUs: ~2-3 hours (vs 8-10 hours online)
 - Each epoch: ~12-18 minutes
 
 **Expected output:**
+
 ```
 Epoch 1/10: 100%|███████████| 1562/1562 [12:34<00:00,  2.07it/s]
 Train Loss: 2.1234 | Val Loss: 2.0567 | Accuracy: 0.42
@@ -233,6 +248,7 @@ tensorboard --logdir ./logs
 ```
 
 Open http://localhost:6006 to monitor:
+
 - Loss curves
 - Accuracy metrics
 - Learning rate schedule
@@ -258,12 +274,12 @@ checkpoints/
 ### Select Best Checkpoint
 
 **Option A: Lowest validation loss**
+
 ```bash
 ls -la checkpoints/best
 ```
 
-**Option B: Manually evaluate**
-Test each checkpoint on your validation set.
+**Option B: Manually evaluate** Test each checkpoint on your validation set.
 
 ## Step 8: Validate Your Model
 
@@ -295,6 +311,7 @@ See [Evaluating Performance Tutorial](evaluating_performance.md) for comprehensi
 ### 1. Faster Training Iterations
 
 **Offline:**
+
 ```
 Pre-generate once: 60 min
 Train (10 epochs): 120 min
@@ -302,6 +319,7 @@ Total: 180 min
 ```
 
 **Online:**
+
 ```
 Train (10 epochs): 600 min
 Total: 600 min
@@ -312,6 +330,7 @@ For multiple experiments: Offline wins significantly.
 ### 2. Reproducibility
 
 Hidden states are identical across runs:
+
 - Same random seed → same results
 - Easy to debug
 - Fair comparisons between hyperparameters
@@ -418,12 +437,14 @@ echo "Best checkpoint: $CHECKPOINT_DIR/best"
 ### Optimizing Disk Usage
 
 **Use fast storage:**
+
 ```bash
 # Store hidden states on NVMe SSD
 --output /fast_storage/hidden_states
 ```
 
 **Compress after training:**
+
 ```bash
 # After successful training, compress hidden states
 tar -czf hidden_states.tar.gz ./hidden_states/
@@ -431,6 +452,7 @@ tar -czf hidden_states.tar.gz ./hidden_states/
 ```
 
 **Clean up intermediate files:**
+
 ```bash
 # Remove hidden states after training if disk-constrained
 rm -rf ./hidden_states/
@@ -462,11 +484,13 @@ torchrun --nproc_per_node 4 scripts/train.py \
 ### Issue: Missing Hidden States
 
 **Error:**
+
 ```
 FileNotFoundError: hs_1234.safetensors not found
 ```
 
 **Solutions:**
+
 ```bash
 # Check which files are missing
 python scripts/data_generation_offline2.py \
@@ -478,11 +502,13 @@ python scripts/data_generation_offline2.py \
 ### Issue: Corrupted Hidden States Files
 
 **Error:**
+
 ```
 SafetensorsError: Invalid file format
 ```
 
 **Solution:**
+
 ```bash
 # Regenerate with validation
 python scripts/data_generation_offline2.py \
@@ -496,12 +522,15 @@ Delete corrupted files and regenerate them.
 ### Issue: Disk Full During Generation
 
 **Error:**
+
 ```
 OSError: No space left on device
 ```
 
 **Solutions:**
+
 1. **Generate in batches:**
+
    ```bash
    # First 10K
    --max-samples 10000 --output ./hs_batch1
@@ -512,26 +541,28 @@ OSError: No space left on device
    ```
 
 2. **Use larger storage:**
+
    ```bash
    --output /large_disk/hidden_states
    ```
 
 3. **Clean up old experiments:**
+
    ```bash
    rm -rf ./old_hidden_states/
    ```
 
 ## Comparison: Online vs Offline
 
-| Aspect | Online | Offline |
-|--------|--------|---------|
-| **Initial setup** | Faster ✅ | Slower (generation time) |
-| **Training speed** | Slower | Much faster ✅ |
-| **Disk usage** | Minimal ✅ | High (TB scale) |
-| **Reproducibility** | Lower | Perfect ✅ |
-| **Multiple experiments** | Slow | Fast ✅ |
-| **Resource efficiency** | vLLM + Training concurrently | Separate phases ✅ |
-| **Best for** | Development | Production ✅ |
+| Aspect                   | Online                       | Offline                  |
+| ------------------------ | ---------------------------- | ------------------------ |
+| **Initial setup**        | Faster ✅                    | Slower (generation time) |
+| **Training speed**       | Slower                       | Much faster ✅           |
+| **Disk usage**           | Minimal ✅                   | High (TB scale)          |
+| **Reproducibility**      | Lower                        | Perfect ✅               |
+| **Multiple experiments** | Slow                         | Fast ✅                  |
+| **Resource efficiency**  | vLLM + Training concurrently | Separate phases ✅       |
+| **Best for**             | Development                  | Production ✅            |
 
 ## Next Steps
 
@@ -546,6 +577,7 @@ After offline training:
 ## Summary
 
 You've learned how to:
+
 - ✅ Prepare production-quality training data
 - ✅ Pre-generate hidden states offline
 - ✅ Train with cached hidden states for maximum speed
