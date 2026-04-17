@@ -13,6 +13,7 @@ Speculative decoding algorithms use a smaller "draft" model to predict multiple 
 **EAGLE** (Extrapolation Algorithm for Greater Language-model Efficiency) is a state-of-the-art speculative decoding algorithm that uses auto-regression combined with feature extrapolation from the target model's hidden states.
 
 **Key characteristics:**
+
 - Lightweight draft model (typically 1 layer)
 - Uses hidden states from multiple layers of the target model
 - Excellent for general-purpose acceleration
@@ -25,6 +26,7 @@ Speculative decoding algorithms use a smaller "draft" model to predict multiple 
 **DFlash** (Decoding with Flash attention) is a block-based speculative decoding algorithm optimized for efficient parallel verification.
 
 **Key characteristics:**
+
 - Block-based token generation
 - Optimized for flash attention
 - Configurable block sizes for different workloads

@@ -5,12 +5,14 @@ This tutorial shows you how to benchmark and evaluate your trained speculator mo
 ## Overview
 
 After training a speculator, it's crucial to measure its performance to understand:
+
 - **Speedup:** How much faster is inference compared to the base model?
 - **Acceptance rate:** How many draft tokens are accepted on average?
 - **Throughput:** Requests per second with vs without speculation
 - **Latency:** Time to first token and time per output token
 
 **What you'll learn:**
+
 - How to set up the evaluation framework
 - How to benchmark with GuideLLM
 - How to interpret acceptance metrics
@@ -19,6 +21,7 @@ After training a speculator, it's crucial to measure its performance to understa
 **Time required:** ~30-60 minutes
 
 **Prerequisites:**
+
 - Trained speculator model (or use pre-trained from HuggingFace)
 - vLLM 0.12.1 or greater
 - GuideLLM installed
@@ -36,6 +39,7 @@ bash setup.sh --use-uv
 ```
 
 This installs:
+
 - GuideLLM (benchmarking framework)
 - Required Python packages
 - Evaluation scripts
@@ -56,12 +60,14 @@ Test with a pre-trained model using provided configs:
 ```
 
 The script will:
+
 1. Start a vLLM server with speculative decoding
 2. Run GuideLLM benchmarks
 3. Extract and analyze metrics
 4. Generate a report
 
 **Output:**
+
 ```
 eval_results_20260416_123456/
 ├── guidellm_results.html      # Interactive benchmark report
@@ -83,6 +89,7 @@ eval_results_20260416_123456/
 ```
 
 **Parameters:**
+
 - `-b` - Base/target model
 - `-s` - Your trained speculator model
 - `-d` - Dataset for benchmarking
@@ -102,14 +109,17 @@ eval_results_20260416_123456/
 ### Available Datasets
 
 **Emulated (synthetic):**
+
 ```bash
 -d "emulated"  # Quick synthetic benchmark
 ```
+
 - Generates random prompts
 - Fast, reproducible
 - Good for initial testing
 
 **Real datasets:**
+
 ```bash
 # Math reasoning
 -d "RedHatAI/speculator_benchmarks:math_reasoning.jsonl"
@@ -132,6 +142,7 @@ Use your own JSONL file:
 ```
 
 Then:
+
 ```bash
 -d "./my_prompts.jsonl"
 ```
@@ -157,6 +168,7 @@ Overall Acceptance: 2.3 tokens/speculation
 ```
 
 **Key metrics:**
+
 - **Average acceptance:** Higher is better (typical: 1.5-3.0)
 - **Position 1 accuracy:** First token prediction rate
 - **Acceptance rate curve:** Should decrease by position
@@ -206,6 +218,7 @@ guidellm --target http://localhost:8001/v1 --output speculative_results
 ```
 
 Compare:
+
 - Throughput improvement
 - Latency reduction
 - Quality (should be identical)
@@ -228,6 +241,7 @@ guidellm --target http://localhost:8000/v1 --request-rate 50.0
 ```
 
 **Expected behavior:**
+
 - Low batch sizes: Higher speedup (2.5-3x)
 - High batch sizes: Lower speedup (1.5-2x)
 
@@ -245,6 +259,7 @@ guidellm --data "prompt_tokens=2048,generated_tokens=1024"
 ```
 
 **Expected behavior:**
+
 - Longer prompts: Often higher speedup
 - Varies by model and workload
 
@@ -258,6 +273,7 @@ python scripts/parse_logs.py vllm_server.log
 ```
 
 Outputs:
+
 ```
 Position-wise acceptance rates:
 Pos 1: 67.2% (4,032 / 6,000)
@@ -279,18 +295,21 @@ Average acceptance: 2.28 tokens
 ### Understanding Acceptance Curves
 
 **Good performance:**
+
 ```
 Pos 1: 70% → Pos 2: 50% → Pos 3: 30% → Pos 4: 15% → Pos 5: 5%
 Average: 2.4 tokens
 ```
 
 **Poor performance:**
+
 ```
 Pos 1: 40% → Pos 2: 15% → Pos 3: 5% → Pos 4: 1% → Pos 5: 0%
 Average: 0.8 tokens
 ```
 
 **Indicators of issues:**
+
 - Pos 1 < 50%: Model not well-aligned with target
 - Steep dropoff: Try fewer speculative tokens
 - Flat curve: Underfitting, train longer
@@ -300,19 +319,21 @@ Average: 0.8 tokens
 ### If Acceptance Rate is Low
 
 **1. Train longer:**
+
 ```bash
 --epochs 20  # Instead of 10
 ```
 
 **2. Use more training data:**
+
 ```bash
 --max-samples 100000  # Instead of 10000
 ```
 
-**3. Check data quality:**
-Ensure preprocessing was correct, data matches your use case.
+**3. Check data quality:** Ensure preprocessing was correct, data matches your use case.
 
 **4. Adjust speculative tokens:**
+
 ```bash
 # Fewer tokens may have higher acceptance
 vllm serve model --speculative-tokens 3  # Instead of 5
@@ -321,19 +342,22 @@ vllm serve model --speculative-tokens 3  # Instead of 5
 ### If Speedup is Lower Than Expected
 
 **1. Reduce batch size:**
+
 ```bash
 # Speculative decoding works best at low batch sizes
 --max-num-seqs 8  # Instead of 256
 ```
 
 **2. Check GPU utilization:**
+
 ```bash
 nvidia-smi
 ```
+
 If draft model is slow, may need optimization.
 
-**3. Verify draft vocab size:**
-Smaller vocab = faster inference
+**3. Verify draft vocab size:** Smaller vocab = faster inference
+
 ```bash
 # Check model config
 cat checkpoints/best/config.json | grep draft_vocab_size
@@ -374,6 +398,7 @@ OUTPUT_DIR="my_evaluation_$(date +%Y%m%d_%H%M%S)"
 ```
 
 Run with:
+
 ```bash
 ./run_evaluation.sh -c configs/my-model.env
 ```
@@ -393,16 +418,19 @@ Run with:
 ### When to Iterate
 
 **Good enough for production:**
+
 - Avg acceptance: 2.0-2.5+
 - Speedup: 2-3x
 - Stable under load
 
 **Needs improvement:**
+
 - Avg acceptance: < 1.5
 - Speedup: < 1.5x
 - Unstable acceptance rates
 
 **Action items if underperforming:**
+
 1. Train with more data
 2. Try different hyperparameters
 3. Ensure data quality matches use case
@@ -508,6 +536,7 @@ After evaluating your model:
 ## Summary
 
 You've learned how to:
+
 - ✅ Set up the evaluation framework
 - ✅ Benchmark with GuideLLM
 - ✅ Interpret acceptance metrics and speedup

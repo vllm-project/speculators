@@ -6,12 +6,12 @@ This page provides a comprehensive reference for all command-line interface (CLI
 
 Speculators provides four main CLI scripts for different stages of the speculative decoding workflow:
 
-| Script | Purpose | Reference |
-|--------|---------|-----------|
-| `prepare_data.py` | Preprocess and tokenize datasets for training | [→ Details](prepare_data.md) |
-| `data_generation_offline.py` | Generate hidden states offline using vLLM | [→ Details](data_generation_offline.md) |
-| `launch_vllm.py` | Launch vLLM server configured for hidden states extraction | [→ Details](launch_vllm.md) |
-| `train.py` | Train speculator models with online or offline hidden states | [→ Details](train.md) |
+| Script                       | Purpose                                                      | Reference                               |
+| ---------------------------- | ------------------------------------------------------------ | --------------------------------------- |
+| `prepare_data.py`            | Preprocess and tokenize datasets for training                | [→ Details](prepare_data.md)            |
+| `data_generation_offline.py` | Generate hidden states offline using vLLM                    | [→ Details](data_generation_offline.md) |
+| `launch_vllm.py`             | Launch vLLM server configured for hidden states extraction   | [→ Details](launch_vllm.md)             |
+| `train.py`                   | Train speculator models with online or offline hidden states | [→ Details](train.md)                   |
 
 ## Common Workflows
 

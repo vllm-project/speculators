@@ -81,6 +81,7 @@ loss = KL_divergence(draft_logits, target_logits)
 ```
 
 The model learns to:
+
 - Predict tokens that the target model is likely to generate
 - Use hidden states effectively to capture target model's knowledge
 - Balance precision (correct predictions) with recall (bold predictions)
@@ -110,11 +111,13 @@ The draft model uses 1-4 transformer decoder layers (default: 1):
 EAGLE-3 supports cross-tokenizer scenarios where draft and target have different vocabularies:
 
 **t2d (target-to-draft) mapping:**
+
 - Boolean mask indicating which target tokens exist in draft vocabulary
 - Shape: `[target_vocab_size]`
 - Used during inference to check if draft token is valid
 
 **d2t (draft-to-target) mapping:**
+
 - Index mapping from draft tokens to target tokens
 - Shape: `[draft_vocab_size]`
 - Maps draft model outputs to target vocabulary
@@ -126,11 +129,13 @@ This enables using a smaller draft vocabulary (e.g., 32K) compared to target (e.
 Hidden states are extracted from 4 layers of the target model:
 
 **Default selection for N-layer model:**
+
 ```python
 [2, N//2, N-3, N-1]
 ```
 
 **Example for 32-layer model:**
+
 ```python
 [2, 16, 29, 31]  # Early, middle, late, final layers
 ```
@@ -200,24 +205,28 @@ Example timing on 2x H100 GPUs (5K samples):
 - **Total:** ~35 minutes
 
 Scaling to larger datasets:
+
 - 50K samples: ~3-4 hours
 - 500K samples: ~30-40 hours
 
 ### Model-Specific Settings
 
 **Llama models:**
+
 ```bash
 --norm-before-residual \
 --norm-before-fc false
 ```
 
 **gpt-oss models:**
+
 ```bash
 --norm-before-residual \
 --norm-before-fc  # Enable for gpt-oss
 ```
 
 **Qwen3 models:**
+
 ```bash
 --norm-before-residual \
 --draft-vocab-size 32000
@@ -254,6 +263,7 @@ Typical end-to-end speedup on vLLM:
 - **Large models (400B+):** 2.2-3.0x
 
 Speedup varies based on:
+
 - Batch size (lower batch = higher speedup)
 - Prompt length (longer prompts = higher speedup)
 - Hardware (faster GPUs benefit more)
@@ -262,20 +272,11 @@ Speedup varies based on:
 
 ### Advantages
 
-✅ **Broad model support** - Works with Llama, Qwen3, gpt-oss, MoE, VLM
-✅ **Cross-tokenizer** - Draft can use smaller vocabulary
-✅ **Flexible architecture** - Configurable layers and hidden states
-✅ **Production-ready** - Full vLLM integration
-✅ **Lossless** - No quality degradation
-✅ **Easy to train** - Converges in 10-20 epochs
+✅ **Broad model support** - Works with Llama, Qwen3, gpt-oss, MoE, VLM ✅ **Cross-tokenizer** - Draft can use smaller vocabulary ✅ **Flexible architecture** - Configurable layers and hidden states ✅ **Production-ready** - Full vLLM integration ✅ **Lossless** - No quality degradation ✅ **Easy to train** - Converges in 10-20 epochs
 
 ### Limitations
 
-⚠️ **Training data dependency** - Needs quality conversational data
-⚠️ **Layer compatibility** - Must use same layers for generation and training
-⚠️ **Memory overhead** - Requires loading draft model alongside target
-⚠️ **Sequential constraints** - Speedup limited by acceptance rate
-⚠️ **Batch size impact** - Lower speedup at large batch sizes
+⚠️ **Training data dependency** - Needs quality conversational data ⚠️ **Layer compatibility** - Must use same layers for generation and training ⚠️ **Memory overhead** - Requires loading draft model alongside target ⚠️ **Sequential constraints** - Speedup limited by acceptance rate ⚠️ **Batch size impact** - Lower speedup at large batch sizes
 
 ## Best Practices
 
@@ -297,6 +298,7 @@ Using 2-4 draft layers can improve quality at the cost of speed:
 ```
 
 Trade-off:
+
 - 1 layer: Fastest, good quality
 - 2 layers: Better quality, ~10-15% slower
 - 3-4 layers: Best quality, ~20-30% slower
@@ -310,6 +312,7 @@ Manually specify hidden state layers:
 ```
 
 Use when:
+
 - Default layers don't work well
 - Experimenting with layer importance
 - Matching external research configurations
@@ -324,6 +327,7 @@ Experiment with draft vocabulary size:
 ```
 
 Guidelines:
+
 - 8K-16K: Very fast, may miss rare tokens
 - 32K: Recommended default
 - 64K+: Better coverage, slower inference
@@ -343,6 +347,7 @@ EAGLE-3 is based on research from SafeAI Lab:
 **EAGLE Repository:** https://github.com/SafeAILab/EAGLE
 
 **Citation:**
+
 ```bibtex
 @article{li2024eagle,
   title={EAGLE: Speculative Sampling Requires Rethinking Feature Uncertainty},
@@ -353,6 +358,7 @@ EAGLE-3 is based on research from SafeAI Lab:
 ```
 
 Speculators extends EAGLE-3 with:
+
 - Production-ready vLLM integration
 - Simplified training pipeline
 - Vocabulary mapping support

@@ -16,6 +16,7 @@ DFlash (Draft Flash) uses anchor-based speculation to predict multiple tokens ah
 **Current Status:**
 
 ⚠️ DFlash is a newer algorithm with more limited support than EAGLE-3:
+
 - **Supported models:** Qwen3 (other models coming soon)
 - **vLLM support:** Available but less mature than EAGLE-3
 - **Training infrastructure:** Fully functional
@@ -69,11 +70,13 @@ DFlash predicts tokens using a block-based approach:
 Unlike EAGLE-3's sequential prediction, DFlash predicts in blocks:
 
 **EAGLE-3 (sequential):**
+
 ```
 Token 1 → Token 2 → Token 3 → Token 4 → Token 5
 ```
 
 **DFlash (block-based):**
+
 ```
 Anchor 1 → [Block: Tokens 1-8]
 Anchor 2 → [Block: Tokens 9-16]
@@ -96,6 +99,7 @@ Anchor points are positions where the model has high confidence:
 ### Model Components
 
 **DFlash Config:**
+
 ```python
 DFlashSpeculatorConfig(
     draft_vocab_size=64000,           # Larger vocab than EAGLE-3
@@ -135,6 +139,7 @@ The `block_size` parameter controls prediction granularity:
 ```
 
 **Trade-offs:**
+
 - Smaller blocks: More anchors, finer control, potentially higher overhead
 - Larger blocks: Fewer anchors, coarser predictions, faster if blocks align well
 
@@ -194,31 +199,27 @@ python scripts/train.py \
 
 DFlash can outperform EAGLE-3 in scenarios with:
 
-✅ **Structured output** - JSON, code, or formatted text
-✅ **Repetitive patterns** - Lists, tables, or template-based content
-✅ **Fixed-length elements** - Tokens that naturally align with block sizes
-✅ **Qwen3 models** - Optimized for Qwen3 architecture
+✅ **Structured output** - JSON, code, or formatted text ✅ **Repetitive patterns** - Lists, tables, or template-based content ✅ **Fixed-length elements** - Tokens that naturally align with block sizes ✅ **Qwen3 models** - Optimized for Qwen3 architecture
 
 ### When to Use EAGLE-3 Instead
 
 Prefer EAGLE-3 for:
 
-⚠️ **General conversation** - Free-form dialogue
-⚠️ **Creative writing** - Unpredictable token sequences
-⚠️ **Non-Qwen3 models** - Llama, gpt-oss, etc.
-⚠️ **Production deployment** - More mature and tested
+⚠️ **General conversation** - Free-form dialogue ⚠️ **Creative writing** - Unpredictable token sequences ⚠️ **Non-Qwen3 models** - Llama, gpt-oss, etc. ⚠️ **Production deployment** - More mature and tested
 
 ### Typical Metrics
 
 Performance varies significantly based on workload:
 
 **Structured output (JSON generation):**
+
 ```
 Average acceptance: 2.5-3.5 tokens
 Speedup: 2.5-3.5x
 ```
 
 **General conversation:**
+
 ```
 Average acceptance: 1.5-2.0 tokens
 Speedup: 1.5-2.0x
@@ -228,18 +229,11 @@ Speedup: 1.5-2.0x
 
 ### Advantages
 
-✅ **Block-based efficiency** - Can predict multiple tokens in parallel
-✅ **Larger vocabulary** - Better token coverage with 64K vocab
-✅ **Structured content** - Excels at formatted outputs
-✅ **Anchor flexibility** - Adaptive anchor selection
+✅ **Block-based efficiency** - Can predict multiple tokens in parallel ✅ **Larger vocabulary** - Better token coverage with 64K vocab ✅ **Structured content** - Excels at formatted outputs ✅ **Anchor flexibility** - Adaptive anchor selection
 
 ### Limitations
 
-⚠️ **Limited model support** - Currently Qwen3 only
-⚠️ **Less mature** - Newer algorithm with less production testing
-⚠️ **Workload dependent** - Performance varies more than EAGLE-3
-⚠️ **Memory overhead** - Anchor tracking adds memory cost
-⚠️ **vLLM integration** - Less optimized than EAGLE-3 in vLLM
+⚠️ **Limited model support** - Currently Qwen3 only ⚠️ **Less mature** - Newer algorithm with less production testing ⚠️ **Workload dependent** - Performance varies more than EAGLE-3 ⚠️ **Memory overhead** - Anchor tracking adds memory cost ⚠️ **vLLM integration** - Less optimized than EAGLE-3 in vLLM
 
 ## Best Practices
 
@@ -255,6 +249,7 @@ Speedup: 1.5-2.0x
 ### Good Fit
 
 **JSON API responses:**
+
 ```python
 # DFlash can predict structured blocks efficiently
 {
@@ -265,6 +260,7 @@ Speedup: 1.5-2.0x
 ```
 
 **Code generation:**
+
 ```python
 # Block-aligned function definitions
 def function_name():    # Block 1
@@ -273,6 +269,7 @@ def function_name():    # Block 1
 ```
 
 **Table generation:**
+
 ```markdown
 | Column 1 | Column 2 | Column 3 |  # Block 1
 | -------- | -------- | -------- |  # Block 2
@@ -282,6 +279,7 @@ def function_name():    # Block 1
 ### Poor Fit
 
 **Free-form dialogue:**
+
 ```
 User: How are you?
 Assistant: I'm doing well, thank you for asking! How can I help you today?
@@ -289,6 +287,7 @@ Assistant: I'm doing well, thank you for asking! How can I help you today?
 ```
 
 **Creative writing:**
+
 ```
 Once upon a time, in a faraway land, there lived a brave knight who...
 # Unpredictable narrative flow - better suited for EAGLE-3
@@ -298,38 +297,30 @@ Once upon a time, in a faraway land, there lived a brave knight who...
 
 ### Current Support
 
-✅ **Training:** Fully functional
-✅ **Qwen3 models:** 8B, 14B, 32B, MoE variants
-✅ **vLLM deployment:** Available
-✅ **Offline generation:** Supported
+✅ **Training:** Fully functional ✅ **Qwen3 models:** 8B, 14B, 32B, MoE variants ✅ **vLLM deployment:** Available ✅ **Offline generation:** Supported
 
 ### In Progress
 
-⏳ **Additional architectures:** Llama, gpt-oss support
-⏳ **Optimized vLLM kernels:** Performance improvements
-⏳ **Adaptive anchors:** Dynamic anchor selection
-⏳ **Production validation:** Large-scale testing
+⏳ **Additional architectures:** Llama, gpt-oss support ⏳ **Optimized vLLM kernels:** Performance improvements ⏳ **Adaptive anchors:** Dynamic anchor selection ⏳ **Production validation:** Large-scale testing
 
 ### Future Work
 
-🔮 **Multi-model support:** Expand beyond Qwen3
-🔮 **Hybrid approaches:** Combine DFlash and EAGLE-3
-🔮 **Auto-tuning:** Automatic block size selection
+🔮 **Multi-model support:** Expand beyond Qwen3 🔮 **Hybrid approaches:** Combine DFlash and EAGLE-3 🔮 **Auto-tuning:** Automatic block size selection
 
 ## Comparison with EAGLE-3
 
-| Feature | EAGLE-3 | DFlash |
-|---------|---------|--------|
-| **Model Support** | Llama, Qwen3, gpt-oss, MoE, VLM | Qwen3 only |
-| **Prediction Style** | Sequential | Block-based |
-| **Draft Vocab Size** | 32K typical | 64K typical |
-| **Maturity** | Production-ready | Experimental |
-| **General Performance** | 2-3x speedup | 1.5-3.5x speedup |
-| **Structured Output** | Good | Excellent |
-| **Free-form Text** | Excellent | Good |
-| **Memory Overhead** | Lower | Higher (anchors) |
-| **Training Complexity** | Standard | Slightly higher |
-| **vLLM Integration** | Mature | Developing |
+| Feature                 | EAGLE-3                         | DFlash           |
+| ----------------------- | ------------------------------- | ---------------- |
+| **Model Support**       | Llama, Qwen3, gpt-oss, MoE, VLM | Qwen3 only       |
+| **Prediction Style**    | Sequential                      | Block-based      |
+| **Draft Vocab Size**    | 32K typical                     | 64K typical      |
+| **Maturity**            | Production-ready                | Experimental     |
+| **General Performance** | 2-3x speedup                    | 1.5-3.5x speedup |
+| **Structured Output**   | Good                            | Excellent        |
+| **Free-form Text**      | Excellent                       | Good             |
+| **Memory Overhead**     | Lower                           | Higher (anchors) |
+| **Training Complexity** | Standard                        | Slightly higher  |
+| **vLLM Integration**    | Mature                          | Developing       |
 
 ## Migration from EAGLE-3
 
@@ -408,11 +399,13 @@ Contributions and feedback welcome!
 ## Summary
 
 **Use DFlash when:**
+
 - Working with Qwen3 models
 - Generating structured output (JSON, code, tables)
 - Willing to experiment and benchmark
 
 **Use EAGLE-3 when:**
+
 - Need broad model support
 - Generating free-form text
 - Want production-ready stability

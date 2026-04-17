@@ -5,6 +5,7 @@ Welcome to the Speculators User Guide. This guide will help you get started with
 ## Overview
 
 Speculators provides a comprehensive framework for:
+
 - Training speculative decoding models
 - Converting existing models to the Speculators format
 - Deploying models with vLLM
