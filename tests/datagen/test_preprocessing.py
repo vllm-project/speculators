@@ -472,6 +472,104 @@ def test_preprocess_batch_falls_back_to_regex():
     assert torch.any(results["loss_mask"][0] == 1)
 
 
+@pytest.mark.sanity
+def test_preprocess_batch_minimum_valid_tokens_filters_regex_path():
+    """Test that minimum_valid_tokens drops short samples on regex path."""
+    tokenizer = AutoTokenizer.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
+
+    if not hasattr(tokenizer, "apply_chat_template") or tokenizer.chat_template is None:
+        pytest.skip("Tokenizer does not support chat templates")
+
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    examples = {
+        "conversations": [
+            [
+                {"role": "user", "content": "Hello"},
+                {"role": "assistant", "content": "OK"},
+            ]
+        ]
+    }
+
+    assistant_pattern = _detect_assistant_pattern(tokenizer)
+
+    baseline = _preprocess_batch(
+        examples,
+        tokenizer,
+        max_length=128,
+        assistant_pattern=assistant_pattern,
+    )
+
+    assert len(baseline["loss_mask"]) == 1
+    valid_count = int(baseline["loss_mask"][0].sum().item())
+    assert valid_count > 0
+
+    filtered = _preprocess_batch(
+        examples,
+        tokenizer,
+        max_length=128,
+        assistant_pattern=assistant_pattern,
+        minimum_valid_tokens=valid_count + 1,
+    )
+
+    assert filtered["input_ids"] == []
+    assert filtered["loss_mask"] == []
+    assert filtered["seq_len"] == []
+
+
+@pytest.mark.sanity
+def test_preprocess_batch_minimum_valid_tokens_keeps_boundary_case():
+    """Test that a sample is kept when valid tokens equal the threshold."""
+    tokenizer = AutoTokenizer.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
+
+    if not hasattr(tokenizer, "apply_chat_template") or tokenizer.chat_template is None:
+        pytest.skip("Tokenizer does not support chat templates")
+
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    examples = {
+        "conversations": [
+            [
+                {"role": "user", "content": "Explain speculative decoding."},
+                {
+                    "role": "assistant",
+                    "content": (
+                        "Speculative decoding uses a draft model to propose tokens "
+                        "that a verifier model then checks."
+                    ),
+                },
+            ]
+        ]
+    }
+
+    assistant_pattern = _detect_assistant_pattern(tokenizer)
+
+    baseline = _preprocess_batch(
+        examples,
+        tokenizer,
+        max_length=256,
+        assistant_pattern=assistant_pattern,
+    )
+
+    assert len(baseline["loss_mask"]) == 1
+    valid_count = int(baseline["loss_mask"][0].sum().item())
+    assert valid_count > 0
+
+    kept = _preprocess_batch(
+        examples,
+        tokenizer,
+        max_length=256,
+        assistant_pattern=assistant_pattern,
+        minimum_valid_tokens=valid_count,
+    )
+
+    assert len(kept["input_ids"]) == 1
+    assert len(kept["loss_mask"]) == 1
+    assert int(kept["loss_mask"][0].sum().item()) == valid_count
+
+
 # Tests for build_eagle3_dataset
 
 
@@ -567,6 +665,75 @@ def test_build_eagle3_dataset_removes_original_columns():
     if len(result) > 0:
         assert "conversations" not in result.column_names
         assert "extra_column" not in result.column_names
+
+
+@pytest.mark.sanity
+def test_build_eagle3_dataset_minimum_valid_tokens_filters_short_samples():
+    """Test that build_eagle3_dataset removes samples below the token threshold."""
+    tokenizer = AutoTokenizer.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
+
+    if not hasattr(tokenizer, "apply_chat_template") or tokenizer.chat_template is None:
+        pytest.skip("Tokenizer does not support chat templates")
+
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    short_conv = [
+        {"role": "user", "content": "Hi"},
+        {"role": "assistant", "content": "OK"},
+    ]
+    long_conv = [
+        {"role": "user", "content": "Explain speculative decoding."},
+        {
+            "role": "assistant",
+            "content": (
+                "Speculative decoding uses a draft model to propose multiple "
+                "candidate tokens that a stronger verifier then checks."
+            ),
+        },
+    ]
+
+    assistant_pattern = _detect_assistant_pattern(tokenizer)
+
+    short_baseline = _preprocess_batch(
+        {"conversations": [short_conv]},
+        tokenizer,
+        max_length=256,
+        assistant_pattern=assistant_pattern,
+    )
+    long_baseline = _preprocess_batch(
+        {"conversations": [long_conv]},
+        tokenizer,
+        max_length=256,
+        assistant_pattern=assistant_pattern,
+    )
+
+    assert len(short_baseline["loss_mask"]) == 1
+    assert len(long_baseline["loss_mask"]) == 1
+
+    short_count = int(short_baseline["loss_mask"][0].sum().item())
+    long_count = int(long_baseline["loss_mask"][0].sum().item())
+
+    assert short_count > 0
+    assert long_count > short_count
+
+    threshold = short_count + 1
+
+    dataset = HFDataset.from_dict({"conversations": [short_conv, long_conv]})
+    result = build_eagle3_dataset(
+        dataset,
+        tokenizer,
+        max_length=256,
+        num_proc=1,
+        assistant_pattern=assistant_pattern,
+        minimum_valid_tokens=threshold,
+    )
+
+    assert isinstance(result, HFDataset)
+    assert len(result) == 1
+
+    remaining_valid_count = int(result[0]["loss_mask"].sum().item())
+    assert remaining_valid_count >= threshold
 
 
 # Tests for turn dropout feature

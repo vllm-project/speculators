@@ -26,8 +26,33 @@ MODEL = "Qwen/Qwen3-0.6B"
 
 @pytest.mark.e2e
 @pytest.mark.slow
-def test_offline_smoke(tmp_path: Path, prompts: list[list[dict[str, str]]]):
-    run_offline_e2e(tmp_path, MODEL, prompts=prompts, vllm_gpu_util=0.9)
+@pytest.mark.parametrize(
+    ("speculator_type", "extra_train_args", "target_layer_ids"),
+    [
+        ("eagle3", [], None),  # Use default EAGLE layers
+        (
+            "dflash",
+            ["--block-size", "8", "--max-anchors", "256", "--num-layers", "3"],
+            [1, 13, 25],
+        ),  # DFlash with 3 layers + verifier last layer
+    ],
+)
+def test_offline_smoke(
+    tmp_path: Path,
+    prompts: list[list[dict[str, str]]],
+    speculator_type: str,
+    extra_train_args: list[str],
+    target_layer_ids: list[int] | None,
+):
+    run_offline_e2e(
+        tmp_path,
+        MODEL,
+        prompts=prompts,
+        vllm_gpu_util=0.9,
+        speculator_type=speculator_type,
+        extra_train_args=extra_train_args,
+        target_layer_ids=target_layer_ids,
+    )
 
 
 def run_offline_e2e(
@@ -45,6 +70,9 @@ def run_offline_e2e(
     max_tokens: int = 50,
     ignore_eos: bool = True,
     acceptance_thresholds: list[float] | None = None,
+    speculator_type: str = "eagle3",
+    extra_train_args: list[str] | None = None,
+    target_layer_ids: list[int] | None = None,
 ):
     data_path = tmp_path / "data"
     offline_hidden_states = tmp_path / "offline_hidden_states"
@@ -56,9 +84,10 @@ def run_offline_e2e(
     with launch_vllm_server_context(
         model,
         port,
-        tmp_path / "vllm_hidden_states",
+        str(tmp_path / "vllm_hidden_states"),
         max_model_len=seq_length + 1,
         gpu_memory_utilization=vllm_gpu_util,
+        target_layer_ids=target_layer_ids,
     ):
         # Step 2: Generate hidden states offline
         run_data_generation_offline2(
@@ -66,7 +95,7 @@ def run_offline_e2e(
             offline_hidden_states,
             port,
             max_samples,
-            timeout=25 * 60,  # 25 mins
+            timeout=25 * 60,
         )
 
     # Step 3: Train using pre-generated hidden states (no live server needed)
@@ -81,6 +110,9 @@ def run_offline_e2e(
         lr,
         online=False,
         hidden_states_path=offline_hidden_states,
+        speculator_type=speculator_type,
+        extra_train_args=extra_train_args,
+        target_layer_ids=target_layer_ids,
     )
 
     # Step 4: Validate trained checkpoint with vLLM inference

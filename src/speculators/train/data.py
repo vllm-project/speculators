@@ -18,7 +18,8 @@ from safetensors.torch import load_file
 from torch.utils.data import Dataset
 
 from speculators.data_generation.vllm_client import (
-    InvalidResponseError,
+    DEFAULT_MAX_RETRIES,
+    DEFAULT_REQUEST_TIMEOUT,
     generate_hidden_states,
 )
 from speculators.train.noise_transforms import TransformTensors
@@ -43,44 +44,6 @@ def slice_and_pad_to_length(tensor, length):
     padding = [0, 0] * sliced_tensor.dim()
     padding[-1] = length - sliced_tensor.shape[0]
     return F.pad(sliced_tensor, padding)
-
-
-def shift_batch(batch: BatchType):
-    input_ids = batch["input_ids"]  # shape: [seq_len]
-    # [x0, x1, x2, x3, x4, x5, x6, x7, x8, x9]
-    hidden_states = batch["hidden_states"]  # shape: [seq_len, hidden_size]
-    # [g0, g1, g2, g3, g4, g5, g6, g7, g8, g9]
-    verifier_last_hidden_states = batch[
-        "verifier_last_hidden_states"
-    ]  # shape: [seq_len, hidden_size]
-    # [y0, y1, y2, y3, y4, y5, y6, y7, y8, y9]
-    loss_mask = batch["loss_mask"]  # shape: [seq_len]
-    # [l0, l1, l2, l3, l4, l5, l6, l7, l8, l9]
-    lengths = batch["lengths"]  # shape: [1]
-    # [10]
-    position_ids = batch["position_ids"]  # shape: [seq_len]
-    # [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-
-    # Need to align (x1, g0, y1, l1)
-    # todo: verify loss mask shift is correct
-
-    # Drop x0, g(-1), y0, l0, reduce seq_len by 1
-
-    input_ids = input_ids[1:]
-    hidden_states = hidden_states[:-1]
-    verifier_last_hidden_states = verifier_last_hidden_states[1:]
-    loss_mask = loss_mask[1:]
-    lengths = lengths - 1
-    position_ids = position_ids[1:]  # Note: position_ids now start at 1
-
-    return {
-        "input_ids": input_ids,
-        "hidden_states": hidden_states,
-        "verifier_last_hidden_states": verifier_last_hidden_states,
-        "loss_mask": loss_mask,
-        "lengths": lengths,
-        "position_ids": position_ids,
-    }
 
 
 def split_files(datapath: str, ratio: float = 0.9, seed: int = 0):
@@ -143,7 +106,7 @@ def standardize_data_v1(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-class BaseEagle3Dataset(Dataset):
+class BaseDataset(Dataset):
     def __init__(
         self,
         max_len: int,
@@ -201,11 +164,10 @@ class BaseEagle3Dataset(Dataset):
         if self.transform:
             data = self.transform(data)
 
-        # Note: shift_batch will reduce seq_len by 1
-        return shift_batch(data)
+        return data
 
 
-class Eagle3ArrowDataset(BaseEagle3Dataset):
+class ArrowDataset(BaseDataset):
     def __init__(
         self,
         max_len: int,
@@ -218,8 +180,10 @@ class Eagle3ArrowDataset(BaseEagle3Dataset):
         transform: TransformTensors | None = None,
         hidden_states_dtype=torch.float,
         model: str | None = None,
+        request_timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
+        max_retries: int = DEFAULT_MAX_RETRIES,
     ):
-        """Initialize the Eagle3ArrowDataset.
+        """Initialize the ArrowDataset.
         Args:
             max_len: The maximum length of the sequence.
             datapath: The path to the data directory that contains the preprocessed
@@ -251,6 +215,8 @@ class Eagle3ArrowDataset(BaseEagle3Dataset):
         self.on_generate = on_generate
         self.client: openai.OpenAI | None = None
         self.model = model
+        self.request_timeout = request_timeout
+        self.max_retries = max_retries
 
         # Delay super init so that `_compute_approx_lengths` has required data
         super().__init__(max_len, transform, hidden_states_dtype)
@@ -260,7 +226,9 @@ class Eagle3ArrowDataset(BaseEagle3Dataset):
 
     def _setup_client(self):
         # Delay client setup so it runs in dataloader thread if on_missing="generate"
-        self.client = openai.OpenAI(base_url=self.vllm_endpoint, api_key="EMPTY")
+        self.client = openai.OpenAI(
+            base_url=self.vllm_endpoint, api_key="EMPTY", max_retries=0
+        )
         list_models = self.client.models.list()
         model_id = list_models.data[0].id
         if self.model and self.model != model_id:
@@ -292,8 +260,14 @@ class Eagle3ArrowDataset(BaseEagle3Dataset):
 
         input_ids = self.data[index]["input_ids"].tolist()
         try:
-            hs_filepath = generate_hidden_states(self.client, self.model, input_ids)  # type:ignore[arg-type]
-        except InvalidResponseError as e:
+            hs_filepath = generate_hidden_states(
+                self.client,  # type:ignore[arg-type]
+                self.model,  # type:ignore[arg-type]
+                input_ids,
+                timeout=self.request_timeout,
+                max_retries=self.max_retries,
+            )
+        except Exception as e:  # noqa: BLE001
             warnings.warn(str(e), stacklevel=1)
             return None
 
@@ -357,7 +331,7 @@ class Eagle3ArrowDataset(BaseEagle3Dataset):
         }
 
 
-class Eagle3SampleFileDataset(BaseEagle3Dataset):
+class SampleFileDataset(BaseDataset):
     def __init__(
         self,
         max_len: int,
@@ -366,7 +340,7 @@ class Eagle3SampleFileDataset(BaseEagle3Dataset):
         transform: TransformTensors | None = None,
         hidden_states_dtype=None,
     ):
-        """Initialize the Eagle3SampleFileDataset.
+        """Initialize the SampleFileDataset.
         Args:
             max_len: The maximum length of the sequence.
             datapath: The path to the data directory. All `.pt` files in this directory
@@ -454,10 +428,14 @@ class Eagle3SampleFileDataset(BaseEagle3Dataset):
         )
 
 
-def create_collate_fn(max_len: int, hidden_size: int):
+def create_collate_fn(
+    max_len: int,
+    hidden_size: int,
+    preprocess: Callable[[BatchType], BatchType] | None = None,
+):
     def collate_fn(batch: list[BatchType | None]) -> BatchType:
-        # Filter failed samples
-        batch = [b for b in batch if b is not None]
+        # Apply per-sample preprocessing and filter failed samples
+        batch = [preprocess(b) if preprocess else b for b in batch if b is not None]
 
         if not batch:
             # Create empty sample which then gets padded to full

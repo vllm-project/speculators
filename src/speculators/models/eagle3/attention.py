@@ -1,14 +1,12 @@
 # ruff: noqa: ERA001
-from typing import cast
-
 import torch
 from torch.nn.attention.flex_attention import (
     BlockMask,
     and_masks,
-    flex_attention,
     or_masks,
 )
-from transformers.modeling_utils import AttentionInterface
+
+from speculators.models.attention import ALL_ATTENTION_FUNCTIONS  # noqa: F401
 
 
 def create_combined_mask_mod(lengths: torch.Tensor, total_seq_len: int):
@@ -136,38 +134,3 @@ def block_mask_to_dense_attention_mask(
             torch.arange(attention_mask.shape[3], device=device, dtype=torch.long),
         )
     return attention_mask
-
-
-def flex_attention_forward(
-    module: torch.nn.Module,  # noqa: ARG001
-    query: torch.Tensor,
-    key: torch.Tensor,
-    value: torch.Tensor,
-    attention_mask,
-    scaling: float | None = None,
-    **_kwargs,
-) -> tuple[torch.Tensor, torch.Tensor | None]:
-    num_query_heads = query.shape[1]
-    num_key_value_heads = key.shape[1]
-    enable_gqa = num_query_heads != num_key_value_heads
-
-    query = query.contiguous()
-    key = key.contiguous()
-    value = value.contiguous()
-
-    flex_attention_output = flex_attention(
-        query,
-        key,
-        value,
-        score_mod=None,
-        block_mask=attention_mask,
-        enable_gqa=enable_gqa,
-        scale=scaling,
-    )
-    attention_output: torch.Tensor = cast("torch.Tensor", flex_attention_output)
-    attention_output = attention_output.transpose(1, 2).contiguous()
-    return attention_output, None
-
-
-ALL_ATTENTION_FUNCTIONS = AttentionInterface()  # Singleton class used for registry
-ALL_ATTENTION_FUNCTIONS.register("simple_flex_attention", flex_attention_forward)

@@ -8,7 +8,7 @@ from torch.nn.attention.flex_attention import create_block_mask
 from transformers import AutoConfig, DynamicCache, PretrainedConfig
 
 from speculators.config import SpeculatorsConfig, VerifierConfig
-from speculators.model import SpeculatorModel
+from speculators.model import DraftVocabMixin, SpeculatorModel
 from speculators.models.eagle3 import Eagle3SpeculatorConfig
 from speculators.models.eagle3.attention import (
     create_combined_mask_mod,
@@ -153,7 +153,7 @@ def conditional_torch_compile(func):
 
 
 @SpeculatorModel.register("eagle3")
-class Eagle3DraftModel(SpeculatorModel):
+class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
     config_class: ClassVar[type[Eagle3SpeculatorConfig]] = Eagle3SpeculatorConfig  # type: ignore[misc]
     _keys_to_ignore_on_load_missing: ClassVar[list[str]] = [  # type: ignore[misc,assignment]
         "embed_tokens.weight",
@@ -173,26 +173,16 @@ class Eagle3DraftModel(SpeculatorModel):
 
     def __init__(self, config: Eagle3SpeculatorConfig):
         # Forcibly override config settings
-        config.tie_word_embeddings = False
-        config.transformer_layer_config._attn_implementation = "simple_flex_attention"  # noqa: SLF001
+        impl = "simple_flex_attention"
+        config.transformer_layer_config._attn_implementation = impl  # noqa: SLF001
         super().__init__(config=config)
-
-        self.hidden_size = config.transformer_layer_config.hidden_size
-        self.draft_vocab_size = config.draft_vocab_size
-        self.verifier_vocab_size = config.transformer_layer_config.vocab_size
+        self._init_vocab(config)
 
         tl_config = self.config.transformer_layer_config
         self._model_definitions = model_classes[tl_config.model_type]
 
-        # VOCAB MAPPINGS
-        self.use_draft_vocab = self.draft_vocab_size != self.verifier_vocab_size
-        t2d: torch.Tensor | None = None
-        d2t: torch.Tensor | None = None
-        if self.use_draft_vocab:
-            t2d = torch.zeros((self.verifier_vocab_size,), dtype=torch.bool)
-            d2t = torch.zeros((self.draft_vocab_size,), dtype=torch.long)
-        self.register_buffer("t2d", t2d)
-        self.register_buffer("d2t", d2t)
+        # Eagle3-specific: embed_tokens grad depends on config
+        self.embed_tokens.weight.requires_grad = self.config.embed_requires_grad
 
         # FC LAYER
         self.fc = torch.nn.Linear(3 * self.hidden_size, self.hidden_size, bias=False)
@@ -236,77 +226,13 @@ class Eagle3DraftModel(SpeculatorModel):
         else:
             self.input_norm = None
 
-        # TOKEN EMBEDDINGS
-        self.embed_tokens = torch.nn.Embedding(
-            self.verifier_vocab_size,
-            self.hidden_size,
-            padding_idx=tl_config.pad_token_id,
-        )
-        self.embed_tokens.weight.requires_grad = self.config.embed_requires_grad
-
-        # LM HEADS
-        self.lm_head = torch.nn.Linear(
-            self.hidden_size, self.draft_vocab_size, bias=False
-        )
-        self.verifier_lm_head = torch.nn.Linear(
-            self.hidden_size, self.draft_vocab_size, bias=False
-        )
-        self.verifier_lm_head.weight.requires_grad = False
-
-        # Initialize weights to nan
-        # This ensures it will be easy to detect if the weights are never
-        # loaded from the verifier model
-        torch.nn.init.constant_(self.lm_head.weight, torch.nan)
-        torch.nn.init.constant_(self.embed_tokens.weight, torch.nan)
-        torch.nn.init.constant_(self.verifier_lm_head.weight, torch.nan)
-        self.lm_head._is_hf_initialized = True  # type: ignore[assignment] # noqa: SLF001
-        self.embed_tokens._is_hf_initialized = True  # type: ignore[assignment] # noqa: SLF001
-        self.verifier_lm_head._is_hf_initialized = True  # type: ignore[assignment] # noqa: SLF001
-
         self.post_init()
 
-    def load_vocab_mappings(self, t2d: torch.Tensor | None, d2t: torch.Tensor | None):
-        if t2d is None and d2t is None:
-            # Nothing to load, return early
-            return
-        elif t2d is None or d2t is None:
-            raise ValueError(
-                "Both t2d and d2t must be provided together, or both must be None. "
-                f"Got t2d={'provided' if t2d is not None else 'None'}, "
-                f"d2t={'provided' if d2t is not None else 'None'}"
-            )
-
-        if not self.use_draft_vocab:
-            raise RuntimeError(
-                "Vocab mappings were provided but are not needed because verifier "
-                "vocab size equals draft vocab size. Vocab mappings are only required "
-                "when using a reduced vocab."
-            )
-
-        if t2d.shape[0] != self.verifier_vocab_size:
-            raise ValueError(
-                f"t2d.shape[0] ({t2d.shape[0]}) must match"
-                f" verifier_vocab_size ({self.verifier_vocab_size})."
-            )
-        if int(t2d.sum(dtype=torch.long).item()) != self.draft_vocab_size:
-            raise ValueError(
-                f"t2d has {int(t2d.sum(dtype=torch.long).item())} non-zero values, "
-                f"expected {self.draft_vocab_size}."
-            )
-
-        if d2t.shape[0] != self.draft_vocab_size:
-            raise ValueError(
-                f"d2t.shape[0] ({d2t.shape[0]}) must match"
-                f" draft_vocab_size ({self.draft_vocab_size})."
-            )
-
-        self.load_state_dict({"t2d": t2d, "d2t": d2t}, strict=False)
-
     def load_verifier_weights(self):  # noqa: C901
+        super().load_verifier_weights()
+
         verifier_config = self.config.speculators_config.verifier
-        if verifier_config.name_or_path is None:
-            raise ValueError("VerifierConfig `name_or_path` value is required.")
-        verifier_model_config = AutoConfig.from_pretrained(verifier_config.name_or_path)
+        verifier_model_config = AutoConfig.from_pretrained(verifier_config.name_or_path)  # type: ignore[arg-type]
 
         # For multimodal models (Qwen3VL, etc.), extract text_config
         if hasattr(verifier_model_config, "text_config"):
@@ -318,56 +244,10 @@ class Eagle3DraftModel(SpeculatorModel):
                 f" match draft hidden size {self.hidden_size}."
             )
 
-        # Load embedding, lm_head, and norm weights using suffix names (model-agnostic)
+        # Load verifier norm weights
         verifier_weights = load_model_layers(
-            ["embed_tokens.weight", "lm_head.weight", "model.norm.weight"],
-            verifier_config.name_or_path,
-        )
-
-        if "embed_tokens.weight" not in verifier_weights:
-            raise KeyError(
-                f"Could not find embedding weights in {verifier_config.name_or_path}. "
-                "Expected a key ending with 'embed_tokens.weight'."
-            )
-
-        embed_tokens_weight = verifier_weights["embed_tokens.weight"]
-        # Use embed_tokens as fallback for lm_head if not found (tied weights)
-        lm_head_weight = verifier_weights.get("lm_head.weight", embed_tokens_weight)
-
-        # Check that embed_tokens hasn't been initialized yet (e.g. by from_pretrained)
-        if self.embed_tokens.weight.isnan().any():
-            embed_tokens_sd = {"weight": embed_tokens_weight}
-            self.embed_tokens.load_state_dict(embed_tokens_sd)
-
-        if self.use_draft_vocab:
-            if self.t2d is None or not torch.any(self.t2d).item():
-                # (not torch.any(self.t2d).item) because t2d is initialized to zeros
-                raise ValueError(
-                    "t2d tensor hasn't been set. Please call "
-                    "`.load_vocab_mappings(t2d, d2t)` before `.load_verifier_weights()`"
-                )
-
-            # Reduce to limited vocab
-            lm_head_weight = lm_head_weight[
-                self.t2d.to(device=lm_head_weight.device, dtype=torch.bool), :
-            ]
-
-        if lm_head_weight.shape != self.lm_head.weight.shape:
-            raise ValueError(
-                f"Verifier lm head data shape "
-                f"{lm_head_weight.shape} does not match draft "
-                f"lm head shape {self.lm_head.weight.shape}"
-            )
-
-        # Check that lm_head hasn't been initialized yet (e.g. by from_pretrained)
-        if self.lm_head.weight.isnan().any():
-            self.lm_head.load_state_dict(
-                {"weight": lm_head_weight.detach().clone()}, strict=False
-            )
-
-        # Always safe to overwrite verifier_lm_head
-        self.verifier_lm_head.load_state_dict(
-            {"weight": lm_head_weight.detach().clone()}, strict=False
+            ["model.norm.weight"],
+            verifier_config.name_or_path,  # type: ignore[arg-type]
         )
 
         if "model.norm.weight" not in verifier_weights:
@@ -378,7 +258,6 @@ class Eagle3DraftModel(SpeculatorModel):
                 stacklevel=2,
             )
         else:
-            # Always safe to overwrite verifier_norm
             verifier_norm_sd = {"weight": verifier_weights["model.norm.weight"]}
             self.verifier_norm.load_state_dict(verifier_norm_sd)
 
@@ -583,19 +462,6 @@ class Eagle3DraftModel(SpeculatorModel):
             ),
         )
         model = cls(config=config)
-        model.load_vocab_mappings(t2d, d2t)
-        model.load_verifier_weights()
-        return model
-
-    @classmethod
-    def from_pretrained(
-        cls,
-        *args,
-        t2d: torch.Tensor | None = None,
-        d2t: torch.Tensor | None = None,
-        **kwargs,
-    ) -> "Eagle3DraftModel":
-        model: Eagle3DraftModel = super().from_pretrained(*args, **kwargs)  # type: ignore[assignment]
         model.load_vocab_mappings(t2d, d2t)
         model.load_verifier_weights()
         return model

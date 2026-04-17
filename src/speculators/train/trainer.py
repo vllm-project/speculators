@@ -91,6 +91,14 @@ class Trainer:
         self.global_step = 0
         self.best_val_loss = float("inf")
 
+        if self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1:
+            saved = self.checkpointer.load_best_val_loss()
+            if saved is not None:
+                self.best_val_loss = saved
+                root_logger.info(
+                    f"Restored best_val_loss={self.best_val_loss:.6f} from checkpoint"
+                )
+
     def setup_model(self):
         # Verify model is compatible with training infrastructure
         SpeculatorModel.verify_training_compatible(self.model)
@@ -104,9 +112,7 @@ class Trainer:
             # Single device case
             self.model.to(self.local_rank)  # type: ignore[arg-type]
             if load_checkpoint:
-                restored_from_best = self.init_best_val_loss_from_checkpoint_best()
-                if not restored_from_best:
-                    self.checkpointer.load_model_state_dict(self.model)
+                self.checkpointer.load_model_state_dict(self.model)
             return
 
         # Distributed case
@@ -118,9 +124,7 @@ class Trainer:
         apply_fully_sharded(self.model)
 
         if load_checkpoint:
-            restored_from_best = self.init_best_val_loss_from_checkpoint_best()
-            if not restored_from_best:
-                self.checkpointer.load_model_state_dict(self.model)
+            self.checkpointer.load_model_state_dict(self.model)
         else:
             # Broadcast full state dict from rank 0 to all ranks
             set_model_state_dict(
@@ -134,55 +138,6 @@ class Trainer:
             )
             del full_state_dict
             dist.barrier()
-
-    def init_best_val_loss_from_checkpoint_best(self) -> bool:
-        """
-        If resuming and checkpoint_best exists, initialize self.best_val_loss.
-        If checkpoint_best is missing or broken, keep best_val_loss as inf).
-        """
-        best_epoch = self.checkpointer.read_best_epoch()
-
-        if best_epoch is None:
-            return False
-
-        if self.val_loader is None:
-            root_logger.warning(
-                f"Found checkpoint_best -> {best_epoch} but no val_loader; "
-                f"leaving best_val_loss=inf."
-            )
-            return False
-
-        last_epoch = self.checkpointer.previous_epoch  # Epoch to resume from
-
-        root_logger.info(
-            f"Initializing best_val_loss from checkpoint_best -> {best_epoch} "
-            f"(will resume from epoch {last_epoch})"
-        )
-
-        self.checkpointer.load_model_state_dict_for_epoch(self.model, best_epoch)
-        val_metrics = self.val_epoch(best_epoch)
-
-        val_loss = None
-        if val_metrics is not None and "loss_epoch" in val_metrics:
-            val_loss = float(val_metrics["loss_epoch"])
-
-        if val_loss is None:
-            root_logger.warning(
-                f"Could not compute loss_epoch for checkpoint_best -> {best_epoch}; "
-                "leaving best_val_loss=inf."
-            )
-        else:
-            self.best_val_loss = val_loss
-            root_logger.info(
-                f"Restored best_val_loss={self.best_val_loss:.6f} "
-                f"from checkpoint_best -> {best_epoch}"
-            )
-
-        # Restore LAST weights so training resumes normally
-        if last_epoch != best_epoch:
-            self.checkpointer.load_model_state_dict_for_epoch(self.model, last_epoch)
-
-        return True
 
     def setup_optimizer(self):
         # Setup optimizer
@@ -319,6 +274,7 @@ class Trainer:
                 self.checkpointer.save_checkpoint(self.model, self.opt, epoch)
                 if self.scheduler is not None:
                     self.checkpointer.save_scheduler_state_dict(self.scheduler, epoch)
+                self.checkpointer.save_val_metrics(epoch, val_metrics)
                 self.checkpointer.update_best_symlink(epoch)
                 root_logger.info(
                     f"Updated checkpoint_best -> {epoch} "
@@ -334,6 +290,8 @@ class Trainer:
             self.checkpointer.save_checkpoint(self.model, self.opt, epoch)
             if self.scheduler is not None:
                 self.checkpointer.save_scheduler_state_dict(self.scheduler, epoch)
+            if val_metrics is not None:
+                self.checkpointer.save_val_metrics(epoch, val_metrics)
             root_logger.info(
                 f"Checkpoint saved to {self.checkpointer.path / str(epoch)}"
             )
