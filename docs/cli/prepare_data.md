@@ -1,6 +1,7 @@
 # prepare_data.py
 
 Prepares data for speculator training by:
+
 1. Applying chat template and tokenizing each sample
 2. Producing a loss/assistant mask for each sample
 3. Recording token frequency statistics
@@ -34,7 +35,7 @@ python scripts/prepare_data.py \
   Example: `--data sharegpt --data ./custom_data.jsonl`
 
 - **`--seq-length`** (int, default: `8192`)
-  Maximum sequence length for preprocessing and model.
+  Maximum sequence length for each sample. Longer samples will be truncated.
 
 - **`--max-samples`** (int, default: `None`)
   Maximum number of samples to process. If `None`, processes all samples.
@@ -57,7 +58,7 @@ python scripts/prepare_data.py \
   Directory to save the processed dataset.
 
 - **`--overwrite`** (flag)
-  Forcibly rerun preprocessing and delete existing content in output directory.
+  Forcibly rerun preprocessing and overwrite existing content in output directory.
 
 ### Processing Arguments
 
@@ -67,7 +68,7 @@ python scripts/prepare_data.py \
 - **`--num-preprocessing-workers`** (int, default: `8`)
   Number of CPU processes for dataset preprocessing.
 
-## Example
+## Full Example
 
 ```bash
 python scripts/prepare_data.py \
@@ -80,10 +81,3 @@ python scripts/prepare_data.py \
   --turn-dropout \
   --num-preprocessing-workers 16
 ```
-
-## See Also
-
-- [CLI Reference Overview](README.md)
-- [Data Preparation Feature Guide](../user_guide/features/prepare_data.md)
-- [Next Step: Generate Hidden States](data_generation_offline.md) (for offline training)
-- [Next Step: Launch vLLM](launch_vllm.md) (for online training)
