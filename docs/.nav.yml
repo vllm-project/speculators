@@ -22,7 +22,6 @@ nav:
                 - Train Dflash Model Online: user_guide/tutorials/train_dflash_online.md
                 - Response Regeneration: user_guide/tutorials/response_regeneration.md
                 - Evaluating Model Performance: user_guide/tutorials/evaluating_performance.md
-                - Convert Eagle3 Model: user_guide/tutorials/convert_eagle3.md
                 - Serve in vLLM: user_guide/tutorials/serve_vllm.md
           - Troubleshooting: user_guide/troubleshooting.md
     - Developer Guide:
