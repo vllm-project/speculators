@@ -1,39 +1,30 @@
 # Train EAGLE-3 Model Offline
 
-This tutorial walks you through training an EAGLE-3 speculator model using **offline training**, where hidden states are pre-generated and cached before training begins.
+This tutorial walks you through training an EAGLE-3 speculator model using **offline training**, where hidden states are pre-generated and cached before training begins. This example uses `meta-llama/Llama-3.1-8B-Instruct` as the target model, but the process is the same for other models.
 
 ## Overview
 
-Offline training is ideal for:
-
-- Production training runs
-- Large datasets (50K+ samples)
-- Repeated experimentation (multiple training runs on same data)
-- Reproducible results
-- Faster training iterations
-
-**What you'll learn:**
-
-- How to prepare and preprocess training data
-- How to generate hidden states offline
-- How to train using cached hidden states
-- How to optimize for production workflows
-
-**Time required:** ~2-4 hours (including data generation)
+**Time required:** ~3 hours (including data generation)
 
 **Prerequisites:**
 
 - Python 3.10+
 - CUDA-capable GPU(s)
-- `speculators` installed with `[datagen]` extras
-- `vllm` installed
-- Sufficient disk space for hidden states (~260 GB per 1K samples for Llama-3.1-8B)
+- Sufficient disk space for hidden states (~1.6 TB for 50k samples for Llama-3.1-8B, avg seq len 1024)
+
+Two virtual environments:
+
+- One with `speculators>=0.5.0` installed. Note: if you are using an experiment tracker (e.g. trackio, wandb, tensorboard) you will need to install it in this venv manually. The example commands below use tensorboard.
+- One with `vllm>=0.18` installed
+
+Note: you can also use a single enviroment with both, but it is usually better to keep them separate so that the dependencies don't conflict.
 
 ## Step 1: Prepare Your Data
 
-Preprocess your training dataset:
+First, preprocess your training dataset:
 
 ```bash
+# in speculators venv
 python scripts/prepare_data.py \
   --model meta-llama/Llama-3.1-8B-Instruct \
   --data sharegpt \
@@ -42,51 +33,60 @@ python scripts/prepare_data.py \
   --max-samples 50000
 ```
 
-**For production training:**
+**Parameters explained:**
 
-```bash
-python scripts/prepare_data.py \
-  --model meta-llama/Llama-3.1-8B-Instruct \
-  --data sharegpt \
-  --data ultrachat \
-  --output ./production_data \
-  --turn-dropout \                    # Data augmentation
-  --minimum-valid-tokens 10           # Quality filter
-```
+- `--model` - The target model you want to accelerate
+- `--data` - Dataset to use (Built-in support for `sharegpt`, `ultrachat`. Otherwise provide a custom path to a jsonl file). Can be suplied multiple times to combine multiple datasets.
+- `--output` - Where to save preprocessed data
+- `--max-samples` - Limit samples (optional, good for testing/getting started)
 
 **Expected output:**
 
 ```
 training_data/
-├── data-*.arrow files (preprocessed dataset)
+├── data-*.arrow files
 ├── dataset_info.json
 ├── state.json
 └── token_freq.pt
 ```
 
-**Time:** ~5-15 minutes for 50K samples
+**Time:** ~5 minutes for 50K samples
+
+**Note:** This step is used to setup the dataset that will be used to train your model and is the same for both online and offline training. It's important that any data configuration choices are made at this stage. For example, limiting the data sample length, filtering out samples with limited assistant response tokens, handling multi-turn conversation responses, etc. For more information please see the [prepare_data.py cli reference](/cli/prepare_data.md).
 
 ## Step 2: Launch vLLM Server
 
-Launch vLLM configured for hidden states extraction:
+Next launch vLLM configured for hidden states extraction:
 
 ```bash
+# in vLLM venv
 # For 8B model - use data parallelism
 CUDA_VISIBLE_DEVICES=0,1,2,3 python scripts/launch_vllm.py \
   meta-llama/Llama-3.1-8B-Instruct \
   -- --data-parallel-size 4 --port 8000
 
-# For 70B model - use tensor parallelism
+# For 70B model - combine tensor parallelism and data parallelism
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 python scripts/launch_vllm.py \
   meta-llama/Llama-3.3-70B-Instruct \
-  -- --tensor-parallel-size 8 --port 8000
+  -- --tensor-parallel-size 4 --data-parallel-size 2 --port 8000
 ```
 
-**Verify server is ready:**
+**The `--` separator:** Anything after `--` is passed directly to vLLM. Common options:
 
-```bash
-curl http://localhost:8000/v1/models
+- `--data-parallel-size 4` - Use 4 data parallel instances
+- `--tensor-parallel-size 2` - Group GPUs in pairs for tensor parallelism
+- `--port 8000` - Specify port (default: 8000)
+- `--gpu-memory-utilization 0.9` - GPU memory to use
+
+**Wait for server to start:**
+
 ```
+INFO:     Started server process [2140110]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete
+```
+
+**Note:** This stage is also when you must decide which layer ids to extract from vLLM. For eagle3, if you don't pass in `--target-layer-ids`, this script will use sensible default values. For more information on usage, please see the [launch_vllm.py cli reference](/cli/launch_vllm.md).
 
 ## Step 3: Generate Hidden States Offline
 
@@ -97,8 +97,6 @@ python scripts/data_generation_offline2.py \
   --model meta-llama/Llama-3.1-8B-Instruct \
   --preprocessed-data ./training_data \
   --output ./hidden_states \
-  --max-samples 50000 \
-  --concurrency 32 \
   --validate-outputs
 ```
 
@@ -106,18 +104,9 @@ python scripts/data_generation_offline2.py \
 
 - `--preprocessed-data` - Path to prepared data from Step 1
 - `--output` - Where to save hidden states
-- `--concurrency 32` - Number of parallel requests (tune based on GPU memory)
 - `--validate-outputs` - Verify file integrity (recommended for production)
 
 **Expected output:**
-
-```
-Processing samples: 100%|███████████| 50000/50000 [45:23<00:00, 18.4it/s]
-Generated 50000 hidden state files
-Validation: 50000/50000 files OK
-```
-
-**Output structure:**
 
 ```
 hidden_states/
@@ -128,17 +117,12 @@ hidden_states/
 └── hs_49999.safetensors
 ```
 
-**Generation time:**
-
-- 8B model, 50K samples, 4 GPUs (DP): ~45-60 minutes
-- 70B model, 50K samples, 8 GPUs (TP): ~90-120 minutes
-
 ### Optimizing Generation Speed
 
 **Increase concurrency:**
 
 ```bash
---concurrency 64  # Higher throughput, needs more GPU memory
+--concurrency 64  # Controls the number of concurrent requests to vllm as well as concurrent write to disk operations. 
 ```
 
 **Use more GPUs:**
@@ -148,17 +132,20 @@ hidden_states/
 python scripts/launch_vllm.py model -- --data-parallel-size 8
 ```
 
-**Skip validation (faster, less safe):**
+**Skip validation:**
+
+Validation loads every single generated output file and confirms that the token ids match the sent request and the hidden states length matches expectation. This is generally not required but is a good sanity check. Turn this off to skip loading generated samples during data gen.
 
 ```bash
-# Omit --validate-outputs for faster generation
+# Omit --validate-outputs argument
 ```
 
 ### Resuming Interrupted Generation
 
-If generation is interrupted, simply rerun the same command:
+If generation is interrupted, simply ensure the vllm server is launched and rerun the same command:
 
 ```bash
+# in speculators venv
 python scripts/data_generation_offline2.py \
   --model meta-llama/Llama-3.1-8B-Instruct \
   --preprocessed-data ./training_data \
@@ -167,14 +154,16 @@ python scripts/data_generation_offline2.py \
   --concurrency 32
 ```
 
-The script automatically detects existing `hs_*.safetensors` files and skips them.
+The script automatically detects existing `hs_*.safetensors` files and skips them, continuing where you left off.
+
+**Note:** For more information on usage, please see the [data_generation_offline.py cli reference](/cli/data_generation_offline.md).
 
 ## Step 4: Stop vLLM Server
 
 After hidden states generation is complete, stop the vLLM server:
 
 ```bash
-# Press Ctrl+C in the vLLM terminal
+# Press Ctrl+C in the vLLM terminal  
 ```
 
 You don't need vLLM running during offline training.
@@ -184,14 +173,15 @@ You don't need vLLM running during offline training.
 ### Single-GPU Training
 
 ```bash
+# in speculators venv
 python scripts/train.py \
   --verifier-name-or-path meta-llama/Llama-3.1-8B-Instruct \
   --data-path ./training_data \
   --hidden-states-path ./hidden_states \
-  --on-missing raise \
+  --on-missing raise \ # or skip or warn
   --save-path ./checkpoints \
   --draft-vocab-size 32000 \
-  --epochs 10 \
+  --epochs 5 \
   --lr 3e-5 \
   --logger tensorboard \
   --run-name llama31_8b_offline
@@ -200,6 +190,7 @@ python scripts/train.py \
 ### Multi-GPU Training (FSDP)
 
 ```bash
+# in speculators venv
 CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun \
   --standalone \
   --nproc_per_node 4 \
@@ -207,226 +198,77 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun \
   --verifier-name-or-path meta-llama/Llama-3.1-8B-Instruct \
   --data-path ./training_data \
   --hidden-states-path ./hidden_states \
-  --on-missing raise \
+  --on-missing raise \ # or skip or warn
   --save-path ./checkpoints \
   --draft-vocab-size 32000 \
-  --epochs 10 \
+  --epochs 5 \
   --lr 3e-5 \
   --logger tensorboard \
   --run-name llama31_8b_offline
 ```
 
-**Critical parameters:**
+**Key parameters:**
 
 - `--hidden-states-path` - Points to cached hidden states
-- `--on-missing raise` - Fail if any hidden states are missing (recommended)
+- `--on-missing raise` - Fail if any hidden states are missing (recommended). Alternatives are `skip` and `warn` which both skip the missing sample, with the latter raising a warning.
+- `--draft-vocab-size 32000` - Reduced vocabulary size to use
+- `--epochs 5` - Number of training epochs
+- `--lr 3e-5` - Learning rate
+- `--logger tensorboard` - Enable TensorBoard logging
 
-**Training speed:** Offline training is **significantly faster** than online:
+**Warning:** If you set `--logger`, make sure you have installed the logging backend's package. These are not required dependencies of speculators and therefore aren't installed automatically.
 
-- 50K samples, 10 epochs, 4 GPUs: ~2-3 hours (vs 8-10 hours online)
-- Each epoch: ~12-18 minutes
+**Note:** There are a lot of configuration options available at this stage. We've attempted to set sensible defaults but please see the [train.py cli reference](/cli/train.md) to see all available options.
 
-**Expected output:**
+## Step 6: Inspect Checkpoints
 
-```
-Epoch 1/10: 100%|███████████| 1562/1562 [12:34<00:00,  2.07it/s]
-Train Loss: 2.1234 | Val Loss: 2.0567 | Accuracy: 0.42
-Saved checkpoint to ./checkpoints/0
-
-Epoch 2/10: 100%|███████████| 1562/1562 [12:28<00:00,  2.09it/s]
-Train Loss: 1.9845 | Val Loss: 1.9123 | Accuracy: 0.48
-Saved checkpoint to ./checkpoints/1
-...
-```
-
-## Step 6: Monitor Training
-
-### TensorBoard
-
-```bash
-tensorboard --logdir ./logs
-```
-
-Open http://localhost:6006 to monitor:
-
-- Loss curves
-- Accuracy metrics
-- Learning rate schedule
-
-### Key Metrics to Watch
-
-- **Train loss decreasing** - Model is learning
-- **Val loss decreasing** - Generalizing well
-- **Accuracy increasing** - Better token predictions
-- **No overfitting** - Val loss not increasing while train loss decreases
-
-## Step 7: Checkpoint Management
-
-After training completes:
+After training, your checkpoints directory contains:
 
 ```
 checkpoints/
-├── 0/ ... 9/          # All epochs
-├── best -> 5/         # Best validation loss (if --save-best)
-└── latest -> 9/       # Most recent
+├── 0/                          # Epoch 0
+│   ├── config.json
+│   ├── model.safetensors
+│   ├── generation_config.json
+│   ├── optimizer_state_dict.pt
+│   └── scheduler_state_dict.pt
+├── 1/                          # Epoch 1
+├── ...
+├── 9/                          # Epoch 9 (final)
+└── checkpoint_best -> 9/                # Symlink to lowest val loss checkpoint
 ```
 
-### Select Best Checkpoint
+Each checkpoint is a complete, self-contained speculator model ready for deployment in vLLM. The checkpoints also contain optimizer and learning rate scheduler states for resume training.
 
-**Option A: Lowest validation loss**
+## Step 7: Test Your Model
+
+### Quick Test with vLLM
+
+Stop the training vLLM server (Ctrl+C), then serve your speculator:
 
 ```bash
-ls -la checkpoints/best
+# in vllm venv
+vllm serve ./checkpoints/checkpoint_best --port 8000
 ```
 
-**Option B: Manually evaluate** Test each checkpoint on your validation set.
+### Chat with the served model
 
-## Step 8: Validate Your Model
-
-### Quick Sanity Check
+While the model in served, in a separate window run:
 
 ```bash
-# Serve the trained model
-vllm serve ./checkpoints/best
-
-# In another terminal, test it
-python -c "
-from openai import OpenAI
-client = OpenAI(base_url='http://localhost:8000/v1', api_key='dummy')
-response = client.chat.completions.create(
-    model='./checkpoints/best',
-    messages=[{'role': 'user', 'content': 'Hello!'}],
-    max_tokens=50
-)
-print(response.choices[0].message.content)
-"
+# in vllm venv
+vllm chat --url http://localhost:8000/v1
 ```
 
-### Full Evaluation
+### Verify Speculative Decoding
 
-See [Evaluating Performance Tutorial](evaluating_performance.md) for comprehensive benchmarking.
+Check vLLM logs for speculative decoding metrics
 
-## Advantages of Offline Training
-
-### 1. Faster Training Iterations
-
-**Offline:**
-
-```
-Pre-generate once: 60 min
-Train (10 epochs): 120 min
-Total: 180 min
-```
-
-**Online:**
-
-```
-Train (10 epochs): 600 min
-Total: 600 min
-```
-
-For multiple experiments: Offline wins significantly.
-
-### 2. Reproducibility
-
-Hidden states are identical across runs:
-
-- Same random seed → same results
-- Easy to debug
-- Fair comparisons between hyperparameters
-
-### 3. Resource Separation
-
-- **Generation:** Use all GPUs for vLLM
-- **Training:** Use all GPUs for FSDP
-- No resource contention
-
-### 4. Disk-Based Caching
-
-- Generate once, train many times
-- Experiment with hyperparameters
-- No need to regenerate hidden states
-
-## Production Workflow
-
-For production-scale training:
-
-```bash
-#!/bin/bash
-set -e
-
-# Configuration
-MODEL="meta-llama/Llama-3.1-8B-Instruct"
-DATA_DIR="./production_data"
-HS_DIR="./hidden_states"
-CHECKPOINT_DIR="./checkpoints"
-MAX_SAMPLES=100000
-
-# Step 1: Prepare high-quality data
-echo "=== Preparing Data ==="
-python scripts/prepare_data.py \
-  --model $MODEL \
-  --data sharegpt \
-  --data ultrachat \
-  --output $DATA_DIR \
-  --max-samples $MAX_SAMPLES \
-  --turn-dropout \
-  --minimum-valid-tokens 20 \
-  --num-preprocessing-workers 32
-
-# Step 2: Generate hidden states
-echo "=== Generating Hidden States ==="
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 python scripts/launch_vllm.py \
-  $MODEL \
-  -- --data-parallel-size 8 --port 8000 &
-
-VLLM_PID=$!
-sleep 90  # Wait for vLLM startup
-
-python scripts/data_generation_offline2.py \
-  --model $MODEL \
-  --preprocessed-data $DATA_DIR \
-  --output $HS_DIR \
-  --max-samples $MAX_SAMPLES \
-  --concurrency 64 \
-  --validate-outputs
-
-kill $VLLM_PID
-
-# Step 3: Train with best practices
-echo "=== Training ==="
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 torchrun \
-  --standalone \
-  --nproc_per_node 8 \
-  scripts/train.py \
-  --verifier-name-or-path $MODEL \
-  --data-path $DATA_DIR \
-  --hidden-states-path $HS_DIR \
-  --on-missing raise \
-  --save-path $CHECKPOINT_DIR \
-  --draft-vocab-size 32000 \
-  --num-layers 1 \
-  --epochs 15 \
-  --lr 3e-5 \
-  --scheduler-type cosine \
-  --scheduler-num-cosine-cycles 0.5 \
-  --checkpoint-freq 1 \
-  --save-best \
-  --logger wandb \
-  --run-name production_llama31_8b \
-  --noise-std 0.05
-
-echo "=== Training Complete ==="
-echo "Best checkpoint: $CHECKPOINT_DIR/best"
-```
-
-## Disk Space Management
-
-### Estimating Space Requirements
+## Estimating Disk Space Requirements
 
 ```python
 # For Llama-3.1-8B:
-# seq_len × num_layers × hidden_size × dtype_bytes
+# avg_seq_len × num_layers × hidden_size × dtype_bytes
 # 8192 × 4 × 4096 × 2 = ~268 MB per sample
 
 # For 50K samples: ~13 TB
@@ -434,163 +276,57 @@ echo "Best checkpoint: $CHECKPOINT_DIR/best"
 # For 1K samples: ~260 GB
 ```
 
-### Optimizing Disk Usage
-
-**Use fast storage:**
-
-```bash
-# Store hidden states on NVMe SSD
---output /fast_storage/hidden_states
-```
-
-**Compress after training:**
-
-```bash
-# After successful training, compress hidden states
-tar -czf hidden_states.tar.gz ./hidden_states/
-# Can delete originals if needed
-```
-
-**Clean up intermediate files:**
-
-```bash
-# Remove hidden states after training if disk-constrained
-rm -rf ./hidden_states/
-# Keep preprocessed data and checkpoints
-```
-
-## Advanced: Parallel Experimentation
-
-With offline hidden states, run multiple experiments in parallel:
-
-```bash
-# Experiment 1: Single layer, LR=3e-5
-torchrun --nproc_per_node 4 scripts/train.py \
-  --hidden-states-path ./hs \
-  --save-path ./exp1 \
-  --num-layers 1 --lr 3e-5 &
-
-# Experiment 2: Two layers, LR=1e-5
-torchrun --nproc_per_node 4 scripts/train.py \
-  --hidden-states-path ./hs \
-  --save-path ./exp2 \
-  --num-layers 2 --lr 1e-5 &
-
-# Both use same cached hidden states
-```
-
 ## Common Issues & Solutions
 
-### Issue: Missing Hidden States
+### Issue: Out of Memory (Training)
 
 **Error:**
 
 ```
-FileNotFoundError: hs_1234.safetensors not found
+torch.cuda.OutOfMemoryError
 ```
 
 **Solutions:**
 
 ```bash
-# Check which files are missing
-python scripts/data_generation_offline2.py \
-  --preprocessed-data ./training_data \
-  --output ./hidden_states \
-  --max-samples 50000  # Rerun to fill gaps
+# Reduce sequence length
+python scripts/train.py --total-seq-len 4096 ...
+
+# Consider different model configurations
+# e.g. less draft layers
+python scripts/train.py --num-layers 1
 ```
 
-### Issue: Corrupted Hidden States Files
+### Issue: Training Loss Not Decreasing
 
-**Error:**
-
-```
-SafetensorsError: Invalid file format
-```
-
-**Solution:**
-
-```bash
-# Regenerate with validation
-python scripts/data_generation_offline2.py \
-  --preprocessed-data ./training_data \
-  --output ./hidden_states \
-  --validate-outputs  # Validates all files
-```
-
-Delete corrupted files and regenerate them.
-
-### Issue: Disk Full During Generation
-
-**Error:**
-
-```
-OSError: No space left on device
-```
+**Symptoms:** Loss plateaus or increases
 
 **Solutions:**
 
-1. **Generate in batches:**
+1. **Lower learning rate:**
 
    ```bash
-   # First 10K
-   --max-samples 10000 --output ./hs_batch1
-
-   # Next 10K (adjust dataset)
-   --max-samples 20000 --output ./hs_batch2
-   # etc.
+   --lr 1e-5  # Try lower LR
    ```
 
-2. **Use larger storage:**
+2. **Check data quality:**
 
    ```bash
-   --output /large_disk/hidden_states
+   # Verify preprocessing succeeded
+   ls -lh ./training_data/
    ```
 
-3. **Clean up old experiments:**
+3. **Increase training time:**
 
    ```bash
-   rm -rf ./old_hidden_states/
+   --epochs 20  # Train longer
    ```
-
-## Comparison: Online vs Offline
-
-| Aspect                   | Online                       | Offline                  |
-| ------------------------ | ---------------------------- | ------------------------ |
-| **Initial setup**        | Faster ✅                    | Slower (generation time) |
-| **Training speed**       | Slower                       | Much faster ✅           |
-| **Disk usage**           | Minimal ✅                   | High (TB scale)          |
-| **Reproducibility**      | Lower                        | Perfect ✅               |
-| **Multiple experiments** | Slow                         | Fast ✅                  |
-| **Resource efficiency**  | vLLM + Training concurrently | Separate phases ✅       |
-| **Best for**             | Development                  | Production ✅            |
 
 ## Next Steps
 
-After offline training:
+After training your model:
 
-1. **Benchmark performance** - [Evaluating Performance](evaluating_performance.md)
-2. **Deploy to production** - [Serve in vLLM](serve_vllm.md)
-3. **Experiment with hyperparameters** - Reuse cached hidden states
-4. **Train larger models** - Scale to 70B, 405B models
-5. **Share your model** - Upload to HuggingFace Hub
-
-## Summary
-
-You've learned how to:
-
-- ✅ Prepare production-quality training data
-- ✅ Pre-generate hidden states offline
-- ✅ Train with cached hidden states for maximum speed
-- ✅ Manage disk space efficiently
-- ✅ Run reproducible experiments
-- ✅ Optimize for production workflows
-
-**Offline training** is the recommended approach for production deployments and large-scale training. The initial time investment in generating hidden states pays off through faster iterations and perfect reproducibility.
-
-## See Also
-
-- [Train EAGLE-3 Online](train_eagle3_online.md) - Online training guide
-- [Offline Hidden States Generation](../features/offline_hidden_states.md) - Detailed generation docs
-- [Training Feature](../features/training.md) - Complete training reference
-- [Evaluating Performance](evaluating_performance.md) - Benchmark your model
-- [EAGLE-3 Algorithm](../algorithms/eagle3.md) - Algorithm details
+1. **Evaluate performance** - See [Evaluating Performance](evaluating_performance.md)
+2. **Deploy to production** - See [Serve in vLLM](serve_vllm.md)
+3. **Fine-tune further** - Use `--from-pretrained ./checkpoints/latest` to continue training
+4. **Upload to HuggingFace** - Share your model with the community
