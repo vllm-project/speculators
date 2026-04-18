@@ -438,4 +438,4 @@ convert_model(
 - [Train Eagle3 Tutorial](../tutorials/train_eagle3_online.md) - Train models from scratch
 - [Convert Eagle3 Tutorial](../tutorials/convert_eagle3.md) - Step-by-step conversion guide
 - [Serve in vLLM Tutorial](../tutorials/serve_vllm.md) - Deploy converted models
-- [API Reference](../../api/README.md) - Full API documentation
+- [API Reference](../../api/index.md) - Full API documentation
