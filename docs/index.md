@@ -48,7 +48,7 @@ Behind the scenes, this reads the model from Hugging Face, parses the `speculato
 
 To create a speculative decoding model for a different verifier model, there are two approaches you can choose:
 
-1. **Train a new speculative decoding model** - See [Getting Started](user_guide/getting_started.md) and [Tutorials](user_guide/tutorials/README.md).
+1. **Train a new speculative decoding model** - See [Getting Started](user_guide/getting_started.md) and [Tutorials](user_guide/tutorials/index.md).
 2. **Convert an existing model** from a third-party library to the Speculators format for easy deployment with vLLM - See [Conversion Guide](user_guide/features/conversion.md).
 
 ## Installation
@@ -218,11 +218,11 @@ For more community resources, see the [Community page](community.md).
 
 ## Next Steps
 
-- [User Guide](user_guide/README.md) - Learn how to use Speculators
+- [User Guide](user_guide/index.md) - Learn how to use Speculators
 - [Getting Started](user_guide/getting_started.md) - Quick start guide for training models
-- [Tutorials](user_guide/tutorials/README.md) - Step-by-step walkthroughs
-- [API Reference](api/README.md) - Python API documentation
-- [CLI Reference](cli/README.md) - Command-line tools documentation
+- [Tutorials](user_guide/tutorials/index.md) - Step-by-step walkthroughs
+- [API Reference](api/index.md) - Python API documentation
+- [CLI Reference](cli/index.md) - Command-line tools documentation
 
 ## License
 

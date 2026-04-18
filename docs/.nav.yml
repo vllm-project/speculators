@@ -1,22 +1,22 @@
 nav:
     - Home: index.md
     - User Guide:
-          - user_guide/README.md
+          - user_guide/index.md
           - Getting Started: user_guide/getting_started.md
           - Features:
-                - user_guide/features/README.md
+                - user_guide/features/index.md
                 - Response Regeneration: user_guide/features/response_regeneration.md
                 - Prepare Data: user_guide/features/prepare_data.md
                 - Offline Hidden States Generation: user_guide/features/offline_hidden_states.md
                 - Training: user_guide/features/training.md
                 - Conversion: user_guide/features/conversion.md
           - Algorithms:
-                - user_guide/algorithms/README.md
+                - user_guide/algorithms/index.md
                 - Eagle3: user_guide/algorithms/eagle3.md
                 - Dflash: user_guide/algorithms/dflash.md
                 - Decision Guide: user_guide/algorithms/decision_guide.md
           - Tutorials:
-                - user_guide/tutorials/README.md
+                - user_guide/tutorials/index.md
                 - Train Eagle3 Model Online: user_guide/tutorials/train_eagle3_online.md
                 - Train Eagle3 Model Offline: user_guide/tutorials/train_eagle3_offline.md
                 - Train Dflash Model Online: user_guide/tutorials/train_dflash_online.md
@@ -32,10 +32,10 @@ nav:
           - Design Documents: developer/design_docs.md
     - Roadmap: roadmap.md
     - API Reference:
-          - api/README.md
+          - api/index.md
           - reference/speculators
     - CLI Reference:
-          - cli/README.md
+          - cli/index.md
           - prepare_data.py: cli/prepare_data.md
           - data_generation_offline.py: cli/data_generation_offline.md
           - launch_vllm.py: cli/launch_vllm.md

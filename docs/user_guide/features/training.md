@@ -569,4 +569,4 @@ python scripts/train.py --request-timeout 30 ...
 - [Offline Hidden States](offline_hidden_states.md) - Pre-generate hidden states
 - [Train Eagle3 Online Tutorial](../tutorials/train_eagle3_online.md) - Complete walkthrough
 - [Train Eagle3 Offline Tutorial](../tutorials/train_eagle3_offline.md) - Offline training guide
-- [CLI Reference](../../cli/README.md) - Complete argument reference
+- [CLI Reference](../../cli/index.md) - Complete argument reference

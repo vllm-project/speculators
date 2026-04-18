@@ -543,5 +543,5 @@ If you're still stuck:
 
 - [Getting Started](getting_started.md) - Initial setup guide
 - [Training Feature](features/training.md) - Complete training documentation
-- [CLI Reference](../cli/README.md) - All command-line options
+- [CLI Reference](../cli/index.md) - All command-line options
 - [Community](../community.md) - Get help from the community
