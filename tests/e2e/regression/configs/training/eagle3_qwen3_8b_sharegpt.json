@@ -1,6 +1,6 @@
 {
     "name": "eagle3_qwen3_8b_sharegpt",
-    "verifier_model": "Qwen/Qwen3-8b",
+    "verifier_model": "Qwen/Qwen3-8B",
     "hidden_states_repo": "inference-optimization/Qwen3-8b-sharegpt-5k",
     "training": {
         "lr": 3e-4,
