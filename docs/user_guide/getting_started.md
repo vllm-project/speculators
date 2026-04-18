@@ -199,10 +199,10 @@ Speculators use a smaller vocabulary than the target model (e.g., 32K vs 128K to
 
 ## Next Steps
 
-- **Tutorials:** Follow step-by-step guides in the [Tutorials](tutorials/README.md) section
-- **Features:** Learn about specific capabilities in the [Features](features/README.md) section
-- **Algorithms:** Understand different speculative decoding approaches in [Algorithms](algorithms/README.md)
-- **CLI Reference:** Explore all command-line options in [CLI Reference](../cli/README.md)
+- **Tutorials:** Follow step-by-step guides in the [Tutorials](tutorials/index.md) section
+- **Features:** Learn about specific capabilities in the [Features](features/index.md) section
+- **Algorithms:** Understand different speculative decoding approaches in [Algorithms](algorithms/index.md)
+- **CLI Reference:** Explore all command-line options in [CLI Reference](../cli/index.md)
 - **Troubleshooting:** Find solutions to common issues in [Troubleshooting](troubleshooting.md)
 
 ## Additional Resources

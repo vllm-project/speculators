@@ -13,7 +13,7 @@ Speculators provides a comprehensive framework for:
 ## Quick Links
 
 - [Getting Started](getting_started.md) - Start here if you're new to Speculators
-- [Features](features/README.md) - Detailed documentation on core features
-- [Algorithms](algorithms/README.md) - Overview of supported algorithms
-- [Tutorials](tutorials/README.md) - Step-by-step guides
+- [Features](features/index.md) - Detailed documentation on core features
+- [Algorithms](algorithms/index.md) - Overview of supported algorithms
+- [Tutorials](tutorials/index.md) - Step-by-step guides
 - [Troubleshooting](troubleshooting.md) - Common issues and solutions
