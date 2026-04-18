@@ -13,4 +13,5 @@ Watch our Speculators Office Hours presentation:
 - **Slides:** [Google Slides](https://docs.google.com/presentation/d/1s4eAb7v-rdZt8smyULBJWGXjJXrgFTZWnwqYa2-h1l4/edit?slide=id.g3365e070742_6_0#slide=id.g3365e070742_6_0)
 
 ## vLLM Meetups
+
 For more information on general vLLM events / meetups visit https://vllm.ai/events

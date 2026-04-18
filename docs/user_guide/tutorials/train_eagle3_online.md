@@ -1,39 +1,31 @@
 # Train EAGLE-3 Model Online
 
-This tutorial walks you through training an EAGLE-3 speculator model using **online training**, where hidden states are generated on-demand during the training process.
+This tutorial walks you through training an EAGLE-3 speculator model using **online training**, where hidden states are generated on-demand during the training process. This example uses `Qwen/Qwen3-8B` as the target model, but the process is the same for other models.
 
 ## Overview
 
-Online training is ideal for:
-
-- Quick experimentation and iteration
-- Smaller datasets (< 50K samples)
-- Limited disk space
-- Development and prototyping
-
-**What you'll learn:**
-
-- How to prepare training data
-- How to launch vLLM for hidden states extraction
-- How to train an EAGLE-3 model with online generation
-- How to validate and serve your trained model
-
-**Time required:** ~1-2 hours (including training)
+**Time required:** ~30 mins (including training)
 
 **Prerequisites:**
 
 - Python 3.10+
 - CUDA-capable GPU(s)
-- `speculators` installed with `[datagen]` extras
-- `vllm` installed
+
+Two virtual environments:
+
+- One with `speculators>=0.5.0` installed. Note: if you are using an experiment tracker (e.g. trackio, wandb, tensorboard) you will need to install it in this venv manually. The example commands below use tensorboard.
+- One with `vllm>=0.18` installed
+
+Note: you can also use a single enviroment with both, but it is usually better to keep them separate so that the dependencies don't conflict.
 
 ## Step 1: Prepare Your Data
 
 First, preprocess your training dataset:
 
 ```bash
+# in speculators venv
 python scripts/prepare_data.py \
-  --model meta-llama/Llama-3.1-8B-Instruct \
+  --model Qwen/Qwen3-8B \
   --data sharegpt \
   --output ./training_data \
   --max-samples 5000
@@ -42,9 +34,9 @@ python scripts/prepare_data.py \
 **Parameters explained:**
 
 - `--model` - The target model you want to accelerate
-- `--data` - Dataset to use (`sharegpt`, `ultrachat`, or custom path)
+- `--data` - Dataset to use (Built-in support for `sharegpt`, `ultrachat`. Otherwise provide a custom path to a jsonl file)
 - `--output` - Where to save preprocessed data
-- `--max-samples` - Limit samples (optional, good for testing)
+- `--max-samples` - Limit samples (optional, good for testing/getting started)
 
 **Expected output:**
 
@@ -57,145 +49,96 @@ training_data/
 └── token_freq.pt
 ```
 
-**Time:** ~2-5 minutes for 5K samples
+**Time:** ~1-2 minutes for 5K samples
+
+**Note:** This step is used to setup the dataset that will be used to train your model and is the same for both online and offline training. It's important that any data configuration choices are made at this stage. For example, limiting the data sample length, filtering out samples with limited assistant response tokens, handling multi-turn conversation responses, etc. For more information please see the [prepare_data.py cli reference](/cli/prepare_data.md).
 
 ## Step 2: Launch vLLM Server
 
-In a **separate terminal**, launch vLLM configured for hidden states extraction:
+Next launch vLLM configured for hidden states extraction:
 
 ```bash
+# in vLLM venv
+
 # Single GPU
-python scripts/launch_vllm.py meta-llama/Llama-3.1-8B-Instruct
+python scripts/launch_vllm.py Qwen/Qwen3-8B
 
 # Multiple GPUs with data parallelism (recommended)
 CUDA_VISIBLE_DEVICES=0,1,2,3 python scripts/launch_vllm.py \
-  meta-llama/Llama-3.1-8B-Instruct \
-  -- --data-parallel-size 4 --port 8000
+  Qwen/Qwen3-8B -- --data-parallel-size 4 --port 8000
 ```
 
 **The `--` separator:** Anything after `--` is passed directly to vLLM. Common options:
 
-- `--data-parallel-size 4` - Use 4 GPUs for data parallelism
-- `--tensor-parallel-size 2` - Use 2 GPUs for tensor parallelism
+- `--data-parallel-size 4` - Use 4 data parallel instances
+- `--tensor-parallel-size 2` - Group GPUs in pairs for tensor parallelism
 - `--port 8000` - Specify port (default: 8000)
 - `--gpu-memory-utilization 0.9` - GPU memory to use
 
 **Wait for server to start:**
 
 ```
-INFO:     Application startup complete.
-INFO:     Uvicorn running on http://0.0.0.0:8000
+INFO:     Started server process [2140110]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete
 ```
 
-**Verify server is running:**
-
-```bash
-curl http://localhost:8000/v1/models
-```
-
-You should see the model listed.
+**Note:** This stage is also when you must decide which layer ids to extract from vLLM. For eagle3, if you don't pass in `--target-layer-ids`, this script will use sensible default values. For more information on usage, please see the [launch_vllm.py cli reference](/cli/launch_vllm.md).
 
 ## Step 3: Start Training
 
-In your **original terminal** (not the vLLM terminal), start training:
+Wait for vLLM to finish launching.
+
+In a **separate terminal** on the same node, start the training process:
 
 ### Single-GPU Training
 
 ```bash
+# in speculators venv
 python scripts/train.py \
-  --verifier-name-or-path meta-llama/Llama-3.1-8B-Instruct \
+  --verifier-name-or-path Qwen/Qwen3-8B \
   --data-path ./training_data \
   --vllm-endpoint http://localhost:8000/v1 \
   --save-path ./checkpoints \
   --draft-vocab-size 32000 \
-  --epochs 10 \
+  --epochs 5 \
   --lr 3e-5 \
   --logger tensorboard \
-  --run-name llama31_8b_online
+  --run-name qwen_8b_online
 ```
 
 ### Multi-GPU Training (FSDP)
 
 ```bash
+# in speculators venv
 CUDA_VISIBLE_DEVICES=4,5,6,7 torchrun \
   --standalone \
   --nproc_per_node 4 \
   scripts/train.py \
-  --verifier-name-or-path meta-llama/Llama-3.1-8B-Instruct \
+  --verifier-name-or-path Qwen/Qwen3-8B \
   --data-path ./training_data \
   --vllm-endpoint http://localhost:8000/v1 \
   --save-path ./checkpoints \
   --draft-vocab-size 32000 \
-  --epochs 10 \
+  --epochs 5 \
   --lr 3e-5 \
   --logger tensorboard \
-  --run-name llama31_8b_online
+  --run-name qwen_8b_online
 ```
 
 **Key parameters:**
 
-- `--vllm-endpoint` - vLLM server URL (enables online generation)
-- `--draft-vocab-size 32000` - Reduced vocabulary size
-- `--epochs 10` - Number of training epochs
+- `--vllm-endpoint` - vLLM server URL (localhost endpoint where vLLM is served)
+- `--draft-vocab-size 32000` - Reduced vocabulary size to use
+- `--epochs 5` - Number of training epochs
 - `--lr 3e-5` - Learning rate
 - `--logger tensorboard` - Enable TensorBoard logging
 
-**Expected training output:**
+**Warning:** If you set `--logger`, make sure you have installed the logging backend's package. These are not required dependencies of speculators and therefore aren't installed automatically.
 
-```
-Epoch 1/10: 100%|███████████| 156/156 [03:21<00:00,  1.29s/it]
-Train Loss: 2.3456 | Val Loss: 2.2891 | LR: 3.00e-05
-Saved checkpoint to ./checkpoints/0
+**Note:** There are a lot of configuration options available at this stage. We've attempted to set sensible defaults but please see the [train.py cli reference](/cli/train.md) to see all available options.
 
-Epoch 2/10: 100%|███████████| 156/156 [03:18<00:00,  1.27s/it]
-Train Loss: 2.1234 | Val Loss: 2.0987 | LR: 2.70e-05
-Saved checkpoint to ./checkpoints/1
-...
-```
-
-**Training time:**
-
-- 5K samples, 10 epochs, 1 GPU: ~30-40 minutes
-- 5K samples, 10 epochs, 4 GPUs: ~15-20 minutes
-
-## Step 4: Monitor Training
-
-### TensorBoard
-
-If you used `--logger tensorboard`:
-
-```bash
-tensorboard --logdir ./logs
-```
-
-Open http://localhost:6006 to view:
-
-- Training and validation loss curves
-- Learning rate schedule
-- Token prediction accuracy
-- Per-epoch metrics
-
-### Weights & Biases
-
-For W&B logging:
-
-```bash
-python scripts/train.py \
-  --logger wandb \
-  --run-name llama31_8b_online \
-  ...
-```
-
-### Console Output
-
-Watch for:
-
-- **Decreasing loss** - Model is learning
-- **Validation loss** - Should decrease without overfitting
-- **Learning rate** - Should decay according to schedule
-- **Checkpoint saves** - Confirm checkpoints are being written
-
-## Step 5: Inspect Checkpoints
+## Step 4: Inspect Checkpoints
 
 After training, your checkpoints directory contains:
 
@@ -210,111 +153,36 @@ checkpoints/
 ├── 1/                          # Epoch 1
 ├── ...
 ├── 9/                          # Epoch 9 (final)
-└── latest -> 9/                # Symlink to latest
+└── checkpoint_best -> 9/                # Symlink to lowest val loss checkpoint
 ```
 
-Each checkpoint is a complete, self-contained speculator model ready for deployment.
+Each checkpoint is a complete, self-contained speculator model ready for deployment in vLLM. The checkpoints also contain optimizer and learning rate scheduler states for resume training.
 
-## Step 6: Select Best Checkpoint
-
-### Option A: Use Latest Checkpoint
-
-```bash
-cd checkpoints/latest
-```
-
-### Option B: Use Best Validation Loss
-
-If you used `--save-best`:
-
-```bash
-cd checkpoints/best
-```
-
-### Option C: Manually Evaluate
-
-Test each epoch's checkpoint on a validation set and choose the best performer.
-
-## Step 7: Test Your Model
+## Step 5: Test Your Model
 
 ### Quick Test with vLLM
 
 Stop the training vLLM server (Ctrl+C), then serve your speculator:
 
 ```bash
-vllm serve ./checkpoints/latest
+# in vllm venv
+vllm serve ./checkpoints/checkpoint_best --port 8000
 ```
 
-### Send a Test Request
+### Chat with the served model
 
-```python
-from openai import OpenAI
+While the model in served, in a separate window run:
 
-client = OpenAI(
-    base_url="http://localhost:8000/v1",
-    api_key="dummy"
-)
-
-response = client.chat.completions.create(
-    model="./checkpoints/latest",
-    messages=[
-        {"role": "user", "content": "What is machine learning?"}
-    ],
-    max_tokens=100
-)
-
-print(response.choices[0].message.content)
+```bash
+# in vllm venv
+vllm chat --url http://localhost:8000/v1
 ```
 
 ### Verify Speculative Decoding
 
-Check vLLM logs for speculative decoding metrics:
-
-```
-Average acceptance rate: 1.8 tokens
-Speculative tokens proposed: 5
-```
-
-## Step 8: Benchmark Performance
-
-Use [GuideLLM](https://github.com/vllm-project/guidellm) to benchmark:
-
-```bash
-# Install GuideLLM
-pip install guidellm
-
-# Benchmark your speculator
-guidellm \
-  --target http://localhost:8000/v1 \
-  --model ./checkpoints/latest \
-  --data-type emulated \
-  --data "prompt_tokens=512,generated_tokens=256" \
-  --request-rate 1.0
-```
-
-Compare against the base model to measure speedup.
-
-See [Evaluating Performance Tutorial](evaluating_performance.md) for detailed benchmarking.
+Check vLLM logs for speculative decoding metrics
 
 ## Common Issues & Solutions
-
-### Issue: vLLM Connection Timeout
-
-**Error:**
-
-```
-TimeoutError: Request to vLLM timed out
-```
-
-**Solution:**
-
-```bash
-# Increase timeout in training
-python scripts/train.py \
-  --request-timeout 30 \  # Increase from default 15s
-  --max-retries 5 \       # More retry attempts
-  ...
-```
 
 ### Issue: Out of Memory (Training)
 
@@ -330,11 +198,9 @@ torch.cuda.OutOfMemoryError
 # Reduce sequence length
 python scripts/train.py --total-seq-len 4096 ...
 
-# Reduce batch size (via sequence packing)
-# Use fewer dataloader workers
-python scripts/train.py --num-workers 4 ...
-
-# Use fewer GPUs for training (give more to vLLM)
+# Consider different model configurations
+# e.g. less draft layers
+python scripts/train.py --num-layers 1
 ```
 
 ### Issue: Out of Memory (vLLM)
@@ -348,8 +214,8 @@ vLLM: CUDA out of memory
 **Solutions:**
 
 ```bash
-# Reduce GPU memory utilization
-python scripts/launch_vllm.py model -- --gpu-memory-utilization 0.7
+# Increase GPU memory utilization
+python scripts/launch_vllm.py model -- --gpu-memory-utilization 0.95
 
 # Reduce max model length
 python scripts/launch_vllm.py model -- --max-model-len 4096
@@ -383,39 +249,24 @@ python scripts/launch_vllm.py model -- --tensor-parallel-size 2
    --epochs 20  # Train longer
    ```
 
-4. **Verify vLLM is working:**
+### Issue: Inconsistent training utilization
 
-   ```bash
-   curl http://localhost:8000/v1/models
-   ```
-
-### Issue: Slow Training
-
-**Symptoms:** Very slow iteration speed
+**Symptoms:** Training logs are bursty, gpu utilization/power draw is inconsistent for training process.
 
 **Solutions:**
 
-1. **Increase vLLM concurrency (implicitly via batch size):** vLLM will handle more requests in parallel
+1. **Redistribute GPUs between training and datagen processes:** If possible, increase the number of gpus assigned to vLLM datagen (i.e. the `launch_vllm.py` step) and reduce the number used during training. Inconsistent training performance typically means the training process is stuck waiting for new data samples to be generated.
 
-2. **Use more vLLM GPUs:**
-
-   ```bash
-   --data-parallel-size 4  # More vLLM replicas
-   ```
-
-3. **Reduce dataloader workers:**
-
-   ```bash
-   --num-workers 8  # Instead of default 12
-   ```
+2. **Consider switching to offline training:** Offline training pre-generates the hidden states for all samples and caches them on disk. Then during training the samples can just be loaded directly. If gpu resources are limited, this can be a better approach as it allows you to assign all gpus to data gen and then all to training.
 
 ## Advanced: Hybrid Training
 
 Start with online, cache for later epochs:
 
 ```bash
+# in speculators venv
 python scripts/train.py \
-  --verifier-name-or-path meta-llama/Llama-3.1-8B-Instruct \
+  --verifier-name-or-path Qwen/Qwen3-8B \
   --data-path ./training_data \
   --hidden-states-path ./hidden_states \  # Where to cache
   --vllm-endpoint http://localhost:8000/v1 \
@@ -423,85 +274,16 @@ python scripts/train.py \
   --on-generate cache \       # Cache generated states
   --save-path ./checkpoints \
   --draft-vocab-size 32000 \
-  --epochs 10
+  --epochs 5
 ```
 
-**First epoch:** Generates and caches hidden states to `./hidden_states/` **Subsequent epochs:** Uses cached hidden states (faster)
+**First epoch:** Generates and caches hidden states to `./hidden_states/` **Subsequent epochs:** Uses cached hidden states.
 
 ## Next Steps
 
 After training your model:
 
 1. **Evaluate performance** - See [Evaluating Performance](evaluating_performance.md)
-2. **Try offline training** - See [Train EAGLE-3 Offline](train_eagle3_offline.md) for faster iterations
-3. **Deploy to production** - See [Serve in vLLM](serve_vllm.md)
-4. **Fine-tune further** - Use `--from-pretrained ./checkpoints/latest` to continue training
-5. **Upload to HuggingFace** - Share your model with the community
-
-## Complete Example Script
-
-Here's a complete script for reference:
-
-```bash
-#!/bin/bash
-
-# Step 1: Prepare data
-echo "Preparing data..."
-python scripts/prepare_data.py \
-  --model meta-llama/Llama-3.1-8B-Instruct \
-  --data sharegpt \
-  --output ./training_data \
-  --max-samples 5000
-
-# Step 2: Launch vLLM (in background)
-echo "Launching vLLM server..."
-CUDA_VISIBLE_DEVICES=0,1,2,3 python scripts/launch_vllm.py \
-  meta-llama/Llama-3.1-8B-Instruct \
-  -- --data-parallel-size 4 --port 8000 &
-
-VLLM_PID=$!
-sleep 60  # Wait for vLLM to start
-
-# Step 3: Train
-echo "Starting training..."
-CUDA_VISIBLE_DEVICES=4,5,6,7 torchrun \
-  --standalone \
-  --nproc_per_node 4 \
-  scripts/train.py \
-  --verifier-name-or-path meta-llama/Llama-3.1-8B-Instruct \
-  --data-path ./training_data \
-  --vllm-endpoint http://localhost:8000/v1 \
-  --save-path ./checkpoints \
-  --draft-vocab-size 32000 \
-  --epochs 10 \
-  --lr 3e-5 \
-  --logger tensorboard \
-  --run-name llama31_8b_online
-
-# Step 4: Cleanup
-echo "Stopping vLLM server..."
-kill $VLLM_PID
-
-echo "Training complete! Checkpoints saved to ./checkpoints/"
-```
-
-## Summary
-
-You've learned how to:
-
-- ✅ Prepare training data
-- ✅ Launch vLLM for online hidden states generation
-- ✅ Train an EAGLE-3 model with online generation
-- ✅ Monitor training progress
-- ✅ Test and validate your trained model
-- ✅ Troubleshoot common issues
-
-**Online training** is perfect for quick iteration and development. For production training with large datasets, consider [offline training](train_eagle3_offline.md) for faster, more reproducible results.
-
-## See Also
-
-- [Train EAGLE-3 Offline](train_eagle3_offline.md) - Offline training guide
-- [EAGLE-3 Algorithm](../algorithms/eagle3.md) - Algorithm details
-- [Training Feature](../features/training.md) - Complete training reference
-- [Evaluating Performance](evaluating_performance.md) - Benchmark your model
-- [Serve in vLLM](serve_vllm.md) - Deploy to production
+2. **Deploy to production** - See [Serve in vLLM](serve_vllm.md)
+3. **Fine-tune further** - Use `--from-pretrained ./checkpoints/latest` to continue training
+4. **Upload to HuggingFace** - Share your model with the community
