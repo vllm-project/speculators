@@ -1,47 +1,19 @@
 # Algorithms
 
-Speculators supports multiple speculative decoding algorithms, each with different strengths and trade-offs. This section provides an overview of the available algorithms and guidance on choosing the right one for your use case.
+Speculators supports two speculative decoding algorithms. Both are lossless -- they produce output from the same distribution as the target model.
 
-## Overview
+## [EAGLE-3](eagle3.md)
 
-Speculative decoding algorithms use a smaller "draft" model to predict multiple tokens ahead, which are then verified by the larger target model in parallel. Different algorithms employ different strategies for generating these draft tokens.
+Predicts draft tokens autoregressively using Llama-style draft layers. The more established algorithm with mature support in both Speculators and vLLM.
 
-## Supported Algorithms
+## [DFlash](dflash.md)
 
-### [EAGLE-3](eagle3.md)
+Predicts all draft tokens in a single forward pass using block-based prediction with Qwen3-style draft layers. Newer, with support improving rapidly.
 
-**EAGLE** (Extrapolation Algorithm for Greater Language-model Efficiency) is a state-of-the-art speculative decoding algorithm that uses auto-regression combined with feature extrapolation from the target model's hidden states.
+## Choosing an Algorithm
 
-**Key characteristics:**
-
-- Lightweight draft model (typically 1 layer)
-- Uses hidden states from multiple layers of the target model
-- Excellent for general-purpose acceleration
-- Well-tested across various model architectures
-
-**Best for:** Most production use cases, especially when you want a balance of speed improvement and ease of deployment.
-
-### [DFlash](dflash.md)
-
-**DFlash** (Decoding with Flash attention) is a block-based speculative decoding algorithm optimized for efficient parallel verification.
-
-**Key characteristics:**
-
-- Block-based token generation
-- Optimized for flash attention
-- Configurable block sizes for different workloads
-
-**Best for:** Workloads where batch processing and parallel verification are critical.
-
-### [Decision Guide](decision_guide.md)
-
-Not sure which algorithm to choose? The decision guide helps you select the right algorithm based on your:
-
-- Model architecture (Llama, Qwen, GPT-OSS, etc.)
-- Use case (chat, completion, code generation)
-- Performance requirements (latency vs throughput)
-- Hardware constraints (GPU memory, compute budget)
+Both algorithms can be paired with any supported verifier model. For help choosing between them, see the [Decision Guide](decision_guide.md).
 
 ## Adding New Algorithms
 
-Interested in implementing a new speculative decoding algorithm? See the [Developer Guide](../../developer/add_algorithm.md) for instructions on adding custom algorithms to Speculators.
+See the [Developer Guide](../../developer/add_algorithm.md) for instructions on adding custom algorithms to Speculators.
