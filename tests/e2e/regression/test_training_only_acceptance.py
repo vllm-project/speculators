@@ -53,20 +53,26 @@ def test_training_acceptance(
     # 1. Fetch precomputed hidden states
     hidden_states_dir = _resolve_repo(config["hidden_states_repo"])
 
-    # 2. Set arg to build for vocab mapping from token_freq.pt in dataset
+    # 2. Build extra CLI args from config
     extra_train_args = ["--draft-vocab-size", str(config["draft_vocab_size"])]
+    if "num_layers" in config:
+        extra_train_args += ["--num-layers", str(config["num_layers"])]
 
     # 3. Run training
     training_cfg = config["training"]
     run_training(
         model=config["verifier_model"],
+        speculator_type=config["speculator_type"],
         data_path=hidden_states_dir,
         save_path=save_path,
         seq_length=training_cfg["total_seq_len"],
         epochs=training_cfg["epochs"],
         lr=training_cfg["lr"],
         online=False,
-        extra_train_args=extra_train_args or None,
+        target_layer_ids=config.get(
+            "target_layer_ids"
+        ),  # will use default ones if not specified
+        extra_train_args=extra_train_args,
     )
 
     # 4. Validate trained model meets acceptance thresholds in vLLM

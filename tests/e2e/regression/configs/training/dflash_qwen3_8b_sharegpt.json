@@ -1,7 +1,7 @@
 {
-    "name": "eagle3_qwen3_8b_sharegpt",
+    "name": "dflash_qwen3_8b_sharegpt",
     "verifier_model": "Qwen/Qwen3-8b",
-    "speculator_type": "eagle3",
+    "speculator_type": "dflash",
     "hidden_states_repo": "inference-optimization/Qwen3-8b-sharegpt-5k",
     "training": {
         "lr": 3e-4,
@@ -9,5 +9,6 @@
         "epochs": 5
     },
     "draft_vocab_size": 8192,
-    "acceptance_thresholds": [0.40, 0.10, 0.01]
+    "num_layers": 3,
+    "acceptance_thresholds": [0.30, 0.05, 0.01, 0, 0, 0, 0, 0]
 }
