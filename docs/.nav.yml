@@ -30,7 +30,6 @@ nav:
           - Code of Conduct: developer/code_of_conduct.md
           - Add New Spec Decode Algorithm: developer/add_algorithm.md
           - Design Documents: developer/design_docs.md
-    - Roadmap: roadmap.md
     - API Reference:
           - api/index.md
           - reference/speculators
