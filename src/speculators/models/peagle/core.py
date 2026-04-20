@@ -268,7 +268,8 @@ class PEagleDraftModel(Eagle3DraftModel):
         targets_full = targets.repeat(1, para_depth, 1)
         targets = targets_full[:, all_indices, :]
 
-        # Use per-depth normalization, each depth should contribute equally to gradient
+        # Loss is normalized by total token count across all depths, so deeper
+        # depths with fewer sampled tokens naturally contribute less gradient.
         with torch.no_grad():
             target_probs = torch.nn.functional.softmax(targets, dim=-1)
 
@@ -295,9 +296,10 @@ class PEagleDraftModel(Eagle3DraftModel):
                 while loss_mask.ndim > 2:
                     loss_mask = loss_mask.squeeze(1)
 
-        # Single loop for both loss and accuracy computation
-        # Each depth contributes equally to gradient
-        prediction_loss = 0.0
+        # Compute loss across all depths with a single normalizer so that
+        # deeper depths (fewer tokens from COD sampling) naturally contribute
+        # less gradient, matching the p-eagle-train reference implementation.
+        total_masked_loss = 0.0
         total_correct = 0.0
         total_tokens = 0.0
         start_idx = 0
@@ -306,28 +308,24 @@ class PEagleDraftModel(Eagle3DraftModel):
             num_samples = len(indices)
             end_idx = start_idx + num_samples
 
-            # Extract depth slice
             depth_pred_loss = per_token_pred_loss[:, start_idx:end_idx]
 
             if loss_mask is not None:
                 depth_loss_mask = loss_mask[:, indices]
                 depth_pred_loss = depth_pred_loss * depth_loss_mask
-                depth_normalizer = depth_loss_mask.sum() + self.LOSS_EPSILON
 
-                # Accuracy computation (reuse the same mask)
                 depth_correct = correct[:, start_idx:end_idx]
                 total_correct += (depth_correct * depth_loss_mask).sum()
                 total_tokens += depth_loss_mask.sum()
             else:
-                depth_normalizer = num_samples + self.LOSS_EPSILON
+                total_tokens += num_samples
 
-            # Accumulate per-depth loss
-            depth_pred_loss_mean = depth_pred_loss.sum() / depth_normalizer
-            prediction_loss += depth_pred_loss_mean / para_depth
+            total_masked_loss += depth_pred_loss.sum()
 
             start_idx = end_idx
 
-        # Finalize loss and accuracy
+        prediction_loss = total_masked_loss / (total_tokens + self.LOSS_EPSILON)
+
         loss = self.config.prediction_loss_weight * prediction_loss
 
         with torch.no_grad():
