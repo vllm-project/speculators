@@ -91,23 +91,22 @@ def launch_vllm_server(
         str(max_model_len),
         "--gpu-memory-utilization",
         str(gpu_memory_utilization),
+        "--disable-uvicorn-access-log",
     ]
     logger.info("Starting vLLM server: {}", " ".join(cmd))
 
-    process = subprocess.Popen(  # noqa: S603
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
-    )
+    process = subprocess.Popen(cmd)  # noqa: S603
 
     try:
         wait_for_server(port, process=process)
         logger.info("vLLM server ready on port {}", port)
     except Exception:
-        # Dump captured output to help debug startup failures
-        output = process.stdout.read().decode() if process.stdout else ""
-        if output:
-            logger.error("vLLM server output:\n{}", indent(output, "    "))
         process.terminate()
-        process.wait(timeout=30)
+        try:
+            process.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
         raise
 
     return process
@@ -123,13 +122,7 @@ def stop_vllm_server(process: subprocess.Popen):
             process.kill()
             process.wait(timeout=10)
     if process.returncode not in (0, -15):  # -15 = SIGTERM (expected)
-        output = process.stdout.read().decode() if process.stdout else ""
-        if output:
-            logger.error(
-                "vLLM server exited with code {}. Output:\n{}",
-                process.returncode,
-                indent(output, "    "),
-            )
+        logger.error("vLLM server exited with code {}", process.returncode)
     logger.info("vLLM server stopped (exit code {})", process.returncode)
 
 

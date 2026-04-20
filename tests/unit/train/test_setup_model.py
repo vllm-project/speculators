@@ -35,18 +35,7 @@ from speculators.train.checkpointer import (
     SingleGPUCheckpointer,
 )
 from speculators.train.trainer import Trainer, TrainerConfig
-
-# ---------------------------------------------------------------------------
-# Skip decorators
-# ---------------------------------------------------------------------------
-
-requires_cuda = pytest.mark.skipif(
-    not torch.cuda.is_available(), reason="CUDA required"
-)
-requires_multi_gpu = pytest.mark.skipif(
-    not torch.cuda.is_available() or torch.cuda.device_count() < 2,
-    reason="2+ GPUs required",
-)
+from tests.conftest import requires_cuda, requires_multi_gpu
 
 # ---------------------------------------------------------------------------
 # Tiny model constants
