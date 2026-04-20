@@ -42,7 +42,7 @@ def _resolve_repo(repo_id: str, repo_type: str = "dataset") -> Path:
         return Path(snapshot_download(repo_id=repo_id, repo_type=repo_type))
 
 
-@requires_cadence("weekly")
+@requires_cadence("nightly")
 @pytest.mark.regression
 @pytest.mark.parametrize("config", _CONFIGS, ids=[c["name"] for c in _CONFIGS])
 def test_training_acceptance(
