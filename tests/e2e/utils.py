@@ -102,7 +102,11 @@ def launch_vllm_server(
         logger.info("vLLM server ready on port {}", port)
     except Exception:
         process.terminate()
-        process.wait(timeout=30)
+        try:
+            process.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
         raise
 
     return process

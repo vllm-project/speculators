@@ -316,7 +316,9 @@ async def worker(
                     )
         except Exception as e:
             if fail_on_error:
-                logger.error("Fatal: sample %d failed with --fail-on-error: %s", idx, e)
+                logger.exception(
+                    "Fatal: sample %d failed with --fail-on-error: %s", idx, e
+                )
                 logging.shutdown()
                 os._exit(1)
             logger.warning("Skipping sample %d due to error: %s", idx, e)
