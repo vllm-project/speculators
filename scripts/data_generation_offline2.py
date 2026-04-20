@@ -15,6 +15,7 @@ Usage:
 import argparse
 import asyncio
 import logging
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -315,8 +316,9 @@ async def worker(
                     )
         except Exception as e:
             if fail_on_error:
-                cancel_event.set()
-                raise
+                logger.error("Fatal: sample %d failed with --fail-on-error: %s", idx, e)
+                logging.shutdown()
+                os._exit(1)
             logger.warning("Skipping sample %d due to error: %s", idx, e)
             skipped_indices.append(idx)
             if failure_tracker is not None and failure_tracker.record_failure():
@@ -460,6 +462,9 @@ def main():
         asyncio.run(generate_and_save_hidden_states(args, dataset))
     except KeyboardInterrupt:
         sys.exit(130)
+    except Exception:
+        logger.exception("Data generation failed")
+        sys.exit(1)
 
     logger.info("Data generation complete!")
 
