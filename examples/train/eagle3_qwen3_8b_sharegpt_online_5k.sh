@@ -5,7 +5,7 @@
 # and training (with hidden states generated on-the-fly from the live server).
 #
 # Usage: Copy this script, modify the configuration variables below, then run:
-#   bash examples/training/online_training.sh
+#   bash examples/train/eagle3_qwen3_8b_sharegpt_online_5k.sh
 #
 # For a detailed walkthrough, see examples/ONLINE_TRAINING.md
 
@@ -45,8 +45,8 @@ EPOCHS=5
 LR=1e-4
 
 # GPU assignments (online training needs separate GPUs for vLLM and training)
-VLLM_GPUS="2,3"
-TRAIN_GPUS="5,6"
+VLLM_GPUS="0,1"
+TRAIN_GPUS="2,3"
 NUM_TRAIN_GPUS=2
 # =======================================
 

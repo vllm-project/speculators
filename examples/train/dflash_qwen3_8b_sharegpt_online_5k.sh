@@ -22,18 +22,6 @@
 # Training (3 epochs): 1618 seconds (26 mins 58 secs)
 # Total: 1690 seconds (28 mins 10 secs)
 
-# Validation Results (final epoch on validation set):
-# full acceptance: 20.6%
-# per-position acceptance:
-#   position 0: 0.0%
-#   position 1: 48.8%
-#   position 2: 31.7%
-#   position 3: 20.5%
-#   position 4: 14.1%
-#   position 5: 11.0%
-#   position 6: 9.3%
-#   position 7: 8.2%
-#
 # MT-Bench Results (80 prompts, 2048 max output tokens):
 # acceptance rate: 5.90%
 # acceptance length: 1.47
@@ -67,8 +55,8 @@ DRAFT_VOCAB_SIZE=8192
 TARGET_LAYER_IDS="2 18 33"  # Must match vLLM's eagle_aux_hidden_state_layer_ids
 
 # GPU assignments (online training needs separate GPUs for vLLM and training)
-VLLM_GPUS="2,3"
-TRAIN_GPUS="5,6"
+VLLM_GPUS="0,1"
+TRAIN_GPUS="2,3"
 NUM_TRAIN_GPUS=2
 # =======================================
 
