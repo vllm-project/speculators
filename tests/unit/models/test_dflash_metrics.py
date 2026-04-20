@@ -151,10 +151,9 @@ class TestLossFunction:
         loss = loss_function(logits, target_ids, loss_mask)
         assert loss.item() == pytest.approx(0.0, abs=1e-4)
 
-    def test_different_gamma(self):
+    def test_different_gamma(self, seed):
         """Different gamma values should produce different losses."""
         B, T, V = 1, 16, 10
-        torch.manual_seed(42)
         logits = torch.randn(B, T, V)
         target_ids = torch.randint(0, V, (B, T))
         loss_mask = torch.ones(B, T)
@@ -162,10 +161,9 @@ class TestLossFunction:
         loss_g10 = loss_function(logits, target_ids, loss_mask, gamma=10.0)
         assert not torch.isclose(loss_g1, loss_g10)
 
-    def test_different_block_sizes(self):
+    def test_different_block_sizes(self, seed):
         """Different block sizes should produce different weight patterns."""
         B, T, V = 1, 16, 10
-        torch.manual_seed(42)
         logits = torch.randn(B, T, V)
         target_ids = torch.randint(0, V, (B, T))
         loss_mask = torch.ones(B, T)
