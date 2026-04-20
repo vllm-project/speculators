@@ -270,5 +270,7 @@ addopts = '-s -vvv --cache-clear'
 markers = [
     "smoke: quick tests to check basic functionality",
     "sanity: detailed tests to ensure major functions work correctly",
-    "regression: tests to ensure that new changes do not break existing functionality"
+    "regression: tests to ensure that new changes do not break existing functionality",
+    "e2e: end-to-end integration tests",
+    "slow: tests that take a long time to run"
 ]
