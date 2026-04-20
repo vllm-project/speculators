@@ -399,7 +399,6 @@ As the library evolves:
 
 **Stay Updated:**
 
-- Check [Roadmap](../../roadmap.md) for upcoming features
 - Monitor [Release Notes] for algorithm improvements
 - Join [Community](../../community.md) for discussions
 
