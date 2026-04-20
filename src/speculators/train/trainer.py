@@ -1,4 +1,5 @@
 import logging
+import os
 import warnings
 from typing import Literal, NamedTuple
 
@@ -58,6 +59,7 @@ class Trainer:
     ):
         self.model = model
         self.config = config
+        self.rank = int(os.environ.get("RANK", "0"))
         self.local_rank = config.local_rank
         self.train_loader = train_loader
         self.val_loader = val_loader
@@ -186,7 +188,7 @@ class Trainer:
             self.train_loader.batch_sampler.set_epoch(epoch)  # type: ignore[union-attr]
 
         train_loader = self.train_loader
-        if self.local_rank == 0:
+        if self.rank == 0:
             train_loader = tqdm(train_loader, desc=f"Epoch {epoch}")  # type: ignore[assignment]
 
         for batch in train_loader:
@@ -229,7 +231,7 @@ class Trainer:
         if hasattr(self.val_loader.batch_sampler, "set_epoch"):
             self.val_loader.batch_sampler.set_epoch(epoch)  # type: ignore[union-attr]
         val_loader = self.val_loader
-        if self.local_rank == 0:
+        if self.rank == 0:
             val_loader = tqdm(val_loader, desc=f"Epoch {epoch}")  # type: ignore[assignment]
 
         val_metrics: dict[str, float] = {}

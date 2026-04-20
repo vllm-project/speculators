@@ -268,11 +268,68 @@ The scripts has the following optional arguments:
 - `--t2d-path`: The path to the t2d tensor. Defaults to `t2d.npy`.
 - `--ttt-steps`: The number of TTT steps to use. Defaults to 3.
 - `--ttt-step-loss-decay`: The loss decay factor to use for the TTT steps. Defaults to 1.0.
+- `--scheduler-type`: The type of learning rate scheduler to use. Defaults to "linear".
+- `--scheduler-warmup-steps`: The number of warmup steps for the learning rate scheduler. Defaults to None.
+- `--scheduler-total-steps`: The total number of steps for the learning rate scheduler. Defaults to None.
+- `--scheduler-num-cosine-cycles`: The number of cosine cycles for the cosine scheduler. Defaults to 0.5.
+### Distributed Training with torchrun
+
+For distributed training, use `torchrun` with the following parameters:
+
+- `--nproc_per_node`: Number of processes per node.
+- `--nnodes`: Number of nodes to use for distributed training.
+- `--node_rank`: Rank of the current node.
+- `--master_addr`: Address of the master node.
+- `--master_port`: Port of the master node.
+
+These parameters are passed to `torchrun` before the script.
 
 ### Example Command
 
+#### Single Node Training
+
 ```bash
-torchrun --nnodes=1 --nproc_per_node=8 scripts/train.py \
+torchrun --standalone --nproc_per_node=8 scripts/train.py \
+    --verifier-name-or-path "meta-llama/Llama-3.1-8B-Instruct" \
+    --data-path "./data/llama-3.1-8b_sharegpt/gen/" \
+    --save-path "./checkpoints/llama-3.1-8b.eagle3" \
+    --epochs 10 \
+    --lr 1e-4 \
+    --no-resume-from-checkpoint \
+    --logger "tensorboard" \
+    --total-seq-len 8192 \
+    --log-dir "./logs/llama-3.1-8b.eagle3" \
+    --run-name "llama-3.1-8b.eagle3" \
+    --num-layers 1 \
+    --d2t-path "./data/llama-3.1-8b_sharegpt/d2t.npy" \
+    --t2d-path "./data/llama-3.1-8b_sharegpt/t2d.npy" \
+    --ttt-steps 3 \
+    --ttt-step-loss-decay 1.0
+```
+
+#### Multi-Node Training
+
+```bash
+# On node 0 (master node)
+torchrun --nproc_per_node=8 --nnodes=2 --node_rank=0 --master_addr="192.168.1.100" --master_port=12345 scripts/train.py \
+    --verifier-name-or-path "meta-llama/Llama-3.1-8B-Instruct" \
+    --data-path "./data/llama-3.1-8b_sharegpt/gen/" \
+    --save-path "./checkpoints/llama-3.1-8b.eagle3" \
+    --epochs 10 \
+    --lr 1e-4 \
+    --no-resume-from-checkpoint \
+    --logger "tensorboard" \
+    --total-seq-len 8192 \
+    --log-dir "./logs/llama-3.1-8b.eagle3" \
+    --run-name "llama-3.1-8b.eagle3" \
+    --num-layers 1 \
+    --d2t-path "./data/llama-3.1-8b_sharegpt/d2t.npy" \
+    --t2d-path "./data/llama-3.1-8b_sharegpt/t2d.npy" \
+    --ttt-steps 3 \
+    --ttt-step-loss-decay 1.0
+
+# On node 1
+torchrun --nproc_per_node=8 --nnodes=2 --node_rank=1 --master_addr="192.168.1.100" --master_port=12345 scripts/train.py \
     --verifier-name-or-path "meta-llama/Llama-3.1-8B-Instruct" \
     --data-path "./data/llama-3.1-8b_sharegpt/gen/" \
     --save-path "./checkpoints/llama-3.1-8b.eagle3" \
