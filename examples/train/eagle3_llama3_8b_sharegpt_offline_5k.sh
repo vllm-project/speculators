@@ -9,18 +9,19 @@
 #
 # For a detailed walkthrough, see examples/OFFLINE_TRAINING.md
 
-### Example E2E run for Llama 3.1 8B on 5k samples from ShareGPT ###
+### Example E2E run for Llama 3.1 8B on 5k samples from UltraChat ###
 
 # Note: With just 5k samples, the model performance will not be very good, however there
 # are enough samples to verify that the pipeline is working correctly and that the model
 # is learning something. This is a good sanity check when creating a drafter for a new
 # target model.
 
-# Timing (on 2x NVIDIA H100 80GB GPUs)
-# Data Preprocessing: 15 seconds
-# vLLM Server Startup: 29 seconds
-# Training (5 epochs): 1821 seconds (30 mins 21 secs)
-# Total: 1896 seconds (31 mins 36 secs)
+# Timing (on 2x NVIDIA H100 80GB GPUs, DP=2)
+# Data Preprocessing: 16 seconds
+# vLLM Server Startup: 60 seconds (1 min)
+# Hidden States Generation: 143 seconds (2 mins 23 secs)
+# Training (5 epochs): 327 seconds (5 mins 27 secs)
+# Total: 572 seconds (9 mins 32 secs)
 
 # Results on MT-Bench (80 prompts, up to 2048 output tokens):
 # acceptance rate: 16.32%
@@ -47,8 +48,8 @@ LR=1e-4
 CONCURRENCY=32                    # Parallel requests to vLLM during data generation
 
 # GPU assignments (offline reuses the same GPUs sequentially)
-GPUS="0,1,2,3"
-NUM_GPUS=4
+GPUS="0,1"
+NUM_GPUS=2
 # =======================================
 
 # Step 1: Prepare data
@@ -75,7 +76,7 @@ echo "vLLM server ready."
 # Step 3: Generate hidden states
 echo "=== Step 3: Generating hidden states ==="
 python scripts/data_generation_offline.py \
-    --preprocessed-data "$OUTPUT_DIR" \le
+    --preprocessed-data "$OUTPUT_DIR" \
     --endpoint "http://localhost:${VLLM_PORT}/v1" \
     --output "$HIDDEN_STATES_DIR" \
     --max-samples "$MAX_SAMPLES" \

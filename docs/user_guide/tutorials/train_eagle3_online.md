@@ -6,7 +6,7 @@ For a ready-to-run version of this tutorial, see [`examples/train/eagle3_qwen3_8
 
 ## Overview
 
-**Time required:** ~30 mins (including training)
+**Time required:** ~17 mins on 4x H100 GPUs (2 for vLLM, 2 for training)
 
 **Prerequisites:**
 
@@ -152,7 +152,7 @@ CUDA_VISIBLE_DEVICES=2,3 torchrun \
 - `--epochs 5` - Number of training epochs
 - `--lr 1e-4` - Learning rate
 - `--total-seq-len 8192` - Maximum sequence length for training
-- `--on-missing generate` - Generate hidden states on-the-fly if not cached
+- `--on-missing generate` - Generate hidden states on-the-fly
 - `--on-generate delete` - Delete generated hidden states after use (saves disk space)
 
 **Note:** There are a lot of configuration options available at this stage. We've attempted to set sensible defaults but please see the [train.py cli reference](/cli/train.md) to see all available options.
@@ -171,8 +171,8 @@ checkpoints/
 │   └── scheduler_state_dict.pt
 ├── 1/                          # Epoch 1
 ├── ...
-├── 9/                          # Epoch 9 (final)
-└── checkpoint_best -> 9/                # Symlink to lowest val loss checkpoint
+├── 4/                          # Epoch 4 (final)
+└── checkpoint_best -> 4/       # Symlink to lowest val loss checkpoint
 ```
 
 Each checkpoint is a complete, self-contained speculator model ready for deployment in vLLM. The checkpoints also contain optimizer and learning rate scheduler states for resume training.
@@ -259,7 +259,7 @@ python scripts/launch_vllm.py model -- --tensor-parallel-size 2
 
    ```bash
    # Verify preprocessing succeeded
-   ls -lh ./training_data/
+   ls -lh ./output/
    ```
 
 3. **Increase training time:**

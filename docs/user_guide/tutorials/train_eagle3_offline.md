@@ -6,7 +6,7 @@ For a ready-to-run version of this tutorial, see [`examples/train/eagle3_llama3_
 
 ## Overview
 
-**Time required:** ~3 hours (including data generation)
+**Time required:** ~10 mins on 2x H100 GPUs (including data generation)
 
 **Prerequisites:**
 
@@ -109,6 +109,7 @@ INFO:     Application startup complete
 Use `data_generation_offline.py` to pre-generate all hidden states:
 
 ```bash
+# in speculators venv
 python scripts/data_generation_offline.py \
   --preprocessed-data ./output \
   --endpoint http://localhost:8000/v1 \
@@ -135,7 +136,7 @@ output/hidden_states/
 ├── hs_1.safetensors
 ├── hs_2.safetensors
 ├── ...
-└── hs_49999.safetensors
+└── hs_4999.safetensors
 ```
 
 ### Optimizing Generation Speed
@@ -211,9 +212,9 @@ python scripts/train.py \
 
 ```bash
 # in speculators venv
-CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun \
+CUDA_VISIBLE_DEVICES=0,1 torchrun \
   --standalone \
-  --nproc_per_node 4 \
+  --nproc_per_node 2 \
   scripts/train.py \
   --verifier-name-or-path meta-llama/Llama-3.1-8B-Instruct \
   --data-path ./output \
@@ -251,8 +252,8 @@ checkpoints/
 │   └── scheduler_state_dict.pt
 ├── 1/                          # Epoch 1
 ├── ...
-├── 9/                          # Epoch 9 (final)
-└── checkpoint_best -> 9/                # Symlink to lowest val loss checkpoint
+├── 4/                          # Epoch 4 (final)
+└── checkpoint_best -> 4/       # Symlink to lowest val loss checkpoint
 ```
 
 Each checkpoint is a complete, self-contained speculator model ready for deployment in vLLM. The checkpoints also contain optimizer and learning rate scheduler states for resume training.
@@ -330,7 +331,7 @@ python scripts/train.py --num-layers 1
 
    ```bash
    # Verify preprocessing succeeded
-   ls -lh ./training_data/
+   ls -lh ./output/
    ```
 
 3. **Increase training time:**

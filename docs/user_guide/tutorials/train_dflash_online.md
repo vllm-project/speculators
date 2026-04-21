@@ -6,7 +6,7 @@ For a ready-to-run version of this tutorial, see [`examples/train/dflash_qwen3_8
 
 ## Overview
 
-**Time required:** ~30 mins on 4x H100 GPUs (2 for vLLM, 2 for training)
+**Time required:** ~25 mins on 4x H100 GPUs (2 for vLLM, 2 for training)
 
 **Prerequisites:**
 
