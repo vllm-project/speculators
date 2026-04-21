@@ -1,5 +1,6 @@
 """Shared base model components for all speculator types."""
 
+from contextlib import suppress
 from typing import NamedTuple
 
 from transformers.models.llama.modeling_llama import (
@@ -38,18 +39,61 @@ class ModelComponents(NamedTuple):
 
 model_classes: dict[str, ModelComponents] = {
     "llama": ModelComponents(
-        LlamaDecoderLayer,  # first_layer_class (same as decoder for base models)
-        LlamaDecoderLayer,
-        LlamaRMSNorm,
-        LlamaRotaryEmbedding,
+        first_layer_class=LlamaDecoderLayer,
+        decoder_layer_class=LlamaDecoderLayer,
+        norm_class=LlamaRMSNorm,
+        rotary_emb_class=LlamaRotaryEmbedding,
     ),
     "qwen3": ModelComponents(
-        Qwen3DecoderLayer,  # first_layer_class (same as decoder for base models)
-        Qwen3DecoderLayer,
-        Qwen3RMSNorm,
-        Qwen3RotaryEmbedding,
+        first_layer_class=Qwen3DecoderLayer,
+        decoder_layer_class=Qwen3DecoderLayer,
+        norm_class=Qwen3RMSNorm,
+        rotary_emb_class=Qwen3RotaryEmbedding,
     ),
 }
+
+
+with suppress(ImportError):
+    from transformers.models.qwen3_next.modeling_qwen3_next import (
+        Qwen3NextDecoderLayer,
+        Qwen3NextRMSNorm,
+        Qwen3NextRotaryEmbedding,
+    )
+
+    model_classes["qwen3_next"] = ModelComponents(
+        first_layer_class=Qwen3NextDecoderLayer,
+        decoder_layer_class=Qwen3NextDecoderLayer,
+        norm_class=Qwen3NextRMSNorm,
+        rotary_emb_class=Qwen3NextRotaryEmbedding,
+    )
+
+with suppress(ImportError):
+    from transformers.models.qwen3_5.modeling_qwen3_5 import (
+        Qwen3_5DecoderLayer,
+        Qwen3_5RMSNorm,
+        Qwen3_5TextRotaryEmbedding,
+    )
+
+    model_classes["qwen3_5_text"] = ModelComponents(
+        first_layer_class=Qwen3_5DecoderLayer,
+        decoder_layer_class=Qwen3_5DecoderLayer,
+        norm_class=Qwen3_5RMSNorm,
+        rotary_emb_class=Qwen3_5TextRotaryEmbedding,
+    )
+
+with suppress(ImportError):
+    from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import (
+        Qwen3_5MoeDecoderLayer,
+        Qwen3_5MoeRMSNorm,
+        Qwen3_5MoeTextRotaryEmbedding,
+    )
+
+    model_classes["qwen3_5_moe_text"] = ModelComponents(
+        first_layer_class=Qwen3_5MoeDecoderLayer,
+        decoder_layer_class=Qwen3_5MoeDecoderLayer,
+        norm_class=Qwen3_5MoeRMSNorm,
+        rotary_emb_class=Qwen3_5MoeTextRotaryEmbedding,
+    )
 
 
 def override_components(model_type: str, **overrides) -> ModelComponents:
@@ -59,7 +103,7 @@ def override_components(model_type: str, **overrides) -> ModelComponents:
     while inheriting other components from the base model.
 
     Args:
-        model_type: Base model type ("llama" or "qwen3").
+        model_type: Base model type key in ``model_classes``.
         **overrides: Component fields to override (first_layer_class,
             decoder_layer_class, etc).
 

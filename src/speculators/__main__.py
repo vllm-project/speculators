@@ -158,6 +158,7 @@ def convert(
             --algorithm eagle3
             --algorithm-kwargs '{"norm_before_residual": true}'
             --verifier "meta-llama/Llama-3.1-8B-Instruct"
+
     """
     if not algorithm_kwargs:
         algorithm_kwargs = {}
