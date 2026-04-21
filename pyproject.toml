@@ -87,7 +87,7 @@ dev = [
     "pytest-cov~=7.1.0",
     "pytest-mock~=3.15.1",
     "pytest-rerunfailures~=14.0",
-    "respx~=0.22.0",
+    "respx~=0.23.1",
 
     # code quality
     "mypy~=1.15.0",
