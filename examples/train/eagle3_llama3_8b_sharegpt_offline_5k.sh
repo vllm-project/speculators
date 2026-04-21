@@ -74,7 +74,7 @@ echo "vLLM server ready."
 
 # Step 3: Generate hidden states
 echo "=== Step 3: Generating hidden states ==="
-python scripts/data_generation_offline2.py \
+python scripts/data_generation_offline.py \
     --preprocessed-data "$OUTPUT_DIR" \le
     --endpoint "http://localhost:${VLLM_PORT}/v1" \
     --output "$HIDDEN_STATES_DIR" \
