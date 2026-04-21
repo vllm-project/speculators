@@ -542,6 +542,6 @@ If you're still stuck:
 ## See Also
 
 - [Getting Started](getting_started.md) - Initial setup guide
-- [Training Feature](features/training.md) - Complete training documentation
+- [Features](features/index.md) - Overview of Speculators capabilities
 - [CLI Reference](../cli/index.md) - All command-line options
 - [Community](../community.md) - Get help from the community

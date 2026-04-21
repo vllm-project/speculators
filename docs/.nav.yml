@@ -3,13 +3,7 @@ nav:
     - User Guide:
           - user_guide/index.md
           - Getting Started: user_guide/getting_started.md
-          - Features:
-                - user_guide/features/index.md
-                - Response Regeneration: user_guide/features/response_regeneration.md
-                - Prepare Data: user_guide/features/prepare_data.md
-                - Offline Hidden States Generation: user_guide/features/offline_hidden_states.md
-                - Training: user_guide/features/training.md
-                - Conversion: user_guide/features/conversion.md
+          - Features: user_guide/features/index.md
           - Algorithms:
                 - user_guide/algorithms/index.md
                 - Eagle3: user_guide/algorithms/eagle3.md
