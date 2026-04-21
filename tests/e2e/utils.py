@@ -218,6 +218,7 @@ def run_training(
     speculator_type: str = "eagle3",
     extra_train_args: list[str] | None = None,
     target_layer_ids: list[int] | None = None,
+    num_layers: int | None = None,
 ):
     train_cmd = [
         sys.executable,
@@ -257,6 +258,8 @@ def run_training(
         train_cmd += ["--hidden-states-path", str(hidden_states_path)]
     if target_layer_ids is not None:
         train_cmd += ["--target-layer-ids"] + [str(lid) for lid in target_layer_ids]
+    if num_layers is not None:
+        train_cmd += ["--num-layers", str(num_layers)]
     if extra_train_args:
         train_cmd += extra_train_args
 
