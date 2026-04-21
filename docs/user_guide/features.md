@@ -20,7 +20,7 @@ During data preparation, Speculators automatically detects assistant response bo
 
 ## Performant Flex Attention
 
-Both [EAGLE-3](../algorithms/eagle3.md) and [DFlash](../algorithms/dflash.md) models use PyTorch's `flex_attention` with `BlockMask` for efficient, structured attention patterns (causal, document-aware, and anchor-based). The EAGLE-3 forward pass is wrapped with `torch.compile` for additional runtime optimization.
+Both [EAGLE-3](algorithms/eagle3.md) and [DFlash](algorithms/dflash.md) models use PyTorch's `flex_attention` with `BlockMask` for efficient, structured attention patterns (causal, document-aware, and anchor-based). The EAGLE-3 forward pass is wrapped with `torch.compile` for additional runtime optimization.
 
 ## Efficient Sequence Packing
 
@@ -36,4 +36,4 @@ Speculators can convert pre-trained models from third-party repositories (EAGLE 
 
 ---
 
-For hands-on guides covering the full workflow, see the [Tutorials](../tutorials/index.md).
+For hands-on guides covering the full workflow, see the [Tutorials](tutorials/index.md).

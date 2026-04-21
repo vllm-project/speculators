@@ -3,7 +3,7 @@ nav:
     - User Guide:
           - user_guide/index.md
           - Getting Started: user_guide/getting_started.md
-          - Features: user_guide/features/index.md
+          - Features: user_guide/features.md
           - Algorithms:
                 - user_guide/algorithms/index.md
                 - Eagle3: user_guide/algorithms/eagle3.md
