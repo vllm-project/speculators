@@ -147,7 +147,7 @@ def compute_acceptance_rate(
     if block_size != 1:
         acc_rates = []
         assert loss_mask is not None  # noqa: S101
-        for i in range(block_size):
+        for i in range(1, block_size):
             pos_accepted = torch.masked_select(
                 accepted[:, i::block_size],
                 loss_mask.to(torch.bool)[:, i::block_size],
@@ -195,6 +195,6 @@ def compute_metrics(
     metrics["loss"] = loss.detach().clone()
     metrics["full_acc"] = full_acc
 
-    for pos in range(len(per_position_acc)):
+    for pos in range(1, len(per_position_acc)):
         metrics[f"position {pos} acc"] = per_position_acc[pos]
     return loss, metrics

@@ -498,13 +498,24 @@ def parse_args():
         "--token-freq-path",
         type=str,
         default=None,
-        help="Path to token frequency distribution file (.pt)",
+        help=(
+            "Path to token frequency distribution file (.pt). Used together with "
+            "--draft-vocab-size to build vocab mappings at training time. Falls back "
+            "to '<data-path>/token_freq.pt' if not provided. If neither that file "
+            "exists nor --draft-vocab-size is set, vocab mapping is skipped and the "
+            "full verifier vocab is used."
+        ),
     )
     parser.add_argument(
         "--draft-vocab-size",
         type=int,
         default=None,
-        help="Vocabulary size for the draft model",
+        help=(
+            "Vocabulary size for the draft model. Must be provided together with a "
+            "token frequency file (--token-freq-path or '<data-path>/token_freq.pt') "
+            "to generate vocab mappings. If either is absent, vocab mapping is skipped "
+            "and the full verifier vocab is used, making this argument a no-op."
+        ),
     )
     parser.add_argument("--d2t-path", type=str, default=None)
     parser.add_argument("--t2d-path", type=str, default=None)
