@@ -63,7 +63,7 @@ python scripts/prepare_data.py \
 # Step 2: Launch vLLM server in the background
 echo "=== Step 2: Launching vLLM server ==="
 CUDA_VISIBLE_DEVICES="$GPUS" python scripts/launch_vllm.py "$MODEL" \
-    -- --port "$VLLM_PORT" &
+    -- --tensor-parallel-size 2 --port "$VLLM_PORT" &
 VLLM_PID=$!
 
 echo "Waiting for vLLM server to be ready..."

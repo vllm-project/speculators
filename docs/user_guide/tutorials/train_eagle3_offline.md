@@ -77,9 +77,9 @@ Next launch vLLM configured for hidden states extraction:
 ```bash
 # in vLLM venv
 # For 8B model - use data parallelism
-CUDA_VISIBLE_DEVICES=0,1,2,3 python scripts/launch_vllm.py \
+CUDA_VISIBLE_DEVICES=0,1 python scripts/launch_vllm.py \
   meta-llama/Llama-3.1-8B-Instruct \
-  -- --data-parallel-size 4 --port 8000
+  -- --tensor-parallel-size 2 --port 8000
 
 # For 70B model - combine tensor parallelism and data parallelism
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 python scripts/launch_vllm.py \

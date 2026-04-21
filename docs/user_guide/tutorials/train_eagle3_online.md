@@ -19,15 +19,15 @@ Create two virtual environments (recommended to keep separate so dependencies do
 
 ```bash
 # Speculators venv (for data prep and training)
-uv venv speculators
-source speculators/bin/activate
+uv venv speculators_venv
+source speculators_venv/bin/activate
 uv pip install "speculators>=0.5.0"
 ```
 
 ```bash
 # vLLM venv (for serving the target model)
-uv venv vllm
-source vllm/bin/activate
+uv venv vllm_venv
+source vllm_venv/bin/activate
 uv pip install "vllm>=0.18"
 ```
 
@@ -81,8 +81,8 @@ Next launch vLLM configured for hidden states extraction:
 python scripts/launch_vllm.py Qwen/Qwen3-8B
 
 # Multiple GPUs with data parallelism (recommended)
-CUDA_VISIBLE_DEVICES=0,1,2,3 python scripts/launch_vllm.py \
-  Qwen/Qwen3-8B -- --data-parallel-size 4 --port 8000
+CUDA_VISIBLE_DEVICES=0,1 python scripts/launch_vllm.py \
+  Qwen/Qwen3-8B -- --tensor-parallel-size 2 --port 8000
 ```
 
 **The `--` separator:** Anything after `--` is passed directly to vLLM. Common options:
