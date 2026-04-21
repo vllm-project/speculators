@@ -71,15 +71,17 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             verifier_config = verifier_config.text_config
         num_verifier_layers = verifier_config.num_hidden_layers
 
-        # Use aux_hidden_state_layer_ids from config if present
         if config.aux_hidden_state_layer_ids is not None:
             self.target_layer_ids = config.aux_hidden_state_layer_ids
         else:
+            # Eagle3 defaults; write back so they are persisted in config.json
             self.target_layer_ids = [
                 2,
                 num_verifier_layers // 2,
                 num_verifier_layers - 3,
             ]
+            # set defaults to config if not provided - vLLM will fail otherwise
+            config.aux_hidden_state_layer_ids = self.target_layer_ids
 
         self.norm = Qwen3RMSNorm(
             config.transformer_layer_config.hidden_size,
