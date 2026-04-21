@@ -128,10 +128,9 @@ def create_transformer_layer_config(
     if hasattr(verifier_config, "text_config"):
         verifier_config = verifier_config.text_config
 
-    if hidden_act is None:
-        hidden_act = getattr(verifier_config, "hidden_act", None) or getattr(
-            verifier_config, "hidden_activation", None
-        )
+    hidden_act = hidden_act or getattr(verifier_config, "hidden_act", None) or getattr(
+        verifier_config, "hidden_activation", None
+    )
     if hidden_act is None:
         raise AttributeError(
             f"{type(verifier_config).__name__} has neither 'hidden_act' nor 'hidden_activation'"
