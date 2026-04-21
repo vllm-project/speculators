@@ -1,86 +1,40 @@
 # EAGLE-3
 
-EAGLE-3 is a speculative decoding algorithm that uses a lightweight draft model to autoregressively predict multiple tokens ahead, which are then verified by the target model in a single forward pass.
-
-## Overview
-
-EAGLE-3 uses Llama-style transformer layers for the draft model, but can be paired with any supported verifier model -- the draft architecture is independent of the verifier.
-
-**Key characteristics:**
-
-- **Autoregressive drafting:** Predicts draft tokens one at a time, sequentially
-- **Cross-tokenizer support:** Draft model can use a smaller vocabulary than the target
-- **Lossless:** Output comes from the same distribution as the target model
+EAGLE-3 is a speculative decoding algorithm that uses a lightweight draft model to autoregressively predict multiple tokens ahead, which are then verified by the target model in a single forward pass. The draft model uses Llama-style transformer layers and is trained to minimize KL divergence against the target model's logits. It supports cross-tokenizer vocabularies and can be paired with any supported verifier model.
 
 ## How It Works
 
 ### Architecture
 
-EAGLE-3 consists of:
+![EAGLE-3 Architecture](../../assets/eagle3_architecture.png)
 
-1. **Token embeddings:** Embedding of the current token
-2. **Hidden states:** Internal representations from the target model at selected layers
-3. **FC projection:** Combines embeddings with hidden states
-4. **Llama-style decoder layers:** 1-4 transformer decoder layers (default: 1)
-5. **LM head:** Projects to vocabulary logits
+The target model produces hidden states at selected layers, which are concatenated and projected through an FC layer alongside token embeddings. These pass through Llama-style decoder layers (default: 1) and an LM head to produce draft logits. At each autoregressive step, the draft model takes the previous token's embedding and hidden states to predict the next token.
 
 ### Inference Process
 
-1. Target model generates the first token autoregressively
-2. EAGLE-3 drafts the next K tokens using hidden states from the target model
-3. Target model verifies all K draft tokens in one forward pass
-4. The longest correct prefix is accepted
-5. Repeat from the last accepted token
+1. EAGLE-3 autoregressively drafts K tokens, each step feeding the previous prediction back through the draft model
+2. Target model verifies all K draft tokens in one forward pass
+3. The longest correct prefix is accepted
+4. Repeat from the last accepted token
 
-### Training
+## Pretrained Models
 
-EAGLE-3 is trained to minimize KL divergence between its draft logits and the target model's logits, learning to predict tokens the target model is likely to generate.
+Pretrained EAGLE-3 speculator models are available on HuggingFace from the [RedHatAI speculator models collection](https://huggingface.co/collections/RedHatAI/speculator-models):
 
-## Configuration
-
-```python
-Eagle3SpeculatorConfig(
-    draft_vocab_size=32000,
-    norm_before_residual=True,
-    target_layer_ids=[2, 16, 29, 31],
-    transformer_layer_config=...,
-)
-```
-
-Key parameters:
-
-- **`draft_vocab_size`** -- Typically 32K. Smaller vocabularies give faster inference; larger ones give better token coverage.
-- **`target_layer_ids`** -- Which layers to extract hidden states from. Default selects early, middle, and late layers (e.g., `[2, N//2, N-3, N-1]` for an N-layer model).
-- **`num_layers`** -- Number of draft decoder layers (default: 1). More layers improve quality at the cost of speed.
-
-## Training
-
-```bash
-python scripts/train.py \
-  --speculator-type eagle3 \
-  --verifier-name-or-path meta-llama/Llama-3.1-8B-Instruct \
-  --data-path ./training_data \
-  --draft-vocab-size 32000 \
-  --epochs 10 \
-  --lr 3e-5
-```
-
-See the step-by-step tutorials for detailed instructions:
-
-- [Train EAGLE-3 Online](../tutorials/train_eagle3_online.md)
-- [Train EAGLE-3 Offline](../tutorials/train_eagle3_offline.md)
-
-## Current Support
-
-EAGLE-3 is the more established algorithm with mature support:
-
-- **Speculators:** Fully supported
-- **vLLM:** Fully optimized (Llama-style draft layers)
-- **Verifier models:** Any supported architecture
+| Verifier | Speculator |
+| --- | --- |
+| `meta-llama/Llama-3.1-8B-Instruct` | [`RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3`](https://huggingface.co/RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3) |
+| `meta-llama/Llama-3.3-70B-Instruct` | [`RedHatAI/Llama-3.3-70B-Instruct-speculator.eagle3`](https://huggingface.co/RedHatAI/Llama-3.3-70B-Instruct-speculator.eagle3) |
+| `Qwen/Qwen3-8B` | [`RedHatAI/Qwen3-8B-speculator.eagle3`](https://huggingface.co/RedHatAI/Qwen3-8B-speculator.eagle3) |
+| `Qwen/Qwen3-14B` | [`RedHatAI/Qwen3-14B-speculator.eagle3`](https://huggingface.co/RedHatAI/Qwen3-14B-speculator.eagle3) |
+| `Qwen/Qwen3-32B` | [`RedHatAI/Qwen3-32B-speculator.eagle3`](https://huggingface.co/RedHatAI/Qwen3-32B-speculator.eagle3) |
+| `Qwen/Qwen3-235B-A22B` | [`RedHatAI/Qwen3-235B-A22B-speculator.eagle3`](https://huggingface.co/RedHatAI/Qwen3-235B-A22B-speculator.eagle3) |
+| `meta-llama/Llama-4-Maverick-17B-128E-Instruct` | [`RedHatAI/Llama-4-Maverick-17B-128E-Instruct-speculator.eagle3`](https://huggingface.co/RedHatAI/Llama-4-Maverick-17B-128E-Instruct-speculator.eagle3) |
+| `google/gemma-4-31B-it` | [`RedHatAI/gemma-4-31B-it-speculator.eagle3`](https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.eagle3) |
 
 ## Research & Citation
 
-EAGLE-3 is based on research from SafeAI Lab: [EAGLE Repository](https://github.com/SafeAILab/EAGLE)
+EAGLE-3 is based on research from SafeAI Lab: [EAGLE Repository](https://github.com/SafeAILab/EAGLE) | [arXiv Paper](https://arxiv.org/abs/2401.15077)
 
 ```bibtex
 @article{li2024eagle,
@@ -90,3 +44,9 @@ EAGLE-3 is based on research from SafeAI Lab: [EAGLE Repository](https://github.
   year={2024}
 }
 ```
+
+## See Also
+
+- [Train EAGLE-3 Online](../tutorials/train_eagle3_online.md) -- Online training tutorial
+- [Train EAGLE-3 Offline](../tutorials/train_eagle3_offline.md) -- Offline training tutorial
+- [Convert EAGLE-3 Models](../tutorials/convert_eagle3.md) -- Convert third-party models to Speculators format
