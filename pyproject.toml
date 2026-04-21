@@ -65,7 +65,7 @@ dev = [
     # docs build
     "mike~=2.2.0",
     "mkdocs~=1.6.1",
-    "mkdocs-material[imaging]~=9.6.16",
+    "mkdocs-material[imaging]~=9.7.6",
     "markdown~=3.8.2",
     "pymdown-extensions~=10.16.1",
     "mkdocs-section-index~=0.3.10",
