@@ -2,36 +2,37 @@ from typing import Any, Literal
 
 from pydantic import Field, field_serializer, field_validator
 from transformers import AutoConfig, PretrainedConfig
-from transformers.models.llama.configuration_llama import LlamaConfig
+from transformers.models.qwen3.modeling_qwen3 import (
+    Qwen3Config,
+)
 
 from speculators import SpeculatorModelConfig
 
 __all__ = [
-    "Eagle3SpeculatorConfig",
+    "DFlashSpeculatorConfig",
 ]
 
 
-@SpeculatorModelConfig.register("eagle3")
-class Eagle3SpeculatorConfig(SpeculatorModelConfig):
+@SpeculatorModelConfig.register("dflash")
+class DFlashSpeculatorConfig(SpeculatorModelConfig):
     """
-    Configuration for EAGLE-3 speculator with vocabulary mapping.
+    Configuration for DFlash speculator with vocabulary mapping.
 
-    EAGLE-3 features vocabulary mapping between draft (32K) and target (128K)
+    DFlash features vocabulary mapping between draft (64K) and target (128K)
     vocabularies, enabling cross-tokenizer speculation.
 
     :param transformer_layer_config: Configuration for the transformer decoder layer
     :param draft_vocab_size: Size of draft model vocabulary for speculation
-    :param norm_before_residual: Apply hidden_norm before storing residual
     """
 
-    speculators_model_type: Literal["eagle3"] = "eagle3"
+    speculators_model_type: Literal["dflash"] = "dflash"
     architectures: list[str] = Field(
-        default_factory=lambda: ["Eagle3Speculator"],
+        default_factory=lambda: ["DFlashSpeculator"],
         description="Model architectures that can load these weights",
     )
 
     transformer_layer_config: PretrainedConfig = Field(
-        default_factory=LlamaConfig,
+        default_factory=Qwen3Config,
         description="Configuration for the transformer decoder layer",
     )
 
@@ -40,9 +41,19 @@ class Eagle3SpeculatorConfig(SpeculatorModelConfig):
         description="Size of draft model vocabulary for speculation",
     )
 
-    norm_before_residual: bool = Field(
-        default=False,
-        description="Apply hidden_norm before storing residual",
+    block_size: int = Field(
+        default=8,
+        description=(
+            "Default size of the draft block predicted with a forward pass of the model"
+        ),
+    )
+
+    max_anchors: int = Field(
+        default=256,
+        description=(
+            "Maximum number of anchor positions to sample during training "
+            "(controls memory usage and training efficiency)"
+        ),
     )
 
     target_hidden_size: int | None = Field(
@@ -50,23 +61,14 @@ class Eagle3SpeculatorConfig(SpeculatorModelConfig):
         description="Hidden size of the target model (if different from draft model)",
     )
 
-    eagle_aux_hidden_state_layer_ids: list[int] | None = Field(
+    aux_hidden_state_layer_ids: list[int] | None = Field(
         default=None,
-        description="Layer IDs of the Eagle auxiliary hidden state layers",
+        description="Layer IDs of the DFlash auxiliary hidden state layers",
     )
 
-    norm_before_fc: bool = Field(
-        default=False,
-        description=(
-            "If True, vLLM will add and apply RMSNorm before the fc layer when loading "
-            "this draft model (e.g. for gpt-oss draft checkpoints). Set in config when "
-            "converting or saving gpt-oss draft models."
-        ),
-    )
-
-    embed_requires_grad: bool = Field(
-        default=False,
-        description="Whether embedding layer weights require gradients during training",
+    mask_token_id: int | None = Field(
+        default=None,
+        description="Token ID used for masking",
     )
 
     @field_serializer("transformer_layer_config")
@@ -79,7 +81,7 @@ class Eagle3SpeculatorConfig(SpeculatorModelConfig):
     def validate_transformer_config(cls, value: Any) -> PretrainedConfig:
         """Validate and convert transformer config."""
         if isinstance(value, dict):
-            config_class: type[PretrainedConfig] = LlamaConfig
+            config_class: type[PretrainedConfig] = Qwen3Config
             if "model_type" in value:
                 config_class = AutoConfig.for_model(
                     model_type=value["model_type"]

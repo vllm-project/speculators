@@ -24,13 +24,13 @@ jobs:
       id-token: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.10'
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v7
       - name: Generate doc files
         run: uv run --with .[dev] --no-sync --isolated docs/scripts/gen_files.py
 
@@ -42,7 +42,7 @@ jobs:
           args: --root-dir "$(pwd)/docs" --verbose --no-progress './docs/**/*.md'
       - name: (DOCS) Find existing comment
         if: github.event.pull_request.head.repo.full_name == github.repository
-        uses: peter-evans/find-comment@v3
+        uses: peter-evans/find-comment@v4
         id: find_docs_comment
         with:
           issue-number: ${{ github.event.pull_request.number }}
@@ -63,7 +63,7 @@ jobs:
         if: >
           steps.lychee_docs.outputs.exit_code != '0' &&
           github.event.pull_request.head.repo.full_name == github.repository
-        uses: peter-evans/create-or-update-comment@v4
+        uses: peter-evans/create-or-update-comment@v5
         with:
           comment-id: ${{ steps.find_docs_comment.outputs.comment-id }}
           issue-number: ${{ github.event.pull_request.number }}
@@ -74,7 +74,7 @@ jobs:
           steps.lychee_docs.outputs.exit_code == '0' &&
           steps.find_docs_comment.outputs.comment-id != '' &&
           github.event.pull_request.head.repo.full_name == github.repository
-        uses: peter-evans/create-or-update-comment@v4
+        uses: peter-evans/create-or-update-comment@v5
         with:
           comment-id: ${{ steps.find_docs_comment.outputs.comment-id }}
           issue-number: ${{ github.event.pull_request.number }}
@@ -95,7 +95,7 @@ jobs:
           args: --root-dir "$(pwd)" --verbose --no-progress --exclude-path 'docs' './**/*.md'
       - name: (REPO) Find existing comment
         if: github.event.pull_request.head.repo.full_name == github.repository
-        uses: peter-evans/find-comment@v3
+        uses: peter-evans/find-comment@v4
         id: find_repo_comment
         with:
           issue-number: ${{ github.event.pull_request.number }}
@@ -116,7 +116,7 @@ jobs:
         if: >
           steps.lychee_repo.outputs.exit_code != '0' &&
           github.event.pull_request.head.repo.full_name == github.repository
-        uses: peter-evans/create-or-update-comment@v4
+        uses: peter-evans/create-or-update-comment@v5
         with:
           comment-id: ${{ steps.find_repo_comment.outputs.comment-id }}
           issue-number: ${{ github.event.pull_request.number }}
@@ -127,7 +127,7 @@ jobs:
           steps.lychee_repo.outputs.exit_code == '0' &&
           steps.find_repo_comment.outputs.comment-id != '' &&
           github.event.pull_request.head.repo.full_name == github.repository
-        uses: peter-evans/create-or-update-comment@v4
+        uses: peter-evans/create-or-update-comment@v5
         with:
           comment-id: ${{ steps.find_repo_comment.outputs.comment-id }}
           issue-number: ${{ github.event.pull_request.number }}

@@ -1,7 +1,7 @@
 import pytest
 
 from speculators.convert.eagle.eagle3_converter import Eagle3Converter
-from tests.e2e.vllm.utils import run_vllm_engine
+from tests.e2e.utils import run_vllm_engine
 
 
 class TestEagle3vLLM:

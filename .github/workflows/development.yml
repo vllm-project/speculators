@@ -20,9 +20,9 @@ jobs:
     env:
       UV_SYSTEM_PYTHON: 1
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
       - name: Install uv
@@ -43,9 +43,9 @@ jobs:
             - python: "3.13"                                                                                                                                                                                                                                                              
               transformers: "<5.0.0"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
       - name: Install dependencies
@@ -65,9 +65,9 @@ jobs:
             - python: "3.13"                                                                                                                                                                                                                                                              
               transformers: "<5.0.0"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
       - name: Install dependencies
@@ -83,65 +83,12 @@ jobs:
       matrix:
         python: ["3.10"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
       - name: Install dependencies
         run: pip install tox tox-uv
       - name: Run data generation tests
         run: tox -e test-datagen
-
-  build:
-    runs-on: ubuntu-latest
-    permissions:
-      pull-requests: write
-    strategy:
-      matrix:
-        python: ["3.10"]
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python }}
-      - name: Install dependencies
-        run: pip install tox tox-uv
-      - name: Build the package
-        run: |
-          export SPECULATORS_BUILD_TYPE=dev
-          export SPECULATORS_BUILD_ITERATION=${{ github.event.pull_request.number }}
-          tox -e build
-      - name: Upload build artifacts
-        id: artifact-upload
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-artifacts
-          path: dist/*
-          compression-level: 6
-          if-no-files-found: error
-          retention-days: 30
-      - name: Find comment
-        if: github.event.pull_request.head.repo.full_name == github.repository
-        uses: peter-evans/find-comment@v3
-        id: fc
-        with:
-          issue-number: ${{ github.event.pull_request.number }}
-          comment-author: "github-actions[bot]"
-          body-includes: Build Artifacts Available
-      - name: Create or update comment
-        if: github.event.pull_request.head.repo.full_name == github.repository
-        uses: peter-evans/create-or-update-comment@v4
-        with:
-          comment-id: ${{ steps.fc.outputs.comment-id }}
-          issue-number: ${{ github.event.pull_request.number }}
-          body: |
-            📦 **Build Artifacts Available**
-            The build artifacts (\`.whl\` and \`.tar.gz\`) have been successfully generated and are available for download: ${{ steps.artifact-upload.outputs.artifact-url }}.
-            They will be retained for **up to 30 days**.
-            Commit: ${{ github.event.pull_request.head.sha }}
-          edit-mode: replace

@@ -28,8 +28,17 @@ def parse_args():
         nargs="+",
         help=(
             "(Optional) A (space separated) list of integer layer ids. Defaults to "
-            "[2, num_hidden_layers // 2, num_hidden_layers - 3, num_hidden_layers]. "
+            "[2, num_hidden_layers // 2, num_hidden_layers - 3]. "
             "Note: if set, you must also pass the same value into the training process"
+        ),
+    )
+    parser.add_argument(
+        "--include-last-layer",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "For DFlash models, append the last layer (num_hidden_layers) to "
+            "target_layer_ids for verifier hidden states extraction. Default: True"
         ),
     )
     parser.add_argument(
@@ -45,22 +54,23 @@ def main():
     if "--" in vllm_args:
         vllm_args.remove("--")
 
+    from transformers import AutoConfig  # noqa: PLC0415
+
+    config = AutoConfig.from_pretrained(args.model)
+    if hasattr(config, "text_config"):
+        config = config.text_config
+    num_hidden_layers = config.num_hidden_layers
+
     if args.target_layer_ids:
         target_layer_ids = args.target_layer_ids
+        if args.include_last_layer and num_hidden_layers not in target_layer_ids:
+            target_layer_ids.append(num_hidden_layers)
         warnings.warn(
-            f"Using custom target layer ids {args.target_layer_ids}. These "
+            f"Using custom target layer ids {target_layer_ids}. These "
             "must also be explicitly passed into the training script.",
             stacklevel=2,
         )
     else:
-        # Import here so that it isn't required if target_layer_ids passed explicitly
-        from transformers import AutoConfig  # noqa: PLC0415
-
-        config = AutoConfig.from_pretrained(args.model)
-        if hasattr(config, "text_config"):
-            config = config.text_config
-
-        num_hidden_layers = config.num_hidden_layers
         target_layer_ids = [
             2,
             num_hidden_layers // 2,

@@ -174,6 +174,15 @@ def parse_args():
         default=8,
         help="Number of CPU processes for dataset preprocessing (default: 8)",
     )
+    parser.add_argument(
+        "--minimum-valid-tokens",
+        type=int,
+        default=None,
+        help=(
+            "Drop samples whose loss mask contains fewer than this many "
+            "trainable tokens."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -349,6 +358,7 @@ def main():
         token_freq_path=args.token_freq_path,
         assistant_pattern=args.assistant_pattern,
         turn_dropout=args.turn_dropout,
+        minimum_valid_tokens=args.minimum_valid_tokens,
     )
     num_saved = generate_and_save_hidden_states(args, dataset)
 
