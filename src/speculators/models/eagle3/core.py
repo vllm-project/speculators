@@ -432,6 +432,8 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
             unmodified_verifier_config = AutoConfig.from_pretrained(
                 kwargs["verifier_name_or_path"]
             )
+            if hasattr(unmodified_verifier_config, "text_config"):
+                unmodified_verifier_config = unmodified_verifier_config.text_config
             num_target_layers = unmodified_verifier_config.num_hidden_layers
             target_layer_ids = [2, num_target_layers // 2, num_target_layers - 3]
             warnings.warn(
