@@ -113,6 +113,14 @@ def create_transformer_layer_config(
     if hasattr(verifier_config, "text_config"):
         verifier_config = verifier_config.text_config
 
+    hidden_act = getattr(verifier_config, "hidden_act", None) or getattr(
+        verifier_config, "hidden_activation", None
+    )
+    if hidden_act is None:
+        raise AttributeError(
+            f"{type(verifier_config).__name__} has neither 'hidden_act' nor 'hidden_activation'"
+        )
+
     return config_class(
         vocab_size=verifier_config.vocab_size,
         hidden_size=verifier_config.hidden_size,
@@ -120,7 +128,7 @@ def create_transformer_layer_config(
         num_hidden_layers=num_layers,
         num_attention_heads=verifier_config.num_attention_heads,
         num_key_value_heads=verifier_config.num_key_value_heads,
-        hidden_act="silu",#verifier_config.hidden_activation,
+        hidden_act=hidden_act,
         max_position_embeddings=verifier_config.max_position_embeddings,
         initializer_range=verifier_config.initializer_range,
         rms_norm_eps=verifier_config.rms_norm_eps,
