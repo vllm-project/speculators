@@ -58,7 +58,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     # build
-    "build>=1.0.0",
+    "build>=1.4.3",
     "setuptools>=61.0",
     "setuptools-git-versioning>=2.0,<3",
 
