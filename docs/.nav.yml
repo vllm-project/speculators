@@ -17,7 +17,6 @@ nav:
                 - Response Regeneration: user_guide/tutorials/response_regeneration.md
                 - Evaluating Model Performance: user_guide/tutorials/evaluating_performance.md
                 - Serve in vLLM: user_guide/tutorials/serve_vllm.md
-          - Troubleshooting: user_guide/troubleshooting.md
     - Developer Guide:
           - developer/index.md
           - Contributing Guide: developer/contributing.md
