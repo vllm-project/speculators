@@ -313,7 +313,7 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
         # and hits the same torch annotation issue. See pydantic_utils.py for why
         # _types_namespace is needed and is backwards compatible.
         cls.model_rebuild(force=True, _types_namespace={"torch": torch})
-        for subcls in cls.registry.values():
+        for subcls in (cls.registry or {}).values():
             subcls.model_rebuild(force=True, _types_namespace={"torch": torch})
 
     # transformers >= 5.x adds validate() which conflicts with Pydantic v2's
