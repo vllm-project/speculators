@@ -111,8 +111,6 @@ dev = [
     "mkdocs-linkcheck~=1.0.6",
 ]
 
-datagen = ["vllm>=0.12.0,<=0.16.0"]
-
 [project.entry-points.console_scripts]
 speculators = "speculators.__main__:app"
 
@@ -258,9 +256,6 @@ select = [
     "INP001", # allow implicit namespace packages in examples
 ]
 
-"scripts/gen_and_train.py" = [
-    "T201", # allow print in scripts
-]
 
 [tool.ruff.lint.isort]
 known-first-party = ["speculators", "tests"]

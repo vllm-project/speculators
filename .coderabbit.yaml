@@ -34,7 +34,7 @@ reviews:
     - path: "examples/**/*.py"
       instructions: "Review for clarity, correctness, and educational value. Ensure examples are end-to-end runnable, configurations match current API, and comments explain speculative decoding-specific concepts for users new to the algorithm."
     - path: "scripts/**/*.py"
-      instructions: "Check that scripts handle argument parsing robustly, log progress clearly, and are safe to run in multi-GPU environments. Verify that gen_and_train.py pipeline orchestration correctly sequences data generation before training."
+      instructions: "Check that scripts handle argument parsing robustly, log progress clearly, and are safe to run in multi-GPU environments."
     - path: "docs/**/*.md"
       instructions: "Check for clarity, accuracy, and completeness. Ensure code examples match the current API and that speculative decoding concepts are explained correctly."
     - path: "**/README.md"
