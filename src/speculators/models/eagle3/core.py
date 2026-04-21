@@ -15,6 +15,7 @@ from speculators.models.eagle3.attention import (
     extend_mask_for_draft_tokens,
 )
 from speculators.models.eagle3.model_definitions import model_classes
+from speculators.models.utils import resolve_target_layer_ids
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 from speculators.utils.loading import load_model_layers
 
@@ -427,21 +428,10 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
         Returns:
             Initialized Eagle3DraftModel
         """
-        target_layer_ids = kwargs.get("target_layer_ids")
-        if target_layer_ids is None:
-            unmodified_verifier_config = AutoConfig.from_pretrained(
-                kwargs["verifier_name_or_path"]
-            )
-            if hasattr(unmodified_verifier_config, "text_config"):
-                unmodified_verifier_config = unmodified_verifier_config.text_config
-            num_target_layers = unmodified_verifier_config.num_hidden_layers
-            target_layer_ids = [2, num_target_layers // 2, num_target_layers - 3]
-            warnings.warn(
-                "--target-layer-ids is not explicitly set. Setting target "
-                f"layers to {target_layer_ids}. If custom target layers were used "
-                "when launching vllm datagen, please set them explicitly.",
-                stacklevel=2,
-            )
+        target_layer_ids = resolve_target_layer_ids(
+            kwargs.get("target_layer_ids"),
+            kwargs["verifier_name_or_path"],
+        )
 
         config = Eagle3SpeculatorConfig(
             transformer_layer_config=verifier_config,

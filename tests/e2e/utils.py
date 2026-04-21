@@ -17,7 +17,7 @@ __all__ = [
     "VLLM_PYTHON",
     "launch_vllm_server",
     "launch_vllm_server_context",
-    "run_data_generation_offline2",
+    "run_data_generation_offline",
     "run_prepare_data",
     "run_training",
     "run_vllm_engine",
@@ -164,7 +164,7 @@ def run_prepare_data(
     assert result.returncode == 0, "prepare_data.py failed"
 
 
-def run_data_generation_offline2(
+def run_data_generation_offline(
     data_path: Path,
     hidden_states_path: Path | None = None,
     port: int = 8321,
@@ -176,7 +176,7 @@ def run_data_generation_offline2(
 ):
     datagen_cmd = [
         sys.executable,
-        str(SCRIPTS_DIR / "data_generation_offline2.py"),
+        str(SCRIPTS_DIR / "data_generation_offline.py"),
         "--preprocessed-data",
         str(data_path),
         "--endpoint",
@@ -199,7 +199,7 @@ def run_data_generation_offline2(
         datagen_cmd, stderr=subprocess.PIPE, text=True, check=False, timeout=timeout
     )
     assert result.returncode == 0, (
-        f"data_generation_offline2.py failed:\n{result.stderr}"
+        f"data_generation_offline.py failed:\n{result.stderr}"
     )
 
 
@@ -218,6 +218,7 @@ def run_training(
     speculator_type: str = "eagle3",
     extra_train_args: list[str] | None = None,
     target_layer_ids: list[int] | None = None,
+    num_layers: int | None = None,
 ):
     train_cmd = [
         sys.executable,
@@ -257,6 +258,8 @@ def run_training(
         train_cmd += ["--hidden-states-path", str(hidden_states_path)]
     if target_layer_ids is not None:
         train_cmd += ["--target-layer-ids"] + [str(lid) for lid in target_layer_ids]
+    if num_layers is not None:
+        train_cmd += ["--num-layers", str(num_layers)]
     if extra_train_args:
         train_cmd += extra_train_args
 

@@ -140,12 +140,6 @@ def migrate_developer_docs():
         ),
         # Examples
         ProcessFile(
-            root_path=Path("examples/data_generation_and_training/README.md"),
-            docs_path=Path("examples/data_generation_and_training.md"),
-            title="Train",
-            weight=1,
-        ),
-        ProcessFile(
             root_path=Path("examples/convert/README.md"),
             docs_path=Path("examples/convert.md"),
             title="Convert",
@@ -158,7 +152,7 @@ def migrate_developer_docs():
             weight=4,
         ),
         ProcessFile(
-            root_path=Path("scripts/README.md"),
+            root_path=Path("examples/ONLINE_TRAINING.md"),
             docs_path=Path("train.md"),
             title="Train",
             weight=-8,

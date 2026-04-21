@@ -167,14 +167,6 @@ The following table summarizes the models that have been trained end-to-end by o
 
 ✅ = Supported, ⏳ = In Progress, ❌ = Not Yet Supported
 
-## Examples
-
-End-To-End Training Examples:
-
-- [Train Llama3 Draft Model](https://github.com/vllm-project/speculators/blob/main/examples/data_generation_and_training/llama3_8b_sharegpt_5k.py)
-- [Train Qwen3 (Non-MoE) Draft Model](https://github.com/vllm-project/speculators/blob/main/examples/data_generation_and_training/qwen3_8b_sharegpt_ultrachat.py)
-- [Train GPT-OSS Draft Model](https://github.com/vllm-project/speculators/blob/main/examples/data_generation_and_training/gpt_oss_20b_ultrachat_5k.py)
-
 ## vLLM Inference
 
 Models trained through Speculators can run seamlessly in vLLM using a simple `vllm serve <speculator_model>` command. This will run the model in vLLM using default arguments, defined in the `speculator_config` of the model's config.json.
@@ -232,12 +224,6 @@ For development with additional tools:
 
 ```bash
 pip install -e ".[dev]"
-```
-
-To enable the generation of data (i.e hidden states) from vLLM for speculator training:
-
-```bash
-pip install -e ".[datagen]"
 ```
 
 #### Verify Installation

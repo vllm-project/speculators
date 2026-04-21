@@ -76,19 +76,3 @@ jobs:
         run: tox -e test-integration
         env:
           TRANSFORMERS_VERSION: ${{ matrix.transformers }}
-
-  datagen-tests:
-    runs-on: ibm-wdc-k8s-vllm-h100-solo
-    strategy:
-      matrix:
-        python: ["3.10"]
-    steps:
-      - uses: actions/checkout@v6
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: ${{ matrix.python }}
-      - name: Install dependencies
-        run: pip install tox tox-uv
-      - name: Run data generation tests
-        run: tox -e test-datagen

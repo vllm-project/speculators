@@ -204,7 +204,8 @@ class TestComputeMetrics:
         targets = torch.randint(0, V, (B, T))
         loss_mask = torch.ones(B, T)
         _, metrics = compute_metrics(logits, targets, loss_mask, block_size=4)
-        for i in range(4):
+        assert "position 0 acc" not in metrics
+        for i in range(1, 4):
             assert f"position {i} acc" in metrics
 
     def test_loss_matches_loss_function(self):
@@ -227,5 +228,5 @@ class TestComputeMetrics:
             logits, targets, loss_mask, block_size=4
         )
         assert torch.isclose(metrics["full_acc"], expected_acc)
-        for i in range(4):
+        for i in range(1, 4):
             assert torch.isclose(metrics[f"position {i} acc"], expected_pos_accs[i])

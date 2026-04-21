@@ -3,7 +3,7 @@
 Exercises the full offline pipeline:
   1. Prepare data (scripts/prepare_data.py)
   2. Launch a vLLM server for hidden-state extraction (scripts/launch_vllm.py)
-  3. Generate hidden states offline (scripts/data_generation_offline2.py)
+  3. Generate hidden states offline (scripts/data_generation_offline.py)
   4. Stop the vLLM server
   5. Train a draft model using pre-generated hidden states (scripts/train.py)
   6. Validate the trained checkpoint via vLLM inference (run_vllm_engine)
@@ -15,7 +15,7 @@ import pytest
 
 from tests.e2e.utils import (
     launch_vllm_server_context,
-    run_data_generation_offline2,
+    run_data_generation_offline,
     run_prepare_data,
     run_training,
     run_vllm_engine,
@@ -90,7 +90,7 @@ def run_offline_e2e(
         target_layer_ids=target_layer_ids,
     ):
         # Step 2: Generate hidden states offline
-        run_data_generation_offline2(
+        run_data_generation_offline(
             data_path,
             offline_hidden_states,
             port,
