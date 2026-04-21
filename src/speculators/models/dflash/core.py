@@ -151,7 +151,8 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 algorithm="dflash",
                 proposal_methods=[
                     GreedyTokenProposalConfig(
-                        speculative_tokens=kwargs.get("block_size", 8),
+                        # DFlash first position is anchor position, not used during gen
+                        speculative_tokens=kwargs.get("block_size", 8) - 1,
                     )
                 ],
                 default_proposal_method="greedy",
