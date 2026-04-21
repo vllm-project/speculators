@@ -1,35 +1,39 @@
 # Features
 
-Speculators provides a comprehensive set of features for building, training, and deploying speculative decoding models. This section covers the core capabilities of the library.
+Speculators is built to make training and deploying speculative decoding models fast, scalable, and easy to integrate into existing workflows. Here are some of the key features.
 
-## Overview
+## Distributed Training with FSDP
 
-The features in Speculators span the entire workflow of speculative decoding model development:
+Speculators supports multi-GPU training via PyTorch Fully Sharded Data Parallel (FSDP). Model parameters are sharded per-layer with a mixed precision policy — bfloat16 for parameters, float32 for gradient reductions — and distributed checkpointing handles save/restore across ranks automatically.
 
-- **Data Preparation** - Transform raw conversational datasets into training-ready format
-- **Hidden States Generation** - Extract hidden states from verifier models for training
-- **Model Training** - Train speculator models with flexible online or offline approaches
-- **Response Regeneration** - Generate diverse training data with response variations
-- **Model Conversion** - Convert third-party models to the Speculators format
+## Draft Vocabulary Support
 
-## Available Features
+Draft models use a reduced vocabulary for faster inference. Speculators automatically builds vocabulary mappings (`t2d` and `d2t` tensors) from token frequency statistics collected during data preparation, selecting the most frequent tokens for the draft vocab. Pre-built mappings can also be provided manually.
 
-### [Response Regeneration](response_regeneration.md)
+## Multi-Backend Metric Logging
 
-Generate alternative responses to training data using the target model to create more diverse training datasets. This technique helps improve the robustness of speculator models by exposing them to a wider variety of language patterns.
+Training metrics can be logged to TensorBoard, Weights & Biases, and TrackIO — individually or simultaneously, so that you can use your preferred experiment tracking tool.
 
-### [Prepare Data](prepare_data.md)
+## Automatic Chat Template Detection
 
-Preprocess conversational datasets by applying chat templates, tokenization, and creating loss masks. This is the first step in the training pipeline that converts raw text into a format ready for speculator training.
+During data preparation, Speculators automatically detects assistant response boundaries to build loss masks. It first tries HuggingFace's native `assistant_tokens_mask` support, then falls back to regex-based pattern detection — including stripping `<think>` blocks from reasoning models. No manual template configuration is needed for most models.
 
-### [Offline Hidden States Generation](offline_hidden_states.md)
+## Performant Flex Attention
 
-Extract and save hidden states from the verifier model using vLLM for offline training. This approach pre-generates all training data, enabling faster training iterations and reduced GPU memory requirements during training.
+Both [EAGLE-3](../algorithms/eagle3.md) and [DFlash](../algorithms/dflash.md) models use PyTorch's `flex_attention` with `BlockMask` for efficient, structured attention patterns (causal, document-aware, and anchor-based). The EAGLE-3 forward pass is wrapped with `torch.compile` for additional runtime optimization.
 
-### [Training](training.md)
+## Efficient Sequence Packing
 
-Train speculator models using PyTorch with support for distributed training via FSDP. Choose between online training (generating hidden states on-demand) or offline training (using pre-generated hidden states).
+The multipack batch sampler uses an LPT (Longest Processing Time First) bin-packing algorithm to pack variable-length sequences into batches, maximizing GPU utilization while respecting per-device token limits. This avoids the wasted compute from naive padding.
 
-### [Conversion](conversion.md)
+## Checkpoint Resume
 
-Convert models from third-party formats (e.g., EAGLE repositories) into the standardized Speculators format. This allows you to use existing pre-trained models with vLLM and other Speculators-compatible tools.
+Training automatically resumes from the latest checkpoint, restoring model weights, optimizer state, and scheduler state. The checkpointer tracks the best validation loss and maintains a symlink to the best checkpoint for easy model selection.
+
+## Model Conversion
+
+Speculators can convert pre-trained models from third-party repositories (EAGLE v1/v2/v3, HASS) into Speculators format for direct deployment with vLLM.
+
+---
+
+For hands-on guides covering the full workflow, see the [Tutorials](../tutorials/index.md).
