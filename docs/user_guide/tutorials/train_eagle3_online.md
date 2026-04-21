@@ -2,6 +2,8 @@
 
 This tutorial walks you through training an EAGLE-3 speculator model using **online training**, where hidden states are generated on-demand during the training process. This example uses `Qwen/Qwen3-8B` as the target model, but the process is the same for other models.
 
+For a ready-to-run version of this tutorial, see [`examples/train/eagle3_qwen3_8b_sharegpt_online_5k.sh`](https://github.com/vllm-project/speculators/blob/main/examples/train/eagle3_qwen3_8b_sharegpt_online_5k.sh).
+
 ## Overview
 
 **Time required:** ~30 mins (including training)
@@ -11,12 +13,25 @@ This tutorial walks you through training an EAGLE-3 speculator model using **onl
 - Python 3.10+
 - CUDA-capable GPU(s)
 
-Two virtual environments:
+## Step 0: Setup Your Environment
 
-- One with `speculators>=0.5.0` installed. Note: if you are using an experiment tracker (e.g. trackio, wandb, tensorboard) you will need to install it in this venv manually. The example commands below use tensorboard.
-- One with `vllm>=0.18` installed
+Create two virtual environments (recommended to keep separate so dependencies don't conflict):
 
-Note: you can also use a single enviroment with both, but it is usually better to keep them separate so that the dependencies don't conflict.
+```bash
+# Speculators venv (for data prep and training)
+uv venv speculators_venv
+source speculators_venv/bin/activate
+uv pip install "speculators>=0.5.0"
+```
+
+```bash
+# vLLM venv (for serving the target model)
+uv venv vllm_venv
+source vllm_venv/bin/activate
+uv pip install "vllm>=0.18"
+```
+
+Note: if you are using an experiment tracker (e.g. trackio, wandb, tensorboard), install it in the speculators venv manually.
 
 ## Step 1: Prepare Your Data
 
@@ -27,8 +42,9 @@ First, preprocess your training dataset:
 python scripts/prepare_data.py \
   --model Qwen/Qwen3-8B \
   --data sharegpt \
-  --output ./training_data \
-  --max-samples 5000
+  --output ./output \
+  --max-samples 5000 \
+  --seq-length 8192
 ```
 
 **Parameters explained:**
@@ -37,11 +53,12 @@ python scripts/prepare_data.py \
 - `--data` - Dataset to use (Built-in support for `sharegpt`, `ultrachat`. Otherwise provide a custom path to a jsonl file)
 - `--output` - Where to save preprocessed data
 - `--max-samples` - Limit samples (optional, good for testing/getting started)
+- `--seq-length` - Maximum sequence length
 
 **Expected output:**
 
 ```
-training_data/
+output/
 ├── data-00000-of-00002.arrow
 ├── data-00001-of-00002.arrow
 ├── dataset_info.json
@@ -64,8 +81,8 @@ Next launch vLLM configured for hidden states extraction:
 python scripts/launch_vllm.py Qwen/Qwen3-8B
 
 # Multiple GPUs with data parallelism (recommended)
-CUDA_VISIBLE_DEVICES=0,1,2,3 python scripts/launch_vllm.py \
-  Qwen/Qwen3-8B -- --data-parallel-size 4 --port 8000
+CUDA_VISIBLE_DEVICES=0,1 python scripts/launch_vllm.py \
+  Qwen/Qwen3-8B -- --data-parallel-size 2 --port 8000
 ```
 
 **The `--` separator:** Anything after `--` is passed directly to vLLM. Common options:
@@ -97,33 +114,35 @@ In a **separate terminal** on the same node, start the training process:
 # in speculators venv
 python scripts/train.py \
   --verifier-name-or-path Qwen/Qwen3-8B \
-  --data-path ./training_data \
+  --data-path ./output \
   --vllm-endpoint http://localhost:8000/v1 \
-  --save-path ./checkpoints \
+  --save-path ./output/checkpoints \
   --draft-vocab-size 32000 \
   --epochs 5 \
-  --lr 3e-5 \
-  --logger tensorboard \
-  --run-name qwen_8b_online
+  --lr 1e-4 \
+  --total-seq-len 8192 \
+  --on-missing generate \
+  --on-generate delete
 ```
 
 ### Multi-GPU Training (FSDP)
 
 ```bash
 # in speculators venv
-CUDA_VISIBLE_DEVICES=4,5,6,7 torchrun \
+CUDA_VISIBLE_DEVICES=2,3 torchrun \
   --standalone \
-  --nproc_per_node 4 \
+  --nproc_per_node 2 \
   scripts/train.py \
   --verifier-name-or-path Qwen/Qwen3-8B \
-  --data-path ./training_data \
+  --data-path ./output \
   --vllm-endpoint http://localhost:8000/v1 \
-  --save-path ./checkpoints \
+  --save-path ./output/checkpoints \
   --draft-vocab-size 32000 \
   --epochs 5 \
-  --lr 3e-5 \
-  --logger tensorboard \
-  --run-name qwen_8b_online
+  --lr 1e-4 \
+  --total-seq-len 8192 \
+  --on-missing generate \
+  --on-generate delete
 ```
 
 **Key parameters:**
@@ -131,10 +150,10 @@ CUDA_VISIBLE_DEVICES=4,5,6,7 torchrun \
 - `--vllm-endpoint` - vLLM server URL (localhost endpoint where vLLM is served)
 - `--draft-vocab-size 32000` - Reduced vocabulary size to use
 - `--epochs 5` - Number of training epochs
-- `--lr 3e-5` - Learning rate
-- `--logger tensorboard` - Enable TensorBoard logging
-
-**Warning:** If you set `--logger`, make sure you have installed the logging backend's package. These are not required dependencies of speculators and therefore aren't installed automatically.
+- `--lr 1e-4` - Learning rate
+- `--total-seq-len 8192` - Maximum sequence length for training
+- `--on-missing generate` - Generate hidden states on-the-fly if not cached
+- `--on-generate delete` - Delete generated hidden states after use (saves disk space)
 
 **Note:** There are a lot of configuration options available at this stage. We've attempted to set sensible defaults but please see the [train.py cli reference](/cli/train.md) to see all available options.
 
@@ -267,14 +286,16 @@ Start with online, cache for later epochs:
 # in speculators venv
 python scripts/train.py \
   --verifier-name-or-path Qwen/Qwen3-8B \
-  --data-path ./training_data \
-  --hidden-states-path ./hidden_states \  # Where to cache
+  --data-path ./output \
+  --hidden-states-path ./output/hidden_states \
   --vllm-endpoint http://localhost:8000/v1 \
-  --on-missing generate \     # Generate if missing
-  --on-generate cache \       # Cache generated states
-  --save-path ./checkpoints \
+  --on-missing generate \
+  --on-generate cache \
+  --save-path ./output/checkpoints \
   --draft-vocab-size 32000 \
-  --epochs 5
+  --epochs 5 \
+  --lr 1e-4 \
+  --total-seq-len 8192
 ```
 
 **First epoch:** Generates and caches hidden states to `./hidden_states/` **Subsequent epochs:** Uses cached hidden states.
