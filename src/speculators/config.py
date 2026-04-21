@@ -23,7 +23,6 @@ from importlib.metadata import version
 from typing import Any, ClassVar
 
 import torch
-
 from pydantic import BaseModel, ConfigDict, Field
 from transformers import PretrainedConfig
 
@@ -320,6 +319,7 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
     # transformers >= 5.x adds validate() which conflicts with Pydantic v2's
     # validate() classmethod. Guard so we don't stub it on older transformers.
     if "validate" in vars(PretrainedConfig):
+
         def validate(self) -> None:  # type: ignore[override]
             pass
 
