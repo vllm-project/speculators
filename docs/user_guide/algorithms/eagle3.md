@@ -21,16 +21,16 @@ The target model produces hidden states at selected layers, which are concatenat
 
 Pretrained EAGLE-3 speculator models are available on HuggingFace from the [RedHatAI speculator models collection](https://huggingface.co/collections/RedHatAI/speculator-models):
 
-| Verifier | Speculator |
-| --- | --- |
-| `meta-llama/Llama-3.1-8B-Instruct` | [`RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3`](https://huggingface.co/RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3) |
-| `meta-llama/Llama-3.3-70B-Instruct` | [`RedHatAI/Llama-3.3-70B-Instruct-speculator.eagle3`](https://huggingface.co/RedHatAI/Llama-3.3-70B-Instruct-speculator.eagle3) |
-| `Qwen/Qwen3-8B` | [`RedHatAI/Qwen3-8B-speculator.eagle3`](https://huggingface.co/RedHatAI/Qwen3-8B-speculator.eagle3) |
-| `Qwen/Qwen3-14B` | [`RedHatAI/Qwen3-14B-speculator.eagle3`](https://huggingface.co/RedHatAI/Qwen3-14B-speculator.eagle3) |
-| `Qwen/Qwen3-32B` | [`RedHatAI/Qwen3-32B-speculator.eagle3`](https://huggingface.co/RedHatAI/Qwen3-32B-speculator.eagle3) |
-| `Qwen/Qwen3-235B-A22B` | [`RedHatAI/Qwen3-235B-A22B-speculator.eagle3`](https://huggingface.co/RedHatAI/Qwen3-235B-A22B-speculator.eagle3) |
+| Verifier                                        | Speculator                                                                                                                                              |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `meta-llama/Llama-3.1-8B-Instruct`              | [`RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3`](https://huggingface.co/RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3)                           |
+| `meta-llama/Llama-3.3-70B-Instruct`             | [`RedHatAI/Llama-3.3-70B-Instruct-speculator.eagle3`](https://huggingface.co/RedHatAI/Llama-3.3-70B-Instruct-speculator.eagle3)                         |
+| `Qwen/Qwen3-8B`                                 | [`RedHatAI/Qwen3-8B-speculator.eagle3`](https://huggingface.co/RedHatAI/Qwen3-8B-speculator.eagle3)                                                     |
+| `Qwen/Qwen3-14B`                                | [`RedHatAI/Qwen3-14B-speculator.eagle3`](https://huggingface.co/RedHatAI/Qwen3-14B-speculator.eagle3)                                                   |
+| `Qwen/Qwen3-32B`                                | [`RedHatAI/Qwen3-32B-speculator.eagle3`](https://huggingface.co/RedHatAI/Qwen3-32B-speculator.eagle3)                                                   |
+| `Qwen/Qwen3-235B-A22B`                          | [`RedHatAI/Qwen3-235B-A22B-speculator.eagle3`](https://huggingface.co/RedHatAI/Qwen3-235B-A22B-speculator.eagle3)                                       |
 | `meta-llama/Llama-4-Maverick-17B-128E-Instruct` | [`RedHatAI/Llama-4-Maverick-17B-128E-Instruct-speculator.eagle3`](https://huggingface.co/RedHatAI/Llama-4-Maverick-17B-128E-Instruct-speculator.eagle3) |
-| `google/gemma-4-31B-it` | [`RedHatAI/gemma-4-31B-it-speculator.eagle3`](https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.eagle3) |
+| `google/gemma-4-31B-it`                         | [`RedHatAI/gemma-4-31B-it-speculator.eagle3`](https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.eagle3)                                         |
 
 ## Research & Citation
 
@@ -49,4 +49,3 @@ EAGLE-3 is based on research from SafeAI Lab: [EAGLE Repository](https://github.
 
 - [Train EAGLE-3 Online](../tutorials/train_eagle3_online.md) -- Online training tutorial
 - [Train EAGLE-3 Offline](../tutorials/train_eagle3_offline.md) -- Offline training tutorial
-- [Convert EAGLE-3 Models](../tutorials/convert_eagle3.md) -- Convert third-party models to Speculators format
