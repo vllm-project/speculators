@@ -6,7 +6,7 @@ For a ready-to-run version of this tutorial, see [`examples/train/eagle3_llama3_
 
 ## Overview
 
-**Time required:** ~3 hours (including data generation)
+**Time required:** ~10 mins on 2x H100 GPUs (including data generation)
 
 **Prerequisites:**
 
@@ -66,7 +66,7 @@ output/
 └── token_freq.pt
 ```
 
-**Time:** ~15 seconds for 5K samples
+**Time:** ~5 minutes for 50K samples
 
 **Note:** This step is used to setup the dataset that will be used to train your model and is the same for both online and offline training. It's important that any data configuration choices are made at this stage. For example, limiting the data sample length, filtering out samples with limited assistant response tokens, handling multi-turn conversation responses, etc. For more information please see the [prepare_data.py cli reference](/cli/prepare_data.md).
 
@@ -76,15 +76,9 @@ Next launch vLLM configured for hidden states extraction:
 
 ```bash
 # in vLLM venv
-# For 8B model - use data parallelism
 CUDA_VISIBLE_DEVICES=0,1 python scripts/launch_vllm.py \
   meta-llama/Llama-3.1-8B-Instruct \
   -- --data-parallel-size 2 --port 8000
-
-# For 70B model - combine tensor parallelism and data parallelism
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 python scripts/launch_vllm.py \
-  meta-llama/Llama-3.3-70B-Instruct \
-  -- --tensor-parallel-size 4 --data-parallel-size 2 --port 8000
 ```
 
 **The `--` separator:** Anything after `--` is passed directly to vLLM. Common options:
@@ -109,6 +103,7 @@ INFO:     Application startup complete
 Use `data_generation_offline.py` to pre-generate all hidden states:
 
 ```bash
+# in speculators venv
 python scripts/data_generation_offline.py \
   --preprocessed-data ./output \
   --endpoint http://localhost:8000/v1 \
@@ -124,8 +119,8 @@ python scripts/data_generation_offline.py \
 - `--endpoint` - vLLM server URL
 - `--output` - Where to save hidden states
 - `--max-samples` - Number of samples to generate
-- `--concurrency` - Parallel requests to vLLM during data generation
-- `--validate-outputs` - Verify file integrity (recommended)
+- `--concurrency` - Parallel requests to vLLM
+- `--validate-outputs` - Verify file integrity (recommended for production)
 
 **Expected output:**
 
@@ -135,7 +130,7 @@ output/hidden_states/
 ├── hs_1.safetensors
 ├── hs_2.safetensors
 ├── ...
-└── hs_49999.safetensors
+└── hs_4999.safetensors
 ```
 
 ### Optimizing Generation Speed
@@ -143,7 +138,7 @@ output/hidden_states/
 **Increase concurrency:**
 
 ```bash
---concurrency 64  # Controls the number of concurrent requests to vllm as well as concurrent write to disk operations. 
+--concurrency 64
 ```
 
 **Use more GPUs:**
@@ -184,7 +179,7 @@ The script automatically detects existing `hs_*.safetensors` files and skips the
 After hidden states generation is complete, stop the vLLM server:
 
 ```bash
-# Press Ctrl+C in the vLLM terminal  
+# Press Ctrl+C in the vLLM terminal
 ```
 
 You don't need vLLM running during offline training.
@@ -211,9 +206,9 @@ python scripts/train.py \
 
 ```bash
 # in speculators venv
-CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun \
+CUDA_VISIBLE_DEVICES=0,1 torchrun \
   --standalone \
-  --nproc_per_node 4 \
+  --nproc_per_node 2 \
   scripts/train.py \
   --verifier-name-or-path meta-llama/Llama-3.1-8B-Instruct \
   --data-path ./output \
@@ -233,7 +228,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun \
 - `--draft-vocab-size 32000` - Reduced vocabulary size to use
 - `--epochs 5` - Number of training epochs
 - `--lr 1e-4` - Learning rate
-- `--total-seq-len 8192` - Maximum sequence length for training
+- `--total-seq-len 8192` - Maximum sequence length
 
 **Note:** There are a lot of configuration options available at this stage. We've attempted to set sensible defaults but please see the [train.py cli reference](/cli/train.md) to see all available options.
 
@@ -251,8 +246,8 @@ checkpoints/
 │   └── scheduler_state_dict.pt
 ├── 1/                          # Epoch 1
 ├── ...
-├── 9/                          # Epoch 9 (final)
-└── checkpoint_best -> 9/                # Symlink to lowest val loss checkpoint
+├── 4/                          # Epoch 4 (final)
+└── checkpoint_best -> 4/       # Symlink to lowest val loss checkpoint
 ```
 
 Each checkpoint is a complete, self-contained speculator model ready for deployment in vLLM. The checkpoints also contain optimizer and learning rate scheduler states for resume training.
@@ -330,7 +325,7 @@ python scripts/train.py --num-layers 1
 
    ```bash
    # Verify preprocessing succeeded
-   ls -lh ./training_data/
+   ls -lh ./output/
    ```
 
 3. **Increase training time:**

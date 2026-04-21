@@ -6,7 +6,7 @@ For a ready-to-run version of this tutorial, see [`examples/train/eagle3_qwen3_8
 
 ## Overview
 
-**Time required:** ~30 mins (including training)
+**Time required:** ~17 mins on 4x H100 GPUs (2 for vLLM, 2 for training)
 
 **Prerequisites:**
 
@@ -76,11 +76,6 @@ Next launch vLLM configured for hidden states extraction:
 
 ```bash
 # in vLLM venv
-
-# Single GPU
-python scripts/launch_vllm.py Qwen/Qwen3-8B
-
-# Multiple GPUs with data parallelism (recommended)
 CUDA_VISIBLE_DEVICES=0,1 python scripts/launch_vllm.py \
   Qwen/Qwen3-8B -- --data-parallel-size 2 --port 8000
 ```
@@ -151,8 +146,8 @@ CUDA_VISIBLE_DEVICES=2,3 torchrun \
 - `--draft-vocab-size 32000` - Reduced vocabulary size to use
 - `--epochs 5` - Number of training epochs
 - `--lr 1e-4` - Learning rate
-- `--total-seq-len 8192` - Maximum sequence length for training
-- `--on-missing generate` - Generate hidden states on-the-fly if not cached
+- `--total-seq-len 8192` - Maximum sequence length
+- `--on-missing generate` - Generate hidden states on-the-fly from the vLLM server
 - `--on-generate delete` - Delete generated hidden states after use (saves disk space)
 
 **Note:** There are a lot of configuration options available at this stage. We've attempted to set sensible defaults but please see the [train.py cli reference](/cli/train.md) to see all available options.
@@ -171,8 +166,8 @@ checkpoints/
 │   └── scheduler_state_dict.pt
 ├── 1/                          # Epoch 1
 ├── ...
-├── 9/                          # Epoch 9 (final)
-└── checkpoint_best -> 9/                # Symlink to lowest val loss checkpoint
+├── 4/                          # Epoch 4 (final)
+└── checkpoint_best -> 4/       # Symlink to lowest val loss checkpoint
 ```
 
 Each checkpoint is a complete, self-contained speculator model ready for deployment in vLLM. The checkpoints also contain optimizer and learning rate scheduler states for resume training.
@@ -200,6 +195,18 @@ vllm chat --url http://localhost:8000/v1
 ### Verify Speculative Decoding
 
 Check vLLM logs for speculative decoding metrics
+
+## Expected Results
+
+With 5K ShareGPT samples and 5 epochs on Qwen3-8B (SpecBench, 80 prompts, 256 output tokens):
+
+| Metric            | Value        |
+| ----------------- | ------------ |
+| Acceptance rate   | 14.88%       |
+| Acceptance length | 1.45         |
+| Output throughput | 143.37 tok/s |
+
+> **Note:** With just 5K samples, model performance will be limited. This is intended as a sanity check to verify that the pipeline is working and the model is learning. For production quality, train on significantly more data.
 
 ## Common Issues & Solutions
 
@@ -259,7 +266,7 @@ python scripts/launch_vllm.py model -- --tensor-parallel-size 2
 
    ```bash
    # Verify preprocessing succeeded
-   ls -lh ./training_data/
+   ls -lh ./output/
    ```
 
 3. **Increase training time:**
@@ -277,28 +284,6 @@ python scripts/launch_vllm.py model -- --tensor-parallel-size 2
 1. **Redistribute GPUs between training and datagen processes:** If possible, increase the number of gpus assigned to vLLM datagen (i.e. the `launch_vllm.py` step) and reduce the number used during training. Inconsistent training performance typically means the training process is stuck waiting for new data samples to be generated.
 
 2. **Consider switching to offline training:** Offline training pre-generates the hidden states for all samples and caches them on disk. Then during training the samples can just be loaded directly. If gpu resources are limited, this can be a better approach as it allows you to assign all gpus to data gen and then all to training.
-
-## Advanced: Hybrid Training
-
-Start with online, cache for later epochs:
-
-```bash
-# in speculators venv
-python scripts/train.py \
-  --verifier-name-or-path Qwen/Qwen3-8B \
-  --data-path ./output \
-  --hidden-states-path ./output/hidden_states \
-  --vllm-endpoint http://localhost:8000/v1 \
-  --on-missing generate \
-  --on-generate cache \
-  --save-path ./output/checkpoints \
-  --draft-vocab-size 32000 \
-  --epochs 5 \
-  --lr 1e-4 \
-  --total-seq-len 8192
-```
-
-**First epoch:** Generates and caches hidden states to `./hidden_states/` **Subsequent epochs:** Uses cached hidden states.
 
 ## Next Steps
 
