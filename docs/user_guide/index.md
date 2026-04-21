@@ -16,4 +16,3 @@ Speculators provides a comprehensive framework for:
 - [Features](features.md) - Detailed documentation on core features
 - [Algorithms](algorithms/index.md) - Overview of supported algorithms
 - [Tutorials](tutorials/index.md) - Step-by-step guides
-- [Troubleshooting](troubleshooting.md) - Common issues and solutions
