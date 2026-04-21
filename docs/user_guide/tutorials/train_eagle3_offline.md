@@ -20,16 +20,16 @@ Create two virtual environments (recommended to keep separate so dependencies do
 
 ```bash
 # Speculators venv (for data prep and training)
-python -m venv speculators
+uv venv speculators
 source speculators/bin/activate
-pip install "speculators>=0.5.0"
+uv pip install "speculators>=0.5.0"
 ```
 
 ```bash
 # vLLM venv (for serving the target model)
-python -m venv vllm
+uv venv vllm
 source vllm/bin/activate
-pip install "vllm>=0.18"
+uv pip install "vllm>=0.18"
 ```
 
 Note: if you are using an experiment tracker (e.g. trackio, wandb, tensorboard), install it in the speculators venv manually.
