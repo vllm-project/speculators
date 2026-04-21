@@ -12,12 +12,12 @@ Both algorithms can be paired with any supported verifier model -- the draft arc
 
 ## Current Support
 
-|                    | EAGLE-3            | DFlash              |
-| ------------------ | ------------------ | ------------------- |
-| **Draft layers**   | Llama-style        | Qwen3-style         |
-| **Verifier models**| Any supported      | Any supported       |
-| **Speculators**    | Mature             | Newer, growing fast |
-| **vLLM**           | Mature             | Newer, growing fast |
+|                     | EAGLE-3       | DFlash              |
+| ------------------- | ------------- | ------------------- |
+| **Draft layers**    | Llama-style   | Qwen3-style         |
+| **Verifier models** | Any supported | Any supported       |
+| **Speculators**     | Mature        | Newer, growing fast |
+| **vLLM**            | Mature        | Newer, growing fast |
 
 EAGLE-3 has been available longer and has broader support in both Speculators and vLLM. DFlash was added more recently and support is improving rapidly.
 

@@ -90,7 +90,3 @@ EAGLE-3 is based on research from SafeAI Lab: [EAGLE Repository](https://github.
   year={2024}
 }
 ```
-
-## See Also
-
-- [Convert EAGLE-3 Models](../tutorials/convert_eagle3.md) -- Convert third-party models to Speculators format

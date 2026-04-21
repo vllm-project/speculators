@@ -51,7 +51,6 @@ To create a speculative decoding model for a different verifier model, there are
 1. **Train a new speculative decoding model** - See [Getting Started](user_guide/getting_started.md) and [Tutorials](user_guide/tutorials/index.md).
 2. **Convert an existing model** from a third-party library to the Speculators format for easy deployment with vLLM - See [Features](user_guide/features.md).
 
-
 ## Supported Models
 
 The following table summarizes the models that have been trained end-to-end by our team:
@@ -206,7 +205,7 @@ pip install -e ".[dev]"
 
 🎥 Watch our Office Hours presentation: [Video](https://www.youtube.com/live/2ISAr_JVGLs) | [Slides](https://docs.google.com/presentation/d/1s4eAb7v-rdZt8smyULBJWGXjJXrgFTZWnwqYa2-h1l4/edit?slide=id.g3365e070742_6_0#slide=id.g3365e070742_6_0)
 
-For more community resources, see the [Community page](community.md).
+For more community resources, see the [Community page](community/index.md).
 
 ## Next Steps
 

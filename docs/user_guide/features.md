@@ -34,6 +34,6 @@ Training automatically resumes from the latest checkpoint, restoring model weigh
 
 Speculators can convert pre-trained models from third-party repositories (EAGLE v1/v2/v3, HASS) into Speculators format for direct deployment with vLLM.
 
----
+______________________________________________________________________
 
 For hands-on guides covering the full workflow, see the [Tutorials](tutorials/index.md).
