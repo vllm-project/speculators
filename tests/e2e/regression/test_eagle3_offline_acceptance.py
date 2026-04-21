@@ -12,8 +12,10 @@ Exercises the full offline pipeline:
 from pathlib import Path
 
 from tests.e2e.smoke.test_offline_training import run_offline_e2e
+from tests.utils import requires_cadence
 
 
+@requires_cadence("nightly")
 def test_offline_regression(tmp_path: Path, prompts):
     run_offline_e2e(
         tmp_path,

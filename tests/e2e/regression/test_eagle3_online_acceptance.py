@@ -10,8 +10,10 @@ Exercises the full pipeline documented in examples/ONLINE_TRAINING.md:
 from pathlib import Path
 
 from tests.e2e.smoke.test_online_training import run_online_e2e
+from tests.utils import requires_cadence
 
 
+@requires_cadence("nightly")
 def test_online_regression(tmp_path: Path, prompts):
     run_online_e2e(
         tmp_path,

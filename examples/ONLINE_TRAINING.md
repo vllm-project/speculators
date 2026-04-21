@@ -52,7 +52,7 @@ CUDA_VISIBLE_DEVICES=4,5,6,7 torchrun --standalone --nproc_per_node 4 scripts/tr
     state.json                   #  |
     token_freq.pt                #  ⎦
 
-    td2.npy                      #  ⎤ Vocab mappings
+    t2d.npy                      #  ⎤ Vocab mappings
     d2t.npy                      #  ⎦
     
     checkpoints/                 # Training checkpoints (loadable by vLLM)
