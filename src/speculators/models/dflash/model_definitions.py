@@ -188,12 +188,6 @@ class Qwen3DFlashDecoderLayer(GradientCheckpointingLayer):
         assert hidden_states is not None  # noqa: S101
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
-        if torch.__version__ >= "2.10":
-            # As of `torch==2.10`, compile attempts to fuse together too many
-            # ops, resulting in a fused kernel that exceeds shared memory limits
-            # For now, we force a graph break to prevent this
-            # https://github.com/pytorch/pytorch/issues/175250
-            torch._dynamo.graph_break()  # noqa: SLF001
         hidden_states = self.self_attn(
             hidden_states=hidden_states,
             target_hidden=target_hidden,
