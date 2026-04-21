@@ -20,15 +20,15 @@ Create two virtual environments (recommended to keep separate so dependencies do
 
 ```bash
 # Speculators venv (for data prep and training)
-uv venv speculators
-source speculators/bin/activate
+uv venv speculators_venv
+source speculators_venv/bin/activate
 uv pip install "speculators>=0.5.0"
 ```
 
 ```bash
 # vLLM venv (for serving the target model)
-uv venv vllm
-source vllm/bin/activate
+uv venv vllm_venv
+source vllm_venv/bin/activate
 uv pip install "vllm>=0.18"
 ```
 
