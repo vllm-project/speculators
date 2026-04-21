@@ -213,9 +213,6 @@ def main(args: argparse.Namespace):
 
     # Setup distributed training
     local_rank, world_size, rank, is_distributed = maybe_setup_distributed()
-    logger.info(
-        f"Using RANK: {rank}, LOCAL_RANK: {local_rank}, WORLD_SIZE: {world_size}"
-    )
     if not hasattr(torch, args.hidden_states_dtype):
         raise ValueError(
             "--hidden-states-dtype must be a dtype attribute of torch. e.g. `bfloat16`"
@@ -321,6 +318,7 @@ def main(args: argparse.Namespace):
         lr=args.lr,
         resume_from_checkpoint=not args.no_resume_from_checkpoint,
         is_distributed=is_distributed,
+        rank=rank,
         local_rank=local_rank,
         train_call_kwargs=train_call_kwargs,
         val_call_kwargs=val_call_kwargs,

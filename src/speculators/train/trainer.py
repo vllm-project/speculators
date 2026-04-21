@@ -1,5 +1,4 @@
 import logging
-import os
 import warnings
 from typing import Literal, NamedTuple
 
@@ -37,6 +36,7 @@ class TrainerConfig(NamedTuple):
     save_path: str
     resume_from_checkpoint: bool = False
     is_distributed: bool = False
+    rank: int = 0
     local_rank: int = 0
     train_call_kwargs: dict = {}
     val_call_kwargs: dict = {}
@@ -59,7 +59,7 @@ class Trainer:
     ):
         self.model = model
         self.config = config
-        self.rank = int(os.environ.get("RANK", "0"))
+        self.rank = config.rank
         self.local_rank = config.local_rank
         self.train_loader = train_loader
         self.val_loader = val_loader
