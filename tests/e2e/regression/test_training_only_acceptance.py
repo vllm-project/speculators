@@ -80,5 +80,5 @@ def test_dflash_qwen3_8b_sharegpt(tmp_path: Path, prompts: list[list[dict[str, s
         max_tokens=512,
         ignore_eos=True,
         prompts=prompts,
-        acceptance_thresholds=[0.30, 0.05, 0.001, 0, 0, 0, 0, 0],
+        acceptance_thresholds=[0.30, 0.05, 0.001, 0, 0, 0, 0],
     )
