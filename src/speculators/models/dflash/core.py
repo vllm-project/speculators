@@ -3,10 +3,7 @@ from typing import Any, ClassVar
 import torch
 from torch import nn
 from torch.nn.attention.flex_attention import create_block_mask
-from transformers import (
-    AutoConfig,
-    PretrainedConfig,
-)
+from transformers import PretrainedConfig
 from transformers.models.qwen3.modeling_qwen3 import (
     Qwen3RMSNorm,
     Qwen3RotaryEmbedding,
@@ -21,6 +18,7 @@ from speculators.models.dflash.utils import (
     get_base_indices_for_anchored_blocks,
     select_anchors,
 )
+from speculators.models.utils import resolve_target_layer_ids
 
 
 @SpeculatorModel.register("dflash")
@@ -63,25 +61,12 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             ]
         )
 
-        verifier_name_or_path = config.speculators_config.verifier.name_or_path
-        if verifier_name_or_path is None:
-            raise ValueError("Verifier name_or_path must be set in speculators_config")
-        verifier_config = AutoConfig.from_pretrained(verifier_name_or_path)
-        if hasattr(verifier_config, "text_config"):
-            verifier_config = verifier_config.text_config
-        num_verifier_layers = verifier_config.num_hidden_layers
-
-        if config.aux_hidden_state_layer_ids is not None:
-            self.target_layer_ids = config.aux_hidden_state_layer_ids
-        else:
-            # Eagle3 defaults; write back so they are persisted in config.json
-            self.target_layer_ids = [
-                2,
-                num_verifier_layers // 2,
-                num_verifier_layers - 3,
-            ]
-            # set defaults to config if not provided - vLLM will fail otherwise
-            config.aux_hidden_state_layer_ids = self.target_layer_ids
+        if config.aux_hidden_state_layer_ids is None:
+            raise ValueError(
+                "aux_hidden_state_layer_ids must be set in DFlashSpeculatorConfig. "
+                "Use DFlashDraftModel.from_training_args() to resolve defaults."
+            )
+        self.target_layer_ids = config.aux_hidden_state_layer_ids
 
         self.norm = Qwen3RMSNorm(
             config.transformer_layer_config.hidden_size,
@@ -140,12 +125,17 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             GreedyTokenProposalConfig,
         )
 
+        target_layer_ids = resolve_target_layer_ids(
+            kwargs.get("target_layer_ids"),
+            kwargs["verifier_name_or_path"],
+        )
+
         config = DFlashSpeculatorConfig(
             transformer_layer_config=verifier_config,
             draft_vocab_size=kwargs["draft_vocab_size"],
             block_size=kwargs.get("block_size", 8),
             max_anchors=kwargs.get("max_anchors", 3072),
-            aux_hidden_state_layer_ids=kwargs.get("target_layer_ids"),
+            aux_hidden_state_layer_ids=target_layer_ids,
             mask_token_id=kwargs.get("mask_token_id"),
             speculators_config=SpeculatorsConfig(
                 algorithm="dflash",
