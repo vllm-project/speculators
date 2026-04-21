@@ -60,29 +60,3 @@ CUDA_VISIBLE_DEVICES=4,5,6,7 torchrun --standalone --nproc_per_node 4 scripts/tr
         1/
         ...
 ```
-
-> **Note:** If using the offline data generation system (`scripts/data_generation_offline2.py`), hidden states are pre-generated and cached to disk rather than generated on-demand during training. In that case, the data directory will also contain a `hidden_states/` subdirectory:
->
-> ```
-> ./output/
->     data-00000-of-00002.arrow    #  ⎤
->     data-00001-of-00002.arrow    #  | From `scripts/prepare_data.py` step
->     dataset_info.json            #  |
->     state.json                   #  |
->     token_freq.pt                #  ⎦
->
->     t2d.npy                      #  ⎤ Vocab mappings
->     d2t.npy                      #  ⎦
->
->     hidden_states/               #  Pre-generated hidden states (offline mode only)
->         hs_0.safetensors         #  ⎤ One file per sample, indexed by dataset position
->         hs_1.safetensors         #  | Keys: hidden_states [seq_len, 4, hidden_size]
->         ...                      #  ⎦       token_ids     [seq_len]
->
->     checkpoints/                 # Training checkpoints (loadable by vLLM)
->         0/
->         1/
->         ...
-> ```
->
-> **Note:** `train.py` expects this exact directory structure under `--data-path`. If vocab mapping files (`t2d.npy`, `d2t.npy`, `token_freq.pt`) are not at their expected locations, training will silently fall back to the full verifier vocab. Only the Arrow dataset files are required — training will hard fail if they are missing.
