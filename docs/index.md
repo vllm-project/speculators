@@ -12,7 +12,7 @@
 
 Speculators is a unified library for building, training and storing speculative decoding algorithms for large language model (LLM) inference, including in frameworks like vLLM. Speculative decoding is a lossless technique that speeds up LLM inference by using a smaller, faster draft model (i.e "the speculator") to propose tokens, which are then verified by the larger base model, reducing latency without compromising output quality.
 
-The speculator intelligently drafts multiple tokens ahead of time, and the base model verifies them in a single forward pass. This approach boosts performance without sacrificing output quality, as every accepted token is guaranteed to match what the main model would have generated on its own.
+The speculator intelligently drafts multiple tokens ahead of time, and the base model verifies them in a single forward pass. This approach boosts performance without sacrificing output quality, as every accepted token is guaranteed to come from the same distribution as using the main model on its own.
 
 Speculators standardizes this process by providing a productionized end-to-end framework to train draft models with reusable formats and tools. Trained models can seamlessly run in vLLM, enabling the deployment of speculative decoding in production-grade inference servers.
 
@@ -51,61 +51,6 @@ To create a speculative decoding model for a different verifier model, there are
 1. **Train a new speculative decoding model** - See [Getting Started](user_guide/getting_started.md) and [Tutorials](user_guide/tutorials/index.md).
 2. **Convert an existing model** from a third-party library to the Speculators format for easy deployment with vLLM - See [Features](user_guide/features.md).
 
-## Installation
-
-### Prerequisites
-
-Before installing, ensure you have the following:
-
-- **Operating System:** Linux or macOS
-- **Python:** 3.10 or higher
-- **Package Manager:** pip (recommended) or conda
-
-### Install from PyPI (Recommended)
-
-Install the latest stable release from PyPI:
-
-```bash
-pip install speculators
-```
-
-### Install from Source
-
-For the latest development version or to contribute to the project:
-
-```bash
-git clone https://github.com/vllm-project/speculators.git
-cd speculators
-
-pip install -e .
-```
-
-For development with additional tools:
-
-```bash
-pip install -e ".[dev]"
-```
-
-To enable the generation of data (i.e hidden states) from vLLM for speculator training:
-
-```bash
-pip install -e ".[datagen]"
-```
-
-### Verify Installation
-
-You can verify your installation by checking the version:
-
-```bash
-speculators --version
-```
-
-Or by importing the package in Python:
-
-```python
-import speculators
-print(speculators.__version__)
-```
 
 ## Supported Models
 
@@ -200,10 +145,57 @@ The following table summarizes the models that have been trained end-to-end by o
 <td>EAGLE-3 ⏳</td>
 <td>⏳</td>
 </tr>
+<tr>
+<td>Gemma 4</td>
+<td>31B-it</td>
+<td><a href="https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.eagle3">EAGLE-3</a> ✅<br/><a href="https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.dflash">DFlash</a> ✅</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>Gemma 4 MoE</td>
+<td>26B-A4B-it</td>
+<td><a href="https://huggingface.co/RedHatAI/gemma-4-26B-A4B-it-speculator.eagle3">EAGLE-3</a> ✅</td>
+<td>✅</td>
+</tr>
 </tbody>
 </table>
 
 ✅ = Supported, ⏳ = In Progress, ❌ = Not Yet Supported
+
+## Installation
+
+### Prerequisites
+
+Before installing, ensure you have the following:
+
+- **Operating System:** Linux or macOS
+- **Python:** 3.10 or higher
+- **Package Manager:** pip (recommended) or conda
+
+### Install from PyPI (Recommended)
+
+Install the latest stable release from PyPI:
+
+```bash
+pip install speculators
+```
+
+### Install from Source
+
+For the latest development version or to contribute to the project:
+
+```bash
+git clone https://github.com/vllm-project/speculators.git
+cd speculators
+
+pip install -e .
+```
+
+For development with additional tools:
+
+```bash
+pip install -e ".[dev]"
+```
 
 ## Community & Support
 
