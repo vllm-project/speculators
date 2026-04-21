@@ -33,12 +33,8 @@ class ReloadableBaseModel(BaseModel):
         This method is useful when the registry has been modified or when the
         class needs to be re-validated with the latest schema.
         """
-        # transformers 5.4+ uses torch in annotations (e.g. torch.dtype) without
-        # importing it into the module namespace where the annotation is defined.
-        # Pydantic resolves forward references using that module's globals, so
-        # torch falls out of scope and model_rebuild() raises NameError. Passing
-        # it here is backwards compatible — unused names in _types_namespace are
-        # silently ignored by older transformers versions.
+        # transformers 5.4+ uses torch.dtype in annotations without importing torch,
+        # causing model_rebuild() to raise NameError. Ignored on older versions.
         cls.model_rebuild(force=True, _types_namespace={"torch": torch})
 
 
