@@ -2,6 +2,8 @@
 
 This tutorial walks you through training an EAGLE-3 speculator model using **offline training**, where hidden states are pre-generated and cached before training begins. This example uses `meta-llama/Llama-3.1-8B-Instruct` as the target model, but the process is the same for other models.
 
+For a ready-to-run version of this tutorial, see [`examples/train/eagle3_llama3_8b_sharegpt_offline_5k.sh`](https://github.com/vllm-project/speculators/blob/main/examples/train/eagle3_llama3_8b_sharegpt_offline_5k.sh).
+
 ## Overview
 
 **Time required:** ~3 hours (including data generation)
@@ -12,12 +14,25 @@ This tutorial walks you through training an EAGLE-3 speculator model using **off
 - CUDA-capable GPU(s)
 - Sufficient disk space for hidden states (~1.6 TB for 50k samples for Llama-3.1-8B, avg seq len 1024)
 
-Two virtual environments:
+## Step 0: Setup Your Environment
 
-- One with `speculators>=0.5.0` installed. Note: if you are using an experiment tracker (e.g. trackio, wandb, tensorboard) you will need to install it in this venv manually. The example commands below use tensorboard.
-- One with `vllm>=0.18` installed
+Create two virtual environments (recommended to keep separate so dependencies don't conflict):
 
-Note: you can also use a single enviroment with both, but it is usually better to keep them separate so that the dependencies don't conflict.
+```bash
+# Speculators venv (for data prep and training)
+uv venv speculators_venv
+source speculators_venv/bin/activate
+uv pip install "speculators>=0.5.0"
+```
+
+```bash
+# vLLM venv (for serving the target model)
+uv venv vllm_venv
+source vllm_venv/bin/activate
+uv pip install "vllm>=0.18"
+```
+
+Note: if you are using an experiment tracker (e.g. trackio, wandb, tensorboard), install it in the speculators venv manually.
 
 ## Step 1: Prepare Your Data
 
@@ -27,30 +42,31 @@ First, preprocess your training dataset:
 # in speculators venv
 python scripts/prepare_data.py \
   --model meta-llama/Llama-3.1-8B-Instruct \
-  --data sharegpt \
   --data ultrachat \
-  --output ./training_data \
-  --max-samples 50000
+  --output ./output \
+  --max-samples 5000 \
+  --seq-length 8192
 ```
 
 **Parameters explained:**
 
 - `--model` - The target model you want to accelerate
-- `--data` - Dataset to use (Built-in support for `sharegpt`, `ultrachat`. Otherwise provide a custom path to a jsonl file). Can be suplied multiple times to combine multiple datasets.
+- `--data` - Dataset to use (Built-in support for `sharegpt`, `ultrachat`. Otherwise provide a custom path to a jsonl file). Can be supplied multiple times to combine multiple datasets.
 - `--output` - Where to save preprocessed data
 - `--max-samples` - Limit samples (optional, good for testing/getting started)
+- `--seq-length` - Maximum sequence length
 
 **Expected output:**
 
 ```
-training_data/
+output/
 ├── data-*.arrow files
 ├── dataset_info.json
 ├── state.json
 └── token_freq.pt
 ```
 
-**Time:** ~5 minutes for 50K samples
+**Time:** ~15 seconds for 5K samples
 
 **Note:** This step is used to setup the dataset that will be used to train your model and is the same for both online and offline training. It's important that any data configuration choices are made at this stage. For example, limiting the data sample length, filtering out samples with limited assistant response tokens, handling multi-turn conversation responses, etc. For more information please see the [prepare_data.py cli reference](/cli/prepare_data.md).
 
@@ -61,9 +77,9 @@ Next launch vLLM configured for hidden states extraction:
 ```bash
 # in vLLM venv
 # For 8B model - use data parallelism
-CUDA_VISIBLE_DEVICES=0,1,2,3 python scripts/launch_vllm.py \
+CUDA_VISIBLE_DEVICES=0,1 python scripts/launch_vllm.py \
   meta-llama/Llama-3.1-8B-Instruct \
-  -- --data-parallel-size 4 --port 8000
+  -- --data-parallel-size 2 --port 8000
 
 # For 70B model - combine tensor parallelism and data parallelism
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 python scripts/launch_vllm.py \
@@ -90,26 +106,31 @@ INFO:     Application startup complete
 
 ## Step 3: Generate Hidden States Offline
 
-Use `data_generation_offline2.py` to pre-generate all hidden states:
+Use `data_generation_offline.py` to pre-generate all hidden states:
 
 ```bash
-python scripts/data_generation_offline2.py \
-  --model meta-llama/Llama-3.1-8B-Instruct \
-  --preprocessed-data ./training_data \
-  --output ./hidden_states \
+python scripts/data_generation_offline.py \
+  --preprocessed-data ./output \
+  --endpoint http://localhost:8000/v1 \
+  --output ./output/hidden_states \
+  --max-samples 5000 \
+  --concurrency 32 \
   --validate-outputs
 ```
 
 **Key parameters:**
 
 - `--preprocessed-data` - Path to prepared data from Step 1
+- `--endpoint` - vLLM server URL
 - `--output` - Where to save hidden states
-- `--validate-outputs` - Verify file integrity (recommended for production)
+- `--max-samples` - Number of samples to generate
+- `--concurrency` - Parallel requests to vLLM during data generation
+- `--validate-outputs` - Verify file integrity (recommended)
 
 **Expected output:**
 
 ```
-hidden_states/
+output/hidden_states/
 ├── hs_0.safetensors
 ├── hs_1.safetensors
 ├── hs_2.safetensors
@@ -146,11 +167,11 @@ If generation is interrupted, simply ensure the vllm server is launched and reru
 
 ```bash
 # in speculators venv
-python scripts/data_generation_offline2.py \
-  --model meta-llama/Llama-3.1-8B-Instruct \
-  --preprocessed-data ./training_data \
-  --output ./hidden_states \
-  --max-samples 50000 \
+python scripts/data_generation_offline.py \
+  --preprocessed-data ./output \
+  --endpoint http://localhost:8000/v1 \
+  --output ./output/hidden_states \
+  --max-samples 5000 \
   --concurrency 32
 ```
 
@@ -176,15 +197,14 @@ You don't need vLLM running during offline training.
 # in speculators venv
 python scripts/train.py \
   --verifier-name-or-path meta-llama/Llama-3.1-8B-Instruct \
-  --data-path ./training_data \
-  --hidden-states-path ./hidden_states \
-  --on-missing raise \ # or skip or warn
-  --save-path ./checkpoints \
+  --data-path ./output \
+  --hidden-states-path ./output/hidden_states \
+  --save-path ./output/checkpoints \
   --draft-vocab-size 32000 \
   --epochs 5 \
-  --lr 3e-5 \
-  --logger tensorboard \
-  --run-name llama31_8b_offline
+  --lr 1e-4 \
+  --total-seq-len 8192 \
+  --on-missing raise
 ```
 
 ### Multi-GPU Training (FSDP)
@@ -196,15 +216,14 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun \
   --nproc_per_node 4 \
   scripts/train.py \
   --verifier-name-or-path meta-llama/Llama-3.1-8B-Instruct \
-  --data-path ./training_data \
-  --hidden-states-path ./hidden_states \
-  --on-missing raise \ # or skip or warn
-  --save-path ./checkpoints \
+  --data-path ./output \
+  --hidden-states-path ./output/hidden_states \
+  --save-path ./output/checkpoints \
   --draft-vocab-size 32000 \
   --epochs 5 \
-  --lr 3e-5 \
-  --logger tensorboard \
-  --run-name llama31_8b_offline
+  --lr 1e-4 \
+  --total-seq-len 8192 \
+  --on-missing raise
 ```
 
 **Key parameters:**
@@ -213,10 +232,8 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun \
 - `--on-missing raise` - Fail if any hidden states are missing (recommended). Alternatives are `skip` and `warn` which both skip the missing sample, with the latter raising a warning.
 - `--draft-vocab-size 32000` - Reduced vocabulary size to use
 - `--epochs 5` - Number of training epochs
-- `--lr 3e-5` - Learning rate
-- `--logger tensorboard` - Enable TensorBoard logging
-
-**Warning:** If you set `--logger`, make sure you have installed the logging backend's package. These are not required dependencies of speculators and therefore aren't installed automatically.
+- `--lr 1e-4` - Learning rate
+- `--total-seq-len 8192` - Maximum sequence length for training
 
 **Note:** There are a lot of configuration options available at this stage. We've attempted to set sensible defaults but please see the [train.py cli reference](/cli/train.md) to see all available options.
 
