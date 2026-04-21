@@ -26,7 +26,7 @@ For a list of models that have been trained and validated end-to-end by our team
 
 Speculators supports multiple speculative decoding algorithms:
 
-- **[EAGLE-3](algorithms/eagle3.md)** 
+- **[EAGLE-3](algorithms/eagle3.md)**
 - **[DFlash](algorithms/dflash.md)**
 
 For help choosing between them, see the [Algorithm Decision Guide](algorithms/decision_guide.md).
@@ -41,7 +41,7 @@ If a pre-trained speculator isn't available for your target model, you can train
 ### Tutorials
 
 - [Train EAGLE-3 Online](tutorials/train_eagle3_online.md) -- Recommended starting point
-- [Train EAGLE-3 Offline](tutorials/train_eagle3_offline.md) 
+- [Train EAGLE-3 Offline](tutorials/train_eagle3_offline.md)
 - [Train DFlash Online](tutorials/train_dflash_online.md) -- Starting point for DFlash
 - [Evaluating Model Performance](tutorials/evaluating_performance.md) -- Benchmark your trained speculator
 - [Response Regeneration](tutorials/response_regeneration.md) -- Improve training data quality

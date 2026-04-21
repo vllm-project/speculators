@@ -36,5 +36,5 @@ nav:
           - community/index.md
           - Contact Us: community/contact_us.md
           - Events & Meetups: community/meetups.md
-          - Slack: slack.vllm.ai
+          - Slack: https://slack.vllm.ai
           - Blog: https://vllm.ai/blog/tags/speculative-decoding
