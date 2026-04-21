@@ -82,7 +82,7 @@ python scripts/launch_vllm.py Qwen/Qwen3-8B
 
 # Multiple GPUs with data parallelism (recommended)
 CUDA_VISIBLE_DEVICES=0,1 python scripts/launch_vllm.py \
-  Qwen/Qwen3-8B -- --tensor-parallel-size 2 --port 8000
+  Qwen/Qwen3-8B -- --data-parallel-size 2 --port 8000
 ```
 
 **The `--` separator:** Anything after `--` is passed directly to vLLM. Common options:

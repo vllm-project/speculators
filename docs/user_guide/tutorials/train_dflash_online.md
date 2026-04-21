@@ -78,7 +78,7 @@ Launch vLLM configured for hidden states extraction. For DFlash, you must explic
 # in vLLM venv
 CUDA_VISIBLE_DEVICES=0,1 python scripts/launch_vllm.py Qwen/Qwen3-8B \
   --target-layer-ids 2 18 33 \
-  -- --tensor-parallel-size 2 --port 8000
+  -- --data-parallel-size 2 --port 8000
 ```
 
 **The `--` separator:** Anything after `--` is passed directly to vLLM. Common options:
