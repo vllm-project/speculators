@@ -66,7 +66,7 @@ output/
 └── token_freq.pt
 ```
 
-**Time:** ~5 minutes for 50K samples
+**Time:** ~15 seconds for 5K samples
 
 **Note:** This step is used to setup the dataset that will be used to train your model and is the same for both online and offline training. It's important that any data configuration choices are made at this stage. For example, limiting the data sample length, filtering out samples with limited assistant response tokens, handling multi-turn conversation responses, etc. For more information please see the [prepare_data.py cli reference](/cli/prepare_data.md).
 
@@ -76,9 +76,15 @@ Next launch vLLM configured for hidden states extraction:
 
 ```bash
 # in vLLM venv
+# For 8B model - use data parallelism
 CUDA_VISIBLE_DEVICES=0,1 python scripts/launch_vllm.py \
   meta-llama/Llama-3.1-8B-Instruct \
   -- --data-parallel-size 2 --port 8000
+
+# For 70B model - combine tensor parallelism and data parallelism
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 python scripts/launch_vllm.py \
+  meta-llama/Llama-3.3-70B-Instruct \
+  -- --tensor-parallel-size 4 --data-parallel-size 2 --port 8000
 ```
 
 **The `--` separator:** Anything after `--` is passed directly to vLLM. Common options:
@@ -119,8 +125,8 @@ python scripts/data_generation_offline.py \
 - `--endpoint` - vLLM server URL
 - `--output` - Where to save hidden states
 - `--max-samples` - Number of samples to generate
-- `--concurrency` - Parallel requests to vLLM
-- `--validate-outputs` - Verify file integrity (recommended for production)
+- `--concurrency` - Parallel requests to vLLM during data generation
+- `--validate-outputs` - Verify file integrity (recommended)
 
 **Expected output:**
 
@@ -138,7 +144,7 @@ output/hidden_states/
 **Increase concurrency:**
 
 ```bash
---concurrency 64
+--concurrency 64  # Controls the number of concurrent requests to vllm as well as concurrent write to disk operations. 
 ```
 
 **Use more GPUs:**
@@ -179,7 +185,7 @@ The script automatically detects existing `hs_*.safetensors` files and skips the
 After hidden states generation is complete, stop the vLLM server:
 
 ```bash
-# Press Ctrl+C in the vLLM terminal
+# Press Ctrl+C in the vLLM terminal  
 ```
 
 You don't need vLLM running during offline training.
@@ -228,7 +234,7 @@ CUDA_VISIBLE_DEVICES=0,1 torchrun \
 - `--draft-vocab-size 32000` - Reduced vocabulary size to use
 - `--epochs 5` - Number of training epochs
 - `--lr 1e-4` - Learning rate
-- `--total-seq-len 8192` - Maximum sequence length
+- `--total-seq-len 8192` - Maximum sequence length for training
 
 **Note:** There are a lot of configuration options available at this stage. We've attempted to set sensible defaults but please see the [train.py cli reference](/cli/train.md) to see all available options.
 
