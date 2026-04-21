@@ -151,7 +151,7 @@ class TestLossFunction:
         loss = loss_function(logits, target_ids, loss_mask)
         assert loss.item() == pytest.approx(0.0, abs=1e-4)
 
-    def test_different_gamma(self):
+    def test_different_gamma(self, seed):
         """Different gamma values should produce different losses."""
         B, T, V = 1, 16, 10
         logits = torch.randn(B, T, V)
@@ -161,7 +161,7 @@ class TestLossFunction:
         loss_g10 = loss_function(logits, target_ids, loss_mask, gamma=10.0)
         assert not torch.isclose(loss_g1, loss_g10)
 
-    def test_different_block_sizes(self):
+    def test_different_block_sizes(self, seed):
         """Different block sizes should produce different weight patterns."""
         B, T, V = 1, 16, 10
         logits = torch.randn(B, T, V)
@@ -204,7 +204,8 @@ class TestComputeMetrics:
         targets = torch.randint(0, V, (B, T))
         loss_mask = torch.ones(B, T)
         _, metrics = compute_metrics(logits, targets, loss_mask, block_size=4)
-        for i in range(4):
+        assert "position 0 acc" not in metrics
+        for i in range(1, 4):
             assert f"position {i} acc" in metrics
 
     def test_loss_matches_loss_function(self):
@@ -227,5 +228,5 @@ class TestComputeMetrics:
             logits, targets, loss_mask, block_size=4
         )
         assert torch.isclose(metrics["full_acc"], expected_acc)
-        for i in range(4):
+        for i in range(1, 4):
             assert torch.isclose(metrics[f"position {i} acc"], expected_pos_accs[i])

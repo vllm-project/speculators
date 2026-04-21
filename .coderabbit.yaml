@@ -39,6 +39,27 @@ reviews:
       instructions: "Check for clarity, accuracy, and completeness. Ensure code examples match the current API and that speculative decoding concepts are explained correctly."
     - path: "**/README.md"
       instructions: "Review for clarity, accuracy, and up-to-date information. Ensure installation instructions, vLLM integration steps, and training examples are correct and reflect the current state of the library."
+  labeling_instructions:
+    - label: "bug"
+      instructions: "Indicates a bug in the code that needs to be fixed. Match case-insensitively (e.g., 'Bug', 'BUG', 'bug' all qualify)."
+    - label: "enhancement"
+      instructions: "Indicates a new feature or improvement to existing functionality. Match case-insensitively (e.g., 'Enhancement', 'ENHANCEMENT')."
+    - label: "rfc"
+      instructions: "Issues proposing a design or requesting feedback before implementation. Match case-insensitively — 'rfc', 'RFC', 'Rfc' all qualify."
+    - label: "refactor"
+      instructions: "Issues or PRs that restructure or clean up existing code without changing external behavior. Match case-insensitively — 'refactor', 'Refactor', 'REFACTOR' all qualify."
+    - label: "training"
+      instructions: "Apply to PRs that modify core training infrastructure under src/speculators/train/, including the training loop (trainer.py), checkpointing (checkpointer.py), distributed batch sampling, loss computation, learning rate scheduling, noise transforms, or vocabulary mapping. Also applies to changes in training configuration or training-specific utilities."
+    - label: "data-generation"
+      instructions: "Apply to PRs that modify the data generation pipeline under src/speculators/data_generation/, including hidden state extraction (vllm_hidden_states_generator.py), the vLLM client, data generation configs, preprocessing, or custom worker logic. Also applies to changes affecting how training data is produced from vLLM."
+    - label: "eagle3"
+      instructions: "Apply to PRs that modify Eagle3-specific model code under src/speculators/models/eagle3/ (core architecture, attention, config, model definitions, data handling) or Eagle3 conversion tooling under src/speculators/convert/ (eagle3_converter.py, eagle3_legacy_model.py). Match case-insensitively — 'eagle3', 'Eagle3', 'EAGLE3' all qualify."
+    - label: "dflash"
+      instructions: "Apply to PRs that modify DFlash-specific model code under src/speculators/models/dflash/ (core architecture, attention, config, model definitions, metrics, or utilities). Match case-insensitively — 'dflash', 'DFlash', 'DFLASH' all qualify."
+    - label: "mtp"
+      instructions: "Apply to PRs that affect Multi-Token Prediction (MTP) support, including evaluation configs and scripts under examples/evaluate/eval-guidellm/ that set METHOD=mtp or reference MTP models, or any vLLM integration changes specific to MTP-based speculative decoding. Match case-insensitively — 'mtp', 'MTP', 'Mtp' all qualify."
+    - label: "two-reviews"
+      instructions: "Apply to PRs that make substantial changes warranting more than one reviewer. This includes: updates to critical dependencies such as torch or transformers in pyproject.toml or requirements files; broad changes to core shared infrastructure (src/speculators/model.py, src/speculators/config.py, src/speculators/models/base_components.py, src/speculators/models/attention.py); changes that span multiple subsystems (e.g., training + data generation, or multiple model architectures); or any PR flagged as high-risk due to distributed training correctness, checkpoint format changes, or vocabulary mapping logic."
   auto_review:
     enabled: true
     ignore_title_keywords:
@@ -58,3 +79,4 @@ chat:
 issue_enrichment:
   auto_enrich:
     enabled: true
+    
