@@ -22,6 +22,7 @@ import os
 from importlib.metadata import version
 from typing import Any, ClassVar
 
+import torch
 from pydantic import BaseModel, ConfigDict, Field
 from transformers import PretrainedConfig
 
@@ -296,6 +297,31 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
             or set, along with all Pydantic fields.
         """
         return super().to_diff_dict()
+
+    @classmethod
+    def __init_subclass__(cls, **kwargs):
+        # transformers >= 5.x injects its own __init__ on subclasses; call super
+        # first then restore ours if it was replaced.
+        super().__init_subclass__(**kwargs)
+        injected = cls.__dict__.get("__init__")
+        if injected is not None and injected is not SpeculatorModelConfig.__init__:
+            cls.__init__ = SpeculatorModelConfig.__init__  # type: ignore[method-assign]
+
+    @classmethod
+    def reload_schema(cls):
+        # Rebuild registered subclasses too — each inherits from PretrainedConfig
+        # and hits the same torch annotation issue. See pydantic_utils.py for why
+        # _types_namespace is needed and is backwards compatible.
+        cls.model_rebuild(force=True, _types_namespace={"torch": torch})
+        for subcls in (cls.registry or {}).values():
+            subcls.model_rebuild(force=True, _types_namespace={"torch": torch})
+
+    # transformers >= 5.x adds validate() which conflicts with Pydantic v2's
+    # validate() classmethod. Guard so we don't stub it on older transformers.
+    if "validate" in vars(PretrainedConfig):
+
+        def validate(self) -> None:  # type: ignore[override]
+            pass
 
 
 def reload_schemas():
