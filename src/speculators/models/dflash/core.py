@@ -37,6 +37,22 @@ def unwrap_verifier_configs(
     return multimodal_config, text_config
 
 
+def get_deepstack_visual_indexes(multimodal_config: PretrainedConfig) -> list[int]:
+    """Return DeepStack layer indexes when present on the verifier.
+
+    DeepStack visual indexes may live either on the multimodal/thinker config
+    directly or nested under ``vision_config`` depending on the transformers
+    version. ``None`` / missing is treated as "no DeepStack layers".
+    """
+    vision_config = getattr(multimodal_config, "vision_config", None)
+    deepstack_layers = getattr(vision_config, "deepstack_visual_indexes", None)
+    if deepstack_layers is None:
+        deepstack_layers = getattr(
+            multimodal_config, "deepstack_visual_indexes", None
+        )
+    return list(deepstack_layers or [])
+
+
 @SpeculatorModel.register("dflash")
 class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
     config_class: ClassVar[type[DFlashSpeculatorConfig]] = DFlashSpeculatorConfig  # type: ignore[misc]
@@ -91,12 +107,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             self.target_layer_ids = config.aux_hidden_state_layer_ids
         else:
             deepstack_layers = set(
-                getattr(
-                    getattr(verifier_multimodal_config, "vision_config", None),
-                    "deepstack_visual_indexes",
-                    [],
-                )
-                or getattr(verifier_multimodal_config, "deepstack_visual_indexes", [])
+                get_deepstack_visual_indexes(verifier_multimodal_config)
             )
             candidate_layer_ids = [2, num_verifier_layers // 2, num_verifier_layers - 3]
             self.target_layer_ids = [

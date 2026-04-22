@@ -47,9 +47,9 @@
 
 - `scripts/train.py` — verifier→draft config 派生逻辑
 - `scripts/launch_vllm.py` — vLLM 启动前的 verifier config 解析
-- `src/speculators/models/dflash/core.py` — 运行时 verifier config 解析 + RoPE 初始化
+- `src/speculators/models/dflash/core.py` — 运行时 verifier config 解析 + RoPE 初始化（MRoPE 时选用 `Qwen3OmniMoeThinkerTextRotaryEmbedding`）
 - `src/speculators/models/dflash/config.py` — `validate_transformer_config` 对 `qwen3_omni_moe_text` 的降级处理
-- `src/speculators/models/dflash/model_definitions.py` — `apply_rotary_pos_emb` 的 MRoPE 支持
+- `src/speculators/models/dflash/model_definitions.py` — `apply_rotary_pos_emb` 保持 1D RoPE 单一路径（保留 q 端尾切片以支持 `q_len != k_len` 的非对称 attention）
 - `src/speculators/data_generation/custom_worker.py` — hidden state 捕获点的 `thinker` 前缀分支
 - `examples/data_generation_and_training/` — 新增 Qwen3-Omni-Thinking 示例脚本
 
@@ -303,68 +303,102 @@ def validate_transformer_config(cls, value: Any) -> PretrainedConfig:
 
 ---
 
-### Step 5：`src/speculators/models/dflash/model_definitions.py` — MRoPE 适配
+### Step 5：`src/speculators/models/dflash/core.py` + `model_definitions.py` — MRoPE 适配
 
-**文件**：`src/speculators/models/dflash/model_definitions.py`
-**位置**：第 22-43 行（`_rotate_half` / `apply_rotary_pos_emb`），以及第 130 行调用处。
+**文件**：
+- `src/speculators/models/dflash/core.py`（RotaryEmbedding 分派）
+- `src/speculators/models/dflash/model_definitions.py`（`apply_rotary_pos_emb`）
 
-**现状问题**：
+**关键认知**（直接决定设计方向）：
+
+Qwen3-Omni 的 MRoPE **不是**在 `apply_rotary_pos_emb` 里做分段的。所有多模态分段（T/H/W 三路 freq 的 interleave）**在 `Qwen3OmniMoeThinkerTextRotaryEmbedding.forward` 内部就已经通过 `apply_interleaved_mrope` 完成**，它返回的 `cos/sin` 形状是标准的 `(bsz, seq_len, head_dim)`，**和 1D RoPE 完全一致**。验证方法 —— 查看 transformers 自带的 `Qwen3OmniMoeThinkerTextAttention.forward`，它对 `cos/sin` 的使用就是一句 `apply_rotary_pos_emb(q, k, cos, sin)`，没有任何 `mrope_section` 逻辑。
+
+因此 MRoPE 支持的**唯一改动点**是：**把 `self.rotary_emb` 从 `Qwen3RotaryEmbedding` 换成 `Qwen3OmniMoeThinkerTextRotaryEmbedding`**。`apply_rotary_pos_emb` 一端**不需要任何分支**，只需要维持 DFlash 原本就有的 `q_len` 尾切片以适应 `q_len != k_len` 的非对称 attention。
+
+#### 5.1 `core.py` 的 RotaryEmbedding 分派
+
+```python
+from transformers.models.qwen3.modeling_qwen3 import Qwen3RotaryEmbedding
+from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
+    Qwen3OmniMoeThinkerTextRotaryEmbedding,
+)
+
+# DFlashDraftModel.__init__ 内
+rope_scaling = getattr(config.transformer_layer_config, "rope_scaling", None)
+if isinstance(rope_scaling, dict) and "mrope_section" in rope_scaling:
+    self.rotary_emb = Qwen3OmniMoeThinkerTextRotaryEmbedding(
+        config.transformer_layer_config
+    )
+else:
+    self.rotary_emb = Qwen3RotaryEmbedding(config.transformer_layer_config)
+```
+
+`Qwen3OmniMoeThinkerTextRotaryEmbedding` 的 `__init__` 只读 `rope_scaling["mrope_section"]`（缺省会 fallback `[24,20,20]`）、`rope_theta`、`max_position_embeddings`，Step 1 已经把这些字段透传到 draft `Qwen3Config` 里，**不需要再传 `Qwen3OmniMoeTextConfig`**，稠密的 `Qwen3Config` 足够构造它。
+
+#### 5.2 `model_definitions.py` 的 `apply_rotary_pos_emb`
+
+**保持单一代码路径，唯一重点是 q 端的尾切片**：
 
 ```python
 def _rotate_half(x):
-    ...
-def apply_rotary_pos_emb(q, k, cos, sin):
+    x1 = x[..., : x.shape[-1] // 2]
+    x2 = x[..., x.shape[-1] // 2 :]
+    return torch.cat((-x2, x1), dim=-1)
+
+
+def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
+    """Apply rotary position embeddings for DFlash's asymmetric attention.
+
+    NOTE on MRoPE (Qwen3-Omni):
+        Multimodal section interleaving is fully handled inside
+        ``Qwen3OmniMoeThinkerTextRotaryEmbedding.forward`` (via
+        ``apply_interleaved_mrope``). The returned ``cos/sin`` already have
+        the standard 1D-RoPE shape ``(bsz, seq_len, head_dim)``, so a single
+        RoPE code path suffices - matching Qwen3-Omni's own attention.
+
+    NOTE on the q-side slicing:
+        DFlash attention is asymmetric - ``k`` has length ``ctx_len + q_len``
+        while ``q`` has length ``q_len``. ``cos/sin`` are built from the
+        concatenated ``position_ids`` and therefore align with ``k``. We must
+        slice the last ``q_len`` positions for ``q`` so that the RoPE applied
+        on ``q`` corresponds to the noise-block positions at the tail of
+        ``position_ids``.
+    """
+    cos = cos.unsqueeze(unsqueeze_dim)
+    sin = sin.unsqueeze(unsqueeze_dim)
+    q_len = q.size(-2)
     q_embed = (q * cos[..., -q_len:, :]) + (_rotate_half(q) * sin[..., -q_len:, :])
     k_embed = (k * cos) + (_rotate_half(k) * sin)
+    return q_embed, k_embed
 ```
 
-- 是标准 1D RoPE 实现，假设 `cos/sin` shape = `[..., seq, head_dim]`。
-- Qwen3-Omni 的 MRoPE 会让上游 `Qwen3RotaryEmbedding` 产出 shape = `[3, ..., seq, head_dim]`（T/H/W 三段 position），`apply_rotary_pos_emb` 需要按 `mrope_section` 在 head_dim 维度分段再拼回。
-
-**修改方案**：
-
-优先级 1（推荐）：**直接复用 transformers 的 `apply_multimodal_rotary_pos_emb`**，保证和 verifier 行为一致。
+**调用点**（`Qwen3DFlashAttention.forward`）保持最简：
 
 ```python
-from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
-    apply_multimodal_rotary_pos_emb,
-)
-
-def apply_rotary_pos_emb(q, k, cos, sin, mrope_section=None):
-    """
-    Unified RoPE dispatcher.
-    - mrope_section is None  -> standard 1D RoPE (legacy behavior)
-    - mrope_section is list  -> multimodal RoPE (Qwen3-Omni / Qwen2-VL)
-    """
-    if mrope_section is None:
-        # 原 1D RoPE 实现保留
-        q_len = q.shape[-2]
-        q_embed = (q * cos[..., -q_len:, :]) + (_rotate_half(q) * sin[..., -q_len:, :])
-        k_embed = (k * cos) + (_rotate_half(k) * sin)
-        return q_embed, k_embed
-
-    return apply_multimodal_rotary_pos_emb(q, k, cos, sin, mrope_section=mrope_section)
+cos, sin = position_embeddings
+q, k = apply_rotary_pos_emb(q, k, cos, sin)
 ```
 
-**调用点**（第 130 行附近）：
+不要再从 `self.config.rope_scaling` 读 `mrope_section` 做分支判断 —— MRoPE 的适配已经在 RotaryEmbedding 侧闭环。
 
-```python
-# Qwen3DFlashAttention.forward 内
-mrope_section = None
-rope_scaling = getattr(self.config, "rope_scaling", None) or {}
-if rope_scaling.get("rope_type") in (None, "default") and "mrope_section" in rope_scaling:
-    mrope_section = rope_scaling["mrope_section"]
+#### 5.3 常见误区与反例（避坑）
 
-q, k = apply_rotary_pos_emb(q, k, cos, sin, mrope_section=mrope_section)
+**误区**：以为 `transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe.apply_rotary_pos_emb` 是 MRoPE 专用实现，于是在 DFlash 里基于 `mrope_section is not None` 切到它。
+
+**事实**：该函数只是标准 1D RoPE（`(q*cos) + (rotate_half(q)*sin)`），**不做任何 mrope_section 相关的处理**，并且**不做 q 端尾切片**。如果切过去，会在 `q_len != k_len` 时因为 broadcast 失败直接 crash：
+
+```
+RuntimeError: The size of tensor a (q_len) must match the size of tensor b
+(ctx_len + q_len) at non-singleton dimension 2
 ```
 
-**`Qwen3RotaryEmbedding` 初始化**（`core.py` 第 88 行）：
+所以**既不要 import 它，也不要添加 `mrope_section` 分支**，维持单一 RoPE 路径即可。
 
-- `transformers.Qwen3RotaryEmbedding` 本身读 `config.rope_scaling`/`config.rope_theta`，Step 1/Step 4 把这俩字段透传进 `Qwen3Config` 后，**无需修改**该构造行，RoPE 参数会自动生效。
+#### 5.4 验收标准
 
-**验收标准**：
-- 用真实 Qwen3-Omni input_ids 与 3D position_ids 跑一次 forward：不报 shape 错误，且 `q_embed` shape 与原 verifier 路径一致。
-- 关掉 MRoPE（`rope_scaling=None`）时退回 1D RoPE，单元测试保持绿色。
+- 用 Qwen3-Omni-Thinking 的 `rope_scaling={"mrope_section":[24,20,20], "mrope_interleaved":true, "rope_type":"default"}` 构造 draft `Qwen3Config`，`core.py` 能正确选中 `Qwen3OmniMoeThinkerTextRotaryEmbedding`。
+- 用 `(q_len=16, k_len=64, head_dim=128)` 的 shape 调用 `apply_rotary_pos_emb`，输出 shape 分别为 `q=(1,32,16,128)`、`k=(1,32,64,128)`，不抛异常。
+- 关掉 MRoPE（`rope_scaling=None` 或无 `mrope_section`）时自动回落到 `Qwen3RotaryEmbedding`，原单元测试保持绿色。
 
 ---
 
@@ -475,7 +509,10 @@ print(m.config)
 1. Step 3 生效：`m.config.target_hidden_size == 2048`
 2. Step 1 生效：`m.config.transformer_layer_config.intermediate_size == 6144`
 3. Step 4 生效：`m.config.transformer_layer_config.model_type == 'qwen3'` 且无 MoE 字段
-4. Step 5 生效：训练 forward 无 RoPE shape 错误；loss 在前 200 step 下降
+4. Step 5 生效：
+   - `DFlashDraftModel.rotary_emb` 实际类型为 `Qwen3OmniMoeThinkerTextRotaryEmbedding`（当 `rope_scaling` 含 `mrope_section` 时）
+   - 训练 forward 无 RoPE shape 错误，即使 `q_len != k_len` 也正常工作
+   - loss 在前 200 step 下降
 5. Step 6 生效：数据生成阶段捕获的 hidden states 三层形状都是 `[*, 2048]`
 
 ---
@@ -484,9 +521,10 @@ print(m.config)
 
 ### 5.1 MRoPE 行为一致性
 
-- **风险**：若 `apply_multimodal_rotary_pos_emb` 在不同 transformers 版本间有 API 变动，draft 与 verifier 可能产生位置编码偏差。
-- **回退**：Step 5 中保留 1D RoPE 分支（`mrope_section is None`），允许通过 `--disable-mrope` CLI 强制走 1D RoPE 训练一版基线作为下界。
-- **兜底**：在 `model_definitions.py` 中复制一份 transformers 当前版本的 `apply_multimodal_rotary_pos_emb` 源码，避免远端升级造成训练漂移。
+- **风险**：`Qwen3OmniMoeThinkerTextRotaryEmbedding` 跨 transformers 版本的 `apply_interleaved_mrope` 实现若发生变化（例如 mrope_section 默认值、interleave 顺序调整），会导致 draft 的 cos/sin 与 verifier 不再对齐。
+- **回退**：`core.py` 的 dispatch 是纯运行时判断（`"mrope_section" in rope_scaling`），可通过 CLI 强制传 `rope_scaling=None` 让 draft 退回 `Qwen3RotaryEmbedding` 的标准 1D RoPE，训练一版基线作为下界。
+- **兜底**：必要时在 `speculators/models/dflash/` 下镜像一份当前 transformers 版本的 `Qwen3OmniMoeThinkerTextRotaryEmbedding` 源码，避免远端升级造成训练漂移。
+- **反模式提示**：不要通过"在 `apply_rotary_pos_emb` 里按 `mrope_section` 切分支"的方式适配 MRoPE —— transformers 的 `qwen3_omni_moe.apply_rotary_pos_emb` 并不是 MRoPE 专用函数，且不做 DFlash 所需的 q 端尾切片，误用会在 `q_len != k_len` 时直接 crash。MRoPE 的分段完全在 RotaryEmbedding 侧完成。
 
 ### 5.2 `mask_token_id` 选择
 
@@ -515,9 +553,9 @@ print(m.config)
 
 - [ ] `scripts/train.py` — Step 1
 - [ ] `scripts/launch_vllm.py` — Step 2
-- [ ] `src/speculators/models/dflash/core.py` — Step 3
+- [ ] `src/speculators/models/dflash/core.py` — Step 3 + Step 5.1（RotaryEmbedding 分派）
 - [ ] `src/speculators/models/dflash/config.py` — Step 4
-- [ ] `src/speculators/models/dflash/model_definitions.py` — Step 5
+- [ ] `src/speculators/models/dflash/model_definitions.py` — Step 5.2（保持单一 1D RoPE 路径 + q 端尾切片）
 - [ ] `src/speculators/data_generation/custom_worker.py` — Step 6
 - [ ] `examples/data_generation_and_training/qwen3_omni_thinking_sharegpt.py` — Step 7（新增）
 - [ ] `examples/data_generation_and_training/README.md` — Step 7（更新链接）

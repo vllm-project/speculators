@@ -12,9 +12,6 @@ from transformers.models.qwen3.modeling_qwen3 import (
     Qwen3RMSNorm,
     eager_attention_forward,
 )
-from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
-    apply_rotary_pos_emb as apply_qwen3_omni_rotary_pos_emb,
-)
 from typing_extensions import Unpack
 
 if TYPE_CHECKING:
@@ -34,22 +31,27 @@ def apply_rotary_pos_emb(
     k,
     cos,
     sin,
-    position_ids=None,
+    position_ids=None,  # noqa: ARG001
     unsqueeze_dim=1,
-    mrope_section=None,
 ):
-    """Apply rotary position embeddings for both standard RoPE and Omni MRoPE."""
+    """Apply rotary position embeddings for DFlash's asymmetric attention.
 
-    if mrope_section is not None:
-        return apply_qwen3_omni_rotary_pos_emb(
-            q,
-            k,
-            cos,
-            sin,
-            position_ids=position_ids,
-            unsqueeze_dim=unsqueeze_dim,
-        )
+    NOTE on MRoPE (Qwen3-Omni):
+        Multimodal section interleaving is fully handled inside
+        ``Qwen3OmniMoeThinkerTextRotaryEmbedding.forward`` (see
+        ``apply_interleaved_mrope`` there). The ``cos`` / ``sin`` returned
+        from that module already have the standard 1D-RoPE shape
+        ``(bsz, seq_len, head_dim)``, so downstream only needs a single
+        RoPE code path. This matches what Qwen3-Omni's own attention does.
 
+    NOTE on the q-side slicing:
+        DFlash attention is asymmetric - ``k`` has length ``ctx_len + q_len``
+        while ``q`` has length ``q_len``. ``cos`` / ``sin`` are built from the
+        concatenated ``position_ids`` and therefore align with ``k``. We must
+        slice the last ``q_len`` positions for ``q`` so that the RoPE applied
+        on ``q`` corresponds to the noise-block positions (which sit at the
+        tail of ``position_ids``).
+    """
     cos = cos.unsqueeze(unsqueeze_dim)
     sin = sin.unsqueeze(unsqueeze_dim)
     q_len = q.size(-2)
@@ -141,15 +143,7 @@ class Qwen3DFlashAttention(nn.Module):
         k = self.k_norm(k).transpose(1, 2)
         v = v.transpose(1, 2)
         cos, sin = position_embeddings
-        rope_scaling = getattr(self.config, "rope_scaling", None) or {}
-        mrope_section = rope_scaling.get("mrope_section")
-        q, k = apply_rotary_pos_emb(
-            q,
-            k,
-            cos,
-            sin,
-            mrope_section=mrope_section,
-        )
+        q, k = apply_rotary_pos_emb(q, k, cos, sin)
         if past_key_values is not None:
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
             k, v = past_key_values.update(k, v, self.layer_idx, cache_kwargs)
