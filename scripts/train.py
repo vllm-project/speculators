@@ -404,7 +404,16 @@ def parse_args():
         default="",
         help="The pretrained draft model to finetune",
     )
-    parser.add_argument("--data-path", type=str, default="./data")
+    parser.add_argument(
+        "--data-path",
+        type=str,
+        default="./output",
+        help=(
+            "Root data directory containing the preprocessed dataset, "
+            "vocab mappings (d2t.npy, t2d.npy), token frequencies "
+            "(token_freq.pt), and hidden states (default: ./output)"
+        ),
+    )
     parser.add_argument(
         "--hidden-states-path",
         type=str,
@@ -479,7 +488,7 @@ def parse_args():
             "removed soon."
         ),
     )
-    parser.add_argument("--save-path", type=str, default="./checkpoints")
+    parser.add_argument("--save-path", type=str, default="./output/checkpoints")
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--no-resume-from-checkpoint", action="store_true")
