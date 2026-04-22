@@ -41,7 +41,8 @@ def parse_args():
         "--token-freq-path",
         type=str,
         default="./output/token_freq.pt",
-        help="Path to token frequency distribution file (.pt) (default: ./output/token_freq.pt)",
+        help="Path to token frequency distribution file (.pt)"
+        " (default: ./output/token_freq.pt)",
     )
     parser.add_argument(
         "--draft-vocab-size",

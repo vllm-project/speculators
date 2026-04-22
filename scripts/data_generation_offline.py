@@ -86,7 +86,8 @@ def parse_args():
         "--preprocessed-data",
         type=str,
         default="./output",
-        help="Path to preprocessed dataset (dataset produced by prepare_data.py) (default: ./output)",
+        help="Path to preprocessed dataset (dataset produced by prepare_data.py)"
+        " (default: ./output)",
     )
     parser.add_argument(
         "--max-samples",
