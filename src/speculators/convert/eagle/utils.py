@@ -2,13 +2,53 @@
 Utility functions for checkpoint conversion operations.
 """
 
+from __future__ import annotations
+
+import inspect
 import json
 from pathlib import Path
+from typing import Any
 
 import torch
 from huggingface_hub import snapshot_download
 from loguru import logger
 from safetensors import safe_open
+from transformers import LlamaConfig
+
+_LLAMA_CONFIG_PARAMS = set(inspect.signature(LlamaConfig.__init__).parameters)
+_LLAMA_CONFIG_HAS_ROPE_THETA = "rope_theta" in _LLAMA_CONFIG_PARAMS
+_LLAMA_CONFIG_HAS_TORCH_DTYPE = "torch_dtype" in _LLAMA_CONFIG_PARAMS
+
+
+def build_llama_config_dtype_kwarg(torch_dtype: str | None) -> dict[str, Any]:
+    if torch_dtype is None:
+        return {}
+    if _LLAMA_CONFIG_HAS_TORCH_DTYPE:
+        return {"torch_dtype": torch_dtype}
+    return {"dtype": torch_dtype}
+
+
+def build_llama_config_rope_kwargs(
+    rope_theta: float = 10000.0,
+    rope_scaling: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if _LLAMA_CONFIG_HAS_ROPE_THETA:
+        kwargs: dict[str, Any] = {"rope_theta": rope_theta}
+        if rope_scaling is not None:
+            kwargs["rope_scaling"] = rope_scaling
+        return kwargs
+
+    rope_params: dict[str, Any] = {"rope_theta": rope_theta}
+    if rope_scaling is not None:
+        rope_params["rope_type"] = rope_scaling.get(
+            "rope_type", rope_scaling.get("type", "default")
+        )
+        for k, v in rope_scaling.items():
+            if k not in ("rope_type", "type"):
+                rope_params[k] = v
+    else:
+        rope_params["rope_type"] = "default"
+    return {"rope_parameters": rope_params}
 
 
 def find_vocab_size(config_dict: dict) -> int | None:
