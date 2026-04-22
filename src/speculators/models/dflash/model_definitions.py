@@ -12,6 +12,9 @@ from transformers.models.qwen3.modeling_qwen3 import (
     Qwen3RMSNorm,
     eager_attention_forward,
 )
+from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
+    apply_rotary_pos_emb as apply_qwen3_omni_rotary_pos_emb,
+)
 from typing_extensions import Unpack
 
 if TYPE_CHECKING:
@@ -31,10 +34,21 @@ def apply_rotary_pos_emb(
     k,
     cos,
     sin,
-    position_ids=None,  # noqa: ARG001
+    position_ids=None,
     unsqueeze_dim=1,
+    mrope_section=None,
 ):
-    """Apply rotary position embeddings (local implementation)."""
+    """Apply rotary position embeddings for both standard RoPE and Omni MRoPE."""
+
+    if mrope_section is not None:
+        return apply_qwen3_omni_rotary_pos_emb(
+            q,
+            k,
+            cos,
+            sin,
+            position_ids=position_ids,
+            unsqueeze_dim=unsqueeze_dim,
+        )
 
     cos = cos.unsqueeze(unsqueeze_dim)
     sin = sin.unsqueeze(unsqueeze_dim)
@@ -127,7 +141,15 @@ class Qwen3DFlashAttention(nn.Module):
         k = self.k_norm(k).transpose(1, 2)
         v = v.transpose(1, 2)
         cos, sin = position_embeddings
-        q, k = apply_rotary_pos_emb(q, k, cos, sin)
+        rope_scaling = getattr(self.config, "rope_scaling", None) or {}
+        mrope_section = rope_scaling.get("mrope_section")
+        q, k = apply_rotary_pos_emb(
+            q,
+            k,
+            cos,
+            sin,
+            mrope_section=mrope_section,
+        )
         if past_key_values is not None:
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
             k, v = past_key_values.update(k, v, self.layer_idx, cache_kwargs)

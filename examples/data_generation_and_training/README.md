@@ -42,4 +42,6 @@ For a full list of models with support, see: https://github.com/vllm-project/spe
 
 # Examples
 
-The files in this folder provide end-to-end examples which run the three steps listed above for GPT-OSS, Llama3 and Qwen3 draft models. If at any point a step fails, you can rerun the script and continue from the last step. Seprate steps may also run using the individual scripts listed above.
+The files in this folder provide end-to-end examples which run the three steps listed above for GPT-OSS, Llama3, Qwen3, and Qwen3-Omni-Thinking DFlash draft models. If at any point a step fails, you can rerun the script and continue from the last step. Separate steps may also run using the individual scripts listed above.
+
+- `qwen3_omni_thinking_sharegpt.py`: text-only ShareGPT pipeline for training a 1-layer dense Qwen3 DFlash draft against `Qwen/Qwen3-Omni-30B-A3B-Thinking`.

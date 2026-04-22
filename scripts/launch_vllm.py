@@ -5,6 +5,24 @@ import sys
 import warnings
 
 
+def unwrap_verifier_configs(config):
+    """Return multimodal/container config and the text backbone config."""
+    multimodal_config = getattr(config, "thinker_config", config)
+    text_config = multimodal_config
+    if hasattr(text_config, "text_config"):
+        text_config = text_config.text_config
+    return multimodal_config, text_config
+
+
+def get_deepstack_visual_indexes(multimodal_config) -> list[int]:
+    """Get DeepStack layer indexes when present on the verifier."""
+    vision_config = getattr(multimodal_config, "vision_config", None)
+    deepstack_layers = getattr(vision_config, "deepstack_visual_indexes", None)
+    if deepstack_layers is None:
+        deepstack_layers = getattr(multimodal_config, "deepstack_visual_indexes", None)
+    return list(deepstack_layers or [])
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Launch vLLM for hidden states extraction",
@@ -56,13 +74,12 @@ def main():
 
     from transformers import AutoConfig  # noqa: PLC0415
 
-    config = AutoConfig.from_pretrained(args.model)
-    if hasattr(config, "text_config"):
-        config = config.text_config
+    raw_config = AutoConfig.from_pretrained(args.model)
+    multimodal_config, config = unwrap_verifier_configs(raw_config)
     num_hidden_layers = config.num_hidden_layers
 
     if args.target_layer_ids:
-        target_layer_ids = args.target_layer_ids
+        target_layer_ids = list(args.target_layer_ids)
         if args.include_last_layer and num_hidden_layers not in target_layer_ids:
             target_layer_ids.append(num_hidden_layers)
         warnings.warn(
@@ -71,12 +88,14 @@ def main():
             stacklevel=2,
         )
     else:
+        deepstack_layers = set(get_deepstack_visual_indexes(multimodal_config))
+        candidate_layer_ids = [2, num_hidden_layers // 2, num_hidden_layers - 3]
         target_layer_ids = [
-            2,
-            num_hidden_layers // 2,
-            num_hidden_layers - 3,
-            num_hidden_layers,
+            layer_id - 1 if layer_id in deepstack_layers else layer_id
+            for layer_id in candidate_layer_ids
         ]
+        if args.include_last_layer:
+            target_layer_ids.append(num_hidden_layers)
 
     speculative_config = {
         "method": "extract_hidden_states",

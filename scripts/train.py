@@ -61,6 +61,31 @@ def set_seed(seed: int, deterministic: bool = False):
         torch.backends.cudnn.benchmark = False
 
 
+def unwrap_verifier_text_config(verifier_config: PretrainedConfig) -> PretrainedConfig:
+    """Unwrap multimodal verifier configs to their text backbone config."""
+    if hasattr(verifier_config, "thinker_config"):
+        verifier_config = verifier_config.thinker_config
+    if hasattr(verifier_config, "text_config"):
+        verifier_config = verifier_config.text_config
+    return verifier_config
+
+
+def get_default_draft_intermediate_size(verifier_config: PretrainedConfig) -> int:
+    """Map verifier FFN width to a dense draft FFN width."""
+    is_moe_text = getattr(verifier_config, "model_type", "").endswith(
+        "_moe_text"
+    ) or hasattr(verifier_config, "moe_intermediate_size")
+    if is_moe_text:
+        moe_ffn = getattr(
+            verifier_config,
+            "moe_intermediate_size",
+            verifier_config.intermediate_size,
+        )
+        experts_per_tok = getattr(verifier_config, "num_experts_per_tok", 1)
+        return int(moe_ffn * experts_per_tok)
+    return int(verifier_config.intermediate_size)
+
+
 def setup_dataloader(
     dataset: BaseDataset,
     world_size: int,
@@ -102,7 +127,10 @@ def setup_dataloader(
 
 
 def create_transformer_layer_config(
-    verifier_name_or_path: str, num_layers: int, draft_arch: str = "llama"
+    verifier_name_or_path: str,
+    num_layers: int,
+    draft_arch: str = "llama",
+    draft_intermediate_size: int | None = None,
 ) -> PretrainedConfig:
     if draft_arch not in DRAFT_ARCH_CONFIGS:
         raise ValueError(
@@ -119,16 +147,23 @@ def create_transformer_layer_config(
         )
 
     config_class = DRAFT_ARCH_CONFIGS[draft_arch]
-    verifier_config = AutoConfig.from_pretrained(verifier_name_or_path)
+    verifier_config = unwrap_verifier_text_config(
+        AutoConfig.from_pretrained(verifier_name_or_path)
+    )
 
-    # For multimodal models (Qwen3VL, etc.), extract text_config
-    if hasattr(verifier_config, "text_config"):
-        verifier_config = verifier_config.text_config
+    if draft_intermediate_size is None:
+        draft_intermediate_size = get_default_draft_intermediate_size(verifier_config)
+
+    rope_kwargs = {}
+    if getattr(verifier_config, "rope_theta", None) is not None:
+        rope_kwargs["rope_theta"] = verifier_config.rope_theta
+    if getattr(verifier_config, "rope_scaling", None) is not None:
+        rope_kwargs["rope_scaling"] = dict(verifier_config.rope_scaling)
 
     return config_class(
         vocab_size=verifier_config.vocab_size,
         hidden_size=verifier_config.hidden_size,
-        intermediate_size=verifier_config.intermediate_size,
+        intermediate_size=draft_intermediate_size,
         num_hidden_layers=num_layers,
         num_attention_heads=verifier_config.num_attention_heads,
         num_key_value_heads=verifier_config.num_key_value_heads,
@@ -138,6 +173,7 @@ def create_transformer_layer_config(
         rms_norm_eps=verifier_config.rms_norm_eps,
         head_dim=getattr(verifier_config, "head_dim", None),
         tie_word_embeddings=False,
+        **rope_kwargs,
     )
 
 
@@ -207,9 +243,9 @@ def parse_vocab_mappings(args: argparse.Namespace):
         "None. Using full verifier vocab"
     )
     # When vocab mapping is not provided, use the full verifier vocab
-    verifier_config = AutoConfig.from_pretrained(args.verifier_name_or_path)
-    if hasattr(verifier_config, "text_config"):
-        verifier_config = verifier_config.text_config
+    verifier_config = unwrap_verifier_text_config(
+        AutoConfig.from_pretrained(args.verifier_name_or_path)
+    )
     return None, None, verifier_config.vocab_size
 
 
@@ -235,7 +271,10 @@ def main(args: argparse.Namespace):
 
     # Setup speculator config
     transformer_layer_config = create_transformer_layer_config(
-        args.verifier_name_or_path, args.num_layers, draft_arch=args.draft_arch
+        args.verifier_name_or_path,
+        args.num_layers,
+        draft_arch=args.draft_arch,
+        draft_intermediate_size=args.draft_intermediate_size,
     )
 
     args.mask_token_id = resolve_mask_token_id(
@@ -485,13 +524,24 @@ def parse_args():
         "Note: only 'llama' is currently supported in vLLM for inference.",
     )
     parser.add_argument(
+        "--draft-intermediate-size",
+        type=int,
+        default=None,
+        help=(
+            "Override draft FFN intermediate size. For MoE verifiers (for example "
+            "Qwen3-Omni-Thinking), the default is "
+            "moe_intermediate_size * num_experts_per_tok."
+        ),
+    )
+    parser.add_argument(
         "--target-layer-ids",
         type=int,
         nargs="+",
         help=(
-            "(Optional) A (space separated) list of integer layer ids. Defaults to"
-            "[2, num_hidden_layers // 2, num_hidden_layers - 3, num_hidden_layers]. "
-            "Note: must be set explicitly if custom values were used to launch vllm"
+            "(Optional) A (space separated) list of verifier auxiliary hidden-state "
+            "layer ids. Defaults to [2, num_hidden_layers // 2, num_hidden_layers - 3]. "
+            "Do not include the final verifier layer, which is stored separately. "
+            "Must match the layers used during hidden-states extraction."
         ),
     )
     parser.add_argument(

@@ -117,8 +117,26 @@ class HiddenStatesWorkerExtension:
 
         model = self.model_runner.model  # type: ignore[attr-defined]
 
+        # Qwen3-Omni thinker models
+        if hasattr(model, "thinker"):
+            thinker = model.thinker
+            if hasattr(thinker, "get_language_model"):
+                base_model = thinker.get_language_model().model
+            elif hasattr(thinker, "model"):
+                base_model = (
+                    thinker.model.model
+                    if hasattr(thinker.model, "model")
+                    else thinker.model
+                )
+            else:
+                attrs = [a for a in dir(thinker) if not a.startswith("_")]
+                raise AttributeError(
+                    "Could not find thinker base model with 'layers' attribute. "
+                    f"Thinker type: {type(thinker).__name__}, "
+                    f"Available attributes: {attrs}"
+                )
         # Vision-language models
-        if hasattr(model, "get_language_model"):
+        elif hasattr(model, "get_language_model"):
             base_model = model.get_language_model().model
         # Text models
         elif hasattr(model, "model") and hasattr(model.model, "layers"):

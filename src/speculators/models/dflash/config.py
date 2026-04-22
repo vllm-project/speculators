@@ -12,6 +12,35 @@ __all__ = [
     "DFlashSpeculatorConfig",
 ]
 
+_MOE_TO_DENSE_MAP: dict[str, type[PretrainedConfig]] = {
+    "qwen3_omni_moe_text": Qwen3Config,
+}
+
+_QWEN3_DENSE_WHITELIST = {
+    "attention_bias",
+    "attention_dropout",
+    "bos_token_id",
+    "eos_token_id",
+    "head_dim",
+    "hidden_act",
+    "hidden_size",
+    "initializer_range",
+    "intermediate_size",
+    "max_position_embeddings",
+    "model_type",
+    "num_attention_heads",
+    "num_hidden_layers",
+    "num_key_value_heads",
+    "pad_token_id",
+    "rms_norm_eps",
+    "rope_scaling",
+    "rope_theta",
+    "tie_word_embeddings",
+    "torch_dtype",
+    "use_qk_norm",
+    "vocab_size",
+}
+
 
 @SpeculatorModelConfig.register("dflash")
 class DFlashSpeculatorConfig(SpeculatorModelConfig):
@@ -81,11 +110,20 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
     def validate_transformer_config(cls, value: Any) -> PretrainedConfig:
         """Validate and convert transformer config."""
         if isinstance(value, dict):
+            model_type = value.get("model_type")
+            if model_type in _MOE_TO_DENSE_MAP:
+                config_class = _MOE_TO_DENSE_MAP[model_type]
+                filtered_value = {
+                    key: item
+                    for key, item in value.items()
+                    if key in _QWEN3_DENSE_WHITELIST
+                }
+                filtered_value["model_type"] = "qwen3"
+                return config_class(**filtered_value)
+
             config_class: type[PretrainedConfig] = Qwen3Config
-            if "model_type" in value:
-                config_class = AutoConfig.for_model(
-                    model_type=value["model_type"]
-                ).__class__
+            if model_type is not None:
+                config_class = AutoConfig.for_model(model_type=model_type).__class__
             return config_class(**value)
         return value
 

@@ -126,6 +126,14 @@ class TrainArgs(NamedTuple):
     epochs: int | _NS = _NOTSET
     no_resume_from_checkpoint: bool | _NS = _NOTSET
     num_layers: int | _NS = _NOTSET
+    draft_arch: str | _NS = _NOTSET
+    draft_intermediate_size: int | _NS = _NOTSET
+    draft_vocab_size: int | _NS = _NOTSET
+    speculator_type: str | _NS = _NOTSET
+    target_layer_ids: list[int] | _NS = _NOTSET
+    mask_token_id: int | _NS = _NOTSET
+    block_size: int | _NS = _NOTSET
+    max_anchors: int | _NS = _NOTSET
     ttt_step_loss_decay: float | _NS = _NOTSET
     use_off_policy_tokens: bool | _NS = _NOTSET
     scheduler_type: str | _NS = _NOTSET
@@ -150,6 +158,10 @@ def prepare_args(args: dict[str, Any]) -> list[str]:
             if value:
                 args_list.append(f"--{dashed_key}")
             # If False, don't add the flag at all
+        elif isinstance(value, (list, tuple)):
+            if value:
+                args_list.append(f"--{dashed_key}")
+                args_list.extend(str(item) for item in value)
         else:
             args_list.append(f"--{dashed_key}")
             args_list.append(str(value))

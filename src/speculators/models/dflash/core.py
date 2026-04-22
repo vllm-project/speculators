@@ -11,6 +11,9 @@ from transformers.models.qwen3.modeling_qwen3 import (
     Qwen3RMSNorm,
     Qwen3RotaryEmbedding,
 )
+from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
+    Qwen3OmniMoeThinkerTextRotaryEmbedding,
+)
 
 from speculators.model import DraftVocabMixin, SpeculatorModel
 from speculators.models.dflash import DFlashSpeculatorConfig
@@ -21,6 +24,17 @@ from speculators.models.dflash.utils import (
     get_base_indices_for_anchored_blocks,
     select_anchors,
 )
+
+
+def unwrap_verifier_configs(
+    verifier_config: PretrainedConfig,
+) -> tuple[PretrainedConfig, PretrainedConfig]:
+    """Return multimodal/container config and the text backbone config."""
+    multimodal_config = getattr(verifier_config, "thinker_config", verifier_config)
+    text_config = multimodal_config
+    if hasattr(text_config, "text_config"):
+        text_config = text_config.text_config
+    return multimodal_config, text_config
 
 
 @SpeculatorModel.register("dflash")
@@ -66,26 +80,41 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         verifier_name_or_path = config.speculators_config.verifier.name_or_path
         if verifier_name_or_path is None:
             raise ValueError("Verifier name_or_path must be set in speculators_config")
-        verifier_config = AutoConfig.from_pretrained(verifier_name_or_path)
-        if hasattr(verifier_config, "text_config"):
-            verifier_config = verifier_config.text_config
+        verifier_root_config = AutoConfig.from_pretrained(verifier_name_or_path)
+        verifier_multimodal_config, verifier_config = unwrap_verifier_configs(
+            verifier_root_config
+        )
         num_verifier_layers = verifier_config.num_hidden_layers
 
         # Use aux_hidden_state_layer_ids from config if present
         if config.aux_hidden_state_layer_ids is not None:
             self.target_layer_ids = config.aux_hidden_state_layer_ids
         else:
+            deepstack_layers = set(
+                getattr(
+                    getattr(verifier_multimodal_config, "vision_config", None),
+                    "deepstack_visual_indexes",
+                    [],
+                )
+                or getattr(verifier_multimodal_config, "deepstack_visual_indexes", [])
+            )
+            candidate_layer_ids = [2, num_verifier_layers // 2, num_verifier_layers - 3]
             self.target_layer_ids = [
-                2,
-                num_verifier_layers // 2,
-                num_verifier_layers - 3,
+                layer_id - 1 if layer_id in deepstack_layers else layer_id
+                for layer_id in candidate_layer_ids
             ]
 
         self.norm = Qwen3RMSNorm(
             config.transformer_layer_config.hidden_size,
             eps=config.transformer_layer_config.rms_norm_eps,  # type: ignore[arg-type]
         )
-        self.rotary_emb = Qwen3RotaryEmbedding(config.transformer_layer_config)  # type: ignore[arg-type]
+        rope_scaling = getattr(config.transformer_layer_config, "rope_scaling", None)
+        if isinstance(rope_scaling, dict) and "mrope_section" in rope_scaling:
+            self.rotary_emb = Qwen3OmniMoeThinkerTextRotaryEmbedding(
+                config.transformer_layer_config
+            )  # type: ignore[arg-type]
+        else:
+            self.rotary_emb = Qwen3RotaryEmbedding(config.transformer_layer_config)  # type: ignore[arg-type]
 
         self.fc = nn.Linear(
             len(self.target_layer_ids) * config.transformer_layer_config.hidden_size,
@@ -143,6 +172,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             draft_vocab_size=kwargs["draft_vocab_size"],
             block_size=kwargs.get("block_size", 8),
             max_anchors=kwargs.get("max_anchors", 3072),
+            target_hidden_size=verifier_config.hidden_size,
             aux_hidden_state_layer_ids=kwargs.get("target_layer_ids"),
             mask_token_id=kwargs.get("mask_token_id"),
             speculators_config=SpeculatorsConfig(
