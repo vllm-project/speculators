@@ -318,7 +318,7 @@ async def worker(
         except Exception as e:
             if fail_on_error:
                 logger.exception(
-                    "Fatal: sample %d failed with --fail-on-error: %s", idx, e
+                    "Fatal: sample %d aborted with --fail-on-error: %s", idx, e
                 )
                 logging.shutdown()
                 os._exit(1)
@@ -328,7 +328,7 @@ async def worker(
                 cancel_event.set()
                 raise RuntimeError(
                     f"Aborting: {failure_tracker.threshold} consecutive samples "
-                    "failed. The vLLM server may be unreachable."
+                    "errored out. The vLLM server may be unreachable."
                 ) from e
         else:
             if failure_tracker is not None:
