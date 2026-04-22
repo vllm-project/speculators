@@ -1,6 +1,10 @@
 # Train DFlash Model Online
 
-This tutorial walks you through training a DFlash speculator model using **online training**, where hidden states are generated on-demand during the training process. This example uses `Qwen/Qwen3-8B` as the target model, but the process is the same for other models.
+This tutorial walks you through training a DFlash speculator model using **online training**, where hidden states are generated on-demand during the training process. This example uses `Qwen/Qwen3-8B` as the target model, but the process is the same for other models. This tutorial follows the same structure as [Train EAGLE-3 Online](train_eagle3_online.md). The key differences are:
+
+- **Step 2 — vLLM launch:** DFlash requires explicitly passing `--target-layer-ids` to select which intermediate layers to extract hidden states from. EAGLE-3 uses sensible defaults automatically.
+- **Step 3 — Training:** DFlash introduces several additional parameters: `--speculator-type dflash`, `--block-size`, `--max-anchors`, and typically uses more draft layers (`--num-layers 5` vs 1 for EAGLE-3).
+
 
 For a ready-to-run version of this tutorial, see [`examples/train/dflash_qwen3_8b_sharegpt_online_5k.sh`](https://github.com/vllm-project/speculators/blob/main/examples/train/dflash_qwen3_8b_sharegpt_online_5k.sh).
 
@@ -59,11 +63,11 @@ python scripts/prepare_data.py \
 
 ```
 output/dflash_qwen3_8b_sharegpt/
-├── data-00000-of-00002.arrow
-├── data-00001-of-00002.arrow
-├── dataset_info.json
-├── state.json
-└── token_freq.pt
+├── data-00000-of-00002.arrow    #  ⎤
+├── data-00001-of-00002.arrow    #  | Processed dataset on disk
+├── dataset_info.json            #  |
+├── state.json                   #  ⎦
+└── token_freq.pt                # Token frequencies for vocab mapping
 ```
 
 **Time:** ~14 seconds for 5K samples
@@ -171,11 +175,10 @@ After training, your checkpoints directory contains:
 ```
 checkpoints/
 ├── 0/                          # Epoch 0
-│   ├── config.json
-│   ├── model.safetensors
-│   ├── generation_config.json
-│   ├── optimizer_state_dict.pt
-│   └── scheduler_state_dict.pt
+│   ├── config.json             #   Model architecture config
+│   ├── model.safetensors       #   Model weights
+│   ├── optimizer_state_dict.pt #   ⎤ Training state for
+│   └── scheduler_state_dict.pt #   ⎦ resuming training
 ├── 1/                          # Epoch 1
 ├── ...
 └── checkpoint_best -> 4/       # Symlink to lowest val loss checkpoint

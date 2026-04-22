@@ -15,27 +15,39 @@ Speculators provides four main CLI scripts for different stages of the speculati
 
 ## Common Workflows
 
-### Full Training Pipeline (Offline)
+The diagram below shows the high-level flow for training a speculator model.
+The offline pipeline runs each stage sequentially, while the online pipeline
+combines hidden-state extraction and training into a single step.
 
-```bash
-# Step 1: Prepare data
-python scripts/prepare_data.py ...
-# Step 2: Launch vLLM server
-python scripts/launch_vllm.py ...
-# Step 3: Generate hidden states offline
-python scripts/data_generation_offline.py ...
-# Step 4: Stop vLLM server
-# Step 5: Train the speculator
-python scripts/train.py ...
-```
+```mermaid
+flowchart TD
+    subgraph optional ["Optional: Response Regeneration"]
+        A["response_regeneration/script.py\nRegenerate model responses to dataset prompts for improved model alignment"]
+    end
 
-### Full Training Pipeline (Online)
+    subgraph offline ["Offline Pipeline"]
+        B["prepare_data.py\nTokenize & format dataset"]
+        C["launch_vllm.py\nStart vLLM server"]
+        D["data_generation_offline.py\nExtract hidden states from verifier and cache to disk"]
+        E["train.py \nTrain draft model on saved hidden states"]
+    end
 
-```bash
-# Step 1: Prepare data
-python scripts/prepare_data.py ...
-# Step 2: Launch vLLM server
-python scripts/launch_vllm.py ...
-# Step 3: Train with online hidden states generation
-python scripts/train.py ...
+    subgraph online ["Online Pipeline"]
+        F["prepare_data.py\nTokenize & format dataset"]
+        G["launch_vllm.py\nStart vLLM server"]
+        H["train.py \nExtract hidden states & train in one step"]
+    end
+
+    A -- "JSONL conversations" --> B
+    A -- "JSONL conversations" --> F
+    B --> C --> D -- "hs_i.safetensors files\ncontaining {hidden_states}" --> E
+    F --> G --> H
+
+    click B "prepare_data/" _self
+    click F "prepare_data/" _self
+    click C "launch_vllm/" _self
+    click G "launch_vllm/" _self
+    click D "data_generation_offline/" _self
+    click E "train/" _self
+    click H "train/" _self
 ```

@@ -59,11 +59,11 @@ python scripts/prepare_data.py \
 
 ```
 output/
-├── data-00000-of-00002.arrow
-├── data-00001-of-00002.arrow
-├── dataset_info.json
-├── state.json
-└── token_freq.pt
+├── data-00000-of-00002.arrow    #  ⎤
+├── data-00001-of-00002.arrow    #  | Processed dataset on disk
+├── dataset_info.json            #  |
+├── state.json                   #  ⎦
+└── token_freq.pt                # Token frequencies for vocab mapping
 ```
 
 **Time:** ~1-2 minutes for 5K samples
@@ -164,11 +164,10 @@ After training, your checkpoints directory contains:
 ```
 checkpoints/
 ├── 0/                          # Epoch 0
-│   ├── config.json
-│   ├── model.safetensors
-│   ├── generation_config.json
-│   ├── optimizer_state_dict.pt
-│   └── scheduler_state_dict.pt
+│   ├── config.json             #   Model architecture config
+│   ├── model.safetensors       #   Model weights
+│   ├── optimizer_state_dict.pt #   ⎤ Training state for
+│   └── scheduler_state_dict.pt #   ⎦ resuming training
 ├── 1/                          # Epoch 1
 ├── ...
 ├── 4/                          # Epoch 4 (final)

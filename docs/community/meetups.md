@@ -3,7 +3,7 @@
 ## Speculative Decoding Special Interest Group (SIG)
 
 - **Focus:** Anything related to speculative decoding in vLLM and Speculators
-- **Meetings:** Weekly on Thursday at 3:30 PM ET [link](https://zoom-lfx.platform.linuxfoundation.org/meeting/97526717352?password=e952fd74-25e7-45bc-aa8e-982e2115ba90)
+- **Meetings:** Weekly on Thursday at 3:30 PM ET — [Zoom Meeting](https://zoom-lfx.platform.linuxfoundation.org/meeting/97526717352?password=e952fd74-25e7-45bc-aa8e-982e2115ba90)
 
 ## Office Hours
 
@@ -14,4 +14,4 @@ Watch our Speculators Office Hours presentation:
 
 ## vLLM Meetups
 
-For more information on general vLLM events / meetups visit https://vllm.ai/events
+For more information on general vLLM events / meetups visit the [vLLM events page](https://vllm.ai/events)

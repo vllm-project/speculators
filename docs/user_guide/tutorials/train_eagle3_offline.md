@@ -60,10 +60,10 @@ python scripts/prepare_data.py \
 
 ```
 output/
-├── data-*.arrow files
-├── dataset_info.json
-├── state.json
-└── token_freq.pt
+├── data-*.arrow files           #  ⎤
+├── dataset_info.json            #  | Processed dataset on disk
+├── state.json                   #  ⎦
+└── token_freq.pt                # Token frequencies for vocab mapping
 ```
 
 **Time:** ~15 seconds for 5K samples
@@ -132,11 +132,11 @@ python scripts/data_generation_offline.py \
 
 ```
 output/hidden_states/
-├── hs_0.safetensors
-├── hs_1.safetensors
-├── hs_2.safetensors
-├── ...
-└── hs_4999.safetensors
+├── hs_0.safetensors             #  ⎤
+├── hs_1.safetensors             #  |
+├── hs_2.safetensors             #  | Cached hidden states (one per sample)
+├── ...                          #  |
+└── hs_4999.safetensors          #  ⎦
 ```
 
 ### Optimizing Generation Speed
@@ -245,11 +245,10 @@ After training, your checkpoints directory contains:
 ```
 checkpoints/
 ├── 0/                          # Epoch 0
-│   ├── config.json
-│   ├── model.safetensors
-│   ├── generation_config.json
-│   ├── optimizer_state_dict.pt
-│   └── scheduler_state_dict.pt
+│   ├── config.json             #   Model architecture config
+│   ├── model.safetensors       #   Model weights
+│   ├── optimizer_state_dict.pt #   ⎤ Training state for
+│   └── scheduler_state_dict.pt #   ⎦ resuming training
 ├── 1/                          # Epoch 1
 ├── ...
 ├── 4/                          # Epoch 4 (final)

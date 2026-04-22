@@ -19,17 +19,13 @@ The target model produces hidden states at selected layers, which are concatenat
 
 ## Pretrained Models
 
-Pretrained EAGLE-3 speculator models are available on HuggingFace from the [RedHatAI speculator models collection](https://huggingface.co/collections/RedHatAI/speculator-models):
+Pretrained EAGLE-3 speculator models trained by our team are available on HuggingFace from the [RedHatAI speculator models collection](https://huggingface.co/collections/RedHatAI/speculator-models). Below are a few examples of models we've produced:
 
 | Verifier                                        | Speculator                                                                                                                                              |
 | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `meta-llama/Llama-3.1-8B-Instruct`              | [`RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3`](https://huggingface.co/RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3)                           |
-| `meta-llama/Llama-3.3-70B-Instruct`             | [`RedHatAI/Llama-3.3-70B-Instruct-speculator.eagle3`](https://huggingface.co/RedHatAI/Llama-3.3-70B-Instruct-speculator.eagle3)                         |
 | `Qwen/Qwen3-8B`                                 | [`RedHatAI/Qwen3-8B-speculator.eagle3`](https://huggingface.co/RedHatAI/Qwen3-8B-speculator.eagle3)                                                     |
-| `Qwen/Qwen3-14B`                                | [`RedHatAI/Qwen3-14B-speculator.eagle3`](https://huggingface.co/RedHatAI/Qwen3-14B-speculator.eagle3)                                                   |
-| `Qwen/Qwen3-32B`                                | [`RedHatAI/Qwen3-32B-speculator.eagle3`](https://huggingface.co/RedHatAI/Qwen3-32B-speculator.eagle3)                                                   |
-| `Qwen/Qwen3-235B-A22B`                          | [`RedHatAI/Qwen3-235B-A22B-speculator.eagle3`](https://huggingface.co/RedHatAI/Qwen3-235B-A22B-speculator.eagle3)                                       |
 | `meta-llama/Llama-4-Maverick-17B-128E-Instruct` | [`RedHatAI/Llama-4-Maverick-17B-128E-Instruct-speculator.eagle3`](https://huggingface.co/RedHatAI/Llama-4-Maverick-17B-128E-Instruct-speculator.eagle3) |
+| `openai/gpt-oss-20b`                            | [`RedHatAI/gpt-oss-20b-speculator.eagle3`](https://huggingface.co/RedHatAI/gpt-oss-20b-speculator.eagle3)                                               |
 | `google/gemma-4-31B-it`                         | [`RedHatAI/gemma-4-31B-it-speculator.eagle3`](https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.eagle3)                                         |
 
 ## Research & Citation

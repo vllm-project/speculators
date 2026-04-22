@@ -1,6 +1,6 @@
 # Algorithm Decision Guide
 
-Speculators supports two speculative decoding algorithms: **EAGLE-3** and **DFlash**. Both are lossless -- they produce output from the same distribution as the target model.
+Speculators currently supports two speculative decoding algorithms: **EAGLE-3** and **DFlash**. Both are lossless -- they produce output from the same distribution as the target model.
 
 ## How They Differ
 
@@ -8,7 +8,7 @@ Speculators supports two speculative decoding algorithms: **EAGLE-3** and **DFla
 
 **DFlash** predicts all draft tokens in a single forward pass using block-based prediction with anchor points.
 
-Both algorithms can be paired with any supported verifier model -- the draft architecture is independent of the verifier architecture. The draft layers are always trained from scratch, so the choice of draft architecture doesn't constrain which target models you can accelerate.
+Both algorithms can be paired with any supported verifier model (including quantized variants) -- the draft architecture is independent of the verifier architecture. The draft layers are always trained from scratch, so the choice of draft architecture doesn't constrain which target models you can accelerate.
 
 ## Current Support
 
