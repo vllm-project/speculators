@@ -25,5 +25,5 @@ def test_offline_regression(tmp_path: Path, prompts):
         vllm_gpu_util=0.9,
         epochs=3,
         prompts=prompts,
-        acceptance_thresholds=[0.4, 0.1, 0.01],
+        acceptance_thresholds=[0.4, 0.07, 0.007],
     )
