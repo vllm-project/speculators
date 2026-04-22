@@ -64,7 +64,7 @@ class PEagleDraftModel(Eagle3DraftModel):
         self.lm_head.eval()
 
         # Learnable mask_hidden parameter for padding unsampled positions
-        self.mask_hidden = torch.nn.Parameter(torch.zeros(1, 1, 3 * self.hidden_size))
+        self.mask_hidden = torch.nn.Parameter(torch.randn(1, 1, 3 * self.hidden_size))
 
     def _pad_hidden_states(self, intensors, target_len, hidden, index_list):
         """

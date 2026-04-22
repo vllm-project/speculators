@@ -19,7 +19,7 @@ from gen_and_train import (  # noqa: E402
 
 if __name__ == "__main__":
     VERIFIER_NAME_OR_PATH = "Qwen/Qwen3-8B"
-    OUTPUT_PATH = "/mnt/solo-4-training/peagle_qwen3_8b"
+    OUTPUT_PATH = "/data-attached/megan/qwen"
     # Use smaller sequence length for initial testing to avoid OOM
     TOTAL_SEQ_LEN = 4096
     # Data Generation (same as EAGLE-3)
@@ -28,7 +28,7 @@ if __name__ == "__main__":
         train_data_path="/home/MeganEFlynn/Speculators-DEMO-Qwen3_8b/combined.jsonl",
         assistant_pattern=r"<\|im_start\|>assistant\s*([\s\S]*?)<\|im_end\|>",
         seq_length=TOTAL_SEQ_LEN,
-        max_samples=500000,
+        max_samples=160000,
     )
 
     # Vocab Mapping - set to None to use full vocabulary (no reduction)
@@ -36,17 +36,18 @@ if __name__ == "__main__":
 
     train_args = TrainArgs(
         logger="trackio",
-        lr=1e-4,
+        lr=6e-4,
         total_seq_len=TOTAL_SEQ_LEN,
-        run_name="peagle_qwen3_8b_ultrachat_500k",
+        run_name="peagle_qwen_more_data",
         epochs=4,
         num_layers=4,
         speculator_type="peagle",
         para_depths=4,
         down_sample_ratio=0.7,
         down_sample_ratio_min=0.2,
-        max_seq_len=2048,
-        ptd_token_id=151643,
+        max_seq_len=8192,
+        ptd_token_id=151669,
+        scheduler_type='cosine',
         no_norm_before_residual=True,
     )
 
