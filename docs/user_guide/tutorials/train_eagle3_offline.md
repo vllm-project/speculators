@@ -1,6 +1,6 @@
-# Train EAGLE-3 Model Offline
+# Train Eagle-3 Model Offline
 
-This tutorial walks you through training an EAGLE-3 speculator model using **offline training**, where hidden states are pre-generated and cached before training begins. This example uses `meta-llama/Llama-3.1-8B-Instruct` as the target model, but the process is the same for other models.
+This tutorial walks you through training an Eagle-3 speculator model using **offline training**, where hidden states are pre-generated and cached before training begins. This example uses `meta-llama/Llama-3.1-8B-Instruct` as the target model, but the process is the same for other models.
 
 For a ready-to-run version of this tutorial, see [`examples/train/eagle3_llama3_8b_sharegpt_offline_5k.sh`](https://github.com/vllm-project/speculators/blob/main/examples/train/eagle3_llama3_8b_sharegpt_offline_5k.sh).
 
@@ -72,7 +72,7 @@ output/
 
 ## Step 2: Launch vLLM Server
 
-Next launch vLLM configured for hidden states extraction:
+During training, the drafter model takes internal hidden states from the verifier model as input. We use vLLM to serve the verifier and extract these hidden states. The `launch_vllm.py` script is a lightweight wrapper that sets up the right CLI arguments for vLLM to enable hidden state extraction.
 
 ```bash
 # in vLLM venv
@@ -102,7 +102,7 @@ INFO:     Waiting for application startup.
 INFO:     Application startup complete
 ```
 
-**Note:** This stage is also when you must decide which layer ids to extract from vLLM. For eagle3, if you don't pass in `--target-layer-ids`, this script will use sensible default values. For more information on usage, please see the [launch_vllm.py cli reference](/cli/launch_vllm.md).
+**Note:** This stage is also when you must decide which layer ids to extract from vLLM. For Eagle-3, if you don't pass in `--target-layer-ids`, this script will use sensible default values. For more information on usage, please see the [launch_vllm.py cli reference](/cli/launch_vllm.md).
 
 ## Step 3: Generate Hidden States Offline
 

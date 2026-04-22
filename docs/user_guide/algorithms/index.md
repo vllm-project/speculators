@@ -2,7 +2,7 @@
 
 Speculators supports two speculative decoding algorithms. Both are lossless -- they produce output from the same distribution as the target model.
 
-## [EAGLE-3](eagle3.md)
+## [Eagle-3](eagle3.md)
 
 Predicts draft tokens autoregressively using Llama-style draft layers. The more established algorithm with mature support in both Speculators and vLLM.
 

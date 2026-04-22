@@ -1,9 +1,9 @@
 # Train DFlash Model Online
 
-This tutorial walks you through training a DFlash speculator model using **online training**, where hidden states are generated on-demand during the training process. This example uses `Qwen/Qwen3-8B` as the target model, but the process is the same for other models. This tutorial follows the same structure as [Train EAGLE-3 Online](train_eagle3_online.md). The key differences are:
+This tutorial walks you through training a DFlash speculator model using **online training**, where hidden states are generated on-demand during the training process. This example uses `Qwen/Qwen3-8B` as the target model, but the process is the same for other models. This tutorial follows the same structure as [Train Eagle-3 Online](train_eagle3_online.md). The key differences are:
 
-- **Step 2 — vLLM launch:** DFlash requires explicitly passing `--target-layer-ids` to select which intermediate layers to extract hidden states from. EAGLE-3 uses sensible defaults automatically.
-- **Step 3 — Training:** DFlash introduces several additional parameters: `--speculator-type dflash`, `--block-size`, `--max-anchors`, and typically uses more draft layers (`--num-layers 5` vs 1 for EAGLE-3).
+- **Step 2 — vLLM launch:** DFlash requires explicitly passing `--target-layer-ids` to select which intermediate layers to extract hidden states from. Eagle-3 uses sensible defaults automatically.
+- **Step 3 — Training:** DFlash introduces several additional parameters: `--speculator-type dflash`, `--block-size`, `--max-anchors`, and typically uses more draft layers (`--num-layers 5` vs 1 for Eagle-3).
 
 
 For a ready-to-run version of this tutorial, see [`examples/train/dflash_qwen3_8b_sharegpt_online_5k.sh`](https://github.com/vllm-project/speculators/blob/main/examples/train/dflash_qwen3_8b_sharegpt_online_5k.sh).
@@ -76,7 +76,9 @@ output/dflash_qwen3_8b_sharegpt/
 
 ## Step 2: Launch vLLM Server
 
-Launch vLLM configured for hidden states extraction. For DFlash, you must explicitly specify which target layers to extract hidden states from using `--target-layer-ids`:
+During training, the drafter model takes internal hidden states from the verifier model as input. We use vLLM to serve the verifier and extract these hidden states. The `launch_vllm.py` script is a lightweight wrapper that sets up the right CLI arguments for vLLM to enable hidden state extraction.
+
+For DFlash, you must explicitly specify which target layers to extract hidden states from using `--target-layer-ids`:
 
 ```bash
 # in vLLM venv

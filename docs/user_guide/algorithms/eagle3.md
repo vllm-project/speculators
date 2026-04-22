@@ -1,25 +1,25 @@
-# EAGLE-3
+# Eagle-3
 
-EAGLE-3 is a speculative decoding algorithm that uses a lightweight draft model to autoregressively predict multiple tokens ahead, which are then verified by the target model in a single forward pass. The draft model uses Llama-style transformer layers and is trained to minimize KL divergence against the target model's logits. It supports cross-tokenizer vocabularies and can be paired with any supported verifier model.
+Eagle-3 is a speculative decoding algorithm that uses a lightweight draft model to autoregressively predict multiple tokens ahead, which are then verified by the target model in a single forward pass. The draft model uses Llama-style transformer layers and is trained to minimize KL divergence against the target model's logits. It supports cross-tokenizer vocabularies and can be paired with any supported verifier model.
 
 ## How It Works
 
 ### Architecture
 
-![EAGLE-3 Architecture](../../assets/eagle3_architecture.png)
+![Eagle-3 Architecture](../../assets/eagle3_architecture.png)
 
 The target model produces hidden states at selected layers, which are concatenated and projected through an FC layer alongside token embeddings. These pass through Llama-style decoder layers (default: 1) and an LM head to produce draft logits. At each autoregressive step, the draft model takes the previous token's embedding and hidden states to predict the next token.
 
 ### Inference Process
 
-1. EAGLE-3 autoregressively drafts K tokens, each step feeding the previous prediction back through the draft model
+1. Eagle-3 autoregressively drafts K tokens, each step feeding the previous prediction back through the draft model
 2. Target model verifies all K draft tokens in one forward pass
 3. The longest correct prefix is accepted
 4. Repeat from the last accepted token
 
 ## Pretrained Models
 
-Pretrained EAGLE-3 speculator models trained by our team are available on HuggingFace from the [RedHatAI speculator models collection](https://huggingface.co/collections/RedHatAI/speculator-models). Below are a few examples of models we've produced:
+Pretrained Eagle-3 speculator models trained by our team are available on HuggingFace from the [RedHatAI speculator models collection](https://huggingface.co/collections/RedHatAI/speculator-models). Below are a few examples of models we've produced:
 
 | Verifier                                        | Speculator                                                                                                                                              |
 | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -30,7 +30,7 @@ Pretrained EAGLE-3 speculator models trained by our team are available on Huggin
 
 ## Research & Citation
 
-EAGLE-3 is based on research from SafeAI Lab: [EAGLE Repository](https://github.com/SafeAILab/EAGLE) | [arXiv Paper](https://arxiv.org/abs/2401.15077)
+Eagle-3 is based on research from SafeAI Lab: [EAGLE Repository](https://github.com/SafeAILab/EAGLE) | [arXiv Paper](https://arxiv.org/abs/2401.15077)
 
 ```bibtex
 @article{li2024eagle,
@@ -43,5 +43,5 @@ EAGLE-3 is based on research from SafeAI Lab: [EAGLE Repository](https://github.
 
 ## See Also
 
-- [Train EAGLE-3 Online](../tutorials/train_eagle3_online.md) -- Online training tutorial
-- [Train EAGLE-3 Offline](../tutorials/train_eagle3_offline.md) -- Offline training tutorial
+- [Train Eagle-3 Online](../tutorials/train_eagle3_online.md) -- Online training tutorial
+- [Train Eagle-3 Offline](../tutorials/train_eagle3_offline.md) -- Offline training tutorial

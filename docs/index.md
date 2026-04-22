@@ -68,12 +68,12 @@ The following table summarizes the models that have been trained end-to-end by o
 <tr>
 <td rowspan="3">Llama</td>
 <td>8B-Instruct</td>
-<td><a href="https://huggingface.co/RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3">EAGLE-3</a> ✅</td>
+<td><a href="https://huggingface.co/RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3">Eagle-3</a> ✅</td>
 <td>✅</td>
 </tr>
 <tr>
 <td>70B-Instruct</td>
-<td><a href="https://huggingface.co/RedHatAI/Llama-3.3-70B-Instruct-speculator.eagle3">EAGLE-3</a> ✅</td>
+<td><a href="https://huggingface.co/RedHatAI/Llama-3.3-70B-Instruct-speculator.eagle3">Eagle-3</a> ✅</td>
 <td>✅</td>
 </tr>
 <tr>
@@ -81,29 +81,29 @@ The following table summarizes the models that have been trained end-to-end by o
 <tr>
 <td rowspan="3">Qwen3</td>
 <td>8B</td>
-<td><a href="https://huggingface.co/RedHatAI/Qwen3-8B-speculator.eagle3">EAGLE-3</a> ✅</td>
+<td><a href="https://huggingface.co/RedHatAI/Qwen3-8B-speculator.eagle3">Eagle-3</a> ✅</td>
 <td>✅</td>
 </tr>
 <tr>
 <td>14B</td>
-<td><a href="https://huggingface.co/RedHatAI/Qwen3-14B-speculator.eagle3">EAGLE-3</a> ✅</td>
+<td><a href="https://huggingface.co/RedHatAI/Qwen3-14B-speculator.eagle3">Eagle-3</a> ✅</td>
 <td>✅</td>
 </tr>
 <tr>
 <td>32B</td>
-<td><a href="https://huggingface.co/RedHatAI/Qwen3-32B-speculator.eagle3">EAGLE-3</a> ✅</td>
+<td><a href="https://huggingface.co/RedHatAI/Qwen3-32B-speculator.eagle3">Eagle-3</a> ✅</td>
 <td>✅</td>
 </tr>
 <tr>
 <td rowspan="2">gpt-oss</td>
 <td>20b</td>
-<td><a href="https://huggingface.co/RedHatAI/gpt-oss-20b-speculator.eagle3">EAGLE-3</a> ✅</td>
+<td><a href="https://huggingface.co/RedHatAI/gpt-oss-20b-speculator.eagle3">Eagle-3</a> ✅</td>
 <td>✅</td>
 </tr>
 <tr>
 <td>120b</td>
 <td><a href="https://huggingface.co/RedHatAI/gpt-oss-120b-speculator.eagle3">
-      EAGLE-3
+      Eagle-3
     </a> ✅</td>
 <td>✅</td>
 </tr>
@@ -111,7 +111,7 @@ The following table summarizes the models that have been trained end-to-end by o
   <td rowspan="3">Qwen3 MoE</td>
   <td>30B-Instruct</td>
   <td><a href="https://huggingface.co/RedHatAI/Qwen3-30B-A3B-Instruct-2507-speculator.eagle3">
-      EAGLE-3
+      Eagle-3
     </a> ✅</td>
   <td>✅</td>
 </tr>
@@ -119,7 +119,7 @@ The following table summarizes the models that have been trained end-to-end by o
   <td>235B-Instruct</td>
   <td>
     <a href="https://huggingface.co/RedHatAI/Qwen3-235B-A22B-Instruct-2507-speculator.eagle3">
-      EAGLE-3
+      Eagle-3
     </a> ✅
   </td>
   <td>✅</td>
@@ -127,33 +127,33 @@ The following table summarizes the models that have been trained end-to-end by o
 <tr>
   <td>235B</td>
   <td><a href="https://huggingface.co/RedHatAI/Qwen3-235B-A22B-speculator.eagle3">
-      EAGLE-3
+      Eagle-3
     </a> ✅</td>
   <td>✅</td>
 </tr>
 <td>Qwen3-VL</td>
 <td>235B-A22B</td>
 <td><a href="https://huggingface.co/RedHatAI/Qwen3-VL-235B-A22B-Instruct-speculator.eagle3">
-      EAGLE-3
+      Eagle-3
     </a> ✅</td>
 <td>✅</td>
 </tr>
 <tr>
 <td>Mistral 3 Large</td>
 <td>675B-Instruct</td>
-<td>EAGLE-3 ⏳</td>
+<td>Eagle-3 ⏳</td>
 <td>⏳</td>
 </tr>
 <tr>
 <td>Gemma 4</td>
 <td>31B-it</td>
-<td><a href="https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.eagle3">EAGLE-3</a> ✅<br/><a href="https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.dflash">DFlash</a> ✅</td>
+<td><a href="https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.eagle3">Eagle-3</a> ✅<br/><a href="https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.dflash">DFlash</a> ✅</td>
 <td>✅</td>
 </tr>
 <tr>
 <td>Gemma 4 MoE</td>
 <td>26B-A4B-it</td>
-<td><a href="https://huggingface.co/RedHatAI/gemma-4-26B-A4B-it-speculator.eagle3">EAGLE-3</a> ✅</td>
+<td><a href="https://huggingface.co/RedHatAI/gemma-4-26B-A4B-it-speculator.eagle3">Eagle-3</a> ✅</td>
 <td>✅</td>
 </tr>
 </tbody>

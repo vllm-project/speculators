@@ -8,15 +8,15 @@ Deploy your trained speculator models in vLLM for production inference.
 
 **Time required:** ~5 minutes
 
-## [Train EAGLE-3 Model Online](train_eagle3_online.md)
+## [Train Eagle-3 Model Online](train_eagle3_online.md)
 
-Learn how to train an EAGLE-3 speculator using online training, where hidden states are generated on-demand during training.
+Learn how to train an Eagle-3 speculator using online training, where hidden states are generated on-demand during training.
 
 **Time required:** ~30 mins
 
-## [Train EAGLE-3 Model Offline](train_eagle3_offline.md)
+## [Train Eagle-3 Model Offline](train_eagle3_offline.md)
 
-Learn how to train an EAGLE-3 speculator using offline training with pre-generated hidden states.
+Learn how to train an Eagle-3 speculator using offline training with pre-generated hidden states.
 
 **Time required:** ~3 hours
 
