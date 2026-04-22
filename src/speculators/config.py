@@ -19,7 +19,6 @@ Classes:
 """
 
 import os
-from collections.abc import Sequence
 from importlib.metadata import version
 from typing import Any, ClassVar
 
@@ -237,7 +236,7 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
     is_composition: ClassVar[bool] = False  # type: ignore[misc]
     attribute_map: ClassVar[dict[str, str]] = {}  # type: ignore[misc]
     base_model_tp_plan: ClassVar[dict[str, Any] | None] = None  # type: ignore[misc]
-    base_model_pp_plan: ClassVar[dict[str, Sequence[list[str]]] | None] = None  # type: ignore[misc]
+    base_model_pp_plan: ClassVar[dict[str, tuple[list[str]]] | None] = None  # type: ignore[misc]
     _auto_class: ClassVar[str | None] = ""  # type: ignore[misc]
 
     # Speculator model instance attributes
@@ -271,7 +270,7 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
         # ensure we always update the transformers version
         self.transformers_version = version("transformers")
 
-    def validate(self) -> None:
+    def validate(self) -> None:  # type: ignore[override]
         """Resolve MRO conflict between BaseModel.validate (classmethod) and
         PretrainedConfig.validate (instance method added in transformers v5).
 

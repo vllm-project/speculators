@@ -23,6 +23,8 @@ def test_verifier_config_from_verifier_config():
             "RedHatAI/Llama-3.1-8B-Instruct",
             cache_dir=tmp_dir,
         )
+    # TODO(ianliuy): Remove this workaround once the upstream config includes
+    # the rope_scaling fields required by newer transformers validation.
     config_dict.pop("rope_scaling", None)
     pretrained_config = PretrainedConfig(**config_dict)
 
