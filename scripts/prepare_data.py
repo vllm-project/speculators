@@ -99,7 +99,10 @@ def parse_args():
 
     # Output arguments
     parser.add_argument(
-        "--output", type=str, required=True, help="Directory to save output dataset"
+        "--output",
+        type=str,
+        default="./output",
+        help="Directory to save output dataset (default: ./output)",
     )
     parser.add_argument(
         "--overwrite",

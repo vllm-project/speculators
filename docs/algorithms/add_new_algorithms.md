@@ -111,8 +111,8 @@ torchrun --nnodes=1 --nproc_per_node=8 scripts/train.py \
     --verifier-name-or-path meta-llama/Llama-3.1-8B \
     --num-layers 1 \
     --block-size 8 \
-    --data-path ./data \
-    --save-path ./checkpoints \
+    --data-path ./output \
+    --save-path ./output/checkpoints \
     --epochs 20
 ```
 
