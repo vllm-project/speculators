@@ -106,6 +106,32 @@ def standardize_data_v1(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def standardize_data_v2_fp8(data: dict[str, Any]) -> dict[str, Any]:
+    """Standardize FP8 scaled data (v2 format) by dequantizing hidden states."""
+    from speculators.data_generation.fp8_utils import dequantize_fp8_tensor
+
+    hidden_states = [
+        dequantize_fp8_tensor(h, s, torch.bfloat16)
+        for h, s in zip(data["hidden_states"], data["hidden_states_scales"])
+    ]
+    return {
+        "hidden_states": torch.cat(hidden_states[:-1], dim=-1),
+        "input_ids": data["input_ids"],
+        "verifier_last_hidden_states": hidden_states[-1],
+        "loss_mask": data["loss_mask"],
+    }
+
+
+def standardize_data_auto(data: dict[str, Any]) -> dict[str, Any]:
+    """Auto-detect data format and standardize accordingly.
+
+    Handles both v1 (bf16) and v2 (fp8 scaled) formats transparently.
+    """
+    if "fp8_format" in data:
+        return standardize_data_v2_fp8(data)
+    return standardize_data_v1(data)
+
+
 class BaseDataset(Dataset):
     def __init__(
         self,
@@ -306,10 +332,11 @@ class ArrowDataset(BaseDataset):
         if loaded_hs is None:
             return loaded_hs
 
-        # loaded_hs structure: {
-        #   "hidden_states": [seq_len, 4, hidden_size]
-        #   "token_ids": [seq_len]
-        # }
+        # loaded_hs structure (bf16):
+        #   {"hidden_states": [seq_len, 4, hidden_size], "token_ids": [seq_len]}
+        # loaded_hs structure (fp8):
+        #   {"hidden_states": fp8 [seq_len, 4, hidden_size],
+        #    "hidden_states_scales": [seq_len, 1] or [1], "token_ids": [seq_len]}
 
         if not torch.equal(loaded_hs["token_ids"], self.data[index]["input_ids"]):
             warnings.warn(
@@ -319,14 +346,20 @@ class ArrowDataset(BaseDataset):
             )
             return None
 
+        hs = loaded_hs["hidden_states"]
+
+        if "hidden_states_scales" in loaded_hs:
+            from speculators.data_generation.fp8_utils import dequantize_fp8_tensor
+
+            flat = hs.reshape(hs.shape[0], -1)
+            hs = dequantize_fp8_tensor(
+                flat, loaded_hs["hidden_states_scales"], torch.bfloat16
+            ).reshape(hs.shape)
+
         return {
-            "hidden_states": loaded_hs["hidden_states"][:, :-1].flatten(
-                1
-            ),  # [seq_len, 3 * hidden_size]
+            "hidden_states": hs[:, :-1].flatten(1),  # [seq_len, 3 * hidden_size]
             "input_ids": loaded_hs["token_ids"],  # [seq_len]
-            "verifier_last_hidden_states": loaded_hs["hidden_states"][
-                :, -1
-            ],  # [seq_len, hidden_size]
+            "verifier_last_hidden_states": hs[:, -1],  # [seq_len, hidden_size]
             "loss_mask": self.data[index]["loss_mask"],  # [seq_len]
         }
 
@@ -421,7 +454,7 @@ class SampleFileDataset(BaseDataset):
         ]
 
     def _get_raw_data(self, index):
-        return standardize_data_v1(
+        return standardize_data_auto(
             torch.load(
                 self.data[index], mmap=True, weights_only=True, map_location="cpu"
             )
