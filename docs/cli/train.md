@@ -92,7 +92,7 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--no-resume-from-checkpoint`** (flag) Disable automatic checkpoint resumption. Without this flag, this script will automatically load the latest checkpoint in `{save-path}` if one exists.
 
-- **`--logger`** (str, default: `""`) Metric logging backend(s). Options: `trackio`, `wandb`, `tensorboard` Can specify multiple comma-separated: `--logger tensorboard,wandb`. **Warning:** backend must be pip install before using.
+- **`--logger`** (str, default: `""`) Metric logging backend(s). Options: `trackio`, `wandb`, `tensorboard` Can specify multiple comma-separated: `--logger tensorboard,wandb`. **Warning:** backend must be pip installed before using.
 
 - **`--log-dir`** (str, default: `"./logs"`) Directory to save training logs. Only applies to some logging backends (e.g. `tensorboard`)
 
