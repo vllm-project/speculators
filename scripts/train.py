@@ -102,7 +102,10 @@ def setup_dataloader(
 
 
 def create_transformer_layer_config(
-    verifier_name_or_path: str, num_layers: int, draft_arch: str = "llama"
+    verifier_name_or_path: str,
+    num_layers: int,
+    draft_arch: str = "llama",
+    hidden_act: str | None = None,
 ) -> PretrainedConfig:
     if draft_arch not in DRAFT_ARCH_CONFIGS:
         raise ValueError(
@@ -125,6 +128,17 @@ def create_transformer_layer_config(
     if hasattr(verifier_config, "text_config"):
         verifier_config = verifier_config.text_config
 
+    hidden_act = (
+        hidden_act
+        or getattr(verifier_config, "hidden_act", None)
+        or getattr(verifier_config, "hidden_activation", None)
+    )
+    if hidden_act is None:
+        raise AttributeError(
+            f"{type(verifier_config).__name__} has neither 'hidden_act' "
+            "nor 'hidden_activation'"
+        )
+
     return config_class(
         vocab_size=verifier_config.vocab_size,
         hidden_size=verifier_config.hidden_size,
@@ -132,7 +146,7 @@ def create_transformer_layer_config(
         num_hidden_layers=num_layers,
         num_attention_heads=verifier_config.num_attention_heads,
         num_key_value_heads=verifier_config.num_key_value_heads,
-        hidden_act=verifier_config.hidden_act,
+        hidden_act=hidden_act,
         max_position_embeddings=verifier_config.max_position_embeddings,
         initializer_range=verifier_config.initializer_range,
         rms_norm_eps=verifier_config.rms_norm_eps,
@@ -235,7 +249,10 @@ def main(args: argparse.Namespace):
 
     # Setup speculator config
     transformer_layer_config = create_transformer_layer_config(
-        args.verifier_name_or_path, args.num_layers, draft_arch=args.draft_arch
+        args.verifier_name_or_path,
+        args.num_layers,
+        draft_arch=args.draft_arch,
+        hidden_act=args.draft_hidden_act,
     )
 
     args.mask_token_id = resolve_mask_token_id(
@@ -492,6 +509,14 @@ def parse_args():
         choices=list(DRAFT_ARCH_CONFIGS.keys()),
         help="Architecture for draft decoder layers. Defaults to 'llama'. "
         "Note: only 'llama' is currently supported in vLLM for inference.",
+    )
+    parser.add_argument(
+        "--draft-hidden-act",
+        type=str,
+        default=None,
+        help="Activation function for draft decoder layers. Defaults to the verifier's "
+        "activation. Useful for dflash which uses Qwen3 layers that expects 'silu' for "
+        "vLLM deployment.",
     )
     parser.add_argument(
         "--target-layer-ids",
