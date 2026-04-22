@@ -12,7 +12,7 @@ The fastest way to try speculative decoding is to serve a pre-trained speculator
 vllm serve RedHatAI/Qwen3-8B-speculator.eagle3
 ```
 
-vLLM reads the `speculators_config` from the model, loads both the speculator and the target model, and enables speculative decoding automatically. See the [Serve in vLLM](tutorials/serve_vllm.md) tutorial for more options.
+vLLM reads from the model's config, loads both the speculator and the target model, and enables speculative decoding automatically. See the [Serve in vLLM](tutorials/serve_vllm.md) tutorial for more options.
 
 ## Pre-trained Speculator Models
 
@@ -33,7 +33,7 @@ For help choosing between them, see the [Algorithm Decision Guide](algorithms/de
 
 ## Train Your Own Speculator
 
-If a pre-trained speculator isn't available for your target model, you can train one with Speculators. The library supports both online and offline training modes:
+If a pre-trained speculator isn't available for your target model, you can train one with Speculators. Training requires internal hidden states from the target model, which are extracted by serving the target model with vLLM. The library supports both online and offline training modes:
 
 - **Online training** -- Hidden states are generated on-the-fly during training. Easier to get started, lower disk usage.
 - **Offline training** -- Hidden states are pre-generated and cached.

@@ -30,6 +30,10 @@ The multipack batch sampler uses an LPT (Longest Processing Time First) bin-pack
 
 Training automatically resumes from the latest checkpoint, restoring model weights, optimizer state, and scheduler state. The checkpointer tracks the best validation loss and maintains a symlink to the best checkpoint for easy model selection.
 
+## Seamless Integration with vLLM
+
+Trained models are saved in a special speculators format that vLLM can load directly. Point vLLM at a checkpoint or a HuggingFace model and it automatically detects the speculator, pairs it with the target model, and enables speculative decoding — no extra configuration needed.
+
 ## Model Conversion
 
 Speculators can convert pre-trained models from third-party repositories (EAGLE v1/v2/v3, HASS) into Speculators format for direct deployment with vLLM.
