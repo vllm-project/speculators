@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import warnings
+from typing import Any
 
 
 def parse_args():
@@ -39,6 +40,15 @@ def parse_args():
         help=(
             "For DFlash models, append the last layer (num_hidden_layers) to "
             "target_layer_ids for verifier hidden states extraction. Default: True"
+        ),
+    )
+    parser.add_argument(
+        "--fp8-quantize",
+        action="store_true",
+        help=(
+            "Quantize hidden states to float8_e4m3fn with per-token scaling "
+            "before saving. Uses a custom KV connector that stores FP8 data "
+            "with scaling factors, reducing disk usage by ~50%%."
         ),
     )
     parser.add_argument(
@@ -85,11 +95,23 @@ def main():
             "hf_config": {"eagle_aux_hidden_state_layer_ids": target_layer_ids}
         },
     }
-    kv_transfer_config = {
-        "kv_connector": "ExampleHiddenStatesConnector",
+    extra_config: dict[str, str] = {"shared_storage_path": args.hidden_states_path}
+    if args.fp8_quantize:
+        connector_name = "FP8HiddenStatesConnector"
+        module_path = (
+            "speculators.data_generation.fp8_hidden_states_connector"
+        )
+    else:
+        connector_name = "ExampleHiddenStatesConnector"
+        module_path = None
+
+    kv_transfer_config: dict[str, Any] = {
+        "kv_connector": connector_name,
         "kv_role": "kv_producer",
-        "kv_connector_extra_config": {"shared_storage_path": args.hidden_states_path},
+        "kv_connector_extra_config": extra_config,
     }
+    if module_path is not None:
+        kv_transfer_config["kv_connector_module_path"] = module_path
 
     cmd = [
         sys.executable,
