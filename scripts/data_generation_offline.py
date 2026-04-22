@@ -38,6 +38,10 @@ envs.VLLM_WORKER_MULTIPROC_METHOD = "spawn"
 from speculators.data_generation.config_generator import (  # noqa: E402
     DataGenerationConfig,
 )
+from speculators.data_generation.fp8_utils import (  # noqa: E402
+    FP8_FORMAT_KEY,
+    SCALES_KEY,
+)
 from speculators.data_generation.logging_utils import PipelineLogger  # noqa: E402
 from speculators.data_generation.preprocessing import (  # noqa: E402
     load_and_preprocess_dataset,
@@ -183,6 +187,25 @@ def parse_args():
             "trainable tokens."
         ),
     )
+    parser.add_argument(
+        "--fp8-quantize",
+        action="store_true",
+        default=False,
+        help=(
+            "Quantize hidden states to float8_e4m3fn with scaling "
+            "before saving."
+        ),
+    )
+    parser.add_argument(
+        "--fp8-granularity",
+        type=str,
+        choices=["per_tensor", "per_token"],
+        default="per_token",
+        help=(
+            "FP8 quantization granularity. per_token (default) uses one scale "
+            "per token position; per_tensor uses one scale for the whole tensor."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -268,6 +291,8 @@ def generate_and_save_hidden_states(args, dataset):
         max_model_len=args.seq_length,
         gpu_memory_utilization=args.gpu_memory_utilization,
         tensor_parallel_size=args.tensor_parallel_size,
+        fp8_quantize=args.fp8_quantize,
+        fp8_granularity=args.fp8_granularity,
     )
 
     log.info(f"Processing {num_samples - start_sample_idx}/{num_samples} samples")
@@ -309,6 +334,10 @@ def generate_and_save_hidden_states(args, dataset):
                     "hidden_states": [h.contiguous() for h in result["hidden_states"]],
                     "loss_mask": loss_mask,
                 }
+                if SCALES_KEY in result:
+                    result_cleaned[SCALES_KEY] = result[SCALES_KEY]
+                if FP8_FORMAT_KEY in result:
+                    result_cleaned[FP8_FORMAT_KEY] = result[FP8_FORMAT_KEY]
                 output_path = Path(args.output_dir) / f"data_{file_idx}.pt"
                 future = thread_executor.submit(
                     save_sample_to_disk, result_cleaned, output_path

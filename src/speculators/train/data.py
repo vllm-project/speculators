@@ -106,6 +106,32 @@ def standardize_data_v1(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def standardize_data_v2_fp8(data: dict[str, Any]) -> dict[str, Any]:
+    """Standardize FP8 scaled data (v2 format) by dequantizing hidden states."""
+    from speculators.data_generation.fp8_utils import dequantize_fp8_tensor
+
+    hidden_states = [
+        dequantize_fp8_tensor(h, s, torch.bfloat16)
+        for h, s in zip(data["hidden_states"], data["hidden_states_scales"])
+    ]
+    return {
+        "hidden_states": torch.cat(hidden_states[:-1], dim=-1),
+        "input_ids": data["input_ids"],
+        "verifier_last_hidden_states": hidden_states[-1],
+        "loss_mask": data["loss_mask"],
+    }
+
+
+def standardize_data_auto(data: dict[str, Any]) -> dict[str, Any]:
+    """Auto-detect data format and standardize accordingly.
+
+    Handles both v1 (bf16) and v2 (fp8 scaled) formats transparently.
+    """
+    if "fp8_format" in data:
+        return standardize_data_v2_fp8(data)
+    return standardize_data_v1(data)
+
+
 class BaseDataset(Dataset):
     def __init__(
         self,
@@ -421,7 +447,7 @@ class SampleFileDataset(BaseDataset):
         ]
 
     def _get_raw_data(self, index):
-        return standardize_data_v1(
+        return standardize_data_auto(
             torch.load(
                 self.data[index], mmap=True, weights_only=True, map_location="cpu"
             )

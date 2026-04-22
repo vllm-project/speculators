@@ -30,6 +30,7 @@ from vllm.v1.structured_output import StructuredOutputManager
 
 from speculators.utils.util import empty_cache, is_npu_available, mem_get_info
 
+from .fp8_utils import FP8_FORMAT_KEY, SCALES_KEY, Granularity, _format_value, quantize_tensor_to_fp8
 from .logging_utils import PipelineLogger
 
 __all__ = ["VllmHiddenStatesGenerator"]
@@ -84,6 +85,8 @@ class VllmHiddenStatesGenerator:
         gpu_memory_utilization: float = 0.8,
         tensor_parallel_size: int = 1,
         max_num_batched_tokens: int | None = None,
+        fp8_quantize: bool = False,
+        fp8_granularity: Granularity = "per_token",
     ):
         warnings.warn(
             "VllmHiddenStatesGenerator and the associated data_generation_offline.py"
@@ -93,6 +96,8 @@ class VllmHiddenStatesGenerator:
         )
         self.model_path = model_path
         self.tensor_parallel_size = tensor_parallel_size
+        self.fp8_quantize = fp8_quantize
+        self.fp8_granularity: Granularity = fp8_granularity
         self._request_counter = 0
 
         log.info(f"Initializing hidden states generator for {model_path}")
@@ -279,7 +284,6 @@ class VllmHiddenStatesGenerator:
                     max_tokens=MAX_DECODE_TOKENS, temperature=SAMPLING_TEMPERATURE
                 ),
                 pooling_params=None,
-                eos_token_id=self.tokenizer.eos_token_id,
                 arrival_time=INITIAL_ARRIVAL_TIME,
                 block_hasher=self.block_hasher,
             )
@@ -323,7 +327,7 @@ class VllmHiddenStatesGenerator:
                 )
 
             model_output = self.executor.execute_model(scheduler_output)
-            self.executor.sample_tokens(model_output)
+            self.executor.sample_tokens(None)
 
         # Abort all requests (prefill complete, don't need decode)
         self.scheduler.finish_requests(
@@ -352,16 +356,29 @@ class VllmHiddenStatesGenerator:
                     f"Available: {list(request_states_dict.keys())}"
                 )
 
-            layer_states = [h.clone().cpu() for h in request_states_dict[req_id]]
+            layer_states = []
+            layer_scales = []
+            for h in request_states_dict[req_id]:
+                cpu_h = h.clone().cpu()
+                if self.fp8_quantize:
+                    fp8_h, scale = quantize_tensor_to_fp8(cpu_h, self.fp8_granularity)
+                    layer_states.append(fp8_h)
+                    layer_scales.append(scale)
+                else:
+                    layer_states.append(cpu_h)
+
             input_ids_tensor = torch.as_tensor(input_ids_list[i], dtype=torch.long)
 
-            results.append(
-                {
-                    "input_ids": input_ids_tensor,
-                    "hidden_states": layer_states,
-                    "loss_mask": None,
-                }
-            )
+            result = {
+                "input_ids": input_ids_tensor,
+                "hidden_states": layer_states,
+                "loss_mask": None,
+            }
+            if self.fp8_quantize:
+                result[SCALES_KEY] = layer_scales
+                result[FP8_FORMAT_KEY] = _format_value(self.fp8_granularity)
+
+            results.append(result)
 
         empty_cache()
         return results
