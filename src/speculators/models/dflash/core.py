@@ -290,7 +290,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         verifier_preds = torch.argmax(verifier_logits, dim=-1)
         # Shift right by 1 so verifier_preds[i] predicts token at position i
         verifier_preds = torch.cat(
-            [input_ids[:, :1], verifier_preds[:, :-1]], dim=1
+            [verifier_preds.new_zeros(1, 1), verifier_preds[:, :-1]], dim=1
         )
         targets = verifier_preds[:, anchored_block_indices]
         # shape: [1, num_anchors*block_size] # noqa: ERA001
