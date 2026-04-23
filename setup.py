@@ -6,8 +6,8 @@ from packaging.version import Version
 from setuptools import setup
 from setuptools_git_versioning import count_since, get_branch, get_sha, get_tags
 
-LAST_RELEASE_VERSION = Version("0.3.0")
-TAG_VERSION_PATTERN = re.compile(r"^v(\d+\.\d+\.\d+)$")
+LAST_RELEASE_VERSION = Version("0.4.0")
+TAG_VERSION_PATTERN = re.compile(r"^v(\d+\.\d+\.\d+)\+rhaiis$")
 
 
 def get_last_version_diff() -> tuple[Version, str | None, int | None]:
@@ -66,8 +66,8 @@ def get_next_version(
             version = Version(f"{version.base_version}.post{build_iteration}")
         return version, tag, build_iteration
 
-    # not in release pathway, so need to increment to target next release version
-    version = Version(f"{version.major}.{version.minor + 1}.0")
+    # Keep the same version for rhaiis release
+    version = Version(f"{version.major}.{version.minor}.0")
 
     if build_type == "candidate":
         # add 'rc' since we are in candidate pathway
