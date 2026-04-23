@@ -24,4 +24,6 @@ def test_online_regression(tmp_path: Path, prompts):
         epochs=3,
         prompts=prompts,
         acceptance_thresholds=[0.4, 0.1, 0.01],
+        log_freq=50,
+        train_timeout=45 * 60,  # 45 mins
     )

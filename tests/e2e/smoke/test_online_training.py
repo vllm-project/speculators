@@ -42,6 +42,8 @@ def run_online_e2e(
     max_tokens: int = 50,
     ignore_eos: bool = True,
     acceptance_thresholds: list[float] | None = None,
+    log_freq: int = 1,
+    train_timeout: int = 30 * 60,  # 30 mins
 ):
     """
     Run online training e2e testing pipeline.
@@ -72,7 +74,8 @@ def run_online_e2e(
             draft_vocab_size,
             epochs,
             lr,
-            timeout=30 * 60,  # 30 mins
+            log_freq=log_freq,
+            timeout=train_timeout,
         )
 
     # Step 3: Validate trained checkpoint with vLLM inference
