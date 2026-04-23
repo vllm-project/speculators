@@ -5,7 +5,6 @@ This tutorial walks you through training a DFlash speculator model using **onlin
 - **Step 2 — vLLM launch:** DFlash requires explicitly passing `--target-layer-ids` to select which intermediate layers to extract hidden states from. Eagle-3 uses sensible defaults automatically.
 - **Step 3 — Training:** DFlash introduces several additional parameters: `--speculator-type dflash`, `--block-size`, `--max-anchors`, and typically uses more draft layers (`--num-layers 5` vs 1 for Eagle-3).
 
-
 For a ready-to-run version of this tutorial, see [`examples/train/dflash_qwen3_8b_sharegpt_online_5k.sh`](https://github.com/vllm-project/speculators/blob/main/examples/train/dflash_qwen3_8b_sharegpt_online_5k.sh).
 
 ## Overview

@@ -15,9 +15,7 @@ Speculators provides four main CLI scripts for different stages of the speculati
 
 ## Common Workflows
 
-The diagram below shows the high-level flow for training a speculator model.
-The offline pipeline runs each stage sequentially, while the online pipeline
-combines hidden-state extraction and training into a single step.
+The diagram below shows the high-level flow for training a speculator model. The offline pipeline runs each stage sequentially, while the online pipeline combines hidden-state extraction and training into a single step.
 
 ```mermaid
 flowchart TD
