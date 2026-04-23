@@ -26,4 +26,5 @@ def test_offline_regression(tmp_path: Path, prompts):
         epochs=3,
         prompts=prompts,
         acceptance_thresholds=[0.4, 0.07, 0.007],
+        log_freq=50,
     )

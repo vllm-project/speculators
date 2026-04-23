@@ -73,6 +73,9 @@ def run_offline_e2e(
     speculator_type: str = "eagle3",
     extra_train_args: list[str] | None = None,
     target_layer_ids: list[int] | None = None,
+    log_freq: int = 1,
+    train_timeout: int = 30 * 60,  # 30 mins
+    datagen_timeout: int = 25 * 60,  # 25 mins
 ):
     data_path = tmp_path / "data"
     offline_hidden_states = tmp_path / "offline_hidden_states"
@@ -95,7 +98,7 @@ def run_offline_e2e(
             offline_hidden_states,
             port,
             max_samples,
-            timeout=25 * 60,
+            timeout=datagen_timeout,
         )
 
     # Step 3: Train using pre-generated hidden states (no live server needed)
@@ -113,6 +116,8 @@ def run_offline_e2e(
         speculator_type=speculator_type,
         extra_train_args=extra_train_args,
         target_layer_ids=target_layer_ids,
+        log_freq=log_freq,
+        timeout=train_timeout,
     )
 
     # Step 4: Validate trained checkpoint with vLLM inference

@@ -372,6 +372,7 @@ def main(args: argparse.Namespace):
         checkpoint_freq=args.checkpoint_freq,
         save_best=args.save_best,
         hidden_states_dtype=hidden_states_dtype,
+        log_freq=args.log_freq,
     )
     trainer = Trainer(draft_model, trainer_config, train_loader, val_loader)
 
@@ -499,6 +500,12 @@ def parse_args():
         help="One of 'trackio', 'wandb', 'tensorboard' or comma separated list of them",
     )
     parser.add_argument("--total-seq-len", type=int, default=8192)
+    parser.add_argument(
+        "--log-freq",
+        type=int,
+        default=1,
+        help="Log training metrics every N steps (default: 1)",
+    )
     parser.add_argument("--log-dir", type=str, default="./logs")
     parser.add_argument("--run-name", type=str, default=None)
     parser.add_argument("--num-layers", type=int, default=1)

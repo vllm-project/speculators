@@ -46,6 +46,7 @@ class TrainerConfig(NamedTuple):
     checkpoint_freq: int = 1
     save_best: bool = False
     hidden_states_dtype: torch.dtype = torch.bfloat16
+    log_freq: int = 1
 
 
 class Trainer:
@@ -210,15 +211,21 @@ class Trainer:
             if self.scheduler is not None:
                 self.scheduler.step()
 
-            if self.is_distributed:
-                for v in metrics.values():
-                    dist.reduce(v, dst=0, op=dist.ReduceOp.AVG)
+            if self.global_step % self.config.log_freq == 0:
+                if self.is_distributed:
+                    for v in metrics.values():
+                        dist.reduce(v, dst=0, op=dist.ReduceOp.AVG)
 
-            metrics = {k: v.item() for k, v in metrics.items()}
-            metric_logger.info(
-                {"train": metrics, "epoch": epoch, "lr": current_lr},
-                extra={"step": self.global_step},
-            )
+                metrics = {k: v.item() for k, v in metrics.items()}
+                metric_logger.info(
+                    {
+                        "train": metrics,
+                        "epoch": epoch,
+                        "lr": current_lr,
+                        "global_step": self.global_step,
+                    },
+                    extra={"step": self.global_step},
+                )
             self.global_step += 1
 
     @torch.no_grad()
