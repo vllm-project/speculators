@@ -51,9 +51,6 @@ theme:
         icon: material/brightness-4
         name: Switch to system preference
 
-exclude_docs: |
-  developer/branding.md
-
 validation:
   links:
     absolute_links: relative_to_docs
@@ -99,9 +96,6 @@ plugins:
   - api-autonav:
       modules: ['src/speculators']
   - awesome-nav
-  - gen-files:
-      scripts:
-        - docs/scripts/gen_files.py
   - mike
   - minify:
       minify_html: true

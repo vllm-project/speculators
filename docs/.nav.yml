@@ -23,6 +23,7 @@ nav:
           - Code of Conduct: developer/code_of_conduct.md
           - Add New Spec Decode Algorithm: developer/add_algorithm.md
           - Design Documents: developer/design_docs.md
+          - Branding Guidelines: developer/branding.md
     - API Reference:
           - api/index.md
           - reference/speculators
