@@ -52,7 +52,7 @@ TINY_LLAMA_CONFIG = LlamaConfig(
     max_position_embeddings=32,
     rms_norm_eps=1e-6,  # type: ignore[arg-type] # (bad transformer's type hint, int instead of float)
     tie_word_embeddings=False,
-    _attn_implementation="eager",
+    _attn_implementation="eager",  # type: ignore[call-arg]
 )
 
 

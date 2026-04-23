@@ -11,6 +11,8 @@ from transformers import LlamaConfig, PretrainedConfig
 from speculators.config import SpeculatorsConfig, VerifierConfig
 from speculators.convert.eagle.eagle3_legacy_model import Eagle3Speculator
 from speculators.convert.eagle.utils import (
+    build_llama_config_dtype_kwarg,
+    build_llama_config_rope_kwargs,
     ensure_checkpoint_is_local,
     find_vocab_size,
     load_checkpoint_config,
@@ -158,11 +160,13 @@ class Eagle3Converter:
             rms_norm_eps=eagle_config.get("rms_norm_eps", 1e-6),
             use_cache=True,
             attention_bias=eagle_config.get("attention_bias", False),
-            rope_theta=eagle_config.get("rope_theta", 10000.0),
             mlp_bias=eagle_config.get("mlp_bias", False),
             tie_word_embeddings=False,
-            torch_dtype=eagle_config.get("torch_dtype"),
             head_dim=eagle_config.get("head_dim"),
+            **build_llama_config_rope_kwargs(
+                rope_theta=eagle_config.get("rope_theta", 10000.0),
+            ),
+            **build_llama_config_dtype_kwarg(eagle_config.get("torch_dtype")),
         )
 
     def _save_converted_checkpoint(
