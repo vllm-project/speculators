@@ -16,11 +16,11 @@
 # is learning something. This is a good sanity check when creating a drafter for a new
 # target model.
 
-# Timing (on 2x NVIDIA H100 80GB GPUs)
-# Data Preprocessing: 14 seconds
-# vLLM Server Startup: 58 seconds
-# Training (3 epochs): 1618 seconds (26 mins 58 secs)
-# Total: 1690 seconds (28 mins 10 secs)
+# Timing (on 4x NVIDIA H100 80GB GPUs, DP=2)
+# Data Preprocessing: 26 seconds
+# vLLM Server Startup: 60 seconds (1 min)
+# Training (5 epochs): 1374 seconds (22 mins 54 secs)
+# Total: 1475 seconds (24 mins 35 secs)
 
 # MT-Bench Results (80 prompts, 2048 max output tokens):
 # acceptance rate: 5.90%
@@ -73,7 +73,7 @@ python scripts/prepare_data.py \
 echo "=== Step 2: Launching vLLM server ==="
 CUDA_VISIBLE_DEVICES="$VLLM_GPUS" python scripts/launch_vllm.py "$MODEL" \
     --target-layer-ids $TARGET_LAYER_IDS \
-    -- --port "$VLLM_PORT" &
+    -- --data-parallel-size 2 --port "$VLLM_PORT" &
 VLLM_PID=$!
 
 # Ensure vLLM is cleaned up on exit
