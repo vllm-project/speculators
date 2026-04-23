@@ -97,12 +97,65 @@ def main():
         if args.include_last_layer:
             target_layer_ids.append(num_hidden_layers)
 
+    # Build hf_config overrides for ExtractHiddenStatesConfig.
+    #
+    # vLLM's SpeculativeConfig("extract_hidden_states") builds a draft hf_config
+    # via ExtractHiddenStatesConfig(target_hf_config, **hf_config_overrides) and
+    # merges them as `{**target_hf_config.to_dict(), **kwargs}` (kwargs win).
+    #
+    # For composite multimodal configs (e.g. Qwen3-Omni*, Qwen3-VL-MoE),
+    # `target_hf_config.to_dict()` keeps the text backbone either under nested
+    # containers such as `thinker_config -> text_config` or under a top-level
+    # selector attr like `text_config`. In both cases, the rebuilt
+    # ExtractHiddenStatesConfig can fail vLLM's `get_hf_text_config()` path:
+    # either the text attrs are no longer directly visible on the wrapper, or a
+    # stale nested dict is returned instead of a real config-like object.
+    # That leads to the "text_config extracted ... does not have
+    # `num_attention_heads` attribute" ValidationError.
+    #
+    # Fix: flatten the text backbone's fields into the hf_config override.
+    # Since kwargs override the flattened model_dict in ExtractHiddenStatesConfig,
+    # the resulting draft hf_config will expose text-backbone attributes at the
+    # top level (num_attention_heads, hidden_size, num_hidden_layers,
+    # vocab_size, ...), which is what vLLM's get_hf_text_config() requires.
+    hf_config_overrides: dict = {"eagle_aux_hidden_state_layer_ids": target_layer_ids}
+    if config is not raw_config:
+        # Nested multimodal target: promote text-backbone attrs to top level.
+        # `to_dict()` recursively serialises sub-configs; we strip fields that
+        # would conflict with ExtractHiddenStatesConfig's forced
+        # `architectures`/`model_type`.
+        _text_cfg_dict = config.to_dict()
+        for _k in ("architectures", "model_type", "auto_map", "torch_dtype"):
+            _text_cfg_dict.pop(_k, None)
+
+        # Some multimodal parent configs (e.g. Qwen3-VL-MoE) expose the text
+        # backbone via selector attrs such as `text_config`. When vLLM rebuilds
+        # the draft config as ExtractHiddenStatesConfig(parent_hf_config,
+        # **hf_config_overrides), those parent attrs survive as plain dicts.
+        # Then `PretrainedConfig.get_text_config()` returns the stale nested
+        # dict instead of falling back to the promoted top-level text attrs,
+        # and `get_hf_text_config()` raises because dict values do not expose
+        # attribute access like `num_attention_heads`.
+        #
+        # Explicitly neutralise all selector attrs that HF may probe so the
+        # rebuilt config falls back to the promoted top-level text fields.
+        for _nested_text_attr in (
+            "text_config",
+            "text_encoder",
+            "decoder",
+            "generator",
+        ):
+            _text_cfg_dict[_nested_text_attr] = None
+
+        # kwargs win over model_dict in ExtractHiddenStatesConfig; this surfaces
+        # `num_attention_heads` et al. at top level so get_hf_text_config()
+        # returns a valid text config.
+        hf_config_overrides = {**_text_cfg_dict, **hf_config_overrides}
+
     speculative_config = {
         "method": "extract_hidden_states",
         "num_speculative_tokens": 1,
-        "draft_model_config": {
-            "hf_config": {"eagle_aux_hidden_state_layer_ids": target_layer_ids}
-        },
+        "draft_model_config": {"hf_config": hf_config_overrides},
     }
     kv_transfer_config = {
         "kv_connector": "ExampleHiddenStatesConnector",

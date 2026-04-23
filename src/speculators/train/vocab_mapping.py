@@ -111,7 +111,17 @@ def get_target_vocab_size(target_vocab_size, target_model_path):
 
     config = AutoConfig.from_pretrained(target_model_path)
 
-    # For multimodal models (Qwen3VL, etc.), extract text_config
+    # Multimodal verifiers nest the text backbone. Must match
+    # train.py::unwrap_verifier_text_config EXACTLY so prepare_data
+    # (vocab-mapping) and train (transformer_layer_config.vocab_size)
+    # agree on the same integer. Otherwise load_vocab_mappings raises
+    # `t2d.shape[0] must match verifier_vocab_size`.
+    # Layout variants seen in the wild:
+    #   - Qwen3-Omni-Thinking: top.thinker_config.text_config.vocab_size
+    #   - Qwen3-VL-MoE:        top.text_config.vocab_size
+    #   - Plain text LLMs:     top.vocab_size
+    if hasattr(config, "thinker_config"):
+        config = config.thinker_config
     if hasattr(config, "text_config"):
         config = config.text_config
 

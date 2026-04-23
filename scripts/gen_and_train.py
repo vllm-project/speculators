@@ -302,6 +302,15 @@ def run_e2e(
 
     train_data_path = output_path / "gen"
 
+    # When LOCAL_DATAGEN_ENV is set (or running on NPU), reuse the currently
+    # activated Python environment for all data-generation sub-steps instead of
+    # spawning an isolated `uv` venv. This avoids re-resolving/re-installing
+    # heavy extras such as `vllm` from `.[datagen]` on every run, and keeps
+    # data-gen aligned with the same vLLM build that serves hidden states.
+    local_datagen_env = is_npu_available() or bool(
+        os.environ.get("LOCAL_DATAGEN_ENV", "")
+    )
+
     for dga_obj in data_gen_args:
         dga_dict = dga_obj._asdict()
         multimodal = bool(dga_dict.pop("multimodal", False))
@@ -333,7 +342,7 @@ def run_e2e(
                 "prepare_data.py",
                 prepare_args(prepare_args_dict),
                 [".[datagen]"],
-                use_uv=not is_npu_available(),
+                use_uv=not local_datagen_env,
             )
 
             offline2_args = {
@@ -348,7 +357,7 @@ def run_e2e(
                 "data_generation_offline2.py",
                 prepare_args(offline2_args),
                 [".[datagen]"],
-                use_uv=not is_npu_available(),
+                use_uv=not local_datagen_env,
             )
             train_data_path = dataset_output_dir
         else:
@@ -360,7 +369,7 @@ def run_e2e(
                 "data_generation_offline.py",
                 dga_list,
                 [".[datagen]"],
-                use_uv=not is_npu_available(),
+                use_uv=not local_datagen_env,
             )
 
     # Combine token frequency files from all datasets into a single file.
@@ -398,7 +407,7 @@ def run_e2e(
             "build_vocab_mapping.py",
             vma_list,
             [".[datagen]"],
-            use_uv=not is_npu_available(),
+            use_uv=not local_datagen_env,
         )
         ta_dict["d2t-path"] = str(output_path / "vocab_mapping" / "d2t.npy")
         ta_dict["t2d-path"] = str(output_path / "vocab_mapping" / "t2d.npy")
@@ -417,7 +426,12 @@ def run_e2e(
         packages.extend(loggers)
     device_count = torch.accelerator.device_count()
 
-    local_train_env = is_npu_available() or bool(os.environ.get("LOCAL_TRAIN_ENV", ""))
+    # LOCAL_TRAIN_ENV implies LOCAL_DATAGEN_ENV semantics for the training step;
+    # additionally honor LOCAL_DATAGEN_ENV so users that opt into the local env
+    # for data-gen can keep the same env for training without setting both.
+    local_train_env = (
+        local_datagen_env or bool(os.environ.get("LOCAL_TRAIN_ENV", ""))
+    )
 
     run_script(
         "train.py",
