@@ -22,9 +22,9 @@ Learn how to train an Eagle-3 speculator using offline training with pre-generat
 
 ## [Train DFlash Model Online](train_dflash_online.md)
 
-**COMING SOON**
-
 Learn how to train a DFlash speculator model with block-based token generation.
+
+**Time required:** ~25 mins
 
 ## [Response Regeneration](response_regeneration.md)
 
