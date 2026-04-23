@@ -14,6 +14,7 @@ Usage:
 
 import argparse
 import asyncio
+import json
 import logging
 import shutil
 import sys
@@ -29,6 +30,7 @@ from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_REQUEST_TIMEOUT,
     generate_hidden_states_async,
+    generate_hidden_states_multimodal_async,
 )
 from speculators.train.logger import setup_root_logger
 
@@ -293,18 +295,28 @@ async def worker(
             continue
 
         input_ids = item["input_ids"].tolist()
+        messages_json = item.get("messages_json")
 
         target_hidden_states_path = hidden_states_output_dir / f"hs_{idx}.safetensors"
 
         try:
             async with vllm_semaphore:  # Limit number of active generate calls
-                hidden_states_path = await generate_hidden_states_async(
-                    client,
-                    model,
-                    input_ids,
-                    timeout=request_timeout,
-                    max_retries=max_retries,
-                )
+                if messages_json:
+                    hidden_states_path = await generate_hidden_states_multimodal_async(
+                        client,
+                        model,
+                        json.loads(messages_json),
+                        timeout=request_timeout,
+                        max_retries=max_retries,
+                    )
+                else:
+                    hidden_states_path = await generate_hidden_states_async(
+                        client,
+                        model,
+                        input_ids,
+                        timeout=request_timeout,
+                        max_retries=max_retries,
+                    )
             async with write_semaphore:  # Limit number of active disk writes
                 await asyncio.to_thread(
                     shutil.move, hidden_states_path, target_hidden_states_path
@@ -339,11 +351,16 @@ async def _feed_queue(to_process, dataset, queue, cancel_event):
         if cancel_event.is_set():
             break
         item = dataset[i]
+        payload = {
+            "idx": i,
+            "input_ids": item["input_ids"],
+            "messages_json": item.get("messages_json", ""),
+        }
         # Check cancel_event while waiting for queue space to avoid
         # deadlocking when all workers have died.
         while not cancel_event.is_set():
             try:
-                queue.put_nowait({"idx": i, "input_ids": item["input_ids"]})
+                queue.put_nowait(payload)
                 break
             except asyncio.QueueFull:
                 await asyncio.sleep(0.1)

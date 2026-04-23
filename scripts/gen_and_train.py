@@ -100,6 +100,7 @@ class DataGenArgs(NamedTuple):
  output path generation. If None and train_data_path is sharegpt or ultrachat, the
  dataset name will be inferred from the train_data_path."""
     turn_dropout: bool = False
+    multimodal: bool = False
     seq_length: int | _NS = _NOTSET
     max_samples: int | _NS = _NOTSET
     tensor_parallel_size: int | _NS = _NOTSET
@@ -261,6 +262,16 @@ def run_script(
         raise subprocess.CalledProcessError(process.returncode, command)
 
 
+def _infer_dataset_name(dga_dict: dict[str, Any]) -> str:
+    dataset_name = dga_dict["dataset_name"]
+    if dataset_name is not None:
+        return dataset_name
+    if dga_dict["train_data_path"] in ["sharegpt", "ultrachat", "llava-instruct"]:
+        return dga_dict["train_data_path"]
+    raise ValueError(f"Dataset name is required for {dga_dict['train_data_path']}")
+
+
+
 def run_e2e(
     verifier_name_or_path: str,
     output_path: str,
@@ -270,6 +281,10 @@ def run_e2e(
 ):
     """Run the full pipeline in one command."""
     output_path = Path(output_path)
+    (output_path / "gen").mkdir(parents=True, exist_ok=True)
+    (output_path / "vocab_mapping").mkdir(parents=True, exist_ok=True)
+    (output_path / "checkpoints").mkdir(parents=True, exist_ok=True)
+    (output_path / "logs").mkdir(parents=True, exist_ok=True)
 
     # Data Generation
     if isinstance(data_gen_args, DataGenArgs):
@@ -277,37 +292,76 @@ def run_e2e(
 
     token_freq_paths = []
     num_datasets = len(data_gen_args)
+    uses_multimodal = any(dga.multimodal for dga in data_gen_args)
+    if uses_multimodal and num_datasets != 1:
+        raise ValueError(
+            "Multimodal E2E currently supports a single dataset per run. "
+            "Pass one DataGenArgs with train_data_path='llava-instruct' or another "
+            "single multimodal dataset."
+        )
+
+    train_data_path = output_path / "gen"
 
     for dga_obj in data_gen_args:
         dga_dict = dga_obj._asdict()
-        dga_dict["target-model-path"] = verifier_name_or_path
+        multimodal = bool(dga_dict.pop("multimodal", False))
 
-        dataset_name = dga_dict["dataset_name"]
-        if dataset_name is None:
-            if dga_dict["train_data_path"] in ["sharegpt", "ultrachat"]:
-                dataset_name = dga_dict["train_data_path"]
-            else:
-                raise ValueError(
-                    f"Dataset name is required for {dga_dict['train_data_path']}"
-                )
-        del dga_dict[
-            "dataset_name"
-        ]  # Remove name so it isn't passed as argument to data_generation_offline.py
+        dataset_name = _infer_dataset_name(dga_dict)
+        del dga_dict["dataset_name"]
 
         token_freq_path = (
             output_path / "vocab_mapping" / f"token_freq_{dataset_name}.pt"
         )
-        dga_dict["token-freq-path"] = str(token_freq_path)
         token_freq_paths.append(token_freq_path)
-        dga_dict["output-dir"] = str(output_path / "gen" / dataset_name)
 
-        dga_list = prepare_args(dga_dict)
-        run_script(
-            "data_generation_offline.py",
-            dga_list,
-            [".[datagen]"],
-            use_uv=not is_npu_available(),
-        )
+        dataset_output_dir = output_path / "gen" / dataset_name
+
+        if multimodal:
+            prepare_args_dict = {
+                "model": verifier_name_or_path,
+                "data": dga_dict["train_data_path"],
+                "seq_length": dga_dict["seq_length"],
+                "max_samples": dga_dict["max_samples"],
+                "token_freq_path": str(token_freq_path),
+                "turn_dropout": dga_dict["turn_dropout"],
+                "output": str(dataset_output_dir),
+                "seed": dga_dict["seed"],
+                "num_preprocessing_workers": dga_dict["num_preprocessing_workers"],
+                "multimodal": True,
+            }
+            run_script(
+                "prepare_data.py",
+                prepare_args(prepare_args_dict),
+                [".[datagen]"],
+                use_uv=not is_npu_available(),
+            )
+
+            offline2_args = {
+                "model": verifier_name_or_path,
+                "preprocessed_data": str(dataset_output_dir),
+                "output": str(dataset_output_dir / "hidden_states"),
+                "layer_ids": dga_dict["layer_ids"],
+                "max_samples": dga_dict["max_samples"],
+                "start_idx": dga_dict["start_idx"],
+            }
+            run_script(
+                "data_generation_offline2.py",
+                prepare_args(offline2_args),
+                [".[datagen]"],
+                use_uv=not is_npu_available(),
+            )
+            train_data_path = dataset_output_dir
+        else:
+            dga_dict["target-model-path"] = verifier_name_or_path
+            dga_dict["token-freq-path"] = str(token_freq_path)
+            dga_dict["output-dir"] = str(dataset_output_dir)
+            dga_list = prepare_args(dga_dict)
+            run_script(
+                "data_generation_offline.py",
+                dga_list,
+                [".[datagen]"],
+                use_uv=not is_npu_available(),
+            )
 
     # Combine token frequency files from all datasets into a single file.
     if num_datasets > 1:
@@ -324,10 +378,17 @@ def run_e2e(
     ta_dict = {
         **train_args._asdict(),
         "verifier-name-or-path": verifier_name_or_path,
-        "data-path": str(output_path / "gen"),
+        "data-path": str(train_data_path),
         "save-path": str(output_path / "checkpoints"),
         "log-dir": str(output_path / "logs"),
     }
+    if uses_multimodal:
+        ta_dict["multimodal"] = True
+        # Be explicit about where train.py should look for hidden-states even
+        # though `ArrowDataset` would default to `<data-path>/hidden_states`.
+        # Relying on the default silently desynchronizes from
+        # `data_generation_offline2.py --output` if that default ever changes.
+        ta_dict["hidden-states-path"] = str(train_data_path / "hidden_states")
     if vocab_mapping_args is not None:
         vma_dict = vocab_mapping_args._asdict()
         vma_dict["token-freq-path"] = str(combined_token_freq_path)
@@ -343,7 +404,8 @@ def run_e2e(
         ta_dict["t2d-path"] = str(output_path / "vocab_mapping" / "t2d.npy")
 
     ta_list = prepare_args(ta_dict)
-    ta_list.append("--legacy-data")
+    if not uses_multimodal:
+        ta_list.append("--legacy-data")
 
     # Get additional packages to install if loggers are specified.
     packages = ["."]

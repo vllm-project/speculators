@@ -20,6 +20,7 @@ def _patched_forward(
     positions,
     intermediate_tensors: dict[str, torch.Tensor] | None = None,
     inputs_embeds=None,
+    deepstack_input_embeds: dict[str, torch.Tensor] | None = None,
     **_kwargs,
 ):
     """Patched forward pass that captures hidden states from specified layers.
@@ -29,7 +30,16 @@ def _patched_forward(
     HiddenStatesWorkerExtension instance.
 
     Args:
-        deepstack_input_embeds: For multimodal models with deepstack (Qwen3VL)
+        input_ids: token id sequence (prefill path).
+        positions: position ids tensor consumed by the text backbone.
+        intermediate_tensors: pipeline-parallel intermediate residual/hidden.
+        inputs_embeds: when the caller (VLM / thinker) has already embedded the
+            tokens and scattered vision / audio features, feed that here and
+            skip ``embed_input_ids``.
+        deepstack_input_embeds: DeepStack visual injection dict for multimodal
+            models (Qwen3VL / Qwen3-Omni). Keys are ``deepstack_input_embeds_{i}``
+            where ``i`` is the absolute decoder-layer index at which the extra
+            visual embedding should be additively fused into ``hidden_states``.
     """
     if get_pp_group().is_first_rank:
         hidden_states = (
@@ -55,6 +65,12 @@ def _patched_forward(
         )
         absolute_layer_idx = self.start_layer + idx
 
+        if deepstack_input_embeds:
+            deepstack_key = f"deepstack_input_embeds_{absolute_layer_idx}"
+            ds_embed = deepstack_input_embeds.get(deepstack_key)
+            if ds_embed is not None:
+                hidden_states = hidden_states + ds_embed
+
         # Capture intermediate layers (not the last) before norm
         if absolute_layer_idx in target_layers:
             aux_hidden_states.append((hidden_states + residual).clone())
@@ -70,6 +86,107 @@ def _patched_forward(
         extension._store_captured_states(aux_hidden_states)  # noqa: SLF001
 
     return hidden_states
+
+
+def _patched_thinker_forward(self, *args, **kwargs):
+    """Patched thinker forward that scatters vision/audio embeds, then delegates
+    to the (already patched) text backbone so hidden-state capture on text
+    decoder layers still fires.
+
+    Supports the image / audio branches today; the video branch falls through
+    to the original forward (handled upstream in vLLM).
+    """
+    pixel_values = kwargs.pop("pixel_values", None)
+    image_grid_thw = kwargs.pop("image_grid_thw", None)
+    pixel_values_videos = kwargs.pop("pixel_values_videos", None)
+    video_grid_thw = kwargs.pop("video_grid_thw", None)
+    second_per_grids = kwargs.pop("second_per_grids", None)
+    input_features = kwargs.pop("input_features", None)
+    feature_attention_mask = kwargs.pop("feature_attention_mask", None)
+
+    input_ids = kwargs.get("input_ids")
+    # If the caller already prepared ``inputs_embeds`` (nested forward, etc.),
+    # don't try to re-embed / re-scatter; just delegate.
+    if input_ids is None:
+        return self._orig_forward(*args, **kwargs)
+
+    # No multimodal payload → nothing to scatter; delegate to stock forward so
+    # text-only prefill keeps identical numerics.
+    if (
+        pixel_values is None
+        and pixel_values_videos is None
+        and input_features is None
+    ):
+        return self._orig_forward(*args, **kwargs)
+
+    inputs_embeds = self.model.get_input_embeddings()(input_ids)
+    deepstack_visual_embeds = None
+
+    # --- vision: image ---
+    if pixel_values is not None and image_grid_thw is not None:
+        image_payload = {
+            "pixel_values": pixel_values,
+            "image_grid_thw": image_grid_thw,
+        }
+        try:
+            image_embeds, deepstack_visual_embeds = self._process_image_input(
+                image_payload
+            )
+        except Exception:  # noqa: BLE001
+            # Fallback: some transformers versions expose ``get_image_features``
+            image_embeds = self.get_image_features(pixel_values, image_grid_thw)
+            deepstack_visual_embeds = None
+        mask = (input_ids == self.config.image_token_id).unsqueeze(-1)
+        inputs_embeds = inputs_embeds.masked_scatter(
+            mask.expand_as(inputs_embeds), image_embeds
+        )
+
+    # --- vision: video (best-effort; opt-in) ---
+    if pixel_values_videos is not None and video_grid_thw is not None:
+        try:
+            video_embeds, _ = self._process_video_input(
+                {
+                    "pixel_values_videos": pixel_values_videos,
+                    "video_grid_thw": video_grid_thw,
+                    "second_per_grids": second_per_grids,
+                }
+            )
+            mask = (input_ids == self.config.video_token_id).unsqueeze(-1)
+            inputs_embeds = inputs_embeds.masked_scatter(
+                mask.expand_as(inputs_embeds), video_embeds
+            )
+        except Exception:  # noqa: BLE001
+            # Defer video to the stock forward path.
+            pass
+
+    # --- audio ---
+    if input_features is not None:
+        try:
+            audio_embeds = self.get_audio_features(
+                input_features, feature_attention_mask
+            )
+        except Exception:  # noqa: BLE001
+            audio_embeds = self.get_audio_features(input_features)
+        mask = (input_ids == self.config.audio_token_id).unsqueeze(-1)
+        inputs_embeds = inputs_embeds.masked_scatter(
+            mask.expand_as(inputs_embeds), audio_embeds
+        )
+
+    kwargs["inputs_embeds"] = inputs_embeds
+    kwargs["input_ids"] = None
+    if deepstack_visual_embeds is not None:
+        vision_cfg = getattr(self.config, "vision_config", None)
+        deepstack_indexes = getattr(vision_cfg, "deepstack_visual_indexes", None)
+        if deepstack_indexes is not None:
+            kwargs["deepstack_input_embeds"] = {
+                f"deepstack_input_embeds_{layer}": emb
+                for layer, emb in zip(
+                    deepstack_indexes,
+                    deepstack_visual_embeds,
+                    strict=False,
+                )
+            }
+    return self._orig_forward(*args, **kwargs)
 
 
 class HiddenStatesWorkerExtension:
@@ -120,6 +237,11 @@ class HiddenStatesWorkerExtension:
         # Qwen3-Omni thinker models
         if hasattr(model, "thinker"):
             thinker = model.thinker
+            # Patch the thinker so it scatters vision/audio embeds and then
+            # delegates to the already-patched text backbone (see below).
+            if not getattr(thinker, "_orig_forward", None):
+                thinker._orig_forward = thinker.forward  # noqa: SLF001
+                thinker.forward = types.MethodType(_patched_thinker_forward, thinker)
             if hasattr(thinker, "get_language_model"):
                 base_model = thinker.get_language_model().model
             elif hasattr(thinker, "model"):

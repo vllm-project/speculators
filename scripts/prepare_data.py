@@ -131,6 +131,14 @@ def parse_args():
             "trainable tokens."
         ),
     )
+    parser.add_argument(
+        "--multimodal",
+        action="store_true",
+        help=(
+            "Use AutoProcessor.apply_chat_template and emit multimodal sidecars. "
+            "Required for image/video/audio datasets such as llava-instruct."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -174,6 +182,8 @@ def main():
         assistant_pattern=args.assistant_pattern,
         turn_dropout=args.turn_dropout,
         minimum_valid_tokens=args.minimum_valid_tokens,
+        multimodal=args.multimodal,
+        multimodal_output_dir=output if args.multimodal else None,
     )
 
     log.info("Done preparing data")

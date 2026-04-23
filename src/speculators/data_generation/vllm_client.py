@@ -2,6 +2,7 @@ import asyncio
 import functools
 import logging
 import time
+from typing import Any
 
 import openai
 
@@ -82,6 +83,16 @@ def with_retries(fn):
     return sync_wrapper
 
 
+def _extract_hidden_states_path(completion) -> str:
+    if not hasattr(completion, "kv_transfer_params"):
+        raise InvalidResponseError("Response missing kv_transfer_params")
+
+    hidden_states_path = completion.kv_transfer_params.get("hidden_states_path")
+    if not hidden_states_path:
+        raise InvalidResponseError("Response missing hidden_states_path")
+    return hidden_states_path
+
+
 def extract_output(completion, token_ids) -> str:
     prompt_token_ids = getattr(completion.choices[0], "prompt_token_ids", None)
 
@@ -93,10 +104,11 @@ def extract_output(completion, token_ids) -> str:
             f"Prompt token IDs mismatch: expected {token_ids}, got {prompt_token_ids}"
         )
 
-    if not hasattr(completion, "kv_transfer_params"):
-        raise InvalidResponseError("Response missing kv_transfer_params")
+    return _extract_hidden_states_path(completion)
 
-    return completion.kv_transfer_params.get("hidden_states_path")
+
+def extract_output_no_token_check(completion) -> str:
+    return _extract_hidden_states_path(completion)
 
 
 @with_retries
@@ -132,6 +144,29 @@ async def generate_hidden_states_async(
 
 
 @with_retries
+async def generate_hidden_states_multimodal_async(
+    client: openai.AsyncClient,
+    model: str,
+    messages: list[dict[str, Any]],
+    timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
+) -> str:
+    """Generate hidden states for multimodal chat messages."""
+    coro = client.chat.completions.create(
+        model=model,
+        messages=messages,
+        max_tokens=1,
+        extra_body={"return_token_ids": True},
+        timeout=timeout,
+    )
+    if timeout is not None:
+        completion = await asyncio.wait_for(coro, timeout=timeout)
+    else:
+        completion = await coro
+
+    return extract_output_no_token_check(completion)
+
+
+@with_retries
 def generate_hidden_states(
     client: openai.Client,
     model: str,
@@ -150,3 +185,21 @@ def generate_hidden_states(
         timeout=timeout,
     )
     return extract_output(completion, token_ids)
+
+
+@with_retries
+def generate_hidden_states_multimodal(
+    client: openai.Client,
+    model: str,
+    messages: list[dict[str, Any]],
+    timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
+) -> str:
+    """Generate hidden states for multimodal chat messages."""
+    completion = client.chat.completions.create(
+        model=model,
+        messages=messages,
+        max_tokens=1,
+        extra_body={"return_token_ids": True},
+        timeout=timeout,
+    )
+    return extract_output_no_token_check(completion)

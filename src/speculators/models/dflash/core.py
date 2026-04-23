@@ -246,6 +246,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         verifier_last_hidden_states: torch.Tensor,  # shape: [1, total_seq_len, hidden_size] # noqa: ARG002, E501
         lengths: torch.Tensor | None = None,  # shape: [batch_size]
         position_ids: torch.Tensor | None = None,  # shape: [1, total_seq_len]
+        anchor_mask: torch.Tensor | None = None,  # shape: [1, total_seq_len]
         **kwargs,
     ):
         device = hidden_states.device
@@ -259,8 +260,16 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 total_seq_len, dtype=torch.long, device=device
             ).unsqueeze(0)
 
+        # For 3D MRoPE inputs (Qwen3-Omni), anchors must land on tokens where the
+        # T/H/W channels coincide (text tokens). Restrict the anchor candidate
+        # set before sampling so ``mask_position_ids`` can safely broadcast a
+        # single T-channel offset across all three channels.
+        anchor_loss_mask = loss_mask
+        if anchor_mask is not None:
+            anchor_loss_mask = loss_mask * anchor_mask.to(loss_mask.dtype)
+
         anchor_positions, anchor_valid = select_anchors(
-            loss_mask, num_anchors, self.block_size
+            anchor_loss_mask, num_anchors, self.block_size
         )
         # shape: [num_anchors], [num_anchors]
 
@@ -296,11 +305,23 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         fc_output = self.hidden_norm(fc_output)
         # shape: [1, total_seq_len, hidden_size] # noqa: ERA001
 
-        mask_position_ids = get_base_indices_for_anchored_blocks(
-            position_ids[:, anchor_positions], self.block_size, input_ids.numel()
-        )
-        position_ids = torch.cat([position_ids, mask_position_ids.unsqueeze(0)], dim=1)
-        # shape: [1, total_seq_len + num_anchors*block_size] # noqa: ERA001
+        if position_ids.dim() == 3:
+            anchor_position_ids = position_ids[..., anchor_positions]
+            mask_position_ids_1d = get_base_indices_for_anchored_blocks(
+                anchor_position_ids[0], self.block_size, input_ids.numel()
+            )
+            mask_position_ids = mask_position_ids_1d.view(1, 1, -1).expand(
+                position_ids.shape[0], position_ids.shape[1], -1
+            )
+            position_ids = torch.cat([position_ids, mask_position_ids], dim=-1)
+        else:
+            mask_position_ids = get_base_indices_for_anchored_blocks(
+                position_ids[:, anchor_positions], self.block_size, input_ids.numel()
+            )
+            position_ids = torch.cat(
+                [position_ids, mask_position_ids.unsqueeze(0)], dim=1
+            )
+        # shape: [1, total_seq_len + num_anchors*block_size] or [3, 1, ...]
 
         # the hidden_states shape doesn't match position_ids but doesn't need
         # to, as hidden_states is only used to set dtype and device in rotary_emb

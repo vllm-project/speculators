@@ -328,6 +328,11 @@ def main(args: argparse.Namespace):
             hidden_states_dtype=hidden_states_dtype,
         )
     else:
+        # Only enable verifier-aware RoPE (3D MRoPE) under --multimodal to
+        # avoid unnecessary AutoConfig.from_pretrained IO on text-only runs,
+        # and to keep train/val dataset RoPE behaviour symmetric.
+        rope_verifier = args.verifier_name_or_path if args.multimodal else None
+
         train_dataset = ArrowDataset(
             datapath=args.data_path,
             max_len=args.total_seq_len,
@@ -341,6 +346,7 @@ def main(args: argparse.Namespace):
             hidden_states_dtype=hidden_states_dtype,
             request_timeout=args.request_timeout,
             max_retries=args.max_retries,
+            verifier_name_or_path=rope_verifier,
         )
         val_dataset = ArrowDataset(
             datapath=args.data_path,
@@ -354,6 +360,7 @@ def main(args: argparse.Namespace):
             hidden_states_dtype=hidden_states_dtype,
             request_timeout=args.request_timeout,
             max_retries=args.max_retries,
+            verifier_name_or_path=rope_verifier,
         )
 
     train_loader = setup_dataloader(
@@ -499,6 +506,14 @@ def parse_args():
             "DEPRECATED. Use the old data format which stores hidden states alongside "
             "token_ids and assistant_masks, in data_i.pt files. This option will be "
             "removed soon."
+        ),
+    )
+    parser.add_argument(
+        "--multimodal",
+        action="store_true",
+        help=(
+            "Enable multimodal Arrow dataset handling, including sidecar loading, "
+            "chat-based hidden-state generation, and 3D MRoPE position_ids."
         ),
     )
     parser.add_argument("--save-path", type=str, default="./checkpoints")
