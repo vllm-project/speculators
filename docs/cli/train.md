@@ -106,7 +106,7 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 ### Eagle3-Specific Arguments
 
-- **`--use-off-policy-tokens`** (flag) Use off-policy tokens during training (required for regenerated data).
+- **`--use-off-policy-tokens`** (flag) Use off-policy tokens during training (required for [regenerated data](response_regeneration.md)).
 
 - **`--norm-before-residual` / `--no-norm-before-residual`** (flag, default: `True`) Toggle normalization before residual connections.
 

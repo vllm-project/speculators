@@ -28,9 +28,9 @@ Learn how to train a DFlash speculator model with block-based token generation.
 
 ## [Response Regeneration](response_regeneration.md)
 
-**COMING SOON**
+Regenerate dataset responses using your target model for improved drafter alignment.
 
-Regenerate dataset model responses using your target model for improved drafter alignment.
+**Time required:** ~10 minutes
 
 ## [Evaluating Model Performance](evaluating_performance.md)
 
