@@ -64,10 +64,15 @@ def _last_full_attention_idx(config: PretrainedConfig) -> int:
     uses full_attention, so we must pick a matching index.
     """
     layer_types: list[str] = getattr(config, "layer_types", [])
+    if not layer_types:
+        return 0
     for i in reversed(range(len(layer_types))):
         if layer_types[i] == "full_attention":
             return i
-    return 0
+    raise ValueError(
+        "Hybrid MTP layer requires at least one 'full_attention' entry in "
+        f"config.layer_types, got: {layer_types}"
+    )
 
 
 class MTPLayerMixin:

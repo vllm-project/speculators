@@ -105,7 +105,16 @@ class MTPStitcher:
         weight_map: dict[str, str],
         remapped: dict[str, torch.Tensor],
     ) -> None:
-        mtp_shards = {weight_map[k] for k in remapped if k in weight_map}
+        missing = [k for k in remapped if k not in weight_map]
+        if missing:
+            preview = missing[:5]  # noqa: PLR2004
+            suffix = "..." if len(missing) > 5 else ""  # noqa: PLR2004
+            raise KeyError(
+                f"{len(missing)} finetuned MTP tensor(s) not "
+                f"found in verifier weight_map and would be "
+                f"dropped: {preview}{suffix}"
+            )
+        mtp_shards = {weight_map[k] for k in remapped}
 
         for shard_name in sorted(set(weight_map.values())):
             src = verifier_local / shard_name
@@ -150,10 +159,15 @@ class MTPStitcher:
         with index_path.open() as f:
             weight_map = json.load(f)["weight_map"]
 
+        missing = [k for k in expected_keys if k not in weight_map]
+        if missing:
+            preview = missing[:5]  # noqa: PLR2004
+            suffix = "..." if len(missing) > 5 else ""  # noqa: PLR2004
+            raise ValueError(
+                f"{len(missing)} expected MTP key(s) missing "
+                f"from output index: {preview}{suffix}"
+            )
         for key in expected_keys:
-            if key not in weight_map:
-                logger.warning(f"Expected key {key} not in output weight map")
-                continue
             shard = weight_map[key]
             shard_path = output_dir / shard
             with safe_open(str(shard_path), framework="pt") as f:
