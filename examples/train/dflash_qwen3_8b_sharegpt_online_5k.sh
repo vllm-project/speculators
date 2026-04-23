@@ -7,7 +7,7 @@
 # Usage: Copy this script, modify the configuration variables below, then run:
 #   bash examples/train/dflash_qwen3_8b_sharegpt_online_5k.sh
 #
-# For a detailed walkthrough, see examples/ONLINE_TRAINING.md
+# For a detailed walkthrough, see docs/user_guide/tutorials/train_dflash_online.md
 
 ### Example E2E run for DFlash Qwen3-8B on 5k samples from ShareGPT ###
 

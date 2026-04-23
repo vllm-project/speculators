@@ -128,7 +128,7 @@ def migrate_developer_docs():
         # Developer
         ProcessFile(
             root_path=Path("CODE_OF_CONDUCT.md"),
-            docs_path=Path("developer/code-of-conduct.md"),
+            docs_path=Path("developer/code_of_conduct.md"),
             title="Code of Conduct",
             weight=-10,
         ),
@@ -138,28 +138,9 @@ def migrate_developer_docs():
             title="Contributing Guide",
             weight=-12,
         ),
-        # Examples
-        ProcessFile(
-            root_path=Path("examples/convert/README.md"),
-            docs_path=Path("examples/convert.md"),
-            title="Convert",
-            weight=3,
-        ),
-        ProcessFile(
-            root_path=Path("examples/evaluate/eval-guidellm/README.md"),
-            docs_path=Path("examples/evaluate.md"),
-            title="Evaluate",
-            weight=4,
-        ),
-        ProcessFile(
-            root_path=Path("examples/ONLINE_TRAINING.md"),
-            docs_path=Path("train.md"),
-            title="Train",
-            weight=-8,
-        ),
         ProcessFile(
             root_path=Path("scripts/response_regeneration/README.md"),
-            docs_path=Path("response_regeneration.md"),
+            docs_path=Path("user_guide/tutorials/response_regeneration.md"),
             title="Response Regeneration",
             weight=-6,
         ),

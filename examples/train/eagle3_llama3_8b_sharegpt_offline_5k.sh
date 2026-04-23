@@ -7,7 +7,7 @@
 # Usage: Copy this script, modify the configuration variables below, then run:
 #   bash examples/train/eagle3_llama3_8b_sharegpt_offline_5k.sh
 #
-# For a detailed walkthrough, see examples/OFFLINE_TRAINING.md
+# For a detailed walkthrough, see docs/user_guide/tutorials/train_eagle3_offline.md
 
 ### Example E2E run for Llama 3.1 8B on 5k samples from UltraChat ###
 
