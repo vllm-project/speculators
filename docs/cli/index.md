@@ -4,7 +4,7 @@ This page provides a comprehensive reference for all command-line interface (CLI
 
 ## Overview
 
-Speculators provides four main CLI scripts for different stages of the speculative decoding workflow:
+Speculators provides the following CLI scripts for different stages of the speculative decoding workflow:
 
 | Script                       | Purpose                                                      | Reference                               |
 | ---------------------------- | ------------------------------------------------------------ | --------------------------------------- |
@@ -12,6 +12,7 @@ Speculators provides four main CLI scripts for different stages of the speculati
 | `data_generation_offline.py` | Generate hidden states offline using vLLM                    | [→ Details](data_generation_offline.md) |
 | `launch_vllm.py`             | Launch vLLM server configured for hidden states extraction   | [→ Details](launch_vllm.md)             |
 | `train.py`                   | Train speculator models with online or offline hidden states | [→ Details](train.md)                   |
+| `response_regeneration/`     | Regenerate dataset responses using a vLLM-served model       | [→ Details](response_regeneration.md)   |
 
 ## Common Workflows
 
@@ -20,7 +21,7 @@ The diagram below shows the high-level flow for training a speculator model. The
 ```mermaid
 flowchart TD
     subgraph optional ["Optional: Response Regeneration"]
-        A["response_regeneration/script.py\nRegenerate model responses to dataset prompts for improved model alignment"]
+        A["response_regeneration/script.py\nRegenerate dataset responses for improved model alignment"]
     end
 
     subgraph offline ["Offline Pipeline"]
@@ -47,5 +48,6 @@ flowchart TD
     click G "launch_vllm/" _self
     click D "data_generation_offline/" _self
     click E "train/" _self
+    click A "response_regeneration/" _self
     click H "train/" _self
 ```

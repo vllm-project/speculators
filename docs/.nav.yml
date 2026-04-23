@@ -33,6 +33,7 @@ nav:
           - data_generation_offline.py: cli/data_generation_offline.md
           - launch_vllm.py: cli/launch_vllm.md
           - train.py: cli/train.md
+          - response_regeneration: cli/response_regeneration.md
     - Community:
           - community/index.md
           - Contact Us: community/contact_us.md
