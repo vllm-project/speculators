@@ -114,7 +114,7 @@ class MTPConverter:
             raise ValueError(
                 f"No keys with prefix '{_MTP_PREFIX}' found. "
                 "This converter requires checkpoints with native "
-                "MTP layers (e.g. Qwen3-Next, Qwen3.5, Qwen3.6)."
+                "MTP layers (e.g. Qwen3-Next, Qwen3.5, Qwen3.5-MoE)."
             )
 
     @staticmethod
