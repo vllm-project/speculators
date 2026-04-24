@@ -134,6 +134,10 @@ class MTPConverter:
     ) -> dict[str, torch.Tensor]:
         """Fuse individual expert weights into packed tensors.
 
+        This exists to support transformers>=4.57. When the minimum is
+        raised to v5+, replace with ``WeightConverter`` from
+        ``transformers.core_model_loading`` (MergeModulelist + Concatenate).
+
         MoE checkpoints (e.g. Qwen3-Next) store per-expert weights as
         separate keys (``experts.{N}.gate_proj``), but the transformers
         model uses fused 3D tensors (``experts.gate_up_proj``).  This
