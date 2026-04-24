@@ -291,7 +291,7 @@ def main(args: argparse.Namespace):
         )
 
     # Setup dataloaders
-    preprocess = shift_batch if args.speculator_type == "eagle3" else None
+    preprocess = shift_batch if args.speculator_type in ("eagle3", "peagle") else None
 
     noise_transform = AddUniformNoise(std=args.noise_std)
     if args.legacy_data:
@@ -610,6 +610,7 @@ def parse_args():
         help="Use RMSNorm before fc in Eagle3 draft path "
         "(e.g. for gpt-oss). Omit for other models.",
     )
+    # D-Flash specific parameters
     parser.add_argument(
         "--block-size",
         type=int,
@@ -646,12 +647,6 @@ def parse_args():
         type=int,
         default=2048,
         help="Maximum sequence length for attention mask construction (default: 2048)",
-    )
-    parser.add_argument(
-        "--ptd-token-id",
-        type=int,
-        default=0,
-        help="Token ID for predicted token dropout padding in P-EAGLE (default: 0)",
     )
     parser.add_argument(
         "--prediction-loss-weight",
