@@ -5,7 +5,7 @@
 # hidden states generation, and training (with pre-generated hidden states).
 #
 # Usage: Copy this script, modify the configuration variables below, then run:
-#   bash examples/train/eagle3_llama3_8b_sharegpt_offline_5k.sh
+#   bash examples/train/eagle3_llama3_8b_ultrachat_offline_5k.sh
 #
 # For a detailed walkthrough, see
 # https://docs.vllm.ai/projects/speculators/en/latest/user_guide/tutorials/train_eagle3_offline/
