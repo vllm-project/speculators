@@ -246,6 +246,26 @@ def check_safetensors_file(path: Path, tokens: list[int]):
             )
 
 
+def _to_token_id_list(value: Any) -> list[int]:
+    if hasattr(value, "tolist"):
+        return value.tolist()
+    return list(value)
+
+
+def _build_queue_item(idx: int, item: dict[str, Any]) -> dict[str, Any]:
+    queue_item: dict[str, Any] = {
+        "idx": idx,
+        "input_ids": _to_token_id_list(item["input_ids"]),
+    }
+
+    if "prompt" in item:
+        queue_item["prompt"] = item["prompt"]
+    if "multi_modal_data" in item:
+        queue_item["multi_modal_data"] = item["multi_modal_data"]
+
+    return queue_item
+
+
 async def worker(
     client,
     model: str,
@@ -276,7 +296,9 @@ async def worker(
             queue.task_done()
             continue
 
-        input_ids = item["input_ids"].tolist()
+        input_ids = item["input_ids"]
+        prompt = item.get("prompt")
+        multi_modal_data = item.get("multi_modal_data")
 
         target_hidden_states_path = hidden_states_output_dir / f"hs_{idx}.safetensors"
 
@@ -286,6 +308,8 @@ async def worker(
                     client,
                     model,
                     input_ids,
+                    prompt=prompt,
+                    multi_modal_data=multi_modal_data,
                     timeout=request_timeout,
                     max_retries=max_retries,
                 )
@@ -330,7 +354,7 @@ async def _feed_queue(to_process, dataset, queue, cancel_event):
         # deadlocking when all workers have died.
         while not cancel_event.is_set():
             try:
-                queue.put_nowait({"idx": i, "input_ids": item["input_ids"]})
+                queue.put_nowait(_build_queue_item(i, item))
                 break
             except asyncio.QueueFull:
                 await asyncio.sleep(0.1)
@@ -368,6 +392,8 @@ async def generate_and_save_hidden_states(args, dataset):
 
     existing_file_indices = get_existing_hidden_state_indices(hidden_states_dir)
     num_samples = len(dataset)
+    if "multi_modal_data" in dataset.column_names:
+        logger.info("Detected multimodal preprocessed dataset")
 
     to_process = get_indices_to_process(
         num_samples, args.max_samples, existing_file_indices
@@ -428,7 +454,7 @@ async def generate_and_save_hidden_states(args, dataset):
             await _shutdown_workers(workers, queue, cancel_event)
 
     num_saved = len(to_process) - len(skipped_indices)
-    logger.info(f"Saved {num_saved} new data points to {args.output}")
+    logger.info(f"Saved {num_saved} new data points to {hidden_states_dir}")
     if skipped_indices:
         logger.warning(
             f"Skipped {len(skipped_indices)} samples due to errors: {skipped_indices}"

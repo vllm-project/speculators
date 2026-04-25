@@ -57,9 +57,8 @@ def main():
     from transformers import AutoConfig  # noqa: PLC0415
 
     config = AutoConfig.from_pretrained(args.model)
-    if hasattr(config, "text_config"):
-        config = config.text_config
-    num_hidden_layers = config.num_hidden_layers
+    text_config = config.text_config if hasattr(config, "text_config") else config
+    num_hidden_layers = text_config.num_hidden_layers
 
     if args.target_layer_ids:
         target_layer_ids = args.target_layer_ids
@@ -67,7 +66,9 @@ def main():
             target_layer_ids.append(num_hidden_layers)
         warnings.warn(
             f"Using custom target layer ids {target_layer_ids}. These "
-            "must also be explicitly passed into the training script.",
+            "must also be explicitly aligned in the training script. "
+            "If the final verifier layer is included here, pass only the "
+            "auxiliary layers to training.",
             stacklevel=2,
         )
     else:
@@ -78,12 +79,29 @@ def main():
             num_hidden_layers,
         ]
 
+    draft_hf_config = {"eagle_aux_hidden_state_layer_ids": target_layer_ids}
+    if text_config is not config:
+        # vLLM's ExtractHiddenStatesConfig flattens the draft config and does not
+        # preserve nested text_config for multimodal verifiers. Clear the nested
+        # text_config and copy the text-only shape fields onto the draft config so
+        # hidden-state extraction can derive the draft model shape from the
+        # flattened config.
+        draft_hf_config["text_config"] = None
+        for field_name in (
+            "num_attention_heads",
+            "num_hidden_layers",
+            "hidden_size",
+            "num_key_value_heads",
+            "head_dim",
+        ):
+            field_value = getattr(text_config, field_name, None)
+            if field_value is not None:
+                draft_hf_config[field_name] = field_value
+
     speculative_config = {
         "method": "extract_hidden_states",
         "num_speculative_tokens": 1,
-        "draft_model_config": {
-            "hf_config": {"eagle_aux_hidden_state_layer_ids": target_layer_ids}
-        },
+        "draft_model_config": {"hf_config": draft_hf_config},
     }
     kv_transfer_config = {
         "kv_connector": "ExampleHiddenStatesConnector",

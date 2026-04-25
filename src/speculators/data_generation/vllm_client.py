@@ -2,6 +2,7 @@ import asyncio
 import functools
 import logging
 import time
+from typing import Any, cast
 
 import openai
 
@@ -99,11 +100,37 @@ def extract_output(completion, token_ids) -> str:
     return completion.kv_transfer_params.get("hidden_states_path")
 
 
+def _build_request_payload(
+    token_ids: list[int],
+    prompt: str | None = None,
+    multi_modal_data: dict[str, Any] | None = None,
+) -> tuple[list[int] | dict[str, Any], dict[str, Any]]:
+    """Build a vLLM completion request payload.
+
+    Text-only requests can pass token IDs directly. Requests that need the
+    original prompt text or multimodal inputs use vLLM's structured prompt form.
+    """
+    extra_body: dict[str, Any] = {"return_token_ids": True}
+
+    if prompt is None and multi_modal_data is None:
+        return token_ids, extra_body
+
+    request_prompt: dict[str, Any] = {"prompt_token_ids": token_ids}
+    if prompt is not None:
+        request_prompt["prompt"] = prompt
+    if multi_modal_data is not None:
+        request_prompt["multi_modal_data"] = multi_modal_data
+
+    return request_prompt, extra_body
+
+
 @with_retries
 async def generate_hidden_states_async(
     client: openai.AsyncClient,
     model: str,
     token_ids: list[int],
+    prompt: str | None = None,
+    multi_modal_data: dict[str, Any] | None = None,
     timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
 ) -> str:
     """
@@ -114,13 +141,18 @@ async def generate_hidden_states_async(
         client: The async OpenAI client.
         model: The model ID.
         token_ids: The input token IDs.
+        prompt: Optional prompt text corresponding to ``token_ids``.
+        multi_modal_data: Optional multimodal payload expected by vLLM.
         timeout: Timeout in seconds for each request attempt. None for no timeout.
     """
+    request_prompt, extra_body = _build_request_payload(
+        token_ids, prompt, multi_modal_data
+    )
     coro = client.completions.create(
         model=model,
-        prompt=token_ids,
+        prompt=cast("Any", request_prompt),
         max_tokens=1,
-        extra_body={"return_token_ids": True},
+        extra_body=extra_body,
         timeout=timeout,
     )
     if timeout is not None:
@@ -136,17 +168,22 @@ def generate_hidden_states(
     client: openai.Client,
     model: str,
     token_ids: list[int],
+    prompt: str | None = None,
+    multi_modal_data: dict[str, Any] | None = None,
     timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
 ) -> str:
     """
     Runs decode w/ max_tokens 1 to generate hidden states and returns path to
     hidden states file.
     """
+    request_prompt, extra_body = _build_request_payload(
+        token_ids, prompt, multi_modal_data
+    )
     completion = client.completions.create(
         model=model,
-        prompt=token_ids,
+        prompt=cast("Any", request_prompt),
         max_tokens=1,
-        extra_body={"return_token_ids": True},
+        extra_body=extra_body,
         timeout=timeout,
     )
     return extract_output(completion, token_ids)

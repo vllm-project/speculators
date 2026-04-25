@@ -243,6 +243,26 @@ def test_collate_fn_length_truncation():
         assert collated[key].shape[1] == max_len
 
 
+def test_collate_fn_empty_batch_uses_training_dtypes():
+    """Test that all-skipped batches keep training-compatible dtypes."""
+    max_len = 8
+    hidden_size = 4
+    collate_fn = create_collate_fn(
+        max_len,
+        hidden_size,
+        hidden_states_dtype=torch.bfloat16,
+    )
+
+    collated = collate_fn([None])
+
+    assert collated["hidden_states"].dtype == torch.bfloat16
+    assert collated["verifier_last_hidden_states"].dtype == torch.bfloat16
+    assert collated["input_ids"].dtype == torch.long
+    assert collated["loss_mask"].dtype == torch.long
+    assert collated["position_ids"].dtype == torch.long
+    assert collated["lengths"].dtype == torch.long
+
+
 def test_dataset_getitem_v1_format(tmp_path: Path):
     """Test dataset __getitem__ with v1 data format and dtype conversion."""
 

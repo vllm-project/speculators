@@ -65,7 +65,9 @@ def split_files(datapath: str, ratio: float = 0.9, seed: int = 0):
 StandardizeFnSig = Callable[[dict[str, Any]], dict[str, Any]]
 
 
-def create_empty_sample(hidden_size: int):
+def create_empty_sample(
+    hidden_size: int, hidden_states_dtype: torch.dtype = torch.bfloat16
+):
     # data structure: {
     #     "hidden_states": [seq_len, 3 * hidden_size],
     #     "input_ids": [seq_len],
@@ -76,10 +78,12 @@ def create_empty_sample(hidden_size: int):
     # }
 
     return {
-        "hidden_states": torch.empty(0, 3 * hidden_size),
-        "input_ids": torch.empty(0),
-        "verifier_last_hidden_states": torch.empty(0, hidden_size),
-        "loss_mask": torch.empty(0),
+        "hidden_states": torch.empty(0, 3 * hidden_size, dtype=hidden_states_dtype),
+        "input_ids": torch.empty(0, dtype=torch.long),
+        "verifier_last_hidden_states": torch.empty(
+            0, hidden_size, dtype=hidden_states_dtype
+        ),
+        "loss_mask": torch.empty(0, dtype=torch.long),
         "lengths": torch.tensor([0], dtype=torch.long),
         "position_ids": torch.arange(0, dtype=torch.long),
     }
@@ -258,12 +262,17 @@ class ArrowDataset(BaseDataset):
         if not self.client:
             self._setup_client()
 
-        input_ids = self.data[index]["input_ids"].tolist()
+        sample = self.data[index]
+        input_ids = sample["input_ids"]
+        if hasattr(input_ids, "tolist"):
+            input_ids = input_ids.tolist()
         try:
             hs_filepath = generate_hidden_states(
                 self.client,  # type:ignore[arg-type]
                 self.model,  # type:ignore[arg-type]
                 input_ids,
+                prompt=sample.get("prompt"),
+                multi_modal_data=sample.get("multi_modal_data"),
                 timeout=self.request_timeout,
                 max_retries=self.max_retries,
             )
@@ -431,6 +440,7 @@ class SampleFileDataset(BaseDataset):
 def create_collate_fn(
     max_len: int,
     hidden_size: int,
+    hidden_states_dtype: torch.dtype = torch.bfloat16,
     preprocess: Callable[[BatchType], BatchType] | None = None,
 ):
     def collate_fn(batch: list[BatchType | None]) -> BatchType:
@@ -440,7 +450,7 @@ def create_collate_fn(
         if not batch:
             # Create empty sample which then gets padded to full
             # batch size if no valid samples are found
-            batch = [create_empty_sample(hidden_size)]
+            batch = [create_empty_sample(hidden_size, hidden_states_dtype)]
 
         collated_data = {}
         for key in batch[0]:  # type: ignore[union-attr]

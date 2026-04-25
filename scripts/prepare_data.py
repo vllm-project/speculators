@@ -134,6 +134,14 @@ def parse_args():
             "trainable tokens."
         ),
     )
+    parser.add_argument(
+        "--multimodal",
+        action="store_true",
+        help=(
+            "Enable multimodal preprocessing with AutoProcessor and preserve "
+            "the prompt/multi_modal_data needed for hidden-state generation."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -177,6 +185,7 @@ def main():
         assistant_pattern=args.assistant_pattern,
         turn_dropout=args.turn_dropout,
         minimum_valid_tokens=args.minimum_valid_tokens,
+        is_multimodal=args.multimodal,
     )
 
     log.info("Done preparing data")

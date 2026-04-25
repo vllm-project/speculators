@@ -3,12 +3,14 @@ Unit tests for the preprocessing module in the Speculators data generation.
 """
 
 import re
+from typing import Any, cast
 
 import pytest
 import torch
 from datasets import Dataset as HFDataset
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
+from speculators.data_generation import preprocessing
 from speculators.data_generation.preprocessing import (
     _create_loss_mask_from_offsets,
     _detect_assistant_pattern,
@@ -75,6 +77,125 @@ def test_normalize_conversation_unknown_role():
     assert len(result) == 2
     assert result[0]["role"] == "user"
     assert result[1]["role"] == "assistant"
+
+
+@pytest.mark.sanity
+def test_normalize_conversation_multimodal_content():
+    """Test normalization of multimodal content items."""
+    conv: list[dict[str, Any]] = [
+        {
+            "role": "user",
+            "content": [
+                "Look at this <image>",
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "https://example.com/cat.png"},
+                },
+                {"text": "Caption <image>"},
+            ],
+        },
+        {"role": "assistant", "content": "Nice cat."},
+    ]
+
+    result = _normalize_conversation(conv)
+
+    assert result[0]["content"] == [
+        {"type": "text", "text": "Look at this"},
+        {"type": "image", "image": "https://example.com/cat.png"},
+        {"type": "text", "text": "Caption"},
+    ]
+
+
+@pytest.mark.sanity
+def test_preprocess_batch_supports_messages_schema():
+    """Test that preprocessing accepts datasets using the messages field."""
+
+    class DummyTokenizer:
+        chat_template = "dummy-template"
+
+        def apply_chat_template(self, *args, **kwargs):
+            if kwargs.get("tokenize"):
+                return {"input_ids": [[11, 12, 13]], "assistant_mask": [[0, 1, 1]]}
+            return "formatted"
+
+    results = _preprocess_batch(
+        {
+            "messages": [
+                [
+                    {"role": "user", "content": "Hello"},
+                    {"role": "assistant", "content": "Hi!"},
+                ]
+            ]
+        },
+        cast("PreTrainedTokenizerBase", DummyTokenizer()),
+        max_length=64,
+        assistant_pattern=None,
+    )
+
+    assert len(results["input_ids"]) == 1
+    assert len(results["loss_mask"]) == 1
+
+
+@pytest.mark.sanity
+def test_load_and_preprocess_dataset_defaults_to_text_mode(monkeypatch):
+    """Test that omitted multimodal flag falls back to text-only processing."""
+    raw_dataset = HFDataset.from_dict(
+        {
+            "conversations": [
+                [
+                    {"role": "user", "content": "Hello"},
+                    {"role": "assistant", "content": "Hi!"},
+                ]
+            ]
+        }
+    )
+
+    class DummyTokenizer:
+        def __init__(self):
+            self.pad_token = None
+            self.eos_token = "<eos>"
+            self.chat_template = "dummy-template"
+
+        def apply_chat_template(self, *args, **kwargs):
+            return "formatted"
+
+    dummy_tokenizer = DummyTokenizer()
+    captured: dict[str, object] = {}
+
+    def fake_build_eagle3_dataset(*args, **kwargs):
+        captured["processor"] = kwargs.get("processor")
+        return raw_dataset
+
+    monkeypatch.setattr(
+        preprocessing, "load_raw_dataset", lambda *args, **kwargs: raw_dataset
+    )
+    monkeypatch.setattr(
+        preprocessing.AutoTokenizer,
+        "from_pretrained",
+        lambda *args, **kwargs: dummy_tokenizer,
+    )
+    monkeypatch.setattr(
+        preprocessing, "build_eagle3_dataset", fake_build_eagle3_dataset
+    )
+    monkeypatch.setattr(
+        preprocessing, "save_token_frequency_distribution", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        preprocessing, "_visualize_sample", lambda *args, **kwargs: None
+    )
+
+    dataset, tokenizer = preprocessing.load_and_preprocess_dataset(
+        target_model_path="dummy-model",
+        train_data_paths=["dummy-data"],
+        seq_length=128,
+        build_dataset_num_proc=1,
+        is_multimodal=None,
+    )
+
+    assert len(dataset) == len(raw_dataset)
+    assert tokenizer is dummy_tokenizer
+    assert captured["processor"] is None
+    assert dummy_tokenizer.pad_token == dummy_tokenizer.eos_token
 
 
 # Tests for _detect_assistant_pattern
@@ -926,3 +1047,74 @@ def test_build_eagle3_dataset_with_custom_pattern():
     # Should successfully build dataset with custom pattern
     assert isinstance(result, HFDataset)
     assert len(result) > 0
+
+
+@pytest.mark.sanity
+def test_build_eagle3_dataset_multimodal_preserves_prompt_and_mm_data():
+    """Test multimodal preprocessing preserves prompt text and image metadata."""
+
+    class DummyTokenizer:
+        pad_token = "<pad>"
+        eos_token = "<eos>"
+
+        def __call__(
+            self,
+            text,
+            return_offsets_mapping=False,
+            max_length=None,
+            truncation=False,
+            add_special_tokens=False,
+        ):
+            del text, max_length, truncation, add_special_tokens
+            if return_offsets_mapping:
+                return {
+                    "input_ids": [101, 102, 103],
+                    "offset_mapping": [(0, 1), (1, 2), (2, 3)],
+                }
+            return {"input_ids": [101, 102, 103]}
+
+    class DummyProcessor:
+        def __init__(self):
+            self.tokenizer = DummyTokenizer()
+
+        def apply_chat_template(self, *args, **kwargs):
+            if kwargs.get("tokenize"):
+                return {"input_ids": [[101, 102, 103]], "assistant_mask": [[0, 1, 1]]}
+            return "formatted multimodal prompt"
+
+    dataset = HFDataset.from_dict(
+        {
+            "messages": [
+                [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Describe <image>"},
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": "https://example.com/cat.png"},
+                            },
+                        ],
+                    },
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "A cat."}],
+                    },
+                ]
+            ]
+        }
+    )
+
+    processor = DummyProcessor()
+    result = build_eagle3_dataset(
+        dataset,
+        cast("PreTrainedTokenizerBase", processor.tokenizer),
+        max_length=64,
+        num_proc=1,
+        processor=processor,
+    )
+
+    assert "prompt" in result.column_names
+    assert "multi_modal_data" in result.column_names
+    assert result[0]["prompt"] == "formatted multimodal prompt"
+    assert result[0]["multi_modal_data"] == {"image": ["https://example.com/cat.png"]}
