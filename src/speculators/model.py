@@ -7,7 +7,7 @@ in the Speculators library.
 
 import os
 from abc import abstractmethod
-from typing import ClassVar
+from typing import ClassVar, cast
 
 import torch
 from torch import nn
@@ -33,6 +33,7 @@ class DraftVocabMixin(nn.Module):
     embed_tokens: nn.Embedding
     lm_head: nn.Linear
     verifier_lm_head: nn.Linear
+    verifier_norm: nn.Module
 
     def _init_vocab(self, config):
         """Initialize vocab mappings, token embeddings, and LM heads.
@@ -181,7 +182,8 @@ class DraftVocabMixin(nn.Module):
         if hasattr(self, "verifier_norm"):
             if "model.norm.weight" not in verifier_weights:
                 warnings.warn(
-                    f"Could not find final norm weights in {verifier_config.name_or_path}. "
+                    f"Could not find final norm weights in "
+                    f"{verifier_config.name_or_path}. "
                     "Using default initialization (weight=1.0).",
                     UserWarning,
                     stacklevel=2,
