@@ -176,7 +176,7 @@ Add `--capture-acceptance-rate` to the main pipeline. The script snapshots vLLM'
 
 ```bash
 ./run_perf_benchmark.sh \
-    --target http://localhost:8000/v1 \
+    --target http://localhost:8101/v1 \
     --capture-acceptance-rate
 ```
 
