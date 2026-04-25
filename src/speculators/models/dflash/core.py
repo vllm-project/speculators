@@ -92,21 +92,6 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         self.block_size = config.block_size
         self.post_init()
 
-    def load_verifier_weights(self):
-        super().load_verifier_weights()
-
-        from speculators.utils.loading import load_model_layers  # noqa: PLC0415
-
-        verifier_config = self.config.speculators_config.verifier
-        verifier_weights = load_model_layers(
-            ["model.norm.weight"],
-            verifier_config.name_or_path,
-        )
-
-        if "model.norm.weight" in verifier_weights:
-            verifier_norm_sd = {"weight": verifier_weights["model.norm.weight"]}
-            self.verifier_norm.load_state_dict(verifier_norm_sd)
-
     @classmethod
     def from_training_args(
         cls,

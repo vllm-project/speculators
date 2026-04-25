@@ -129,6 +129,8 @@ class DraftVocabMixin(nn.Module):
         is True. Subclasses can override to load additional weights (e.g. norms,
         tokenizer) by calling super().load_verifier_weights() first.
         """
+        import warnings  # noqa: PLC0415
+
         from speculators.utils.loading import load_model_layers  # noqa: PLC0415
 
         speculators_config = getattr(
@@ -140,8 +142,13 @@ class DraftVocabMixin(nn.Module):
         if verifier_config.name_or_path is None:
             return
 
+        # Determine which weights to load based on model attributes
+        weights_to_load = ["embed_tokens.weight", "lm_head.weight"]
+        if hasattr(self, "verifier_norm"):
+            weights_to_load.append("model.norm.weight")
+
         verifier_weights = load_model_layers(
-            ["embed_tokens.weight", "lm_head.weight"],
+            weights_to_load,
             verifier_config.name_or_path,
         )
 
@@ -169,6 +176,19 @@ class DraftVocabMixin(nn.Module):
         self.verifier_lm_head.load_state_dict(
             {"weight": lm_head_weight.detach().clone()}, strict=False
         )
+
+        # Load verifier norm weights if the model has verifier_norm
+        if hasattr(self, "verifier_norm"):
+            if "model.norm.weight" not in verifier_weights:
+                warnings.warn(
+                    f"Could not find final norm weights in {verifier_config.name_or_path}. "
+                    "Using default initialization (weight=1.0).",
+                    UserWarning,
+                    stacklevel=2,
+                )
+            else:
+                verifier_norm_sd = {"weight": verifier_weights["model.norm.weight"]}
+                self.verifier_norm.load_state_dict(verifier_norm_sd)
 
 
 class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc]
