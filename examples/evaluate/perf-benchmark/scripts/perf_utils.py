@@ -50,6 +50,20 @@ METRICS: dict[str, dict[str, str | bool]] = {
         "label": "Output Tokens/s",
         "increasing": False,
     },
+    "acceptance_rate": {
+        "csv_col": "acceptance_rate",
+        "json_key": None,
+        "stat": None,
+        "label": "Acceptance Rate",
+        "increasing": False,
+    },
+    "mean_accepted": {
+        "csv_col": "mean_accepted_tokens",
+        "json_key": None,
+        "stat": None,
+        "label": "Mean Accepted Tokens",
+        "increasing": False,
+    },
 }
 
 PRETTY_SUBSET_NAMES: dict[str, str] = {

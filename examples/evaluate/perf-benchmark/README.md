@@ -24,6 +24,12 @@ A running vLLM server is required. The pipeline does **not** start or stop the s
 
 This runs all 9 subsets from `RedHatAI/speculator_benchmarks` through the full pipeline and produces a CSV at `perf_results_<timestamp>/perf_results.csv`.
 
+With speculative decoding enabled, add `--capture-acceptance-rate` to also record per-subset acceptance rates:
+
+```bash
+./run_perf_benchmark.sh --target http://localhost:8000/v1 --capture-acceptance-rate
+```
+
 ## Usage
 
 ```
@@ -46,6 +52,8 @@ Optional:
                              '{"temperature":0.6, "top_p":0.95, "top_k":20}'
   --data-column-mapper JSON  Column mapping for guidellm
                              (default: '{"text_column":"prompt"}')
+  --capture-acceptance-rate  Query vLLM /metrics to capture spec-decode
+                             acceptance rate per subset
 ```
 
 ### Examples
@@ -109,6 +117,8 @@ Script: `scripts/parse_sweep_results.py`
 | `itl_median_ms`     | Median inter-token latency in milliseconds  |
 | `ttft_median_ms`    | Median time to first token in milliseconds  |
 | `output_tps_median` | Median output tokens per second             |
+| `acceptance_rate`   | Spec-decode acceptance rate (with `--capture-acceptance-rate`) |
+| `mean_accepted_tokens` | Mean accepted tokens per draft (with `--capture-acceptance-rate`) |
 
 ## Output Directory Structure
 
@@ -122,7 +132,12 @@ perf_results_YYYYMMDD_HHMMSS/
 │   ├── sweep_HumanEval.json
 │   ├── sweep_qa.json
 │   └── ...
+├── acceptance/                        # only with --capture-acceptance-rate
+│   ├── before_HumanEval.json
+│   ├── after_HumanEval.json
+│   └── ...
 ├── max_tokens.json
+├── acceptance_rates.json              # only with --capture-acceptance-rate
 └── perf_results.csv
 ```
 
@@ -149,6 +164,60 @@ scripts/run_sweep.sh \
 
 # Parse sweep results
 python scripts/parse_sweep_results.py --output results.csv sweep_*.json
+```
+
+## Acceptance Rate
+
+When the vLLM server is running with speculative decoding enabled (EAGLE3, MTP, etc.), the pipeline can capture the acceptance rate -- the fraction of speculated tokens accepted by the verifier. This requires vLLM's Prometheus `/metrics` endpoint to be reachable.
+
+### Integrated (during sweep)
+
+Add `--capture-acceptance-rate` to the main pipeline. The script snapshots vLLM's spec-decode counters before and after each subset's sweep, computes the delta, and merges the result into the final CSV.
+
+```bash
+./run_perf_benchmark.sh \
+    --target http://localhost:8000/v1 \
+    --capture-acceptance-rate
+```
+
+The output `acceptance_rates.json` contains per-subset metrics:
+
+```json
+{
+  "HumanEval": {
+    "num_drafts": 12345,
+    "num_draft_tokens": 37035,
+    "num_accepted_tokens": 28500,
+    "acceptance_rate": 0.7696,
+    "mean_accepted_tokens": 3.309
+  }
+}
+```
+
+### Standalone
+
+Query acceptance rate from a running vLLM server at any time:
+
+```bash
+# Snapshot current cumulative metrics
+python scripts/get_acceptance_rate.py --endpoint http://localhost:8000
+
+# Delta mode: capture acceptance rate during a specific command
+python scripts/get_acceptance_rate.py \
+    --endpoint http://localhost:8000 \
+    --run "guidellm benchmark --target http://localhost:8000/v1 --profile throughput ..." \
+    -o acceptance.json
+```
+
+### Merge acceptance rates into an existing CSV
+
+If you ran the sweep without `--capture-acceptance-rate` and collected acceptance data separately:
+
+```bash
+python scripts/parse_sweep_results.py \
+    --output results.csv \
+    --acceptance-rates acceptance_rates.json \
+    sweeps/sweep_*.json
 ```
 
 ## Visualization

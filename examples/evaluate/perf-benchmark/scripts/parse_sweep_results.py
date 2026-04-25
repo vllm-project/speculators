@@ -35,6 +35,8 @@ CSV_COLUMNS = [
     "itl_median_ms",
     "ttft_median_ms",
     "output_tps_median",
+    "acceptance_rate",
+    "mean_accepted_tokens",
 ]
 
 SKIP_STRATEGIES = {"throughput"}
@@ -87,6 +89,12 @@ def parse_sweep_file(filepath: Path) -> list[dict]:
     return rows
 
 
+def load_acceptance_rates(filepath: Path) -> dict[str, dict]:
+    """Load per-subset acceptance rates from acceptance_rates.json."""
+    with filepath.open() as f:
+        return json.load(f)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Parse sweep results and extract metrics to CSV."
@@ -104,7 +112,20 @@ def main() -> None:
         required=True,
         help="Output CSV file path",
     )
+    parser.add_argument(
+        "--acceptance-rates",
+        type=Path,
+        default=None,
+        help="Path to acceptance_rates.json (from get_acceptance_rate.py)",
+    )
     args = parser.parse_args()
+
+    acceptance_data: dict[str, dict] = {}
+    if args.acceptance_rates and args.acceptance_rates.exists():
+        acceptance_data = load_acceptance_rates(args.acceptance_rates)
+        print(  # noqa: T201
+            f"[INFO] Loaded acceptance rates for {len(acceptance_data)} subsets"
+        )
 
     all_rows: list[dict] = []
 
@@ -118,6 +139,15 @@ def main() -> None:
 
         try:
             rows = parse_sweep_file(filepath)
+            for row in rows:
+                subset = row["subset"]
+                if subset in acceptance_data:
+                    ar = acceptance_data[subset]
+                    row["acceptance_rate"] = ar.get("acceptance_rate", "")
+                    row["mean_accepted_tokens"] = ar.get("mean_accepted_tokens", "")
+                else:
+                    row["acceptance_rate"] = ""
+                    row["mean_accepted_tokens"] = ""
             all_rows.extend(rows)
             print(  # noqa: T201
                 f"[INFO] Parsed {len(rows)} entries from {filepath.name}"

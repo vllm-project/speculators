@@ -24,6 +24,7 @@ MAX_REQUESTS=""
 GEN_KWARGS=""
 GEN_LEN_RATE=""
 DATA_COLUMN_MAPPER=""
+CAPTURE_ACCEPTANCE_RATE=""
 
 # ==============================================================================
 # Helper Functions
@@ -48,6 +49,8 @@ Optional:
                              '{"temperature":0.6, "top_p":0.95, "top_k":20}'
   --data-column-mapper JSON  Column mapping for guidellm
                              (default: '{"text_column":"prompt"}')
+  --capture-acceptance-rate  Query vLLM /metrics to capture spec-decode acceptance
+                             rate per subset (requires speculative decoding enabled)
   -h, --help                 Show this help message
 
 Examples:
@@ -117,6 +120,10 @@ while [[ $# -gt 0 ]]; do
             DATA_COLUMN_MAPPER="$2"
             shift 2
             ;;
+        --capture-acceptance-rate)
+            CAPTURE_ACCEPTANCE_RATE="1"
+            shift
+            ;;
         -h|--help)
             show_usage
             exit 0
@@ -160,9 +167,14 @@ fi
 
 GEN_LEN_DIR="${OUTPUT_DIR}/gen_len"
 SWEEP_DIR="${OUTPUT_DIR}/sweeps"
+ACCEPTANCE_DIR="${OUTPUT_DIR}/acceptance"
 
 mkdir -p "${GEN_LEN_DIR}" "${SWEEP_DIR}"
+[[ -n "${CAPTURE_ACCEPTANCE_RATE}" ]] && mkdir -p "${ACCEPTANCE_DIR}"
 echo "[INFO] Output directory: ${OUTPUT_DIR}"
+
+# Derive the base server URL from the target (strip /v1 suffix if present)
+METRICS_ENDPOINT="${TARGET%/v1}"
 
 # Split subsets into array
 IFS=',' read -ra SUBSET_ARRAY <<< "${SUBSETS}"
@@ -231,6 +243,13 @@ for subset in "${SUBSET_ARRAY[@]}"; do
 
     echo "[INFO] Running sweep for subset: ${subset} (max_tokens=${MAX_TOKENS})"
 
+    # Snapshot acceptance metrics before sweep (if enabled)
+    if [[ -n "${CAPTURE_ACCEPTANCE_RATE}" ]]; then
+        python "${SCRIPT_DIR}/scripts/get_acceptance_rate.py" \
+            --endpoint "${METRICS_ENDPOINT}" \
+            -o "${ACCEPTANCE_DIR}/before_${subset}.json" 2>/dev/null || true
+    fi
+
     SWEEP_ARGS=(
         --target "${TARGET}"
         --dataset "${DATASET}"
@@ -245,16 +264,79 @@ for subset in "${SUBSET_ARRAY[@]}"; do
 
     bash "${SCRIPT_DIR}/scripts/run_sweep.sh" "${SWEEP_ARGS[@]}"
 
+    # Snapshot acceptance metrics after sweep (if enabled)
+    if [[ -n "${CAPTURE_ACCEPTANCE_RATE}" ]]; then
+        python "${SCRIPT_DIR}/scripts/get_acceptance_rate.py" \
+            --endpoint "${METRICS_ENDPOINT}" \
+            -o "${ACCEPTANCE_DIR}/after_${subset}.json" 2>/dev/null || true
+    fi
+
     echo "[INFO] Sweep complete for: ${subset}"
 done
 
 # ==============================================================================
-# Step 4: Parse Sweep Results -> CSV
+# Step 4: Compute Acceptance Rates (if captured)
+# ==============================================================================
+
+ACCEPTANCE_RATES_FILE=""
+
+if [[ -n "${CAPTURE_ACCEPTANCE_RATE}" ]]; then
+    echo ""
+    echo "[INFO] ============================================"
+    echo "[INFO] Step 4: Computing per-subset acceptance rates"
+    echo "[INFO] ============================================"
+
+    ACCEPTANCE_RATES_FILE="${OUTPUT_DIR}/acceptance_rates.json"
+
+    python -c "
+import json, sys
+from pathlib import Path
+
+acceptance_dir = Path(sys.argv[1])
+subsets = sys.argv[2].split(',')
+result = {}
+
+for subset in subsets:
+    before_file = acceptance_dir / f'before_{subset}.json'
+    after_file = acceptance_dir / f'after_{subset}.json'
+    if not before_file.exists() or not after_file.exists():
+        print(f'[WARN] Missing acceptance snapshots for {subset}', file=sys.stderr)
+        continue
+
+    before = json.loads(before_file.read_text())
+    after = json.loads(after_file.read_text())
+
+    num_drafts = after['num_drafts'] - before['num_drafts']
+    num_draft_tokens = after['num_draft_tokens'] - before['num_draft_tokens']
+    num_accepted = after['num_accepted_tokens'] - before['num_accepted_tokens']
+
+    acceptance_rate = num_accepted / num_draft_tokens if num_draft_tokens > 0 else 0.0
+    mean_accepted = 1 + (num_accepted / num_drafts) if num_drafts > 0 else 0.0
+
+    per_pos_before = after.get('per_position_acceptance', [])
+    per_pos_after = after.get('per_position_acceptance', [])
+
+    result[subset] = {
+        'num_drafts': num_drafts,
+        'num_draft_tokens': num_draft_tokens,
+        'num_accepted_tokens': num_accepted,
+        'acceptance_rate': round(acceptance_rate, 4),
+        'mean_accepted_tokens': round(mean_accepted, 4),
+    }
+    print(f'  {subset}: acceptance_rate={acceptance_rate:.4f}, mean_accepted={mean_accepted:.4f}')
+
+Path(sys.argv[3]).write_text(json.dumps(result, indent=2))
+print(f'\n[INFO] Acceptance rates written to: {sys.argv[3]}')
+" "${ACCEPTANCE_DIR}" "${SUBSETS}" "${ACCEPTANCE_RATES_FILE}"
+fi
+
+# ==============================================================================
+# Step 5: Parse Sweep Results -> CSV
 # ==============================================================================
 
 echo ""
 echo "[INFO] ============================================"
-echo "[INFO] Step 4: Extracting sweep metrics to CSV"
+echo "[INFO] Step 5: Extracting sweep metrics to CSV"
 echo "[INFO] ============================================"
 
 SWEEP_FILES=()
@@ -264,8 +346,13 @@ done
 
 CSV_FILE="${OUTPUT_DIR}/perf_results.csv"
 
+PARSE_ARGS=(
+    --output "${CSV_FILE}"
+)
+[[ -n "${ACCEPTANCE_RATES_FILE}" ]] && PARSE_ARGS+=(--acceptance-rates "${ACCEPTANCE_RATES_FILE}")
+
 python "${SCRIPT_DIR}/scripts/parse_sweep_results.py" \
-    --output "${CSV_FILE}" \
+    "${PARSE_ARGS[@]}" \
     "${SWEEP_FILES[@]}"
 
 # ==============================================================================
@@ -280,4 +367,5 @@ echo "[INFO] Results saved to: ${OUTPUT_DIR}"
 echo "[INFO]   - Gen-len outputs:  ${GEN_LEN_DIR}/"
 echo "[INFO]   - Max tokens map:   ${MAX_TOKENS_FILE}"
 echo "[INFO]   - Sweep outputs:    ${SWEEP_DIR}/"
+[[ -n "${ACCEPTANCE_RATES_FILE}" ]] && echo "[INFO]   - Acceptance rates: ${ACCEPTANCE_RATES_FILE}"
 echo "[INFO]   - CSV results:      ${CSV_FILE}"
