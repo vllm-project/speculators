@@ -50,8 +50,20 @@ def fetch_metrics(endpoint: str) -> str:
         sys.exit(1)
 
 
+def _strip_labels(name_with_labels: str) -> str:
+    """Strip Prometheus label suffix: 'metric{k=v,...}' -> 'metric'."""
+    brace = name_with_labels.find("{")
+    return name_with_labels[:brace] if brace != -1 else name_with_labels
+
+
 def parse_prometheus(text: str) -> dict[str, float]:
-    """Parse Prometheus exposition format into a flat dict of metric values."""
+    """Parse Prometheus exposition format into a flat dict of metric values.
+
+    Metric names may carry label suffixes (e.g.
+    ``vllm:spec_decode_num_drafts_total{engine="0",...}``).  We match on the
+    bare metric name and store with the full key so per-position labels are
+    preserved for downstream parsing.
+    """
     min_parts = 2
     result: dict[str, float] = {}
     for line in text.splitlines():
@@ -60,36 +72,46 @@ def parse_prometheus(text: str) -> dict[str, float]:
         parts = line.split()
         if len(parts) < min_parts:
             continue
-        name = parts[0]
+        full_name = parts[0]
+        bare_name = _strip_labels(full_name)
         try:
             value = float(parts[1])
         except ValueError:
             continue
 
-        if name in SPEC_DECODE_METRICS or name.startswith(SPEC_DECODE_PER_POS_PREFIX):
-            result[name] = value
+        if bare_name in SPEC_DECODE_METRICS or bare_name.startswith(
+            SPEC_DECODE_PER_POS_PREFIX
+        ):
+            result[full_name] = value
 
     return result
+
+
+def _sum_by_bare_name(raw: dict[str, float], bare_name: str) -> float:
+    """Sum values across all label variants of a metric."""
+    return sum(v for k, v in raw.items() if _strip_labels(k) == bare_name)
 
 
 def extract_acceptance(
     raw: dict[str, float],
 ) -> dict[str, float | list[float]]:
     """Convert raw Prometheus counters into human-readable acceptance metrics."""
-    num_drafts = raw.get("vllm:spec_decode_num_drafts_total", 0)
-    num_draft_tokens = raw.get("vllm:spec_decode_num_draft_tokens_total", 0)
-    num_accepted = raw.get("vllm:spec_decode_num_accepted_tokens_total", 0)
-    num_emitted = raw.get("vllm:spec_decode_num_emitted_tokens_total", 0)
+    num_drafts = _sum_by_bare_name(raw, "vllm:spec_decode_num_drafts_total")
+    num_draft_tokens = _sum_by_bare_name(raw, "vllm:spec_decode_num_draft_tokens_total")
+    num_accepted = _sum_by_bare_name(raw, "vllm:spec_decode_num_accepted_tokens_total")
+    num_emitted = _sum_by_bare_name(raw, "vllm:spec_decode_num_emitted_tokens_total")
 
     acceptance_rate = num_accepted / num_draft_tokens if num_draft_tokens > 0 else 0.0
     mean_accepted = 1 + (num_accepted / num_drafts) if num_drafts > 0 else 0.0
 
     per_pos: dict[int, float] = {}
     for key, val in raw.items():
-        if key.startswith(SPEC_DECODE_PER_POS_PREFIX + "{"):
+        bare = _strip_labels(key)
+        if bare == SPEC_DECODE_PER_POS_PREFIX + "_total":
             try:
                 pos_str = key.split('position="')[1].split('"')[0]
-                per_pos[int(pos_str)] = val
+                pos = int(pos_str)
+                per_pos[pos] = per_pos.get(pos, 0.0) + val
             except (IndexError, ValueError):
                 continue
 
