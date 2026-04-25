@@ -33,7 +33,6 @@ class DraftVocabMixin(nn.Module):
     embed_tokens: nn.Embedding
     lm_head: nn.Linear
     verifier_lm_head: nn.Linear
-    verifier_norm: nn.Module
 
     def _init_vocab(self, config):
         """Initialize vocab mappings, token embeddings, and LM heads.
