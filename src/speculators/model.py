@@ -7,7 +7,7 @@ in the Speculators library.
 
 import os
 from abc import abstractmethod
-from typing import ClassVar, cast
+from typing import ClassVar
 
 import torch
 from torch import nn
