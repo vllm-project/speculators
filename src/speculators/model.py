@@ -189,7 +189,7 @@ class DraftVocabMixin(nn.Module):
                 )
             else:
                 verifier_norm_sd = {"weight": verifier_weights["model.norm.weight"]}
-                self.verifier_norm.load_state_dict(verifier_norm_sd)
+                self.verifier_norm.load_state_dict(verifier_norm_sd)  # type: ignore[union-attr]
 
 
 class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc]
