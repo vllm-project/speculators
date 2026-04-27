@@ -1,3 +1,0 @@
-# Core dependencies for evaluating speculator models with guidellm
-vllm==0.12.0
-guidellm==0.6.0
