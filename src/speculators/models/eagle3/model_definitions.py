@@ -111,7 +111,7 @@ class Eagle3FirstLayerMixin:
         return hidden_states  # noqa: RET504
 
 
-class LlamaDecoderEagle3FirstLayer(Eagle3FirstLayerMixin, LlamaDecoderLayer):
+class LlamaDecoderEagle3FirstLayer(Eagle3FirstLayerMixin, LlamaDecoderLayer):  # type:ignore[misc]
     def __init__(
         self,
         config: LlamaConfig,
@@ -122,7 +122,7 @@ class LlamaDecoderEagle3FirstLayer(Eagle3FirstLayerMixin, LlamaDecoderLayer):
         self._patch_eagle3_projections(config, LlamaRMSNorm, norm_before_residual)
 
 
-class Qwen3DecoderEagle3FirstLayer(Eagle3FirstLayerMixin, Qwen3DecoderLayer):
+class Qwen3DecoderEagle3FirstLayer(Eagle3FirstLayerMixin, Qwen3DecoderLayer):  # type:ignore[misc]
     def __init__(
         self,
         config: Qwen3Config,

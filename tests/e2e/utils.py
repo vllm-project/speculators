@@ -219,6 +219,7 @@ def run_training(
     extra_train_args: list[str] | None = None,
     target_layer_ids: list[int] | None = None,
     num_layers: int | None = None,
+    log_freq: int = 1,
 ):
     train_cmd = [
         sys.executable,
@@ -241,6 +242,8 @@ def run_training(
         str(seq_length),
         "--speculator-type",
         speculator_type,
+        "--log-freq",
+        str(log_freq),
     ]
     if online:
         train_cmd += [

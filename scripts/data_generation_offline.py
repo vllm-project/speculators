@@ -109,16 +109,6 @@ def parse_args():
 
     # Hidden states generation arguments
     parser.add_argument(
-        "--layer-ids",
-        type=int,
-        nargs="+",
-        default=None,
-        help=(
-            "List of layer IDs from which to capture hidden states "
-            "(default: auto-select)"
-        ),
-    )
-    parser.add_argument(
         "--concurrency",
         type=int,
         default=32,
@@ -172,14 +162,6 @@ def parse_args():
             "Ignored when --fail-on-error is set. "
             "(default: value of --concurrency)"
         ),
-    )
-
-    # Processing arguments
-    parser.add_argument(
-        "--start-idx",
-        type=int,
-        default=0,
-        help="Starting index for output files (default: 0)",
     )
     return parser.parse_args()
 

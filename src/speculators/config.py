@@ -228,7 +228,10 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
     is_composition: ClassVar[bool] = False  # type: ignore[misc]
     attribute_map: ClassVar[dict[str, str]] = {}  # type: ignore[misc]
     base_model_tp_plan: ClassVar[dict[str, Any] | None] = None  # type: ignore[misc]
-    base_model_pp_plan: ClassVar[dict[str, tuple[list[str]]] | None] = None  # type: ignore[misc]
+    base_model_pp_plan: ClassVar[dict[str, Any] | None] = None  # type: ignore[misc]
+    base_model_ep_plan: ClassVar[dict[str, Any] | None] = None  # type: ignore[misc]
+    has_no_defaults_at_init: ClassVar[bool] = False  # type: ignore[misc]
+    keys_to_ignore_at_inference: ClassVar[list[str]] = []  # type: ignore[misc]
     _auto_class: ClassVar[str | None] = ""  # type: ignore[misc]
 
     # Speculator model instance attributes
@@ -255,6 +258,12 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
         # reset kwargs handled by Pydantic so PretrainedConfig doesn't override
         for field in self.__class__.model_fields:
             kwargs[field] = getattr(self, field)
+
+        # strip ClassVars so PretrainedConfig.__post_init__ doesn't try to
+        # setattr them (pydantic blocks setattr on ClassVar names)
+        class_vars = self.__class__.__class_vars__
+        for cv in class_vars:
+            kwargs.pop(cv, None)
 
         # initialize the Hugging Face PretrainedConfig arguments for the model
         PretrainedConfig.__init__(self, **kwargs)
@@ -284,6 +293,9 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
             "attribute_map",
             "base_model_tp_plan",
             "base_model_pp_plan",
+            "base_model_ep_plan",
+            "has_no_defaults_at_init",
+            "keys_to_ignore_at_inference",
             "_auto_class",
         ):
             config_dict.pop(key, None)

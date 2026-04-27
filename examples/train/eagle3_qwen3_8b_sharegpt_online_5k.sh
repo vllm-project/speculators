@@ -7,7 +7,8 @@
 # Usage: Copy this script, modify the configuration variables below, then run:
 #   bash examples/train/eagle3_qwen3_8b_sharegpt_online_5k.sh
 #
-# For a detailed walkthrough, see examples/ONLINE_TRAINING.md
+# For a detailed walkthrough, see 
+# https://docs.vllm.ai/projects/speculators/en/latest/user_guide/tutorials/train_eagle3_online/
 
 ### Example E2E run for Qwen3-8B on 5k samples from ShareGPT ###
 
@@ -16,11 +17,11 @@
 # is learning something. This is a good sanity check when creating a drafter for a new
 # target model.
 
-# Timing (on 2x NVIDIA H100 80GB GPUs)
-# Data Preprocessing: 15 seconds
-# vLLM Server Startup: 25 seconds
-# Training (5 epochs): 1854 seconds (30 mins 54 secs)
-# Total: 1894 seconds (31 mins 34 secs)
+# Timing (on 4x NVIDIA H100 80GB GPUs, DP=2)
+# Data Preprocessing: 26 seconds
+# vLLM Server Startup: 74 seconds (1 min 14 secs)
+# Training (5 epochs): 942 seconds (15 mins 42 secs)
+# Total: 1042 seconds (17 mins 22 secs)
 
 # Results on SpecBench (80 prompts, 256 output tokens):
 # acceptance rate: 14.88%
@@ -62,7 +63,7 @@ python scripts/prepare_data.py \
 # Step 2: Launch vLLM server in the background
 echo "=== Step 2: Launching vLLM server ==="
 CUDA_VISIBLE_DEVICES="$VLLM_GPUS" python scripts/launch_vllm.py "$MODEL" \
-    -- --port "$VLLM_PORT" &
+    -- --data-parallel-size 2 --port "$VLLM_PORT" &
 VLLM_PID=$!
 
 # Ensure vLLM is cleaned up on exit

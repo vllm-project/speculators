@@ -1,0 +1,42 @@
+nav:
+    - Home: index.md
+    - User Guide:
+          - user_guide/index.md
+          - Getting Started: user_guide/getting_started.md
+          - Features: user_guide/features.md
+          - Algorithms:
+                - user_guide/algorithms/index.md
+                - Eagle3: user_guide/algorithms/eagle3.md
+                - Dflash: user_guide/algorithms/dflash.md
+                - Decision Guide: user_guide/algorithms/decision_guide.md
+          - Tutorials:
+                - user_guide/tutorials/index.md
+                - Train Eagle3 Model Online: user_guide/tutorials/train_eagle3_online.md
+                - Train Eagle3 Model Offline: user_guide/tutorials/train_eagle3_offline.md
+                - Train Dflash Model Online: user_guide/tutorials/train_dflash_online.md
+                - Response Regeneration: user_guide/tutorials/response_regeneration.md
+                - Evaluating Model Performance: user_guide/tutorials/evaluating_performance.md
+                - Serve in vLLM: user_guide/tutorials/serve_vllm.md
+    - Developer Guide:
+          - developer/index.md
+          - Contributing Guide: developer/contributing.md
+          - Code of Conduct: developer/code_of_conduct.md
+          - Add New Spec Decode Algorithm: developer/add_algorithm.md
+          - Design Documents: developer/design_docs.md
+          - Branding Guidelines: developer/branding.md
+    - API Reference:
+          - api/index.md
+          - reference/speculators
+    - CLI Reference:
+          - cli/index.md
+          - prepare_data.py: cli/prepare_data.md
+          - data_generation_offline.py: cli/data_generation_offline.md
+          - launch_vllm.py: cli/launch_vllm.md
+          - train.py: cli/train.md
+          - response_regeneration: cli/response_regeneration.md
+    - Community:
+          - community/index.md
+          - Contact Us: community/contact_us.md
+          - Events & Meetups: community/meetups.md
+          - Slack: https://slack.vllm.ai
+          - Blog: https://vllm.ai/blog/tags/speculative-decoding

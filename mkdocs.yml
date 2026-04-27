@@ -21,6 +21,9 @@ theme:
     - navigation.indexes
     - navigation.instant
     - navigation.path
+    - navigation.sections
+    - navigation.tabs
+    - navigation.tabs.sticky
     - navigation.top
     - navigation.tracking
     - search.highlight
@@ -47,9 +50,6 @@ theme:
       toggle:
         icon: material/brightness-4
         name: Switch to system preference
-
-exclude_docs: |
-  developer/branding.md
 
 validation:
   links:
@@ -95,9 +95,7 @@ markdown_extensions:
 plugins:
   - api-autonav:
       modules: ['src/speculators']
-  - gen-files:
-      scripts:
-        - docs/scripts/gen_files.py
+  - awesome-nav
   - mike
   - minify:
       minify_html: true

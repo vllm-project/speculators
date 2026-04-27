@@ -1,7 +1,3 @@
----
-weight: -3
----
-
 # Developer
 
 Welcome to the Developer section of Speculators! This area provides essential resources for developers who want to contribute to or extend Speculators. Whether you're interested in fixing bugs, adding new features, improving documentation, or understanding the project's governance, you'll find comprehensive guides to help you get started.
@@ -18,7 +14,7 @@ Speculators is an open-source project that values community contributions. We ma
 
   Our community guidelines ensure that participation in the Speculators project is a positive, inclusive, and respectful experience for everyone.
 
-  [:octicons-arrow-right-24: Code of Conduct](code-of-conduct.md)
+  [:octicons-arrow-right-24: Code of Conduct](code_of_conduct.md)
 
 - :material-source-pull:{ .lg .middle } Contributing Guide
 
@@ -34,9 +30,15 @@ Speculators is an open-source project that values community contributions. We ma
 
   Learn how to add a new speculative decoding training algorithm.
 
-  [:octicons-arrow-right-24: Add new algorithms](../algorithms/add_new_algorithms.md)
+  [:octicons-arrow-right-24: Add new algorithms](add_algorithm.md)
 
 - :material-palette:{ .lg .middle } Branding Guidelines
+
+  ______________________________________________________________________
+
+  Guidance and assets for using the Speculators brand in docs, slides, blogs, and social posts.
+
+  [:octicons-arrow-right-24: Branding Guidelines](branding.md)
 
 </div>
 
