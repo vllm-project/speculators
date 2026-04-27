@@ -397,7 +397,7 @@ def _checkpoint_freq(value: str) -> int:
     return ivalue
 
 
-def parse_args():
+def parse_args():  # noqa: PLR0915
     parser = argparse.ArgumentParser()
     parser.add_argument("--verifier-name-or-path", type=str, required=True)
     parser.add_argument(

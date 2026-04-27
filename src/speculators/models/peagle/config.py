@@ -21,7 +21,7 @@ class PEagleSpeculatorConfig(Eagle3SpeculatorConfig):
     :param para_depths: Number of parallel prediction groups (typically 8)
     :param down_sample_ratio: Geometric decay ratio for COD sampling (r in [0,1])
     :param down_sample_ratio_min: Minimum retention ratio floor
-    :param mask_token_id: Token ID for predicted token dropout (padding unused positions)
+    :param mask_token_id: Token ID used for masking
     :param max_seq_len: Maximum sequence length for attention mask construction
     """
 

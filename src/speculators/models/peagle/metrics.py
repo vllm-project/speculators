@@ -4,7 +4,6 @@ from typing import Any
 
 import torch
 
-
 LOSS_EPSILON = 1e-5
 
 
@@ -49,7 +48,7 @@ def loss_function(
         correct = (pred_tokens == target_tokens).float()
 
         if loss_mask is not None:
-            while loss_mask.ndim > 2:
+            while loss_mask.ndim > 2:  # noqa: PLR2004
                 loss_mask = loss_mask.squeeze(1)
 
     total_masked_loss = 0.0
@@ -130,8 +129,7 @@ def compute_accuracy(
         has_depth = depth_mask.sum() > 0
         if has_depth:
             depth_correct = (
-                (pred_tokens_flat == target_tokens_flat).float()
-                * depth_mask.float()
+                (pred_tokens_flat == target_tokens_flat).float() * depth_mask.float()
             ).sum()
             depth_total = depth_mask.sum().float()
             depth_accuracy = depth_correct / (depth_total + LOSS_EPSILON)
@@ -178,9 +176,14 @@ def compute_metrics(
 
     with torch.no_grad():
         accuracy, per_position_accuracy = compute_accuracy(
-            logits, targets, loss_mask,
-            total_correct, total_tokens,
-            all_indices, seq_length, para_depth,
+            logits,
+            targets,
+            loss_mask,
+            total_correct,
+            total_tokens,
+            all_indices,
+            seq_length,
+            para_depth,
         )
 
     metrics = {
@@ -191,9 +194,7 @@ def compute_metrics(
 
     if sample_indices is not None:
         first_depth_len = len(sample_indices[0])
-        draft_tokens = torch.argmax(
-            logits[:, :first_depth_len], dim=-1
-        )
+        draft_tokens = torch.argmax(logits[:, :first_depth_len], dim=-1)
     else:
         draft_tokens = torch.argmax(logits[:, :seq_length], dim=-1)
 

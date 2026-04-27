@@ -30,8 +30,6 @@ from heapq import heapreplace
 from typing import NamedTuple
 
 import numpy as np
-import torch
-import torch.distributed as dist
 
 # Third Party
 from numpy.typing import ArrayLike, NDArray
