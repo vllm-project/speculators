@@ -232,19 +232,5 @@ class MultipackDistributedBatchSamplerV2(Sampler):
         # self.lengths array.
         batches = [indices[batch] for batch in batches]
 
-        if self.num_replicas > 1 and dist.is_available() and dist.is_initialized():
-            # Create tensor on CUDA device (required for NCCL backend)
-            device = torch.device(f"cuda:{torch.cuda.current_device()}")
-            local_batch_count = torch.tensor(
-                len(batches), dtype=torch.long, device=device
-            )
-            # All-reduce to find minimum batch count across all ranks
-            dist.all_reduce(local_batch_count, op=dist.ReduceOp.MIN)
-            min_batch_count = local_batch_count.item()
-
-            # Truncate to minimum to ensure all ranks have same batch count
-            if len(batches) > min_batch_count:
-                batches = batches[:min_batch_count]
-
         self._cached_generated_batches = (epoch, batches)
         return batches
