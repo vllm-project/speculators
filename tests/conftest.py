@@ -14,10 +14,11 @@ def seed():
 requires_cuda = pytest.mark.skipif(
     not torch.cuda.is_available(), reason="CUDA required"
 )
+
+
 def requires_multi_gpu(fn):
     fn = pytest.mark.multi_gpu(fn)
-    fn = pytest.mark.skipif(
+    return pytest.mark.skipif(
         not torch.cuda.is_available() or torch.cuda.device_count() < 2,
         reason="2+ GPUs required",
     )(fn)
-    return fn
