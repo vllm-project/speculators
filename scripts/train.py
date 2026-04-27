@@ -270,13 +270,6 @@ def main(args: argparse.Namespace):
 
     model_class = registry[args.speculator_type]
 
-    # Set attention implementation from model class
-    if hasattr(model_class, "_attn_implementation_name"):
-        # noqa: SLF001
-        transformer_layer_config._attn_implementation = (
-            model_class._attn_implementation_name  # noqa: SLF001
-        )
-
     if args.from_pretrained:
         draft_model = model_class.from_pretrained(
             args.from_pretrained, t2d=t2d, d2t=d2t

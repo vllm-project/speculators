@@ -51,9 +51,10 @@ def loss_function(
             while loss_mask.ndim > 2:  # noqa: PLR2004
                 loss_mask = loss_mask.squeeze(1)
 
-    total_masked_loss = 0.0
-    total_correct = 0.0
-    total_tokens = 0.0
+    device = logits.device
+    total_masked_loss = torch.tensor(0.0, device=device)
+    total_correct = torch.tensor(0.0, device=device)
+    total_tokens = torch.tensor(0.0, device=device)
     start_idx = 0
 
     for _depth, indices in enumerate(sample_indices):
@@ -86,8 +87,8 @@ def compute_accuracy(
     logits: torch.Tensor,
     targets: torch.Tensor,
     loss_mask: torch.Tensor | None,
-    total_correct: torch.Tensor | float,
-    total_tokens: torch.Tensor | float,
+    total_correct: torch.Tensor,
+    total_tokens: torch.Tensor,
     all_indices: torch.Tensor,
     seq_length: int,
     para_depth: int,

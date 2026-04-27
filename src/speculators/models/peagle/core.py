@@ -178,7 +178,7 @@ class PEagleDraftModel(Eagle3DraftModel):
 
         pad = torch.full(
             (input_ids.shape[0], input_ids.shape[1] * (para_depth - 1)),
-            self.mask_token_id,
+            self.mask_token_id,  # type: ignore[arg-type]
             dtype=input_ids.dtype,
             device=input_ids.device,
         )
