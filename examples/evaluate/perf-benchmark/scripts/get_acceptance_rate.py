@@ -115,9 +115,11 @@ def extract_acceptance(
             except (IndexError, ValueError):
                 continue
 
+    n_pos = max(per_pos.keys()) + 1 if per_pos else 0
+    per_pos_counts: list[int] = [int(per_pos.get(i, 0.0)) for i in range(n_pos)]
     per_pos_rates: list[float] = []
     if per_pos and num_drafts > 0:
-        for i in range(max(per_pos.keys()) + 1):
+        for i in range(n_pos):
             per_pos_rates.append(per_pos.get(i, 0.0) / num_drafts)
 
     return {
@@ -127,6 +129,7 @@ def extract_acceptance(
         "num_emitted_tokens": num_emitted,
         "acceptance_rate": round(acceptance_rate, 4),
         "mean_accepted_tokens": round(mean_accepted, 4),
+        "per_position_counts": per_pos_counts,
         "per_position_acceptance": [round(r, 4) for r in per_pos_rates],
     }
 
