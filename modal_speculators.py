@@ -206,9 +206,7 @@ def launch_vllm(cfg: TrainingConfig, vllm_venv: str) -> subprocess.Popen:
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = vllm_gpu_ids
 
-    # launch_vllm.py is a speculators script that wraps `vllm serve` with
-    # hidden-state extraction flags. It needs both speculators and vllm
-    # importable, so we run it from the vllm venv (which has both).
+    # launch_vllm.py wraps `vllm serve` with hidden-state extraction flags.
     script = SPECULATORS_REPO / "scripts" / "launch_vllm.py"
     cmd = [
         f"{vllm_venv}/bin/python", str(script),
@@ -311,9 +309,7 @@ def train_speculators(cfg_dict: dict, skip_data_prep: bool = False) -> None:
     print(f"[modal] GPU layout: {cfg.vllm_gpus} for vLLM, {cfg.train_gpus} for training")
 
     # Create isolated venvs.
-    # The vllm venv needs speculators too because launch_vllm.py imports from it.
-    # The speculators venv is used for data prep and training (no vllm needed).
-    vllm_venv = _create_venv("vllm", ["vllm>=0.18", "speculators>=0.5.0"])
+    vllm_venv = _create_venv("vllm", ["vllm>=0.18"])
     speculators_venv = _create_venv("speculators", ["speculators>=0.5.0"])
 
     # Stage 1: Data preparation (runs on CPU, uses speculators venv)
