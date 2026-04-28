@@ -155,7 +155,7 @@ class TrainingConfig:
 def _create_venv(
     name: str,
     packages: list[str],
-    torch_backend: str = "cu130",
+    torch_backend: str = "cu129",
 ) -> str:
     """Create a uv virtual environment and return the path to its python."""
     venv_dir = f"/tmp/{name}_venv"
