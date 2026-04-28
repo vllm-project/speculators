@@ -12,18 +12,12 @@ Launch example::
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 import safetensors.torch
 import torch
-
-from vllm.distributed.kv_transfer.kv_connector.v1.base import (
-    KVConnectorRole,
-)
-from vllm.distributed.kv_transfer.kv_connector.v1.example_hidden_states_connector import (
-    ExampleHiddenStatesConnector,
-    ExampleHiddenStatesConnectorMetadata,
-    extract_from_kv_cache,
+from vllm.distributed.kv_transfer.kv_connector.v1 import (
+    example_hidden_states_connector as _eh_mod,
 )
 from vllm.model_executor.models.extract_hidden_states import CacheOnlyAttentionMetadata
 
@@ -34,6 +28,10 @@ from speculators.data_generation.fp8_utils import (
 
 if TYPE_CHECKING:
     from vllm.v1.attention.backend import AttentionMetadata
+
+ExampleHiddenStatesConnector = _eh_mod.ExampleHiddenStatesConnector
+ExampleHiddenStatesConnectorMetadata = _eh_mod.ExampleHiddenStatesConnectorMetadata
+extract_from_kv_cache = _eh_mod.extract_from_kv_cache
 
 
 class FP8HiddenStatesConnector(ExampleHiddenStatesConnector):
