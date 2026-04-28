@@ -51,6 +51,8 @@ VOLUME_MOUNT = Path("/vol")
 
 # Path where the speculators repo is cloned inside the container
 SPECULATORS_REPO = Path("/opt/speculators")
+# Pin to a specific release tag for reproducible builds.
+SPECULATORS_VERSION = "v0.5.1"
 
 # ---------------------------------------------------------------------------
 # Container image — clone the speculators repo for its standalone scripts,
@@ -61,7 +63,8 @@ image = (
     .apt_install("curl", "git")
     .run_commands(
         "curl -LsSf https://astral.sh/uv/install.sh | sh",
-        f"git clone --depth 1 https://github.com/vllm-project/speculators.git {SPECULATORS_REPO}",
+        f"git clone --depth 1 --branch {SPECULATORS_VERSION}"
+        f" https://github.com/vllm-project/speculators.git {SPECULATORS_REPO}",
     )
     .env({"PATH": "/root/.local/bin:$PATH"})
 )
@@ -298,7 +301,7 @@ def run_training(cfg: TrainingConfig, speculators_venv: str) -> None:
 # ---------------------------------------------------------------------------
 @app.function(
     volumes={VOLUME_MOUNT: volume},
-    # gpu is set dynamically via .with_options() in the entrypoint
+    gpu="H100:4",  # default; overridden via .with_options() in the entrypoint
     timeout=86400,  # 24 hours
     _allow_background_volume_commits=True,
 )
