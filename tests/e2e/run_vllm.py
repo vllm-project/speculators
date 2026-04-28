@@ -1,8 +1,12 @@
 import argparse
 import importlib
 import json
+import os
 import types
 from pathlib import Path
+
+# Set environment variables before importing vLLM
+os.environ["VLLM_USE_DEEP_GEMM"] = "0"
 
 
 def _workaround_vllm_torch210() -> None:
