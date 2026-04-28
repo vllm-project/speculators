@@ -178,7 +178,7 @@ def _install_deepgemm(venv_dir: str) -> None:
     # Ensure the venv's python/pip/uv are found first
     env["PATH"] = f"{venv_dir}/bin:" + env.get("PATH", "")
     env["VIRTUAL_ENV"] = venv_dir
-    subprocess.run(["bash", script_path], env=env, check=True)
+    subprocess.run(["bash", script_path, "--cuda-version", "12.8"], env=env, check=True)
     print("[modal] DeepGEMM installed successfully.")
 
 
