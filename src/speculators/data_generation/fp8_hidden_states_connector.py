@@ -29,12 +29,8 @@ from speculators.data_generation.fp8_utils import (
 if TYPE_CHECKING:
     from vllm.v1.attention.backend import AttentionMetadata
 
-ExampleHiddenStatesConnector = _eh_mod.ExampleHiddenStatesConnector
-ExampleHiddenStatesConnectorMetadata = _eh_mod.ExampleHiddenStatesConnectorMetadata
-extract_from_kv_cache = _eh_mod.extract_from_kv_cache
 
-
-class FP8HiddenStatesConnector(ExampleHiddenStatesConnector):
+class FP8HiddenStatesConnector(_eh_mod.ExampleHiddenStatesConnector):
     """Quantizes hidden states to float8_e4m3fn with per-token scaling
     before saving to safetensors.
 
@@ -58,11 +54,13 @@ class FP8HiddenStatesConnector(ExampleHiddenStatesConnector):
         assert isinstance(attn_metadata, CacheOnlyAttentionMetadata)
 
         connector_metadata = self._get_connector_metadata()
-        assert isinstance(connector_metadata, ExampleHiddenStatesConnectorMetadata)
+        assert isinstance(
+            connector_metadata, _eh_mod.ExampleHiddenStatesConnectorMetadata
+        )
 
         os.makedirs(self._storage_path, exist_ok=True)
         for request in connector_metadata.requests:
-            hidden_states = extract_from_kv_cache(
+            hidden_states = _eh_mod.extract_from_kv_cache(
                 kv_layer, request.slot_mapping, request.token_ids.shape[0]
             )
             cpu_hs = hidden_states.detach().cpu()
