@@ -288,6 +288,7 @@ def run_training(cfg: TrainingConfig, speculators_venv: str) -> None:
         "--on-generate", cfg.on_generate,
         "--seed", str(cfg.seed),
         "--checkpoint-freq", str(cfg.checkpoint_freq),
+        "--log-freq", "100",
     ]
     if cfg.draft_vocab_size is not None:
         cmd += ["--draft-vocab-size", str(cfg.draft_vocab_size)]
