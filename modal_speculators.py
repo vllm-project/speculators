@@ -231,10 +231,14 @@ def launch_vllm(cfg: TrainingConfig, vllm_venv: str) -> subprocess.Popen:
         "--gpu-memory-utilization", str(cfg.vllm_gpu_memory_utilization),
         "--disable-uvicorn-access-log",
     ]
+    # Ensure all vLLM GPUs are used. Default to TP=vllm_gpus if neither
+    # tensor-parallel nor data-parallel size is explicitly configured.
     if cfg.vllm_data_parallel_size is not None:
         cmd += ["--data-parallel-size", str(cfg.vllm_data_parallel_size)]
     if cfg.vllm_tensor_parallel_size is not None:
         cmd += ["--tensor-parallel-size", str(cfg.vllm_tensor_parallel_size)]
+    elif cfg.vllm_data_parallel_size is None and cfg.vllm_gpus > 1:
+        cmd += ["--tensor-parallel-size", str(cfg.vllm_gpus)]
     if cfg.vllm_max_model_len is not None:
         cmd += ["--max-model-len", str(cfg.vllm_max_model_len)]
     if cfg.extra_vllm_args:
