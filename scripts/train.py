@@ -269,22 +269,22 @@ def main(args: argparse.Namespace):
         )
 
     model_class = registry[args.speculator_type]
+
     if args.from_pretrained:
         draft_model = model_class.from_pretrained(
             args.from_pretrained, t2d=t2d, d2t=d2t
         )
     else:
-        args_dict = vars(args)
-        args_dict["draft_vocab_size"] = draft_vocab_size
+        args.draft_vocab_size = draft_vocab_size
         draft_model = model_class.from_training_args(
             verifier_config=transformer_layer_config,
             t2d=t2d,
             d2t=d2t,
-            **args_dict,
+            **vars(args),
         )
 
     # Setup dataloaders
-    preprocess = shift_batch if args.speculator_type == "eagle3" else None
+    preprocess = shift_batch if args.speculator_type in ("eagle3", "peagle") else None
 
     noise_transform = AddUniformNoise(std=args.noise_std)
     if args.legacy_data:
@@ -390,7 +390,7 @@ def _checkpoint_freq(value: str) -> int:
     return ivalue
 
 
-def parse_args():
+def parse_args():  # noqa: PLR0915
     parser = argparse.ArgumentParser()
     parser.add_argument("--verifier-name-or-path", type=str, required=True)
     parser.add_argument(
@@ -603,6 +603,7 @@ def parse_args():
         help="Use RMSNorm before fc in Eagle3 draft path "
         "(e.g. for gpt-oss). Omit for other models.",
     )
+    # D-Flash specific parameters
     parser.add_argument(
         "--block-size",
         type=int,
@@ -614,6 +615,40 @@ def parse_args():
         type=int,
         default=256,
         help="Maximum anchor positions for DFlash training (default: 256)",
+    )
+    # P-EAGLE specific parameters
+    parser.add_argument(
+        "--para-depths",
+        type=int,
+        default=8,
+        help="Number of parallel prediction groups for P-EAGLE (default: 8)",
+    )
+    parser.add_argument(
+        "--down-sample-ratio",
+        type=float,
+        default=0.7,
+        help="Geometric decay ratio for COD sampling in P-EAGLE (default: 0.7)",
+    )
+    parser.add_argument(
+        "--down-sample-ratio-min",
+        type=float,
+        default=0.2,
+        help="Minimum retention ratio for COD sampling in P-EAGLE (default: 0.2)",
+    )
+    parser.add_argument(
+        "--max-seq-len",
+        type=int,
+        default=2048,
+        help="Maximum sequence length for attention mask construction (default: 2048)",
+    )
+    parser.add_argument(
+        "--prediction-loss-weight",
+        type=float,
+        default=1.0,
+        help=(
+            "Weight for prediction loss (cross-entropy on logits) "
+            "in P-EAGLE (default: 1.0)"
+        ),
     )
     # Dataloader parameters
     parser.add_argument(

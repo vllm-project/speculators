@@ -22,7 +22,7 @@ from speculators.train.checkpointer import (
     DistributedCheckpointer,
     SingleGPUCheckpointer,
 )
-from speculators.train.utils import apply_fully_sharded
+from speculators.train.utils import apply_fully_sharded, normalize_counted_metrics
 
 root_logger = logging.getLogger("speculators")
 metric_logger = logging.getLogger("speculators.metrics")
@@ -217,6 +217,7 @@ class Trainer:
                         dist.reduce(v, dst=0, op=dist.ReduceOp.AVG)
 
                 metrics = {k: v.item() for k, v in metrics.items()}
+                metrics = normalize_counted_metrics(metrics)
                 metric_logger.info(
                     {
                         "train": metrics,
@@ -260,10 +261,14 @@ class Trainer:
             for k, v in metrics.items():
                 val_metrics[k] = val_metrics.get(k, 0.0) + v.item()
 
-        val_metrics = {f"{k}_epoch": v / num_batches for k, v in val_metrics.items()}
+        val_metrics = {k: v / num_batches for k, v in val_metrics.items()}
+        val_metrics = normalize_counted_metrics(val_metrics)
+        val_metrics = {f"{k}_epoch": v for k, v in val_metrics.items()}
+
         metric_logger.info(
             {"val": val_metrics, "epoch": epoch}, extra={"step": self.global_step}
         )
+
         return val_metrics
 
     def maybe_save_checkpoint(self, epoch: int, val_metrics: dict | None):
