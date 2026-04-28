@@ -169,41 +169,6 @@ def _create_venv(
     return venv_dir
 
 
-DEEPGEMM_INSTALL_SCRIPT = (
-    "https://raw.githubusercontent.com/vllm-project/vllm/main/tools/install_deepgemm.sh"
-)
-
-
-def _install_deepgemm(venv_dir: str) -> None:
-    """Download vLLM's install_deepgemm.sh and run it against the venv."""
-    import urllib.request
-    script_path = "/tmp/install_deepgemm.sh"
-    urllib.request.urlretrieve(DEEPGEMM_INSTALL_SCRIPT, script_path)
-    env = os.environ.copy()
-    # Ensure the venv's python/pip/uv are found first
-    env["PATH"] = f"{venv_dir}/bin:" + env.get("PATH", "")
-    env["VIRTUAL_ENV"] = venv_dir
-    # Set CUDA_HOME if not already set — Modal containers have CUDA
-    # installed but may not export this variable. Use torch to find it.
-    if "CUDA_HOME" not in env:
-        result = subprocess.run(
-            [f"{venv_dir}/bin/python", "-c",
-             "from torch.utils.cpp_extension import _find_cuda_home_path; print(_find_cuda_home_path())"],
-            capture_output=True, text=True,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            env["CUDA_HOME"] = result.stdout.strip()
-        else:
-            # Fallback: search common paths
-            for candidate in ["/usr/local/cuda", "/usr/lib/cuda",
-                              "/opt/cuda", "/usr/local/nvidia"]:
-                if os.path.isdir(candidate):
-                    env["CUDA_HOME"] = candidate
-                    break
-        print(f"[modal] CUDA_HOME set to: {env.get('CUDA_HOME', 'NOT FOUND')}")
-    subprocess.run(["bash", script_path, "--cuda-version", "13.0"], env=env, check=True)
-    print("[modal] DeepGEMM installed successfully.")
-
 
 # ---------------------------------------------------------------------------
 # Helper: wait for vLLM to be ready
@@ -365,7 +330,6 @@ def train_speculators(cfg_dict: dict, skip_data_prep: bool = False) -> None:
         ])
     else:
         vllm_venv = _create_venv("vllm", ["vllm==0.19"])
-    _install_deepgemm(vllm_venv)
     speculators_venv = _create_venv("speculators", ["speculators>=0.5.0"])
 
     # Stage 1: Data preparation (runs on CPU, uses speculators venv)
