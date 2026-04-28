@@ -164,6 +164,44 @@ def _create_venv(name: str, packages: list[str]) -> str:
     return venv_dir
 
 
+DEEPGEMM_REPO = "https://github.com/deepseek-ai/DeepGEMM.git"
+DEEPGEMM_REF = "891d57b4db1071624b5c8fa0d1e51cb317fa709f"
+
+
+def _install_deepgemm(venv_dir: str) -> None:
+    """Build and install DeepGEMM from source into a venv."""
+    import tempfile
+    build_dir = tempfile.mkdtemp(prefix="deepgemm-")
+    python = f"{venv_dir}/bin/python"
+    try:
+        subprocess.run(
+            ["git", "clone", "--recursive", "--shallow-submodules",
+             DEEPGEMM_REPO, build_dir],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", build_dir, "checkout", DEEPGEMM_REF],
+            check=True,
+        )
+        subprocess.run(
+            [python, "setup.py", "bdist_wheel"],
+            cwd=build_dir, check=True,
+        )
+        # Find the built wheel and install it
+        import glob
+        wheels = glob.glob(f"{build_dir}/dist/*.whl")
+        if not wheels:
+            raise RuntimeError("DeepGEMM wheel build produced no .whl files")
+        subprocess.run(
+            ["uv", "pip", "install", "--python", python, wheels[0]],
+            check=True,
+        )
+        print("[modal] DeepGEMM installed successfully.")
+    finally:
+        import shutil
+        shutil.rmtree(build_dir, ignore_errors=True)
+
+
 # ---------------------------------------------------------------------------
 # Helper: wait for vLLM to be ready
 # ---------------------------------------------------------------------------
@@ -325,6 +363,7 @@ def train_speculators(cfg_dict: dict, skip_data_prep: bool = False) -> None:
         ])
     else:
         vllm_venv = _create_venv("vllm", ["vllm>=0.18"])
+    _install_deepgemm(vllm_venv)
     speculators_venv = _create_venv("speculators", ["speculators>=0.5.0"])
 
     # Stage 1: Data preparation (runs on CPU, uses speculators venv)
