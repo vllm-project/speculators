@@ -16,16 +16,21 @@ set -euo pipefail
 PORT="${PORT:-8000}"
 SERVER_LOG="${SERVER_LOG:-server.log}"
 
-echo "[INFO] Starting DeepSeek-V4-Flash on H100 GPUs: ${GPU_IDS} (port ${PORT})"
+CONTAINER_NAME="vllm-deepseek-${PORT}"
+echo "[INFO] Starting DeepSeek-V4-Flash on H100 GPUs: ${GPU_IDS} (port ${PORT}, container: ${CONTAINER_NAME})"
 
-NVIDIA_VISIBLE_DEVICES="${GPU_IDS}" \
-podman run \
+# Write the container name to a lockfile so kill_server.sh can find it after a crash
+echo "${CONTAINER_NAME}" > "/tmp/vllm_container_${PORT}.lock"
+
+docker run --rm \
+    --name "${CONTAINER_NAME}" \
+    --gpus all \
     --privileged --ipc=host \
     -p "${PORT}:8000" \
     -v "${HF_HUB_CACHE}:/root/.cache/huggingface" \
     -e NVIDIA_VISIBLE_DEVICES="${GPU_IDS}" \
     -e VLLM_ENGINE_READY_TIMEOUT_S=3600 \
-    docker.io/vllm/vllm-openai:deepseekv4-cu129 \
+    vllm/vllm-openai:deepseekv4-cu129 \
     deepseek-ai/DeepSeek-V4-Flash \
     --trust-remote-code \
     --kv-cache-dtype fp8 \
@@ -35,3 +40,5 @@ podman run \
     --compilation-config '{"cudagraph_mode":"FULL_AND_PIECEWISE","custom_ops":["all"]}' \
     --speculative_config '{"method":"mtp","num_speculative_tokens":10}' \
     2>&1 | tee "${SERVER_LOG}"
+
+rm -f "/tmp/vllm_container_${PORT}.lock"

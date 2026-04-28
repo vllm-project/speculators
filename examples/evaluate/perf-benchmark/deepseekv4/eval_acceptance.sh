@@ -23,6 +23,7 @@ SUBSET=""
 OUTPUT=""
 MAX_REQUESTS=200
 MAX_CONCURRENCY=128
+RATE=128
 GEN_KWARGS=""
 
 # ---------------------------------------------------------------------------
@@ -36,6 +37,7 @@ while [[ $# -gt 0 ]]; do
         --output)          OUTPUT="$2";          shift 2 ;;
         --max-requests)    MAX_REQUESTS="$2";    shift 2 ;;
         --max-concurrency) MAX_CONCURRENCY="$2"; shift 2 ;;
+        --rate)            RATE="$2";            shift 2 ;;
         --gen-kwargs)      GEN_KWARGS="$2";      shift 2 ;;
         *) echo "[ERROR] Unknown option: $1" >&2; exit 1 ;;
     esac
@@ -72,8 +74,8 @@ GUIDELLM_CMD=(
     --data-args "{\"data_files\": \"${SUBSET}.jsonl\"}"
     --data-column-mapper '{"text_column":"prompt"}'
     --profile throughput
+    --rate "${RATE}"
     --max-requests "${MAX_REQUESTS}"
-    --output-path /dev/null
 )
 [[ -n "${BACKEND_ARGS}" ]] && GUIDELLM_CMD+=(--backend-args "${BACKEND_ARGS}")
 

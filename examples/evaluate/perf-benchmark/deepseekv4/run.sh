@@ -109,7 +109,10 @@ cleanup() {
     release_gpus
     info "Done."
 }
+# EXIT runs cleanup on normal finish; INT/TERM/HUP use exit_after_cleanup
+# so the script actually terminates instead of resuming the retry loop.
 trap cleanup EXIT
+trap exit_after_cleanup INT TERM HUP
 
 # ---------------------------------------------------------------------------
 # Acquire GPUs

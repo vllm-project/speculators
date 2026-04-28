@@ -202,18 +202,32 @@ wait_for_server() {
 
 stop_server() {
     local port="${1:-${PORT:-8000}}"
-    info "Stopping server on port ${port}..."
+    local name="vllm-deepseek-${port}"
+    info "Stopping server on port ${port} (container: ${name})..."
+
+    # Kill the bash wrapper process (serve_b200.sh / serve_h100.sh)
     if [[ -n "${SERVER_PID}" ]] && kill -0 "${SERVER_PID}" 2>/dev/null; then
         kill "${SERVER_PID}" 2>/dev/null || true
         wait "${SERVER_PID}" 2>/dev/null || true
     fi
-    local cid
-    cid=$(podman ps --filter "publish=${port}" --format "{{.ID}}" 2>/dev/null | head -1) || true
-    if [[ -n "${cid}" ]]; then
-        info "Stopping container ${cid}..."
-        podman stop "${cid}" > /dev/null 2>&1 || true
+
+    # Stop the container by name — works even after the wrapper process has exited
+    if docker ps --format "{{.Names}}" 2>/dev/null | grep -q "^${name}$"; then
+        info "Stopping container ${name}..."
+        docker stop "${name}" > /dev/null 2>&1 || true
     fi
+
+    rm -f "/tmp/vllm_container_${port}.lock"
     SERVER_PID=""
     sleep 5
     info "Server stopped."
+}
+
+# Call after stop_server in a signal trap — exits the script so the retry loop
+# does not resume after the handler returns.
+exit_after_cleanup() {
+    stop_server "${PORT:-8000}" 2>/dev/null || true
+    release_gpus
+    info "Exiting (total elapsed: $(elapsed))."
+    exit 1
 }
