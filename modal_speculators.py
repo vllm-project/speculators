@@ -109,6 +109,9 @@ class TrainingConfig:
     on_missing: str = "generate"
     on_generate: str = "delete"
 
+    # vLLM install
+    vllm_nightly: bool = False  # install nightly instead of stable release
+
     # vLLM server
     vllm_port: int = 8000
     vllm_gpu_memory_utilization: float = 0.9
@@ -314,7 +317,14 @@ def train_speculators(cfg_dict: dict, skip_data_prep: bool = False) -> None:
     print(f"[modal] GPU layout: {cfg.vllm_gpus} for vLLM, {cfg.train_gpus} for training")
 
     # Create isolated venvs.
-    vllm_venv = _create_venv("vllm", ["vllm>=0.18"])
+    if cfg.vllm_nightly:
+        vllm_venv = _create_venv("vllm", [
+            "vllm",
+            "--torch-backend=cu130",
+            "--extra-index-url", "https://wheels.vllm.ai/nightly/cu130",
+        ])
+    else:
+        vllm_venv = _create_venv("vllm", ["vllm>=0.18"])
     speculators_venv = _create_venv("speculators", ["speculators>=0.5.0"])
 
     # Stage 1: Data preparation (runs on CPU, uses speculators venv)
@@ -370,6 +380,7 @@ def main(
     on_generate: str = "delete",
     seed: int = 42,
     # vLLM
+    vllm_nightly: bool = False,
     vllm_port: int = 8000,
     vllm_gpu_memory_utilization: float = 0.9,
     vllm_data_parallel_size: Optional[int] = None,
@@ -395,6 +406,7 @@ def main(
         num_layers=num_layers,
         draft_vocab_size=draft_vocab_size,
         vllm_gpus=vllm_gpus,
+        vllm_nightly=vllm_nightly,
         dataset=dataset,
         max_samples=max_samples,
         seq_length=seq_length,
