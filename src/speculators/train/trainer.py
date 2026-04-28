@@ -255,8 +255,8 @@ class Trainer:
             )
 
             if self.is_distributed:
-                for v in metrics.values():
-                    dist.reduce(v, dst=0, op=dist.ReduceOp.AVG)
+                for m in metrics.values():
+                    dist.all_reduce(m, op=dist.ReduceOp.AVG)
 
             for k, v in metrics.items():
                 val_metrics[k] = val_metrics.get(k, 0.0) + v.item()
@@ -270,11 +270,6 @@ class Trainer:
         )
 
         return val_metrics
-
-    def save_checkpoint(self, epoch: int):
-        self.checkpointer.save_checkpoint(self.model, self.opt, epoch)
-        if self.scheduler is not None:
-            self.checkpointer.save_scheduler_state_dict(self.scheduler, epoch)
 
     def maybe_save_checkpoint(self, epoch: int, val_metrics: dict | None):
         if (

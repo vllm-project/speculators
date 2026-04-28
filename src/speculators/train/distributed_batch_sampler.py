@@ -230,5 +230,6 @@ class MultipackDistributedBatchSamplerV2(Sampler):
         # self.lengths array.
         batches = [indices[batch] for batch in batches]
 
+        # Cache result
         self._cached_generated_batches = (epoch, batches)
         return batches

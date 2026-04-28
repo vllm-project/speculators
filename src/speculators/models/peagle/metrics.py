@@ -47,9 +47,10 @@ def loss_function(
         target_tokens = torch.argmax(target_probs, dim=-1)
         correct = (pred_tokens == target_tokens).float()
 
-        if loss_mask is not None:
-            while loss_mask.ndim > 2:  # noqa: PLR2004
-                loss_mask = loss_mask.squeeze(1)
+        if loss_mask is not None and loss_mask.ndim != 2:  # noqa: PLR2004
+            raise ValueError(
+                f"Expected loss_mask to be 2D [B, T], got shape {loss_mask.shape}"
+            )
 
     device = logits.device
     total_masked_loss = torch.tensor(0.0, device=device)
@@ -125,15 +126,22 @@ def compute_accuracy(
     target_tokens_flat = target_tokens.squeeze(0)
     device = logits.device
 
+    # loss_mask is [B, seq_len]; map to flat sampled domain via all_indices:
+    # original positions per sampled slot
+    orig_positions = all_indices % seq_length
+    if loss_mask is not None:
+        flat_lm = loss_mask.squeeze(0)[orig_positions].float()
+    else:
+        flat_lm = torch.ones_like(pred_tokens_flat, dtype=torch.float, device=device)
+    correct_flat = (pred_tokens_flat == target_tokens_flat).float() * flat_lm
     for depth in range(min(para_depth, 10)):
-        depth_mask = depths == depth
-        has_depth = depth_mask.sum() > 0
+        depth_mask = (depths == depth).float()
+        depth_total = (depth_mask * flat_lm).sum()
+        has_depth = depth_total > 0
         if has_depth:
-            depth_correct = (
-                (pred_tokens_flat == target_tokens_flat).float() * depth_mask.float()
-            ).sum()
-            depth_total = depth_mask.sum().float()
-            depth_accuracy = depth_correct / (depth_total + LOSS_EPSILON)
+            depth_accuracy = (correct_flat * depth_mask).sum() / (
+                depth_total + LOSS_EPSILON
+            )
         else:
             depth_accuracy = torch.tensor(0.0, device=device)
         per_position_accuracy[f"position {depth} acc"] = depth_accuracy.detach()

@@ -32,7 +32,6 @@ class PEagleDraftModel(Eagle3DraftModel):
     """
 
     config_class: ClassVar[type[PEagleSpeculatorConfig]] = PEagleSpeculatorConfig  # type: ignore[misc]
-    _attn_implementation_name: ClassVar[str] = "peagle_flex_attention"
     _keys_to_ignore_on_load_missing: ClassVar[list[str]] = [  # type: ignore[misc]
         *Eagle3DraftModel._keys_to_ignore_on_load_missing,
         "mask_hidden",
@@ -44,9 +43,8 @@ class PEagleDraftModel(Eagle3DraftModel):
         t2d: torch.Tensor | None = None,
         d2t: torch.Tensor | None = None,
     ):
-        super().__init__(config=config)
-
         config.transformer_layer_config._attn_implementation = "peagle_flex_attention"  # noqa: SLF001
+        super().__init__(config=config)
 
         if t2d is not None or d2t is not None:
             self.load_vocab_mappings(t2d, d2t)
@@ -195,8 +193,6 @@ class PEagleDraftModel(Eagle3DraftModel):
 
         layer_input = torch.cat([inputs_embeds, hidden_states_tensor], dim=-1)
 
-        position_embeddings = self.rotary_emb(layer_input, position_ids)
-
         all_indices_list = []
         for depth, indices in enumerate(sample_indices):
             encoded_indices = depth * seq_length + indices
@@ -262,8 +258,9 @@ class PEagleDraftModel(Eagle3DraftModel):
                 self.verifier_norm(verifier_last_hidden_states)
             )
 
-        targets_full = targets.repeat(1, para_depth, 1)
-        targets = targets_full[:, all_indices, :]
+        # Map sampled (depth, original_position) → original_position only.
+        original_positions = all_indices % seq_length
+        targets = targets[:, original_positions, :]
 
         loss, draft_tokens, metrics = compute_metrics(
             logits=logits,
@@ -297,7 +294,7 @@ class PEagleDraftModel(Eagle3DraftModel):
                 - para_depths: Number of parallel groups (default 8)
                 - down_sample_ratio: COD sampling ratio (default 0.7)
                 - down_sample_ratio_min: Minimum sampling ratio (default 0.2)
-                - unused_token_id: Padding token ID (default 0)
+                - mask_token_id: Mask token ID
                 - t2d: Target-to-draft vocabulary mapping
                 - d2t: Draft-to-target vocabulary mapping
                 - verifier_name_or_path: Path to verifier model

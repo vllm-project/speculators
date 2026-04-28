@@ -4,7 +4,8 @@ from typing import cast
 
 import torch
 from torch.nn.attention.flex_attention import flex_attention
-from transformers.modeling_utils import AttentionInterface
+
+from speculators.models.attention import ALL_ATTENTION_FUNCTIONS
 
 
 def create_peagle_mask_mod(
@@ -157,5 +158,4 @@ def peagle_flex_attention_forward(
 
 
 # Register P-EAGLE flex attention with transformers AttentionInterface
-ALL_ATTENTION_FUNCTIONS = AttentionInterface()
 ALL_ATTENTION_FUNCTIONS.register("peagle_flex_attention", peagle_flex_attention_forward)
