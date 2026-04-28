@@ -17,6 +17,7 @@ from datasets import load_from_disk
 from safetensors.torch import load_file
 from torch.utils.data import Dataset
 
+from speculators.data_generation.fp8_utils import dequantize_fp8_tensor
 from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_REQUEST_TIMEOUT,
@@ -323,8 +324,6 @@ class ArrowDataset(BaseDataset):
         hs = loaded_hs["hidden_states"]
 
         if "hidden_states_scales" in loaded_hs:
-            from speculators.data_generation.fp8_utils import dequantize_fp8_tensor
-
             flat = hs.reshape(hs.shape[0], -1)
             hs = dequantize_fp8_tensor(
                 flat, loaded_hs["hidden_states_scales"], torch.bfloat16

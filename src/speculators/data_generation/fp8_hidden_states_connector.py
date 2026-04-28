@@ -25,6 +25,7 @@ from vllm.distributed.kv_transfer.kv_connector.v1.example_hidden_states_connecto
     ExampleHiddenStatesConnectorMetadata,
     extract_from_kv_cache,
 )
+from vllm.model_executor.models.extract_hidden_states import CacheOnlyAttentionMetadata
 
 from speculators.data_generation.fp8_utils import (
     SCALES_KEY,
@@ -32,9 +33,7 @@ from speculators.data_generation.fp8_utils import (
 )
 
 if TYPE_CHECKING:
-    from vllm.config import VllmConfig
     from vllm.v1.attention.backend import AttentionMetadata
-    from vllm.v1.kv_cache_interface import KVCacheConfig
 
 
 class FP8HiddenStatesConnector(ExampleHiddenStatesConnector):
@@ -52,15 +51,11 @@ class FP8HiddenStatesConnector(ExampleHiddenStatesConnector):
         self,
         layer_name: str,
         kv_layer: torch.Tensor,
-        attn_metadata: "AttentionMetadata",
-        **kwargs: Any,
+        attn_metadata: AttentionMetadata,
+        **_kwargs: Any,
     ) -> None:
         if layer_name not in self.cache_layers:
             return
-
-        from vllm.model_executor.models.extract_hidden_states import (
-            CacheOnlyAttentionMetadata,
-        )
 
         assert isinstance(attn_metadata, CacheOnlyAttentionMetadata)
 
