@@ -22,10 +22,11 @@ Usage:
     # Custom config
     modal run --detach modal_speculators.py \
         --model meta-llama/Llama-3.1-8B-Instruct \
-        --gpu-type H100 \
-        --num-gpus 8 \
         --vllm-gpus 4 \
         --epochs 10
+
+GPU type and count are set via the GPU_TYPE and GPU_COUNT constants at the
+top of the script, since Modal requires these at decoration time.
 
 See TrainingConfig below for all configurable parameters.
 """
@@ -73,6 +74,14 @@ app = modal.App("speculators-training", image=image)
 
 
 # ---------------------------------------------------------------------------
+# GPU configuration — must be set before running the script, since Modal
+# requires GPU specs at decoration time (not configurable via CLI args).
+# ---------------------------------------------------------------------------
+GPU_TYPE = "H100"
+GPU_COUNT = 4
+
+
+# ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 @dataclasses.dataclass
@@ -84,9 +93,7 @@ class TrainingConfig:
     num_layers: int = 1
     draft_vocab_size: int = 32000
 
-    # GPU layout
-    gpu_type: str = "H100"
-    num_gpus: int = 4
+    # GPU layout — GPU_TYPE and GPU_COUNT are set above as module constants.
     vllm_gpus: int = 2  # remainder used for training
 
     # Data preparation
@@ -128,7 +135,7 @@ class TrainingConfig:
 
     @property
     def train_gpus(self) -> int:
-        return self.num_gpus - self.vllm_gpus
+        return GPU_COUNT - self.vllm_gpus
 
     @property
     def data_path(self) -> Path:
@@ -137,10 +144,6 @@ class TrainingConfig:
     @property
     def save_path(self) -> Path:
         return VOLUME_MOUNT / self.checkpoint_dir
-
-    @property
-    def gpu_spec(self) -> str:
-        return f"{self.gpu_type}:{self.num_gpus}"
 
 
 # ---------------------------------------------------------------------------
@@ -301,7 +304,7 @@ def run_training(cfg: TrainingConfig, speculators_venv: str) -> None:
 # ---------------------------------------------------------------------------
 @app.function(
     volumes={VOLUME_MOUNT: volume},
-    gpu="H100:4",  # default; overridden via .with_options() in the entrypoint
+    gpu=f"{GPU_TYPE}:{GPU_COUNT}",
     timeout=86400,  # 24 hours
 )
 def train_speculators(cfg_dict: dict, skip_data_prep: bool = False) -> None:
@@ -353,8 +356,6 @@ def main(
     num_layers: int = 1,
     draft_vocab_size: int = 32000,
     # GPU layout
-    gpu_type: str = "H100",
-    num_gpus: int = 4,
     vllm_gpus: int = 2,
     # Data
     dataset: str = "sharegpt",
@@ -393,8 +394,6 @@ def main(
         draft_arch=draft_arch,
         num_layers=num_layers,
         draft_vocab_size=draft_vocab_size,
-        gpu_type=gpu_type,
-        num_gpus=num_gpus,
         vllm_gpus=vllm_gpus,
         dataset=dataset,
         max_samples=max_samples,
@@ -423,10 +422,8 @@ def main(
 
     print(f"[modal] Launching speculators training")
     print(f"  Model:       {cfg.model}")
-    print(f"  GPUs:        {cfg.num_gpus}x {cfg.gpu_type} ({cfg.vllm_gpus} vLLM + {cfg.train_gpus} training)")
+    print(f"  GPUs:        {GPU_COUNT}x {GPU_TYPE} ({cfg.vllm_gpus} vLLM + {cfg.train_gpus} training)")
     print(f"  Epochs:      {cfg.epochs}")
     print(f"  LR:          {cfg.lr}")
 
-    # Dynamically set GPU count on the remote function
-    fn = train_speculators.with_options(gpu=cfg.gpu_spec)
-    fn.remote(dataclasses.asdict(cfg), skip_data_prep=skip_data_prep)
+    train_speculators.remote(dataclasses.asdict(cfg), skip_data_prep=skip_data_prep)
