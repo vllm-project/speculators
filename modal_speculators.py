@@ -115,8 +115,8 @@ class TrainingConfig:
     # vLLM server
     vllm_port: int = 8000
     vllm_gpu_memory_utilization: float = 0.9
-    vllm_data_parallel_size: Optional[int] = None
-    vllm_tensor_parallel_size: Optional[int] = None
+    vllm_tensor_parallel_size: int = 1
+    vllm_data_parallel_size: Optional[int] = None  # defaults to vllm_gpus // tp
     vllm_max_model_len: Optional[int] = None
 
     # Checkpoint / resume
@@ -231,14 +231,25 @@ def launch_vllm(cfg: TrainingConfig, vllm_venv: str) -> subprocess.Popen:
         "--gpu-memory-utilization", str(cfg.vllm_gpu_memory_utilization),
         "--disable-uvicorn-access-log",
     ]
-    # Ensure all vLLM GPUs are used. Default to TP=vllm_gpus if neither
-    # tensor-parallel nor data-parallel size is explicitly configured.
+    # Compute TP and DP to use all vLLM GPUs.
+    tp = cfg.vllm_tensor_parallel_size
     if cfg.vllm_data_parallel_size is not None:
-        cmd += ["--data-parallel-size", str(cfg.vllm_data_parallel_size)]
-    if cfg.vllm_tensor_parallel_size is not None:
-        cmd += ["--tensor-parallel-size", str(cfg.vllm_tensor_parallel_size)]
-    elif cfg.vllm_data_parallel_size is None and cfg.vllm_gpus > 1:
-        cmd += ["--tensor-parallel-size", str(cfg.vllm_gpus)]
+        dp = cfg.vllm_data_parallel_size
+    else:
+        if cfg.vllm_gpus % tp != 0:
+            raise ValueError(
+                f"vllm_gpus ({cfg.vllm_gpus}) must be divisible by "
+                f"vllm_tensor_parallel_size ({tp})"
+            )
+        dp = cfg.vllm_gpus // tp
+    if tp * dp != cfg.vllm_gpus:
+        raise ValueError(
+            f"tp ({tp}) * dp ({dp}) = {tp * dp} does not match "
+            f"vllm_gpus ({cfg.vllm_gpus})"
+        )
+    cmd += ["--tensor-parallel-size", str(tp)]
+    if dp > 1:
+        cmd += ["--data-parallel-size", str(dp)]
     if cfg.vllm_max_model_len is not None:
         cmd += ["--max-model-len", str(cfg.vllm_max_model_len)]
     if cfg.extra_vllm_args:
@@ -394,8 +405,8 @@ def main(
     vllm_nightly: bool = False,
     vllm_port: int = 8000,
     vllm_gpu_memory_utilization: float = 0.9,
+    vllm_tensor_parallel_size: int = 1,
     vllm_data_parallel_size: Optional[int] = None,
-    vllm_tensor_parallel_size: Optional[int] = None,
     vllm_max_model_len: Optional[int] = None,
     # Checkpoint
     no_resume_from_checkpoint: bool = False,
@@ -429,8 +440,8 @@ def main(
         seed=seed,
         vllm_port=vllm_port,
         vllm_gpu_memory_utilization=vllm_gpu_memory_utilization,
-        vllm_data_parallel_size=vllm_data_parallel_size,
         vllm_tensor_parallel_size=vllm_tensor_parallel_size,
+        vllm_data_parallel_size=vllm_data_parallel_size,
         vllm_max_model_len=vllm_max_model_len,
         no_resume_from_checkpoint=no_resume_from_checkpoint,
         checkpoint_freq=checkpoint_freq,
