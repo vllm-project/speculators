@@ -354,8 +354,12 @@ def run_training(cfg: TrainingConfig, speculators_venv: str) -> None:
 def train_speculators(cfg_dict: dict, skip_data_prep: bool = False) -> None:
     cfg = TrainingConfig(**cfg_dict)
 
-    print(f"[modal] Setting up environments...")
+    print(f"[modal] Run ID:  {cfg.run_id}")
+    print(f"[modal] Model:   {cfg.model}")
+    print(f"[modal] Data:    {cfg.data_path}")
+    print(f"[modal] Ckpts:   {cfg.save_path}")
     print(f"[modal] GPU layout: {cfg.vllm_gpus} for vLLM, {cfg.train_gpus} for training")
+    print(f"[modal] Setting up environments...")
 
     # Create isolated venvs.
     if cfg.vllm_nightly:
