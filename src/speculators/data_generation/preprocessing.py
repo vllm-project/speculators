@@ -7,6 +7,7 @@ from pathlib import Path
 from re import Pattern
 from typing import Any, cast
 
+from jinja2.exceptions import TemplateError
 import torch
 from datasets import Dataset as HFDataset
 from datasets import concatenate_datasets, load_dataset
@@ -208,18 +209,26 @@ def _build_multimodal_loss_mask(
     return loss_mask
 
 
+def _mask_has_positive(mask: Any) -> bool:
+    """Return True only when an assistant mask contains at least one trainable token."""
+    mask_tensor = _maybe_strip_batch_dim(mask)
+    # Vectorized validation avoids Python iteration over token positions and also
+    # handles list, NumPy, and tensor masks uniformly without extra allocations.
+    return bool(mask_tensor.numel() > 0 and torch.count_nonzero(mask_tensor).item() > 0)
+
+
 _PROCESSOR_KW_CACHE: dict[int, set[str]] = {}
 
 
 def _processor_kwargs(processor: Any) -> set[str]:
-    """Discover which kwargs ``processor.apply_chat_template`` actually accepts.
+    """Discover which kwargs ``processor.apply_chat_template`` explicitly accepts.
 
     Older transformers versions do not support ``load_image / load_audio /
     load_video`` nor ``return_assistant_tokens_mask`` on the processor-level
-    ``apply_chat_template``; passing them unconditionally either (a) silently
-    no-ops or (b) raises ``TypeError`` depending on the version. We therefore
-    probe the signature once per processor instance and only forward kwargs
-    the callee declares.
+    ``apply_chat_template``. Newer generic processors may expose ``**kwargs``,
+    but passing media-loader flags through that wildcard makes Transformers
+    treat them as ``processor.__call__`` kwargs and overwrite the structured
+    ``processor_kwargs`` dict. Keep only explicitly declared parameters.
     """
     key = id(processor)
     cached = _PROCESSOR_KW_CACHE.get(key)
@@ -227,21 +236,11 @@ def _processor_kwargs(processor: Any) -> set[str]:
         return cached
     try:
         sig = inspect.signature(processor.apply_chat_template)
-        names = set(sig.parameters.keys())
-        has_varkw = any(
-            p.kind is inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
-        )
-        if has_varkw:
-            # **kwargs wildcard: treat all "known" multimodal kwargs as allowed.
-            names |= {
-                "load_audio",
-                "load_image",
-                "load_video",
-                "load_audios",
-                "load_images",
-                "load_videos",
-                "return_assistant_tokens_mask",
-            }
+        names = {
+            name
+            for name, param in sig.parameters.items()
+            if param.kind is not inspect.Parameter.VAR_KEYWORD
+        }
     except (TypeError, ValueError):
         names = set()
     _PROCESSOR_KW_CACHE[key] = names
@@ -257,6 +256,33 @@ def _conversation_use_audio_in_video(conv: list[dict[str, Any]]) -> bool:
             if isinstance(seg, dict) and seg.get("use_audio_in_video"):
                 return True
     return False
+
+
+def _as_processor_content_blocks(content: Any) -> list[dict[str, Any]]:
+    """Convert message content to HF processor-compatible content blocks.
+
+    Transformers' multimodal `ProcessorMixin.apply_chat_template(tokenize=True)`
+    iterates every message content item and indexes `content_block["type"]` while
+    collecting media inputs. Therefore every message, including assistant text
+    turns, must expose content as a list of dict blocks instead of a raw string.
+    """
+    if isinstance(content, list):
+        return [
+            seg if isinstance(seg, dict) else {"type": "text", "text": str(seg)}
+            for seg in content
+        ]
+    return [{"type": "text", "text": content if isinstance(content, str) else str(content or "")}]
+
+
+def _conversation_for_processor(conv: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return a shallow processor-only copy with list/dict content blocks."""
+    return [
+        {
+            **turn,
+            "content": _as_processor_content_blocks(turn.get("content", "")),
+        }
+        for turn in conv
+    ]
 
 
 def _is_multimodal_batch(examples: dict) -> bool:
@@ -327,8 +353,12 @@ def _supports_assistant_mask(tokenizer: PreTrainedTokenizerBase) -> bool:
     """
     try:
         res_any = tokenizer.apply_chat_template(
-            [{"role": "assistant", "content": "test"}],
+            [
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": "test"},
+            ],
             tokenize=True,
+            add_generation_prompt=False,
             return_assistant_tokens_mask=True,
             return_dict=True,
         )
@@ -339,8 +369,8 @@ def _supports_assistant_mask(tokenizer: PreTrainedTokenizerBase) -> bool:
             return False
 
         # Verify the mask is not all zeros
-        return any(m == 1 for m in mask)
-    except (TypeError, ValueError, KeyError, AttributeError):
+        return _mask_has_positive(mask)
+    except (TypeError, ValueError, KeyError, AttributeError, TemplateError):
         return False
 
 
@@ -468,6 +498,89 @@ def _create_loss_mask_from_offsets(
     return loss_mask
 
 
+def _content_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for seg in content:
+            if isinstance(seg, dict) and seg.get("type", "text") == "text":
+                parts.append(str(seg.get("text") or seg.get("value") or ""))
+            elif isinstance(seg, str):
+                parts.append(seg)
+        return "".join(parts)
+    return str(content or "")
+
+
+def _find_token_subsequence(
+    input_ids: torch.Tensor,
+    needle: torch.Tensor,
+    start: int,
+) -> int | None:
+    """Vectorized CPU subsequence search for assistant-token spans."""
+    needle_len = int(needle.numel())
+    haystack = input_ids[start:]
+    if needle_len == 0 or int(haystack.numel()) < needle_len:
+        return None
+
+    # First-token filtering keeps the `unfold` comparison compact for long
+    # multimodal prompts while still avoiding scalar token-by-token scans.
+    candidate_offsets = (haystack[: haystack.numel() - needle_len + 1] == needle[0]).nonzero(
+        as_tuple=False
+    ).flatten()
+    if candidate_offsets.numel() == 0:
+        return None
+    if needle_len == 1:
+        return start + int(candidate_offsets[0].item())
+
+    windows = haystack.unfold(0, needle_len, 1).index_select(0, candidate_offsets)
+    matches = (windows == needle.view(1, -1)).all(dim=1).nonzero(
+        as_tuple=False
+    ).flatten()
+    if matches.numel() == 0:
+        return None
+    return start + int(candidate_offsets[int(matches[0].item())].item())
+
+
+def _loss_mask_from_assistant_token_spans(
+    input_ids: torch.Tensor,
+    normalized_conv: list[dict[str, Any]],
+    tokenizer: PreTrainedTokenizerBase,
+) -> torch.Tensor | None:
+    """Create an exact-position mask by matching assistant text in final IDs.
+
+    Multimodal processors such as Qwen-VL/Omni expand image/video placeholders
+    before tokenization. Matching assistant content directly against final
+    `input_ids` keeps the loss mask aligned with the exact sequence that vLLM
+    later returns as `token_ids`.
+    """
+    loss_mask = torch.zeros_like(input_ids, dtype=torch.long)
+    cursor = 0
+    matches_found = 0
+
+    for turn in normalized_conv:
+        if turn.get("role") != "assistant":
+            continue
+        text = _content_text(turn.get("content", ""))
+        if not text:
+            continue
+        tokenized = tokenizer(text, add_special_tokens=False)
+        token_ids = tokenized.get("input_ids", [])
+        if not token_ids:
+            continue
+        needle = torch.as_tensor(token_ids, dtype=torch.long, device=input_ids.device)
+        span_start = _find_token_subsequence(input_ids, needle, cursor)
+        if span_start is None:
+            log.warning("Could not align assistant content tokens in processor input_ids")
+            continue
+        span_end = span_start + int(needle.numel())
+        loss_mask[span_start:span_end] = 1
+        cursor = span_end
+        matches_found += 1
+
+    return loss_mask if matches_found else None
+
+
 def _loss_mask_from_ids_fallback(
     input_ids: torch.Tensor,
     normalized_conv: list[dict[str, Any]],
@@ -572,8 +685,12 @@ def _preprocess_batch(
                     add_generation_prompt=False,
                     return_dict=True,
                     return_tensors="pt",
-                    max_length=max_length,
-                    truncation=True,
+                    # Do not pass tokenizer truncation through multimodal
+                    # processors. Qwen-VL/Omni expands media placeholders before
+                    # tokenization and validates media-token parity; truncation
+                    # can cut those placeholder runs and make the processor fail.
+                    # We filter overlength multimodal samples below instead.
+                    processor_kwargs={},
                 )
                 for k in (
                     "load_audio",
@@ -585,12 +702,15 @@ def _preprocess_batch(
                 ):
                     if k in allowed:
                         call_kwargs[k] = True
-                supports_mask = "return_assistant_tokens_mask" in allowed
+                supports_mask = (
+                    assistant_pattern is None
+                    and "return_assistant_tokens_mask" in allowed
+                )
                 if supports_mask:
                     call_kwargs["return_assistant_tokens_mask"] = True
 
                 encoded_any = processor.apply_chat_template(
-                    normalized_conv, **call_kwargs
+                    _conversation_for_processor(normalized_conv), **call_kwargs
                 )
                 encoded = cast("dict[str, Any]", encoded_any)
                 input_ids = _maybe_strip_batch_dim(encoded["input_ids"]).to(torch.long)
@@ -603,40 +723,45 @@ def _preprocess_batch(
                         mask_key = "assistant_mask"
 
                 if mask_key is not None:
-                    base_loss_mask = _maybe_strip_batch_dim(encoded[mask_key]).to(
+                    candidate_loss_mask = _maybe_strip_batch_dim(encoded[mask_key]).to(
                         torch.long
                     )
-                else:
-                    # Fallback: processor did not emit an assistant mask on
-                    # this transformers version. Approximate via the tokenizer
-                    # + assistant_pattern path.
+                    if _mask_has_positive(candidate_loss_mask):
+                        base_loss_mask = candidate_loss_mask
+                    else:
+                        mask_key = None
+
+                if mask_key is None:
+                    # Fallback: processor did not emit a usable assistant mask on
+                    # this transformers version/template. Approximate via the
+                    # tokenizer + assistant_pattern path.
                     if assistant_pattern is None:
                         # We need a pattern for the fallback; derive one now.
                         try:
                             assistant_pattern = _detect_assistant_pattern(tokenizer)
-                        except (ValueError, KeyError, AttributeError):
+                        except (ValueError, KeyError, AttributeError, TemplateError):
                             raise ValueError(  # noqa: B904
                                 "Processor did not return assistant_masks and "
                                 "no assistant_pattern fallback could be "
                                 "auto-detected for this tokenizer."
                             )
-                    base_loss_mask = _loss_mask_from_ids_fallback(
+                    base_loss_mask = _loss_mask_from_assistant_token_spans(
                         input_ids,
                         normalized_conv,
                         tokenizer,
-                        assistant_pattern,
                     )
+                    if base_loss_mask is None:
+                        base_loss_mask = _loss_mask_from_ids_fallback(
+                            input_ids,
+                            normalized_conv,
+                            tokenizer,
+                            assistant_pattern,
+                        )
 
                 loss_mask = _build_multimodal_loss_mask(
                     input_ids,
                     base_loss_mask,
                     placeholder_token_ids,
-                )
-                mm_file = _save_multimodal_sidecar(
-                    encoded,
-                    multimodal_output_dir,
-                    sample_idx,
-                    sidecar_prefix,
                 )
             elif assistant_pattern is None:
                 # HF assistant token mask
@@ -693,11 +818,25 @@ def _preprocess_batch(
                 f"loss_mask={len(loss_mask)}"
             )
 
+            # Multimodal processor tokenization must stay untruncated to preserve
+            # exact media-token parity with vLLM hidden-state generation. Drop
+            # overlength samples instead of truncating tensors/sidecars.
+            if is_multimodal and len(input_ids) > max_length:
+                continue
+
             # Filtering samples out with too few valid tokens
             if minimum_valid_tokens is not None:
                 num_valid_tokens = int(loss_mask.sum().item())
                 if num_valid_tokens < minimum_valid_tokens:
                     continue
+
+            if processor is not None and is_multimodal:
+                mm_file = _save_multimodal_sidecar(
+                    encoded,
+                    multimodal_output_dir,
+                    sample_idx,
+                    sidecar_prefix,
+                )
 
             # Append to results
             results["input_ids"].append(input_ids)
