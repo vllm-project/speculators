@@ -66,9 +66,14 @@ check_dependencies() {
         fi
     done
 
+    # Check for required Python modules
+    if ! python -c "import requests" &> /dev/null; then
+        missing_deps+=("python-requests")
+    fi
+
     if [[ ${#missing_deps[@]} -gt 0 ]]; then
         echo "[ERROR] Missing required dependencies: ${missing_deps[*]}" >&2
-        echo "[ERROR] Install with: pip install guidellm" >&2
+        echo "[ERROR] Install with: pip install -r requirements.txt" >&2
         return 1
     fi
 
@@ -140,6 +145,12 @@ MAX_CONCURRENCY="${MAX_CONCURRENCY:-128}"
 MAX_REQUESTS="${MAX_REQUESTS:-200}"
 GEN_LEN_RATE="${GEN_LEN_RATE:-128}"
 
+# Derive vLLM URL from target if not provided (strip /v1 suffix)
+if [[ -z "${VLLM_URL}" ]]; then
+    VLLM_URL="${TARGET%/}"
+    VLLM_URL="${VLLM_URL%/v1}"
+fi
+
 # ==============================================================================
 # Validate
 # ==============================================================================
@@ -168,16 +179,26 @@ echo "[INFO] Output directory: ${OUTPUT_DIR}"
 IFS=',' read -ra SUBSET_ARRAY <<< "${SUBSETS}"
 
 # ==============================================================================
-# Step 1: Estimate Output Token Distributions
+# Main Pipeline: Process Each Subset Sequentially
 # ==============================================================================
+# Process gen_len -> sweep for each subset to avoid server state pollution
 
 echo ""
 echo "[INFO] ============================================"
-echo "[INFO] Step 1: Estimating output token distributions"
+echo "[INFO] Processing ${#SUBSET_ARRAY[@]} subsets sequentially"
 echo "[INFO] ============================================"
 
+PARTIAL_CSV_FILES=()
+ALL_MAX_TOKENS=()
+
 for subset in "${SUBSET_ARRAY[@]}"; do
-    echo "[INFO] Running gen-len estimation for subset: ${subset}"
+    echo ""
+    echo "[INFO] ============================================"
+    echo "[INFO] Processing subset: ${subset}"
+    echo "[INFO] ============================================"
+
+    # Step 1: Gen-len estimation for this subset
+    echo "[INFO] [${subset}] Step 1/3: Estimating output token distribution"
 
     GEN_LEN_ARGS=(
         --target "${TARGET}"
@@ -191,45 +212,32 @@ for subset in "${SUBSET_ARRAY[@]}"; do
     [[ -n "${DATA_COLUMN_MAPPER}" ]] && GEN_LEN_ARGS+=(--data-column-mapper "${DATA_COLUMN_MAPPER}")
 
     bash "${SCRIPT_DIR}/scripts/run_gen_len_estimation.sh" "${GEN_LEN_ARGS[@]}"
+    echo "[INFO] [${subset}] Gen-len estimation complete"
 
-    echo "[INFO] Gen-len estimation complete for: ${subset}"
-done
+    # Step 2: Parse gen-len to get max_tokens for this subset
+    echo "[INFO] [${subset}] Step 2/3: Computing max_tokens"
 
-# ==============================================================================
-# Step 2: Parse Gen-Len Results -> max_tokens.json
-# ==============================================================================
+    SUBSET_MAX_TOKENS_FILE="${GEN_LEN_DIR}/max_tokens_${subset}.json"
+    python "${SCRIPT_DIR}/scripts/parse_gen_len.py" \
+        --output "${SUBSET_MAX_TOKENS_FILE}" \
+        "${GEN_LEN_DIR}/gen_len_${subset}.json"
 
-echo ""
-echo "[INFO] ============================================"
-echo "[INFO] Step 2: Computing max_tokens per subset"
-echo "[INFO] ============================================"
+    MAX_TOKENS=$(python -c "import json; print(json.load(open('${SUBSET_MAX_TOKENS_FILE}'))['${subset}'])")
+    ALL_MAX_TOKENS+=("\"${subset}\": ${MAX_TOKENS}")
+    echo "[INFO] [${subset}] max_tokens=${MAX_TOKENS}"
 
-GEN_LEN_FILES=()
-for subset in "${SUBSET_ARRAY[@]}"; do
-    GEN_LEN_FILES+=("${GEN_LEN_DIR}/gen_len_${subset}.json")
-done
+    # Step 3: Run sweep immediately (server state is fresh from gen-len)
+    echo "[INFO] [${subset}] Step 3/3: Running performance sweep"
 
-MAX_TOKENS_FILE="${OUTPUT_DIR}/max_tokens.json"
-
-python "${SCRIPT_DIR}/scripts/parse_gen_len.py" \
-    --output "${MAX_TOKENS_FILE}" \
-    "${GEN_LEN_FILES[@]}"
-
-echo "[INFO] max_tokens mapping saved to: ${MAX_TOKENS_FILE}"
-
-# ==============================================================================
-# Step 3: Run Sweeps
-# ==============================================================================
-
-echo ""
-echo "[INFO] ============================================"
-echo "[INFO] Step 3: Running performance sweeps"
-echo "[INFO] ============================================"
-
-for subset in "${SUBSET_ARRAY[@]}"; do
-    MAX_TOKENS=$(python -c "import json; print(json.load(open('${MAX_TOKENS_FILE}'))['${subset}'])")
-
-    echo "[INFO] Running sweep for subset: ${subset} (max_tokens=${MAX_TOKENS})"
+    # Capture baseline vLLM metrics BEFORE the sweep (if vLLM URL provided)
+    BASELINE_METRICS_FILE=""
+    if [[ -n "${VLLM_URL}" ]]; then
+        BASELINE_METRICS_FILE="${OUTPUT_DIR}/${subset}_baseline_metrics.txt"
+        bash "${SCRIPT_DIR}/scripts/fetch_and_save_vllm_metrics.sh" "${VLLM_URL}" "${BASELINE_METRICS_FILE}" || {
+            echo "[WARN] Failed to fetch baseline metrics, proceeding without delta" >&2
+            BASELINE_METRICS_FILE=""
+        }
+    fi
 
     SWEEP_ARGS=(
         --target "${TARGET}"
@@ -244,29 +252,69 @@ for subset in "${SUBSET_ARRAY[@]}"; do
     [[ -n "${DATA_COLUMN_MAPPER}" ]] && SWEEP_ARGS+=(--data-column-mapper "${DATA_COLUMN_MAPPER}")
 
     bash "${SCRIPT_DIR}/scripts/run_sweep.sh" "${SWEEP_ARGS[@]}"
+    echo "[INFO] [${subset}] Sweep complete"
 
-    echo "[INFO] Sweep complete for: ${subset}"
+    # Parse sweep results to capture metrics (delta from baseline)
+    PARTIAL_CSV="${OUTPUT_DIR}/${subset}_partial.csv"
+
+    if [[ -n "${VLLM_URL}" ]]; then
+        echo "[INFO] [${subset}] Extracting speculative decoding metrics"
+        PARSE_ARGS=(
+            --output "${PARTIAL_CSV}"
+            --vllm-url "${VLLM_URL}"
+        )
+        [[ -n "${BASELINE_METRICS_FILE}" ]] && PARSE_ARGS+=(--baseline-metrics-file "${BASELINE_METRICS_FILE}")
+
+        python "${SCRIPT_DIR}/scripts/parse_sweep_with_metrics.py" \
+            "${PARSE_ARGS[@]}" \
+            "${SWEEP_DIR}/sweep_${subset}.json"
+    else
+        python "${SCRIPT_DIR}/scripts/parse_sweep_results.py" \
+            --output "${PARTIAL_CSV}" \
+            "${SWEEP_DIR}/sweep_${subset}.json"
+    fi
+
+    # Only add to the array if the file was created successfully
+    if [[ -f "${PARTIAL_CSV}" ]]; then
+        PARTIAL_CSV_FILES+=("${PARTIAL_CSV}")
+        echo "[INFO] [${subset}] ✓ Complete"
+    else
+        echo "[WARN] [${subset}] Parsing failed, skipping" >&2
+    fi
 done
 
 # ==============================================================================
-# Step 4: Parse Sweep Results -> CSV
+# Save Combined max_tokens.json
 # ==============================================================================
 
 echo ""
 echo "[INFO] ============================================"
-echo "[INFO] Step 4: Extracting sweep metrics to CSV"
+echo "[INFO] Saving consolidated max_tokens mapping"
 echo "[INFO] ============================================"
 
-SWEEP_FILES=()
-for subset in "${SUBSET_ARRAY[@]}"; do
-    SWEEP_FILES+=("${SWEEP_DIR}/sweep_${subset}.json")
-done
+MAX_TOKENS_FILE="${OUTPUT_DIR}/max_tokens.json"
+printf "{\n  %s\n}\n" "$(IFS=','; echo "${ALL_MAX_TOKENS[*]}" | sed 's/,/,\n  /g')" > "${MAX_TOKENS_FILE}"
+echo "[INFO] max_tokens mapping saved to: ${MAX_TOKENS_FILE}"
+
+# ==============================================================================
+# Step 4: Combine Per-Subset CSVs
+# ==============================================================================
+
+echo ""
+echo "[INFO] ============================================"
+echo "[INFO] Step 4: Combining subset results into final CSV"
+echo "[INFO] ============================================"
 
 CSV_FILE="${OUTPUT_DIR}/perf_results.csv"
 
-python "${SCRIPT_DIR}/scripts/parse_sweep_results.py" \
-    --output "${CSV_FILE}" \
-    "${SWEEP_FILES[@]}"
+# Combine all partial CSVs (header from first, data from all)
+if [[ ${#PARTIAL_CSV_FILES[@]} -gt 0 ]]; then
+    head -n 1 "${PARTIAL_CSV_FILES[0]}" > "${CSV_FILE}"
+    for partial_csv in "${PARTIAL_CSV_FILES[@]}"; do
+        tail -n +2 "${partial_csv}" >> "${CSV_FILE}"
+    done
+    echo "[INFO] Combined ${#PARTIAL_CSV_FILES[@]} subset results"
+fi
 
 # ==============================================================================
 # Summary
