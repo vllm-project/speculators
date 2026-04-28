@@ -34,6 +34,8 @@ See TrainingConfig below for all configurable parameters.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
+import json
 import os
 import signal
 import subprocess
@@ -132,9 +134,25 @@ class TrainingConfig:
     extra_vllm_args: str = ""
     extra_train_args: str = ""
 
-    # Paths (relative to volume mount)
-    data_dir: str = "data"
-    checkpoint_dir: str = "checkpoints"
+    @property
+    def run_id(self) -> str:
+        """Deterministic short hash of config fields that define a unique run.
+        Same config always produces the same run_id, enabling checkpoint resume."""
+        key_fields = {
+            "model": self.model,
+            "speculator_type": self.speculator_type,
+            "draft_arch": self.draft_arch,
+            "num_layers": self.num_layers,
+            "draft_vocab_size": self.draft_vocab_size,
+            "dataset": self.dataset,
+            "seq_length": self.seq_length,
+            "max_samples": self.max_samples,
+            "total_seq_len": self.total_seq_len,
+            "lr": self.lr,
+            "seed": self.seed,
+        }
+        h = hashlib.sha256(json.dumps(key_fields, sort_keys=True).encode())
+        return h.hexdigest()[:12]
 
     @property
     def train_gpus(self) -> int:
@@ -142,11 +160,11 @@ class TrainingConfig:
 
     @property
     def data_path(self) -> Path:
-        return VOLUME_MOUNT / self.data_dir
+        return VOLUME_MOUNT / self.run_id / "data"
 
     @property
     def save_path(self) -> Path:
-        return VOLUME_MOUNT / self.checkpoint_dir
+        return VOLUME_MOUNT / self.run_id / "checkpoints"
 
 
 # ---------------------------------------------------------------------------
@@ -418,8 +436,6 @@ def main(
     # Extra
     extra_vllm_args: str = "",
     extra_train_args: str = "",
-    data_dir: str = "data",
-    checkpoint_dir: str = "checkpoints",
 ):
     cfg = TrainingConfig(
         model=model,
@@ -450,11 +466,10 @@ def main(
         run_name=run_name,
         extra_vllm_args=extra_vllm_args,
         extra_train_args=extra_train_args,
-        data_dir=data_dir,
-        checkpoint_dir=checkpoint_dir,
     )
 
     print(f"[modal] Launching speculators training")
+    print(f"  Run ID:      {cfg.run_id}")
     print(f"  Model:       {cfg.model}")
     print(f"  GPUs:        {GPU_COUNT}x {GPU_TYPE} ({cfg.vllm_gpus} vLLM + {cfg.train_gpus} training)")
     print(f"  Epochs:      {cfg.epochs}")
