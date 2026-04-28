@@ -52,7 +52,7 @@ VOLUME_MOUNT = Path("/vol")
 # Path where the speculators repo is cloned inside the container
 SPECULATORS_REPO = Path("/opt/speculators")
 # Pin to a specific release tag for reproducible builds.
-SPECULATORS_VERSION = "v0.5.1"
+SPECULATORS_VERSION = "v0.5.0"
 
 # ---------------------------------------------------------------------------
 # Container image — clone the speculators repo for its standalone scripts,
