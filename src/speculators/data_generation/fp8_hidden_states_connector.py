@@ -12,7 +12,6 @@ Launch example::
 from __future__ import annotations
 
 import os
-from concurrent.futures import Future, ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any, Optional
 
 import safetensors.torch
@@ -48,16 +47,6 @@ class FP8HiddenStatesConnector(ExampleHiddenStatesConnector):
         hidden_states_scales – fp32 [seq_len, 1]
         token_ids            – int64 [seq_len]
     """
-
-    def __init__(
-        self,
-        vllm_config: "VllmConfig",
-        role: KVConnectorRole,
-        kv_cache_config: Optional["KVCacheConfig"] = None,
-    ):
-        super().__init__(vllm_config, role, kv_cache_config)
-        self._executor = ThreadPoolExecutor(max_workers=4)
-        self._pending: list[Future] = []
 
     def save_kv_layer(
         self,
@@ -97,13 +86,4 @@ class FP8HiddenStatesConnector(ExampleHiddenStatesConnector):
                 SCALES_KEY: scales,
                 "token_ids": request.token_ids.detach().cpu(),
             }
-            self._pending.append(
-                self._executor.submit(
-                    safetensors.torch.save_file, tensors, request.filename
-                )
-            )
-
-    def wait_for_save(self):
-        for f in self._pending:
-            f.result()
-        self._pending.clear()
+            safetensors.torch.save_file(tensors, request.filename)
