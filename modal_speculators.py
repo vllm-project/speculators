@@ -164,42 +164,22 @@ def _create_venv(name: str, packages: list[str]) -> str:
     return venv_dir
 
 
-DEEPGEMM_REPO = "https://github.com/deepseek-ai/DeepGEMM.git"
-DEEPGEMM_REF = "891d57b4db1071624b5c8fa0d1e51cb317fa709f"
+DEEPGEMM_INSTALL_SCRIPT = (
+    "https://raw.githubusercontent.com/vllm-project/vllm/main/tools/install_deepgemm.sh"
+)
 
 
 def _install_deepgemm(venv_dir: str) -> None:
-    """Build and install DeepGEMM from source into a venv."""
-    import tempfile
-    build_dir = tempfile.mkdtemp(prefix="deepgemm-")
-    python = f"{venv_dir}/bin/python"
-    try:
-        subprocess.run(
-            ["git", "clone", "--recursive", "--shallow-submodules",
-             DEEPGEMM_REPO, build_dir],
-            check=True,
-        )
-        subprocess.run(
-            ["git", "-C", build_dir, "checkout", DEEPGEMM_REF],
-            check=True,
-        )
-        subprocess.run(
-            [python, "setup.py", "bdist_wheel"],
-            cwd=build_dir, check=True,
-        )
-        # Find the built wheel and install it
-        import glob
-        wheels = glob.glob(f"{build_dir}/dist/*.whl")
-        if not wheels:
-            raise RuntimeError("DeepGEMM wheel build produced no .whl files")
-        subprocess.run(
-            ["uv", "pip", "install", "--python", python, wheels[0]],
-            check=True,
-        )
-        print("[modal] DeepGEMM installed successfully.")
-    finally:
-        import shutil
-        shutil.rmtree(build_dir, ignore_errors=True)
+    """Download vLLM's install_deepgemm.sh and run it against the venv."""
+    import urllib.request
+    script_path = "/tmp/install_deepgemm.sh"
+    urllib.request.urlretrieve(DEEPGEMM_INSTALL_SCRIPT, script_path)
+    env = os.environ.copy()
+    # Ensure the venv's python/pip/uv are found first
+    env["PATH"] = f"{venv_dir}/bin:" + env.get("PATH", "")
+    env["VIRTUAL_ENV"] = venv_dir
+    subprocess.run(["bash", script_path], env=env, check=True)
+    print("[modal] DeepGEMM installed successfully.")
 
 
 # ---------------------------------------------------------------------------
