@@ -183,6 +183,13 @@ def _install_deepgemm(venv_dir: str) -> None:
     # Ensure the venv's python/pip/uv are found first
     env["PATH"] = f"{venv_dir}/bin:" + env.get("PATH", "")
     env["VIRTUAL_ENV"] = venv_dir
+    # Set CUDA_HOME if not already set — Modal containers have CUDA
+    # installed but may not export this variable.
+    if "CUDA_HOME" not in env:
+        for candidate in ["/usr/local/cuda", "/usr/lib/cuda"]:
+            if os.path.isdir(candidate):
+                env["CUDA_HOME"] = candidate
+                break
     subprocess.run(["bash", script_path, "--cuda-version", "13.0"], env=env, check=True)
     print("[modal] DeepGEMM installed successfully.")
 
