@@ -229,6 +229,7 @@ def launch_vllm(cfg: TrainingConfig, vllm_venv: str) -> subprocess.Popen:
         "--",
         "--port", str(cfg.vllm_port),
         "--gpu-memory-utilization", str(cfg.vllm_gpu_memory_utilization),
+        "--disable-uvicorn-access-log",
     ]
     if cfg.vllm_data_parallel_size is not None:
         cmd += ["--data-parallel-size", str(cfg.vllm_data_parallel_size)]
