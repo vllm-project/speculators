@@ -364,7 +364,7 @@ def train_speculators(cfg_dict: dict, skip_data_prep: bool = False) -> None:
             "--extra-index-url", "https://wheels.vllm.ai/nightly/cu130",
         ])
     else:
-        vllm_venv = _create_venv("vllm", ["vllm>=0.18"])
+        vllm_venv = _create_venv("vllm", ["vllm==0.19"])
     _install_deepgemm(vllm_venv)
     speculators_venv = _create_venv("speculators", ["speculators>=0.5.0"])
 
