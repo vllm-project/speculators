@@ -303,7 +303,6 @@ def run_training(cfg: TrainingConfig, speculators_venv: str) -> None:
     volumes={VOLUME_MOUNT: volume},
     gpu="H100:4",  # default; overridden via .with_options() in the entrypoint
     timeout=86400,  # 24 hours
-    _allow_background_volume_commits=True,
 )
 def train_speculators(cfg_dict: dict, skip_data_prep: bool = False) -> None:
     cfg = TrainingConfig(**cfg_dict)
