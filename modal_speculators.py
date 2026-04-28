@@ -152,13 +152,18 @@ class TrainingConfig:
 # ---------------------------------------------------------------------------
 # Helper: create a uv venv and install packages
 # ---------------------------------------------------------------------------
-def _create_venv(name: str, packages: list[str]) -> str:
+def _create_venv(
+    name: str,
+    packages: list[str],
+    torch_backend: str = "cu129",
+) -> str:
     """Create a uv virtual environment and return the path to its python."""
     venv_dir = f"/tmp/{name}_venv"
     subprocess.run(["uv", "venv", venv_dir, "--python", "3.12"], check=True)
     python = f"{venv_dir}/bin/python"
     subprocess.run(
-        ["uv", "pip", "install", "--python", python, *packages],
+        ["uv", "pip", "install", f"--torch-backend={torch_backend}",
+         "--python", python, *packages],
         check=True,
     )
     return venv_dir
@@ -178,7 +183,7 @@ def _install_deepgemm(venv_dir: str) -> None:
     # Ensure the venv's python/pip/uv are found first
     env["PATH"] = f"{venv_dir}/bin:" + env.get("PATH", "")
     env["VIRTUAL_ENV"] = venv_dir
-    subprocess.run(["bash", script_path, "--cuda-version", "12.8"], env=env, check=True)
+    subprocess.run(["bash", script_path, "--cuda-version", "12.9"], env=env, check=True)
     print("[modal] DeepGEMM installed successfully.")
 
 
@@ -338,9 +343,8 @@ def train_speculators(cfg_dict: dict, skip_data_prep: bool = False) -> None:
     if cfg.vllm_nightly:
         vllm_venv = _create_venv("vllm", [
             "vllm",
-            "--torch-backend=cu130",
             "--extra-index-url", "https://wheels.vllm.ai/nightly/cu130",
-        ])
+        ], torch_backend="cu130")
     else:
         vllm_venv = _create_venv("vllm", ["vllm>=0.18"])
     _install_deepgemm(vllm_venv)
