@@ -98,9 +98,7 @@ def main():
     extra_config: dict[str, str] = {"shared_storage_path": args.hidden_states_path}
     if args.fp8_quantize:
         connector_name = "FP8HiddenStatesConnector"
-        module_path = (
-            "speculators.data_generation.fp8_hidden_states_connector"
-        )
+        module_path = "speculators.data_generation.fp8_hidden_states_connector"
     else:
         connector_name = "ExampleHiddenStatesConnector"
         module_path = None
