@@ -79,8 +79,6 @@ dev = [
 
     # general and configurations
     "sphinx~=8.1.3",
-    "tox~=4.16.0",
-    "tox-uv", # version is tied to tox version
 
     # testing
     "pytest~=8.2.2",
@@ -132,7 +130,7 @@ warn_redundant_casts = true
 warn_unused_ignores = false
 show_error_codes = true
 namespace_packages = true
-exclude = ["venv", ".tox", "build", "dist"]
+exclude = ["venv", "build", "dist"]
 
 # Silence "type import errors" as our 3rd-party libs does not have types
 # Check: https://mypy.readthedocs.io/en/latest/config_file.html#import-discovery
