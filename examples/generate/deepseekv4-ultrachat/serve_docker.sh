@@ -24,6 +24,7 @@ case "${HARDWARE}" in
     h100)
         IMAGE="vllm/vllm-openai:deepseekv4-cu129"
         GPUS_FLAG="all"
+        GPU_ENV="-e NVIDIA_VISIBLE_DEVICES=${GPU_IDS}"
         HW_ARGS=(
             --data-parallel-size 4
             --compilation-config '{"cudagraph_mode":"FULL_AND_PIECEWISE","custom_ops":["all"]}'
@@ -32,8 +33,10 @@ case "${HARDWARE}" in
     b200)
         IMAGE="vllm/vllm-openai:deepseekv4-cu130"
         GPUS_FLAG="\"device=${GPU_IDS}\""
+        GPU_ENV="-e CUDA_VISIBLE_DEVICES=${GPU_IDS}"
         HW_ARGS=(
             --data-parallel-size 4
+            --compilation-config '{"cudagraph_mode":"FULL_AND_PIECEWISE","custom_ops":["all"]}'
             --attention_config.use_fp4_indexer_cache=True
         )
         ;;
@@ -48,13 +51,14 @@ echo "[INFO] Starting DeepSeek-V4-Flash (Docker) on ${HARDWARE} GPUs: ${GPU_IDS}
 # Write the container name so stop_server can find it after a crash
 echo "${CONTAINER_NAME}" > "/tmp/vllm_container_${PORT}.lock"
 
+# shellcheck disable=SC2086  # GPU_ENV is intentionally unquoted (two separate args)
 docker run --rm \
     --name "${CONTAINER_NAME}" \
     --gpus "${GPUS_FLAG}" \
     --privileged --ipc=host \
     -p "${PORT}:8000" \
     -v "${HF_HUB_CACHE}:/root/.cache/huggingface" \
-    -e NVIDIA_VISIBLE_DEVICES="${GPU_IDS}" \
+    ${GPU_ENV} \
     -e VLLM_ENGINE_READY_TIMEOUT_S=3600 \
     "${IMAGE}" \
     deepseek-ai/DeepSeek-V4-Flash \
