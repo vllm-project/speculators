@@ -91,8 +91,16 @@ info "Concurrency   : ${CONCURRENCY}"
 info "Max tokens    : ${MAX_TOKENS}"
 info "Reserve dur   : ${RESERVE_DURATION}"
 info "Max runtime   : ${MAX_RUNTIME_HOURS}h (deadline: ${DEADLINE_TS})"
-[[ -n "${LIMIT}" ]]      && info "Limit         : ${LIMIT} rows"
-[[ "${RESUME}" == true ]] && info "Resume        : enabled"
+[[ -n "${LIMIT}" ]]       && info "Limit         : ${LIMIT} rows"
+if [[ "${RESUME}" == true ]]; then
+    if [[ -f "${OUTFILE}" ]]; then
+        already_done=$(wc -l < "${OUTFILE}")
+        info "Resume        : enabled (${already_done} rows already in ${OUTFILE})"
+    else
+        warn "Resume        : --resume set but no existing output file found at ${OUTFILE}"
+        warn "                Starting fresh. Use --output-dir to point at a prior run."
+    fi
+fi
 
 # ---------------------------------------------------------------------------
 # Cleanup trap
