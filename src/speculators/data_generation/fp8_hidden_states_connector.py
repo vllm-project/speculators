@@ -1,7 +1,7 @@
 """KV connector that quantizes hidden states to FP8 before writing to disk.
 
 Drop-in replacement for vLLM's ExampleHiddenStatesConnector. Loaded via
-the ``kv_connector_module_path`` factory mechanism — no vLLM modifications
+the ``kv_connector_module_path`` factory mechanism - no vLLM modifications
 required.
 
 Launch example::
@@ -36,9 +36,9 @@ class FP8HiddenStatesConnector(_eh_mod.ExampleHiddenStatesConnector):
 
     The output file contains three tensors::
 
-        hidden_states        – fp8 [seq_len, num_layers, hidden_size]
-        hidden_states_scales – fp32 [seq_len, 1]
-        token_ids            – int64 [seq_len]
+        hidden_states        - fp8 [seq_len, num_layers, hidden_size]
+        hidden_states_scales - fp32 [seq_len, 1]
+        token_ids            - int64 [seq_len]
     """
 
     def save_kv_layer(
