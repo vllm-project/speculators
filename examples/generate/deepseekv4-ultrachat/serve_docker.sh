@@ -27,7 +27,6 @@ case "${HARDWARE}" in
         GPU_ENV="-e NVIDIA_VISIBLE_DEVICES=${GPU_IDS}"
         HW_ARGS=(
             --data-parallel-size 4
-            --compilation-config '{"cudagraph_mode":"FULL_AND_PIECEWISE","custom_ops":["all"]}'
         )
         ;;
     b200)
