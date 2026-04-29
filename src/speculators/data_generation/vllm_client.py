@@ -1,8 +1,12 @@
 import asyncio
+import base64
 import functools
 import logging
+import mimetypes
 import time
+from pathlib import Path
 from typing import Any, cast
+from urllib.parse import urlparse
 
 import openai
 
@@ -15,6 +19,93 @@ RETRY_BACKOFF_BASE = 2  # seconds
 
 class InvalidResponseError(Exception):
     pass
+
+
+def _get_field(obj: Any, key: str) -> Any:
+    if isinstance(obj, dict):
+        return obj.get(key)
+    return getattr(obj, key, None)
+
+
+def _image_ref_to_chat_url(image_ref: Any) -> str:
+    """Convert a dataset image reference to an OpenAI-compatible image URL."""
+    ref = str(image_ref)
+    parsed = urlparse(ref)
+    if parsed.scheme in {"http", "https", "data", "file"}:
+        return ref
+
+    path = Path(ref).expanduser()
+    if path.exists() and path.is_file():
+        mime_type = mimetypes.guess_type(path.name)[0] or "image/jpeg"
+        encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+        return f"data:{mime_type};base64,{encoded}"
+
+    if path.is_absolute():
+        return path.as_uri()
+
+    return ref
+
+
+def _get_image_ref(part: dict[str, Any]) -> Any | None:
+    if part.get("type") not in ("image", "image_url", "input_image"):
+        return None
+
+    image_ref = part.get("image")
+    if image_ref is not None:
+        return image_ref
+
+    image_url = part.get("image_url")
+    if isinstance(image_url, dict):
+        return image_url.get("url")
+    return image_url
+
+
+def _prepare_chat_message_content(content: Any) -> Any:
+    if not isinstance(content, list):
+        return content
+
+    prepared = []
+    for part in content:
+        if isinstance(part, str):
+            prepared.append({"type": "text", "text": part})
+            continue
+
+        if not isinstance(part, dict):
+            prepared.append(part)
+            continue
+
+        image_ref = _get_image_ref(part)
+        if image_ref is not None:
+            prepared.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": _image_ref_to_chat_url(image_ref)},
+                }
+            )
+            continue
+
+        text = part.get("text")
+        if text is not None:
+            prepared.append({"type": "text", "text": str(text)})
+            continue
+
+        prepared.append(part)
+
+    return prepared
+
+
+def _prepare_chat_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Convert processor-style multimodal messages to vLLM chat messages."""
+    prepared = []
+    for message in messages:
+        prepared_message: dict[str, Any] = {
+            "role": message.get("role"),
+            "content": _prepare_chat_message_content(message.get("content", "")),
+        }
+        if "name" in message:
+            prepared_message["name"] = message["name"]
+        prepared.append(prepared_message)
+    return prepared
 
 
 def _handle_retry_error(
@@ -84,7 +175,11 @@ def with_retries(fn):
 
 
 def extract_output(completion, token_ids) -> str:
-    prompt_token_ids = getattr(completion.choices[0], "prompt_token_ids", None)
+    prompt_token_ids = _get_field(completion, "prompt_token_ids")
+    if prompt_token_ids is None:
+        choices = _get_field(completion, "choices")
+        if choices:
+            prompt_token_ids = _get_field(choices[0], "prompt_token_ids")
 
     if prompt_token_ids is None:
         raise InvalidResponseError("Response missing prompt_token_ids")
@@ -94,34 +189,14 @@ def extract_output(completion, token_ids) -> str:
             f"Prompt token IDs mismatch: expected {token_ids}, got {prompt_token_ids}"
         )
 
-    if not hasattr(completion, "kv_transfer_params"):
+    kv_transfer_params = _get_field(completion, "kv_transfer_params")
+    if kv_transfer_params is None:
         raise InvalidResponseError("Response missing kv_transfer_params")
 
-    return completion.kv_transfer_params.get("hidden_states_path")
-
-
-def _build_request_payload(
-    token_ids: list[int],
-    prompt: str | None = None,
-    multi_modal_data: dict[str, Any] | None = None,
-) -> tuple[list[int] | dict[str, Any], dict[str, Any]]:
-    """Build a vLLM completion request payload.
-
-    Text-only requests can pass token IDs directly. Requests that need the
-    original prompt text or multimodal inputs use vLLM's structured prompt form.
-    """
-    extra_body: dict[str, Any] = {"return_token_ids": True}
-
-    if prompt is None and multi_modal_data is None:
-        return token_ids, extra_body
-
-    request_prompt: dict[str, Any] = {"prompt_token_ids": token_ids}
-    if prompt is not None:
-        request_prompt["prompt"] = prompt
-    if multi_modal_data is not None:
-        request_prompt["multi_modal_data"] = multi_modal_data
-
-    return request_prompt, extra_body
+    hidden_states_path = _get_field(kv_transfer_params, "hidden_states_path")
+    if hidden_states_path is None:
+        raise InvalidResponseError("Response missing hidden_states_path")
+    return hidden_states_path
 
 
 @with_retries
@@ -129,8 +204,7 @@ async def generate_hidden_states_async(
     client: openai.AsyncClient,
     model: str,
     token_ids: list[int],
-    prompt: str | None = None,
-    multi_modal_data: dict[str, Any] | None = None,
+    messages: list[dict[str, Any]] | None = None,
     timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
 ) -> str:
     """
@@ -141,20 +215,26 @@ async def generate_hidden_states_async(
         client: The async OpenAI client.
         model: The model ID.
         token_ids: The input token IDs.
-        prompt: Optional prompt text corresponding to ``token_ids``.
-        multi_modal_data: Optional multimodal payload expected by vLLM.
+        messages: Optional chat messages for vLLM multimodal requests.
         timeout: Timeout in seconds for each request attempt. None for no timeout.
     """
-    request_prompt, extra_body = _build_request_payload(
-        token_ids, prompt, multi_modal_data
-    )
-    coro = client.completions.create(
-        model=model,
-        prompt=cast("Any", request_prompt),
-        max_tokens=1,
-        extra_body=extra_body,
-        timeout=timeout,
-    )
+    if messages is not None:
+        chat_messages = _prepare_chat_messages(messages)
+        coro = client.chat.completions.create(
+            model=model,
+            messages=cast("Any", chat_messages),
+            max_tokens=1,
+            extra_body={"return_token_ids": True, "add_generation_prompt": False},
+            timeout=timeout,
+        )
+    else:
+        coro = client.completions.create(
+            model=model,
+            prompt=token_ids,
+            max_tokens=1,
+            extra_body={"return_token_ids": True},
+            timeout=timeout,
+        )
     if timeout is not None:
         completion = await asyncio.wait_for(coro, timeout=timeout)
     else:
@@ -168,22 +248,28 @@ def generate_hidden_states(
     client: openai.Client,
     model: str,
     token_ids: list[int],
-    prompt: str | None = None,
-    multi_modal_data: dict[str, Any] | None = None,
+    messages: list[dict[str, Any]] | None = None,
     timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
 ) -> str:
     """
     Runs decode w/ max_tokens 1 to generate hidden states and returns path to
     hidden states file.
     """
-    request_prompt, extra_body = _build_request_payload(
-        token_ids, prompt, multi_modal_data
-    )
-    completion = client.completions.create(
-        model=model,
-        prompt=cast("Any", request_prompt),
-        max_tokens=1,
-        extra_body=extra_body,
-        timeout=timeout,
-    )
+    if messages is not None:
+        chat_messages = _prepare_chat_messages(messages)
+        completion = client.chat.completions.create(
+            model=model,
+            messages=cast("Any", chat_messages),
+            max_tokens=1,
+            extra_body={"return_token_ids": True, "add_generation_prompt": False},
+            timeout=timeout,
+        )
+    else:
+        completion = client.completions.create(
+            model=model,
+            prompt=token_ids,
+            max_tokens=1,
+            extra_body={"return_token_ids": True},
+            timeout=timeout,
+        )
     return extract_output(completion, token_ids)

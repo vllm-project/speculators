@@ -266,13 +266,13 @@ class ArrowDataset(BaseDataset):
         input_ids = sample["input_ids"]
         if hasattr(input_ids, "tolist"):
             input_ids = input_ids.tolist()
+        messages = sample.get("messages")
         try:
             hs_filepath = generate_hidden_states(
                 self.client,  # type:ignore[arg-type]
                 self.model,  # type:ignore[arg-type]
                 input_ids,
-                prompt=sample.get("prompt"),
-                multi_modal_data=sample.get("multi_modal_data"),
+                messages=messages,
                 timeout=self.request_timeout,
                 max_retries=self.max_retries,
             )

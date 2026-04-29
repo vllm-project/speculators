@@ -258,10 +258,8 @@ def _build_queue_item(idx: int, item: dict[str, Any]) -> dict[str, Any]:
         "input_ids": _to_token_id_list(item["input_ids"]),
     }
 
-    if "prompt" in item:
-        queue_item["prompt"] = item["prompt"]
-    if "multi_modal_data" in item:
-        queue_item["multi_modal_data"] = item["multi_modal_data"]
+    if "messages" in item:
+        queue_item["messages"] = item["messages"]
 
     return queue_item
 
@@ -297,8 +295,7 @@ async def worker(
             continue
 
         input_ids = item["input_ids"]
-        prompt = item.get("prompt")
-        multi_modal_data = item.get("multi_modal_data")
+        messages = item.get("messages")
 
         target_hidden_states_path = hidden_states_output_dir / f"hs_{idx}.safetensors"
 
@@ -308,8 +305,7 @@ async def worker(
                     client,
                     model,
                     input_ids,
-                    prompt=prompt,
-                    multi_modal_data=multi_modal_data,
+                    messages=messages,
                     timeout=request_timeout,
                     max_retries=max_retries,
                 )
@@ -392,7 +388,7 @@ async def generate_and_save_hidden_states(args, dataset):
 
     existing_file_indices = get_existing_hidden_state_indices(hidden_states_dir)
     num_samples = len(dataset)
-    if "multi_modal_data" in dataset.column_names:
+    if "messages" in dataset.column_names:
         logger.info("Detected multimodal preprocessed dataset")
 
     to_process = get_indices_to_process(

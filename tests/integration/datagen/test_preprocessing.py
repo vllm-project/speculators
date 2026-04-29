@@ -14,6 +14,7 @@ from speculators.data_generation import preprocessing
 from speculators.data_generation.preprocessing import (
     _create_loss_mask_from_offsets,
     _detect_assistant_pattern,
+    _expand_loss_mask_for_multimodal_tokens,
     _normalize_conversation,
     _preprocess_batch,
     _supports_assistant_mask,
@@ -134,6 +135,21 @@ def test_preprocess_batch_supports_messages_schema():
 
     assert len(results["input_ids"]) == 1
     assert len(results["loss_mask"]) == 1
+
+
+@pytest.mark.sanity
+def test_expand_loss_mask_for_multimodal_tokens_allows_truncation():
+    """Test that expanded multimodal alignment tolerates processor truncation."""
+    loss_mask = torch.tensor([0, 0, 1, 1], dtype=torch.long)
+
+    expanded = _expand_loss_mask_for_multimodal_tokens(
+        input_ids=[10, 999, 20, 30],
+        loss_mask=loss_mask,
+        expanded_input_ids=[10, 999, 999, 999, 20],
+        image_token_ids={999},
+    )
+
+    assert expanded.tolist() == [0, 0, 0, 0, 1]
 
 
 @pytest.mark.sanity
@@ -1050,12 +1066,23 @@ def test_build_eagle3_dataset_with_custom_pattern():
 
 
 @pytest.mark.sanity
-def test_build_eagle3_dataset_multimodal_preserves_prompt_and_mm_data():
-    """Test multimodal preprocessing preserves prompt text and image metadata."""
+def test_build_eagle3_dataset_multimodal_expands_image_tokens_and_preserves_messages():
+    """Test multimodal preprocessing expands image tokens and preserves messages."""
+    image_url = (
+        "data:image/png;base64,"
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/"
+        "x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+    )
 
     class DummyTokenizer:
         pad_token = "<pad>"
         eos_token = "<eos>"
+        unk_token_id = -1
+
+        def convert_tokens_to_ids(self, token):
+            if token == "<|image_pad|>":
+                return 999
+            return self.unk_token_id
 
         def __call__(
             self,
@@ -1077,9 +1104,15 @@ def test_build_eagle3_dataset_multimodal_preserves_prompt_and_mm_data():
         def __init__(self):
             self.tokenizer = DummyTokenizer()
 
+        def __call__(self, *args, **kwargs):
+            images = kwargs["images"]
+            assert len(images) == 1
+            assert getattr(images[0], "mode", None) == "RGB"
+            return {"input_ids": [[101, 999, 999, 999, 103]]}
+
         def apply_chat_template(self, *args, **kwargs):
             if kwargs.get("tokenize"):
-                return {"input_ids": [[101, 102, 103]], "assistant_mask": [[0, 1, 1]]}
+                return {"input_ids": [[101, 999, 103]], "assistant_mask": [[0, 0, 1]]}
             return "formatted multimodal prompt"
 
     dataset = HFDataset.from_dict(
@@ -1092,7 +1125,7 @@ def test_build_eagle3_dataset_multimodal_preserves_prompt_and_mm_data():
                             {"type": "text", "text": "Describe <image>"},
                             {
                                 "type": "image_url",
-                                "image_url": {"url": "https://example.com/cat.png"},
+                                "image_url": {"url": image_url},
                             },
                         ],
                     },
@@ -1114,7 +1147,24 @@ def test_build_eagle3_dataset_multimodal_preserves_prompt_and_mm_data():
         processor=processor,
     )
 
-    assert "prompt" in result.column_names
-    assert "multi_modal_data" in result.column_names
-    assert result[0]["prompt"] == "formatted multimodal prompt"
-    assert result[0]["multi_modal_data"] == {"image": ["https://example.com/cat.png"]}
+    assert "messages" in result.column_names
+    assert result[0]["input_ids"].tolist() == [101, 999, 999, 999, 103]
+    assert result[0]["loss_mask"].tolist() == [0, 0, 0, 0, 1]
+    assert result[0]["seq_len"] == 5
+    assert result[0]["messages"] == [
+        {
+            "content": [
+                {"image": None, "text": "Describe", "type": "text"},
+                {
+                    "image": image_url,
+                    "text": None,
+                    "type": "image",
+                },
+            ],
+            "role": "user",
+        },
+        {
+            "content": [{"image": None, "text": "A cat.", "type": "text"}],
+            "role": "assistant",
+        },
+    ]

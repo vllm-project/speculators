@@ -49,6 +49,42 @@ def parse_args():
     return parser.parse_known_args()
 
 
+def _is_multimodal_config(config) -> bool:
+    if any(
+        hasattr(config, field_name)
+        for field_name in (
+            "vision_config",
+            "visual_config",
+            "image_token_id",
+            "video_token_id",
+        )
+    ):
+        return True
+
+    model_type = str(getattr(config, "model_type", "")).lower()
+    if any(
+        marker in model_type
+        for marker in ("vl", "vision", "llava", "mllama", "paligemma", "pixtral")
+    ):
+        return True
+
+    architectures = getattr(config, "architectures", []) or []
+    return any(
+        any(
+            marker in str(architecture).lower()
+            for marker in (
+                "vl",
+                "vision",
+                "llava",
+                "mllama",
+                "paligemma",
+                "pixtral",
+            )
+        )
+        for architecture in architectures
+    )
+
+
 def main():
     args, vllm_args = parse_args()
     if "--" in vllm_args:
@@ -59,6 +95,16 @@ def main():
     config = AutoConfig.from_pretrained(args.model)
     text_config = config.text_config if hasattr(config, "text_config") else config
     num_hidden_layers = text_config.num_hidden_layers
+
+    if _is_multimodal_config(config) and "--enforce-eager" not in vllm_args:
+        # vLLM 0.20 multimodal hidden-state extraction can hit CUDA graph
+        # shape mismatches after image/video token expansion. Eager mode avoids
+        # that runtime crash.
+        vllm_args.append("--enforce-eager")
+        warnings.warn(
+            "Adding --enforce-eager for multimodal hidden-state extraction.",
+            stacklevel=2,
+        )
 
     if args.target_layer_ids:
         target_layer_ids = args.target_layer_ids

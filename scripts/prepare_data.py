@@ -139,7 +139,7 @@ def parse_args():
         action="store_true",
         help=(
             "Enable multimodal preprocessing with AutoProcessor and preserve "
-            "the prompt/multi_modal_data needed for hidden-state generation."
+            "messages needed for vLLM chat hidden-state generation."
         ),
     )
     return parser.parse_args()

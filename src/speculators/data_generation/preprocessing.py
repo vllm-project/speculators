@@ -5,11 +5,13 @@ from functools import partial
 from pathlib import Path
 from re import Pattern
 from typing import Any, cast
+from urllib.parse import unquote, urlparse
 
 import torch
 from datasets import Dataset as HFDataset
 from datasets import concatenate_datasets, load_dataset
 from transformers import AutoProcessor, AutoTokenizer, PreTrainedTokenizerBase
+from transformers.image_utils import load_image
 
 from speculators.data_generation.configs import DATASET_CONFIGS
 from speculators.data_generation.logging_utils import PipelineLogger
@@ -121,9 +123,18 @@ def _get_tokenizer_from_processor(processor: Any) -> PreTrainedTokenizerBase:
     return cast("PreTrainedTokenizerBase", tokenizer)
 
 
+def _load_image_for_processor(image_ref: Any) -> Any:
+    """Load a local/data image reference for HF multimodal processors."""
+    if isinstance(image_ref, str):
+        parsed = urlparse(image_ref)
+        if parsed.scheme == "file":
+            image_ref = unquote(parsed.path)
+    return load_image(image_ref)
+
+
 def _get_image_ref(item: dict) -> Any | None:
     """Extract a serializable image reference from a multimodal content item."""
-    if item.get("type") not in ("image", "image_url"):
+    if item.get("type") not in ("image", "image_url", "input_image"):
         return None
 
     image_ref = item.get("image")
@@ -136,11 +147,9 @@ def _get_image_ref(item: dict) -> Any | None:
     return image_url
 
 
-def _extract_multimodal_data_from_conversation(
-    conv: list[dict],
-) -> dict[str, list[Any]]:
-    """Build the minimal multi_modal_data payload expected by vLLM."""
-    mm_data: dict[str, list[Any]] = {}
+def _extract_processor_images_from_conversation(conv: list[dict]) -> list[Any]:
+    """Extract image inputs in the same order as the chat template placeholders."""
+    images = []
     for turn in conv:
         content = turn.get("content")
         if not isinstance(content, list):
@@ -151,9 +160,114 @@ def _extract_multimodal_data_from_conversation(
                 continue
             image_ref = _get_image_ref(item)
             if image_ref is not None:
-                mm_data.setdefault("image", []).append(image_ref)
+                images.append(_load_image_for_processor(image_ref))
 
-    return mm_data
+    return images
+
+
+def _get_image_token_ids(tokenizer: PreTrainedTokenizerBase) -> set[int]:
+    """Return known image placeholder token IDs for VL token expansion."""
+    image_token_ids = set()
+    convert_tokens_to_ids = getattr(tokenizer, "convert_tokens_to_ids", None)
+    if not callable(convert_tokens_to_ids):
+        return image_token_ids
+
+    unk_token_id = getattr(tokenizer, "unk_token_id", None)
+    for token in ("<|image_pad|>", "<image>", "<image_pad>"):
+        token_id = convert_tokens_to_ids(token)
+        if isinstance(token_id, int) and token_id >= 0 and token_id != unk_token_id:
+            image_token_ids.add(token_id)
+
+    return image_token_ids
+
+
+def _expand_loss_mask_for_multimodal_tokens(
+    input_ids: list[int],
+    loss_mask: torch.Tensor,
+    expanded_input_ids: list[int],
+    image_token_ids: set[int],
+) -> torch.Tensor:
+    """Expand loss masks when a processor expands image placeholders."""
+    if input_ids == expanded_input_ids:
+        return loss_mask
+
+    if not image_token_ids:
+        raise ValueError("Cannot align expanded multimodal input IDs without image IDs")
+
+    mask_values = loss_mask.tolist()
+    expanded_mask: list[int] = []
+    src_idx = 0
+    dst_idx = 0
+
+    while src_idx < len(input_ids):
+        token_id = input_ids[src_idx]
+        if dst_idx >= len(expanded_input_ids):
+            break
+
+        if token_id in image_token_ids:
+            start_idx = dst_idx
+            while (
+                dst_idx < len(expanded_input_ids)
+                and expanded_input_ids[dst_idx] == token_id
+            ):
+                dst_idx += 1
+            if dst_idx == start_idx:
+                raise ValueError(
+                    f"Unable to align image token {token_id} at position {src_idx}"
+                )
+            expanded_mask.extend([0] * (dst_idx - start_idx))
+            src_idx += 1
+            continue
+
+        if expanded_input_ids[dst_idx] != token_id:
+            raise ValueError(
+                "Unable to align expanded multimodal input IDs at "
+                f"source={src_idx}, expanded={dst_idx}: "
+                f"{token_id} != {expanded_input_ids[dst_idx]}"
+            )
+        expanded_mask.append(int(mask_values[src_idx]))
+        src_idx += 1
+        dst_idx += 1
+
+    if dst_idx != len(expanded_input_ids):
+        raise ValueError(
+            "Expanded multimodal input IDs contain trailing tokens after alignment"
+        )
+
+    return torch.tensor(expanded_mask, dtype=loss_mask.dtype)
+
+
+def _expand_multimodal_inputs_with_images(
+    processor: Any,
+    tokenizer: PreTrainedTokenizerBase,
+    formatted_text: str,
+    normalized_conv: list[dict],
+    input_ids: list[int],
+    loss_mask: torch.Tensor,
+    max_length: int,
+) -> tuple[list[int], torch.Tensor]:
+    """Use actual images so HF preprocessing matches vLLM VL token expansion."""
+    images = _extract_processor_images_from_conversation(normalized_conv)
+    if not images:
+        return input_ids, loss_mask
+
+    encoded = processor(
+        text=[formatted_text],
+        images=images,
+        max_length=max_length,
+        truncation=True,
+    )
+    expanded_input_ids = _flatten_singleton_batch(
+        encoded["input_ids"],
+        field_name="Multimodal processor input_ids with images",
+    )
+    expanded_loss_mask = _expand_loss_mask_for_multimodal_tokens(
+        input_ids,
+        loss_mask,
+        expanded_input_ids,
+        _get_image_token_ids(tokenizer),
+    )
+    return expanded_input_ids, expanded_loss_mask
 
 
 def _normalize_conversation(
@@ -486,8 +600,7 @@ def _preprocess_batch_multimodal(  # noqa: PLR0912, PLR0915
     results: dict[str, list] = {
         "input_ids": [],
         "loss_mask": [],
-        "multi_modal_data": [],
-        "prompt": [],
+        "messages": [],
         "seq_len": [],
     }
     conversations = _get_conversations_from_examples(examples)
@@ -565,20 +678,34 @@ def _preprocess_batch_multimodal(  # noqa: PLR0912, PLR0915
                 f"loss_mask={len(loss_mask)}"
             )
 
+            input_ids, loss_mask = _expand_multimodal_inputs_with_images(
+                processor,
+                tokenizer,
+                formatted_raw,
+                normalized_conv,
+                input_ids,
+                loss_mask,
+                max_length,
+            )
+
             if minimum_valid_tokens is not None:
                 num_valid_tokens = int(loss_mask.sum().item())
                 if num_valid_tokens < minimum_valid_tokens:
                     continue
 
-            mm_data = _extract_multimodal_data_from_conversation(normalized_conv)
-
             results["input_ids"].append(torch.tensor(input_ids, dtype=torch.long))
             results["loss_mask"].append(loss_mask)
-            results["multi_modal_data"].append(mm_data)
-            results["prompt"].append(formatted_raw)
+            results["messages"].append(normalized_conv)
             results["seq_len"].append(len(input_ids))
 
-        except (TypeError, ValueError, KeyError, AttributeError, RuntimeError) as e:
+        except (
+            TypeError,
+            ValueError,
+            KeyError,
+            AttributeError,
+            RuntimeError,
+            OSError,
+        ) as e:
             log.error(
                 f"Failed to process conversation {idx} "
                 f"(assistant_pattern={assistant_pattern is not None}): {e}"
@@ -653,7 +780,11 @@ def build_eagle3_dataset(
         map_fn,
         batched=True,
         num_proc=num_proc,
-        batch_size=1000,
+        # Multimodal preprocessing loads each image and asks the processor to
+        # expand image placeholders into the real visual-token length. Large
+        # batches can look stuck because a worker must finish the whole batch
+        # before datasets updates progress.
+        batch_size=32 if is_multimodal else 1000,
         remove_columns=original_cols,
         keep_in_memory=True,  # skip caching
     )
