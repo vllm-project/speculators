@@ -48,7 +48,7 @@ def parse_args():
         help=(
             "Quantize hidden states to float8_e4m3fn with per-token scaling "
             "before saving. Uses a custom KV connector that stores FP8 data "
-            "with scaling factors, reducing disk usage by ~50%%."
+            "with scaling factors."
         ),
     )
     parser.add_argument(
