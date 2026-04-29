@@ -24,7 +24,7 @@ case "${HARDWARE}" in
     h100)
         IMAGE="vllm/vllm-openai:deepseekv4-cu129"
         GPUS_FLAG="all"
-        GPU_ENV="-e NVIDIA_VISIBLE_DEVICES=${GPU_IDS}"
+        GPU_ENV="-e CUDA_VISIBLE_DEVICES=${GPU_IDS}"
         HW_ARGS=(
             --data-parallel-size 4
         )
