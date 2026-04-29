@@ -9,6 +9,8 @@
 #   bash run.sh [OPTIONS]
 #
 # Options:
+#   --mode STR            native | docker  (default: native)
+#   --hardware STR        h100 | b200      (default: h100; docker mode only)
 #   --dataset STR         ultrachat | magpie (default: ultrachat)
 #   --limit N             Stop after N rows — use for test runs (default: all)
 #   --concurrency N       Concurrent HTTP requests (default: 64)
@@ -18,8 +20,11 @@
 #   --max-runtime N       Global deadline in hours (default: 12)
 #   --reserve-duration S  chg reserve duration string (default: 2h)
 #
-# Quick test run (50 samples):
+# Quick test run — native vllm, 50 samples:
 #   bash run.sh --limit 50
+#
+# Quick test run — Docker on H100, 50 samples:
+#   bash run.sh --mode docker --hardware h100 --limit 50
 # =============================================================================
 
 set -euo pipefail
@@ -33,6 +38,8 @@ source "${SCRIPT_DIR}/lib.sh"
 # ---------------------------------------------------------------------------
 # Defaults
 # ---------------------------------------------------------------------------
+MODE="native"
+HARDWARE="h100"
 DATASET="ultrachat"
 LIMIT=""
 CONCURRENCY=64
@@ -42,13 +49,13 @@ OUTPUT_DIR="results_$(date +%Y%m%d_%H%M%S)"
 MAX_RUNTIME_HOURS=12
 RESERVE_DURATION="2h"
 
-NUM_GPUS=8
-
 # ---------------------------------------------------------------------------
 # CLI parsing
 # ---------------------------------------------------------------------------
 while [[ $# -gt 0 ]]; do
     case $1 in
+        --mode)             MODE="$2";               shift 2 ;;
+        --hardware)         HARDWARE="$2";           shift 2 ;;
         --dataset)          DATASET="$2";            shift 2 ;;
         --limit)            LIMIT="$2";              shift 2 ;;
         --concurrency)      CONCURRENCY="$2";        shift 2 ;;
@@ -60,6 +67,29 @@ while [[ $# -gt 0 ]]; do
         *) error "Unknown option: $1"; exit 1 ;;
     esac
 done
+
+# ---------------------------------------------------------------------------
+# Validate mode / hardware and pick serve script + GPU count
+# ---------------------------------------------------------------------------
+case "${MODE}" in
+    native)
+        NUM_GPUS=8
+        SERVE_SCRIPT="${SCRIPT_DIR}/serve.sh"
+        ;;
+    docker)
+        case "${HARDWARE}" in
+            h100) NUM_GPUS=8 ;;
+            b200) NUM_GPUS=4 ;;
+            *) error "Unknown hardware: ${HARDWARE}. Valid: h100, b200"; exit 1 ;;
+        esac
+        SERVE_SCRIPT="${SCRIPT_DIR}/serve_docker.sh"
+        : "${HF_HUB_CACHE:?HF_HUB_CACHE must be set for docker mode}"
+        ;;
+    *) error "Unknown mode: ${MODE}. Valid: native, docker"; exit 1 ;;
+esac
+
+# Expose to lib.sh stop_server
+export SERVE_MODE="${MODE}"
 
 # ---------------------------------------------------------------------------
 # Computed values
@@ -84,6 +114,7 @@ DEADLINE_TS=$(date -d "@${SCRIPT_DEADLINE}" '+%Y-%m-%d %H:%M:%S' 2>/dev/null \
     || echo "start + ${MAX_RUNTIME_HOURS}h")
 
 banner "DeepSeek-V4-Flash UltraChat Response Regeneration"
+info "Mode          : ${MODE}$([[ ${MODE} == docker ]] && echo " (${HARDWARE})" || true)"
 info "Dataset       : ${DATASET}"
 info "Output dir    : ${OUTPUT_DIR}"
 info "Output file   : ${OUTFILE}"
@@ -129,16 +160,17 @@ if ! reserve_gpus "${NUM_GPUS}" "${RESERVE_DURATION}"; then
 fi
 
 # ---------------------------------------------------------------------------
-# Start vLLM server
+# Start server
 # ---------------------------------------------------------------------------
-banner "Starting vLLM Server"
+banner "Starting vLLM Server (${MODE})"
 
 PORT=$(find_free_port 8000)
 ENDPOINT="http://localhost:${PORT}"
 
 info "Starting server on port ${PORT}..."
 GPU_IDS="${GPU_IDS}" PORT="${PORT}" SERVER_LOG="${SERVER_LOG}" \
-    bash "${SCRIPT_DIR}/serve.sh" > /dev/null 2>&1 &
+    HARDWARE="${HARDWARE}" \
+    bash "${SERVE_SCRIPT}" > /dev/null 2>&1 &
 SERVER_PID=$!
 info "Server PID: ${SERVER_PID}"
 

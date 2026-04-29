@@ -168,7 +168,8 @@ find_free_port() {
 }
 
 # ---------------------------------------------------------------------------
-# Server management (native process — no Docker)
+# Server management
+# SERVE_MODE (set by run.sh): "native" or "docker"
 # ---------------------------------------------------------------------------
 SERVER_PID=""
 
@@ -201,13 +202,49 @@ wait_for_server() {
 }
 
 stop_server() {
-    info "Stopping vLLM server..."
-    if [[ -n "${SERVER_PID}" ]] && kill -0 "${SERVER_PID}" 2>/dev/null; then
-        kill "${SERVER_PID}" 2>/dev/null || true
-        wait "${SERVER_PID}" 2>/dev/null || true
+    local port="${PORT:-8000}"
+
+    if [[ "${SERVE_MODE:-native}" == "docker" ]]; then
+        local name="vllm-deepseek-${port}"
+        info "Stopping Docker server (container: ${name})..."
+
+        # Kill the bash wrapper (serve_docker.sh) so the pipe exits cleanly
+        if [[ -n "${SERVER_PID}" ]] && kill -0 "${SERVER_PID}" 2>/dev/null; then
+            kill "${SERVER_PID}" 2>/dev/null || true
+            wait "${SERVER_PID}" 2>/dev/null || true
+        fi
+
+        # docker stop: sends SIGTERM to PID 1 in the container, then SIGKILL after 10s
+        if docker ps --format "{{.Names}}" 2>/dev/null | grep -q "^${name}$"; then
+            info "Running docker stop ${name}..."
+            docker stop "${name}" > /dev/null 2>&1 || true
+        fi
+
+        rm -f "/tmp/vllm_container_${port}.lock"
+    else
+        info "Stopping vLLM server (PID: ${SERVER_PID:-none})..."
+
+        if [[ -n "${SERVER_PID}" ]] && kill -0 "${SERVER_PID}" 2>/dev/null; then
+            # Graceful: SIGTERM first
+            kill -TERM "${SERVER_PID}" 2>/dev/null || true
+
+            # Wait up to 30s for the process to exit on its own
+            local deadline=$(( $(date +%s) + 30 ))
+            while kill -0 "${SERVER_PID}" 2>/dev/null && [[ $(date +%s) -lt $deadline ]]; do
+                sleep 1
+            done
+
+            # Force kill if still alive
+            if kill -0 "${SERVER_PID}" 2>/dev/null; then
+                warn "Still alive after 30s — sending SIGKILL..."
+                kill -KILL "${SERVER_PID}" 2>/dev/null || true
+                wait "${SERVER_PID}" 2>/dev/null || true
+            fi
+        fi
     fi
+
     SERVER_PID=""
-    sleep 3
+    sleep 2
     info "Server stopped."
 }
 
