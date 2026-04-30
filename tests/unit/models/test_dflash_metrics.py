@@ -164,7 +164,10 @@ class TestLossFunction:
         loss_mask = torch.ones(B, T)
         pos_idx = torch.arange(T).unsqueeze(0).expand(B, -1) % 8
         loss = loss_function(
-            logits, targets, loss_mask, pos_idx,
+            logits,
+            targets,
+            loss_mask,
+            pos_idx,
             loss_fn=ce_loss,
             decay_fn=partial(dflash_loss_decay, gamma=4.0),
         )
@@ -187,7 +190,10 @@ class TestLossFunction:
         loss_mask = torch.zeros(B, T)
         pos_idx = torch.arange(T).unsqueeze(0) % 8
         loss = loss_function(
-            logits, targets, loss_mask, pos_idx,
+            logits,
+            targets,
+            loss_mask,
+            pos_idx,
             loss_fn=ce_loss,
             decay_fn=partial(dflash_loss_decay, gamma=4.0),
         )
@@ -201,12 +207,18 @@ class TestLossFunction:
         loss_mask = torch.ones(B, T)
         pos_idx = torch.arange(T).unsqueeze(0) % 8
         loss_g1 = loss_function(
-            logits, targets, loss_mask, pos_idx,
+            logits,
+            targets,
+            loss_mask,
+            pos_idx,
             loss_fn=ce_loss,
             decay_fn=partial(dflash_loss_decay, gamma=1.0),
         )
         loss_g10 = loss_function(
-            logits, targets, loss_mask, pos_idx,
+            logits,
+            targets,
+            loss_mask,
+            pos_idx,
             loss_fn=ce_loss,
             decay_fn=partial(dflash_loss_decay, gamma=10.0),
         )
@@ -221,12 +233,18 @@ class TestLossFunction:
         pos_idx_b4 = torch.arange(T).unsqueeze(0) % 4
         pos_idx_b8 = torch.arange(T).unsqueeze(0) % 8
         loss_b4 = loss_function(
-            logits, targets, loss_mask, pos_idx_b4,
+            logits,
+            targets,
+            loss_mask,
+            pos_idx_b4,
             loss_fn=ce_loss,
             decay_fn=partial(dflash_loss_decay, gamma=4.0),
         )
         loss_b8 = loss_function(
-            logits, targets, loss_mask, pos_idx_b8,
+            logits,
+            targets,
+            loss_mask,
+            pos_idx_b8,
             loss_fn=ce_loss,
             decay_fn=partial(dflash_loss_decay, gamma=4.0),
         )
@@ -243,7 +261,10 @@ class TestLossFunction:
         loss_mask = torch.ones(B, T)
         pos_idx = torch.arange(T).unsqueeze(0) % 8
         loss = loss_function(
-            logits, targets, loss_mask, pos_idx,
+            logits,
+            targets,
+            loss_mask,
+            pos_idx,
             loss_fn=ce_loss,
             decay_fn=partial(dflash_loss_decay, gamma=4.0),
         )
@@ -281,7 +302,10 @@ class TestComputeMetrics:
         loss, metrics = compute_metrics(logits, targets, loss_mask, block_size=4)
         pos_idx = torch.arange(T).unsqueeze(0) % 4
         expected_loss = loss_function(
-            logits, targets, loss_mask, pos_idx,
+            logits,
+            targets,
+            loss_mask,
+            pos_idx,
             loss_fn=ce_loss,
             decay_fn=partial(dflash_loss_decay, gamma=4.0),
         )

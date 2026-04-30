@@ -92,9 +92,7 @@ def compute_metrics(
 
     seq_len = s_logits.shape[1]
     if s_loss_mask is None:
-        s_loss_mask = torch.ones(
-            1, seq_len, device=s_logits.device, dtype=torch.bool
-        )
+        s_loss_mask = torch.ones(1, seq_len, device=s_logits.device, dtype=torch.bool)
 
     pos_idx = torch.full(
         (1, seq_len), ttt_step, device=s_logits.device, dtype=torch.long

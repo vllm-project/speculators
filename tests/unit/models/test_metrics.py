@@ -33,12 +33,18 @@ class TestLossFunction:
         pos_idx_step2 = torch.full((B, T), 2, dtype=torch.long)
 
         loss_step0 = loss_function(
-            logits, targets, loss_mask, pos_idx_step0,
+            logits,
+            targets,
+            loss_mask,
+            pos_idx_step0,
             loss_fn=kl_div_loss,
             decay_fn=partial(exp_loss_decay, gamma=gamma),
         )
         loss_step2 = loss_function(
-            logits, targets, loss_mask, pos_idx_step2,
+            logits,
+            targets,
+            loss_mask,
+            pos_idx_step2,
             loss_fn=kl_div_loss,
             decay_fn=partial(exp_loss_decay, gamma=gamma),
         )
@@ -96,7 +102,10 @@ class TestComputeAccuracySingleStep:
         prev_correct = torch.ones(1, 4, dtype=torch.bool)
 
         full_acc_0, cond_acc_0 = compute_accuracy_single_step(
-            pred_step0, tgt_step0, loss_mask=None, prev_correct=prev_correct,
+            pred_step0,
+            tgt_step0,
+            loss_mask=None,
+            prev_correct=prev_correct,
         )
         assert full_acc_0 == pytest.approx(3 / 4, abs=1e-4)
         assert cond_acc_0 == pytest.approx(3 / 4, abs=1e-4)
@@ -106,9 +115,13 @@ class TestComputeAccuracySingleStep:
         tgt_step1 = torch.tensor([[1, 2, 5, 4]])
 
         full_acc_1, cond_acc_1 = compute_accuracy_single_step(
-            pred_step1, tgt_step1, loss_mask=None, prev_correct=prev_correct,
+            pred_step1,
+            tgt_step1,
+            loss_mask=None,
+            prev_correct=prev_correct,
         )
-        # [0,1] correct on both steps, [2] was correct but now wrong, [3] was already wrong
+        # [0,1] correct on both steps, [2] was correct but now wrong,
+        # [3] was already wrong
         assert prev_correct.tolist() == [[True, True, False, False]]
         assert full_acc_1 == pytest.approx(2 / 4, abs=1e-4)
         assert cond_acc_1 == pytest.approx(2 / 3, abs=1e-4)
@@ -123,5 +136,7 @@ class TestDecayFunctions:
         assert dflash[1].item() == pytest.approx(1.0)
         assert dflash[2].item() < dflash[1].item()
 
-        assert exp_loss_decay(torch.tensor(2.0), gamma=0.5).item() == pytest.approx(0.25)
+        assert exp_loss_decay(torch.tensor(2.0), gamma=0.5).item() == pytest.approx(
+            0.25
+        )
         assert exp_loss_decay(torch.tensor(0.0), gamma=0.5).item() == pytest.approx(1.0)
