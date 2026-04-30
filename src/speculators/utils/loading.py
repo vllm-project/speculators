@@ -9,6 +9,35 @@ from loguru import logger
 from safetensors import safe_open
 
 
+def list_checkpoint_keys(checkpoint_dir: str | Path) -> list[str]:
+    """List all tensor keys in a checkpoint without loading weights.
+
+    Supports sharded safetensors (via index), single safetensors, and
+    pytorch_model.bin formats.
+
+    :param checkpoint_dir: Path to a local checkpoint directory.
+    :return: List of tensor key names present in the checkpoint.
+    """
+    checkpoint_dir = Path(checkpoint_dir)
+
+    index_path = checkpoint_dir / "model.safetensors.index.json"
+    if index_path.exists():
+        with index_path.open() as f:
+            return list(json.load(f)["weight_map"].keys())
+
+    single = checkpoint_dir / "model.safetensors"
+    if single.exists():
+        with safe_open(str(single), framework="pt") as f:
+            return list(f.keys())  # noqa: SIM118
+
+    pytorch = checkpoint_dir / "pytorch_model.bin"
+    if pytorch.exists():
+        state_dict = torch.load(str(pytorch), map_location="cpu", weights_only=True)
+        return list(state_dict.keys())
+
+    raise FileNotFoundError(f"No checkpoint weights found at {checkpoint_dir}")
+
+
 def load_model_layers(
     layer_names: list[str], model_path: str
 ) -> dict[str, torch.Tensor]:

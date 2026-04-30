@@ -16,7 +16,19 @@ from speculators.models.mtp.model_definitions import (
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 from speculators.utils.loading import load_model_layers
 
-__all__ = ["MTPDraftModel"]
+__all__ = ["MTPDraftModel", "compute_step_weights"]
+
+
+def compute_step_weights(beta: float = 0.6, num_steps: int = 3) -> list[float]:
+    """Compute normalized exponential-decay step weights.
+
+    alpha_k = beta^(k-1) / sum(beta^(j-1) for j=1..K)
+
+    See FastMTP (arXiv:2509.18362), Equation 2.
+    """
+    raw = [beta**k for k in range(num_steps)]
+    total = sum(raw)
+    return [w / total for w in raw]
 
 
 @SpeculatorModel.register("mtp")
@@ -77,7 +89,6 @@ class MTPDraftModel(SpeculatorModel):
         hidden_states: torch.Tensor,
         attention_mask: torch.Tensor | None = None,
         position_ids: torch.Tensor | None = None,
-        labels: torch.Tensor | None = None,
         loss_mask: torch.Tensor | None = None,
         step_weights: list[float] | None = None,
         return_dict: bool = True,  # noqa: ARG002
@@ -90,12 +101,15 @@ class MTPDraftModel(SpeculatorModel):
         hidden state input. Hidden states are passed recursively: each step's MTP
         output feeds the next step.
 
-        :param input_ids: Token IDs [batch, seq_len]
+        Targets are derived from input_ids via per-step offset slicing — no
+        separate label tensor is needed. Use loss_mask to exclude positions
+        (e.g. prompt tokens) from the loss.
+
+        :param input_ids: Token IDs [batch, seq_len]. Serves as both the
+            embedding source and the prediction target (offset by step+2).
         :param hidden_states: Hidden states from verifier [batch, seq_len, hidden_size]
         :param attention_mask: Optional attention mask [batch, seq_len]
         :param position_ids: Optional position IDs [batch, seq_len]
-        :param labels: Optional ground truth labels [batch, seq_len]. If None,
-            defaults to input_ids.
         :param loss_mask: Optional binary mask [batch, seq_len]; 1=compute loss,
             0=ignore.
         :param step_weights: Per-step loss weights (None = uniform). Training only.
@@ -104,10 +118,7 @@ class MTPDraftModel(SpeculatorModel):
             (lengths, verifier_last_hidden_states)
         :return: Tuple of (logits_list, loss, metrics)
         """
-        # Trainer casts all batch tensors to bfloat16; restore integer types
         input_ids = input_ids.long()
-        labels = input_ids if labels is None else labels.long()
-
         device = input_ids.device
         batch_size, seq_len = input_ids.shape
         num_steps = self.config.num_speculative_steps
@@ -118,9 +129,7 @@ class MTPDraftModel(SpeculatorModel):
             )
 
         all_logits: list[torch.Tensor] = []
-        total_loss: torch.Tensor | None = (
-            torch.tensor(0.0, device=device) if labels is not None else None
-        )
+        total_loss = torch.tensor(0.0, device=device)
         metrics: dict[str, float] = {}
 
         current_hidden = hidden_states
@@ -149,20 +158,19 @@ class MTPDraftModel(SpeculatorModel):
             logits = self.lm_head(mtp_output)
             all_logits.append(logits)
 
-            if labels is not None:
-                step_labels = labels[:, step + 2 : step + 2 + valid_len]
-                if loss_mask is not None:
-                    step_mask = loss_mask[:, step + 2 : step + 2 + valid_len]
-                    step_labels = step_labels.clone()
-                    step_labels[step_mask == 0] = -100
-                weight = step_weights[step] if step_weights is not None else 1.0
-                step_loss = weight * nn.functional.cross_entropy(
-                    logits.reshape(-1, self.config.vocab_size),
-                    step_labels.reshape(-1),
-                    ignore_index=-100,
-                )
-                total_loss = total_loss + step_loss  # type: ignore[operator]
-                metrics[f"loss_step_{step}"] = step_loss.item()
+            step_targets = input_ids[:, step + 2 : step + 2 + valid_len]
+            if loss_mask is not None:
+                step_mask = loss_mask[:, step + 2 : step + 2 + valid_len]
+                step_targets = step_targets.clone()
+                step_targets[step_mask == 0] = -100
+            weight = step_weights[step] if step_weights is not None else 1.0
+            step_loss = weight * nn.functional.cross_entropy(
+                logits.reshape(-1, self.config.vocab_size),
+                step_targets.reshape(-1),
+                ignore_index=-100,
+            )
+            total_loss = total_loss + step_loss
+            metrics[f"loss_step_{step}"] = step_loss.item()
 
             current_hidden = mtp_output
 
@@ -207,7 +215,7 @@ class MTPDraftModel(SpeculatorModel):
         """
         step_weights = kwargs.get("step_weights")
         if step_weights is None:
-            step_weights = MTPConfig.compute_step_weights(
+            step_weights = compute_step_weights(
                 beta=kwargs.get("step_weight_beta", 0.6),
                 num_steps=kwargs.get("num_speculative_steps", 3),
             )

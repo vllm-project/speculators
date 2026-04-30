@@ -25,6 +25,7 @@ from speculators.convert.eagle.utils import (
 )
 from speculators.models.mtp import MTPConfig, MTPDraftModel
 from speculators.proposals.greedy import GreedyTokenProposalConfig
+from speculators.utils.loading import list_checkpoint_keys
 
 __all__ = ["MTPConverter"]
 
@@ -74,7 +75,7 @@ class MTPConverter:
         local_path = ensure_checkpoint_is_local(input_path, cache_dir)
         source_config = load_checkpoint_config(local_path)
 
-        all_keys = self._list_checkpoint_keys(local_path)
+        all_keys = list_checkpoint_keys(local_path)
         self._verify_mtp_format(all_keys)
 
         weights = self._extract_weights(local_path, all_keys)
@@ -90,24 +91,6 @@ class MTPConverter:
 
         if validate:
             self._validate(saved_path)
-
-    def _list_checkpoint_keys(self, checkpoint_dir: Path) -> list[str]:
-        index_path = checkpoint_dir / "model.safetensors.index.json"
-        if index_path.exists():
-            with index_path.open() as f:
-                return list(json.load(f)["weight_map"].keys())
-
-        single = checkpoint_dir / "model.safetensors"
-        if single.exists():
-            with safe_open(str(single), framework="pt") as f:
-                return list(f.keys())  # noqa: SIM118
-
-        pytorch = checkpoint_dir / "pytorch_model.bin"
-        if pytorch.exists():
-            state_dict = torch.load(str(pytorch), map_location="cpu", weights_only=True)
-            return list(state_dict.keys())
-
-        raise FileNotFoundError(f"No checkpoint weights found at {checkpoint_dir}")
 
     def _verify_mtp_format(self, keys: list[str]) -> None:
         if not any(k.startswith(_MTP_PREFIX) for k in keys):

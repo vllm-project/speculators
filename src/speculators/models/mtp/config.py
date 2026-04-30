@@ -52,15 +52,6 @@ class MTPConfig(SpeculatorModelConfig):
         ),
     )
 
-    step_weight_beta: float = Field(
-        default=0.6,
-        description=(
-            "Exponential decay factor for per-step loss weights. "
-            "Weight for step k is beta^(k-1) normalized over all steps. "
-            "From FastMTP (arXiv:2509.18362), Equation 2."
-        ),
-    )
-
     @property
     def hidden_size(self) -> int:
         return self.transformer_layer_config.hidden_size  # type: ignore[return-value]
@@ -72,18 +63,6 @@ class MTPConfig(SpeculatorModelConfig):
     @property
     def num_speculative_steps(self) -> int:
         return self.speculators_config.proposal_methods[0].speculative_tokens  # type: ignore[union-attr,attr-defined]
-
-    @staticmethod
-    def compute_step_weights(beta: float = 0.6, num_steps: int = 3) -> list[float]:
-        """Compute normalized exponential-decay step weights.
-
-        alpha_k = beta^(k-1) / sum(beta^(j-1) for j=1..K)
-
-        See FastMTP (arXiv:2509.18362), Equation 2.
-        """
-        raw = [beta**k for k in range(num_steps)]
-        total = sum(raw)
-        return [w / total for w in raw]
 
     @field_validator("num_nextn_predict_layers")
     @classmethod
