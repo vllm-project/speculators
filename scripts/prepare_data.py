@@ -53,7 +53,7 @@ def parse_args():
         "--trust-remote-code",
         action="store_true",
         help=(
-            "Allow executing code from HF Hub when loading the target model's. "
+            "Allow executing code from HF Hub when loading the target model's "
             "processor. Also applies to datasets."
         ),
     )
