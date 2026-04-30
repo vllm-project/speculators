@@ -66,7 +66,7 @@ DATASET_CONFIGS: dict[str, DatasetConfig] = {
         normalize_fn=_normalize_ultrachat,
     ),
     # NOTE: `datasets<4` is needed to run custom script
-    # You also need to pass `--allowed-local-media-path` to `launch_vllm.py`
+    # You also need to pass `--allowed-local-media-path /` to `launch_vllm.py`
     "coco": DatasetConfig(
         name="coco",
         hf_path="HuggingFaceM4/COCO",
