@@ -5,20 +5,25 @@ Combines performance metrics from guidellm sweep JSON files with speculative
 decoding acceptance rates from vLLM's /metrics endpoint.
 
 Usage:
-    python parse_sweep_with_metrics.py --output results.csv --vllm-url http://localhost:8000 sweep_*.json
+    python parse_sweep_with_metrics.py --output results.csv \\
+        --vllm-url http://localhost:8000 sweep_*.json
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import csv
 import json
+import logging
 import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -74,11 +79,11 @@ def fetch_vllm_metrics(url: str, timeout: int = 10) -> str:
         response.raise_for_status()
         return response.text
     except requests.exceptions.RequestException as e:
-        print(f"[WARN] Failed to fetch vLLM metrics from {metrics_url}: {e}", file=sys.stderr)
+        logger.warning("Failed to fetch vLLM metrics from %s: %s", metrics_url, e)
         return ""
 
 
-def parse_prometheus_metrics(raw_text: str) -> list[Metric]:
+def parse_prometheus_metrics(raw_text: str) -> list[Metric]:  # noqa: C901
     """Parse Prometheus-formatted metrics into Metric objects."""
     if not raw_text:
         return []
@@ -87,13 +92,13 @@ def parse_prometheus_metrics(raw_text: str) -> list[Metric]:
     lines = raw_text.strip().split("\n")
     vector_data: dict[str, list[tuple[int, float]]] = {}
 
-    for line in lines:
-        line = line.strip()
+    for raw_line in lines:
+        line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
 
         # Match simple counter: metric_name value
-        match = re.match(r'^([a-zA-Z_:][a-zA-Z0-9_:]*)\s+([0-9.eE+-]+)$', line)
+        match = re.match(r"^([a-zA-Z_:][a-zA-Z0-9_:]*)\s+([0-9.eE+-]+)$", line)
         if match:
             name, value = match.groups()
             if "vllm:spec_decode" in name:
@@ -104,7 +109,7 @@ def parse_prometheus_metrics(raw_text: str) -> list[Metric]:
 
         # Match labeled metrics: metric_name{labels} value
         match = re.match(
-            r'^([a-zA-Z_:][a-zA-Z0-9_:]*)\{([^}]+)\}\s+([0-9.eE+-]+)$', line
+            r"^([a-zA-Z_:][a-zA-Z0-9_:]*)\{([^}]+)\}\s+([0-9.eE+-]+)$", line
         )
         if match:
             name, labels_str, value = match.groups()
@@ -136,7 +141,9 @@ def parse_prometheus_metrics(raw_text: str) -> list[Metric]:
     return metrics
 
 
-def extract_spec_decode_metrics(raw_metrics: list[Metric], baseline_metrics: list[Metric] | None = None) -> dict[str, float]:
+def extract_spec_decode_metrics(  # noqa: C901
+    raw_metrics: list[Metric], baseline_metrics: list[Metric] | None = None
+) -> dict[str, float]:
     """Extract speculative decoding metrics and calculate acceptance rates.
 
     Args:
@@ -146,7 +153,10 @@ def extract_spec_decode_metrics(raw_metrics: list[Metric], baseline_metrics: lis
     Returns:
         Dictionary of computed metrics. If baseline provided, returns the delta.
     """
-    def _accumulate_metrics(metrics: list[Metric]) -> tuple[float, float, float, list[float]]:
+
+    def _accumulate_metrics(  # noqa: C901
+        metrics: list[Metric],
+    ) -> tuple[float, float, float, list[float]]:
         """Helper to accumulate raw counter values."""
         num_drafts = 0.0
         num_draft_tokens = 0.0
@@ -155,16 +165,18 @@ def extract_spec_decode_metrics(raw_metrics: list[Metric], baseline_metrics: lis
 
         for metric in metrics:
             if metric.name == "vllm:spec_decode_num_drafts":
-                assert isinstance(metric, Counter)
-                num_drafts += metric.value
+                if isinstance(metric, Counter):
+                    num_drafts += metric.value
             elif metric.name == "vllm:spec_decode_num_draft_tokens":
-                assert isinstance(metric, Counter)
-                num_draft_tokens += metric.value
+                if isinstance(metric, Counter):
+                    num_draft_tokens += metric.value
             elif metric.name == "vllm:spec_decode_num_accepted_tokens":
-                assert isinstance(metric, Counter)
-                num_accepted_tokens += metric.value
-            elif metric.name == "vllm:spec_decode_num_accepted_tokens_per_pos":
-                assert isinstance(metric, Vector)
+                if isinstance(metric, Counter):
+                    num_accepted_tokens += metric.value
+            elif (
+                metric.name == "vllm:spec_decode_num_accepted_tokens_per_pos"
+                and isinstance(metric, Vector)
+            ):
                 if len(acceptance_counts) < len(metric.values):
                     acceptance_counts = acceptance_counts + [0.0] * (
                         len(metric.values) - len(acceptance_counts)
@@ -175,21 +187,31 @@ def extract_spec_decode_metrics(raw_metrics: list[Metric], baseline_metrics: lis
         return num_drafts, num_draft_tokens, num_accepted_tokens, acceptance_counts
 
     # Accumulate current metrics
-    num_drafts, num_draft_tokens, num_accepted_tokens, acceptance_counts = _accumulate_metrics(raw_metrics)
+    num_drafts, num_draft_tokens, num_accepted_tokens, acceptance_counts = (
+        _accumulate_metrics(raw_metrics)
+    )
 
     # Subtract baseline if provided (for delta)
     if baseline_metrics:
-        base_drafts, base_draft_tokens, base_accepted_tokens, base_acceptance_counts = _accumulate_metrics(baseline_metrics)
+        base_drafts, base_draft_tokens, base_accepted_tokens, base_acceptance_counts = (
+            _accumulate_metrics(baseline_metrics)
+        )
         num_drafts -= base_drafts
         num_draft_tokens -= base_draft_tokens
         num_accepted_tokens -= base_accepted_tokens
 
         # Ensure baseline acceptance_counts has same length
         if len(base_acceptance_counts) < len(acceptance_counts):
-            base_acceptance_counts += [0.0] * (len(acceptance_counts) - len(base_acceptance_counts))
+            base_acceptance_counts += [0.0] * (
+                len(acceptance_counts) - len(base_acceptance_counts)
+            )
 
         for pos in range(len(acceptance_counts)):
-            acceptance_counts[pos] -= base_acceptance_counts[pos] if pos < len(base_acceptance_counts) else 0.0
+            acceptance_counts[pos] -= (
+                base_acceptance_counts[pos]
+                if pos < len(base_acceptance_counts)
+                else 0.0
+            )
 
     metrics_dict: dict[str, float] = {}
     metrics_dict["num_drafts"] = num_drafts
@@ -257,7 +279,14 @@ def parse_sweep_file(filepath: Path) -> list[dict]:
     return rows
 
 
-def main() -> None:
+def main() -> None:  # noqa: C901, PLR0912, PLR0915
+    # Configure logging for CLI usage
+    logging.basicConfig(
+        level=logging.INFO,
+        format="[%(levelname)s] %(message)s",
+        stream=sys.stderr,
+    )
+
     parser = argparse.ArgumentParser(
         description="Parse sweep results and enhance with vLLM spec decode metrics."
     )
@@ -277,12 +306,17 @@ def main() -> None:
     parser.add_argument(
         "--vllm-url",
         type=str,
-        help="vLLM server base URL (e.g. http://localhost:8000) to fetch spec decode metrics",
+        help=(
+            "vLLM server base URL (e.g. http://localhost:8000) "
+            "to fetch spec decode metrics"
+        ),
     )
     parser.add_argument(
         "--baseline-metrics-file",
         type=Path,
-        help="File containing baseline vLLM metrics to subtract (for computing deltas)",
+        help=(
+            "File containing baseline vLLM metrics to subtract (for computing deltas)"
+        ),
     )
     parser.add_argument(
         "--timeout",
@@ -299,9 +333,11 @@ def main() -> None:
             with args.baseline_metrics_file.open() as f:
                 baseline_text = f.read()
             baseline_metrics = parse_prometheus_metrics(baseline_text)
-            print(f"[INFO] Loaded baseline metrics from {args.baseline_metrics_file}")
+            logger.info("Loaded baseline metrics from %s", args.baseline_metrics_file)
         else:
-            print(f"[WARN] Baseline metrics file not found: {args.baseline_metrics_file}", file=sys.stderr)
+            logger.warning(
+                "Baseline metrics file not found: %s", args.baseline_metrics_file
+            )
 
     # Parse sweep files
     all_rows: list[dict] = []
@@ -309,7 +345,7 @@ def main() -> None:
 
     for filepath in args.files:
         if not filepath.exists():
-            print(f"[WARN] File not found, skipping: {filepath}", file=sys.stderr)
+            logger.warning("File not found, skipping: %s", filepath)
             continue
 
         try:
@@ -318,44 +354,54 @@ def main() -> None:
             # Sum up total output tokens
             for row in rows:
                 if row.get("total_output_tokens"):
-                    try:
+                    with contextlib.suppress(ValueError, TypeError):
                         total_output_tokens += int(row["total_output_tokens"])
-                    except (ValueError, TypeError):
-                        pass
-            print(f"[INFO] Parsed {len(rows)} entries from {filepath.name}")
+            logger.info("Parsed %d entries from %s", len(rows), filepath.name)
         except (ValueError, KeyError, json.JSONDecodeError) as e:
-            print(f"[WARN] Failed to parse {filepath}: {e}", file=sys.stderr)
+            logger.warning("Failed to parse %s: %s", filepath, e)
             continue
 
     if not all_rows:
-        print("[ERROR] No data was successfully parsed", file=sys.stderr)
+        logger.error("No data was successfully parsed")
         sys.exit(1)
 
     # Fetch vLLM speculative decoding metrics if URL provided
     spec_decode_metrics = {}
     if args.vllm_url:
-        print(f"[INFO] Fetching vLLM metrics from {args.vllm_url}")
+        logger.info("Fetching vLLM metrics from %s", args.vllm_url)
         raw_text = fetch_vllm_metrics(args.vllm_url, timeout=args.timeout)
         if raw_text:
             parsed_metrics = parse_prometheus_metrics(raw_text)
             # Compute delta if baseline provided, otherwise use raw metrics
             spec_decode_metrics = extract_spec_decode_metrics(
                 parsed_metrics,
-                baseline_metrics=baseline_metrics if baseline_metrics else None
+                baseline_metrics=baseline_metrics if baseline_metrics else None,
             )
-            print(f"[INFO] Extracted {len(spec_decode_metrics)} spec decode metrics")
+            logger.info("Extracted %d spec decode metrics", len(spec_decode_metrics))
 
             # Print summary
             if spec_decode_metrics:
-                print(f"[INFO] Acceptance length: {spec_decode_metrics.get('acceptance_length', 0):.2f}")
-                print(f"[INFO] Total output tokens: {total_output_tokens}")
-                print(f"[INFO] Num drafts: {spec_decode_metrics.get('num_drafts', 0):.0f}")
+                logger.info(
+                    "Acceptance length: %.2f",
+                    spec_decode_metrics.get("acceptance_length", 0),
+                )
+                logger.info("Total output tokens: %d", total_output_tokens)
+                logger.info(
+                    "Num drafts: %.0f", spec_decode_metrics.get("num_drafts", 0)
+                )
 
     # Build CSV columns dynamically based on available spec decode metrics
     csv_columns = BASE_CSV_COLUMNS.copy()
     if spec_decode_metrics:
         # Add acceptance metrics columns
-        csv_columns.extend(["num_drafts", "num_draft_tokens", "num_accepted_tokens", "acceptance_length"])
+        csv_columns.extend(
+            [
+                "num_drafts",
+                "num_draft_tokens",
+                "num_accepted_tokens",
+                "acceptance_length",
+            ]
+        )
         # Add per-position acceptance rates
         pos = 0
         while f"acceptance_at_pos_{pos}" in spec_decode_metrics:
@@ -371,11 +417,16 @@ def main() -> None:
     # Write CSV
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=csv_columns, extrasaction='ignore')
+        writer = csv.DictWriter(f, fieldnames=csv_columns, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(all_rows)
 
-    print(f"\n[INFO] CSV written to: {args.output} ({len(all_rows)} rows, {len(csv_columns)} columns)")
+    logger.info(
+        "\nCSV written to: %s (%d rows, %d columns)",
+        args.output,
+        len(all_rows),
+        len(csv_columns),
+    )
 
 
 if __name__ == "__main__":

@@ -14,13 +14,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -52,11 +54,11 @@ def fetch_metrics(url: str, timeout: int = 10) -> str:
         response.raise_for_status()
         return response.text
     except requests.exceptions.RequestException as e:
-        print(f"[ERROR] Failed to fetch metrics from {metrics_url}: {e}", file=sys.stderr)
+        logger.error("Failed to fetch metrics from %s: %s", metrics_url, e)
         sys.exit(1)
 
 
-def parse_prometheus_metrics(raw_text: str) -> list[Metric]:
+def parse_prometheus_metrics(raw_text: str) -> list[Metric]:  # noqa: C901
     """Parse Prometheus-formatted metrics into Metric objects."""
     metrics: list[Metric] = []
     lines = raw_text.strip().split("\n")
@@ -64,14 +66,14 @@ def parse_prometheus_metrics(raw_text: str) -> list[Metric]:
     # Track vector metrics (those with position labels)
     vector_data: dict[str, list[tuple[int, float]]] = {}
 
-    for line in lines:
-        line = line.strip()
+    for raw_line in lines:
+        line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
 
         # Match metric lines like: metric_name{labels} value
         # or simple: metric_name value
-        match = re.match(r'^([a-zA-Z_:][a-zA-Z0-9_:]*)\s+([0-9.eE+-]+)$', line)
+        match = re.match(r"^([a-zA-Z_:][a-zA-Z0-9_:]*)\s+([0-9.eE+-]+)$", line)
         if match:
             name, value = match.groups()
             if "vllm:spec_decode" in name:
@@ -80,7 +82,7 @@ def parse_prometheus_metrics(raw_text: str) -> list[Metric]:
 
         # Match labeled metrics like: metric_name{label="value"} value
         match = re.match(
-            r'^([a-zA-Z_:][a-zA-Z0-9_:]*)\{([^}]+)\}\s+([0-9.eE+-]+)$', line
+            r"^([a-zA-Z_:][a-zA-Z0-9_:]*)\{([^}]+)\}\s+([0-9.eE+-]+)$", line
         )
         if match:
             name, labels_str, value = match.groups()
@@ -105,7 +107,9 @@ def parse_prometheus_metrics(raw_text: str) -> list[Metric]:
     return metrics
 
 
-def extract_metrics(raw_metrics: list[Metric], total_num_output_tokens: int) -> dict:
+def extract_metrics(  # noqa: C901
+    raw_metrics: list[Metric], total_num_output_tokens: int
+) -> dict:
     """Extract speculative decoding metrics and calculate acceptance rates."""
     metrics_dict: dict[str, int | float] = {}
     num_drafts = 0
@@ -115,16 +119,12 @@ def extract_metrics(raw_metrics: list[Metric], total_num_output_tokens: int) -> 
 
     for metric in raw_metrics:
         if metric.name == "vllm:spec_decode_num_drafts":
-            assert isinstance(metric, Counter)
             num_drafts += metric.value
         elif metric.name == "vllm:spec_decode_num_draft_tokens":
-            assert isinstance(metric, Counter)
             num_draft_tokens += metric.value
         elif metric.name == "vllm:spec_decode_num_accepted_tokens":
-            assert isinstance(metric, Counter)
             num_accepted_tokens += metric.value
         elif metric.name == "vllm:spec_decode_num_accepted_tokens_per_pos":
-            assert isinstance(metric, Vector)
             if len(acceptance_counts) < len(metric.values):
                 acceptance_counts = acceptance_counts + [0.0] * (
                     len(metric.values) - len(acceptance_counts)
@@ -154,7 +154,9 @@ def format_output(metrics: dict[str, int | float]) -> str:
     lines.append(f"Number of drafts: {metrics.get('num_drafts', 0)}")
     lines.append(f"Draft tokens proposed: {metrics.get('num_draft_tokens', 0)}")
     lines.append(f"Draft tokens accepted: {metrics.get('num_accepted_tokens', 0)}")
-    lines.append(f"Average acceptance length: {metrics.get('acceptance_length', 0):.2f}")
+    lines.append(
+        f"Average acceptance length: {metrics.get('acceptance_length', 0):.2f}"
+    )
     lines.append("\nPer-position acceptance rates:")
 
     pos = 0
@@ -167,6 +169,13 @@ def format_output(metrics: dict[str, int | float]) -> str:
 
 
 def main() -> None:
+    # Configure logging for CLI usage
+    logging.basicConfig(
+        level=logging.INFO,
+        format="[%(levelname)s] %(message)s",
+        stream=sys.stderr,
+    )
+
     parser = argparse.ArgumentParser(
         description="Fetch vLLM metrics and calculate acceptance rates."
     )
@@ -197,24 +206,24 @@ def main() -> None:
     args = parser.parse_args()
 
     # Fetch raw metrics
-    print(f"[INFO] Fetching metrics from {args.url}/metrics")
+    logger.info("Fetching metrics from %s/metrics", args.url)
     raw_text = fetch_metrics(args.url, timeout=args.timeout)
 
     # Parse metrics
     parsed_metrics = parse_prometheus_metrics(raw_text)
-    print(f"[INFO] Parsed {len(parsed_metrics)} speculative decoding metrics")
+    logger.info("Parsed %d speculative decoding metrics", len(parsed_metrics))
 
     # Extract and calculate
     result = extract_metrics(parsed_metrics, args.total_tokens)
 
     # Output
-    print(format_output(result))
+    logger.info("\n%s", format_output(result))
 
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         with args.output.open("w") as f:
             json.dump(result, f, indent=2)
-        print(f"\n[INFO] Metrics saved to: {args.output}")
+        logger.info("Metrics saved to: %s", args.output)
 
 
 if __name__ == "__main__":
