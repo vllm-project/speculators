@@ -53,55 +53,6 @@ def align_for_step(
     return logits, targets, loss_mask, prev_correct
 
 
-@torch.no_grad()
-def compute_accuracy(
-    logits: torch.Tensor,  # shape: [1, total_seq_len - ttt_step, draft_vocab_size]
-    targets: torch.Tensor,  # shape: [1, total_seq_len - ttt_step, draft_vocab_size]
-    loss_mask: torch.Tensor | None,  # shape: [1, total_seq_len - ttt_step]
-    prev_correct: torch.Tensor | None,  # shape: [1, total_seq_len - ttt_step]
-):
-    # Note: logits, targets, and loss_mask are already aligned for the current ttt_step
-    target_tokens = torch.argmax(targets, dim=-1)
-    predicted_tokens = torch.argmax(logits, dim=-1)
-    # shape: [1, total_seq_len - ttt_step]
-
-    correct = predicted_tokens == target_tokens
-    cond_denom: torch.Tensor | int = correct.numel()
-    if prev_correct is not None:
-        cond_denom = prev_correct.sum()
-        # Update prev_correct in place
-        correct = torch.logical_and(prev_correct, correct, out=prev_correct)
-    if loss_mask is not None:
-        correct = torch.masked_select(correct, loss_mask.to(torch.bool))
-
-    correct_sum = correct.float().sum()
-    full_denom = correct.numel()
-
-    return correct_sum / (full_denom + 1e-5), correct_sum / (cond_denom + 1e-5)
-
-
-def loss_function(
-    logits: torch.Tensor,  # shape: [1, total_seq_len - ttt_step, draft_vocab_size]
-    targets: torch.Tensor,  # shape: [1, total_seq_len - ttt_step, draft_vocab_size]
-    loss_mask: torch.Tensor | None,  # shape: [1, total_seq_len - ttt_step]
-):
-    # Note: logits, targets, and loss_mask are already aligned for the current ttt_step
-    logits = torch.nn.functional.log_softmax(logits, dim=-1)
-    target_p = torch.nn.functional.softmax(targets, dim=-1)
-    elementwise_loss = torch.nn.functional.kl_div(
-        logits, target_p, reduction="none", log_target=False
-    )
-
-    if loss_mask is not None:
-        elementwise_loss = elementwise_loss * loss_mask.unsqueeze(-1)
-        denominator: torch.Tensor | int = loss_mask.sum(dim=1) + 1e-5
-    else:
-        denominator = logits.shape[1]  # total_seq_len - ttt_step
-    batch_loss = torch.sum(elementwise_loss, dim=(1, 2)) / denominator
-    # shape: [1]
-    return batch_loss.mean()
-
-
 def compute_metrics(
     logits: torch.Tensor,
     targets: torch.Tensor,
@@ -126,17 +77,46 @@ def compute_metrics(
     Returns:
         Loss value and metrics dictionary.
     """
+    from functools import partial  # noqa: PLC0415
 
-    s_metrics = {}
+    from speculators.models.metrics import (  # noqa: PLC0415
+        compute_accuracy_single_step,
+        exp_loss_decay,
+        kl_div_loss,
+        loss_function,
+    )
+
     s_logits, s_targets, s_loss_mask, s_prev_correct = align_for_step(
         logits, targets, loss_mask, prev_correct, ttt_step
     )
-    loss_weight = ttt_step_loss_decay**ttt_step
-    s_loss = loss_weight * loss_function(s_logits, s_targets, s_loss_mask)
 
-    s_full_acc, s_cond_acc = compute_accuracy(
-        s_logits, s_targets, s_loss_mask, s_prev_correct
+    seq_len = s_logits.shape[1]
+    if s_loss_mask is None:
+        s_loss_mask = torch.ones(
+            1, seq_len, device=s_logits.device, dtype=torch.bool
+        )
+
+    pos_idx = torch.full(
+        (1, seq_len), ttt_step, device=s_logits.device, dtype=torch.long
     )
+
+    s_loss = loss_function(
+        s_logits,
+        s_targets,
+        s_loss_mask,
+        pos_idx,
+        loss_fn=kl_div_loss,
+        decay_fn=partial(exp_loss_decay, gamma=ttt_step_loss_decay),
+    )
+
+    pred_ids = torch.argmax(s_logits, dim=-1)
+    target_ids = torch.argmax(s_targets, dim=-1)
+
+    s_full_acc, s_cond_acc = compute_accuracy_single_step(
+        pred_ids, target_ids, s_loss_mask, s_prev_correct
+    )
+
+    s_metrics = {}
     s_metrics[f"loss_{ttt_step}"] = s_loss.detach().clone()
     s_metrics[f"full_acc_{ttt_step}"] = s_full_acc
     s_metrics[f"cond_acc_{ttt_step}"] = s_cond_acc
