@@ -118,13 +118,20 @@ def extract_metrics(  # noqa: C901
     acceptance_counts: list[float] = []
 
     for metric in raw_metrics:
-        if metric.name == "vllm:spec_decode_num_drafts":
+        if metric.name == "vllm:spec_decode_num_drafts" and isinstance(metric, Counter):
             num_drafts += metric.value
-        elif metric.name == "vllm:spec_decode_num_draft_tokens":
+        elif metric.name == "vllm:spec_decode_num_draft_tokens" and isinstance(
+            metric, Counter
+        ):
             num_draft_tokens += metric.value
-        elif metric.name == "vllm:spec_decode_num_accepted_tokens":
+        elif metric.name == "vllm:spec_decode_num_accepted_tokens" and isinstance(
+            metric, Counter
+        ):
             num_accepted_tokens += metric.value
-        elif metric.name == "vllm:spec_decode_num_accepted_tokens_per_pos":
+        elif (
+            metric.name == "vllm:spec_decode_num_accepted_tokens_per_pos"
+            and isinstance(metric, Vector)
+        ):
             if len(acceptance_counts) < len(metric.values):
                 acceptance_counts = acceptance_counts + [0.0] * (
                     len(metric.values) - len(acceptance_counts)

@@ -6,7 +6,7 @@ decoding acceptance rates from vLLM's /metrics endpoint.
 
 Usage:
     python parse_sweep_with_metrics.py --output results.csv \\
-        --vllm-url http://localhost:8000 sweep_*.json
+        --url http://localhost:8000 sweep_*.json
 """
 
 from __future__ import annotations
@@ -304,7 +304,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
         help="Output CSV file path",
     )
     parser.add_argument(
-        "--vllm-url",
+        "--url",
         type=str,
         help=(
             "vLLM server base URL (e.g. http://localhost:8000) "
@@ -367,9 +367,9 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
 
     # Fetch vLLM speculative decoding metrics if URL provided
     spec_decode_metrics = {}
-    if args.vllm_url:
-        logger.info("Fetching vLLM metrics from %s", args.vllm_url)
-        raw_text = fetch_vllm_metrics(args.vllm_url, timeout=args.timeout)
+    if args.url:
+        logger.info("Fetching vLLM metrics from %s", args.url)
+        raw_text = fetch_vllm_metrics(args.url, timeout=args.timeout)
         if raw_text:
             parsed_metrics = parse_prometheus_metrics(raw_text)
             # Compute delta if baseline provided, otherwise use raw metrics
