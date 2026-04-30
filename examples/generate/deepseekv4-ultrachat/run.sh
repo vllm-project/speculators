@@ -40,12 +40,11 @@ source "${SCRIPT_DIR}/lib.sh"
 # ---------------------------------------------------------------------------
 MODE="native"
 HARDWARE="h100"
-DATASET="ultrachat"
 LIMIT=""
 CONCURRENCY=64
 MAX_TOKENS=8192
 RESUME=false
-OUTPUT_DIR="results_$(date +%Y%m%d_%H%M%S)"
+OUTPUT_DIR=""  # Set after MODE and HARDWARE are parsed
 MAX_RUNTIME_HOURS=12
 RESERVE_DURATION="2h"
 
@@ -56,7 +55,6 @@ while [[ $# -gt 0 ]]; do
     case $1 in
         --mode)             MODE="$2";               shift 2 ;;
         --hardware)         HARDWARE="$2";           shift 2 ;;
-        --dataset)          DATASET="$2";            shift 2 ;;
         --limit)            LIMIT="$2";              shift 2 ;;
         --concurrency)      CONCURRENCY="$2";        shift 2 ;;
         --max-tokens)       MAX_TOKENS="$2";         shift 2 ;;
@@ -67,6 +65,11 @@ while [[ $# -gt 0 ]]; do
         *) error "Unknown option: $1"; exit 1 ;;
     esac
 done
+
+# Set default output directory after MODE and HARDWARE are parsed
+if [[ -z "${OUTPUT_DIR}" ]]; then
+    OUTPUT_DIR="/mnt/data/engine/rahul-tuli/deepseekv4-${HARDWARE}-${MODE}-$(date +%Y%m%d_%H%M%S)"
+fi
 
 # ---------------------------------------------------------------------------
 # Validate mode / hardware and pick serve script + GPU count
@@ -80,7 +83,8 @@ case "${MODE}" in
         case "${HARDWARE}" in
             h100) NUM_GPUS=8 ;;
             b200) NUM_GPUS=4 ;;
-            *) error "Unknown hardware: ${HARDWARE}. Valid: h100, b200"; exit 1 ;;
+            h200) NUM_GPUS=8 ;;
+            *) error "Unknown hardware: ${HARDWARE}. Valid: h100, b200, h200"; exit 1 ;;
         esac
         SERVE_SCRIPT="${SCRIPT_DIR}/serve_docker.sh"
         : "${HF_HUB_CACHE:?HF_HUB_CACHE must be set for docker mode}"
@@ -98,7 +102,6 @@ SCRIPT_DEADLINE=$(( SCRIPT_START + MAX_RUNTIME_HOURS * 3600 ))
 GPU_IDS=""
 RESERVATION_EXPIRY=0
 
-OUTFILE="${OUTPUT_DIR}/ultrachat_DeepSeek-V4-Flash.jsonl"
 SERVER_LOG="${OUTPUT_DIR}/server.log"
 
 REGEN_SCRIPT="${SCRIPT_DIR}/../../../scripts/response_regeneration/script.py"
@@ -113,25 +116,16 @@ DEADLINE_TS=$(date -d "@${SCRIPT_DEADLINE}" '+%Y-%m-%d %H:%M:%S' 2>/dev/null \
     || date -r "${SCRIPT_DEADLINE}" '+%Y-%m-%d %H:%M:%S' 2>/dev/null \
     || echo "start + ${MAX_RUNTIME_HOURS}h")
 
-banner "DeepSeek-V4-Flash UltraChat Response Regeneration"
+banner "DeepSeek-V4-Flash Response Regeneration"
 info "Mode          : ${MODE}$([[ ${MODE} == docker ]] && echo " (${HARDWARE})" || true)"
-info "Dataset       : ${DATASET}"
+info "Datasets      : ultrachat, magpie (sequential)"
 info "Output dir    : ${OUTPUT_DIR}"
-info "Output file   : ${OUTFILE}"
 info "Concurrency   : ${CONCURRENCY}"
 info "Max tokens    : ${MAX_TOKENS}"
 info "Reserve dur   : ${RESERVE_DURATION}"
 info "Max runtime   : ${MAX_RUNTIME_HOURS}h (deadline: ${DEADLINE_TS})"
-[[ -n "${LIMIT}" ]]       && info "Limit         : ${LIMIT} rows"
-if [[ "${RESUME}" == true ]]; then
-    if [[ -f "${OUTFILE}" ]]; then
-        already_done=$(wc -l < "${OUTFILE}")
-        info "Resume        : enabled (${already_done} rows already in ${OUTFILE})"
-    else
-        warn "Resume        : --resume set but no existing output file found at ${OUTFILE}"
-        warn "                Starting fresh. Use --output-dir to point at a prior run."
-    fi
-fi
+[[ -n "${LIMIT}" ]]       && info "Limit         : ${LIMIT} rows per dataset"
+[[ "${RESUME}" == true ]] && info "Resume        : enabled"
 
 # ---------------------------------------------------------------------------
 # Cleanup trap
@@ -180,27 +174,37 @@ if ! wait_for_server "${ENDPOINT}" 3600; then
 fi
 
 # ---------------------------------------------------------------------------
-# Run response regeneration
+# Run response regeneration for both datasets
 # ---------------------------------------------------------------------------
-banner "Running Response Regeneration"
+for DATASET in ultrachat magpie; do
+    banner "Running Response Regeneration: ${DATASET}"
 
-REGEN_ARGS=(
-    --endpoint "${ENDPOINT}/v1/chat/completions"
-    --dataset "${DATASET}"
-    --concurrency "${CONCURRENCY}"
-    --max-tokens "${MAX_TOKENS}"
-    --outfile "${OUTFILE}"
-)
-[[ -n "${LIMIT}" ]]       && REGEN_ARGS+=(--limit "${LIMIT}")
-[[ "${RESUME}" == true ]] && REGEN_ARGS+=(--resume)
+    DATASET_OUTDIR="${OUTPUT_DIR}/${DATASET}"
+    mkdir -p "${DATASET_OUTDIR}"
+    OUTFILE="${DATASET_OUTDIR}/${DATASET}_DeepSeek-V4-Flash.jsonl"
+    DATASET_LOG="${DATASET_OUTDIR}/generation.log"
 
-info "Command: python script.py ${REGEN_ARGS[*]}"
-python "${REGEN_SCRIPT}" "${REGEN_ARGS[@]}"
+    REGEN_ARGS=(
+        --endpoint "${ENDPOINT}/v1/chat/completions"
+        --dataset "${DATASET}"
+        --concurrency "${CONCURRENCY}"
+        --max-tokens "${MAX_TOKENS}"
+        --outfile "${OUTFILE}"
+    )
+    [[ -n "${LIMIT}" ]]       && REGEN_ARGS+=(--limit "${LIMIT}")
+    [[ "${RESUME}" == true ]] && REGEN_ARGS+=(--resume)
+
+    info "Command: python script.py ${REGEN_ARGS[*]}"
+    python "${REGEN_SCRIPT}" "${REGEN_ARGS[@]}" 2>&1 | tee "${DATASET_LOG}"
+
+    info "Dataset ${DATASET} complete. Lines written: $(wc -l < "${OUTFILE}" 2>/dev/null || echo "0")"
+done
 
 # ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 banner "Complete! (total: $(elapsed))"
-info "Output dir  : ${OUTPUT_DIR}"
-info "Output file : ${OUTFILE}"
-info "Lines written: $(wc -l < "${OUTFILE}" 2>/dev/null || echo "unknown")"
+info "Output dir       : ${OUTPUT_DIR}"
+info "UltraChat results: ${OUTPUT_DIR}/ultrachat/ultrachat_DeepSeek-V4-Flash.jsonl"
+info "Magpie results   : ${OUTPUT_DIR}/magpie/magpie_DeepSeek-V4-Flash.jsonl"
+info "Server log       : ${SERVER_LOG}"

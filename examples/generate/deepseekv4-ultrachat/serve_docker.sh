@@ -3,7 +3,7 @@
 #
 # Required env vars:
 #   GPU_IDS   — comma-separated GPU IDs
-#   HARDWARE  — h100 | b200
+#   HARDWARE  — h100 | b200 | h200
 #
 # Optional env vars:
 #   PORT        — host port to bind (default: 8000)
@@ -25,6 +25,11 @@ case "${HARDWARE}" in
         IMAGE="vllm/vllm-openai:deepseekv4-cu129"
         GPUS_FLAG="all"
         GPU_ENV="-e CUDA_VISIBLE_DEVICES=${GPU_IDS}"
+        CONTAINER_CMD="docker"
+        PODMAN_EXTRA=""
+        CACHE_ENV=""
+        VOLUME_SUFFIX=""
+        SPEC_TOKENS=2
         HW_ARGS=(
             --data-parallel-size 4
         )
@@ -33,14 +38,30 @@ case "${HARDWARE}" in
         IMAGE="vllm/vllm-openai:deepseekv4-cu130"
         GPUS_FLAG="\"device=${GPU_IDS}\""
         GPU_ENV="-e CUDA_VISIBLE_DEVICES=${GPU_IDS}"
+        CONTAINER_CMD="docker"
+        PODMAN_EXTRA=""
+        CACHE_ENV=""
+        VOLUME_SUFFIX=""
+        SPEC_TOKENS=2
         HW_ARGS=(
             --data-parallel-size 4
             --compilation-config '{"cudagraph_mode":"FULL_AND_PIECEWISE","custom_ops":["all"]}'
             --attention_config.use_fp4_indexer_cache=True
         )
         ;;
+    h200)
+        IMAGE="vllm/vllm-openai:latest"
+        GPUS_FLAG="all"
+        GPU_ENV="-e CUDA_VISIBLE_DEVICES=${GPU_IDS}"
+        CONTAINER_CMD="docker"
+        PODMAN_EXTRA=""
+        CACHE_ENV=""
+        VOLUME_SUFFIX=""
+        SPEC_TOKENS=1
+        HW_ARGS=()
+        ;;
     *)
-        echo "[ERROR] Unknown hardware: ${HARDWARE}. Valid: h100, b200" >&2
+        echo "[ERROR] Unknown hardware: ${HARDWARE}. Valid: h100, b200, h200" >&2
         exit 1
         ;;
 esac
@@ -50,13 +71,15 @@ echo "[INFO] Starting DeepSeek-V4-Flash (Docker) on ${HARDWARE} GPUs: ${GPU_IDS}
 # Write the container name so stop_server can find it after a crash
 echo "${CONTAINER_NAME}" > "/tmp/vllm_container_${PORT}.lock"
 
-# shellcheck disable=SC2086  # GPU_ENV is intentionally unquoted (two separate args)
-docker run --rm \
+# shellcheck disable=SC2086  # GPU_ENV, CACHE_ENV, PODMAN_EXTRA are intentionally unquoted (separate args)
+${CONTAINER_CMD} run --rm \
     --name "${CONTAINER_NAME}" \
     --gpus "${GPUS_FLAG}" \
     --privileged --ipc=host \
+    ${PODMAN_EXTRA} \
     -p "${PORT}:8000" \
-    -v "${HF_HUB_CACHE}:/root/.cache/huggingface" \
+    -v "${HF_HUB_CACHE}:/root/.cache/huggingface${VOLUME_SUFFIX}" \
+    ${CACHE_ENV} \
     ${GPU_ENV} \
     -e VLLM_ENGINE_READY_TIMEOUT_S=3600 \
     "${IMAGE}" \
@@ -66,7 +89,7 @@ docker run --rm \
     --block-size 256 \
     --enable-expert-parallel \
     "${HW_ARGS[@]}" \
-    --speculative_config '{"method":"mtp","num_speculative_tokens":2}' \
+    --speculative_config "{\"method\":\"mtp\",\"num_speculative_tokens\":${SPEC_TOKENS}}" \
     2>&1 | tee "${SERVER_LOG}"
 
 rm -f "/tmp/vllm_container_${PORT}.lock"

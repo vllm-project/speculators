@@ -9,7 +9,7 @@ Reuses [`scripts/response_regeneration/script.py`](../../../scripts/response_reg
 
 - `chg` available in PATH (GPU reservation CLI)
 - **Native mode**: `vllm` installed in the active Python environment
-- **Docker mode**: Docker with NVIDIA runtime; `HF_HUB_CACHE` set to the model weights directory
+- **Docker mode**: Docker (H100/B200) or Podman (H200) with NVIDIA runtime; `HF_HUB_CACHE` set to the model weights directory
 - `HF_HUB_CACHE` set (Docker mode always requires it; native mode uses it implicitly from the environment)
 
 ## Quick start
@@ -17,17 +17,23 @@ Reuses [`scripts/response_regeneration/script.py`](../../../scripts/response_reg
 ```bash
 cd examples/generate/deepseekv4-ultrachat
 
-# Test run — native vllm, 50 samples to check response quality
+# Test run — native vllm, 50 samples per dataset (ultrachat + magpie)
 bash run.sh --limit 50
 
-# Test run — Docker on H100, 50 samples
+# Test run — Docker on H100, 50 samples per dataset
 bash run.sh --mode docker --hardware h100 --limit 50
 
-# Full UltraChat run — native
+# Test run — Podman on H200, 50 samples per dataset
+bash run.sh --mode docker --hardware h200 --limit 50
+
+# Full run — both datasets, all samples
 bash run.sh
 
-# Full UltraChat run — Docker on B200
+# Full run — Docker on B200
 bash run.sh --mode docker --hardware b200
+
+# Full run — Podman on H200
+bash run.sh --mode docker --hardware h200
 ```
 
 ## All options
@@ -36,46 +42,43 @@ bash run.sh --mode docker --hardware b200
 bash run.sh [OPTIONS]
 
   --mode STR            How to launch the server: native | docker   (default: native)
-  --hardware STR        GPU hardware profile: h100 | b200           (default: h100; docker mode only)
-  --dataset STR         Dataset to process: ultrachat | magpie      (default: ultrachat)
-  --limit N             Stop after N rows. Omit to process the entire dataset.
+  --hardware STR        GPU hardware profile: h100 | b200 | h200    (default: h100; docker mode only)
+  --limit N             Stop after N rows per dataset. Omit to process entire datasets.
   --concurrency N       Concurrent HTTP requests to the vLLM server  (default: 64)
   --max-tokens N        Max tokens per generated response            (default: 8192)
-  --resume              Skip rows already written to the output file
-  --output-dir DIR      Directory for results and server log         (default: results_YYYYMMDD_HHMMSS)
+  --resume              Skip rows already written to the output files
+  --output-dir DIR      Directory for results and server log         (default: /mnt/data/engine/rahul-tuli/deepseekv4-{hardware}-{mode}-{timestamp})
   --max-runtime N       Global deadline in hours before the script exits  (default: 12)
   --reserve-duration S  Duration string passed to chg reserve        (default: 2h)
 ```
 
+**Note:** Both ultrachat and magpie datasets are processed sequentially in every run. Use `--limit` for quick test runs of both datasets.
+
 ## Common invocations
 
 ```bash
-# Test runs
+# Test runs (50 samples per dataset, both ultrachat and magpie)
 bash run.sh --limit 50
 bash run.sh --mode docker --hardware h100 --limit 50
-bash run.sh --mode docker --hardware b200 --limit 50
+bash run.sh --mode docker --hardware h200 --limit 50
 
-# Full dataset runs
+# Full dataset runs (both ultrachat and magpie, all samples)
 bash run.sh
 bash run.sh --mode docker --hardware h100
 bash run.sh --mode docker --hardware b200
-
-# Magpie instead of UltraChat
-bash run.sh --dataset magpie
-bash run.sh --mode docker --hardware h100 --dataset magpie
+bash run.sh --mode docker --hardware h200
 
 # Higher concurrency for faster throughput
 bash run.sh --concurrency 128
 
-# Resume a run that was interrupted (point at the previous output directory)
-bash run.sh --output-dir results_20260429_120000 --resume
-bash run.sh --mode docker --hardware h100 --output-dir results_20260429_120000 --resume
+# Resume a run that was interrupted
+bash run.sh --output-dir /mnt/data/engine/rahul-tuli/deepseekv4-h200-docker-20260429_120000 --resume
 
 # Longer reservation and deadline for a big run
 bash run.sh --reserve-duration 4h --max-runtime 20
 
 # Custom output directory
-bash run.sh --output-dir /data/regen/deepseekv4_ultrachat
+bash run.sh --output-dir /mnt/data/engine/rahul-tuli/my-custom-run
 ```
 
 ## Server modes
@@ -96,21 +99,40 @@ CUDA_VISIBLE_DEVICES=<reserved-gpu-ids> vllm serve deepseek-ai/DeepSeek-V4-Flash
     --speculative_config '{"method":"mtp","num_speculative_tokens":2}'
 ```
 
-### Docker (`--mode docker`)
+### Docker/Podman (`--mode docker`)
 
-Runs vLLM inside `docker run --rm` using a pre-built image. Requires `HF_HUB_CACHE` to mount weights.
-Graceful shutdown: kills the bash wrapper, then `docker stop` (SIGTERM → 10s → SIGKILL).
+Runs vLLM inside a container using docker (H100/B200) or podman (H200). Requires `HF_HUB_CACHE` to mount weights.
+Graceful shutdown: kills the bash wrapper, then `docker stop` or `podman stop` (SIGTERM → 10s → SIGKILL).
 
-| `--hardware` | Image | GPUs | vLLM args |
-|---|---|---|---|
-| `h100` | `vllm/vllm-openai:deepseekv4-cu129` | 8 | `--data-parallel-size 4`, cudagraph compilation |
-| `b200` | `vllm/vllm-openai:deepseekv4-cu130` | 4 | `--data-parallel-size 4`, fp4 indexer cache |
+| `--hardware` | Runtime | Image | GPUs | vLLM args | Spec tokens |
+|---|---|---|---|---|---|
+| `h100` | docker | `vllm/vllm-openai:deepseekv4-cu129` | 8 | `--data-parallel-size 4` | 2 |
+| `b200` | docker | `vllm/vllm-openai:deepseekv4-cu130` | 4 | `--data-parallel-size 4`, fp4 indexer cache | 2 |
+| `h200` | **podman** | `vllm/vllm-openai:latest` | 8 | minimal (no DP, no compilation) | **1** |
 
-Both hardware variants add `--speculative_config '{"method":"mtp","num_speculative_tokens":2}'`.
+**H200-specific configuration:**
+- Uses podman instead of docker
+- Sets HF_HUB_CACHE as environment variable inside container
+- Uses 1 speculative token (vs 2 for H100/B200)
+- Minimal vLLM configuration (no data-parallel-size or compilation config)
 
 ## Output
 
-Results are written to `<output-dir>/ultrachat_DeepSeek-V4-Flash.jsonl` as one JSON object per line:
+**Default location:** `/mnt/data/engine/rahul-tuli/deepseekv4-{hardware}-{mode}-{timestamp}/`
+
+**Directory structure:**
+```
+deepseekv4-h200-docker-20260429_143022/
+├── server.log                              (vLLM server log, shared)
+├── ultrachat/
+│   ├── ultrachat_DeepSeek-V4-Flash.jsonl  (generated responses)
+│   └── generation.log                      (regeneration script output)
+└── magpie/
+    ├── magpie_DeepSeek-V4-Flash.jsonl     (generated responses)
+    └── generation.log                      (regeneration script output)
+```
+
+Each JSONL file contains one JSON object per line:
 
 ```json
 {
@@ -129,22 +151,26 @@ Results are written to `<output-dir>/ultrachat_DeepSeek-V4-Flash.jsonl` as one J
 }
 ```
 
-Failed requests are also written with an `"error"` key in metadata so the file stays appendable for `--resume`.
-
-The server log is saved to `<output-dir>/server.log`.
+Failed requests are also written with an `"error"` key in metadata so files stay appendable for `--resume`.
 
 ## Workflow
 
 ```
 run.sh
  ├── validate --mode and --hardware
- ├── acquire N GPUs via chg reserve  (8 for native/h100, 4 for b200)
+ ├── create output directory: /mnt/data/rahul-tuli/deepseekv4-{hardware}-{mode}-{timestamp}/
+ ├── acquire N GPUs via chg reserve  (8 for native/h100/h200, 4 for b200)
  ├── start serve.sh or serve_docker.sh (background)
  ├── poll /health every 30s (up to 3600s)
- ├── run scripts/response_regeneration/script.py
+ ├── for dataset in ultrachat magpie:
+ │    ├── create dataset subdirectory
+ │    ├── run scripts/response_regeneration/script.py
+ │    └── save results to {dataset}/{dataset}_DeepSeek-V4-Flash.jsonl
  └── cleanup on EXIT / Ctrl-C / SIGTERM
       ├── native:  SIGTERM → 30s grace → SIGKILL
-      └── docker:  kill wrapper + docker stop (SIGTERM → 10s → SIGKILL)
+      └── docker/podman:  kill wrapper + container stop (SIGTERM → 10s → SIGKILL)
 ```
 
 GPU reservation is renewed automatically if less than 30 minutes remain.
+
+Both ultrachat and magpie are processed sequentially in a single run. The server stays running between datasets to avoid startup overhead.
