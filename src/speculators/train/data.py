@@ -258,12 +258,16 @@ class ArrowDataset(BaseDataset):
         if not self.client:
             self._setup_client()
 
-        input_ids = self.data[index]["input_ids"].tolist()
+        item = self.data[index]
+        input_ids = item["input_ids"].tolist()
+        messages = self.data.get("messages")
+
         try:
             hs_filepath = generate_hidden_states(
                 self.client,  # type:ignore[arg-type]
                 self.model,  # type:ignore[arg-type]
                 input_ids,
+                messages=messages,
                 timeout=self.request_timeout,
                 max_retries=self.max_retries,
             )

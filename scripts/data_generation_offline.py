@@ -277,6 +277,7 @@ async def worker(
             continue
 
         input_ids = item["input_ids"].tolist()
+        messages = item.get("messages")
 
         target_hidden_states_path = hidden_states_output_dir / f"hs_{idx}.safetensors"
 
@@ -286,6 +287,7 @@ async def worker(
                     client,
                     model,
                     input_ids,
+                    messages=messages,
                     timeout=request_timeout,
                     max_retries=max_retries,
                 )

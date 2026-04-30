@@ -4,6 +4,7 @@ import logging
 import time
 
 import openai
+from openai.types.chat import ChatCompletionMessageParam
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +105,8 @@ async def generate_hidden_states_async(
     client: openai.AsyncClient,
     model: str,
     token_ids: list[int],
+    *,
+    messages: list[ChatCompletionMessageParam] | None = None,
     timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
 ) -> str:
     """
@@ -114,15 +117,27 @@ async def generate_hidden_states_async(
         client: The async OpenAI client.
         model: The model ID.
         token_ids: The input token IDs.
+        messages: If provided, pass `messages` to Chat Completions API
+                 instead of passing `token_ids` to Completions API.
         timeout: Timeout in seconds for each request attempt. None for no timeout.
     """
-    coro = client.completions.create(
-        model=model,
-        prompt=token_ids,
-        max_tokens=1,
-        extra_body={"return_token_ids": True},
-        timeout=timeout,
-    )
+    if messages is None:
+        coro = client.completions.create(
+            model=model,
+            prompt=token_ids,
+            max_tokens=1,
+            extra_body={"return_token_ids": True},
+            timeout=timeout,
+        )
+    else:
+        coro = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            max_tokens=1,
+            extra_body={"return_token_ids": True},
+            timeout=timeout,
+        )
+
     if timeout is not None:
         completion = await asyncio.wait_for(coro, timeout=timeout)
     else:
@@ -136,17 +151,29 @@ def generate_hidden_states(
     client: openai.Client,
     model: str,
     token_ids: list[int],
+    *,
+    messages: list[ChatCompletionMessageParam] | None = None,
     timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
 ) -> str:
     """
     Runs decode w/ max_tokens 1 to generate hidden states and returns path to
     hidden states file.
     """
-    completion = client.completions.create(
-        model=model,
-        prompt=token_ids,
-        max_tokens=1,
-        extra_body={"return_token_ids": True},
-        timeout=timeout,
-    )
+    if messages is None:
+        completion = client.completions.create(
+            model=model,
+            prompt=token_ids,
+            max_tokens=1,
+            extra_body={"return_token_ids": True},
+            timeout=timeout,
+        )
+    else:
+        completion = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            max_tokens=1,
+            extra_body={"return_token_ids": True},
+            timeout=timeout,
+        )
+
     return extract_output(completion, token_ids)
