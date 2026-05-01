@@ -9,6 +9,19 @@ def compute_accuracy_single_step(
     loss_mask: torch.Tensor | None,  # shape: [1, seq_len]
     prev_correct: torch.Tensor | None,  # shape: [1, seq_len]
 ):
+    """Compute full and conditional accuracy for a single speculative step.
+
+    Args:
+        pred_ids: Predicted token IDs.
+        target_ids: Ground-truth token IDs.
+        loss_mask: If provided, restricts accuracy to masked positions.
+        prev_correct: Boolean mask of positions correct so far. Updated in place
+            via logical AND with the current step's correctness.
+
+    Returns:
+        Tuple of (full_accuracy, conditional_accuracy) where conditional accuracy
+        is accuracy given all previous steps were also correct.
+    """
     correct = pred_ids == target_ids
     cond_denom: torch.Tensor | int = correct.numel()
     if prev_correct is not None:
@@ -32,6 +45,19 @@ def compute_accuracy_multi_step(
     pos_idx: torch.Tensor,  # shape: [1, seq_len]
     num_pos: int,
 ) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compute overall and per-position accuracy across multiple speculative steps.
+
+    Args:
+        pred_ids: Predicted token IDs.
+        target_ids: Ground-truth token IDs.
+        loss_mask: Boolean mask selecting positions to evaluate.
+        pos_idx: Position index within each speculative block (e.g. 0,1,2,3,0,1,2,3).
+        num_pos: Number of distinct positions (i.e. block size).
+
+    Returns:
+        Tuple of (overall_accuracy, per_position_accuracy) where per_position_accuracy
+        has shape [num_pos].
+    """
     correct = pred_ids == target_ids
     correct = torch.masked_select(correct, loss_mask.to(torch.bool))
     pos_idx = torch.masked_select(pos_idx, loss_mask.to(torch.bool))
@@ -53,6 +79,15 @@ def kl_div_loss(
     logits: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
     targets: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
 ):
+    """Compute per-position KL divergence from draft logits to target logits.
+
+    Args:
+        logits: Draft model logits (log-softmax applied internally).
+        targets: Target model logits (softmax applied internally).
+
+    Returns:
+        Per-position KL divergence with shape [1, seq_len].
+    """
     logits = torch.nn.functional.log_softmax(logits, dim=-1)
     target_p = torch.nn.functional.softmax(targets, dim=-1)
     elementwise_loss = torch.nn.functional.kl_div(
@@ -66,6 +101,15 @@ def ce_loss(
     logits: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
     targets: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
 ):
+    """Compute per-position cross-entropy loss using argmax of target logits as labels.
+
+    Args:
+        logits: Draft model logits.
+        targets: Target model logits (argmax taken to produce hard labels).
+
+    Returns:
+        Per-position cross-entropy loss with shape [1, seq_len].
+    """
     batch_size, seq_len, draft_vocab_size = logits.shape
     target_ids = torch.argmax(targets, dim=-1)  # shape: [1, seq_len]
 
@@ -80,6 +124,18 @@ def ce_loss(
 
 
 def dflash_loss_decay(pos_idx: torch.Tensor, gamma: float):
+    """Compute DFlash-style exponential decay weights per position.
+
+    Position 0 gets weight 0, position 1 gets weight 1, and subsequent positions
+    decay as exp(-(pos - 1) / gamma).
+
+    Args:
+        pos_idx: Position indices within each speculative block.
+        gamma: Decay rate (higher = slower decay).
+
+    Returns:
+        Decay multiplier tensor with same shape as pos_idx.
+    """
     # pos_idx = 0 1 2 3 0 1 2 3, block_size = 4
     decay_mult = torch.exp(-((pos_idx - 1).clamp(min=0)) / gamma)
     # decay_mult = e^-(0 0 1 2 0 0 1 2) / gamma
@@ -89,6 +145,15 @@ def dflash_loss_decay(pos_idx: torch.Tensor, gamma: float):
 
 
 def exp_loss_decay(pos_idx: torch.Tensor, gamma: float):
+    """Compute simple exponential decay weights as gamma^pos_idx.
+
+    Args:
+        pos_idx: Position indices within each speculative block.
+        gamma: Base of the exponent (typically in (0, 1]).
+
+    Returns:
+        Decay multiplier tensor with same shape as pos_idx.
+    """
     return gamma**pos_idx
 
 
@@ -100,6 +165,19 @@ def loss_function(
     loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = kl_div_loss,
     decay_fn: Callable[[torch.Tensor], torch.Tensor] | None = None,
 ):
+    """Compute masked, optionally position-decayed training loss.
+
+    Args:
+        logits: Draft model logits.
+        targets: Target model logits.
+        loss_mask: Boolean mask selecting positions to include in the loss.
+        pos_idx: Position indices within each speculative block.
+        loss_fn: Per-position loss function (default: kl_div_loss).
+        decay_fn: Optional position-dependent decay weighting function.
+
+    Returns:
+        Scalar mean loss across the batch.
+    """
     elementwise_loss = loss_fn(logits, targets)  # shape: [1, seq_len]
 
     loss_mask = loss_mask.to(elementwise_loss.dtype)
