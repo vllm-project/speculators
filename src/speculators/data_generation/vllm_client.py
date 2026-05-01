@@ -9,6 +9,7 @@ from typing import Any, cast
 from urllib.parse import urlparse
 
 import openai
+from safetensors.torch import load_file, save_file
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,12 @@ def _get_field(obj: Any, key: str) -> Any:
     if isinstance(obj, dict):
         return obj.get(key)
     return getattr(obj, key, None)
+
+
+def _to_token_id_list(token_ids: Any) -> list[int]:
+    if hasattr(token_ids, "tolist"):
+        token_ids = token_ids.tolist()
+    return list(token_ids)
 
 
 def _image_ref_to_chat_url(image_ref: Any) -> str:
@@ -108,6 +115,39 @@ def _prepare_chat_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any
     return prepared
 
 
+def _truncate_hidden_states_file(hidden_states_path: str, token_ids: list[int]) -> str:
+    """Trim vLLM's full multimodal prompt output to the preprocessed prefix."""
+    tensors = load_file(hidden_states_path)
+
+    try:
+        file_token_ids = _to_token_id_list(tensors["token_ids"])
+        hidden_states = tensors["hidden_states"]
+    except KeyError as exc:
+        raise InvalidResponseError(
+            f"Hidden states file missing {exc.args[0]}: {hidden_states_path}"
+        ) from exc
+
+    expected_len = len(token_ids)
+    if (
+        file_token_ids[:expected_len] != token_ids
+        or hidden_states.shape[0] < expected_len
+    ):
+        raise InvalidResponseError(
+            "Hidden states file does not match preprocessed prompt prefix: "
+            f"expected {token_ids}, got {file_token_ids}"
+        )
+
+    # Safe for causal models: prefix hidden states cannot attend to future tokens
+    # that only exist in vLLM's full chat-rendered prompt.
+    tensors["token_ids"] = tensors["token_ids"][:expected_len].contiguous()
+    tensors["hidden_states"] = hidden_states[:expected_len].contiguous()
+    save_file(
+        {key: value.contiguous() for key, value in tensors.items()},
+        hidden_states_path,
+    )
+    return hidden_states_path
+
+
 def _handle_retry_error(
     error: Exception, attempt: int, total_attempts: int
 ) -> float | None:
@@ -174,7 +214,13 @@ def with_retries(fn):
     return sync_wrapper
 
 
-def extract_output(completion, token_ids) -> str:
+def extract_output(
+    completion,
+    token_ids,
+    *,
+    allow_prefix_truncation: bool = False,
+) -> str:
+    token_ids = _to_token_id_list(token_ids)
     prompt_token_ids = _get_field(completion, "prompt_token_ids")
     if prompt_token_ids is None:
         choices = _get_field(completion, "choices")
@@ -184,11 +230,6 @@ def extract_output(completion, token_ids) -> str:
     if prompt_token_ids is None:
         raise InvalidResponseError("Response missing prompt_token_ids")
 
-    if prompt_token_ids != token_ids:
-        raise InvalidResponseError(
-            f"Prompt token IDs mismatch: expected {token_ids}, got {prompt_token_ids}"
-        )
-
     kv_transfer_params = _get_field(completion, "kv_transfer_params")
     if kv_transfer_params is None:
         raise InvalidResponseError("Response missing kv_transfer_params")
@@ -196,7 +237,23 @@ def extract_output(completion, token_ids) -> str:
     hidden_states_path = _get_field(kv_transfer_params, "hidden_states_path")
     if hidden_states_path is None:
         raise InvalidResponseError("Response missing hidden_states_path")
-    return hidden_states_path
+
+    prompt_token_ids = _to_token_id_list(prompt_token_ids)
+    if prompt_token_ids == token_ids:
+        return hidden_states_path
+
+    if allow_prefix_truncation and prompt_token_ids[: len(token_ids)] == token_ids:
+        logger.debug(
+            "vLLM returned %d prompt tokens for a %d-token preprocessed prompt; "
+            "truncating hidden states to match prepare_data output.",
+            len(prompt_token_ids),
+            len(token_ids),
+        )
+        return _truncate_hidden_states_file(hidden_states_path, token_ids)
+
+    raise InvalidResponseError(
+        f"Prompt token IDs mismatch: expected {token_ids}, got {prompt_token_ids}"
+    )
 
 
 @with_retries
@@ -240,7 +297,11 @@ async def generate_hidden_states_async(
     else:
         completion = await coro
 
-    return extract_output(completion, token_ids)
+    return extract_output(
+        completion,
+        token_ids,
+        allow_prefix_truncation=messages is not None,
+    )
 
 
 @with_retries
@@ -272,4 +333,8 @@ def generate_hidden_states(
             extra_body={"return_token_ids": True},
             timeout=timeout,
         )
-    return extract_output(completion, token_ids)
+    return extract_output(
+        completion,
+        token_ids,
+        allow_prefix_truncation=messages is not None,
+    )
