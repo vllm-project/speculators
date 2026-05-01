@@ -116,6 +116,7 @@ class TrainingConfig:
     draft_arch: str = "llama"
     num_layers: int = 1
     draft_vocab_size: int = 32000
+    target_layer_ids: str = ""  # space-separated layer IDs, e.g. "2 14 25"
 
     # GPU layout — GPU_TYPE and GPU_COUNT are set above as module constants.
     vllm_gpus: int = 2  # remainder used for training
@@ -399,6 +400,10 @@ def launch_vllm(cfg: TrainingConfig, vllm_venv: str) -> subprocess.Popen:
     cmd = [
         f"{vllm_venv}/bin/python", str(script),
         cfg.model,
+    ]
+    if cfg.target_layer_ids:
+        cmd += ["--target-layer-ids"] + cfg.target_layer_ids.split()
+    cmd += [
         "--",
         "--port", str(cfg.vllm_port),
         "--gpu-memory-utilization", str(cfg.vllm_gpu_memory_utilization),
@@ -482,6 +487,8 @@ def run_training(cfg: TrainingConfig, speculators_venv: str) -> None:
         cmd += ["--draft-vocab-size", str(cfg.draft_vocab_size)]
     if cfg.draft_arch:
         cmd += ["--draft-arch", cfg.draft_arch]
+    if cfg.target_layer_ids:
+        cmd += ["--target-layer-ids"] + cfg.target_layer_ids.split()
     if cfg.no_resume_from_checkpoint:
         cmd.append("--no-resume-from-checkpoint")
     if cfg.save_best:
@@ -582,6 +589,7 @@ def main(
     draft_arch: str = "llama",
     num_layers: int = 1,
     draft_vocab_size: int = 32000,
+    target_layer_ids: str = "",
     # GPU layout
     vllm_gpus: int = 2,
     # Data
@@ -630,6 +638,7 @@ def main(
         draft_arch=draft_arch,
         num_layers=num_layers,
         draft_vocab_size=draft_vocab_size,
+        target_layer_ids=target_layer_ids,
         vllm_gpus=vllm_gpus,
         vllm_nightly=vllm_nightly,
         vllm_version=vllm_version,
