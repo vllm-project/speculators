@@ -567,7 +567,7 @@ def load_raw_dataset(
     return raw_dataset, config.normalize_fn
 
 
-def _resolve_eos_token(processor: ProcessorLike):
+def _resolve_pad_token(processor: ProcessorLike):
     tokenizer = (
         processor.tokenizer if isinstance(processor, ProcessorMixin) else processor
     )
@@ -580,7 +580,7 @@ def _load_processor(target_model_path: str, *, trust_remote_code: bool = False):
         target_model_path,
         trust_remote_code=trust_remote_code,
     )
-    _resolve_eos_token(processor)
+    _resolve_pad_token(processor)
 
     return processor
 
