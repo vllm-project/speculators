@@ -25,6 +25,20 @@ Usage:
         --vllm-gpus 4 \
         --epochs 10
 
+    # Use an HF dataset with JSONL files
+    modal run --detach modal_speculators.py \
+        --hf-dataset inference-optimization/speculators-qwen3-30b-a3b-instruct \
+        --hf-dataset-files "*.jsonl"
+
+    # Use custom speculators/vllm branches
+    modal run --detach modal_speculators.py \
+        --speculators-branch my-feature-branch \
+        --vllm-branch main \
+        --vllm-repo vllm-project/vllm
+
+    # Enable W&B logging (requires 'wandb' Modal secret)
+    modal run --detach modal_speculators.py --wandb
+
 GPU type and count are set via the GPU_TYPE and GPU_COUNT constants at the
 top of the script, since Modal requires these at decoration time.
 
@@ -74,6 +88,13 @@ image = (
 
 app = modal.App("speculators-training", image=image)
 
+# ---------------------------------------------------------------------------
+# W&B secret — create via `modal secret create wandb WANDB_API_KEY=<key>`
+# or via the Modal dashboard (use the Weights & Biases template).
+# The secret is only attached when --wandb is passed.
+# ---------------------------------------------------------------------------
+wandb_secret = modal.Secret.from_name("wandb", required=False)
+
 
 # ---------------------------------------------------------------------------
 # GPU configuration — must be set before running the script, since Modal
@@ -103,6 +124,12 @@ class TrainingConfig:
     max_samples: int = 5000
     seq_length: int = 8192
 
+    # HuggingFace dataset support — download JSONL files from an HF dataset
+    # repo and pass them to prepare_data.py via --data <path> for each file.
+    hf_dataset: str = ""  # e.g. "inference-optimization/speculators-qwen3-30b-a3b-instruct"
+    hf_dataset_files: str = "*.jsonl"  # glob pattern for files to download
+    hf_dataset_revision: str = "main"
+
     # Training hyperparameters
     epochs: int = 5
     lr: float = 1e-4
@@ -113,6 +140,12 @@ class TrainingConfig:
 
     # vLLM install
     vllm_nightly: bool = False  # install nightly instead of stable release
+    vllm_version: str = "0.19"  # stable version when not using nightly
+    vllm_branch: str = ""  # install from a git branch instead of PyPI
+    vllm_repo: str = "vllm-project/vllm"  # GitHub org/repo for branch installs
+
+    # Speculators install
+    speculators_branch: str = ""  # install from a git branch instead of PyPI
 
     # vLLM server
     vllm_port: int = 8000
@@ -129,6 +162,7 @@ class TrainingConfig:
     # Logging
     logger: str = ""  # "trackio", "wandb", "tensorboard", or ""
     run_name: Optional[str] = None
+    wandb: bool = False  # enable W&B logging (requires Modal 'wandb' secret)
 
     # Extra CLI flags (appended verbatim)
     extra_vllm_args: str = ""
@@ -145,6 +179,7 @@ class TrainingConfig:
             "num_layers": self.num_layers,
             "draft_vocab_size": self.draft_vocab_size,
             "dataset": self.dataset,
+            "hf_dataset": self.hf_dataset,
             "seq_length": self.seq_length,
             "max_samples": self.max_samples,
             "total_seq_len": self.total_seq_len,
@@ -187,6 +222,114 @@ def _create_venv(
     return venv_dir
 
 
+# ---------------------------------------------------------------------------
+# Helper: resolve speculators install spec
+# ---------------------------------------------------------------------------
+def _speculators_install_spec(cfg: TrainingConfig) -> str:
+    """Return the pip install specifier for speculators."""
+    if cfg.speculators_branch:
+        return (
+            f"speculators @ git+https://github.com/vllm-project/speculators.git"
+            f"@{cfg.speculators_branch}"
+        )
+    return "speculators>=0.5.0"
+
+
+# ---------------------------------------------------------------------------
+# Helper: resolve vllm install packages
+# ---------------------------------------------------------------------------
+def _vllm_install_packages(cfg: TrainingConfig) -> list[str]:
+    """Return the list of pip install args for vllm."""
+    if cfg.vllm_nightly:
+        return [
+            "vllm",
+            "--extra-index-url", "https://wheels.vllm.ai/nightly/cu130",
+        ]
+    if cfg.vllm_branch:
+        return [
+            f"vllm @ git+https://github.com/{cfg.vllm_repo}.git"
+            f"@{cfg.vllm_branch}"
+        ]
+    return [f"vllm=={cfg.vllm_version}"]
+
+
+# ---------------------------------------------------------------------------
+# Helper: clone speculators repo for scripts (respects branch override)
+# ---------------------------------------------------------------------------
+def _ensure_speculators_scripts(cfg: TrainingConfig) -> None:
+    """Re-clone the speculators repo if a custom branch is requested."""
+    if not cfg.speculators_branch:
+        return  # use the version cloned at image build time
+    import shutil
+    if SPECULATORS_REPO.exists():
+        shutil.rmtree(SPECULATORS_REPO)
+    subprocess.run(
+        ["git", "clone", "--depth", "1", "--branch", cfg.speculators_branch,
+         "https://github.com/vllm-project/speculators.git",
+         str(SPECULATORS_REPO)],
+        check=True,
+    )
+    print(f"[modal] Cloned speculators scripts from branch: {cfg.speculators_branch}")
+
+
+# ---------------------------------------------------------------------------
+# Helper: download HF dataset files
+# ---------------------------------------------------------------------------
+def _download_hf_dataset(cfg: TrainingConfig) -> list[str]:
+    """Download JSONL files from an HF dataset repo. Returns local file paths."""
+    import fnmatch
+    import urllib.request
+
+    download_dir = Path("/tmp/hf_dataset")
+    download_dir.mkdir(parents=True, exist_ok=True)
+
+    # Use the HF Hub API to list files
+    api_url = (
+        f"https://huggingface.co/api/datasets/{cfg.hf_dataset}"
+        f"/tree/{cfg.hf_dataset_revision}"
+    )
+    req = urllib.request.Request(api_url)
+    # Pass HF token if available
+    hf_token = os.environ.get("HF_TOKEN", "")
+    if hf_token:
+        req.add_header("Authorization", f"Bearer {hf_token}")
+
+    with urllib.request.urlopen(req) as resp:
+        files_meta = json.loads(resp.read())
+
+    # Filter files matching the glob pattern
+    matched = [
+        f["rfilename"] for f in files_meta
+        if f.get("type") == "file"
+        and fnmatch.fnmatch(f["rfilename"], cfg.hf_dataset_files)
+    ]
+    if not matched:
+        raise ValueError(
+            f"No files matching '{cfg.hf_dataset_files}' found in "
+            f"dataset {cfg.hf_dataset}"
+        )
+
+    print(f"[modal] Downloading {len(matched)} files from {cfg.hf_dataset}:")
+    local_paths = []
+    for fname in matched:
+        url = (
+            f"https://huggingface.co/datasets/{cfg.hf_dataset}"
+            f"/resolve/{cfg.hf_dataset_revision}/{fname}"
+        )
+        local_path = download_dir / fname
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        if local_path.exists():
+            print(f"  [cached] {fname}")
+        else:
+            print(f"  [downloading] {fname}")
+            req = urllib.request.Request(url)
+            if hf_token:
+                req.add_header("Authorization", f"Bearer {hf_token}")
+            urllib.request.urlretrieve(url, local_path)
+        local_paths.append(str(local_path))
+
+    return local_paths
+
 
 # ---------------------------------------------------------------------------
 # Helper: wait for vLLM to be ready
@@ -216,15 +359,25 @@ def prepare_data(cfg: TrainingConfig, speculators_venv: str) -> None:
         print("[modal] Data already prepared, skipping.")
         return
 
-    print(f"[modal] Preparing data with model={cfg.model}, dataset={cfg.dataset}")
     script = SPECULATORS_REPO / "scripts" / "prepare_data.py"
     cmd = [
         f"{speculators_venv}/bin/python", str(script),
         "--model", cfg.model,
-        "--data", cfg.dataset,
         "--output", str(cfg.data_path),
         "--seq-length", str(cfg.seq_length),
     ]
+
+    # Determine data source(s)
+    if cfg.hf_dataset:
+        print(f"[modal] Downloading HF dataset: {cfg.hf_dataset}")
+        local_files = _download_hf_dataset(cfg)
+        for f in local_files:
+            cmd += ["--data", f]
+        print(f"[modal] Preparing data from {len(local_files)} files")
+    else:
+        cmd += ["--data", cfg.dataset]
+        print(f"[modal] Preparing data with dataset={cfg.dataset}")
+
     if cfg.max_samples:
         cmd += ["--max-samples", str(cfg.max_samples)]
     subprocess.run(cmd, check=True)
@@ -238,6 +391,7 @@ def launch_vllm(cfg: TrainingConfig, vllm_venv: str) -> subprocess.Popen:
     vllm_gpu_ids = ",".join(str(i) for i in range(cfg.vllm_gpus))
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = vllm_gpu_ids
+    env["VLLM_USE_DEEP_GEMM"] = "0"
 
     # launch_vllm.py wraps `vllm serve` with hidden-state extraction flags.
     script = SPECULATORS_REPO / "scripts" / "launch_vllm.py"
@@ -350,6 +504,7 @@ def run_training(cfg: TrainingConfig, speculators_venv: str) -> None:
     volumes={VOLUME_MOUNT: volume},
     gpu=f"{GPU_TYPE}:{GPU_COUNT}",
     timeout=86400,  # 24 hours
+    secrets=[wandb_secret],
 )
 def train_speculators(cfg_dict: dict, skip_data_prep: bool = False) -> None:
     cfg = TrainingConfig(**cfg_dict)
@@ -359,17 +514,29 @@ def train_speculators(cfg_dict: dict, skip_data_prep: bool = False) -> None:
     print(f"[modal] Data:    {cfg.data_path}")
     print(f"[modal] Ckpts:   {cfg.save_path}")
     print(f"[modal] GPU layout: {cfg.vllm_gpus} for vLLM, {cfg.train_gpus} for training")
+
+    # If a custom speculators branch was requested, re-clone the repo
+    _ensure_speculators_scripts(cfg)
+
     print(f"[modal] Setting up environments...")
 
     # Create isolated venvs.
-    if cfg.vllm_nightly:
-        vllm_venv = _create_venv("vllm", [
-            "vllm",
-            "--extra-index-url", "https://wheels.vllm.ai/nightly/cu130",
-        ])
-    else:
-        vllm_venv = _create_venv("vllm", ["vllm==0.19"])
-    speculators_venv = _create_venv("speculators", ["speculators>=0.5.0"])
+    vllm_packages = _vllm_install_packages(cfg)
+    vllm_venv = _create_venv("vllm", vllm_packages)
+
+    speculators_spec = _speculators_install_spec(cfg)
+    speculators_packages = [speculators_spec]
+    if cfg.wandb:
+        speculators_packages.append("wandb")
+    speculators_venv = _create_venv("speculators", speculators_packages)
+
+    # Configure W&B if enabled
+    if cfg.wandb:
+        if not os.environ.get("WANDB_API_KEY"):
+            print(
+                "[modal] WARNING: --wandb enabled but WANDB_API_KEY not found. "
+                "Create a Modal secret: modal secret create wandb WANDB_API_KEY=<key>"
+            )
 
     # Stage 1: Data preparation (runs on CPU, uses speculators venv)
     if not skip_data_prep:
@@ -416,6 +583,10 @@ def main(
     max_samples: int = 5000,
     seq_length: int = 8192,
     skip_data_prep: bool = False,
+    # HF dataset
+    hf_dataset: str = "",
+    hf_dataset_files: str = "*.jsonl",
+    hf_dataset_revision: str = "main",
     # Training
     epochs: int = 5,
     lr: float = 1e-4,
@@ -425,11 +596,16 @@ def main(
     seed: int = 42,
     # vLLM
     vllm_nightly: bool = False,
+    vllm_version: str = "0.19",
+    vllm_branch: str = "",
+    vllm_repo: str = "vllm-project/vllm",
     vllm_port: int = 8000,
     vllm_gpu_memory_utilization: float = 0.9,
     vllm_tensor_parallel_size: int = 1,
     vllm_data_parallel_size: Optional[int] = None,
     vllm_max_model_len: Optional[int] = None,
+    # Speculators
+    speculators_branch: str = "",
     # Checkpoint
     no_resume_from_checkpoint: bool = False,
     checkpoint_freq: int = 1,
@@ -437,6 +613,7 @@ def main(
     # Logging
     logger: str = "",
     run_name: Optional[str] = None,
+    wandb: bool = False,
     # Extra
     extra_vllm_args: str = "",
     extra_train_args: str = "",
@@ -449,15 +626,22 @@ def main(
         draft_vocab_size=draft_vocab_size,
         vllm_gpus=vllm_gpus,
         vllm_nightly=vllm_nightly,
+        vllm_version=vllm_version,
+        vllm_branch=vllm_branch,
+        vllm_repo=vllm_repo,
         dataset=dataset,
         max_samples=max_samples,
         seq_length=seq_length,
+        hf_dataset=hf_dataset,
+        hf_dataset_files=hf_dataset_files,
+        hf_dataset_revision=hf_dataset_revision,
         epochs=epochs,
         lr=lr,
         total_seq_len=total_seq_len,
         on_missing=on_missing,
         on_generate=on_generate,
         seed=seed,
+        speculators_branch=speculators_branch,
         vllm_port=vllm_port,
         vllm_gpu_memory_utilization=vllm_gpu_memory_utilization,
         vllm_tensor_parallel_size=vllm_tensor_parallel_size,
@@ -468,9 +652,14 @@ def main(
         save_best=save_best,
         logger=logger,
         run_name=run_name,
+        wandb=wandb,
         extra_vllm_args=extra_vllm_args,
         extra_train_args=extra_train_args,
     )
+
+    # Auto-set logger when --wandb is used
+    if cfg.wandb and not cfg.logger:
+        cfg.logger = "wandb"
 
     print(f"[modal] Launching speculators training")
     print(f"  Run ID:      {cfg.run_id}")
@@ -478,5 +667,13 @@ def main(
     print(f"  GPUs:        {GPU_COUNT}x {GPU_TYPE} ({cfg.vllm_gpus} vLLM + {cfg.train_gpus} training)")
     print(f"  Epochs:      {cfg.epochs}")
     print(f"  LR:          {cfg.lr}")
+    if cfg.hf_dataset:
+        print(f"  HF Dataset:  {cfg.hf_dataset} ({cfg.hf_dataset_files})")
+    if cfg.speculators_branch:
+        print(f"  Speculators: branch={cfg.speculators_branch}")
+    if cfg.vllm_branch:
+        print(f"  vLLM:        branch={cfg.vllm_branch} (repo={cfg.vllm_repo})")
+    if cfg.wandb:
+        print(f"  W&B:         enabled")
 
     train_speculators.remote(dataclasses.asdict(cfg), skip_data_prep=skip_data_prep)
