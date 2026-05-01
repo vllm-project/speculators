@@ -260,7 +260,7 @@ class ArrowDataset(BaseDataset):
 
         item = self.data[index]
         input_ids = item["input_ids"].tolist()
-        messages = self.data.get("_vllm_messages")
+        messages = item.get("_vllm_messages")
 
         try:
             hs_filepath = generate_hidden_states(

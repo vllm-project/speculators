@@ -130,7 +130,7 @@ def _hf_to_vllm_part(part: str | dict):
     for modality in ("image", "video", "audio"):
         if part_type == modality:
             if local_path := part.get("path"):
-                file_url = f"file://{local_path}"
+                file_url = f"file://{Path(local_path).absolute()}"
                 return {"type": f"{modality}_url", f"{modality}_url": {"url": file_url}}
             if url := part.get("url"):
                 return {"type": f"{modality}_url", f"{modality}_url": {"url": url}}
