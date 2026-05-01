@@ -2,6 +2,8 @@ from collections.abc import Callable
 
 import torch
 
+_EPS = 1e-5
+
 
 def compute_accuracy_single_step(
     pred_ids: torch.Tensor,  # shape: [1, seq_len]
@@ -34,7 +36,7 @@ def compute_accuracy_single_step(
     correct_sum = correct.float().sum()
     full_denom = correct.numel()
 
-    return correct_sum / (full_denom + 1e-5), correct_sum / (cond_denom + 1e-5)
+    return correct_sum / (full_denom + _EPS), correct_sum / (cond_denom + _EPS)
 
 
 @torch.no_grad()
@@ -64,13 +66,13 @@ def compute_accuracy_multi_step(
 
     correct_sum = correct.float().sum()
     full_denom = correct.numel()
-    overall_acc = correct_sum / (full_denom + 1e-5)
+    overall_acc = correct_sum / (full_denom + _EPS)
 
     sums = torch.zeros(num_pos, dtype=torch.long, device=correct.device)
     counts = torch.zeros(num_pos, dtype=torch.long, device=correct.device)
     sums.scatter_add_(0, pos_idx, correct.long())
     counts.scatter_add_(0, pos_idx, torch.ones_like(correct, dtype=torch.long))
-    per_pos_idx_acc = sums.float() / (counts.float() + 1e-5)
+    per_pos_idx_acc = sums.float() / (counts.float() + _EPS)
 
     return overall_acc, per_pos_idx_acc  # shape: [], [block_size]
 
@@ -187,7 +189,7 @@ def loss_function(
         decay_mult = decay_fn(pos_idx.to(elementwise_loss.dtype))
         elementwise_loss = elementwise_loss * decay_mult
 
-    denominator = loss_mask.sum(dim=1) + 1e-5
+    denominator = loss_mask.sum(dim=1) + _EPS
 
     batch_loss = torch.sum(elementwise_loss, dim=1) / denominator  # shape: [1]
     return batch_loss.mean()  # shape: []
