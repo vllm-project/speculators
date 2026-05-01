@@ -248,17 +248,17 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         )  # shape: [1, num_anchors*block_size]
         mask_token_ids[:, :: self.block_size] = input_ids[:, anchor_positions]
         noise_embedding = self.embed_tokens(mask_token_ids)
-        # shape: [1, num_anchors*block_size, hidden_size] # noqa: ERA001
+        # shape: [1, num_anchors*block_size, hidden_size]
 
         fc_output = self.fc(hidden_states)
         fc_output = self.hidden_norm(fc_output)
-        # shape: [1, total_seq_len, hidden_size] # noqa: ERA001
+        # shape: [1, total_seq_len, hidden_size]
 
         mask_position_ids = get_base_indices_for_anchored_blocks(
             position_ids[:, anchor_positions], self.block_size, input_ids.numel()
         )
         position_ids = torch.cat([position_ids, mask_position_ids.unsqueeze(0)], dim=1)
-        # shape: [1, total_seq_len + num_anchors*block_size] # noqa: ERA001
+        # shape: [1, total_seq_len + num_anchors*block_size]
 
         # the hidden_states shape doesn't match position_ids but doesn't need
         # to, as hidden_states is only used to set dtype and device in rotary_emb
@@ -275,7 +275,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             # Shift right by 1 so verifier_logits[i] predicts token at position i
             verifier_logits = torch.roll(verifier_logits, 1, dims=1)
             targets = verifier_logits[:, anchored_block_indices]
-            # shape: [1, num_anchors*block_size, draft_vocab_size] # noqa: ERA001
+            # shape: [1, num_anchors*block_size, draft_vocab_size]
 
         for layer in self.layers:
             noise_embedding = layer(
@@ -289,10 +289,10 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             )
 
         logits = self.lm_head(self.norm(noise_embedding))
-        # shape: [1, num_anchors*block_size, vocab_size] # noqa: ERA001
+        # shape: [1, num_anchors*block_size, vocab_size]
 
         aligned_loss_mask = loss_mask.clone()[:, anchored_block_indices]
-        # shape: [1, num_anchors*block_size] # noqa: ERA001
+        # shape: [1, num_anchors*block_size]
 
         # zero out any padded anchor blocks
         aligned_loss_mask = aligned_loss_mask * (

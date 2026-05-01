@@ -256,7 +256,7 @@ class TestEagle3ConverterFixes:
         """Test that multi-layer conversion support."""
         converter = Eagle3Converter()
 
-        # TODO: Use a real model in the future  # noqa: FIX002
+        # TODO: Use a real model in the future
         checkpoint_path = "nm-testing/testing-llama3.1.8b-2layer-eagle3"
         base_model = "RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8-dynamic"
 
