@@ -167,7 +167,7 @@ async def worker(
 
             choice = data["choices"][0]
             generated_text = choice["message"]["content"]
-            reasoning_content = choice["message"].get("reasoning_content")
+            reasoning_content = choice["message"].get("reasoning_content") or choice["message"].get("reasoning")
             finish_reason = choice.get("finish_reason")
             latency = time.time() - start_time
 
