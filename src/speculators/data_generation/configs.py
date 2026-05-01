@@ -67,10 +67,12 @@ def _normalize_sharegpt4v(example: dict) -> dict:
     image_path = os.path.join(get_coco_dir(), image_path.removeprefix("coco/"))
 
     if not os.path.exists(image_path):
+        state_str = "set to" if os.getenv("COCO_DIR") else "default"
+
         raise ValueError(
-            "Please download COCO 2017 Train Images from "
-            "http://images.cocodataset.org/zips/train2017.zip and "
-            "place the files under `COCO_DIR` (default: `./coco`)."
+            f"Please download COCO 2017 Train Images from "
+            f"http://images.cocodataset.org/zips/train2017.zip and "
+            f"place the files under `COCO_DIR` ({state_str}: `./coco`)."
         )
 
     hf_messages = [
