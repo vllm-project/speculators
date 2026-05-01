@@ -266,57 +266,39 @@ class Trainer:
         )
         return val_metrics
 
-    def maybe_save_checkpoint(self, epoch: int, val_metrics: dict | None):
-        if (
-            self.config.save_best
-            and val_metrics is not None
-            and "loss_epoch" in val_metrics
-        ):
-            if val_metrics["loss_epoch"] < self.best_val_loss:
-                self.best_val_loss = val_metrics["loss_epoch"]
-                root_logger.info(
-                    f"Saving new best checkpoint at epoch {epoch} "
-                    f"(loss_epoch={self.best_val_loss:.6f})"
-                )
-                self.checkpointer.save_checkpoint(self.model, self.opt, epoch)
-                if self.scheduler is not None:
-                    self.checkpointer.save_scheduler_state_dict(self.scheduler, epoch)
-                self.checkpointer.save_val_metrics(epoch, val_metrics)
-                self.checkpointer.update_best_symlink(epoch)
-                root_logger.info(
-                    f"Updated checkpoint_best -> {epoch} "
-                    f"(loss_epoch={self.best_val_loss:.6f})"
-                )
-                # Keep ONLY the best checkpoint folder + best_checkpoint symlink
-                self.checkpointer.cleanup_keep_only_best(best_epoch=epoch)
+    def maybe_save_checkpoint(self, epoch: int):
+        if self.config.save_best:
+            return
+        if not (epoch == 0 or (epoch + 1) % self.config.checkpoint_freq == 0):
+            return
 
-        elif epoch == 0 or (epoch + 1) % self.config.checkpoint_freq == 0:
-            root_logger.info(
-                f"Saving checkpoint to {self.checkpointer.path / str(epoch)}"
-            )
+        root_logger.info(f"Saving checkpoint to {self.checkpointer.path / str(epoch)}")
+        self.checkpointer.save_checkpoint(self.model, self.opt, epoch)
+        if self.scheduler is not None:
+            self.checkpointer.save_scheduler_state_dict(self.scheduler, epoch)
+        root_logger.info(f"Checkpoint saved to {self.checkpointer.path / str(epoch)}")
+
+    def maybe_update_best(self, epoch: int, val_metrics: dict | None):
+        if val_metrics is None or "loss_epoch" not in val_metrics:
+            return
+        if val_metrics["loss_epoch"] >= self.best_val_loss:
+            return
+
+        if self.config.save_best:
             self.checkpointer.save_checkpoint(self.model, self.opt, epoch)
             if self.scheduler is not None:
                 self.checkpointer.save_scheduler_state_dict(self.scheduler, epoch)
-            if val_metrics is not None:
-                self.checkpointer.save_val_metrics(epoch, val_metrics)
-            root_logger.info(
-                f"Checkpoint saved to {self.checkpointer.path / str(epoch)}"
-            )
-            if (
-                val_metrics is not None
-                and "loss_epoch" in val_metrics
-                and val_metrics["loss_epoch"] < self.best_val_loss
-            ):
-                self.best_val_loss = val_metrics["loss_epoch"]
-                root_logger.info(
-                    f"Updating new best checkpoint symlink at epoch {epoch} "
-                    f"(loss_epoch={self.best_val_loss:.6f})"
-                )
-                self.checkpointer.update_best_symlink(epoch)
-                root_logger.info(
-                    f"Updated checkpoint_best -> {epoch} "
-                    f"(loss_epoch={self.best_val_loss:.6f})"
-                )
+        elif not (self.checkpointer.path / str(epoch)).exists():
+            return
+
+        self.best_val_loss = val_metrics["loss_epoch"]
+        self.checkpointer.save_val_metrics(epoch, val_metrics)
+        self.checkpointer.update_best_symlink(epoch)
+        root_logger.info(
+            f"Updated checkpoint_best -> {epoch} (loss_epoch={self.best_val_loss:.6f})"
+        )
+        if self.config.save_best:
+            self.checkpointer.cleanup_keep_only_best(best_epoch=epoch)
 
     def run_training(self):
         n_epochs = self.config.num_epochs
@@ -324,6 +306,11 @@ class Trainer:
             root_logger.info(f"Training epoch {epoch + 1}/{n_epochs} started")
             self.train_epoch(epoch)
             root_logger.info(f"Training epoch {epoch + 1}/{n_epochs} completed")
+
+            if self.is_distributed:
+                dist.barrier()
+
+            self.maybe_save_checkpoint(epoch)
 
             if self.is_distributed:
                 dist.barrier()
@@ -340,7 +327,7 @@ class Trainer:
             if self.is_distributed:
                 dist.barrier()
 
-            self.maybe_save_checkpoint(epoch, val_metrics)
+            self.maybe_update_best(epoch, val_metrics)
 
             if self.is_distributed:
                 dist.barrier()
