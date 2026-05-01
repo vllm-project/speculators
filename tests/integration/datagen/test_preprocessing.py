@@ -7,11 +7,13 @@ import re
 import pytest
 import torch
 from datasets import Dataset as HFDataset
-from transformers import AutoTokenizer
+from PIL import Image
+from transformers import AutoProcessor
 
 from speculators.data_generation.preprocessing import (
     _create_loss_mask_from_offsets,
     _detect_assistant_pattern,
+    _hf_to_vllm_conv,
     _normalize_conversation,
     _preprocess_batch,
     _supports_assistant_mask,
@@ -77,16 +79,79 @@ def test_normalize_conversation_unknown_role():
     assert result[1]["role"] == "assistant"
 
 
+# Tests for _hf_to_vllm_conv
+@pytest.mark.sanity
+def test_hf_to_vllm_all_content_formats():
+    """Test converting from HF-format to vLLM-format messages with each supported content format."""
+    conv = [
+        {
+            "role": "system",
+            "content": "You are a helpful assistant."  # Content as string
+        },
+        {
+            "role": "assistant",
+            "content": [  # Content as list
+                "Hello,",  # Text as string
+                {"type": "text", "text": "I am"},  # Text as dictionary
+                {"type": "image", "path": "/path/to/img"},  # Image file path
+                {"type": "image", "url": "http://path/to/img"}  # Image URL
+            ]
+        },  
+    ]
+    result = _hf_to_vllm_conv(conv)
+
+    assert len(result) == 2
+
+    assert result[0]["role"] == "system"
+    assert result[0]["content"] == "You are a helpful assistant."
+
+    assert result[1]["role"] == "assistant"
+    assert result[1]["content"][0] == {"type": "text", "text": "Hello,"}
+    assert result[1]["content"][1] == {"type": "text", "text": "I am"}
+    assert result[1]["content"][2] == {"type": "image_url", "image_url": {"url": "file:///path/to/img"}}
+    assert result[1]["content"][3] == {"type": "image_url", "image_url": {"url": "http://path/to/img"}}
+
+
+@pytest.mark.sanity
+def test_hf_to_vllm_invalid_content_formats():
+    """Test converting from HF-format to vLLM-format messages with unsupported content formats."""
+    # Image object is not supported to discourage copying images when saving the preprocessed dataset
+    with pytest.raises(NotImplementedError, match=r"No handler .* for fields: \{'part\.image'\}"):
+        _hf_to_vllm_conv(
+            [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "image", "image": Image.new("RGB", (256, 256))},
+                    ]
+                },  
+            ]
+        )
+
+    # Image base64 is not supported to discourage copying images when saving the preprocessed dataset
+    with pytest.raises(NotImplementedError, match=r"No handler .* for fields: \{'part\.base64'\}"):
+        _hf_to_vllm_conv(
+            [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "image", "base64": "abcdef"},
+                    ]
+                },  
+            ]
+        )
+
+
 # Tests for _detect_assistant_pattern
 @pytest.mark.sanity
 def test_detect_assistant_pattern_structure():
     """Test that the detected pattern has the correct regex structure."""
-    tokenizer = AutoTokenizer.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
+    processor = AutoProcessor.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
 
-    if not hasattr(tokenizer, "apply_chat_template") or tokenizer.chat_template is None:
-        pytest.skip("Tokenizer does not support chat templates")
+    if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
+        pytest.skip("Processor does not support chat templates")
 
-    pattern = _detect_assistant_pattern(tokenizer)
+    pattern = _detect_assistant_pattern(processor)
 
     # Pattern should be a valid regex string
     assert isinstance(pattern, str)
@@ -105,20 +170,20 @@ def test_detect_assistant_pattern_structure():
 @pytest.mark.sanity
 def test_detect_assistant_pattern_correctly_identifies_assistant_vs_user():
     """Test that pattern correctly distinguishes assistant from user content."""
-    tokenizer = AutoTokenizer.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
+    processor = AutoProcessor.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
 
-    if not hasattr(tokenizer, "apply_chat_template") or tokenizer.chat_template is None:
-        pytest.skip("Tokenizer does not support chat templates")
+    if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
+        pytest.skip("Processor does not support chat templates")
 
     # Get the pattern
-    pattern = _detect_assistant_pattern(tokenizer)
+    pattern = _detect_assistant_pattern(processor)
 
     # Format a conversation manually to test the pattern
     test_conv = [
         {"role": "user", "content": "USER_MSG"},
         {"role": "assistant", "content": "ASSISTANT_MSG"},
     ]
-    formatted: str = tokenizer.apply_chat_template(  # type: ignore[assignment]
+    formatted: str = processor.apply_chat_template(  # type: ignore[assignment]
         test_conv, tokenize=False, add_generation_prompt=False
     )
 
@@ -141,12 +206,12 @@ def test_detect_assistant_pattern_correctly_identifies_assistant_vs_user():
 @pytest.mark.sanity
 def test_detect_assistant_pattern_extracts_correct_content():
     """Test that the pattern's capture group extracts only assistant message content."""
-    tokenizer = AutoTokenizer.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
+    processor = AutoProcessor.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
 
-    if not hasattr(tokenizer, "apply_chat_template") or tokenizer.chat_template is None:
-        pytest.skip("Tokenizer does not support chat templates")
+    if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
+        pytest.skip("Processor does not support chat templates")
 
-    pattern = _detect_assistant_pattern(tokenizer)
+    pattern = _detect_assistant_pattern(processor)
 
     # Test with a multi-turn conversation
     test_conv = [
@@ -156,7 +221,7 @@ def test_detect_assistant_pattern_extracts_correct_content():
         {"role": "assistant", "content": "Second answer"},
     ]
 
-    formatted: str = tokenizer.apply_chat_template(  # type: ignore [assignment]
+    formatted: str = processor.apply_chat_template(  # type: ignore [assignment]
         test_conv, tokenize=False, add_generation_prompt=False
     )
 
@@ -261,13 +326,13 @@ def test_create_loss_mask_empty_offsets():
 @pytest.mark.sanity
 def test_preprocess_batch_basic():
     """Test preprocessing a basic batch of conversations."""
-    tokenizer = AutoTokenizer.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
+    processor = AutoProcessor.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
 
-    if not hasattr(tokenizer, "apply_chat_template") or tokenizer.chat_template is None:
-        pytest.skip("Tokenizer does not support chat templates")
+    if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
+        pytest.skip("Processor does not support chat templates")
 
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+    if processor.pad_token is None:
+        processor.pad_token = processor.eos_token
 
     examples = {
         "conversations": [
@@ -282,9 +347,9 @@ def test_preprocess_batch_basic():
         ]
     }
 
-    assistant_pattern = _detect_assistant_pattern(tokenizer)
+    assistant_pattern = _detect_assistant_pattern(processor)
     results = _preprocess_batch(
-        examples, tokenizer, max_length=512, assistant_pattern=assistant_pattern
+        examples, processor, max_length=512, assistant_pattern=assistant_pattern
     )
 
     assert "input_ids" in results
@@ -302,15 +367,15 @@ def test_preprocess_batch_basic():
 @pytest.mark.sanity
 def test_preprocess_batch_empty_conversations():
     """Test preprocessing batch with no conversations."""
-    tokenizer = AutoTokenizer.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
+    processor = AutoProcessor.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
 
-    if not hasattr(tokenizer, "apply_chat_template") or tokenizer.chat_template is None:
-        pytest.skip("Tokenizer does not support chat templates")
+    if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
+        pytest.skip("Processor does not support chat templates")
 
     examples: dict[str, list] = {"conversations": []}
-    assistant_pattern = _detect_assistant_pattern(tokenizer)
+    assistant_pattern = _detect_assistant_pattern(processor)
     results = _preprocess_batch(
-        examples, tokenizer, max_length=512, assistant_pattern=assistant_pattern
+        examples, processor, max_length=512, assistant_pattern=assistant_pattern
     )
 
     assert results["input_ids"] == []
@@ -320,13 +385,13 @@ def test_preprocess_batch_empty_conversations():
 @pytest.mark.sanity
 def test_preprocess_batch_invalid_conversation():
     """Test preprocessing batch with invalid conversations."""
-    tokenizer = AutoTokenizer.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
+    processor = AutoProcessor.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
 
-    if not hasattr(tokenizer, "apply_chat_template") or tokenizer.chat_template is None:
-        pytest.skip("Tokenizer does not support chat templates")
+    if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
+        pytest.skip("Processor does not support chat templates")
 
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+    if processor.pad_token is None:
+        processor.pad_token = processor.eos_token
 
     examples = {
         "conversations": [
@@ -336,9 +401,9 @@ def test_preprocess_batch_invalid_conversation():
         ]
     }
 
-    assistant_pattern = _detect_assistant_pattern(tokenizer)
+    assistant_pattern = _detect_assistant_pattern(processor)
     results = _preprocess_batch(
-        examples, tokenizer, max_length=512, assistant_pattern=assistant_pattern
+        examples, processor, max_length=512, assistant_pattern=assistant_pattern
     )
 
     # Should only process the valid conversation
@@ -349,13 +414,13 @@ def test_preprocess_batch_invalid_conversation():
 @pytest.mark.sanity
 def test_preprocess_batch_truncation():
     """Test that long sequences are truncated to max_length."""
-    tokenizer = AutoTokenizer.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
+    processor = AutoProcessor.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
 
-    if not hasattr(tokenizer, "apply_chat_template") or tokenizer.chat_template is None:
-        pytest.skip("Tokenizer does not support chat templates")
+    if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
+        pytest.skip("Processor does not support chat templates")
 
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+    if processor.pad_token is None:
+        processor.pad_token = processor.eos_token
 
     # Create a very long message
     long_content = "word " * 1000
@@ -370,9 +435,9 @@ def test_preprocess_batch_truncation():
     }
 
     max_length = 100
-    assistant_pattern = _detect_assistant_pattern(tokenizer)
+    assistant_pattern = _detect_assistant_pattern(processor)
     results = _preprocess_batch(
-        examples, tokenizer, max_length=max_length, assistant_pattern=assistant_pattern
+        examples, processor, max_length=max_length, assistant_pattern=assistant_pattern
     )
 
     if len(results["input_ids"]) > 0:
@@ -384,17 +449,17 @@ def test_preprocess_batch_truncation():
 @pytest.mark.sanity
 def test_preprocess_batch_uses_hf_assistant_mask():
     """Test that HF assistant token mask is used when supported."""
-    tokenizer = AutoTokenizer.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
+    processor = AutoProcessor.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
 
-    if not hasattr(tokenizer, "apply_chat_template") or tokenizer.chat_template is None:
-        pytest.skip("Tokenizer does not support chat templates")
+    if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
+        pytest.skip("Processor does not support chat templates")
 
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+    if processor.pad_token is None:
+        processor.pad_token = processor.eos_token
 
-    # Skip test if assistant mask is not supported/functional for this tokenizer
-    if not _supports_assistant_mask(tokenizer):
-        pytest.skip("Tokenizer does not support assistant token mask")
+    # Skip test if assistant mask is not supported/functional for this processor
+    if not _supports_assistant_mask(processor):
+        pytest.skip("Processor does not support assistant token mask")
 
     examples = {
         "conversations": [
@@ -408,7 +473,7 @@ def test_preprocess_batch_uses_hf_assistant_mask():
     # Pass None to trigger masking path
     results = _preprocess_batch(
         examples,
-        tokenizer,
+        processor,
         max_length=128,
         assistant_pattern=None,
     )
@@ -427,23 +492,23 @@ def test_preprocess_batch_falls_back_to_regex():
     """Test that preprocessing falls back to regex-based detection
     when HF mask is unavailable.
     """
-    tokenizer = AutoTokenizer.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
+    processor = AutoProcessor.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
 
-    if not hasattr(tokenizer, "apply_chat_template") or tokenizer.chat_template is None:
-        pytest.skip("Tokenizer does not support chat templates")
+    if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
+        pytest.skip("Processor does not support chat templates")
 
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+    if processor.pad_token is None:
+        processor.pad_token = processor.eos_token
 
     # Monkeypatch apply_chat_template to force HF mask failure
-    original_apply_chat_template = tokenizer.apply_chat_template
+    original_apply_chat_template = processor.apply_chat_template
 
     def patched_apply_chat_template(*args, **kwargs):
         if kwargs.get("return_assistant_tokens_mask", False):
             raise ValueError("Forcing fallback to regex path")
         return original_apply_chat_template(*args, **kwargs)
 
-    tokenizer.apply_chat_template = patched_apply_chat_template  # type: ignore [method-assign]
+    processor.apply_chat_template = patched_apply_chat_template  # type: ignore [method-assign]
 
     examples = {
         "conversations": [
@@ -454,11 +519,11 @@ def test_preprocess_batch_falls_back_to_regex():
         ]
     }
 
-    assistant_pattern = _detect_assistant_pattern(tokenizer)
+    assistant_pattern = _detect_assistant_pattern(processor)
 
     results = _preprocess_batch(
         examples,
-        tokenizer,
+        processor,
         max_length=128,
         assistant_pattern=assistant_pattern,
     )
@@ -475,13 +540,13 @@ def test_preprocess_batch_falls_back_to_regex():
 @pytest.mark.sanity
 def test_preprocess_batch_minimum_valid_tokens_filters_regex_path():
     """Test that minimum_valid_tokens drops short samples on regex path."""
-    tokenizer = AutoTokenizer.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
+    processor = AutoProcessor.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
 
-    if not hasattr(tokenizer, "apply_chat_template") or tokenizer.chat_template is None:
-        pytest.skip("Tokenizer does not support chat templates")
+    if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
+        pytest.skip("Processor does not support chat templates")
 
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+    if processor.pad_token is None:
+        processor.pad_token = processor.eos_token
 
     examples = {
         "conversations": [
@@ -492,11 +557,11 @@ def test_preprocess_batch_minimum_valid_tokens_filters_regex_path():
         ]
     }
 
-    assistant_pattern = _detect_assistant_pattern(tokenizer)
+    assistant_pattern = _detect_assistant_pattern(processor)
 
     baseline = _preprocess_batch(
         examples,
-        tokenizer,
+        processor,
         max_length=128,
         assistant_pattern=assistant_pattern,
     )
@@ -507,7 +572,7 @@ def test_preprocess_batch_minimum_valid_tokens_filters_regex_path():
 
     filtered = _preprocess_batch(
         examples,
-        tokenizer,
+        processor,
         max_length=128,
         assistant_pattern=assistant_pattern,
         minimum_valid_tokens=valid_count + 1,
@@ -521,13 +586,13 @@ def test_preprocess_batch_minimum_valid_tokens_filters_regex_path():
 @pytest.mark.sanity
 def test_preprocess_batch_minimum_valid_tokens_keeps_boundary_case():
     """Test that a sample is kept when valid tokens equal the threshold."""
-    tokenizer = AutoTokenizer.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
+    processor = AutoProcessor.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
 
-    if not hasattr(tokenizer, "apply_chat_template") or tokenizer.chat_template is None:
-        pytest.skip("Tokenizer does not support chat templates")
+    if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
+        pytest.skip("Processor does not support chat templates")
 
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+    if processor.pad_token is None:
+        processor.pad_token = processor.eos_token
 
     examples = {
         "conversations": [
@@ -544,11 +609,11 @@ def test_preprocess_batch_minimum_valid_tokens_keeps_boundary_case():
         ]
     }
 
-    assistant_pattern = _detect_assistant_pattern(tokenizer)
+    assistant_pattern = _detect_assistant_pattern(processor)
 
     baseline = _preprocess_batch(
         examples,
-        tokenizer,
+        processor,
         max_length=256,
         assistant_pattern=assistant_pattern,
     )
@@ -559,7 +624,7 @@ def test_preprocess_batch_minimum_valid_tokens_keeps_boundary_case():
 
     kept = _preprocess_batch(
         examples,
-        tokenizer,
+        processor,
         max_length=256,
         assistant_pattern=assistant_pattern,
         minimum_valid_tokens=valid_count,
@@ -576,13 +641,13 @@ def test_preprocess_batch_minimum_valid_tokens_keeps_boundary_case():
 @pytest.mark.sanity
 def test_build_eagle3_dataset_basic():
     """Test building EAGLE3 dataset from a simple HuggingFace dataset."""
-    tokenizer = AutoTokenizer.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
+    processor = AutoProcessor.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
 
-    if not hasattr(tokenizer, "apply_chat_template") or tokenizer.chat_template is None:
-        pytest.skip("Tokenizer does not support chat templates")
+    if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
+        pytest.skip("Processor does not support chat templates")
 
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+    if processor.pad_token is None:
+        processor.pad_token = processor.eos_token
 
     # Create a simple dataset
     data = {
@@ -599,7 +664,7 @@ def test_build_eagle3_dataset_basic():
     }
 
     dataset = HFDataset.from_dict(data)
-    result = build_eagle3_dataset(dataset, tokenizer, max_length=512, num_proc=1)
+    result = build_eagle3_dataset(dataset, processor, max_length=512, num_proc=1)
 
     assert isinstance(result, HFDataset)
     assert len(result) <= len(dataset)
@@ -613,13 +678,13 @@ def test_build_eagle3_dataset_basic():
 @pytest.mark.sanity
 def test_build_eagle3_dataset_preserves_format():
     """Test that build_eagle3_dataset sets the correct format."""
-    tokenizer = AutoTokenizer.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
+    processor = AutoProcessor.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
 
-    if not hasattr(tokenizer, "apply_chat_template") or tokenizer.chat_template is None:
-        pytest.skip("Tokenizer does not support chat templates")
+    if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
+        pytest.skip("Processor does not support chat templates")
 
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+    if processor.pad_token is None:
+        processor.pad_token = processor.eos_token
 
     data = {
         "conversations": [
@@ -631,7 +696,7 @@ def test_build_eagle3_dataset_preserves_format():
     }
 
     dataset = HFDataset.from_dict(data)
-    result = build_eagle3_dataset(dataset, tokenizer, max_length=512, num_proc=1)
+    result = build_eagle3_dataset(dataset, processor, max_length=512, num_proc=1)
 
     # Dataset should be in torch format
     assert result.format["type"] == "torch"
@@ -640,13 +705,13 @@ def test_build_eagle3_dataset_preserves_format():
 @pytest.mark.sanity
 def test_build_eagle3_dataset_removes_original_columns():
     """Test that original columns are removed after processing."""
-    tokenizer = AutoTokenizer.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
+    processor = AutoProcessor.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
 
-    if not hasattr(tokenizer, "apply_chat_template") or tokenizer.chat_template is None:
-        pytest.skip("Tokenizer does not support chat templates")
+    if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
+        pytest.skip("Processor does not support chat templates")
 
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+    if processor.pad_token is None:
+        processor.pad_token = processor.eos_token
 
     data = {
         "conversations": [
@@ -659,7 +724,7 @@ def test_build_eagle3_dataset_removes_original_columns():
     }
 
     dataset = HFDataset.from_dict(data)
-    result = build_eagle3_dataset(dataset, tokenizer, max_length=512, num_proc=1)
+    result = build_eagle3_dataset(dataset, processor, max_length=512, num_proc=1)
 
     # Original columns should be removed
     if len(result) > 0:
@@ -670,13 +735,13 @@ def test_build_eagle3_dataset_removes_original_columns():
 @pytest.mark.sanity
 def test_build_eagle3_dataset_minimum_valid_tokens_filters_short_samples():
     """Test that build_eagle3_dataset removes samples below the token threshold."""
-    tokenizer = AutoTokenizer.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
+    processor = AutoProcessor.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
 
-    if not hasattr(tokenizer, "apply_chat_template") or tokenizer.chat_template is None:
-        pytest.skip("Tokenizer does not support chat templates")
+    if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
+        pytest.skip("Processor does not support chat templates")
 
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+    if processor.pad_token is None:
+        processor.pad_token = processor.eos_token
 
     short_conv = [
         {"role": "user", "content": "Hi"},
@@ -693,17 +758,17 @@ def test_build_eagle3_dataset_minimum_valid_tokens_filters_short_samples():
         },
     ]
 
-    assistant_pattern = _detect_assistant_pattern(tokenizer)
+    assistant_pattern = _detect_assistant_pattern(processor)
 
     short_baseline = _preprocess_batch(
         {"conversations": [short_conv]},
-        tokenizer,
+        processor,
         max_length=256,
         assistant_pattern=assistant_pattern,
     )
     long_baseline = _preprocess_batch(
         {"conversations": [long_conv]},
-        tokenizer,
+        processor,
         max_length=256,
         assistant_pattern=assistant_pattern,
     )
@@ -722,7 +787,7 @@ def test_build_eagle3_dataset_minimum_valid_tokens_filters_short_samples():
     dataset = HFDataset.from_dict({"conversations": [short_conv, long_conv]})
     result = build_eagle3_dataset(
         dataset,
-        tokenizer,
+        processor,
         max_length=256,
         num_proc=1,
         assistant_pattern=assistant_pattern,
@@ -742,13 +807,13 @@ def test_build_eagle3_dataset_minimum_valid_tokens_filters_short_samples():
 @pytest.mark.sanity
 def test_preprocess_batch_with_turn_dropout():
     """Test preprocessing batch with turn dropout enabled."""
-    tokenizer = AutoTokenizer.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
+    processor = AutoProcessor.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
 
-    if not hasattr(tokenizer, "apply_chat_template") or tokenizer.chat_template is None:
-        pytest.skip("Tokenizer does not support chat templates")
+    if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
+        pytest.skip("Processor does not support chat templates")
 
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+    if processor.pad_token is None:
+        processor.pad_token = processor.eos_token
 
     examples = {
         "conversations": [
@@ -761,10 +826,10 @@ def test_preprocess_batch_with_turn_dropout():
         ]
     }
 
-    assistant_pattern = _detect_assistant_pattern(tokenizer)
+    assistant_pattern = _detect_assistant_pattern(processor)
     results = _preprocess_batch(
         examples,
-        tokenizer,
+        processor,
         max_length=512,
         assistant_pattern=assistant_pattern,
         turn_dropout=True,
@@ -788,8 +853,8 @@ def test_detect_assistant_pattern_thinking_model():
     but the pattern must still match real conversations where the think block
     contains substantial content.
     """
-    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-8B", trust_remote_code=True)
-    pattern = _detect_assistant_pattern(tokenizer)
+    processor = AutoProcessor.from_pretrained("Qwen/Qwen3-8B", trust_remote_code=True)
+    pattern = _detect_assistant_pattern(processor)
 
     # Format a multi-turn conversation with thinking content injected
     # directly into the formatted string (as it would appear in real data)
@@ -807,7 +872,7 @@ def test_detect_assistant_pattern_thinking_model():
             "reasoning_content": "We are adding 3 and 3.",
         },
     ]
-    formatted: str = tokenizer.apply_chat_template(  # type: ignore[assignment]
+    formatted: str = processor.apply_chat_template(  # type: ignore[assignment]
         test_conv, tokenize=False, add_generation_prompt=False, enable_thinking=True
     )
 
@@ -848,8 +913,8 @@ def test_create_loss_mask_thinking_model(thinking_content):
     Verifies correct masking both with and without thinking content in the
     <think> block.
     """
-    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-8B", trust_remote_code=True)
-    pattern = _detect_assistant_pattern(tokenizer)
+    processor = AutoProcessor.from_pretrained("Qwen/Qwen3-8B", trust_remote_code=True)
+    pattern = _detect_assistant_pattern(processor)
 
     # Build formatted text using the real chat template
     conv = [
@@ -858,7 +923,7 @@ def test_create_loss_mask_thinking_model(thinking_content):
     ]
     if thinking_content:
         conv[-1]["reasoning_content"] = thinking_content
-    formatted: str = tokenizer.apply_chat_template(  # type: ignore[assignment]
+    formatted: str = processor.apply_chat_template(  # type: ignore[assignment]
         conv,
         tokenize=False,
         add_generation_prompt=False,
@@ -866,7 +931,7 @@ def test_create_loss_mask_thinking_model(thinking_content):
     )
 
     # Tokenize with offsets
-    encoding = tokenizer(
+    encoding = processor(
         formatted,
         return_offsets_mapping=True,
         add_special_tokens=False,
@@ -880,8 +945,8 @@ def test_create_loss_mask_thinking_model(thinking_content):
 
     # Decode masked vs unmasked regions
     input_ids = torch.tensor(encoding["input_ids"])
-    trainable_text = tokenizer.decode(input_ids[mask == 1])
-    masked_text = tokenizer.decode(input_ids[mask == 0])
+    trainable_text = processor.decode(input_ids[mask == 1])
+    masked_text = processor.decode(input_ids[mask == 0])
 
     # Assistant response must be in the trainable region
     assert "Paris is the capital" in trainable_text
@@ -898,13 +963,13 @@ def test_create_loss_mask_thinking_model(thinking_content):
 @pytest.mark.sanity
 def test_build_eagle3_dataset_with_custom_pattern():
     """Test building dataset with custom assistant pattern."""
-    tokenizer = AutoTokenizer.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
+    processor = AutoProcessor.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
 
-    if not hasattr(tokenizer, "apply_chat_template") or tokenizer.chat_template is None:
-        pytest.skip("Tokenizer does not support chat templates")
+    if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
+        pytest.skip("Processor does not support chat templates")
 
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+    if processor.pad_token is None:
+        processor.pad_token = processor.eos_token
 
     data = {
         "conversations": [
@@ -920,7 +985,7 @@ def test_build_eagle3_dataset_with_custom_pattern():
 
     dataset = HFDataset.from_dict(data)
     result = build_eagle3_dataset(
-        dataset, tokenizer, max_length=512, num_proc=1, assistant_pattern=custom_pattern
+        dataset, processor, max_length=512, num_proc=1, assistant_pattern=custom_pattern
     )
 
     # Should successfully build dataset with custom pattern

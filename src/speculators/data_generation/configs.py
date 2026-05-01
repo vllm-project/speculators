@@ -93,7 +93,7 @@ DATASET_CONFIGS: dict[str, DatasetConfig] = {
         split="train_sft",
         normalize_fn=_normalize_ultrachat,
     ),
-    # NOTE: You need to pass `--allowed-local-media-path /` to `launch_vllm.py`
+    # NOTE: You need to serve vLLM with `--allowed-local-media-path /path/to/coco`
     "sharegpt4v_coco": DatasetConfig(
         name="sharegpt4v_coco",
         hf_path="Lin-Chen/ShareGPT4V",

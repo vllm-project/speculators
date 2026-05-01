@@ -144,11 +144,15 @@ def _hf_to_vllm_part(part: str | dict):
     raise NotImplementedError(f"No handler defined for part.type={part_type!r}")
 
 
+def _hf_to_vllm_turn(turn: dict):
+    if isinstance(turn["content"], str):
+        return turn
+
+    return turn | {"content": [_hf_to_vllm_part(part) for part in turn["content"]]}
+
+
 def _hf_to_vllm_conv(normalized_conv: list[dict]):
-    return [
-        turn | {"content": [_hf_to_vllm_part(part) for part in turn["content"]]}
-        for turn in normalized_conv
-    ]
+    return [_hf_to_vllm_turn(turn) for turn in normalized_conv]
 
 
 def _supports_assistant_mask(processor: ProcessorLike) -> bool:
@@ -156,6 +160,13 @@ def _supports_assistant_mask(processor: ProcessorLike) -> bool:
 
     Must return a non-zero mask for a conversation containing an assistant message.
     """
+    if isinstance(processor, ProcessorMixin):
+        test_conv = [
+            {"role": "assistant", "content": [{"type": "text", "text": "test"}]}
+        ]
+    else:
+        test_conv = [{"role": "assistant", "content": "test"}]
+
     chat_template_kwargs: dict = {
         "tokenize": True,
         "return_assistant_tokens_mask": True,
@@ -163,18 +174,8 @@ def _supports_assistant_mask(processor: ProcessorLike) -> bool:
     }
 
     try:
-        if isinstance(processor, ProcessorMixin):
-            res_any = processor.apply_chat_template(
-                [{"role": "assistant", "content": [{"type": "text", "text": "test"}]}],
-                **chat_template_kwargs,
-            )
-            res = cast("BatchFeature", res_any)
-        else:
-            res_any = processor.apply_chat_template(
-                [{"role": "assistant", "content": "test"}],
-                **chat_template_kwargs,
-            )
-            res = cast("BatchEncoding", res_any)
+        res_any = processor.apply_chat_template(test_conv, **chat_template_kwargs)
+        res = cast("BatchEncoding | BatchFeature", res_any)
 
         # Check both singular and plural key names
         mask = res.get("assistant_masks", res.get("assistant_mask"))
@@ -194,12 +195,20 @@ def _detect_assistant_pattern(processor: ProcessorLike) -> str:
     Uses multi-turn conversation but extracts pattern from the LAST assistant
     message only.
     """
-    test_conv = [
-        {"role": "user", "content": "USER_MSG_1"},
-        {"role": "assistant", "content": "ASSISTANT_MSG_1"},
-        {"role": "user", "content": "USER_MSG_2"},
-        {"role": "assistant", "content": "ASSISTANT_MSG_2"},
-    ]
+    if isinstance(processor, ProcessorMixin):
+        test_conv = [
+            {"role": "user", "content": [{"type": "text", "text": "USER_MSG_1"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "ASSISTANT_MSG_1"}]},
+            {"role": "user", "content": [{"type": "text", "text": "USER_MSG_2"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "ASSISTANT_MSG_2"}]},
+        ]
+    else:
+        test_conv = [
+            {"role": "user", "content": "USER_MSG_1"},
+            {"role": "assistant", "content": "ASSISTANT_MSG_1"},
+            {"role": "user", "content": "USER_MSG_2"},
+            {"role": "assistant", "content": "ASSISTANT_MSG_2"},
+        ]
 
     formatted = processor.apply_chat_template(
         test_conv, tokenize=False, add_generation_prompt=False
@@ -318,8 +327,6 @@ def _get_input_ids_loss_mask(
     max_length: int,
     assistant_pattern: str | Pattern[str] | None,
 ):
-    encoded: BatchEncoding | BatchFeature
-
     if assistant_pattern is None:
         # HF assistant token mask
         encoded_any = processor.apply_chat_template(
@@ -339,53 +346,54 @@ def _get_input_ids_loss_mask(
         )
         loss_mask = torch.tensor(encoded[mask_key], dtype=torch.long)
 
-    else:
-        # Fallback: regex-based detection
-        assert assistant_pattern is not None, "Assistant pattern required for fallback"
+        return input_ids, loss_mask
 
-        processor_kwargs: dict = {
-            "return_offsets_mapping": True,
-            "max_length": max_length,
-            "truncation": True,
-            "add_special_tokens": False,
-        }
+    # Fallback: regex-based detection
+    assert assistant_pattern is not None, "Assistant pattern required for fallback"
 
-        if isinstance(processor, ProcessorMixin):
-            encoded_any = processor.apply_chat_template(
-                normalized_conv,
-                tokenize=True,
-                add_generation_prompt=False,
-                return_dict=True,
-                processor_kwargs=processor_kwargs,
-            )
-            encoded = cast("BatchFeature", encoded_any)
+    processor_kwargs: dict = {
+        "return_offsets_mapping": True,
+        "max_length": max_length,
+        "truncation": True,
+        "add_special_tokens": False,
+    }
 
-            # Remove batch dimension
-            (input_ids,) = encoded["input_ids"]
-            (offsets,) = encoded["offset_mapping"]
-
-            # MM placeholder tokens are inserted separate from chat template
-            formatted_text = processor.decode(input_ids)
-            assert isinstance(formatted_text, str)
-        else:
-            # More optimized flow for text-only processors (i.e. tokenizers)
-            formatted_text = processor.apply_chat_template(
-                normalized_conv,
-                tokenize=False,
-                add_generation_prompt=False,
-            )
-            assert isinstance(formatted_text, str)
-
-            # Tokenize and get offsets
-            encoded_any = processor(formatted_text, **processor_kwargs)
-            encoded = cast("BatchEncoding", encoded_any)
-
-            input_ids = encoded["input_ids"]
-            offsets = encoded["offset_mapping"]
-
-        loss_mask = _create_loss_mask_from_offsets(
-            formatted_text, offsets, assistant_pattern
+    if isinstance(processor, ProcessorMixin):
+        encoded_any = processor.apply_chat_template(
+            normalized_conv,
+            tokenize=True,
+            add_generation_prompt=False,
+            return_dict=True,
+            processor_kwargs=processor_kwargs,
         )
+        encoded = cast("BatchFeature", encoded_any)
+
+        # Remove batch dimension
+        (input_ids,) = encoded["input_ids"]
+        (offsets,) = encoded["offset_mapping"]
+
+        # MM placeholder tokens are inserted separate from chat template
+        formatted_text = processor.decode(input_ids)
+        assert isinstance(formatted_text, str)
+    else:
+        # More optimized flow for text-only processors (i.e. tokenizers)
+        formatted_text = processor.apply_chat_template(
+            normalized_conv,
+            tokenize=False,
+            add_generation_prompt=False,
+        )
+        assert isinstance(formatted_text, str)
+
+        # Tokenize and get offsets
+        encoded_any = processor(formatted_text, **processor_kwargs)
+        encoded = cast("BatchEncoding", encoded_any)
+
+        input_ids = encoded["input_ids"]
+        offsets = encoded["offset_mapping"]
+
+    loss_mask = _create_loss_mask_from_offsets(
+        formatted_text, offsets, assistant_pattern
+    )
 
     return input_ids, loss_mask
 
