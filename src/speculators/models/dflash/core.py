@@ -272,13 +272,10 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             verifier_logits = self.verifier_lm_head(
                 self.verifier_norm(verifier_last_hidden_states)
             )
-        verifier_preds = torch.argmax(verifier_logits, dim=-1)
-        # Shift right by 1 so verifier_preds[i] predicts token at position i
-        verifier_preds = torch.cat(
-            [verifier_preds.new_zeros(1, 1), verifier_preds[:, :-1]], dim=1
-        )
-        targets = verifier_preds[:, anchored_block_indices]
-        # shape: [1, num_anchors*block_size] # noqa: ERA001
+            # Shift right by 1 so verifier_logits[i] predicts token at position i
+            verifier_logits = torch.roll(verifier_logits, 1, dims=1)
+            targets = verifier_logits[:, anchored_block_indices]
+            # shape: [1, num_anchors*block_size, draft_vocab_size] # noqa: ERA001
 
         for layer in self.layers:
             noise_embedding = layer(
