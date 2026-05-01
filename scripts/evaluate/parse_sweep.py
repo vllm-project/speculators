@@ -1,12 +1,21 @@
 #!/usr/bin/env python3
-"""Parse guidellm sweep results and enhance with vLLM speculative decoding metrics.
+"""Parse guidellm sweep output files and extract performance metrics to CSV.
 
-Combines performance metrics from guidellm sweep JSON files with speculative
-decoding acceptance rates from vLLM's /metrics endpoint.
+Reads one or more sweep JSON files and extracts key metrics for each
+sweep point (synchronous and constant-rate). Throughput-mode entries
+are excluded as they represent max-load saturation.
+
+Optionally enriches results with vLLM speculative decoding metrics.
 
 Usage:
-    python parse_sweep_with_metrics.py --output results.csv \\
-        --url http://localhost:8000 sweep_*.json
+    # Basic performance metrics only
+    python parse_sweep.py --output results.csv sweep_*.json
+
+    # With vLLM speculative decoding metrics
+    python parse_sweep.py --output results.csv \
+        --current-metrics current.txt \
+        --baseline-metrics baseline.txt \
+        sweep_*.json
 """
 
 from __future__ import annotations
@@ -20,8 +29,6 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-
-import requests
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +54,6 @@ class Vector(Metric):
     values: list[float]
 
 
-# Performance metrics to extract from guidellm
 METRICS_TO_EXTRACT = [
     ("requests_per_second", "rps_median"),
     ("request_latency", "latency_median_s"),
@@ -71,18 +77,6 @@ BASE_CSV_COLUMNS = [
 SKIP_STRATEGIES = {"throughput"}
 
 
-def fetch_vllm_metrics(url: str, timeout: int = 10) -> str:
-    """Fetch raw metrics from vLLM /metrics endpoint."""
-    metrics_url = url.rstrip("/") + "/metrics"
-    try:
-        response = requests.get(metrics_url, timeout=timeout)
-        response.raise_for_status()
-        return response.text
-    except requests.exceptions.RequestException as e:
-        logger.warning("Failed to fetch vLLM metrics from %s: %s", metrics_url, e)
-        return ""
-
-
 def parse_prometheus_metrics(raw_text: str) -> list[Metric]:  # noqa: C901
     """Parse Prometheus-formatted metrics into Metric objects."""
     if not raw_text:
@@ -102,7 +96,6 @@ def parse_prometheus_metrics(raw_text: str) -> list[Metric]:  # noqa: C901
         if match:
             name, value = match.groups()
             if "vllm:spec_decode" in name:
-                # Remove _total suffix for compatibility
                 name = name.replace("_total", "")
                 metrics.append(Counter(name=name, value=float(value)))
             continue
@@ -113,17 +106,13 @@ def parse_prometheus_metrics(raw_text: str) -> list[Metric]:  # noqa: C901
         )
         if match:
             name, labels_str, value = match.groups()
-            # Handle labeled spec decode counter metrics
             if "vllm:spec_decode" in name and "per_pos" not in name:
-                # Remove _total suffix for compatibility
                 name = name.replace("_total", "")
                 metrics.append(Counter(name=name, value=float(value)))
-            # Handle per-position vector metrics
             elif "vllm:spec_decode_num_accepted_tokens_per_pos" in name:
                 pos_match = re.search(r'position="(\d+)"', labels_str)
                 if pos_match:
                     position = int(pos_match.group(1))
-                    # Remove _total suffix for compatibility
                     base_name = name.replace("_total", "")
                     if base_name not in vector_data:
                         vector_data[base_name] = []
@@ -144,17 +133,9 @@ def parse_prometheus_metrics(raw_text: str) -> list[Metric]:  # noqa: C901
 def extract_spec_decode_metrics(  # noqa: C901
     raw_metrics: list[Metric], baseline_metrics: list[Metric] | None = None
 ) -> dict[str, float]:
-    """Extract speculative decoding metrics and calculate acceptance rates.
+    """Extract speculative decoding metrics and calculate acceptance rates."""
 
-    Args:
-        raw_metrics: Current metrics snapshot
-        baseline_metrics: Optional baseline snapshot to subtract (for computing deltas)
-
-    Returns:
-        Dictionary of computed metrics. If baseline provided, returns the delta.
-    """
-
-    def _accumulate_metrics(  # noqa: C901
+    def _accumulate_metrics(
         metrics: list[Metric],
     ) -> tuple[float, float, float, list[float]]:
         """Helper to accumulate raw counter values."""
@@ -164,15 +145,18 @@ def extract_spec_decode_metrics(  # noqa: C901
         acceptance_counts: list[float] = []
 
         for metric in metrics:
-            if metric.name == "vllm:spec_decode_num_drafts":
-                if isinstance(metric, Counter):
-                    num_drafts += metric.value
-            elif metric.name == "vllm:spec_decode_num_draft_tokens":
-                if isinstance(metric, Counter):
-                    num_draft_tokens += metric.value
-            elif metric.name == "vllm:spec_decode_num_accepted_tokens":
-                if isinstance(metric, Counter):
-                    num_accepted_tokens += metric.value
+            if metric.name == "vllm:spec_decode_num_drafts" and isinstance(
+                metric, Counter
+            ):
+                num_drafts += metric.value
+            elif metric.name == "vllm:spec_decode_num_draft_tokens" and isinstance(
+                metric, Counter
+            ):
+                num_draft_tokens += metric.value
+            elif metric.name == "vllm:spec_decode_num_accepted_tokens" and isinstance(
+                metric, Counter
+            ):
+                num_accepted_tokens += metric.value
             elif (
                 metric.name == "vllm:spec_decode_num_accepted_tokens_per_pos"
                 and isinstance(metric, Vector)
@@ -200,7 +184,6 @@ def extract_spec_decode_metrics(  # noqa: C901
         num_draft_tokens -= base_draft_tokens
         num_accepted_tokens -= base_accepted_tokens
 
-        # Ensure baseline acceptance_counts has same length
         if len(base_acceptance_counts) < len(acceptance_counts):
             base_acceptance_counts += [0.0] * (
                 len(acceptance_counts) - len(base_acceptance_counts)
@@ -280,7 +263,6 @@ def parse_sweep_file(filepath: Path) -> list[dict]:
 
 
 def main() -> None:  # noqa: C901, PLR0912, PLR0915
-    # Configure logging for CLI usage
     logging.basicConfig(
         level=logging.INFO,
         format="[%(levelname)s] %(message)s",
@@ -288,7 +270,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
     )
 
     parser = argparse.ArgumentParser(
-        description="Parse sweep results and enhance with vLLM spec decode metrics."
+        description="Parse sweep results and extract metrics to CSV."
     )
     parser.add_argument(
         "files",
@@ -304,40 +286,27 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
         help="Output CSV file path",
     )
     parser.add_argument(
-        "--url",
-        type=str,
-        help=(
-            "vLLM server base URL (e.g. http://localhost:8000) "
-            "to fetch spec decode metrics"
-        ),
-    )
-    parser.add_argument(
-        "--baseline-metrics-file",
+        "--current-metrics",
         type=Path,
-        help=(
-            "File containing baseline vLLM metrics to subtract (for computing deltas)"
-        ),
+        help="File containing current vLLM metrics (enables spec decode metrics)",
     )
     parser.add_argument(
-        "--timeout",
-        type=int,
-        default=10,
-        help="Timeout for vLLM metrics request in seconds (default: 10)",
+        "--baseline-metrics",
+        type=Path,
+        help="File containing baseline vLLM metrics to subtract (for computing deltas)",
     )
     args = parser.parse_args()
 
     # Load baseline metrics if provided
     baseline_metrics: list[Metric] = []
-    if args.baseline_metrics_file:
-        if args.baseline_metrics_file.exists():
-            with args.baseline_metrics_file.open() as f:
+    if args.baseline_metrics:
+        if args.baseline_metrics.exists():
+            with args.baseline_metrics.open() as f:
                 baseline_text = f.read()
             baseline_metrics = parse_prometheus_metrics(baseline_text)
-            logger.info("Loaded baseline metrics from %s", args.baseline_metrics_file)
+            logger.info("Loaded baseline metrics from %s", args.baseline_metrics)
         else:
-            logger.warning(
-                "Baseline metrics file not found: %s", args.baseline_metrics_file
-            )
+            logger.warning("Baseline metrics file not found: %s", args.baseline_metrics)
 
     # Parse sweep files
     all_rows: list[dict] = []
@@ -365,21 +334,21 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
         logger.error("No data was successfully parsed")
         sys.exit(1)
 
-    # Fetch vLLM speculative decoding metrics if URL provided
+    # Fetch vLLM speculative decoding metrics if current metrics file provided
     spec_decode_metrics = {}
-    if args.url:
-        logger.info("Fetching vLLM metrics from %s", args.url)
-        raw_text = fetch_vllm_metrics(args.url, timeout=args.timeout)
-        if raw_text:
+    if args.current_metrics:
+        if args.current_metrics.exists():
+            logger.info("Reading current metrics from %s", args.current_metrics)
+            with args.current_metrics.open() as f:
+                raw_text = f.read()
+
             parsed_metrics = parse_prometheus_metrics(raw_text)
-            # Compute delta if baseline provided, otherwise use raw metrics
             spec_decode_metrics = extract_spec_decode_metrics(
                 parsed_metrics,
                 baseline_metrics=baseline_metrics if baseline_metrics else None,
             )
             logger.info("Extracted %d spec decode metrics", len(spec_decode_metrics))
 
-            # Print summary
             if spec_decode_metrics:
                 logger.info(
                     "Acceptance length: %.2f",
@@ -389,11 +358,12 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                 logger.info(
                     "Num drafts: %.0f", spec_decode_metrics.get("num_drafts", 0)
                 )
+        else:
+            logger.warning("Current metrics file not found: %s", args.current_metrics)
 
-    # Build CSV columns dynamically based on available spec decode metrics
+    # Build CSV columns dynamically
     csv_columns = BASE_CSV_COLUMNS.copy()
     if spec_decode_metrics:
-        # Add acceptance metrics columns
         csv_columns.extend(
             [
                 "num_drafts",

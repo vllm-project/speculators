@@ -60,7 +60,7 @@ EOF
 check_dependencies() {
     local missing_deps=()
 
-    for cmd in guidellm python; do
+    for cmd in guidellm python curl; do
         if ! command -v "$cmd" &> /dev/null; then
             missing_deps+=("$cmd")
         fi
@@ -78,6 +78,20 @@ check_dependencies() {
     fi
 
     return 0
+}
+
+build_backend_args() {
+    local gen_kwargs="${1:-}"
+    local max_tokens="$2"
+
+    python -c "
+import json, sys
+gen_kwargs = sys.argv[1]
+max_tokens = int(sys.argv[2])
+body = json.loads(gen_kwargs) if gen_kwargs else {}
+body['max_tokens'] = max_tokens
+print(json.dumps({'extras': {'body': body}}))
+" "${gen_kwargs}" "${max_tokens}"
 }
 
 # ==============================================================================
@@ -144,9 +158,10 @@ OUTPUT_DIR="${OUTPUT_DIR:-perf_results_$(date +%Y%m%d_%H%M%S)}"
 MAX_CONCURRENCY="${MAX_CONCURRENCY:-128}"
 MAX_REQUESTS="${MAX_REQUESTS:-200}"
 GEN_LEN_RATE="${GEN_LEN_RATE:-128}"
+DATA_COLUMN_MAPPER="${DATA_COLUMN_MAPPER:-{\"text_column\":\"prompt\"}}"
 
 # Derive vLLM URL from target if not provided (strip /v1 suffix)
-if [[ -z "${VLLM_URL}" ]]; then
+if [[ -z "${VLLM_URL:-}" ]]; then
     VLLM_URL="${TARGET%/}"
     VLLM_URL="${VLLM_URL%/v1}"
 fi
@@ -181,7 +196,6 @@ IFS=',' read -ra SUBSET_ARRAY <<< "${SUBSETS}"
 # ==============================================================================
 # Main Pipeline: Process Each Subset Sequentially
 # ==============================================================================
-# Process gen_len -> sweep for each subset to avoid server state pollution
 
 echo ""
 echo "[INFO] ============================================"
@@ -200,27 +214,29 @@ for subset in "${SUBSET_ARRAY[@]}"; do
     # Step 1: Gen-len estimation for this subset
     echo "[INFO] [${subset}] Step 1/3: Estimating output token distribution"
 
-    GEN_LEN_ARGS=(
-        --target "${TARGET}"
-        --dataset "${DATASET}"
-        --subset "${subset}"
-        --output-file "${GEN_LEN_DIR}/gen_len_${subset}.json"
-        --rate "${GEN_LEN_RATE}"
-        --max-concurrency "${MAX_CONCURRENCY}"
-    )
-    [[ -n "${GEN_KWARGS}" ]] && GEN_LEN_ARGS+=(--gen-kwargs "${GEN_KWARGS}")
-    [[ -n "${DATA_COLUMN_MAPPER}" ]] && GEN_LEN_ARGS+=(--data-column-mapper "${DATA_COLUMN_MAPPER}")
+    GEN_LEN_OUTPUT="${GEN_LEN_DIR}/gen_len_${subset}.json"
+    BACKEND_ARGS=$(build_backend_args "${GEN_KWARGS}" "4096")
 
-    bash "${SCRIPT_DIR}/scripts/run_gen_len_estimation.sh" "${GEN_LEN_ARGS[@]}"
+    GUIDELLM__MAX_CONCURRENCY="${MAX_CONCURRENCY}" \
+    guidellm benchmark \
+        --target "${TARGET}" \
+        --data "${DATASET}" \
+        --data-args "{\"data_files\": \"${subset}.jsonl\"}" \
+        --data-column-mapper "${DATA_COLUMN_MAPPER}" \
+        --profile throughput \
+        --rate "${GEN_LEN_RATE}" \
+        --output-path "${GEN_LEN_OUTPUT}" \
+        --backend-args "${BACKEND_ARGS}"
+
     echo "[INFO] [${subset}] Gen-len estimation complete"
 
     # Step 2: Parse gen-len to get max_tokens for this subset
     echo "[INFO] [${subset}] Step 2/3: Computing max_tokens"
 
     SUBSET_MAX_TOKENS_FILE="${GEN_LEN_DIR}/max_tokens_${subset}.json"
-    python "${SCRIPT_DIR}/scripts/parse_gen_len.py" \
+    python "${SCRIPT_DIR}/parse_gen_len.py" \
         --output "${SUBSET_MAX_TOKENS_FILE}" \
-        "${GEN_LEN_DIR}/gen_len_${subset}.json"
+        "${GEN_LEN_OUTPUT}"
 
     MAX_TOKENS=$(python -c "import json; print(json.load(open('${SUBSET_MAX_TOKENS_FILE}'))['${subset}'])")
     ALL_MAX_TOKENS+=("\"${subset}\": ${MAX_TOKENS}")
@@ -233,46 +249,56 @@ for subset in "${SUBSET_ARRAY[@]}"; do
     BASELINE_METRICS_FILE=""
     if [[ -n "${VLLM_URL}" ]]; then
         BASELINE_METRICS_FILE="${OUTPUT_DIR}/${subset}_baseline_metrics.txt"
-        bash "${SCRIPT_DIR}/scripts/fetch_and_save_vllm_metrics.sh" "${VLLM_URL}" "${BASELINE_METRICS_FILE}" || {
+        METRICS_URL="${VLLM_URL%/}/metrics"
+        if curl -s -f --max-time 10 "${METRICS_URL}" > "${BASELINE_METRICS_FILE}"; then
+            echo "[INFO] [${subset}] Captured baseline metrics"
+        else
             echo "[WARN] Failed to fetch baseline metrics, proceeding without delta" >&2
             BASELINE_METRICS_FILE=""
-        }
+        fi
     fi
 
-    SWEEP_ARGS=(
-        --target "${TARGET}"
-        --dataset "${DATASET}"
-        --subset "${subset}"
-        --output-file "${SWEEP_DIR}/sweep_${subset}.json"
-        --max-tokens "${MAX_TOKENS}"
-        --max-requests "${MAX_REQUESTS}"
-        --max-concurrency "${MAX_CONCURRENCY}"
-    )
-    [[ -n "${GEN_KWARGS}" ]] && SWEEP_ARGS+=(--gen-kwargs "${GEN_KWARGS}")
-    [[ -n "${DATA_COLUMN_MAPPER}" ]] && SWEEP_ARGS+=(--data-column-mapper "${DATA_COLUMN_MAPPER}")
+    SWEEP_OUTPUT="${SWEEP_DIR}/sweep_${subset}.json"
+    BACKEND_ARGS=$(build_backend_args "${GEN_KWARGS}" "${MAX_TOKENS}")
 
-    bash "${SCRIPT_DIR}/scripts/run_sweep.sh" "${SWEEP_ARGS[@]}"
+    GUIDELLM__MAX_CONCURRENCY="${MAX_CONCURRENCY}" \
+    guidellm benchmark \
+        --target "${TARGET}" \
+        --data "${DATASET}" \
+        --data-args "{\"data_files\": \"${subset}.jsonl\"}" \
+        --data-column-mapper "${DATA_COLUMN_MAPPER}" \
+        --profile sweep \
+        --max-requests "${MAX_REQUESTS}" \
+        --output-path "${SWEEP_OUTPUT}" \
+        --backend-args "${BACKEND_ARGS}"
+
     echo "[INFO] [${subset}] Sweep complete"
+
+    # Capture current vLLM metrics AFTER sweep (if vLLM URL provided)
+    CURRENT_METRICS_FILE=""
+    if [[ -n "${VLLM_URL}" ]]; then
+        CURRENT_METRICS_FILE="${OUTPUT_DIR}/${subset}_current_metrics.txt"
+        METRICS_URL="${VLLM_URL%/}/metrics"
+        if curl -s -f --max-time 10 "${METRICS_URL}" > "${CURRENT_METRICS_FILE}"; then
+            echo "[INFO] [${subset}] Captured current metrics"
+        else
+            echo "[WARN] Failed to fetch current metrics, proceeding without spec decode data" >&2
+            CURRENT_METRICS_FILE=""
+        fi
+    fi
 
     # Parse sweep results to capture metrics (delta from baseline)
     PARTIAL_CSV="${OUTPUT_DIR}/${subset}_partial.csv"
 
-    if [[ -n "${VLLM_URL}" ]]; then
-        echo "[INFO] [${subset}] Extracting speculative decoding metrics"
-        PARSE_ARGS=(
-            --output "${PARTIAL_CSV}"
-            --vllm-url "${VLLM_URL}"
-        )
-        [[ -n "${BASELINE_METRICS_FILE}" ]] && PARSE_ARGS+=(--baseline-metrics-file "${BASELINE_METRICS_FILE}")
+    PARSE_ARGS=(
+        --output "${PARTIAL_CSV}"
+    )
+    [[ -n "${CURRENT_METRICS_FILE}" && -f "${CURRENT_METRICS_FILE}" ]] && PARSE_ARGS+=(--current-metrics "${CURRENT_METRICS_FILE}")
+    [[ -n "${BASELINE_METRICS_FILE}" && -f "${BASELINE_METRICS_FILE}" ]] && PARSE_ARGS+=(--baseline-metrics "${BASELINE_METRICS_FILE}")
 
-        python "${SCRIPT_DIR}/scripts/parse_sweep_with_metrics.py" \
-            "${PARSE_ARGS[@]}" \
-            "${SWEEP_DIR}/sweep_${subset}.json"
-    else
-        python "${SCRIPT_DIR}/scripts/parse_sweep_results.py" \
-            --output "${PARTIAL_CSV}" \
-            "${SWEEP_DIR}/sweep_${subset}.json"
-    fi
+    python "${SCRIPT_DIR}/parse_sweep.py" \
+        "${PARSE_ARGS[@]}" \
+        "${SWEEP_OUTPUT}"
 
     # Only add to the array if the file was created successfully
     if [[ -f "${PARTIAL_CSV}" ]]; then
