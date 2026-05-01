@@ -88,7 +88,7 @@ def test_hf_to_vllm_all_content_formats():
     Test converting from HF-format to vLLM-format messages with
     each supported content format.
     """
-    conv = [
+    conv: list[dict] = [
         {
             "role": "system",
             "content": "You are a helpful assistant.",  # Content as string

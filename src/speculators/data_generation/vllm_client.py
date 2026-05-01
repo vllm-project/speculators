@@ -2,9 +2,14 @@ import asyncio
 import functools
 import logging
 import time
+from typing import TYPE_CHECKING, Any
 
 import openai
-from openai.types.chat import ChatCompletionMessageParam
+from openai.types.chat import ChatCompletion, ChatCompletionMessageParam
+from openai.types.completion import Completion
+
+if TYPE_CHECKING:
+    from collections.abc import Coroutine
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +126,7 @@ async def generate_hidden_states_async(
                  instead of passing `token_ids` to Completions API.
         timeout: Timeout in seconds for each request attempt. None for no timeout.
     """
+    coro: Coroutine[Any, Any, Completion | ChatCompletion]
     if messages is None:
         coro = client.completions.create(
             model=model,
@@ -139,11 +145,11 @@ async def generate_hidden_states_async(
         )
 
     if timeout is not None:
-        completion = await asyncio.wait_for(coro, timeout=timeout)
+        res = await asyncio.wait_for(coro, timeout=timeout)
     else:
-        completion = await coro
+        res = await coro
 
-    return extract_output(completion, token_ids)
+    return extract_output(res, token_ids)
 
 
 @with_retries
@@ -159,8 +165,9 @@ def generate_hidden_states(
     Runs decode w/ max_tokens 1 to generate hidden states and returns path to
     hidden states file.
     """
+    res: Completion | ChatCompletion
     if messages is None:
-        completion = client.completions.create(
+        res = client.completions.create(
             model=model,
             prompt=token_ids,
             max_tokens=1,
@@ -168,7 +175,7 @@ def generate_hidden_states(
             timeout=timeout,
         )
     else:
-        completion = client.chat.completions.create(
+        res = client.chat.completions.create(
             model=model,
             messages=messages,
             max_tokens=1,
@@ -176,4 +183,4 @@ def generate_hidden_states(
             timeout=timeout,
         )
 
-    return extract_output(completion, token_ids)
+    return extract_output(res, token_ids)

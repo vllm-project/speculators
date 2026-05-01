@@ -37,8 +37,8 @@ def _visualize_sample(preprocessed: HFDataset, processor: ProcessorLike, idx: in
     """Visualize a single sample with color-coded trainable regions."""
     # Get preprocessed sample
     prep_sample = preprocessed[idx]
-    input_ids = prep_sample["input_ids"]
-    loss_mask = prep_sample["loss_mask"]
+    input_ids = prep_sample["input_ids"].tolist()
+    loss_mask = prep_sample["loss_mask"].tolist()
 
     log.info(f"SAMPLE #{idx}")
     log.info("HIGHLIGHTED TEXT (BLUE = trainable, GREY = masked)")
@@ -52,8 +52,9 @@ def _visualize_sample(preprocessed: HFDataset, processor: ProcessorLike, idx: in
     prev_state = None
 
     for i in range(len(input_ids)):
-        is_train = loss_mask[i].item() == 1
-        token = processor.decode([input_ids[i].item()])
+        is_train = loss_mask[i] == 1
+        token = processor.decode([input_ids[i]])
+        assert isinstance(token, str)
 
         # Switch colors when state changes
         if is_train != prev_state:
