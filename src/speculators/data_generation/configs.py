@@ -1,5 +1,6 @@
 """Configuration registries for data generation pipeline."""
 
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -9,14 +10,43 @@ __all__ = [
 ]
 
 
-@dataclass
+@dataclass(kw_only=True)
 class DatasetConfig:
     """Configuration for loading a dataset"""
 
     name: str
     hf_path: str
+    hf_name: str | None = None
     split: str
     normalize_fn: Callable[[dict], dict] | None = None
+
+
+def hf_to_vllm_part(part: str | dict):
+    if isinstance(part, str):
+        return {"type": "text", "text": part}
+
+    part_type = part["type"]
+
+    for modality in ("image", "video", "audio"):
+        if part_type == modality:
+            if local_path := part.get("path"):
+                file_url = f"file://{local_path}"
+                return {"type": f"{modality}_url", f"{modality}_url": {"url": file_url}}
+            if url := part.get("url"):
+                return {"type": f"{modality}_url", f"{modality}_url": {"url": url}}
+
+            fields_expr = {f"part.{k}" for k in part if k != "type"}
+
+            raise NotImplementedError(
+                f"No handler defined in part.type={part_type!r} "
+                f"for fields: {fields_expr}"
+            )
+
+    raise NotImplementedError(f"No handler defined for part.type={part_type!r}")
+
+
+def get_coco_dir():
+    return os.getenv("COCO_DIR") or "coco/"
 
 
 def _normalize_ultrachat(example: dict) -> dict:
@@ -25,58 +55,40 @@ def _normalize_ultrachat(example: dict) -> dict:
     return example
 
 
-def _normalize_coco(example: dict) -> dict:
-    pil_image = example["image"]
-    task = "Describe the image with a brief caption."
-    caption = example["sentences"]["raw"]
+def _unformat_sharegpt4v(part: str, image_path: str):
+    if part == "<image>":
+        return {"type": "image", "path": image_path}
+
+    return {"type": "text", "text": part}
+
+
+def _normalize_sharegpt4v(example: dict) -> dict:
+    image_path: str = example["image"]
+    image_path = os.path.join(get_coco_dir(), image_path.removeprefix("coco/"))
+
+    if not os.path.exists(image_path):
+        raise ValueError(
+            "Please download COCO 2017 Train Images from "
+            "http://images.cocodataset.org/zips/train2017.zip and "
+            "place the files under `COCO_DIR` (default: `./coco`)."
+        )
 
     hf_messages = [
         {
-            "role": "user",
+            **turn,
             "content": [
-                {
-                    "type": "image",
-                    "path": pil_image.filename,
-                },
-                {
-                    "type": "text",
-                    "text": task,
-                },
+                _unformat_sharegpt4v(part, image_path)
+                for part in turn.pop("value").split("\n")
             ],
-        },
-        {
-            "role": "assistant",
-            "content": [
-                {
-                    "type": "text",
-                    "text": caption,
-                }
-            ]
-        },
+        }
+        for turn in example["conversations"]
     ]
     vllm_messages = [
         {
-            "role": "user",
-            "content": [
-                {
-                    "type": "image_url",
-                    "image_url": f"file://{pil_image.filename}",
-                },
-                {
-                    "type": "text",
-                    "text": task,
-                },
-            ],
-        },
-        {
-            "role": "assistant",
-            "content": [
-                {
-                    "type": "text",
-                    "text": caption,
-                }
-            ]
-        },
+            **turn,
+            "content": [hf_to_vllm_part(part) for part in turn["content"]],
+        }
+        for turn in hf_messages
     ]
 
     return {"conversations": hf_messages, "_vllm_messages": vllm_messages}
@@ -94,12 +106,12 @@ DATASET_CONFIGS: dict[str, DatasetConfig] = {
         split="train_sft",
         normalize_fn=_normalize_ultrachat,
     ),
-    # NOTE: `datasets<4` is needed to run custom script
-    # You also need to pass `--allowed-local-media-path /` to `launch_vllm.py`
-    "coco": DatasetConfig(
-        name="coco",
-        hf_path="HuggingFaceM4/COCO",
+    # NOTE: You need to pass `--allowed-local-media-path /` to `launch_vllm.py`
+    "sharegpt4v": DatasetConfig(
+        name="sharegpt4v",
+        hf_path="Lin-Chen/ShareGPT4V",
+        hf_name="ShareGPT4V",
         split="train",
-        normalize_fn=_normalize_coco,
+        normalize_fn=_normalize_sharegpt4v,
     ),
 }

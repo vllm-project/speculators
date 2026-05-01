@@ -6,7 +6,6 @@ from pathlib import Path
 from re import Pattern
 from typing import cast
 
-import aiohttp
 import torch
 from datasets import Dataset as HFDataset
 from datasets import concatenate_datasets, load_dataset
@@ -151,9 +150,7 @@ def _supports_assistant_mask(processor: ProcessorLike) -> bool:
         # Verify the mask is not all zeros
         return any(m == 1 for m in mask)
     except (TypeError, ValueError, KeyError, AttributeError) as e:
-        log.warning(
-            f"An error occurred when trying to return assistant mask: {e}"
-        )
+        log.warning(f"An error occurred when trying to return assistant mask: {e}")
         return False
 
 
@@ -304,17 +301,13 @@ def _get_input_ids_loss_mask(
         input_ids = encoded["input_ids"]
         # HF uses 'assistant_masks' in recent versions
         mask_key = (
-            "assistant_masks"
-            if "assistant_masks" in encoded
-            else "assistant_mask"
+            "assistant_masks" if "assistant_masks" in encoded else "assistant_mask"
         )
         loss_mask = torch.tensor(encoded[mask_key], dtype=torch.long)
 
     else:
         # Fallback: regex-based detection
-        assert assistant_pattern is not None, (
-            "Assistant pattern required for fallback"
-        )
+        assert assistant_pattern is not None, "Assistant pattern required for fallback"
 
         processor_kwargs: dict = {
             "return_offsets_mapping": True,
@@ -410,8 +403,7 @@ def _preprocess_batch(
 
         # Assert shapes match
         assert len(input_ids) == len(loss_mask), (
-            f"Shape mismatch: input_ids={len(input_ids)}, "
-            f"loss_mask={len(loss_mask)}"
+            f"Shape mismatch: input_ids={len(input_ids)}, loss_mask={len(loss_mask)}"
         )
 
         # Filtering samples out with too few valid tokens
@@ -487,8 +479,6 @@ def build_eagle3_dataset(
 
 def load_raw_dataset(
     train_data_path: str,
-    *,
-    trust_remote_code: bool = False,
 ) -> tuple[HFDataset, Callable[[dict], dict] | None]:
     """Load raw dataset from local file or HuggingFace."""
     if train_data_path.endswith((".jsonl", ".json")):
@@ -501,15 +491,7 @@ def load_raw_dataset(
         )
 
     config = DATASET_CONFIGS[train_data_path]
-    raw_dataset = load_dataset(
-        config.hf_path,
-        split=config.split,
-        trust_remote_code=trust_remote_code,
-        storage_options={
-            # Avoid timeout when downloading COCO dataset
-            "client_kwargs": {"timeout": aiohttp.ClientTimeout(total=3600)}
-        },
-    )
+    raw_dataset = load_dataset(config.hf_path, config.hf_name, split=config.split)
 
     return raw_dataset, config.normalize_fn
 
@@ -581,10 +563,7 @@ def load_and_preprocess_dataset(
     processed_datasets = []
     for train_data_path in train_data_paths:
         log.subsection(f"Processing {train_data_path}")
-        raw_dataset, normalize_fn = load_raw_dataset(
-            train_data_path,
-            trust_remote_code=trust_remote_code,
-        )
+        raw_dataset, normalize_fn = load_raw_dataset(train_data_path)
         raw_dataset = raw_dataset.shuffle(seed=seed)
 
         if max_samples is not None and len(raw_dataset) > 3 * max_samples:
