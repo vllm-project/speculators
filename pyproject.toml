@@ -250,6 +250,7 @@ select = [
     "INP001", # allow implicit namespace packages in scripts
     "PTH", # os.path is acceptable in scripts
     "T201", # print statements are acceptable in scripts
+    "PLR0915", # allow long parse_args functions
 ]
 
 "examples/**/*.py" = [

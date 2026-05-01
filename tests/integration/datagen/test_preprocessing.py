@@ -82,11 +82,14 @@ def test_normalize_conversation_unknown_role():
 # Tests for _hf_to_vllm_conv
 @pytest.mark.sanity
 def test_hf_to_vllm_all_content_formats():
-    """Test converting from HF-format to vLLM-format messages with each supported content format."""
+    """
+    Test converting from HF-format to vLLM-format messages with
+    each supported content format.
+    """
     conv = [
         {
             "role": "system",
-            "content": "You are a helpful assistant."  # Content as string
+            "content": "You are a helpful assistant.",  # Content as string
         },
         {
             "role": "assistant",
@@ -94,9 +97,9 @@ def test_hf_to_vllm_all_content_formats():
                 "Hello,",  # Text as string
                 {"type": "text", "text": "I am"},  # Text as dictionary
                 {"type": "image", "path": "/path/to/img"},  # Image file path
-                {"type": "image", "url": "http://path/to/img"}  # Image URL
-            ]
-        },  
+                {"type": "image", "url": "http://path/to/img"},  # Image URL
+            ],
+        },
     ]
     result = _hf_to_vllm_conv(conv)
 
@@ -108,36 +111,51 @@ def test_hf_to_vllm_all_content_formats():
     assert result[1]["role"] == "assistant"
     assert result[1]["content"][0] == {"type": "text", "text": "Hello,"}
     assert result[1]["content"][1] == {"type": "text", "text": "I am"}
-    assert result[1]["content"][2] == {"type": "image_url", "image_url": {"url": "file:///path/to/img"}}
-    assert result[1]["content"][3] == {"type": "image_url", "image_url": {"url": "http://path/to/img"}}
+    assert result[1]["content"][2] == {
+        "type": "image_url",
+        "image_url": {"url": "file:///path/to/img"},
+    }
+    assert result[1]["content"][3] == {
+        "type": "image_url",
+        "image_url": {"url": "http://path/to/img"},
+    }
 
 
 @pytest.mark.sanity
 def test_hf_to_vllm_invalid_content_formats():
-    """Test converting from HF-format to vLLM-format messages with unsupported content formats."""
-    # Image object is not supported to discourage copying images when saving the preprocessed dataset
-    with pytest.raises(NotImplementedError, match=r"No handler .* for fields: \{'part\.image'\}"):
+    """
+    Test converting from HF-format to vLLM-format messages with
+    unsupported content formats.
+    """
+    # Image object is not supported to discourage copying images
+    # when saving the preprocessed dataset
+    with pytest.raises(
+        NotImplementedError, match=r"No handler .* for fields: \{'part\.image'\}"
+    ):
         _hf_to_vllm_conv(
             [
                 {
                     "role": "assistant",
                     "content": [
                         {"type": "image", "image": Image.new("RGB", (256, 256))},
-                    ]
-                },  
+                    ],
+                },
             ]
         )
 
-    # Image base64 is not supported to discourage copying images when saving the preprocessed dataset
-    with pytest.raises(NotImplementedError, match=r"No handler .* for fields: \{'part\.base64'\}"):
+    # Image base64 is not supported to discourage copying images
+    # when saving the preprocessed dataset
+    with pytest.raises(
+        NotImplementedError, match=r"No handler .* for fields: \{'part\.base64'\}"
+    ):
         _hf_to_vllm_conv(
             [
                 {
                     "role": "assistant",
                     "content": [
                         {"type": "image", "base64": "abcdef"},
-                    ]
-                },  
+                    ],
+                },
             ]
         )
 

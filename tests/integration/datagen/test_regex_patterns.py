@@ -48,7 +48,9 @@ def test_regex_detection_across_models(tmp_path, processor):
     Verify that _detect_assistant_pattern and _preprocess_batch (regex path)
     work correctly for a variety of model families.
     """
-    tokenizer = processor.tokenizer if isinstance(processor, ProcessorMixin) else processor
+    tokenizer = (
+        processor.tokenizer if isinstance(processor, ProcessorMixin) else processor
+    )
     model_name = tokenizer.name_or_path
     log.info(f"Testing family: {model_name}")
 
@@ -78,14 +80,14 @@ def test_regex_detection_across_models(tmp_path, processor):
                 "role": "assistant",
                 "content": [
                     {"type": "text", "text": "I am a helpful assistant."},
-                ]
+                ],
             },
             {
                 "role": "user",
                 "content": [
                     {"type": "text", "text": "What is the capital"},
                     {"type": "image", "path": img_path},
-                    {"type": "text", "text": "of France?"}
+                    {"type": "text", "text": "of France?"},
                 ],
             },
             {
