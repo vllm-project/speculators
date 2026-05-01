@@ -166,8 +166,11 @@ async def worker(
                 data = await response.json()
 
             choice = data["choices"][0]
-            generated_text = choice["message"]["content"]
-            reasoning_content = choice["message"].get("reasoning_content")
+            message = choice["message"]
+            generated_text = message["content"]
+            reasoning_content = message.get("reasoning_content")
+            if reasoning_content is None:
+                reasoning_content = message.get("reasoning")
             finish_reason = choice.get("finish_reason")
             latency = time.time() - start_time
 
