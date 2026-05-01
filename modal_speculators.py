@@ -296,6 +296,10 @@ def _download_hf_dataset(cfg: TrainingConfig, speculators_venv: str) -> list[str
     # Filter to matching files
     if cfg.hf_dataset_files != "*":
         cmd += ["--include", cfg.hf_dataset_files]
+    # Pass HF token explicitly if available
+    hf_token = os.environ.get("HF_TOKEN", "")
+    if hf_token:
+        cmd += ["--token", hf_token]
 
     print(f"[modal] Downloading dataset {cfg.hf_dataset} via huggingface-cli...")
     subprocess.run(cmd, check=True)
