@@ -288,7 +288,7 @@ class Trainer:
             self.checkpointer.save_checkpoint(self.model, self.opt, epoch)
             if self.scheduler is not None:
                 self.checkpointer.save_scheduler_state_dict(self.scheduler, epoch)
-        elif not (self.checkpointer.path / str(epoch)).exists():
+        elif not (epoch == 0 or (epoch + 1) % self.config.checkpoint_freq == 0):
             return
 
         self.best_val_loss = val_metrics["loss_epoch"]
