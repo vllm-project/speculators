@@ -277,7 +277,7 @@ async def worker(
             continue
 
         input_ids = item["input_ids"].tolist()
-        messages = item.get("messages")
+        messages = item.get("_vllm_messages")
 
         target_hidden_states_path = hidden_states_output_dir / f"hs_{idx}.safetensors"
 

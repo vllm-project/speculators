@@ -1,5 +1,6 @@
 """Configuration registries for data generation pipeline."""
 
+import random
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -32,25 +33,41 @@ COCO_TASKS = [
 
 
 def _normalize_coco(example: dict) -> dict:
-    image_path_local = example["image"]
+    pil_image = example["image"]
+    selected_task = random.choice(COCO_TASKS)
 
-    conversations = [
-        [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image_url", "image_url": f"file://{image_path_local}"},
-                    {
-                        "type": "text",
-                        "text": task,
-                    },
-                ],
-            }
-            for task in COCO_TASKS
-        ]
+    hf_messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "image": pil_image,
+                },
+                {
+                    "type": "text",
+                    "text": selected_task,
+                },
+            ],
+        }
+    ]
+    vllm_messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": f"file://{pil_image.filename}",
+                },
+                {
+                    "type": "text",
+                    "text": selected_task,
+                },
+            ],
+        }
     ]
 
-    return {"conversations": conversations}
+    return {"conversations": hf_messages, "_vllm_messages": vllm_messages}
 
 
 DATASET_CONFIGS: dict[str, DatasetConfig] = {

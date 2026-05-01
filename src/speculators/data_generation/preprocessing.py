@@ -1,9 +1,10 @@
 import bisect
 import random
 import re
+from collections.abc import Callable
 from pathlib import Path
 from re import Pattern
-from typing import cast
+from typing import Literal, cast
 
 import aiohttp
 import torch
@@ -117,14 +118,29 @@ def _normalize_conversation(
     return normalized
 
 
-def _supports_assistant_mask(processor: ProcessorLike) -> bool:
+def _supports_assistant_mask(
+    processor: ProcessorLike,
+    chat_template_content_format: Literal["string", "openai"] | None = None,
+) -> bool:
     """Check if processor truly supports HF assistant token mask.
 
     Must return a non-zero mask for a conversation containing an assistant message.
     """
+    if chat_template_content_format is None:
+        return any(
+            _supports_assistant_mask(processor, chat_template_content_format)
+            for chat_template_content_format in ("string", "openai")
+        )
+
+    content = (
+        "test"
+        if chat_template_content_format == "string"
+        else [{"type": "text", "text": "test"}]
+    )
+
     try:
         res_any = processor.apply_chat_template(
-            [{"role": "assistant", "content": "test"}],
+            [{"role": "assistant", "content": content}],
             tokenize=True,
             return_assistant_tokens_mask=True,
             return_dict=True,
@@ -137,7 +153,11 @@ def _supports_assistant_mask(processor: ProcessorLike) -> bool:
 
         # Verify the mask is not all zeros
         return any(m == 1 for m in mask)
-    except (TypeError, ValueError, KeyError, AttributeError):
+    except (TypeError, ValueError, KeyError, AttributeError) as e:
+        log.warning(
+            f"An error occurred when trying to return assistant mask "
+            f"({chat_template_content_format=}): {e}"
+        )
         return False
 
 
@@ -265,11 +285,6 @@ def _create_loss_mask_from_offsets(
     return loss_mask
 
 
-# Keys in processor outputs that indicate that the conversation has multi-modal data
-# In that case, we must use Chat Completions API to send the multi-modal inputs to vLLM
-MM_KEYS = {"pixel_values", "pixel_values_videos", "input_features"}
-
-
 def _preprocess_batch(
     examples: dict,
     processor: ProcessorLike,
@@ -282,6 +297,11 @@ def _preprocess_batch(
 
     results: dict[str, list] = {"input_ids": [], "loss_mask": [], "seq_len": []}
     conversations = examples.get("conversations", [])
+
+    # A special key defining Chat Completion API messages to pass directly to vLLM
+    # It should be consistent with the `conversations` passed to `apply_chat_template`
+    if "_vllm_messages" in examples:
+        results["_vllm_messages"] = examples["_vllm_messages"]
 
     if not conversations:
         log.warning(f"No conversations key found. Keys: {list(examples.keys())}")
@@ -365,13 +385,6 @@ def _preprocess_batch(
             results["input_ids"].append(torch.tensor(input_ids, dtype=torch.long))
             results["loss_mask"].append(loss_mask)
             results["seq_len"].append(len(input_ids))
-
-            if MM_KEYS.intersection(results.keys()):
-                if "messages" not in results:
-                    results["messages"] = []
-
-                results["messages"].append(conv)
-
         except (TypeError, ValueError, KeyError, AttributeError, RuntimeError) as e:
             log.error(
                 f"Failed to process conversation {idx} "
@@ -441,12 +454,12 @@ def build_eagle3_dataset(
 
 def load_raw_dataset(
     train_data_path: str,
-    num_proc: int = 8,
+    *,
     trust_remote_code: bool = False,
-) -> HFDataset:
+) -> tuple[HFDataset, Callable[[dict], dict] | None]:
     """Load raw dataset from local file or HuggingFace."""
     if train_data_path.endswith((".jsonl", ".json")):
-        return load_dataset("json", data_files=train_data_path, split="train")
+        return load_dataset("json", data_files=train_data_path, split="train"), None
 
     if train_data_path not in DATASET_CONFIGS:
         raise ValueError(
@@ -465,15 +478,13 @@ def load_raw_dataset(
         },
     )
 
-    if config.normalize_fn is not None:
-        raw_dataset = raw_dataset.map(config.normalize_fn, num_proc=num_proc)
-
-    return raw_dataset
+    return raw_dataset, config.normalize_fn
 
 
 def load_and_preprocess_dataset(
     target_model_path: str,
     train_data_paths: list[str],
+    *,
     seq_length: int,
     build_dataset_num_proc: int = 8,
     seed: int = 0,
@@ -537,9 +548,8 @@ def load_and_preprocess_dataset(
     processed_datasets = []
     for train_data_path in train_data_paths:
         log.subsection(f"Processing {train_data_path}")
-        raw_dataset = load_raw_dataset(
+        raw_dataset, normalize_fn = load_raw_dataset(
             train_data_path,
-            num_proc=build_dataset_num_proc,
             trust_remote_code=trust_remote_code,
         )
         raw_dataset = raw_dataset.shuffle(seed=seed)
@@ -549,6 +559,13 @@ def load_and_preprocess_dataset(
             # This will then be reduced further to max_samples
             # after combining datasets and shuffling
             raw_dataset = raw_dataset.select(range(3 * max_samples))
+
+        if normalize_fn is not None:
+            raw_dataset = raw_dataset.map(
+                normalize_fn,
+                num_proc=build_dataset_num_proc,
+                keep_in_memory=True,  # skip caching
+            )
 
         log.info(f"Loaded {len(raw_dataset)} samples")
 
