@@ -539,7 +539,17 @@ def train_speculators(cfg_dict: dict, skip_data_prep: bool = False) -> None:
 
     speculators_spec = _speculators_install_spec(cfg)
     speculators_packages = [speculators_spec]
-    if cfg.wandb:
+    # Install logger backends — they aren't speculators dependencies
+    logger_packages = {
+        "wandb": "wandb",
+        "trackio": "trackio",
+        "tensorboard": "tensorboard",
+    }
+    for logger_name in cfg.logger.split(",") if cfg.logger else []:
+        pkg = logger_packages.get(logger_name.strip())
+        if pkg:
+            speculators_packages.append(pkg)
+    if cfg.wandb and "wandb" not in speculators_packages:
         speculators_packages.append("wandb")
     speculators_venv = _create_venv("speculators", speculators_packages)
 
