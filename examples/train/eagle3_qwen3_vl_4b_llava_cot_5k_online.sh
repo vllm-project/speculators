@@ -29,18 +29,18 @@
 # checkpointing all work end-to-end, but it is not intended to represent final
 # model quality.
 #
-# Timing from an observed run on 4x NVIDIA GeForce RTX 4090 24GB GPUs
+# Timing from an observed run on 4x NVIDIA GeForce RTX 5090 32GB GPUs
 # (vLLM on GPUs 0,1 and training on GPUs 2,3):
-# Data preprocessing: 8 seconds
-# vLLM server startup: 54 seconds
-# Training (5 epochs): 1337 seconds (22 mins 17 secs)
-# Total (prepare_data start to checkpoint save): 1427 seconds (23 mins 47 secs)
+# Data preprocessing: 460 seconds (7 mins 40 secs)
+# vLLM server startup: 45 seconds
+# Training (5 epochs): 1110 seconds (18 mins 30 secs)
+# Total (prepare_data start to checkpoint save): 1615 seconds (26 mins 55 secs)
 #
 # Final validation metrics from that run:
-# val/loss_epoch: 8.4479
-# val/full_acc_0_epoch: 58.55%
-# val/full_acc_1_epoch: 32.46%
-# val/full_acc_2_epoch: 18.22%
+# val/loss_epoch: 8.676
+# val/full_acc_0_epoch: 57.7%
+# val/full_acc_1_epoch: 31.9%
+# val/full_acc_2_epoch: 17.9%
 
 set -euo pipefail
 
@@ -60,6 +60,7 @@ VLLM_TP="${VLLM_TP:-2}"
 EPOCHS="${EPOCHS:-5}"
 LR="${LR:-1e-4}"
 VLLM_EXTRA_ARGS="${VLLM_EXTRA_ARGS:-}"
+VLLM_LOG_FILE="${VLLM_LOG_FILE:-./vllm_server.log}"
 
 # GPU assignments
 VLLM_GPUS="${VLLM_GPUS:-0,1}"
@@ -177,6 +178,8 @@ python scripts/prepare_data.py \
     --multimodal
 
 echo "=== Step 4: Launching vLLM server ==="
+echo "vLLM logs will be written to: $VLLM_LOG_FILE"
+
 CUDA_VISIBLE_DEVICES="$VLLM_GPUS" python scripts/launch_vllm.py "$MODEL" \
     --hidden-states-path "$HIDDEN_STATES_DIR" \
     -- \
@@ -184,7 +187,8 @@ CUDA_VISIBLE_DEVICES="$VLLM_GPUS" python scripts/launch_vllm.py "$MODEL" \
     --tensor-parallel-size "$VLLM_TP" \
     --max-model-len "$VLLM_MAX_MODEL_LEN" \
     --limit-mm-per-prompt '{"image":1}' \
-    "${VLLM_EXTRA_ARR[@]}" &
+    "${VLLM_EXTRA_ARR[@]}" \
+    > "$VLLM_LOG_FILE" 2>&1 &
 VLLM_PID=$!
 
 cleanup() {
