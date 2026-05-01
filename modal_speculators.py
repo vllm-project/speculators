@@ -89,12 +89,14 @@ image = (
 app = modal.App("speculators-training", image=image)
 
 # ---------------------------------------------------------------------------
-# Optional Modal secrets — set env vars to attach them to the function.
+# Optional Modal secrets — injected as env vars at runtime.
+# Create them before running:
 #   modal secret create wandb WANDB_API_KEY=<key>
 #   modal secret create huggingface HF_TOKEN=<token>
+# If a secret doesn't exist, create an empty placeholder:
+#   modal secret create wandb WANDB_API_KEY=unused
+#   modal secret create huggingface HF_TOKEN=unused
 # ---------------------------------------------------------------------------
-WANDB_ENABLED = os.getenv("WANDB_ENABLED", "0") == "1"
-HF_SECRET_ENABLED = os.getenv("HF_SECRET_ENABLED", "0") == "1"
 
 
 # ---------------------------------------------------------------------------
@@ -513,10 +515,8 @@ def run_training(cfg: TrainingConfig, speculators_venv: str) -> None:
     gpu=f"{GPU_TYPE}:{GPU_COUNT}",
     timeout=86400,  # 24 hours
     secrets=[
-        s for s in [
-            modal.Secret.from_name("wandb") if WANDB_ENABLED else None,
-            modal.Secret.from_name("huggingface") if HF_SECRET_ENABLED else None,
-        ] if s is not None
+        modal.Secret.from_name("wandb"),
+        modal.Secret.from_name("huggingface"),
     ],
 )
 def train_speculators(cfg_dict: dict, skip_data_prep: bool = False) -> None:
