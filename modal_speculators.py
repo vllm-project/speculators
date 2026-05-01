@@ -513,6 +513,8 @@ def train_speculators(cfg_dict: dict, skip_data_prep: bool = False) -> None:
     print(f"[modal] Data:    {cfg.data_path}")
     print(f"[modal] Ckpts:   {cfg.save_path}")
     print(f"[modal] GPU layout: {cfg.vllm_gpus} for vLLM, {cfg.train_gpus} for training")
+    print(f"[modal] HF_TOKEN:  {'set' if os.environ.get('HF_TOKEN') else 'not set'}")
+    print(f"[modal] WANDB_API_KEY: {'set' if os.environ.get('WANDB_API_KEY') else 'not set'}")
 
     # If a custom speculators branch was requested, re-clone the repo
     _ensure_speculators_scripts(cfg)
