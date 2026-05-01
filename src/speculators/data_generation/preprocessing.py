@@ -328,8 +328,8 @@ def _get_input_ids_loss_mask(
                 normalized_conv,
                 tokenize=True,
                 add_generation_prompt=False,
-                processor_kwargs=processor_kwargs,
                 return_dict=True,
+                processor_kwargs=processor_kwargs,
             )
             encoded = cast("BatchFeature", encoded_any)
 
