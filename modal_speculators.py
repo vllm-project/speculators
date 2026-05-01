@@ -303,9 +303,9 @@ def _download_hf_dataset(cfg: TrainingConfig) -> list[str]:
 
     # Filter files matching the glob pattern
     matched = [
-        f["rfilename"] for f in files_meta
+        f["path"] for f in files_meta
         if f.get("type") == "file"
-        and fnmatch.fnmatch(f["rfilename"], cfg.hf_dataset_files)
+        and fnmatch.fnmatch(f["path"], cfg.hf_dataset_files)
     ]
     if not matched:
         raise ValueError(
