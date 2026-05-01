@@ -285,6 +285,87 @@ def _create_loss_mask_from_offsets(
     return loss_mask
 
 
+def _get_input_ids_loss_mask(
+    normalized_conv: list[dict],
+    processor: ProcessorLike,
+    max_length: int,
+    assistant_pattern: str | Pattern[str] | None,
+):
+    encoded: BatchEncoding | BatchFeature
+
+    if assistant_pattern is None:
+        # HF assistant token mask
+        encoded_any = processor.apply_chat_template(
+            normalized_conv,
+            tokenize=True,
+            add_generation_prompt=False,
+            return_assistant_tokens_mask=True,
+            return_dict=True,
+        )
+        encoded = cast("BatchEncoding | BatchFeature", encoded_any)
+
+        # input IDs and loss mask
+        input_ids = encoded["input_ids"]
+        # HF uses 'assistant_masks' in recent versions
+        mask_key = (
+            "assistant_masks"
+            if "assistant_masks" in encoded
+            else "assistant_mask"
+        )
+        loss_mask = torch.tensor(encoded[mask_key], dtype=torch.long)
+
+    else:
+        # Fallback: regex-based detection
+        assert assistant_pattern is not None, (
+            "Assistant pattern required for fallback"
+        )
+
+        processor_kwargs: dict = {
+            "return_offsets_mapping": True,
+            "max_length": max_length,
+            "truncation": True,
+            "add_special_tokens": False,
+        }
+
+        if isinstance(processor, ProcessorMixin):
+            encoded_any = processor.apply_chat_template(
+                normalized_conv,
+                tokenize=True,
+                add_generation_prompt=False,
+                processor_kwargs=processor_kwargs,
+                return_dict=True,
+            )
+            encoded = cast("BatchFeature", encoded_any)
+
+            # Remove batch dimension
+            (input_ids,) = encoded["input_ids"]
+            (offsets,) = encoded["offset_mapping"]
+
+            # MM placeholder tokens are inserted separate from chat template
+            formatted_text = processor.decode(input_ids)
+            assert isinstance(formatted_text, str)
+        else:
+            formatted_text = processor.apply_chat_template(
+                normalized_conv,
+                tokenize=False,
+                add_generation_prompt=False,
+            )
+            assert isinstance(formatted_text, str)
+
+            # Tokenize and get offsets
+            encoded_any = processor(formatted_text, **processor_kwargs)
+            encoded = cast("BatchEncoding", encoded_any)
+
+            input_ids = encoded["input_ids"]
+            offsets = encoded["offset_mapping"]
+
+        loss_mask = _create_loss_mask_from_offsets(
+            formatted_text, offsets, assistant_pattern
+        )
+
+    return input_ids, loss_mask
+
+
 def _preprocess_batch(
     examples: dict,
     processor: ProcessorLike,
@@ -316,81 +397,36 @@ def _preprocess_batch(
         if not normalized_conv:
             continue
 
-        encoded: BatchEncoding | BatchFeature
         try:
-            if assistant_pattern is None:
-                # HF assistant token mask
-                encoded_any = processor.apply_chat_template(
-                    normalized_conv,
-                    tokenize=True,
-                    add_generation_prompt=False,
-                    return_assistant_tokens_mask=True,
-                    return_dict=True,
-                )
-                encoded = cast("BatchEncoding | BatchFeature", encoded_any)
-
-                # input IDs and loss mask
-                input_ids = encoded["input_ids"]
-                # HF uses 'assistant_masks' in recent versions
-                mask_key = (
-                    "assistant_masks"
-                    if "assistant_masks" in encoded
-                    else "assistant_mask"
-                )
-                loss_mask = torch.tensor(encoded[mask_key], dtype=torch.long)
-
-            else:
-                # Fallback: regex-based detection
-                assert assistant_pattern is not None, (
-                    "Assistant pattern required for fallback"
-                )
-                formatted_raw = processor.apply_chat_template(
-                    normalized_conv,
-                    tokenize=False,
-                    add_generation_prompt=False,
-                )
-                assert isinstance(formatted_raw, str)
-
-                # Tokenize and get offsets
-                encoded_any = processor(
-                    formatted_raw,
-                    return_offsets_mapping=True,
-                    max_length=max_length,
-                    truncation=True,
-                    add_special_tokens=False,
-                )
-                encoded = cast("BatchEncoding | BatchFeature", encoded_any)
-
-                # input IDs and loss mask
-                input_ids = encoded["input_ids"]
-                offsets = encoded["offset_mapping"]
-
-                loss_mask = _create_loss_mask_from_offsets(
-                    formatted_raw, offsets, assistant_pattern
-                )
-
-            # Assert shapes match
-            assert len(input_ids) == len(loss_mask), (
-                f"Shape mismatch: input_ids={len(input_ids)}, "
-                f"loss_mask={len(loss_mask)}"
+            input_ids, loss_mask = _get_input_ids_loss_mask(
+                normalized_conv,
+                processor,
+                max_length=max_length,
+                assistant_pattern=assistant_pattern,
             )
-
-            # Filtering samples out with too few valid tokens
-            if minimum_valid_tokens is not None:
-                num_valid_tokens = int(loss_mask.sum().item())
-                if num_valid_tokens < minimum_valid_tokens:
-                    continue
-
-            # Append to results
-            results["input_ids"].append(torch.tensor(input_ids, dtype=torch.long))
-            results["loss_mask"].append(loss_mask)
-            results["seq_len"].append(len(input_ids))
         except (TypeError, ValueError, KeyError, AttributeError, RuntimeError) as e:
             log.error(
                 f"Failed to process conversation {idx} "
                 f"(assistant_pattern={assistant_pattern is not None}): {e}"
             )
             continue
+
+        # Assert shapes match
+        assert len(input_ids) == len(loss_mask), (
+            f"Shape mismatch: input_ids={len(input_ids)}, "
+            f"loss_mask={len(loss_mask)}"
+        )
+
+        # Filtering samples out with too few valid tokens
+        if minimum_valid_tokens is not None:
+            num_valid_tokens = int(loss_mask.sum().item())
+            if num_valid_tokens < minimum_valid_tokens:
+                continue
+
+        # Append to results
+        results["input_ids"].append(torch.tensor(input_ids, dtype=torch.long))
+        results["loss_mask"].append(loss_mask)
+        results["seq_len"].append(len(input_ids))
 
     return results
 

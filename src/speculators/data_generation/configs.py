@@ -1,6 +1,5 @@
 """Configuration registries for data generation pipeline."""
 
-import random
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -26,15 +25,10 @@ def _normalize_ultrachat(example: dict) -> dict:
     return example
 
 
-COCO_TASKS = [
-    "Locate each object in this image.",
-    "Describe the image with a brief caption.",
-]
-
-
 def _normalize_coco(example: dict) -> dict:
     pil_image = example["image"]
-    selected_task = random.choice(COCO_TASKS)
+    task = "Describe the image with a brief caption."
+    caption = example["sentences"]["raw"]
 
     hf_messages = [
         {
@@ -42,14 +36,23 @@ def _normalize_coco(example: dict) -> dict:
             "content": [
                 {
                     "type": "image",
-                    "image": pil_image,
+                    "path": pil_image.filename,
                 },
                 {
                     "type": "text",
-                    "text": selected_task,
+                    "text": task,
                 },
             ],
-        }
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "text",
+                    "text": caption,
+                }
+            ]
+        },
     ]
     vllm_messages = [
         {
@@ -61,10 +64,19 @@ def _normalize_coco(example: dict) -> dict:
                 },
                 {
                     "type": "text",
-                    "text": selected_task,
+                    "text": task,
                 },
             ],
-        }
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "text",
+                    "text": caption,
+                }
+            ]
+        },
     ]
 
     return {"conversations": hf_messages, "_vllm_messages": vllm_messages}
