@@ -1,4 +1,3 @@
-# ruff: noqa: ERA001
 import copy
 from typing import ClassVar
 
@@ -102,7 +101,7 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
 
         self.post_init()
 
-    def load_verifier_weights(self):  # noqa: C901
+    def load_verifier_weights(self):
         super().load_verifier_weights()
 
         verifier_config = self.config.speculators_config.verifier

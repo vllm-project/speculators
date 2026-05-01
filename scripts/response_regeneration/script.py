@@ -131,7 +131,7 @@ async def detect_model(endpoint: str) -> str:
             raise ValueError("No models found at endpoint")
     except ValueError:
         raise
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         raise ValueError(
             f"Failed to auto-detect model from {models_endpoint}: {e}\n"
             f"Please specify model with --model argument"

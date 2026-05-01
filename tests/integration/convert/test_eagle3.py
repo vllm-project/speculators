@@ -122,7 +122,7 @@ class TestEagle3Conversion:
             logger.error(f"Forward pass failed: {e}")
             return False
 
-    # TODO: @dsikka - add llama3 example # noqa: FIX002
+    # TODO: @dsikka - add llama3 example
     @pytest.mark.smoke
     @pytest.mark.parametrize(
         "checkpoint_info",

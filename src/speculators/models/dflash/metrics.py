@@ -35,7 +35,7 @@ def compute_metrics(
             - full_acc: Overall accuracy
             - position {i} acc: Accuracy at position i within blocks
     """
-    seq_len = logits.shape[1]  # noqa: N806
+    seq_len = logits.shape[1]
     pos_idx = torch.arange(seq_len, device=logits.device) % block_size
     pos_idx = pos_idx.unsqueeze(0)  # shape: [1, T]
 

@@ -1,4 +1,3 @@
-# ruff: noqa: ERA001
 import torch
 from torch.nn.attention.flex_attention import (
     BlockMask,

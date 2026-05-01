@@ -233,7 +233,7 @@ class SingleGPUCheckpointer(BaseCheckpointer):
 
     def load_optimizer_state_dict(
         self,
-        model: PreTrainedModel,  # noqa: ARG002
+        model: PreTrainedModel,
         optimizer: torch.optim.Optimizer,
         float_dtype: torch.dtype | None = None,
     ):
