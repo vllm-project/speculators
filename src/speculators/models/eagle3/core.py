@@ -1,6 +1,5 @@
 # ruff: noqa: ERA001
 import copy
-import warnings
 from typing import ClassVar
 
 import torch
@@ -17,7 +16,6 @@ from speculators.models.eagle3.attention import (
 from speculators.models.eagle3.model_definitions import model_classes
 from speculators.models.utils import resolve_target_layer_ids
 from speculators.proposals.greedy import GreedyTokenProposalConfig
-from speculators.utils.loading import load_model_layers
 
 
 def align_for_step(
@@ -244,23 +242,6 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
                 f"Verifier hidden size {verifier_model_config.hidden_size} does not"
                 f" match draft hidden size {self.hidden_size}."
             )
-
-        # Load verifier norm weights
-        verifier_weights = load_model_layers(
-            ["model.norm.weight"],
-            verifier_config.name_or_path,  # type: ignore[arg-type]
-        )
-
-        if "model.norm.weight" not in verifier_weights:
-            warnings.warn(
-                f"Could not find final norm weights in {verifier_config.name_or_path}. "
-                "Using default initialization (weight=1.0).",
-                UserWarning,
-                stacklevel=2,
-            )
-        else:
-            verifier_norm_sd = {"weight": verifier_weights["model.norm.weight"]}
-            self.verifier_norm.load_state_dict(verifier_norm_sd)
 
     @conditional_torch_compile
     def forward(  # noqa: C901
