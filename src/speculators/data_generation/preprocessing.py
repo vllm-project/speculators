@@ -117,6 +117,40 @@ def _normalize_conversation(
     return normalized
 
 
+def _hf_to_vllm_part(part: str | dict):
+    if isinstance(part, str):
+        return {"type": "text", "text": part}
+
+    part_type = part["type"]
+
+    if part_type == "text":
+        return {"type": "text", "text": part["text"]}
+
+    for modality in ("image", "video", "audio"):
+        if part_type == modality:
+            if local_path := part.get("path"):
+                file_url = f"file://{local_path}"
+                return {"type": f"{modality}_url", f"{modality}_url": {"url": file_url}}
+            if url := part.get("url"):
+                return {"type": f"{modality}_url", f"{modality}_url": {"url": url}}
+
+            fields_expr = {f"part.{k}" for k in part if k != "type"}
+
+            raise NotImplementedError(
+                f"No handler defined in part.type={part_type!r} "
+                f"for fields: {fields_expr}"
+            )
+
+    raise NotImplementedError(f"No handler defined for part.type={part_type!r}")
+
+
+def _hf_to_vllm_conv(normalized_conv: list[dict]):
+    return [
+        turn | {"content": [_hf_to_vllm_part(part) for part in turn["content"]]}
+        for turn in normalized_conv
+    ]
+
+
 def _supports_assistant_mask(processor: ProcessorLike) -> bool:
     """Check if processor truly supports HF assistant token mask.
 
@@ -367,12 +401,11 @@ def _preprocess_batch(
     """Process a batch of conversations into tokenized format with loss masks."""
 
     results: dict[str, list] = {"input_ids": [], "loss_mask": [], "seq_len": []}
-    conversations = examples.get("conversations", [])
+    conversations: list[dict] = examples.get("conversations", [])
 
-    # A special key defining Chat Completion API messages to pass directly to vLLM
-    # It should be consistent with the `conversations` passed to `apply_chat_template`
-    if "_vllm_messages" in examples:
-        results["_vllm_messages"] = examples["_vllm_messages"]
+    # MM inputs must use Chat Completion API
+    if isinstance(processor, ProcessorMixin):
+        results["_vllm_messages"] = []
 
     if not conversations:
         log.warning(f"No conversations key found. Keys: {list(examples.keys())}")
@@ -416,6 +449,9 @@ def _preprocess_batch(
         results["input_ids"].append(torch.tensor(input_ids, dtype=torch.long))
         results["loss_mask"].append(loss_mask)
         results["seq_len"].append(len(input_ids))
+
+        if "_vllm_messages" in results:
+            results["_vllm_messages"].append(_hf_to_vllm_conv(normalized_conv))
 
     return results
 
