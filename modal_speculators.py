@@ -287,7 +287,7 @@ def _download_hf_dataset(cfg: TrainingConfig, speculators_venv: str) -> list[str
 
     # Use huggingface-cli from the speculators venv (huggingface_hub is a dep)
     cmd = [
-        f"{speculators_venv}/bin/huggingface-cli", "download",
+        f"{speculators_venv}/bin/hf", "download",
         cfg.hf_dataset,
         "--repo-type", "dataset",
         "--revision", cfg.hf_dataset_revision,
