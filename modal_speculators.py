@@ -91,9 +91,9 @@ app = modal.App("speculators-training", image=image)
 # ---------------------------------------------------------------------------
 # W&B secret — create via `modal secret create wandb WANDB_API_KEY=<key>`
 # or via the Modal dashboard (use the Weights & Biases template).
-# Set WANDB_ENABLED to True below to attach the secret to the function.
+# Set WANDB_ENABLED=1 in your environment to attach the secret.
 # ---------------------------------------------------------------------------
-WANDB_ENABLED = False
+WANDB_ENABLED = os.getenv("WANDB_ENABLED", "0") == "1"
 
 
 # ---------------------------------------------------------------------------
