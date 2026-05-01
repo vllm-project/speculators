@@ -220,6 +220,7 @@ def _detect_assistant_pattern(processor: ProcessorLike) -> str:
     message only.
     """
     test_conv = _get_assistant_pattern_test_conv(processor)
+
     formatted = processor.apply_chat_template(
         test_conv, tokenize=False, add_generation_prompt=False
     )
