@@ -9,6 +9,7 @@ from typing import cast
 import torch
 from datasets import Dataset as HFDataset
 from datasets import concatenate_datasets, load_dataset
+from packaging.version import Version
 from transformers import (
     AutoProcessor,
     BatchEncoding,
@@ -16,6 +17,7 @@ from transformers import (
     PreTrainedTokenizerBase,
     ProcessorMixin,
 )
+from transformers import __version__ as TRANSFORMERS_VERSION  # noqa: N812
 
 from speculators.data_generation.configs import DATASET_CONFIGS
 from speculators.data_generation.logging_utils import PipelineLogger
@@ -371,13 +373,23 @@ def _get_input_ids_loss_mask(
     }
 
     if isinstance(processor, ProcessorMixin):
-        encoded_any = processor.apply_chat_template(
-            normalized_conv,
-            tokenize=True,
-            add_generation_prompt=False,
-            return_dict=True,
-            processor_kwargs=processor_kwargs,
-        )
+        if Version(TRANSFORMERS_VERSION) >= Version("5.4.0"):
+            encoded_any = processor.apply_chat_template(
+                normalized_conv,
+                tokenize=True,
+                add_generation_prompt=False,
+                return_dict=True,
+                processor_kwargs=processor_kwargs,
+            )
+        else:
+            encoded_any = processor.apply_chat_template(
+                normalized_conv,
+                tokenize=True,
+                add_generation_prompt=False,
+                return_dict=True,
+                **processor_kwargs,
+            )
+
         encoded = cast("BatchFeature", encoded_any)
 
         # Remove batch dimension

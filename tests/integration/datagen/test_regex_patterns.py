@@ -6,8 +6,10 @@ from re import Pattern
 
 import pytest
 from loguru import logger as log
+from packaging.version import Version
 from PIL import Image
 from transformers import ProcessorMixin
+from transformers import __version__ as TRANSFORMERS_VERSION  # noqa: N812
 
 from speculators.data_generation.preprocessing import (
     _detect_assistant_pattern,
@@ -29,9 +31,11 @@ MODELS = [
     "microsoft/Phi-3-mini-4k-instruct",
     # GPT-OSS
     "openai/gpt-oss-20b",
-    # Multimodal
-    "google/gemma-4-E2B-it",
 ]
+
+if Version(TRANSFORMERS_VERSION) >= Version("5.5.0"):
+    # Multimodal
+    MODELS.append("google/gemma-4-E2B-it")
 
 
 @pytest.fixture(scope="module", params=MODELS)
