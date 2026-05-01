@@ -50,6 +50,8 @@ dependencies = [
     "safetensors",
     "setuptools",
     "torch>=2.9.0,<=2.11.0",
+    "torchaudio",
+    "torchvision",
     "tqdm>=4.66.3,<=4.67.3",
     "transformers>=4.56.1,<5.7.0",
     "typer>=0.12.0",
