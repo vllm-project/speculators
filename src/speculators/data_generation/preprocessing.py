@@ -4,7 +4,7 @@ import re
 from collections.abc import Callable
 from pathlib import Path
 from re import Pattern
-from typing import Literal, cast
+from typing import cast
 
 import aiohttp
 import torch
@@ -118,34 +118,31 @@ def _normalize_conversation(
     return normalized
 
 
-def _supports_assistant_mask(
-    processor: ProcessorLike,
-    chat_template_content_format: Literal["string", "openai"] | None = None,
-) -> bool:
+def _supports_assistant_mask(processor: ProcessorLike) -> bool:
     """Check if processor truly supports HF assistant token mask.
 
     Must return a non-zero mask for a conversation containing an assistant message.
     """
-    if chat_template_content_format is None:
-        return any(
-            _supports_assistant_mask(processor, chat_template_content_format)
-            for chat_template_content_format in ("string", "openai")
-        )
-
-    content = (
-        "test"
-        if chat_template_content_format == "string"
-        else [{"type": "text", "text": "test"}]
-    )
+    chat_template_kwargs: dict = {
+        "tokenize": True,
+        "return_assistant_tokens_mask": True,
+        "return_dict": True,
+    }
 
     try:
-        res_any = processor.apply_chat_template(
-            [{"role": "assistant", "content": content}],
-            tokenize=True,
-            return_assistant_tokens_mask=True,
-            return_dict=True,
-        )
-        res = cast("BatchEncoding | BatchFeature", res_any)
+        if isinstance(processor, ProcessorMixin):
+            res_any = processor.apply_chat_template(
+                [{"role": "assistant", "content": [{"type": "text", "text": "test"}]}],
+                **chat_template_kwargs,
+            )
+            res = cast("BatchFeature", res_any)
+        else:
+            res_any = processor.apply_chat_template(
+                [{"role": "assistant", "content": "test"}],
+                **chat_template_kwargs,
+            )
+            res = cast("BatchEncoding", res_any)
+
         # Check both singular and plural key names
         mask = res.get("assistant_masks", res.get("assistant_mask"))
         if mask is None:
@@ -155,8 +152,7 @@ def _supports_assistant_mask(
         return any(m == 1 for m in mask)
     except (TypeError, ValueError, KeyError, AttributeError) as e:
         log.warning(
-            f"An error occurred when trying to return assistant mask "
-            f"({chat_template_content_format=}): {e}"
+            f"An error occurred when trying to return assistant mask: {e}"
         )
         return False
 
@@ -345,6 +341,7 @@ def _get_input_ids_loss_mask(
             formatted_text = processor.decode(input_ids)
             assert isinstance(formatted_text, str)
         else:
+            # More optimized flow for text-only processors (i.e. tokenizers)
             formatted_text = processor.apply_chat_template(
                 normalized_conv,
                 tokenize=False,
