@@ -7,10 +7,11 @@ from re import Pattern
 import pytest
 from loguru import logger as log
 from PIL import Image
-from transformers import AutoProcessor, ProcessorMixin
+from transformers import ProcessorMixin
 
 from speculators.data_generation.preprocessing import (
     _detect_assistant_pattern,
+    _load_processor,
     _preprocess_batch,
 )
 
@@ -38,7 +39,7 @@ def processor(request):
     model_id = request.param
     try:
         # Using trust_remote_code=True for variety of templates
-        return AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+        return _load_processor(model_id, trust_remote_code=True)
     except (TypeError, ValueError, KeyError, AttributeError, RuntimeError) as e:
         pytest.skip(f"Failed to load processor for {model_id}: {e}")
 
