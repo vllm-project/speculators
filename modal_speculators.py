@@ -326,10 +326,12 @@ def _download_hf_dataset(cfg: TrainingConfig) -> list[str]:
             print(f"  [cached] {fname}")
         else:
             print(f"  [downloading] {fname}")
-            req = urllib.request.Request(url)
+            dl_req = urllib.request.Request(url)
             if hf_token:
-                req.add_header("Authorization", f"Bearer {hf_token}")
-            urllib.request.urlretrieve(url, local_path)
+                dl_req.add_header("Authorization", f"Bearer {hf_token}")
+            with urllib.request.urlopen(dl_req) as resp, open(local_path, "wb") as f:
+                import shutil
+                shutil.copyfileobj(resp, f)
         local_paths.append(str(local_path))
 
     return local_paths
