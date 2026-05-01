@@ -259,6 +259,7 @@ def main(args: argparse.Namespace):
         args.verifier_name_or_path,
         transformer_layer_config.vocab_size,
         args.mask_token_id,
+        trust_remote_code=args.trust_remote_code,
     )
 
     registry = SpeculatorModel.registry
@@ -393,6 +394,11 @@ def _checkpoint_freq(value: str) -> int:
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--verifier-name-or-path", type=str, required=True)
+    parser.add_argument(
+        "--trust-remote-code",
+        action="store_true",
+        help="Allow executing code from HF Hub when loading the verifier's tokenizer.",
+    )
     parser.add_argument(
         "--speculator-type",
         type=str,
