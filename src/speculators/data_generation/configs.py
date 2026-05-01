@@ -18,6 +18,7 @@ class DatasetConfig:
     hf_path: str
     hf_name: str | None = None
     split: str
+    filter_fn: Callable[[dict], bool] | None = None
     normalize_fn: Callable[[dict], dict] | None = None
 
 
@@ -26,6 +27,9 @@ def hf_to_vllm_part(part: str | dict):
         return {"type": "text", "text": part}
 
     part_type = part["type"]
+
+    if part_type == "text":
+        return {"type": "text", "text": part["text"]}
 
     for modality in ("image", "video", "audio"):
         if part_type == modality:
@@ -62,7 +66,11 @@ def _unformat_sharegpt4v(part: str, image_path: str):
     return {"type": "text", "text": part}
 
 
-def _normalize_sharegpt4v(example: dict) -> dict:
+def _filter_sharegpt4v_coco(example: dict) -> bool:
+    return example["image"].startswith("coco/")
+
+
+def _normalize_sharegpt4v_coco(example: dict) -> dict:
     coco_dir = get_coco_dir()
     image_path = os.path.join(coco_dir, example["image"].removeprefix("coco/"))
 
@@ -77,18 +85,18 @@ def _normalize_sharegpt4v(example: dict) -> dict:
 
     hf_messages = [
         {
-            **turn,
             "content": [
                 _unformat_sharegpt4v(part, image_path)
                 for part in turn.pop("value").split("\n")
             ],
+            **turn,
         }
         for turn in example["conversations"]
     ]
     vllm_messages = [
         {
+            "content": [hf_to_vllm_part(part) for part in turn.pop("content")],
             **turn,
-            "content": [hf_to_vllm_part(part) for part in turn["content"]],
         }
         for turn in hf_messages
     ]
@@ -109,11 +117,12 @@ DATASET_CONFIGS: dict[str, DatasetConfig] = {
         normalize_fn=_normalize_ultrachat,
     ),
     # NOTE: You need to pass `--allowed-local-media-path /` to `launch_vllm.py`
-    "sharegpt4v": DatasetConfig(
-        name="sharegpt4v",
+    "sharegpt4v_coco": DatasetConfig(
+        name="sharegpt4v_coco",
         hf_path="Lin-Chen/ShareGPT4V",
         hf_name="ShareGPT4V",
         split="train",
-        normalize_fn=_normalize_sharegpt4v,
+        filter_fn=_filter_sharegpt4v_coco,
+        normalize_fn=_normalize_sharegpt4v_coco,
     ),
 }

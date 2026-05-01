@@ -493,6 +493,9 @@ def load_raw_dataset(
     config = DATASET_CONFIGS[train_data_path]
     raw_dataset = load_dataset(config.hf_path, config.hf_name, split=config.split)
 
+    if config.filter_fn is not None:
+        raw_dataset = raw_dataset.filter(config.filter_fn)
+
     return raw_dataset, config.normalize_fn
 
 
