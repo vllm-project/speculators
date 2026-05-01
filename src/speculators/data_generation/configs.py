@@ -71,8 +71,8 @@ def _normalize_sharegpt4v(example: dict) -> dict:
 
         raise ValueError(
             f"Please download COCO 2017 Train Images from "
-            f"<http://images.cocodataset.org/zips/train2017.zip> and "
-            f"place the files under `COCO_DIR` ({state_str}: `{coco_dir}`)."
+            f"<http://images.cocodataset.org/zips/train2017.zip> and place the "
+            f"extracted folder under `COCO_DIR` ({state_str}: `{coco_dir}`)."
         )
 
     hf_messages = [
