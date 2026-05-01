@@ -363,7 +363,7 @@ class Eagle3Speculator(SpeculatorModel):
         past_key_values: tuple[tuple[torch.FloatTensor]] | None = None,
         use_cache: bool | None = None,
         output_attentions: bool | None = None,
-        output_hidden_states: bool | None = None,  # noqa: ARG002
+        output_hidden_states: bool | None = None,
         return_dict: bool | None = None,
     ) -> torch.FloatTensor:
         """

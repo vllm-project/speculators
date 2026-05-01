@@ -1,4 +1,3 @@
-# ruff: noqa: ERA001
 import copy
 from typing import ClassVar
 
@@ -13,135 +12,10 @@ from speculators.models.eagle3.attention import (
     create_combined_mask_mod,
     extend_mask_for_draft_tokens,
 )
+from speculators.models.eagle3.metrics import compute_metrics
 from speculators.models.eagle3.model_definitions import model_classes
 from speculators.models.utils import resolve_target_layer_ids
 from speculators.proposals.greedy import GreedyTokenProposalConfig
-
-
-def align_for_step(
-    logits: torch.Tensor,  # shape: [1, total_seq_len, draft_vocab_size]
-    targets: torch.Tensor,  # shape: [1, total_seq_len, draft_vocab_size]
-    loss_mask: torch.Tensor | None,  # shape: [1, total_seq_len]
-    prev_correct: torch.Tensor | None,  # shape: [1, total_seq_len]
-    ttt_step: int,
-):
-    """Align logits, targets, loss_mask, and prev_correct for a given ttt_step.
-
-    There are no target values for the last ttt_step tokens, so we mask them out
-    before computing the loss/accuracy. Likewise, there are no logits for the first
-    ttt_step tokens, so we mask them out.
-    This is equivalent to shifting the target values by ttt_step + 1 to the left
-    which puts them in the correct position for the generated tokens.
-    e.g.
-        indices of targets = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-        indices of logits for ttt_step_0 = [1, 2, 3, 4, 5, 6, 7, 8, 9] # no shift
-        indices of logits for ttt_step_1 = [2, 3, 4, 5, 6, 7, 8, 9, 10] # shift by 1
-        indices of logits for ttt_step_2 = [3, 4, 5, 6, 7, 8, 9, 10, 11] # shift by 2
-    The indices for the loss_mask need to be kept in line with the targets indices
-    """
-    logits = logits[:, :-ttt_step] if ttt_step > 0 else logits
-    # shape: [1, total_seq_len - ttt_step, draft_vocab_size]
-    targets = targets[:, ttt_step:]
-    # shape: [1, total_seq_len - ttt_step, draft_vocab_size]
-    if loss_mask is not None:
-        loss_mask = loss_mask[:, ttt_step:]
-        # shape: [1, total_seq_len - ttt_step]
-    if prev_correct is not None:
-        # Align with draft starts
-        prev_correct = prev_correct[:, :-ttt_step] if ttt_step > 0 else prev_correct
-        # shape: [1, total_seq_len - ttt_step]
-    return logits, targets, loss_mask, prev_correct
-
-
-@torch.no_grad()
-def compute_accuracy(
-    logits: torch.Tensor,  # shape: [1, total_seq_len - ttt_step, draft_vocab_size]
-    targets: torch.Tensor,  # shape: [1, total_seq_len - ttt_step, draft_vocab_size]
-    loss_mask: torch.Tensor | None,  # shape: [1, total_seq_len - ttt_step]
-    prev_correct: torch.Tensor | None,  # shape: [1, total_seq_len - ttt_step]
-):
-    # Note: logits, targets, and loss_mask are already aligned for the current ttt_step
-    target_tokens = torch.argmax(targets, dim=-1)
-    predicted_tokens = torch.argmax(logits, dim=-1)
-    # shape: [1, total_seq_len - ttt_step]
-
-    correct = predicted_tokens == target_tokens
-    cond_denom: torch.Tensor | int = correct.numel()
-    if prev_correct is not None:
-        cond_denom = prev_correct.sum()
-        # Update prev_correct in place
-        correct = torch.logical_and(prev_correct, correct, out=prev_correct)
-    if loss_mask is not None:
-        correct = torch.masked_select(correct, loss_mask.to(torch.bool))
-
-    correct_sum = correct.float().sum()
-    full_denom = correct.numel()
-
-    return correct_sum / (full_denom + 1e-5), correct_sum / (cond_denom + 1e-5)
-
-
-def loss_function(
-    logits: torch.Tensor,  # shape: [1, total_seq_len - ttt_step, draft_vocab_size]
-    targets: torch.Tensor,  # shape: [1, total_seq_len - ttt_step, draft_vocab_size]
-    loss_mask: torch.Tensor | None,  # shape: [1, total_seq_len - ttt_step]
-):
-    # Note: logits, targets, and loss_mask are already aligned for the current ttt_step
-    logits = torch.nn.functional.log_softmax(logits, dim=-1)
-    target_p = torch.nn.functional.softmax(targets, dim=-1)
-    elementwise_loss = torch.nn.functional.kl_div(
-        logits, target_p, reduction="none", log_target=False
-    )
-
-    if loss_mask is not None:
-        elementwise_loss = elementwise_loss * loss_mask.unsqueeze(-1)
-        denominator: torch.Tensor | int = loss_mask.sum(dim=1) + 1e-5
-    else:
-        denominator = logits.shape[1]  # total_seq_len - ttt_step
-    batch_loss = torch.sum(elementwise_loss, dim=(1, 2)) / denominator
-    # shape: [1]
-    return batch_loss.mean()
-
-
-def compute_metrics(
-    logits: torch.Tensor,
-    targets: torch.Tensor,
-    loss_mask: torch.Tensor | None,
-    prev_correct: torch.Tensor | None,
-    ttt_step: int,
-    ttt_step_loss_decay: float,
-) -> tuple[torch.Tensor, dict]:
-    """Compute metrics for a given ttt_step.
-
-    Args:
-        logits: The logits for the current ttt_step.
-        targets: The targets for the current ttt_step.
-        loss_mask: The loss mask for the current ttt_step.
-        prev_correct: The previous correct predictions for the current ttt_step.
-        ttt_step: The current ttt_step.
-        ttt_step_loss_decay: The loss decay for the current ttt_step.
-
-    Effects:
-        Modifies prev_correct in place.
-
-    Returns:
-        Loss value and metrics dictionary.
-    """
-
-    s_metrics = {}
-    s_logits, s_targets, s_loss_mask, s_prev_correct = align_for_step(
-        logits, targets, loss_mask, prev_correct, ttt_step
-    )
-    loss_weight = ttt_step_loss_decay**ttt_step
-    s_loss = loss_weight * loss_function(s_logits, s_targets, s_loss_mask)
-
-    s_full_acc, s_cond_acc = compute_accuracy(
-        s_logits, s_targets, s_loss_mask, s_prev_correct
-    )
-    s_metrics[f"loss_{ttt_step}"] = s_loss.detach().clone()
-    s_metrics[f"full_acc_{ttt_step}"] = s_full_acc
-    s_metrics[f"cond_acc_{ttt_step}"] = s_cond_acc
-
-    return s_loss, s_metrics
 
 
 def conditional_torch_compile(func):
@@ -227,7 +101,7 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
 
         self.post_init()
 
-    def load_verifier_weights(self):  # noqa: C901
+    def load_verifier_weights(self):
         super().load_verifier_weights()
 
         verifier_config = self.config.speculators_config.verifier

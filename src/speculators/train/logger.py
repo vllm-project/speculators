@@ -229,7 +229,7 @@ class FormatDictFilter(logging.Filter):
 
     Note: This is not a true filter, but a processing step as described in the
     Python logging cookbook: https://docs.python.org/3/howto/logging-cookbook.html#using-filters-to-impart-contextual-information
-    """  # noqa: E501
+    """
 
     @staticmethod
     def _format_value(v):
