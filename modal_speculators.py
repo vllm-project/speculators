@@ -89,11 +89,12 @@ image = (
 app = modal.App("speculators-training", image=image)
 
 # ---------------------------------------------------------------------------
-# W&B secret — create via `modal secret create wandb WANDB_API_KEY=<key>`
-# or via the Modal dashboard (use the Weights & Biases template).
-# Set WANDB_ENABLED=1 in your environment to attach the secret.
+# Optional Modal secrets — set env vars to attach them to the function.
+#   modal secret create wandb WANDB_API_KEY=<key>
+#   modal secret create huggingface HF_TOKEN=<token>
 # ---------------------------------------------------------------------------
 WANDB_ENABLED = os.getenv("WANDB_ENABLED", "0") == "1"
+HF_SECRET_ENABLED = os.getenv("HF_SECRET_ENABLED", "0") == "1"
 
 
 # ---------------------------------------------------------------------------
@@ -504,7 +505,12 @@ def run_training(cfg: TrainingConfig, speculators_venv: str) -> None:
     volumes={VOLUME_MOUNT: volume},
     gpu=f"{GPU_TYPE}:{GPU_COUNT}",
     timeout=86400,  # 24 hours
-    secrets=[modal.Secret.from_name("wandb")] if WANDB_ENABLED else [],
+    secrets=[
+        s for s in [
+            modal.Secret.from_name("wandb") if WANDB_ENABLED else None,
+            modal.Secret.from_name("huggingface") if HF_SECRET_ENABLED else None,
+        ] if s is not None
+    ],
 )
 def train_speculators(cfg_dict: dict, skip_data_prep: bool = False) -> None:
     cfg = TrainingConfig(**cfg_dict)
