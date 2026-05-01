@@ -279,62 +279,42 @@ def _ensure_speculators_scripts(cfg: TrainingConfig) -> None:
 # ---------------------------------------------------------------------------
 # Helper: download HF dataset files
 # ---------------------------------------------------------------------------
-def _download_hf_dataset(cfg: TrainingConfig) -> list[str]:
-    """Download JSONL files from an HF dataset repo. Returns local file paths."""
+def _download_hf_dataset(cfg: TrainingConfig, speculators_venv: str) -> list[str]:
+    """Download files from an HF dataset repo using huggingface-cli. Returns local paths."""
     import fnmatch
-    import urllib.request
 
-    download_dir = Path("/tmp/hf_dataset")
-    download_dir.mkdir(parents=True, exist_ok=True)
+    download_dir = "/tmp/hf_dataset"
 
-    # Use the HF Hub API to list files
-    api_url = (
-        f"https://huggingface.co/api/datasets/{cfg.hf_dataset}"
-        f"/tree/{cfg.hf_dataset_revision}"
-    )
-    req = urllib.request.Request(api_url)
-    # Pass HF token if available
-    hf_token = os.environ.get("HF_TOKEN", "")
-    if hf_token:
-        req.add_header("Authorization", f"Bearer {hf_token}")
-
-    with urllib.request.urlopen(req) as resp:
-        files_meta = json.loads(resp.read())
-
-    # Filter files matching the glob pattern
-    matched = [
-        f["path"] for f in files_meta
-        if f.get("type") == "file"
-        and fnmatch.fnmatch(f["path"], cfg.hf_dataset_files)
+    # Use huggingface-cli from the speculators venv (huggingface_hub is a dep)
+    cmd = [
+        f"{speculators_venv}/bin/huggingface-cli", "download",
+        cfg.hf_dataset,
+        "--repo-type", "dataset",
+        "--revision", cfg.hf_dataset_revision,
+        "--local-dir", download_dir,
     ]
+    # Filter to matching files
+    if cfg.hf_dataset_files != "*":
+        cmd += ["--include", cfg.hf_dataset_files]
+
+    print(f"[modal] Downloading dataset {cfg.hf_dataset} via huggingface-cli...")
+    subprocess.run(cmd, check=True)
+
+    # Find downloaded files matching the pattern
+    download_path = Path(download_dir)
+    matched = sorted(
+        str(p) for p in download_path.rglob("*")
+        if p.is_file() and fnmatch.fnmatch(p.name, cfg.hf_dataset_files)
+    )
     if not matched:
         raise ValueError(
-            f"No files matching '{cfg.hf_dataset_files}' found in "
-            f"dataset {cfg.hf_dataset}"
+            f"No files matching '{cfg.hf_dataset_files}' found after download"
         )
 
-    print(f"[modal] Downloading {len(matched)} files from {cfg.hf_dataset}:")
-    local_paths = []
-    for fname in matched:
-        url = (
-            f"https://huggingface.co/datasets/{cfg.hf_dataset}"
-            f"/resolve/{cfg.hf_dataset_revision}/{fname}"
-        )
-        local_path = download_dir / fname
-        local_path.parent.mkdir(parents=True, exist_ok=True)
-        if local_path.exists():
-            print(f"  [cached] {fname}")
-        else:
-            print(f"  [downloading] {fname}")
-            dl_req = urllib.request.Request(url)
-            if hf_token:
-                dl_req.add_header("Authorization", f"Bearer {hf_token}")
-            with urllib.request.urlopen(dl_req) as resp, open(local_path, "wb") as f:
-                import shutil
-                shutil.copyfileobj(resp, f)
-        local_paths.append(str(local_path))
-
-    return local_paths
+    print(f"[modal] Downloaded {len(matched)} files:")
+    for f in matched:
+        print(f"  {f}")
+    return matched
 
 
 # ---------------------------------------------------------------------------
@@ -376,7 +356,7 @@ def prepare_data(cfg: TrainingConfig, speculators_venv: str) -> None:
     # Determine data source(s)
     if cfg.hf_dataset:
         print(f"[modal] Downloading HF dataset: {cfg.hf_dataset}")
-        local_files = _download_hf_dataset(cfg)
+        local_files = _download_hf_dataset(cfg, speculators_venv)
         for f in local_files:
             cmd += ["--data", f]
         print(f"[modal] Preparing data from {len(local_files)} files")
