@@ -14,6 +14,11 @@ from pathlib import Path
 import pytest
 
 from speculators.data_generation.configs import get_coco_dir
+from speculators.data_generation.preprocessing import (
+    _adapt_conv_for_vllm,
+    _normalize_conversation,
+    load_raw_dataset,
+)
 from tests.e2e.smoke.test_offline_training import run_offline_e2e
 from tests.utils import requires_cadence
 
@@ -27,7 +32,6 @@ from tests.utils import requires_cadence
     ],
 )
 def test_offline_regression(
-    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     model: str,
     dataset: str,
@@ -41,6 +45,15 @@ def test_offline_regression(
             pytest.skip(f"Cannot find COCO dataset at {coco_dir}")
 
         vllm_media_path = coco_dir
+
+        raw_dataset, normalize_fn = load_raw_dataset(dataset)
+        raw_dataset = raw_dataset.skip(len(dataset) - len(prompts))
+        if normalize_fn is not None:
+            raw_dataset = raw_dataset.map(normalize_fn, keep_in_memory=True)
+
+        raw_convs = raw_dataset["conversations"]
+        normalized_convs = [_normalize_conversation(conv) for conv in raw_convs]
+        prompts = [_adapt_conv_for_vllm(conv) for conv in normalized_convs]
     else:
         vllm_media_path = None
 
