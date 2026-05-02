@@ -112,9 +112,8 @@ def extract_output(
 async def generate_hidden_states_async(
     client: openai.AsyncClient,
     model: str,
-    token_ids: list[int],
+    dataset_item: dict,
     *,
-    messages: list[ChatCompletionMessageParam] | None = None,
     timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
 ) -> str:
     """
@@ -129,6 +128,9 @@ async def generate_hidden_states_async(
                  instead of passing `token_ids` to Completions API.
         timeout: Timeout in seconds for each request attempt. None for no timeout.
     """
+    token_ids: list[int] = dataset_item["input_ids"]
+    messages: list[ChatCompletionMessageParam] | None = dataset_item.get("messages")
+
     coro: Coroutine[Any, Any, Completion | ChatCompletion]
     if messages is None:
         coro = client.completions.create(
@@ -160,15 +162,17 @@ async def generate_hidden_states_async(
 def generate_hidden_states(
     client: openai.Client,
     model: str,
-    token_ids: list[int],
+    dataset_item: dict,
     *,
-    messages: list[ChatCompletionMessageParam] | None = None,
     timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
 ) -> str:
     """
     Runs decode w/ max_tokens 1 to generate hidden states and returns path to
     hidden states file.
     """
+    token_ids: list[int] = dataset_item["input_ids"]
+    messages: list[ChatCompletionMessageParam] | None = dataset_item.get("messages")
+
     res: Completion | ChatCompletion
     if messages is None:
         res = client.completions.create(

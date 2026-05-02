@@ -271,15 +271,12 @@ class ArrowDataset(BaseDataset):
 
         dataset_item = self.data[index]
         openai_item = self.convert_to_openai(dataset_item)
-        input_ids = openai_item["input_ids"].tolist()
-        messages = openai_item.get("messages")
 
         try:
             hs_filepath = generate_hidden_states(
                 self.client,  # type:ignore[arg-type]
                 self.model,  # type:ignore[arg-type]
-                input_ids,
-                messages=messages,
+                openai_item,
                 timeout=self.request_timeout,
                 max_retries=self.max_retries,
             )

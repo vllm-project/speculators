@@ -277,9 +277,6 @@ async def worker(
             queue.task_done()
             continue
 
-        input_ids = item["input_ids"].tolist()
-        messages = item.get("messages")
-
         target_hidden_states_path = hidden_states_output_dir / f"hs_{idx}.safetensors"
 
         try:
@@ -287,8 +284,7 @@ async def worker(
                 hidden_states_path = await generate_hidden_states_async(
                     client,
                     model,
-                    input_ids,
-                    messages=messages,
+                    item,
                     timeout=request_timeout,
                     max_retries=max_retries,
                 )
@@ -298,7 +294,9 @@ async def worker(
                 )
                 if validate_outputs:
                     await asyncio.to_thread(
-                        check_safetensors_file, target_hidden_states_path, input_ids
+                        check_safetensors_file,
+                        target_hidden_states_path,
+                        item["input_ids"],
                     )
         except Exception as e:
             if fail_on_error:
