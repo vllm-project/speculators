@@ -504,10 +504,7 @@ def test_preprocess_batch_multimodal(tmp_path):
                 {
                     "role": "assistant",
                     "content": [
-                        {
-                            "type": "text",
-                            "text": "They are both blank.",
-                        },
+                        {"type": "text",  "text": "They are both blank."},
                     ],
                 },
             ],
