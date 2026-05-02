@@ -168,18 +168,16 @@ class BaseDataset(Dataset):
 
 
 class ArrowDataset(BaseDataset):
-    DATASET_TO_OPENAI_FIELDS = {
-        "input_ids": "input_ids",
-        "_vllm_messages": "messages",
-    }
-
     @classmethod
     def convert_to_openai(cls, dataset_item: dict):
-        return {
-            openai_field: dataset_item[dataset_field]
-            for dataset_field, openai_field in cls.DATASET_TO_OPENAI_FIELDS.items()
-            if dataset_field in dataset_item
-        }
+        openai_item = {}
+
+        openai_item["input_ids"] = dataset_item["input_ids"].tolist()
+
+        if "_vllm_messages" in dataset_item:
+            openai_item["messages"] = dataset_item["_vllm_messages"]
+
+        return openai_item
 
     def __init__(
         self,
