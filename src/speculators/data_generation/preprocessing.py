@@ -163,15 +163,15 @@ def _adapt_part_for_vllm(part: str | dict):
             if part.get("base64"):
                 expr = {"type": modality, "base64": "..."}
                 raise ValueError(
-                    f"Content part {expr} is not supported. "
-                    f"To avoid copying the image when saving the preprocessed dataset, "
+                    f"Content part {expr} is not supported. To avoid copying "
+                    f"the {modality} when saving the preprocessed dataset, "
                     f"please express {modality} inputs using file paths or URLs."
                 )
             if part.get(modality):
                 expr = {"type": modality, modality: "..."}
                 raise ValueError(
-                    f"Content part {expr} is not supported. "
-                    f"To avoid copying the image when saving the preprocessed dataset, "
+                    f"Content part {expr} is not supported. The avoid copying "
+                    f"the {modality} when saving the preprocessed dataset, "
                     f"please express {modality} inputs using file paths or URLs."
                 )
 
