@@ -158,8 +158,10 @@ def setup_dummy_sharegpt4v_coco(coco_dir: Path):
     # Use symlinks to avoid copying the image
     for raw_path in raw_dataset["image"]:
         image_path = coco_dir / raw_path.removeprefix("coco/")
-        image_path.parent.mkdir(parents=True, exist_ok=True)
-        image_path.symlink_to(dummy_image_path)
+
+        if not image_path.exists():
+            image_path.parent.mkdir(parents=True, exist_ok=True)
+            image_path.symlink_to(dummy_image_path)
 
 
 def run_prepare_data(
