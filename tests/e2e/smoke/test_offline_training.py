@@ -155,4 +155,5 @@ def run_offline_e2e(
             max_tokens=max_tokens,
             ignore_eos=ignore_eos,
             acceptance_thresholds=acceptance_thresholds,
+            **(vllm_kwargs or {}),
         )
