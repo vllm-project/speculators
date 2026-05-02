@@ -327,12 +327,19 @@ async def _feed_queue(to_process, dataset, queue, cancel_event):
     for i in to_process:
         if cancel_event.is_set():
             break
+
         item = dataset[i]
+
+        partial_item = {"idx": i}
+        for k in ("input_ids", "_vllm_messages"):
+            if k in item:
+                partial_item[k] = item[k]
+
         # Check cancel_event while waiting for queue space to avoid
         # deadlocking when all workers have died.
         while not cancel_event.is_set():
             try:
-                queue.put_nowait({"idx": i, "input_ids": item["input_ids"]})
+                queue.put_nowait(partial_item)
                 break
             except asyncio.QueueFull:
                 await asyncio.sleep(0.1)
