@@ -357,6 +357,8 @@ def _get_input_ids_loss_mask(
     max_length: int,
     assistant_pattern: str | Pattern[str] | None,
 ):
+    normalized_conv = _adapt_conv_for_hf(normalized_conv, processor)
+
     if assistant_pattern is None:
         # HF assistant token mask
         encoded_any = processor.apply_chat_template(
