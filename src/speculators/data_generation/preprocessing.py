@@ -165,14 +165,14 @@ def _adapt_part_for_vllm(part: str | dict):
                 raise ValueError(
                     f"Content part {expr} is not supported. "
                     f"To avoid copying the image when saving the preprocessed dataset, "
-                    f"please express {modality} inputs using file URLs."
+                    f"please express {modality} inputs using file paths or URLs."
                 )
             if part.get(modality):
                 expr = {"type": modality, modality: "..."}
                 raise ValueError(
                     f"Content part {expr} is not supported. "
                     f"To avoid copying the image when saving the preprocessed dataset, "
-                    f"please express {modality} inputs using file URLs."
+                    f"please express {modality} inputs using file paths or URLs."
                 )
 
             expr = {"type": modality} | {k: "..." for k in part if k != "type"}
