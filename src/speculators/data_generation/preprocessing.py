@@ -387,7 +387,7 @@ def _get_input_ids_loss_mask(
         "return_offsets_mapping": True,
         "max_length": max_length,
         "truncation": True,
-        "add_special_tokens": False,
+        "add_special_tokens": isinstance(processor, ProcessorMixin),
     }
 
     if isinstance(processor, ProcessorMixin):
