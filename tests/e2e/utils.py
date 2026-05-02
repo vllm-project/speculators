@@ -137,6 +137,7 @@ def launch_vllm_server_context(*args, **kwargs):
 
 def run_prepare_data(
     model: str,
+    data: str,
     data_path: Path,
     max_samples: int = 50,
     seq_length: int = 512,
@@ -149,7 +150,7 @@ def run_prepare_data(
         "--model",
         model,
         "--data",
-        "sharegpt",
+        data,
         "--output",
         str(data_path),
         "--max-samples",

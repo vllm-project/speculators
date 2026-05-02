@@ -82,7 +82,7 @@ def run_offline_e2e(
     save_path = tmp_path / "checkpoints"
 
     # Step 1: Prepare data
-    run_prepare_data(model, data_path, max_samples, seq_length)
+    run_prepare_data(model, "sharegpt", data_path, max_samples, seq_length)
 
     with launch_vllm_server_context(
         model,

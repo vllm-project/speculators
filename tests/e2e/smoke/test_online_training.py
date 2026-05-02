@@ -55,7 +55,7 @@ def run_online_e2e(
     save_path = tmp_path / "checkpoints"
 
     # Step 1: Prepare data
-    run_prepare_data(model, data_path, max_samples, seq_length)
+    run_prepare_data(model, "sharegpt", data_path, max_samples, seq_length)
 
     hidden_states_path = str(tmp_path / "hidden_states")
     with launch_vllm_server_context(
