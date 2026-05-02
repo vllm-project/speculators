@@ -107,6 +107,16 @@ def standardize_data_v1(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def build_client_item(dataset_item: dict) -> ClientItem:
+    out_dict = {}
+    out_dict["input_ids"] = dataset_item["input_ids"].tolist()
+
+    if "_vllm_messages" in dataset_item:
+        out_dict["messages"] = dataset_item["_vllm_messages"]
+
+    return cast("ClientItem", out_dict)
+
+
 class BaseDataset(Dataset):
     def __init__(
         self,
@@ -169,16 +179,6 @@ class BaseDataset(Dataset):
 
 
 class ArrowDataset(BaseDataset):
-    @classmethod
-    def build_client_item(cls, dataset_item: dict) -> ClientItem:
-        out_dict = {}
-        out_dict["input_ids"] = dataset_item["input_ids"].tolist()
-
-        if "_vllm_messages" in dataset_item:
-            out_dict["messages"] = dataset_item["_vllm_messages"]
-
-        return cast("ClientItem", out_dict)
-
     def __init__(
         self,
         max_len: int,
@@ -270,7 +270,7 @@ class ArrowDataset(BaseDataset):
             self._setup_client()
 
         dataset_item = self.data[index]
-        client_item = self.build_client_item(dataset_item)
+        client_item = build_client_item(dataset_item)
 
         try:
             hs_filepath = generate_hidden_states(

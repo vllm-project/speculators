@@ -31,7 +31,7 @@ from speculators.data_generation.vllm_client import (
     DEFAULT_REQUEST_TIMEOUT,
     generate_hidden_states_async,
 )
-from speculators.train.data import ArrowDataset
+from speculators.train.data import build_client_item
 from speculators.train.logger import setup_root_logger
 
 logger = logging.getLogger(__name__)
@@ -328,7 +328,7 @@ async def _feed_queue(to_process, dataset, queue, cancel_event):
             break
 
         dataset_item = dataset[i]
-        client_item = ArrowDataset.build_client_item(dataset_item) | {"idx": i}
+        client_item = build_client_item(dataset_item) | {"idx": i}
 
         # Check cancel_event while waiting for queue space to avoid
         # deadlocking when all workers have died.
