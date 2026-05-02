@@ -143,7 +143,7 @@ def _adapt_conv_for_hf(normalized_conv: list[dict], processor: ProcessorLike):
     return [_adapt_turn_for_hf(turn, processor) for turn in normalized_conv]
 
 
-def _hf_to_vllm_part(part: str | dict):
+def _adapt_part_for_vllm(part: str | dict):
     if isinstance(part, str):
         return {"type": "text", "text": part}
 
@@ -178,19 +178,19 @@ def _hf_to_vllm_part(part: str | dict):
             expr = {"type": modality} | {k: "..." for k in part if k != "type"}
             raise NotImplementedError(f"Unknown content part: {expr}")
 
-    expr = {k: "..." for k in part}
+    expr = dict.fromkeys(part.keys(), "...")
     raise NotImplementedError(f"Unknown content part: {expr}")
 
 
-def _hf_to_vllm_turn(turn: dict):
+def _adapt_turn_for_vllm(turn: dict):
     if isinstance(turn["content"], str):
         return turn
 
-    return turn | {"content": [_hf_to_vllm_part(part) for part in turn["content"]]}
+    return turn | {"content": [_adapt_part_for_vllm(part) for part in turn["content"]]}
 
 
-def _hf_to_vllm_conv(normalized_conv: list[dict]):
-    return [_hf_to_vllm_turn(turn) for turn in normalized_conv]
+def _adapt_conv_for_vllm(normalized_conv: list[dict]):
+    return [_adapt_turn_for_vllm(turn) for turn in normalized_conv]
 
 
 def _supports_assistant_mask(processor: ProcessorLike) -> bool:
@@ -501,7 +501,7 @@ def _preprocess_batch(
         results["seq_len"].append(len(input_ids))
 
         if "_vllm_messages" in results:
-            results["_vllm_messages"].append(_hf_to_vllm_conv(normalized_conv))
+            results["_vllm_messages"].append(_adapt_conv_for_vllm(normalized_conv))
 
     return results
 

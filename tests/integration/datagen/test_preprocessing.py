@@ -11,9 +11,9 @@ from PIL import Image
 
 from speculators.data_generation.preprocessing import (
     _adapt_conv_for_hf,
+    _adapt_conv_for_vllm,
     _create_loss_mask_from_offsets,
     _detect_assistant_pattern,
-    _hf_to_vllm_conv,
     _load_processor,
     _normalize_conversation,
     _preprocess_batch,
@@ -86,8 +86,8 @@ def test_normalize_conversation_unknown_role():
 @pytest.mark.sanity
 def test_adapt_conv_for_hf_text_only_processor():
     """
-    Test converting from normalized conversation to HF-format with
-    a text-only processor (i.e. tokenizer).
+    Test converting from normalized conversation to HF format
+    with a text-only processor (i.e. tokenizer).
     """
     processor = _load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
 
@@ -104,8 +104,8 @@ def test_adapt_conv_for_hf_text_only_processor():
 @pytest.mark.sanity
 def test_adapt_conv_for_hf_multimodal_processor():
     """
-    Test converting from normalized conversation to HF-format with
-    a multi-modal processor.
+    Test converting from normalized conversation to HF format
+    with a multi-modal processor.
     """
     processor = _load_processor(MM_MODEL_REPO, trust_remote_code=True)
 
@@ -144,12 +144,12 @@ def test_adapt_conv_for_hf_multimodal_processor():
     ]
 
 
-# Tests for _hf_to_vllm_conv
+# Tests for _adapt_conv_for_vllm
 @pytest.mark.sanity
-def test_hf_to_vllm_all_content_formats():
+def test_adapt_conv_for_vllm_all_content_formats():
     """
-    Test converting from HF-format to vLLM-format messages with
-    each supported content format.
+    Test converting from normalized conversation to vLLM format
+    with each supported content format.
     """
     conv: list[dict] = [
         {
@@ -166,7 +166,7 @@ def test_hf_to_vllm_all_content_formats():
             ],
         },
     ]
-    result = _hf_to_vllm_conv(conv)
+    result = _adapt_conv_for_vllm(conv)
 
     assert len(result) == 2
 
@@ -189,13 +189,13 @@ def test_hf_to_vllm_all_content_formats():
 
 
 @pytest.mark.sanity
-def test_hf_to_vllm_invalid_content_formats():
+def test_adapt_conv_for_vllm_invalid_content_formats():
     """
-    Test converting from HF-format to vLLM-format messages with
-    unsupported content formats.
+    Test converting from normalized conversation to vLLM format
+    with unsupported content formats.
     """
     with pytest.raises(ValueError, match=r"'image':.* is not supported"):
-        _hf_to_vllm_conv(
+        _adapt_conv_for_vllm(
             [
                 {
                     "role": "assistant",
@@ -207,7 +207,7 @@ def test_hf_to_vllm_invalid_content_formats():
         )
 
     with pytest.raises(ValueError, match=r"'base64':.* is not supported"):
-        _hf_to_vllm_conv(
+        _adapt_conv_for_vllm(
             [
                 {
                     "role": "assistant",
