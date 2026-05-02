@@ -10,21 +10,38 @@ docs/user_guide/tutorials/train_eagle3_online.md:
 
 from pathlib import Path
 
+import pytest
+
 from tests.e2e.smoke.test_online_training import run_online_e2e
 from tests.utils import requires_cadence
 
 
 @requires_cadence("nightly")
-def test_online_regression(tmp_path: Path, prompts):
+@pytest.mark.parametrize(
+    ("model", "dataset", "acceptance_thresholds"),
+    [
+        ("Qwen/Qwen3-8B", "sharegpt", [0.4, 0.1, 0.01]),
+        ("Qwen/Qwen3-VL-2B-Instruct", "sharegpt4v_coco", [0.4, 0.1, 0.01]),
+    ],
+)
+def test_online_regression(
+    tmp_path: Path,
+    model: str,
+    dataset: str,
+    acceptance_thresholds: list[float],
+    prompts: list[list[dict[str, str]]],
+):
     run_online_e2e(
         tmp_path,
-        "Qwen/Qwen3-8B",
+        model,
+        dataset,
         max_samples=5000,
         seq_length=8192,
         vllm_gpu_util=0.75,
+        vllm_enforce_eager=dataset == "sharegpt4v_coco",
         epochs=3,
         prompts=prompts,
-        acceptance_thresholds=[0.4, 0.1, 0.01],
+        acceptance_thresholds=acceptance_thresholds,
         log_freq=50,
         train_timeout=45 * 60,  # 45 mins
     )

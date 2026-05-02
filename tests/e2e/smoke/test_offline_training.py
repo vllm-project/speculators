@@ -62,6 +62,7 @@ def test_offline_smoke(
         dataset=dataset,
         prompts=prompts,
         vllm_gpu_util=0.9,
+        vllm_enforce_eager=dataset == "sharegpt4v_coco",
         speculator_type=speculator_type,
         extra_train_args=extra_train_args,
         target_layer_ids=target_layer_ids,
@@ -75,6 +76,7 @@ def run_offline_e2e(
     max_samples: int = 50,
     seq_length: int = 512,
     vllm_gpu_util: float = 0.5,
+    vllm_enforce_eager: bool = False,
     port: int = 8321,
     draft_vocab_size: int = 8192,
     epochs: int = 1,
@@ -105,6 +107,7 @@ def run_offline_e2e(
         max_model_len=seq_length + 1,
         gpu_memory_utilization=vllm_gpu_util,
         target_layer_ids=target_layer_ids,
+        enforce_eager=vllm_enforce_eager,
     ):
         # Step 2: Generate hidden states offline
         run_data_generation_offline(
