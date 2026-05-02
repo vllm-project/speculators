@@ -13,8 +13,8 @@ from pathlib import Path
 
 import pytest
 
+from speculators.data_generation.configs import get_coco_dir
 from tests.e2e.smoke.test_offline_training import run_offline_e2e
-from tests.e2e.utils import setup_dummy_sharegpt4v_coco
 from tests.utils import requires_cadence
 
 
@@ -35,10 +35,12 @@ def test_offline_regression(
     prompts: list[list[dict[str, str]]],
 ):
     if dataset == "sharegpt4v_coco":
-        monkeypatch.setenv("COCO_DIR", str(tmp_path / "coco"))
-        setup_dummy_sharegpt4v_coco(tmp_path / "coco")
+        coco_dir = get_coco_dir()
 
-        vllm_media_path = str(tmp_path / "coco")
+        if not Path(coco_dir).exists():
+            pytest.skip(f"Cannot find COCO dataset at {coco_dir}")
+
+        vllm_media_path = coco_dir
     else:
         vllm_media_path = None
 

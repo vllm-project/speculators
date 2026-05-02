@@ -54,10 +54,12 @@ def test_offline_smoke(
     target_layer_ids: list[int] | None,
 ):
     if dataset == "sharegpt4v_coco":
-        monkeypatch.setenv("COCO_DIR", str(tmp_path / "coco"))
-        setup_dummy_sharegpt4v_coco(tmp_path / "coco")
+        coco_dir = tmp_path / "coco"
 
-        vllm_media_path = str(tmp_path / "coco")
+        monkeypatch.setenv("COCO_DIR", str(coco_dir))
+        setup_dummy_sharegpt4v_coco(coco_dir)
+
+        vllm_media_path = str(coco_dir)
     else:
         vllm_media_path = None
 
