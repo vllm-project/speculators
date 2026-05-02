@@ -128,8 +128,11 @@ def _adapt_part_for_hf(part: str | dict, processor: ProcessorLike):
 
 
 def _adapt_turn_for_hf(turn: dict, processor: ProcessorLike):
-    if isinstance(turn["content"], str) and isinstance(processor, ProcessorMixin):
-        return turn | {"content": [_adapt_part_for_hf(turn["content"], processor)]}
+    if isinstance(turn["content"], str):
+        if isinstance(processor, ProcessorMixin):
+            return turn | {"content": [_adapt_part_for_hf(turn["content"], processor)]}
+
+        return turn
 
     return turn | {
         "content": [_adapt_part_for_hf(part, processor) for part in turn["content"]]
