@@ -227,12 +227,7 @@ def run_data_generation_offline(
 
     logger.info("Generating hidden states offline: {}", " ".join(datagen_cmd))
     result = subprocess.run(  # noqa: S603
-        datagen_cmd,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=False,
-        timeout=timeout,
-        env=os.environ.copy(),
+        datagen_cmd, stderr=subprocess.PIPE, text=True, check=False, timeout=timeout
     )
     assert result.returncode == 0, (
         f"data_generation_offline.py failed:\n{result.stderr}"
@@ -304,12 +299,7 @@ def run_training(
 
     logger.info("Running training: {}", " ".join(train_cmd))
     result = subprocess.run(  # noqa: S603
-        train_cmd,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=False,
-        timeout=timeout,
-        env=os.environ.copy(),
+        train_cmd, stderr=subprocess.PIPE, text=True, check=False, timeout=timeout
     )
     assert result.returncode == 0, f"train.py failed:\n{result.stderr}"
 
