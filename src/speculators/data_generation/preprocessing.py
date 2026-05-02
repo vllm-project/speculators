@@ -357,12 +357,12 @@ def _get_input_ids_loss_mask(
     max_length: int,
     assistant_pattern: str | Pattern[str] | None,
 ):
-    normalized_conv = _adapt_conv_for_hf(normalized_conv, processor)
+    hf_conv = _adapt_conv_for_hf(normalized_conv, processor)
 
     if assistant_pattern is None:
         # HF assistant token mask
         encoded_any = processor.apply_chat_template(
-            normalized_conv,
+            hf_conv,
             tokenize=True,
             add_generation_prompt=False,
             return_assistant_tokens_mask=True,
@@ -393,7 +393,7 @@ def _get_input_ids_loss_mask(
     if isinstance(processor, ProcessorMixin):
         if Version(TRANSFORMERS_VERSION) >= Version("5.4.0"):
             encoded_any = processor.apply_chat_template(
-                normalized_conv,
+                hf_conv,
                 tokenize=True,
                 add_generation_prompt=False,
                 return_dict=True,
@@ -401,7 +401,7 @@ def _get_input_ids_loss_mask(
             )
         else:
             encoded_any = processor.apply_chat_template(
-                normalized_conv,
+                hf_conv,
                 tokenize=True,
                 add_generation_prompt=False,
                 return_dict=True,
@@ -420,7 +420,7 @@ def _get_input_ids_loss_mask(
     else:
         # More optimized flow for text-only processors (i.e. tokenizers)
         formatted_text = processor.apply_chat_template(
-            normalized_conv,
+            hf_conv,
             tokenize=False,
             add_generation_prompt=False,
         )
