@@ -66,8 +66,8 @@ def parse_args():
         type=str,
         default=None,
         help=(
-            "HuggingFace model ID or local path for target model (default auto select)."
-            "For verification purposes only."
+            "HuggingFace model ID or local path for target model "
+            "(default auto select). For verification purposes only."
         ),
     )
     parser.add_argument(
@@ -113,7 +113,7 @@ def parse_args():
         type=int,
         default=32,
         help=(
-            "Number of active vLLM requests at a time."
+            "Number of active vLLM requests at a time. "
             "Note: number of async workers set to 2*concurrency"
         ),
     )
@@ -121,8 +121,8 @@ def parse_args():
         "--validate-outputs",
         action="store_true",
         help=(
-            "Load generated safetensor files and check output token ids match prompt"
-            " tokens and hidden states seq_len matches num tokens"
+            "Load generated safetensor files and check output token ids match "
+            "prompt tokens and hidden states seq_len matches num tokens"
         ),
     )
     parser.add_argument(
