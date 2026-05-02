@@ -592,7 +592,7 @@ def main(
     vllm_gpus: int = 2,
     # Data
     dataset: str = "sharegpt",
-    max_samples: int = 5000,
+    max_samples: int | None = None,
     seq_length: int = 8192,
     skip_data_prep: bool = False,
     # HF dataset
@@ -621,7 +621,7 @@ def main(
     # Checkpoint
     no_resume_from_checkpoint: bool = False,
     checkpoint_freq: int = 1,
-    save_best: bool = True,
+    save_best: bool = False,
     # Logging
     logger: str = "",
     run_name: Optional[str] = None,
