@@ -9,6 +9,7 @@ docs/user_guide/tutorials/train_eagle3_online.md:
 """
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -55,8 +56,10 @@ def test_online_smoke(
         model,
         dataset=dataset,
         prompts=prompts,
-        vllm_enforce_eager=vllm_enforce_eager,
-        vllm_media_path=vllm_media_path,
+        vllm_kwargs={
+            "enforce_eager": vllm_enforce_eager,
+            "allowed_local_media_path": vllm_media_path,
+        },
     )
 
 
@@ -66,9 +69,7 @@ def run_online_e2e(
     dataset: str,
     max_samples: int = 50,
     seq_length: int = 512,
-    vllm_gpu_util: float = 0.5,
-    vllm_enforce_eager: bool = False,
-    vllm_media_path: str | None = None,
+    vllm_kwargs: dict[str, Any] | None = None,
     port: int = 8321,
     draft_vocab_size: int = 8192,
     epochs: int = 1,
@@ -98,9 +99,7 @@ def run_online_e2e(
         port,
         hidden_states_path,
         max_model_len=seq_length + 1,
-        gpu_memory_utilization=vllm_gpu_util,
-        enforce_eager=vllm_enforce_eager,
-        allowed_local_media_path=vllm_media_path,
+        **(vllm_kwargs or {}),
     ):
         # Step 2: Train against live vLLM server
         run_training(
