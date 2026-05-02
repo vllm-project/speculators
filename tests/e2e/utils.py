@@ -11,6 +11,9 @@ from pathlib import Path
 from textwrap import indent
 
 from loguru import logger
+from PIL import Image
+
+from speculators.data_generation.preprocessing import load_raw_dataset
 
 __all__ = [
     "SCRIPTS_DIR",
@@ -135,15 +138,42 @@ def launch_vllm_server_context(*args, **kwargs):
         stop_vllm_server(process)
 
 
+def setup_dummy_sharegpt4v_coco(
+    coco_dir: Path,
+    max_samples: int = 50,
+    seed: int = 0,
+):
+    """Enable ShareGPT4V to be used without downloading the actual COCO dataset."""
+    coco_dir.mkdir(parents=True, exist_ok=True)
+
+    # In load_and_process_dataset, we shuffle and then
+    # select 3 * max_samples from the dataset
+    # We must ensure all sample filepaths can be loaded successfully
+    raw_dataset, normalize_fn = load_raw_dataset("sharegpt4v_coco")
+    raw_dataset = raw_dataset.shuffle(seed=seed)
+    raw_dataset = raw_dataset.select(range(3 * max_samples))
+
+    dummy_image = Image.new("RGB", (256, 256))
+    dummy_image_path = coco_dir / "dummy.png"
+    dummy_image.save(dummy_image_path)
+
+    # Use symlinks to avoid copying the image
+    for raw_path in raw_dataset["image"]:
+        image_path = coco_dir / raw_path.removeprefix("coco/")
+        image_path.parent.mkdir(parents=True, exist_ok=True)
+        image_path.symlink_to(dummy_image_path)
+
+
 def run_prepare_data(
     model: str,
     data: str,
     data_path: Path,
     max_samples: int = 50,
     seq_length: int = 512,
+    seed: int = 0,
     timeout: float | None = None,
 ):
-    """Tokenize ShareGPT data using prepare_data.py."""
+    """Tokenize data using prepare_data.py."""
     cmd = [
         sys.executable,
         str(SCRIPTS_DIR / "prepare_data.py"),
@@ -155,6 +185,8 @@ def run_prepare_data(
         str(data_path),
         "--max-samples",
         str(max_samples),
+        "--seed",
+        str(seed),
         "--seq-length",
         str(seq_length),
     ]
@@ -197,7 +229,12 @@ def run_data_generation_offline(
 
     logger.info("Generating hidden states offline: {}", " ".join(datagen_cmd))
     result = subprocess.run(  # noqa: S603
-        datagen_cmd, stderr=subprocess.PIPE, text=True, check=False, timeout=timeout
+        datagen_cmd,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+        timeout=timeout,
+        env=os.environ.copy(),
     )
     assert result.returncode == 0, (
         f"data_generation_offline.py failed:\n{result.stderr}"
@@ -269,7 +306,12 @@ def run_training(
 
     logger.info("Running training: {}", " ".join(train_cmd))
     result = subprocess.run(  # noqa: S603
-        train_cmd, stderr=subprocess.PIPE, text=True, check=False, timeout=timeout
+        train_cmd,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+        timeout=timeout,
+        env=os.environ.copy(),
     )
     assert result.returncode == 0, f"train.py failed:\n{result.stderr}"
 

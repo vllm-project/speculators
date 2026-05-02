@@ -19,34 +19,47 @@ from tests.e2e.utils import (
     run_prepare_data,
     run_training,
     run_vllm_engine,
+    setup_dummy_sharegpt4v_coco,
 )
 
-MODEL = "Qwen/Qwen3-0.6B"
+TEXT_MODEL = "Qwen/Qwen3-0.6B"
+MM_MODEL = "Qwen/Qwen3-VL-2B-Instruct"
 
 
 @pytest.mark.e2e
 @pytest.mark.slow
 @pytest.mark.parametrize(
-    ("speculator_type", "extra_train_args", "target_layer_ids"),
+    ("model", "dataset", "speculator_type", "extra_train_args", "target_layer_ids"),
     [
-        ("eagle3", [], None),  # Use default EAGLE layers
+        (TEXT_MODEL, "sharegpt", "eagle3", [], None),  # Use default EAGLE layers
         (
+            TEXT_MODEL,
+            "sharegpt",
             "dflash",
             ["--block-size", "8", "--max-anchors", "256", "--num-layers", "3"],
             [1, 13, 25],
         ),  # DFlash with 3 layers + verifier last layer
+        (MM_MODEL, "sharegpt4v_coco", "eagle3", [], None),  # Multimodal
     ],
 )
 def test_offline_smoke(
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    model: str,
+    dataset: str,
     prompts: list[list[dict[str, str]]],
     speculator_type: str,
     extra_train_args: list[str],
     target_layer_ids: list[int] | None,
 ):
+    if dataset == "sharegpt4v_coco":
+        monkeypatch.setenv("COCO_DIR", str(tmp_path / "coco"))
+        setup_dummy_sharegpt4v_coco(tmp_path / "coco")
+
     run_offline_e2e(
         tmp_path,
-        MODEL,
+        model,
+        dataset=dataset,
         prompts=prompts,
         vllm_gpu_util=0.9,
         speculator_type=speculator_type,
@@ -58,6 +71,7 @@ def test_offline_smoke(
 def run_offline_e2e(
     tmp_path: Path,
     model: str,
+    dataset: str,
     max_samples: int = 50,
     seq_length: int = 512,
     vllm_gpu_util: float = 0.5,
@@ -82,7 +96,7 @@ def run_offline_e2e(
     save_path = tmp_path / "checkpoints"
 
     # Step 1: Prepare data
-    run_prepare_data(model, "sharegpt", data_path, max_samples, seq_length)
+    run_prepare_data(model, dataset, data_path, max_samples, seq_length)
 
     with launch_vllm_server_context(
         model,

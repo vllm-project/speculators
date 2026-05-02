@@ -25,12 +25,13 @@ MODEL = "Qwen/Qwen3-0.6B"
 @pytest.mark.e2e
 @pytest.mark.slow
 def test_online_smoke(tmp_path: Path, prompts: list[list[dict[str, str]]]):
-    run_online_e2e(tmp_path, MODEL, prompts=prompts)
+    run_online_e2e(tmp_path, MODEL, dataset="sharegpt", prompts=prompts)
 
 
 def run_online_e2e(
     tmp_path: Path,
     model: str,
+    dataset: str,
     max_samples: int = 50,
     seq_length: int = 512,
     vllm_gpu_util: float = 0.5,
@@ -55,7 +56,7 @@ def run_online_e2e(
     save_path = tmp_path / "checkpoints"
 
     # Step 1: Prepare data
-    run_prepare_data(model, "sharegpt", data_path, max_samples, seq_length)
+    run_prepare_data(model, dataset, data_path, max_samples, seq_length)
 
     hidden_states_path = str(tmp_path / "hidden_states")
     with launch_vllm_server_context(

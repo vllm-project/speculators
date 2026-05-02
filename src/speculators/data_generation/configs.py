@@ -59,6 +59,7 @@ def _normalize_sharegpt4v_coco(example: dict) -> dict:
         state_str = "set to" if os.getenv("COCO_DIR") else "default"
 
         raise ValueError(
+            f"No image found at <{image_path}>. "
             f"Please download COCO 2017 Train Images from "
             f"<http://images.cocodataset.org/zips/train2017.zip> and place the "
             f"extracted folder under `COCO_DIR` ({state_str}: `{coco_dir}`)."
