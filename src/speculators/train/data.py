@@ -8,7 +8,7 @@ import warnings
 from collections.abc import Callable
 from os import PathLike
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import openai
 import torch
@@ -20,6 +20,7 @@ from torch.utils.data import Dataset
 from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_REQUEST_TIMEOUT,
+    ClientItem,
     generate_hidden_states,
 )
 from speculators.train.noise_transforms import TransformTensors
@@ -169,15 +170,14 @@ class BaseDataset(Dataset):
 
 class ArrowDataset(BaseDataset):
     @classmethod
-    def convert_to_openai(cls, dataset_item: dict):
-        openai_item = {}
-
-        openai_item["input_ids"] = dataset_item["input_ids"].tolist()
+    def build_client_item(cls, dataset_item: dict) -> ClientItem:
+        out_dict = {}
+        out_dict["input_ids"] = dataset_item["input_ids"].tolist()
 
         if "_vllm_messages" in dataset_item:
-            openai_item["messages"] = dataset_item["_vllm_messages"]
+            out_dict["messages"] = dataset_item["_vllm_messages"]
 
-        return openai_item
+        return cast("ClientItem", out_dict)
 
     def __init__(
         self,
@@ -270,13 +270,13 @@ class ArrowDataset(BaseDataset):
             self._setup_client()
 
         dataset_item = self.data[index]
-        openai_item = self.convert_to_openai(dataset_item)
+        client_item = self.build_client_item(dataset_item)
 
         try:
             hs_filepath = generate_hidden_states(
                 self.client,  # type:ignore[arg-type]
                 self.model,  # type:ignore[arg-type]
-                openai_item,
+                client_item,
                 timeout=self.request_timeout,
                 max_retries=self.max_retries,
             )

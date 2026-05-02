@@ -2,11 +2,12 @@ import asyncio
 import functools
 import logging
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypedDict
 
 import openai
 from openai.types.chat import ChatCompletion, ChatCompletionMessageParam
 from openai.types.completion import Completion
+from typing_extensions import NotRequired
 
 if TYPE_CHECKING:
     from collections.abc import Coroutine
@@ -108,11 +109,16 @@ def extract_output(
     return response.kv_transfer_params.get("hidden_states_path")
 
 
+class ClientItem(TypedDict):
+    input_ids: list[int]
+    messages: NotRequired[list[ChatCompletionMessageParam]]
+
+
 @with_retries
 async def generate_hidden_states_async(
     client: openai.AsyncClient,
     model: str,
-    dataset_item: dict,
+    client_item: ClientItem,
     *,
     timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
 ) -> str:
@@ -128,8 +134,8 @@ async def generate_hidden_states_async(
                  instead of passing `token_ids` to Completions API.
         timeout: Timeout in seconds for each request attempt. None for no timeout.
     """
-    token_ids: list[int] = dataset_item["input_ids"]
-    messages: list[ChatCompletionMessageParam] | None = dataset_item.get("messages")
+    token_ids = client_item["input_ids"]
+    messages = client_item.get("messages")
 
     coro: Coroutine[Any, Any, Completion | ChatCompletion]
     if messages is None:
@@ -162,7 +168,7 @@ async def generate_hidden_states_async(
 def generate_hidden_states(
     client: openai.Client,
     model: str,
-    dataset_item: dict,
+    client_item: ClientItem,
     *,
     timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
 ) -> str:
@@ -170,8 +176,8 @@ def generate_hidden_states(
     Runs decode w/ max_tokens 1 to generate hidden states and returns path to
     hidden states file.
     """
-    token_ids: list[int] = dataset_item["input_ids"]
-    messages: list[ChatCompletionMessageParam] | None = dataset_item.get("messages")
+    token_ids = client_item["input_ids"]
+    messages = client_item.get("messages")
 
     res: Completion | ChatCompletion
     if messages is None:

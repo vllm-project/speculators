@@ -328,13 +328,13 @@ async def _feed_queue(to_process, dataset, queue, cancel_event):
             break
 
         dataset_item = dataset[i]
-        openai_item = ArrowDataset.convert_to_openai(dataset_item) | {"idx": i}
+        client_item = ArrowDataset.build_client_item(dataset_item) | {"idx": i}
 
         # Check cancel_event while waiting for queue space to avoid
         # deadlocking when all workers have died.
         while not cancel_event.is_set():
             try:
-                queue.put_nowait(openai_item)
+                queue.put_nowait(client_item)
                 break
             except asyncio.QueueFull:
                 await asyncio.sleep(0.1)
