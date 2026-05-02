@@ -93,7 +93,10 @@ def extract_output(
     response: Completion | ChatCompletion,
     token_ids: list[int],
 ) -> str:
-    prompt_token_ids = getattr(response.choices[0], "prompt_token_ids", None)
+    if isinstance(response, Completion):
+        prompt_token_ids = getattr(response.choices[0], "prompt_token_ids", None)
+    else:
+        prompt_token_ids = getattr(response, "prompt_token_ids", None)
 
     if prompt_token_ids is None:
         raise InvalidResponseError("Response missing prompt_token_ids")
