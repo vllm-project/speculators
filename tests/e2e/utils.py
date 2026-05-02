@@ -310,6 +310,8 @@ def run_vllm_engine(
     model_path: str,
     tmp_path: Path,
     prompts: list[list[dict[str, str]]],
+    max_model_len: int = 1024,
+    gpu_memory_utilization: float = 0.8,
     enforce_eager: bool = True,
     allowed_local_media_path: str | None = None,
     disable_compile_cache: bool = False,
@@ -340,8 +342,8 @@ def run_vllm_engine(
         json.dumps(
             {
                 "model": model_path,
-                "max_model_len": 1024,
-                "gpu_memory_utilization": 0.8,
+                "max_model_len": max_model_len,
+                "gpu_memory_utilization": gpu_memory_utilization,
                 "enforce_eager": enforce_eager,
                 "allowed_local_media_path": allowed_local_media_path,
             }
