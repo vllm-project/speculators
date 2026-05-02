@@ -159,6 +159,18 @@ def _hf_to_vllm_part(part: str | dict):
                 return {"type": f"{modality}_url", f"{modality}_url": {"url": file_url}}
             if url := part.get("url"):
                 return {"type": f"{modality}_url", f"{modality}_url": {"url": url}}
+            if part.get("base64"):
+                raise ValueError(
+                    f"base64 content is not supported. "
+                    f"To avoid copying the image when saving the preprocessed dataset, "
+                    f"please express {modality} inputs using file URLs."
+                )
+            if obj := part.get(modality):
+                raise ValueError(
+                    f"{type(obj).__name__} content is not supported. "
+                    f"To avoid copying the image when saving the preprocessed dataset, "
+                    f"please express {modality} inputs using file URLs."
+                )
 
             fields_expr = {f"part.{k}" for k in part if k != "type"}
 

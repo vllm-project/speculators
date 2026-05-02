@@ -194,11 +194,7 @@ def test_hf_to_vllm_invalid_content_formats():
     Test converting from HF-format to vLLM-format messages with
     unsupported content formats.
     """
-    # Image object is not supported to discourage copying images
-    # when saving the preprocessed dataset
-    with pytest.raises(
-        NotImplementedError, match=r"No handler .* for fields: \{'part\.image'\}"
-    ):
+    with pytest.raises(ValueError, match="Image content is not supported"):
         _hf_to_vllm_conv(
             [
                 {
@@ -210,11 +206,7 @@ def test_hf_to_vllm_invalid_content_formats():
             ]
         )
 
-    # Image base64 is not supported to discourage copying images
-    # when saving the preprocessed dataset
-    with pytest.raises(
-        NotImplementedError, match=r"No handler .* for fields: \{'part\.base64'\}"
-    ):
+    with pytest.raises(ValueError, match="base64 content is not supported"):
         _hf_to_vllm_conv(
             [
                 {
@@ -504,7 +496,7 @@ def test_preprocess_batch_multimodal(tmp_path):
                 {
                     "role": "assistant",
                     "content": [
-                        {"type": "text",  "text": "They are both blank."},
+                        {"type": "text", "text": "They are both blank."},
                     ],
                 },
             ],
