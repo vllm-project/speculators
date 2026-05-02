@@ -154,7 +154,7 @@ async def generate_hidden_states_async(
             model=model,
             messages=messages,
             max_tokens=1,
-            extra_body={"return_token_ids": True},
+            extra_body={"add_generation_prompt": False, "return_token_ids": True},
             timeout=timeout,
         )
 
@@ -196,7 +196,7 @@ def generate_hidden_states(
             model=model,
             messages=messages,
             max_tokens=1,
-            extra_body={"return_token_ids": True},
+            extra_body={"add_generation_prompt": False, "return_token_ids": True},
             timeout=timeout,
         )
 
