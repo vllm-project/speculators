@@ -57,10 +57,8 @@ def test_offline_smoke(
         monkeypatch.setenv("COCO_DIR", str(tmp_path / "coco"))
         setup_dummy_sharegpt4v_coco(tmp_path / "coco")
 
-        vllm_enforce_eager = True
         vllm_media_path = str(tmp_path / "coco")
     else:
-        vllm_enforce_eager = False
         vllm_media_path = None
 
     run_offline_e2e(
@@ -70,7 +68,6 @@ def test_offline_smoke(
         prompts=prompts,
         vllm_kwargs={
             "gpu_memory_utilization": 0.9,
-            "enforce_eager": vllm_enforce_eager,
             "allowed_local_media_path": vllm_media_path,
         },
         speculator_type=speculator_type,

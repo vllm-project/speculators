@@ -72,7 +72,7 @@ def launch_vllm_server(
     max_model_len: int = 513,
     gpu_memory_utilization: float = 0.5,
     target_layer_ids: list[int] | None = None,
-    enforce_eager: bool = False,
+    enforce_eager: bool = True,
     allowed_local_media_path: str | None = None,
 ) -> subprocess.Popen:
     """Launch a vLLM server configured for hidden-state extraction.
