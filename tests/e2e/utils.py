@@ -153,7 +153,7 @@ def setup_dummy_sharegpt4v_coco(
     """Enable ShareGPT4V to be used without downloading the actual COCO dataset."""
     coco_dir.mkdir(parents=True, exist_ok=True)
 
-    # In load_and_process_dataset, we shuffle and then
+    # In load_and_preprocess_dataset, we shuffle and then
     # select 3 * max_samples from the dataset
     # We must ensure all sample filepaths can be loaded successfully
     raw_dataset, normalize_fn = load_raw_dataset("sharegpt4v_coco")
