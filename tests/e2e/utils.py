@@ -145,26 +145,15 @@ def launch_vllm_server_context(*args, **kwargs):
         stop_vllm_server(process)
 
 
-def setup_dummy_sharegpt4v_coco(
-    coco_dir: Path,
-    max_samples: int = 50,
-    seed: int = 0,
-):
+def setup_dummy_sharegpt4v_coco(coco_dir: Path):
     """Enable ShareGPT4V to be used without downloading the actual COCO dataset."""
     coco_dir.mkdir(parents=True, exist_ok=True)
-
-    # In load_and_preprocess_dataset, we shuffle and then
-    # select 3 * max_samples from the dataset
-    # We must ensure all sample filepaths can be loaded successfully
-    raw_dataset, normalize_fn = load_raw_dataset("sharegpt4v_coco")
-    raw_dataset = raw_dataset.shuffle(seed=seed)
-
-    if max_samples is not None and len(raw_dataset) > 3 * max_samples:
-        raw_dataset = raw_dataset.select(range(3 * max_samples))
 
     dummy_image = Image.new("RGB", (256, 256))
     dummy_image_path = coco_dir / "dummy.png"
     dummy_image.save(dummy_image_path)
+
+    raw_dataset, normalize_fn = load_raw_dataset("sharegpt4v_coco")
 
     # Use symlinks to avoid copying the image
     for raw_path in raw_dataset["image"]:
