@@ -88,8 +88,11 @@ def with_retries(fn):
     return sync_wrapper
 
 
-def extract_output(completion, token_ids) -> str:
-    prompt_token_ids = getattr(completion.choices[0], "prompt_token_ids", None)
+def extract_output(
+    response: Completion | ChatCompletion,
+    token_ids: list[int],
+) -> str:
+    prompt_token_ids = getattr(response.choices[0], "prompt_token_ids", None)
 
     if prompt_token_ids is None:
         raise InvalidResponseError("Response missing prompt_token_ids")
@@ -99,10 +102,10 @@ def extract_output(completion, token_ids) -> str:
             f"Prompt token IDs mismatch: expected {token_ids}, got {prompt_token_ids}"
         )
 
-    if not hasattr(completion, "kv_transfer_params"):
+    if not hasattr(response, "kv_transfer_params"):
         raise InvalidResponseError("Response missing kv_transfer_params")
 
-    return completion.kv_transfer_params.get("hidden_states_path")
+    return response.kv_transfer_params.get("hidden_states_path")
 
 
 @with_retries
@@ -144,6 +147,7 @@ async def generate_hidden_states_async(
             timeout=timeout,
         )
 
+    res: Completion | ChatCompletion
     if timeout is not None:
         res = await asyncio.wait_for(coro, timeout=timeout)
     else:
