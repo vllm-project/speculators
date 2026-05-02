@@ -159,7 +159,7 @@ def setup_dummy_sharegpt4v_coco(
     raw_dataset, normalize_fn = load_raw_dataset("sharegpt4v_coco")
     raw_dataset = raw_dataset.shuffle(seed=seed)
 
-    if max_samples is not None and len(raw_dataset) > 3 * max_samples
+    if max_samples is not None and len(raw_dataset) > 3 * max_samples:
         raw_dataset = raw_dataset.select(range(3 * max_samples))
 
     dummy_image = Image.new("RGB", (256, 256))
