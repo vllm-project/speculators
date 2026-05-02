@@ -10,6 +10,7 @@ from datasets import Dataset as HFDataset
 from PIL import Image
 
 from speculators.data_generation.preprocessing import (
+    _adapt_conv_for_hf,
     _create_loss_mask_from_offsets,
     _detect_assistant_pattern,
     _hf_to_vllm_conv,
@@ -81,6 +82,68 @@ def test_normalize_conversation_unknown_role():
     assert result[1]["role"] == "assistant"
 
 
+# Tests for _adapt_conv_for_hf
+@pytest.mark.sanity
+def test_adapt_conv_for_hf_text_only_processor():
+    """
+    Test converting from normalized conversation to HF-format with
+    a text-only processor (i.e. tokenizer).
+    """
+    processor = _load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
+
+    conv: list[dict] = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": ["Hello"]},
+        {"role": "assistant", "content": "Hi!"},
+    ]
+    result = _adapt_conv_for_hf(conv, processor)
+
+    assert result == conv
+
+
+@pytest.mark.sanity
+def test_adapt_conv_for_hf_multimodal_processor():
+    """
+    Test converting from normalized conversation to HF-format with
+    a multi-modal processor.
+    """
+    processor = _load_processor(MM_MODEL_REPO, trust_remote_code=True)
+
+    conv: list[dict] = [
+        {
+            "role": "system",
+            "content": "You are a helpful assistant.",
+        },
+        {
+            "role": "user",
+            "content": ["Hello", {"type": "image", "path": "/path/to/img"}],
+        },
+        {
+            "role": "assistant",
+            "content": "Hi!",
+        },
+    ]
+    result = _adapt_conv_for_hf(conv, processor)
+
+    assert result == [
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": "You are a helpful assistant."}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Hello"},
+                {"type": "image", "path": "/path/to/img"},
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "Hi!"}],
+        },
+    ]
+
+
 # Tests for _hf_to_vllm_conv
 @pytest.mark.sanity
 def test_hf_to_vllm_all_content_formats():
@@ -111,16 +174,18 @@ def test_hf_to_vllm_all_content_formats():
     assert result[0]["content"] == "You are a helpful assistant."
 
     assert result[1]["role"] == "assistant"
-    assert result[1]["content"][0] == {"type": "text", "text": "Hello,"}
-    assert result[1]["content"][1] == {"type": "text", "text": "I am"}
-    assert result[1]["content"][2] == {
-        "type": "image_url",
-        "image_url": {"url": "file:///path/to/img"},
-    }
-    assert result[1]["content"][3] == {
-        "type": "image_url",
-        "image_url": {"url": "http://path/to/img"},
-    }
+    assert result[1]["content"] == [
+        {"type": "text", "text": "Hello,"},
+        {"type": "text", "text": "I am"},
+        {
+            "type": "image_url",
+            "image_url": {"url": "file:///path/to/img"},
+        },
+        {
+            "type": "image_url",
+            "image_url": {"url": "http://path/to/img"},
+        },
+    ]
 
 
 @pytest.mark.sanity
@@ -397,30 +462,19 @@ def test_preprocess_batch_multimodal(tmp_path):
             [
                 {
                     "role": "user",
-                    "content": [
-                        {"type": "text", "text": "Hello, how are you?"},
-                    ],
+                    "content": "Hello, how are you?",
                 },
                 {
                     "role": "assistant",
-                    "content": [
-                        {"type": "text", "text": "I am a helpful assistant."},
-                    ],
+                    "content": "I am a helpful assistant.",
                 },
                 {
                     "role": "user",
-                    "content": [
-                        {"type": "text", "text": "What is the capital of France?"},
-                    ],
+                    "content": "What is the capital of France?",
                 },
                 {
                     "role": "assistant",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "The capital of France is Paris.",
-                        },
-                    ],
+                    "content": "The capital of France is Paris.",
                 },
             ],
             [

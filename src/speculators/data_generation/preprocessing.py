@@ -120,6 +120,26 @@ def _normalize_conversation(
     return normalized
 
 
+def _adapt_part_for_hf(part: str | dict, processor: ProcessorLike):
+    if isinstance(part, str) and isinstance(processor, ProcessorMixin):
+        return {"type": "text", "text": part}
+
+    return part
+
+
+def _adapt_turn_for_hf(turn: dict, processor: ProcessorLike):
+    if isinstance(turn["content"], str) and isinstance(processor, ProcessorMixin):
+        return turn | {"content": [_adapt_part_for_hf(turn["content"], processor)]}
+
+    return turn | {
+        "content": [_adapt_part_for_hf(part, processor) for part in turn["content"]]
+    }
+
+
+def _adapt_conv_for_hf(normalized_conv: list[dict], processor: ProcessorLike):
+    return [_adapt_turn_for_hf(turn, processor) for turn in normalized_conv]
+
+
 def _hf_to_vllm_part(part: str | dict):
     if isinstance(part, str):
         return {"type": "text", "text": part}
@@ -158,19 +178,15 @@ def _hf_to_vllm_conv(normalized_conv: list[dict]):
     return [_hf_to_vllm_turn(turn) for turn in normalized_conv]
 
 
-def _get_assistant_mask_test_conv(processor: ProcessorLike):
-    if isinstance(processor, ProcessorMixin):
-        return [{"role": "assistant", "content": [{"type": "text", "text": "test"}]}]
-
-    return [{"role": "assistant", "content": "test"}]
-
-
 def _supports_assistant_mask(processor: ProcessorLike) -> bool:
     """Check if processor truly supports HF assistant token mask.
 
     Must return a non-zero mask for a conversation containing an assistant message.
     """
-    test_conv = _get_assistant_mask_test_conv(processor)
+    test_conv = _adapt_conv_for_hf(
+        [{"role": "assistant", "content": "test"}],
+        processor,
+    )
 
     try:
         res_any = processor.apply_chat_template(
@@ -193,36 +209,21 @@ def _supports_assistant_mask(processor: ProcessorLike) -> bool:
         return False
 
 
-def _get_assistant_pattern_test_conv(processor: ProcessorLike):
-    if isinstance(processor, ProcessorMixin):
-        return [
-            {"role": "user", "content": [{"type": "text", "text": "USER_MSG_1"}]},
-            {
-                "role": "assistant",
-                "content": [{"type": "text", "text": "ASSISTANT_MSG_1"}],
-            },
-            {"role": "user", "content": [{"type": "text", "text": "USER_MSG_2"}]},
-            {
-                "role": "assistant",
-                "content": [{"type": "text", "text": "ASSISTANT_MSG_2"}],
-            },
-        ]
-
-    return [
-        {"role": "user", "content": "USER_MSG_1"},
-        {"role": "assistant", "content": "ASSISTANT_MSG_1"},
-        {"role": "user", "content": "USER_MSG_2"},
-        {"role": "assistant", "content": "ASSISTANT_MSG_2"},
-    ]
-
-
 def _detect_assistant_pattern(processor: ProcessorLike) -> str:
     """Auto-detect the assistant message pattern from the processor's chat template.
 
     Uses multi-turn conversation but extracts pattern from the LAST assistant
     message only.
     """
-    test_conv = _get_assistant_pattern_test_conv(processor)
+    test_conv = _adapt_conv_for_hf(
+        [
+            {"role": "user", "content": "USER_MSG_1"},
+            {"role": "assistant", "content": "ASSISTANT_MSG_1"},
+            {"role": "user", "content": "USER_MSG_2"},
+            {"role": "assistant", "content": "ASSISTANT_MSG_2"},
+        ],
+        processor,
+    )
 
     formatted = processor.apply_chat_template(
         test_conv, tokenize=False, add_generation_prompt=False
