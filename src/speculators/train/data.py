@@ -168,6 +168,19 @@ class BaseDataset(Dataset):
 
 
 class ArrowDataset(BaseDataset):
+    DATASET_TO_OPENAI_FIELDS = {
+        "input_ids": "input_ids",
+        "_vllm_messages": "messages",
+    }
+
+    @classmethod
+    def convert_to_openai(cls, dataset_item: dict):
+        return {
+            openai_field: dataset_item[dataset_field]
+            for dataset_field, openai_field in cls.DATASET_TO_OPENAI_FIELDS.items()
+            if dataset_field in dataset_item
+        }
+
     def __init__(
         self,
         max_len: int,
@@ -258,9 +271,10 @@ class ArrowDataset(BaseDataset):
         if not self.client:
             self._setup_client()
 
-        item = self.data[index]
-        input_ids = item["input_ids"].tolist()
-        messages = item.get("_vllm_messages")
+        dataset_item = self.data[index]
+        openai_item = self.convert_to_openai(dataset_item)
+        input_ids = openai_item["input_ids"].tolist()
+        messages = openai_item.get("messages")
 
         try:
             hs_filepath = generate_hidden_states(

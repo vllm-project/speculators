@@ -31,6 +31,7 @@ from speculators.data_generation.vllm_client import (
     DEFAULT_REQUEST_TIMEOUT,
     generate_hidden_states_async,
 )
+from speculators.train.data import ArrowDataset
 from speculators.train.logger import setup_root_logger
 
 logger = logging.getLogger(__name__)
@@ -277,7 +278,7 @@ async def worker(
             continue
 
         input_ids = item["input_ids"].tolist()
-        messages = item.get("_vllm_messages")
+        messages = item.get("messages")
 
         target_hidden_states_path = hidden_states_output_dir / f"hs_{idx}.safetensors"
 
@@ -328,18 +329,14 @@ async def _feed_queue(to_process, dataset, queue, cancel_event):
         if cancel_event.is_set():
             break
 
-        item = dataset[i]
-
-        partial_item = {"idx": i}
-        for k in ("input_ids", "_vllm_messages"):
-            if k in item:
-                partial_item[k] = item[k]
+        dataset_item = dataset[i]
+        openai_item = ArrowDataset.convert_to_openai(dataset_item) | {"idx": i}
 
         # Check cancel_event while waiting for queue space to avoid
         # deadlocking when all workers have died.
         while not cancel_event.is_set():
             try:
-                queue.put_nowait(partial_item)
+                queue.put_nowait(openai_item)
                 break
             except asyncio.QueueFull:
                 await asyncio.sleep(0.1)
