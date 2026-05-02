@@ -159,27 +159,27 @@ def _hf_to_vllm_part(part: str | dict):
                 return {"type": f"{modality}_url", f"{modality}_url": {"url": file_url}}
             if url := part.get("url"):
                 return {"type": f"{modality}_url", f"{modality}_url": {"url": url}}
+
             if part.get("base64"):
+                expr = {"type": modality, "base64": "..."}
                 raise ValueError(
-                    f"base64 content is not supported. "
+                    f"Content part {expr} is not supported. "
                     f"To avoid copying the image when saving the preprocessed dataset, "
                     f"please express {modality} inputs using file URLs."
                 )
-            if obj := part.get(modality):
+            if part.get(modality):
+                expr = {"type": modality, modality: "..."}
                 raise ValueError(
-                    f"{type(obj).__name__} content is not supported. "
+                    f"Content part {expr} is not supported. "
                     f"To avoid copying the image when saving the preprocessed dataset, "
                     f"please express {modality} inputs using file URLs."
                 )
 
-            fields_expr = {f"part.{k}" for k in part if k != "type"}
+            expr = {"type": modality} | {k: "..." for k in part if k != "type"}
+            raise NotImplementedError(f"Unknown content part: {expr}")
 
-            raise NotImplementedError(
-                f"No handler defined in part.type={part_type!r} "
-                f"for fields: {fields_expr}"
-            )
-
-    raise NotImplementedError(f"No handler defined for part.type={part_type!r}")
+    expr = {k: "..." for k in part}
+    raise NotImplementedError(f"Unknown content part: {expr}")
 
 
 def _hf_to_vllm_turn(turn: dict):

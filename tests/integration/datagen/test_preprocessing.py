@@ -194,7 +194,7 @@ def test_hf_to_vllm_invalid_content_formats():
     Test converting from HF-format to vLLM-format messages with
     unsupported content formats.
     """
-    with pytest.raises(ValueError, match="Image content is not supported"):
+    with pytest.raises(ValueError, match=r"'image':.* is not supported"):
         _hf_to_vllm_conv(
             [
                 {
@@ -206,7 +206,7 @@ def test_hf_to_vllm_invalid_content_formats():
             ]
         )
 
-    with pytest.raises(ValueError, match="base64 content is not supported"):
+    with pytest.raises(ValueError, match=r"'base64':.* is not supported"):
         _hf_to_vllm_conv(
             [
                 {
