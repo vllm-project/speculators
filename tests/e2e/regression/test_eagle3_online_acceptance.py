@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from tests.e2e.smoke.test_online_training import run_online_e2e
+from tests.e2e.utils import setup_dummy_sharegpt4v_coco
 from tests.utils import requires_cadence
 
 
@@ -25,12 +26,23 @@ from tests.utils import requires_cadence
     ],
 )
 def test_online_regression(
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     model: str,
     dataset: str,
     acceptance_thresholds: list[float],
     prompts: list[list[dict[str, str]]],
 ):
+    if dataset == "sharegpt4v_coco":
+        monkeypatch.setenv("COCO_DIR", str(tmp_path / "coco"))
+        setup_dummy_sharegpt4v_coco(tmp_path / "coco")
+
+        vllm_enforce_eager = True
+        vllm_media_path = str(tmp_path / "coco")
+    else:
+        vllm_enforce_eager = False
+        vllm_media_path = None
+
     run_online_e2e(
         tmp_path,
         model,
@@ -38,7 +50,8 @@ def test_online_regression(
         max_samples=5000,
         seq_length=8192,
         vllm_gpu_util=0.75,
-        vllm_enforce_eager=dataset == "sharegpt4v_coco",
+        vllm_enforce_eager=vllm_enforce_eager,
+        vllm_media_path=vllm_media_path,
         epochs=3,
         prompts=prompts,
         acceptance_thresholds=acceptance_thresholds,

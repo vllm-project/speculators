@@ -56,13 +56,20 @@ def test_offline_smoke(
         monkeypatch.setenv("COCO_DIR", str(tmp_path / "coco"))
         setup_dummy_sharegpt4v_coco(tmp_path / "coco")
 
+        vllm_enforce_eager = True
+        vllm_media_path = str(tmp_path / "coco")
+    else:
+        vllm_enforce_eager = False
+        vllm_media_path = None
+
     run_offline_e2e(
         tmp_path,
         model,
         dataset=dataset,
         prompts=prompts,
         vllm_gpu_util=0.9,
-        vllm_enforce_eager=dataset == "sharegpt4v_coco",
+        vllm_enforce_eager=vllm_enforce_eager,
+        vllm_media_path=vllm_media_path,
         speculator_type=speculator_type,
         extra_train_args=extra_train_args,
         target_layer_ids=target_layer_ids,
@@ -77,6 +84,7 @@ def run_offline_e2e(
     seq_length: int = 512,
     vllm_gpu_util: float = 0.5,
     vllm_enforce_eager: bool = False,
+    vllm_media_path: str | None = None,
     port: int = 8321,
     draft_vocab_size: int = 8192,
     epochs: int = 1,
@@ -108,6 +116,7 @@ def run_offline_e2e(
         gpu_memory_utilization=vllm_gpu_util,
         target_layer_ids=target_layer_ids,
         enforce_eager=vllm_enforce_eager,
+        allowed_local_media_path=vllm_media_path,
     ):
         # Step 2: Generate hidden states offline
         run_data_generation_offline(

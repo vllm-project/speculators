@@ -68,10 +68,12 @@ def launch_vllm_server(
     model: str,
     port: int,
     hidden_states_path: str,
+    *,
     max_model_len: int = 513,
     gpu_memory_utilization: float = 0.5,
     target_layer_ids: list[int] | None = None,
     enforce_eager: bool = False,
+    allowed_local_media_path: str | None = None,
 ) -> subprocess.Popen:
     """Launch a vLLM server configured for hidden-state extraction.
 
@@ -89,6 +91,8 @@ def launch_vllm_server(
         cmd += ["--target-layer-ids"] + [str(lid) for lid in target_layer_ids]
     if enforce_eager:
         cmd += ["--enforce-eager"]
+    if allowed_local_media_path:
+        cmd += ["--allowed-local-media-path", allowed_local_media_path]
     cmd += [
         "--",
         "--port",
