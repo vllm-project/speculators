@@ -36,6 +36,7 @@ class TrainerConfig(NamedTuple):
     save_path: str
     resume_from_checkpoint: bool = False
     is_distributed: bool = False
+    rank: int = 0
     local_rank: int = 0
     train_call_kwargs: dict = {}
     val_call_kwargs: dict = {}
@@ -59,6 +60,7 @@ class Trainer:
     ):
         self.model = model
         self.config = config
+        self.rank = config.rank
         self.local_rank = config.local_rank
         self.train_loader = train_loader
         self.val_loader = val_loader
@@ -187,7 +189,7 @@ class Trainer:
             self.train_loader.batch_sampler.set_epoch(epoch)  # type: ignore[union-attr]
 
         train_loader = self.train_loader
-        if self.local_rank == 0:
+        if self.rank == 0:
             train_loader = tqdm(train_loader, desc=f"Epoch {epoch}")  # type: ignore[assignment]
 
         for batch in train_loader:
@@ -236,7 +238,7 @@ class Trainer:
         if hasattr(self.val_loader.batch_sampler, "set_epoch"):
             self.val_loader.batch_sampler.set_epoch(epoch)  # type: ignore[union-attr]
         val_loader = self.val_loader
-        if self.local_rank == 0:
+        if self.rank == 0:
             val_loader = tqdm(val_loader, desc=f"Epoch {epoch}")  # type: ignore[assignment]
 
         val_metrics: dict[str, float] = {}
