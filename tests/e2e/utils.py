@@ -323,16 +323,16 @@ def run_vllm_engine(
     VLLM_PYTHON = os.environ.get("VLLM_PYTHON", sys.executable)
     logger.info("vLLM Python executable: {}", VLLM_PYTHON)
 
-    run_vllm_file = str(Path(__file__).with_name("run_vllm.py"))
-    results_file = str(tmp_path / "results.json")
+    run_vllm_file = Path(__file__).with_name("run_vllm.py")
+    results_file = tmp_path / "results.json"
 
-    prompts_file = str(tmp_path / "prompts.json")
-    with open(prompts_file, "w") as f:
+    prompts_file = tmp_path / "prompts.json"
+    with prompts_file.open("w") as f:
         json.dump(prompts, f)
 
     command = [
         VLLM_PYTHON,
-        run_vllm_file,
+        str(run_vllm_file),
         "--sampling-params-args",
         json.dumps(
             {
@@ -353,9 +353,9 @@ def run_vllm_engine(
             }
         ),
         "--prompts",
-        prompts_file,
+        str(prompts_file),
         "--results-file",
-        results_file,
+        str(results_file),
     ]
     logger.info("run_vllm.py command:\n    {}", command)
 

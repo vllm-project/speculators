@@ -63,7 +63,10 @@ def parse_args():
         "--sampling-params-args",
         type=str,
         required=True,
-        help="JSON-serialized kwargs or path to JSON file for SamplingParams instantiation.",
+        help=(
+            "JSON-serialized kwargs or path to JSON file for "
+            "SamplingParams instantiation."
+        ),
     )
     parser.add_argument(
         "--llm-args",
@@ -125,9 +128,9 @@ def extract_metrics(raw_metrics: list[Metric], total_num_output_tokens: int) -> 
 
 def _load_json(value: str):
     if value.endswith(".json") and Path(value).is_file():
-        with open(value, "rb") as f:
+        with Path(value).open("rb") as f:
             return json.load(f)
-    
+
     return json.loads(value)
 
 
