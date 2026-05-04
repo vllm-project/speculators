@@ -326,6 +326,10 @@ def run_vllm_engine(
     run_vllm_file = str(Path(__file__).with_name("run_vllm.py"))
     results_file = str(tmp_path / "results.json")
 
+    prompts_file = str(tmp_path / "prompts.json")
+    with open(prompts_file, "w") as f:
+        json.dump(prompts, f)
+
     command = [
         VLLM_PYTHON,
         run_vllm_file,
@@ -349,7 +353,7 @@ def run_vllm_engine(
             }
         ),
         "--prompts",
-        json.dumps(prompts),
+        prompts_file,
         "--results-file",
         results_file,
     ]
