@@ -46,7 +46,7 @@ def test_online_regression(
         vllm_media_path = coco_dir
 
         raw_dataset, normalize_fn = load_raw_dataset(dataset)
-        raw_dataset = raw_dataset.skip(len(dataset) - len(prompts))
+        raw_dataset = raw_dataset.skip(len(raw_dataset) - len(prompts))
         if normalize_fn is not None:
             raw_dataset = raw_dataset.map(normalize_fn, keep_in_memory=True)
 
