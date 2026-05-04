@@ -258,7 +258,7 @@ class PEagleDraftModel(Eagle3DraftModel):
                 preview,
             )
             for i in range(preview):
-                pos = sample_indices[0][i].item()
+                pos = int(sample_indices[0][i].item())
                 inp = original_input_ids[0, pos].item()
                 d = draft_ids[0, i].item()
                 t = target_ids[0, i].item()
