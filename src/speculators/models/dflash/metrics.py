@@ -51,15 +51,17 @@ def compute_metrics(
     pred_ids = torch.argmax(logits, dim=-1)
     target_ids = torch.argmax(targets, dim=-1)
 
-    full_acc, per_position_acc = compute_accuracy_multi_step(
+    correct_per_pos, total_per_pos = compute_accuracy_multi_step(
         pred_ids, target_ids, loss_mask, pos_idx, block_size
     )
 
     metrics: dict[str, Any] = {}
     metrics["loss"] = loss.detach().clone()
-    metrics["full_acc"] = full_acc
+    # Position 0 is the anchor — intentionally excluded from accuracy
+    metrics["full_correct"] = correct_per_pos[1:].sum()
+    metrics["full_total"] = total_per_pos[1:].sum()
 
-    # Intentionally drop position 0
-    for pos in range(1, len(per_position_acc)):
-        metrics[f"position {pos} acc"] = per_position_acc[pos]
+    for pos in range(1, block_size):
+        metrics[f"position {pos} correct"] = correct_per_pos[pos]
+        metrics[f"position {pos} total"] = total_per_pos[pos]
     return loss, metrics

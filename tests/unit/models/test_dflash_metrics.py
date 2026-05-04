@@ -29,10 +29,10 @@ class TestComputeAccuracy:
         target_ids = torch.argmax(targets, dim=-1)
         loss_mask = torch.tensor([[1, 1]])
         pos_idx = torch.tensor([[0, 1]])
-        acc, _ = compute_accuracy_multi_step(
+        correct, total = compute_accuracy_multi_step(
             pred_ids, target_ids, loss_mask, pos_idx, 2
         )
-        assert acc == pytest.approx(1.0, abs=1e-4)
+        assert correct.sum() / total.sum() == pytest.approx(1.0, abs=1e-4)
 
     def test_zero_accuracy(self):
         logits = torch.tensor([[[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]]])
@@ -41,10 +41,10 @@ class TestComputeAccuracy:
         target_ids = torch.argmax(targets, dim=-1)
         loss_mask = torch.tensor([[1, 1]])
         pos_idx = torch.tensor([[0, 1]])
-        acc, _ = compute_accuracy_multi_step(
+        correct, total = compute_accuracy_multi_step(
             pred_ids, target_ids, loss_mask, pos_idx, 2
         )
-        assert acc == pytest.approx(0.0, abs=1e-4)
+        assert correct.sum() / total.sum() == pytest.approx(0.0, abs=1e-4)
 
     def test_partial_accuracy(self):
         logits = torch.tensor([[[0.0, 0.0, 1.0], [1.0, 0.0, 0.0]]])
@@ -53,10 +53,10 @@ class TestComputeAccuracy:
         target_ids = torch.argmax(targets, dim=-1)
         loss_mask = torch.tensor([[1, 1]])
         pos_idx = torch.tensor([[0, 1]])
-        acc, _ = compute_accuracy_multi_step(
+        correct, total = compute_accuracy_multi_step(
             pred_ids, target_ids, loss_mask, pos_idx, 2
         )
-        assert acc == pytest.approx(0.5, abs=1e-4)
+        assert correct.sum() / total.sum() == pytest.approx(0.5, abs=1e-4)
 
     def test_loss_mask_excludes_positions(self):
         logits = torch.tensor([[[0.0, 0.0, 1.0], [1.0, 0.0, 0.0]]])
@@ -65,10 +65,10 @@ class TestComputeAccuracy:
         target_ids = torch.argmax(targets, dim=-1)
         loss_mask = torch.tensor([[1, 0]])
         pos_idx = torch.tensor([[0, 1]])
-        acc, _ = compute_accuracy_multi_step(
+        correct, total = compute_accuracy_multi_step(
             pred_ids, target_ids, loss_mask, pos_idx, 2
         )
-        assert acc == pytest.approx(1.0, abs=1e-4)
+        assert correct.sum() / total.sum() == pytest.approx(1.0, abs=1e-4)
 
     def test_all_masked_out(self):
         logits = torch.tensor([[[0.0, 0.0, 1.0], [0.0, 1.0, 0.0]]])
@@ -77,12 +77,13 @@ class TestComputeAccuracy:
         target_ids = torch.argmax(targets, dim=-1)
         loss_mask = torch.tensor([[0, 0]])
         pos_idx = torch.tensor([[0, 1]])
-        acc, _ = compute_accuracy_multi_step(
+        correct, total = compute_accuracy_multi_step(
             pred_ids, target_ids, loss_mask, pos_idx, 2
         )
-        assert acc == pytest.approx(0.0, abs=1e-4)
+        assert correct.sum() == pytest.approx(0.0, abs=1e-4)
+        assert total.sum() == pytest.approx(0.0, abs=1e-4)
 
-    def test_block_size_per_position_accuracy(self):
+    def test_block_size_per_position_counts(self):
         logits = torch.tensor(
             [
                 [
@@ -98,12 +99,13 @@ class TestComputeAccuracy:
         target_ids = torch.argmax(targets, dim=-1)
         loss_mask = torch.tensor([[1, 1, 1, 1]])
         pos_idx = torch.arange(4).unsqueeze(0) % 2
-        acc, accs = compute_accuracy_multi_step(
+        correct, total = compute_accuracy_multi_step(
             pred_ids, target_ids, loss_mask, pos_idx, 2
         )
-        assert len(accs) == 2
-        assert accs[0] == pytest.approx(1.0, abs=1e-4)
-        assert accs[1] == pytest.approx(0.5, abs=1e-4)
+        assert len(correct) == 2
+        # pos 0: 2/2 correct, pos 1: 1/2 correct
+        assert correct[0] / total[0] == pytest.approx(1.0, abs=1e-4)
+        assert correct[1] / total[1] == pytest.approx(0.5, abs=1e-4)
 
     def test_block_size_with_mask(self):
         logits = torch.tensor(
@@ -121,39 +123,41 @@ class TestComputeAccuracy:
         target_ids = torch.argmax(targets, dim=-1)
         loss_mask = torch.tensor([[1, 0, 1, 1]])
         pos_idx = torch.arange(4).unsqueeze(0) % 2
-        acc, accs = compute_accuracy_multi_step(
+        correct, total = compute_accuracy_multi_step(
             pred_ids, target_ids, loss_mask, pos_idx, 2
         )
-        assert accs[0] == pytest.approx(1.0, abs=1e-4)
-        assert accs[1] == pytest.approx(1.0, abs=1e-4)
+        assert correct[0] / total[0] == pytest.approx(1.0, abs=1e-4)
+        assert correct[1] / total[1] == pytest.approx(1.0, abs=1e-4)
 
-    def test_returns_list_per_position(self):
-        """Per-position accuracies should be a 1D tensor of shape [block_size]."""
+    def test_returns_tensors_per_position(self):
+        """Per-position counts should be 1D tensors of shape [block_size]."""
         logits = torch.randn(1, 8, 10)
         targets = _ids_to_logits(torch.randint(0, 10, (1, 8)), 10)
         pred_ids = torch.argmax(logits, dim=-1)
         target_ids = torch.argmax(targets, dim=-1)
         loss_mask = torch.ones(1, 8)
         pos_idx = torch.arange(8).unsqueeze(0) % 4
-        _, accs = compute_accuracy_multi_step(
+        correct, total = compute_accuracy_multi_step(
             pred_ids, target_ids, loss_mask, pos_idx, 4
         )
-        assert isinstance(accs, torch.Tensor)
-        assert len(accs) == 4
+        assert isinstance(correct, torch.Tensor)
+        assert isinstance(total, torch.Tensor)
+        assert len(correct) == 4
+        assert len(total) == 4
 
-    def test_overall_accuracy_consistent_with_per_position(self):
-        """Overall accuracy should be consistent with per-position accuracies."""
+    def test_overall_counts_consistent_with_per_position(self):
+        """Sum of per-position counts should equal overall counts."""
         logits = torch.randn(1, 6, 5)
         targets = _ids_to_logits(torch.randint(0, 5, (1, 6)), 5)
         pred_ids = torch.argmax(logits, dim=-1)
         target_ids = torch.argmax(targets, dim=-1)
         loss_mask = torch.ones(1, 6)
         pos_idx = torch.arange(6).unsqueeze(0) % 3
-        acc, accs = compute_accuracy_multi_step(
+        correct, total = compute_accuracy_multi_step(
             pred_ids, target_ids, loss_mask, pos_idx, 3
         )
-        assert acc >= 0.0
-        assert acc <= 1.0 + 1e-4
+        assert total.sum().item() == pytest.approx(6.0, abs=1e-4)
+        assert correct.sum().item() <= total.sum().item() + 1e-4
 
 
 class TestLossFunction:
@@ -282,7 +286,8 @@ class TestComputeMetrics:
         assert loss.ndim == 0
         assert isinstance(metrics, dict)
         assert "loss" in metrics
-        assert "full_acc" in metrics
+        assert "full_correct" in metrics
+        assert "full_total" in metrics
 
     def test_per_position_keys(self):
         B, T, V = 1, 8, 10
@@ -290,9 +295,10 @@ class TestComputeMetrics:
         targets = _ids_to_logits(torch.randint(0, V, (B, T)), V)
         loss_mask = torch.ones(B, T)
         _, metrics = compute_metrics(logits, targets, loss_mask, block_size=4)
-        assert "position 0 acc" not in metrics
+        assert "position 0 correct" not in metrics
         for i in range(1, 4):
-            assert f"position {i} acc" in metrics
+            assert f"position {i} correct" in metrics
+            assert f"position {i} total" in metrics
 
     def test_loss_matches_loss_function(self):
         B, T, V = 1, 8, 10
@@ -312,7 +318,7 @@ class TestComputeMetrics:
         assert torch.isclose(loss, expected_loss)
         assert torch.isclose(metrics["loss"], expected_loss)
 
-    def test_accuracy_matches_compute_accuracy(self):
+    def test_counts_match_compute_accuracy(self):
         B, T, V = 1, 8, 10
         logits = torch.randn(B, T, V)
         targets = _ids_to_logits(torch.randint(0, V, (B, T)), V)
@@ -321,9 +327,20 @@ class TestComputeMetrics:
         pred_ids = torch.argmax(logits, dim=-1)
         target_ids = torch.argmax(targets, dim=-1)
         pos_idx = torch.arange(T).unsqueeze(0) % 4
-        expected_acc, expected_pos_accs = compute_accuracy_multi_step(
+        expected_correct, expected_total = compute_accuracy_multi_step(
             pred_ids, target_ids, loss_mask, pos_idx, 4
         )
-        assert torch.isclose(metrics["full_acc"], expected_acc)
+        # full counts = sum of positions 1+ (position 0 excluded)
+        assert torch.isclose(
+            metrics["full_correct"], expected_correct[1:].sum()
+        )
+        assert torch.isclose(
+            metrics["full_total"], expected_total[1:].sum()
+        )
         for i in range(1, 4):
-            assert torch.isclose(metrics[f"position {i} acc"], expected_pos_accs[i])
+            assert torch.isclose(
+                metrics[f"position {i} correct"], expected_correct[i]
+            )
+            assert torch.isclose(
+                metrics[f"position {i} total"], expected_total[i]
+            )

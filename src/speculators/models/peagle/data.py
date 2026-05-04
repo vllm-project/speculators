@@ -6,7 +6,7 @@ import torch
 def generate_cod_sample_indices(
     seq_length: int,
     loss_mask: torch.Tensor,
-    para_num: int = 8,
+    num_depths: int = 8,
     down_sample_ratio: float = 0.7,
     down_sample_ratio_min: float = 0.2,
     filter_position_zero: bool = True,
@@ -21,7 +21,7 @@ def generate_cod_sample_indices(
     Args:
         seq_length: Length of the sequence
         loss_mask: Binary mask indicating valid training positions [batch, seq_len]
-        para_num: Number of parallel prediction groups (K)
+        num_depths: Number of parallel prediction groups (K)
         down_sample_ratio: Geometric decay ratio r ∈ (0,1)
         down_sample_ratio_min: Minimum retention ratio floor
         filter_position_zero: Whether to filter out position 0 from candidates
@@ -39,7 +39,7 @@ def generate_cod_sample_indices(
     sample_indices = [torch.arange(seq_length, device=loss_mask.device)]
     prev_indices = all_valid_indices
 
-    for depth in range(1, para_num):
+    for depth in range(1, num_depths):
         # Calculate retention ratio with geometric decay and minimum floor
         valid_length = max(0, len(all_valid_indices) - depth)
         ratio = max(down_sample_ratio**depth, down_sample_ratio_min)

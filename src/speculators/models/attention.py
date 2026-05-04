@@ -10,6 +10,8 @@ import torch
 from torch.nn.attention.flex_attention import BlockMask, flex_attention
 from transformers.modeling_utils import AttentionInterface
 
+_compiled_flex_attention = torch.compile(flex_attention)
+
 
 def flex_attention_forward(
     module: torch.nn.Module,  # noqa: ARG001
@@ -46,7 +48,7 @@ def flex_attention_forward(
     key = key.contiguous()
     value = value.contiguous()
 
-    flex_attention_output = flex_attention(
+    flex_attention_output = _compiled_flex_attention(
         query,
         key,
         value,

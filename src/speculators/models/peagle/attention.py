@@ -1,17 +1,12 @@
 """Flex attention mask functions for P-EAGLE parallel group prediction."""
 
-from typing import cast
-
 import torch
-from torch.nn.attention.flex_attention import flex_attention
-
-from speculators.models.attention import ALL_ATTENTION_FUNCTIONS
 
 
 def create_peagle_mask_mod(
     all_indices: torch.Tensor,
     seq_length: int,
-    para_depth: int,
+    num_depths: int,
     sample_ids: torch.Tensor | None = None,
 ):
     """
@@ -23,7 +18,7 @@ def create_peagle_mask_mod(
     Args:
         all_indices: Flattened position indices for all groups [total_length]
         seq_length: Original sequence length (before parallel expansion)
-        para_depth: Number of parallel groups (K)
+        num_depths: Number of parallel groups (K)
         sample_ids: Optional sample IDs to prevent cross-sample attention
             [batch_size, seq_length]
 
@@ -31,7 +26,7 @@ def create_peagle_mask_mod(
         A mask_mod function compatible with flex_attention create_block_mask
     """
     device = all_indices.device
-    total_length = para_depth * seq_length
+    total_length = num_depths * seq_length
 
     original_positions = torch.full(
         (total_length,), -1, dtype=torch.long, device=device
@@ -46,7 +41,7 @@ def create_peagle_mask_mod(
         depth_assignments[full_idx] = depth
 
     assert sample_ids is not None, "sample_ids must be provided"
-    sample_ids_repeated = sample_ids.squeeze(0).repeat(para_depth)  # [total_length]
+    sample_ids_repeated = sample_ids.squeeze(0).repeat(num_depths)  # [total_length]
 
     def peagle_mask_mod(_b, _h, q_idx, kv_idx):
         """
@@ -103,59 +98,3 @@ def create_peagle_mask_mod(
         return valid_query & valid_key & hierarchical & same_sample & attention_allowed
 
     return peagle_mask_mod
-
-
-# Compile flex_attention for efficient block-sparse attention
-_compiled_flex_attention = torch.compile(flex_attention)
-
-
-def peagle_flex_attention_forward(
-    module: torch.nn.Module,  # noqa: ARG001
-    query: torch.Tensor,
-    key: torch.Tensor,
-    value: torch.Tensor,
-    attention_mask,
-    scaling: float | None = None,
-    **_kwargs,
-) -> tuple[torch.Tensor, torch.Tensor | None]:
-    """
-    Flex attention forward pass for P-EAGLE.
-
-    Uses compiled flex_attention with block-sparse masks for memory efficiency.
-
-    Args:
-        module: The attention module (unused, for interface compatibility)
-        query: Query tensor [batch, num_heads, seq_len, head_dim]
-        key: Key tensor [batch, num_kv_heads, seq_len, head_dim]
-        value: Value tensor [batch, num_kv_heads, seq_len, head_dim]
-        attention_mask: BlockMask object from create_block_mask()
-        scaling: Optional attention scaling factor
-        **_kwargs: Additional arguments (unused)
-
-    Returns:
-        Tuple of (attention_output, None)
-    """
-    num_query_heads = query.shape[1]
-    num_key_value_heads = key.shape[1]
-    enable_gqa = num_query_heads != num_key_value_heads
-
-    query = query.contiguous()
-    key = key.contiguous()
-    value = value.contiguous()
-
-    flex_attention_output = _compiled_flex_attention(
-        query,
-        key,
-        value,
-        score_mod=None,
-        block_mask=attention_mask,
-        enable_gqa=enable_gqa,
-        scale=scaling,
-    )
-    attention_output: torch.Tensor = cast("torch.Tensor", flex_attention_output)
-    attention_output = attention_output.transpose(1, 2).contiguous()
-    return attention_output, None
-
-
-# Register P-EAGLE flex attention with transformers AttentionInterface
-ALL_ATTENTION_FUNCTIONS.register("peagle_flex_attention", peagle_flex_attention_forward)

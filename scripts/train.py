@@ -618,10 +618,10 @@ def parse_args():  # noqa: PLR0915
     )
     # P-EAGLE specific parameters
     parser.add_argument(
-        "--para-depths",
+        "--num-depths",
         type=int,
         default=8,
-        help="Number of parallel prediction groups for P-EAGLE (default: 8)",
+        help="Number of parallel prediction depths for P-EAGLE (default: 8)",
     )
     parser.add_argument(
         "--down-sample-ratio",
@@ -634,21 +634,6 @@ def parse_args():  # noqa: PLR0915
         type=float,
         default=0.2,
         help="Minimum retention ratio for COD sampling in P-EAGLE (default: 0.2)",
-    )
-    parser.add_argument(
-        "--max-seq-len",
-        type=int,
-        default=2048,
-        help="Maximum sequence length for attention mask construction (default: 2048)",
-    )
-    parser.add_argument(
-        "--prediction-loss-weight",
-        type=float,
-        default=1.0,
-        help=(
-            "Weight for prediction loss (cross-entropy on logits) "
-            "in P-EAGLE (default: 1.0)"
-        ),
     )
     # Dataloader parameters
     parser.add_argument(
@@ -669,6 +654,12 @@ def parse_args():  # noqa: PLR0915
         type=_checkpoint_freq,
         default=1,
         help="Save a checkpoint every N epochs.",
+    )
+    parser.add_argument(
+        "--save-steps",
+        type=int,
+        default=None,
+        help="Save a mid-epoch checkpoint every N training steps.",
     )
     parser.add_argument(
         "--save-best",

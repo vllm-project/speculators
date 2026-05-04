@@ -11,7 +11,7 @@ def compute_accuracy_single_step(
     loss_mask: torch.Tensor | None,  # shape: [1, seq_len]
     prev_correct: torch.Tensor | None,  # shape: [1, seq_len]
 ):
-    """Compute full and conditional accuracy for a single speculative step.
+    """Compute full and conditional accuracy counts for a single speculative step.
 
     Args:
         pred_ids: Predicted token IDs.
@@ -21,22 +21,21 @@ def compute_accuracy_single_step(
             via logical AND with the current step's correctness.
 
     Returns:
-        Tuple of (full_accuracy, conditional_accuracy) where conditional accuracy
-        is accuracy given all previous steps were also correct.
+        Tuple of (full_correct, full_total, cond_correct, cond_total) as raw
+        counts suitable for distributed reduction before computing ratios.
     """
     correct = pred_ids == target_ids
-    cond_denom: torch.Tensor | int = correct.numel()
+    cond_total = torch.tensor(correct.numel(), dtype=torch.float, device=correct.device)
     if prev_correct is not None:
-        cond_denom = prev_correct.sum()
-        # Update prev_correct in place
+        cond_total = prev_correct.sum().float()
         correct = torch.logical_and(prev_correct, correct, out=prev_correct)
     if loss_mask is not None:
         correct = torch.masked_select(correct, loss_mask.to(torch.bool))
 
     correct_sum = correct.float().sum()
-    full_denom = correct.numel()
+    full_total = torch.tensor(correct.numel(), dtype=torch.float, device=correct.device)
 
-    return correct_sum / (full_denom + _EPS), correct_sum / (cond_denom + _EPS)
+    return correct_sum, full_total, correct_sum, cond_total
 
 
 @torch.no_grad()
@@ -47,7 +46,7 @@ def compute_accuracy_multi_step(
     pos_idx: torch.Tensor,  # shape: [1, seq_len]
     num_pos: int,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Compute overall and per-position accuracy across multiple speculative steps.
+    """Compute per-position correct/total counts across multiple speculative steps.
 
     Args:
         pred_ids: Predicted token IDs.
@@ -57,24 +56,19 @@ def compute_accuracy_multi_step(
         num_pos: Number of distinct positions (i.e. block size).
 
     Returns:
-        Tuple of (overall_accuracy, per_position_accuracy) where per_position_accuracy
-        has shape [num_pos].
+        Tuple of (correct_per_pos, total_per_pos) both with shape [num_pos].
+        Overall counts can be derived by summing these.
     """
     correct = pred_ids == target_ids
     correct = torch.masked_select(correct, loss_mask.to(torch.bool))
     pos_idx = torch.masked_select(pos_idx, loss_mask.to(torch.bool))
 
-    correct_sum = correct.float().sum()
-    full_denom = correct.numel()
-    overall_acc = correct_sum / (full_denom + _EPS)
+    correct_per_pos = torch.zeros(num_pos, dtype=torch.float, device=correct.device)
+    total_per_pos = torch.zeros(num_pos, dtype=torch.float, device=correct.device)
+    correct_per_pos.scatter_add_(0, pos_idx, correct.float())
+    total_per_pos.scatter_add_(0, pos_idx, torch.ones_like(correct, dtype=torch.float))
 
-    sums = torch.zeros(num_pos, dtype=torch.long, device=correct.device)
-    counts = torch.zeros(num_pos, dtype=torch.long, device=correct.device)
-    sums.scatter_add_(0, pos_idx, correct.long())
-    counts.scatter_add_(0, pos_idx, torch.ones_like(correct, dtype=torch.long))
-    per_pos_idx_acc = sums.float() / (counts.float() + _EPS)
-
-    return overall_acc, per_pos_idx_acc  # shape: [], [block_size]
+    return correct_per_pos, total_per_pos  # shape: [num_pos], [num_pos]
 
 
 def kl_div_loss(
