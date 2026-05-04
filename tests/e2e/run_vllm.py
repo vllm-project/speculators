@@ -63,22 +63,16 @@ def parse_args():
         "--sampling-params-args",
         type=str,
         required=True,
-        help=(
-            "JSON-serialized kwargs or path to JSON file for "
-            "SamplingParams instantiation."
-        ),
+        help="JSON-serialized kwargs for SamplingParams instantiation",
     )
     parser.add_argument(
         "--llm-args",
         type=str,
         required=True,
-        help="JSON-serialized kwargs or path to JSON file for LLM instantiation",
+        help="JSON-serialized kwargs for LLM instantiation",
     )
     parser.add_argument(
-        "--prompts",
-        type=str,
-        required=True,
-        help="JSON-serialized prompts or path to JSON file",
+        "--prompts", type=str, required=True, help="JSON-serialized prompts"
     )
     parser.add_argument(
         "--results-file",
@@ -126,18 +120,10 @@ def extract_metrics(raw_metrics: list[Metric], total_num_output_tokens: int) -> 
     return metrics_dict
 
 
-def _load_json(value: str):
-    if value.endswith(".json") and Path(value).is_file():
-        with Path(value).open("rb") as f:
-            return json.load(f)
-
-    return json.loads(value)
-
-
 def run_vllm(args: argparse.Namespace):
-    sampling_params = SamplingParams(**_load_json(args.sampling_params_args))
-    llm = LLM(**_load_json(args.llm_args), disable_log_stats=False)
-    outputs = llm.chat(_load_json(args.prompts), sampling_params)
+    sampling_params = SamplingParams(**json.loads(args.sampling_params_args))
+    llm = LLM(**json.loads(args.llm_args), disable_log_stats=False)
+    outputs = llm.chat(json.loads(args.prompts), sampling_params)
     total_num_output_tokens = sum(
         len(output.outputs[0].token_ids) for output in outputs
     )
