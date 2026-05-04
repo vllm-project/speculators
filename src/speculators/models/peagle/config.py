@@ -65,4 +65,3 @@ class PEagleSpeculatorConfig(Eagle3SpeculatorConfig):
             "training (True for P-EAGLE)"
         ),
     )
-

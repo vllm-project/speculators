@@ -95,10 +95,8 @@ def compute_metrics(
     pred_ids = torch.argmax(s_logits, dim=-1)
     target_ids = torch.argmax(s_targets, dim=-1)
 
-    full_correct, full_total, cond_correct, cond_total = (
-        compute_accuracy_single_step(
-            pred_ids, target_ids, s_loss_mask, s_prev_correct
-        )
+    full_correct, full_total, cond_correct, cond_total = compute_accuracy_single_step(
+        pred_ids, target_ids, s_loss_mask, s_prev_correct
     )
 
     s_metrics = {}

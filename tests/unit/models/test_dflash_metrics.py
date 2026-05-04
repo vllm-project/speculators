@@ -331,16 +331,8 @@ class TestComputeMetrics:
             pred_ids, target_ids, loss_mask, pos_idx, 4
         )
         # full counts = sum of positions 1+ (position 0 excluded)
-        assert torch.isclose(
-            metrics["full_correct"], expected_correct[1:].sum()
-        )
-        assert torch.isclose(
-            metrics["full_total"], expected_total[1:].sum()
-        )
+        assert torch.isclose(metrics["full_correct"], expected_correct[1:].sum())
+        assert torch.isclose(metrics["full_total"], expected_total[1:].sum())
         for i in range(1, 4):
-            assert torch.isclose(
-                metrics[f"position {i} correct"], expected_correct[i]
-            )
-            assert torch.isclose(
-                metrics[f"position {i} total"], expected_total[i]
-            )
+            assert torch.isclose(metrics[f"position {i} correct"], expected_correct[i])
+            assert torch.isclose(metrics[f"position {i} total"], expected_total[i])

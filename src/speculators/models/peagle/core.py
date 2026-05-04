@@ -1,5 +1,6 @@
 """P-EAGLE draft model implementation with parallel multi-token prediction."""
 
+import logging
 from typing import ClassVar
 
 import torch
@@ -15,6 +16,8 @@ from speculators.models.peagle.data import generate_cod_sample_indices
 from speculators.models.peagle.metrics import compute_metrics
 from speculators.models.utils import resolve_target_layer_ids
 from speculators.proposals.greedy import GreedyTokenProposalConfig
+
+logger = logging.getLogger(__name__)
 
 
 @SpeculatorModel.register("peagle")
@@ -168,6 +171,8 @@ class PEagleDraftModel(Eagle3DraftModel):
         else:
             hidden_states_tensor = hidden_states
 
+        original_input_ids = input_ids.clone()
+
         pad = torch.full(
             (input_ids.shape[0], input_ids.shape[1] * (num_depths - 1)),
             self.mask_token_id,  # type: ignore[arg-type]
@@ -239,6 +244,33 @@ class PEagleDraftModel(Eagle3DraftModel):
         # Map sampled (depth, original_position) → original_position only.
         original_positions = all_indices % seq_length
         targets = targets[:, original_positions, :]
+
+        # Debug: print predicted vs target tokens for depth 0
+        with torch.no_grad():
+            depth0_len = len(sample_indices[0])
+            draft_ids = torch.argmax(logits[:, :depth0_len], dim=-1)
+            target_ids = torch.argmax(targets[:, :depth0_len], dim=-1)
+            match = (draft_ids == target_ids).float().mean().item()
+            preview = min(20, depth0_len)
+            logger.info(
+                "depth0 accuracy=%.3f | pos: input -> draft / target (first %d tokens)",
+                match,
+                preview,
+            )
+            for i in range(preview):
+                pos = sample_indices[0][i].item()
+                inp = original_input_ids[0, pos].item()
+                d = draft_ids[0, i].item()
+                t = target_ids[0, i].item()
+                mark = "OK" if d == t else "XX"
+                logger.info(
+                    "  pos=%4d  input_id=%6d  draft=%6d  target=%6d  [%s]",
+                    pos,
+                    inp,
+                    d,
+                    t,
+                    mark,
+                )
 
         loss, draft_tokens, metrics = compute_metrics(
             logits=logits,
