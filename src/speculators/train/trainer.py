@@ -22,6 +22,7 @@ from speculators.train.checkpointer import (
     DistributedCheckpointer,
     SingleGPUCheckpointer,
 )
+from speculators.train.graceful_shutdown import with_graceful_shutdown
 from speculators.train.utils import apply_fully_sharded
 
 root_logger = logging.getLogger("speculators")
@@ -266,10 +267,15 @@ class Trainer:
         )
         return val_metrics
 
-    def maybe_save_checkpoint(self, epoch: int):
-        if self.config.save_best:
-            return
-        if not (epoch == 0 or (epoch + 1) % self.config.checkpoint_freq == 0):
+    def maybe_save_checkpoint(self, epoch: int | str):
+        if epoch != "interrupted" and (
+            self.config.save_best
+            or (
+                isinstance(epoch, int)
+                and epoch != 0
+                and (epoch + 1) % self.config.checkpoint_freq != 0
+            )
+        ):
             return
 
         root_logger.info(f"Saving checkpoint to {self.checkpointer.path / str(epoch)}")
@@ -300,6 +306,7 @@ class Trainer:
         if self.config.save_best:
             self.checkpointer.cleanup_keep_only_best(best_epoch=epoch)
 
+    @with_graceful_shutdown()
     def run_training(self):
         n_epochs = self.config.num_epochs
         for epoch in range(self.current_epoch, n_epochs):
