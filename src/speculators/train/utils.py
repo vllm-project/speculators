@@ -104,6 +104,25 @@ def resolve_mask_token_id(
     )
 
 
+def normalize_counted_metrics(metrics: dict[str, float]) -> dict[str, float]:
+    """Normalize sum/count pairs into single values.
+
+    For any key ending in ' count', finds the matching ' sum' key,
+    computes sum / count, and stores the result under the prefix
+    (e.g. 'loss sum' / 'loss count' -> 'loss').
+    The raw sum/count keys are removed.
+    """
+    for ck in [k for k in metrics if k.endswith(" count")]:
+        prefix = ck.removesuffix(" count")
+        sk = f"{prefix} sum"
+        if sk in metrics:
+            count = metrics[ck]
+            metrics[prefix] = metrics[sk] / count if count > 0 else 0.0
+            del metrics[sk]
+        del metrics[ck]
+    return metrics
+
+
 def apply_fully_sharded(model: torch.nn.Module):
     """Applies torch FSDP fully_shard to the model, wrapping layers in FSDPModule.
 
@@ -119,6 +138,6 @@ def apply_fully_sharded(model: torch.nn.Module):
     for layer in model.layers:  # type: ignore[union-attr]
         fully_shard(layer, mp_policy=mp_policy)
 
-    fully_shard(model)
+    fully_shard(model, mp_policy=mp_policy)
 
     return model

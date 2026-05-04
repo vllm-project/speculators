@@ -158,14 +158,6 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             ),
         )
 
-        # Create identity mappings if t2d/d2t not provided (no vocab reduction)
-        if t2d is None or d2t is None:
-            vocab_size = kwargs["draft_vocab_size"]
-            # t2d: all tokens in target vocab are in draft vocab
-            t2d = torch.ones(vocab_size, dtype=torch.bool)
-            # d2t: identity mapping (zero offset for all tokens)
-            d2t = torch.zeros(vocab_size, dtype=torch.long)
-
         model = cls(config=config)
         model.load_vocab_mappings(t2d, d2t)
         model.load_verifier_weights()

@@ -28,7 +28,7 @@ def conditional_torch_compile(func):
 @SpeculatorModel.register("eagle3")
 class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
     config_class: ClassVar[type[Eagle3SpeculatorConfig]] = Eagle3SpeculatorConfig  # type: ignore[misc]
-    _keys_to_ignore_on_load_missing: ClassVar[list[str]] = [  # type: ignore[misc,assignment]
+    _keys_to_ignore_on_load_missing: ClassVar[list[str]] = [  # type: ignore[misc]
         "embed_tokens.weight",
         "verifier_norm.weight",
         "verifier_lm_head.weight",
@@ -255,7 +255,8 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
             # shape: [1, total_seq_len]
 
         if return_loss:
-            metrics["loss"] = loss.detach().clone()
+            metrics["loss sum"] = loss.detach().clone()
+            metrics["loss count"] = torch.tensor(1.0, device=device)
             return draft_tokens, loss, metrics
         else:
             return draft_tokens

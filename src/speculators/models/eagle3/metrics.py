@@ -95,13 +95,16 @@ def compute_metrics(
     pred_ids = torch.argmax(s_logits, dim=-1)
     target_ids = torch.argmax(s_targets, dim=-1)
 
-    s_full_acc, s_cond_acc = compute_accuracy_single_step(
+    full_correct, full_total, cond_correct, cond_total = compute_accuracy_single_step(
         pred_ids, target_ids, s_loss_mask, s_prev_correct
     )
 
     s_metrics = {}
-    s_metrics[f"loss_{ttt_step}"] = s_loss.detach().clone()
-    s_metrics[f"full_acc_{ttt_step}"] = s_full_acc
-    s_metrics[f"cond_acc_{ttt_step}"] = s_cond_acc
+    s_metrics[f"loss_{ttt_step} sum"] = s_loss.detach().clone()
+    s_metrics[f"loss_{ttt_step} count"] = torch.tensor(1.0, device=s_loss.device)
+    s_metrics[f"full_acc_{ttt_step} sum"] = full_correct
+    s_metrics[f"full_acc_{ttt_step} count"] = full_total
+    s_metrics[f"cond_acc_{ttt_step} sum"] = cond_correct
+    s_metrics[f"cond_acc_{ttt_step} count"] = cond_total
 
     return s_loss, s_metrics
