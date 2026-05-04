@@ -170,7 +170,6 @@ def run_prepare_data(
     data_path: Path,
     max_samples: int = 50,
     seq_length: int = 512,
-    seed: int = 0,
     timeout: float | None = None,
 ):
     """Tokenize data using prepare_data.py."""
@@ -185,8 +184,6 @@ def run_prepare_data(
         str(data_path),
         "--max-samples",
         str(max_samples),
-        "--seed",
-        str(seed),
         "--seq-length",
         str(seq_length),
     ]
