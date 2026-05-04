@@ -66,6 +66,7 @@ def setup_dataloader(
     world_size: int,
     local_rank: int,
     hidden_size: int,
+    hidden_states_dtype: torch.dtype,
     num_workers: int = 12,
     prefetch_factor: int = 4,
     preprocess=None,
@@ -96,7 +97,12 @@ def setup_dataloader(
         num_workers=num_workers,
         prefetch_factor=prefetch_factor,
         pin_memory=True,
-        collate_fn=create_collate_fn(args.total_seq_len, hidden_size, preprocess),
+        collate_fn=create_collate_fn(
+            args.total_seq_len,
+            hidden_size,
+            hidden_states_dtype=hidden_states_dtype,
+            preprocess=preprocess,
+        ),
         persistent_workers=True,
     )
 
@@ -339,6 +345,7 @@ def main(args: argparse.Namespace):
         world_size,
         local_rank,
         transformer_layer_config.hidden_size,
+        hidden_states_dtype,
         num_workers=args.num_workers,
         prefetch_factor=args.prefetch_factor,
         preprocess=preprocess,
@@ -348,6 +355,7 @@ def main(args: argparse.Namespace):
         world_size,
         local_rank,
         transformer_layer_config.hidden_size,
+        hidden_states_dtype,
         num_workers=args.num_workers,
         prefetch_factor=args.prefetch_factor,
         preprocess=preprocess,
