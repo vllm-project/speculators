@@ -1,6 +1,5 @@
 import logging
 import warnings
-from datetime import timedelta
 from typing import Literal, NamedTuple
 
 import torch
@@ -23,10 +22,7 @@ from speculators.train.checkpointer import (
     DistributedCheckpointer,
     SingleGPUCheckpointer,
 )
-from speculators.train.graceful_shutdown import (
-    GracefulShutdownHandler,
-    TrainingInterrupted,
-)
+from speculators.train.graceful_shutdown import with_graceful_shutdown
 from speculators.train.utils import apply_fully_sharded
 
 root_logger = logging.getLogger("speculators")
@@ -271,10 +267,15 @@ class Trainer:
         )
         return val_metrics
 
-    def maybe_save_checkpoint(self, epoch: int):
-        if self.config.save_best:
-            return
-        if not (epoch == 0 or (epoch + 1) % self.config.checkpoint_freq == 0):
+    def maybe_save_checkpoint(self, epoch: int | str):
+        if epoch != "interrupted" and (
+            self.config.save_best
+            or (
+                isinstance(epoch, int)
+                and epoch != 0
+                and (epoch + 1) % self.config.checkpoint_freq != 0
+            )
+        ):
             return
 
         root_logger.info(f"Saving checkpoint to {self.checkpointer.path / str(epoch)}")
@@ -305,50 +306,8 @@ class Trainer:
         if self.config.save_best:
             self.checkpointer.cleanup_keep_only_best(best_epoch=epoch)
 
-    def _save_interrupt_checkpoint(self, timeout: int):
-        """Save a checkpoint to the 'interrupted' directory.
-
-        In distributed mode, uses monitored_barrier (host-side, Store-based)
-        to synchronize ranks with a timeout. This works even if NCCL is in a
-        bad state from the interrupted operation.
-        """
-        interrupt_dir = "interrupted"
-
-        if self.is_distributed:
-            dist.monitored_barrier(timeout=timedelta(seconds=timeout))
-
-        self.checkpointer.save_checkpoint(self.model, self.opt, interrupt_dir)
-        if self.scheduler is not None:
-            self.checkpointer.save_scheduler_state_dict(
-                self.scheduler, interrupt_dir
-            )
-
+    @with_graceful_shutdown()
     def run_training(self):
-        shutdown_handler = GracefulShutdownHandler()
-        shutdown_handler.install()
-
-        try:
-            self._run_training_loop()
-        except TrainingInterrupted:
-            # Restore default handlers so a second Ctrl+C during save
-            # causes immediate exit
-            shutdown_handler.restore()
-
-            root_logger.warning(
-                "Training interrupted — attempting to save checkpoint "
-                f"(timeout={shutdown_handler.timeout}s, send Ctrl+C again "
-                "to force exit)..."
-            )
-            try:
-                self._save_interrupt_checkpoint(shutdown_handler.timeout)
-                root_logger.info(
-                    "Interrupt checkpoint saved to "
-                    f"'{self.checkpointer.path / 'interrupted'}'"
-                )
-            except Exception:
-                root_logger.exception("Failed to save interrupt checkpoint")
-
-    def _run_training_loop(self):
         n_epochs = self.config.num_epochs
         for epoch in range(self.current_epoch, n_epochs):
             root_logger.info(f"Training epoch {epoch + 1}/{n_epochs} started")

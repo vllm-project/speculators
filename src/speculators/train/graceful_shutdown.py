@@ -5,7 +5,7 @@ When Ctrl+C is pressed during training:
 - In single-GPU mode, the process receives SIGINT directly
 
 This module handles both cases by registering handlers for SIGINT and SIGTERM.
-The first signal raises a TrainingInterrupted exception that unwinds the call
+The first signal raises a TrainingInterruptedError exception that unwinds the call
 stack -- this works even when a process is stuck in a NCCL collective, data
 loading, or a GPU kernel. The exception is caught at the run_training level
 to attempt a checkpoint save.
@@ -24,6 +24,8 @@ import logging
 import os
 import signal
 import threading
+from functools import wraps
+from typing import Any
 
 logger = logging.getLogger("speculators")
 
@@ -31,16 +33,14 @@ logger = logging.getLogger("speculators")
 DEFAULT_SHUTDOWN_TIMEOUT = 120
 
 
-class TrainingInterrupted(Exception):
+class TrainingInterruptedError(Exception):
     """Raised by the signal handler to interrupt training for checkpoint save."""
-
-    pass
 
 
 class GracefulShutdownHandler:
     """Manages graceful shutdown with checkpoint saving on interrupt.
 
-    First interrupt: raises TrainingInterrupted to break out of stuck code.
+    First interrupt: raises TrainingInterruptedError to break out of stuck code.
     Subsequent rapid signals (from torchrun re-sends): silently ignored.
     After restore(): default handlers are active, so another Ctrl+C kills.
     """
@@ -48,8 +48,8 @@ class GracefulShutdownHandler:
     def __init__(self, timeout: int = DEFAULT_SHUTDOWN_TIMEOUT):
         self._interrupted = False
         self._lock = threading.Lock()
-        self._original_sigint = None
-        self._original_sigterm = None
+        self._original_sigint: Any = None
+        self._original_sigterm: Any = None
         self._timeout = timeout
         self._owner_pid: int | None = None
 
@@ -72,10 +72,10 @@ class GracefulShutdownHandler:
         if self._original_sigterm is not None:
             signal.signal(signal.SIGTERM, self._original_sigterm)
 
-    def _handler(self, signum, frame):
+    def _handler(self, signum, frame):  # noqa: ARG002
         # Only handle in the process that installed the handler.
         # Forked dataloader workers inherit signal handlers but should
-        # not raise TrainingInterrupted (it would crash the worker).
+        # not raise TrainingInterruptedError (it would crash the worker).
         if os.getpid() != self._owner_pid:
             return
 
@@ -91,8 +91,61 @@ class GracefulShutdownHandler:
                 f"Received {sig_name} — interrupting training to save checkpoint. "
                 "Send again to force immediate exit."
             )
-            raise TrainingInterrupted(sig_name)
+            raise TrainingInterruptedError(sig_name)
 
     @property
     def timeout(self) -> int:
         return self._timeout
+
+
+def with_graceful_shutdown(
+    save_label: str = "interrupted",
+    timeout: int = DEFAULT_SHUTDOWN_TIMEOUT,
+):
+    """Decorator that wraps a Trainer method with graceful shutdown handling.
+
+    The decorated method's `self` must have `maybe_save_checkpoint(label)` and
+    `checkpointer.path`.
+    """
+
+    def decorator(fn):
+        @wraps(fn)
+        def wrapper(self, *args, **kwargs):
+            handler = GracefulShutdownHandler(timeout=timeout)
+            handler.install()
+
+            try:
+                return fn(self, *args, **kwargs)
+            except TrainingInterruptedError:
+                handler.restore()
+
+                logger.warning(
+                    "Training interrupted — attempting to save checkpoint "
+                    f"(timeout={handler.timeout}s, send Ctrl+C again to force exit)..."
+                )
+
+                def _watchdog():
+                    logger.error(
+                        f"Interrupt checkpoint save timed out after {handler.timeout}s "
+                        "— forcing exit"
+                    )
+                    os._exit(1)
+
+                timer = threading.Timer(handler.timeout, _watchdog)
+                timer.daemon = True
+                timer.start()
+
+                try:
+                    self.maybe_save_checkpoint(save_label)
+                    logger.info(
+                        "Interrupt checkpoint saved to "
+                        f"'{self.checkpointer.path / save_label}'"
+                    )
+                except Exception:
+                    logger.exception("Failed to save interrupt checkpoint")
+                finally:
+                    timer.cancel()
+
+        return wrapper
+
+    return decorator
