@@ -214,7 +214,7 @@ class Trainer:
             if self.global_step % self.config.log_freq == 0:
                 if self.is_distributed:
                     for v in metrics.values():
-                        dist.reduce(v, dst=0, op=dist.ReduceOp.AVG)
+                        dist.reduce(v, dst=0, op=dist.ReduceOp.SUM)
 
                 metrics = {k: v.item() for k, v in metrics.items()}
                 metrics = normalize_counted_metrics(metrics)
@@ -256,7 +256,7 @@ class Trainer:
 
             if self.is_distributed:
                 for m in metrics.values():
-                    dist.all_reduce(m, op=dist.ReduceOp.AVG)
+                    dist.all_reduce(m, op=dist.ReduceOp.SUM)
 
             for k, v in metrics.items():
                 val_metrics[k] = val_metrics.get(k, 0.0) + v.item()

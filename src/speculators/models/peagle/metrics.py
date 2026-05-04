@@ -65,13 +65,14 @@ def compute_metrics(
         )
 
     metrics: dict[str, Any] = {
-        "loss": loss.detach(),
-        "full_correct": correct_per_pos.sum(),
-        "full_total": total_per_pos.sum(),
+        "loss sum": loss.detach(),
+        "loss count": torch.tensor(1.0, device=device),
+        "full_acc sum": correct_per_pos.sum(),
+        "full_acc count": total_per_pos.sum(),
     }
     for depth in range(num_depths):
-        metrics[f"position {depth} correct"] = correct_per_pos[depth]
-        metrics[f"position {depth} total"] = total_per_pos[depth]
+        metrics[f"position {depth} acc sum"] = correct_per_pos[depth]
+        metrics[f"position {depth} acc count"] = total_per_pos[depth]
 
     first_depth_len = len(sample_indices[0])
     draft_tokens = torch.argmax(logits[:, :first_depth_len], dim=-1)

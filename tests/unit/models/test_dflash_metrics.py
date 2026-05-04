@@ -285,9 +285,10 @@ class TestComputeMetrics:
         assert isinstance(loss, torch.Tensor)
         assert loss.ndim == 0
         assert isinstance(metrics, dict)
-        assert "loss" in metrics
-        assert "full_correct" in metrics
-        assert "full_total" in metrics
+        assert "loss sum" in metrics
+        assert "loss count" in metrics
+        assert "full_acc sum" in metrics
+        assert "full_acc count" in metrics
 
     def test_per_position_keys(self):
         B, T, V = 1, 8, 10
@@ -295,10 +296,10 @@ class TestComputeMetrics:
         targets = _ids_to_logits(torch.randint(0, V, (B, T)), V)
         loss_mask = torch.ones(B, T)
         _, metrics = compute_metrics(logits, targets, loss_mask, block_size=4)
-        assert "position 0 correct" not in metrics
+        assert "position 0 acc sum" not in metrics
         for i in range(1, 4):
-            assert f"position {i} correct" in metrics
-            assert f"position {i} total" in metrics
+            assert f"position {i} acc sum" in metrics
+            assert f"position {i} acc count" in metrics
 
     def test_loss_matches_loss_function(self):
         B, T, V = 1, 8, 10
@@ -316,7 +317,7 @@ class TestComputeMetrics:
             decay_fn=partial(dflash_loss_decay, gamma=4.0),
         )
         assert torch.isclose(loss, expected_loss)
-        assert torch.isclose(metrics["loss"], expected_loss)
+        assert torch.isclose(metrics["loss sum"], expected_loss)
 
     def test_counts_match_compute_accuracy(self):
         B, T, V = 1, 8, 10
@@ -331,8 +332,8 @@ class TestComputeMetrics:
             pred_ids, target_ids, loss_mask, pos_idx, 4
         )
         # full counts = sum of positions 1+ (position 0 excluded)
-        assert torch.isclose(metrics["full_correct"], expected_correct[1:].sum())
-        assert torch.isclose(metrics["full_total"], expected_total[1:].sum())
+        assert torch.isclose(metrics["full_acc sum"], expected_correct[1:].sum())
+        assert torch.isclose(metrics["full_acc count"], expected_total[1:].sum())
         for i in range(1, 4):
-            assert torch.isclose(metrics[f"position {i} correct"], expected_correct[i])
-            assert torch.isclose(metrics[f"position {i} total"], expected_total[i])
+            assert torch.isclose(metrics[f"position {i} acc sum"], expected_correct[i])
+            assert torch.isclose(metrics[f"position {i} acc count"], expected_total[i])

@@ -105,22 +105,21 @@ def resolve_mask_token_id(
 
 
 def normalize_counted_metrics(metrics: dict[str, float]) -> dict[str, float]:
-    """Compute accuracy ratios from correct/total count pairs.
+    """Normalize sum/count pairs into single values.
 
-    For any key ending in ' total', finds the matching ' correct' key,
-    computes correct / total, and stores the result under a new key with
-    suffix replaced by nothing (e.g. 'full_correct' + 'full_total' -> 'full_acc').
-    The raw correct/total keys are removed.
+    For any key ending in ' count', finds the matching ' sum' key,
+    computes sum / count, and stores the result under the prefix
+    (e.g. 'loss sum' / 'loss count' -> 'loss').
+    The raw sum/count keys are removed.
     """
-    for tk in [k for k in metrics if k.endswith(" total")]:
-        prefix = tk.removesuffix(" total")
-        ck = f"{prefix} correct"
-        if ck in metrics:
-            total = metrics[tk]
-            acc = metrics[ck] / total if total > 0 else 0.0
-            metrics[f"{prefix} acc"] = acc
-            del metrics[ck]
-        del metrics[tk]
+    for ck in [k for k in metrics if k.endswith(" count")]:
+        prefix = ck.removesuffix(" count")
+        sk = f"{prefix} sum"
+        if sk in metrics:
+            count = metrics[ck]
+            metrics[prefix] = metrics[sk] / count if count > 0 else 0.0
+            del metrics[sk]
+        del metrics[ck]
     return metrics
 
 
