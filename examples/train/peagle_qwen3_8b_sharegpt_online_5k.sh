@@ -17,6 +17,15 @@
 # is learning something. This is a good sanity check when creating a drafter for a new
 # target model.
 
+# Results on SpecBench (80 prompts, 256 output tokens):
+# acceptance rate: 12.18%
+# acceptance length: 1.49
+# per-position acceptance:
+#   position 0: 39.05%
+#   position 1: 8.71%
+#   position 2: 0.88%
+#   position 3: 0.07%
+
 set -euo pipefail
 
 # ============ Configuration ============
@@ -32,14 +41,11 @@ LR=6e-4
 # P-EAGLE-specific parameters
 SPECULATOR_TYPE="peagle"
 NUM_LAYERS=4
-PARA_DEPTHS=4
+NUM_DEPTHS=4
 DOWN_SAMPLE_RATIO=0.7
 DOWN_SAMPLE_RATIO_MIN=0.2
-MAX_SEQ_LEN=8192
-PREDICTION_LOSS_WEIGHT=1.0
-
 # GPU assignments (online training needs separate GPUs for vLLM and training)
-VLLM_GPUS="1"
+VLLM_GPUS="0"
 TRAIN_GPUS="2"
 NUM_TRAIN_GPUS=1
 # =======================================
@@ -87,11 +93,9 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPUS" torchrun \
     --total-seq-len "$SEQ_LENGTH" \
     --speculator-type "$SPECULATOR_TYPE" \
     --num-layers "$NUM_LAYERS" \
-    --para-depths "$PARA_DEPTHS" \
+    --num-depths "$NUM_DEPTHS" \
     --down-sample-ratio "$DOWN_SAMPLE_RATIO" \
     --down-sample-ratio-min "$DOWN_SAMPLE_RATIO_MIN" \
-    --max-seq-len "$MAX_SEQ_LEN" \
-    --prediction-loss-weight "$PREDICTION_LOSS_WEIGHT" \
     --no-norm-before-residual \
     --scheduler-type cosine \
     --on-missing generate \
