@@ -1,4 +1,4 @@
-# Performance Benchmarking with GuideLLM
+# Evaluating Model Performance
 
 ## Motivation
 
@@ -141,20 +141,21 @@ Script: `parse_sweep.py`
 
 ```
 perf_results_YYYYMMDD_HHMMSS/
-├── gen_len/
-│   ├── gen_len_HumanEval.json
-│   ├── gen_len_qa.json
-│   ├── max_tokens_HumanEval.json
-│   └── ...
-├── sweeps/
-│   ├── sweep_HumanEval.json
-│   ├── sweep_qa.json
-│   └── ...
-├── HumanEval_baseline_metrics.txt   # vLLM metrics before sweep
-├── HumanEval_current_metrics.txt    # vLLM metrics after sweep
-├── HumanEval_partial.csv            # Per-subset results
+├── perf_results.csv                 # Final consolidated results
 ├── max_tokens.json
-└── perf_results.csv                 # Final consolidated results
+└── .artifacts/                      # Intermediate files
+    ├── gen_len/
+    │   ├── gen_len_HumanEval.json
+    │   ├── gen_len_qa.json
+    │   ├── max_tokens_HumanEval.json
+    │   └── ...
+    ├── sweeps/
+    │   ├── sweep_HumanEval.json
+    │   ├── sweep_qa.json
+    │   └── ...
+    ├── HumanEval_baseline_metrics.txt   # vLLM metrics before sweep
+    ├── HumanEval_current_metrics.txt    # vLLM metrics after sweep
+    └── HumanEval_partial.csv            # Per-subset results
 ```
 
 ## Core Scripts

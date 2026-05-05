@@ -22,15 +22,17 @@
 #
 # Output Results:
 #   Creates a timestamped directory (perf_results_YYYYMMDD_HHMMSS/) containing:
-#     gen_len/
-#       gen_len_HumanEval.json     - Raw output length distribution data
-#       max_tokens_HumanEval.json  - Computed max_tokens cap (power-of-2)
-#     sweeps/
-#       sweep_HumanEval.json       - Full GuideLLM sweep results (11MB)
-#     HumanEval_baseline_metrics.txt   - vLLM metrics snapshot before sweep
-#     HumanEval_current_metrics.txt    - vLLM metrics snapshot after sweep
-#     HumanEval_partial.csv            - Performance + spec decode metrics
 #     perf_results.csv                 - Final consolidated CSV with columns:
+#     max_tokens.json                  - Combined max_tokens mapping
+#     .artifacts/
+#       gen_len/
+#         gen_len_HumanEval.json     - Raw output length distribution data
+#         max_tokens_HumanEval.json  - Computed max_tokens cap (power-of-2)
+#       sweeps/
+#         sweep_HumanEval.json       - Full GuideLLM sweep results (11MB)
+#       HumanEval_baseline_metrics.txt   - vLLM metrics snapshot before sweep
+#       HumanEval_current_metrics.txt    - vLLM metrics snapshot after sweep
+#       HumanEval_partial.csv            - Performance + spec decode metrics
 #       Performance: subset, strategy, target_rate, rps_median, latency_median_s,
 #                    itl_median_ms, ttft_median_ms, output_tps_median
 #       Spec Decode: num_drafts, num_draft_tokens, num_accepted_tokens,
