@@ -69,8 +69,8 @@ def _print_header() -> None:
         f"{'Subset':<20} {'Count':>6} {'Median':>8}"
         f" {'Min':>8} {'Max':>8} {'max_tokens':>12}"
     )
-    print(header)  # noqa: T201
-    print("-" * 70)  # noqa: T201
+    print(header)
+    print("-" * 70)
 
 
 def main() -> None:
@@ -98,7 +98,7 @@ def main() -> None:
 
     for filepath in args.files:
         if not filepath.exists():
-            print(  # noqa: T201
+            print(
                 f"[WARN] File not found, skipping: {filepath}",
                 file=sys.stderr,
             )
@@ -108,7 +108,7 @@ def main() -> None:
         try:
             stats = parse_gen_len_file(filepath)
         except (ValueError, KeyError, json.JSONDecodeError) as e:
-            print(  # noqa: T201
+            print(
                 f"[WARN] Failed to parse {filepath}: {e}",
                 file=sys.stderr,
             )
@@ -116,14 +116,14 @@ def main() -> None:
 
         max_tokens_map[subset] = stats["max_tokens"]
 
-        print(  # noqa: T201
+        print(
             f"{subset:<20} {stats['count']:>6} {stats['median']:>8.0f} "
             f"{stats['min']:>8} {stats['max']:>8} "
             f"{stats['max_tokens']:>12}"
         )
 
     if not max_tokens_map:
-        print(  # noqa: T201
+        print(
             "[ERROR] No files were successfully parsed",
             file=sys.stderr,
         )
@@ -133,7 +133,7 @@ def main() -> None:
     with args.output.open("w") as f:
         json.dump(max_tokens_map, f, indent=2)
 
-    print(f"\nmax_tokens mapping written to: {args.output}")  # noqa: T201
+    print(f"\nmax_tokens mapping written to: {args.output}")
 
 
 if __name__ == "__main__":

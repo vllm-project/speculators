@@ -93,7 +93,7 @@ def _collect_all_data(
             try:
                 file_data = load_data(path, metric_name)
             except (ValueError, FileNotFoundError) as e:
-                print(f"[WARN] {e}", file=sys.stderr)  # noqa: T201
+                print(f"[WARN] {e}", file=sys.stderr)
                 continue
             for subset, points in file_data.items():
                 all_data[label][subset].extend(points)
@@ -145,7 +145,7 @@ def main() -> None:
     try:
         sources = parse_source_args(args.source)
     except (ValueError, FileNotFoundError) as e:
-        print(f"[ERROR] {e}", file=sys.stderr)  # noqa: T201
+        print(f"[ERROR] {e}", file=sys.stderr)
         sys.exit(1)
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -165,7 +165,7 @@ def main() -> None:
             all_subsets &= subset_filter
 
         if not all_subsets:
-            print(  # noqa: T201
+            print(
                 f"[WARN] No data found for metric '{metric_name}'",
                 file=sys.stderr,
             )
@@ -193,7 +193,7 @@ def main() -> None:
             outpath = args.output_dir / f"compare_{subset}_{metric_name}.png"
             fig.savefig(outpath, dpi=150)
             plt.close(fig)
-            print(f"[INFO] Saved {outpath}")  # noqa: T201
+            print(f"[INFO] Saved {outpath}")
 
 
 if __name__ == "__main__":

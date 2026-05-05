@@ -304,7 +304,7 @@ def main() -> None:
                 metric_name,
             )
         except (ValueError, FileNotFoundError) as e:
-            print(f"[ERROR] {e}", file=sys.stderr)  # noqa: T201
+            print(f"[ERROR] {e}", file=sys.stderr)
             sys.exit(1)
 
         all_subsets = set(baseline_data.keys()) & set(target_data.keys())
@@ -312,7 +312,7 @@ def main() -> None:
             all_subsets &= subset_filter
 
         if not all_subsets:
-            print(  # noqa: T201
+            print(
                 f"[WARN] No common subsets for metric '{metric_name}'",
                 file=sys.stderr,
             )
@@ -336,7 +336,7 @@ def main() -> None:
                 title_prefix=args.title,
             )
             if not ok:
-                print(  # noqa: T201
+                print(
                     f"[WARN] No overlapping RPS range for subset '{subset}', skipping",
                     file=sys.stderr,
                 )
@@ -346,7 +346,7 @@ def main() -> None:
             outpath = args.output_dir / f"speedup_{subset}_{metric_name}.png"
             fig.savefig(outpath, dpi=150)
             plt.close(fig)
-            print(f"[INFO] Saved {outpath}")  # noqa: T201
+            print(f"[INFO] Saved {outpath}")
 
 
 if __name__ == "__main__":

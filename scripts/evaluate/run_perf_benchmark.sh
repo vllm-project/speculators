@@ -184,8 +184,8 @@ fi
 # Setup Output Directory
 # ==============================================================================
 
-GEN_LEN_DIR="${OUTPUT_DIR}/gen_len"
-SWEEP_DIR="${OUTPUT_DIR}/sweeps"
+GEN_LEN_DIR="${OUTPUT_DIR}/.artifacts/gen_len"
+SWEEP_DIR="${OUTPUT_DIR}/.artifacts/sweeps"
 
 mkdir -p "${GEN_LEN_DIR}" "${SWEEP_DIR}"
 echo "[INFO] Output directory: ${OUTPUT_DIR}"
@@ -248,7 +248,7 @@ for subset in "${SUBSET_ARRAY[@]}"; do
     # Capture baseline vLLM metrics BEFORE the sweep (if vLLM URL provided)
     BASELINE_METRICS_FILE=""
     if [[ -n "${VLLM_URL}" ]]; then
-        BASELINE_METRICS_FILE="${OUTPUT_DIR}/${subset}_baseline_metrics.txt"
+        BASELINE_METRICS_FILE="${OUTPUT_DIR}/.artifacts/${subset}_baseline_metrics.txt"
         METRICS_URL="${VLLM_URL%/}/metrics"
         if curl -s -f --max-time 10 "${METRICS_URL}" > "${BASELINE_METRICS_FILE}"; then
             echo "[INFO] [${subset}] Captured baseline metrics"
@@ -277,7 +277,7 @@ for subset in "${SUBSET_ARRAY[@]}"; do
     # Capture current vLLM metrics AFTER sweep (if vLLM URL provided)
     CURRENT_METRICS_FILE=""
     if [[ -n "${VLLM_URL}" ]]; then
-        CURRENT_METRICS_FILE="${OUTPUT_DIR}/${subset}_current_metrics.txt"
+        CURRENT_METRICS_FILE="${OUTPUT_DIR}/.artifacts/${subset}_current_metrics.txt"
         METRICS_URL="${VLLM_URL%/}/metrics"
         if curl -s -f --max-time 10 "${METRICS_URL}" > "${CURRENT_METRICS_FILE}"; then
             echo "[INFO] [${subset}] Captured current metrics"
@@ -288,7 +288,7 @@ for subset in "${SUBSET_ARRAY[@]}"; do
     fi
 
     # Parse sweep results to capture metrics (delta from baseline)
-    PARTIAL_CSV="${OUTPUT_DIR}/${subset}_partial.csv"
+    PARTIAL_CSV="${OUTPUT_DIR}/.artifacts/${subset}_partial.csv"
 
     PARSE_ARGS=(
         --output "${PARTIAL_CSV}"
