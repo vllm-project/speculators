@@ -171,7 +171,6 @@ select = [
     "A", # flake8-builtins: prevents shadowing of Python built-in names
     "C", # Convention: ensures code adheres to specific style and formatting conventions
     "COM", # flake8-commas: enforces the correct use of trailing commas
-    "ERA", # eradicate: detects commented-out code that should be removed
     "I", # isort: ensures imports are sorted in a consistent manner
     "ICN", # flake8-import-conventions: enforces import conventions for better readability
     "N", # pep8-naming: enforces PEP 8 naming conventions for classes, functions, and variables
@@ -183,6 +182,7 @@ select = [
     "TCH", # flake8-type-checking: enforces type checking practices and standards
     "TID", # flake8-tidy-imports: enforces tidy and well-organized imports
     "RUF022", # flake8-ruff: enforce sorting of __all__ in modules
+    "RUF100", # unused-noqa: Checks if there are noqa directives that aren't needed
 
     # Code Structure / Complexity
     "C4", # flake8-comprehensions: improves readability and performance of list, set, and dict comprehensions
@@ -243,7 +243,6 @@ select = [
     "SIM105", # contextlib.suppress not needed for __del__
     "S101", # assert in worker is acceptable
     "SIM102", # nested if is clearer
-    "ERA001", # comment is documentation, not code
     "PTH", # os.path is acceptable in data generation
 ]
 "scripts/**/*.py" = [

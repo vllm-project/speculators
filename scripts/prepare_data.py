@@ -28,8 +28,8 @@ import logging
 import sys
 from pathlib import Path
 
-from speculators.data_generation.logging_utils import PipelineLogger  # noqa: E402
-from speculators.data_generation.preprocessing import (  # noqa: E402
+from speculators.data_generation.logging_utils import PipelineLogger
+from speculators.data_generation.preprocessing import (
     load_and_preprocess_dataset,
 )
 
