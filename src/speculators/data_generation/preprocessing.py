@@ -453,7 +453,7 @@ def _preprocess_batch(
     results: dict[str, list] = {"input_ids": [], "loss_mask": [], "seq_len": []}
     conversations: list[dict] = examples.get("conversations", [])
 
-    # MM inputs must use Chat Completion API
+    # MM inputs must use Chat Completions API
     if isinstance(processor, ProcessorMixin):
         results["messages"] = []
 
