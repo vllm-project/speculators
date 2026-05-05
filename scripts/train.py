@@ -656,12 +656,6 @@ def parse_args():  # noqa: PLR0915
         help="Save a checkpoint every N epochs.",
     )
     parser.add_argument(
-        "--save-steps",
-        type=int,
-        default=None,
-        help="Save a mid-epoch checkpoint every N training steps.",
-    )
-    parser.add_argument(
         "--save-best",
         action="store_true",
         default=False,
