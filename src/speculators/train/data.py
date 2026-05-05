@@ -111,8 +111,8 @@ def build_client_item(dataset_item: dict) -> ClientItem:
     out_dict = {}
     out_dict["input_ids"] = dataset_item["input_ids"].tolist()
 
-    if "_vllm_messages" in dataset_item:
-        out_dict["messages"] = dataset_item["_vllm_messages"]
+    if "messages" in dataset_item:
+        out_dict["messages"] = dataset_item["messages"]
 
     return cast("ClientItem", out_dict)
 

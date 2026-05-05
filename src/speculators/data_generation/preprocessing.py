@@ -455,7 +455,7 @@ def _preprocess_batch(
 
     # MM inputs must use Chat Completion API
     if isinstance(processor, ProcessorMixin):
-        results["_vllm_messages"] = []
+        results["messages"] = []
 
     if not conversations:
         log.warning(f"No conversations key found. Keys: {list(examples.keys())}")
@@ -500,8 +500,8 @@ def _preprocess_batch(
         results["loss_mask"].append(loss_mask)
         results["seq_len"].append(len(input_ids))
 
-        if "_vllm_messages" in results:
-            results["_vllm_messages"].append(_adapt_conv_for_vllm(normalized_conv))
+        if "messages" in results:
+            results["messages"].append(_adapt_conv_for_vllm(normalized_conv))
 
     return results
 
