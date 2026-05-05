@@ -1,14 +1,23 @@
 import bisect
 import random
 import re
+from collections.abc import Callable
 from pathlib import Path
 from re import Pattern
-from typing import Any, cast
+from typing import cast
 
 import torch
 from datasets import Dataset as HFDataset
 from datasets import concatenate_datasets, load_dataset
-from transformers import AutoTokenizer, PreTrainedTokenizerBase
+from packaging.version import Version
+from transformers import (
+    AutoProcessor,
+    BatchEncoding,
+    BatchFeature,
+    PreTrainedTokenizerBase,
+    ProcessorMixin,
+)
+from transformers import __version__ as TRANSFORMERS_VERSION  # noqa: N812
 
 from speculators.data_generation.configs import DATASET_CONFIGS
 from speculators.data_generation.logging_utils import PipelineLogger
@@ -23,12 +32,15 @@ __all__ = [
 log = PipelineLogger(__name__)
 
 
-def _visualize_sample(preprocessed, tokenizer, idx: int = 0):
+ProcessorLike = PreTrainedTokenizerBase | ProcessorMixin
+
+
+def _visualize_sample(preprocessed: HFDataset, processor: ProcessorLike, idx: int = 0):
     """Visualize a single sample with color-coded trainable regions."""
     # Get preprocessed sample
     prep_sample = preprocessed[idx]
-    input_ids = prep_sample["input_ids"]
-    loss_mask = prep_sample["loss_mask"]
+    input_ids = prep_sample["input_ids"].tolist()
+    loss_mask = prep_sample["loss_mask"].tolist()
 
     log.info(f"SAMPLE #{idx}")
     log.info("HIGHLIGHTED TEXT (BLUE = trainable, GREY = masked)")
@@ -42,8 +54,9 @@ def _visualize_sample(preprocessed, tokenizer, idx: int = 0):
     prev_state = None
 
     for i in range(len(input_ids)):
-        is_train = loss_mask[i].item() == 1
-        token = tokenizer.decode([input_ids[i].item()])
+        is_train = loss_mask[i] == 1
+        token = processor.decode([input_ids[i]])
+        assert isinstance(token, str)
 
         # Switch colors when state changes
         if is_train != prev_state:
@@ -107,19 +120,98 @@ def _normalize_conversation(
     return normalized
 
 
-def _supports_assistant_mask(tokenizer: PreTrainedTokenizerBase) -> bool:
-    """Check if tokenizer truly supports HF assistant token mask.
+def _adapt_part_for_hf(part: str | dict, processor: ProcessorLike):
+    if isinstance(part, str) and isinstance(processor, ProcessorMixin):
+        return {"type": "text", "text": part}
+
+    return part
+
+
+def _adapt_turn_for_hf(turn: dict, processor: ProcessorLike):
+    if isinstance(turn["content"], str):
+        if isinstance(processor, ProcessorMixin):
+            return turn | {"content": [_adapt_part_for_hf(turn["content"], processor)]}
+
+        return turn
+
+    return turn | {
+        "content": [_adapt_part_for_hf(part, processor) for part in turn["content"]]
+    }
+
+
+def _adapt_conv_for_hf(normalized_conv: list[dict], processor: ProcessorLike):
+    return [_adapt_turn_for_hf(turn, processor) for turn in normalized_conv]
+
+
+def _adapt_part_for_vllm(part: str | dict):
+    if isinstance(part, str):
+        return {"type": "text", "text": part}
+
+    part_type = part["type"]
+
+    if part_type == "text":
+        return {"type": "text", "text": part["text"]}
+
+    for modality in ("image", "video", "audio"):
+        if part_type == modality:
+            if local_path := part.get("path"):
+                file_url = f"file://{Path(local_path).absolute()}"
+                return {"type": f"{modality}_url", f"{modality}_url": {"url": file_url}}
+            if url := part.get("url"):
+                return {"type": f"{modality}_url", f"{modality}_url": {"url": url}}
+
+            if part.get("base64"):
+                expr = {"type": modality, "base64": "..."}
+                raise ValueError(
+                    f"Content part {expr} is not supported. To avoid copying "
+                    f"the {modality} when saving the preprocessed dataset, "
+                    f"please express {modality} inputs using file paths or URLs."
+                )
+            if part.get(modality):
+                expr = {"type": modality, modality: "..."}
+                raise ValueError(
+                    f"Content part {expr} is not supported. To avoid copying "
+                    f"the {modality} when saving the preprocessed dataset, "
+                    f"please express {modality} inputs using file paths or URLs."
+                )
+
+            expr = {"type": modality} | {k: "..." for k in part if k != "type"}
+            raise NotImplementedError(f"Unknown content part: {expr}")
+
+    expr = dict.fromkeys(part.keys(), "...")
+    raise NotImplementedError(f"Unknown content part: {expr}")
+
+
+def _adapt_turn_for_vllm(turn: dict):
+    if isinstance(turn["content"], str):
+        return turn
+
+    return turn | {"content": [_adapt_part_for_vllm(part) for part in turn["content"]]}
+
+
+def _adapt_conv_for_vllm(normalized_conv: list[dict]):
+    return [_adapt_turn_for_vllm(turn) for turn in normalized_conv]
+
+
+def _supports_assistant_mask(processor: ProcessorLike) -> bool:
+    """Check if processor truly supports HF assistant token mask.
 
     Must return a non-zero mask for a conversation containing an assistant message.
     """
+    test_conv = _adapt_conv_for_hf(
+        [{"role": "assistant", "content": "test"}],
+        processor,
+    )
+
     try:
-        res_any = tokenizer.apply_chat_template(
-            [{"role": "assistant", "content": "test"}],
-            tokenize=True,
+        res_any = processor.apply_chat_template(
+            test_conv,
+            tokenizer=True,
             return_assistant_tokens_mask=True,
             return_dict=True,
         )
-        res = cast("dict[str, Any]", res_any)
+        res = cast("BatchEncoding | BatchFeature", res_any)
+
         # Check both singular and plural key names
         mask = res.get("assistant_masks", res.get("assistant_mask"))
         if mask is None:
@@ -127,24 +219,28 @@ def _supports_assistant_mask(tokenizer: PreTrainedTokenizerBase) -> bool:
 
         # Verify the mask is not all zeros
         return any(m == 1 for m in mask)
-    except (TypeError, ValueError, KeyError, AttributeError):
+    except (TypeError, ValueError, KeyError, AttributeError) as e:
+        log.warning(f"An error occurred when trying to return assistant mask: {e}")
         return False
 
 
-def _detect_assistant_pattern(tokenizer: PreTrainedTokenizerBase) -> str:
-    """Auto-detect the assistant message pattern from the tokenizer's chat template.
+def _detect_assistant_pattern(processor: ProcessorLike) -> str:
+    """Auto-detect the assistant message pattern from the processor's chat template.
 
     Uses multi-turn conversation but extracts pattern from the LAST assistant
     message only.
     """
-    test_conv = [
-        {"role": "user", "content": "USER_MSG_1"},
-        {"role": "assistant", "content": "ASSISTANT_MSG_1"},
-        {"role": "user", "content": "USER_MSG_2"},
-        {"role": "assistant", "content": "ASSISTANT_MSG_2"},
-    ]
+    test_conv = _adapt_conv_for_hf(
+        [
+            {"role": "user", "content": "USER_MSG_1"},
+            {"role": "assistant", "content": "ASSISTANT_MSG_1"},
+            {"role": "user", "content": "USER_MSG_2"},
+            {"role": "assistant", "content": "ASSISTANT_MSG_2"},
+        ],
+        processor,
+    )
 
-    formatted = tokenizer.apply_chat_template(
+    formatted = processor.apply_chat_template(
         test_conv, tokenize=False, add_generation_prompt=False
     )
     assert isinstance(formatted, str), "Expected string from apply_chat_template"
@@ -255,9 +351,98 @@ def _create_loss_mask_from_offsets(
     return loss_mask
 
 
+def _get_input_ids_loss_mask(
+    normalized_conv: list[dict],
+    processor: ProcessorLike,
+    max_length: int,
+    assistant_pattern: str | Pattern[str] | None,
+):
+    hf_conv = _adapt_conv_for_hf(normalized_conv, processor)
+
+    if assistant_pattern is None:
+        # HF assistant token mask
+        encoded_any = processor.apply_chat_template(
+            hf_conv,
+            tokenize=True,
+            add_generation_prompt=False,
+            return_assistant_tokens_mask=True,
+            return_dict=True,
+        )
+        encoded = cast("BatchEncoding | BatchFeature", encoded_any)
+
+        # input IDs and loss mask
+        input_ids = encoded["input_ids"]
+        # HF uses 'assistant_masks' in recent versions
+        mask_key = (
+            "assistant_masks" if "assistant_masks" in encoded else "assistant_mask"
+        )
+        loss_mask = torch.tensor(encoded[mask_key], dtype=torch.long)
+
+        return input_ids, loss_mask
+
+    # Fallback: regex-based detection
+    assert assistant_pattern is not None, "Assistant pattern required for fallback"
+
+    processor_kwargs: dict = {
+        "return_offsets_mapping": True,
+        "max_length": max_length,
+        "truncation": True,
+        "add_special_tokens": False,
+    }
+
+    if isinstance(processor, ProcessorMixin):
+        if Version(TRANSFORMERS_VERSION) >= Version("5.4.0"):
+            encoded_any = processor.apply_chat_template(
+                hf_conv,
+                tokenize=True,
+                add_generation_prompt=False,
+                return_dict=True,
+                processor_kwargs=processor_kwargs,
+            )
+        else:
+            encoded_any = processor.apply_chat_template(
+                hf_conv,
+                tokenize=True,
+                add_generation_prompt=False,
+                return_dict=True,
+                **processor_kwargs,
+            )
+
+        encoded = cast("BatchFeature", encoded_any)
+
+        # Remove batch dimension
+        (input_ids,) = encoded["input_ids"]
+        (offsets,) = encoded["offset_mapping"]
+
+        # MM placeholder tokens are inserted separate from chat template
+        formatted_text = processor.decode(input_ids)
+        assert isinstance(formatted_text, str)
+    else:
+        # More optimized flow for text-only processors (i.e. tokenizers)
+        formatted_text = processor.apply_chat_template(
+            hf_conv,
+            tokenize=False,
+            add_generation_prompt=False,
+        )
+        assert isinstance(formatted_text, str)
+
+        # Tokenize and get offsets
+        encoded_any = processor(formatted_text, **processor_kwargs)
+        encoded = cast("BatchEncoding", encoded_any)
+
+        input_ids = encoded["input_ids"]
+        offsets = encoded["offset_mapping"]
+
+    loss_mask = _create_loss_mask_from_offsets(
+        formatted_text, offsets, assistant_pattern
+    )
+
+    return input_ids, loss_mask
+
+
 def _preprocess_batch(
     examples: dict,
-    tokenizer: PreTrainedTokenizerBase,
+    processor: ProcessorLike,
     max_length: int,
     assistant_pattern: str | Pattern[str] | None,
     turn_dropout: bool = False,
@@ -266,7 +451,11 @@ def _preprocess_batch(
     """Process a batch of conversations into tokenized format with loss masks."""
 
     results: dict[str, list] = {"input_ids": [], "loss_mask": [], "seq_len": []}
-    conversations = examples.get("conversations", [])
+    conversations: list[dict] = examples.get("conversations", [])
+
+    # MM inputs must use Chat Completions API
+    if isinstance(processor, ProcessorMixin):
+        results["messages"] = []
 
     if not conversations:
         log.warning(f"No conversations key found. Keys: {list(examples.keys())}")
@@ -282,73 +471,12 @@ def _preprocess_batch(
             continue
 
         try:
-            if assistant_pattern is None:
-                # HF assistant token mask
-                encoded_any = tokenizer.apply_chat_template(
-                    normalized_conv,
-                    tokenize=True,
-                    add_generation_prompt=False,
-                    return_assistant_tokens_mask=True,
-                    return_dict=True,
-                )
-                encoded = cast("dict[str, Any]", encoded_any)
-
-                # input IDs and loss mask
-                input_ids = encoded["input_ids"]
-                # HF uses 'assistant_masks' in recent versions
-                mask_key = (
-                    "assistant_masks"
-                    if "assistant_masks" in encoded
-                    else "assistant_mask"
-                )
-                loss_mask = torch.tensor(encoded[mask_key], dtype=torch.long)
-
-            else:
-                # Fallback: regex-based detection
-                assert assistant_pattern is not None, (
-                    "Assistant pattern required for fallback"
-                )
-                formatted_raw = tokenizer.apply_chat_template(
-                    normalized_conv,
-                    tokenize=False,
-                    add_generation_prompt=False,
-                )
-                assert isinstance(formatted_raw, str)
-
-                # Tokenize and get offsets
-                encoding = tokenizer(
-                    formatted_raw,
-                    return_offsets_mapping=True,
-                    max_length=max_length,
-                    truncation=True,
-                    add_special_tokens=False,
-                )
-
-                # input IDs and loss mask
-                input_ids = encoding["input_ids"]
-                offsets = encoding["offset_mapping"]
-
-                loss_mask = _create_loss_mask_from_offsets(
-                    formatted_raw, offsets, assistant_pattern
-                )
-
-            # Assert shapes match
-            assert len(input_ids) == len(loss_mask), (
-                f"Shape mismatch: input_ids={len(input_ids)}, "
-                f"loss_mask={len(loss_mask)}"
+            input_ids, loss_mask = _get_input_ids_loss_mask(
+                normalized_conv,
+                processor,
+                max_length=max_length,
+                assistant_pattern=assistant_pattern,
             )
-
-            # Filtering samples out with too few valid tokens
-            if minimum_valid_tokens is not None:
-                num_valid_tokens = int(loss_mask.sum().item())
-                if num_valid_tokens < minimum_valid_tokens:
-                    continue
-
-            # Append to results
-            results["input_ids"].append(torch.tensor(input_ids, dtype=torch.long))
-            results["loss_mask"].append(loss_mask)
-            results["seq_len"].append(len(input_ids))
-
         except (TypeError, ValueError, KeyError, AttributeError, RuntimeError) as e:
             log.error(
                 f"Failed to process conversation {idx} "
@@ -356,12 +484,31 @@ def _preprocess_batch(
             )
             continue
 
+        # Assert shapes match
+        assert len(input_ids) == len(loss_mask), (
+            f"Shape mismatch: input_ids={len(input_ids)}, loss_mask={len(loss_mask)}"
+        )
+
+        # Filtering samples out with too few valid tokens
+        if minimum_valid_tokens is not None:
+            num_valid_tokens = int(loss_mask.sum().item())
+            if num_valid_tokens < minimum_valid_tokens:
+                continue
+
+        # Append to results
+        results["input_ids"].append(torch.tensor(input_ids, dtype=torch.long))
+        results["loss_mask"].append(loss_mask)
+        results["seq_len"].append(len(input_ids))
+
+        if "messages" in results:
+            results["messages"].append(_adapt_conv_for_vllm(normalized_conv))
+
     return results
 
 
 def build_eagle3_dataset(
     dataset: HFDataset,
-    tokenizer: PreTrainedTokenizerBase,
+    processor: ProcessorLike,
     max_length: int = 2048,
     num_proc: int = 8,
     assistant_pattern: str | Pattern[str] | None = None,
@@ -370,11 +517,11 @@ def build_eagle3_dataset(
 ) -> HFDataset:
     """Build EAGLE3 dataset by tokenizing conversations and creating loss masks.
 
-    Uses the tokenizer's built-in chat template via apply_chat_template.
+    Uses the processor's built-in chat template via apply_chat_template.
 
     Args:
         dataset: Raw dataset with conversations
-        tokenizer: Tokenizer with chat template support
+        processor: Processor with chat template support
         max_length: Maximum sequence length
         num_proc: Number of processes for parallel processing
         assistant_pattern: Optional custom regex pattern for matching assistant
@@ -387,11 +534,11 @@ def build_eagle3_dataset(
     # Detect and use provided assistant message pattern
     if assistant_pattern is not None:
         log.info(f"Using custom assistant pattern: {str(assistant_pattern)[:80]}...")
-    elif _supports_assistant_mask(tokenizer):
+    elif _supports_assistant_mask(processor):
         assistant_pattern = None  # Signal to use HF mask in _preprocess_batch
         log.info("Using HF assistant token mask for loss masking")
     else:
-        assistant_pattern = _detect_assistant_pattern(tokenizer)
+        assistant_pattern = _detect_assistant_pattern(processor)
         log.info(f"Detected assistant pattern: {str(assistant_pattern)[:80]}...")
 
     original_cols = dataset.column_names
@@ -399,7 +546,7 @@ def build_eagle3_dataset(
     dataset = dataset.map(
         lambda examples: _preprocess_batch(
             examples,
-            tokenizer,
+            processor,
             max_length,
             assistant_pattern,
             turn_dropout,
@@ -416,10 +563,12 @@ def build_eagle3_dataset(
     return dataset
 
 
-def load_raw_dataset(train_data_path: str, num_proc: int = 8) -> HFDataset:
+def load_raw_dataset(
+    train_data_path: str,
+) -> tuple[HFDataset, Callable[[dict], dict] | None]:
     """Load raw dataset from local file or HuggingFace."""
     if train_data_path.endswith((".jsonl", ".json")):
-        return load_dataset("json", data_files=train_data_path, split="train")
+        return load_dataset("json", data_files=train_data_path, split="train"), None
 
     if train_data_path not in DATASET_CONFIGS:
         raise ValueError(
@@ -428,17 +577,36 @@ def load_raw_dataset(train_data_path: str, num_proc: int = 8) -> HFDataset:
         )
 
     config = DATASET_CONFIGS[train_data_path]
-    raw_dataset = load_dataset(config.hf_path, split=config.split)
+    raw_dataset = load_dataset(config.hf_path, config.hf_name, split=config.split)
 
-    if config.normalize_fn is not None:
-        raw_dataset = raw_dataset.map(config.normalize_fn, num_proc=num_proc)
+    if config.filter_fn is not None:
+        raw_dataset = raw_dataset.filter(config.filter_fn)
 
-    return raw_dataset
+    return raw_dataset, config.normalize_fn
+
+
+def _resolve_pad_token(processor: ProcessorLike):
+    tokenizer = (
+        processor.tokenizer if isinstance(processor, ProcessorMixin) else processor
+    )
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+
+def _load_processor(target_model_path: str, *, trust_remote_code: bool = False):
+    processor = AutoProcessor.from_pretrained(
+        target_model_path,
+        trust_remote_code=trust_remote_code,
+    )
+    _resolve_pad_token(processor)
+
+    return processor
 
 
 def load_and_preprocess_dataset(
     target_model_path: str,
     train_data_paths: list[str],
+    *,
     seq_length: int,
     build_dataset_num_proc: int = 8,
     seed: int = 0,
@@ -447,10 +615,11 @@ def load_and_preprocess_dataset(
     assistant_pattern: str | None = None,
     turn_dropout: bool = False,
     minimum_valid_tokens: int | None = None,
-) -> tuple[HFDataset, PreTrainedTokenizerBase]:
+    trust_remote_code: bool = False,
+) -> tuple[HFDataset, ProcessorLike]:
     """Load, tokenize, and preprocess a dataset for EAGLE3 training.
 
-    Uses the tokenizer's built-in chat template via apply_chat_template.
+    Uses the processor's built-in chat template via apply_chat_template.
     Caching is handled automatically by HuggingFace datasets.
 
     Args:
@@ -468,9 +637,10 @@ def load_and_preprocess_dataset(
         turn_dropout: If True, randomly keeps first N consecutive turns per
                      conversation
         minimum_valid_tokens: Number of tokens to consider for a valid sample
+        trust_remote_code: If True, allows executing code from HF Hub.
 
     Returns:
-        Tuple of (preprocessed_dataset, tokenizer)
+        Tuple of (preprocessed_dataset, processor)
     """
     if minimum_valid_tokens is not None and minimum_valid_tokens < 0:
         raise ValueError("minimum_valid_tokens must be >= 0")
@@ -480,21 +650,19 @@ def load_and_preprocess_dataset(
             f"Filtering samples with fewer than {minimum_valid_tokens} valid tokens"
         )
 
-    log.subsection("Loading tokenizer")
-    tokenizer = AutoTokenizer.from_pretrained(target_model_path, trust_remote_code=True)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+    log.subsection("Loading processor")
+    processor = _load_processor(target_model_path, trust_remote_code=trust_remote_code)
 
-    if not hasattr(tokenizer, "apply_chat_template") or tokenizer.chat_template is None:
+    if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
         raise ValueError(
-            f"Tokenizer for {target_model_path} does not support chat templates. "
+            f"Processor for {target_model_path} does not support chat templates. "
             "Please use a model with a pre-configured chat template."
         )
 
     processed_datasets = []
     for train_data_path in train_data_paths:
         log.subsection(f"Processing {train_data_path}")
-        raw_dataset = load_raw_dataset(train_data_path, num_proc=build_dataset_num_proc)
+        raw_dataset, normalize_fn = load_raw_dataset(train_data_path)
         raw_dataset = raw_dataset.shuffle(seed=seed)
 
         if max_samples is not None and len(raw_dataset) > 3 * max_samples:
@@ -503,6 +671,13 @@ def load_and_preprocess_dataset(
             # after combining datasets and shuffling
             raw_dataset = raw_dataset.select(range(3 * max_samples))
 
+        if normalize_fn is not None:
+            raw_dataset = raw_dataset.map(
+                normalize_fn,
+                num_proc=build_dataset_num_proc,
+                keep_in_memory=True,  # skip caching
+            )
+
         log.info(f"Loaded {len(raw_dataset)} samples")
 
         if turn_dropout:
@@ -510,7 +685,7 @@ def load_and_preprocess_dataset(
 
         preprocessed_dataset = build_eagle3_dataset(
             dataset=raw_dataset,
-            tokenizer=tokenizer,
+            processor=processor,
             max_length=seq_length,
             num_proc=build_dataset_num_proc,
             assistant_pattern=assistant_pattern,
@@ -533,8 +708,8 @@ def load_and_preprocess_dataset(
     )
 
     log.subsection("Visualizing sample")
-    _visualize_sample(combined_dataset, tokenizer, idx=0)
+    _visualize_sample(combined_dataset, processor, idx=0)
 
     log.section("Dataset preprocessing complete")
 
-    return combined_dataset, tokenizer
+    return combined_dataset, processor

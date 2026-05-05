@@ -7,7 +7,7 @@ import warnings
 from collections.abc import Callable
 from os import PathLike
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import openai
 import torch
@@ -19,6 +19,7 @@ from torch.utils.data import Dataset
 from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_REQUEST_TIMEOUT,
+    ClientItem,
     generate_hidden_states,
 )
 from speculators.train.noise_transforms import TransformTensors
@@ -103,6 +104,16 @@ def standardize_data_v1(data: dict[str, Any]) -> dict[str, Any]:
         "verifier_last_hidden_states": data["hidden_states"][-1],
         "loss_mask": data["loss_mask"],
     }
+
+
+def build_client_item(dataset_item: dict) -> ClientItem:
+    out_dict = {}
+    out_dict["input_ids"] = dataset_item["input_ids"].tolist()
+
+    if "messages" in dataset_item:
+        out_dict["messages"] = dataset_item["messages"]
+
+    return cast("ClientItem", out_dict)
 
 
 class BaseDataset(Dataset):
@@ -257,12 +268,14 @@ class ArrowDataset(BaseDataset):
         if not self.client:
             self._setup_client()
 
-        input_ids = self.data[index]["input_ids"].tolist()
+        dataset_item = self.data[index]
+        client_item = build_client_item(dataset_item)
+
         try:
             hs_filepath = generate_hidden_states(
                 self.client,  # type:ignore[arg-type]
                 self.model,  # type:ignore[arg-type]
-                input_ids,
+                client_item,
                 timeout=self.request_timeout,
                 max_retries=self.max_retries,
             )

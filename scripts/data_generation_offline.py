@@ -31,6 +31,7 @@ from speculators.data_generation.vllm_client import (
     DEFAULT_REQUEST_TIMEOUT,
     generate_hidden_states_async,
 )
+from speculators.train.data import build_client_item
 from speculators.train.logger import setup_root_logger
 
 logger = logging.getLogger(__name__)
@@ -66,8 +67,8 @@ def parse_args():
         type=str,
         default=None,
         help=(
-            "HuggingFace model ID or local path for target model (default auto select)."
-            "For verification purposes only."
+            "HuggingFace model ID or local path for target model "
+            "(default auto select). For verification purposes only."
         ),
     )
     parser.add_argument(
@@ -113,7 +114,7 @@ def parse_args():
         type=int,
         default=32,
         help=(
-            "Number of active vLLM requests at a time."
+            "Number of active vLLM requests at a time. "
             "Note: number of async workers set to 2*concurrency"
         ),
     )
@@ -121,8 +122,8 @@ def parse_args():
         "--validate-outputs",
         action="store_true",
         help=(
-            "Load generated safetensor files and check output token ids match prompt"
-            " tokens and hidden states seq_len matches num tokens"
+            "Load generated safetensor files and check output token ids match "
+            "prompt tokens and hidden states seq_len matches num tokens"
         ),
     )
     parser.add_argument(
@@ -276,8 +277,6 @@ async def worker(
             queue.task_done()
             continue
 
-        input_ids = item["input_ids"].tolist()
-
         target_hidden_states_path = hidden_states_output_dir / f"hs_{idx}.safetensors"
 
         try:
@@ -285,7 +284,7 @@ async def worker(
                 hidden_states_path = await generate_hidden_states_async(
                     client,
                     model,
-                    input_ids,
+                    item,
                     timeout=request_timeout,
                     max_retries=max_retries,
                 )
@@ -295,7 +294,9 @@ async def worker(
                 )
                 if validate_outputs:
                     await asyncio.to_thread(
-                        check_safetensors_file, target_hidden_states_path, input_ids
+                        check_safetensors_file,
+                        target_hidden_states_path,
+                        item["input_ids"],
                     )
         except Exception as e:
             if fail_on_error:
@@ -325,12 +326,15 @@ async def _feed_queue(to_process, dataset, queue, cancel_event):
     for i in to_process:
         if cancel_event.is_set():
             break
-        item = dataset[i]
+
+        dataset_item = dataset[i]
+        client_item = build_client_item(dataset_item) | {"idx": i}
+
         # Check cancel_event while waiting for queue space to avoid
         # deadlocking when all workers have died.
         while not cancel_event.is_set():
             try:
-                queue.put_nowait({"idx": i, "input_ids": item["input_ids"]})
+                queue.put_nowait(client_item)
                 break
             except asyncio.QueueFull:
                 await asyncio.sleep(0.1)

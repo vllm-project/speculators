@@ -32,6 +32,8 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--verifier-name-or-path`** (str, required) HuggingFace model ID or local path for the verifier/target model.
 
+- **`--trust-remote-code`** (flag) Allow executing code from HF Hub when loading the verifier's tokenizer.
+
 - **`--speculator-type`** (str, default: `"eagle3"`) Type of speculator model to train. Options: `eagle3`, `dflash`
 
 - **`--from-pretrained`** (str, default: `""`) Path to a pretrained draft model to finetune.
