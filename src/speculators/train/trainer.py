@@ -43,7 +43,7 @@ class TrainerConfig(NamedTuple):
     scheduler_warmup_steps: int | None = None
     scheduler_total_steps: int | None = None
     scheduler_num_cosine_cycles: float = 0.5
-    checkpoint_freq: int = 1
+    checkpoint_freq: float = 1
     save_best: bool = False
     hidden_states_dtype: torch.dtype = torch.bfloat16
     log_freq: int = 1
@@ -190,7 +190,13 @@ class Trainer:
         if self.local_rank == 0:
             train_loader = tqdm(train_loader, desc=f"Epoch {epoch}")  # type: ignore[assignment]
 
-        for batch in train_loader:
+        num_steps = len(self.train_loader)
+        step_interval = (
+            max(1, round(num_steps * self.config.checkpoint_freq))
+            if self.config.checkpoint_freq < 1
+            else None
+        )
+        for local_step, batch in enumerate(train_loader, 1):
             gpu_batch = {
                 k: v.to(self.local_rank, non_blocking=True)
                 if isinstance(v, torch.Tensor)
@@ -227,6 +233,14 @@ class Trainer:
                     extra={"step": self.global_step},
                 )
             self.global_step += 1
+
+            if (
+                step_interval is not None
+                and not self.config.save_best
+                and local_step % step_interval == 0
+                and num_steps - local_step >= step_interval
+            ):
+                self.maybe_save_checkpoint(epoch)
 
     @torch.no_grad()
     def val_epoch(self, epoch: int) -> dict[str, float] | None:
@@ -269,7 +283,9 @@ class Trainer:
     def maybe_save_checkpoint(self, epoch: int):
         if self.config.save_best:
             return
-        if not (epoch == 0 or (epoch + 1) % self.config.checkpoint_freq == 0):
+        if self.config.checkpoint_freq >= 1 and not (
+            epoch == 0 or (epoch + 1) % int(self.config.checkpoint_freq) == 0
+        ):
             return
 
         root_logger.info(f"Saving checkpoint to {self.checkpointer.path / str(epoch)}")
@@ -288,7 +304,9 @@ class Trainer:
             self.checkpointer.save_checkpoint(self.model, self.opt, epoch)
             if self.scheduler is not None:
                 self.checkpointer.save_scheduler_state_dict(self.scheduler, epoch)
-        elif not (epoch == 0 or (epoch + 1) % self.config.checkpoint_freq == 0):
+        elif self.config.checkpoint_freq >= 1 and not (
+            epoch == 0 or (epoch + 1) % int(self.config.checkpoint_freq) == 0
+        ):
             return
 
         self.best_val_loss = val_metrics["loss_epoch"]
