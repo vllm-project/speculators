@@ -387,6 +387,11 @@ def _checkpoint_freq(value: str) -> float:
     fvalue = float(value)
     if fvalue <= 0:
         raise argparse.ArgumentTypeError("--checkpoint-freq must be > 0")
+    if fvalue > 1 and not fvalue.is_integer():
+        raise argparse.ArgumentTypeError(
+            f"--checkpoint-freq={fvalue} is not an integer. Values > 1 are treated "
+            "as epoch counts and must be whole numbers."
+        )
     return fvalue
 
 
