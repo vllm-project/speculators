@@ -4,7 +4,7 @@ import warnings
 
 import torch
 import torch.distributed as dist
-from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
+from torch.distributed.fsdp import fully_shard
 from transformers import AutoTokenizer
 
 local_rank = int(os.environ.get("LOCAL_RANK", "0"))
@@ -104,22 +104,35 @@ def resolve_mask_token_id(
     )
 
 
-def normalize_counted_metrics(metrics: dict[str, float]) -> dict[str, float]:
-    """Normalize sum/count pairs into single values.
+def normalize_counted_metrics(
+    metrics: dict[str, float], world_size: int = 1
+) -> dict[str, float]:
+    """Normalize metrics after ReduceOp.SUM across ranks.
 
-    For any key ending in ' count', finds the matching ' sum' key,
-    computes sum / count, and stores the result under the prefix
-    (e.g. 'loss sum' / 'loss count' -> 'loss').
-    The raw sum/count keys are removed.
+    For any key ending in '_total', finds the matching '_sum' key,
+    computes sum / total, and stores the result under the prefix
+    (e.g. 'loss_sum' / 'loss_total' -> 'loss').
+    The raw sum/total keys are removed.
+
+    Any remaining metrics (not part of a sum/total pair) are divided
+    by world_size to compute the average across ranks.
     """
-    for ck in [k for k in metrics if k.endswith(" count")]:
-        prefix = ck.removesuffix(" count")
-        sk = f"{prefix} sum"
+    normalized_keys: set[str] = set()
+    for tk in [k for k in metrics if k.endswith("_total")]:
+        prefix = tk.removesuffix("_total")
+        sk = f"{prefix}_sum"
         if sk in metrics:
-            count = metrics[ck]
-            metrics[prefix] = metrics[sk] / count if count > 0 else 0.0
+            total = metrics[tk]
+            metrics[prefix] = metrics[sk] / total if total > 0 else 0.0
             del metrics[sk]
-        del metrics[ck]
+            normalized_keys.add(prefix)
+        del metrics[tk]
+
+    if world_size > 1:
+        for k in metrics:
+            if k not in normalized_keys:
+                metrics[k] /= world_size
+
     return metrics
 
 
@@ -130,14 +143,9 @@ def apply_fully_sharded(model: torch.nn.Module):
     Model should be validated with SpeculatorModel.verify_training_compatible()
     before calling this function.
     """
-    mp_policy = MixedPrecisionPolicy(
-        param_dtype=torch.bfloat16,
-        reduce_dtype=torch.float32,
-    )
-
     for layer in model.layers:  # type: ignore[union-attr]
-        fully_shard(layer, mp_policy=mp_policy)
+        fully_shard(layer)
 
-    fully_shard(model, mp_policy=mp_policy)
+    fully_shard(model)
 
     return model

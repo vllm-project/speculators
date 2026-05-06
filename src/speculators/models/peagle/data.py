@@ -10,7 +10,7 @@ def generate_cod_sample_indices(
     down_sample_ratio: float = 0.7,
     down_sample_ratio_min: float = 0.2,
     filter_position_zero: bool = True,
-) -> tuple[list[torch.Tensor], int]:
+) -> tuple[torch.Tensor, torch.Tensor, int, int]:
     """
     Generate sampling indices for parallel sequences using COD sampling.
 
@@ -22,25 +22,27 @@ def generate_cod_sample_indices(
         seq_length: Length of the sequence
         loss_mask: Binary mask indicating valid training positions [batch, seq_len]
         num_depths: Number of parallel prediction groups (K)
-        down_sample_ratio: Geometric decay ratio r ∈ (0,1)
+        down_sample_ratio: Geometric decay ratio r in (0,1)
         down_sample_ratio_min: Minimum retention ratio floor
         filter_position_zero: Whether to filter out position 0 from candidates
 
     Returns:
         Tuple of:
-        - sample_indices: List of K tensors, each containing position
-          indices for that depth
-        - total_additional_length: Sum of lengths of depths 1 through K-1
+        - all_indices: Flat tensor of encoded indices (depth * seq_length + pos)
+          for all depths [total_sampled_length]
+        - depth_ids: Per-element depth assignment [total_sampled_length]
+        - num_depths_used: Actual number of depths produced
+        - first_depth_len: Length of depth-0 indices (always seq_length)
     """
     loss_mask = loss_mask.squeeze()
+    device = loss_mask.device
     all_valid_indices = torch.where(loss_mask == 1)[0]
 
     # Depth 0: Always include ALL positions
-    sample_indices = [torch.arange(seq_length, device=loss_mask.device)]
+    sample_indices = [torch.arange(seq_length, device=device)]
     prev_indices = all_valid_indices
 
     for depth in range(1, num_depths):
-        # Calculate retention ratio with geometric decay and minimum floor
         valid_length = max(0, len(all_valid_indices) - depth)
         ratio = max(down_sample_ratio**depth, down_sample_ratio_min)
         sample_size = int(valid_length * ratio)
@@ -48,12 +50,10 @@ def generate_cod_sample_indices(
         if sample_size <= 0:
             break
 
-        # Random sampling for robustness
         if len(prev_indices) >= sample_size:
-            # Randomly select sample_size positions from prev_indices
-            random_selection = torch.randperm(
-                len(prev_indices), device=loss_mask.device
-            )[:sample_size]
+            random_selection = torch.randperm(len(prev_indices), device=device)[
+                :sample_size
+            ]
             sampled_idx = prev_indices[random_selection]
             sampled_idx = torch.sort(sampled_idx)[0]
         else:
@@ -67,5 +67,16 @@ def generate_cod_sample_indices(
 
         sample_indices.append(sampled_idx)
 
-    total_additional_length = sum(len(idx) for idx in sample_indices[1:])
-    return sample_indices, total_additional_length
+    num_depths_used = len(sample_indices)
+
+    all_indices = torch.cat(
+        [depth * seq_length + idx for depth, idx in enumerate(sample_indices)]
+    )
+    depth_ids = torch.cat(
+        [
+            torch.full((idx.shape[0],), depth, device=device, dtype=torch.long)
+            for depth, idx in enumerate(sample_indices)
+        ]
+    )
+
+    return all_indices, depth_ids, num_depths_used, seq_length

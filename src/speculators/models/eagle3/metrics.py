@@ -100,11 +100,11 @@ def compute_metrics(
     )
 
     s_metrics = {}
-    s_metrics[f"loss_{ttt_step} sum"] = s_loss.detach().clone()
-    s_metrics[f"loss_{ttt_step} count"] = torch.tensor(1.0, device=s_loss.device)
-    s_metrics[f"full_acc_{ttt_step} sum"] = full_correct
-    s_metrics[f"full_acc_{ttt_step} count"] = full_total
-    s_metrics[f"cond_acc_{ttt_step} sum"] = cond_correct
-    s_metrics[f"cond_acc_{ttt_step} count"] = cond_total
+    s_metrics[f"loss_{ttt_step}_sum"] = s_loss.detach().clone()
+    s_metrics[f"loss_{ttt_step}_total"] = torch.tensor(1.0, device=s_loss.device)
+    s_metrics[f"full_acc_{ttt_step}_sum"] = full_correct
+    s_metrics[f"full_acc_{ttt_step}_total"] = full_total
+    s_metrics[f"cond_acc_{ttt_step}_sum"] = cond_correct
+    s_metrics[f"cond_acc_{ttt_step}_total"] = cond_total
 
     return s_loss, s_metrics

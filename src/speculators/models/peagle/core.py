@@ -8,7 +8,7 @@ from transformers import PretrainedConfig
 
 from speculators.config import SpeculatorsConfig, VerifierConfig
 from speculators.model import SpeculatorModel
-from speculators.models.eagle3.core import Eagle3DraftModel
+from speculators.models.eagle3.core import Eagle3DraftModel, conditional_torch_compile
 from speculators.models.peagle.attention import create_peagle_mask_mod
 from speculators.models.peagle.config import PEagleSpeculatorConfig
 from speculators.models.peagle.data import generate_cod_sample_indices
@@ -34,7 +34,7 @@ class PEagleDraftModel(Eagle3DraftModel):
 
     config_class: ClassVar[type[PEagleSpeculatorConfig]] = PEagleSpeculatorConfig  # type: ignore[misc]
     _keys_to_ignore_on_load_missing: ClassVar[list[str]] = [  # type: ignore[misc]
-        *Eagle3DraftModel._keys_to_ignore_on_load_missing,
+        *Eagle3DraftModel._keys_to_ignore_on_load_missing,  # noqa: SLF001
         "mask_hidden",
     ]
 
@@ -49,46 +49,15 @@ class PEagleDraftModel(Eagle3DraftModel):
         self.down_sample_ratio_min = config.down_sample_ratio_min
         self.mask_token_id = config.mask_token_id
 
-        self.lm_head.weight.requires_grad = False
-        self.lm_head.eval()
-
         # Learnable mask_hidden parameter for padding unsampled positions
         self.mask_hidden = torch.nn.Parameter(torch.randn(1, 1, 3 * self.hidden_size))
 
-    def _pad_hidden_states(self, intensors, target_len, hidden, index_list):
-        """
-        Pad hidden states to target length using learnable mask_hidden parameter.
-
-        This matches the p-eagle-train paddinghidden implementation exactly.
-
-        Args:
-            intensors: Input tensor [batch, n, hidden_size]
-            target_len: Target sequence length to pad to
-            hidden: Learnable padding parameter (self.mask_hidden)
-            index_list: List to append current length to (for tracking)
-
-        Returns:
-            Padded tensor [batch, target_len, hidden_size]
-        """
-        batch_size, current_len, hidden_size = intensors.shape
-        index_list.append(current_len)
-
-        # Move hidden to same device and dtype as intensors
-        # mask_hidden is in ignored_params for FSDP, so it's replicated not sharded
-        hidden = hidden.to(device=intensors.device, dtype=intensors.dtype)
-        padding_tensor = hidden.expand(
-            batch_size, target_len - current_len, hidden_size
-        )
-
-        # Concatenate
-        return torch.cat((intensors, padding_tensor), dim=1)
-
+    @conditional_torch_compile
     def forward(
         self,
         hidden_states: torch.Tensor,
         input_ids: torch.Tensor,
         lengths: torch.Tensor | None = None,
-        attention_mask: torch.Tensor | None = None,
         position_ids: torch.Tensor | None = None,
         loss_mask: torch.Tensor | None = None,
         verifier_last_hidden_states: torch.Tensor | None = None,
@@ -103,7 +72,6 @@ class PEagleDraftModel(Eagle3DraftModel):
             hidden_states: Verifier hidden states [batch, seq_len, 3*hidden_size]
             input_ids: Input token IDs [batch, seq_len]
             lengths: Sequence lengths for each sample in batch [batch_size]
-            attention_mask: Attention mask (optional, created from sample_indices)
             position_ids: Position IDs [batch, seq_len] (optional)
             loss_mask: Loss mask for which tokens to compute loss on
                 [batch, seq_len]
@@ -121,81 +89,59 @@ class PEagleDraftModel(Eagle3DraftModel):
         if loss_mask is None:
             loss_mask = torch.ones_like(input_ids, dtype=torch.float32)
 
-        # Generate COD sampling indices (moved from collate function)
-        sample_indices, _ = generate_cod_sample_indices(
-            seq_length=seq_length,
-            loss_mask=loss_mask,
-            num_depths=self.num_depths,
-            down_sample_ratio=self.down_sample_ratio,
-            down_sample_ratio_min=self.down_sample_ratio_min,
+        # Generate COD sampling indices
+        all_indices, depth_ids, num_depths, first_depth_len = (
+            generate_cod_sample_indices(
+                seq_length=seq_length,
+                loss_mask=loss_mask,
+                num_depths=self.num_depths,
+                down_sample_ratio=self.down_sample_ratio,
+                down_sample_ratio_min=self.down_sample_ratio_min,
+            )
         )
-
-        # Use actual number of depths returned (may be less than num_depths
-        # if sampling stopped early)
-        num_depths = len(sample_indices)
 
         # Generate sample_ids to prevent cross-sample attention
-        sample_ids_list = []
-        cum_len = 0
-        for sample_id, length in enumerate(lengths):
-            sample_ids_list.append(
-                torch.full((length.item(),), sample_id, dtype=torch.long, device=device)
-            )
-            cum_len += length.item()
-
-        if cum_len < seq_length:
-            pad_id = len(lengths) - 1 if len(lengths) > 0 else 0
-            sample_ids_list.append(
-                torch.full(
-                    (seq_length - cum_len,), pad_id, dtype=torch.long, device=device
-                )
-            )
-
-        sample_ids = torch.cat(sample_ids_list, dim=0).unsqueeze(0)  # [1, seq_len]
-
-        target_len = input_ids.shape[1] * num_depths
-
-        batch_size, current_len, hidden_size = hidden_states.shape
-        pad_len = target_len - current_len
-
-        if pad_len > 0:
-            padding = self.mask_hidden.to(
-                device=hidden_states.device,
-                dtype=hidden_states.dtype,
-            ).expand(batch_size, pad_len, hidden_size)
-
-            hidden_states_tensor = torch.cat([hidden_states, padding], dim=1)
-        else:
-            hidden_states_tensor = hidden_states
-
-        pad = torch.full(
-            (input_ids.shape[0], input_ids.shape[1] * (num_depths - 1)),
-            self.mask_token_id,  # type: ignore[arg-type]
-            dtype=input_ids.dtype,
-            device=input_ids.device,
+        document_ids = torch.repeat_interleave(
+            torch.arange(lengths.shape[0], device=device, dtype=torch.long), lengths
         )
+        document_ids = torch.cat(
+            [
+                document_ids,
+                -1
+                * torch.ones(
+                    seq_length - document_ids.shape[0],
+                    device=device,
+                    dtype=torch.long,
+                ),
+            ]
+        ).contiguous()
+        sample_ids = document_ids.unsqueeze(0)  # [1, seq_len]
 
-        input_ids = torch.cat([input_ids, pad], dim=1)
-        inputs_embeds = self.embed_tokens(input_ids)
+        orig_positions = all_indices % seq_length
+        is_depth_0 = depth_ids == 0
 
-        single_pos = torch.arange(0, seq_length, dtype=torch.long, device=device)
-        position_ids = single_pos.repeat(num_depths).unsqueeze(0)
-        inputs_embeds = inputs_embeds.to(hidden_states_tensor.dtype)
+        # Build sampled input_ids: real tokens for depth 0, mask for others
+        sampled_ids = torch.where(
+            is_depth_0,
+            input_ids[0, orig_positions],
+            torch.tensor(self.mask_token_id, dtype=input_ids.dtype, device=device),
+        ).unsqueeze(0)
+        inputs_embeds = self.embed_tokens(sampled_ids).to(hidden_states.dtype)
+
+        # Build sampled hidden states: real for depth 0, mask_hidden for others
+        mask_hidden = self.mask_hidden.to(device=device, dtype=hidden_states.dtype)
+        sampled_hidden = torch.where(
+            is_depth_0.unsqueeze(-1),
+            hidden_states[0, orig_positions],
+            mask_hidden.squeeze(0).expand(orig_positions.shape[0], -1),
+        ).unsqueeze(0)
 
         # Project concatenated hidden states (3*hidden_size) -> hidden_size
-        hidden_states_tensor = self.fc(hidden_states_tensor)
+        sampled_hidden = self.fc(sampled_hidden)
 
-        layer_input = torch.cat([inputs_embeds, hidden_states_tensor], dim=-1)
+        layer_input = torch.cat([inputs_embeds, sampled_hidden], dim=-1)
 
-        all_indices_list = []
-        for depth, indices in enumerate(sample_indices):
-            encoded_indices = depth * seq_length + indices
-            all_indices_list.append(encoded_indices)
-
-        all_indices = torch.cat(all_indices_list, dim=0)  # [total_sampled_length]
-
-        layer_input = layer_input[:, all_indices, :]
-        position_ids = position_ids[:, all_indices]
+        position_ids = orig_positions.unsqueeze(0)
 
         position_embeddings = self.rotary_emb(layer_input, position_ids)
 
@@ -210,8 +156,8 @@ class PEagleDraftModel(Eagle3DraftModel):
             mask_mod,
             B=None,
             H=None,
-            Q_LEN=len(all_indices),
-            KV_LEN=len(all_indices),
+            Q_LEN=all_indices.shape[0],
+            KV_LEN=all_indices.shape[0],
             device=device,
         )
 
@@ -228,26 +174,24 @@ class PEagleDraftModel(Eagle3DraftModel):
 
         logits = self.lm_head(self.norm(hidden))
 
-        assert verifier_last_hidden_states is not None, (
-            "verifier_last_hidden_states required for training"
-        )
+        if verifier_last_hidden_states is None:
+            raise ValueError("verifier_last_hidden_states required for training")
         with torch.no_grad():
             targets = self.verifier_lm_head(
                 self.verifier_norm(verifier_last_hidden_states)
             )
 
-        # Map sampled (depth, original_position) → original_position only.
-        original_positions = all_indices % seq_length
-        targets = targets[:, original_positions, :]
+        targets = targets[:, orig_positions, :]
 
         loss, draft_tokens, metrics = compute_metrics(
             logits=logits,
             targets=targets,
             loss_mask=loss_mask,
-            sample_indices=sample_indices,
+            depth_ids=depth_ids,
             all_indices=all_indices,
             seq_length=seq_length,
             num_depths=num_depths,
+            first_depth_len=first_depth_len,
         )
 
         return draft_tokens, loss, metrics

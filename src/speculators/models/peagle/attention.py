@@ -7,7 +7,7 @@ def create_peagle_mask_mod(
     all_indices: torch.Tensor,
     seq_length: int,
     num_depths: int,
-    sample_ids: torch.Tensor | None = None,
+    sample_ids: torch.Tensor,
 ):
     """
     Create a flex attention mask modifier for P-EAGLE parallel groups.
@@ -19,7 +19,7 @@ def create_peagle_mask_mod(
         all_indices: Flattened position indices for all groups [total_length]
         seq_length: Original sequence length (before parallel expansion)
         num_depths: Number of parallel groups (K)
-        sample_ids: Optional sample IDs to prevent cross-sample attention
+        sample_ids: Sample IDs to prevent cross-sample attention
             [batch_size, seq_length]
 
     Returns:
@@ -40,7 +40,6 @@ def create_peagle_mask_mod(
         original_positions[full_idx] = original_pos
         depth_assignments[full_idx] = depth
 
-    assert sample_ids is not None, "sample_ids must be provided"
     sample_ids_repeated = sample_ids.squeeze(0).repeat(num_depths)  # [total_length]
 
     def peagle_mask_mod(_b, _h, q_idx, kv_idx):

@@ -41,11 +41,11 @@ class PEagleSpeculatorConfig(Eagle3SpeculatorConfig):
         default=0.7,
         description="Geometric decay ratio for COD sampling (retention rate r)",
         gt=0.0,
-        lt=1.0,
+        le=1.0,
     )
 
     down_sample_ratio_min: float = Field(
-        default=0.1,
+        default=0.2,
         description="Minimum retention ratio floor to prevent over-sampling",
         gt=0.0,
         le=1.0,

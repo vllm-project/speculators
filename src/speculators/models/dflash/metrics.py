@@ -56,13 +56,13 @@ def compute_metrics(
     )
 
     metrics: dict[str, Any] = {}
-    metrics["loss sum"] = loss.detach().clone()
-    metrics["loss count"] = torch.tensor(1.0, device=logits.device)
+    metrics["loss_sum"] = loss.detach().clone()
+    metrics["loss_total"] = torch.tensor(1.0, device=logits.device)
     # Position 0 is the anchor — intentionally excluded from accuracy
-    metrics["full_acc sum"] = correct_per_pos[1:].sum()
-    metrics["full_acc count"] = total_per_pos[1:].sum()
+    metrics["full_acc_sum"] = correct_per_pos[1:].sum()
+    metrics["full_acc_total"] = total_per_pos[1:].sum()
 
     for pos in range(1, block_size):
-        metrics[f"position {pos} acc sum"] = correct_per_pos[pos]
-        metrics[f"position {pos} acc count"] = total_per_pos[pos]
+        metrics[f"position_{pos}_acc_sum"] = correct_per_pos[pos]
+        metrics[f"position_{pos}_acc_total"] = total_per_pos[pos]
     return loss, metrics

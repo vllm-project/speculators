@@ -14,43 +14,34 @@ from speculators.models.metrics import (
 def compute_metrics(
     logits: torch.Tensor,
     targets: torch.Tensor,
-    loss_mask: torch.Tensor | None,
-    sample_indices: list[torch.Tensor],
+    loss_mask: torch.Tensor,
+    depth_ids: torch.Tensor,
     all_indices: torch.Tensor,
     seq_length: int,
     num_depths: int,
+    first_depth_len: int,
 ) -> tuple[torch.Tensor, torch.Tensor, dict[str, Any]]:
     """Compute loss and accuracy metrics for P-EAGLE predictions.
 
     Args:
         logits: Draft model logits [B, total_sampled, vocab_size]
         targets: Verifier logits [B, total_sampled, vocab_size]
-        loss_mask: Binary mask [B, seq_len] (original sequence length)
-        sample_indices: Per-depth COD sampling indices
-        all_indices: Flattened COD sample indices
+        loss_mask: Binary mask [B, seq_len]
+        depth_ids: Per-element depth assignment [total_sampled]
+        all_indices: Flattened COD sample indices [total_sampled]
         seq_length: Original sequence length
-        num_depths: Number of parallel depths (config max, not actual)
+        num_depths: Number of parallel depths
+        first_depth_len: Length of depth-0 indices
 
     Returns:
         Tuple of (loss, draft_tokens, metrics_dict)
     """
     device = logits.device
-    total_sampled = logits.shape[1]
 
-    pos_idx = torch.cat(
-        [
-            torch.full((len(indices),), depth, device=device, dtype=torch.long)
-            for depth, indices in enumerate(sample_indices)
-        ]
-    ).unsqueeze(0)
+    pos_idx = depth_ids.unsqueeze(0)
 
-    if loss_mask is not None:
-        orig_positions = all_indices % seq_length
-        sampled_loss_mask = loss_mask[:, orig_positions]
-    else:
-        sampled_loss_mask = torch.ones(
-            1, total_sampled, device=device, dtype=torch.bool
-        )
+    orig_positions = all_indices % seq_length
+    sampled_loss_mask = loss_mask[:, orig_positions]
 
     loss = loss_function(
         logits, targets, sampled_loss_mask, pos_idx, loss_fn=kl_div_loss
@@ -65,16 +56,15 @@ def compute_metrics(
         )
 
     metrics: dict[str, Any] = {
-        "loss sum": loss.detach(),
-        "loss count": torch.tensor(1.0, device=device),
-        "full_acc sum": correct_per_pos.sum(),
-        "full_acc count": total_per_pos.sum(),
+        "loss_sum": loss.detach(),
+        "loss_total": torch.tensor(1.0, device=device),
+        "full_acc_sum": correct_per_pos.sum(),
+        "full_acc_total": total_per_pos.sum(),
     }
     for depth in range(num_depths):
-        metrics[f"position {depth} acc sum"] = correct_per_pos[depth]
-        metrics[f"position {depth} acc count"] = total_per_pos[depth]
+        metrics[f"position_{depth}_acc_sum"] = correct_per_pos[depth]
+        metrics[f"position_{depth}_acc_total"] = total_per_pos[depth]
 
-    first_depth_len = len(sample_indices[0])
     draft_tokens = torch.argmax(logits[:, :first_depth_len], dim=-1)
 
     return loss, draft_tokens, metrics

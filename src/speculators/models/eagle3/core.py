@@ -255,8 +255,8 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
             # shape: [1, total_seq_len]
 
         if return_loss:
-            metrics["loss sum"] = loss.detach().clone()
-            metrics["loss count"] = torch.tensor(1.0, device=device)
+            metrics["loss_sum"] = loss.detach().clone()
+            metrics["loss_total"] = torch.tensor(1.0, device=device)
             return draft_tokens, loss, metrics
         else:
             return draft_tokens

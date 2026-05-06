@@ -17,14 +17,20 @@
 # is learning something. This is a good sanity check when creating a drafter for a new
 # target model.
 
+# Timing (on 4x NVIDIA H100 80GB GPUs, DP=2)
+# Data Preprocessing: 26 seconds
+# vLLM Server Startup: 82 seconds (1 min 22 secs)
+# Training (4 epochs): 2793 seconds (46 mins 33 secs)
+# Total: 2901 seconds (48 mins 21 secs)
+
 # Results on SpecBench (80 prompts, 256 output tokens):
-# acceptance rate: 12.18%
-# acceptance length: 1.49
+# acceptance rate: 12.81%
+# acceptance length: 1.51
 # per-position acceptance:
-#   position 0: 39.05%
-#   position 1: 8.71%
-#   position 2: 0.88%
-#   position 3: 0.07%
+#   position 0: 39.92%
+#   position 1: 10.02%
+#   position 2: 1.19%
+#   position 3: 0.10%
 
 set -euo pipefail
 
@@ -45,9 +51,9 @@ NUM_DEPTHS=4
 DOWN_SAMPLE_RATIO=0.7
 DOWN_SAMPLE_RATIO_MIN=0.2
 # GPU assignments (online training needs separate GPUs for vLLM and training)
-VLLM_GPUS="0"
-TRAIN_GPUS="2"
-NUM_TRAIN_GPUS=1
+VLLM_GPUS="3,4"
+TRAIN_GPUS="6,7"
+NUM_TRAIN_GPUS=2
 # =======================================
 
 # Step 1: Prepare data
@@ -62,7 +68,8 @@ python scripts/prepare_data.py \
 # Step 2: Launch vLLM server in the background
 echo "=== Step 2: Launching vLLM server ==="
 CUDA_VISIBLE_DEVICES="$VLLM_GPUS" python scripts/launch_vllm.py "$MODEL" \
-    -- --port "$VLLM_PORT" &
+    --hidden-states-path "$OUTPUT_DIR/hidden_states" \
+    -- --data-parallel-size 2 --port "$VLLM_PORT" &
 VLLM_PID=$!
 
 # Ensure vLLM is cleaned up on exit
@@ -87,6 +94,7 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPUS" torchrun \
     --verifier-name-or-path "$MODEL" \
     --data-path "$OUTPUT_DIR" \
     --vllm-endpoint "http://localhost:${VLLM_PORT}/v1" \
+    --hidden-states-path "$OUTPUT_DIR/hidden_states" \
     --save-path "$OUTPUT_DIR/checkpoints" \
     --epochs "$EPOCHS" \
     --lr "$LR" \

@@ -217,7 +217,8 @@ class Trainer:
                         dist.reduce(v, dst=0, op=dist.ReduceOp.SUM)
 
                 metrics = {k: v.item() for k, v in metrics.items()}
-                metrics = normalize_counted_metrics(metrics)
+                world_size = dist.get_world_size() if self.is_distributed else 1
+                metrics = normalize_counted_metrics(metrics, world_size)
                 metric_logger.info(
                     {
                         "train": metrics,
@@ -261,8 +262,9 @@ class Trainer:
             for k, v in metrics.items():
                 val_metrics[k] = val_metrics.get(k, 0.0) + v.item()
 
+        world_size = dist.get_world_size() if self.is_distributed else 1
         val_metrics = {k: v / num_batches for k, v in val_metrics.items()}
-        val_metrics = normalize_counted_metrics(val_metrics)
+        val_metrics = normalize_counted_metrics(val_metrics, world_size)
         val_metrics = {f"{k}_epoch": v for k, v in val_metrics.items()}
 
         metric_logger.info(
