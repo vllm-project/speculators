@@ -19,8 +19,7 @@ def compute_metrics(
     all_indices: torch.Tensor,
     seq_length: int,
     num_depths: int,
-    first_depth_len: int,
-) -> tuple[torch.Tensor, torch.Tensor, dict[str, Any]]:
+) -> tuple[torch.Tensor, dict[str, Any]]:
     """Compute loss and accuracy metrics for P-EAGLE predictions.
 
     Args:
@@ -31,7 +30,6 @@ def compute_metrics(
         all_indices: Flattened COD sample indices [total_sampled]
         seq_length: Original sequence length
         num_depths: Number of parallel depths
-        first_depth_len: Length of depth-0 indices
 
     Returns:
         Tuple of (loss, draft_tokens, metrics_dict)
@@ -65,6 +63,4 @@ def compute_metrics(
         metrics[f"position_{depth}_acc_sum"] = correct_per_pos[depth]
         metrics[f"position_{depth}_acc_total"] = total_per_pos[depth]
 
-    draft_tokens = torch.argmax(logits[:, :first_depth_len], dim=-1)
-
-    return loss, draft_tokens, metrics
+    return loss, metrics

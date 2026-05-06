@@ -90,14 +90,12 @@ class PEagleDraftModel(Eagle3DraftModel):
             loss_mask = torch.ones_like(input_ids, dtype=torch.float32)
 
         # Generate COD sampling indices
-        all_indices, depth_ids, num_depths, first_depth_len = (
-            generate_cod_sample_indices(
-                seq_length=seq_length,
-                loss_mask=loss_mask,
-                num_depths=self.num_depths,
-                down_sample_ratio=self.down_sample_ratio,
-                down_sample_ratio_min=self.down_sample_ratio_min,
-            )
+        all_indices, depth_ids, num_depths = generate_cod_sample_indices(
+            seq_length=seq_length,
+            loss_mask=loss_mask,
+            num_depths=self.num_depths,
+            down_sample_ratio=self.down_sample_ratio,
+            down_sample_ratio_min=self.down_sample_ratio_min,
         )
 
         # Generate sample_ids to prevent cross-sample attention
@@ -182,7 +180,7 @@ class PEagleDraftModel(Eagle3DraftModel):
 
         targets = targets[:, orig_positions, :]
 
-        loss, draft_tokens, metrics = compute_metrics(
+        loss, metrics = compute_metrics(
             logits=logits,
             targets=targets,
             loss_mask=loss_mask,
@@ -190,10 +188,9 @@ class PEagleDraftModel(Eagle3DraftModel):
             all_indices=all_indices,
             seq_length=seq_length,
             num_depths=self.num_depths,
-            first_depth_len=first_depth_len,
         )
 
-        return draft_tokens, loss, metrics
+        return None, loss, metrics
 
     @classmethod
     def from_training_args(
