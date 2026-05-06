@@ -4,7 +4,7 @@ import warnings
 
 import torch
 import torch.distributed as dist
-from torch.distributed.fsdp import fully_shard
+from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
 from transformers import AutoTokenizer
 
 local_rank = int(os.environ.get("LOCAL_RANK", "0"))
@@ -143,8 +143,13 @@ def apply_fully_sharded(model: torch.nn.Module):
     Model should be validated with SpeculatorModel.verify_training_compatible()
     before calling this function.
     """
+    mp_policy = MixedPrecisionPolicy(
+        param_dtype=torch.bfloat16,
+        reduce_dtype=torch.float32,
+    )
+
     for layer in model.layers:  # type: ignore[union-attr]
-        fully_shard(layer)
+        fully_shard(layer, mp_policy=mp_policy)
 
     fully_shard(model)
 

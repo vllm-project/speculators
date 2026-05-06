@@ -190,7 +190,7 @@ class PEagleDraftModel(Eagle3DraftModel):
             depth_ids=depth_ids,
             all_indices=all_indices,
             seq_length=seq_length,
-            num_depths=num_depths,
+            num_depths=self.num_depths,
             first_depth_len=first_depth_len,
         )
 
