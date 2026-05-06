@@ -161,18 +161,17 @@ class PEagleDraftModel(Eagle3DraftModel):
             device=device,
         )
 
-        hidden = layer_input
+        hidden_states = layer_input
         for layer in self.layers:
-            output = layer(
-                hidden,
+            hidden_states = layer(
+                hidden_states,
                 attention_mask=attention_mask,
                 position_ids=position_ids,
                 position_embeddings=position_embeddings,
                 **kwargs,
             )
-            hidden = output if isinstance(output, torch.Tensor) else output[0]
 
-        logits = self.lm_head(self.norm(hidden))
+        logits = self.lm_head(self.norm(hidden_states))
 
         if verifier_last_hidden_states is None:
             raise ValueError("verifier_last_hidden_states required for training")
