@@ -12,21 +12,77 @@ import aiohttp
 from datasets import load_dataset
 
 DATASET_CONFIGS = {
+    # 300K filtered synthetic instructions generated via Magpie from Llama-3.1.
+    # Single "train" split with an "instruction" field.
     "magpie": {
         "id": "Magpie-Align/Magpie-Llama-3.1-Pro-300K-Filtered",
         "prompt_field": "instruction",
         "default_split": "train",
     },
+    # 200K multi-turn dialogues covering a broad range of topics. The "train_sft"
+    # split contains the SFT-ready subset with a "prompt" field.
     "ultrachat": {
         "id": "HuggingFaceH4/ultrachat_200k",
         "prompt_field": "prompt",
         "default_split": "train_sft",
     },
+    # Grade-school math word problems with step-by-step solutions. Uses the "main"
+    # subset. Good for evaluating mathematical reasoning capabilities.
     "gsm8k": {
         "id": "openai/gsm8k",
         "prompt_field": "question",
         "default_split": "train",
         "subset": "main",
+    },
+    # NVIDIA's large-scale post-training dataset covering multiple domains. Available
+    # splits: chat, math, code, stem. Uses a messages format with role/content pairs.
+    # Select domain via --split (defaults to "chat").
+    "nemotron": {
+        "id": "nvidia/Nemotron-Post-Training-Dataset-v2",
+        "prompt_field": "messages",
+        "default_split": "chat",
+        "messages_role_field": "role",
+        "messages_content_field": "content",
+    },
+    # Allen AI's SFT mixture used to train Tulu 3. Contains ~939K examples spanning
+    # diverse tasks and sources. Uses a messages format with role/content pairs.
+    "tulu3": {
+        "id": "allenai/tulu-3-sft-mixture",
+        "prompt_field": "messages",
+        "default_split": "train",
+        "messages_role_field": "role",
+        "messages_content_field": "content",
+    },
+    # ~529K real user conversations collected from ChatGPT and GPT-4. Useful for
+    # capturing natural user interaction patterns. Uses a "conversation" field with
+    # role/content pairs.
+    "wildchat": {
+        "id": "allenai/WildChat",
+        "prompt_field": "conversation",
+        "default_split": "train",
+        "messages_role_field": "role",
+        "messages_content_field": "content",
+    },
+    # NVIDIA's Cascade 2 SFT data spanning 8 domains. Each domain is a separate
+    # subset: chat, conversational_agent, instruction_following, math, safety,
+    # science, swe, terminal_agent. Select domain via --subset (defaults to "chat").
+    "nemotron_cascade": {
+        "id": "nvidia/Nemotron-Cascade-2-SFT-Data",
+        "prompt_field": "messages",
+        "default_split": "train",
+        "subset": "chat",
+        "messages_role_field": "role",
+        "messages_content_field": "content",
+    },
+    # NVIDIA's instruction-following and chat SFT dataset with synthetic dialogues
+    # from multiple frontier models. Available in two splits: "reasoning_off"
+    # (default) and "reasoning_on" for chain-of-thought style responses.
+    "nemotron_ifchat": {
+        "id": "nvidia/Nemotron-SFT-Instruction-Following-Chat-v2",
+        "prompt_field": "messages",
+        "default_split": "reasoning_off",
+        "messages_role_field": "role",
+        "messages_content_field": "content",
     },
 }
 
@@ -294,6 +350,20 @@ async def main():
                 prompt = row.get(prompt_field)
                 if not prompt:
                     continue
+
+                if isinstance(prompt, list):
+                    role_field = dataset_config.get("messages_role_field", "role")
+                    content_field = dataset_config.get(
+                        "messages_content_field", "content"
+                    )
+                    user_msgs = [
+                        m[content_field]
+                        for m in prompt
+                        if m.get(role_field) == "user"
+                    ]
+                    if not user_msgs:
+                        continue
+                    prompt = user_msgs[0]
 
                 uuid = row.get("uuid")
                 key = str(uuid or index)
