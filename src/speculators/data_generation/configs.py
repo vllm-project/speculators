@@ -80,6 +80,8 @@ def _normalize_sharegpt4v_coco(example: dict) -> dict:
     ]
 
     return {"conversations": messages}
+
+
 def _normalize_gsm8k(example: dict) -> dict:
     return {
         "conversations": [
