@@ -550,21 +550,28 @@ def build_eagle3_dataset(
 
     original_cols = dataset.column_names
 
-    dataset = dataset.map(
-        lambda examples: _preprocess_batch(
-            examples,
-            processor,
-            max_length,
-            assistant_pattern,
-            turn_dropout,
-            minimum_valid_tokens,
-        ),
-        batched=True,
-        num_proc=num_proc,
-        batch_size=1000,
-        remove_columns=original_cols,
-        keep_in_memory=True,  # skip caching
-    )
+    # Avoid CPU contention for MM processing:
+    # https://github.com/vllm-project/vllm/pull/31879
+    with (
+        set_default_torch_num_threads()
+        if isinstance(processor, ProcessorMixin)
+        else nullcontext()
+    ):
+        dataset = dataset.map(
+            lambda examples: _preprocess_batch(
+                examples,
+                processor,
+                max_length,
+                assistant_pattern,
+                turn_dropout,
+                minimum_valid_tokens,
+            ),
+            batched=True,
+            num_proc=num_proc,
+            batch_size=1000,
+            remove_columns=original_cols,
+            keep_in_memory=True,  # skip caching
+        )
 
     dataset.set_format(type="torch")
     return dataset
@@ -666,49 +673,42 @@ def load_and_preprocess_dataset(
             "Please use a model with a pre-configured chat template."
         )
 
-    # Avoid CPU contention for MM processing:
-    # https://github.com/vllm-project/vllm/pull/31879
-    with (
-        set_default_torch_num_threads()
-        if isinstance(processor, ProcessorMixin)
-        else nullcontext()
-    ):
-        processed_datasets = []
-        for train_data_path in train_data_paths:
-            log.subsection(f"Processing {train_data_path}")
-            raw_dataset, normalize_fn = load_raw_dataset(train_data_path)
-            raw_dataset = raw_dataset.shuffle(seed=seed)
+    processed_datasets = []
+    for train_data_path in train_data_paths:
+        log.subsection(f"Processing {train_data_path}")
+        raw_dataset, normalize_fn = load_raw_dataset(train_data_path)
+        raw_dataset = raw_dataset.shuffle(seed=seed)
 
-            if max_samples is not None and len(raw_dataset) > 3 * max_samples:
-                # Reduce size to 3 * max_samples to reduce processing
-                # This will then be reduced further to max_samples
-                # after combining datasets and shuffling
-                raw_dataset = raw_dataset.select(range(3 * max_samples))
+        if max_samples is not None and len(raw_dataset) > 3 * max_samples:
+            # Reduce size to 3 * max_samples to reduce processing
+            # This will then be reduced further to max_samples
+            # after combining datasets and shuffling
+            raw_dataset = raw_dataset.select(range(3 * max_samples))
 
-            if normalize_fn is not None:
-                raw_dataset = raw_dataset.map(
-                    normalize_fn,
-                    num_proc=build_dataset_num_proc,
-                    keep_in_memory=True,  # skip caching
-                )
-
-            log.info(f"Loaded {len(raw_dataset)} samples")
-
-            if turn_dropout:
-                log.info("Turn dropout enabled: randomly keeping N consecutive turns")
-
-            preprocessed_dataset = build_eagle3_dataset(
-                dataset=raw_dataset,
-                processor=processor,
-                max_length=seq_length,
+        if normalize_fn is not None:
+            raw_dataset = raw_dataset.map(
+                normalize_fn,
                 num_proc=build_dataset_num_proc,
-                assistant_pattern=assistant_pattern,
-                turn_dropout=turn_dropout,
-                minimum_valid_tokens=minimum_valid_tokens,
+                keep_in_memory=True,  # skip caching
             )
-            if minimum_valid_tokens is not None:
-                log.info(f"Kept {len(preprocessed_dataset)} samples after filtering")
-            processed_datasets.append(preprocessed_dataset)
+
+        log.info(f"Loaded {len(raw_dataset)} samples")
+
+        if turn_dropout:
+            log.info("Turn dropout enabled: randomly keeping N consecutive turns")
+
+        preprocessed_dataset = build_eagle3_dataset(
+            dataset=raw_dataset,
+            processor=processor,
+            max_length=seq_length,
+            num_proc=build_dataset_num_proc,
+            assistant_pattern=assistant_pattern,
+            turn_dropout=turn_dropout,
+            minimum_valid_tokens=minimum_valid_tokens,
+        )
+        if minimum_valid_tokens is not None:
+            log.info(f"Kept {len(preprocessed_dataset)} samples after filtering")
+        processed_datasets.append(preprocessed_dataset)
 
     combined_dataset = concatenate_datasets(processed_datasets)
     combined_dataset.shuffle(seed=seed)
