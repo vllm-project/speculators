@@ -24,6 +24,7 @@ MAX_REQUESTS=""
 GEN_KWARGS=""
 GEN_LEN_RATE=""
 DATA_COLUMN_MAPPER=""
+ACCEPTANCE_ONLY=false
 
 # ==============================================================================
 # Helper Functions
@@ -48,6 +49,8 @@ Optional:
                              '{"temperature":0.6, "top_p":0.95, "top_k":20}'
   --data-column-mapper JSON  Column mapping for guidellm
                              (default: '{"text_column":"prompt"}')
+  --acceptance-only          Send requests and report per-position acceptance rates
+                             (skips gen-len estimation and sweep; uses --max-requests)
   -h, --help                 Show this help message
 
 Examples:
@@ -136,6 +139,10 @@ while [[ $# -gt 0 ]]; do
             DATA_COLUMN_MAPPER="$2"
             shift 2
             ;;
+        --acceptance-only)
+            ACCEPTANCE_ONLY=true
+            shift
+            ;;
         -h|--help)
             show_usage
             exit 0
@@ -178,6 +185,64 @@ fi
 
 if ! check_dependencies; then
     exit 1
+fi
+
+# ==============================================================================
+# Acceptance-Only Mode
+# ==============================================================================
+
+if [[ "${ACCEPTANCE_ONLY}" == "true" ]]; then
+    echo "[INFO] Running in acceptance-only mode (skipping gen-len estimation and sweeps)"
+
+    METRICS_URL="${VLLM_URL%/}/metrics"
+    ACCEPTANCE_DIR="${OUTPUT_DIR}/.artifacts/acceptance"
+    mkdir -p "${ACCEPTANCE_DIR}"
+
+    BASELINE_FILE="${ACCEPTANCE_DIR}/baseline_metrics.txt"
+    CURRENT_FILE="${ACCEPTANCE_DIR}/current_metrics.txt"
+
+    # Capture baseline metrics
+    echo "[INFO] Capturing baseline metrics from ${METRICS_URL}"
+    if ! curl -s -f --max-time 30 "${METRICS_URL}" > "${BASELINE_FILE}"; then
+        echo "[ERROR] Failed to fetch baseline metrics from ${METRICS_URL}" >&2
+        exit 1
+    fi
+
+    # Run a single guidellm throughput pass per subset
+    IFS=',' read -ra SUBSET_ARRAY <<< "${SUBSETS}"
+    BACKEND_ARGS=$(build_backend_args "${GEN_KWARGS}" "4096")
+
+    for subset in "${SUBSET_ARRAY[@]}"; do
+        echo "[INFO] [${subset}] Sending ${MAX_REQUESTS} requests"
+
+        GUIDELLM__MAX_CONCURRENCY="${MAX_CONCURRENCY}" \
+        guidellm benchmark \
+            --target "${TARGET}" \
+            --data "${DATASET}" \
+            --data-args "{\"data_files\": \"${subset}.jsonl\"}" \
+            --data-column-mapper "${DATA_COLUMN_MAPPER}" \
+            --profile throughput \
+            --rate "${GEN_LEN_RATE}" \
+            --max-requests "${MAX_REQUESTS}" \
+            --output-path "${ACCEPTANCE_DIR}/run_${subset}.json" \
+            --backend-args "${BACKEND_ARGS}"
+
+        echo "[INFO] [${subset}] Done"
+    done
+
+    # Capture current metrics after all requests
+    echo "[INFO] Capturing current metrics from ${METRICS_URL}"
+    if ! curl -s -f --max-time 30 "${METRICS_URL}" > "${CURRENT_FILE}"; then
+        echo "[ERROR] Failed to fetch current metrics from ${METRICS_URL}" >&2
+        exit 1
+    fi
+
+    # Parse and display acceptance rates (delta from baseline)
+    PARSE_ARGS=(--acceptance-only --current-metrics "${CURRENT_FILE}" --baseline-metrics "${BASELINE_FILE}")
+    [[ -n "${OUTPUT_DIR}" ]] && PARSE_ARGS+=(--output "${OUTPUT_DIR}/acceptance.csv")
+
+    python "${SCRIPT_DIR}/parse_sweep.py" "${PARSE_ARGS[@]}"
+    exit 0
 fi
 
 # ==============================================================================

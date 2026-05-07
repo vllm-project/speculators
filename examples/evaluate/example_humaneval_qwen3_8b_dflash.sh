@@ -41,7 +41,7 @@
 set -euo pipefail
 
 # ============ Configuration ============
-MODEL="nm-testing/dflash-qwen3-8b-speculators"
+MODEL="RedHatAI/Qwen3-8B-speculator.dflash"
 VLLM_PORT=8000
 SERVER_URL="http://localhost:${VLLM_PORT}"
 # Uses CUDA_VISIBLE_DEVICES from environment (or set it before running this script)

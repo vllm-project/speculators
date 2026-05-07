@@ -262,6 +262,33 @@ def parse_sweep_file(filepath: Path) -> list[dict]:
     return rows
 
 
+def print_acceptance_report(
+    spec_decode_metrics: dict[str, float],
+) -> None:
+    """Print a human-readable table of acceptance rates."""
+    m = spec_decode_metrics
+    print("\n=== Speculative Decoding Acceptance Report ===\n")
+    print(f"  {'Metric':<25} {'Value':>12}")
+    print(f"  {'-' * 25} {'-' * 12}")
+    print(f"  {'Num drafts':<25} {m.get('num_drafts', 0):>12.0f}")
+    print(f"  {'Num draft tokens':<25} {m.get('num_draft_tokens', 0):>12.0f}")
+    print(f"  {'Num accepted tokens':<25} {m.get('num_accepted_tokens', 0):>12.0f}")
+    print(f"  {'Acceptance length':<25} {m.get('acceptance_length', 0):>12.4f}")
+
+    pos = 0
+    has_positions = False
+    while f"acceptance_at_pos_{pos}" in m:
+        if not has_positions:
+            print(f"\n  {'Position':<25} {'Acceptance Rate':>12}")
+            print(f"  {'-' * 25} {'-' * 12}")
+            has_positions = True
+        rate = m[f"acceptance_at_pos_{pos}"]
+        print(f"  {f'Position {pos}':<25} {rate:>12.4f}")
+        pos += 1
+
+    print()
+
+
 def main() -> None:  # noqa: C901, PLR0912, PLR0915
     logging.basicConfig(
         level=logging.INFO,
@@ -274,16 +301,20 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
     )
     parser.add_argument(
         "files",
-        nargs="+",
+        nargs="*",
         type=Path,
         help="Sweep JSON files (e.g. sweep_HumanEval.json)",
+    )
+    parser.add_argument(
+        "--acceptance-only",
+        action="store_true",
+        help=("Only parse vLLM metrics and print per-position acceptance rates"),
     )
     parser.add_argument(
         "--output",
         "-o",
         type=Path,
-        required=True,
-        help="Output CSV file path",
+        help="Output CSV file path (required unless --acceptance-only)",
     )
     parser.add_argument(
         "--current-metrics",
@@ -296,6 +327,68 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
         help="File containing baseline vLLM metrics to subtract (for computing deltas)",
     )
     args = parser.parse_args()
+
+    # --- acceptance-only mode: just parse metrics and report ---
+    if args.acceptance_only:
+        if not args.current_metrics:
+            parser.error("--acceptance-only requires --current-metrics")
+        if not args.current_metrics.exists():
+            logger.error("Current metrics file not found: %s", args.current_metrics)
+            sys.exit(1)
+
+        baseline_metrics: list[Metric] = []
+        if args.baseline_metrics and args.baseline_metrics.exists():
+            with args.baseline_metrics.open() as f:
+                baseline_metrics = parse_prometheus_metrics(f.read())
+
+        with args.current_metrics.open() as f:
+            parsed_metrics = parse_prometheus_metrics(f.read())
+
+        spec_decode_metrics = extract_spec_decode_metrics(
+            parsed_metrics,
+            baseline_metrics=baseline_metrics if baseline_metrics else None,
+        )
+        no_data = (
+            not spec_decode_metrics or spec_decode_metrics.get("num_drafts", 0) == 0
+        )
+        if no_data:
+            logger.error(
+                "No speculative decoding metrics found in %s",
+                args.current_metrics,
+            )
+            sys.exit(1)
+
+        print_acceptance_report(spec_decode_metrics)
+
+        if args.output:
+            csv_columns = [
+                "num_drafts",
+                "num_draft_tokens",
+                "num_accepted_tokens",
+                "acceptance_length",
+            ]
+            pos = 0
+            while f"acceptance_at_pos_{pos}" in spec_decode_metrics:
+                csv_columns.append(f"acceptance_at_pos_{pos}")
+                pos += 1
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            with args.output.open("w", newline="") as f:
+                writer = csv.DictWriter(
+                    f,
+                    fieldnames=csv_columns,
+                    extrasaction="ignore",
+                )
+                writer.writeheader()
+                writer.writerow(spec_decode_metrics)
+            logger.info("CSV written to: %s", args.output)
+
+        return
+
+    # --- normal sweep mode: validate required args ---
+    if not args.files:
+        parser.error("sweep files are required (or use --acceptance-only)")
+    if not args.output:
+        parser.error("--output is required")
 
     # Load baseline metrics if provided
     baseline_metrics: list[Metric] = []

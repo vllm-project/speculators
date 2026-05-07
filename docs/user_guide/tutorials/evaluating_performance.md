@@ -53,6 +53,8 @@ Optional:
                              '{"temperature":0.6, "top_p":0.95, "top_k":20}'
   --data-column-mapper JSON  Column mapping for guidellm
                              (default: '{"text_column":"prompt"}')
+  --acceptance-only          Send requests and report per-position acceptance rates
+                             (skips gen-len estimation and sweep; uses --max-requests)
 ```
 
 ### Examples
@@ -75,6 +77,18 @@ Run with a local dataset directory and custom column mapping:
     --subsets "code,chat" \
     --data-column-mapper '{"text_column":"input"}'
 ```
+
+Get per-position acceptance rates without running the full benchmark:
+
+```bash
+./run_perf_benchmark.sh \
+    --target http://localhost:8000/v1 \
+    --subsets "HumanEval" \
+    --max-requests 80 \
+    --acceptance-only
+```
+
+See [`examples/evaluate/example_acceptance_rate_qwen3_8b_dflash.sh`](../../../examples/evaluate/example_acceptance_rate_qwen3_8b_dflash.sh) for a complete end-to-end example.
 
 ## Pipeline Steps
 
@@ -136,6 +150,36 @@ Script: `parse_sweep.py`
 | `num_accepted_tokens` | Total draft tokens accepted                        |
 | `acceptance_length`   | Average acceptance length (1 + accepted/drafts)    |
 | `acceptance_at_pos_N` | Acceptance rate at draft position N (0, 1, 2, ...) |
+
+## Acceptance-Only Mode
+
+The `--acceptance-only` flag skips gen-len estimation and the sweep, running a single throughput pass per subset instead. This is useful when you only need per-position acceptance rates and don't need the full latency/throughput profile.
+
+The mode:
+
+1. Captures baseline vLLM metrics before any requests
+2. Runs `guidellm benchmark --profile throughput` with `--max-requests` for each subset
+3. Captures vLLM metrics after all requests
+4. Computes the delta and reports per-position acceptance rates
+
+Output is printed to stdout and optionally saved as `acceptance.csv` in the output directory.
+
+```bash
+./run_perf_benchmark.sh \
+    --target http://localhost:8000/v1 \
+    --subsets "HumanEval,qa" \
+    --max-requests 80 \
+    --acceptance-only
+```
+
+You can also use `parse_sweep.py` directly if you already have metrics files:
+
+```bash
+python parse_sweep.py \
+    --acceptance-only \
+    --current-metrics current_metrics.txt \
+    --baseline-metrics baseline_metrics.txt
+```
 
 ## Output Directory Structure
 
