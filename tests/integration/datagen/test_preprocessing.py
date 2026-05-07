@@ -26,7 +26,7 @@ from speculators.data_generation.preprocessing import (
 # chat template support
 TEXT_MODEL_REPO = "Qwen/Qwen2-0.5B-Instruct"
 # For testing multi-modal support
-MM_MODEL_REPO = "Qwen/Qwen3-VL-2B-Instruct"
+MM_MODEL_REPO = "Qwen/Qwen3.5-0.8B"
 
 
 # Tests for _normalize_conversation

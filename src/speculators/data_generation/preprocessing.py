@@ -198,8 +198,13 @@ def _supports_assistant_mask(processor: ProcessorLike) -> bool:
 
     Must return a non-zero mask for a conversation containing an assistant message.
     """
+    # NOTE: Some models (e.g. Qwen3.5) require a user message in the conversation,
+    # even though this check only looks at the assistant turn
     test_conv = _adapt_conv_for_hf(
-        [{"role": "assistant", "content": "test"}],
+        [
+            {"role": "user", "content": "test"},
+            {"role": "assistant", "content": "test"},
+        ],
         processor,
     )
 
