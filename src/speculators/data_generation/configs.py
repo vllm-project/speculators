@@ -22,14 +22,23 @@ class DatasetConfig:
     normalize_fn: Callable[[dict], dict] | None = None
 
 
-def get_coco_dir():
-    return os.getenv("COCO_DIR") or "coco/"
-
-
 def _normalize_ultrachat(example: dict) -> dict:
     if "messages" in example:
         return {"conversations": example["messages"]}
     return example
+
+
+def _normalize_gsm8k(example: dict) -> dict:
+    return {
+        "conversations": [
+            {"role": "user", "content": example["question"]},
+            {"role": "assistant", "content": example["answer"]},
+        ]
+    }
+
+
+def get_coco_dir():
+    return os.getenv("COCO_DIR") or "coco/"
 
 
 def _parse_sharegpt4v_part(part: str, image_path: str):
@@ -80,15 +89,6 @@ def _normalize_sharegpt4v_coco(example: dict) -> dict:
     ]
 
     return {"conversations": messages}
-
-
-def _normalize_gsm8k(example: dict) -> dict:
-    return {
-        "conversations": [
-            {"role": "user", "content": example["question"]},
-            {"role": "assistant", "content": example["answer"]},
-        ]
-    }
 
 
 DATASET_CONFIGS: dict[str, DatasetConfig] = {
