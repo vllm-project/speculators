@@ -16,7 +16,7 @@ class DatasetConfig:
 
     name: str
     hf_path: str
-    hf_name: str | None = None
+    subset: str | None = None
     split: str
     filter_fn: Callable[[dict], bool] | None = None
     normalize_fn: Callable[[dict], dict] | None = None
@@ -80,6 +80,13 @@ def _normalize_sharegpt4v_coco(example: dict) -> dict:
     ]
 
     return {"conversations": messages}
+def _normalize_gsm8k(example: dict) -> dict:
+    return {
+        "conversations": [
+            {"role": "user", "content": example["question"]},
+            {"role": "assistant", "content": example["answer"]},
+        ]
+    }
 
 
 DATASET_CONFIGS: dict[str, DatasetConfig] = {
@@ -94,11 +101,18 @@ DATASET_CONFIGS: dict[str, DatasetConfig] = {
         split="train_sft",
         normalize_fn=_normalize_ultrachat,
     ),
+    "gsm8k": DatasetConfig(
+        name="gsm8k",
+        hf_path="openai/gsm8k",
+        subset="main",
+        split="train",
+        normalize_fn=_normalize_gsm8k,
+    ),
     # NOTE: You need to serve vLLM with `--allowed-local-media-path /path/to/coco`
     "sharegpt4v_coco": DatasetConfig(
         name="sharegpt4v_coco",
         hf_path="Lin-Chen/ShareGPT4V",
-        hf_name="ShareGPT4V",
+        subset="ShareGPT4V",
         split="train",
         filter_fn=_filter_sharegpt4v_coco,
         normalize_fn=_normalize_sharegpt4v_coco,
