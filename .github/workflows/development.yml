@@ -44,16 +44,12 @@ jobs:
               transformers: "<5.0.0"
     steps:
       - uses: actions/checkout@v6
-      - name: Set up Python
-        uses: actions/setup-python@v6
+      - uses: ./.github/actions/setup-test-env
         with:
           python-version: ${{ matrix.python }}
-      - name: Install dependencies
-        run: pip install tox tox-uv
+          transformers-version: ${{ matrix.transformers }}
       - name: Run unit tests
-        run: tox -e test-unit
-        env:
-          TRANSFORMERS_VERSION: ${{ matrix.transformers }}
+        run: python -m pytest -ra tests/unit
 
   integration-tests:
     runs-on: ibm-wdc-k8s-vllm-h100-solo
@@ -66,13 +62,9 @@ jobs:
               transformers: "<5.0.0"
     steps:
       - uses: actions/checkout@v6
-      - name: Set up Python
-        uses: actions/setup-python@v6
+      - uses: ./.github/actions/setup-test-env
         with:
           python-version: ${{ matrix.python }}
-      - name: Install dependencies
-        run: pip install tox tox-uv
+          transformers-version: ${{ matrix.transformers }}
       - name: Run integration tests
-        run: tox -e test-integration
-        env:
-          TRANSFORMERS_VERSION: ${{ matrix.transformers }}
+        run: python -m pytest -ra tests/integration

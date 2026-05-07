@@ -2,7 +2,7 @@
 
 This tutorial walks you through training an Eagle-3 speculator model using **offline training**, where hidden states are pre-generated and cached before training begins. This example uses `meta-llama/Llama-3.1-8B-Instruct` as the target model, but the process is the same for other models.
 
-For a ready-to-run version of this tutorial, see [`examples/train/eagle3_llama3_8b_sharegpt_offline_5k.sh`](https://github.com/vllm-project/speculators/blob/main/examples/train/eagle3_llama3_8b_sharegpt_offline_5k.sh).
+For a ready-to-run version of this tutorial, see [`examples/train/eagle3_llama3_8b_ultrachat_offline_5k.sh`](https://github.com/vllm-project/speculators/blob/main/examples/train/eagle3_llama3_8b_ultrachat_offline_5k.sh).
 
 ## Overview
 
