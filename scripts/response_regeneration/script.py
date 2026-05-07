@@ -34,6 +34,13 @@ DATASET_CONFIGS = {
         "default_split": "train",
         "subset": "main",
     },
+    # 20K code generation prompts based on the Stanford Alpaca format. Each row has a
+    # plain string "prompt" field describing a coding task. Compact and code-focused.
+    "code_alpaca": {
+        "id": "HuggingFaceH4/CodeAlpaca_20K",
+        "prompt_field": "prompt",
+        "default_split": "train",
+    },
     # NVIDIA's large-scale post-training dataset covering multiple domains. Available
     # splits: chat, math, code, stem. Uses a messages format with role/content pairs.
     # Select domain via --split (defaults to "chat").

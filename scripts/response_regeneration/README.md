@@ -19,6 +19,7 @@ The model name is auto-detected from the vLLM server. Output is written to a JSO
 | `magpie` | [Magpie-Align/Magpie-Llama-3.1-Pro-300K-Filtered](https://huggingface.co/datasets/Magpie-Align/Magpie-Llama-3.1-Pro-300K-Filtered) | `train` | string |
 | `ultrachat` | [HuggingFaceH4/ultrachat_200k](https://huggingface.co/datasets/HuggingFaceH4/ultrachat_200k) | `train_sft` | string |
 | `gsm8k` | [openai/gsm8k](https://huggingface.co/datasets/openai/gsm8k) | `train` | string |
+| `code_alpaca` | [HuggingFaceH4/CodeAlpaca_20K](https://huggingface.co/datasets/HuggingFaceH4/CodeAlpaca_20K) | `train` | string |
 | `nemotron` | [nvidia/Nemotron-Post-Training-Dataset-v2](https://huggingface.co/datasets/nvidia/Nemotron-Post-Training-Dataset-v2) | `chat` | messages |
 | `tulu3` | [allenai/tulu-3-sft-mixture](https://huggingface.co/datasets/allenai/tulu-3-sft-mixture) | `train` | messages |
 | `wildchat` | [allenai/WildChat](https://huggingface.co/datasets/allenai/WildChat) | `train` | messages |
@@ -36,6 +37,10 @@ The model name is auto-detected from the vLLM server. Output is written to a JSO
 ### gsm8k
 
 Grade-school math word problems with step-by-step solutions. Uses the `main` subset. Useful for training and evaluating mathematical reasoning capabilities.
+
+### code_alpaca
+
+20K code generation prompts based on the Stanford Alpaca format. Each row contains a plain string prompt describing a coding task. Compact and code-focused, making it useful for training on programming-specific distributions.
 
 ### nemotron
 
