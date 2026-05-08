@@ -25,6 +25,7 @@ The model name is auto-detected from the vLLM server. Output is written to a JSO
 | `wildchat` | [allenai/WildChat](https://huggingface.co/datasets/allenai/WildChat) | `train` | 529K | 3.1 GB | messages |
 | `nemotron_cascade` | [nvidia/Nemotron-Cascade-2-SFT-Data](https://huggingface.co/datasets/nvidia/Nemotron-Cascade-2-SFT-Data) | `train` | 1.9M | 33.3 GB | messages |
 | `nemotron_ifchat` | [nvidia/Nemotron-SFT-Instruction-Following-Chat-v2](https://huggingface.co/datasets/nvidia/Nemotron-SFT-Instruction-Following-Chat-v2) | `reasoning_off` | ~2M | ~16 GB | messages |
+| `longalign` | [zai-org/LongAlign-10k](https://huggingface.co/datasets/zai-org/LongAlign-10k) | `train` | 9.9K | 0.6 GB | messages |
 
 ### magpie
 
@@ -107,6 +108,10 @@ NVIDIA's instruction-following and chat SFT dataset with synthetic dialogues gen
 python script.py --dataset nemotron_ifchat                        # non-reasoning
 python script.py --dataset nemotron_ifchat --split reasoning_on   # reasoning
 ```
+
+### longalign
+
+~10K long-context instruction-following samples ranging from 8k to 64k tokens. Useful for training speculators on long-form generation patterns where token prediction behavior may differ from shorter contexts.
 
 ## Arguments
 

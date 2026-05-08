@@ -91,6 +91,15 @@ DATASET_CONFIGS = {
         "messages_role_field": "role",
         "messages_content_field": "content",
     },
+    # ~10K long-context instruction-following samples (8k-64k tokens). Useful for
+    # training speculators on long-form generation patterns.
+    "longalign": {
+        "id": "zai-org/LongAlign-10k",
+        "prompt_field": "messages",
+        "default_split": "train",
+        "messages_role_field": "role",
+        "messages_content_field": "content",
+    },
 }
 
 
