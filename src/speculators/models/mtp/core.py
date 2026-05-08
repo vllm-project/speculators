@@ -179,7 +179,7 @@ class MTPDraftModel(SpeculatorModel):
                 ignore_index=-100,
             )
             total_loss = total_loss + step_loss
-            metrics[f"loss_step_{step}"] = step_loss.item()
+            metrics[f"loss_step_{step}"] = step_loss.detach().clone()
 
             current_hidden = mtp_output
 
