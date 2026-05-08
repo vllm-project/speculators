@@ -22,7 +22,7 @@ MAX_MODEL_LEN=""
 REASONING_PARSER=""
 GPUS=""
 DURATION=60
-CONCURRENCIES=(64 128 256 512)
+CONCURRENCIES=(64 128 256 512 1024)
 
 # Collect args for script.py (dataset, shuffle, etc.)
 PYTHON_ARGS=()
@@ -152,6 +152,26 @@ while [ $RETRY -lt $MAX_RETRIES ]; do
 done
 echo ""
 
+# Warmup run (15s) to prime prefix cache and trigger kernel compilation
+WARMUP_OUTFILE="sweep_warmup.jsonl"
+rm -f "$WARMUP_OUTFILE"
+echo "Warmup: running 15s burst to prime caches and compile kernels..."
+timeout 15 python "$SCRIPT_DIR/script.py" \
+    "${PYTHON_ARGS[@]}" \
+    --endpoint "http://127.0.0.1:$PORT/v1/chat/completions" \
+    --concurrency 64 \
+    --outfile "$WARMUP_OUTFILE" \
+    --shuffle \
+    2>&1 || true
+rm -f "$WARMUP_OUTFILE"
+echo "Warmup complete."
+echo ""
+
+# Randomize sweep order to avoid ordering bias
+SHUFFLED_CONCURRENCIES=($(printf '%s\n' "${CONCURRENCIES[@]}" | shuf))
+echo "Sweep order (randomized): ${SHUFFLED_CONCURRENCIES[*]}"
+echo ""
+
 # Run sweep
 declare -a RESULTS_CONC
 declare -a RESULTS_COUNT
@@ -160,7 +180,7 @@ declare -a RESULTS_RATE
 BEST_CONC=0
 BEST_RATE=0
 
-for CONC in "${CONCURRENCIES[@]}"; do
+for CONC in "${SHUFFLED_CONCURRENCIES[@]}"; do
     OUTFILE="sweep_concurrency_${CONC}.jsonl"
     rm -f "$OUTFILE"
 
