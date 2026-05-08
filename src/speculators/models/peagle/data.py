@@ -10,7 +10,7 @@ def generate_cod_sample_indices(
     down_sample_ratio: float = 0.7,
     down_sample_ratio_min: float = 0.2,
     filter_position_zero: bool = True,
-) -> tuple[torch.Tensor, torch.Tensor, int]:
+) -> tuple[torch.Tensor, int]:
     """
     Generate sampling indices for parallel sequences using COD sampling.
 
@@ -29,8 +29,8 @@ def generate_cod_sample_indices(
     Returns:
         Tuple of:
         - all_indices: Flat tensor of encoded indices (depth * seq_length + pos)
-          for all depths [total_sampled_length]
-        - depth_ids: Per-element depth assignment [total_sampled_length]
+          for all depths [total_sampled]. Depth and position can be recovered
+          via all_indices // seq_length and all_indices % seq_length.
         - num_depths_used: Actual number of depths produced
     """
     loss_mask = loss_mask.squeeze()
@@ -48,15 +48,17 @@ def generate_cod_sample_indices(
         if sample_size <= 0:
             break
 
+        # Subsample from candidate pool, or keep all if pool is too small
         if prev_indices.shape[0] >= sample_size:
             random_selection = torch.randperm(prev_indices.shape[0], device=device)[
                 :sample_size
             ]
             sampled_idx = prev_indices[random_selection]
-            sampled_idx = torch.sort(sampled_idx)[0]
+            sampled_idx = torch.sort(sampled_idx)[0]  # restore causal order
         else:
             sampled_idx = prev_indices
 
+        # Build candidate pool for next depth: shift by +1 (next-token targets),
         next_candidates = (sampled_idx + 1) % seq_length
         if filter_position_zero:
             next_candidates = next_candidates[next_candidates != 0]
@@ -70,11 +72,5 @@ def generate_cod_sample_indices(
     all_indices = torch.cat(
         [depth * seq_length + idx for depth, idx in enumerate(sample_indices)]
     )
-    depth_ids = torch.cat(
-        [
-            torch.full((idx.shape[0],), depth, device=device, dtype=torch.long)
-            for depth, idx in enumerate(sample_indices)
-        ]
-    )
 
-    return all_indices, depth_ids, num_depths_used
+    return all_indices, num_depths_used

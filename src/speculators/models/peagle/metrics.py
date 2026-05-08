@@ -15,7 +15,6 @@ def compute_metrics(
     logits: torch.Tensor,
     targets: torch.Tensor,
     loss_mask: torch.Tensor,
-    depth_ids: torch.Tensor,
     all_indices: torch.Tensor,
     seq_length: int,
     num_depths: int,
@@ -26,20 +25,23 @@ def compute_metrics(
         logits: Draft model logits [B, total_sampled, vocab_size]
         targets: Verifier logits [B, total_sampled, vocab_size]
         loss_mask: Binary mask [B, seq_len]
-        depth_ids: Per-element depth assignment [total_sampled]
-        all_indices: Flattened COD sample indices [total_sampled]
+        all_indices: Encoded COD sample indices (depth * seq_length + pos)
+            [total_sampled]
         seq_length: Original sequence length
         num_depths: Number of parallel depths
 
     Returns:
-        Tuple of (loss, draft_tokens, metrics_dict)
+        Tuple of (loss, metrics_dict)
     """
     device = logits.device
 
-    pos_idx = depth_ids.unsqueeze(0)
-
-    orig_positions = all_indices % seq_length
-    sampled_loss_mask = loss_mask[:, orig_positions]
+    orig_positions = all_indices % seq_length  # [total_sampled]
+    # For P-EAGLE, depth serves as the position index in the speculative block.
+    # TODO: batch size is always 1 for P-EAGLE; unsqueeze is only to match the
+    # shared loss_function/compute_accuracy_multi_step shape contract
+    # [B, total_sampled].
+    pos_idx = (all_indices // seq_length).unsqueeze(0)  # [1, total_sampled]
+    sampled_loss_mask = loss_mask[:, orig_positions]  # [1, total_sampled]
 
     loss = loss_function(
         logits, targets, sampled_loss_mask, pos_idx, loss_fn=kl_div_loss
