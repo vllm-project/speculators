@@ -26,6 +26,12 @@ Learn how to train a DFlash speculator model with block-based token generation.
 
 **Time required:** ~25 mins
 
+## [Finetune MTP Head (Offline)](train_mtp_offline.md)
+
+Finetune the native MTP head from Qwen3-Next or Qwen3.5 on domain-specific data using the FastMTP methodology.
+
+**Time required:** ~1 hour (excluding hidden states generation)
+
 ## [Response Regeneration](response_regeneration.md)
 
 Regenerate dataset responses using your target model for improved drafter alignment.

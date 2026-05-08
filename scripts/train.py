@@ -17,6 +17,7 @@ from speculators.data_generation.vllm_client import (
 )
 from speculators.model import SpeculatorModel
 from speculators.models.eagle3.data import shift_batch
+from speculators.models.mtp.data import shift_batch_mtp
 from speculators.train.data import (
     ArrowDataset,
     BaseDataset,
@@ -245,21 +246,30 @@ def main(args: argparse.Namespace):
         )
     hidden_states_dtype = getattr(torch, args.hidden_states_dtype)
 
-    d2t, t2d, draft_vocab_size = parse_vocab_mappings(args)
+    if args.speculator_type == "mtp":
+        transformer_layer_config = AutoConfig.from_pretrained(
+            args.verifier_name_or_path
+        )
+        if hasattr(transformer_layer_config, "text_config"):
+            transformer_layer_config = transformer_layer_config.text_config
+        d2t, t2d, draft_vocab_size = None, None, transformer_layer_config.vocab_size
+        args.mask_token_id = None
+    else:
+        d2t, t2d, draft_vocab_size = parse_vocab_mappings(args)
 
-    # Setup speculator config
-    transformer_layer_config = create_transformer_layer_config(
-        args.verifier_name_or_path,
-        args.num_layers,
-        draft_arch=args.draft_arch,
-        hidden_act=args.draft_hidden_act,
-    )
+        # Setup speculator config
+        transformer_layer_config = create_transformer_layer_config(
+            args.verifier_name_or_path,
+            args.num_layers,
+            draft_arch=args.draft_arch,
+            hidden_act=args.draft_hidden_act,
+        )
 
-    args.mask_token_id = resolve_mask_token_id(
-        args.verifier_name_or_path,
-        transformer_layer_config.vocab_size,
-        args.mask_token_id,
-    )
+        args.mask_token_id = resolve_mask_token_id(
+            args.verifier_name_or_path,
+            transformer_layer_config.vocab_size,
+            args.mask_token_id,
+        )
 
     registry = SpeculatorModel.registry
     if registry is None or args.speculator_type not in registry:
@@ -284,7 +294,8 @@ def main(args: argparse.Namespace):
         )
 
     # Setup dataloaders
-    preprocess = shift_batch if args.speculator_type == "eagle3" else None
+    preprocess_fns = {"eagle3": shift_batch, "mtp": shift_batch_mtp}
+    preprocess = preprocess_fns.get(args.speculator_type)
 
     noise_transform = AddUniformNoise(std=args.noise_std)
     if args.legacy_data:
@@ -390,7 +401,7 @@ def _checkpoint_freq(value: str) -> int:
     return ivalue
 
 
-def parse_args():
+def parse_args():  # noqa: PLR0915
     parser = argparse.ArgumentParser()
     parser.add_argument("--verifier-name-or-path", type=str, required=True)
     parser.add_argument(
@@ -563,6 +574,9 @@ def parse_args():
     parser.add_argument("--mask-token-id", type=int, default=None)
     parser.add_argument("--ttt-steps", type=int, default=3)
     parser.add_argument("--ttt-step-loss-decay", type=float, default=1.0)
+    # MTP parameters
+    parser.add_argument("--num-speculative-steps", type=int, default=3)
+    parser.add_argument("--step-weight-beta", type=float, default=0.6)
     parser.add_argument(
         "--seed", type=int, default=42, help="Random seed for reproducibility"
     )
