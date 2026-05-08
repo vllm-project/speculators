@@ -26,9 +26,8 @@ def compute_metrics(
         targets: Verifier logits [B, total_sampled, vocab_size]
         loss_mask: Binary mask [B, seq_len]
         anchor_pos: The starting position in the original sequence the current
-            sampling chain started from. [total_sampled]
+            sampling chain started from [total_sampled]
         depth: Which COD sampling round each element belongs to [total_sampled]
-        seq_length: Original sequence length
         num_depths: Number of parallel depths
 
     Returns:
@@ -42,7 +41,7 @@ def compute_metrics(
     sampled_loss_mask = loss_mask[:, orig_positions]  # [1, total_sampled]
 
     loss = loss_function(
-        logits, targets, sampled_loss_mask, pos_idx, loss_fn=kl_div_loss
+        logits, targets, sampled_loss_mask, depth.unsqueeze(0), loss_fn=kl_div_loss
     )
 
     with torch.no_grad():
@@ -60,8 +59,8 @@ def compute_metrics(
         "full_acc_sum": correct_per_pos.sum(),
         "full_acc_total": total_per_pos.sum(),
     }
-    for depth in range(num_depths):
-        metrics[f"position_{depth}_acc_sum"] = correct_per_pos[depth]
-        metrics[f"position_{depth}_acc_total"] = total_per_pos[depth]
+    for d in range(num_depths):
+        metrics[f"position_{d}_acc_sum"] = correct_per_pos[d]
+        metrics[f"position_{d}_acc_total"] = total_per_pos[d]
 
     return loss, metrics
