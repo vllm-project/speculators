@@ -84,36 +84,17 @@ class PEagleDraftModel(Eagle3DraftModel):
             loss_mask = torch.ones_like(input_ids, dtype=torch.float32)
 
         # Generate COD sampling indices
-        all_indices, num_depths_used = generate_cod_sample_indices(
+        anchor_pos, depth = generate_cod_sample_indices(
             seq_length=seq_length,
             loss_mask=loss_mask,
             num_depths=self.num_depths,
             down_sample_ratio=self.down_sample_ratio,
             down_sample_ratio_min=self.down_sample_ratio_min,
         )
+        total_sampled = anchor_pos.shape[0]
 
-        # all_indices: [total_sampled] encoded as depth * seq_length + pos
-        depth_ids = all_indices // seq_length  # [total_sampled]
-
-        # Generate sample_ids to prevent cross-sample attention
-        document_ids = torch.repeat_interleave(
-            torch.arange(lengths.shape[0], device=device, dtype=torch.long), lengths
-        )
-        document_ids = torch.cat(
-            [
-                document_ids,
-                -1
-                * torch.ones(
-                    seq_length - document_ids.shape[0],
-                    device=device,
-                    dtype=torch.long,
-                ),
-            ]
-        ).contiguous()  # [seq_len]
-        sample_ids = document_ids.unsqueeze(0)  # [1, seq_len]
-
-        orig_positions = all_indices % seq_length  # [total_sampled]
-        is_depth_0 = depth_ids == 0  # [total_sampled]
+        orig_positions = anchor_pos + depth
+        is_depth_0 = depth == 0  # [total_sampled]
 
         # Build sampled input_ids: real tokens for depth 0, mask for others
         sampled_ids = torch.where(
@@ -145,17 +126,18 @@ class PEagleDraftModel(Eagle3DraftModel):
         position_embeddings = self.rotary_emb(layer_input, position_ids)
 
         mask_mod = create_peagle_mask_mod(
-            all_indices=all_indices,
-            seq_length=seq_length,
-            sample_ids=sample_ids,
+            anchor_pos=anchor_pos,
+            depth=depth,
+            lengths=lengths,
+            total_seq_len=seq_length,
         )
 
         attention_mask = create_block_mask(  # type: ignore[assignment]
             mask_mod,
             B=None,
             H=None,
-            Q_LEN=all_indices.shape[0],
-            KV_LEN=all_indices.shape[0],
+            Q_LEN=total_sampled,
+            KV_LEN=total_sampled,
             device=device,
         )
 
@@ -186,8 +168,8 @@ class PEagleDraftModel(Eagle3DraftModel):
             logits=logits,
             targets=targets,
             loss_mask=loss_mask,
-            all_indices=all_indices,
-            seq_length=seq_length,
+            anchor_pos=anchor_pos,
+            depth=depth,
             num_depths=self.num_depths,
         )
 

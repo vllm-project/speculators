@@ -4,9 +4,10 @@ import torch
 
 
 def create_peagle_mask_mod(
-    all_indices: torch.Tensor,
-    seq_length: int,
-    sample_ids: torch.Tensor,
+    anchor_pos: torch.Tensor,  # shape: [total_sampled]
+    depth: torch.Tensor,  # shape: [total_sampled]
+    lengths: torch.Tensor,  # shape: [batch_size]
+    total_seq_len: int,
 ):
     """
     Create a flex attention mask modifier for P-EAGLE parallel groups.
@@ -14,49 +15,70 @@ def create_peagle_mask_mod(
     P-EAGLE uses COD (Conditional-On-Distribution) sampling to create parallel
     prediction groups. Each group (depth) has progressively fewer positions.
 
+    This function creates a mask where each element can attend to only to previous
+    elements in the same sampling chain/rollout and previous context in the base sample.
+
+
     Args:
-        all_indices: Encoded COD sample indices (depth * seq_length + pos)
-            [total_sampled]
-        seq_length: Original sequence length (before parallel expansion)
-        sample_ids: Sample IDs to prevent cross-sample attention
-            [batch_size, seq_length]
+        anchor_pos: The starting position in the original sequence the current
+            sampling chain started from.
+        depth: Which COD sampling round each element belongs to
+        lengths: The length of each document. Used to produce a document mask to prevent
+            cross contamination
+        total_seq_len: int, combined padded length of the original sequences
+
+    Args example:
+
+    Given a sequnce of length 6.
+    Original positions: [0,1,2,3,4,5]
+    Apply COD sampling:
+    Round 1: sample locations [0, 1, 3, 4]
+    Round 2: sample locations [0, 3]
+    Round 3: sample locations [0]
+    anchor_pos: [0,1,2,3,4,5,0,1,3,4,0,3,0]
+    depth: [0,0,0,0,0,0,1,1,1,1,2,2,3]
+    reference positions (e.g. for target) = anchor_pos + depth
+    [0,1,2,3,4,5,1,2,4,5,2,5,3]
+
 
     Returns:
         A mask_mod function compatible with flex_attention create_block_mask
     """
-    sample_ids_flat = sample_ids.squeeze(0)
+
+    # Generate sample_ids to prevent cross-sample attention
+    document_ids = torch.repeat_interleave(
+        torch.arange(lengths.shape[0], device=lengths.device, dtype=torch.long), lengths
+    )
+    # Pad ids with -1 to indicate padding
+    document_ids = torch.cat(
+        [
+            document_ids,
+            -1
+            * torch.ones(
+                total_seq_len - document_ids.shape[0],
+                device=lengths.device,
+                dtype=torch.long,
+            ),
+        ]
+    ).contiguous()
 
     def peagle_mask_mod(_b, _h, q_idx, kv_idx):
-        q_full = all_indices[q_idx]
-        kv_full = all_indices[kv_idx]
+        q_anchor_pos = anchor_pos[q_idx]
+        kv_anchor_pos = anchor_pos[kv_idx]
+        q_depth = depth[q_idx]
+        kv_depth = depth[kv_idx]
 
-        q_pos = q_full % seq_length
-        kv_pos = kv_full % seq_length
-        q_depth = q_full // seq_length
-        kv_depth = kv_full // seq_length
+        same_document = document_ids[q_anchor_pos] == document_ids[kv_anchor_pos]
+        is_not_padding = document_ids[q_idx] != -1
+        same_rollout = q_anchor_pos == kv_anchor_pos
+        kv_depth0 = kv_depth == 0
+        in_depth_order = q_depth >= kv_depth
+        is_anchor_causal = q_anchor_pos >= kv_anchor_pos
 
-        hierarchical = q_depth >= kv_depth
-        same_sample = sample_ids_flat[q_pos] == sample_ids_flat[kv_pos]
-        same_depth = q_depth == kv_depth
-
-        # Same-depth: full causal at depth 0, self-only at depth > 0
-        is_depth_0 = (q_depth == 0) & (kv_depth == 0)
-        same_depth_causal_depth0 = (q_pos >= kv_pos) & is_depth_0
-        same_depth_diagonal = (q_idx == kv_idx) & (~is_depth_0)
-        same_depth_mask = same_depth_causal_depth0 | same_depth_diagonal
-
-        # Cross-depth: causal with offset to depth 0, parent-only to intermediate
-        kv_is_depth_0 = kv_depth == 0
-        kv_is_intermediate = (kv_depth > 0) & (kv_depth < q_depth)
-        cross_depth_to_depth0 = kv_is_depth_0 & (kv_pos <= (q_pos - q_depth))
-        parent_pos = q_pos - (q_depth - kv_depth)
-        cross_depth_to_intermediate = kv_is_intermediate & (kv_pos == parent_pos)
-        cross_depth_mask = cross_depth_to_depth0 | cross_depth_to_intermediate
-
-        attention_allowed = (same_depth & same_depth_mask) | (
-            (~same_depth) & cross_depth_mask
+        return (
+            is_not_padding
+            & same_document
+            & ((kv_depth0 & is_anchor_causal) | (same_rollout & in_depth_order))
         )
-
-        return hierarchical & same_sample & attention_allowed
 
     return peagle_mask_mod

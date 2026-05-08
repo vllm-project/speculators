@@ -10,7 +10,7 @@ def generate_cod_sample_indices(
     down_sample_ratio: float = 0.7,
     down_sample_ratio_min: float = 0.2,
     filter_position_zero: bool = True,
-) -> tuple[torch.Tensor, int]:
+) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Generate sampling indices for parallel sequences using COD sampling.
 
@@ -28,16 +28,16 @@ def generate_cod_sample_indices(
 
     Returns:
         Tuple of:
-        - all_indices: Flat tensor of encoded indices (depth * seq_length + pos)
-          for all depths [total_sampled]. Depth and position can be recovered
-          via all_indices // seq_length and all_indices % seq_length.
-        - num_depths_used: Actual number of depths produced
+            anchor_pos: The starting position in the original sequence the current
+                sampling chain started from.
+            depth: Which COD sampling round each element belongs to
     """
     loss_mask = loss_mask.squeeze()
     device = loss_mask.device
     all_valid_indices = torch.where(loss_mask == 1)[0]
 
     sample_indices = [torch.arange(seq_length, device=device)]
+    n_per_depth = [seq_length]
     prev_indices = all_valid_indices
 
     for depth in range(1, num_depths):
@@ -65,12 +65,10 @@ def generate_cod_sample_indices(
         mask = torch.isin(next_candidates, all_valid_indices)
         prev_indices = next_candidates[mask]
 
-        sample_indices.append(sampled_idx)
+        sample_indices.append(sampled_idx - depth)
+        n_per_depth.append(sampled_idx.shape[0])
 
-    num_depths_used = len(sample_indices)
+    anchor_pos = torch.cat(sample_indices)
+    depth = torch.cat([torch.ones(n) * i for i, n in enumerate(n_per_depth)])
 
-    all_indices = torch.cat(
-        [depth * seq_length + idx for depth, idx in enumerate(sample_indices)]
-    )
-
-    return all_indices, num_depths_used
+    return anchor_pos, depth

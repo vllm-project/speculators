@@ -15,8 +15,8 @@ def compute_metrics(
     logits: torch.Tensor,
     targets: torch.Tensor,
     loss_mask: torch.Tensor,
-    all_indices: torch.Tensor,
-    seq_length: int,
+    anchor_pos: torch.Tensor,
+    depth: torch.Tensor,
     num_depths: int,
 ) -> tuple[torch.Tensor, dict[str, Any]]:
     """Compute loss and accuracy metrics for P-EAGLE predictions.
@@ -25,8 +25,9 @@ def compute_metrics(
         logits: Draft model logits [B, total_sampled, vocab_size]
         targets: Verifier logits [B, total_sampled, vocab_size]
         loss_mask: Binary mask [B, seq_len]
-        all_indices: Encoded COD sample indices (depth * seq_length + pos)
-            [total_sampled]
+        anchor_pos: The starting position in the original sequence the current
+            sampling chain started from. [total_sampled]
+        depth: Which COD sampling round each element belongs to [total_sampled]
         seq_length: Original sequence length
         num_depths: Number of parallel depths
 
@@ -35,12 +36,9 @@ def compute_metrics(
     """
     device = logits.device
 
-    orig_positions = all_indices % seq_length  # [total_sampled]
-    # For P-EAGLE, depth serves as the position index in the speculative block.
     # TODO: batch size is always 1 for P-EAGLE; unsqueeze is only to match the
     # shared loss_function/compute_accuracy_multi_step shape contract
-    # [B, total_sampled].
-    pos_idx = (all_indices // seq_length).unsqueeze(0)  # [1, total_sampled]
+    orig_positions = anchor_pos + depth  # [total_sampled]
     sampled_loss_mask = loss_mask[:, orig_positions]  # [1, total_sampled]
 
     loss = loss_function(
@@ -51,8 +49,9 @@ def compute_metrics(
         pred_ids = torch.argmax(logits, dim=-1)
         target_ids = torch.argmax(targets, dim=-1)
 
+        # For P-EAGLE, depth serves as the position index in the speculative block.
         correct_per_pos, total_per_pos = compute_accuracy_multi_step(
-            pred_ids, target_ids, sampled_loss_mask, pos_idx, num_depths
+            pred_ids, target_ids, sampled_loss_mask, depth.unsqueeze(0), num_depths
         )
 
     metrics: dict[str, Any] = {
