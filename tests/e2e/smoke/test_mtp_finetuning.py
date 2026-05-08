@@ -89,8 +89,7 @@ def test_mtp_finetuning_smoke(tmp_path: Path):
 
     FROZEN_PATTERNS = ("embed_tokens", "lm_head")
 
-    model = _make_model()
-    model.to(dtype=torch.bfloat16)
+    model = _make_model().to(dtype=torch.bfloat16)  # type: ignore[call-arg]
     initial_sd = {k: v.detach().clone() for k, v in model.state_dict().items()}
 
     step_weights = compute_step_weights(beta=0.6, num_steps=NUM_STEPS)
