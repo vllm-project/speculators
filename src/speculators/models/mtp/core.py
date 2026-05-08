@@ -139,7 +139,7 @@ class MTPDraftModel(SpeculatorModel):
 
         all_logits: list[torch.Tensor] = []
         total_loss = torch.tensor(0.0, device=device)
-        metrics: dict[str, float] = {}
+        metrics: dict[str, torch.Tensor] = {}
 
         current_hidden = hidden_states
         for step in range(num_steps):

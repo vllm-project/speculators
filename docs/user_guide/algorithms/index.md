@@ -10,6 +10,10 @@ Predicts draft tokens autoregressively using Llama-style draft layers. The more 
 
 Predicts all draft tokens in a single forward pass using block-based prediction with Qwen3-style draft layers. Newer, with support improving rapidly.
 
+## [MTP](mtp.md)
+
+Finetunes the native multi-token prediction head shipped with models like Qwen3-Next and Qwen3.5. Uses the FastMTP methodology to improve speculative decoding acceptance rates on domain-specific data.
+
 ## Choosing an Algorithm
 
 Both algorithms can be paired with any supported verifier model. For help choosing between them, see the [Decision Guide](decision_guide.md).
