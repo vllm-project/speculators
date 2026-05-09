@@ -69,7 +69,7 @@ def create_peagle_mask_mod(
         kv_depth = depth[kv_idx]
 
         same_document = document_ids[q_anchor_pos] == document_ids[kv_anchor_pos]
-        is_not_padding = document_ids[q_idx] != -1
+        is_not_padding = document_ids[q_anchor_pos] != -1
         same_rollout = q_anchor_pos == kv_anchor_pos
         kv_depth0 = kv_depth == 0
         in_depth_order = q_depth >= kv_depth
