@@ -40,9 +40,9 @@ def generate_cod_sample_indices(
     n_per_depth = [seq_length]
     prev_indices = all_valid_indices
 
-    for depth in range(1, num_depths):
-        valid_length = max(0, all_valid_indices.shape[0] - depth)
-        ratio = max(down_sample_ratio**depth, down_sample_ratio_min)
+    for d in range(1, num_depths):
+        valid_length = max(0, all_valid_indices.shape[0] - d)
+        ratio = max(down_sample_ratio**d, down_sample_ratio_min)
         sample_size = int(valid_length * ratio)
 
         if sample_size <= 0:
@@ -65,10 +65,15 @@ def generate_cod_sample_indices(
         mask = torch.isin(next_candidates, all_valid_indices)
         prev_indices = next_candidates[mask]
 
-        sample_indices.append(sampled_idx - depth)
+        sample_indices.append(sampled_idx - d)
         n_per_depth.append(sampled_idx.shape[0])
 
     anchor_pos = torch.cat(sample_indices)
-    depth = torch.cat([torch.ones(n) * i for i, n in enumerate(n_per_depth)])
+    depth = torch.cat(
+        [
+            torch.full((n,), i, device=device, dtype=torch.long)
+            for i, n in enumerate(n_per_depth)
+        ]
+    )
 
     return anchor_pos, depth
