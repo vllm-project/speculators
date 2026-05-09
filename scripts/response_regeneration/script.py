@@ -281,7 +281,10 @@ async def main():
         dataset = dataset.shuffle(
             seed=args.shuffle_seed, buffer_size=args.shuffle_buffer_size
         )
-        print(f"Shuffling with seed={args.shuffle_seed}, buffer={args.shuffle_buffer_size}")
+        print(
+            f"Shuffling with seed={args.shuffle_seed},"
+            f" buffer={args.shuffle_buffer_size}"
+        )
 
     queue: asyncio.Queue = asyncio.Queue(maxsize=args.concurrency * 4)
     semaphore = asyncio.Semaphore(args.concurrency)
