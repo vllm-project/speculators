@@ -20,17 +20,17 @@
 # Timing (on 4x NVIDIA H100 80GB GPUs, DP=2)
 # Data Preprocessing: 26 seconds
 # vLLM Server Startup: 82 seconds (1 min 22 secs)
-# Training (4 epochs): 2793 seconds (46 mins 33 secs)
+# Training (5 epochs): 2793 seconds (46 mins 33 secs)
 # Total: 2901 seconds (48 mins 21 secs)
 
 # Results on SpecBench (80 prompts, 256 output tokens):
-# acceptance rate: 12.81%
-# acceptance length: 1.51
+# acceptance rate: 13.35%
+# acceptance length: 1.53
 # per-position acceptance:
-#   position 0: 39.92%
-#   position 1: 10.02%
-#   position 2: 1.19%
-#   position 3: 0.10%
+#   position 0: 40.84%
+#   position 1: 10.84%
+#   position 2: 1.58%
+#   position 3: 0.15%
 
 set -euo pipefail
 
