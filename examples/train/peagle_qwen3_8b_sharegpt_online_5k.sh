@@ -41,7 +41,7 @@ OUTPUT_DIR="./output/peagle_qwen3_8b_sharegpt"
 VLLM_PORT=8108
 MAX_SAMPLES=5000
 SEQ_LENGTH=4196
-EPOCHS=4
+EPOCHS=5
 LR=6e-4
 
 # P-EAGLE-specific parameters
@@ -51,8 +51,8 @@ NUM_DEPTHS=4
 DOWN_SAMPLE_RATIO=0.7
 DOWN_SAMPLE_RATIO_MIN=0.2
 # GPU assignments (online training needs separate GPUs for vLLM and training)
-VLLM_GPUS="3,4"
-TRAIN_GPUS="6,7"
+VLLM_GPUS="2,3"
+TRAIN_GPUS="4,5"
 NUM_TRAIN_GPUS=2
 # =======================================
 
