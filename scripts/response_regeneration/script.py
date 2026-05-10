@@ -18,6 +18,7 @@ DATASET_CONFIGS = {
         "id": "Magpie-Align/Magpie-Llama-3.1-Pro-300K-Filtered",
         "prompt_field": "instruction",
         "default_split": "train",
+        "id_field": "uuid",
     },
     # 200K multi-turn dialogues covering a broad range of topics. The "train_sft"
     # split contains the SFT-ready subset with a "prompt" field.
@@ -25,6 +26,7 @@ DATASET_CONFIGS = {
         "id": "HuggingFaceH4/ultrachat_200k",
         "prompt_field": "prompt",
         "default_split": "train_sft",
+        "id_field": "prompt_id",
     },
     # Grade-school math word problems with step-by-step solutions. Uses the "main"
     # subset. Good for evaluating mathematical reasoning capabilities.
@@ -48,6 +50,7 @@ DATASET_CONFIGS = {
         "id": "nvidia/Nemotron-Post-Training-Dataset-v2",
         "prompt_field": "messages",
         "default_split": "chat",
+        "id_field": "uuid",
         "messages_role_field": "role",
         "messages_content_field": "content",
     },
@@ -57,6 +60,7 @@ DATASET_CONFIGS = {
         "id": "allenai/tulu-3-sft-mixture",
         "prompt_field": "messages",
         "default_split": "train",
+        "id_field": "id",
         "messages_role_field": "role",
         "messages_content_field": "content",
     },
@@ -67,6 +71,7 @@ DATASET_CONFIGS = {
         "id": "allenai/WildChat",
         "prompt_field": "conversation",
         "default_split": "train",
+        "id_field": "conversation_id",
         "messages_role_field": "role",
         "messages_content_field": "content",
     },
@@ -88,6 +93,7 @@ DATASET_CONFIGS = {
         "id": "nvidia/Nemotron-SFT-Instruction-Following-Chat-v2",
         "prompt_field": "messages",
         "default_split": "reasoning_off",
+        "id_field": "uuid",
         "messages_role_field": "role",
         "messages_content_field": "content",
     },
@@ -97,6 +103,7 @@ DATASET_CONFIGS = {
         "id": "zai-org/LongAlign-10k",
         "prompt_field": "messages",
         "default_split": "train",
+        "id_field": "id",
         "messages_role_field": "role",
         "messages_content_field": "content",
     },
@@ -204,7 +211,7 @@ def load_seen(path: str):
                 obj = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            key = obj.get("uuid") or obj.get("idx")
+            key = obj.get("id") or obj.get("uuid") or obj.get("idx")
             if key is not None:
                 seen.add(str(key))
     return seen
@@ -311,7 +318,7 @@ async def worker(
             queue.task_done()
 
 
-async def main():
+async def main():  # noqa: C901, PLR0915
     """Main async function to process dataset through vLLM endpoints."""
     args = parse_args()
 
@@ -353,7 +360,10 @@ async def main():
         dataset = dataset.shuffle(
             seed=args.shuffle_seed, buffer_size=args.shuffle_buffer_size
         )
-        print(f"Shuffling with seed={args.shuffle_seed}, buffer={args.shuffle_buffer_size}")
+        print(
+            f"Shuffling with seed={args.shuffle_seed},"
+            f" buffer={args.shuffle_buffer_size}"
+        )
 
     queue: asyncio.Queue = asyncio.Queue(maxsize=args.concurrency * 4)
     semaphore = asyncio.Semaphore(args.concurrency)
@@ -396,23 +406,22 @@ async def main():
                         "messages_content_field", "content"
                     )
                     user_msgs = [
-                        m[content_field]
-                        for m in prompt
-                        if m.get(role_field) == "user"
+                        m[content_field] for m in prompt if m.get(role_field) == "user"
                     ]
                     if not user_msgs:
                         continue
                     prompt = user_msgs[0]
 
-                uuid = row.get("uuid")
-                key = str(uuid or index)
+                id_field = dataset_config.get("id_field")
+                row_id = row.get(id_field) if id_field else None
+                key = str(row_id if row_id is not None else index)
                 if key in seen_ids:
                     continue
 
                 await queue.put(
                     {
                         "idx": index,
-                        "uuid": uuid,
+                        "uuid": row_id,
                         "prompt": prompt,
                     }
                 )
