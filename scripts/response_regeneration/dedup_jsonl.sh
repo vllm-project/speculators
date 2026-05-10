@@ -8,13 +8,14 @@
 
 set -e
 
-if [ $# -lt 2 ]; then
-    echo "Usage: $0 <input.jsonl> <output.jsonl>"
+if [ $# -lt 1 ]; then
+    echo "Usage: $0 <input.jsonl> [output.jsonl]"
+    echo "  If output is omitted, the input file is deduped in place."
     exit 1
 fi
 
 INPUT="$1"
-OUTPUT="$2"
+OUTPUT="${2:-$INPUT}"
 
 if [ ! -f "$INPUT" ]; then
     echo "Error: $INPUT not found"
@@ -22,6 +23,7 @@ if [ ! -f "$INPUT" ]; then
 fi
 
 BEFORE=$(wc -l < "$INPUT" | tr -d ' ')
+TMPFILE=$(mktemp "${INPUT}.dedup.XXXXXX")
 
 tac "$INPUT" | python3 -c "
 import json,sys
@@ -34,10 +36,12 @@ for l in sys.stdin:
         lines.append(l)
 for l in reversed(lines):
     sys.stdout.write(l)
-" > "$OUTPUT"
+" > "$TMPFILE"
 
-AFTER=$(wc -l < "$OUTPUT" | tr -d ' ')
+AFTER=$(wc -l < "$TMPFILE" | tr -d ' ')
 REMOVED=$((BEFORE - AFTER))
+
+mv "$TMPFILE" "$OUTPUT"
 
 echo "Before: $BEFORE"
 echo "After:  $AFTER"
