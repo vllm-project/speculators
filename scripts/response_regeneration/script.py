@@ -318,7 +318,7 @@ async def worker(
             queue.task_done()
 
 
-async def main():  # noqa: C901, PLR0915
+async def main():  # noqa: C901, PLR0915, PLR0912
     """Main async function to process dataset through vLLM endpoints."""
     args = parse_args()
 
@@ -345,7 +345,14 @@ async def main():  # noqa: C901, PLR0915
         # Extract simple model name from full path
         model_name = args.model.split("/")[-1] if "/" in args.model else args.model
         model_name = sanitize_filename(model_name)
-        args.outfile = f"{args.dataset}_{model_name}.jsonl"
+        parts = [args.dataset]
+        if subset:
+            parts.append(sanitize_filename(subset))
+        default_split = dataset_config.get("default_split")
+        if split != default_split:
+            parts.append(sanitize_filename(split))
+        parts.append(model_name)
+        args.outfile = "_".join(parts) + ".jsonl"
 
     print(f"Using dataset: {dataset_id}")
     print(f"Subset: {subset}")
