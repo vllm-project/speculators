@@ -23,7 +23,7 @@ The model name is auto-detected from the vLLM server. Output is written to a JSO
 | `nemotron` | [nvidia/Nemotron-Post-Training-Dataset-v2](https://huggingface.co/datasets/nvidia/Nemotron-Post-Training-Dataset-v2) | `chat` | 1.4M | 6.1 GB | messages |
 | `tulu3` | [allenai/tulu-3-sft-mixture](https://huggingface.co/datasets/allenai/tulu-3-sft-mixture) | `train` | 939K | 1.5 GB | messages |
 | `wildchat` | [allenai/WildChat](https://huggingface.co/datasets/allenai/WildChat) | `train` | 529K | 3.1 GB | messages |
-| `nemotron_cascade` | [nvidia/Nemotron-Cascade-2-SFT-Data](https://huggingface.co/datasets/nvidia/Nemotron-Cascade-2-SFT-Data) | `train` | 1.9M | 33.3 GB | messages |
+| `nemotron_cascade` | [nvidia/Nemotron-Cascade-2-SFT-Data](https://huggingface.co/datasets/nvidia/Nemotron-Cascade-2-SFT-Data) | `train` | millions | ~593 GB | messages |
 | `nemotron_ifchat` | [nvidia/Nemotron-SFT-Instruction-Following-Chat-v2](https://huggingface.co/datasets/nvidia/Nemotron-SFT-Instruction-Following-Chat-v2) | `reasoning_off` | ~2M | ~16 GB | messages |
 | `longalign` | [zai-org/LongAlign-10k](https://huggingface.co/datasets/zai-org/LongAlign-10k) | `train` | 9.9K | 0.6 GB | messages |
 
@@ -71,18 +71,18 @@ Allen AI's SFT mixture used to train Tulu 3, containing ~939K examples spanning 
 
 ### nemotron_cascade
 
-NVIDIA's Cascade 2 SFT dataset spanning 8 domains with data generated from multiple frontier models. Each domain is a separate subset. All subsets use a single `train` split.
+NVIDIA's Cascade 2 SFT dataset spanning 8 domains with data generated from multiple frontier models. Each domain is a separate subset. All subsets use a single `train` split. Note: the HuggingFace metadata underreports sizes — actual sizes are much larger than shown in the dataset viewer.
 
-| Subset | Samples | Size |
-|--------|---------|------|
-| `chat` | 365K | 5.0 GB |
-| `instruction_following` | 820K | 3.3 GB |
-| `science` | 305K | 5.0 GB |
-| `conversational_agent` | 248K | 5.0 GB |
-| `math` | 94K | 5.0 GB |
-| `terminal_agent` | 83K | 5.0 GB |
-| `swe` | 22K | 5.0 GB |
-| `safety` | 4K | 14 MB |
+| Subset | Size |
+|--------|------|
+| `chat` | 213 GB |
+| `math` | 246 GB |
+| `science` | 46 GB |
+| `swe` | 36 GB |
+| `terminal_agent` | 31 GB |
+| `conversational_agent` | 17 GB |
+| `instruction_following` | 3.6 GB |
+| `safety` | 14 MB |
 
 ```bash
 python script.py --dataset nemotron_cascade                                    # chat (default)
