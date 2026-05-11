@@ -348,6 +348,7 @@ async def main():  # noqa: C901, PLR0915
         args.outfile = f"{args.dataset}_{model_name}.jsonl"
 
     print(f"Using dataset: {dataset_id}")
+    print(f"Subset: {subset}")
     print(f"Split: {split}")
     print(f"Prompt field: {prompt_field}")
     print(f"Output file: {args.outfile}")
