@@ -93,9 +93,10 @@ def _normalize_conversation(
         # Build normalized turn with role and content
         normalized_turn = {"role": role, "content": content}
 
-        # Preserve 'thinking' field if it exists
-        if "thinking" in turn and turn["thinking"]:
-            normalized_turn["thinking"] = turn["thinking"]
+        thinking = turn.get("thinking") or turn.get("reasoning_content")
+        if thinking:
+            normalized_turn["thinking"] = thinking
+            normalized_turn["reasoning_content"] = thinking
 
         normalized.append(normalized_turn)
 

@@ -9,6 +9,7 @@ def create_anchor_block_mask_mod(
     total_seq_len: int,
     anchor_positions: torch.Tensor,
     block_size: int,
+    sliding_window: int | None = None,
 ):
     """
     Build a flex-attention mask mod where each query block corresponds to one anchor.
@@ -94,7 +95,13 @@ def create_anchor_block_mask_mod(
         same_doc = (q_doc == kv_doc) & (q_doc != -1)
         before_anchor = kv_base_pos < q_anchor
 
-        return kv_is_base & same_doc & before_anchor
+        in_window = (
+            (kv_base_pos >= q_anchor - sliding_window)
+            if sliding_window is not None
+            else True
+        )
+
+        return kv_is_base & same_doc & before_anchor & in_window
 
     def same_block_mod(_b, _h, q_idx, kv_idx):
         """
