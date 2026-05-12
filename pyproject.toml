@@ -89,7 +89,7 @@ dev = [
     "respx~=0.23.1",
 
     # code quality
-    "mypy~=1.20.2",
+    "mypy~=2.1.0",
     "ruff~=0.14.1",
 
     # docs quality
