@@ -52,7 +52,7 @@ SPECULATOR_TYPE="dflash"
 BLOCK_SIZE=8
 MAX_ANCHORS=3072
 NUM_LAYERS=5
-DRAFT_VOCAB_SIZE=8192
+DRAFT_VOCAB_SIZE=32000
 TARGET_LAYER_IDS="2 18 33"  # Must match vLLM's eagle_aux_hidden_state_layer_ids
 
 # GPU assignments (online training needs separate GPUs for vLLM and training)

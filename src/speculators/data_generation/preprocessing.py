@@ -428,7 +428,7 @@ def load_raw_dataset(train_data_path: str, num_proc: int = 8) -> HFDataset:
         )
 
     config = DATASET_CONFIGS[train_data_path]
-    raw_dataset = load_dataset(config.hf_path, split=config.split)
+    raw_dataset = load_dataset(config.hf_path, name=config.subset, split=config.split)
 
     if config.normalize_fn is not None:
         raw_dataset = raw_dataset.map(config.normalize_fn, num_proc=num_proc)
