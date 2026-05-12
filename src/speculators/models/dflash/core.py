@@ -222,11 +222,15 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         )
         # shape: [num_anchors], [num_anchors]
 
+        sliding_window = getattr(
+            self.config.transformer_layer_config, "sliding_window", None
+        )
         mask_mod, q_len, kv_len = create_anchor_block_mask_mod(
             lengths=lengths.to(device),
             total_seq_len=total_seq_len,
             anchor_positions=anchor_positions,
             block_size=self.block_size,
+            sliding_window=sliding_window,
         )
 
         attention_mask = create_block_mask(

@@ -157,6 +157,11 @@ def main():
                 "preprocessing. To existing overwrite files use --overwrite."
             )
             sys.exit(0)
+        if args.overwrite:
+            import shutil
+
+            shutil.rmtree(output)
+            output.mkdir(parents=True)
     else:
         output.mkdir(parents=True)
 
