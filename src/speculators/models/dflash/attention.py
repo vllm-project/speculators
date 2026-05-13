@@ -74,13 +74,6 @@ def create_anchor_block_mask_mod(
             f"anchor_positions out of range: {anchor_positions[oob].tolist()}"
         )
 
-    anchor_docs = document_ids[anchor_positions]
-    if (pad_mask := anchor_docs == -1).any():
-        raise ValueError(
-            f"anchor_positions include padding locations:"
-            f" {anchor_positions[pad_mask].tolist()}"
-        )
-
     # For each query position, which anchor does it belong to?
     # query q in [j*block_size, (j+1)*block_size) belongs to anchor_positions[j]
     query_anchor_positions = torch.repeat_interleave(anchor_positions, block_size)
