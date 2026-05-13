@@ -287,6 +287,7 @@ class Trainer:
         if epoch != "interrupted" and (
             self.config.save_best
             or (
+                self.config.checkpoint_freq >= 1 and
                 isinstance(epoch, int)
                 and epoch != 0
                 and (epoch + 1) % self.config.checkpoint_freq != 0
