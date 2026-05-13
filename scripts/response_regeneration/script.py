@@ -233,7 +233,7 @@ async def worker(
             queue.task_done()
 
 
-async def main():
+async def main():  # noqa: PLR0915
     """Main async function to process dataset through vLLM endpoints."""
     args = parse_args()
 
