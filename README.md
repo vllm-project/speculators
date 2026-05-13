@@ -41,6 +41,7 @@ Big updates have landed in Speculators! To get a more in-depth look, check out t
 
 Some of the exciting new features include:
 
+- **Qwen3-8B DFlash Speculator**: The RedHat team published a [DFlash speculator for Qwen3-8B](https://huggingface.co/RedHatAI/Qwen3-8B-speculator.dflash), achieving average speculative token acceptance lengths of up to 3.74 on `math_reasoning`.
 - **Gemma 4 Speculators**: The RedHat team published speculators for Gemma 4 31B-it, including both [DFlash](https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.dflash) and [EAGLE-3](https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.eagle3) checkpoints, enabling production-grade speculative decoding for Gemma 4 models.
 - **DFlash Training Algorithm**: Added support for the DFlash training algorithm with anchored-block drafting, using auxiliary hidden states from multiple verifier layers. Includes CLI options for block size and max anchors, plus DFlash metrics, utilities, and draft model. DFlash models trained through Speculators can now run seamlessly in vLLM as of [vLLM PR #38300](https://github.com/vllm-project/vllm/pull/38300).
 - **Online Training Support**: Added support for online training using the new [vLLM hidden extraction system](https://github.com/vllm-project/vllm/pull/33736), enabling real-time hidden state generation during training without requiring separate offline data generation steps.
@@ -87,7 +88,7 @@ The following table summarizes the models that have been trained end-to-end by o
 <tr>
 <td rowspan="3">Qwen3</td>
 <td>8B</td>
-<td><a href="https://huggingface.co/RedHatAI/Qwen3-8B-speculator.eagle3">EAGLE-3</a> ✅</td>
+<td><a href="https://huggingface.co/RedHatAI/Qwen3-8B-speculator.eagle3">EAGLE-3</a> ✅<br/><a href="https://huggingface.co/RedHatAI/Qwen3-8B-speculator.dflash">DFlash</a> ✅</td>
 <td>✅</td>
 </tr>
 <tr>

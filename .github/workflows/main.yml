@@ -7,6 +7,7 @@ on:
 
 env:
   UV_TORCH_BACKEND: "auto"
+  HF_TOKEN: ${{ secrets.HF_RED_HAT_READ_ONLY }}
 
 jobs:
   quality-checks:
