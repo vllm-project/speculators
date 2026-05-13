@@ -28,6 +28,7 @@ root_logger = logging.getLogger("speculators")
 metric_logger = logging.getLogger("speculators.metrics")
 
 warnings.filterwarnings("ignore", category=TqdmExperimentalWarning)
+MIN_STEP_PCT = 0.25
 
 
 class TrainerConfig(NamedTuple):
@@ -238,7 +239,8 @@ class Trainer:
                 step_interval is not None
                 and not self.config.save_best
                 and local_step % step_interval == 0
-                and num_steps - local_step >= step_interval
+                and num_steps - local_step >= step_interval * MIN_STEP_PCT
+                # Avoid saving back to back ay the end of each epoch
             ):
                 self.maybe_save_checkpoint(epoch)
 
