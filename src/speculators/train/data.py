@@ -16,6 +16,7 @@ from datasets import load_from_disk
 from safetensors.torch import load_file
 from torch.utils.data import Dataset
 
+from speculators.data_generation.fp8_utils import dequantize_fp8_tensor
 from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_REQUEST_TIMEOUT,
@@ -305,10 +306,11 @@ class ArrowDataset(BaseDataset):
         if loaded_hs is None:
             return loaded_hs
 
-        # loaded_hs structure: {
-        #   "hidden_states": [seq_len, 4, hidden_size]
-        #   "token_ids": [seq_len]
-        # }
+        # loaded_hs structure (bf16):
+        #   {"hidden_states": [seq_len, 4, hidden_size], "token_ids": [seq_len]}
+        # loaded_hs structure (fp8):
+        #   {"hidden_states": fp8 [seq_len, 4, hidden_size],
+        #    "hidden_states_scales": [seq_len, 1] or [1], "token_ids": [seq_len]}
 
         if not torch.equal(loaded_hs["token_ids"], self.data[index]["input_ids"]):
             warnings.warn(
@@ -318,14 +320,18 @@ class ArrowDataset(BaseDataset):
             )
             return None
 
+        hs = loaded_hs["hidden_states"]
+
+        if "hidden_states_scales" in loaded_hs:
+            flat = hs.reshape(hs.shape[0], -1)
+            hs = dequantize_fp8_tensor(
+                flat, loaded_hs["hidden_states_scales"], torch.bfloat16
+            ).reshape(hs.shape)
+
         return {
-            "hidden_states": loaded_hs["hidden_states"][:, :-1].flatten(
-                1
-            ),  # [seq_len, 3 * hidden_size]
+            "hidden_states": hs[:, :-1].flatten(1),  # [seq_len, 3 * hidden_size]
             "input_ids": loaded_hs["token_ids"],  # [seq_len]
-            "verifier_last_hidden_states": loaded_hs["hidden_states"][
-                :, -1
-            ],  # [seq_len, hidden_size]
+            "verifier_last_hidden_states": hs[:, -1],  # [seq_len, hidden_size]
             "loss_mask": self.data[index]["loss_mask"],  # [seq_len]
         }
 

@@ -260,14 +260,15 @@ class TestEagle3ConverterFixes:
         checkpoint_path = "nm-testing/testing-llama3.1.8b-2layer-eagle3"
         base_model = "RedHatAI/Meta-Llama-3.1-8B-Instruct-FP8-dynamic"
 
+        ckpt_leaf = checkpoint_path.rsplit("/", maxsplit=1)[-1]
         converter.convert(
             checkpoint_path,
-            tmp_path / checkpoint_path.split("/")[-1],
+            tmp_path / ckpt_leaf,
             base_model,
             norm_before_residual=False,
         )
 
-        config = load_checkpoint_config(tmp_path / checkpoint_path.split("/")[-1])
+        config = load_checkpoint_config(tmp_path / ckpt_leaf)
 
         # Verify that num_hidden_layers is correctly set to 2
         assert config["transformer_layer_config"]["num_hidden_layers"] == 2
