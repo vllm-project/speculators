@@ -383,11 +383,16 @@ def main(args: argparse.Namespace):
     maybe_destroy_distributed()
 
 
-def _checkpoint_freq(value: str) -> int:
-    ivalue = int(value)
-    if ivalue < 1:
-        raise argparse.ArgumentTypeError("--checkpoint-freq must be >= 1")
-    return ivalue
+def _checkpoint_freq(value: str) -> float:
+    fvalue = float(value)
+    if fvalue <= 0:
+        raise argparse.ArgumentTypeError("--checkpoint-freq must be > 0")
+    if fvalue > 1 and not fvalue.is_integer():
+        raise argparse.ArgumentTypeError(
+            f"--checkpoint-freq={fvalue} is not an integer. Values > 1 are treated "
+            "as epoch counts and must be whole numbers."
+        )
+    return fvalue
 
 
 def parse_args():
@@ -652,8 +657,9 @@ def parse_args():
     parser.add_argument(
         "--checkpoint-freq",
         type=_checkpoint_freq,
-        default=1,
-        help="Save a checkpoint every N epochs.",
+        default=1.0,
+        help="Save a checkpoint every N epochs. Values < 1 enable sub-epoch "
+        "checkpointing (e.g. 0.5 = every half epoch).",
     )
     parser.add_argument(
         "--save-best",
