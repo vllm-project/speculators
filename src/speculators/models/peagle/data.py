@@ -32,7 +32,7 @@ def generate_cod_sample_indices(
                 sampling chain started from.
             depth: Which COD sampling round each element belongs to
     """
-    loss_mask = loss_mask.squeeze()
+    loss_mask = loss_mask.squeeze(0)
     device = loss_mask.device
     all_valid_indices = torch.where(loss_mask == 1)[0]
 
