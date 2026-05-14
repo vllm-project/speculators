@@ -107,6 +107,7 @@ def create_transformer_layer_config(
     draft_arch: str = "llama",
     hidden_act: str | None = None,
     sliding_window: int | None = None,
+    full_attention_interval: int | None = None,
 ) -> PretrainedConfig:
     if draft_arch not in DRAFT_ARCH_CONFIGS:
         raise ValueError(
@@ -157,7 +158,14 @@ def create_transformer_layer_config(
 
     if sliding_window is not None:
         kwargs["sliding_window"] = sliding_window
-        kwargs["layer_types"] = ["sliding_attention"] * num_layers
+        if full_attention_interval is not None:
+            kwargs["layer_types"] = [
+                "full_attention" if (i + 1) % full_attention_interval == 0
+                else "sliding_attention"
+                for i in range(num_layers)
+            ]
+        else:
+            kwargs["layer_types"] = ["sliding_attention"] * num_layers
 
     return config_class(**kwargs)
 
@@ -256,12 +264,14 @@ def main(args: argparse.Namespace):
 
     # Setup speculator config
     sliding_window = getattr(args, "sliding_window", None) or None
+    full_attention_interval = getattr(args, "full_attention_interval", None)
     transformer_layer_config = create_transformer_layer_config(
         args.verifier_name_or_path,
         args.num_layers,
         draft_arch=args.draft_arch,
         hidden_act=args.draft_hidden_act,
         sliding_window=sliding_window,
+        full_attention_interval=full_attention_interval,
     )
 
     args.mask_token_id = resolve_mask_token_id(
@@ -652,9 +662,17 @@ def parse_args():
     parser.add_argument(
         "--sliding-window",
         type=int,
-        default=2048,
-        help="Sliding window size for DFlash attention (default: 2048). "
-        "Set to 0 to disable and use full attention.",
+        default=0,
+        help="Sliding window size for DFlash attention (default: 0 = full attention). "
+        "Set to a positive value (e.g. 2048) to enable sliding window attention.",
+    )
+    parser.add_argument(
+        "--full-attention-interval",
+        type=int,
+        default=None,
+        help="Every Nth layer uses full attention instead of sliding window. "
+        "Requires --sliding-window > 0. E.g., --full-attention-interval 3 "
+        "with 5 layers gives [slide, slide, full, slide, slide].",
     )
     # Dataloader parameters
     parser.add_argument(
