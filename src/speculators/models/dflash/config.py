@@ -71,6 +71,12 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
         description="Token ID used for masking",
     )
 
+    swa_causal: bool = Field(
+        default=False,
+        description="Use causal (left-to-right) masking within draft blocks for "
+        "sliding window attention layers. Full attention layers are always bidirectional.",
+    )
+
     @field_serializer("transformer_layer_config")
     def serialize_transformer_config(self, value: PretrainedConfig) -> dict:
         """Serialize transformer config to dict."""

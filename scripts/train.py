@@ -654,6 +654,14 @@ def parse_args():
         "Requires --sliding-window > 0. E.g., --full-attention-interval 3 "
         "with 5 layers gives [slide, slide, full, slide, slide].",
     )
+    parser.add_argument(
+        "--swa-causal",
+        action="store_true",
+        default=False,
+        help="Use causal (left-to-right) masking within draft blocks for sliding "
+        "window attention layers. Full attention layers are always bidirectional. "
+        "Matches vLLM inference behavior when SWA layers use causal attention.",
+    )
     # Dataloader parameters
     parser.add_argument(
         "--num-workers", type=int, default=12, help="Number of dataloader workers"
