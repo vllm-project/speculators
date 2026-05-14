@@ -222,25 +222,45 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         )
         # shape: [num_anchors], [num_anchors]
 
-        sliding_window = getattr(
-            self.config.transformer_layer_config, "sliding_window", None
+        tl_config = self.config.transformer_layer_config
+        sliding_window = getattr(tl_config, "sliding_window", None)
+        layer_types = getattr(tl_config, "layer_types", None)
+
+        needs_swa = (
+            sliding_window is not None
+            and layer_types is not None
+            and "sliding_attention" in layer_types
         )
-        mask_mod, q_len, kv_len = create_anchor_block_mask_mod(
+        needs_full = (
+            layer_types is None
+            or "full_attention" in layer_types
+            or not needs_swa
+        )
+
+        mask_kwargs = dict(
             lengths=lengths.to(device),
             total_seq_len=total_seq_len,
             anchor_positions=anchor_positions,
             block_size=self.block_size,
-            sliding_window=sliding_window,
         )
 
-        attention_mask = create_block_mask(
-            mask_mod,
-            B=None,
-            H=None,
-            Q_LEN=q_len,
-            KV_LEN=kv_len,
-            device=device,
-        )
+        def _build_mask(sw):
+            mod, q, kv = create_anchor_block_mask_mod(**mask_kwargs, sliding_window=sw)
+            return create_block_mask(mod, B=None, H=None, Q_LEN=q, KV_LEN=kv, device=device), q, kv
+
+        if needs_swa:
+            swa_mask, q_len, kv_len = _build_mask(sliding_window)
+        if needs_full:
+            full_mask, q_len, kv_len = _build_mask(None)
+
+        layer_masks = []
+        for i in range(len(self.layers)):
+            is_swa = (
+                layer_types is not None
+                and sliding_window is not None
+                and layer_types[i] == "sliding_attention"
+            )
+            layer_masks.append(swa_mask if is_swa else full_mask)
 
         mask_tokens_size = num_anchors * self.block_size
 
@@ -281,11 +301,11 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             targets = verifier_logits[:, anchored_block_indices]
             # shape: [1, num_anchors*block_size, draft_vocab_size]
 
-        for layer in self.layers:
+        for layer, mask in zip(self.layers, layer_masks):
             noise_embedding = layer(
                 hidden_states=noise_embedding,
                 target_hidden=fc_output,
-                attention_mask=attention_mask,
+                attention_mask=mask,
                 position_ids=position_ids,
                 use_cache=False,
                 position_embeddings=position_embeddings,
