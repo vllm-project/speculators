@@ -141,6 +141,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             max_anchors=kwargs.get("max_anchors", 3072),
             aux_hidden_state_layer_ids=target_layer_ids,
             mask_token_id=kwargs.get("mask_token_id"),
+            swa_causal=kwargs.get("swa_causal", False),
             speculators_config=SpeculatorsConfig(
                 algorithm="dflash",
                 proposal_methods=[
@@ -234,12 +235,14 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             block_size=self.block_size,
         )
 
-        def _build_mask(sw):
-            mod, q, kv = create_anchor_block_mask_mod(**mask_kwargs, sliding_window=sw)
+        swa_causal = getattr(self.config, "swa_causal", False)
+
+        def _build_mask(sw, causal=False):
+            mod, q, kv = create_anchor_block_mask_mod(**mask_kwargs, sliding_window=sw, causal=causal)
             return create_block_mask(mod, B=None, H=None, Q_LEN=q, KV_LEN=kv, device=device), q, kv
 
         if needs_swa:
-            swa_mask, q_len, kv_len = _build_mask(sliding_window)
+            swa_mask, q_len, kv_len = _build_mask(sliding_window, causal=swa_causal)
         if needs_full:
             full_mask, q_len, kv_len = _build_mask(None)
 
