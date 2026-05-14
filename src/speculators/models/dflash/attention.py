@@ -9,6 +9,8 @@ def create_anchor_block_mask_mod(
     total_seq_len: int,
     anchor_positions: torch.Tensor,
     block_size: int,
+    sliding_window: int | None = None,
+    causal: bool = False,
 ):
     """
     Build a flex-attention mask mod where each query block corresponds to one anchor.
@@ -94,16 +96,26 @@ def create_anchor_block_mask_mod(
         same_doc = (q_doc == kv_doc) & (q_doc != -1)
         before_anchor = kv_base_pos < q_anchor
 
-        return kv_is_base & same_doc & before_anchor
+        in_window = (
+            (kv_base_pos >= q_anchor - sliding_window)
+            if sliding_window is not None
+            else True
+        )
+
+        return kv_is_base & same_doc & before_anchor & in_window
 
     def same_block_mod(_b, _h, q_idx, kv_idx):
         """
-        Queries may attend bidirectionally to all tokens in their own synthetic block.
+        Queries may attend to tokens in their own synthetic block.
+        Bidirectional unless causal=True, in which case only prior positions.
         """
         q_block = q_idx // block_size
         kv_is_block = kv_idx >= total_seq_len
         kv_block = (kv_idx - total_seq_len) // block_size
 
-        return kv_is_block & (q_block == kv_block)
+        same = kv_is_block & (q_block == kv_block)
+        if causal:
+            same = same & (kv_idx <= q_idx + total_seq_len)
+        return same
 
     return or_masks(base_prefix_mod, same_block_mod), q_len, kv_len
