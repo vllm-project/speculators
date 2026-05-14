@@ -75,6 +75,9 @@ class PEagleDraftModel(Eagle3DraftModel):
         Returns:
             Tuple of (draft_tokens, loss, metrics)
         """
+        if verifier_last_hidden_states is None:
+            raise ValueError("verifier_last_hidden_states required for training")
+
         device = hidden_states.device
         seq_length = input_ids.shape[1]
 
@@ -155,8 +158,6 @@ class PEagleDraftModel(Eagle3DraftModel):
             self.norm(hidden_states)
         )  # [1, total_sampled, vocab_size]
 
-        if verifier_last_hidden_states is None:
-            raise ValueError("verifier_last_hidden_states required for training")
         with torch.no_grad():
             targets = self.verifier_lm_head(
                 self.verifier_norm(verifier_last_hidden_states)

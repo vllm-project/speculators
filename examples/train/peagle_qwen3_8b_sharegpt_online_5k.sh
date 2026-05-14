@@ -40,7 +40,7 @@ DATASET="sharegpt"                # sharegpt, ultrachat, or path to custom data
 OUTPUT_DIR="./output/peagle_qwen3_8b_sharegpt"
 VLLM_PORT=8108
 MAX_SAMPLES=5000
-SEQ_LENGTH=4196
+SEQ_LENGTH=4096
 EPOCHS=5
 LR=6e-4
 
