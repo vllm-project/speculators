@@ -139,18 +139,34 @@ def create_transformer_layer_config(
             "nor 'hidden_activation'"
         )
 
+    head_dim = getattr(verifier_config, "head_dim", None)
+    num_attention_heads = verifier_config.num_attention_heads
+    num_key_value_heads = verifier_config.num_key_value_heads
+
+    # Models like Qwen3.6-27B use an explicit head_dim where
+    # hidden_size != num_attention_heads * head_dim (e.g. 5120 != 24 * 256).
+    # LlamaConfig validates hidden_size % num_attention_heads == 0, so
+    # recompute heads to match hidden_size // head_dim for the speculator.
+    if (
+        head_dim
+        and verifier_config.hidden_size % num_attention_heads != 0
+        and verifier_config.hidden_size % head_dim == 0
+    ):
+        num_attention_heads = verifier_config.hidden_size // head_dim
+        num_key_value_heads = min(num_key_value_heads, num_attention_heads)
+
     return config_class(
         vocab_size=verifier_config.vocab_size,
         hidden_size=verifier_config.hidden_size,
         intermediate_size=verifier_config.intermediate_size,
         num_hidden_layers=num_layers,
-        num_attention_heads=verifier_config.num_attention_heads,
-        num_key_value_heads=verifier_config.num_key_value_heads,
+        num_attention_heads=num_attention_heads,
+        num_key_value_heads=num_key_value_heads,
         hidden_act=hidden_act,
         max_position_embeddings=verifier_config.max_position_embeddings,
         initializer_range=verifier_config.initializer_range,
         rms_norm_eps=verifier_config.rms_norm_eps,
-        head_dim=getattr(verifier_config, "head_dim", None),
+        head_dim=head_dim,
         tie_word_embeddings=False,
     )
 
