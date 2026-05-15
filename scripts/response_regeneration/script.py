@@ -10,6 +10,7 @@ from typing import Any
 
 import aiohttp
 from datasets import load_dataset
+from tqdm import tqdm
 
 DATASET_CONFIGS = {
     "magpie": {
@@ -154,6 +155,8 @@ async def worker(
     args,
     out_fh,
     endpoint: str,
+    progress,
+    stats: dict[str, int],
 ):
     """Worker that pulls items from queue and sends them to the vLLM endpoint."""
     while True:
@@ -206,6 +209,7 @@ async def worker(
             }
             out_fh.write(json.dumps(output, ensure_ascii=False) + "\n")
             out_fh.flush()
+            stats["ok"] += 1
         except Exception as e:  # noqa: BLE001
             error_output = {
                 "id": item.get("uuid") or f"sample_{idx}",
@@ -218,11 +222,18 @@ async def worker(
             }
             out_fh.write(json.dumps(error_output, ensure_ascii=False) + "\n")
             out_fh.flush()
+            stats["errors"] += 1
         finally:
+            progress.update(1)
+            progress.set_postfix(
+                ok=stats["ok"],
+                errors=stats["errors"],
+                refresh=False,
+            )
             queue.task_done()
 
 
-async def main():
+async def main():  # noqa: PLR0915
     """Main async function to process dataset through vLLM endpoints."""
     args = parse_args()
 
@@ -276,43 +287,72 @@ async def main():
         timeout=timeout, connector=connector, headers=headers
     ) as session:
         with open(args.outfile, "a", encoding="utf-8") as output_file:  # noqa: ASYNC230
-            workers = [
-                asyncio.create_task(
-                    worker(semaphore, session, queue, args, output_file, endpoint)
-                )
-                for _ in range(args.concurrency)
-            ]
+            stats = {"ok": 0, "errors": 0}
+            progress_total = args.limit if args.limit is not None else None
+            progress = tqdm(
+                total=progress_total,
+                desc="Generating responses",
+                unit="sample",
+                dynamic_ncols=True,
+            )
+            workers = []
 
-            processed_count = 0
-            for index, row in enumerate(dataset):
-                if args.limit is not None and processed_count >= args.limit:
-                    break
+            try:
+                workers = [
+                    asyncio.create_task(
+                        worker(
+                            semaphore,
+                            session,
+                            queue,
+                            args,
+                            output_file,
+                            endpoint,
+                            progress,
+                            stats,
+                        )
+                    )
+                    for _ in range(args.concurrency)
+                ]
 
-                if args.language_filter and row.get("language") != args.language_filter:
-                    continue
+                processed_count = 0
+                for index, row in enumerate(dataset):
+                    if args.limit is not None and processed_count >= args.limit:
+                        break
 
-                prompt = row.get(prompt_field)
-                if not prompt:
-                    continue
+                    if (
+                        args.language_filter
+                        and row.get("language") != args.language_filter
+                    ):
+                        continue
 
-                uuid = row.get("uuid")
-                key = str(uuid or index)
-                if key in seen_ids:
-                    continue
+                    prompt = row.get(prompt_field)
+                    if not prompt:
+                        continue
 
-                await queue.put(
-                    {
-                        "idx": index,
-                        "uuid": uuid,
-                        "prompt": prompt,
-                    }
-                )
-                processed_count += 1
+                    uuid = row.get("uuid")
+                    key = str(uuid or index)
+                    if key in seen_ids:
+                        continue
 
-            # Signal workers to stop
-            for _ in range(len(workers)):
-                await queue.put(None)
-            await asyncio.gather(*workers)
+                    await queue.put(
+                        {
+                            "idx": index,
+                            "uuid": uuid,
+                            "prompt": prompt,
+                        }
+                    )
+                    processed_count += 1
+
+                if progress.total is None or processed_count < progress.total:
+                    progress.total = processed_count
+                    progress.refresh()
+
+                # Signal workers to stop
+                for _ in range(len(workers)):
+                    await queue.put(None)
+                await asyncio.gather(*workers)
+            finally:
+                progress.close()
 
 
 if __name__ == "__main__":
