@@ -3,6 +3,34 @@
 import torch
 
 
+def hc_head_project(
+    hidden_states: torch.Tensor,
+    hc_fn: torch.Tensor,
+    hc_scale: torch.Tensor,
+    hc_base: torch.Tensor,
+    rms_norm_eps: float = 1e-6,
+    hc_eps: float = 1e-6,
+) -> torch.Tensor:
+    """Collapse multi-channel hidden states via the hc_head projection.
+
+    Pure-PyTorch port of vLLM's ``_hc_head_fused_reference``.
+    """
+    num_tokens, hc_mult, hidden_size = hidden_states.shape
+
+    x = hidden_states.reshape(num_tokens, hc_mult * hidden_size).to(torch.float32)
+
+    mixes = torch.matmul(x, hc_fn.t())
+
+    sqrsum = x.square().sum(dim=-1, keepdim=True)
+    rsqrt = torch.rsqrt(sqrsum / (hc_mult * hidden_size) + rms_norm_eps)
+
+    pre_mix = torch.sigmoid(mixes * rsqrt * hc_scale[0] + hc_base) + hc_eps
+
+    result = torch.sum(pre_mix.unsqueeze(-1) * hidden_states.to(torch.float32), dim=1)
+
+    return result.to(hidden_states.dtype)
+
+
 def get_base_indices_for_anchored_blocks(
     anchor_positions: torch.Tensor,  # shape: [1, num_anchors]
     block_size: int,

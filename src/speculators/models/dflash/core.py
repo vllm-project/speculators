@@ -16,6 +16,7 @@ from speculators.models.dflash.metrics import compute_metrics
 from speculators.models.dflash.model_definitions import Qwen3DFlashDecoderLayer
 from speculators.models.dflash.utils import (
     get_base_indices_for_anchored_blocks,
+    hc_head_project,
     select_anchors,
 )
 from speculators.models.utils import resolve_target_layer_ids
@@ -30,10 +31,16 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         "verifier_norm.weight",
         "t2d",
         "d2t",
+        "hc_head_fn",
+        "hc_head_base",
+        "hc_head_scale",
     ]
     _keys_to_ignore_on_save: ClassVar[list[str]] = [  # type: ignore[misc,assignment]
         "verifier_lm_head.weight",
         "verifier_norm.weight",
+        "hc_head_fn",
+        "hc_head_base",
+        "hc_head_scale",
     ]
 
     t2d: torch.Tensor | None
@@ -52,6 +59,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         self._init_vocab(config)
 
         tl_config = config.transformer_layer_config
+        self.hc_mult = getattr(tl_config, "hc_mult", 1)
 
         # Number of draft layers is encoded in transformer_layer_config
         num_draft_layers = tl_config.num_hidden_layers
@@ -75,8 +83,13 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         )
         self.rotary_emb = Qwen3RotaryEmbedding(config.transformer_layer_config)  # type: ignore[arg-type]
 
+        fc_in = (
+            len(self.target_layer_ids)
+            * self.hc_mult
+            * config.transformer_layer_config.hidden_size
+        )
         self.fc = nn.Linear(
-            len(self.target_layer_ids) * config.transformer_layer_config.hidden_size,
+            fc_in,
             config.transformer_layer_config.hidden_size,
             bias=False,
         )
@@ -89,6 +102,15 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             eps=config.transformer_layer_config.rms_norm_eps,  # type: ignore[arg-type]
         )
         self.verifier_norm.weight.requires_grad = False
+
+        if self.hc_mult > 1:
+            hs = config.transformer_layer_config.hidden_size
+            self.register_buffer(
+                "hc_head_fn", torch.empty(self.hc_mult, self.hc_mult * hs)
+            )
+            self.register_buffer("hc_head_base", torch.empty(self.hc_mult))
+            self.register_buffer("hc_head_scale", torch.empty(1))
+
         self.block_size = config.block_size
         self.post_init()
 
@@ -175,6 +197,65 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         val_kwargs: dict[str, Any] = {}
         return train_kwargs, val_kwargs
 
+    def load_verifier_weights(self):
+        """Load verifier weights, handling DSv4's non-standard weight names."""
+        if self.hc_mult <= 1:
+            super().load_verifier_weights()
+            return
+
+        from speculators.utils.loading import load_model_layers  # noqa: PLC0415
+
+        speculators_config = getattr(
+            getattr(self, "config", None), "speculators_config", None
+        )
+        if speculators_config is None:
+            return
+        verifier_config = speculators_config.verifier
+        if verifier_config.name_or_path is None:
+            return
+
+        verifier_weights = load_model_layers(
+            [
+                "embed.weight",
+                "head.weight",
+                "norm.weight",
+                "hc_head_fn",
+                "hc_head_base",
+                "hc_head_scale",
+            ],
+            verifier_config.name_or_path,
+        )
+
+        embed_weight = verifier_weights["embed.weight"]
+        lm_head_weight = verifier_weights.get("head.weight", embed_weight)
+
+        if self.embed_tokens.weight.isnan().any():
+            self.embed_tokens.load_state_dict({"weight": embed_weight})
+
+        if self.use_draft_vocab:
+            if self.t2d is None or not torch.any(self.t2d).item():
+                raise ValueError(
+                    "t2d tensor hasn't been set. Please call "
+                    "`.load_vocab_mappings(t2d, d2t)` before `.load_verifier_weights()`"
+                )
+            lm_head_weight = lm_head_weight[
+                self.t2d.to(device=lm_head_weight.device, dtype=torch.bool), :
+            ]
+
+        if self.lm_head.weight.isnan().any():
+            self.lm_head.load_state_dict(
+                {"weight": lm_head_weight.detach().clone()}, strict=False
+            )
+        self.verifier_lm_head.load_state_dict(
+            {"weight": lm_head_weight.detach().clone()}, strict=False
+        )
+
+        self.verifier_norm.load_state_dict({"weight": verifier_weights["norm.weight"]})
+
+        self.hc_head_fn.copy_(verifier_weights["hc_head_fn"])
+        self.hc_head_base.copy_(verifier_weights["hc_head_base"])
+        self.hc_head_scale.copy_(verifier_weights["hc_head_scale"])
+
     @property
     def mask_token_id(self) -> int:
         if self.config.mask_token_id is None:
@@ -259,6 +340,14 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         )  # shape: [num_anchors*block_size]
 
         with torch.no_grad():
+            if self.hc_mult > 1:
+                bsz, seq, _ = verifier_last_hidden_states.shape
+                verifier_last_hidden_states = hc_head_project(
+                    verifier_last_hidden_states.reshape(bsz * seq, self.hc_mult, -1),
+                    self.hc_head_fn,
+                    self.hc_head_scale,
+                    self.hc_head_base,
+                ).reshape(bsz, seq, -1)
             verifier_logits = self.verifier_lm_head(
                 self.verifier_norm(verifier_last_hidden_states)
             )
