@@ -51,6 +51,12 @@ python scripts/data_generation_offline.py \
 
 - **`--max-consecutive-errors`** (int, default: value of `--concurrency`) Abort after this many consecutive sample failures (each sample already retried `--max-retries` times). Prevents silently churning through the entire dataset when the server is down. Ignored when `--fail-on-error` is set.
 
+### Multi-Node Arguments
+
+- **`--world-size`** (int, default: `1`) Number of nodes participating in data generation. Each node is assigned a contiguous, non-overlapping chunk of the dataset. This is the number of nodes, not the number of GPUs.
+
+- **`--rank`** (int, default: `0`) Zero-based index of the current node. Must be in the range `[0, world-size)`.
+
 ## Full Example
 
 ```bash
