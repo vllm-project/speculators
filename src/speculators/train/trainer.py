@@ -23,7 +23,7 @@ from speculators.train.checkpointer import (
     SingleGPUCheckpointer,
 )
 from speculators.train.graceful_shutdown import with_graceful_shutdown
-from speculators.train.utils import apply_fully_sharded
+from speculators.train.utils import apply_fully_sharded, normalize_counted_metrics
 
 root_logger = logging.getLogger("speculators")
 metric_logger = logging.getLogger("speculators.metrics")
@@ -222,9 +222,11 @@ class Trainer:
             if self.global_step % self.config.log_freq == 0:
                 if self.is_distributed:
                     for v in metrics.values():
-                        dist.reduce(v, dst=0, op=dist.ReduceOp.AVG)
+                        dist.reduce(v, dst=0, op=dist.ReduceOp.SUM)
 
                 metrics = {k: v.item() for k, v in metrics.items()}
+                world_size = dist.get_world_size() if self.is_distributed else 1
+                metrics = normalize_counted_metrics(metrics, world_size)
                 metric_logger.info(
                     {
                         "train": metrics,
@@ -272,15 +274,20 @@ class Trainer:
 
             if self.is_distributed:
                 for m in metrics.values():
-                    dist.all_reduce(m, op=dist.ReduceOp.AVG)
+                    dist.all_reduce(m, op=dist.ReduceOp.SUM)
 
             for k, v in metrics.items():
                 val_metrics[k] = val_metrics.get(k, 0.0) + v.item()
 
-        val_metrics = {f"{k}_epoch": v / num_batches for k, v in val_metrics.items()}
+        world_size = dist.get_world_size() if self.is_distributed else 1
+        val_metrics = {k: v / num_batches for k, v in val_metrics.items()}
+        val_metrics = normalize_counted_metrics(val_metrics, world_size)
+        val_metrics = {f"{k}_epoch": v for k, v in val_metrics.items()}
+
         metric_logger.info(
             {"val": val_metrics, "epoch": epoch}, extra={"step": self.global_step}
         )
+
         return val_metrics
 
     def maybe_save_checkpoint(self, epoch: int | str):

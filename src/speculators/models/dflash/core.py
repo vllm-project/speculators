@@ -106,10 +106,8 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             verifier_config: Verifier model configuration. This should be a config
                 with num_hidden_layers set to the number of DRAFT layers (created
                 by create_transformer_layer_config in train.py).
-            t2d: Target-to-draft vocabulary mapping tensor (optional, creates
-                identity mapping if None)
-            d2t: Draft-to-target vocabulary mapping tensor (optional, creates
-                identity mapping if None)
+            t2d: Target-to-draft vocabulary mapping tensor (optional)
+            d2t: Draft-to-target vocabulary mapping tensor (optional)
             **kwargs: Training arguments with DFlash-specific params
                 - draft_vocab_size: Size of draft vocabulary
                 - block_size: Block size for draft predictions (default: 8)
@@ -157,14 +155,6 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 ),
             ),
         )
-
-        # Create identity mappings if t2d/d2t not provided (no vocab reduction)
-        if t2d is None or d2t is None:
-            vocab_size = kwargs["draft_vocab_size"]
-            # t2d: all tokens in target vocab are in draft vocab
-            t2d = torch.ones(vocab_size, dtype=torch.bool)
-            # d2t: identity mapping (zero offset for all tokens)
-            d2t = torch.zeros(vocab_size, dtype=torch.long)
 
         model = cls(config=config)
         model.load_vocab_mappings(t2d, d2t)
