@@ -213,7 +213,7 @@ def _supports_assistant_mask(processor: ProcessorLike) -> bool:
     try:
         res_any = processor.apply_chat_template(
             test_conv,
-            tokenizer=True,
+            tokenize=True,
             return_assistant_tokens_mask=True,
             return_dict=True,
         )
