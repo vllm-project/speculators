@@ -448,7 +448,7 @@ def _get_input_ids_loss_mask(
         offsets = encoded["offset_mapping"]
 
     loss_mask = _create_loss_mask_from_offsets(
-        formatted_text, offsets, assistant_pattern, conv_idx
+        formatted_text, offsets, assistant_pattern, conv_idx=conv_idx
     )
 
     return input_ids, loss_mask
