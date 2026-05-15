@@ -35,6 +35,21 @@ MODEL = "Qwen/Qwen3-0.6B"
             ["--block-size", "8", "--max-anchors", "256", "--num-layers", "3"],
             [1, 13, 25],
         ),  # DFlash with 3 layers + verifier last layer
+        (
+            "peagle",
+            [
+                "--num-layers",
+                "4",
+                "--num-depths",
+                "4",
+                "--down-sample-ratio",
+                "0.7",
+                "--down-sample-ratio-min",
+                "0.2",
+                "--no-norm-before-residual",
+            ],
+            None,
+        ),  # P-EAGLE with parallel multi-token prediction
     ],
 )
 def test_offline_smoke(
