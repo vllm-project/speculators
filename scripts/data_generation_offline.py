@@ -163,6 +163,24 @@ def parse_args():
             "(default: value of --concurrency)"
         ),
     )
+    parser.add_argument(
+        "--world-size",
+        type=int,
+        default=1,
+        help=(
+            "World size for multi-node data generation offline. IMPORTANT: this"
+            "is the number of nodes (not the number of gpus). Defaults to 1"
+        ),
+    )
+    parser.add_argument(
+        "--rank",
+        type=int,
+        default=0,
+        help=(
+            "Rank for multi-node data generation offline. IMPORTANT: this is"
+            "the node index, not an index for a gpu. Defaults to 0"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -187,7 +205,11 @@ def get_existing_hidden_state_indices(output_path: Path) -> list[int]:
 
 
 def get_indices_to_process(
-    num_samples: int, max_samples: int | None, existing: list[int]
+    num_samples: int,
+    max_samples: int | None,
+    existing: list[int],
+    world_size: int,
+    rank: int,
 ) -> list[int]:
     """Determines which indices should be processed. If max_samples is None
     returns all dataset indices not in existing. Otherwise gets the first
@@ -197,6 +219,8 @@ def get_indices_to_process(
         num_samples: Total size of preprocessed dataset
         max_samples: (Optional) limit for number of samples to process
         existing: list of ids that have already been processed
+        world_size: Number of nodes to generate on
+        rank: The rank of the local node
 
     Returns:
         list of dataset indices to process
@@ -205,26 +229,28 @@ def get_indices_to_process(
     if len(existing) >= num_samples:
         logger.info("All samples already processed!")
         return []
-    if max_samples and len(existing) >= max_samples:
-        logger.info("At least max_samples already processed!")
-        return []
 
-    if len(existing) > 0:
-        logger.info(f"Found {len(existing)} existing samples.")
+    target = min(max_samples, num_samples) if max_samples else num_samples
+
+    chunk_size = target // world_size
+    remainder = target % world_size
+    # Distribute remainder across the first `remainder` ranks so chunks differ
+    # by at most 1.
+    start = rank * chunk_size + min(rank, remainder)
+    end = start + chunk_size + (1 if rank < remainder else 0)
 
     existing_s = set(existing)
-    if max_samples is None:
-        return [i for i in range(num_samples) if i not in existing_s]
+    to_process = [i for i in range(start, end) if i not in existing_s]
 
-    num_remaining = min(max_samples, num_samples) - len(existing)
-    to_process = []
-    cur = 0
-    while num_remaining > 0 and cur < num_samples:
-        if cur not in existing_s:
-            to_process.append(cur)
-            num_remaining -= 1
+    if not to_process:
+        logger.info("All samples for this rank already processed!")
+        return []
 
-        cur += 1
+    if len(existing_s & set(range(start, end))) > 0:
+        logger.info(
+            f"Found {len(existing_s & set(range(start, end)))} existing samples"
+            f" for rank {rank}."
+        )
 
     return to_process
 
@@ -370,7 +396,11 @@ async def generate_and_save_hidden_states(args, dataset):
     num_samples = len(dataset)
 
     to_process = get_indices_to_process(
-        num_samples, args.max_samples, existing_file_indices
+        num_samples,
+        args.max_samples,
+        existing_file_indices,
+        args.world_size,
+        args.rank,
     )
     if not to_process:
         return
