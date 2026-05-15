@@ -244,7 +244,7 @@ class ArrowDataset(BaseDataset):
         if self.model and self.model != model_id:
             raise ValueError(
                 f"An explicit model name was passed ({self.model}) which doesn't match"
-                "found model_id {model_id}."
+                f"found model_id {model_id}."
                 "Please make sure --endpoint is set to the correct vllm instance."
             )
         self.model = model_id
