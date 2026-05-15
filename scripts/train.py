@@ -139,6 +139,8 @@ def create_transformer_layer_config(
             "nor 'hidden_activation'"
         )
 
+    hc_mult = getattr(verifier_config, "hc_mult", 1)
+
     return config_class(
         vocab_size=verifier_config.vocab_size,
         hidden_size=verifier_config.hidden_size,
@@ -152,6 +154,7 @@ def create_transformer_layer_config(
         rms_norm_eps=verifier_config.rms_norm_eps,
         head_dim=getattr(verifier_config, "head_dim", None),
         tie_word_embeddings=False,
+        hc_mult=hc_mult,
     )
 
 
@@ -334,11 +337,14 @@ def main(args: argparse.Namespace):
             max_retries=args.max_retries,
         )
 
+    hc_mult = getattr(transformer_layer_config, "hc_mult", 1)
+    effective_hidden_size = hc_mult * transformer_layer_config.hidden_size
+
     train_loader = setup_dataloader(
         train_dataset,
         world_size,
         local_rank,
-        transformer_layer_config.hidden_size,
+        effective_hidden_size,
         num_workers=args.num_workers,
         prefetch_factor=args.prefetch_factor,
         preprocess=preprocess,
@@ -347,7 +353,7 @@ def main(args: argparse.Namespace):
         val_dataset,
         world_size,
         local_rank,
-        transformer_layer_config.hidden_size,
+        effective_hidden_size,
         num_workers=args.num_workers,
         prefetch_factor=args.prefetch_factor,
         preprocess=preprocess,
