@@ -328,7 +328,9 @@ def _create_loss_mask_from_offsets(
     offsets: list[tuple[int, int]],
     assistant_pattern: str | Pattern[str],
     *,
-    conv_idx: int | None = None,  # For logging
+    # For logging
+    conv_idx: int | None = None,
+    max_length: int | None = None,
 ) -> torch.Tensor:
     """Create loss mask by finding assistant response spans in formatted text."""
     loss_mask = torch.zeros(len(offsets), dtype=torch.bool)
@@ -355,10 +357,18 @@ def _create_loss_mask_from_offsets(
                 loss_mask[idx] = 1
 
     if matches_found == 0:
-        if conv_idx is None:
-            log.warning("No assistant response spans found in conversation")
-        else:
-            log.warning(f"No assistant response spans found in conversation {conv_idx}")
+        warning_msg = "No assistant response spans found in conversation"
+        if conv_idx is not None:
+            warning_msg += f" {conv_idx}"
+
+        suggestion_msg = ""
+        if max_length is not None and len(offsets) == max_length:
+            suggestion_msg += (
+                "Consider increasing --seq-length to avoid truncating "
+                "the assistant response."
+            )
+
+        log.warning(f"{warning_msg}. {suggestion_msg}")
 
     return loss_mask
 
@@ -369,7 +379,8 @@ def _get_input_ids_loss_mask(
     max_length: int,
     assistant_pattern: str | Pattern[str] | None,
     *,
-    conv_idx: int | None = None,  # For logging
+    # For logging
+    conv_idx: int | None = None,
 ):
     hf_conv = _adapt_conv_for_hf(normalized_conv, processor)
 
@@ -448,7 +459,11 @@ def _get_input_ids_loss_mask(
         offsets = encoded["offset_mapping"]
 
     loss_mask = _create_loss_mask_from_offsets(
-        formatted_text, offsets, assistant_pattern, conv_idx=conv_idx
+        formatted_text,
+        offsets,
+        assistant_pattern,
+        conv_idx=conv_idx,
+        max_length=max_length,
     )
 
     return input_ids, loss_mask
