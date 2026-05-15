@@ -1,6 +1,7 @@
 import bisect
 import random
 import re
+from collections.abc import Callable
 from pathlib import Path
 from re import Pattern
 from typing import Any, cast
@@ -8,7 +9,7 @@ from typing import Any, cast
 import torch
 from datasets import Dataset as HFDataset
 from datasets import concatenate_datasets, load_dataset
-from transformers import AutoTokenizer, PreTrainedTokenizerBase
+from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase
 
 from speculators.data_generation.configs import DATASET_CONFIGS
 from speculators.data_generation.logging_utils import PipelineLogger
@@ -262,6 +263,7 @@ def _preprocess_batch(
     assistant_pattern: str | Pattern[str] | None,
     turn_dropout: bool = False,
     minimum_valid_tokens: int | None = None,
+    format_fn: Callable[[list[dict]], str] | None = None,
 ) -> dict[str, list]:
     """Process a batch of conversations into tokenized format with loss masks."""
 
@@ -308,11 +310,14 @@ def _preprocess_batch(
                 assert assistant_pattern is not None, (
                     "Assistant pattern required for fallback"
                 )
-                formatted_raw = tokenizer.apply_chat_template(
-                    normalized_conv,
-                    tokenize=False,
-                    add_generation_prompt=False,
-                )
+                if format_fn is not None:
+                    formatted_raw = format_fn(normalized_conv)
+                else:
+                    formatted_raw = tokenizer.apply_chat_template(
+                        normalized_conv,
+                        tokenize=False,
+                        add_generation_prompt=False,
+                    )
                 assert isinstance(formatted_raw, str)
 
                 # Tokenize and get offsets
@@ -367,10 +372,12 @@ def build_eagle3_dataset(
     assistant_pattern: str | Pattern[str] | None = None,
     turn_dropout: bool = False,
     minimum_valid_tokens: int | None = None,
+    format_fn: Callable[[list[dict]], str] | None = None,
 ) -> HFDataset:
     """Build EAGLE3 dataset by tokenizing conversations and creating loss masks.
 
-    Uses the tokenizer's built-in chat template via apply_chat_template.
+    Uses the tokenizer's built-in chat template via apply_chat_template,
+    or a custom format_fn when the tokenizer lacks a chat template.
 
     Args:
         dataset: Raw dataset with conversations
@@ -383,6 +390,8 @@ def build_eagle3_dataset(
         turn_dropout: If True, randomly keeps first N consecutive turns per
                      conversation
         minimum_valid_tokens: Number of tokens to consider for a valid sample
+        format_fn: Optional callable that formats a conversation into a string.
+                   Used when the tokenizer lacks a chat template (e.g. DSv4).
     """
     # Detect and use provided assistant message pattern
     if assistant_pattern is not None:
@@ -404,6 +413,7 @@ def build_eagle3_dataset(
             assistant_pattern,
             turn_dropout,
             minimum_valid_tokens,
+            format_fn,
         ),
         batched=True,
         num_proc=num_proc,
@@ -485,11 +495,27 @@ def load_and_preprocess_dataset(
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
+    format_fn = None
     if not hasattr(tokenizer, "apply_chat_template") or tokenizer.chat_template is None:
-        raise ValueError(
-            f"Tokenizer for {target_model_path} does not support chat templates. "
-            "Please use a model with a pre-configured chat template."
-        )
+        config = AutoConfig.from_pretrained(target_model_path, trust_remote_code=True)
+        if getattr(config, "model_type", None) == "deepseek_v4":
+            from speculators.data_generation.chat_templates import (  # noqa: PLC0415
+                DSV4_ASSISTANT_PATTERN,
+                dsv4_format_conversation,
+            )
+
+            format_fn = dsv4_format_conversation
+            if assistant_pattern is None:
+                assistant_pattern = DSV4_ASSISTANT_PATTERN
+            log.info(
+                "Using vendored DSv4 chat template (tokenizer lacks chat_template)"
+            )
+        else:
+            raise ValueError(
+                f"Tokenizer for {target_model_path} does not support chat "
+                "templates and no vendored template is available for model "
+                f"type '{getattr(config, 'model_type', 'unknown')}'."
+            )
 
     processed_datasets = []
     for train_data_path in train_data_paths:
@@ -516,6 +542,7 @@ def load_and_preprocess_dataset(
             assistant_pattern=assistant_pattern,
             turn_dropout=turn_dropout,
             minimum_valid_tokens=minimum_valid_tokens,
+            format_fn=format_fn,
         )
         if minimum_valid_tokens is not None:
             log.info(f"Kept {len(preprocessed_dataset)} samples after filtering")
