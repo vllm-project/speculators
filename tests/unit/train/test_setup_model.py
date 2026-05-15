@@ -120,6 +120,7 @@ def _make_trainer_no_init(
     *,
     is_distributed=False,
     resume_from_checkpoint=False,
+    rank=0,
     local_rank=0,
     save_path="/tmp/test_ckpt",
     hidden_states_dtype=torch.bfloat16,
@@ -131,18 +132,41 @@ def _make_trainer_no_init(
         save_path=save_path,
         resume_from_checkpoint=resume_from_checkpoint,
         is_distributed=is_distributed,
+        rank=rank,
         local_rank=local_rank,
         hidden_states_dtype=hidden_states_dtype,
     )
     trainer = Trainer.__new__(Trainer)
     trainer.model = model
     trainer.config = config
+    trainer.rank = config.rank
     trainer.local_rank = config.local_rank
     trainer.is_distributed = config.is_distributed
     trainer.resume_from_checkpoint = config.resume_from_checkpoint
     trainer.train_loader = MagicMock(__len__=MagicMock(return_value=1))
     trainer.val_loader = None
     return trainer
+
+
+def test_trainer_uses_rank_from_config(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    monkeypatch.setattr(Trainer, "setup_trainer", lambda self: None)
+    monkeypatch.setattr(Trainer, "setup_model", lambda self: None)
+    monkeypatch.setattr(Trainer, "setup_optimizer", lambda self: None)
+
+    trainer = Trainer(
+        MagicMock(),
+        TrainerConfig(
+            lr=1e-4,
+            num_epochs=1,
+            save_path=str(tmp_path),
+            rank=3,
+            local_rank=1,
+        ),
+        MagicMock(),
+    )
+
+    assert trainer.rank == 3
+    assert trainer.local_rank == 1
 
 
 def _param_checksums(state_dict: dict[str, torch.Tensor]) -> dict[str, float]:
@@ -465,7 +489,9 @@ def _worker_distributed_fresh_init(rank, world_size, results_dir):
         # Capture rank 0's pre-FSDP state dict for comparison
         pre_fsdp_checksums = _param_checksums(model.state_dict()) if rank == 0 else {}
 
-        trainer = _make_trainer_no_init(model, is_distributed=True, local_rank=rank)
+        trainer = _make_trainer_no_init(
+            model, is_distributed=True, rank=rank, local_rank=rank
+        )
         trainer.checkpointer = MagicMock()
         trainer.checkpointer.previous_epoch = -1
 
@@ -551,6 +577,7 @@ def _worker_distributed_resume(rank, world_size, ckpt_dir, results_dir):
             model,
             is_distributed=True,
             resume_from_checkpoint=True,
+            rank=rank,
             local_rank=rank,
             save_path=ckpt_dir,
         )
@@ -619,7 +646,9 @@ def _worker_distributed_from_pretrained(rank, world_size, model_dir, results_dir
             model = Eagle3DraftModel.from_pretrained(model_dir)
         _fill_nan_weights(model)  # type: ignore[arg-type]  # fill verifier weights post-load
 
-        trainer = _make_trainer_no_init(model, is_distributed=True, local_rank=rank)
+        trainer = _make_trainer_no_init(
+            model, is_distributed=True, rank=rank, local_rank=rank
+        )
         trainer.checkpointer = MagicMock()
         trainer.checkpointer.previous_epoch = -1
 
