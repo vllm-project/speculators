@@ -327,7 +327,8 @@ def _create_loss_mask_from_offsets(
     text: str,
     offsets: list[tuple[int, int]],
     assistant_pattern: str | Pattern[str],
-    conv_idx: int,
+    *,
+    conv_idx: int | None = None,  # For logging
 ) -> torch.Tensor:
     """Create loss mask by finding assistant response spans in formatted text."""
     loss_mask = torch.zeros(len(offsets), dtype=torch.bool)
@@ -354,7 +355,10 @@ def _create_loss_mask_from_offsets(
                 loss_mask[idx] = 1
 
     if matches_found == 0:
-        log.warning(f"No assistant response spans found in conversation {conv_idx}")
+        if conv_idx is None:
+            log.warning(f"No assistant response spans found in conversation")
+        else:
+            log.warning(f"No assistant response spans found in conversation {conv_idx}")
 
     return loss_mask
 
@@ -364,7 +368,8 @@ def _get_input_ids_loss_mask(
     processor: ProcessorLike,
     max_length: int,
     assistant_pattern: str | Pattern[str] | None,
-    conv_idx: int,
+    *,
+    conv_idx: int | None = None,  # For logging
 ):
     hf_conv = _adapt_conv_for_hf(normalized_conv, processor)
 
