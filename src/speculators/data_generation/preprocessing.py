@@ -356,7 +356,7 @@ def _create_loss_mask_from_offsets(
 
     if matches_found == 0:
         if conv_idx is None:
-            log.warning(f"No assistant response spans found in conversation")
+            log.warning("No assistant response spans found in conversation")
         else:
             log.warning(f"No assistant response spans found in conversation {conv_idx}")
 
