@@ -434,6 +434,7 @@ class SampleFileDataset(BaseDataset):
 def create_collate_fn(
     max_len: int,
     hidden_size: int,
+    dtype: torch.dtype = torch.bfloat16,
     preprocess: Callable[[BatchType], BatchType] | None = None,
 ):
     def collate_fn(batch: list[BatchType | None]) -> BatchType:
@@ -442,8 +443,11 @@ def create_collate_fn(
 
         if not batch:
             # Create empty sample which then gets padded to full
-            # batch size if no valid samples are found
-            batch = [create_empty_sample(hidden_size)]
+            # batch size if no valid samples are found.
+            # Match the configured `dtype` so the placeholder doesn't crash
+            # downstream layers loaded at a different precision (e.g. bf16
+            # weights vs fp32 default placeholders).
+            batch = [create_empty_sample(hidden_size, dtype=dtype)]
 
         collated_data = {}
         for key in batch[0]:  # type: ignore[union-attr]
