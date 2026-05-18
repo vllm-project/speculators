@@ -191,6 +191,7 @@ class ArrowDataset(BaseDataset):
             hidden_states_dtype: The dtype of the hidden states.
         """
         self.data = load_from_disk(datapath)
+        self.start_file_idx = 0
         if split_ratio == 1.0:
             pass
         elif 1.0 > split_ratio > 0:
