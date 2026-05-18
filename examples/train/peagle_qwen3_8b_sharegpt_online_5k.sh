@@ -1,16 +1,16 @@
 #!/bin/bash
-# Online DFlash Training Script
+# Online P-EAGLE Training Script
 #
-# Runs the full online DFlash training pipeline: data preparation, vLLM server launch,
+# Runs the full online P-EAGLE training pipeline: data preparation, vLLM server launch,
 # and training (with hidden states generated on-the-fly from the live server).
 #
 # Usage: Copy this script, modify the configuration variables below, then run:
-#   bash examples/train/dflash_qwen3_8b_sharegpt_online_5k.sh
-#
-# For a detailed walkthrough, see 
-# https://docs.vllm.ai/projects/speculators/en/latest/user_guide/tutorials/train_dflash_online/
+#   bash examples/train/peagle_qwen3_8b_sharegpt_online_5k.sh
 
-### Example E2E run for DFlash Qwen3-8B on 5k samples from ShareGPT ###
+### Example E2E run for P-EAGLE Qwen3-8B on 5k samples from ShareGPT ###
+
+# P-EAGLE (Parallel EAGLE) extends EAGLE-3 with parallel multi-token prediction using
+# Conditional-On-Distribution (COD) sampling for memory-efficient training.
 
 # Note: With just 5k samples, the model performance will not be very good, however there
 # are enough samples to verify that the pipeline is working correctly and that the model
@@ -19,45 +19,40 @@
 
 # Timing (on 4x NVIDIA H100 80GB GPUs, DP=2)
 # Data Preprocessing: 26 seconds
-# vLLM Server Startup: 60 seconds (1 min)
-# Training (5 epochs): 1374 seconds (22 mins 54 secs)
-# Total: 1475 seconds (24 mins 35 secs)
+# vLLM Server Startup: 82 seconds (1 min 22 secs)
+# Training (5 epochs): 2793 seconds (46 mins 33 secs)
+# Total: 2901 seconds (48 mins 21 secs)
 
-# MT-Bench Results (80 prompts, 2048 max output tokens):
-# acceptance rate: 5.90%
-# acceptance length: 1.47
-# output throughput: 129.41 tok/s
+# Results on SpecBench (80 prompts, 256 output tokens):
+# acceptance rate: 13.35%
+# acceptance length: 1.53
 # per-position acceptance:
-#   position 0: 36.80%
-#   position 1: 8.79%
-#   position 2: 1.39%
-#   position 3: 0.18%
-#   position 4: 0.02%
-#   position 5-7: 0.00%
+#   position 0: 40.84%
+#   position 1: 10.84%
+#   position 2: 1.58%
+#   position 3: 0.15%
 
 set -euo pipefail
 
 # ============ Configuration ============
 MODEL="Qwen/Qwen3-8B"
 DATASET="sharegpt"                # sharegpt, ultrachat, or path to custom data
-OUTPUT_DIR="./output/dflash_qwen3_8b_sharegpt"
-VLLM_PORT=8000
+OUTPUT_DIR="./output/peagle_qwen3_8b_sharegpt"
+VLLM_PORT=8108
 MAX_SAMPLES=5000
-SEQ_LENGTH=8192
+SEQ_LENGTH=4096
 EPOCHS=5
-LR=3e-4
+LR=6e-4
 
-# DFlash-specific parameters
-SPECULATOR_TYPE="dflash"
-BLOCK_SIZE=8
-MAX_ANCHORS=3072
-NUM_LAYERS=5
-DRAFT_VOCAB_SIZE=32000
-TARGET_LAYER_IDS="2 18 33"  # Must match vLLM's eagle_aux_hidden_state_layer_ids
-
+# P-EAGLE-specific parameters
+SPECULATOR_TYPE="peagle"
+NUM_LAYERS=4
+NUM_DEPTHS=4
+DOWN_SAMPLE_RATIO=0.7
+DOWN_SAMPLE_RATIO_MIN=0.2
 # GPU assignments (online training needs separate GPUs for vLLM and training)
-VLLM_GPUS="0,1"
-TRAIN_GPUS="2,3"
+VLLM_GPUS="2,3"
+TRAIN_GPUS="4,5"
 NUM_TRAIN_GPUS=2
 # =======================================
 
@@ -73,7 +68,7 @@ python scripts/prepare_data.py \
 # Step 2: Launch vLLM server in the background
 echo "=== Step 2: Launching vLLM server ==="
 CUDA_VISIBLE_DEVICES="$VLLM_GPUS" python scripts/launch_vllm.py "$MODEL" \
-    --target-layer-ids $TARGET_LAYER_IDS \
+    --hidden-states-path "$OUTPUT_DIR/hidden_states" \
     -- --data-parallel-size 2 --port "$VLLM_PORT" &
 VLLM_PID=$!
 
@@ -99,16 +94,18 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPUS" torchrun \
     --verifier-name-or-path "$MODEL" \
     --data-path "$OUTPUT_DIR" \
     --vllm-endpoint "http://localhost:${VLLM_PORT}/v1" \
+    --hidden-states-path "$OUTPUT_DIR/hidden_states" \
     --save-path "$OUTPUT_DIR/checkpoints" \
-    --draft-vocab-size "$DRAFT_VOCAB_SIZE" \
     --epochs "$EPOCHS" \
     --lr "$LR" \
     --total-seq-len "$SEQ_LENGTH" \
     --speculator-type "$SPECULATOR_TYPE" \
-    --block-size "$BLOCK_SIZE" \
-    --max-anchors "$MAX_ANCHORS" \
     --num-layers "$NUM_LAYERS" \
-    --target-layer-ids $TARGET_LAYER_IDS \
+    --num-depths "$NUM_DEPTHS" \
+    --down-sample-ratio "$DOWN_SAMPLE_RATIO" \
+    --down-sample-ratio-min "$DOWN_SAMPLE_RATIO_MIN" \
+    --no-norm-before-residual \
+    --scheduler-type cosine \
     --on-missing generate \
     --on-generate delete
 

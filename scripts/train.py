@@ -270,22 +270,22 @@ def main(args: argparse.Namespace):
         )
 
     model_class = registry[args.speculator_type]
+
     if args.from_pretrained:
         draft_model = model_class.from_pretrained(
             args.from_pretrained, t2d=t2d, d2t=d2t
         )
     else:
-        args_dict = vars(args)
-        args_dict["draft_vocab_size"] = draft_vocab_size
+        args.draft_vocab_size = draft_vocab_size
         draft_model = model_class.from_training_args(
             verifier_config=transformer_layer_config,
             t2d=t2d,
             d2t=d2t,
-            **args_dict,
+            **vars(args),
         )
 
     # Setup dataloaders
-    preprocess = shift_batch if args.speculator_type == "eagle3" else None
+    preprocess = shift_batch if args.speculator_type in ("eagle3", "peagle") else None
 
     noise_transform = AddUniformNoise(std=args.noise_std)
     if args.legacy_data:
@@ -384,11 +384,16 @@ def main(args: argparse.Namespace):
     maybe_destroy_distributed()
 
 
-def _checkpoint_freq(value: str) -> int:
-    ivalue = int(value)
-    if ivalue < 1:
-        raise argparse.ArgumentTypeError("--checkpoint-freq must be >= 1")
-    return ivalue
+def _checkpoint_freq(value: str) -> float:
+    fvalue = float(value)
+    if fvalue <= 0:
+        raise argparse.ArgumentTypeError("--checkpoint-freq must be > 0")
+    if fvalue > 1 and not fvalue.is_integer():
+        raise argparse.ArgumentTypeError(
+            f"--checkpoint-freq={fvalue} is not an integer. Values > 1 are treated "
+            "as epoch counts and must be whole numbers."
+        )
+    return fvalue
 
 
 def parse_args():
@@ -609,6 +614,7 @@ def parse_args():
         help="Use RMSNorm before fc in Eagle3 draft path "
         "(e.g. for gpt-oss). Omit for other models.",
     )
+    # D-Flash specific parameters
     parser.add_argument(
         "--block-size",
         type=int,
@@ -620,6 +626,25 @@ def parse_args():
         type=int,
         default=256,
         help="Maximum anchor positions for DFlash training (default: 256)",
+    )
+    # P-EAGLE specific parameters
+    parser.add_argument(
+        "--num-depths",
+        type=int,
+        default=8,
+        help="Number of parallel prediction depths for P-EAGLE (default: 8)",
+    )
+    parser.add_argument(
+        "--down-sample-ratio",
+        type=float,
+        default=0.7,
+        help="Geometric decay ratio for COD sampling in P-EAGLE (default: 0.7)",
+    )
+    parser.add_argument(
+        "--down-sample-ratio-min",
+        type=float,
+        default=0.2,
+        help="Minimum retention ratio for COD sampling in P-EAGLE (default: 0.2)",
     )
     # Dataloader parameters
     parser.add_argument(
@@ -638,8 +663,9 @@ def parse_args():
     parser.add_argument(
         "--checkpoint-freq",
         type=_checkpoint_freq,
-        default=1,
-        help="Save a checkpoint every N epochs.",
+        default=1.0,
+        help="Save a checkpoint every N epochs. Values < 1 enable sub-epoch "
+        "checkpointing (e.g. 0.5 = every half epoch).",
     )
     parser.add_argument(
         "--save-best",
