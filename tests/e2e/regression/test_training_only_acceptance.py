@@ -23,15 +23,17 @@ def _resolve_repo(repo_id: str, repo_type: str = "dataset") -> Path:
                 repo_id=repo_id,
                 repo_type=repo_type,
                 local_files_only=True,
-                allow_patterns=["*.arrow", "*.json", "*.pt", "hidden_states/*"]
+                allow_patterns=["*.arrow", "*.json", "*.pt", "hidden_states/*"],
             )
         )
     except LocalEntryNotFoundError:
-        return Path(snapshot_download(
-            repo_id=repo_id,
-            repo_type=repo_type,
-            allow_patterns=["*.arrow", "*.json", "*.pt", "hidden_states/*"]
-        ))
+        return Path(
+            snapshot_download(
+                repo_id=repo_id,
+                repo_type=repo_type,
+                allow_patterns=["*.arrow", "*.json", "*.pt", "hidden_states/*"],
+            )
+        )
 
 
 @requires_cadence("weekly")
@@ -116,7 +118,8 @@ def test_peagle_qwen3_8b_sharegpt(tmp_path: Path, prompts: list[list[dict[str, s
         timeout=30 * 60,  # 30 mins
         extra_train_args=[
             "--no-norm-before-residual",
-            "--scheduler-type", "cosine",
+            "--scheduler-type",
+            "cosine",
         ],
     )
     final_checkpoint = str(save_path / str(epochs - 1))

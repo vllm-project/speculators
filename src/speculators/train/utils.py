@@ -154,4 +154,3 @@ def apply_fully_sharded(model: torch.nn.Module):
     fully_shard(model)
 
     return model
-
