@@ -106,7 +106,7 @@ def extract_output(
             f"Prompt token IDs mismatch: expected {token_ids}, got {prompt_token_ids}"
         )
 
-    if not hasattr(response, "kv_transfer_params"):
+    if getattr(response, "kv_transfer_params", None) is None:
         raise InvalidResponseError("Response missing kv_transfer_params")
 
     return response.kv_transfer_params.get("hidden_states_path")
