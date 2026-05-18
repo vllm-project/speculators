@@ -60,6 +60,8 @@ def resolve_mask_token_id(
     verifier_name_or_path: str,
     vocab_size: int,
     mask_token_id: int | None = None,
+    *,
+    trust_remote_code: bool = False,
 ) -> int:
     """Resolve mask_token_id from explicit value, tokenizer, or fallback.
 
@@ -73,7 +75,10 @@ def resolve_mask_token_id(
         logger.info(f"Using explicit mask_token_id={mask_token_id}")
         return mask_token_id
 
-    tokenizer = AutoTokenizer.from_pretrained(verifier_name_or_path)
+    tokenizer = AutoTokenizer.from_pretrained(
+        verifier_name_or_path,
+        trust_remote_code=trust_remote_code,
+    )
 
     if tokenizer.mask_token_id is not None:
         logger.info(f"Using tokenizer mask_token_id={tokenizer.mask_token_id}")
