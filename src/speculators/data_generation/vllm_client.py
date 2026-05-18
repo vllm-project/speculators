@@ -106,10 +106,11 @@ def extract_output(
             f"Prompt token IDs mismatch: expected {token_ids}, got {prompt_token_ids}"
         )
 
-    if getattr(response, "kv_transfer_params", None) is None:
+    kv_transfer_params = getattr(response, "kv_transfer_params", None)
+    if kv_transfer_params is None:
         raise InvalidResponseError("Response missing kv_transfer_params")
 
-    return response.kv_transfer_params.get("hidden_states_path")
+    return kv_transfer_params.get("hidden_states_path")
 
 
 class ClientItem(TypedDict):
