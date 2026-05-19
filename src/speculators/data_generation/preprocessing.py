@@ -98,7 +98,7 @@ def _normalize_conversation(
         if "thinking" in turn and turn["thinking"]:
             normalized_turn["thinking"] = turn["thinking"]
 
-        if "reasoning_content" in metadata and metadata["reasoning_content"]:
+        if role == "assistant" and "reasoning_content" in metadata and metadata["reasoning_content"]:
             normalized_turn["reasoning_content"] = metadata["reasoning_content"]
 
         normalized.append(normalized_turn)
@@ -271,7 +271,29 @@ def _preprocess_batch(
 
     results: dict[str, list] = {"input_ids": [], "loss_mask": [], "seq_len": []}
     conversations = examples.get("conversations", [])
-    metadatas= examples.get("metadata", [])
+    metadatas = examples.get("metadata", None)
+
+    if metadatas is None:
+        metadatas = [{} for _ in conversations]
+    elif not isinstance(metadatas, list):
+        log.warning("Invalid metadata column type; falling back to empty metadata")
+        metadatas = [{} for _ in conversations]
+
+    if len(metadatas) != len(conversations):
+        log.warning(
+            f"Metadata/conversation length mismatch: "
+            f"{len(metadatas)} vs {len(conversations)}; padding metadata"
+        )
+        if len(metadatas) < len(conversations):
+            metadatas = metadatas + [{} for _ in range(len(conversations) - len(metadatas))]
+        else:
+            metadatas = metadatas[: len(conversations)]
+
+    for idx, (conv, metadata) in enumerate(zip(conversations, metadatas, strict=True)):
+        if not conv or not isinstance(conv, list):
+            continue
+        if not isinstance(metadata, dict):
+            continue
 
     if not conversations:
         log.warning(f"No conversations key found. Keys: {list(examples.keys())}")
