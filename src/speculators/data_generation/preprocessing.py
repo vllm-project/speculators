@@ -60,6 +60,7 @@ def _visualize_sample(preprocessed, tokenizer, idx: int = 0):
 
 def _normalize_conversation(
     conv: list[dict],
+    metadata: dict,
     turn_dropout: bool = False,
 ) -> list[dict]:
     """Normalize conversation to standard format with role/content keys.
@@ -96,6 +97,9 @@ def _normalize_conversation(
         # Preserve 'thinking' field if it exists
         if "thinking" in turn and turn["thinking"]:
             normalized_turn["thinking"] = turn["thinking"]
+
+        if "reasoning_content" in metadata and metadata["reasoning_content"]:
+            normalized_turn["reasoning_content"] = metadata["reasoning_content"]
 
         normalized.append(normalized_turn)
 
@@ -267,17 +271,20 @@ def _preprocess_batch(
 
     results: dict[str, list] = {"input_ids": [], "loss_mask": [], "seq_len": []}
     conversations = examples.get("conversations", [])
+    metadatas= examples.get("metadata", [])
 
     if not conversations:
         log.warning(f"No conversations key found. Keys: {list(examples.keys())}")
         return results
 
-    for idx, conv in enumerate(conversations):
+    for idx, (conv,metadata) in enumerate(zip(conversations,metadatas)):
         if not conv or not isinstance(conv, list):
+            continue
+        if not metadata or not isinstance(metadata, dict):
             continue
 
         # Normalize to standard format with optional turn dropout
-        normalized_conv = _normalize_conversation(conv, turn_dropout)
+        normalized_conv = _normalize_conversation(conv, metadata, turn_dropout)
         if not normalized_conv:
             continue
 
