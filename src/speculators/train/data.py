@@ -13,7 +13,6 @@ import openai
 import torch
 import torch.nn.functional as F  # noqa: N812
 from datasets import load_from_disk
-from safetensors import SafetensorError
 from safetensors.torch import load_file
 from torch.utils.data import Dataset
 
@@ -250,12 +249,7 @@ class ArrowDataset(BaseDataset):
         file_idx = self._map_to_file_idx(index)
         candidate_path = self.hidden_states_path / f"hs_{file_idx}.safetensors"
         if candidate_path.exists():
-            try:
-                return load_file(candidate_path)
-            except SafetensorError as e:
-                raise RuntimeError(
-                    f"Failed to load {candidate_path}: {e}"
-                ) from None
+            return load_file(candidate_path)
 
         return None
 
@@ -276,12 +270,7 @@ class ArrowDataset(BaseDataset):
             warnings.warn(str(e), stacklevel=1)
             return None
 
-        try:
-            loaded_hs = load_file(hs_filepath)
-        except SafetensorError as e:
-            raise RuntimeError(
-                f"Failed to load generated hidden states from {hs_filepath}: {e}"
-            ) from None
+        loaded_hs = load_file(hs_filepath)
 
         match self.on_generate:
             case "cache":

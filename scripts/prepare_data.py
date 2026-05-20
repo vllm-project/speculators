@@ -25,6 +25,7 @@ Usage:
 import argparse
 import glob
 import logging
+import shutil
 import sys
 from pathlib import Path
 
@@ -158,8 +159,6 @@ def main():
             )
             sys.exit(0)
         if args.overwrite:
-            import shutil
-
             shutil.rmtree(output)
             output.mkdir(parents=True)
     else:
