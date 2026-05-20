@@ -172,7 +172,7 @@ def parse_args():
         type=int,
         default=1,
         help=(
-            "World size for multi-node data generation offline. IMPORTANT: this"
+            "World size for multi-node data generation offline. IMPORTANT: this "
             "is the number of nodes (not the number of gpus). Defaults to 1"
         ),
     )
@@ -181,8 +181,9 @@ def parse_args():
         type=int,
         default=0,
         help=(
-            "Rank for multi-node data generation offline. IMPORTANT: this is"
-            "the node index, not an index for a gpu. Defaults to 0"
+            "Rank for multi-node data generation offline. IMPORTANT: this is "
+            "the node index, not an index for a gpu. Must be in range[0, world_size)."
+            " Defaults to 0"
         ),
     )
     return parser.parse_args()
@@ -400,6 +401,8 @@ async def generate_and_save_hidden_states(args, dataset):
 
 def main():
     args = parse_args()
+    if int(args.rank) < 0 or int(args.rank) >= int(args.world_size):
+        raise ValueError("--rank must be in range [0, world_size)")
     setup_root_logger()
 
     logger.info("EAGLE Offline Data Generation")

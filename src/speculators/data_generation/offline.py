@@ -46,11 +46,10 @@ def get_indices_to_process(
         list of dataset indices to process
     """
 
-    if len(existing) >= num_samples:
-        logger.info("All samples already processed!")
-        return []
+    target = min(max_samples, num_samples) if max_samples is not None else num_samples
 
-    target = min(max_samples, num_samples) if max_samples else num_samples
+    if target <= 0:
+        return []
 
     chunk_size = target // world_size
     remainder = target % world_size
