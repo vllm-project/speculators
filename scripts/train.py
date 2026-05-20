@@ -104,10 +104,10 @@ def setup_dataloader(
 def create_transformer_layer_config(
     verifier_name_or_path: str,
     num_layers: int,
-    draft_arch: str = "llama",
-    hidden_act: str | None = None,
-    sliding_window: int | None = None,
-    full_attention_interval: int | None = None,
+    draft_arch: str,
+    hidden_act: str | None,
+    sliding_window: int,
+    sliding_window_indices: list[int],
 ) -> PretrainedConfig:
     if draft_arch not in DRAFT_ARCH_CONFIGS:
         raise ValueError(
@@ -141,7 +141,19 @@ def create_transformer_layer_config(
             "nor 'hidden_activation'"
         )
 
-    kwargs = dict(
+    if sliding_window_indices and (
+        min(sliding_window_indices) < 0 or max(sliding_window_indices) >= num_layers
+    ):
+        raise ValueError(
+            "Sliding window indices must be validate draft layer ids "
+            "in range [0, num_layers)."
+        )
+    layer_types = [
+        "sliding_attention" if i in sliding_window_indices else "full_attention"
+        for i in range(num_layers)
+    ]
+
+    return config_class(
         vocab_size=verifier_config.vocab_size,
         hidden_size=verifier_config.hidden_size,
         intermediate_size=verifier_config.intermediate_size,
@@ -154,20 +166,9 @@ def create_transformer_layer_config(
         rms_norm_eps=verifier_config.rms_norm_eps,
         head_dim=getattr(verifier_config, "head_dim", None),
         tie_word_embeddings=False,
+        sliding_window=sliding_window,
+        layer_types=layer_types,
     )
-
-    if sliding_window is not None:
-        kwargs["sliding_window"] = sliding_window
-        if full_attention_interval is not None:
-            kwargs["layer_types"] = [
-                "full_attention" if (i + 1) % full_attention_interval == 0
-                else "sliding_attention"
-                for i in range(num_layers)
-            ]
-        else:
-            kwargs["layer_types"] = ["sliding_attention"] * num_layers
-
-    return config_class(**kwargs)
 
 
 def _load_mappings(d2t_path, t2d_path, expected_draft_vocab_size: int | None):
@@ -262,16 +263,20 @@ def main(args: argparse.Namespace):
 
     d2t, t2d, draft_vocab_size = parse_vocab_mappings(args)
 
+    if len(args.sliding_window_indices) and args.speculator_type != "dflash":
+        raise ValueError(
+            "Currently sliding window attention is only supported by dflash "
+            "draft models. Please open an issue/pr if you would like to use "
+            "sliding window attention with a different speculator type"
+        )
     # Setup speculator config
-    sliding_window = getattr(args, "sliding_window", None) or None
-    full_attention_interval = getattr(args, "full_attention_interval", None)
     transformer_layer_config = create_transformer_layer_config(
-        args.verifier_name_or_path,
-        args.num_layers,
+        verifier_name_or_path=args.verifier_name_or_path,
+        num_layers=args.num_layers,
         draft_arch=args.draft_arch,
         hidden_act=args.draft_hidden_act,
-        sliding_window=sliding_window,
-        full_attention_interval=full_attention_interval,
+        sliding_window_size=args.sliding_window_size,
+        sliding_window_indices=args.sliding_window_indices,
     )
 
     args.mask_token_id = resolve_mask_token_id(
@@ -660,27 +665,30 @@ def parse_args():
         help="Minimum retention ratio for COD sampling in P-EAGLE (default: 0.2)",
     )
     parser.add_argument(
-        "--sliding-window",
+        "--sliding-window-size",
         type=int,
-        default=0,
-        help="Sliding window size for DFlash attention (default: 0 = full attention). "
-        "Set to a positive value (e.g. 2048) to enable sliding window attention.",
+        default=2048,
+        help="Sliding window size for sliding window attention layers."
+        "Must also set --sliding-window-indices.",
     )
     parser.add_argument(
-        "--full-attention-interval",
+        "--sliding-window-indices",
         type=int,
+        nargs="+",
         default=None,
-        help="Every Nth layer uses full attention instead of sliding window. "
-        "Requires --sliding-window > 0. E.g., --full-attention-interval 3 "
-        "with 5 layers gives [slide, slide, full, slide, slide].",
+        help="(Optional) A (space separated) list of draft layer indices of sliding "
+        " window layers. All other draft layers are assumed to be full attention "
+        "layers. (e.g. 0 2 4 will make the first, third, and fifth layers use "
+        "sliding window attention and the second and fourth will be full attention)."
+        "Defaults to all layers using full attention.",
     )
     parser.add_argument(
-        "--swa-causal",
+        "--sliding-window-non-causal",
         action="store_true",
         default=False,
-        help="Use causal (left-to-right) masking within draft blocks for sliding "
-        "window attention layers. Full attention layers are always bidirectional. "
-        "Matches vLLM inference behavior when SWA layers use causal attention.",
+        help="Use non-causal (bidirectional) masking within draft blocks for sliding "
+        "window attention layers. Full attention layers are always bidirectional, for"
+        "DFlash. Note: vLLM currently doesn't support these models",
     )
     # Dataloader parameters
     parser.add_argument(
