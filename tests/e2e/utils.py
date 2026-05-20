@@ -255,7 +255,7 @@ def run_training(
     else:
         train_cmd += [
             "--on-missing",
-            "skip",
+            "raise",
         ]
     if hidden_states_path is not None:
         train_cmd += ["--hidden-states-path", str(hidden_states_path)]
