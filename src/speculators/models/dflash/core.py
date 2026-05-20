@@ -61,6 +61,15 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 for layer_idx in range(num_draft_layers)
             ]
         )
+        self.sliding_window = tl_config.sliding_window
+        self.sliding_window_indices = [
+            i
+            for i in range(num_draft_layers)
+            if tl_config.layer_types == "sliding_attention"
+        ]
+        self.uses_sliding_window_attn = bool(self.sliding_window_indices)
+        self.uses_full_attn = bool(num_draft_layers - len(self.sliding_window_indices))
+        self.sliding_window_non_causal = config.sliding_window_non_causal
 
         if config.aux_hidden_state_layer_ids is None:
             raise ValueError(
@@ -141,7 +150,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             max_anchors=kwargs.get("max_anchors", 3072),
             aux_hidden_state_layer_ids=target_layer_ids,
             mask_token_id=kwargs.get("mask_token_id"),
-            swa_causal=kwargs.get("swa_causal", False),
+            sliding_window_non_causal=kwargs.get("sliding_window_non_causal", False),
             speculators_config=SpeculatorsConfig(
                 algorithm="dflash",
                 proposal_methods=[
@@ -213,47 +222,32 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         )
         # shape: [num_anchors], [num_anchors]
 
-        tl_config = self.config.transformer_layer_config
-        sliding_window = getattr(tl_config, "sliding_window", None)
-        layer_types = getattr(tl_config, "layer_types", None)
-
-        needs_swa = (
-            sliding_window is not None
-            and layer_types is not None
-            and "sliding_attention" in layer_types
-        )
-        needs_full = (
-            layer_types is None
-            or "full_attention" in layer_types
-            or not needs_swa
-        )
-
-        mask_kwargs = dict(
-            lengths=lengths.to(device),
-            total_seq_len=total_seq_len,
-            anchor_positions=anchor_positions,
-            block_size=self.block_size,
-        )
-
-        swa_causal = getattr(self.config, "swa_causal", False)
-
-        def _build_mask(sw, causal=False):
-            mod, q, kv = create_anchor_block_mask_mod(**mask_kwargs, sliding_window=sw, causal=causal)
-            return create_block_mask(mod, B=None, H=None, Q_LEN=q, KV_LEN=kv, device=device), q, kv
-
-        if needs_swa:
-            swa_mask, q_len, kv_len = _build_mask(sliding_window, causal=swa_causal)
-        if needs_full:
-            full_mask, q_len, kv_len = _build_mask(None)
-
-        layer_masks = []
-        for i in range(len(self.layers)):
-            is_swa = (
-                layer_types is not None
-                and sliding_window is not None
-                and layer_types[i] == "sliding_attention"
+        full_attn_mask = None
+        if self.uses_full_attn:
+            mask_mod, q_len, kv_len = create_anchor_block_mask_mod(
+                lengths=lengths.to(device),
+                total_seq_len=total_seq_len,
+                anchor_positions=anchor_positions,
+                block_size=self.block_size,
+                sliding_window=None,
             )
-            layer_masks.append(swa_mask if is_swa else full_mask)
+            full_attn_mask = create_block_mask(
+                mask_mod, B=None, H=None, Q_LEN=q_len, KV_LEN=kv_len, device=device
+            )
+
+        sliding_window_attn_mask = None
+        if self.uses_sliding_window_attn:
+            mask_mod, q_len, kv_len = create_anchor_block_mask_mod(
+                lengths=lengths.to(device),
+                total_seq_len=total_seq_len,
+                anchor_positions=anchor_positions,
+                block_size=self.block_size,
+                sliding_window=self.sliding_window,
+                sliding_window_non_causal=self.sliding_window_non_causal,
+            )
+            sliding_window_attn_mask = create_block_mask(
+                mask_mod, B=None, H=None, Q_LEN=q_len, KV_LEN=kv_len, device=device
+            )
 
         mask_tokens_size = num_anchors * self.block_size
 
@@ -294,11 +288,13 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             targets = verifier_logits[:, anchored_block_indices]
             # shape: [1, num_anchors*block_size, draft_vocab_size]
 
-        for layer, mask in zip(self.layers, layer_masks):
+        for layer_idx, layer in enumerate(self.layers):
             noise_embedding = layer(
                 hidden_states=noise_embedding,
                 target_hidden=fc_output,
-                attention_mask=mask,
+                attention_mask=sliding_window_attn_mask
+                if layer_idx in self.sliding_window_indices
+                else full_attn_mask,
                 position_ids=position_ids,
                 use_cache=False,
                 position_embeddings=position_embeddings,

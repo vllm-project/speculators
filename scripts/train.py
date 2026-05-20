@@ -275,7 +275,7 @@ def main(args: argparse.Namespace):
         num_layers=args.num_layers,
         draft_arch=args.draft_arch,
         hidden_act=args.draft_hidden_act,
-        sliding_window_size=args.sliding_window_size,
+        sliding_window=args.sliding_window,
         sliding_window_indices=args.sliding_window_indices,
     )
 
@@ -665,7 +665,7 @@ def parse_args():
         help="Minimum retention ratio for COD sampling in P-EAGLE (default: 0.2)",
     )
     parser.add_argument(
-        "--sliding-window-size",
+        "--sliding-window",
         type=int,
         default=2048,
         help="Sliding window size for sliding window attention layers."
