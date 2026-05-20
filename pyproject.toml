@@ -67,7 +67,7 @@ dev = [
     "mkdocs~=1.6.1",
     "mkdocs-material[imaging]~=9.7.6",
     "markdown~=3.10.2",
-    "pymdown-extensions~=10.21.2",
+    "pymdown-extensions~=10.21.3",
     "mkdocs-section-index~=0.3.12",
     "mkdocs-minify-plugin~=0.8.0",
     "mkdocs-api-autonav~=0.4.0",
@@ -90,7 +90,7 @@ dev = [
 
     # code quality
     "mypy~=2.1.0",
-    "ruff~=0.14.1",
+    "ruff~=0.15.13",
 
     # docs quality
     "mdformat~=1.0.0",
