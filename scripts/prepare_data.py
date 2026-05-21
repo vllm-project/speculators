@@ -28,8 +28,8 @@ import logging
 import sys
 from pathlib import Path
 
-from speculators.data_generation.logging_utils import PipelineLogger  # noqa: E402
-from speculators.data_generation.preprocessing import (  # noqa: E402
+from speculators.data_generation.logging_utils import PipelineLogger
+from speculators.data_generation.preprocessing import (
     load_and_preprocess_dataset,
 )
 
@@ -99,7 +99,10 @@ def parse_args():
 
     # Output arguments
     parser.add_argument(
-        "--output", type=str, required=True, help="Directory to save output dataset"
+        "--output",
+        type=str,
+        default="./output",
+        help="Directory to save output dataset (default: ./output)",
     )
     parser.add_argument(
         "--overwrite",

@@ -1,4 +1,3 @@
-# ruff: noqa: ERA001
 import torch
 from torch.nn.attention.flex_attention import (
     or_masks,
@@ -73,13 +72,6 @@ def create_anchor_block_mask_mod(
     if (oob := (anchor_positions < 0) | (anchor_positions >= total_seq_len)).any():
         raise ValueError(
             f"anchor_positions out of range: {anchor_positions[oob].tolist()}"
-        )
-
-    anchor_docs = document_ids[anchor_positions]
-    if (pad_mask := anchor_docs == -1).any():
-        raise ValueError(
-            f"anchor_positions include padding locations:"
-            f" {anchor_positions[pad_mask].tolist()}"
         )
 
     # For each query position, which anchor does it belong to?

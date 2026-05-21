@@ -48,7 +48,6 @@ Before contributing, ensure you have the following installed:
 
 - Python 3.10 or higher
 - pip (Python package manager)
-- Tox
 - Git
 
 ### Setting Up the Repository
@@ -85,8 +84,6 @@ pip install -e .[dev]
 
 The `-e` flag installs the package in editable mode, allowing you to make changes to the code without reinstalling it. The `[dev]` part installs additional dependencies needed for development, such as testing and linting tools.
 
-Note: the data generation components off speculators (i.e. `src/speculators/data_generation`) require a vLLM installation. Code in this module should be run in a separate environment, with vllm. This can be done by installing the `datagen` extra using `pip install -e .[datagen]` (or `pip install -e .[datagen,dev]` for development).
-
 ## Code Style and Guidelines
 
 We follow strict coding standards to ensure code quality and maintainability. Please adhere to the following guidelines:
@@ -114,52 +111,42 @@ make style
 
 ## Running Tests
 
-For testing, we use [pytest](https://docs.pytest.org/) as our testing framework. We have different test suites for unit tests, integration tests, end-to-end tests, and data generation tests. To run the tests, you can use Tox, which will automatically create isolated environments for each test suite. Tox will also ensure that the tests are run in a consistent environment, regardless of where they are executed.
+For testing, we use [pytest](https://docs.pytest.org/) as our testing framework. We have different test suites for unit tests, integration tests, and end-to-end tests.
 
 ### Running All Tests
 
 To run all tests:
 
 ```bash
-tox
+python -m pytest tests/
 ```
 
 ### Running Specific Tests
 
-`tox` will set up the environment for the test environment for each test you run.
-
 - Unit tests (focused on individual components with mocking):
 
   ```bash
-  tox -e test-unit
+  python -m pytest tests/unit
   ```
 
 - Integration tests (focused on interactions between components ideally without mocking):
 
   ```bash
-  tox -e test-integration
+  python -m pytest tests/integration
   ```
 
 - End-to-end tests (focused on the entire system and user interfaces):
 
   ```bash
-  tox -e test-e2e
+  python -m pytest tests/e2e
   ```
-
-- Data generation tests (focused on the data generation process):
-
-Note: This creates an environment with the `datagen` extra installed (including vllm) and executes the tests in this environment.
-
-```bash
-tox -e test-datagen
-```
 
 ### Running Tests with Coverage
 
 To ensure your changes are covered by tests, run:
 
 ```bash
-tox -e test-unit -- --cov=speculators --cov-report=html
+python -m pytest tests/unit --cov=speculators --cov-report=html
 ```
 
 Review the coverage report to confirm that your new code is adequately tested.
@@ -194,7 +181,7 @@ git rebase --signoff master
 4. **Run Tests and Quality Checks**: Before submitting your changes, ensure all tests pass and code quality checks are satisfied:
 
    ```bash
-   tox
+   make quality
    ```
 
 5. **Push Changes**: Push your branch to your forked repository (if you forked):
@@ -220,7 +207,6 @@ We are committed to fostering a welcoming and inclusive community. Please read a
 ## Additional Resources
 
 - [CODE_OF_CONDUCT.md](https://github.com/vllm-project/speculators/blob/main/CODE_OF_CONDUCT.md): Our expectations for community behavior.
-- [tox.ini](https://github.com/vllm-project/speculators/blob/main/tox.ini): Configuration for Tox environments.
 - [Makefile](https://github.com/vllm-project/speculators/blob/main/Makefile): Quality check and style commands.
 
 ## License

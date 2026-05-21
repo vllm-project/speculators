@@ -104,6 +104,38 @@ def resolve_mask_token_id(
     )
 
 
+def normalize_counted_metrics(
+    metrics: dict[str, float], world_size: int = 1
+) -> dict[str, float]:
+    """Normalize metrics after ReduceOp.SUM across ranks.
+
+    For any key ending in '_total', finds the matching '_sum' key,
+    computes sum / total, and stores the result under the prefix
+    (e.g. 'loss_sum' / 'loss_total' -> 'loss').
+    The raw sum/total keys are removed.
+
+    Any remaining metrics (not part of a sum/total pair) are divided
+    by world_size to compute the average across ranks.
+    """
+    normalized_keys: set[str] = set()
+    for tk in [k for k in metrics if k.endswith("_total")]:
+        prefix = tk.removesuffix("_total")
+        sk = f"{prefix}_sum"
+        if sk in metrics:
+            total = metrics[tk]
+            metrics[prefix] = metrics[sk] / total if total > 0 else 0.0
+            del metrics[sk]
+            normalized_keys.add(prefix)
+        del metrics[tk]
+
+    if world_size > 1:
+        for k in metrics:
+            if k not in normalized_keys:
+                metrics[k] /= world_size
+
+    return metrics
+
+
 def apply_fully_sharded(model: torch.nn.Module):
     """Applies torch FSDP fully_shard to the model, wrapping layers in FSDPModule.
 

@@ -12,7 +12,7 @@ def temp_cache_dir(tmp_path, monkeypatch):
 @pytest.fixture
 def prompts():
     return [
-        [{"role": "user", "content": "The president of United States is"}],
-        [{"role": "user", "content": "The capital of France is"}],
-        [{"role": "user", "content": "My name is"}],
+        [{"role": "user", "content": "Write a binary search function in python"}],
+        [{"role": "user", "content": "Explain how speculative decoding works"}],
+        [{"role": "user", "content": "Code a transformer block function"}],
     ]

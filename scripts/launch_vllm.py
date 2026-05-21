@@ -37,7 +37,7 @@ def parse_args():
         action=argparse.BooleanOptionalAction,
         default=True,
         help=(
-            "For DFlash models, append the last layer (num_hidden_layers) to "
+            "Append the last layer (num_hidden_layers) to "
             "target_layer_ids for verifier hidden states extraction. Default: True"
         ),
     )

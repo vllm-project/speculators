@@ -113,16 +113,7 @@ def sample_llama_config():
         num_key_value_heads=8,
         pretraining_tp=1,
         rms_norm_eps=1e-5,  # type: ignore[arg-type] # (bad transformer's type hint, int instead of float)
-        rope_scaling={
-            "factor": 8.0,
-            "high_freq_factor": 4.0,
-            "low_freq_factor": 1.0,
-            "original_max_position_embeddings": 8192,
-            "rope_type": "llama3",
-        },
-        rope_theta=500000.0,
         tie_word_embeddings=False,
-        torch_dtype="float32",
         transformers_version="4.46.0",
         use_cache=True,
         vocab_size=128256,

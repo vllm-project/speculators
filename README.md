@@ -12,7 +12,7 @@
 
 ## Overview
 
-Speculators is a unified library for building, training and storing speculative decoding algorithms for large language model (LLM) inference, including in frameworks like vLLM. Speculative decoding is a lossless technique that speeds up LLM inference by using a smaller, faster draft model (i.e "the speculator") to propose tokens, which are then verified by the larger base model, reducing latency without compromising output quality. The speculator intelligently drafts multiple tokens ahead of time, and the base model verifies them in a single forward pass. This approach boosts performance without sacrificing output quality, as every accepted token is guaranteed to match what the main model would have generated on its own.
+Speculators is a library for training speculative decoding draft models that deploy directly to LLM inference engines like vLLM. Speculative decoding is a lossless technique that speeds up LLM inference by using a smaller, faster draft model (i.e. "the speculator") to propose tokens, which are then verified by the larger base model, reducing latency without compromising output quality. The speculator intelligently drafts multiple tokens ahead of time, and the base model verifies them in a single forward pass. This approach boosts performance without sacrificing output quality, as every accepted token is guaranteed to match what the main model would have generated on its own.
 
 Speculators standardizes this process by providing a productionized end-to-end framework to train draft models with reusable formats and tools. Trained models can seamlessly run in vLLM, enabling the deployment of speculative decoding in production-grade inference servers.
 
@@ -32,6 +32,19 @@ ______________________________________________________________________
 - `#feat-spec-decode`
 
 🎥 Watch our Office Hours presentation: [Video](https://www.youtube.com/live/2ISAr_JVGLs) | [Slides](https://docs.google.com/presentation/d/1s4eAb7v-rdZt8smyULBJWGXjJXrgFTZWnwqYa2-h1l4/edit?slide=id.g3365e070742_6_0#slide=id.g3365e070742_6_0)
+
+______________________________________________________________________
+
+## 🚀 What's New!
+
+Big updates have landed in Speculators! To get a more in-depth look, check out the [Speculators documentation](https://docs.vllm.ai/projects/speculators/en/latest/).
+
+Some of the exciting new features include:
+
+- **Qwen3-8B DFlash Speculator**: The RedHat team published a [DFlash speculator for Qwen3-8B](https://huggingface.co/RedHatAI/Qwen3-8B-speculator.dflash), achieving average speculative token acceptance lengths of up to 3.74 on `math_reasoning`.
+- **Gemma 4 Speculators**: The RedHat team published speculators for Gemma 4 31B-it, including both [DFlash](https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.dflash) and [EAGLE-3](https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.eagle3) checkpoints, enabling production-grade speculative decoding for Gemma 4 models.
+- **DFlash Training Algorithm**: Added support for the DFlash training algorithm with anchored-block drafting, using auxiliary hidden states from multiple verifier layers. Includes CLI options for block size and max anchors, plus DFlash metrics, utilities, and draft model. DFlash models trained through Speculators can now run seamlessly in vLLM as of [vLLM PR #38300](https://github.com/vllm-project/vllm/pull/38300).
+- **Online Training Support**: Added support for online training using the new [vLLM hidden extraction system](https://github.com/vllm-project/vllm/pull/33736), enabling real-time hidden state generation during training without requiring separate offline data generation steps.
 
 ______________________________________________________________________
 
@@ -75,7 +88,7 @@ The following table summarizes the models that have been trained end-to-end by o
 <tr>
 <td rowspan="3">Qwen3</td>
 <td>8B</td>
-<td><a href="https://huggingface.co/RedHatAI/Qwen3-8B-speculator.eagle3">EAGLE-3</a> ✅</td>
+<td><a href="https://huggingface.co/RedHatAI/Qwen3-8B-speculator.eagle3">EAGLE-3</a> ✅<br/><a href="https://huggingface.co/RedHatAI/Qwen3-8B-speculator.dflash">DFlash</a> ✅</td>
 <td>✅</td>
 </tr>
 <tr>
@@ -138,18 +151,22 @@ The following table summarizes the models that have been trained end-to-end by o
 <td>EAGLE-3 ⏳</td>
 <td>⏳</td>
 </tr>
+<tr>
+<td>Gemma 4</td>
+<td>31B-it</td>
+<td><a href="https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.eagle3">EAGLE-3</a> ✅<br/><a href="https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.dflash">DFlash</a> ✅</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>Gemma 4 MoE</td>
+<td>26B-A4B-it</td>
+<td><a href="https://huggingface.co/RedHatAI/gemma-4-26B-A4B-it-speculator.eagle3">EAGLE-3</a> ✅</td>
+<td>✅</td>
+</tr>
 </tbody>
 </table>
 
 ✅ = Supported, ⏳ = In Progress, ❌ = Not Yet Supported
-
-## Examples
-
-End-To-End Training Examples:
-
-- [Train Llama3 Draft Model](https://github.com/vllm-project/speculators/blob/main/examples/data_generation_and_training/llama3_8b_sharegpt_5k.py)
-- [Train Qwen3 (Non-MoE) Draft Model](https://github.com/vllm-project/speculators/blob/main/examples/data_generation_and_training/qwen3_8b_sharegpt_ultrachat.py)
-- [Train GPT-OSS Draft Model](https://github.com/vllm-project/speculators/blob/main/examples/data_generation_and_training/gpt_oss_20b_ultrachat_5k.py)
 
 ## vLLM Inference
 
@@ -208,12 +225,6 @@ For development with additional tools:
 
 ```bash
 pip install -e ".[dev]"
-```
-
-To enable the generation of data (i.e hidden states) from vLLM for speculator training:
-
-```bash
-pip install -e ".[datagen]"
 ```
 
 #### Verify Installation

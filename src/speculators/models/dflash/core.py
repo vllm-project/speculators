@@ -3,10 +3,7 @@ from typing import Any, ClassVar
 import torch
 from torch import nn
 from torch.nn.attention.flex_attention import create_block_mask
-from transformers import (
-    AutoConfig,
-    PretrainedConfig,
-)
+from transformers import PretrainedConfig
 from transformers.models.qwen3.modeling_qwen3 import (
     Qwen3RMSNorm,
     Qwen3RotaryEmbedding,
@@ -21,6 +18,7 @@ from speculators.models.dflash.utils import (
     get_base_indices_for_anchored_blocks,
     select_anchors,
 )
+from speculators.models.utils import resolve_target_layer_ids
 
 
 @SpeculatorModel.register("dflash")
@@ -29,6 +27,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
     _no_split_modules = ["Qwen3DFlashDecoderLayer"]
     _keys_to_ignore_on_load_missing: ClassVar[list[str]] = [  # type: ignore[misc]
         "embed_tokens.weight",
+        "verifier_norm.weight",
         "t2d",
         "d2t",
     ]
@@ -63,23 +62,12 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             ]
         )
 
-        verifier_name_or_path = config.speculators_config.verifier.name_or_path
-        if verifier_name_or_path is None:
-            raise ValueError("Verifier name_or_path must be set in speculators_config")
-        verifier_config = AutoConfig.from_pretrained(verifier_name_or_path)
-        if hasattr(verifier_config, "text_config"):
-            verifier_config = verifier_config.text_config
-        num_verifier_layers = verifier_config.num_hidden_layers
-
-        # Use aux_hidden_state_layer_ids from config if present
-        if config.aux_hidden_state_layer_ids is not None:
-            self.target_layer_ids = config.aux_hidden_state_layer_ids
-        else:
-            self.target_layer_ids = [
-                2,
-                num_verifier_layers // 2,
-                num_verifier_layers - 3,
-            ]
+        if config.aux_hidden_state_layer_ids is None:
+            raise ValueError(
+                "aux_hidden_state_layer_ids must be set in DFlashSpeculatorConfig. "
+                "Use DFlashDraftModel.from_training_args() to resolve defaults."
+            )
+        self.target_layer_ids = config.aux_hidden_state_layer_ids
 
         self.norm = Qwen3RMSNorm(
             config.transformer_layer_config.hidden_size,
@@ -96,6 +84,11 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             config.transformer_layer_config.hidden_size,
             eps=config.transformer_layer_config.rms_norm_eps,  # type: ignore[arg-type]
         )
+        self.verifier_norm = Qwen3RMSNorm(
+            config.transformer_layer_config.hidden_size,
+            eps=config.transformer_layer_config.rms_norm_eps,  # type: ignore[arg-type]
+        )
+        self.verifier_norm.weight.requires_grad = False
         self.block_size = config.block_size
         self.post_init()
 
@@ -113,10 +106,8 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             verifier_config: Verifier model configuration. This should be a config
                 with num_hidden_layers set to the number of DRAFT layers (created
                 by create_transformer_layer_config in train.py).
-            t2d: Target-to-draft vocabulary mapping tensor (optional, creates
-                identity mapping if None)
-            d2t: Draft-to-target vocabulary mapping tensor (optional, creates
-                identity mapping if None)
+            t2d: Target-to-draft vocabulary mapping tensor (optional)
+            d2t: Draft-to-target vocabulary mapping tensor (optional)
             **kwargs: Training arguments with DFlash-specific params
                 - draft_vocab_size: Size of draft vocabulary
                 - block_size: Block size for draft predictions (default: 8)
@@ -138,18 +129,24 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             GreedyTokenProposalConfig,
         )
 
+        target_layer_ids = resolve_target_layer_ids(
+            kwargs.get("target_layer_ids"),
+            kwargs["verifier_name_or_path"],
+        )
+
         config = DFlashSpeculatorConfig(
             transformer_layer_config=verifier_config,
             draft_vocab_size=kwargs["draft_vocab_size"],
             block_size=kwargs.get("block_size", 8),
             max_anchors=kwargs.get("max_anchors", 3072),
-            aux_hidden_state_layer_ids=kwargs.get("target_layer_ids"),
+            aux_hidden_state_layer_ids=target_layer_ids,
             mask_token_id=kwargs.get("mask_token_id"),
             speculators_config=SpeculatorsConfig(
                 algorithm="dflash",
                 proposal_methods=[
                     GreedyTokenProposalConfig(
-                        speculative_tokens=kwargs.get("block_size", 8),
+                        # DFlash first position is anchor position, not used during gen
+                        speculative_tokens=kwargs.get("block_size", 8) - 1,
                     )
                 ],
                 default_proposal_method="greedy",
@@ -158,14 +155,6 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 ),
             ),
         )
-
-        # Create identity mappings if t2d/d2t not provided (no vocab reduction)
-        if t2d is None or d2t is None:
-            vocab_size = kwargs["draft_vocab_size"]
-            # t2d: all tokens in target vocab are in draft vocab
-            t2d = torch.ones(vocab_size, dtype=torch.bool)
-            # d2t: identity mapping (zero offset for all tokens)
-            d2t = torch.zeros(vocab_size, dtype=torch.long)
 
         model = cls(config=config)
         model.load_vocab_mappings(t2d, d2t)
@@ -202,7 +191,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         hidden_states: torch.Tensor,  # shape: [1,total_seq_len,num_hidden*hidden_size]
         input_ids: torch.Tensor,  # shape: [1, total_seq_len]
         loss_mask: torch.Tensor,  # shape: [1, total_seq_len]
-        verifier_last_hidden_states: torch.Tensor,  # shape: [1, total_seq_len, hidden_size] # noqa: ARG002, E501
+        verifier_last_hidden_states: torch.Tensor,  # shape: [1, total_seq_len, hidden_size] # noqa: E501
         lengths: torch.Tensor | None = None,  # shape: [batch_size]
         position_ids: torch.Tensor | None = None,  # shape: [1, total_seq_len]
         **kwargs,
@@ -249,17 +238,17 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         )  # shape: [1, num_anchors*block_size]
         mask_token_ids[:, :: self.block_size] = input_ids[:, anchor_positions]
         noise_embedding = self.embed_tokens(mask_token_ids)
-        # shape: [1, num_anchors*block_size, hidden_size] # noqa: ERA001
+        # shape: [1, num_anchors*block_size, hidden_size]
 
         fc_output = self.fc(hidden_states)
         fc_output = self.hidden_norm(fc_output)
-        # shape: [1, total_seq_len, hidden_size] # noqa: ERA001
+        # shape: [1, total_seq_len, hidden_size]
 
         mask_position_ids = get_base_indices_for_anchored_blocks(
             position_ids[:, anchor_positions], self.block_size, input_ids.numel()
         )
         position_ids = torch.cat([position_ids, mask_position_ids.unsqueeze(0)], dim=1)
-        # shape: [1, total_seq_len + num_anchors*block_size] # noqa: ERA001
+        # shape: [1, total_seq_len + num_anchors*block_size]
 
         # the hidden_states shape doesn't match position_ids but doesn't need
         # to, as hidden_states is only used to set dtype and device in rotary_emb
@@ -269,8 +258,14 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             anchor_positions, self.block_size, input_ids.numel()
         )  # shape: [num_anchors*block_size]
 
-        targets = input_ids.clone()[:, anchored_block_indices]
-        # shape: [1, num_anchors*block_size] # noqa: ERA001
+        with torch.no_grad():
+            verifier_logits = self.verifier_lm_head(
+                self.verifier_norm(verifier_last_hidden_states)
+            )
+            # Shift right by 1 so verifier_logits[i] predicts token at position i
+            verifier_logits = torch.roll(verifier_logits, 1, dims=1)
+            targets = verifier_logits[:, anchored_block_indices]
+            # shape: [1, num_anchors*block_size, draft_vocab_size]
 
         for layer in self.layers:
             noise_embedding = layer(
@@ -284,21 +279,10 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             )
 
         logits = self.lm_head(self.norm(noise_embedding))
-        # shape: [1, num_anchors*block_size, vocab_size] # noqa: ERA001
-
-        # Convert targets from verifier vocab to draft vocab
-        # t2d is a boolean mask [verifier_vocab_size] - True where
-        # verifier token exists in draft
-        # cumsum gives us the draft index for each verifier token
-        draft_indices = torch.cumsum(self.t2d.long(), dim=0) - 1  # type: ignore[union-attr,operator]
-        targets_draft = torch.where(
-            self.t2d[targets],  # type: ignore[index]
-            draft_indices[targets],  # type: ignore[index]
-            torch.tensor(-100, dtype=torch.long, device=device),
-        )
+        # shape: [1, num_anchors*block_size, vocab_size]
 
         aligned_loss_mask = loss_mask.clone()[:, anchored_block_indices]
-        # shape: [1, num_anchors*block_size] # noqa: ERA001
+        # shape: [1, num_anchors*block_size]
 
         # zero out any padded anchor blocks
         aligned_loss_mask = aligned_loss_mask * (
@@ -309,7 +293,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
 
         aligned_loss_mask[:, :: self.block_size] = 0
         loss, metrics = compute_metrics(
-            logits, targets_draft, aligned_loss_mask, self.block_size
+            logits, targets, aligned_loss_mask, self.block_size
         )
         draft_tokens = torch.argmax(logits, dim=-1)
 

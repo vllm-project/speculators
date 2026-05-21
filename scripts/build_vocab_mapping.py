@@ -40,8 +40,9 @@ def parse_args():
     parser.add_argument(
         "--token-freq-path",
         type=str,
-        required=True,
-        help="Path to token frequency distribution file (.pt)",
+        default="./output/token_freq.pt",
+        help="Path to token frequency distribution file (.pt)"
+        " (default: ./output/token_freq.pt)",
     )
     parser.add_argument(
         "--draft-vocab-size",
@@ -64,8 +65,8 @@ def parse_args():
     parser.add_argument(
         "--output-path",
         type=str,
-        required=True,
-        help="Path to save the vocabulary mapping files",
+        default="./output",
+        help="Path to save the vocabulary mapping files (default: ./output)",
     )
 
     return parser.parse_args()

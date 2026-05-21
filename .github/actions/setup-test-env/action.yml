@@ -1,0 +1,46 @@
+name: Setup Test Environment
+description: Set up Python, uv, venv, and install dependencies for test jobs
+
+inputs:
+  python-version:
+    description: Python version to use
+    required: true
+  transformers-version:
+    description: Transformers version constraint (e.g. "<5.0.0"). Empty string means latest.
+    required: false
+    default: ""
+  uv-torch-backend:
+    description: UV_TORCH_BACKEND value
+    required: false
+    default: "cu130"
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+
+    - name: Create venv and install dependencies
+      shell: bash
+      run: |
+        uv venv
+        source ".venv/bin/activate"
+
+        uv pip install .[dev]
+        if [ -n "${{ inputs.transformers-version }}" ]; then
+          uv pip install "transformers${{ inputs.transformers-version }}"
+        fi
+
+        # Github actions output formatting plugin
+        uv pip install pytest-github-actions-annotate-failures
+      env:
+        UV_TORCH_BACKEND: ${{ inputs.uv-torch-backend }}
+
+    - name: Add venv to PATH
+      shell: bash
+      run: echo "$PWD/.venv/bin" >> "$GITHUB_PATH"

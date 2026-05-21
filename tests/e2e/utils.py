@@ -17,7 +17,7 @@ __all__ = [
     "VLLM_PYTHON",
     "launch_vllm_server",
     "launch_vllm_server_context",
-    "run_data_generation_offline2",
+    "run_data_generation_offline",
     "run_prepare_data",
     "run_training",
     "run_vllm_engine",
@@ -91,23 +91,22 @@ def launch_vllm_server(
         str(max_model_len),
         "--gpu-memory-utilization",
         str(gpu_memory_utilization),
+        "--disable-uvicorn-access-log",
     ]
     logger.info("Starting vLLM server: {}", " ".join(cmd))
 
-    process = subprocess.Popen(  # noqa: S603
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
-    )
+    process = subprocess.Popen(cmd)  # noqa: S603
 
     try:
         wait_for_server(port, process=process)
         logger.info("vLLM server ready on port {}", port)
     except Exception:
-        # Dump captured output to help debug startup failures
-        output = process.stdout.read().decode() if process.stdout else ""
-        if output:
-            logger.error("vLLM server output:\n{}", indent(output, "    "))
         process.terminate()
-        process.wait(timeout=30)
+        try:
+            process.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
         raise
 
     return process
@@ -123,13 +122,7 @@ def stop_vllm_server(process: subprocess.Popen):
             process.kill()
             process.wait(timeout=10)
     if process.returncode not in (0, -15):  # -15 = SIGTERM (expected)
-        output = process.stdout.read().decode() if process.stdout else ""
-        if output:
-            logger.error(
-                "vLLM server exited with code {}. Output:\n{}",
-                process.returncode,
-                indent(output, "    "),
-            )
+        logger.error("vLLM server exited with code {}", process.returncode)
     logger.info("vLLM server stopped (exit code {})", process.returncode)
 
 
@@ -171,7 +164,7 @@ def run_prepare_data(
     assert result.returncode == 0, "prepare_data.py failed"
 
 
-def run_data_generation_offline2(
+def run_data_generation_offline(
     data_path: Path,
     hidden_states_path: Path | None = None,
     port: int = 8321,
@@ -183,7 +176,7 @@ def run_data_generation_offline2(
 ):
     datagen_cmd = [
         sys.executable,
-        str(SCRIPTS_DIR / "data_generation_offline2.py"),
+        str(SCRIPTS_DIR / "data_generation_offline.py"),
         "--preprocessed-data",
         str(data_path),
         "--endpoint",
@@ -206,7 +199,7 @@ def run_data_generation_offline2(
         datagen_cmd, stderr=subprocess.PIPE, text=True, check=False, timeout=timeout
     )
     assert result.returncode == 0, (
-        f"data_generation_offline2.py failed:\n{result.stderr}"
+        f"data_generation_offline.py failed:\n{result.stderr}"
     )
 
 
@@ -225,6 +218,8 @@ def run_training(
     speculator_type: str = "eagle3",
     extra_train_args: list[str] | None = None,
     target_layer_ids: list[int] | None = None,
+    num_layers: int | None = None,
+    log_freq: int = 1,
 ):
     train_cmd = [
         sys.executable,
@@ -247,6 +242,8 @@ def run_training(
         str(seq_length),
         "--speculator-type",
         speculator_type,
+        "--log-freq",
+        str(log_freq),
     ]
     if online:
         train_cmd += [
@@ -264,6 +261,8 @@ def run_training(
         train_cmd += ["--hidden-states-path", str(hidden_states_path)]
     if target_layer_ids is not None:
         train_cmd += ["--target-layer-ids"] + [str(lid) for lid in target_layer_ids]
+    if num_layers is not None:
+        train_cmd += ["--num-layers", str(num_layers)]
     if extra_train_args:
         train_cmd += extra_train_args
 
@@ -308,6 +307,7 @@ def run_vllm_engine(
                 "model": model_path,
                 "max_model_len": 1024,
                 "gpu_memory_utilization": 0.8,
+                "enforce_eager": True,
             }
         ),
         "--prompts",

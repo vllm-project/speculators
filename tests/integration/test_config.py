@@ -5,7 +5,7 @@ Unit tests for the config module in the Speculators library.
 import tempfile
 
 import pytest
-from transformers import PretrainedConfig
+from transformers import AutoConfig
 
 from speculators import (
     VerifierConfig,
@@ -17,7 +17,7 @@ from speculators import (
 @pytest.mark.smoke
 def test_verifier_config_from_verifier_config():
     with tempfile.TemporaryDirectory() as tmp_dir:
-        pretrained_config = PretrainedConfig.from_pretrained(
+        pretrained_config = AutoConfig.from_pretrained(
             pretrained_model_name_or_path="RedHatAI/Llama-3.1-8B-Instruct",
             cache_dir=tmp_dir,
         )

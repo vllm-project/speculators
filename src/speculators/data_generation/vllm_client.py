@@ -29,14 +29,14 @@ def _handle_retry_error(
     if attempt < total_attempts:
         backoff = RETRY_BACKOFF_BASE**attempt
         logger.warning(
-            "Request failed (attempt %d/%d): %s. Retrying in %ds...",
+            "Request aborted (attempt %d/%d): %s. Retrying in %ds...",
             attempt,
             total_attempts,
             error,
             backoff,
         )
         return backoff
-    logger.error("Request failed after %d attempts: %s", total_attempts, error)
+    logger.error("Request timed out after %d attempts: %s", total_attempts, error)
     return None
 
 
