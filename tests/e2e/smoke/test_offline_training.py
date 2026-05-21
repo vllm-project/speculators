@@ -42,6 +42,7 @@ MM_MODEL = "Qwen/Qwen3-VL-2B-Instruct"
             [1, 13, 25],
         ),  # DFlash with 3 layers + verifier last layer
         (
+            TEXT_MODEL,
             "peagle",
             [
                 "--num-layers",
