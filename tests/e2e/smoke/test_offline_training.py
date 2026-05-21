@@ -43,6 +43,7 @@ MM_MODEL = "Qwen/Qwen3-VL-2B-Instruct"
         ),  # DFlash with 3 layers + verifier last layer
         (
             TEXT_MODEL,
+            "sharegpt",
             "peagle",
             [
                 "--num-layers",
