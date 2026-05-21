@@ -5,4 +5,5 @@ guidellm==0.6.0
 # Visualization dependencies
 matplotlib
 numpy
+scikit-learn
 scipy

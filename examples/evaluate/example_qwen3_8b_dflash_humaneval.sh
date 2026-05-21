@@ -1,23 +1,20 @@
 #!/bin/bash
-# Example: Per-position acceptance rate (no performance sweep)
+# Example: Speculative decoding evaluation with Qwen3-8B dflash
 #
-# This example sends a small batch of requests through vLLM and reports
-# per-position speculative decoding acceptance rates. It skips the
-# expensive gen-len estimation and sweep steps from the full benchmark.
+# This example launches a vLLM server and runs an acceptance rate
+# evaluation. Change "throughput" to "sweep" for a full performance
+# benchmark with gen-len estimation and multi-rate sweep.
 #
 # Prerequisites:
-#   cd examples/evaluate
 #   pip install -r ../../scripts/evaluate/requirements.txt
 #
 # Usage:
-#   bash examples/evaluate/example_acceptance_rate_qwen3_8b_dflash.sh
+#   bash examples/evaluate/example_qwen3_8b_dflash_humaneval.sh
 #
 # Output Results:
-#   Creates a timestamped directory (perf_results_YYYYMMDD_HHMMSS/) containing:
+#   Creates a timestamped directory (<model_name>_YYYYMMDD_HHMMSS/) containing:
 #     acceptance.csv                   - Per-position acceptance rates CSV
-#     .artifacts/acceptance/
-#       baseline_metrics.txt           - vLLM metrics snapshot before requests
-#       current_metrics.txt            - vLLM metrics snapshot after requests
+#     artifacts/
 #       run_HumanEval.json             - Raw GuideLLM output
 #
 #   Printed report includes:
@@ -28,6 +25,7 @@ set -euo pipefail
 
 # ============ Configuration ============
 MODEL="nm-testing/dflash-qwen3-8b-speculators"
+DATASET="RedHatAI/speculator_benchmarks"
 VLLM_PORT=8108
 SERVER_URL="http://localhost:${VLLM_PORT}"
 # Uses CUDA_VISIBLE_DEVICES from environment (or set it before running this script)
@@ -64,12 +62,12 @@ echo "vLLM server ready."
 # Step 2: Run acceptance rate only (no gen-len estimation or sweep)
 echo ""
 echo "=== Step 2: Running acceptance rate evaluation ==="
-export VLLM_URL="${SERVER_URL}"
-"$SCRIPT_DIR/run_perf_benchmark.sh" \
+python "$SCRIPT_DIR/evaluate.py" \
     --target "${SERVER_URL}/v1" \
+    --dataset "$DATASET" \
+    throughput \
     --subsets "HumanEval" \
-    --max-requests 80 \
-    --acceptance-only
+    --max-requests 80
 
 echo ""
 echo "Done. Check the output directory for results."
