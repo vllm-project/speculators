@@ -33,6 +33,7 @@ MM_MODEL = "Qwen/Qwen3-VL-2B-Instruct"
     ("model", "dataset", "speculator_type", "extra_train_args", "target_layer_ids"),
     [
         (TEXT_MODEL, "sharegpt", "eagle3", [], None),  # Use default EAGLE layers
+        (MM_MODEL, "sharegpt4v_coco", "eagle3", [], None),  # Multimodal
         (
             TEXT_MODEL,
             "sharegpt",
@@ -40,7 +41,21 @@ MM_MODEL = "Qwen/Qwen3-VL-2B-Instruct"
             ["--block-size", "8", "--max-anchors", "256", "--num-layers", "3"],
             [1, 13, 25],
         ),  # DFlash with 3 layers + verifier last layer
-        (MM_MODEL, "sharegpt4v_coco", "eagle3", [], None),  # Multimodal
+        (
+            "peagle",
+            [
+                "--num-layers",
+                "4",
+                "--num-depths",
+                "4",
+                "--down-sample-ratio",
+                "0.7",
+                "--down-sample-ratio-min",
+                "0.2",
+                "--no-norm-before-residual",
+            ],
+            None,
+        ),  # P-EAGLE with parallel multi-token prediction
     ],
 )
 def test_offline_smoke(

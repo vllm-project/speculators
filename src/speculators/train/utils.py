@@ -156,6 +156,6 @@ def apply_fully_sharded(model: torch.nn.Module):
     for layer in model.layers:  # type: ignore[union-attr]
         fully_shard(layer, mp_policy=mp_policy)
 
-    fully_shard(model, mp_policy=mp_policy)
+    fully_shard(model)
 
     return model
