@@ -13,7 +13,7 @@ updates:
     directory: "/"
     target-branch: "main"
     schedule:
-      interval: "weekly"
+      interval: "quarterly"
     open-pull-requests-limit: 10
     versioning-strategy: "increase"
     allow:
