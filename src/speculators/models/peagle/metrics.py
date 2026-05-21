@@ -1,5 +1,6 @@
 """Metrics and loss functions for P-EAGLE draft model."""
 
+from collections.abc import Callable
 from typing import Any
 
 import torch
@@ -18,6 +19,7 @@ def compute_metrics(
     anchor_pos: torch.Tensor,
     depth: torch.Tensor,
     num_depths: int,
+    loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = kl_div_loss,
 ) -> tuple[torch.Tensor, dict[str, Any]]:
     """Compute loss and accuracy metrics for P-EAGLE predictions.
 
@@ -29,10 +31,13 @@ def compute_metrics(
             sampling chain started from [total_sampled]
         depth: Which COD sampling round each element belongs to [total_sampled]
         num_depths: Number of parallel depths
+        loss_fn: Loss function.
 
     Returns:
         Tuple of (loss, metrics_dict)
     """
+    if loss_fn is None:
+        loss_fn = kl_div_loss
     device = logits.device
 
     # TODO: batch size is always 1 for P-EAGLE; unsqueeze is only to match the
@@ -41,7 +46,7 @@ def compute_metrics(
     sampled_loss_mask = loss_mask[:, orig_positions]  # [1, total_sampled]
 
     loss = loss_function(
-        logits, targets, sampled_loss_mask, depth.unsqueeze(0), loss_fn=kl_div_loss
+        logits, targets, sampled_loss_mask, depth.unsqueeze(0), loss_fn=loss_fn
     )
 
     with torch.no_grad():
