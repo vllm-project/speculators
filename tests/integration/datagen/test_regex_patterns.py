@@ -13,7 +13,8 @@ from transformers import __version__ as TRANSFORMERS_VERSION  # noqa: N812
 
 from speculators.data_generation.preprocessing import (
     _detect_assistant_pattern,
-    _load_processor,
+    get_tokenizer,
+    load_processor,
     _preprocess_batch,
 )
 
@@ -43,7 +44,7 @@ def processor(request):
     model_id = request.param
     try:
         # Using trust_remote_code=True for variety of templates
-        return _load_processor(model_id, trust_remote_code=True)
+        return load_processor(model_id, trust_remote_code=True)
     except (TypeError, ValueError, KeyError, AttributeError, RuntimeError) as e:
         pytest.skip(f"Failed to load processor for {model_id}: {e}")
 
@@ -53,9 +54,7 @@ def test_regex_detection_across_models(tmp_path, processor):
     Verify that _detect_assistant_pattern and _preprocess_batch (regex path)
     work correctly for a variety of model families.
     """
-    tokenizer = (
-        processor.tokenizer if isinstance(processor, ProcessorMixin) else processor
-    )
+    tokenizer = get_tokenizer(processor)
     model_name = tokenizer.name_or_path
     log.info(f"Testing family: {model_name}")
 

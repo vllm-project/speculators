@@ -622,15 +622,17 @@ def load_raw_dataset(
     return raw_dataset, config.normalize_fn
 
 
+def get_tokenizer(processor: ProcessorLike):
+    return processor.tokenizer if isinstance(processor, ProcessorMixin) else processor
+
+
 def _resolve_pad_token(processor: ProcessorLike):
-    tokenizer = (
-        processor.tokenizer if isinstance(processor, ProcessorMixin) else processor
-    )
+    tokenizer = get_tokenizer(processor)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
 
-def _load_processor(target_model_path: str, *, trust_remote_code: bool = False):
+def load_processor(target_model_path: str, *, trust_remote_code: bool = False):
     processor = AutoProcessor.from_pretrained(
         target_model_path,
         trust_remote_code=trust_remote_code,
@@ -688,7 +690,7 @@ def load_and_preprocess_dataset(
         )
 
     log.subsection("Loading processor")
-    processor = _load_processor(target_model_path, trust_remote_code=trust_remote_code)
+    processor = load_processor(target_model_path, trust_remote_code=trust_remote_code)
 
     if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
         raise ValueError(

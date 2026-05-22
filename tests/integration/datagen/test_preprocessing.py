@@ -14,7 +14,7 @@ from speculators.data_generation.preprocessing import (
     _adapt_conv_for_vllm,
     _create_loss_mask_from_offsets,
     _detect_assistant_pattern,
-    _load_processor,
+    load_processor,
     _normalize_conversation,
     _preprocess_batch,
     _supports_assistant_mask,
@@ -89,7 +89,7 @@ def test_adapt_conv_for_hf_text_only_processor():
     Test converting from normalized conversation to HF format
     with a text-only processor (i.e. tokenizer).
     """
-    processor = _load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
+    processor = load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
 
     conv: list[dict] = [
         {"role": "system", "content": "You are a helpful assistant."},
@@ -107,7 +107,7 @@ def test_adapt_conv_for_hf_multimodal_processor():
     Test converting from normalized conversation to HF format
     with a multi-modal processor.
     """
-    processor = _load_processor(MM_MODEL_REPO, trust_remote_code=True)
+    processor = load_processor(MM_MODEL_REPO, trust_remote_code=True)
 
     conv: list[dict] = [
         {
@@ -223,7 +223,7 @@ def test_adapt_conv_for_vllm_invalid_content_formats():
 @pytest.mark.sanity
 def test_detect_assistant_pattern_structure():
     """Test that the detected pattern has the correct regex structure."""
-    processor = _load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
+    processor = load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
 
     if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
         pytest.skip("Processor does not support chat templates")
@@ -247,7 +247,7 @@ def test_detect_assistant_pattern_structure():
 @pytest.mark.sanity
 def test_detect_assistant_pattern_correctly_identifies_assistant_vs_user():
     """Test that pattern correctly distinguishes assistant from user content."""
-    processor = _load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
+    processor = load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
 
     if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
         pytest.skip("Processor does not support chat templates")
@@ -283,7 +283,7 @@ def test_detect_assistant_pattern_correctly_identifies_assistant_vs_user():
 @pytest.mark.sanity
 def test_detect_assistant_pattern_extracts_correct_content():
     """Test that the pattern's capture group extracts only assistant message content."""
-    processor = _load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
+    processor = load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
 
     if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
         pytest.skip("Processor does not support chat templates")
@@ -403,7 +403,7 @@ def test_create_loss_mask_empty_offsets():
 @pytest.mark.sanity
 def test_preprocess_batch_basic():
     """Test preprocessing a basic batch of conversations."""
-    processor = _load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
+    processor = load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
 
     if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
         pytest.skip("Processor does not support chat templates")
@@ -441,7 +441,7 @@ def test_preprocess_batch_basic():
 @pytest.mark.sanity
 def test_preprocess_batch_multimodal(tmp_path):
     """Test preprocessing a batch of multimodal conversations."""
-    processor = _load_processor(MM_MODEL_REPO, trust_remote_code=True)
+    processor = load_processor(MM_MODEL_REPO, trust_remote_code=True)
 
     if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
         pytest.skip("Processor does not support chat templates")
@@ -523,7 +523,7 @@ def test_preprocess_batch_multimodal(tmp_path):
 @pytest.mark.sanity
 def test_preprocess_batch_empty_conversations():
     """Test preprocessing batch with no conversations."""
-    processor = _load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
+    processor = load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
 
     if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
         pytest.skip("Processor does not support chat templates")
@@ -541,7 +541,7 @@ def test_preprocess_batch_empty_conversations():
 @pytest.mark.sanity
 def test_preprocess_batch_invalid_conversation():
     """Test preprocessing batch with invalid conversations."""
-    processor = _load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
+    processor = load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
 
     if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
         pytest.skip("Processor does not support chat templates")
@@ -567,7 +567,7 @@ def test_preprocess_batch_invalid_conversation():
 @pytest.mark.sanity
 def test_preprocess_batch_truncation():
     """Test that long sequences are truncated to max_length."""
-    processor = _load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
+    processor = load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
 
     if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
         pytest.skip("Processor does not support chat templates")
@@ -599,7 +599,7 @@ def test_preprocess_batch_truncation():
 @pytest.mark.sanity
 def test_preprocess_batch_uses_hf_assistant_mask():
     """Test that HF assistant token mask is used when supported."""
-    processor = _load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
+    processor = load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
 
     if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
         pytest.skip("Processor does not support chat templates")
@@ -639,7 +639,7 @@ def test_preprocess_batch_falls_back_to_regex():
     """Test that preprocessing falls back to regex-based detection
     when HF mask is unavailable.
     """
-    processor = _load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
+    processor = load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
 
     if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
         pytest.skip("Processor does not support chat templates")
@@ -684,7 +684,7 @@ def test_preprocess_batch_falls_back_to_regex():
 @pytest.mark.sanity
 def test_preprocess_batch_minimum_valid_tokens_filters_regex_path():
     """Test that minimum_valid_tokens drops short samples on regex path."""
-    processor = _load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
+    processor = load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
 
     if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
         pytest.skip("Processor does not support chat templates")
@@ -727,7 +727,7 @@ def test_preprocess_batch_minimum_valid_tokens_filters_regex_path():
 @pytest.mark.sanity
 def test_preprocess_batch_minimum_valid_tokens_keeps_boundary_case():
     """Test that a sample is kept when valid tokens equal the threshold."""
-    processor = _load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
+    processor = load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
 
     if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
         pytest.skip("Processor does not support chat templates")
@@ -779,7 +779,7 @@ def test_preprocess_batch_minimum_valid_tokens_keeps_boundary_case():
 @pytest.mark.sanity
 def test_build_eagle3_dataset_basic():
     """Test building EAGLE3 dataset from a simple HuggingFace dataset."""
-    processor = _load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
+    processor = load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
 
     if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
         pytest.skip("Processor does not support chat templates")
@@ -813,7 +813,7 @@ def test_build_eagle3_dataset_basic():
 @pytest.mark.sanity
 def test_build_eagle3_dataset_preserves_format():
     """Test that build_eagle3_dataset sets the correct format."""
-    processor = _load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
+    processor = load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
 
     if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
         pytest.skip("Processor does not support chat templates")
@@ -837,7 +837,7 @@ def test_build_eagle3_dataset_preserves_format():
 @pytest.mark.sanity
 def test_build_eagle3_dataset_removes_original_columns():
     """Test that original columns are removed after processing."""
-    processor = _load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
+    processor = load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
 
     if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
         pytest.skip("Processor does not support chat templates")
@@ -864,7 +864,7 @@ def test_build_eagle3_dataset_removes_original_columns():
 @pytest.mark.sanity
 def test_build_eagle3_dataset_minimum_valid_tokens_filters_short_samples():
     """Test that build_eagle3_dataset removes samples below the token threshold."""
-    processor = _load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
+    processor = load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
 
     if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
         pytest.skip("Processor does not support chat templates")
@@ -933,7 +933,7 @@ def test_build_eagle3_dataset_minimum_valid_tokens_filters_short_samples():
 @pytest.mark.sanity
 def test_preprocess_batch_with_turn_dropout():
     """Test preprocessing batch with turn dropout enabled."""
-    processor = _load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
+    processor = load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
 
     if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
         pytest.skip("Processor does not support chat templates")
@@ -976,7 +976,7 @@ def test_detect_assistant_pattern_thinking_model():
     but the pattern must still match real conversations where the think block
     contains substantial content.
     """
-    processor = _load_processor("Qwen/Qwen3-8B", trust_remote_code=True)
+    processor = load_processor("Qwen/Qwen3-8B", trust_remote_code=True)
     pattern = _detect_assistant_pattern(processor)
 
     # Format a multi-turn conversation with thinking content injected
@@ -1036,7 +1036,7 @@ def test_create_loss_mask_thinking_model(thinking_content):
     Verifies correct masking both with and without thinking content in the
     <think> block.
     """
-    processor = _load_processor("Qwen/Qwen3-8B", trust_remote_code=True)
+    processor = load_processor("Qwen/Qwen3-8B", trust_remote_code=True)
     pattern = _detect_assistant_pattern(processor)
 
     # Build formatted text using the real chat template
@@ -1086,7 +1086,7 @@ def test_create_loss_mask_thinking_model(thinking_content):
 @pytest.mark.sanity
 def test_build_eagle3_dataset_with_custom_pattern():
     """Test building dataset with custom assistant pattern."""
-    processor = _load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
+    processor = load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
 
     if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
         pytest.skip("Processor does not support chat templates")
