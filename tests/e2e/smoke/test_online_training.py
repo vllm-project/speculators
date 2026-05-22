@@ -57,6 +57,7 @@ def test_online_smoke(
         dataset=dataset,
         prompts=prompts,
         vllm_kwargs={
+            "enforce_eager": True,
             "allowed_local_media_path": vllm_media_path,
         },
     )

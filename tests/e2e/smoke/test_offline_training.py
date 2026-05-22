@@ -86,6 +86,7 @@ def test_offline_smoke(
         dataset=dataset,
         prompts=prompts,
         vllm_kwargs={
+            "enforce_eager": True,
             "gpu_memory_utilization": 0.9,
             "allowed_local_media_path": vllm_media_path,
         },
