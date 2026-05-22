@@ -309,7 +309,7 @@ def run_vllm_engine(
     prompts: list[list[dict[str, str]]],
     max_model_len: int = 1024,
     gpu_memory_utilization: float = 0.8,
-    enforce_eager: bool = True,
+    enforce_eager: bool = False,
     allowed_local_media_path: str | None = None,
     disable_compile_cache: bool = False,
     max_tokens: int = 50,
