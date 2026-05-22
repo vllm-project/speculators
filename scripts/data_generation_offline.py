@@ -401,7 +401,7 @@ async def generate_and_save_hidden_states(args, dataset):
         if args.model and args.model != model_id:
             raise ValueError(
                 f"An explicit model name was passed ({args.model}) which doesn't match"
-                f"found model_id {model_id}."
+                f" found model_id {model_id}."
                 "Please make sure --endpoint is set to the correct vllm instance."
             )
 
