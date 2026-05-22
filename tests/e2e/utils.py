@@ -323,28 +323,29 @@ def run_vllm_engine(
     run_vllm_file = str(Path(__file__).with_name("run_vllm.py"))
     results_file = str(tmp_path / "results.json")
 
+    sampling_params_dict = {
+        "temperature": 0,
+        "top_p": 0.9,
+        "max_tokens": max_tokens,
+        "ignore_eos": ignore_eos,
+    }
+
+    llm_args_dict = {
+        "model": model_path,
+        "max_model_len": max_model_len,
+        "gpu_memory_utilization": gpu_memory_utilization,
+        "enforce_eager": enforce_eager,
+    }
+    if allowed_local_media_path is not None:
+        llm_args_dict["allowed_local_media_path"] = allowed_local_media_path
+
     command = [
         VLLM_PYTHON,
         run_vllm_file,
         "--sampling-params-args",
-        json.dumps(
-            {
-                "temperature": 0,
-                "top_p": 0.9,
-                "max_tokens": max_tokens,
-                "ignore_eos": ignore_eos,
-            }
-        ),
+        json.dumps(sampling_params_dict),
         "--llm-args",
-        json.dumps(
-            {
-                "model": model_path,
-                "max_model_len": max_model_len,
-                "gpu_memory_utilization": gpu_memory_utilization,
-                "enforce_eager": enforce_eager,
-                "allowed_local_media_path": allowed_local_media_path,
-            }
-        ),
+        json.dumps(llm_args_dict),
         "--prompts",
         json.dumps(prompts),
         "--results-file",
