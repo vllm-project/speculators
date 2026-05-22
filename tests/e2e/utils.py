@@ -91,7 +91,7 @@ def launch_vllm_server(
         cmd += ["--target-layer-ids"] + [str(lid) for lid in target_layer_ids]
     if enforce_eager:
         cmd += ["--enforce-eager"]
-    if allowed_local_media_path:
+    if allowed_local_media_path is not None:
         cmd += ["--allowed-local-media-path", allowed_local_media_path]
     cmd += [
         "--",
