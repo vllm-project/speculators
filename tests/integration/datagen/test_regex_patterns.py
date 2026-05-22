@@ -13,9 +13,9 @@ from transformers import __version__ as TRANSFORMERS_VERSION  # noqa: N812
 
 from speculators.data_generation.preprocessing import (
     _detect_assistant_pattern,
+    _preprocess_batch,
     get_tokenizer,
     load_processor,
-    _preprocess_batch,
 )
 
 # Test models covering major template families

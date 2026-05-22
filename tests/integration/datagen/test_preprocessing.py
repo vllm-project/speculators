@@ -14,11 +14,11 @@ from speculators.data_generation.preprocessing import (
     _adapt_conv_for_vllm,
     _create_loss_mask_from_offsets,
     _detect_assistant_pattern,
-    load_processor,
     _normalize_conversation,
     _preprocess_batch,
     _supports_assistant_mask,
     build_eagle3_dataset,
+    load_processor,
 )
 
 # Test model from HuggingFace with chat template
