@@ -623,7 +623,10 @@ def load_raw_dataset(
 
 
 def get_tokenizer(processor: ProcessorLike):
-    return processor.tokenizer if isinstance(processor, ProcessorMixin) else processor
+    if isinstance(processor, ProcessorMixin):
+        return processor.tokenizer  # type: ignore[attr-defined]
+
+    return processor
 
 
 def _resolve_pad_token(processor: ProcessorLike):
