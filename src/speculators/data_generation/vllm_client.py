@@ -115,7 +115,11 @@ def extract_output(
 
 class ClientItem(TypedDict):
     input_ids: list[int]
+    """The input token IDs."""
+
     messages: NotRequired[list[ChatCompletionMessageParam]]
+    """If provided, pass `messages` to Chat Completions API
+    instead of passing `token_ids` to Completions API."""
 
 
 @with_retries
@@ -133,9 +137,7 @@ async def generate_hidden_states_async(
     Args:
         client: The async OpenAI client.
         model: The model ID.
-        token_ids: The input token IDs.
-        messages: If provided, pass `messages` to Chat Completions API
-                 instead of passing `token_ids` to Completions API.
+        client_item: Inputs to send via the client.
         timeout: Timeout in seconds for each request attempt. None for no timeout.
     """
     token_ids = client_item["input_ids"]
