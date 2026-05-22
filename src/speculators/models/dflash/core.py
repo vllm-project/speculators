@@ -195,7 +195,6 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             )
         return self.config.mask_token_id
 
-    @torch.compile
     def forward(
         self,
         hidden_states: torch.Tensor,  # shape: [1,total_seq_len,num_hidden*hidden_size]
@@ -249,21 +248,13 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 mask_mod, B=None, H=None, Q_LEN=q_len, KV_LEN=kv_len, device=device
             )
 
-        mask_tokens_size = num_anchors * self.block_size
-
         mask_token_ids = torch.full(
-            (1, mask_tokens_size),
+            (1, num_anchors * self.block_size),
             self.mask_token_id,
             dtype=torch.long,
             device=device,
         )  # shape: [1, num_anchors*block_size]
         mask_token_ids[:, :: self.block_size] = input_ids[:, anchor_positions]
-        noise_embedding = self.embed_tokens(mask_token_ids)
-        # shape: [1, num_anchors*block_size, hidden_size]
-
-        fc_output = self.fc(hidden_states)
-        fc_output = self.hidden_norm(fc_output)
-        # shape: [1, total_seq_len, hidden_size]
 
         mask_position_ids = get_base_indices_for_anchored_blocks(
             position_ids[:, anchor_positions], self.block_size, input_ids.numel()
@@ -271,13 +262,52 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         position_ids = torch.cat([position_ids, mask_position_ids.unsqueeze(0)], dim=1)
         # shape: [1, total_seq_len + num_anchors*block_size]
 
-        # the hidden_states shape doesn't match position_ids but doesn't need
-        # to, as hidden_states is only used to set dtype and device in rotary_emb
-        position_embeddings = self.rotary_emb(hidden_states, position_ids)
-
         anchored_block_indices = get_base_indices_for_anchored_blocks(
             anchor_positions, self.block_size, input_ids.numel()
         )  # shape: [num_anchors*block_size]
+
+        layer_masks = [
+            sliding_window_attn_mask
+            if layer_idx in self.sliding_window_indices
+            else full_attn_mask
+            for layer_idx in range(len(self.layers))
+        ]
+
+        return self._compiled_forward(
+            hidden_states=hidden_states,
+            verifier_last_hidden_states=verifier_last_hidden_states,
+            loss_mask=loss_mask,
+            mask_token_ids=mask_token_ids,
+            position_ids=position_ids,
+            anchored_block_indices=anchored_block_indices,
+            anchor_valid=anchor_valid,
+            layer_masks=layer_masks,
+            **kwargs,
+        )
+
+    @torch.compile
+    def _compiled_forward(
+        self,
+        hidden_states: torch.Tensor,
+        verifier_last_hidden_states: torch.Tensor,
+        loss_mask: torch.Tensor,
+        mask_token_ids: torch.Tensor,
+        position_ids: torch.Tensor,
+        anchored_block_indices: torch.Tensor,
+        anchor_valid: torch.Tensor,
+        layer_masks: list,
+        **kwargs,
+    ):
+        noise_embedding = self.embed_tokens(mask_token_ids)
+        # shape: [1, num_anchors*block_size, hidden_size]
+
+        fc_output = self.fc(hidden_states)
+        fc_output = self.hidden_norm(fc_output)
+        # shape: [1, total_seq_len, hidden_size]
+
+        # the hidden_states shape doesn't match position_ids but doesn't need
+        # to, as hidden_states is only used to set dtype and device in rotary_emb
+        position_embeddings = self.rotary_emb(hidden_states, position_ids)
 
         with torch.no_grad():
             verifier_logits = self.verifier_lm_head(
@@ -288,13 +318,11 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             targets = verifier_logits[:, anchored_block_indices]
             # shape: [1, num_anchors*block_size, draft_vocab_size]
 
-        for layer_idx, layer in enumerate(self.layers):
+        for layer, mask in zip(self.layers, layer_masks):
             noise_embedding = layer(
                 hidden_states=noise_embedding,
                 target_hidden=fc_output,
-                attention_mask=sliding_window_attn_mask
-                if layer_idx in self.sliding_window_indices
-                else full_attn_mask,
+                attention_mask=mask,
                 position_ids=position_ids,
                 use_cache=False,
                 position_embeddings=position_embeddings,
