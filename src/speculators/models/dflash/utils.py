@@ -25,6 +25,7 @@ def get_base_indices_for_anchored_blocks(
     return idx.reshape(-1)
 
 
+@torch.compiler.disable
 def select_anchors(
     loss_mask: torch.Tensor,  # shape: [1, total_seq_len]
     num_anchors: int,

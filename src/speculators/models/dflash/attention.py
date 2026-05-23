@@ -4,6 +4,7 @@ from torch.nn.attention.flex_attention import (
 )
 
 
+@torch.compiler.disable
 def create_anchor_block_mask_mod(
     lengths: torch.Tensor,
     total_seq_len: int,

@@ -195,6 +195,37 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             )
         return self.config.mask_token_id
 
+    @torch.compiler.disable
+    def _build_masks(self, lengths, device, total_seq_len, anchor_positions):
+        full_attn_mask = None
+        if self.uses_full_attn:
+            mask_mod, q_len, kv_len = create_anchor_block_mask_mod(
+                lengths=lengths.to(device),
+                total_seq_len=total_seq_len,
+                anchor_positions=anchor_positions,
+                block_size=self.block_size,
+                sliding_window=None,
+            )
+            full_attn_mask = create_block_mask(
+                mask_mod, B=None, H=None, Q_LEN=q_len, KV_LEN=kv_len, device=device
+            )
+
+        sliding_window_attn_mask = None
+        if self.uses_sliding_window_attn:
+            mask_mod, q_len, kv_len = create_anchor_block_mask_mod(
+                lengths=lengths.to(device),
+                total_seq_len=total_seq_len,
+                anchor_positions=anchor_positions,
+                block_size=self.block_size,
+                sliding_window=self.sliding_window,
+                sliding_window_non_causal=self.sliding_window_non_causal,
+            )
+            sliding_window_attn_mask = create_block_mask(
+                mask_mod, B=None, H=None, Q_LEN=q_len, KV_LEN=kv_len, device=device
+            )
+
+        return full_attn_mask, sliding_window_attn_mask
+
     @torch.compile
     def forward(
         self,
@@ -222,32 +253,9 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         )
         # shape: [num_anchors], [num_anchors]
 
-        full_attn_mask = None
-        if self.uses_full_attn:
-            mask_mod, q_len, kv_len = create_anchor_block_mask_mod(
-                lengths=lengths.to(device),
-                total_seq_len=total_seq_len,
-                anchor_positions=anchor_positions,
-                block_size=self.block_size,
-                sliding_window=None,
-            )
-            full_attn_mask = create_block_mask(
-                mask_mod, B=None, H=None, Q_LEN=q_len, KV_LEN=kv_len, device=device
-            )
-
-        sliding_window_attn_mask = None
-        if self.uses_sliding_window_attn:
-            mask_mod, q_len, kv_len = create_anchor_block_mask_mod(
-                lengths=lengths.to(device),
-                total_seq_len=total_seq_len,
-                anchor_positions=anchor_positions,
-                block_size=self.block_size,
-                sliding_window=self.sliding_window,
-                sliding_window_non_causal=self.sliding_window_non_causal,
-            )
-            sliding_window_attn_mask = create_block_mask(
-                mask_mod, B=None, H=None, Q_LEN=q_len, KV_LEN=kv_len, device=device
-            )
+        full_attn_mask, sliding_window_attn_mask = self._build_masks(
+            lengths, device, total_seq_len, anchor_positions,
+        )
 
         mask_tokens_size = num_anchors * self.block_size
 
