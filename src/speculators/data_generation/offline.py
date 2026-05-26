@@ -7,21 +7,21 @@ logger = logging.getLogger(__name__)
 def get_existing_hidden_state_indices(output_path: Path) -> list[int]:
     """Find existing `hs_i.safetensors` files (where i is the file index)"""
 
-    existing_file_indices: list[int] = []
+    existing_file_indices_set: set[int] = set()
 
     if not output_path.exists():
-        return existing_file_indices
+        return []
 
     for file_path in output_path.iterdir():
         if file_path.name.startswith("hs_") and file_path.name.endswith(".safetensors"):
             index_str = file_path.stem[3:]  # Remove "hs_" prefix
             try:
                 file_index = int(index_str)
-                existing_file_indices.append(file_index)
+                existing_file_indices_set.add(file_index)
             except ValueError:
                 continue
 
-    return sorted(existing_file_indices)
+    return sorted(existing_file_indices_set)
 
 
 def get_indices_to_process(
