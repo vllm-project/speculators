@@ -69,7 +69,7 @@ def make_eagle3_model(
     *,
     draft_vocab_size: int = 64,
     norm_before_residual: bool = False,
-    device: str = "cuda",
+    device: str = "cuda:0",
 ) -> Eagle3DraftModel:
     """Create a tiny Eagle3 model with real initialized weights."""
     config = Eagle3SpeculatorConfig(
@@ -97,7 +97,7 @@ def make_dflash_model(
     draft_vocab_size: int = 64,
     block_size: int = 4,
     max_anchors: int = 8,
-    device: str = "cuda",
+    device: str = "cuda:0",
 ) -> DFlashDraftModel:
     """Create a tiny DFlash model with real initialized weights."""
     config = DFlashSpeculatorConfig(
@@ -105,7 +105,7 @@ def make_dflash_model(
         draft_vocab_size=draft_vocab_size,
         block_size=block_size,
         max_anchors=max_anchors,
-        aux_hidden_state_layer_ids=[0, 1],
+        aux_hidden_state_layer_ids=[0, 1, 2],
         mask_token_id=0,
         speculators_config=SpeculatorsConfig(
             algorithm="dflash",
@@ -129,7 +129,7 @@ def make_peagle_model(
     draft_vocab_size: int = 64,
     num_depths: int = 4,
     down_sample_ratio: float = 0.7,
-    device: str = "cuda",
+    device: str = "cuda:0",
 ) -> PEagleDraftModel:
     """Create a tiny PEagle model with real initialized weights."""
     config = PEagleSpeculatorConfig(
@@ -223,7 +223,7 @@ def make_batch(
     max_len: int,
     samples: list[dict[str, torch.Tensor]],
     hidden_size: int,
-    device: str = "cuda",
+    device: str = "cuda:0",
 ) -> dict[str, torch.Tensor]:
     """Collate a list of samples into a single batch using the real collate_fn.
 
