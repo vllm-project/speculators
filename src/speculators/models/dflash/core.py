@@ -1,4 +1,3 @@
-import functools
 from typing import ClassVar
 
 import torch

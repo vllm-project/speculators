@@ -29,7 +29,7 @@ def create_anchor_block_mask_mod(
         - may not attend to other synthetic blocks or later base tokens
 
     Args:
-        document_ids: [total_seq_len] maps each position to its document index, -1 for padding
+        document_ids: [total_seq_len] maps each position to its doc index, pad -1
         total_seq_len: padded packed sequence width
         anchor_positions: [n_anchors] absolute positions into the packed base sequence
         block_size: number of query tokens per anchor block

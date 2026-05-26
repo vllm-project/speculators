@@ -50,7 +50,9 @@ def test_diagonal_draft_tokens_mask_mod(lengths):
     document_ids = torch.repeat_interleave(
         torch.arange(lengths.shape[0], dtype=torch.long), lengths
     )
-    mask_mod = create_combined_mask_mod(document_ids, total_seq_len=lengths.sum().item())
+    mask_mod = create_combined_mask_mod(
+        document_ids, total_seq_len=lengths.sum().item()
+    )
 
     N = lengths.sum().item()
 

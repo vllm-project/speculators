@@ -65,7 +65,7 @@ class PEagleDraftModel(Eagle3DraftModel):
         Args:
             hidden_states: Verifier hidden states [batch, seq_len, 3*hidden_size]
             input_ids: Input token IDs [batch, seq_len]
-            document_ids: Document IDs [1, seq_len], maps positions to document index, -1 for padding
+            document_ids: Document IDs [1, seq_len], maps positions to doc index, pad -1
             position_ids: Position IDs [batch, seq_len] (optional)
             loss_mask: Loss mask for which tokens to compute loss on
                 [batch, seq_len]

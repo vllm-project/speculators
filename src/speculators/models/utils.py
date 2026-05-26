@@ -1,4 +1,3 @@
-import functools
 import warnings
 from functools import partial
 

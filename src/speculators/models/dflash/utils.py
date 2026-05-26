@@ -55,8 +55,8 @@ def select_anchors(
     k = min(num_anchors, valid_indices.numel())
 
     # Constrain value of k for torch dynamo
-    torch._check(k <= valid_indices.numel())
-    torch._check(k >= 0)
+    torch._check(k <= valid_indices.numel())  # noqa: SLF001
+    torch._check(k >= 0)  # noqa: SLF001
 
     perm = torch.randperm(valid_indices.numel(), device=loss_mask.device)
     anchors[:k] = torch.gather(valid_indices, 0, perm[:k])

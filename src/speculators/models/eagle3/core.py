@@ -129,7 +129,7 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
             )
 
     @conditional_torch_compile
-    def forward(  # noqa: C901
+    def forward(
         self,
         hidden_states: torch.Tensor,  # shape: [1, total_seq_len, 3 * hidden_size]
         input_ids: torch.Tensor,  # shape: [1, total_seq_len]
