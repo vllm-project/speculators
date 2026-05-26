@@ -290,7 +290,7 @@ async def worker(  # noqa: C901
                     max_retries=max_retries,
                 )
             lock_path = hidden_states_path + ".lock"
-            if Path(lock_path).exists():
+            if Path(lock_path).exists():  # noqa: ASYNC240
                 await wait_for_lock_async(lock_path)
 
             async with write_semaphore:  # Limit number of active disk writes
