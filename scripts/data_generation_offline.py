@@ -30,6 +30,7 @@ from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_REQUEST_TIMEOUT,
     generate_hidden_states_async,
+    wait_for_lock_async,
 )
 from speculators.train.data import build_client_item
 from speculators.train.logger import setup_root_logger
@@ -170,21 +171,21 @@ def parse_args():
 def get_existing_hidden_state_indices(output_path: Path) -> list[int]:
     """Find existing `hs_i.safetensors` files (where i is the file index)"""
 
-    existing_file_indices = []
+    existing_file_indices_set: set[int] = set()
 
     if not output_path.exists():
-        return existing_file_indices
+        return []
 
     for file_path in output_path.iterdir():
         if file_path.name.startswith("hs_") and file_path.name.endswith(".safetensors"):
             index_str = file_path.stem[3:]  # Remove "hs_" prefix
             try:
                 file_index = int(index_str)
-                existing_file_indices.append(file_index)
+                existing_file_indices_set.add(file_index)
             except ValueError:
                 continue
 
-    return sorted(existing_file_indices)
+    return sorted(existing_file_indices_set)
 
 
 def get_indices_to_process(
@@ -247,7 +248,7 @@ def check_safetensors_file(path: Path, tokens: list[int]):
             )
 
 
-async def worker(
+async def worker(  # noqa: C901
     client,
     model: str,
     queue: "asyncio.Queue[dict[str, Any]]",
@@ -288,6 +289,10 @@ async def worker(
                     timeout=request_timeout,
                     max_retries=max_retries,
                 )
+            lock_path = hidden_states_path + ".lock"
+            if Path(lock_path).exists():  # noqa: ASYNC240
+                await wait_for_lock_async(lock_path)
+
             async with write_semaphore:  # Limit number of active disk writes
                 await asyncio.to_thread(
                     shutil.move, hidden_states_path, target_hidden_states_path
