@@ -26,6 +26,10 @@ from datasets import load_from_disk
 from safetensors import safe_open
 from tqdm import tqdm
 
+from speculators.data_generation.offline import (
+    get_existing_hidden_state_indices,
+    get_indices_to_process,
+)
 from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_REQUEST_TIMEOUT,
@@ -165,70 +169,26 @@ def parse_args():
             "(default: value of --concurrency)"
         ),
     )
+    parser.add_argument(
+        "--world-size",
+        type=int,
+        default=1,
+        help=(
+            "World size for multi-node data generation offline. IMPORTANT: this "
+            "is the number of nodes (not the number of gpus). Defaults to 1"
+        ),
+    )
+    parser.add_argument(
+        "--rank",
+        type=int,
+        default=0,
+        help=(
+            "Rank for multi-node data generation offline. IMPORTANT: this is "
+            "the node index, not an index for a gpu. Must be in range[0, world_size)."
+            " Defaults to 0"
+        ),
+    )
     return parser.parse_args()
-
-
-def get_existing_hidden_state_indices(output_path: Path) -> list[int]:
-    """Find existing `hs_i.safetensors` files (where i is the file index)"""
-
-    existing_file_indices_set: set[int] = set()
-
-    if not output_path.exists():
-        return []
-
-    for file_path in output_path.iterdir():
-        if file_path.name.startswith("hs_") and file_path.name.endswith(".safetensors"):
-            index_str = file_path.stem[3:]  # Remove "hs_" prefix
-            try:
-                file_index = int(index_str)
-                existing_file_indices_set.add(file_index)
-            except ValueError:
-                continue
-
-    return sorted(existing_file_indices_set)
-
-
-def get_indices_to_process(
-    num_samples: int, max_samples: int | None, existing: list[int]
-) -> list[int]:
-    """Determines which indices should be processed. If max_samples is None
-    returns all dataset indices not in existing. Otherwise gets the first
-    `max_samples - len(existing)` samples not already in existing.
-
-    Args:
-        num_samples: Total size of preprocessed dataset
-        max_samples: (Optional) limit for number of samples to process
-        existing: list of ids that have already been processed
-
-    Returns:
-        list of dataset indices to process
-    """
-
-    if len(existing) >= num_samples:
-        logger.info("All samples already processed!")
-        return []
-    if max_samples and len(existing) >= max_samples:
-        logger.info("At least max_samples already processed!")
-        return []
-
-    if len(existing) > 0:
-        logger.info(f"Found {len(existing)} existing samples.")
-
-    existing_s = set(existing)
-    if max_samples is None:
-        return [i for i in range(num_samples) if i not in existing_s]
-
-    num_remaining = min(max_samples, num_samples) - len(existing)
-    to_process = []
-    cur = 0
-    while num_remaining > 0 and cur < num_samples:
-        if cur not in existing_s:
-            to_process.append(cur)
-            num_remaining -= 1
-
-        cur += 1
-
-    return to_process
 
 
 def check_safetensors_file(path: Path, tokens: list[int]):
@@ -379,7 +339,11 @@ async def generate_and_save_hidden_states(args, dataset):
     num_samples = len(dataset)
 
     to_process = get_indices_to_process(
-        num_samples, args.max_samples, existing_file_indices
+        num_samples,
+        args.max_samples,
+        existing_file_indices,
+        args.world_size,
+        args.rank,
     )
     if not to_process:
         return
@@ -446,6 +410,8 @@ async def generate_and_save_hidden_states(args, dataset):
 
 def main():
     args = parse_args()
+    if int(args.rank) < 0 or int(args.rank) >= int(args.world_size):
+        raise ValueError("--rank must be in range [0, world_size)")
     setup_root_logger()
 
     logger.info("EAGLE Offline Data Generation")
