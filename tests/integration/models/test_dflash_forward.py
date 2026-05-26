@@ -162,4 +162,7 @@ class TestDFlashVocabBoundary:
         draft_tokens, loss, metrics = dflash_draft_vocab_model(**batch)
 
         assert loss.isfinite()
+        assert draft_tokens.dtype == torch.long
+        assert (draft_tokens >= 0).all()
+        assert (draft_tokens < 32).all()
         loss.backward()
