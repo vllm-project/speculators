@@ -304,7 +304,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         # shape: [1, total_seq_len, hidden_size]
 
         mask_position_ids = get_base_indices_for_anchored_blocks(
-            position_ids[0, anchor_positions], self.block_size, input_ids.numel()
+            position_ids[0, anchor_positions], self.block_size
         )
         position_ids = torch.cat([position_ids, mask_position_ids.unsqueeze(0)], dim=1)
         # shape: [1, total_seq_len + num_anchors*block_size]
@@ -314,7 +314,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         position_embeddings = self.rotary_emb(hidden_states, position_ids)
 
         anchored_block_indices = get_base_indices_for_anchored_blocks(
-            anchor_positions, self.block_size, input_ids.numel()
+            anchor_positions, self.block_size
         )  # shape: [num_anchors*block_size]
 
         with torch.no_grad():
