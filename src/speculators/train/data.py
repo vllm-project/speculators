@@ -21,6 +21,7 @@ from speculators.data_generation.vllm_client import (
     DEFAULT_REQUEST_TIMEOUT,
     ClientItem,
     generate_hidden_states,
+    wait_for_lock,
 )
 from speculators.train.noise_transforms import TransformTensors
 
@@ -259,6 +260,11 @@ class ArrowDataset(BaseDataset):
     def _maybe_load_hs_file(self, index: int) -> dict[str, torch.Tensor] | None:
         file_idx = self._map_to_file_idx(index)
         candidate_path = self.hidden_states_path / f"hs_{file_idx}.safetensors"
+
+        lock_path = str(candidate_path) + ".lock"
+        if Path(lock_path).exists():
+            wait_for_lock(lock_path)
+
         if candidate_path.exists():
             return load_file(candidate_path)
 
@@ -279,19 +285,22 @@ class ArrowDataset(BaseDataset):
                 timeout=self.request_timeout,
                 max_retries=self.max_retries,
             )
+
+            loaded_hs = load_file(hs_filepath)
+
+            match self.on_generate:
+                case "cache":
+                    file_idx = self._map_to_file_idx(index)
+                    target_path = self.hidden_states_path / f"hs_{file_idx}.safetensors"
+                    shutil.move(hs_filepath, target_path)
+                case "delete":
+                    Path(hs_filepath).unlink()
         except Exception as e:  # noqa: BLE001
-            warnings.warn(str(e), stacklevel=1)
+            warnings.warn(
+                f"Failed to load/cache hidden states for sample {index}: {e}",
+                stacklevel=1,
+            )
             return None
-
-        loaded_hs = load_file(hs_filepath)
-
-        match self.on_generate:
-            case "cache":
-                file_idx = self._map_to_file_idx(index)
-                target_path = self.hidden_states_path / f"hs_{file_idx}.safetensors"
-                shutil.move(hs_filepath, target_path)
-            case "delete":
-                Path(hs_filepath).unlink()
 
         return loaded_hs
 
