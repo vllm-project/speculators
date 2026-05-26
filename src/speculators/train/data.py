@@ -533,7 +533,10 @@ def create_collate_fn(
                 break
             new_lengths.append(length)
             cum_length += length
-        collated_data["lengths"] = torch.tensor(new_lengths, dtype=torch.long)
+        lengths = torch.tensor(new_lengths, dtype=torch.long)
+        # Pad to at least size 4 to avoid torch.compile recompiling on sizes 0/1
+        pad_to = max(4, lengths.shape[0])
+        collated_data["lengths"] = F.pad(lengths, (0, pad_to - lengths.shape[0]))
         return collated_data
 
     return collate_fn
