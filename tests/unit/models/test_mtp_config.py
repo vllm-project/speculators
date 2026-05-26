@@ -93,7 +93,7 @@ class TestValidation:
 
     def test_invalid_speculators_model_type(self):
         with pytest.raises(ValidationError, match="speculators_model_type"):
-            MTPConfig(speculators_model_type="invalid")
+            MTPConfig(speculators_model_type="invalid")  # type: ignore[arg-type]
 
 
 # ===== Round-trip serialization =====

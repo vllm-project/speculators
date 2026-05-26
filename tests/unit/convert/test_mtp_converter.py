@@ -6,6 +6,7 @@ import pytest
 import torch
 
 from speculators.convert.mtp.converter import MTPConverter
+from tests.conftest import requires_transformers_version
 
 
 class TestRemapKey:
@@ -134,6 +135,7 @@ class TestBuildConfig:
                 source_config, "some/model", num_speculative_steps=3
             )
 
+    @requires_transformers_version("5.2.0")
     @patch("speculators.convert.mtp.converter.PretrainedConfig.get_config_dict")
     def test_matching_hidden_size_succeeds(self, mock_get_config):
         mock_get_config.return_value = (

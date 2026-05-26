@@ -90,8 +90,9 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
         """Re-set NaN sentinel before loading — meta-device init may clear
         it. Deletes verifier_lm_head after loading since MTP does not use it.
         """
-        self.embed_tokens.weight.fill_(torch.nan)
-        self.lm_head.weight.fill_(torch.nan)
+        with torch.no_grad():
+            self.embed_tokens.weight.fill_(torch.nan)
+            self.lm_head.weight.fill_(torch.nan)
         super().load_verifier_weights()
         del self.verifier_lm_head
 
@@ -143,7 +144,7 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
 
         all_logits: list[torch.Tensor] = []
         total_loss = torch.tensor(0.0, device=device)
-        metrics: dict[str, float] = {}
+        metrics: dict[str, float | torch.Tensor] = {}
 
         current_hidden = hidden_states
         for step in range(num_steps):

@@ -76,7 +76,7 @@ def test_mtp_roundtrip(tmp_path: Path, seed):
 
     # -- Step 2: Load --
     logger.info("Loading converted speculator")
-    model = SpeculatorModel.from_pretrained(str(converted_path))
+    model = SpeculatorModel.from_pretrained(str(converted_path))  # type: ignore[call-arg]
     model = model.cuda()
     logger.info("Speculator loaded on GPU")
 
