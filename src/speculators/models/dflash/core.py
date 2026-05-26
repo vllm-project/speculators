@@ -185,6 +185,30 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             )
         return self.config.mask_token_id
 
+    @torch.compiler.disable
+    def _build_attention_mask(self, loss_mask, lengths, device):
+        anchor_positions, anchor_valid = select_anchors(
+            loss_mask, self.config.max_anchors, self.block_size
+        )
+        # shape: [num_anchors], [num_anchors]
+
+        mask_mod, q_len, kv_len = create_anchor_block_mask_mod(
+            lengths=lengths.to(device),
+            total_seq_len=loss_mask.shape[1],
+            anchor_positions=anchor_positions,
+            block_size=self.block_size,
+        )
+
+        attention_mask = create_block_mask(
+            mask_mod,
+            B=None,
+            H=None,
+            Q_LEN=q_len,
+            KV_LEN=kv_len,
+            device=device,
+        )
+        return attention_mask, anchor_positions, anchor_valid
+
     @torch.compile
     def forward(
         self,
@@ -207,25 +231,8 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 total_seq_len, dtype=torch.long, device=device
             ).unsqueeze(0)
 
-        anchor_positions, anchor_valid = select_anchors(
-            loss_mask, num_anchors, self.block_size
-        )
-        # shape: [num_anchors], [num_anchors]
-
-        mask_mod, q_len, kv_len = create_anchor_block_mask_mod(
-            lengths=lengths.to(device),
-            total_seq_len=total_seq_len,
-            anchor_positions=anchor_positions,
-            block_size=self.block_size,
-        )
-
-        attention_mask = create_block_mask(
-            mask_mod,
-            B=None,
-            H=None,
-            Q_LEN=q_len,
-            KV_LEN=kv_len,
-            device=device,
+        attention_mask, anchor_positions, anchor_valid = self._build_attention_mask(
+            loss_mask, lengths, device
         )
 
         mask_tokens_size = num_anchors * self.block_size
