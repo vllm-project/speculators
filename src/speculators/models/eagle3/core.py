@@ -133,7 +133,7 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
         self,
         hidden_states: torch.Tensor,  # shape: [1, total_seq_len, 3 * hidden_size]
         input_ids: torch.Tensor,  # shape: [1, total_seq_len]
-        lengths: torch.Tensor | None = None,  # shape: [batch_size]
+        document_ids: torch.Tensor,  # shape: [1, total_seq_len]
         loss_mask: torch.Tensor | None = None,  # shape: [1, total_seq_len]
         position_ids: torch.Tensor | None = None,  # shape: [1, total_seq_len]
         verifier_last_hidden_states: torch.Tensor
@@ -148,8 +148,6 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
         device = hidden_states.device
         total_seq_len = hidden_states.shape[1]
 
-        if lengths is None:
-            lengths = torch.tensor([total_seq_len], dtype=torch.long, device=device)
         if position_ids is None:
             position_ids = 1 + torch.arange(
                 total_seq_len, dtype=torch.long, device=device
@@ -158,7 +156,9 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
 
         past_key_values = DynamicCache(config=self.config.transformer_layer_config)
 
-        combined_mask_mod = create_combined_mask_mod(lengths.to(device), total_seq_len)
+        combined_mask_mod = create_combined_mask_mod(
+            document_ids.squeeze(0).to(device), total_seq_len
+        )
         # Note: Attention mask is stored as a BlockMask object
         attention_mask = create_block_mask(
             combined_mask_mod,

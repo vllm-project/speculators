@@ -10,8 +10,11 @@ from speculators.models.eagle3.attention import (
 
 def test_create_combined_mask_mod():
     lengths = torch.tensor([1, 2, 3])
+    document_ids = torch.repeat_interleave(
+        torch.arange(lengths.shape[0], dtype=torch.long), lengths
+    )
     mask_mod = create_combined_mask_mod(
-        lengths, total_seq_len=int(lengths.sum().item())
+        document_ids, total_seq_len=int(lengths.sum().item())
     )
 
     # Creates causal document mask mod that supports extended diagonals
@@ -44,7 +47,10 @@ def test_diagonal_draft_tokens_mask_mod(lengths):
     # If kv_idx > N (N = orig seq len = num query inds), only the diagonal tokens are
     # in the mask. Diagonal tokens are those where kv_idx % N == q_idx
 
-    mask_mod = create_combined_mask_mod(lengths, total_seq_len=lengths.sum().item())
+    document_ids = torch.repeat_interleave(
+        torch.arange(lengths.shape[0], dtype=torch.long), lengths
+    )
+    mask_mod = create_combined_mask_mod(document_ids, total_seq_len=lengths.sum().item())
 
     N = lengths.sum().item()
 

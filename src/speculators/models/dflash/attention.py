@@ -5,7 +5,7 @@ from torch.nn.attention.flex_attention import (
 
 
 def create_anchor_block_mask_mod(
-    lengths: torch.Tensor,
+    document_ids: torch.Tensor,
     total_seq_len: int,
     anchor_positions: torch.Tensor,
     block_size: int,
@@ -29,7 +29,7 @@ def create_anchor_block_mask_mod(
         - may not attend to other synthetic blocks or later base tokens
 
     Args:
-        lengths: [num_docs] lengths of packed documents
+        document_ids: [total_seq_len] maps each position to its document index, -1 for padding
         total_seq_len: padded packed sequence width
         anchor_positions: [n_anchors] absolute positions into the packed base sequence
         block_size: number of query tokens per anchor block
@@ -42,7 +42,7 @@ def create_anchor_block_mask_mod(
     # Always use non_causal for full attn
     non_causal = sliding_window is None or sliding_window_non_causal
 
-    device = lengths.device
+    device = document_ids.device
     anchor_positions = anchor_positions.to(device=device, dtype=torch.long).contiguous()
 
     if anchor_positions.ndim != 1:
@@ -53,28 +53,6 @@ def create_anchor_block_mask_mod(
     n_anchors = anchor_positions.numel()
     q_len = n_anchors * block_size
     kv_len = total_seq_len + q_len
-
-    # Map each base-sequence position -> document id, padding -> -1
-    document_ids = torch.repeat_interleave(
-        torch.arange(lengths.shape[0], device=device, dtype=torch.long),
-        lengths,
-    )
-    if document_ids.numel() > total_seq_len:
-        raise ValueError(
-            f"sum(lengths)={document_ids.numel()} exceeds total_seq_len={total_seq_len}"
-        )
-    if document_ids.numel() < total_seq_len:
-        document_ids = torch.cat(
-            [
-                document_ids,
-                -1
-                * torch.ones(
-                    total_seq_len - document_ids.numel(),
-                    device=device,
-                    dtype=torch.long,
-                ),
-            ]
-        ).contiguous()
 
     if (oob := (anchor_positions < 0) | (anchor_positions >= total_seq_len)).any():
         raise ValueError(

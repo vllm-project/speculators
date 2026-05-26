@@ -6,8 +6,7 @@ import torch
 def create_peagle_mask_mod(
     anchor_pos: torch.Tensor,  # shape: [total_sampled]
     depth: torch.Tensor,  # shape: [total_sampled]
-    lengths: torch.Tensor,  # shape: [batch_size]
-    total_seq_len: int,
+    document_ids: torch.Tensor,  # shape: [total_seq_len]
 ):
     """
     Create a flex attention mask modifier for P-EAGLE parallel groups.
@@ -23,9 +22,7 @@ def create_peagle_mask_mod(
         anchor_pos: The starting position in the original sequence the current
             sampling chain started from.
         depth: Which COD sampling round each element belongs to
-        lengths: The length of each document. Used to produce a document mask to prevent
-            cross contamination
-        total_seq_len: int, combined padded length of the original sequences
+        document_ids: Maps each position to its document index, -1 for padding
 
     Args example:
 
@@ -44,23 +41,6 @@ def create_peagle_mask_mod(
     Returns:
         A mask_mod function compatible with flex_attention create_block_mask
     """
-
-    # Generate sample_ids to prevent cross-sample attention
-    document_ids = torch.repeat_interleave(
-        torch.arange(lengths.shape[0], device=lengths.device, dtype=torch.long), lengths
-    )
-    # Pad ids with -1 to indicate padding
-    document_ids = torch.cat(
-        [
-            document_ids,
-            -1
-            * torch.ones(
-                total_seq_len - document_ids.shape[0],
-                device=lengths.device,
-                dtype=torch.long,
-            ),
-        ]
-    ).contiguous()
 
     def peagle_mask_mod(_b, _h, q_idx, kv_idx):
         q_anchor_pos = anchor_pos[q_idx]

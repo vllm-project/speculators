@@ -524,7 +524,7 @@ def create_collate_fn(
         # Include lengths until while they fit in max_len
         # The last included length is (if necessary) truncated
         # Any additional lengths are discarded
-        lengths = collated_data["lengths"]
+        lengths = collated_data.pop("lengths")
         new_lengths = []
         cum_length = 0
         for length in lengths:
@@ -534,9 +534,20 @@ def create_collate_fn(
             new_lengths.append(length)
             cum_length += length
         lengths = torch.tensor(new_lengths, dtype=torch.long)
-        # Pad to at least size 4 to avoid torch.compile recompiling on sizes 0/1
-        pad_to = max(4, lengths.shape[0])
-        collated_data["lengths"] = F.pad(lengths, (0, pad_to - lengths.shape[0]))
+
+        # Create document_ids: maps each position to its document index, -1 for padding
+        document_ids = torch.repeat_interleave(
+            torch.arange(lengths.shape[0], dtype=torch.long), lengths
+        )
+        document_ids = torch.cat(
+            [
+                document_ids,
+                -1 * torch.ones(max_len - document_ids.shape[0], dtype=torch.long),
+            ]
+        ).unsqueeze(0)
+        # shape: [1, max_len]
+        collated_data["document_ids"] = document_ids
+
         return collated_data
 
     return collate_fn
