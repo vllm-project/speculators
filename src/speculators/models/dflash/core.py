@@ -1,3 +1,4 @@
+import functools
 from typing import ClassVar
 
 import torch
@@ -203,6 +204,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             )
         return self.config.mask_token_id
 
+    @torch.compiler.disable
     def _create_attention_mask(
         self,
         lengths: torch.Tensor,
@@ -304,7 +306,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         # shape: [1, total_seq_len, hidden_size]
 
         mask_position_ids = get_base_indices_for_anchored_blocks(
-            position_ids[:, anchor_positions], self.block_size, input_ids.numel()
+            position_ids[0, anchor_positions], self.block_size, input_ids.numel()
         )
         position_ids = torch.cat([position_ids, mask_position_ids.unsqueeze(0)], dim=1)
         # shape: [1, total_seq_len + num_anchors*block_size]
