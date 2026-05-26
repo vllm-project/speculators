@@ -115,7 +115,8 @@ def load_seen(path: str):
                 obj = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            key = obj.get("uuid") or obj.get("idx")
+            # Match the actual output format: "id" field and "idx" in metadata
+            key = obj.get("id") or obj.get("metadata", {}).get("idx")
             if key is not None:
                 seen.add(str(key))
     return seen
@@ -296,7 +297,8 @@ async def main():
                     continue
 
                 uuid = row.get("uuid")
-                key = str(uuid or index)
+                # Match the ID format used in output: uuid or "sample_{index}"
+                key = str(uuid) if uuid else f"sample_{index}"
                 if key in seen_ids:
                     continue
 
