@@ -531,10 +531,11 @@ def parse_args():
     parser.add_argument(
         "--draft-hidden-act",
         type=str,
-        default=None,
-        help="Activation function for draft decoder layers. Defaults to the verifier's "
-        "activation. Useful for dflash which uses Qwen3 layers that expects 'silu' for "
-        "vLLM deployment.",
+        default="silu",
+        help="Activation function for draft decoder layers. Defaults to 'silu' for "
+        "sigmoid linear unit. Qwen3 layers of dflash expect 'silu' activation for "
+        "vLLM deployment. If another function is desired, set as a string or leave "
+        "as None to automatically fall back to the verifier's activation function.",
     )
     parser.add_argument(
         "--target-layer-ids",
