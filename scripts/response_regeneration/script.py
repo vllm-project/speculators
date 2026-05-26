@@ -115,8 +115,8 @@ def load_seen(path: str):
                 obj = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            # Match the actual output format: "id" field and "idx" in metadata
-            key = obj.get("id") or obj.get("metadata", {}).get("idx")
+            # Match the actual output format: "id" field
+            key = obj.get("id")
             if key is not None:
                 seen.add(str(key))
     return seen
