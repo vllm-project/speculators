@@ -11,6 +11,9 @@ from pathlib import Path
 from textwrap import indent
 
 from loguru import logger
+from PIL import Image
+
+from speculators.data_generation.preprocessing import load_raw_dataset
 
 __all__ = [
     "SCRIPTS_DIR",
@@ -65,9 +68,12 @@ def launch_vllm_server(
     model: str,
     port: int,
     hidden_states_path: str,
+    *,
     max_model_len: int = 513,
     gpu_memory_utilization: float = 0.5,
     target_layer_ids: list[int] | None = None,
+    enforce_eager: bool = False,
+    allowed_local_media_path: str | None = None,
 ) -> subprocess.Popen:
     """Launch a vLLM server configured for hidden-state extraction.
 
@@ -83,6 +89,10 @@ def launch_vllm_server(
     ]
     if target_layer_ids is not None:
         cmd += ["--target-layer-ids"] + [str(lid) for lid in target_layer_ids]
+    if enforce_eager:
+        cmd += ["--enforce-eager"]
+    if allowed_local_media_path is not None:
+        cmd += ["--allowed-local-media-path", allowed_local_media_path]
     cmd += [
         "--",
         "--port",
@@ -135,21 +145,41 @@ def launch_vllm_server_context(*args, **kwargs):
         stop_vllm_server(process)
 
 
+def setup_dummy_sharegpt4v_coco(coco_dir: Path):
+    """Enable ShareGPT4V to be used without downloading the actual COCO dataset."""
+    coco_dir.mkdir(parents=True, exist_ok=True)
+
+    dummy_image = Image.new("RGB", (256, 256))
+    dummy_image_path = coco_dir / "dummy.png"
+    dummy_image.save(dummy_image_path)
+
+    raw_dataset, normalize_fn = load_raw_dataset("sharegpt4v_coco")
+
+    # Use symlinks to avoid copying the image
+    for raw_path in raw_dataset["image"]:
+        image_path = coco_dir / raw_path.removeprefix("coco/")
+
+        if not image_path.exists():
+            image_path.parent.mkdir(parents=True, exist_ok=True)
+            image_path.symlink_to(dummy_image_path)
+
+
 def run_prepare_data(
     model: str,
+    data: str,
     data_path: Path,
     max_samples: int = 50,
     seq_length: int = 512,
     timeout: float | None = None,
 ):
-    """Tokenize ShareGPT data using prepare_data.py."""
+    """Tokenize data using prepare_data.py."""
     cmd = [
         sys.executable,
         str(SCRIPTS_DIR / "prepare_data.py"),
         "--model",
         model,
         "--data",
-        "sharegpt",
+        data,
         "--output",
         str(data_path),
         "--max-samples",
@@ -277,6 +307,10 @@ def run_vllm_engine(
     model_path: str,
     tmp_path: Path,
     prompts: list[list[dict[str, str]]],
+    max_model_len: int = 1024,
+    gpu_memory_utilization: float = 0.8,
+    enforce_eager: bool = False,
+    allowed_local_media_path: str | None = None,
     disable_compile_cache: bool = False,
     max_tokens: int = 50,
     ignore_eos: bool = True,
@@ -289,27 +323,29 @@ def run_vllm_engine(
     run_vllm_file = str(Path(__file__).with_name("run_vllm.py"))
     results_file = str(tmp_path / "results.json")
 
+    sampling_params_dict = {
+        "temperature": 0,
+        "top_p": 0.9,
+        "max_tokens": max_tokens,
+        "ignore_eos": ignore_eos,
+    }
+
+    llm_args_dict = {
+        "model": model_path,
+        "max_model_len": max_model_len,
+        "gpu_memory_utilization": gpu_memory_utilization,
+        "enforce_eager": enforce_eager,
+    }
+    if allowed_local_media_path is not None:
+        llm_args_dict["allowed_local_media_path"] = allowed_local_media_path
+
     command = [
         VLLM_PYTHON,
         run_vllm_file,
         "--sampling-params-args",
-        json.dumps(
-            {
-                "temperature": 0,
-                "top_p": 0.9,
-                "max_tokens": max_tokens,
-                "ignore_eos": ignore_eos,
-            }
-        ),
+        json.dumps(sampling_params_dict),
         "--llm-args",
-        json.dumps(
-            {
-                "model": model_path,
-                "max_model_len": 1024,
-                "gpu_memory_utilization": 0.8,
-                "enforce_eager": True,
-            }
-        ),
+        json.dumps(llm_args_dict),
         "--prompts",
         json.dumps(prompts),
         "--results-file",
