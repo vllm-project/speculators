@@ -10,6 +10,7 @@ import pytest
 import torch
 from datasets import Dataset as HFDataset
 from PIL import Image
+from transformers import AutoTokenizer
 
 from speculators.data_generation.preprocessing import (
     _adapt_conv_for_hf,
@@ -1225,7 +1226,7 @@ def test_preprocess_batch_with_tools():
     tools must be a list of JSON strings (one per conversation in the batch),
     matching the HuggingFace datasets batched-column convention.
     """
-    tokenizer = AutoTokenizer.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(TEXT_MODEL_REPO, trust_remote_code=True)
 
     if not hasattr(tokenizer, "apply_chat_template") or tokenizer.chat_template is None:
         pytest.skip("Tokenizer does not support chat templates")
@@ -1295,7 +1296,7 @@ def test_preprocess_batch_with_invalid_tools_json():
 
     The pipeline should warn and continue without tools rather than raising.
     """
-    tokenizer = AutoTokenizer.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(TEXT_MODEL_REPO, trust_remote_code=True)
 
     if not hasattr(tokenizer, "apply_chat_template") or tokenizer.chat_template is None:
         pytest.skip("Tokenizer does not support chat templates")
@@ -1326,7 +1327,7 @@ def test_preprocess_batch_with_invalid_tools_json():
 @pytest.mark.sanity
 def test_preprocess_batch_tools_with_hf_assistant_mask():
     """Test that tools are forwarded when using the HF assistant token mask path."""
-    tokenizer = AutoTokenizer.from_pretrained(TEST_MODEL_REPO, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(TEXT_MODEL_REPO, trust_remote_code=True)
 
     if not hasattr(tokenizer, "apply_chat_template") or tokenizer.chat_template is None:
         pytest.skip("Tokenizer does not support chat templates")
