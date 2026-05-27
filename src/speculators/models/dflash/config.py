@@ -1,5 +1,6 @@
 from typing import Any, Literal
 
+import torch
 from pydantic import Field, field_serializer, field_validator
 from transformers import AutoConfig, PretrainedConfig
 from transformers.models.qwen3.modeling_qwen3 import (
@@ -53,6 +54,9 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
     :param transformer_layer_config: Configuration for the transformer decoder layer
     :param draft_vocab_size: Size of draft model vocabulary for speculation
     """
+
+    def __init__(self, **kwargs: Any):
+        super().__init__(**kwargs)
 
     speculators_model_type: Literal["dflash"] = "dflash"
     architectures: list[str] = Field(
@@ -131,3 +135,6 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
     def target_vocab_size(self) -> int:
         """Get target vocabulary size from transformer config."""
         return self.transformer_layer_config.vocab_size
+
+
+DFlashSpeculatorConfig.model_rebuild(force=True, _types_namespace={"torch": torch})

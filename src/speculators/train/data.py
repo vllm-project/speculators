@@ -159,13 +159,30 @@ def _has_multimodal_payload(data: dict[str, Any]) -> bool:
 
 
 def _make_rope_index_fn(verifier_name_or_path: str):
-    """Build a callable producing 3D MRoPE position ids for Qwen3-Omni.
+    """Build a callable producing 3D MRoPE position ids for multimodal verifiers.
 
-    Returns None (and silently falls back to 1D arange in
+    Supports two config layouts:
+
+    1. **Qwen3-Omni Thinker** (nested ``thinker_config``): the verifier root
+       config exposes ``thinker_config.{vision_config, text_config,
+       image_token_id, video_token_id, audio_*}``. We bind
+       ``Qwen3OmniMoeThinkerForConditionalGeneration.get_rope_index`` to a
+       dummy namespace matching the required ``self`` attributes.
+
+    2. **Qwen3.5 / Qwen3.6 MoE** (flat layout): the verifier root config
+       exposes ``{text_config, vision_config, image_token_id, video_token_id,
+       vision_start_token_id}`` at the top level and has **no**
+       ``thinker_config``. We bind ``Qwen3_5MoeModel.get_rope_index`` — whose
+       signature differs (takes ``mm_token_type_ids`` instead of the
+       audio-related kwargs) — and wrap it in an adapter so the caller can
+       keep using the Qwen3-Omni-style kwargs.
+
+    Returns ``None`` (and silently falls back to 1D arange in
     ``BaseDataset._build_position_ids``) when:
       * ``AutoConfig.from_pretrained`` fails (bad path, missing model, etc.)
-      * The verifier config has no ``thinker_config`` (text-only verifier)
-      * Transformers does not expose the Qwen3-Omni thinker modeling class
+      * The verifier config carries no recognized multimodal layout
+        (text-only verifier)
+      * Transformers does not expose the matching modeling class
 
     This keeps text-only training unaffected by multimodal-specific imports.
     """
@@ -176,10 +193,30 @@ def _make_rope_index_fn(verifier_name_or_path: str):
     except Exception:  # noqa: BLE001
         return None
 
+    # --- Dispatch on config layout ------------------------------------------
     thinker_config = getattr(verifier_root_config, "thinker_config", None)
-    if thinker_config is None:
-        return None
+    if thinker_config is not None:
+        return _make_rope_index_fn_qwen3_omni(thinker_config)
 
+    # Flat multimodal layout (Qwen3.5 / Qwen3.6 MoE): requires BOTH text_config
+    # and vision_config at the top level, plus an image_token_id. We don't
+    # accept a bare text_config because pure-text decoder-only Qwen configs
+    # (e.g. Qwen3ForCausalLM) have text_config too but no MRoPE indexing.
+    top_vision_config = getattr(verifier_root_config, "vision_config", None)
+    top_text_config = getattr(verifier_root_config, "text_config", None)
+    top_image_token_id = getattr(verifier_root_config, "image_token_id", None)
+    if (
+        top_vision_config is not None
+        and top_text_config is not None
+        and top_image_token_id is not None
+    ):
+        return _make_rope_index_fn_qwen3_5_moe(verifier_root_config)
+
+    return None
+
+
+def _make_rope_index_fn_qwen3_omni(thinker_config):
+    """Return a bound ``get_rope_index`` for Qwen3-Omni Thinker verifiers."""
     try:
         from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
             Qwen3OmniMoeThinkerForConditionalGeneration,
@@ -212,6 +249,74 @@ def _make_rope_index_fn(verifier_name_or_path: str):
         Qwen3OmniMoeThinkerForConditionalGeneration.get_rope_index,
         dummy,
     )
+
+
+def _make_rope_index_fn_qwen3_5_moe(root_config):
+    """Return a Qwen3-Omni-shaped ``get_rope_index`` callable for Qwen3.5/3.6 MoE.
+
+    ``Qwen3_5MoeModel.get_rope_index`` has signature
+    ``(input_ids, mm_token_type_ids, image_grid_thw, video_grid_thw,
+    attention_mask)`` — it takes a ``mm_token_type_ids`` tensor marking each
+    token as text (0), image (1), or video (2). The rest of the pipeline
+    (``_build_position_ids``) still emits Qwen3-Omni-style kwargs
+    (``use_audio_in_video``, ``audio_seqlens``, ``second_per_grids``). We
+    return a thin adapter that builds ``mm_token_type_ids`` from ``input_ids``
+    using top-level ``{image_token_id, video_token_id}`` and ignores the
+    unused audio kwargs, so callers never need to know which verifier family
+    they have.
+    """
+    try:
+        from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import (
+            Qwen3_5MoeModel,
+        )
+    except ImportError:
+        return None
+
+    image_token_id = getattr(root_config, "image_token_id", None)
+    video_token_id = getattr(root_config, "video_token_id", None)
+    vision_config = getattr(root_config, "vision_config", None)
+
+    dummy = SimpleNamespace(
+        config=SimpleNamespace(
+            vision_config=vision_config,
+            image_token_id=image_token_id,
+            video_token_id=video_token_id,
+        ),
+    )
+    dummy.get_vision_position_ids = MethodType(
+        Qwen3_5MoeModel.get_vision_position_ids, dummy
+    )
+    raw_get_rope_index = MethodType(Qwen3_5MoeModel.get_rope_index, dummy)
+
+    def adapter(
+        input_ids,
+        image_grid_thw=None,
+        video_grid_thw=None,
+        attention_mask=None,
+        **_ignored,
+    ):
+        # Build mm_token_type_ids from input_ids. Shape must match input_ids.
+        ids = input_ids
+        if image_token_id is not None:
+            image_mask = ids == image_token_id
+        else:
+            image_mask = torch.zeros_like(ids, dtype=torch.bool)
+        if video_token_id is not None:
+            video_mask = ids == video_token_id
+        else:
+            video_mask = torch.zeros_like(ids, dtype=torch.bool)
+        mm_token_type_ids = torch.zeros_like(ids, dtype=torch.int32)
+        mm_token_type_ids[image_mask] = 1
+        mm_token_type_ids[video_mask] = 2
+        return raw_get_rope_index(
+            input_ids=ids,
+            mm_token_type_ids=mm_token_type_ids,
+            image_grid_thw=image_grid_thw,
+            video_grid_thw=video_grid_thw,
+            attention_mask=attention_mask,
+        )
+
+    return adapter
 
 
 class BaseDataset(Dataset):
@@ -334,6 +439,15 @@ class ArrowDataset(BaseDataset):
         """
         self.datapath = Path(datapath)
         self.data = load_from_disk(datapath)
+        # ``prepare_data.py`` persists ``set_format(type="torch",
+        # columns=["input_ids","loss_mask","seq_len"])`` into state.json via
+        # save_to_disk. That silently hides the multimodal metadata columns
+        # (``mm_file``, ``messages_json``, ``use_audio_in_video``) on every
+        # subsequent ``load_from_disk`` call, causing ``row.get("mm_file", "")``
+        # below to return ``""`` and the whole sidecar + 3D MRoPE branch to be
+        # skipped. Reset the format so every stored column stays accessible.
+        # ``with_format(None)`` is an O(1) metadata flip — no tensors copied.
+        self.data = self.data.with_format(None)
         self.start_file_idx = 0
         if split_ratio == 1.0:
             pass

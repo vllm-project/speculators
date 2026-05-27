@@ -29,7 +29,7 @@ Output record shape::
              "min_pixels": 65536, "max_pixels": 1048576},
             {"type": "text",  "text":  "<prompt>"}
         ]},
-        {"from": "gpt",   "value": "<caption>"},
+        {"from": "gpt",   "value": "<raw_result_cn|raw_result_en>"},
       ]
     }
 """
@@ -73,13 +73,13 @@ def main():
             # (datasets.map spawns isolated processes) still resolve correctly.
             img_abs = str(Path(img_path).resolve())
 
-            prompts = []
-            if args.lang in ("cn", "both"):
-                prompts.append(row["prompt_cn"])
-            if args.lang in ("en", "both"):
-                prompts.append(row["prompt_en"])
+            requests = []
+            if args.lang in ("cn", "both") and row.get("raw_result_cn", "").strip():
+                requests.append(("cn", row["prompt_cn"], row["raw_result_cn"]))
+            if args.lang in ("en", "both") and row.get("raw_result_en", "").strip():
+                requests.append(("en", row["prompt_en"], row["raw_result_en"]))
 
-            for idx, prompt_text in enumerate(prompts):
+            for idx, (_lang, prompt_text, assistant_value) in enumerate(requests):
                 # Structured content list: required to trip the multimodal
                 # branch in _preprocess_batch AND to carry per-sample
                 # min/max-pixels through to qwen_vl_utils.fetch_image.
@@ -102,7 +102,7 @@ def main():
                         {"from": "human", "value": user_content},
                         {
                             "from": "gpt",
-                            "value": row.get("caption", row.get("hy_ocr_info", "")),
+                            "value": assistant_value,
                         },
                     ],
                 }

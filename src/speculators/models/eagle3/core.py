@@ -19,6 +19,201 @@ from speculators.proposals.greedy import GreedyTokenProposalConfig
 from speculators.utils.loading import load_model_layers
 
 
+def _select_rotary_emb_class(
+    tl_config: PretrainedConfig, default_cls: type,
+) -> type:
+    """Pick the rotary embedding class based on the draft config.
+
+    When the draft ``transformer_layer_config`` carries ``rope_parameters``
+    with ``mrope_section`` (inherited from a Qwen3-Omni / Qwen3-VL style
+    multimodal verifier), we must use the MRoPE rotary so the returned
+    cos/sin encode the 3D T/H/W position channels via the interleaved
+    section split. Standard ``LlamaRotaryEmbedding`` / ``Qwen3RotaryEmbedding``
+    would silently collapse 3D ``position_ids`` back to 1D and train the
+    drafter with text-only rotary, producing a train/inference mismatch.
+
+    We also honor ``partial_rotary_factor``: upstream
+    ``Qwen3OmniMoeThinkerTextRotaryEmbedding`` hard-codes
+    ``dim = head_dim`` in ``compute_default_rope_parameters`` (i.e. it rotates
+    every head dim, ignoring ``partial_rotary_factor``). vLLM's
+    ``MRotaryEmbeddingInterleaved`` respects ``partial_rotary_factor`` and
+    rotates only the first ``rotary_dim = head_dim * partial_rotary_factor``
+    dims of each head. Training under the former while serving under the
+    latter is the exact mismatch that blew up Qwen3.6 Eagle3-v4 acceptance
+    (cos-sim of draft logits dropped from >0.99 to ~0.93, ~17pp loss on
+    pos0 acceptance). We subclass the Qwen3-Omni rotary so ``inv_freq``
+    spans ``rotary_dim // 2`` entries and the returned cos/sin are identity-
+    padded on the trailing ``head_dim - rotary_dim`` channels — making HF's
+    ``apply_rotary_pos_emb(q, k, cos, sin)`` a no-op there, byte-matching
+    vLLM's "rotate first ``rotary_dim``, pass through the rest" semantics.
+
+    Falls back to ``default_cls`` (architecture default) for any config
+    without ``mrope_section`` so text-only training is unaffected and no
+    new imports are pulled in.
+    """
+    rope_params = getattr(tl_config, "rope_parameters", None)
+    has_mrope = (
+        isinstance(rope_params, dict) and rope_params.get("mrope_section") is not None
+    )
+    if not has_mrope:
+        return default_cls
+
+    try:
+        from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (  # noqa: PLC0415
+            Qwen3OmniMoeThinkerTextRotaryEmbedding,
+        )
+    except ImportError:
+        warnings.warn(
+            "Draft config carries rope_parameters.mrope_section but the installed "
+            "transformers does not expose Qwen3OmniMoeThinkerTextRotaryEmbedding. "
+            "Falling back to the architecture's default rotary embedding, which "
+            "will IGNORE the MRoPE section and produce a train/inference "
+            "mismatch for multimodal inputs.",
+            UserWarning,
+            stacklevel=2,
+        )
+        return default_cls
+
+    partial_rotary_factor = float(rope_params.get("partial_rotary_factor", 1.0))
+    if partial_rotary_factor >= 1.0:
+        # Whole head is rotated; upstream class already does the right thing
+        # and — importantly — HF's rotate_half-based apply_rotary_pos_emb
+        # pairs channels (i, i+head_dim/2) identically to vLLM's neox
+        # partial rotation when rotary_dim == head_dim. This is the ONLY
+        # regime where the trainer and vLLM forward are bit-equivalent for
+        # MRoPE drafts; ``scripts/train.py::--draft-mrope-full-head-hack``
+        # forces verifier configs with partial_rotary_factor<1 into this
+        # regime at config-construction time.
+        return Qwen3OmniMoeThinkerTextRotaryEmbedding
+    # WARNING: PartialMRoPE below shrinks inv_freq to rotary_dim//2 and pads
+    # cos/sin back to head_dim with [real | ones | real | ones], but HF's
+    # rotate_half pairs channels (i, i+head_dim/2) while vLLM's neox-partial
+    # rotation pairs (i, i+rotary_dim/2). These pairings DIFFER whenever
+    # rotary_dim < head_dim, so PartialMRoPE is NOT bit-equivalent to vLLM
+    # at inference time — and empirically (Eagle3-v5 experiments) drafts
+    # trained with PartialMRoPE lose ~10pp acceptance vs the same weights
+    # served under a rescaled partial=1.0 config hack. Prefer training with
+    # --draft-mrope-full-head-hack (default) instead of relying on
+    # PartialMRoPE. This branch is preserved only for the future Option 1
+    # rewrite (vLLM-compatible partial rotation inside the trainer's
+    # attention), at which point the pairing issue will be resolved upstream.
+    warnings.warn(
+        "Eagle3 draft config has partial_rotary_factor="
+        f"{partial_rotary_factor} < 1.0. PartialMRoPE will be used, but it "
+        "does NOT produce vLLM-bit-equivalent rotation (HF's rotate_half "
+        "pairs (i,i+head_dim/2) whereas vLLM's neox-partial pairs "
+        "(i,i+rotary_dim/2) — these differ when rotary_dim<head_dim). "
+        "This causes a silent train/inference mismatch at serving time. "
+        "Recommended fix: retrain with "
+        "scripts/train.py --draft-mrope-full-head-hack (default ON), "
+        "which rescales mrope_section by 1/partial_rotary_factor and pins "
+        "partial_rotary_factor=1.0 so HF and vLLM pairings coincide.",
+        UserWarning,
+        stacklevel=2,
+    )
+    return _make_partial_mrope_rotary_cls(
+        Qwen3OmniMoeThinkerTextRotaryEmbedding, partial_rotary_factor
+    )
+
+
+def _make_partial_mrope_rotary_cls(
+    base_cls: type, partial_rotary_factor: float
+) -> type:
+    """Return a subclass of the Qwen3-Omni MRoPE rotary that respects
+    ``partial_rotary_factor``.
+
+    Differences from the base class:
+      * ``compute_default_rope_parameters`` uses ``dim = int(head_dim *
+        partial_rotary_factor)`` instead of ``head_dim``. This shrinks
+        ``inv_freq`` to ``rotary_dim // 2`` entries.
+      * ``forward`` pads the returned cos/sin back out to ``head_dim`` with
+        ``cos=1`` and ``sin=0`` in the trailing channels, following HF's
+        ``cat((freqs, freqs), -1)`` layout so that ``apply_rotary_pos_emb``
+        leaves the trailing ``head_dim - rotary_dim`` channels untouched.
+
+    The ``mrope_section`` assertion ``sum(mrope_section) == rotary_dim // 2``
+    is implicit in ``apply_interleaved_mrope`` (it only writes freq indices
+    up to ``mrope_section[i] * 3``); the vLLM side enforces it explicitly.
+    Keep training and export configs consistent: ``sum(mrope_section)`` must
+    equal ``int(head_dim * partial_rotary_factor) // 2``.
+    """
+
+    class PartialMRoPE(base_cls):  # type: ignore[misc,valid-type]
+        _partial_rotary_factor: ClassVar[float] = partial_rotary_factor
+
+        @staticmethod
+        def compute_default_rope_parameters(
+            config=None, device=None, seq_len=None,
+        ):
+            base = config.rope_parameters["rope_theta"]
+            head_dim = (
+                getattr(config, "head_dim", None)
+                or config.hidden_size // config.num_attention_heads
+            )
+            rotary_dim = int(head_dim * PartialMRoPE._partial_rotary_factor)
+            # Ensure rotary_dim is even so cat((freqs, freqs), -1) yields an
+            # even-length block suitable for rotate_half-style pairing.
+            rotary_dim = (rotary_dim // 2) * 2
+            attention_factor = 1.0
+            inv_freq = 1.0 / (
+                base
+                ** (
+                    torch.arange(0, rotary_dim, 2, dtype=torch.int64).to(
+                        device=device, dtype=torch.float
+                    )
+                    / rotary_dim
+                )
+            )
+            return inv_freq, attention_factor
+
+        def __init__(self, config, device=None):
+            super().__init__(config=config, device=device)
+            head_dim = (
+                getattr(config, "head_dim", None)
+                or config.hidden_size // config.num_attention_heads
+            )
+            rotary_dim = int(head_dim * self._partial_rotary_factor)
+            rotary_dim = (rotary_dim // 2) * 2
+            # Persisted so ``forward`` can size the identity-padding without
+            # re-reading config.
+            self._head_dim = head_dim
+            self._rotary_dim = rotary_dim
+            self._pad_half = (head_dim - rotary_dim) // 2
+
+        def forward(self, x, position_ids):
+            cos, sin = super().forward(x, position_ids)
+            # Upstream returns cos/sin with last dim == rotary_dim (because
+            # inv_freq was built on rotary_dim). Identity-pad so consumers
+            # that expect head_dim-wide cos/sin still work.
+            if cos.shape[-1] == self._head_dim:
+                return cos, sin  # nothing to pad
+            pad_shape = (*cos.shape[:-1], self._pad_half)
+            pad_cos = torch.ones(pad_shape, dtype=cos.dtype, device=cos.device)
+            pad_sin = torch.zeros(pad_shape, dtype=sin.dtype, device=sin.device)
+            # HF MRoPE layout: emb = cat((freqs, freqs), -1) — two repeats of
+            # the rotary block. We mirror that structure when padding so that
+            # rotate_half's pairing (i, i + head_dim//2) keeps real<->real
+            # inside the rotary region and pad<->pad outside it:
+            #     [rot_first_half | pad | rot_second_half | pad]
+            # where rot_first_half == rot_second_half == cos_rotary.
+            half = cos.shape[-1] // 2
+            cos_first, cos_second = cos[..., :half], cos[..., half:]
+            sin_first, sin_second = sin[..., :half], sin[..., half:]
+            cos_padded = torch.cat(
+                [cos_first, pad_cos, cos_second, pad_cos], dim=-1
+            )
+            sin_padded = torch.cat(
+                [sin_first, pad_sin, sin_second, pad_sin], dim=-1
+            )
+            return cos_padded, sin_padded
+
+    PartialMRoPE.__name__ = (
+        f"{base_cls.__name__}Partial{int(partial_rotary_factor * 100):03d}"
+    )
+    PartialMRoPE.__qualname__ = PartialMRoPE.__name__
+    return PartialMRoPE
+
+
 def align_for_step(
     logits: torch.Tensor,  # shape: [1, total_seq_len, draft_vocab_size]
     targets: torch.Tensor,  # shape: [1, total_seq_len, draft_vocab_size]
@@ -207,7 +402,10 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
         # Create a modified config for the rotary embedding to use 2x the hidden size
         modified_tl_config = copy.copy(config.transformer_layer_config)
         modified_tl_config.hidden_size *= 2
-        self.rotary_emb = self._model_definitions.rotary_emb_class(modified_tl_config)
+        rotary_cls = _select_rotary_emb_class(
+            modified_tl_config, self._model_definitions.rotary_emb_class
+        )
+        self.rotary_emb = rotary_cls(modified_tl_config)
 
         # LAYER NORMS
         norm_class = self._model_definitions.norm_class

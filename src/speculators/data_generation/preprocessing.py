@@ -203,9 +203,15 @@ def _build_multimodal_loss_mask(
     placeholder_token_ids: tuple[int, ...],
 ) -> torch.Tensor:
     loss_mask = base_loss_mask.to(dtype=torch.long).clone()
-    for token_id in placeholder_token_ids:
-        if token_id >= 0:
-            loss_mask[input_ids == token_id] = 0
+    valid_ids = [tid for tid in placeholder_token_ids if tid >= 0]
+    if not valid_ids:
+        return loss_mask
+    placeholder_tensor = torch.as_tensor(
+        valid_ids, dtype=input_ids.dtype, device=input_ids.device
+    )
+    # Vectorized mask of every placeholder-token position
+    is_placeholder = torch.isin(input_ids, placeholder_tensor)
+    loss_mask.masked_fill_(is_placeholder, 0)
     return loss_mask
 
 
@@ -586,6 +592,7 @@ def _loss_mask_from_ids_fallback(
     normalized_conv: list[dict[str, Any]],
     tokenizer: PreTrainedTokenizerBase,
     assistant_pattern: str | Pattern[str],
+    placeholder_token_ids: tuple[int, ...] = (),
 ) -> torch.Tensor:
     """Best-effort assistant-token mask for multimodal samples when the
     processor does not natively emit ``assistant_masks``.
@@ -593,13 +600,14 @@ def _loss_mask_from_ids_fallback(
     Strategy: re-render the conversation through the **tokenizer** chat template
     (text-only), grab character offsets via
     ``tokenizer(..., return_offsets_mapping=True)``, locate assistant spans via
-    ``assistant_pattern``, then **left-align** the resulting mask to
-    ``input_ids`` using the lengths from the processor path. Any length
-    mismatch is resolved by truncating / zero-padding to ``input_ids.shape[0]``.
+    ``assistant_pattern``, then **align** the resulting mask to ``input_ids``
+    by inserting zeros at every position occupied by a media placeholder token
+    (image/video/audio pad tokens) in the processor ``input_ids``.  This
+    corrects the positional shift introduced by the large image-token blocks
+    that the processor inserts but the tokenizer does not.
 
-    This is inherently approximate (processor vs tokenizer may tokenize media
-    placeholders slightly differently), but is strictly better than the
-    previous behaviour of raising and dropping the whole sample.
+    Any residual length mismatch after placeholder insertion is resolved by
+    truncating / zero-padding to ``input_ids.shape[0]``.
     """
     formatted_raw_any = tokenizer.apply_chat_template(
         normalized_conv,
@@ -618,6 +626,31 @@ def _loss_mask_from_ids_fallback(
     ).to(torch.long)
 
     target_len = int(input_ids.shape[0])
+
+    # --- Align mask_text to processor input_ids by inserting 0s at placeholder
+    # positions.  The processor expands each media token into a long run of
+    # placeholder ids (e.g. image_pad × N) that the tokenizer never sees.
+    # Without this correction the assistant-token 1s land on placeholder
+    # positions and are subsequently wiped by _build_multimodal_loss_mask.
+    if placeholder_token_ids:
+        placeholder_tensor = torch.as_tensor(
+            placeholder_token_ids, dtype=input_ids.dtype, device=input_ids.device
+        )
+        # Vectorized placeholder detection (single C++ pass via torch.isin).
+        is_placeholder = torch.isin(input_ids, placeholder_tensor)
+
+        if bool(is_placeholder.any()):
+            aligned = torch.zeros(target_len, dtype=torch.long)
+            # `.nonzero()` is a single vectorized kernel; slicing it costs O(1).
+            text_positions = (~is_placeholder).nonzero(as_tuple=True)[0]
+            copy_len = min(int(text_positions.shape[0]), int(mask_text.shape[0]))
+            if copy_len > 0:
+                aligned.index_copy_(
+                    0, text_positions[:copy_len], mask_text[:copy_len]
+                )
+            return aligned
+
+    # Fallback: simple left-align (no placeholders or none found in input_ids)
     if mask_text.shape[0] == target_len:
         return mask_text
     if mask_text.shape[0] > target_len:
@@ -656,16 +689,24 @@ def _preprocess_batch(
         return results
 
     for idx, conv in enumerate(conversations):
+        sample_idx = indices[idx]
         if not conv or not isinstance(conv, list):
+            log.warning(
+                f"[DROP sample_idx={sample_idx}] reason=empty_or_non_list_conversation "
+                f"type={type(conv).__name__}"
+            )
             continue
 
         # Normalize to standard format with optional turn dropout
         normalized_conv = _normalize_conversation(conv, turn_dropout)
         if not normalized_conv:
+            log.warning(
+                f"[DROP sample_idx={sample_idx}] reason=normalized_conversation_empty "
+                f"raw_turns={len(conv)}"
+            )
             continue
 
         is_multimodal = _is_multimodal_batch({"conversations": [normalized_conv]})
-        sample_idx = indices[idx]
         messages_json = _serialize_messages(normalized_conv) if is_multimodal else ""
         mm_file = ""
         use_audio_in_video = int(_conversation_use_audio_in_video(normalized_conv))
@@ -756,6 +797,7 @@ def _preprocess_batch(
                             normalized_conv,
                             tokenizer,
                             assistant_pattern,
+                            placeholder_token_ids,
                         )
 
                 loss_mask = _build_multimodal_loss_mask(
@@ -822,12 +864,23 @@ def _preprocess_batch(
             # exact media-token parity with vLLM hidden-state generation. Drop
             # overlength samples instead of truncating tensors/sidecars.
             if is_multimodal and len(input_ids) > max_length:
+                log.warning(
+                    f"[DROP sample_idx={sample_idx}] reason=overlength_multimodal "
+                    f"len(input_ids)={len(input_ids)} max_length={max_length}"
+                )
                 continue
 
             # Filtering samples out with too few valid tokens
             if minimum_valid_tokens is not None:
                 num_valid_tokens = int(loss_mask.sum().item())
                 if num_valid_tokens < minimum_valid_tokens:
+                    log.warning(
+                        f"[DROP sample_idx={sample_idx}] reason=too_few_valid_tokens "
+                        f"num_valid_tokens={num_valid_tokens} "
+                        f"minimum_valid_tokens={minimum_valid_tokens} "
+                        f"len(input_ids)={len(input_ids)} "
+                        f"is_multimodal={is_multimodal}"
+                    )
                     continue
 
             if processor is not None and is_multimodal:
@@ -848,7 +901,8 @@ def _preprocess_batch(
 
         except (TypeError, ValueError, KeyError, AttributeError, RuntimeError) as e:
             log.error(
-                f"Failed to process conversation {idx} "
+                f"[DROP sample_idx={sample_idx}] reason=exception "
+                f"exc_type={type(e).__name__} "
                 f"(assistant_pattern={assistant_pattern is not None}): {e}"
             )
             continue
@@ -919,7 +973,7 @@ def build_eagle3_dataset(
         batched=True,
         with_indices=True,
         num_proc=num_proc,
-        batch_size=1000,
+        batch_size=400,
         remove_columns=original_cols,
         keep_in_memory=True,  # skip caching
     )

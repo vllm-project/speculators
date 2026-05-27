@@ -38,9 +38,18 @@ from speculators.data_generation.preprocessing import (  # noqa: E402
     load_and_preprocess_dataset,
 )
 
+# Configure root logger so WARNING / ERROR emitted from worker processes
+# inside `speculators.data_generation.preprocessing` are visible on stderr.
+# Without this, silent-drop diagnostics such as "[DROP sample_idx=...]" are
+# swallowed and the user only sees a mysterious sample-count mismatch.
 logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    force=True,
 )
+# Make sure the preprocessing module's logger propagates at WARNING or above
+# regardless of PipelineLogger defaults.
+logging.getLogger("speculators.data_generation.preprocessing").setLevel(logging.INFO)
 log = PipelineLogger(__name__)
 
 
@@ -191,6 +200,13 @@ def main():
         multimodal_output_dir=output if args.multimodal else None,
     )
 
+    log.info(f"Final preprocessed dataset size: {len(dataset)} samples")
+    log.info(
+        "If this is lower than the raw input size, check the "
+        "'[DROP sample_idx=...]' warnings above for the exact reason "
+        "(overlength_multimodal / too_few_valid_tokens / exception / "
+        "empty_or_non_list_conversation)."
+    )
     log.info("Done preparing data")
     log.section(f"Writing dataset to {args.output}")
     dataset.save_to_disk(args.output)

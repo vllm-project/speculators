@@ -11,6 +11,8 @@ from transformers import LlamaConfig, PretrainedConfig
 from transformers.models.auto.configuration_auto import AutoConfig
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
+import json
+
 from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_REQUEST_TIMEOUT,
@@ -42,6 +44,96 @@ from speculators.train.vocab_mapping import (
 
 logger = logging.getLogger(__name__)
 
+
+def _patch_speculator_configs_for_transformers5() -> None:
+    """Compat shim for transformers>=5.x.
+
+    Starting with transformers 5.x, ``PreTrainedConfig`` became a
+    ``@strict @dataclass`` whose auto-generated ``__init__`` performs
+    ``setattr(self, f.name, f.default)`` for every field *before* any
+    user/pydantic logic runs. Because speculators' ``SpeculatorModelConfig``
+    multiple-inherits from both ``pydantic.BaseModel`` and
+    ``PreTrainedConfig``, those ``setattr`` calls hit pydantic's
+    ``__setattr__`` before pydantic's ``__init__`` has created
+    ``__pydantic_fields_set__``, raising ``AttributeError``.
+
+    We replace the init on every ``SpeculatorModelConfig`` subclass with a
+    pydantic-first init that:
+      1) pre-seeds pydantic's private slots so any incidental ``setattr``
+         is safe,
+      2) runs ``pydantic.BaseModel.__init__`` to validate & populate fields,
+      3) forwards all validated field values back into kwargs,
+      4) calls HF's ``__post_init__`` on the leftover kwargs to preserve
+         ``_name_or_path``, ``_attn_implementation_internal``, ``num_labels``
+         behavior, etc. — *without* the field-reset loop that clobbers
+         pydantic state,
+      5) stamps ``transformers_version``, matching the original
+         ``SpeculatorModelConfig.__init__`` behavior.
+    """
+    from importlib.metadata import version as _pkg_version
+
+    import pydantic
+    from speculators import SpeculatorModelConfig
+
+    def patched_init(self, **kwargs):
+        # 1) Seed pydantic private slots BEFORE any setattr can fire.
+        object.__setattr__(self, "__pydantic_fields_set__", set())
+        object.__setattr__(self, "__pydantic_extra__", {})
+        object.__setattr__(self, "__pydantic_private__", None)
+
+        cls = type(self)
+        model_fields = cls.model_fields
+
+        # 2) Pydantic validation + field population (only recognized fields).
+        pydantic.BaseModel.__init__(
+            self, **{k: v for k, v in kwargs.items() if k in model_fields}
+        )
+
+        # 3) Mirror SpeculatorModelConfig.__init__: push validated values back
+        #    so __post_init__ sees the canonical versions.
+        for field in model_fields:
+            kwargs[field] = getattr(self, field)
+
+        # 4) Run HF PreTrainedConfig.__post_init__ on leftover kwargs only.
+        leftover = {k: v for k, v in kwargs.items() if k not in model_fields}
+        post_init = getattr(self, "__post_init__", None)
+        if callable(post_init):
+            post_init(**leftover)
+
+        # 5) Match original behavior: always stamp transformers version.
+        self.transformers_version = _pkg_version("transformers")
+
+    # Apply to base + every already-registered subclass.
+    targets = {SpeculatorModelConfig}
+
+    def _collect_subclasses(klass):
+        for sub in klass.__subclasses__():
+            if sub in targets:
+                continue
+            targets.add(sub)
+            _collect_subclasses(sub)
+
+    _collect_subclasses(SpeculatorModelConfig)
+
+    # Force pydantic schema rebuild with torch in the type namespace so that
+    # field annotations referencing torch.Tensor (e.g. in Eagle3/DFlash
+    # configs) resolve properly. Without this, pydantic keeps a mock
+    # validator that raises "class-not-fully-defined" when we drive
+    # BaseModel.__init__ directly inside the patched init.
+    import torch as _torch  # noqa: WPS433
+
+    for cls in targets:
+        try:
+            cls.model_rebuild(force=True, _types_namespace={"torch": _torch})
+        except Exception as err:  # noqa: BLE001
+            logger.debug("model_rebuild skipped for %s: %s", cls.__name__, err)
+
+    for cls in targets:
+        cls.__init__ = patched_init
+
+
+_patch_speculator_configs_for_transformers5()
+
 DRAFT_ARCH_CONFIGS: dict[str, type] = {
     "llama": LlamaConfig,
     "qwen3": Qwen3Config,
@@ -71,19 +163,39 @@ def unwrap_verifier_text_config(verifier_config: PretrainedConfig) -> Pretrained
 
 
 def get_default_draft_intermediate_size(verifier_config: PretrainedConfig) -> int:
-    """Map verifier FFN width to a dense draft FFN width."""
-    is_moe_text = getattr(verifier_config, "model_type", "").endswith(
-        "_moe_text"
-    ) or hasattr(verifier_config, "moe_intermediate_size")
-    if is_moe_text:
-        moe_ffn = getattr(
-            verifier_config,
-            "moe_intermediate_size",
-            verifier_config.intermediate_size,
-        )
-        experts_per_tok = getattr(verifier_config, "num_experts_per_tok", 1)
-        return int(moe_ffn * experts_per_tok)
-    return int(verifier_config.intermediate_size)
+    """Map verifier FFN width to a dense draft FFN width.
+
+    Handles three layouts:
+      1) Dense configs (Llama / Qwen3 / Qwen3-text-only): use ``intermediate_size``.
+      2) Classic MoE-text configs that still expose ``intermediate_size`` alongside
+         ``moe_intermediate_size`` (e.g. some Qwen2/3 MoE variants): approximate
+         the per-token active FFN as ``moe_intermediate_size * num_experts_per_tok``.
+      3) Qwen3.5-MoE-style text configs that DELIBERATELY omit ``intermediate_size``
+         and only expose ``moe_intermediate_size`` (+ ``shared_expert_intermediate_size``):
+         approximate as ``moe_intermediate_size * num_experts_per_tok``
+         plus the (always-on) shared-expert width when present.
+    """
+    # Detect MoE text layout via presence of moe_intermediate_size (more reliable
+    # than model_type suffix matching, which misses Qwen3_5MoeTextConfig).
+    moe_ffn = getattr(verifier_config, "moe_intermediate_size", None)
+    if moe_ffn is not None:
+        experts_per_tok = int(getattr(verifier_config, "num_experts_per_tok", 1))
+        active = int(moe_ffn) * max(experts_per_tok, 1)
+        shared_ffn = getattr(verifier_config, "shared_expert_intermediate_size", None)
+        if shared_ffn is not None:
+            active += int(shared_ffn)
+        return active
+
+    dense_ffn = getattr(verifier_config, "intermediate_size", None)
+    if dense_ffn is not None:
+        return int(dense_ffn)
+
+    raise AttributeError(
+        f"Cannot infer draft intermediate_size from verifier config "
+        f"{type(verifier_config).__name__}: neither 'intermediate_size' nor "
+        f"'moe_intermediate_size' is present. Please pass "
+        f"--draft-intermediate-size explicitly."
+    )
 
 
 def setup_dataloader(
@@ -131,6 +243,69 @@ def create_transformer_layer_config(
     num_layers: int,
     draft_arch: str = "llama",
     draft_intermediate_size: int | None = None,
+    # --- NEW: optional drafter head-geometry overrides --------------------
+    # Rationale: vLLM's FA3 kernel rejects some (n_heads, head_dim) combos
+    # (e.g. Qwen3.6's native (16, 2, 256)).  Allowing the drafter to be
+    # re-factored into an FA3-safe shape like (32, 4, 128) while keeping the
+    # same total Q/K/V row count preserves hidden_size and GQA ratio, so the
+    # training objective is unchanged and inference is unblocked.
+    draft_num_attention_heads: int | None = None,
+    draft_num_key_value_heads: int | None = None,
+    draft_head_dim: int | None = None,
+    # --- NEW: optional RoPE scaling override ------------------------------
+    # Rationale: the drafter inherits `rope_scaling` from the verifier's
+    # text config.  Qwen3.6-35B-A3B ships WITHOUT `rope_scaling`, so
+    # training runs use unscaled RoPE and any downstream YaRN declared only
+    # in the exported drafter config would be a train/inference mismatch.
+    # Passing a scaling dict here propagates it into the drafter config at
+    # training time, so Qwen3RotaryEmbedding actually builds YaRN-stretched
+    # inv_freq during the forward pass and the trained weights learn the
+    # stretched frequencies.
+    draft_rope_scaling: dict | None = None,
+    # --- NEW: direct RoPE base / max-position overrides -------------------
+    # Rationale: users training drafters for short-context / non-YaRN
+    # deployment (e.g. Eagle3 head with native 4k window and rope_theta=1e6)
+    # need to decouple the drafter's RoPE base and position budget from the
+    # verifier's long-context settings WITHOUT simultaneously injecting a
+    # rope_scaling dict (which the existing --draft-rope-scaling backdoor
+    # requires).  These two flags are the clean, orthogonal knobs.
+    draft_rope_theta: float | None = None,
+    draft_max_position_embeddings: int | None = None,
+    # --- NEW: MRoPE full-head-rotation consolidation (Option 2) -----------
+    # Rationale: Qwen3-Omni / Qwen3.6 verifiers ship with
+    # ``rope_parameters.partial_rotary_factor < 1.0`` (e.g. 0.25 for Qwen3.6)
+    # meaning only the first ``rotary_dim = head_dim * partial_rotary_factor``
+    # channels of each attention head are rotated. At *inference* time vLLM
+    # implements this natively via ``MRotaryEmbeddingInterleaved`` by slicing
+    # ``q[..., :rotary_dim]`` and pairing neighbouring channels as
+    # ``(i, i + rotary_dim/2)``. At *training* time the HuggingFace-based
+    # trainer instead calls ``apply_rotary_pos_emb(q, k, cos, sin)`` which
+    # applies rotation via ``rotate_half``, pairing channels as
+    # ``(i, i + head_dim/2)``. These pairings are DIFFERENT whenever
+    # ``rotary_dim < head_dim``, so no amount of cos/sin padding can make the
+    # trainer's forward bit-match vLLM's. Empirically (Eagle3-v5 experiments)
+    # a draft trained under partial=0.25 + the (broken) ``PartialMRoPE``
+    # wrapper gets ~44% vLLM acceptance, whereas the SAME weights served with
+    # a ``partial=1.0`` config (and a proportionally rescaled mrope_section)
+    # get ~55% — because the two pairings coincide only when rotary_dim ==
+    # head_dim. Since HF and vLLM agree bit-for-bit in that special case,
+    # we force the draft into that regime: rescale ``mrope_section`` by
+    # ``1/partial_rotary_factor`` and set ``partial_rotary_factor=1.0``. The
+    # draft then rotates all head_dim channels; the trainer and vLLM see the
+    # same rotation pairings; everything is self-consistent. The draft's
+    # rotary semantic intentionally diverges from the verifier's at this
+    # point — that is fine because the draft's attention operates on
+    # ``target_hidden_3H`` (already-post-verifier-attention) and only needs
+    # internal train/inference agreement. See
+    # ``project_eagle3_v4_root_cause.md`` in the project memory for the full
+    # derivation.
+    #
+    # Default: ``True`` so new runs automatically use the correct regime.
+    # Set to ``False`` only when you have implemented a vLLM-compatible
+    # partial-rotation in the trainer's attention (see "Option 1" in the
+    # debugging notes) and want to verify the full-head hack is no longer
+    # needed.
+    mrope_full_head_hack: bool = True,
 ) -> PretrainedConfig:
     if draft_arch not in DRAFT_ARCH_CONFIGS:
         raise ValueError(
@@ -154,24 +329,261 @@ def create_transformer_layer_config(
     if draft_intermediate_size is None:
         draft_intermediate_size = get_default_draft_intermediate_size(verifier_config)
 
-    rope_kwargs = {}
-    if getattr(verifier_config, "rope_theta", None) is not None:
-        rope_kwargs["rope_theta"] = verifier_config.rope_theta
+    # Resolve final head geometry: CLI override > verifier default.
+    n_heads = (
+        draft_num_attention_heads
+        if draft_num_attention_heads is not None
+        else verifier_config.num_attention_heads
+    )
+    n_kv = (
+        draft_num_key_value_heads
+        if draft_num_key_value_heads is not None
+        else verifier_config.num_key_value_heads
+    )
+    hd = (
+        draft_head_dim
+        if draft_head_dim is not None
+        else getattr(verifier_config, "head_dim", None)
+    )
+
+    # Invariants we actually need to enforce:
+    #   1. GQA ratio must be integral (n_heads % n_kv == 0) so each KV head
+    #      maps to a whole number of Q heads during attention broadcasting.
+    #   2. head_dim must be positive.
+    # NOTE: n_heads * head_dim does NOT need to equal hidden_size.  In Qwen3
+    # and Llama-style attention the Q/K/V projections are free to project the
+    # residual stream up to (n_heads * head_dim) and the O projection maps
+    # back down to hidden_size.  Enforcing equality here would reject the
+    # official DFlash release for Qwen3.6 (n_heads=32, head_dim=128,
+    # hidden_size=2048 -> 4096 != 2048) and the verifier itself
+    # (n_heads=16, head_dim=256 -> 4096 != 2048).
+    hidden_size = verifier_config.hidden_size
+    if n_heads % n_kv != 0:
+        raise ValueError(
+            f"Invalid GQA ratio: num_attention_heads({n_heads}) must be "
+            f"divisible by num_key_value_heads({n_kv})."
+        )
+    if hd is not None and hd <= 0:
+        raise ValueError(f"Invalid head_dim({hd}); must be positive.")
+    if (
+        draft_num_attention_heads is not None
+        or draft_num_key_value_heads is not None
+        or draft_head_dim is not None
+    ):
+        logger.info(
+            f"Drafter head geometry overridden: num_attention_heads={n_heads}, "
+            f"num_key_value_heads={n_kv}, head_dim={hd} "
+            f"(verifier defaults were {verifier_config.num_attention_heads}, "
+            f"{verifier_config.num_key_value_heads}, "
+            f"{getattr(verifier_config, 'head_dim', None)})."
+        )
+
+    rope_kwargs: dict = {}
+
+    # ------------------------------------------------------------------
+    # rope_theta: inherit from verifier, honouring multiple shapes.
+    # On vanilla Qwen3 the frequency base lives at ``rope_theta`` on the
+    # text config. On Qwen3-Omni (and other recent transformers releases)
+    # the same value is nested inside ``rope_parameters`` / ``rope_scaling``
+    # alongside MRoPE metadata, and the top-level ``rope_theta`` attribute
+    # is ``None``. If we only look at the top-level attribute the drafter
+    # silently falls back to Qwen3Config's default of 1e4, which is
+    # ~1000x off from the verifier's 1e7 and collapses draft acceptance.
+    # CLI can still force a specific value via ``--draft-rope-scaling``
+    # by embedding ``"rope_theta": ...`` in the JSON blob.
+    # ------------------------------------------------------------------
+    verifier_rope_theta = getattr(verifier_config, "rope_theta", None)
+    if verifier_rope_theta is None:
+        for src_name in ("rope_parameters", "rope_scaling"):
+            src = getattr(verifier_config, src_name, None)
+            if isinstance(src, dict) and src.get("rope_theta") is not None:
+                verifier_rope_theta = src["rope_theta"]
+                logger.info(
+                    f"Drafter rope_theta recovered from verifier "
+                    f"{src_name}.rope_theta = {verifier_rope_theta} "
+                    f"(top-level rope_theta was None)."
+                )
+                break
+    if verifier_rope_theta is not None:
+        rope_kwargs["rope_theta"] = verifier_rope_theta
+
     if getattr(verifier_config, "rope_scaling", None) is not None:
         rope_kwargs["rope_scaling"] = dict(verifier_config.rope_scaling)
+    # CLI override takes precedence over verifier-inherited rope_scaling.
+    if draft_rope_scaling is not None:
+        cli_rope_scaling = dict(draft_rope_scaling)
+        # Allow callers to also override rope_theta via the same JSON blob
+        # (kept separate from the rope_scaling dict so downstream configs
+        # see a clean scaling payload).
+        cli_rope_theta = cli_rope_scaling.pop("rope_theta", None)
+        if cli_rope_theta is not None:
+            rope_kwargs["rope_theta"] = cli_rope_theta
+            logger.info(
+                f"Drafter rope_theta overridden via CLI: {cli_rope_theta}"
+            )
+        rope_kwargs["rope_scaling"] = cli_rope_scaling
+        logger.info(
+            f"Drafter rope_scaling overridden via CLI: {cli_rope_scaling}"
+        )
+
+    # Direct --draft-rope-theta takes ultimate precedence (applied LAST so it
+    # wins over both verifier inheritance and any rope_theta piggy-backed in
+    # --draft-rope-scaling).  This is the intended path for users who want
+    # rope_scaling=None but still need to retune the RoPE base (e.g. Eagle3
+    # drafter with native 4k context and rope_theta=1e6 instead of the
+    # verifier's 1e7).
+    if draft_rope_theta is not None:
+        rope_kwargs["rope_theta"] = float(draft_rope_theta)
+        logger.info(
+            f"Drafter rope_theta overridden via --draft-rope-theta: "
+            f"{rope_kwargs['rope_theta']}"
+        )
+
+    # --------------------------------------------------------------
+    # MRoPE (Qwen3-Omni / Qwen3-VL) bookkeeping.
+    # Modern ``LlamaConfig`` is ``@strict`` and therefore does NOT accept a
+    # top-level ``rope_theta`` kwarg; only ``rope_parameters`` survives. But
+    # the ``rope_scaling`` attribute is defined as a property that proxies
+    # to ``rope_parameters`` for backwards compatibility. When the verifier
+    # carries MRoPE metadata (e.g. Qwen3.6's ``mrope_section``,
+    # ``mrope_interleaved``), the ``rope_kwargs["rope_scaling"]`` branch
+    # above already propagates the full dict -- including ``rope_theta``
+    # and ``rope_type`` -- into the draft config's ``rope_parameters``.
+    # That makes the subsequent ``_select_rotary_emb_class`` check inside
+    # ``Eagle3DraftModel.__init__`` correctly pick
+    # ``Qwen3OmniMoeThinkerTextRotaryEmbedding`` over the default
+    # ``LlamaRotaryEmbedding``.
+    #
+    # To avoid a stale ``rope_theta`` when the user passes
+    # ``--draft-rope-theta`` with an MRoPE verifier, fold the override into
+    # the scaling dict too so the MRoPE rotary reads the intended base.
+    # --------------------------------------------------------------
+    rope_scaling_dict = rope_kwargs.get("rope_scaling")
+    if (
+        isinstance(rope_scaling_dict, dict)
+        and "mrope_section" in rope_scaling_dict
+    ):
+        if draft_rope_theta is not None:
+            rope_scaling_dict["rope_theta"] = float(draft_rope_theta)
+        elif "rope_theta" in rope_kwargs and "rope_theta" not in rope_scaling_dict:
+            # keep legacy path happy (Qwen3-Omni verifier already ships
+            # rope_theta inside rope_parameters, so this branch is only a
+            # safety net for non-standard configs).
+            rope_scaling_dict["rope_theta"] = rope_kwargs["rope_theta"]
+        logger.info(
+            "MRoPE detected on draft config: "
+            f"mrope_section={rope_scaling_dict.get('mrope_section')}, "
+            f"mrope_interleaved={rope_scaling_dict.get('mrope_interleaved')}, "
+            f"rope_theta={rope_scaling_dict.get('rope_theta')}. "
+            "Eagle3DraftModel will use Qwen3OmniMoeThinkerTextRotaryEmbedding."
+        )
+
+        # -------------------------------------------------------------
+        # Option 2 (see docstring above mrope_full_head_hack arg): force
+        # the draft into the ``partial_rotary_factor=1.0`` regime so HF's
+        # rotate_half-style rotation in the trainer matches vLLM's neox
+        # partial rotation bit-for-bit at inference time.
+        # -------------------------------------------------------------
+        inherited_partial = rope_scaling_dict.get("partial_rotary_factor", 1.0)
+        if mrope_full_head_hack and float(inherited_partial) < 1.0:
+            old_partial = float(inherited_partial)
+            old_section = list(rope_scaling_dict["mrope_section"])
+            # 1/partial_rotary_factor must be an integer for the rescaling
+            # to preserve the T/H/W ratio exactly; if not, raise loudly so
+            # the user is forced to supply a compatible set manually via
+            # --draft-rope-scaling.
+            inv = 1.0 / old_partial
+            if abs(inv - round(inv)) > 1e-6:
+                raise ValueError(
+                    "mrope_full_head_hack cannot rescale mrope_section: "
+                    f"1/partial_rotary_factor = {inv} is not integer. "
+                    "Supply a custom rope_scaling dict via "
+                    "--draft-rope-scaling to pre-specify mrope_section and "
+                    "partial_rotary_factor=1.0, or disable the hack with "
+                    "--no-draft-mrope-full-head-hack."
+                )
+            scale = int(round(inv))
+            new_section = [int(x) * scale for x in old_section]
+            # Sanity: 2 * sum(new_section) must equal head_dim, otherwise
+            # vLLM's MRotaryEmbedding.__init__ will assert-fail.
+            expected = hd  # head_dim after overrides (see above)
+            if 2 * sum(new_section) != expected:
+                raise ValueError(
+                    "mrope_full_head_hack rescaling produced inconsistent "
+                    f"mrope_section {new_section}: 2*sum={2*sum(new_section)} "
+                    f"but head_dim={expected}. This usually means the "
+                    f"verifier's original mrope_section {old_section} does "
+                    f"not evenly tile rotary_dim/2 = "
+                    f"{int(expected * old_partial) // 2}. Inspect the "
+                    "verifier's rope_parameters and pass a correct "
+                    "--draft-rope-scaling manually."
+                )
+            rope_scaling_dict["mrope_section"] = new_section
+            rope_scaling_dict["partial_rotary_factor"] = 1.0
+            logger.warning(
+                "=" * 70 + "\n"
+                "MRoPE FULL-HEAD HACK APPLIED (--draft-mrope-full-head-hack):\n"
+                f"  partial_rotary_factor: {old_partial} -> 1.0\n"
+                f"  mrope_section:         {old_section} -> {new_section}\n"
+                "Why: HF's rotate_half-style rotation (used by the trainer's "
+                "LlamaAttention) pairs head-dim channels as (i, i+head_dim/2), "
+                "while vLLM's neox-partial rotation (used at inference) pairs "
+                "(i, i+rotary_dim/2). These pairings differ whenever "
+                "rotary_dim < head_dim, so a partial=0.25 draft trained under "
+                "HF will NOT be bit-equivalent to the same draft served under "
+                "vLLM. Forcing partial=1.0 makes rotary_dim == head_dim, where "
+                "both pairings coincide and train/inference agree exactly. "
+                "The draft's rotation is self-consistent; it intentionally "
+                "differs from the verifier's (which is fine because the draft "
+                "operates on post-verifier-attention hidden states).\n"
+                "To disable this hack (e.g. once the trainer's attention has "
+                "been patched with a vLLM-compatible partial rotation per "
+                "Option 1), pass --no-draft-mrope-full-head-hack.\n" + "=" * 70
+            )
+        elif not mrope_full_head_hack and float(inherited_partial) < 1.0:
+            logger.warning(
+                "mrope_full_head_hack=False with partial_rotary_factor="
+                f"{inherited_partial} < 1.0. The trainer's HF-based attention "
+                "will rotate different head-dim channels than vLLM's native "
+                "partial rotation at inference, producing a silent "
+                "train/inference mismatch. Only run with this combination if "
+                "you have patched the trainer's attention to use vLLM-"
+                "compatible neox-partial rotation (Option 1)."
+            )
+        # -------------------------------------------------------------
+
+    # Resolve max_position_embeddings: CLI override > verifier default.
+    # Kept orthogonal to RoPE theta/scaling so users can shrink the drafter's
+    # position budget (e.g. 4096) without touching frequency settings.
+    max_pos = (
+        int(draft_max_position_embeddings)
+        if draft_max_position_embeddings is not None
+        else verifier_config.max_position_embeddings
+    )
+    if draft_max_position_embeddings is not None:
+        logger.info(
+            f"Drafter max_position_embeddings overridden via CLI: {max_pos} "
+            f"(verifier default was {verifier_config.max_position_embeddings})."
+        )
+
+    logger.info(
+        f"Drafter RoPE resolved: rope_theta="
+        f"{rope_kwargs.get('rope_theta', '<default>')}, "
+        f"rope_scaling={rope_kwargs.get('rope_scaling', None)}"
+    )
 
     return config_class(
         vocab_size=verifier_config.vocab_size,
-        hidden_size=verifier_config.hidden_size,
+        hidden_size=hidden_size,
         intermediate_size=draft_intermediate_size,
         num_hidden_layers=num_layers,
-        num_attention_heads=verifier_config.num_attention_heads,
-        num_key_value_heads=verifier_config.num_key_value_heads,
+        num_attention_heads=n_heads,
+        num_key_value_heads=n_kv,
         hidden_act=verifier_config.hidden_act,
-        max_position_embeddings=verifier_config.max_position_embeddings,
+        max_position_embeddings=max_pos,
         initializer_range=verifier_config.initializer_range,
         rms_norm_eps=verifier_config.rms_norm_eps,
-        head_dim=getattr(verifier_config, "head_dim", None),
+        head_dim=hd,
         tie_word_embeddings=False,
         **rope_kwargs,
     )
@@ -193,6 +605,20 @@ def _load_mappings(d2t_path, t2d_path, expected_draft_vocab_size: int | None):
 
 
 def parse_vocab_mappings(args: argparse.Namespace):
+    # `--draft-vocab-size 0` (or any non-positive value) is an explicit request
+    # for the "full verifier vocab" path. Normalize it to None so every
+    # downstream branch treats it uniformly and we never silently reload stale
+    # cached mappings from a previous run.
+    if args.draft_vocab_size is not None and args.draft_vocab_size <= 0:
+        logger.info(
+            "--draft-vocab-size<=0 received; using full verifier vocab and "
+            "ignoring any cached d2t/t2d/token_freq artifacts in --data-path."
+        )
+        args.draft_vocab_size = None
+        use_full_vocab = True
+    else:
+        use_full_vocab = False
+
     if args.d2t_path or args.t2d_path:
         if not (args.d2t_path and args.t2d_path):
             raise ValueError(
@@ -206,6 +632,17 @@ def parse_vocab_mappings(args: argparse.Namespace):
     data_path = Path(args.data_path)
     default_t2d_path = data_path / "t2d.npy"
     default_d2t_path = data_path / "d2t.npy"
+
+    # Short-circuit to the full-vocab branch *before* looking at cached files
+    # when the user explicitly opted in. This prevents the classic footgun where
+    # a 32k-truncated d2t.npy cached by an earlier run silently overrides a new
+    # full-vocab training job and later trips the t2d guard in
+    # `DraftVocabMixin.load_verifier_weights`.
+    if use_full_vocab:
+        verifier_config = unwrap_verifier_text_config(
+            AutoConfig.from_pretrained(args.verifier_name_or_path)
+        )
+        return None, None, verifier_config.vocab_size
 
     if default_t2d_path.exists() and default_d2t_path.exists():
         return _load_mappings(default_d2t_path, default_t2d_path, args.draft_vocab_size)
@@ -275,6 +712,13 @@ def main(args: argparse.Namespace):
         args.num_layers,
         draft_arch=args.draft_arch,
         draft_intermediate_size=args.draft_intermediate_size,
+        draft_num_attention_heads=args.draft_num_attention_heads,
+        draft_num_key_value_heads=args.draft_num_key_value_heads,
+        draft_head_dim=args.draft_head_dim,
+        draft_rope_scaling=args.draft_rope_scaling,
+        draft_rope_theta=args.draft_rope_theta,
+        draft_max_position_embeddings=args.draft_max_position_embeddings,
+        mrope_full_head_hack=args.draft_mrope_full_head_hack,
     )
 
     args.mask_token_id = resolve_mask_token_id(
@@ -546,6 +990,97 @@ def parse_args():
             "Override draft FFN intermediate size. For MoE verifiers (for example "
             "Qwen3-Omni-Thinking), the default is "
             "moe_intermediate_size * num_experts_per_tok."
+        ),
+    )
+    parser.add_argument(
+        "--draft-num-attention-heads",
+        type=int,
+        default=None,
+        help=(
+            "Override the drafter's num_attention_heads. The product "
+            "num_attention_heads * head_dim must equal the verifier's "
+            "hidden_size. Useful when the verifier's native head layout is "
+            "incompatible with the inference engine's attention kernel "
+            "(e.g. vLLM's FA3 rejects Qwen3.6's native (16, 2, 256); use "
+            "(32, 4, 128) to match the official DFlash release."
+        ),
+    )
+    parser.add_argument(
+        "--draft-num-key-value-heads",
+        type=int,
+        default=None,
+        help=(
+            "Override the drafter's num_key_value_heads (GQA). Must divide "
+            "--draft-num-attention-heads. When changing head geometry, keep "
+            "n_heads/n_kv the same as the verifier to preserve the trained "
+            "GQA ratio (e.g. Qwen3.6 verifier is 16/2=8, so use 32/4=8)."
+        ),
+    )
+    parser.add_argument(
+        "--draft-head-dim",
+        type=int,
+        default=None,
+        help=(
+            "Override the drafter's per-head hidden dim. Must satisfy "
+            "num_attention_heads * head_dim == verifier hidden_size."
+        ),
+    )
+    parser.add_argument(
+        "--draft-rope-scaling",
+        type=lambda s: json.loads(s) if s else None,
+        default=None,
+        help=(
+            "JSON string declaring RoPE scaling (e.g. YaRN) to apply DURING "
+            "TRAINING. Overrides any `rope_scaling` inherited from the "
+            "verifier. Example: "
+            "'{\"rope_type\":\"yarn\",\"factor\":64.0,\"original_max_position_embeddings\":4096,\"beta_fast\":32.0,\"beta_slow\":1.0}'. "
+            "If your verifier lacks rope_scaling but you intend to serve the "
+            "drafter with YaRN at inference, passing it here avoids the "
+            "otherwise-silent train/inference RoPE-frequency mismatch."
+        ),
+    )
+    parser.add_argument(
+        "--draft-rope-theta",
+        type=float,
+        default=None,
+        help=(
+            "Override the drafter's RoPE frequency base (rope_theta) "
+            "orthogonally to --draft-rope-scaling. Use when you want "
+            "rope_scaling=None but a different theta than the verifier, "
+            "e.g. an Eagle3 head trained with native 4k context and "
+            "rope_theta=1e6 even though the verifier uses 1e7."
+        ),
+    )
+    parser.add_argument(
+        "--draft-max-position-embeddings",
+        type=int,
+        default=None,
+        help=(
+            "Override the drafter's max_position_embeddings. Defaults to the "
+            "verifier's value, which is typically far larger than the "
+            "drafter's true training/inference window. Set to e.g. 4096 for "
+            "a short-context Eagle3 drafter."
+        ),
+    )
+    parser.add_argument(
+        "--draft-mrope-full-head-hack",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "When the verifier carries MRoPE metadata with "
+            "partial_rotary_factor < 1 (e.g. Qwen3.6's 0.25), rescale the "
+            "draft's mrope_section by 1/partial_rotary_factor and pin "
+            "partial_rotary_factor=1.0 before training. This keeps the "
+            "trainer's HF-based rotate_half rotation bit-equivalent to "
+            "vLLM's neox partial rotation at inference, eliminating a "
+            "silent ~17pp acceptance regression observed with Qwen3.6 "
+            "Eagle3 drafters. The draft's rotary intentionally diverges "
+            "from the verifier's in this mode; see the long comment on "
+            "`mrope_full_head_hack` in `create_transformer_layer_config` "
+            "for the full rationale. "
+            "Default: --draft-mrope-full-head-hack (on). Use "
+            "--no-draft-mrope-full-head-hack only if you have implemented "
+            "a vLLM-compatible partial rotation in the trainer's attention."
         ),
     )
     parser.add_argument(

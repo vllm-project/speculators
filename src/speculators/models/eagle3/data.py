@@ -29,7 +29,15 @@ def shift_batch(batch: BatchType):
     verifier_last_hidden_states = verifier_last_hidden_states[1:]
     loss_mask = loss_mask[1:]
     lengths = lengths - 1
-    position_ids = position_ids[1:]  # Note: position_ids now start at 1
+    # MRoPE samples carry ``position_ids`` of shape ``[3, seq_len]`` (T/H/W
+    # channels). Naively slicing ``[1:]`` would drop the T channel and turn
+    # a 3D MRoPE sample into a 2D (H, W) tensor, silently corrupting the
+    # rotary embeddings. Slice on the sequence dimension (last axis) so the
+    # semantics match the 1D text-only case for both layouts.
+    if position_ids.ndim == 2:
+        position_ids = position_ids[:, 1:]  # shape: [3, seq_len - 1]
+    else:
+        position_ids = position_ids[1:]  # Note: position_ids now start at 1
 
     return {
         "input_ids": input_ids,

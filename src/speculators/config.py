@@ -261,6 +261,19 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
         # ensure we always update the transformers version
         self.transformers_version = version("transformers")
 
+    def validate(self) -> None:
+        """Transformers save-time validation hook.
+
+        ``PretrainedConfig.save_pretrained`` calls ``self.validate()`` with no
+        arguments when the attribute exists. Because this class also inherits
+        from Pydantic ``BaseModel``, the name would otherwise resolve to
+        ``BaseModel.validate(value)``, which is a class-level data validator and
+        not the Transformers save hook. Pydantic already validates instances in
+        ``__init__`` / ``model_validate``; this no-op keeps Hugging Face
+        checkpoint serialization compatible without adding runtime overhead.
+        """
+        return None
+
     def to_dict(self) -> dict[str, Any]:
         """
         :return: A dictionary representation of the full config, including the

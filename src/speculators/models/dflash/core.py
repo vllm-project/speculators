@@ -153,12 +153,15 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             verifier_config: Verifier model configuration. This should be a config
                 with num_hidden_layers set to the number of DRAFT layers (created
                 by create_transformer_layer_config in train.py).
-            t2d: Target-to-draft vocabulary mapping tensor (optional, creates
-                identity mapping if None)
-            d2t: Draft-to-target vocabulary mapping tensor (optional, creates
-                identity mapping if None)
+            t2d: Target-to-draft vocabulary mapping tensor. Pass ``None`` (along
+                with ``d2t=None``) to train against the full verifier vocabulary
+                (i.e. ``draft_vocab_size == verifier_vocab_size``).
+            d2t: Draft-to-target vocabulary mapping tensor. Pass ``None`` (along
+                with ``t2d=None``) to train against the full verifier vocabulary.
             **kwargs: Training arguments with DFlash-specific params
-                - draft_vocab_size: Size of draft vocabulary
+                - draft_vocab_size: Size of draft vocabulary. If omitted or set
+                  to ``None``, defaults to the verifier's ``vocab_size`` which
+                  enables full-vocabulary training.
                 - block_size: Block size for draft predictions (default: 8)
                 - max_anchors: Max anchor positions during training (default: 256)
                 - verifier_name_or_path: Path to verifier model
@@ -178,9 +181,16 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             GreedyTokenProposalConfig,
         )
 
+        # Default draft_vocab_size to the verifier's vocab_size so that
+        # full-vocabulary training works without requiring the caller to pass
+        # ``--draft-vocab-size`` explicitly.
+        draft_vocab_size = kwargs.get("draft_vocab_size")
+        if draft_vocab_size is None:
+            draft_vocab_size = verifier_config.vocab_size
+
         config = DFlashSpeculatorConfig(
             transformer_layer_config=verifier_config,
-            draft_vocab_size=kwargs["draft_vocab_size"],
+            draft_vocab_size=draft_vocab_size,
             block_size=kwargs.get("block_size", 8),
             max_anchors=kwargs.get("max_anchors", 3072),
             target_hidden_size=verifier_config.hidden_size,
@@ -200,14 +210,10 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             ),
         )
 
-        # Create identity mappings if t2d/d2t not provided (no vocab reduction)
-        if t2d is None or d2t is None:
-            vocab_size = kwargs["draft_vocab_size"]
-            # t2d: all tokens in target vocab are in draft vocab
-            t2d = torch.ones(vocab_size, dtype=torch.bool)
-            # d2t: identity mapping (zero offset for all tokens)
-            d2t = torch.zeros(vocab_size, dtype=torch.long)
-
+        # Full-vocabulary training: draft_vocab_size == verifier vocab_size,
+        # so there is no target<->draft remapping and t2d/d2t must stay None.
+        # ``load_vocab_mappings`` treats (None, None) as a no-op.
+        # For reduced-vocab training the caller must provide both tensors.
         model = cls(config=config)
         model.load_vocab_mappings(t2d, d2t)
         model.load_verifier_weights()
@@ -348,16 +354,22 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         logits = self.lm_head(self.norm(noise_embedding))
         # shape: [1, num_anchors*block_size, vocab_size] # noqa: ERA001
 
-        # Convert targets from verifier vocab to draft vocab
-        # t2d is a boolean mask [verifier_vocab_size] - True where
-        # verifier token exists in draft
-        # cumsum gives us the draft index for each verifier token
-        draft_indices = torch.cumsum(self.t2d.long(), dim=0) - 1  # type: ignore[union-attr,operator]
-        targets_draft = torch.where(
-            self.t2d[targets],  # type: ignore[index]
-            draft_indices[targets],  # type: ignore[index]
-            torch.tensor(-100, dtype=torch.long, device=device),
-        )
+        # Convert targets from verifier vocab to draft vocab.
+        # When ``use_draft_vocab`` is False (full-vocab training) the draft and
+        # verifier vocabularies are identical, so no remapping is needed and
+        # ``self.t2d`` is ``None`` (see ``DraftVocabMixin._init_vocab``).
+        if self.t2d is None:
+            targets_draft = targets
+        else:
+            # t2d is a boolean mask [verifier_vocab_size] - True where
+            # verifier token exists in draft. cumsum gives us the draft index
+            # for each verifier token.
+            draft_indices = torch.cumsum(self.t2d.long(), dim=0) - 1  # type: ignore[union-attr,operator]
+            targets_draft = torch.where(
+                self.t2d[targets],  # type: ignore[index]
+                draft_indices[targets],  # type: ignore[index]
+                torch.tensor(-100, dtype=torch.long, device=device),
+            )
 
         aligned_loss_mask = loss_mask.clone()[:, anchored_block_indices]
         # shape: [1, num_anchors*block_size] # noqa: ERA001
