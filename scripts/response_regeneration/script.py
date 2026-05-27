@@ -10,6 +10,7 @@ from typing import Any
 
 import aiohttp
 from datasets import load_dataset
+from tqdm import tqdm
 
 DATASET_CONFIGS = {
     # 300K filtered synthetic instructions generated via Magpie from Llama-3.1.
@@ -250,6 +251,7 @@ async def worker(
     args,
     out_fh,
     endpoint: str,
+    pbar: tqdm = None,
 ):
     """Worker that pulls items from queue and sends them to the vLLM endpoint."""
     while True:
@@ -315,6 +317,8 @@ async def worker(
             out_fh.write(json.dumps(error_output, ensure_ascii=False) + "\n")
             out_fh.flush()
         finally:
+            if pbar is not None:
+                pbar.update(1)
             queue.task_done()
 
 
@@ -348,9 +352,7 @@ async def main():  # noqa: C901, PLR0915, PLR0912
         parts = [args.dataset]
         if subset:
             parts.append(sanitize_filename(subset))
-        default_split = dataset_config.get("default_split")
-        if split != default_split:
-            parts.append(sanitize_filename(split))
+        parts.append(sanitize_filename(split))
         parts.append(model_name)
         args.outfile = "_".join(parts) + ".jsonl"
 
@@ -389,9 +391,16 @@ async def main():  # noqa: C901, PLR0915, PLR0912
         timeout=timeout, connector=connector, headers=headers
     ) as session:
         with open(args.outfile, "a", encoding="utf-8") as output_file:  # noqa: ASYNC230
+            pbar = tqdm(
+                total=args.limit,
+                desc="Generating responses",
+                unit=" samples",
+                dynamic_ncols=True,
+            )
+
             workers = [
                 asyncio.create_task(
-                    worker(semaphore, session, queue, args, output_file, endpoint)
+                    worker(semaphore, session, queue, args, output_file, endpoint, pbar)
                 )
                 for _ in range(args.concurrency)
             ]
@@ -439,6 +448,7 @@ async def main():  # noqa: C901, PLR0915, PLR0912
             for _ in range(len(workers)):
                 await queue.put(None)
             await asyncio.gather(*workers)
+            pbar.close()
 
 
 if __name__ == "__main__":
