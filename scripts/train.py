@@ -2,8 +2,8 @@ import argparse
 import logging
 import random
 import warnings
-from pathlib import Path
 from copy import deepcopy
+from pathlib import Path
 
 import numpy as np
 import torch
