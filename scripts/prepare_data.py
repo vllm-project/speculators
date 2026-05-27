@@ -63,8 +63,17 @@ def parse_args():
         "--data",
         type=str,
         action="append",
-        required=True,
+        default=[],
         help="Path to training data (same as used in preprocessing)",
+    )
+    parser.add_argument(
+        "--data-directory",
+        type=str,
+        default=None,
+        help=(
+            "Path to a directory containing JSONL files. "
+            "All *.jsonl files in the directory will be added as training data."
+        ),
     )
     parser.add_argument(
         "--seq-length",
@@ -147,6 +156,22 @@ def parse_args():
 
 def main():
     args = parse_args()
+
+    if args.data_directory:
+        data_dir = Path(args.data_directory)
+        if not data_dir.is_dir():
+            log.error(f"--data-directory {args.data_directory} is not a directory")
+            sys.exit(1)
+        jsonl_files = sorted(str(p) for p in data_dir.glob("*.jsonl"))
+        if not jsonl_files:
+            log.error(f"No .jsonl files found in {args.data_directory}")
+            sys.exit(1)
+        args.data.extend(jsonl_files)
+        log.info(f"Found {len(jsonl_files)} JSONL files in {args.data_directory}")
+
+    if not args.data:
+        log.error("No data provided. Use --data or --data-directory.")
+        sys.exit(1)
 
     log.section("Preparing data")
     log.config(

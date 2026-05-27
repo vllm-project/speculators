@@ -10,23 +10,103 @@ from typing import Any
 
 import aiohttp
 from datasets import load_dataset
+from tqdm import tqdm
 
 DATASET_CONFIGS = {
+    # 300K filtered synthetic instructions generated via Magpie from Llama-3.1.
+    # Single "train" split with an "instruction" field.
     "magpie": {
         "id": "Magpie-Align/Magpie-Llama-3.1-Pro-300K-Filtered",
         "prompt_field": "instruction",
         "default_split": "train",
+        "id_field": "uuid",
     },
+    # 200K multi-turn dialogues covering a broad range of topics. The "train_sft"
+    # split contains the SFT-ready subset with a "prompt" field.
     "ultrachat": {
         "id": "HuggingFaceH4/ultrachat_200k",
         "prompt_field": "prompt",
         "default_split": "train_sft",
+        "id_field": "prompt_id",
     },
+    # Grade-school math word problems with step-by-step solutions. Uses the "main"
+    # subset. Good for evaluating mathematical reasoning capabilities.
     "gsm8k": {
         "id": "openai/gsm8k",
         "prompt_field": "question",
         "default_split": "train",
         "subset": "main",
+    },
+    # 20K code generation prompts based on the Stanford Alpaca format. Each row has a
+    # plain string "prompt" field describing a coding task. Compact and code-focused.
+    "code_alpaca": {
+        "id": "HuggingFaceH4/CodeAlpaca_20K",
+        "prompt_field": "prompt",
+        "default_split": "train",
+    },
+    # NVIDIA's large-scale post-training dataset covering multiple domains. Available
+    # splits: chat, math, code, stem. Uses a messages format with role/content pairs.
+    # Select domain via --split (defaults to "chat").
+    "nemotron": {
+        "id": "nvidia/Nemotron-Post-Training-Dataset-v2",
+        "prompt_field": "messages",
+        "default_split": "chat",
+        "id_field": "uuid",
+        "messages_role_field": "role",
+        "messages_content_field": "content",
+    },
+    # Allen AI's SFT mixture used to train Tulu 3. Contains ~939K examples spanning
+    # diverse tasks and sources. Uses a messages format with role/content pairs.
+    "tulu3": {
+        "id": "allenai/tulu-3-sft-mixture",
+        "prompt_field": "messages",
+        "default_split": "train",
+        "id_field": "id",
+        "messages_role_field": "role",
+        "messages_content_field": "content",
+    },
+    # ~529K real user conversations collected from ChatGPT and GPT-4. Useful for
+    # capturing natural user interaction patterns. Uses a "conversation" field with
+    # role/content pairs.
+    "wildchat": {
+        "id": "allenai/WildChat",
+        "prompt_field": "conversation",
+        "default_split": "train",
+        "id_field": "conversation_id",
+        "messages_role_field": "role",
+        "messages_content_field": "content",
+    },
+    # NVIDIA's Cascade 2 SFT data spanning 8 domains. Each domain is a separate
+    # subset: chat, conversational_agent, instruction_following, math, safety,
+    # science, swe, terminal_agent. Select domain via --subset (defaults to "chat").
+    "nemotron_cascade": {
+        "id": "nvidia/Nemotron-Cascade-2-SFT-Data",
+        "prompt_field": "messages",
+        "default_split": "train",
+        "subset": "chat",
+        "messages_role_field": "role",
+        "messages_content_field": "content",
+    },
+    # NVIDIA's instruction-following and chat SFT dataset with synthetic dialogues
+    # from multiple frontier models. Available in two splits: "reasoning_off"
+    # (default) and "reasoning_on" for chain-of-thought style responses.
+    "nemotron_ifchat": {
+        "id": "nvidia/Nemotron-SFT-Instruction-Following-Chat-v2",
+        "prompt_field": "messages",
+        "default_split": "reasoning_off",
+        "id_field": "uuid",
+        "messages_role_field": "role",
+        "messages_content_field": "content",
+    },
+    # ~10K long-context instruction-following samples (8k-64k tokens). Useful for
+    # training speculators on long-form generation patterns.
+    "longalign": {
+        "id": "zai-org/LongAlign-10k",
+        "prompt_field": "messages",
+        "default_split": "train",
+        "id_field": "id",
+        "messages_role_field": "role",
+        "messages_content_field": "content",
     },
 }
 
@@ -93,6 +173,23 @@ def parse_args():
         default=None,
         help="Only process rows where language==this (e.g., EN)",
     )
+    parser.add_argument(
+        "--shuffle",
+        action="store_true",
+        help="Shuffle the dataset before processing",
+    )
+    parser.add_argument(
+        "--shuffle-seed",
+        type=int,
+        default=42,
+        help="Random seed for shuffling (default: 42)",
+    )
+    parser.add_argument(
+        "--shuffle-buffer-size",
+        type=int,
+        default=10000,
+        help="Buffer size for streaming shuffle (default: 10000)",
+    )
     return parser.parse_args()
 
 
@@ -115,7 +212,7 @@ def load_seen(path: str):
                 obj = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            key = obj.get("uuid") or obj.get("idx")
+            key = obj.get("id") or obj.get("uuid") or obj.get("idx")
             if key is not None:
                 seen.add(str(key))
     return seen
@@ -154,6 +251,7 @@ async def worker(
     args,
     out_fh,
     endpoint: str,
+    pbar: tqdm = None,
 ):
     """Worker that pulls items from queue and sends them to the vLLM endpoint."""
     while True:
@@ -219,10 +317,12 @@ async def worker(
             out_fh.write(json.dumps(error_output, ensure_ascii=False) + "\n")
             out_fh.flush()
         finally:
+            if pbar is not None:
+                pbar.update(1)
             queue.task_done()
 
 
-async def main():
+async def main():  # noqa: C901, PLR0915, PLR0912
     """Main async function to process dataset through vLLM endpoints."""
     args = parse_args()
 
@@ -249,9 +349,15 @@ async def main():
         # Extract simple model name from full path
         model_name = args.model.split("/")[-1] if "/" in args.model else args.model
         model_name = sanitize_filename(model_name)
-        args.outfile = f"{args.dataset}_{model_name}.jsonl"
+        parts = [args.dataset]
+        if subset:
+            parts.append(sanitize_filename(subset))
+        parts.append(sanitize_filename(split))
+        parts.append(model_name)
+        args.outfile = "_".join(parts) + ".jsonl"
 
     print(f"Using dataset: {dataset_id}")
+    print(f"Subset: {subset}")
     print(f"Split: {split}")
     print(f"Prompt field: {prompt_field}")
     print(f"Output file: {args.outfile}")
@@ -259,6 +365,15 @@ async def main():
 
     seen_ids = load_seen(args.outfile) if args.resume else set()
     dataset = load_dataset(dataset_id, name=subset, split=split, streaming=True)
+
+    if args.shuffle:
+        dataset = dataset.shuffle(
+            seed=args.shuffle_seed, buffer_size=args.shuffle_buffer_size
+        )
+        print(
+            f"Shuffling with seed={args.shuffle_seed},"
+            f" buffer={args.shuffle_buffer_size}"
+        )
 
     queue: asyncio.Queue = asyncio.Queue(maxsize=args.concurrency * 4)
     semaphore = asyncio.Semaphore(args.concurrency)
@@ -276,9 +391,16 @@ async def main():
         timeout=timeout, connector=connector, headers=headers
     ) as session:
         with open(args.outfile, "a", encoding="utf-8") as output_file:  # noqa: ASYNC230
+            pbar = tqdm(
+                total=args.limit,
+                desc="Generating responses",
+                unit=" samples",
+                dynamic_ncols=True,
+            )
+
             workers = [
                 asyncio.create_task(
-                    worker(semaphore, session, queue, args, output_file, endpoint)
+                    worker(semaphore, session, queue, args, output_file, endpoint, pbar)
                 )
                 for _ in range(args.concurrency)
             ]
@@ -295,15 +417,28 @@ async def main():
                 if not prompt:
                     continue
 
-                uuid = row.get("uuid")
-                key = str(uuid or index)
+                if isinstance(prompt, list):
+                    role_field = dataset_config.get("messages_role_field", "role")
+                    content_field = dataset_config.get(
+                        "messages_content_field", "content"
+                    )
+                    user_msgs = [
+                        m[content_field] for m in prompt if m.get(role_field) == "user"
+                    ]
+                    if not user_msgs:
+                        continue
+                    prompt = user_msgs[0]
+
+                id_field = dataset_config.get("id_field")
+                row_id = row.get(id_field) if id_field else None
+                key = str(row_id if row_id is not None else index)
                 if key in seen_ids:
                     continue
 
                 await queue.put(
                     {
                         "idx": index,
-                        "uuid": uuid,
+                        "uuid": row_id,
                         "prompt": prompt,
                     }
                 )
@@ -313,6 +448,7 @@ async def main():
             for _ in range(len(workers)):
                 await queue.put(None)
             await asyncio.gather(*workers)
+            pbar.close()
 
 
 if __name__ == "__main__":
