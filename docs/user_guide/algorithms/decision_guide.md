@@ -17,7 +17,6 @@ All algorithms can be paired with any supported verifier model (including quanti
 |                     | Eagle-3       | P-EAGLE             | DFlash              |
 | ------------------- | ------------- | ------------------- | ------------------- |
 | **Draft layers**    | Llama-style   | Llama-style         | Qwen3-style         |
-| **Drafting**        | Autoregressive| Parallel (multi-depth) | Single forward pass |
 | **Verifier models** | Any supported | Any supported       | Any supported       |
 | **Speculators**     | Mature        | Newer, growing fast | Newer, growing fast |
 | **vLLM**            | Mature        | Newer, growing fast | Newer, growing fast |
