@@ -42,6 +42,8 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--draft-arch`** (str, default: `"llama"`) Architecture for draft decoder layers (only applies to Eagle3 currently). Options: `llama`, `qwen3` **Warning:** Only `llama` is currently supported in vLLM for inference.
 
+- **`--draft-hidden-act`** (str, default: `"silu"`) Activation function for draft decoder layers. Setting as `None` will inherit activation function from the verifier model.
+
 ### Data Arguments
 
 - **`--data-path`** (str, default: `"./data"`) Path to the processed training data directory.
