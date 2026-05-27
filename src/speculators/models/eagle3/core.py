@@ -1,6 +1,4 @@
-# ruff: noqa: ERA001
 import copy
-import warnings
 from typing import ClassVar
 
 import torch
@@ -14,9 +12,10 @@ from speculators.models.eagle3.attention import (
     create_combined_mask_mod,
     extend_mask_for_draft_tokens,
 )
+from speculators.models.eagle3.metrics import compute_metrics
 from speculators.models.eagle3.model_definitions import model_classes
+from speculators.models.utils import resolve_target_layer_ids
 from speculators.proposals.greedy import GreedyTokenProposalConfig
-from speculators.utils.loading import load_model_layers
 
 
 def _select_rotary_emb_class(
@@ -63,6 +62,7 @@ def _select_rotary_emb_class(
             Qwen3OmniMoeThinkerTextRotaryEmbedding,
         )
     except ImportError:
+        import warnings
         warnings.warn(
             "Draft config carries rope_parameters.mrope_section but the installed "
             "transformers does not expose Qwen3OmniMoeThinkerTextRotaryEmbedding. "
@@ -81,24 +81,26 @@ def _select_rotary_emb_class(
         # pairs channels (i, i+head_dim/2) identically to vLLM's neox
         # partial rotation when rotary_dim == head_dim. This is the ONLY
         # regime where the trainer and vLLM forward are bit-equivalent for
-        # MRoPE drafts; ``scripts/train.py::--draft-mrope-full-head-hack``
+        # MRoPE drafters; ``scripts/train.py::--draft-mrope-full-head-hack``
         # forces verifier configs with partial_rotary_factor<1 into this
         # regime at config-construction time.
         return Qwen3OmniMoeThinkerTextRotaryEmbedding
+
     # WARNING: PartialMRoPE below shrinks inv_freq to rotary_dim//2 and pads
     # cos/sin back to head_dim with [real | ones | real | ones], but HF's
     # rotate_half pairs channels (i, i+head_dim/2) while vLLM's neox-partial
     # rotation pairs (i, i+rotary_dim/2). These pairings DIFFER whenever
     # rotary_dim < head_dim, so PartialMRoPE is NOT bit-equivalent to vLLM
-    # at inference time — and empirically (Eagle3-v5 experiments) drafts
+    # at inference time — and empirically (Eagle3-v5 experiments) drafters
     # trained with PartialMRoPE lose ~10pp acceptance vs the same weights
-    # served under a rescaled partial=1.0 config hack. Prefer training with
-    # --draft-mrope-full-head-hack (default) instead of relying on
+    # served under a rescaled partial=1.0 config. Prefer training with
+    # --draft-mrope-full-head-hack (default ON) instead of relying on
     # PartialMRoPE. This branch is preserved only for the future Option 1
     # rewrite (vLLM-compatible partial rotation inside the trainer's
     # attention), at which point the pairing issue will be resolved upstream.
+    import warnings
     warnings.warn(
-        "Eagle3 draft config has partial_rotary_factor="
+        f"Eagle3 draft config has partial_rotary_factor="
         f"{partial_rotary_factor} < 1.0. PartialMRoPE will be used, but it "
         "does NOT produce vLLM-bit-equivalent rotation (HF's rotate_half "
         "pairs (i,i+head_dim/2) whereas vLLM's neox-partial pairs "
@@ -137,7 +139,6 @@ def _make_partial_mrope_rotary_cls(
     Keep training and export configs consistent: ``sum(mrope_section)`` must
     equal ``int(head_dim * partial_rotary_factor) // 2``.
     """
-
     class PartialMRoPE(base_cls):  # type: ignore[misc,valid-type]
         _partial_rotary_factor: ClassVar[float] = partial_rotary_factor
 
@@ -174,7 +175,7 @@ def _make_partial_mrope_rotary_cls(
             )
             rotary_dim = int(head_dim * self._partial_rotary_factor)
             rotary_dim = (rotary_dim // 2) * 2
-            # Persisted so ``forward`` can size the identity-padding without
+            # Persisted so ``forward`` can size the identity-adding without
             # re-reading config.
             self._head_dim = head_dim
             self._rotary_dim = rotary_dim
@@ -298,46 +299,8 @@ def loss_function(
     return batch_loss.mean()
 
 
-def compute_metrics(
-    logits: torch.Tensor,
-    targets: torch.Tensor,
-    loss_mask: torch.Tensor | None,
-    prev_correct: torch.Tensor | None,
-    ttt_step: int,
-    ttt_step_loss_decay: float,
-) -> tuple[torch.Tensor, dict]:
-    """Compute metrics for a given ttt_step.
-
-    Args:
-        logits: The logits for the current ttt_step.
-        targets: The targets for the current ttt_step.
-        loss_mask: The loss mask for the current ttt_step.
-        prev_correct: The previous correct predictions for the current ttt_step.
-        ttt_step: The current ttt_step.
-        ttt_step_loss_decay: The loss decay for the current ttt_step.
-
-    Effects:
-        Modifies prev_correct in place.
-
-    Returns:
-        Loss value and metrics dictionary.
-    """
-
-    s_metrics = {}
-    s_logits, s_targets, s_loss_mask, s_prev_correct = align_for_step(
-        logits, targets, loss_mask, prev_correct, ttt_step
-    )
-    loss_weight = ttt_step_loss_decay**ttt_step
-    s_loss = loss_weight * loss_function(s_logits, s_targets, s_loss_mask)
-
-    s_full_acc, s_cond_acc = compute_accuracy(
-        s_logits, s_targets, s_loss_mask, s_prev_correct
-    )
-    s_metrics[f"loss_{ttt_step}"] = s_loss.detach().clone()
-    s_metrics[f"full_acc_{ttt_step}"] = s_full_acc
-    s_metrics[f"cond_acc_{ttt_step}"] = s_cond_acc
-
-    return s_loss, s_metrics
+# NOTE: compute_metrics is imported from speculators.models.eagle3.metrics
+# (line 15 above). The local duplicate definition has been removed.
 
 
 def conditional_torch_compile(func):
@@ -350,10 +313,9 @@ def conditional_torch_compile(func):
 @SpeculatorModel.register("eagle3")
 class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
     config_class: ClassVar[type[Eagle3SpeculatorConfig]] = Eagle3SpeculatorConfig  # type: ignore[misc]
-    _keys_to_ignore_on_load_missing: ClassVar[list[str]] = [  # type: ignore[misc,assignment]
+    _keys_to_ignore_on_load_missing: ClassVar[list[str]] = [  # type: ignore[misc]
         "embed_tokens.weight",
         "verifier_norm.weight",
-        "verifier_lm_head.weight",
         "d2t",
         "t2d",
         "input_norm.weight",
@@ -368,7 +330,7 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
 
     def __init__(self, config: Eagle3SpeculatorConfig):
         # Forcibly override config settings
-        impl = "simple_flex_attention"
+        impl = "flash_attention_2"
         config.transformer_layer_config._attn_implementation = impl  # noqa: SLF001
         super().__init__(config=config)
         self._init_vocab(config)
@@ -426,7 +388,7 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
 
         self.post_init()
 
-    def load_verifier_weights(self):  # noqa: C901
+    def load_verifier_weights(self):
         super().load_verifier_weights()
 
         verifier_config = self.config.speculators_config.verifier
@@ -442,33 +404,16 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
                 f" match draft hidden size {self.hidden_size}."
             )
 
-        # Load verifier norm weights
-        verifier_weights = load_model_layers(
-            ["model.norm.weight"],
-            verifier_config.name_or_path,  # type: ignore[arg-type]
-        )
-
-        if "model.norm.weight" not in verifier_weights:
-            warnings.warn(
-                f"Could not find final norm weights in {verifier_config.name_or_path}. "
-                "Using default initialization (weight=1.0).",
-                UserWarning,
-                stacklevel=2,
-            )
-        else:
-            verifier_norm_sd = {"weight": verifier_weights["model.norm.weight"]}
-            self.verifier_norm.load_state_dict(verifier_norm_sd)
-
     @conditional_torch_compile
     def forward(  # noqa: C901
         self,
-        hidden_states: torch.Tensor,  # shape: [1, total_seq_len, 3 * hidden_size]
+        hidden_states: torch.Tensor,  # shape: [1,total_seq_len,3*hidden_size]
         input_ids: torch.Tensor,  # shape: [1, total_seq_len]
         lengths: torch.Tensor | None = None,  # shape: [batch_size]
         loss_mask: torch.Tensor | None = None,  # shape: [1, total_seq_len]
         position_ids: torch.Tensor | None = None,  # shape: [1, total_seq_len]
-        verifier_last_hidden_states: torch.Tensor
-        | None = None,  # shape: [1, total_seq_len, hidden_size]
+        verifier_last_hidden_states: torch.Tensor |
+        None = None,  # shape: [1, total_seq_len, hidden_size] # noqa: E501
         ttt_steps: int = 3,
         ttt_step_loss_decay: float = 1.0,
         use_off_policy_tokens: bool = False,
@@ -571,6 +516,7 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
             input_ids = torch.argmax(logits, dim=-1)
             draft_tokens.append(input_ids.detach().clone())
             # shape: [1, total_seq_len]
+
             # Use d2t to map draft tokens to verifier tokens.
             # Must be in verifier vocabulary space because we use the full verifier
             # vocabulary in the embedding.
@@ -597,7 +543,8 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
             # shape: [1, total_seq_len]
 
         if return_loss:
-            metrics["loss"] = loss.detach().clone()
+            metrics["loss_sum"] = loss.detach().clone()
+            metrics["loss_total"] = torch.tensor(1.0, device=device)
             return draft_tokens, loss, metrics
         else:
             return draft_tokens
@@ -605,7 +552,7 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
     @classmethod
     def from_training_args(
         cls,
-        verifier_config: PretrainedConfig,
+        verifier_config: "PretrainedConfig",
         t2d: torch.Tensor | None = None,
         d2t: torch.Tensor | None = None,
         **kwargs,
@@ -614,38 +561,49 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
 
         Args:
             verifier_config: Verifier model configuration
+            t2d: Target-to-draft vocabulary mapping tensor (optional)
+            d2t: Draft-to-target vocabulary mapping tensor (optional)
             **kwargs: Training arguments with Eagle3-specific params
+                - draft_vocab_size: Size of draft vocabulary (optional)
                 - num_layers: Number of decoder layers
                 - norm_before_residual: Whether to normalize before residual connection
-                - t2d: Target-to-draft vocabulary mapping tensor
-                - d2t: Draft-to-target vocabulary mapping tensor
+                - norm_before_fc: Whether to normalize before fc layer (gpt-oss)
+                - embed_requires_grad: Whether to train embedding layer
                 - ttt_steps: Number of TTT steps
                 - verifier_name_or_path: Path to verifier model
+                - target_layer_ids: Optional override for aux hidden state layers
 
         Returns:
             Initialized Eagle3DraftModel
         """
-        target_layer_ids = kwargs.get("target_layer_ids")
-        if target_layer_ids is None:
-            unmodified_verifier_config = AutoConfig.from_pretrained(
-                kwargs["verifier_name_or_path"]
-            )
-            num_target_layers = unmodified_verifier_config.num_hidden_layers
-            target_layer_ids = [2, num_target_layers // 2, num_target_layers - 3]
-            warnings.warn(
-                "--target-layer-ids is not explicitly set. Setting target "
-                f"layers to {target_layer_ids}. If custom target layers were used "
-                "when launching vllm datagen, please set them explicitly.",
-                stacklevel=2,
-            )
+        from speculators.config import (  # noqa: PLC0415
+            SpeculatorsConfig,
+            VerifierConfig,
+        )
+        from speculators.proposals.greedy import (  # noqa: PLC0415
+            GreedyTokenProposalConfig,
+        )
+
+        target_layer_ids = resolve_target_layer_ids(
+            kwargs.get("target_layer_ids"),
+            kwargs["verifier_name_or_path"],
+        )
+
+        # Default draft_vocab_size to the verifier's vocab_size so that
+        # full-vocabulary training works without requiring the caller to pass
+        # ``--draft-vocab-size`` explicitly.
+        draft_vocab_size = kwargs.get("draft_vocab_size")
+        if draft_vocab_size is None:
+            draft_vocab_size = verifier_config.vocab_size
 
         config = Eagle3SpeculatorConfig(
             transformer_layer_config=verifier_config,
-            draft_vocab_size=kwargs["draft_vocab_size"],
+            draft_vocab_size=draft_vocab_size,
             norm_before_residual=kwargs["norm_before_residual"],
             norm_before_fc=kwargs.get("norm_before_fc", False),
             embed_requires_grad=kwargs.get("embed_requires_grad", False),
             eagle_aux_hidden_state_layer_ids=target_layer_ids,
+            mask_token_id=kwargs.get("mask_token_id"),
             speculators_config=SpeculatorsConfig(
                 algorithm="eagle3",
                 proposal_methods=[
@@ -659,6 +617,11 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
                 ),
             ),
         )
+
+        # Full-vocabulary training: draft_vocab_size == verifier vocab_size,
+        # so there is no target<->draft remapping and t2d/d2t must stay None.
+        # ``load_vocab_mappings`` treats (None, None) as a no-op.
+        # For reduced-vocab training the caller must provide both tensors.
         model = cls(config=config)
         model.load_vocab_mappings(t2d, d2t)
         model.load_verifier_weights()

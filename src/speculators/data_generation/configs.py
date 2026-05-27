@@ -1,6 +1,6 @@
 """Configuration registries for data generation pipeline."""
 
-import re
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,13 +12,15 @@ __all__ = [
 ]
 
 
-@dataclass
+@dataclass(kw_only=True)
 class DatasetConfig:
     """Configuration for loading a dataset"""
 
     name: str
     hf_path: str
+    subset: str | None = None
     split: str
+    filter_fn: Callable[[dict], bool] | None = None
     normalize_fn: Callable[[dict], dict] | None = None
 
 
@@ -28,69 +30,67 @@ def _normalize_ultrachat(example: dict) -> dict:
     return example
 
 
-def _normalize_media_ref(value: Any) -> Any:
-    if isinstance(value, Path):
-        return str(value)
-    filename = getattr(value, "filename", None)
-    if filename:
-        return str(filename)
-    return value
+def _normalize_gsm8k(example: dict) -> dict:
+    return {
+        "conversations": [
+            {"role": "user", "content": example["question"]},
+            {"role": "assistant", "content": example["answer"]},
+        ]
+    }
 
 
-def _split_llava_user_content(text: str, image_ref: Any) -> list[dict[str, Any]]:
-    parts = re.split(r"(<image>)", text or "")
-    content: list[dict[str, Any]] = []
-    inserted_image = False
+def get_coco_dir():
+    return os.getenv("COCO_DIR") or "coco/"
 
-    for part in parts:
-        if part == "<image>":
-            content.append({"type": "image", "image": image_ref})
-            inserted_image = True
-        elif part:
-            # Preserve surrounding whitespace / newlines (e.g. "<image>\n..."),
-            # which some chat templates rely on as turn-level separators.
-            # Only use ``.strip()`` as the filter predicate below.
-            content.append({"type": "text", "text": part})
 
-    if not inserted_image and image_ref is not None:
-        content = [{"type": "image", "image": image_ref}, *content]
+def _parse_sharegpt4v_part(part: str, image_path: str):
+    if part == "<image>":
+        return {"type": "image", "path": image_path}
 
-    return [
-        segment
-        for segment in content
-        if segment["type"] != "text"
-        or (segment.get("text", "") and segment["text"].strip())
+    return {"type": "text", "text": part}
+
+
+def _parse_sharegpt4v_user_content(content: str, image_path: str):
+    return [_parse_sharegpt4v_part(part, image_path) for part in content.split("\n")]
+
+
+def _parse_sharegpt4v_assistant_content(content: str):
+    return [{"type": "text", "text": content}]
+
+
+def _filter_sharegpt4v_coco(example: dict) -> bool:
+    return example["image"].startswith("coco/")
+
+
+def _normalize_sharegpt4v_coco(example: dict) -> dict:
+    coco_dir = get_coco_dir()
+    image_path = os.path.join(coco_dir, example["image"].removeprefix("coco/"))
+
+    if not os.path.exists(image_path):
+        state_str = "set to" if os.getenv("COCO_DIR") else "default"
+
+        raise ValueError(
+            f"No image found at <{image_path}>. "
+            f"Please download COCO 2017 Train Images from "
+            f"<http://images.cocodataset.org/zips/train2017.zip> and place the "
+            f"extracted folder under `COCO_DIR` ({state_str}: `{coco_dir}`)."
+        )
+
+    messages = [
+        (
+            turn
+            | {
+                "value": (
+                    _parse_sharegpt4v_user_content(turn["value"], image_path)
+                    if turn["from"] in ("human", "user")
+                    else _parse_sharegpt4v_assistant_content(turn["value"])
+                )
+            }
+        )
+        for turn in example["conversations"]
     ]
 
-
-def _normalize_llava_instruct(example: dict) -> dict:
-    conversations = example.get("conversations") or []
-    image_ref = _normalize_media_ref(example.get("image"))
-
-    normalized_conversations = []
-    image_attached = False
-    for turn in conversations:
-        role = turn.get("from", turn.get("role"))
-        value = turn.get("value", turn.get("content", ""))
-        if role in {"human", "user"} and image_ref is not None:
-            content = _split_llava_user_content(str(value), image_ref)
-            image_attached = image_attached or any(
-                seg.get("type") == "image" for seg in content
-            )
-            normalized_conversations.append({"from": role, "value": content})
-        else:
-            normalized_conversations.append(turn)
-
-    if image_ref is not None and not image_attached:
-        for turn in normalized_conversations:
-            role = turn.get("from", turn.get("role"))
-            if role in {"human", "user"}:
-                text = turn.get("value", turn.get("content", ""))
-                text = text if isinstance(text, str) else ""
-                turn["value"] = _split_llava_user_content(text, image_ref)
-                break
-
-    return {"conversations": normalized_conversations}
+    return {"conversations": messages}
 
 
 DATASET_CONFIGS: dict[str, DatasetConfig] = {
@@ -105,10 +105,20 @@ DATASET_CONFIGS: dict[str, DatasetConfig] = {
         split="train_sft",
         normalize_fn=_normalize_ultrachat,
     ),
-    "llava-instruct": DatasetConfig(
-        name="llava-instruct",
-        hf_path="liuhaotian/LLaVA-Instruct-150K",
+    "gsm8k": DatasetConfig(
+        name="gsm8k",
+        hf_path="openai/gsm8k",
+        subset="main",
         split="train",
-        normalize_fn=_normalize_llava_instruct,
+        normalize_fn=_normalize_gsm8k,
+    ),
+    # NOTE: You need to serve vLLM with `--allowed-local-media-path /path/to/coco`
+    "sharegpt4v_coco": DatasetConfig(
+        name="sharegpt4v_coco",
+        hf_path="Lin-Chen/ShareGPT4V",
+        subset="ShareGPT4V",
+        split="train",
+        filter_fn=_filter_sharegpt4v_coco,
+        normalize_fn=_normalize_sharegpt4v_coco,
     ),
 }

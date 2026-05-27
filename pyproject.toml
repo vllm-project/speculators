@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools >= 61.0", "setuptools-git-versioning>=2.0,<3"]
+requires = ["setuptools >= 82.0.1", "setuptools-git-versioning>=2.0,<3"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
@@ -37,7 +37,7 @@ keywords = [
 ]
 dependencies = [
     "click",
-    "datasets>=4.0.0,<=4.8.4",
+    "datasets>=4.0.0,<=4.8.5",
     "huggingface-hub",
     "loguru>=0.7.2,<=0.7.3",
     "numpy>=2.0.0,<=2.4.2",
@@ -50,68 +50,67 @@ dependencies = [
     "safetensors",
     "setuptools",
     "torch>=2.9.0,<=2.11.0",
+    "torchaudio",
+    "torchvision",
     "tqdm>=4.66.3,<=4.67.3",
-    "transformers>=4.56.1,<5.4.0",
+    "transformers>=4.56.1,<5.10.0",
     "typer>=0.12.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     # build
-    "build>=1.0.0",
+    "build>=1.5.0",
     "setuptools>=61.0",
     "setuptools-git-versioning>=2.0,<3",
 
     # docs build
     "mike~=2.2.0",
     "mkdocs~=1.6.1",
-    "mkdocs-material[imaging]~=9.6.16",
-    "markdown~=3.8.2",
-    "pymdown-extensions~=10.16.1",
-    "mkdocs-section-index~=0.3.10",
+    "mkdocs-material[imaging]~=9.7.6",
+    "markdown~=3.10.2",
+    "pymdown-extensions~=10.21.3",
+    "mkdocs-section-index~=0.3.12",
     "mkdocs-minify-plugin~=0.8.0",
-    "mkdocs-api-autonav~=0.3.1",
+    "mkdocs-api-autonav~=0.4.0",
+    "mkdocs-awesome-nav~=3.3",
     "mkdocstrings-python~=2.0.3",
-    "mkdocs-gen-files~=0.5.0",
-    "mkdocs-nav-weight~=0.2.0",
+    "mkdocs-gen-files~=0.6.1",
+    "mkdocs-nav-weight~=0.3.0",
     "pygments<2.20.0",
 
     # general and configurations
     "sphinx~=8.1.3",
-    "tox~=4.16.0",
-    "tox-uv", # version is tied to tox version
 
     # testing
-    "pytest~=8.2.2",
-    "pytest-asyncio~=0.23.8",
+    "pytest~=9.0.3",
+    "pytest-asyncio~=1.3.0",
     "pytest-cov~=7.1.0",
     "pytest-mock~=3.15.1",
-    "pytest-rerunfailures~=14.0",
-    "respx~=0.22.0",
+    "pytest-rerunfailures~=16.2",
 
     # code quality
-    "mypy~=1.15.0",
-    "ruff~=0.14.1",
+    "mypy~=2.1.0",
+    "ruff~=0.15.13",
 
     # docs quality
-    "mdformat~=0.7.17",
-    "mdformat-footnote~=0.1.1",
-    "mdformat-frontmatter~=2.0.8",
+    "mdformat~=1.0.0",
+    "mdformat-footnote~=0.1.3",
+    "mdformat-frontmatter~=2.0.10",
     "mdformat-gfm~=1.0.0",
+    "mdformat-admon~=2.1.1",
     "mdformat-gfm-alerts~=2.0.0",
 
     # type-checking
     "types-click~=7.1.8",
-    "types-PyYAML~=6.0.1",
-    "types-requests~=2.32.0",
+    "types-PyYAML~=6.0.12",
+    "types-requests~=2.33.0",
     "types-toml",
     "types-tqdm",
 
     # link checking
     "mkdocs-linkcheck~=1.0.6",
 ]
-
-datagen = ["vllm>=0.12.0,<=0.16.0"]
 
 [project.entry-points.console_scripts]
 speculators = "speculators.__main__:app"
@@ -132,7 +131,7 @@ warn_redundant_casts = true
 warn_unused_ignores = false
 show_error_codes = true
 namespace_packages = true
-exclude = ["venv", ".tox", "build", "dist"]
+exclude = ["venv", "build", "dist"]
 
 # Silence "type import errors" as our 3rd-party libs does not have types
 # Check: https://mypy.readthedocs.io/en/latest/config_file.html#import-discovery
@@ -145,7 +144,7 @@ ignore_missing_imports=true
 [tool.ruff]
 line-length = 88
 indent-width = 4
-exclude = ["build", "dist", "env", ".venv"]
+exclude = ["build", "dist", "env", ".venv", "output"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -163,6 +162,7 @@ ignore = [
     "RET505", # allow `else` blocks
     "RET506", # allow `else` blocks
     "PD011", # ignore .values usage since ruff assumes it's a Pandas DataFrame
+    "PLR0915", # too-many-statements
 ]
 select = [
     # Rules reference: https://docs.astral.sh/ruff/rules/
@@ -173,7 +173,6 @@ select = [
     "A", # flake8-builtins: prevents shadowing of Python built-in names
     "C", # Convention: ensures code adheres to specific style and formatting conventions
     "COM", # flake8-commas: enforces the correct use of trailing commas
-    "ERA", # eradicate: detects commented-out code that should be removed
     "I", # isort: ensures imports are sorted in a consistent manner
     "ICN", # flake8-import-conventions: enforces import conventions for better readability
     "N", # pep8-naming: enforces PEP 8 naming conventions for classes, functions, and variables
@@ -185,6 +184,7 @@ select = [
     "TCH", # flake8-type-checking: enforces type checking practices and standards
     "TID", # flake8-tidy-imports: enforces tidy and well-organized imports
     "RUF022", # flake8-ruff: enforce sorting of __all__ in modules
+    "RUF100", # unused-noqa: Checks if there are noqa directives that aren't needed
 
     # Code Structure / Complexity
     "C4", # flake8-comprehensions: improves readability and performance of list, set, and dict comprehensions
@@ -227,7 +227,6 @@ select = [
     "N806", # allow uppercase variable names in tests
     "PGH003", # allow general ignores in tests
     "S106", # allow hardcoded passwords in tests
-    "PLR0915", # allow complex statements in tests
     "S108", # allow probable insecure usage of temporary files in tests
     "PLW2901", # allow variable overwrite in tests
 ]
@@ -245,21 +244,18 @@ select = [
     "SIM105", # contextlib.suppress not needed for __del__
     "S101", # assert in worker is acceptable
     "SIM102", # nested if is clearer
-    "ERA001", # comment is documentation, not code
     "PTH", # os.path is acceptable in data generation
 ]
 "scripts/**/*.py" = [
     "INP001", # allow implicit namespace packages in scripts
     "PTH", # os.path is acceptable in scripts
     "T201", # print statements are acceptable in scripts
+    "SLF001", # allow private member access for model configuration
+    "PLR0915", # allow long parse_args functions
 ]
 
 "examples/**/*.py" = [
     "INP001", # allow implicit namespace packages in examples
-]
-
-"scripts/gen_and_train.py" = [
-    "T201", # allow print in scripts
 ]
 
 [tool.ruff.lint.isort]
@@ -270,5 +266,8 @@ addopts = '-s -vvv --cache-clear'
 markers = [
     "smoke: quick tests to check basic functionality",
     "sanity: detailed tests to ensure major functions work correctly",
-    "regression: tests to ensure that new changes do not break existing functionality"
+    "regression: tests to ensure that new changes do not break existing functionality",
+    "e2e: end-to-end integration tests",
+    "slow: tests that take a long time to run",
+    "multi_gpu: tests that require 2+ GPUs"
 ]

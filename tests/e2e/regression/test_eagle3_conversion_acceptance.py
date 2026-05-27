@@ -2,9 +2,11 @@ import pytest
 
 from speculators.convert.eagle.eagle3_converter import Eagle3Converter
 from tests.e2e.utils import run_vllm_engine
+from tests.utils import requires_cadence
 
 
 class TestEagle3vLLM:
+    @requires_cadence("nightly")
     @pytest.mark.smoke
     @pytest.mark.parametrize(
         "model_info",
@@ -67,12 +69,14 @@ class TestEagle3vLLM:
         run_vllm_engine(
             model_path=str(converted_path),
             tmp_path=tmp_path,
+            enforce_eager=False,
             disable_compile_cache=disable_compile_cache,
             prompts=prompts,
             acceptance_thresholds=acceptance_thresholds,
             ignore_eos=True,
         )
 
+    @requires_cadence("nightly")
     @pytest.mark.smoke
     @pytest.mark.parametrize(
         ("model_path", "acceptance_thresholds"),

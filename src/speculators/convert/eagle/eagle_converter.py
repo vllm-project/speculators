@@ -14,6 +14,7 @@ from speculators.convert.eagle.eagle_legacy_model import (
     EagleSpeculatorConfig,
 )
 from speculators.convert.eagle.utils import (
+    build_llama_config_rope_kwargs,
     detect_fusion_bias_and_layernorms,
     ensure_checkpoint_is_local,
     load_checkpoint_config,
@@ -156,11 +157,13 @@ class EagleConverter:
             bos_token_id=eagle_config.get("bos_token_id", 1),
             eos_token_id=eagle_config.get("eos_token_id", 2),
             tie_word_embeddings=False,  # Eagle uses separate embed_tokens from verifier
-            rope_theta=eagle_config.get("rope_theta", 10000.0),
-            rope_scaling=eagle_config.get("rope_scaling"),
             attention_bias=eagle_config.get("attention_bias", False),
             attention_dropout=eagle_config.get("attention_dropout", 0.0),
             mlp_bias=eagle_config.get("mlp_bias", False),
+            **build_llama_config_rope_kwargs(
+                rope_theta=eagle_config.get("rope_theta", 10000.0),
+                rope_scaling=eagle_config.get("rope_scaling"),
+            ),
         )
 
     def _build_eagle_speculator_config(

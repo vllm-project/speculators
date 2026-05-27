@@ -1,4 +1,3 @@
-# ruff: noqa: ERA001
 import json
 import math
 import os
@@ -9,7 +8,7 @@ from collections.abc import Callable
 from os import PathLike
 from pathlib import Path
 from types import MethodType, SimpleNamespace
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import openai
 import torch
@@ -22,12 +21,15 @@ from transformers import AutoConfig
 from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_REQUEST_TIMEOUT,
+    ClientItem,
     generate_hidden_states,
-    generate_hidden_states_multimodal,
+    wait_for_lock,
 )
 from speculators.train.noise_transforms import TransformTensors
 
+
 BatchType = dict[str, Any]
+
 MULTIMODAL_SIDECAR_KEYS = (
     "pixel_values",
     "image_grid_thw",
@@ -76,9 +78,10 @@ def pad_last_dim_to_length(tensor: torch.Tensor, length: int) -> torch.Tensor:
 
 
 def split_files(datapath: str, ratio: float = 0.9, seed: int = 0):
-    """Given a datapath, split the files into a training and validation set
-    ratio is the proportion of files to put in the training set
-    1 - ratio is the proportion of files to put in the validation set
+    """Given a datapath, split the files into a training and validation set.
+
+    ratio is the proportion of files to put in the training set.
+    1 - ratio is the proportion of files to put in the validation set.
     """
     random.seed(seed)
     file_list = list_files(datapath)
@@ -103,7 +106,6 @@ def create_empty_sample(hidden_size: int):
     #     "lengths": [1],
     #     "position_ids": [seq_len],
     # }
-
     return {
         "hidden_states": torch.empty(0, 3 * hidden_size),
         "input_ids": torch.empty(0, dtype=torch.long),
@@ -117,16 +119,14 @@ def create_empty_sample(hidden_size: int):
 def standardize_data_v1(data: dict[str, Any]) -> dict[str, Any]:
     # v1 data format:
     # {
-    #  "input_ids": [seq_len],
-    #  "loss_mask": [seq_len],
-    #  "hidden_states": [
-    #    [seq_len, hidden_size],
-    #    [seq_len, hidden_size],
-    #    [seq_len, hidden_size],
-    #    ...
-    #  ],
+    #   "input_ids": [seq_len],
+    #   "loss_mask": [seq_len],
+    #   "hidden_states": [
+    #     [seq_len, hidden_size],
+    #     [seq_len, hidden_size],
+    #     ...
+    #   ],
     # }
-
     return {
         "hidden_states": torch.cat(data["hidden_states"][:-1], dim=-1),
         "input_ids": data["input_ids"],
@@ -179,12 +179,11 @@ def _make_rope_index_fn(verifier_name_or_path: str):
 
     Returns ``None`` (and silently falls back to 1D arange in
     ``BaseDataset._build_position_ids``) when:
+
       * ``AutoConfig.from_pretrained`` fails (bad path, missing model, etc.)
       * The verifier config carries no recognized multimodal layout
         (text-only verifier)
       * Transformers does not expose the matching modeling class
-
-    This keeps text-only training unaffected by multimodal-specific imports.
     """
     try:
         verifier_root_config = AutoConfig.from_pretrained(
@@ -193,7 +192,7 @@ def _make_rope_index_fn(verifier_name_or_path: str):
     except Exception:  # noqa: BLE001
         return None
 
-    # --- Dispatch on config layout ------------------------------------------
+    # --- Dispatch on config layout -----------------------------------------
     thinker_config = getattr(verifier_root_config, "thinker_config", None)
     if thinker_config is not None:
         return _make_rope_index_fn_qwen3_omni(thinker_config)
@@ -218,7 +217,7 @@ def _make_rope_index_fn(verifier_name_or_path: str):
 def _make_rope_index_fn_qwen3_omni(thinker_config):
     """Return a bound ``get_rope_index`` for Qwen3-Omni Thinker verifiers."""
     try:
-        from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
+        from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (  # noqa: PLC0415
             Qwen3OmniMoeThinkerForConditionalGeneration,
         )
     except ImportError:
@@ -234,7 +233,9 @@ def _make_rope_index_fn_qwen3_omni(thinker_config):
             vision_start_token_id=getattr(
                 thinker_config, "vision_start_token_id", None
             ),
-            audio_start_token_id=getattr(thinker_config, "audio_start_token_id", None),
+            audio_start_token_id=getattr(
+                thinker_config, "audio_start_token_id", None
+            ),
             position_id_per_seconds=getattr(
                 thinker_config, "position_id_per_seconds", 25
             ),
@@ -259,14 +260,14 @@ def _make_rope_index_fn_qwen3_5_moe(root_config):
     attention_mask)`` — it takes a ``mm_token_type_ids`` tensor marking each
     token as text (0), image (1), or video (2). The rest of the pipeline
     (``_build_position_ids``) still emits Qwen3-Omni-style kwargs
-    (``use_audio_in_video``, ``audio_seqlens``, ``second_per_grids``). We
+    (``use_audio_in_video``, ``audio_seqlen``, ``second_per_grids``). We
     return a thin adapter that builds ``mm_token_type_ids`` from ``input_ids``
     using top-level ``{image_token_id, video_token_id}`` and ignores the
     unused audio kwargs, so callers never need to know which verifier family
     they have.
     """
     try:
-        from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import (
+        from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import (  # noqa: PLC0415
             Qwen3_5MoeModel,
         )
     except ImportError:
@@ -319,6 +320,16 @@ def _make_rope_index_fn_qwen3_5_moe(root_config):
     return adapter
 
 
+def build_client_item(dataset_item: dict) -> ClientItem:
+    out_dict = {}
+    out_dict["input_ids"] = dataset_item["input_ids"].tolist()
+
+    if "messages" in dataset_item:
+        out_dict["messages"] = dataset_item["messages"]
+
+    return cast("ClientItem", out_dict)
+
+
 class BaseDataset(Dataset):
     def __init__(
         self,
@@ -332,17 +343,17 @@ class BaseDataset(Dataset):
         self.approx_lengths = self._compute_approx_lengths()
 
     def _compute_approx_lengths(self):
-        raise NotImplementedError
+        raise NotImplementedError()
 
     def _get_raw_data(self, index):
-        raise NotImplementedError
+        raise NotImplementedError()
 
     def _build_position_ids(self, data: dict[str, Any], seq_len: int) -> torch.Tensor:
         rope_index_fn = getattr(self, "_rope_index_fn", None)
         if rope_index_fn is not None and _has_multimodal_payload(data):
-            audio_seqlens = _maybe_tensor(data.get("audio_feature_lengths"), torch.long)
-            if audio_seqlens is None and data.get("feature_attention_mask") is not None:
-                audio_seqlens = _maybe_tensor(
+            audio_seqlen = _maybe_tensor(data.get("audio_feature_lengths"), torch.long)
+            if audio_seqlen is None and data.get("feature_attention_mask") is not None:
+                audio_seqlen = _maybe_tensor(
                     data["feature_attention_mask"], torch.long
                 ).sum(dim=-1)
 
@@ -355,7 +366,7 @@ class BaseDataset(Dataset):
                     _maybe_tensor(data.get("video_grid_thw"), torch.long)
                 ),
                 use_audio_in_video=bool(data.get("use_audio_in_video", False)),
-                audio_seqlens=audio_seqlens,
+                audio_seqlen=audio_seqlen,
                 second_per_grids=_maybe_tensor(data.get("second_per_grids")),
                 attention_mask=torch.ones(1, seq_len, dtype=torch.long),
             )
@@ -370,10 +381,10 @@ class BaseDataset(Dataset):
             return data
 
         # data structure: {
-        #  "hidden_states": [seq_len, 3 * hidden_size],
-        #  "input_ids": [seq_len],
-        #  "verifier_last_hidden_states": [seq_len, hidden_size],
-        #  "loss_mask": [seq_len],
+        #     "hidden_states": [seq_len, 3 * hidden_size],
+        #     "input_ids": [seq_len],
+        #     "verifier_last_hidden_states": [seq_len, hidden_size],
+        #     "loss_mask": [seq_len],
         # }
 
         # Convert hidden states to the correct dtype
@@ -389,7 +400,7 @@ class BaseDataset(Dataset):
 
         data["position_ids"] = self._build_position_ids(data, seq_len)
 
-        # Anchor mask: positions where all RoPE channels coincide. For 3D MRoPE
+        # Anchor mask: positions where all RoPE channels coincide (text tokens). For 3D MRoPE
         # the T/H/W channels diverge on vision/audio placeholder tokens, so we
         # must exclude those from the anchor candidate set to keep
         # ``mask_position_ids`` (computed on T only) safe to broadcast to H/W.
@@ -430,10 +441,11 @@ class ArrowDataset(BaseDataset):
         verifier_name_or_path: str | None = None,
     ):
         """Initialize the ArrowDataset.
+
         Args:
             max_len: The maximum length of the sequence.
             datapath: The path to the data directory that contains the preprocessed
-            arrow dataset.
+                arrow dataset.
             transform: The transform to apply to the data.
             hidden_states_dtype: The dtype of the hidden states.
         """
@@ -480,7 +492,7 @@ class ArrowDataset(BaseDataset):
             else None
         )
 
-        # Delay super init so that `_compute_approx_lengths` has required data
+        # Delay super init so that _compute_approx_lengths has required data
         super().__init__(max_len, transform, hidden_states_dtype)
 
     def _map_to_file_idx(self, index: int):
@@ -495,8 +507,8 @@ class ArrowDataset(BaseDataset):
         model_id = list_models.data[0].id
         if self.model and self.model != model_id:
             raise ValueError(
-                f"An explicit model name was passed ({self.model}) which doesn't match "
-                f"found model_id {model_id}. "
+                f"An explicit model name was passed ({self.model}) which doesn't match"
+                f" found model_id {model_id}."
                 "Please make sure --endpoint is set to the correct vllm instance."
             )
         self.model = model_id
@@ -511,6 +523,11 @@ class ArrowDataset(BaseDataset):
     def _maybe_load_hs_file(self, index: int) -> dict[str, torch.Tensor] | None:
         file_idx = self._map_to_file_idx(index)
         candidate_path = self.hidden_states_path / f"hs_{file_idx}.safetensors"
+
+        lock_path = str(candidate_path) + ".lock"
+        if Path(lock_path).exists():
+            wait_for_lock(lock_path)
+
         if candidate_path.exists():
             return load_file(candidate_path)
 
@@ -520,44 +537,36 @@ class ArrowDataset(BaseDataset):
         if not self.client:
             self._setup_client()
 
-        row = self.data[index]
-        input_ids = _maybe_tensor(row["input_ids"], torch.long)
-        if input_ids is None:
-            return None
+        dataset_item = self.data[index]
+        client_item = build_client_item(dataset_item)
 
-        messages_json = row.get("messages_json", "")
         try:
-            if messages_json:
-                hs_filepath = generate_hidden_states_multimodal(
-                    self.client,  # type:ignore[arg-type]
-                    self.model,  # type:ignore[arg-type]
-                    json.loads(messages_json),
-                    timeout=self.request_timeout,
-                    max_retries=self.max_retries,
-                )
-            else:
-                hs_filepath = generate_hidden_states(
-                    self.client,  # type:ignore[arg-type]
-                    self.model,  # type:ignore[arg-type]
-                    input_ids.tolist(),
-                    timeout=self.request_timeout,
-                    max_retries=self.max_retries,
-                )
+            hs_filepath = generate_hidden_states(
+                self.client,  # type:ignore[arg-type]
+                self.model,  # type:ignore[arg-type]
+                client_item,
+                timeout=self.request_timeout,
+                max_retries=self.max_retries,
+            )
+
+            loaded_hs = load_file(hs_filepath)
+
+            match self.on_generate:
+                case "cache":
+                    file_idx = self._map_to_file_idx(index)
+                    target_path = self.hidden_states_path / f"hs_{file_idx}.safetensors"
+                    shutil.move(hs_filepath, target_path)
+                case "delete":
+                    Path(hs_filepath).unlink()
+
+            return loaded_hs
+
         except Exception as e:  # noqa: BLE001
-            warnings.warn(str(e), stacklevel=1)
+            warnings.warn(
+                f"Failed to load/cache hidden states for sample {index}: {e}",
+                stacklevel=1,
+            )
             return None
-
-        loaded_hs = load_file(hs_filepath)
-
-        match self.on_generate:
-            case "cache":
-                file_idx = self._map_to_file_idx(index)
-                target_path = self.hidden_states_path / f"hs_{file_idx}.safetensors"
-                shutil.move(hs_filepath, target_path)
-            case "delete":
-                Path(hs_filepath).unlink()
-
-        return loaded_hs
 
     def _get_raw_data(self, index):
         row = self.data[index]
@@ -592,11 +601,10 @@ class ArrowDataset(BaseDataset):
         #   "hidden_states": [seq_len, 4, hidden_size]
         #   "token_ids": [seq_len]
         # }
-
         if not torch.equal(loaded_hs["token_ids"], stored_input_ids):
             warnings.warn(
                 f"Loaded token ids {loaded_hs['token_ids']} for index {index} don't"
-                f"match input ids {stored_input_ids}",
+                f" match input ids {stored_input_ids}",
                 stacklevel=1,
             )
             return None
@@ -635,22 +643,21 @@ class SampleFileDataset(BaseDataset):
         hidden_states_dtype=None,
     ):
         """Initialize the SampleFileDataset.
+
         Args:
             max_len: The maximum length of the sequence.
             datapath: The path to the data directory. All `.pt` files in this directory
-            or its subdirectories will be loaded and used as training data. MUTUALLY
-            EXCLUSIVE with `file_list`.
-            file_list: The list of explict file paths to load data from. These files
-            must be in the format produced by the Speculators generation scripts.
-            MUTUALLY EXCLUSIVE with `datapath`.
+                or its subdirectories will be loaded and used as training data. MUTUALLY
+                EXCLUSIVE with `file_list`.
+            file_list: The list of explicit file paths to load data from. These files
+                must be in the format produced by the Speculators generation scripts.
+                MUTUALLY EXCLUSIVE with `datapath`.
             transform: The transform to apply to the data.
             hidden_states_dtype: The dtype of the hidden states.
             standardize_fn: The function to standardize the data.
 
-            Note: datapath or file_list must be provided, but not both.
-
+        Note: datapath or file_list must be provided, but not both.
         """
-
         if datapath is not None and file_list is not None:
             raise ValueError(
                 "Either `datapath` or `file_list` must be provided, but "
@@ -670,7 +677,7 @@ class SampleFileDataset(BaseDataset):
 
         self.data: list[str] = file_list
 
-        # Delay super init so that `_compute_approx_lengths` has required data
+        # Delay super init so that _compute_approx_lengths has required data
         super().__init__(max_len, transform, hidden_states_dtype)
 
     def __len__(self):
@@ -726,7 +733,7 @@ def create_collate_fn(
     max_len: int,
     hidden_size: int,
     preprocess: Callable[[BatchType], BatchType] | None = None,
-):
+) -> Callable[[list[BatchType | None]], BatchType]:
     def collate_fn(batch: list[BatchType | None]) -> BatchType:
         # Apply per-sample preprocessing and filter failed samples
         batch = [preprocess(b) if preprocess else b for b in batch if b is not None]
@@ -753,7 +760,7 @@ def create_collate_fn(
                 # Slice and pad on seq (0th) dimension to max_len
                 collated_data[key] = slice_and_pad_to_length(
                     collated_data[key], max_len
-                ).unsqueeze(0)
+                )
                 # shape: [1, max_len, ...]
 
         if has_mrope:
@@ -773,7 +780,7 @@ def create_collate_fn(
                 collated_positions, max_len
             ).unsqueeze(0)
 
-        # Include lengths until while they fit in max_len
+        # Include lengths until they fit in max_len
         # The last included length is (if necessary) truncated
         # Any additional lengths are discarded
         lengths = collated_data["lengths"]

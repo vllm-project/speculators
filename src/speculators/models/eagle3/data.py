@@ -1,4 +1,3 @@
-# ruff: noqa: ERA001
 from speculators.train.data import BatchType
 
 __all__ = ["shift_batch"]

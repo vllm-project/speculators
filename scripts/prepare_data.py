@@ -28,13 +28,8 @@ import logging
 import sys
 from pathlib import Path
 
-_REPO_ROOT = Path(__file__).resolve().parents[1]
-_SRC_ROOT = _REPO_ROOT / "src"
-if str(_SRC_ROOT) not in sys.path:
-    sys.path.insert(0, str(_SRC_ROOT))
-
-from speculators.data_generation.logging_utils import PipelineLogger  # noqa: E402
-from speculators.data_generation.preprocessing import (  # noqa: E402
+from speculators.data_generation.logging_utils import PipelineLogger
+from speculators.data_generation.preprocessing import (
     load_and_preprocess_dataset,
 )
 
@@ -63,6 +58,14 @@ def parse_args():
         required=True,
         help="HuggingFace model ID or local path for target model",
     )
+    parser.add_argument(
+        "--trust-remote-code",
+        action="store_true",
+        help=(
+            "Allow executing code from HF Hub when loading the target model's "
+            "processor."
+        ),
+    )
 
     # Data arguments
     parser.add_argument(
@@ -89,7 +92,7 @@ def parse_args():
         type=str,
         default=None,
         help=(
-            "Path to save token frequency distribution"
+            "Path to save token frequency distribution "
             "(default: args.output / 'token_freq.pt')"
         ),
     )
@@ -113,7 +116,10 @@ def parse_args():
 
     # Output arguments
     parser.add_argument(
-        "--output", type=str, required=True, help="Directory to save output dataset"
+        "--output",
+        type=str,
+        default="./output",
+        help="Directory to save output dataset (default: ./output)",
     )
     parser.add_argument(
         "--overwrite",
@@ -196,6 +202,7 @@ def main():
         assistant_pattern=args.assistant_pattern,
         turn_dropout=args.turn_dropout,
         minimum_valid_tokens=args.minimum_valid_tokens,
+        trust_remote_code=args.trust_remote_code,
         multimodal=args.multimodal,
         multimodal_output_dir=output if args.multimodal else None,
     )

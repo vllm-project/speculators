@@ -149,9 +149,8 @@ def parse_args():
         action=argparse.BooleanOptionalAction,
         default=True,
         help=(
-            "For DFlash models, append the last layer (num_hidden_layers) to the "
-            "vLLM extraction ids as the final verifier/reference slice. "
-            "Default: True"
+            "Append the last layer (num_hidden_layers) to "
+            "target_layer_ids for verifier hidden states extraction. Default: True"
         ),
     )
     parser.add_argument(

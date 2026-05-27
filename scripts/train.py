@@ -572,6 +572,15 @@ def create_transformer_layer_config(
         f"rope_scaling={rope_kwargs.get('rope_scaling', None)}"
     )
 
+    hidden_act = getattr(verifier_config, "hidden_act", None) or getattr(
+        verifier_config, "hidden_activation", None
+    )
+    if hidden_act is None:
+        raise AttributeError(
+            f"{type(verifier_config).__name__} has neither 'hidden_act' "
+            "nor 'hidden_activation'"
+        )
+
     return config_class(
         vocab_size=verifier_config.vocab_size,
         hidden_size=hidden_size,
@@ -579,7 +588,7 @@ def create_transformer_layer_config(
         num_hidden_layers=num_layers,
         num_attention_heads=n_heads,
         num_key_value_heads=n_kv,
-        hidden_act=verifier_config.hidden_act,
+        hidden_act=hidden_act,
         max_position_embeddings=max_pos,
         initializer_range=verifier_config.initializer_range,
         rms_norm_eps=verifier_config.rms_norm_eps,
@@ -725,6 +734,7 @@ def main(args: argparse.Namespace):
         args.verifier_name_or_path,
         transformer_layer_config.vocab_size,
         args.mask_token_id,
+        trust_remote_code=args.trust_remote_code,
     )
 
     registry = SpeculatorModel.registry
@@ -735,22 +745,22 @@ def main(args: argparse.Namespace):
         )
 
     model_class = registry[args.speculator_type]
+
     if args.from_pretrained:
         draft_model = model_class.from_pretrained(
             args.from_pretrained, t2d=t2d, d2t=d2t
         )
     else:
-        args_dict = vars(args)
-        args_dict["draft_vocab_size"] = draft_vocab_size
+        args.draft_vocab_size = draft_vocab_size
         draft_model = model_class.from_training_args(
             verifier_config=transformer_layer_config,
             t2d=t2d,
             d2t=d2t,
-            **args_dict,
+            **vars(args),
         )
 
     # Setup dataloaders
-    preprocess = shift_batch if args.speculator_type == "eagle3" else None
+    preprocess = shift_batch if args.speculator_type in ("eagle3", "peagle") else None
 
     noise_transform = AddUniformNoise(std=args.noise_std)
     if args.legacy_data:
@@ -845,6 +855,7 @@ def main(args: argparse.Namespace):
         checkpoint_freq=args.checkpoint_freq,
         save_best=args.save_best,
         hidden_states_dtype=hidden_states_dtype,
+        log_freq=args.log_freq,
     )
     trainer = Trainer(draft_model, trainer_config, train_loader, val_loader)
 
@@ -855,16 +866,26 @@ def main(args: argparse.Namespace):
     maybe_destroy_distributed()
 
 
-def _checkpoint_freq(value: str) -> int:
-    ivalue = int(value)
-    if ivalue < 1:
-        raise argparse.ArgumentTypeError("--checkpoint-freq must be >= 1")
-    return ivalue
+def _checkpoint_freq(value: str) -> float:
+    fvalue = float(value)
+    if fvalue <= 0:
+        raise argparse.ArgumentTypeError("--checkpoint-freq must be > 0")
+    if fvalue > 1 and not fvalue.is_integer():
+        raise argparse.ArgumentTypeError(
+            f"--checkpoint-freq={fvalue} is not an integer. Values > 1 are treated "
+            "as epoch counts and must be whole numbers."
+        )
+    return fvalue
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--verifier-name-or-path", type=str, required=True)
+    parser.add_argument(
+        "--trust-remote-code",
+        action="store_true",
+        help="Allow executing code from HF Hub when loading the verifier's tokenizer.",
+    )
     parser.add_argument(
         "--speculator-type",
         type=str,
@@ -877,7 +898,16 @@ def parse_args():
         default="",
         help="The pretrained draft model to finetune",
     )
-    parser.add_argument("--data-path", type=str, default="./data")
+    parser.add_argument(
+        "--data-path",
+        type=str,
+        default="./output",
+        help=(
+            "Root data directory containing the preprocessed dataset, "
+            "vocab mappings (d2t.npy, t2d.npy), token frequencies "
+            "(token_freq.pt), and hidden states (default: ./output)"
+        ),
+    )
     parser.add_argument(
         "--hidden-states-path",
         type=str,
@@ -971,6 +1001,12 @@ def parse_args():
         help="One of 'trackio', 'wandb', 'tensorboard' or comma separated list of them",
     )
     parser.add_argument("--total-seq-len", type=int, default=8192)
+    parser.add_argument(
+        "--log-freq",
+        type=int,
+        default=1,
+        help="Log training metrics every N steps (default: 1)",
+    )
     parser.add_argument("--log-dir", type=str, default="./logs")
     parser.add_argument("--run-name", type=str, default=None)
     parser.add_argument("--num-layers", type=int, default=1)
@@ -1098,13 +1134,24 @@ def parse_args():
         "--token-freq-path",
         type=str,
         default=None,
-        help="Path to token frequency distribution file (.pt)",
+        help=(
+            "Path to token frequency distribution file (.pt). Used together with "
+            "--draft-vocab-size to build vocab mappings at training time. Falls back "
+            "to '<data-path>/token_freq.pt' if not provided. If neither that file "
+            "exists nor --draft-vocab-size is set, vocab mapping is skipped and the "
+            "full verifier vocab is used."
+        ),
     )
     parser.add_argument(
         "--draft-vocab-size",
         type=int,
         default=None,
-        help="Vocabulary size for the draft model",
+        help=(
+            "Vocabulary size for the draft model. Must be provided together with a "
+            "token frequency file (--token-freq-path or '<data-path>/token_freq.pt') "
+            "to generate vocab mappings. If either is absent, vocab mapping is skipped "
+            "and the full verifier vocab is used, making this argument a no-op."
+        ),
     )
     parser.add_argument("--d2t-path", type=str, default=None)
     parser.add_argument("--t2d-path", type=str, default=None)
@@ -1151,6 +1198,7 @@ def parse_args():
         help="Use RMSNorm before fc in Eagle3 draft path "
         "(e.g. for gpt-oss). Omit for other models.",
     )
+    # D-Flash specific parameters
     parser.add_argument(
         "--block-size",
         type=int,
@@ -1162,6 +1210,25 @@ def parse_args():
         type=int,
         default=256,
         help="Maximum anchor positions for DFlash training (default: 256)",
+    )
+    # P-EAGLE specific parameters
+    parser.add_argument(
+        "--num-depths",
+        type=int,
+        default=8,
+        help="Number of parallel prediction depths for P-EAGLE (default: 8)",
+    )
+    parser.add_argument(
+        "--down-sample-ratio",
+        type=float,
+        default=0.7,
+        help="Geometric decay ratio for COD sampling in P-EAGLE (default: 0.7)",
+    )
+    parser.add_argument(
+        "--down-sample-ratio-min",
+        type=float,
+        default=0.2,
+        help="Minimum retention ratio for COD sampling in P-EAGLE (default: 0.2)",
     )
     # Dataloader parameters
     parser.add_argument(
@@ -1180,8 +1247,9 @@ def parse_args():
     parser.add_argument(
         "--checkpoint-freq",
         type=_checkpoint_freq,
-        default=1,
-        help="Save a checkpoint every N epochs.",
+        default=1.0,
+        help="Save a checkpoint every N epochs. Values < 1 enable sub-epoch "
+        "checkpointing (e.g. 0.5 = every half epoch).",
     )
     parser.add_argument(
         "--save-best",

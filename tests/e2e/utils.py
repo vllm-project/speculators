@@ -11,13 +11,16 @@ from pathlib import Path
 from textwrap import indent
 
 from loguru import logger
+from PIL import Image
+
+from speculators.data_generation.preprocessing import load_raw_dataset
 
 __all__ = [
     "SCRIPTS_DIR",
     "VLLM_PYTHON",
     "launch_vllm_server",
     "launch_vllm_server_context",
-    "run_data_generation_offline2",
+    "run_data_generation_offline",
     "run_prepare_data",
     "run_training",
     "run_vllm_engine",
@@ -65,9 +68,12 @@ def launch_vllm_server(
     model: str,
     port: int,
     hidden_states_path: str,
+    *,
     max_model_len: int = 513,
     gpu_memory_utilization: float = 0.5,
     target_layer_ids: list[int] | None = None,
+    enforce_eager: bool = False,
+    allowed_local_media_path: str | None = None,
 ) -> subprocess.Popen:
     """Launch a vLLM server configured for hidden-state extraction.
 
@@ -83,6 +89,10 @@ def launch_vllm_server(
     ]
     if target_layer_ids is not None:
         cmd += ["--target-layer-ids"] + [str(lid) for lid in target_layer_ids]
+    if enforce_eager:
+        cmd += ["--enforce-eager"]
+    if allowed_local_media_path is not None:
+        cmd += ["--allowed-local-media-path", allowed_local_media_path]
     cmd += [
         "--",
         "--port",
@@ -91,23 +101,22 @@ def launch_vllm_server(
         str(max_model_len),
         "--gpu-memory-utilization",
         str(gpu_memory_utilization),
+        "--disable-uvicorn-access-log",
     ]
     logger.info("Starting vLLM server: {}", " ".join(cmd))
 
-    process = subprocess.Popen(  # noqa: S603
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
-    )
+    process = subprocess.Popen(cmd)  # noqa: S603
 
     try:
         wait_for_server(port, process=process)
         logger.info("vLLM server ready on port {}", port)
     except Exception:
-        # Dump captured output to help debug startup failures
-        output = process.stdout.read().decode() if process.stdout else ""
-        if output:
-            logger.error("vLLM server output:\n{}", indent(output, "    "))
         process.terminate()
-        process.wait(timeout=30)
+        try:
+            process.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
         raise
 
     return process
@@ -123,13 +132,7 @@ def stop_vllm_server(process: subprocess.Popen):
             process.kill()
             process.wait(timeout=10)
     if process.returncode not in (0, -15):  # -15 = SIGTERM (expected)
-        output = process.stdout.read().decode() if process.stdout else ""
-        if output:
-            logger.error(
-                "vLLM server exited with code {}. Output:\n{}",
-                process.returncode,
-                indent(output, "    "),
-            )
+        logger.error("vLLM server exited with code {}", process.returncode)
     logger.info("vLLM server stopped (exit code {})", process.returncode)
 
 
@@ -142,21 +145,41 @@ def launch_vllm_server_context(*args, **kwargs):
         stop_vllm_server(process)
 
 
+def setup_dummy_sharegpt4v_coco(coco_dir: Path):
+    """Enable ShareGPT4V to be used without downloading the actual COCO dataset."""
+    coco_dir.mkdir(parents=True, exist_ok=True)
+
+    dummy_image = Image.new("RGB", (256, 256))
+    dummy_image_path = coco_dir / "dummy.png"
+    dummy_image.save(dummy_image_path)
+
+    raw_dataset, normalize_fn = load_raw_dataset("sharegpt4v_coco")
+
+    # Use symlinks to avoid copying the image
+    for raw_path in raw_dataset["image"]:
+        image_path = coco_dir / raw_path.removeprefix("coco/")
+
+        if not image_path.exists():
+            image_path.parent.mkdir(parents=True, exist_ok=True)
+            image_path.symlink_to(dummy_image_path)
+
+
 def run_prepare_data(
     model: str,
+    data: str,
     data_path: Path,
     max_samples: int = 50,
     seq_length: int = 512,
     timeout: float | None = None,
 ):
-    """Tokenize ShareGPT data using prepare_data.py."""
+    """Tokenize data using prepare_data.py."""
     cmd = [
         sys.executable,
         str(SCRIPTS_DIR / "prepare_data.py"),
         "--model",
         model,
         "--data",
-        "sharegpt",
+        data,
         "--output",
         str(data_path),
         "--max-samples",
@@ -171,7 +194,7 @@ def run_prepare_data(
     assert result.returncode == 0, "prepare_data.py failed"
 
 
-def run_data_generation_offline2(
+def run_data_generation_offline(
     data_path: Path,
     hidden_states_path: Path | None = None,
     port: int = 8321,
@@ -183,7 +206,7 @@ def run_data_generation_offline2(
 ):
     datagen_cmd = [
         sys.executable,
-        str(SCRIPTS_DIR / "data_generation_offline2.py"),
+        str(SCRIPTS_DIR / "data_generation_offline.py"),
         "--preprocessed-data",
         str(data_path),
         "--endpoint",
@@ -206,7 +229,7 @@ def run_data_generation_offline2(
         datagen_cmd, stderr=subprocess.PIPE, text=True, check=False, timeout=timeout
     )
     assert result.returncode == 0, (
-        f"data_generation_offline2.py failed:\n{result.stderr}"
+        f"data_generation_offline.py failed:\n{result.stderr}"
     )
 
 
@@ -225,6 +248,8 @@ def run_training(
     speculator_type: str = "eagle3",
     extra_train_args: list[str] | None = None,
     target_layer_ids: list[int] | None = None,
+    num_layers: int | None = None,
+    log_freq: int = 1,
 ):
     train_cmd = [
         sys.executable,
@@ -247,6 +272,8 @@ def run_training(
         str(seq_length),
         "--speculator-type",
         speculator_type,
+        "--log-freq",
+        str(log_freq),
     ]
     if online:
         train_cmd += [
@@ -264,6 +291,8 @@ def run_training(
         train_cmd += ["--hidden-states-path", str(hidden_states_path)]
     if target_layer_ids is not None:
         train_cmd += ["--target-layer-ids"] + [str(lid) for lid in target_layer_ids]
+    if num_layers is not None:
+        train_cmd += ["--num-layers", str(num_layers)]
     if extra_train_args:
         train_cmd += extra_train_args
 
@@ -278,6 +307,10 @@ def run_vllm_engine(
     model_path: str,
     tmp_path: Path,
     prompts: list[list[dict[str, str]]],
+    max_model_len: int = 1024,
+    gpu_memory_utilization: float = 0.8,
+    enforce_eager: bool = False,
+    allowed_local_media_path: str | None = None,
     disable_compile_cache: bool = False,
     max_tokens: int = 50,
     ignore_eos: bool = True,
@@ -290,26 +323,29 @@ def run_vllm_engine(
     run_vllm_file = str(Path(__file__).with_name("run_vllm.py"))
     results_file = str(tmp_path / "results.json")
 
+    sampling_params_dict = {
+        "temperature": 0,
+        "top_p": 0.9,
+        "max_tokens": max_tokens,
+        "ignore_eos": ignore_eos,
+    }
+
+    llm_args_dict = {
+        "model": model_path,
+        "max_model_len": max_model_len,
+        "gpu_memory_utilization": gpu_memory_utilization,
+        "enforce_eager": enforce_eager,
+    }
+    if allowed_local_media_path is not None:
+        llm_args_dict["allowed_local_media_path"] = allowed_local_media_path
+
     command = [
         VLLM_PYTHON,
         run_vllm_file,
         "--sampling-params-args",
-        json.dumps(
-            {
-                "temperature": 0,
-                "top_p": 0.9,
-                "max_tokens": max_tokens,
-                "ignore_eos": ignore_eos,
-            }
-        ),
+        json.dumps(sampling_params_dict),
         "--llm-args",
-        json.dumps(
-            {
-                "model": model_path,
-                "max_model_len": 1024,
-                "gpu_memory_utilization": 0.8,
-            }
-        ),
+        json.dumps(llm_args_dict),
         "--prompts",
         json.dumps(prompts),
         "--results-file",

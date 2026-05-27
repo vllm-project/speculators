@@ -35,18 +35,7 @@ from speculators.train.checkpointer import (
     SingleGPUCheckpointer,
 )
 from speculators.train.trainer import Trainer, TrainerConfig
-
-# ---------------------------------------------------------------------------
-# Skip decorators
-# ---------------------------------------------------------------------------
-
-requires_cuda = pytest.mark.skipif(
-    not torch.cuda.is_available(), reason="CUDA required"
-)
-requires_multi_gpu = pytest.mark.skipif(
-    not torch.cuda.is_available() or torch.cuda.device_count() < 2,
-    reason="2+ GPUs required",
-)
+from tests.conftest import requires_cuda, requires_multi_gpu
 
 # ---------------------------------------------------------------------------
 # Tiny model constants
@@ -63,7 +52,7 @@ TINY_LLAMA_CONFIG = LlamaConfig(
     max_position_embeddings=32,
     rms_norm_eps=1e-6,  # type: ignore[arg-type] # (bad transformer's type hint, int instead of float)
     tie_word_embeddings=False,
-    _attn_implementation="eager",
+    _attn_implementation="eager",  # type: ignore[call-arg]
 )
 
 

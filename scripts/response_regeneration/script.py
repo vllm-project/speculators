@@ -22,6 +22,12 @@ DATASET_CONFIGS = {
         "prompt_field": "prompt",
         "default_split": "train_sft",
     },
+    "gsm8k": {
+        "id": "openai/gsm8k",
+        "prompt_field": "question",
+        "default_split": "train",
+        "subset": "main",
+    },
 }
 
 
@@ -43,8 +49,8 @@ def parse_args():
     parser.add_argument(
         "--dataset",
         default="ultrachat",
-        choices=["magpie", "ultrachat"],
-        help="Dataset to process (magpie or ultrachat)",
+        choices=list(DATASET_CONFIGS.keys()),
+        help="Dataset to process",
     )
     parser.add_argument(
         "--split",
@@ -54,7 +60,10 @@ def parse_args():
     parser.add_argument(
         "--subset",
         default=None,
-        help="(unused) kept for symmetry with other scripts",
+        help=(
+            "Dataset subset/config name "
+            "(auto-detected from dataset config if not specified)"
+        ),
     )
     parser.add_argument("--limit", type=int, default=None, help="Stop after N rows")
     parser.add_argument(
@@ -131,7 +140,7 @@ async def detect_model(endpoint: str) -> str:
             raise ValueError("No models found at endpoint")
     except ValueError:
         raise
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         raise ValueError(
             f"Failed to auto-detect model from {models_endpoint}: {e}\n"
             f"Please specify model with --model argument"
@@ -166,8 +175,11 @@ async def worker(
                 data = await response.json()
 
             choice = data["choices"][0]
-            generated_text = choice["message"]["content"]
-            reasoning_content = choice["message"].get("reasoning_content")
+            message = choice["message"]
+            generated_text = message["content"]
+            reasoning_content = message.get("reasoning_content")
+            if reasoning_content is None:
+                reasoning_content = message.get("reasoning")
             finish_reason = choice.get("finish_reason")
             latency = time.time() - start_time
 
@@ -228,8 +240,9 @@ async def main():
     dataset_id = dataset_config["id"]
     prompt_field = dataset_config["prompt_field"]
 
-    # Use dataset-specific default split if not provided
+    # Use dataset-specific defaults if not provided
     split = args.split if args.split is not None else dataset_config["default_split"]
+    subset = args.subset if args.subset is not None else dataset_config.get("subset")
 
     # Generate output filename if not specified
     if args.outfile is None:
@@ -245,7 +258,7 @@ async def main():
     print()
 
     seen_ids = load_seen(args.outfile) if args.resume else set()
-    dataset = load_dataset(dataset_id, split=split, streaming=True)
+    dataset = load_dataset(dataset_id, name=subset, split=split, streaming=True)
 
     queue: asyncio.Queue = asyncio.Queue(maxsize=args.concurrency * 4)
     semaphore = asyncio.Semaphore(args.concurrency)
