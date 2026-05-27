@@ -1,6 +1,8 @@
 import asyncio
+import fcntl
 import functools
 import logging
+import os
 import time
 from typing import TYPE_CHECKING, Any, TypedDict
 
@@ -120,6 +122,47 @@ class ClientItem(TypedDict):
     messages: NotRequired[list[ChatCompletionMessageParam]]
     """If provided, pass `messages` to Chat Completions API
     instead of passing `token_ids` to Completions API."""
+
+
+async def _poll_lock_async(fd, poll_interval):
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except BlockingIOError:
+            await asyncio.sleep(poll_interval)
+
+
+async def wait_for_lock_async(lock_path, timeout=10.0, poll_interval=0.1):
+    fd = os.open(lock_path, os.O_RDONLY)
+    try:
+        await asyncio.wait_for(_poll_lock_async(fd, poll_interval), timeout=timeout)
+    except BaseException:
+        os.close(fd)
+        raise
+    os.close(fd)
+    os.remove(lock_path)
+
+
+def wait_for_lock(lock_path, timeout=10.0, poll_interval=0.1):
+    fd = os.open(lock_path, os.O_RDONLY)
+    try:
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        f"Timed out waiting for lock: {lock_path}"
+                    ) from None
+                time.sleep(poll_interval)
+    except BaseException:
+        os.close(fd)
+        raise
+    os.close(fd)
+    os.remove(lock_path)
 
 
 @with_retries
