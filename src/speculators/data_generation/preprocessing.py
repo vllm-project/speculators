@@ -488,6 +488,27 @@ def _get_input_ids_loss_mask(
     return input_ids, loss_mask
 
 
+def _parse_conv_tools(conv_tools: object, idx: int) -> list | None:
+    """Parse the tools JSON string for one conversation; warn and return None
+    on invalid JSON or unexpected types."""
+    if not conv_tools:
+        return None
+    if not isinstance(conv_tools, str):
+        log.warning(
+            f"Non-string value in tools column for conversation {idx}: "
+            f"{type(conv_tools).__name__}, proceeding without tools"
+        )
+        return None
+    try:
+        return json.loads(conv_tools)
+    except json.JSONDecodeError as e:
+        log.warning(
+            f"Invalid JSON in tools column for conversation {idx}: {e}, "
+            "proceeding without tools"
+        )
+        return None
+
+
 def _preprocess_batch(
     examples: dict,
     processor: ProcessorLike,
@@ -528,22 +549,7 @@ def _preprocess_batch(
         if not normalized_conv:
             continue
 
-        # Parse tools JSON string if present; warn and skip tools on invalid JSON
-        parsed_tools = None
-        if conv_tools:
-            if isinstance(conv_tools, str):
-                try:
-                    parsed_tools = json.loads(conv_tools)
-                except json.JSONDecodeError as e:
-                    log.warning(
-                        f"Invalid JSON in tools column for conversation {idx}: {e}, "
-                        "proceeding without tools"
-                    )
-                else:
-                    log.warning(
-                        f"Non-string value in tools column for conversation {idx}: "
-                        f"{type(conv_tools).__name__}, proceeding without tools"
-                    )
+        parsed_tools = _parse_conv_tools(conv_tools, idx)
 
         try:
             input_ids, loss_mask = _get_input_ids_loss_mask(
