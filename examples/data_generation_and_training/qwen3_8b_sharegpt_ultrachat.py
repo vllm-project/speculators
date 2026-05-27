@@ -36,22 +36,30 @@ from gen_and_train import (  # noqa: E402
 
 
 if __name__ == "__main__":
-    VERIFIER_NAME_OR_PATH = "Qwen/Qwen3-8B"
-    OUTPUT_PATH = "./output/qwen3_8b_sharegpt_ultrachat"
-    TOTAL_SEQ_LEN = 8192
+    # VERIFIER_NAME_OR_PATH = "/mnt/share/Qwen3-32B"
+    VERIFIER_NAME_OR_PATH = "/mnt/share/Qwen3-30B-A3B"
+    OUTPUT_PATH = "/mnt/share/t00886357/eagle3/qwen3_30b_gsm8k_fix_pattern"
+    TOTAL_SEQ_LEN = 2048
 
     # Data Generation
-    data_gen_args_sharegpt = DataGenArgs(
-        train_data_path="sharegpt",
+    # data_gen_args_sharegpt = DataGenArgs(
+    #     train_data_path="sharegpt",
+    #     seq_length=32000,
+    #     turn_dropout=True,  # Turn dropout enabled here
+    # )
+
+    data_gen_args_gsm8k = DataGenArgs(
+        train_data_path="/mnt/share/t00886357/eagle3/dataset/gsm8k/regenerated/regenerated_0_to_7472.jsonl",
+        dataset_name="gsm8k",
         seq_length=TOTAL_SEQ_LEN,
         turn_dropout=True,  # Turn dropout enabled here
     )
 
-    data_gen_args_ultrachat = DataGenArgs(
-        train_data_path="ultrachat",
-        seq_length=TOTAL_SEQ_LEN,
-        turn_dropout=True,  # Turn dropout enabled here
-    )
+    # data_gen_args_ultrachat = DataGenArgs(
+    #     train_data_path="ultrachat",
+    #     seq_length=35000,
+    #     turn_dropout=True,  # Turn dropout enabled here
+    # )
 
     # Vocab Mapping
     vocab_mapping_args = VocabMappingArgs(
@@ -71,7 +79,7 @@ if __name__ == "__main__":
     run_e2e(
         verifier_name_or_path=VERIFIER_NAME_OR_PATH,
         output_path=OUTPUT_PATH,
-        data_gen_args=[data_gen_args_sharegpt, data_gen_args_ultrachat],
+        data_gen_args=[data_gen_args_gsm8k],
         vocab_mapping_args=vocab_mapping_args,
         train_args=train_args,
     )
