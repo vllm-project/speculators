@@ -143,18 +143,27 @@ def create_transformer_layer_config(
             "nor 'hidden_activation'"
         )
 
+    head_dim = getattr(verifier_config, "head_dim", None)
+    num_attention_heads = verifier_config.num_attention_heads
+    num_key_value_heads = verifier_config.num_key_value_heads
+
+    if head_dim and verifier_config.hidden_size % num_attention_heads != 0:
+        num_attention_heads = verifier_config.hidden_size // head_dim
+        if num_attention_heads % num_key_value_heads != 0:
+            num_key_value_heads = num_attention_heads
+
     config = config_class(
         vocab_size=verifier_config.vocab_size,
         hidden_size=verifier_config.hidden_size,
         intermediate_size=verifier_config.intermediate_size,
         num_hidden_layers=num_layers,
-        num_attention_heads=verifier_config.num_attention_heads,
-        num_key_value_heads=verifier_config.num_key_value_heads,
+        num_attention_heads=num_attention_heads,
+        num_key_value_heads=num_key_value_heads,
         hidden_act=hidden_act,
         max_position_embeddings=verifier_config.max_position_embeddings,
         initializer_range=verifier_config.initializer_range,
         rms_norm_eps=verifier_config.rms_norm_eps,
-        head_dim=getattr(verifier_config, "head_dim", None),
+        head_dim=head_dim,
         tie_word_embeddings=False,
     )
 
