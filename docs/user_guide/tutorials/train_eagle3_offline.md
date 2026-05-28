@@ -361,5 +361,5 @@ After training your model:
 
 1. **Evaluate performance** - See [Evaluating Performance](evaluating_performance.md)
 2. **Deploy to production** - See [Serve in vLLM](serve_vllm.md)
-3. **Fine-tune further** - Use `--from-pretrained ./checkpoints/latest` to continue training
+3. **Fine-tune further** - Use `--from-pretrained ./checkpoints/checkpoint_best` to continue training
 4. **Upload to HuggingFace** - Share your model with the community

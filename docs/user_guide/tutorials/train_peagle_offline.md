@@ -1,9 +1,6 @@
 # Train P-EAGLE Model Offline
 
-This tutorial walks you through training a P-EAGLE (Parallel EAGLE) speculator model using **offline training**, where hidden states are pre-generated and cached before training begins. This example uses `Qwen/Qwen3-8B` as the target model, but the process is the same for other models. This tutorial follows the same structure as [Train Eagle-3 Offline](train_eagle3_offline.md). The key differences are:
-
-- **Step 2 — vLLM launch:** P-EAGLE requires passing `--hidden-states-path` to `launch_vllm.py` so the server knows where to write hidden state files.
-- **Step 5 — Training:** P-EAGLE introduces several additional parameters: `--speculator-type peagle`, `--num-depths`, `--down-sample-ratio`, `--down-sample-ratio-min`, `--no-norm-before-residual`, and `--scheduler-type cosine`.
+This tutorial walks you through training a P-EAGLE (Parallel EAGLE) speculator model using **offline training**, where hidden states are pre-generated and cached before training begins. This example uses `Qwen/Qwen3-8B` as the target model, but the process is the same for other models. This tutorial follows the same structure as [Train Eagle-3 Offline](train_eagle3_offline.md).
 
 For a ready-to-run version of this tutorial, see [`examples/train/peagle_qwen3_8b_sharegpt_online_5k.sh`](https://github.com/vllm-project/speculators/blob/main/examples/train/peagle_qwen3_8b_sharegpt_online_5k.sh).
 
@@ -375,5 +372,5 @@ After training your model:
 
 1. **Evaluate performance** - See [Evaluating Performance](evaluating_performance.md)
 2. **Deploy to production** - See [Serve in vLLM](serve_vllm.md)
-3. **Fine-tune further** - Use `--from-pretrained ./checkpoints/latest` to continue training
+3. **Fine-tune further** - Use `--from-pretrained ./checkpoints/checkpoint_best` to continue training
 4. **Upload to HuggingFace** - Share your model with the community
