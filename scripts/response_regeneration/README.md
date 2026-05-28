@@ -25,7 +25,24 @@ The model name is auto-detected from the vLLM server. Output is written to a JSO
 | `wildchat` | [allenai/WildChat](https://huggingface.co/datasets/allenai/WildChat) | `train` | 529K | 3.1 GB | messages |
 | `nemotron_cascade` | [nvidia/Nemotron-Cascade-2-SFT-Data](https://huggingface.co/datasets/nvidia/Nemotron-Cascade-2-SFT-Data) | `train` | millions | ~593 GB | messages |
 | `nemotron_ifchat` | [nvidia/Nemotron-SFT-Instruction-Following-Chat-v2](https://huggingface.co/datasets/nvidia/Nemotron-SFT-Instruction-Following-Chat-v2) | `reasoning_off` | ~2M | ~16 GB | messages |
+| `nemotron_ifchat_v1` | [nvidia/Nemotron-Instruction-Following-Chat-v1](https://huggingface.co/datasets/nvidia/Nemotron-Instruction-Following-Chat-v1) | `structured_outputs` | — | — | messages |
+| `nemotron_agentic` | [nvidia/Nemotron-SFT-Agentic-v2](https://huggingface.co/datasets/nvidia/Nemotron-SFT-Agentic-v2) | `interactive_agent` | — | — | messages |
+| `nemotron_competitive_v2` | [nvidia/Nemotron-SFT-Competitive-Programming-v2](https://huggingface.co/datasets/nvidia/Nemotron-SFT-Competitive-Programming-v2) | `competitive_coding_python` | — | — | messages |
+| `nemotron_competitive_v1` | [nvidia/Nemotron-Competitive-Programming-v1](https://huggingface.co/datasets/nvidia/Nemotron-Competitive-Programming-v1) | `infinibyte_part00` | — | — | messages |
+| `nemotron_math` | [nvidia/Nemotron-Math-v2](https://huggingface.co/datasets/nvidia/Nemotron-Math-v2) | `high_part00` | — | — | messages |
+| `nemotron_science` | [nvidia/Nemotron-Science-v1](https://huggingface.co/datasets/nvidia/Nemotron-Science-v1) | `MCQ` | — | — | messages |
+| `nemotron_swe` | [nvidia/Nemotron-SFT-SWE-v2](https://huggingface.co/datasets/nvidia/Nemotron-SFT-SWE-v2) | `agentless` | — | — | messages |
 | `longalign` | [zai-org/LongAlign-10k](https://huggingface.co/datasets/zai-org/LongAlign-10k) | `train` | 9.9K | 0.6 GB | messages |
+| `open_perfectblend` | [mlabonne/open-perfectblend](https://huggingface.co/datasets/mlabonne/open-perfectblend) | `train` | 1.42M | ~4 GB | messages |
+| `openhermes` | [teknium/OpenHermes-2.5](https://huggingface.co/datasets/teknium/OpenHermes-2.5) | `train` | 1M | — | messages |
+| `openr1_math` | [open-r1/OpenR1-Math-220k](https://huggingface.co/datasets/open-r1/OpenR1-Math-220k) | `train` | 94K–225K | — | messages |
+| `numinamath` | [AI-MO/NuminaMath-TIR](https://huggingface.co/datasets/AI-MO/NuminaMath-TIR) | `train` | 72K | — | messages |
+| `codeforces_cots` | [open-r1/codeforces-cots](https://huggingface.co/datasets/open-r1/codeforces-cots) | `train` | 48K | — | string |
+| `codeforces` | [open-r1/codeforces](https://huggingface.co/datasets/open-r1/codeforces) | `train` | 10K | — | string |
+| `taco` | [BAAI/TACO](https://huggingface.co/datasets/BAAI/TACO) | `train` | 25K | — | string |
+| `xlam_function_calling` | [Salesforce/xlam-function-calling-60k](https://huggingface.co/datasets/Salesforce/xlam-function-calling-60k) | `train` | 60K | — | string |
+| `apigen_mt` | [Salesforce/APIGen-MT-5k](https://huggingface.co/datasets/Salesforce/APIGen-MT-5k) | `train` | 5K | — | messages |
+| `swe_rebench` | [nebius/SWE-rebench-openhands-trajectories](https://huggingface.co/datasets/nebius/SWE-rebench-openhands-trajectories) | `train` | 67K | — | messages |
 
 ### magpie
 
@@ -109,9 +126,215 @@ python script.py --dataset nemotron_ifchat                        # non-reasonin
 python script.py --dataset nemotron_ifchat --split reasoning_on   # reasoning
 ```
 
+### nemotron_ifchat_v1
+
+NVIDIA's instruction-following chat v1 dataset. The `structured_outputs` split contains prompts requiring structured output formats.
+
+```bash
+python script.py --dataset nemotron_ifchat_v1                              # structured_outputs (default)
+```
+
+### nemotron_agentic
+
+NVIDIA's agentic SFT dataset v2 covering interactive agents, tool calling, and search tasks. Select domain via `--split`.
+
+| Split | Description |
+|-------|-------------|
+| `interactive_agent` | Interactive agent conversations |
+| `tool_calling` | Tool calling examples |
+| `search` | Search-based agent tasks |
+
+```bash
+python script.py --dataset nemotron_agentic                                # interactive_agent (default)
+python script.py --dataset nemotron_agentic --split tool_calling
+python script.py --dataset nemotron_agentic --split search
+```
+
+### nemotron_competitive_v2
+
+NVIDIA's competitive programming SFT dataset v2 with Python and C++ solutions. Select language via `--split`.
+
+| Split | Description |
+|-------|-------------|
+| `competitive_coding_python` | Python solutions |
+| `competitive_coding_cpp` | C++ solutions |
+
+```bash
+python script.py --dataset nemotron_competitive_v2                         # Python (default)
+python script.py --dataset nemotron_competitive_v2 --split competitive_coding_cpp
+```
+
+### nemotron_competitive_v1
+
+NVIDIA's competitive programming dataset v1 with Infinibyte-generated data, split into two parts.
+
+| Split | Description |
+|-------|-------------|
+| `infinibyte_part00` | Part 0 |
+| `infinibyte_part01` | Part 1 |
+
+```bash
+python script.py --dataset nemotron_competitive_v1                         # part00 (default)
+python script.py --dataset nemotron_competitive_v1 --split infinibyte_part01
+```
+
+### nemotron_math
+
+NVIDIA's math SFT dataset v2 with problems at three difficulty levels. The high-difficulty split is further divided into three parts.
+
+| Split | Description |
+|-------|-------------|
+| `high_part00` | High difficulty, part 0 |
+| `high_part01` | High difficulty, part 1 |
+| `high_part02` | High difficulty, part 2 |
+| `medium` | Medium difficulty |
+| `low` | Low difficulty |
+
+```bash
+python script.py --dataset nemotron_math                                   # high_part00 (default)
+python script.py --dataset nemotron_math --split high_part01
+python script.py --dataset nemotron_math --split high_part02
+python script.py --dataset nemotron_math --split medium
+python script.py --dataset nemotron_math --split low
+```
+
+### nemotron_science
+
+NVIDIA's science dataset v1 with multiple-choice questions and reasoning Q&A.
+
+| Split | Description |
+|-------|-------------|
+| `MCQ` | Multiple-choice questions |
+| `RQA` | Reasoning question answering |
+
+```bash
+python script.py --dataset nemotron_science                                # MCQ (default)
+python script.py --dataset nemotron_science --split RQA
+```
+
+### nemotron_swe
+
+NVIDIA's software engineering SFT dataset v2 with agentless problem-solving trajectories based on GitHub issues.
+
+```bash
+python script.py --dataset nemotron_swe                                    # agentless (default)
+```
+
 ### longalign
 
 ~10K long-context instruction-following samples ranging from 8k to 64k tokens. Useful for training speculators on long-form generation patterns where token prediction behavior may differ from shorter contexts.
+
+### open_perfectblend
+
+Open-source reproduction of the instruction dataset from "The Perfect Blend: Redefining RLHF with Mixture of Judges." ~1.42M samples blending 8 source datasets covering math, code, chat, and instruction-following. Uses ShareGPT-style conversations with `from`/`value` fields and `human`/`gpt` roles.
+
+| Source | Samples |
+|--------|---------|
+| meta-math/MetaMathQA | 395K |
+| openbmb/UltraInteract_sft | 289K |
+| HuggingFaceH4/ultrachat_200k | 208K |
+| microsoft/orca-math-word-problems-200k | 200K |
+| HuggingFaceH4/ultrafeedback_binarized | 187K |
+| theblackcat102/evol-codealpaca-v1 | 111K |
+| Post-training-Data-Flywheel/AutoIF-instruct-61k | 61K |
+| mlabonne/lmsys-arena-human-preference-55k-sharegpt | 57K |
+
+### openhermes
+
+1M instruction and chat examples covering diverse tasks including coding, roleplay, and general knowledge. Uses ShareGPT-style conversations with `from`/`value` fields.
+
+```bash
+python script.py --dataset openhermes
+```
+
+### openr1_math
+
+High-quality verified R1-style math reasoning traces. Available in three subsets of increasing size. Select via `--subset`.
+
+| Subset | Samples |
+|--------|---------|
+| `default` | 94K |
+| `extended` | 131K |
+| `all` | 225K |
+
+```bash
+python script.py --dataset openr1_math                                     # default subset (94K)
+python script.py --dataset openr1_math --subset extended
+python script.py --dataset openr1_math --subset all
+```
+
+### numinamath
+
+72K math problems with tool-integrated reasoning (TIR) solutions from the AI-MO competition pipeline. Uses standard messages format.
+
+```bash
+python script.py --dataset numinamath
+```
+
+### codeforces_cots
+
+Competitive coding problems with R1-style chain-of-thought reasoning traces. Defaults to the `solutions` subset. Multiple subsets available via `--subset`.
+
+| Subset | Description |
+|--------|-------------|
+| `solutions` | Full solution set |
+| `solutions_py` | Python solutions only |
+| `solutions_cpp` | C++ solutions only |
+| `solutions_decontaminated` | Decontaminated solutions |
+| `solutions_w_editorials` | Solutions with editorials |
+
+```bash
+python script.py --dataset codeforces_cots                                 # solutions (default)
+python script.py --dataset codeforces_cots --subset solutions_py
+python script.py --dataset codeforces_cots --subset solutions_decontaminated
+```
+
+### codeforces
+
+10K+ Codeforces problems through 2025. Problem descriptions are used as prompts. Available subsets via `--subset`.
+
+| Subset | Description |
+|--------|-------------|
+| `default` | Full problem set with metadata |
+| `verifiable` | Problems with verification tests |
+| `verifiable-prompts` | Pre-formatted prompts |
+
+```bash
+python script.py --dataset codeforces                                      # default subset
+python script.py --dataset codeforces --subset verifiable
+```
+
+### taco
+
+25K competitive programming tasks with test cases from multiple online judges. Prompts are plain-string problem descriptions.
+
+```bash
+python script.py --dataset taco
+```
+
+### xlam_function_calling
+
+60K verified function-calling examples. Each row contains a plain-string `query` and JSON-encoded tool definitions and expected answers.
+
+```bash
+python script.py --dataset xlam_function_calling
+```
+
+### apigen_mt
+
+5K multi-turn tool-use and agent trajectories. Uses ShareGPT-style conversations with `from`/`value` fields, including `function_call` and `observation` roles.
+
+```bash
+python script.py --dataset apigen_mt
+```
+
+### swe_rebench
+
+67K realistic SWE agent traces from OpenHands on SWE-bench tasks. Each trajectory contains system/user/assistant/tool turns following the OpenAI function-calling format.
+
+```bash
+python script.py --dataset swe_rebench
+```
 
 ## Arguments
 
@@ -155,3 +378,16 @@ For datasets using a conversational messages format (list of `{role, content}` d
 ```
 
 The script will automatically extract the first user message as the prompt.
+
+For ShareGPT-style datasets that use `from`/`value` fields with `human`/`gpt` roles instead of `user`/`assistant`, set `messages_user_value` to match the user role label:
+
+```python
+"my_sharegpt_dataset": {
+    "id": "org/dataset-name",
+    "prompt_field": "conversations",
+    "default_split": "train",
+    "messages_role_field": "from",
+    "messages_content_field": "value",
+    "messages_user_value": "human",
+},
+```

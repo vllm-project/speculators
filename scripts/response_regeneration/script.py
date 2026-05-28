@@ -98,6 +98,69 @@ DATASET_CONFIGS = {
         "messages_role_field": "role",
         "messages_content_field": "content",
     },
+    # NVIDIA's instruction-following chat v1 dataset with structured outputs.
+    "nemotron_ifchat_v1": {
+        "id": "nvidia/Nemotron-Instruction-Following-Chat-v1",
+        "prompt_field": "messages",
+        "default_split": "structured_outputs",
+        "id_field": "uuid",
+        "messages_role_field": "role",
+        "messages_content_field": "content",
+    },
+    # NVIDIA's agentic SFT dataset covering interactive agents, tool calling,
+    # and search. Select domain via --split.
+    "nemotron_agentic": {
+        "id": "nvidia/Nemotron-SFT-Agentic-v2",
+        "prompt_field": "messages",
+        "default_split": "interactive_agent",
+        "messages_role_field": "role",
+        "messages_content_field": "content",
+    },
+    # NVIDIA's competitive programming dataset v2 with Python and C++ solutions.
+    "nemotron_competitive_v2": {
+        "id": "nvidia/Nemotron-SFT-Competitive-Programming-v2",
+        "prompt_field": "messages",
+        "default_split": "competitive_coding_python",
+        "id_field": "uuid",
+        "messages_role_field": "role",
+        "messages_content_field": "content",
+    },
+    # NVIDIA's competitive programming dataset v1 with Infinibyte-generated data.
+    "nemotron_competitive_v1": {
+        "id": "nvidia/Nemotron-Competitive-Programming-v1",
+        "prompt_field": "messages",
+        "default_split": "infinibyte_part00",
+        "id_field": "uuid",
+        "messages_role_field": "role",
+        "messages_content_field": "content",
+    },
+    # NVIDIA's math SFT dataset v2 with high/medium/low difficulty splits.
+    "nemotron_math": {
+        "id": "nvidia/Nemotron-Math-v2",
+        "prompt_field": "messages",
+        "default_split": "high_part00",
+        "id_field": "uuid",
+        "messages_role_field": "role",
+        "messages_content_field": "content",
+    },
+    # NVIDIA's science dataset with multiple-choice and reasoning Q&A splits.
+    "nemotron_science": {
+        "id": "nvidia/Nemotron-Science-v1",
+        "prompt_field": "messages",
+        "default_split": "MCQ",
+        "id_field": "uuid",
+        "messages_role_field": "role",
+        "messages_content_field": "content",
+    },
+    # NVIDIA's software engineering SFT dataset with agentless trajectories.
+    "nemotron_swe": {
+        "id": "nvidia/Nemotron-SFT-SWE-v2",
+        "prompt_field": "messages",
+        "default_split": "agentless",
+        "id_field": "uuid",
+        "messages_role_field": "role",
+        "messages_content_field": "content",
+    },
     # ~10K long-context instruction-following samples (8k-64k tokens). Useful for
     # training speculators on long-form generation patterns.
     "longalign": {
@@ -105,6 +168,92 @@ DATASET_CONFIGS = {
         "prompt_field": "messages",
         "default_split": "train",
         "id_field": "id",
+        "messages_role_field": "role",
+        "messages_content_field": "content",
+    },
+    # ~1.4M instruction samples blending 8 source datasets (math, code, chat,
+    # instruction-following). Uses ShareGPT-style conversations with from/value
+    # fields and "human"/"gpt" roles.
+    "open_perfectblend": {
+        "id": "mlabonne/open-perfectblend",
+        "prompt_field": "conversations",
+        "default_split": "train",
+        "messages_role_field": "from",
+        "messages_content_field": "value",
+        "messages_user_value": "human",
+    },
+    # 1M instruction/chat examples covering diverse tasks. ShareGPT-style
+    # conversations with from/value fields.
+    "openhermes": {
+        "id": "teknium/OpenHermes-2.5",
+        "prompt_field": "conversations",
+        "default_split": "train",
+        "messages_role_field": "from",
+        "messages_content_field": "value",
+        "messages_user_value": "human",
+    },
+    # High-quality verified R1-style math reasoning traces. Available subsets:
+    # default (94K), extended (131K), all (225K). Select via --subset.
+    "openr1_math": {
+        "id": "open-r1/OpenR1-Math-220k",
+        "prompt_field": "messages",
+        "default_split": "train",
+        "id_field": "uuid",
+        "messages_role_field": "role",
+        "messages_content_field": "content",
+    },
+    # 72K math problems with tool-integrated reasoning solutions.
+    "numinamath": {
+        "id": "AI-MO/NuminaMath-TIR",
+        "prompt_field": "messages",
+        "default_split": "train",
+        "messages_role_field": "role",
+        "messages_content_field": "content",
+    },
+    # Competitive coding problems with R1-style reasoning traces. Multiple
+    # subsets available; defaults to "solutions". Select via --subset.
+    "codeforces_cots": {
+        "id": "open-r1/codeforces-cots",
+        "prompt_field": "prompt",
+        "default_split": "train",
+        "subset": "solutions",
+        "id_field": "id",
+    },
+    # 10K+ Codeforces problems through 2025. Problem descriptions used as
+    # prompts. Select subset via --subset (default, verifiable, verifiable-prompts).
+    "codeforces": {
+        "id": "open-r1/codeforces",
+        "prompt_field": "description",
+        "default_split": "train",
+        "id_field": "id",
+    },
+    # 25K competitive programming tasks with test cases.
+    "taco": {
+        "id": "BAAI/TACO",
+        "prompt_field": "question",
+        "default_split": "train",
+    },
+    # 60K verified function-calling examples with query/tools/answers format.
+    "xlam_function_calling": {
+        "id": "Salesforce/xlam-function-calling-60k",
+        "prompt_field": "query",
+        "default_split": "train",
+    },
+    # 5K multi-turn tool/agent trajectories. ShareGPT-style conversations.
+    "apigen_mt": {
+        "id": "Salesforce/APIGen-MT-5k",
+        "prompt_field": "conversations",
+        "default_split": "train",
+        "messages_role_field": "from",
+        "messages_content_field": "value",
+        "messages_user_value": "human",
+    },
+    # 67K realistic SWE agent traces from OpenHands on SWE-bench tasks.
+    "swe_rebench": {
+        "id": "nebius/SWE-rebench-openhands-trajectories",
+        "prompt_field": "trajectory",
+        "default_split": "train",
+        "id_field": "trajectory_id",
         "messages_role_field": "role",
         "messages_content_field": "content",
     },
@@ -422,8 +571,11 @@ async def main():  # noqa: C901, PLR0915, PLR0912
                     content_field = dataset_config.get(
                         "messages_content_field", "content"
                     )
+                    user_value = dataset_config.get("messages_user_value", "user")
                     user_msgs = [
-                        m[content_field] for m in prompt if m.get(role_field) == "user"
+                        m[content_field]
+                        for m in prompt
+                        if m.get(role_field) == user_value
                     ]
                     if not user_msgs:
                         continue

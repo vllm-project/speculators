@@ -69,7 +69,7 @@ python scripts/response_regeneration/script.py --dataset magpie
 
 #### Data Arguments
 
-- **`--dataset`** (str, default: `ultrachat`, choices: `magpie`, `ultrachat`) Dataset to process.
+- **`--dataset`** (str, default: `ultrachat`) Dataset to process. See [Supported Datasets](#supported-datasets) for the full list.
 
 - **`--split`** (str, default: dataset-specific) Dataset split. Defaults to `train` for magpie and `train_sft` for ultrachat.
 
@@ -110,10 +110,19 @@ python scripts/response_regeneration/script.py \
 
 ## Supported Datasets
 
-| Dataset   | HuggingFace ID                                    | Prompt Field  | Default Split |
-| --------- | ------------------------------------------------- | ------------- | ------------- |
-| Magpie    | `Magpie-Align/Magpie-Llama-3.1-Pro-300K-Filtered` | `instruction` | `train`       |
-| UltraChat | `HuggingFaceH4/ultrachat_200k`                    | `prompt`      | `train_sft`   |
+| Dataset | HuggingFace ID | Default Split | Samples | Prompt Format |
+| ------- | -------------- | ------------- | ------- | ------------- |
+| `magpie` | `Magpie-Align/Magpie-Llama-3.1-Pro-300K-Filtered` | `train` | 300K | string |
+| `ultrachat` | `HuggingFaceH4/ultrachat_200k` | `train_sft` | 208K | string |
+| `gsm8k` | `openai/gsm8k` | `train` | 7.5K | string |
+| `code_alpaca` | `HuggingFaceH4/CodeAlpaca_20K` | `train` | 18K | string |
+| `nemotron` | `nvidia/Nemotron-Post-Training-Dataset-v2` | `chat` | 1.4M | messages |
+| `tulu3` | `allenai/tulu-3-sft-mixture` | `train` | 939K | messages |
+| `wildchat` | `allenai/WildChat` | `train` | 529K | messages |
+| `nemotron_cascade` | `nvidia/Nemotron-Cascade-2-SFT-Data` | `train` | millions | messages |
+| `nemotron_ifchat` | `nvidia/Nemotron-SFT-Instruction-Following-Chat-v2` | `reasoning_off` | ~2M | messages |
+| `longalign` | `zai-org/LongAlign-10k` | `train` | 9.9K | messages |
+| `open_perfectblend` | `mlabonne/open-perfectblend` | `train` | 1.42M | messages |
 
 ## Output Format
 
