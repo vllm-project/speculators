@@ -110,19 +110,66 @@ python scripts/response_regeneration/script.py \
 
 ## Supported Datasets
 
+See the [response regeneration README](../../scripts/response_regeneration/README.md) for full details, split/subset tables, and dataset relationship diagrams.
+
+### General Chat & Instruction Following
+
 | Dataset | HuggingFace ID | Default Split | Samples | Prompt Format |
 | ------- | -------------- | ------------- | ------- | ------------- |
 | `magpie` | `Magpie-Align/Magpie-Llama-3.1-Pro-300K-Filtered` | `train` | 300K | string |
 | `ultrachat` | `HuggingFaceH4/ultrachat_200k` | `train_sft` | 208K | string |
-| `gsm8k` | `openai/gsm8k` | `train` | 7.5K | string |
-| `code_alpaca` | `HuggingFaceH4/CodeAlpaca_20K` | `train` | 18K | string |
-| `nemotron` | `nvidia/Nemotron-Post-Training-Dataset-v2` | `chat` | 1.4M | messages |
 | `tulu3` | `allenai/tulu-3-sft-mixture` | `train` | 939K | messages |
 | `wildchat` | `allenai/WildChat` | `train` | 529K | messages |
-| `nemotron_cascade` | `nvidia/Nemotron-Cascade-2-SFT-Data` | `train` | millions | messages |
-| `nemotron_ifchat` | `nvidia/Nemotron-SFT-Instruction-Following-Chat-v2` | `reasoning_off` | ~2M | messages |
+| `openhermes` | `teknium/OpenHermes-2.5` | `train` | 1M | messages |
+| `ultrafeedback` | `HuggingFaceH4/ultrafeedback_binarized` | `train_sft` | 187K | string |
+| `autoif` | `Post-training-Data-Flywheel/AutoIF-instruct-61k` | `train` | 61K | messages |
+| `lmsys_arena` | `mlabonne/lmsys-arena-human-preference-55k-sharegpt` | `train` | 57K | messages |
 | `longalign` | `zai-org/LongAlign-10k` | `train` | 9.9K | messages |
+| `nemotron_ifchat` | `nvidia/Nemotron-SFT-Instruction-Following-Chat-v2` | `reasoning_off` | ~2M | messages |
+| `nemotron_ifchat_v1` | `nvidia/Nemotron-Instruction-Following-Chat-v1` | `structured_outputs` | ~5K | messages |
+
+### Math & Science
+
+| Dataset | HuggingFace ID | Default Split | Samples | Prompt Format |
+| ------- | -------------- | ------------- | ------- | ------------- |
+| `gsm8k` | `openai/gsm8k` | `train` | 7.5K | string |
+| `metamathqa` | `meta-math/MetaMathQA` | `train` | 395K | string |
+| `orca_math` | `microsoft/orca-math-word-problems-200k` | `train` | 200K | string |
+| `openr1_math` | `open-r1/OpenR1-Math-220k` | `train` | 94K–225K | messages |
+| `numinamath` | `AI-MO/NuminaMath-TIR` | `train` | 72K | messages |
+| `nemotron_math` | `nvidia/Nemotron-Math-v2` | `high_part00` | ~696K | messages |
+| `nemotron_science` | `nvidia/Nemotron-Science-v1` | `MCQ` | ~174K | messages |
+
+### Coding & Competitive Programming
+
+| Dataset | HuggingFace ID | Default Split | Samples | Prompt Format |
+| ------- | -------------- | ------------- | ------- | ------------- |
+| `code_alpaca` | `HuggingFaceH4/CodeAlpaca_20K` | `train` | 18K | string |
+| `evol_codealpaca` | `theblackcat102/evol-codealpaca-v1` | `train` | 111K | string |
+| `codeforces` | `open-r1/codeforces` | `train` | 10K | string |
+| `codeforces_cots` | `open-r1/codeforces-cots` | `train` | 48K | string |
+| `taco` | `BAAI/TACO` | `train` | 25K | string |
+| `nemotron_competitive_v2` | `nvidia/Nemotron-SFT-Competitive-Programming-v2` | `competitive_coding_python` | ~337K | messages |
+| `nemotron_competitive_v1` | `nvidia/Nemotron-Competitive-Programming-v1` | `infinibyte_part00` | ~587K | messages |
+
+### Agentic, Tool Use & SWE
+
+| Dataset | HuggingFace ID | Default Split | Samples | Prompt Format |
+| ------- | -------------- | ------------- | ------- | ------------- |
+| `nemotron_agentic` | `nvidia/Nemotron-SFT-Agentic-v2` | `interactive_agent` | ~279K | messages |
+| `xlam_function_calling` | `Salesforce/xlam-function-calling-60k` | `train` | 60K | string |
+| `apigen_mt` | `Salesforce/APIGen-MT-5k` | `train` | 5K | messages |
+| `nemotron_swe` | `nvidia/Nemotron-SFT-SWE-v2` | `agentless` | ~210K | messages |
+| `swe_rebench` | `nebius/SWE-rebench-openhands-trajectories` | `train` | 67K | messages |
+
+### Multi-Domain Blends
+
+| Dataset | HuggingFace ID | Default Split | Samples | Prompt Format |
+| ------- | -------------- | ------------- | ------- | ------------- |
+| `nemotron` | `nvidia/Nemotron-Post-Training-Dataset-v2` | `chat` | 1.4M | messages |
+| `nemotron_cascade` | `nvidia/Nemotron-Cascade-2-SFT-Data` | `train` | millions | messages |
 | `open_perfectblend` | `mlabonne/open-perfectblend` | `train` | 1.42M | messages |
+| `ultrainteract` | `openbmb/UltraInteract_sft` | `train` | 289K | string |
 
 ## Output Format
 
