@@ -264,7 +264,7 @@ Stop the training vLLM server (Ctrl+C), then serve your speculator:
 
 ```bash
 # in vllm venv
-vllm serve ./checkpoints/checkpoint_best --port 8000
+vllm serve ./output/peagle_qwen3_8b_sharegpt/checkpoints --port 8000
 ```
 
 ### Chat with the served model
