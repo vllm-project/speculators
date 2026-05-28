@@ -19,7 +19,7 @@ jobs:
         python: ["3.10", "3.13"]
     env:
       UV_SYSTEM_PYTHON: 1
-      UV_TORCH_BACKEND: "auto"
+      UV_TORCH_BACKEND: "cpu"
     steps:
       - uses: actions/checkout@v6
       - name: Set up Python
