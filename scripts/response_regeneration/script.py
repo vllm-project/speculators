@@ -182,6 +182,57 @@ DATASET_CONFIGS = {
         "messages_content_field": "value",
         "messages_user_value": "human",
     },
+    # --- Individual sources from open_perfectblend ---
+    # 395K augmented math questions with detailed solutions.
+    "metamathqa": {
+        "id": "meta-math/MetaMathQA",
+        "prompt_field": "query",
+        "default_split": "train",
+    },
+    # 289K instruction-response pairs spanning math, code, and logic tasks.
+    "ultrainteract": {
+        "id": "openbmb/UltraInteract_sft",
+        "prompt_field": "instruction",
+        "default_split": "train",
+        "id_field": "id",
+    },
+    # 200K math word problems with step-by-step solutions.
+    "orca_math": {
+        "id": "microsoft/orca-math-word-problems-200k",
+        "prompt_field": "question",
+        "default_split": "train",
+    },
+    # 187K preference-ranked prompts. Uses the SFT split with plain-string prompts.
+    "ultrafeedback": {
+        "id": "HuggingFaceH4/ultrafeedback_binarized",
+        "prompt_field": "prompt",
+        "default_split": "train_sft",
+        "id_field": "prompt_id",
+    },
+    # 111K evolved code instruction-output pairs.
+    "evol_codealpaca": {
+        "id": "theblackcat102/evol-codealpaca-v1",
+        "prompt_field": "instruction",
+        "default_split": "train",
+    },
+    # 61K auto-generated instruction-following examples.
+    "autoif": {
+        "id": "Post-training-Data-Flywheel/AutoIF-instruct-61k",
+        "prompt_field": "messages",
+        "default_split": "train",
+        "id_field": "conversation_id",
+        "messages_role_field": "role",
+        "messages_content_field": "content",
+    },
+    # 57K human-preference conversations from LMSYS Arena in ShareGPT format.
+    "lmsys_arena": {
+        "id": "mlabonne/lmsys-arena-human-preference-55k-sharegpt",
+        "prompt_field": "conversations",
+        "default_split": "train",
+        "messages_role_field": "from",
+        "messages_content_field": "value",
+        "messages_user_value": "human",
+    },
     # 1M instruction/chat examples covering diverse tasks. ShareGPT-style
     # conversations with from/value fields.
     "openhermes": {

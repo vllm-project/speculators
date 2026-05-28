@@ -34,6 +34,13 @@ The model name is auto-detected from the vLLM server. Output is written to a JSO
 | `nemotron_swe` | [nvidia/Nemotron-SFT-SWE-v2](https://huggingface.co/datasets/nvidia/Nemotron-SFT-SWE-v2) | `agentless` | — | — | messages |
 | `longalign` | [zai-org/LongAlign-10k](https://huggingface.co/datasets/zai-org/LongAlign-10k) | `train` | 9.9K | 0.6 GB | messages |
 | `open_perfectblend` | [mlabonne/open-perfectblend](https://huggingface.co/datasets/mlabonne/open-perfectblend) | `train` | 1.42M | ~4 GB | messages |
+| `metamathqa` | [meta-math/MetaMathQA](https://huggingface.co/datasets/meta-math/MetaMathQA) | `train` | 395K | — | string |
+| `ultrainteract` | [openbmb/UltraInteract_sft](https://huggingface.co/datasets/openbmb/UltraInteract_sft) | `train` | 289K | — | string |
+| `orca_math` | [microsoft/orca-math-word-problems-200k](https://huggingface.co/datasets/microsoft/orca-math-word-problems-200k) | `train` | 200K | — | string |
+| `ultrafeedback` | [HuggingFaceH4/ultrafeedback_binarized](https://huggingface.co/datasets/HuggingFaceH4/ultrafeedback_binarized) | `train_sft` | 187K | — | string |
+| `evol_codealpaca` | [theblackcat102/evol-codealpaca-v1](https://huggingface.co/datasets/theblackcat102/evol-codealpaca-v1) | `train` | 111K | — | string |
+| `autoif` | [Post-training-Data-Flywheel/AutoIF-instruct-61k](https://huggingface.co/datasets/Post-training-Data-Flywheel/AutoIF-instruct-61k) | `train` | 61K | — | messages |
+| `lmsys_arena` | [mlabonne/lmsys-arena-human-preference-55k-sharegpt](https://huggingface.co/datasets/mlabonne/lmsys-arena-human-preference-55k-sharegpt) | `train` | 57K | — | messages |
 | `openhermes` | [teknium/OpenHermes-2.5](https://huggingface.co/datasets/teknium/OpenHermes-2.5) | `train` | 1M | — | messages |
 | `openr1_math` | [open-r1/OpenR1-Math-220k](https://huggingface.co/datasets/open-r1/OpenR1-Math-220k) | `train` | 94K–225K | — | messages |
 | `numinamath` | [AI-MO/NuminaMath-TIR](https://huggingface.co/datasets/AI-MO/NuminaMath-TIR) | `train` | 72K | — | messages |
@@ -238,6 +245,64 @@ Open-source reproduction of the instruction dataset from "The Perfect Blend: Red
 | theblackcat102/evol-codealpaca-v1 | 111K |
 | Post-training-Data-Flywheel/AutoIF-instruct-61k | 61K |
 | mlabonne/lmsys-arena-human-preference-55k-sharegpt | 57K |
+
+The individual source datasets are also available separately (see below): `metamathqa`, `ultrainteract`, `ultrachat`, `orca_math`, `ultrafeedback`, `evol_codealpaca`, `autoif`, `lmsys_arena`.
+
+### metamathqa
+
+395K augmented math questions with detailed solutions. Prompts are plain-string queries covering arithmetic, algebra, geometry, and word problems.
+
+```bash
+python script.py --dataset metamathqa
+```
+
+### ultrainteract
+
+289K instruction-response pairs from UltraInteract spanning math, code, and logic tasks. Prompts are plain-string instructions.
+
+```bash
+python script.py --dataset ultrainteract
+```
+
+### orca_math
+
+200K math word problems with step-by-step solutions from Microsoft's Orca-Math dataset.
+
+```bash
+python script.py --dataset orca_math
+```
+
+### ultrafeedback
+
+187K preference-ranked prompts from UltraFeedback. Uses the `train_sft` split with plain-string prompts.
+
+```bash
+python script.py --dataset ultrafeedback
+```
+
+### evol_codealpaca
+
+111K evolved code instruction-output pairs. Code-focused prompts progressively evolved for complexity.
+
+```bash
+python script.py --dataset evol_codealpaca
+```
+
+### autoif
+
+61K auto-generated instruction-following examples. Uses standard messages format with role/content pairs.
+
+```bash
+python script.py --dataset autoif
+```
+
+### lmsys_arena
+
+57K human-preference conversations from LMSYS Chatbot Arena in ShareGPT format with `from`/`value` fields.
+
+```bash
+python script.py --dataset lmsys_arena
+```
 
 ### openhermes
 
