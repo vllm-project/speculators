@@ -147,7 +147,11 @@ def create_transformer_layer_config(
     num_attention_heads = verifier_config.num_attention_heads
     num_key_value_heads = verifier_config.num_key_value_heads
 
-    if head_dim and verifier_config.hidden_size % num_attention_heads != 0:
+    if (
+        head_dim
+        and verifier_config.hidden_size % num_attention_heads != 0
+        and verifier_config.hidden_size % head_dim == 0
+    ):
         num_attention_heads = verifier_config.hidden_size // head_dim
         if num_attention_heads % num_key_value_heads != 0:
             num_key_value_heads = num_attention_heads
