@@ -224,16 +224,16 @@ async def worker(
             out_fh.flush()
             stats["errors"] += 1
         finally:
-            progress.update(1)
             progress.set_postfix(
                 ok=stats["ok"],
                 errors=stats["errors"],
                 refresh=False,
             )
+            progress.update(1)
             queue.task_done()
 
 
-async def main():  # noqa: PLR0915
+async def main():
     """Main async function to process dataset through vLLM endpoints."""
     args = parse_args()
 
@@ -286,73 +286,62 @@ async def main():  # noqa: PLR0915
     async with aiohttp.ClientSession(
         timeout=timeout, connector=connector, headers=headers
     ) as session:
-        with open(args.outfile, "a", encoding="utf-8") as output_file:  # noqa: ASYNC230
-            stats = {"ok": 0, "errors": 0}
-            progress_total = args.limit if args.limit is not None else None
-            progress = tqdm(
-                total=progress_total,
+        with (
+            open(args.outfile, "a", encoding="utf-8") as output_file,  # noqa: ASYNC230
+            tqdm(
+                total=args.limit,
                 desc="Generating responses",
                 unit="sample",
                 dynamic_ncols=True,
-            )
-            workers = []
-
-            try:
-                workers = [
-                    asyncio.create_task(
-                        worker(
-                            semaphore,
-                            session,
-                            queue,
-                            args,
-                            output_file,
-                            endpoint,
-                            progress,
-                            stats,
-                        )
+            ) as progress,
+        ):
+            stats = {"ok": 0, "errors": 0}
+            workers = [
+                asyncio.create_task(
+                    worker(
+                        semaphore,
+                        session,
+                        queue,
+                        args,
+                        output_file,
+                        endpoint,
+                        progress,
+                        stats,
                     )
-                    for _ in range(args.concurrency)
-                ]
+                )
+                for _ in range(args.concurrency)
+            ]
 
-                processed_count = 0
-                for index, row in enumerate(dataset):
-                    if args.limit is not None and processed_count >= args.limit:
-                        break
+            processed_count = 0
+            for index, row in enumerate(dataset):
+                if args.limit is not None and processed_count >= args.limit:
+                    break
 
-                    if (
-                        args.language_filter
-                        and row.get("language") != args.language_filter
-                    ):
-                        continue
+                if args.language_filter and row.get("language") != args.language_filter:
+                    continue
 
-                    prompt = row.get(prompt_field)
-                    if not prompt:
-                        continue
+                prompt = row.get(prompt_field)
+                if not prompt:
+                    continue
 
-                    uuid = row.get("uuid")
-                    key = str(uuid or index)
-                    if key in seen_ids:
-                        continue
+                uuid = row.get("uuid")
+                key = str(uuid or index)
+                if key in seen_ids:
+                    continue
 
-                    await queue.put(
-                        {
-                            "idx": index,
-                            "uuid": uuid,
-                            "prompt": prompt,
-                        }
-                    )
-                    processed_count += 1
+                await queue.put(
+                    {
+                        "idx": index,
+                        "uuid": uuid,
+                        "prompt": prompt,
+                    }
+                )
+                processed_count += 1
 
-                if progress.total is None or processed_count < progress.total:
-                    progress.total = processed_count
-                    progress.refresh()
-
-                # Signal workers to stop
-                for _ in range(len(workers)):
-                    await queue.put(None)
-                await asyncio.gather(*workers)
-            finally:
-                progress.close()
+            # Signal workers to stop
+            for _ in range(len(workers)):
+                await queue.put(None)
+            await asyncio.gather(*workers)
 
 
 if __name__ == "__main__":
