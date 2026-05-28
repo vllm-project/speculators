@@ -75,8 +75,6 @@ output/peagle_qwen3_8b_sharegpt/
 
 During training, the drafter model takes internal hidden states from the verifier model as input. We use vLLM to serve the verifier and extract these hidden states. The `launch_vllm.py` script is a lightweight wrapper that sets up the right CLI arguments for vLLM to enable hidden state extraction.
 
-For P-EAGLE, you must pass `--hidden-states-path` to tell the server where to write hidden state files:
-
 ```bash
 # in vLLM venv
 CUDA_VISIBLE_DEVICES=0,1 python scripts/launch_vllm.py Qwen/Qwen3-8B \
@@ -149,22 +147,6 @@ output/peagle_qwen3_8b_sharegpt/hidden_states/
 ```bash
 # 8 GPUs with DP=8
 python scripts/launch_vllm.py model -- --data-parallel-size 8
-```
-
-**Use multiple nodes:**
-
-If you have access to multiple machines, each with its own vLLM server, you can split the dataset across them with `--world-size` and `--rank`. Each node generates a contiguous, non-overlapping chunk of the data into a shared (or later merged) output directory. See the [data_generation_offline.py cli reference](/cli/data_generation_offline.md) for details.
-
-```bash
-# On node 0
-python scripts/data_generation_offline.py \
-  --preprocessed-data ./output/peagle_qwen3_8b_sharegpt --output ./output/peagle_qwen3_8b_sharegpt/hidden_states \
-  --max-samples 5000 --world-size 2 --rank 0
-
-# On node 1
-python scripts/data_generation_offline.py \
-  --preprocessed-data ./output/peagle_qwen3_8b_sharegpt --output ./output/peagle_qwen3_8b_sharegpt/hidden_states \
-  --max-samples 5000 --world-size 2 --rank 1
 ```
 
 ### Resuming Interrupted Generation
@@ -247,13 +229,11 @@ CUDA_VISIBLE_DEVICES=0,1 torchrun \
 **Key P-EAGLE-specific parameters:**
 
 - `--speculator-type peagle` - Use the P-EAGLE algorithm
-- `--num-layers 4` - Number of draft transformer layers
 - `--num-depths 4` - Number of parallel prediction depths (multi-token prediction)
 - `--down-sample-ratio 0.7` - Initial down-sampling ratio for COD sampling
 - `--down-sample-ratio-min 0.2` - Minimum down-sampling ratio for COD sampling
 - `--no-norm-before-residual` - Disable normalization before residual connections
 - `--scheduler-type cosine` - Use cosine learning rate schedule
-- `--on-missing raise` - Fail if any hidden states are missing (recommended). Alternatives are `skip` and `warn` which both skip the missing sample, with the latter raising a warning.
 
 **Note:** There are a lot of configuration options available at this stage. We've attempted to set sensible defaults but please see the [train.py cli reference](/cli/train.md) to see all available options.
 
