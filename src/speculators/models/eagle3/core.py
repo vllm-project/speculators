@@ -14,6 +14,7 @@ from speculators.models.eagle3.attention import (
 )
 from speculators.models.eagle3.metrics import compute_metrics
 from speculators.models.eagle3.model_definitions import model_classes
+from speculators.models.metrics import kl_div_loss, resolve_loss_fn
 from speculators.models.utils import resolve_target_layer_ids
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 
@@ -130,8 +131,10 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
         ttt_steps: int = 3,
         ttt_step_loss_decay: float = 1.0,
         use_off_policy_tokens: bool = False,
+        loss_fn=kl_div_loss,
         **kwargs,
     ):
+        loss_fn = loss_fn or kl_div_loss
         device = hidden_states.device
         total_seq_len = hidden_states.shape[1]
 
@@ -222,6 +225,7 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
                     prev_correct,
                     ttt_step,
                     ttt_step_loss_decay,
+                    loss_fn=loss_fn,
                 )
                 loss += s_loss
                 metrics.update(s_metrics)
@@ -324,14 +328,17 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
         Returns:
             Tuple of (train_call_kwargs, val_call_kwargs)
         """
+        loss_fn = resolve_loss_fn(kwargs["loss_fn"])
         train_kwargs = {
             "use_off_policy_tokens": kwargs["use_off_policy_tokens"],
             "ttt_steps": kwargs["ttt_steps"],
             "ttt_step_loss_decay": kwargs["ttt_step_loss_decay"],
+            "loss_fn": loss_fn,
         }
         val_kwargs = {
             "use_off_policy_tokens": False,
             "ttt_steps": kwargs["ttt_steps"],
             "ttt_step_loss_decay": kwargs["ttt_step_loss_decay"],
+            "loss_fn": loss_fn,
         }
         return train_kwargs, val_kwargs

@@ -1,4 +1,4 @@
-from typing import Any, ClassVar
+from typing import ClassVar
 
 import torch
 from torch import nn
@@ -18,6 +18,7 @@ from speculators.models.dflash.utils import (
     get_base_indices_for_anchored_blocks,
     select_anchors,
 )
+from speculators.models.metrics import kl_div_loss, resolve_loss_fn
 from speculators.models.utils import resolve_target_layer_ids
 
 
@@ -162,7 +163,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         return model
 
     @staticmethod
-    def get_trainer_kwargs(**kwargs) -> tuple[dict, dict]:  # noqa: ARG004
+    def get_trainer_kwargs(**kwargs) -> tuple[dict, dict]:
         """Get training and validation kwargs for DFlash.
 
         Args:
@@ -171,9 +172,8 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         Returns:
             Tuple of (train_call_kwargs, val_call_kwargs)
         """
-        train_kwargs: dict[str, Any] = {}
-        val_kwargs: dict[str, Any] = {}
-        return train_kwargs, val_kwargs
+        loss_fn = resolve_loss_fn(kwargs["loss_fn"])
+        return {"loss_fn": loss_fn}, {"loss_fn": loss_fn}
 
     @property
     def mask_token_id(self) -> int:
@@ -218,6 +218,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         verifier_last_hidden_states: torch.Tensor,  # shape: [1, total_seq_len, hidden_size] # noqa: E501
         lengths: torch.Tensor | None = None,  # shape: [batch_size]
         position_ids: torch.Tensor | None = None,  # shape: [1, total_seq_len]
+        loss_fn=kl_div_loss,
         **kwargs,
     ):
         device = hidden_states.device
@@ -300,7 +301,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
 
         aligned_loss_mask[:, :: self.block_size] = 0
         loss, metrics = compute_metrics(
-            logits, targets, aligned_loss_mask, self.block_size
+            logits, targets, aligned_loss_mask, self.block_size, loss_fn=loss_fn
         )
         draft_tokens = torch.argmax(logits, dim=-1)
 

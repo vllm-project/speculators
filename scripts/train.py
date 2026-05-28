@@ -20,6 +20,7 @@ from speculators.data_generation.vllm_client import (
 )
 from speculators.model import SpeculatorModel
 from speculators.models.eagle3.data import shift_batch
+from speculators.models.metrics import resolve_loss_fn
 from speculators.train.data import (
     ArrowDataset,
     BaseDataset,
@@ -590,6 +591,17 @@ def parse_args():
     parser.add_argument("--ttt-steps", type=int, default=3)
     parser.add_argument("--ttt-step-loss-decay", type=float, default=1.0)
     parser.add_argument(
+        "--loss-fn",
+        type=str,
+        default="kl_div",
+        choices=["kl_div", "ce"],
+        help=(
+            "Loss function used during draft model training. "
+            "'kl_div' = KL divergence (default). "
+            "'ce' = cross-entropy."
+        ),
+    )
+    parser.add_argument(
         "--seed", type=int, default=42, help="Random seed for reproducibility"
     )
     parser.add_argument(
@@ -694,7 +706,10 @@ def parse_args():
     parser.add_argument("--scheduler-warmup-steps", type=int, default=None)
     parser.add_argument("--scheduler-total-steps", type=int, default=None)
     parser.add_argument("--scheduler-num-cosine-cycles", type=float, default=0.5)
-    return parser.parse_args()
+
+    args = parser.parse_args()
+    resolve_loss_fn(args.loss_fn)
+    return args
 
 
 if __name__ == "__main__":
