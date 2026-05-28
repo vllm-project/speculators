@@ -2,10 +2,13 @@ import argparse
 import logging
 import random
 import warnings
+from copy import deepcopy
 from pathlib import Path
 
 import numpy as np
 import torch
+import transformers
+from packaging import version
 from torch.utils.data import DataLoader
 from transformers import LlamaConfig, PretrainedConfig
 from transformers.models.auto.configuration_auto import AutoConfig
@@ -140,7 +143,7 @@ def create_transformer_layer_config(
             "nor 'hidden_activation'"
         )
 
-    return config_class(
+    config = config_class(
         vocab_size=verifier_config.vocab_size,
         hidden_size=verifier_config.hidden_size,
         intermediate_size=verifier_config.intermediate_size,
@@ -154,6 +157,17 @@ def create_transformer_layer_config(
         head_dim=getattr(verifier_config, "head_dim", None),
         tie_word_embeddings=False,
     )
+
+    # New rope parameters definition introduced in transformers 5.0
+    if version.parse(transformers.__version__) >= version.parse("5.0.0"):
+        if hasattr(verifier_config, "rope_parameters"):
+            config.rope_parameters = deepcopy(verifier_config.rope_parameters)
+    else:
+        if hasattr(verifier_config, "rope_scaling"):
+            config.rope_scaling = deepcopy(verifier_config.rope_scaling)
+        config.rope_theta = getattr(verifier_config, "rope_theta", 10000.0)
+
+    return config
 
 
 def _load_mappings(d2t_path, t2d_path, expected_draft_vocab_size: int | None):
