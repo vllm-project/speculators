@@ -20,6 +20,12 @@ Learn how to train an Eagle-3 speculator using offline training with pre-generat
 
 **Time required:** ~3 hours
 
+## [Train P-EAGLE Model Offline](train_peagle_offline.md)
+
+Learn how to train a P-EAGLE speculator using offline training with pre-generated hidden states.
+
+**Time required:** ~50 mins
+
 ## [Train DFlash Model Online](train_dflash_online.md)
 
 Learn how to train a DFlash speculator model with block-based token generation.
