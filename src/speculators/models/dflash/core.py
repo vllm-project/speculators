@@ -14,12 +14,9 @@ from speculators.models.dflash import DFlashSpeculatorConfig
 from speculators.models.dflash.attention import create_anchor_block_mask_mod
 from speculators.models.dflash.metrics import compute_metrics
 from speculators.models.dflash.model_definitions import Qwen3DFlashDecoderLayer
-from speculators.models.dflash.utils import (
-    get_base_indices_for_anchored_blocks,
-    select_anchors,
-)
+from speculators.models.dflash.utils import get_base_indices_for_anchored_blocks
 from speculators.models.metrics import kl_div_loss, resolve_loss_fn
-from speculators.models.utils import resolve_target_layer_ids
+from speculators.models.utils import resolve_target_layer_ids, select_anchors
 
 
 @SpeculatorModel.register("dflash")

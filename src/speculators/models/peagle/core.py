@@ -14,7 +14,7 @@ from speculators.models.peagle.attention import create_peagle_mask_mod
 from speculators.models.peagle.config import PEagleSpeculatorConfig
 from speculators.models.peagle.data import generate_cod_sample_indices
 from speculators.models.peagle.metrics import compute_metrics
-from speculators.models.utils import resolve_target_layer_ids
+from speculators.models.utils import resolve_target_layer_ids, select_anchors
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 
 
@@ -43,6 +43,7 @@ class PEagleDraftModel(Eagle3DraftModel):
         self.down_sample_ratio = config.down_sample_ratio
         self.down_sample_ratio_min = config.down_sample_ratio_min
         self.mask_token_id = config.mask_token_id
+        self.max_anchors = config.max_anchors
 
         # Learnable mask_hidden parameter for padding unsampled positions
         self.mask_hidden = torch.nn.Parameter(torch.randn(1, 1, 3 * self.hidden_size))
@@ -98,6 +99,19 @@ class PEagleDraftModel(Eagle3DraftModel):
         )
         total_sampled = anchor_pos.shape[0]
 
+        # Sample anchors from depth 0 if max_anchors is set (reduces O(N²) attention)
+        sampled_anchors = None
+        if self.max_anchors is not None:
+            # Create a mask for depth-0 positions only
+            depth0_mask = (depth == 0).float().unsqueeze(0)  # [1, total_sampled]
+            # Sample anchors from depth 0 positions
+            depth0_anchor_indices, _ = select_anchors(
+                loss_mask=depth0_mask,
+                num_anchors=self.max_anchors,
+                block_size=1,  # We don't use blocks like DFlash, just individual positions
+            )
+            sampled_anchors = depth0_anchor_indices  # Indices into depth-0 positions
+
         orig_positions = anchor_pos + depth
         is_depth_0 = depth == 0  # [total_sampled]
 
@@ -135,6 +149,7 @@ class PEagleDraftModel(Eagle3DraftModel):
             depth=depth,
             lengths=lengths,
             total_seq_len=seq_length,
+            sampled_anchors=sampled_anchors,
         )
 
         attention_mask = create_block_mask(  # type: ignore[assignment]
@@ -217,6 +232,7 @@ class PEagleDraftModel(Eagle3DraftModel):
             norm_before_residual=kwargs.get("norm_before_residual", False),
             eagle_aux_hidden_state_layer_ids=target_layer_ids,
             num_depths=kwargs.get("num_depths", 8),
+            max_anchors=kwargs.get("max_anchors"),
             down_sample_ratio=kwargs.get("down_sample_ratio", 0.7),
             down_sample_ratio_min=kwargs.get("down_sample_ratio_min", 0.2),
             mask_token_id=kwargs.get("mask_token_id"),

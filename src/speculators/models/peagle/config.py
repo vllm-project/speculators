@@ -19,6 +19,7 @@ class PEagleSpeculatorConfig(Eagle3SpeculatorConfig):
     Conditional Drop Token (COD) sampling for memory-efficient training.
 
     :param num_depths: Number of parallel prediction groups (typically 8)
+    :param max_anchors: Maximum anchor positions for depth 0 (reduces O(N²) attention)
     :param down_sample_ratio: Geometric decay ratio for COD sampling (r in [0,1])
     :param down_sample_ratio_min: Minimum retention ratio floor
     :param mask_token_id: Token ID used for masking
@@ -35,6 +36,16 @@ class PEagleSpeculatorConfig(Eagle3SpeculatorConfig):
         description="Number of parallel prediction groups (num_depths)",
         ge=1,
         le=16,
+    )
+
+    max_anchors: int | None = Field(
+        default=None,
+        description=(
+            "Maximum number of anchor positions to sample for depth 0 during training "
+            "(controls memory usage and reduces O(N²) attention cost to O(anchors × N)). "
+            "If None, uses full causal attention for depth 0."
+        ),
+        ge=1,
     )
 
     down_sample_ratio: float = Field(
