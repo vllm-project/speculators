@@ -65,8 +65,8 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         self.sliding_window = tl_config.sliding_window
         self.sliding_window_indices = [
             i
-            for i in range(num_draft_layers)
-            if tl_config.layer_types == "sliding_attention"
+            for i, layer_type in enumerate(tl_config.layer_types)
+            if layer_type == "sliding_attention"
         ]
         self.uses_sliding_window_attn = bool(self.sliding_window_indices)
         self.uses_full_attn = bool(num_draft_layers - len(self.sliding_window_indices))
