@@ -101,12 +101,20 @@ def _normalize_conversation(
             role = "assistant"
         elif role == "system":
             role = "system"
+        elif role == "tool":
+            role = "tool"
         else:
             log.warning(f"Unknown role '{role}', skipping turn")
             continue
 
         # Build normalized turn with role and content
         normalized_turn = {"role": role, "content": content}
+
+        # Preserve tool_calls and tool_call_id if present
+        if turn.get("tool_calls"):
+            normalized_turn["tool_calls"] = turn["tool_calls"]
+        if turn.get("tool_call_id"):
+            normalized_turn["tool_call_id"] = turn["tool_call_id"]
 
         thinking = turn.get("thinking") or turn.get("reasoning_content")
         if thinking:
