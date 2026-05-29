@@ -5,18 +5,6 @@ from importlib.metadata import version as pkg_version
 import pytest
 import torch
 from packaging.version import Version
-from transformers import PretrainedConfig
-
-# transformers 5.6.x has a bug where validate_token_ids iterates Pydantic
-# models and receives (key, value) tuples instead of string keys, causing
-# AttributeError: 'tuple' object has no attribute 'endswith'.
-# Remove the broken validator from the strict validator list.
-if hasattr(PretrainedConfig, "__class_validators__"):
-    PretrainedConfig.__class_validators__ = [
-        v
-        for v in PretrainedConfig.__class_validators__
-        if v.__name__ != "validate_token_ids"
-    ]
 
 
 @pytest.fixture
