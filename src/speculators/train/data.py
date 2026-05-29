@@ -82,7 +82,7 @@ def create_empty_sample(hidden_size: int, dtype: torch.dtype = torch.bfloat16):
         "hidden_states": torch.empty(0, 3 * hidden_size, dtype=dtype),
         "input_ids": torch.empty(0, dtype=torch.long),
         "verifier_last_hidden_states": torch.empty(0, hidden_size, dtype=dtype),
-        "loss_mask": torch.empty(0),
+        "loss_mask": torch.empty(0, dtype=torch.bool),
         "lengths": torch.tensor([0], dtype=torch.long),
         "position_ids": torch.arange(0, dtype=torch.long),
     }

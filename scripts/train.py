@@ -96,7 +96,9 @@ def setup_dataloader(
         num_workers=num_workers,
         prefetch_factor=prefetch_factor,
         pin_memory=True,
-        collate_fn=create_collate_fn(args.total_seq_len, hidden_size, preprocess),
+        collate_fn=create_collate_fn(
+            args.total_seq_len, hidden_size, dataset.hidden_states_dtype, preprocess
+        ),
         persistent_workers=True,
     )
 
