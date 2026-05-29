@@ -233,7 +233,6 @@ CUDA_VISIBLE_DEVICES=0,1 torchrun \
 - `--down-sample-ratio 0.7` - Initial down-sampling ratio for COD sampling
 - `--down-sample-ratio-min 0.2` - Minimum down-sampling ratio for COD sampling
 - `--no-norm-before-residual` - Disable normalization before residual connections
-- `--scheduler-type cosine` - Use cosine learning rate schedule
 
 **Note:** There are a lot of configuration options available at this stage. We've attempted to set sensible defaults but please see the [train.py cli reference](/cli/train.md) to see all available options.
 
