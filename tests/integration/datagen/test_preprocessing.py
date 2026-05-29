@@ -85,14 +85,14 @@ def test_normalize_conversation_unknown_role():
 @pytest.mark.sanity
 def test_normalize_conversation_tool_calls():
     """Test that assistant tool_calls are preserved through normalization."""
-    tool_calls = [
+    tool_calls: list[dict] = [
         {
             "id": "call_123",
             "type": "function",
             "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
         }
     ]
-    conv = [
+    conv: list[dict] = [
         {"role": "system", "content": "You are a helpful assistant."},
         {"role": "user", "content": "What is the weather in Paris?"},
         {"role": "assistant", "content": None, "tool_calls": tool_calls},
