@@ -105,7 +105,7 @@ def setup_dataloader(
     )
 
 
-def create_transformer_layer_config(
+def create_transformer_layer_config(  # noqa: C901
     verifier_name_or_path: str,
     num_layers: int,
     draft_arch: str,
