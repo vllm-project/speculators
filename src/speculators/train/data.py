@@ -126,7 +126,7 @@ class BaseDataset(Dataset):
         self,
         max_len: int,
         transform: TransformTensors | None = None,
-        hidden_states_dtype=torch.float,
+        hidden_states_dtype=torch.bfloat16,
     ):
         self.max_len = max_len
         self.transform = transform
@@ -193,7 +193,7 @@ class ArrowDataset(BaseDataset):
         on_generate: Literal["cache", "delete"] = "delete",
         split_ratio: float = 1.0,
         transform: TransformTensors | None = None,
-        hidden_states_dtype=torch.float,
+        hidden_states_dtype=torch.bfloat16,
         model: str | None = None,
         request_timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
         max_retries: int = DEFAULT_MAX_RETRIES,
@@ -364,7 +364,7 @@ class SampleFileDataset(BaseDataset):
         datapath: str | None = None,
         file_list: list[str] | None = None,
         transform: TransformTensors | None = None,
-        hidden_states_dtype=None,
+        hidden_states_dtype: torch.dtype = torch.bfloat16,
     ):
         """Initialize the SampleFileDataset.
         Args:

@@ -41,6 +41,7 @@ MULTI_BATCH_CONFIGS: list[list[int]] = [
     [32, 3, 17],
     [128],
     [16],
+    [],
 ]
 
 # ---------------------------------------------------------------------------
@@ -99,9 +100,10 @@ def _make_samples(
 
 
 @pytest.fixture(params=ALL_SPECS)
-def model_and_spec(request):
+def model_and_spec(request, hidden_states_dtype=torch.bfloat16):
     spec: ModelSpec = request.param
     model = spec.factory()
+    model.to(hidden_states_dtype)
     yield model, spec
     del model
     torch.cuda.empty_cache()
@@ -147,7 +149,7 @@ class TestTraining:
 class TestMultiBatch:
     """Run multiple batches back-to-back to test statefulness and cache clearing."""
 
-    def test_multi_then_single(self, model_and_spec):
+    def test_varying_batches(self, model_and_spec):
         model, spec = model_and_spec
         torch.compiler.reset()
         for seq_lengths in MULTI_BATCH_CONFIGS:

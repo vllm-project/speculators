@@ -170,7 +170,7 @@ def make_sample(
     loss_mask_pattern: str = "all",
     include_verifier_states: bool = True,
     boundary_token_ids: list[int] | None = None,
-    dtype: torch.dtype = torch.float32,
+    dtype: torch.dtype = torch.bfloat16,
 ) -> dict[str, torch.Tensor]:
     """Generate a single synthetic sample (no batch dim, seq_len on dim 0).
 
