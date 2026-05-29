@@ -144,7 +144,7 @@ def create_transformer_layer_config(
             f"{type(verifier_config).__name__} has neither 'hidden_act' "
             "nor 'hidden_activation'"
         )
-    
+
     if sliding_window_indices and (
         min(sliding_window_indices) < 0 or max(sliding_window_indices) >= num_layers
     ):
@@ -156,7 +156,7 @@ def create_transformer_layer_config(
         "sliding_attention" if i in sliding_window_indices else "full_attention"
         for i in range(num_layers)
     ]
-    
+
     config = config_class(
         vocab_size=verifier_config.vocab_size,
         hidden_size=verifier_config.hidden_size,
