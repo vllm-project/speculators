@@ -1,5 +1,6 @@
 """Metrics and loss functions for Eagle3 draft model."""
 
+from collections.abc import Callable
 from functools import partial
 
 import torch
@@ -54,6 +55,7 @@ def compute_metrics(
     prev_correct: torch.Tensor | None,
     ttt_step: int,
     ttt_step_loss_decay: float,
+    loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = kl_div_loss,
 ) -> tuple[torch.Tensor, dict]:
     """Compute metrics for a given ttt_step.
 
@@ -64,6 +66,7 @@ def compute_metrics(
         prev_correct: The previous correct predictions for the current ttt_step.
         ttt_step: The current ttt_step.
         ttt_step_loss_decay: The loss decay for the current ttt_step.
+        loss_fn: Loss function.
 
     Effects:
         Modifies prev_correct in place.
@@ -71,6 +74,8 @@ def compute_metrics(
     Returns:
         Loss value and metrics dictionary.
     """
+    if loss_fn is None:
+        loss_fn = kl_div_loss
     s_logits, s_targets, s_loss_mask, s_prev_correct = align_for_step(
         logits, targets, loss_mask, prev_correct, ttt_step
     )
@@ -88,7 +93,7 @@ def compute_metrics(
         s_targets,
         s_loss_mask,
         pos_idx,
-        loss_fn=kl_div_loss,
+        loss_fn=loss_fn,
         decay_fn=partial(exp_loss_decay, gamma=ttt_step_loss_decay),
     )
 

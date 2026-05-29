@@ -10,6 +10,7 @@ from typing import Any
 
 import aiohttp
 from datasets import load_dataset
+from tqdm import tqdm
 
 DATASET_CONFIGS = {
     "magpie": {
@@ -154,6 +155,8 @@ async def worker(
     args,
     out_fh,
     endpoint: str,
+    progress,
+    stats: dict[str, int],
 ):
     """Worker that pulls items from queue and sends them to the vLLM endpoint."""
     while True:
@@ -206,6 +209,7 @@ async def worker(
             }
             out_fh.write(json.dumps(output, ensure_ascii=False) + "\n")
             out_fh.flush()
+            stats["ok"] += 1
         except Exception as e:  # noqa: BLE001
             error_output = {
                 "id": item.get("uuid") or f"sample_{idx}",
@@ -218,7 +222,14 @@ async def worker(
             }
             out_fh.write(json.dumps(error_output, ensure_ascii=False) + "\n")
             out_fh.flush()
+            stats["errors"] += 1
         finally:
+            progress.set_postfix(
+                ok=stats["ok"],
+                errors=stats["errors"],
+                refresh=False,
+            )
+            progress.update(1)
             queue.task_done()
 
 
@@ -275,10 +286,28 @@ async def main():
     async with aiohttp.ClientSession(
         timeout=timeout, connector=connector, headers=headers
     ) as session:
-        with open(args.outfile, "a", encoding="utf-8") as output_file:  # noqa: ASYNC230
+        with (
+            open(args.outfile, "a", encoding="utf-8") as output_file,  # noqa: ASYNC230
+            tqdm(
+                total=args.limit,
+                desc="Generating responses",
+                unit="sample",
+                dynamic_ncols=True,
+            ) as progress,
+        ):
+            stats = {"ok": 0, "errors": 0}
             workers = [
                 asyncio.create_task(
-                    worker(semaphore, session, queue, args, output_file, endpoint)
+                    worker(
+                        semaphore,
+                        session,
+                        queue,
+                        args,
+                        output_file,
+                        endpoint,
+                        progress,
+                        stats,
+                    )
                 )
                 for _ in range(args.concurrency)
             ]

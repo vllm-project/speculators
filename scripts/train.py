@@ -2,10 +2,13 @@ import argparse
 import logging
 import random
 import warnings
+from copy import deepcopy
 from pathlib import Path
 
 import numpy as np
 import torch
+import transformers
+from packaging import version
 from torch.utils.data import DataLoader
 from transformers import LlamaConfig, PretrainedConfig
 from transformers.models.auto.configuration_auto import AutoConfig
@@ -17,6 +20,7 @@ from speculators.data_generation.vllm_client import (
 )
 from speculators.model import SpeculatorModel
 from speculators.models.eagle3.data import shift_batch
+from speculators.models.metrics import resolve_loss_fn
 from speculators.train.data import (
     ArrowDataset,
     BaseDataset,
@@ -140,7 +144,7 @@ def create_transformer_layer_config(
             f"{type(verifier_config).__name__} has neither 'hidden_act' "
             "nor 'hidden_activation'"
         )
-
+    
     if sliding_window_indices and (
         min(sliding_window_indices) < 0 or max(sliding_window_indices) >= num_layers
     ):
@@ -152,8 +156,8 @@ def create_transformer_layer_config(
         "sliding_attention" if i in sliding_window_indices else "full_attention"
         for i in range(num_layers)
     ]
-
-    return config_class(
+    
+    config = config_class(
         vocab_size=verifier_config.vocab_size,
         hidden_size=verifier_config.hidden_size,
         intermediate_size=verifier_config.intermediate_size,
@@ -169,6 +173,17 @@ def create_transformer_layer_config(
         sliding_window=sliding_window,
         layer_types=layer_types,
     )
+
+    # New rope parameters definition introduced in transformers 5.0
+    if version.parse(transformers.__version__) >= version.parse("5.0.0"):
+        if hasattr(verifier_config, "rope_parameters"):
+            config.rope_parameters = deepcopy(verifier_config.rope_parameters)
+    else:
+        if hasattr(verifier_config, "rope_scaling"):
+            config.rope_scaling = deepcopy(verifier_config.rope_scaling)
+        config.rope_theta = getattr(verifier_config, "rope_theta", 10000.0)
+
+    return config
 
 
 def _load_mappings(d2t_path, t2d_path, expected_draft_vocab_size: int | None):
@@ -283,6 +298,7 @@ def main(args: argparse.Namespace):
         args.verifier_name_or_path,
         transformer_layer_config.vocab_size,
         args.mask_token_id,
+        trust_remote_code=args.trust_remote_code,
     )
 
     registry = SpeculatorModel.registry
@@ -423,6 +439,11 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--verifier-name-or-path", type=str, required=True)
     parser.add_argument(
+        "--trust-remote-code",
+        action="store_true",
+        help="Allow executing code from HF Hub when loading the verifier's tokenizer.",
+    )
+    parser.add_argument(
         "--speculator-type",
         type=str,
         default="eagle3",
@@ -549,10 +570,11 @@ def parse_args():
     parser.add_argument(
         "--draft-hidden-act",
         type=str,
-        default=None,
-        help="Activation function for draft decoder layers. Defaults to the verifier's "
-        "activation. Useful for dflash which uses Qwen3 layers that expects 'silu' for "
-        "vLLM deployment.",
+        default="silu",
+        help="Activation function for draft decoder layers. Defaults to 'silu' for "
+        "sigmoid linear unit. Qwen3 layers of dflash expect 'silu' activation for "
+        "vLLM deployment. If another function is desired, set as a string or leave "
+        "as None to automatically fall back to the verifier's activation function.",
     )
     parser.add_argument(
         "--target-layer-ids",
@@ -592,6 +614,17 @@ def parse_args():
     parser.add_argument("--mask-token-id", type=int, default=None)
     parser.add_argument("--ttt-steps", type=int, default=3)
     parser.add_argument("--ttt-step-loss-decay", type=float, default=1.0)
+    parser.add_argument(
+        "--loss-fn",
+        type=str,
+        default="kl_div",
+        choices=["kl_div", "ce"],
+        help=(
+            "Loss function used during draft model training. "
+            "'kl_div' = KL divergence (default). "
+            "'ce' = cross-entropy."
+        ),
+    )
     parser.add_argument(
         "--seed", type=int, default=42, help="Random seed for reproducibility"
     )
@@ -723,7 +756,10 @@ def parse_args():
     parser.add_argument("--scheduler-warmup-steps", type=int, default=None)
     parser.add_argument("--scheduler-total-steps", type=int, default=None)
     parser.add_argument("--scheduler-num-cosine-cycles", type=float, default=0.5)
-    return parser.parse_args()
+
+    args = parser.parse_args()
+    resolve_loss_fn(args.loss_fn)
+    return args
 
 
 if __name__ == "__main__":
