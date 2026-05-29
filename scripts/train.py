@@ -278,7 +278,7 @@ def main(args: argparse.Namespace):
 
     d2t, t2d, draft_vocab_size = parse_vocab_mappings(args)
 
-    if len(args.sliding_window_indices) and args.speculator_type != "dflash":
+    if args.sliding_window_indices and args.speculator_type != "dflash":
         raise ValueError(
             "Currently sliding window attention is only supported by dflash "
             "draft models. Please open an issue/pr if you would like to use "
@@ -708,7 +708,7 @@ def parse_args():
         "--sliding-window-indices",
         type=int,
         nargs="+",
-        default=None,
+        default=[],
         help="(Optional) A (space separated) list of draft layer indices of sliding "
         " window layers. All other draft layers are assumed to be full attention "
         "layers. (e.g. 0 2 4 will make the first, third, and fifth layers use "
