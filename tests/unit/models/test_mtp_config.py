@@ -28,7 +28,7 @@ def speculators_config():
         ],
         default_proposal_method="greedy",
         verifier=VerifierConfig(
-            name_or_path="Qwen/Qwen3.5-2B",
+            name_or_path="Qwen/Qwen3.5-0.8B",
             architectures=["Qwen3_5ForCausalLM"],
         ),
     )

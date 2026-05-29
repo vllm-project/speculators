@@ -1,7 +1,7 @@
 """E2E test: convert → load → forward → perturb → stitch round-trip for MTP.
 
 Validates that the full MTP pipeline works end-to-end:
-1. Convert Qwen/Qwen3.5-2B to a speculators MTP checkpoint
+1. Convert Qwen/Qwen3.5-0.8B to a speculators MTP checkpoint
 2. Load the converted speculator and run a forward pass on GPU
 3. Perturb trainable weights to emulate fine-tuning
 4. Save the perturbed speculator
@@ -25,7 +25,7 @@ from tests.conftest import requires_cuda, requires_transformers_version
 
 logger = logging.getLogger(__name__)
 
-VERIFIER = "Qwen/Qwen3.5-2B"
+VERIFIER = "Qwen/Qwen3.5-0.8B"
 MTP_KEY_PREFIX = "mtp."
 NON_MTP_SPOT_CHECK_KEYS = [
     "model.language_model.layers.0.mlp.gate_proj.weight",

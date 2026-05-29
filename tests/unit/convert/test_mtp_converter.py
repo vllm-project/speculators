@@ -140,11 +140,11 @@ class TestBuildConfig:
     def test_matching_hidden_size_succeeds(self, mock_get_config):
         mock_get_config.return_value = (
             {
-                "hidden_size": 2048,
+                "hidden_size": 1024,
                 "architectures": ["Qwen3_5ForCausalLM"],
                 "model_type": "qwen3_5_text",
                 "vocab_size": 248320,
-                "intermediate_size": 6144,
+                "intermediate_size": 3584,
                 "num_attention_heads": 8,
                 "num_key_value_heads": 2,
                 "num_hidden_layers": 24,
@@ -152,10 +152,10 @@ class TestBuildConfig:
             None,
         )
         source_config = {
-            "hidden_size": 2048,
+            "hidden_size": 1024,
             "model_type": "qwen3_5_text",
             "vocab_size": 248320,
-            "intermediate_size": 6144,
+            "intermediate_size": 3584,
             "num_attention_heads": 8,
             "num_key_value_heads": 2,
             "num_hidden_layers": 24,
@@ -163,9 +163,9 @@ class TestBuildConfig:
         converter = MTPConverter()
 
         config = converter._build_config(
-            source_config, "Qwen/Qwen3.5-2B", num_speculative_steps=3
+            source_config, "Qwen/Qwen3.5-0.8B", num_speculative_steps=3
         )
 
         assert config.speculators_config.algorithm == "mtp"
-        assert config.speculators_config.verifier.name_or_path == "Qwen/Qwen3.5-2B"
+        assert config.speculators_config.verifier.name_or_path == "Qwen/Qwen3.5-0.8B"
         assert config.speculators_config.default_proposal_method == "greedy"
