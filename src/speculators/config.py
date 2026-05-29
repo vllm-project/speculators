@@ -23,7 +23,7 @@ from importlib.metadata import version
 from typing import Any, ClassVar
 
 import torch
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from transformers import PretrainedConfig
 
 from speculators.proposals import TokenProposalConfig
@@ -124,6 +124,30 @@ class SpeculatorsConfig(ReloadableBaseModel):
             "compatibility for a new verifier, if needed."
         ),
     )
+
+    @model_validator(mode="after")
+    def check_default_proposal_method(self) -> "SpeculatorsConfig":
+        """
+        Ensure ``default_proposal_method`` references a proposal that is actually
+        present in ``proposal_methods``.
+
+        Without this check an invalid default (a typo, a stale name, or an empty
+        ``proposal_methods`` list) is accepted at construction/deserialization time
+        and only surfaces later as an opaque lookup failure when the default method
+        is resolved.
+
+        :raises ValueError: If ``default_proposal_method`` is not one of the
+            ``proposal_type`` values in ``proposal_methods``.
+        """
+        available = [method.proposal_type for method in self.proposal_methods]
+        if self.default_proposal_method not in available:
+            raise ValueError(
+                "default_proposal_method "
+                f"'{self.default_proposal_method}' must match the proposal_type of "
+                f"one of the configured proposal_methods. Available proposal types: "
+                f"{available}."
+            )
+        return self
 
 
 class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):

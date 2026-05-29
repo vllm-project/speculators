@@ -227,6 +227,58 @@ def test_speculators_config_marshalling(
     )
 
 
+@pytest.mark.smoke
+def test_speculators_config_rejects_unknown_default_proposal_method(
+    sample_token_proposal_config, sample_verifier_config
+):
+    with pytest.raises(ValidationError) as exc_info:
+        SpeculatorsConfig(
+            algorithm="test_algorithm",
+            proposal_methods=[sample_token_proposal_config],
+            default_proposal_method="not_a_real_proposal",
+            verifier=sample_verifier_config,
+        )
+
+    error_str = str(exc_info.value)
+    assert "default_proposal_method" in error_str
+    assert "not_a_real_proposal" in error_str
+
+
+@pytest.mark.smoke
+def test_speculators_config_rejects_default_with_empty_proposal_methods(
+    sample_verifier_config,
+):
+    with pytest.raises(ValidationError) as exc_info:
+        SpeculatorsConfig(
+            algorithm="test_algorithm",
+            proposal_methods=[],
+            default_proposal_method="test_proposal",
+            verifier=sample_verifier_config,
+        )
+
+    assert "default_proposal_method" in str(exc_info.value)
+
+
+@pytest.mark.sanity
+def test_speculators_config_rejects_invalid_default_on_revalidation(
+    sample_token_proposal_config, sample_verifier_config
+):
+    valid_config = SpeculatorsConfig(
+        algorithm="test_algorithm",
+        proposal_methods=[sample_token_proposal_config],
+        default_proposal_method="test_proposal",
+        verifier=sample_verifier_config,
+    )
+
+    config_dict = valid_config.model_dump()
+    config_dict["default_proposal_method"] = "tampered_value"
+
+    with pytest.raises(ValidationError) as exc_info:
+        SpeculatorsConfig.model_validate(config_dict)
+
+    assert "tampered_value" in str(exc_info.value)
+
+
 # ===== SpeculatorModelConfig Tests =====
 
 
