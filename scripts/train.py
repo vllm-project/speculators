@@ -108,8 +108,10 @@ def setup_dataloader(
 def create_transformer_layer_config(
     verifier_name_or_path: str,
     num_layers: int,
-    draft_arch: str = "llama",
-    hidden_act: str | None = None,
+    draft_arch: str,
+    hidden_act: str | None,
+    sliding_window: int,
+    sliding_window_indices: list[int],
 ) -> PretrainedConfig:
     if draft_arch not in DRAFT_ARCH_CONFIGS:
         raise ValueError(
@@ -143,6 +145,18 @@ def create_transformer_layer_config(
             "nor 'hidden_activation'"
         )
 
+    if sliding_window_indices and (
+        min(sliding_window_indices) < 0 or max(sliding_window_indices) >= num_layers
+    ):
+        raise ValueError(
+            "Sliding window indices must be validate draft layer ids "
+            "in range [0, num_layers)."
+        )
+    layer_types = [
+        "sliding_attention" if i in sliding_window_indices else "full_attention"
+        for i in range(num_layers)
+    ]
+
     config = config_class(
         vocab_size=verifier_config.vocab_size,
         hidden_size=verifier_config.hidden_size,
@@ -156,6 +170,8 @@ def create_transformer_layer_config(
         rms_norm_eps=verifier_config.rms_norm_eps,
         head_dim=getattr(verifier_config, "head_dim", None),
         tie_word_embeddings=False,
+        sliding_window=sliding_window,
+        layer_types=layer_types,
     )
 
     # New rope parameters definition introduced in transformers 5.0
@@ -262,12 +278,20 @@ def main(args: argparse.Namespace):
 
     d2t, t2d, draft_vocab_size = parse_vocab_mappings(args)
 
+    if args.sliding_window_indices and args.speculator_type != "dflash":
+        raise ValueError(
+            "Currently sliding window attention is only supported by dflash "
+            "draft models. Please open an issue/pr if you would like to use "
+            "sliding window attention with a different speculator type"
+        )
     # Setup speculator config
     transformer_layer_config = create_transformer_layer_config(
-        args.verifier_name_or_path,
-        args.num_layers,
+        verifier_name_or_path=args.verifier_name_or_path,
+        num_layers=args.num_layers,
         draft_arch=args.draft_arch,
         hidden_act=args.draft_hidden_act,
+        sliding_window=args.sliding_window,
+        sliding_window_indices=args.sliding_window_indices,
     )
 
     args.mask_token_id = resolve_mask_token_id(
@@ -672,6 +696,32 @@ def parse_args():
         type=float,
         default=0.2,
         help="Minimum retention ratio for COD sampling in P-EAGLE (default: 0.2)",
+    )
+    parser.add_argument(
+        "--sliding-window",
+        type=int,
+        default=2048,
+        help="Sliding window size for sliding window attention layers."
+        "Must also set --sliding-window-indices.",
+    )
+    parser.add_argument(
+        "--sliding-window-indices",
+        type=int,
+        nargs="+",
+        default=[],
+        help="(Optional) A (space separated) list of draft layer indices of sliding "
+        " window layers. All other draft layers are assumed to be full attention "
+        "layers. (e.g. 0 2 4 will make the first, third, and fifth layers use "
+        "sliding window attention and the second and fourth will be full attention)."
+        "Defaults to all layers using full attention.",
+    )
+    parser.add_argument(
+        "--sliding-window-non-causal",
+        action="store_true",
+        default=False,
+        help="Use non-causal (bidirectional) masking within draft blocks for sliding "
+        "window attention layers. Full attention layers are always bidirectional, for"
+        "DFlash. Note: vLLM currently doesn't support these models",
     )
     # Dataloader parameters
     parser.add_argument(
