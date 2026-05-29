@@ -25,6 +25,7 @@ Usage:
 import argparse
 import glob
 import logging
+import shutil
 import sys
 from pathlib import Path
 
@@ -48,6 +49,14 @@ def parse_args():
         type=str,
         required=True,
         help="HuggingFace model ID or local path for target model",
+    )
+    parser.add_argument(
+        "--trust-remote-code",
+        action="store_true",
+        help=(
+            "Allow executing code from HF Hub when loading the target model's "
+            "processor."
+        ),
     )
 
     # Data arguments
@@ -75,7 +84,7 @@ def parse_args():
         type=str,
         default=None,
         help=(
-            "Path to save token frequency distribution"
+            "Path to save token frequency distribution "
             "(default: args.output / 'token_freq.pt')"
         ),
     )
@@ -157,6 +166,9 @@ def main():
                 "preprocessing. To existing overwrite files use --overwrite."
             )
             sys.exit(0)
+        if args.overwrite:
+            shutil.rmtree(output)
+            output.mkdir(parents=True)
     else:
         output.mkdir(parents=True)
 
@@ -177,6 +189,7 @@ def main():
         assistant_pattern=args.assistant_pattern,
         turn_dropout=args.turn_dropout,
         minimum_valid_tokens=args.minimum_valid_tokens,
+        trust_remote_code=args.trust_remote_code,
     )
 
     log.info("Done preparing data")

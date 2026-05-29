@@ -26,11 +26,17 @@ from datasets import load_from_disk
 from safetensors import safe_open
 from tqdm import tqdm
 
+from speculators.data_generation.offline import (
+    get_existing_hidden_state_indices,
+    get_indices_to_process,
+)
 from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_REQUEST_TIMEOUT,
     generate_hidden_states_async,
+    wait_for_lock_async,
 )
+from speculators.train.data import build_client_item
 from speculators.train.logger import setup_root_logger
 
 logger = logging.getLogger(__name__)
@@ -66,8 +72,8 @@ def parse_args():
         type=str,
         default=None,
         help=(
-            "HuggingFace model ID or local path for target model (default auto select)."
-            "For verification purposes only."
+            "HuggingFace model ID or local path for target model "
+            "(default auto select). For verification purposes only."
         ),
     )
     parser.add_argument(
@@ -113,7 +119,7 @@ def parse_args():
         type=int,
         default=32,
         help=(
-            "Number of active vLLM requests at a time."
+            "Number of active vLLM requests at a time. "
             "Note: number of async workers set to 2*concurrency"
         ),
     )
@@ -121,8 +127,8 @@ def parse_args():
         "--validate-outputs",
         action="store_true",
         help=(
-            "Load generated safetensor files and check output token ids match prompt"
-            " tokens and hidden states seq_len matches num tokens"
+            "Load generated safetensor files and check output token ids match "
+            "prompt tokens and hidden states seq_len matches num tokens"
         ),
     )
     parser.add_argument(
@@ -163,70 +169,26 @@ def parse_args():
             "(default: value of --concurrency)"
         ),
     )
+    parser.add_argument(
+        "--world-size",
+        type=int,
+        default=1,
+        help=(
+            "World size for multi-node data generation offline. IMPORTANT: this "
+            "is the number of nodes (not the number of gpus). Defaults to 1"
+        ),
+    )
+    parser.add_argument(
+        "--rank",
+        type=int,
+        default=0,
+        help=(
+            "Rank for multi-node data generation offline. IMPORTANT: this is "
+            "the node index, not an index for a gpu. Must be in range[0, world_size)."
+            " Defaults to 0"
+        ),
+    )
     return parser.parse_args()
-
-
-def get_existing_hidden_state_indices(output_path: Path) -> list[int]:
-    """Find existing `hs_i.safetensors` files (where i is the file index)"""
-
-    existing_file_indices = []
-
-    if not output_path.exists():
-        return existing_file_indices
-
-    for file_path in output_path.iterdir():
-        if file_path.name.startswith("hs_") and file_path.name.endswith(".safetensors"):
-            index_str = file_path.stem[3:]  # Remove "hs_" prefix
-            try:
-                file_index = int(index_str)
-                existing_file_indices.append(file_index)
-            except ValueError:
-                continue
-
-    return sorted(existing_file_indices)
-
-
-def get_indices_to_process(
-    num_samples: int, max_samples: int | None, existing: list[int]
-) -> list[int]:
-    """Determines which indices should be processed. If max_samples is None
-    returns all dataset indices not in existing. Otherwise gets the first
-    `max_samples - len(existing)` samples not already in existing.
-
-    Args:
-        num_samples: Total size of preprocessed dataset
-        max_samples: (Optional) limit for number of samples to process
-        existing: list of ids that have already been processed
-
-    Returns:
-        list of dataset indices to process
-    """
-
-    if len(existing) >= num_samples:
-        logger.info("All samples already processed!")
-        return []
-    if max_samples and len(existing) >= max_samples:
-        logger.info("At least max_samples already processed!")
-        return []
-
-    if len(existing) > 0:
-        logger.info(f"Found {len(existing)} existing samples.")
-
-    existing_s = set(existing)
-    if max_samples is None:
-        return [i for i in range(num_samples) if i not in existing_s]
-
-    num_remaining = min(max_samples, num_samples) - len(existing)
-    to_process = []
-    cur = 0
-    while num_remaining > 0 and cur < num_samples:
-        if cur not in existing_s:
-            to_process.append(cur)
-            num_remaining -= 1
-
-        cur += 1
-
-    return to_process
 
 
 def check_safetensors_file(path: Path, tokens: list[int]):
@@ -246,7 +208,7 @@ def check_safetensors_file(path: Path, tokens: list[int]):
             )
 
 
-async def worker(
+async def worker(  # noqa: C901
     client,
     model: str,
     queue: "asyncio.Queue[dict[str, Any]]",
@@ -276,8 +238,6 @@ async def worker(
             queue.task_done()
             continue
 
-        input_ids = item["input_ids"].tolist()
-
         target_hidden_states_path = hidden_states_output_dir / f"hs_{idx}.safetensors"
 
         try:
@@ -285,17 +245,23 @@ async def worker(
                 hidden_states_path = await generate_hidden_states_async(
                     client,
                     model,
-                    input_ids,
+                    item,
                     timeout=request_timeout,
                     max_retries=max_retries,
                 )
+            lock_path = hidden_states_path + ".lock"
+            if Path(lock_path).exists():  # noqa: ASYNC240
+                await wait_for_lock_async(lock_path)
+
             async with write_semaphore:  # Limit number of active disk writes
                 await asyncio.to_thread(
                     shutil.move, hidden_states_path, target_hidden_states_path
                 )
                 if validate_outputs:
                     await asyncio.to_thread(
-                        check_safetensors_file, target_hidden_states_path, input_ids
+                        check_safetensors_file,
+                        target_hidden_states_path,
+                        item["input_ids"],
                     )
         except Exception as e:
             if fail_on_error:
@@ -325,12 +291,15 @@ async def _feed_queue(to_process, dataset, queue, cancel_event):
     for i in to_process:
         if cancel_event.is_set():
             break
-        item = dataset[i]
+
+        dataset_item = dataset[i]
+        client_item = build_client_item(dataset_item) | {"idx": i}
+
         # Check cancel_event while waiting for queue space to avoid
         # deadlocking when all workers have died.
         while not cancel_event.is_set():
             try:
-                queue.put_nowait({"idx": i, "input_ids": item["input_ids"]})
+                queue.put_nowait(client_item)
                 break
             except asyncio.QueueFull:
                 await asyncio.sleep(0.1)
@@ -370,7 +339,11 @@ async def generate_and_save_hidden_states(args, dataset):
     num_samples = len(dataset)
 
     to_process = get_indices_to_process(
-        num_samples, args.max_samples, existing_file_indices
+        num_samples,
+        args.max_samples,
+        existing_file_indices,
+        args.world_size,
+        args.rank,
     )
     if not to_process:
         return
@@ -397,7 +370,7 @@ async def generate_and_save_hidden_states(args, dataset):
         if args.model and args.model != model_id:
             raise ValueError(
                 f"An explicit model name was passed ({args.model}) which doesn't match"
-                "found model_id {model_id}."
+                f" found model_id {model_id}."
                 "Please make sure --endpoint is set to the correct vllm instance."
             )
 
@@ -437,6 +410,8 @@ async def generate_and_save_hidden_states(args, dataset):
 
 def main():
     args = parse_args()
+    if int(args.rank) < 0 or int(args.rank) >= int(args.world_size):
+        raise ValueError("--rank must be in range [0, world_size)")
     setup_root_logger()
 
     logger.info("EAGLE Offline Data Generation")

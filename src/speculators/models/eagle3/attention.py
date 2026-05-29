@@ -43,6 +43,7 @@ def create_combined_mask_mod(lengths: torch.Tensor, total_seq_len: int):
     )
 
 
+@torch.compiler.disable
 def extend_mask_for_draft_tokens(block_mask):
     """
     Extend the block mask to include new draft tokens. Concatenates a diagonal mask for

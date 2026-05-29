@@ -26,6 +26,8 @@ python scripts/prepare_data.py \
 
   Example: `meta-llama/Llama-3.1-8B-Instruct`
 
+- **`--trust-remote-code`** (flag) Allow executing code from HF Hub when loading the target model's processor.
+
 ### Data Arguments
 
 - **`--data`** (str, required, repeatable) Path to training data. Can be a HuggingFace dataset name or local path. Use multiple times to specify multiple datasets.

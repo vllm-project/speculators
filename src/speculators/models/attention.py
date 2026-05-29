@@ -4,8 +4,6 @@ This module contains attention functions and utilities shared across different
 speculator architectures (EAGLE3, DFlash, etc.) to avoid code duplication.
 """
 
-from typing import cast
-
 import torch
 from torch.nn.attention.flex_attention import BlockMask, flex_attention
 from transformers.modeling_utils import AttentionInterface
@@ -55,7 +53,7 @@ def flex_attention_forward(
         enable_gqa=enable_gqa,
         scale=scaling,
     )
-    attention_output: torch.Tensor = cast("torch.Tensor", flex_attention_output)
+    attention_output: torch.Tensor = flex_attention_output
     attention_output = attention_output.transpose(1, 2).contiguous()
     return attention_output, None
 

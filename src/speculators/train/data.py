@@ -7,7 +7,7 @@ import warnings
 from collections.abc import Callable
 from os import PathLike
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import openai
 import torch
@@ -19,7 +19,9 @@ from torch.utils.data import Dataset
 from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_REQUEST_TIMEOUT,
+    ClientItem,
     generate_hidden_states,
+    wait_for_lock,
 )
 from speculators.train.noise_transforms import TransformTensors
 
@@ -109,6 +111,16 @@ def standardize_data_v1(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def build_client_item(dataset_item: dict) -> ClientItem:
+    out_dict = {}
+    out_dict["input_ids"] = dataset_item["input_ids"].tolist()
+
+    if "messages" in dataset_item:
+        out_dict["messages"] = dataset_item["messages"]
+
+    return cast("ClientItem", out_dict)
+
+
 class BaseDataset(Dataset):
     def __init__(
         self,
@@ -195,6 +207,7 @@ class ArrowDataset(BaseDataset):
             hidden_states_dtype: The dtype of the hidden states.
         """
         self.data = load_from_disk(datapath)
+        self.start_file_idx = 0
         if split_ratio == 1.0:
             pass
         elif 1.0 > split_ratio > 0:
@@ -237,7 +250,7 @@ class ArrowDataset(BaseDataset):
         if self.model and self.model != model_id:
             raise ValueError(
                 f"An explicit model name was passed ({self.model}) which doesn't match"
-                "found model_id {model_id}."
+                f" found model_id {model_id}."
                 "Please make sure --endpoint is set to the correct vllm instance."
             )
         self.model = model_id
@@ -252,6 +265,11 @@ class ArrowDataset(BaseDataset):
     def _maybe_load_hs_file(self, index: int) -> dict[str, torch.Tensor] | None:
         file_idx = self._map_to_file_idx(index)
         candidate_path = self.hidden_states_path / f"hs_{file_idx}.safetensors"
+
+        lock_path = str(candidate_path) + ".lock"
+        if Path(lock_path).exists():
+            wait_for_lock(lock_path)
+
         if candidate_path.exists():
             return load_file(candidate_path)
 
@@ -261,28 +279,33 @@ class ArrowDataset(BaseDataset):
         if not self.client:
             self._setup_client()
 
-        input_ids = self.data[index]["input_ids"].tolist()
+        dataset_item = self.data[index]
+        client_item = build_client_item(dataset_item)
+
         try:
             hs_filepath = generate_hidden_states(
                 self.client,  # type:ignore[arg-type]
                 self.model,  # type:ignore[arg-type]
-                input_ids,
+                client_item,
                 timeout=self.request_timeout,
                 max_retries=self.max_retries,
             )
+
+            loaded_hs = load_file(hs_filepath)
+
+            match self.on_generate:
+                case "cache":
+                    file_idx = self._map_to_file_idx(index)
+                    target_path = self.hidden_states_path / f"hs_{file_idx}.safetensors"
+                    shutil.move(hs_filepath, target_path)
+                case "delete":
+                    Path(hs_filepath).unlink()
         except Exception as e:  # noqa: BLE001
-            warnings.warn(str(e), stacklevel=1)
+            warnings.warn(
+                f"Failed to load/cache hidden states for sample {index}: {e}",
+                stacklevel=1,
+            )
             return None
-
-        loaded_hs = load_file(hs_filepath)
-
-        match self.on_generate:
-            case "cache":
-                file_idx = self._map_to_file_idx(index)
-                target_path = self.hidden_states_path / f"hs_{file_idx}.safetensors"
-                shutil.move(hs_filepath, target_path)
-            case "delete":
-                Path(hs_filepath).unlink()
 
         return loaded_hs
 

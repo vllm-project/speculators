@@ -5,7 +5,8 @@ import warnings
 import torch
 import torch.distributed as dist
 from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
-from transformers import AutoTokenizer
+
+from speculators.data_generation.preprocessing import get_tokenizer, load_processor
 
 local_rank = int(os.environ.get("LOCAL_RANK", "0"))
 world_size = int(os.environ.get("WORLD_SIZE", "1"))
@@ -60,6 +61,8 @@ def resolve_mask_token_id(
     verifier_name_or_path: str,
     vocab_size: int,
     mask_token_id: int | None = None,
+    *,
+    trust_remote_code: bool = False,
 ) -> int:
     """Resolve mask_token_id from explicit value, tokenizer, or fallback.
 
@@ -73,7 +76,11 @@ def resolve_mask_token_id(
         logger.info(f"Using explicit mask_token_id={mask_token_id}")
         return mask_token_id
 
-    tokenizer = AutoTokenizer.from_pretrained(verifier_name_or_path)
+    processor = load_processor(
+        verifier_name_or_path,
+        trust_remote_code=trust_remote_code,
+    )
+    tokenizer = get_tokenizer(processor)
 
     if tokenizer.mask_token_id is not None:
         logger.info(f"Using tokenizer mask_token_id={tokenizer.mask_token_id}")
@@ -151,6 +158,6 @@ def apply_fully_sharded(model: torch.nn.Module):
     for layer in model.layers:  # type: ignore[union-attr]
         fully_shard(layer, mp_policy=mp_policy)
 
-    fully_shard(model, mp_policy=mp_policy)
+    fully_shard(model)
 
     return model

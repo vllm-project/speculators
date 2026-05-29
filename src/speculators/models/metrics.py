@@ -153,6 +153,31 @@ def exp_loss_decay(pos_idx: torch.Tensor, gamma: float):
     return gamma**pos_idx
 
 
+def resolve_loss_fn(
+    name: str,
+) -> "Callable[[torch.Tensor, torch.Tensor], torch.Tensor]":
+    """Resolves a loss function given its abbreviated name.
+
+    Args:
+        name: ``"kl_div"`` for KL-divergence or ``"ce"`` for cross-entropy.
+
+    Returns:
+        The corresponding loss function.
+
+    Raises:
+        ValueError: If *name* is not a recognised loss function.
+    """
+    loss_fn_map: dict[str, Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = {
+        "kl_div": kl_div_loss,
+        "ce": ce_loss,
+    }
+    if name not in loss_fn_map:
+        raise ValueError(
+            f"Unknown loss function '{name}'. Choose from: {sorted(loss_fn_map.keys())}"
+        )
+    return loss_fn_map[name]
+
+
 def loss_function(
     logits: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
     targets: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
