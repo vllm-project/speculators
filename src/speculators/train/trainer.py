@@ -1,4 +1,5 @@
 import logging
+import time
 import warnings
 from typing import Literal, NamedTuple
 
@@ -199,25 +200,40 @@ class Trainer:
             else None
         )
         for local_step, batch in enumerate(train_loader, 1):
+            t_step_start = time.perf_counter()
+
+            t_data_start = time.perf_counter()
             gpu_batch = {
                 k: v.to(self.local_rank, non_blocking=True)
                 if isinstance(v, torch.Tensor)
                 else v
                 for k, v in batch.items()
             }
+            t_data_end = time.perf_counter()
 
+            t_model_start = time.perf_counter()
             _draft_tokens, loss, metrics = self.model(
                 **gpu_batch, **self.config.train_call_kwargs
             )
+            t_model_end = time.perf_counter()
 
+            t_backward_start = time.perf_counter()
             self.opt.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
             self.opt.step()
+            t_backward_end = time.perf_counter()
 
             current_lr = self.opt.param_groups[0]["lr"]
             if self.scheduler is not None:
                 self.scheduler.step()
+
+            t_step_end = time.perf_counter()
+
+            # Add timing metrics
+            metrics["time_data_transfer"] = torch.tensor(t_data_end - t_data_start)
+            metrics["time_backward"] = torch.tensor(t_backward_end - t_backward_start)
+            metrics["time_step_total"] = torch.tensor(t_step_end - t_step_start)
 
             if self.global_step % self.config.log_freq == 0:
                 if self.is_distributed:

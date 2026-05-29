@@ -1,3 +1,4 @@
+import time
 from typing import ClassVar
 
 import torch
@@ -244,6 +245,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         loss_fn=kl_div_loss,
         **kwargs,
     ):
+        t0 = time.perf_counter()
         device = hidden_states.device
         total_seq_len = hidden_states.shape[1]
         num_anchors = self.config.max_anchors
@@ -255,10 +257,13 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 total_seq_len, dtype=torch.long, device=device
             ).unsqueeze(0)
 
+        t_mask_start = time.perf_counter()
         full_attn_mask, sliding_window_attn_mask, anchor_positions, anchor_valid = (
             self._build_attention_mask(loss_mask, lengths, device)
         )
+        t_mask_end = time.perf_counter()
 
+        t_prep_start = time.perf_counter()
         mask_tokens_size = num_anchors * self.block_size
 
         mask_token_ids = torch.full(
@@ -284,11 +289,13 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         # the hidden_states shape doesn't match position_ids but doesn't need
         # to, as hidden_states is only used to set dtype and device in rotary_emb
         position_embeddings = self.rotary_emb(hidden_states, position_ids)
+        t_prep_end = time.perf_counter()
 
         anchored_block_indices = get_base_indices_for_anchored_blocks(
             anchor_positions, self.block_size, input_ids.numel()
         )  # shape: [num_anchors*block_size]
 
+        t_targets_start = time.perf_counter()
         with torch.no_grad():
             verifier_logits = self.verifier_lm_head(
                 self.verifier_norm(verifier_last_hidden_states)
@@ -297,7 +304,9 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             verifier_logits = torch.roll(verifier_logits, 1, dims=1)
             targets = verifier_logits[:, anchored_block_indices]
             # shape: [1, num_anchors*block_size, draft_vocab_size]
+        t_targets_end = time.perf_counter()
 
+        t_forward_start = time.perf_counter()
         for layer_idx, layer in enumerate(self.layers):
             noise_embedding = layer(
                 hidden_states=noise_embedding,
@@ -313,7 +322,9 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
 
         logits = self.lm_head(self.norm(noise_embedding))
         # shape: [1, num_anchors*block_size, vocab_size]
+        t_forward_end = time.perf_counter()
 
+        t_loss_start = time.perf_counter()
         aligned_loss_mask = loss_mask.clone()[:, anchored_block_indices]
         # shape: [1, num_anchors*block_size]
 
@@ -329,5 +340,16 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             logits, targets, aligned_loss_mask, self.block_size, loss_fn=loss_fn
         )
         draft_tokens = torch.argmax(logits, dim=-1)
+        t_loss_end = time.perf_counter()
+
+        t_total = time.perf_counter() - t0
+
+        # Add timing metrics
+        metrics["time_mask"] = torch.tensor(t_mask_end - t_mask_start, device=device)
+        metrics["time_prep"] = torch.tensor(t_prep_end - t_prep_start, device=device)
+        metrics["time_targets"] = torch.tensor(t_targets_end - t_targets_start, device=device)
+        metrics["time_forward"] = torch.tensor(t_forward_end - t_forward_start, device=device)
+        metrics["time_loss"] = torch.tensor(t_loss_end - t_loss_start, device=device)
+        metrics["time_total"] = torch.tensor(t_total, device=device)
 
         return draft_tokens, loss, metrics

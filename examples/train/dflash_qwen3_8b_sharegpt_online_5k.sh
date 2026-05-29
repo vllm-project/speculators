@@ -55,9 +55,8 @@ NUM_LAYERS=5
 DRAFT_VOCAB_SIZE=32000
 TARGET_LAYER_IDS="2 18 33"  # Must match vLLM's eagle_aux_hidden_state_layer_ids
 
-# GPU assignments (online training needs separate GPUs for vLLM and training)
-VLLM_GPUS="0,1"
-TRAIN_GPUS="2,3"
+VLLM_GPUS="4,5"
+TRAIN_GPUS="6,7"
 NUM_TRAIN_GPUS=2
 # =======================================
 
@@ -72,9 +71,9 @@ python scripts/prepare_data.py \
 
 # Step 2: Launch vLLM server in the background
 echo "=== Step 2: Launching vLLM server ==="
-CUDA_VISIBLE_DEVICES="$VLLM_GPUS" python scripts/launch_vllm.py "$MODEL" \
+CUDA_VISIBLE_DEVICES="$VLLM_GPUS" VLLM_LOGGING_LEVEL=WARNING ~/vllm-venv/bin/python scripts/launch_vllm.py "$MODEL" \
     --target-layer-ids $TARGET_LAYER_IDS \
-    -- --data-parallel-size 2 --port "$VLLM_PORT" &
+    -- --data-parallel-size 2 --port "$VLLM_PORT" --no-enable-chunked-prefill > /tmp/vllm_server.log 2>&1 &
 VLLM_PID=$!
 
 # Ensure vLLM is cleaned up on exit
@@ -84,6 +83,9 @@ cleanup() {
     wait "$VLLM_PID" 2>/dev/null || true
 }
 trap cleanup EXIT
+
+# Create temporary directory for hidden states
+mkdir -p /tmp/hidden_states
 
 echo "Waiting for vLLM server to be ready..."
 until curl -sf "http://localhost:${VLLM_PORT}/health" > /dev/null 2>&1; do
@@ -100,6 +102,7 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPUS" torchrun \
     --data-path "$OUTPUT_DIR" \
     --vllm-endpoint "http://localhost:${VLLM_PORT}/v1" \
     --save-path "$OUTPUT_DIR/checkpoints" \
+    --hidden-states-path /tmp/hidden_states \
     --draft-vocab-size "$DRAFT_VOCAB_SIZE" \
     --epochs "$EPOCHS" \
     --lr "$LR" \
@@ -109,7 +112,8 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPUS" torchrun \
     --max-anchors "$MAX_ANCHORS" \
     --num-layers "$NUM_LAYERS" \
     --target-layer-ids $TARGET_LAYER_IDS \
+    --num-workers 0 \
     --on-missing generate \
-    --on-generate delete
+    --on-generate cache
 
 echo "Done. Checkpoints saved to $OUTPUT_DIR/checkpoints/"
