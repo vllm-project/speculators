@@ -264,7 +264,7 @@ Stop the training vLLM server (Ctrl+C), then serve your speculator:
 
 ```bash
 # in vllm venv
-vllm serve ./output/peagle_qwen3_8b_sharegpt/checkpoints --port 8000
+vllm serve ./output/peagle_qwen3_8b_sharegpt/checkpoints/checkpoint_best --port 8000
 ```
 
 ### Chat with the served model
@@ -352,5 +352,5 @@ After training your model:
 
 1. **Evaluate performance** - See [Evaluating Performance](evaluating_performance.md)
 2. **Deploy to production** - See [Serve in vLLM](serve_vllm.md)
-3. **Fine-tune further** - Use `--from-pretrained ./checkpoints/checkpoint_best` to continue training
+3. **Fine-tune further** - Use `--from-pretrained ./output/peagle_qwen3_8b_sharegpt/checkpoints/checkpoint_best` to continue training
 4. **Upload to HuggingFace** - Share your model with the community
