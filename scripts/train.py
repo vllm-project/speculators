@@ -105,7 +105,7 @@ def setup_dataloader(
     )
 
 
-def create_transformer_layer_config(
+def create_transformer_layer_config(  # noqa: C901
     verifier_name_or_path: str,
     num_layers: int,
     draft_arch: str,
@@ -145,6 +145,19 @@ def create_transformer_layer_config(
             "nor 'hidden_activation'"
         )
 
+    head_dim = getattr(verifier_config, "head_dim", None)
+    num_attention_heads = verifier_config.num_attention_heads
+    num_key_value_heads = verifier_config.num_key_value_heads
+
+    if (
+        head_dim
+        and verifier_config.hidden_size % num_attention_heads != 0
+        and verifier_config.hidden_size % head_dim == 0
+    ):
+        num_attention_heads = verifier_config.hidden_size // head_dim
+        if num_attention_heads % num_key_value_heads != 0:
+            num_key_value_heads = num_attention_heads
+
     if sliding_window_indices and (
         min(sliding_window_indices) < 0 or max(sliding_window_indices) >= num_layers
     ):
@@ -162,13 +175,13 @@ def create_transformer_layer_config(
         hidden_size=verifier_config.hidden_size,
         intermediate_size=verifier_config.intermediate_size,
         num_hidden_layers=num_layers,
-        num_attention_heads=verifier_config.num_attention_heads,
-        num_key_value_heads=verifier_config.num_key_value_heads,
+        num_attention_heads=num_attention_heads,
+        num_key_value_heads=num_key_value_heads,
         hidden_act=hidden_act,
         max_position_embeddings=verifier_config.max_position_embeddings,
         initializer_range=verifier_config.initializer_range,
         rms_norm_eps=verifier_config.rms_norm_eps,
-        head_dim=getattr(verifier_config, "head_dim", None),
+        head_dim=head_dim,
         tie_word_embeddings=False,
         sliding_window=sliding_window,
         layer_types=layer_types,
