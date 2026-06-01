@@ -178,6 +178,17 @@ class BaseDataset(Dataset):
         return data
 
 
+def _maybe_load_hs_file(file_path: Path) -> dict[str, torch.Tensor] | None:
+    lock_path = str(file_path) + ".lock"
+    if Path(lock_path).exists():
+        wait_for_lock(lock_path)
+
+    if file_path.exists():
+        return load_file(file_path)
+
+    return None
+
+
 class ArrowDataset(BaseDataset):
     def __init__(
         self,
@@ -258,19 +269,6 @@ class ArrowDataset(BaseDataset):
         """Get lengths of the dataset samples."""
         return list(self.data.with_format(None)["seq_len"])
 
-    def _maybe_load_hs_file(self, index: int) -> dict[str, torch.Tensor] | None:
-        file_idx = self._map_to_file_idx(index)
-        candidate_path = self.hidden_states_path / f"hs_{file_idx}.safetensors"
-
-        lock_path = str(candidate_path) + ".lock"
-        if Path(lock_path).exists():
-            wait_for_lock(lock_path)
-
-        if candidate_path.exists():
-            return load_file(candidate_path)
-
-        return None
-
     def _maybe_generate_hs(self, index: int) -> dict[str, torch.Tensor] | None:
         if not self.client:
             self._setup_client()
@@ -287,7 +285,7 @@ class ArrowDataset(BaseDataset):
                 max_retries=self.max_retries,
             )
 
-            loaded_hs = load_file(hs_filepath)
+            loaded_hs = _maybe_load_hs_file(Path(hs_filepath))
 
             match self.on_generate:
                 case "cache":
@@ -306,7 +304,9 @@ class ArrowDataset(BaseDataset):
         return loaded_hs
 
     def _get_raw_data(self, index):
-        loaded_hs = self._maybe_load_hs_file(index)
+        file_idx = self._map_to_file_idx(index)
+        candidate_path = self.hidden_states_path / f"hs_{file_idx}.safetensors"
+        loaded_hs = _maybe_load_hs_file(candidate_path)
 
         if loaded_hs is None:
             match self.on_missing:
