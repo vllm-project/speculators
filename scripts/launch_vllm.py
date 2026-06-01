@@ -104,6 +104,10 @@ def main():
         *vllm_args,
     ]
 
+    disable_cp_arg = "--no-enable-chunked-prefill"
+    if disable_cp_arg not in cmd:
+        cmd.append(disable_cp_arg)
+
     print("Running command:")
     print(" ".join(cmd))
 
