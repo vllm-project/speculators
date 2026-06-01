@@ -508,11 +508,11 @@ class MLFlowHandler(logging.Handler):
         self.init_kwargs.setdefault("name", _substitute_placeholders(run_name))
         self.init_kwargs.setdefault("config", {})
 
+        self.client = None
         self._package_name = "mlflow"
         self._MAX_PARAM_VAL_LENGTH = None
         self._MAX_PARAMS_TAGS_PER_BATCH = None
         self._auto_end_run = False
-        self._client = None
         self._run_id = None
         self._run = None
 
@@ -588,7 +588,7 @@ class MLFlowHandler(logging.Handler):
         """End the MLfow run and cleanup resources."""
         if self._run is not None and self.client is not None:
             # Only end the run if this handler started it
-            if self.client.active_run() is not None:
+            if self._auto_end_run and self.client.active_run() is not None:
                 self.client.end_run()
             self._run = None
         super().close()
