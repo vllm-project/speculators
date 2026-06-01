@@ -70,6 +70,7 @@ def make_eagle3_model(
     draft_vocab_size: int = 64,
     norm_before_residual: bool = False,
     device: str = "cuda:0",
+    dtype: torch.dtype = torch.bfloat16,
 ) -> Eagle3DraftModel:
     """Create a tiny Eagle3 model with real initialized weights."""
     config = Eagle3SpeculatorConfig(
@@ -89,7 +90,7 @@ def make_eagle3_model(
     )
     model = Eagle3DraftModel(config)
     _fill_nan_weights(model)
-    return model.to(device)  # type: ignore[arg-type]
+    return model.to(device=device, dtype=dtype)  # type: ignore[arg-type]
 
 
 def make_dflash_model(
@@ -98,6 +99,7 @@ def make_dflash_model(
     block_size: int = 4,
     max_anchors: int = 8,
     device: str = "cuda:0",
+    dtype: torch.dtype = torch.bfloat16,
 ) -> DFlashDraftModel:
     """Create a tiny DFlash model with real initialized weights."""
     config = DFlashSpeculatorConfig(
@@ -121,7 +123,7 @@ def make_dflash_model(
     )
     model = DFlashDraftModel(config)
     _fill_nan_weights(model)
-    return model.to(device)  # type: ignore[arg-type]
+    return model.to(device=device, dtype=dtype)  # type: ignore[arg-type]
 
 
 def make_peagle_model(
@@ -130,6 +132,7 @@ def make_peagle_model(
     num_depths: int = 4,
     down_sample_ratio: float = 0.7,
     device: str = "cuda:0",
+    dtype: torch.dtype = torch.bfloat16,
 ) -> PEagleDraftModel:
     """Create a tiny PEagle model with real initialized weights."""
     config = PEagleSpeculatorConfig(
@@ -153,7 +156,7 @@ def make_peagle_model(
     )
     model = PEagleDraftModel(config)
     _fill_nan_weights(model)
-    return model.to(device)  # type: ignore[arg-type]
+    return model.to(device=device, dtype=dtype)  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------

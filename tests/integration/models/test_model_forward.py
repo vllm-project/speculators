@@ -100,10 +100,9 @@ def _make_samples(
 
 
 @pytest.fixture(params=ALL_SPECS)
-def model_and_spec(request, hidden_states_dtype=torch.bfloat16):
+def model_and_spec(request):
     spec: ModelSpec = request.param
     model = spec.factory()
-    model.to(hidden_states_dtype)
     yield model, spec
     del model
     torch.cuda.empty_cache()
