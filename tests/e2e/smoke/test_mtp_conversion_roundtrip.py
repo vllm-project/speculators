@@ -22,6 +22,7 @@ from safetensors.torch import load_file
 from speculators import SpeculatorModel
 from speculators.convert.mtp import MTPConverter
 from tests.conftest import requires_cuda, requires_transformers_version
+from tests.e2e.utils import run_mtp_engine
 
 logger = logging.getLogger(__name__)
 
@@ -187,3 +188,18 @@ def test_mtp_roundtrip(tmp_path: Path, seed):
             f"stitched {stitched_weights[key].shape}"
         )
     logger.info("All %d MTP tensor shapes preserved", len(mtp_keys))
+
+    # -- Step 10: Deploy stitched checkpoint with vLLM MTP --
+    logger.info("Running vLLM MTP inference on stitched checkpoint")
+    prompts = [
+        [{"role": "user", "content": "Write a binary search function in python"}],
+    ]
+    run_mtp_engine(
+        model_path=str(stitched_path),
+        tmp_path=tmp_path,
+        prompts=prompts,
+        num_speculative_tokens=1,
+        max_model_len=256,
+        enforce_eager=True,
+    )
+    logger.info("vLLM MTP inference passed")

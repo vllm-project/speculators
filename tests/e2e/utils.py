@@ -21,6 +21,7 @@ __all__ = [
     "launch_vllm_server",
     "launch_vllm_server_context",
     "run_data_generation_offline",
+    "run_mtp_engine",
     "run_prepare_data",
     "run_training",
     "run_vllm_engine",
@@ -311,6 +312,7 @@ def run_vllm_engine(
     gpu_memory_utilization: float = 0.8,
     enforce_eager: bool = False,
     allowed_local_media_path: str | None = None,
+    speculative_config: dict | None = None,
     disable_compile_cache: bool = False,
     max_tokens: int = 50,
     ignore_eos: bool = True,
@@ -338,6 +340,8 @@ def run_vllm_engine(
     }
     if allowed_local_media_path is not None:
         llm_args_dict["allowed_local_media_path"] = allowed_local_media_path
+    if speculative_config is not None:
+        llm_args_dict["speculative_config"] = speculative_config
 
     command = [
         VLLM_PYTHON,
@@ -397,3 +401,23 @@ def run_vllm_engine(
             assert acci >= thresholdi, (
                 f"Acceptance {acci} at token {i} is less than threshold {thresholdi}"
             )
+
+
+def run_mtp_engine(
+    model_path: str,
+    tmp_path: Path,
+    prompts: list[list[dict[str, str]]],
+    num_speculative_tokens: int = 1,
+    **kwargs,
+) -> None:
+    speculative_config = {
+        "method": "mtp",
+        "num_speculative_tokens": num_speculative_tokens,
+    }
+    run_vllm_engine(
+        model_path=model_path,
+        tmp_path=tmp_path,
+        prompts=prompts,
+        speculative_config=speculative_config,
+        **kwargs,
+    )
