@@ -186,12 +186,10 @@ class MTPConverter:
                     weights[self._remap_key(key)] = f.get_tensor(key)
             return weights
 
-        pytorch = checkpoint_dir / "pytorch_model.bin"
-        if pytorch.exists():
-            state_dict = torch.load(str(pytorch), map_location="cpu", weights_only=True)
-            return {self._remap_key(k): v for k, v in state_dict.items() if k in needed}
-
-        raise FileNotFoundError(f"No checkpoint weights found at {checkpoint_dir}")
+        raise FileNotFoundError(
+            f"No safetensors checkpoint found at {checkpoint_dir}. "
+            "Expected model.safetensors.index.json or model.safetensors."
+        )
 
     def _extract_from_shards(
         self,

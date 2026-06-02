@@ -12,8 +12,7 @@ from safetensors import safe_open
 def list_checkpoint_keys(checkpoint_dir: str | Path) -> list[str]:
     """List all tensor keys in a checkpoint without loading weights.
 
-    Supports sharded safetensors (via index), single safetensors, and
-    pytorch_model.bin formats.
+    Supports sharded safetensors (via index) and single safetensors formats.
 
     :param checkpoint_dir: Path to a local checkpoint directory.
     :return: List of tensor key names present in the checkpoint.
@@ -30,12 +29,10 @@ def list_checkpoint_keys(checkpoint_dir: str | Path) -> list[str]:
         with safe_open(str(single), framework="pt") as f:
             return list(f.keys())
 
-    pytorch = checkpoint_dir / "pytorch_model.bin"
-    if pytorch.exists():
-        state_dict = torch.load(str(pytorch), map_location="cpu", weights_only=True)
-        return list(state_dict.keys())
-
-    raise FileNotFoundError(f"No checkpoint weights found at {checkpoint_dir}")
+    raise FileNotFoundError(
+        f"No safetensors checkpoint found at {checkpoint_dir}. "
+        "Expected model.safetensors.index.json or model.safetensors."
+    )
 
 
 def load_model_layers(
