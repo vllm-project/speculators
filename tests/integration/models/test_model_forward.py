@@ -41,6 +41,7 @@ MULTI_BATCH_CONFIGS: list[list[int]] = [
     [32, 3, 17],
     [128],
     [16],
+    [],
 ]
 
 # ---------------------------------------------------------------------------
@@ -147,7 +148,7 @@ class TestTraining:
 class TestMultiBatch:
     """Run multiple batches back-to-back to test statefulness and cache clearing."""
 
-    def test_multi_then_single(self, model_and_spec):
+    def test_varying_batches(self, model_and_spec):
         model, spec = model_and_spec
         torch.compiler.reset()
         for seq_lengths in MULTI_BATCH_CONFIGS:
