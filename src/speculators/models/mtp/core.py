@@ -21,7 +21,6 @@ from speculators.proposals.greedy import GreedyTokenProposalConfig
 __all__ = ["MTPDraftModel", "compute_step_weights"]
 
 _IGNORE_INDEX = -100
-_2D = 2
 
 
 def compute_step_weights(beta: float = 0.6, num_steps: int = 3) -> list[float]:
@@ -141,10 +140,10 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
         batch_size, seq_len = input_ids.shape
         num_steps = self.config.num_speculative_steps
 
-        if step_weights is not None and len(step_weights) < num_steps:
+        if step_weights is not None and len(step_weights) != num_steps:
             raise ValueError(
                 f"step_weights has {len(step_weights)} entries but "
-                f"num_speculative_steps={num_steps}; expected at least "
+                f"num_speculative_steps={num_steps}; expected exactly "
                 f"{num_steps} weights."
             )
 
@@ -153,16 +152,13 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
                 torch.arange(seq_len, device=device).unsqueeze(0).expand(batch_size, -1)
             )
 
-        if attention_mask is not None and attention_mask.dim() == _2D:
-            causal_mask = create_causal_mask(
-                config=self.config.transformer_layer_config,
-                inputs_embeds=hidden_states,
-                attention_mask=attention_mask,
-                past_key_values=None,
-                position_ids=position_ids,
-            )
-        else:
-            causal_mask = attention_mask
+        causal_mask = create_causal_mask(
+            config=self.config.transformer_layer_config,
+            inputs_embeds=hidden_states,
+            attention_mask=attention_mask,
+            past_key_values=None,
+            position_ids=position_ids,
+        )
 
         all_logits: list[torch.Tensor] = []
         total_loss = torch.tensor(0.0, device=device)
