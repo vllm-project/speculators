@@ -5,7 +5,8 @@ import warnings
 import torch
 import torch.distributed as dist
 from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
-from transformers import AutoTokenizer
+
+from speculators.data_generation.preprocessing import get_tokenizer, load_processor
 
 local_rank = int(os.environ.get("LOCAL_RANK", "0"))
 world_size = int(os.environ.get("WORLD_SIZE", "1"))
@@ -60,6 +61,8 @@ def resolve_mask_token_id(
     verifier_name_or_path: str,
     vocab_size: int,
     mask_token_id: int | None = None,
+    *,
+    trust_remote_code: bool = False,
 ) -> int:
     """Resolve mask_token_id from explicit value, tokenizer, or fallback.
 
@@ -73,7 +76,11 @@ def resolve_mask_token_id(
         logger.info(f"Using explicit mask_token_id={mask_token_id}")
         return mask_token_id
 
-    tokenizer = AutoTokenizer.from_pretrained(verifier_name_or_path)
+    processor = load_processor(
+        verifier_name_or_path,
+        trust_remote_code=trust_remote_code,
+    )
+    tokenizer = get_tokenizer(processor)
 
     if tokenizer.mask_token_id is not None:
         logger.info(f"Using tokenizer mask_token_id={tokenizer.mask_token_id}")
@@ -102,6 +109,38 @@ def resolve_mask_token_id(
         "Could not resolve mask_token_id: no --mask-token-id provided, tokenizer has "
         "no mask_token, no unused embedding slots, and no pad/eos/unk fallback tokens."
     )
+
+
+def normalize_counted_metrics(
+    metrics: dict[str, float], world_size: int = 1
+) -> dict[str, float]:
+    """Normalize metrics after ReduceOp.SUM across ranks.
+
+    For any key ending in '_total', finds the matching '_sum' key,
+    computes sum / total, and stores the result under the prefix
+    (e.g. 'loss_sum' / 'loss_total' -> 'loss').
+    The raw sum/total keys are removed.
+
+    Any remaining metrics (not part of a sum/total pair) are divided
+    by world_size to compute the average across ranks.
+    """
+    normalized_keys: set[str] = set()
+    for tk in [k for k in metrics if k.endswith("_total")]:
+        prefix = tk.removesuffix("_total")
+        sk = f"{prefix}_sum"
+        if sk in metrics:
+            total = metrics[tk]
+            metrics[prefix] = metrics[sk] / total if total > 0 else 0.0
+            del metrics[sk]
+            normalized_keys.add(prefix)
+        del metrics[tk]
+
+    if world_size > 1:
+        for k in metrics:
+            if k not in normalized_keys:
+                metrics[k] /= world_size
+
+    return metrics
 
 
 def apply_fully_sharded(model: torch.nn.Module):

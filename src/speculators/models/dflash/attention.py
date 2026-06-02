@@ -9,6 +9,8 @@ def create_anchor_block_mask_mod(
     total_seq_len: int,
     anchor_positions: torch.Tensor,
     block_size: int,
+    sliding_window: int | None = None,
+    sliding_window_non_causal: bool = False,
 ):
     """
     Build a flex-attention mask mod where each query block corresponds to one anchor.
@@ -31,10 +33,15 @@ def create_anchor_block_mask_mod(
         total_seq_len: padded packed sequence width
         anchor_positions: [n_anchors] absolute positions into the packed base sequence
         block_size: number of query tokens per anchor block
+        sliding_window: integer size of sliding window or None for full attn
+        sliding_window_non_causal: Use non causal mask for sliding window attn
 
     Returns:
         mask_mod, q_len, kv_len
     """
+    # Always use non_causal for full attn
+    non_causal = sliding_window is None or sliding_window_non_causal
+
     device = lengths.device
     anchor_positions = anchor_positions.to(device=device, dtype=torch.long).contiguous()
 
@@ -74,13 +81,6 @@ def create_anchor_block_mask_mod(
             f"anchor_positions out of range: {anchor_positions[oob].tolist()}"
         )
 
-    anchor_docs = document_ids[anchor_positions]
-    if (pad_mask := anchor_docs == -1).any():
-        raise ValueError(
-            f"anchor_positions include padding locations:"
-            f" {anchor_positions[pad_mask].tolist()}"
-        )
-
     # For each query position, which anchor does it belong to?
     # query q in [j*block_size, (j+1)*block_size) belongs to anchor_positions[j]
     query_anchor_positions = torch.repeat_interleave(anchor_positions, block_size)
@@ -101,16 +101,27 @@ def create_anchor_block_mask_mod(
         same_doc = (q_doc == kv_doc) & (q_doc != -1)
         before_anchor = kv_base_pos < q_anchor
 
-        return kv_is_base & same_doc & before_anchor
+        in_window = (
+            (kv_base_pos >= q_anchor - sliding_window)
+            if sliding_window is not None
+            else True
+        )
+
+        return kv_is_base & same_doc & before_anchor & in_window
 
     def same_block_mod(_b, _h, q_idx, kv_idx):
         """
-        Queries may attend bidirectionally to all tokens in their own synthetic block.
+        Queries may attend to tokens in their own synthetic block.
+        Non-causal unless non_causal=False,
+        in which case only prior positions are attended.
         """
         q_block = q_idx // block_size
         kv_is_block = kv_idx >= total_seq_len
         kv_block = (kv_idx - total_seq_len) // block_size
 
-        return kv_is_block & (q_block == kv_block)
+        same = kv_is_block & (q_block == kv_block)
+        if not non_causal:
+            same = same & (kv_idx <= q_idx + total_seq_len)
+        return same
 
     return or_masks(base_prefix_mod, same_block_mod), q_len, kv_len

@@ -32,6 +32,8 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--verifier-name-or-path`** (str, required) HuggingFace model ID or local path for the verifier/target model.
 
+- **`--trust-remote-code`** (flag) Allow executing code from HF Hub when loading the verifier's tokenizer.
+
 - **`--speculator-type`** (str, default: `"eagle3"`) Type of speculator model to train. Options: `eagle3`, `dflash`
 
 - **`--from-pretrained`** (str, default: `""`) Path to a pretrained draft model to finetune.
@@ -39,6 +41,8 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 - **`--num-layers`** (int, default: `1`) Number of transformer layers in the draft model.
 
 - **`--draft-arch`** (str, default: `"llama"`) Architecture for draft decoder layers (only applies to Eagle3 currently). Options: `llama`, `qwen3` **Warning:** Only `llama` is currently supported in vLLM for inference.
+
+- **`--draft-hidden-act`** (str, default: `"silu"`) Activation function for draft decoder layers. Setting as `None` will inherit activation function from the verifier model.
 
 ### Data Arguments
 

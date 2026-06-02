@@ -2,10 +2,13 @@ import argparse
 import logging
 import random
 import warnings
+from copy import deepcopy
 from pathlib import Path
 
 import numpy as np
 import torch
+import transformers
+from packaging import version
 from torch.utils.data import DataLoader
 from transformers import LlamaConfig, PretrainedConfig
 from transformers.models.auto.configuration_auto import AutoConfig
@@ -17,6 +20,7 @@ from speculators.data_generation.vllm_client import (
 )
 from speculators.model import SpeculatorModel
 from speculators.models.eagle3.data import shift_batch
+from speculators.models.metrics import resolve_loss_fn
 from speculators.train.data import (
     ArrowDataset,
     BaseDataset,
@@ -96,16 +100,20 @@ def setup_dataloader(
         num_workers=num_workers,
         prefetch_factor=prefetch_factor,
         pin_memory=True,
-        collate_fn=create_collate_fn(args.total_seq_len, hidden_size, preprocess),
+        collate_fn=create_collate_fn(
+            args.total_seq_len, hidden_size, dataset.hidden_states_dtype, preprocess
+        ),
         persistent_workers=True,
     )
 
 
-def create_transformer_layer_config(
+def create_transformer_layer_config(  # noqa: C901
     verifier_name_or_path: str,
     num_layers: int,
-    draft_arch: str = "llama",
-    hidden_act: str | None = None,
+    draft_arch: str,
+    hidden_act: str | None,
+    sliding_window: int,
+    sliding_window_indices: list[int],
 ) -> PretrainedConfig:
     if draft_arch not in DRAFT_ARCH_CONFIGS:
         raise ValueError(
@@ -139,20 +147,58 @@ def create_transformer_layer_config(
             "nor 'hidden_activation'"
         )
 
-    return config_class(
+    head_dim = getattr(verifier_config, "head_dim", None)
+    num_attention_heads = verifier_config.num_attention_heads
+    num_key_value_heads = verifier_config.num_key_value_heads
+
+    if (
+        head_dim
+        and verifier_config.hidden_size % num_attention_heads != 0
+        and verifier_config.hidden_size % head_dim == 0
+    ):
+        num_attention_heads = verifier_config.hidden_size // head_dim
+        if num_attention_heads % num_key_value_heads != 0:
+            num_key_value_heads = num_attention_heads
+
+    if sliding_window_indices and (
+        min(sliding_window_indices) < 0 or max(sliding_window_indices) >= num_layers
+    ):
+        raise ValueError(
+            "Sliding window indices must be validate draft layer ids "
+            "in range [0, num_layers)."
+        )
+    layer_types = [
+        "sliding_attention" if i in sliding_window_indices else "full_attention"
+        for i in range(num_layers)
+    ]
+
+    config = config_class(
         vocab_size=verifier_config.vocab_size,
         hidden_size=verifier_config.hidden_size,
         intermediate_size=verifier_config.intermediate_size,
         num_hidden_layers=num_layers,
-        num_attention_heads=verifier_config.num_attention_heads,
-        num_key_value_heads=verifier_config.num_key_value_heads,
+        num_attention_heads=num_attention_heads,
+        num_key_value_heads=num_key_value_heads,
         hidden_act=hidden_act,
         max_position_embeddings=verifier_config.max_position_embeddings,
         initializer_range=verifier_config.initializer_range,
         rms_norm_eps=verifier_config.rms_norm_eps,
-        head_dim=getattr(verifier_config, "head_dim", None),
+        head_dim=head_dim,
         tie_word_embeddings=False,
+        sliding_window=sliding_window,
+        layer_types=layer_types,
     )
+
+    # New rope parameters definition introduced in transformers 5.0
+    if version.parse(transformers.__version__) >= version.parse("5.0.0"):
+        if hasattr(verifier_config, "rope_parameters"):
+            config.rope_parameters = deepcopy(verifier_config.rope_parameters)
+    else:
+        if hasattr(verifier_config, "rope_scaling"):
+            config.rope_scaling = deepcopy(verifier_config.rope_scaling)
+        config.rope_theta = getattr(verifier_config, "rope_theta", 10000.0)
+
+    return config
 
 
 def _load_mappings(d2t_path, t2d_path, expected_draft_vocab_size: int | None):
@@ -247,18 +293,27 @@ def main(args: argparse.Namespace):
 
     d2t, t2d, draft_vocab_size = parse_vocab_mappings(args)
 
+    if args.sliding_window_indices and args.speculator_type != "dflash":
+        raise ValueError(
+            "Currently sliding window attention is only supported by dflash "
+            "draft models. Please open an issue/pr if you would like to use "
+            "sliding window attention with a different speculator type"
+        )
     # Setup speculator config
     transformer_layer_config = create_transformer_layer_config(
-        args.verifier_name_or_path,
-        args.num_layers,
+        verifier_name_or_path=args.verifier_name_or_path,
+        num_layers=args.num_layers,
         draft_arch=args.draft_arch,
         hidden_act=args.draft_hidden_act,
+        sliding_window=args.sliding_window,
+        sliding_window_indices=args.sliding_window_indices,
     )
 
     args.mask_token_id = resolve_mask_token_id(
         args.verifier_name_or_path,
         transformer_layer_config.vocab_size,
         args.mask_token_id,
+        trust_remote_code=args.trust_remote_code,
     )
 
     registry = SpeculatorModel.registry
@@ -269,22 +324,22 @@ def main(args: argparse.Namespace):
         )
 
     model_class = registry[args.speculator_type]
+
     if args.from_pretrained:
         draft_model = model_class.from_pretrained(
             args.from_pretrained, t2d=t2d, d2t=d2t
         )
     else:
-        args_dict = vars(args)
-        args_dict["draft_vocab_size"] = draft_vocab_size
+        args.draft_vocab_size = draft_vocab_size
         draft_model = model_class.from_training_args(
             verifier_config=transformer_layer_config,
             t2d=t2d,
             d2t=d2t,
-            **args_dict,
+            **vars(args),
         )
 
     # Setup dataloaders
-    preprocess = shift_batch if args.speculator_type == "eagle3" else None
+    preprocess = shift_batch if args.speculator_type in ("eagle3", "peagle") else None
 
     noise_transform = AddUniformNoise(std=args.noise_std)
     if args.legacy_data:
@@ -383,16 +438,26 @@ def main(args: argparse.Namespace):
     maybe_destroy_distributed()
 
 
-def _checkpoint_freq(value: str) -> int:
-    ivalue = int(value)
-    if ivalue < 1:
-        raise argparse.ArgumentTypeError("--checkpoint-freq must be >= 1")
-    return ivalue
+def _checkpoint_freq(value: str) -> float:
+    fvalue = float(value)
+    if fvalue <= 0:
+        raise argparse.ArgumentTypeError("--checkpoint-freq must be > 0")
+    if fvalue > 1 and not fvalue.is_integer():
+        raise argparse.ArgumentTypeError(
+            f"--checkpoint-freq={fvalue} is not an integer. Values > 1 are treated "
+            "as epoch counts and must be whole numbers."
+        )
+    return fvalue
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--verifier-name-or-path", type=str, required=True)
+    parser.add_argument(
+        "--trust-remote-code",
+        action="store_true",
+        help="Allow executing code from HF Hub when loading the verifier's tokenizer.",
+    )
     parser.add_argument(
         "--speculator-type",
         type=str,
@@ -520,10 +585,11 @@ def parse_args():
     parser.add_argument(
         "--draft-hidden-act",
         type=str,
-        default=None,
-        help="Activation function for draft decoder layers. Defaults to the verifier's "
-        "activation. Useful for dflash which uses Qwen3 layers that expects 'silu' for "
-        "vLLM deployment.",
+        default="silu",
+        help="Activation function for draft decoder layers. Defaults to 'silu' for "
+        "sigmoid linear unit. Qwen3 layers of dflash expect 'silu' activation for "
+        "vLLM deployment. If another function is desired, set as a string or leave "
+        "as None to automatically fall back to the verifier's activation function.",
     )
     parser.add_argument(
         "--target-layer-ids",
@@ -564,6 +630,17 @@ def parse_args():
     parser.add_argument("--ttt-steps", type=int, default=3)
     parser.add_argument("--ttt-step-loss-decay", type=float, default=1.0)
     parser.add_argument(
+        "--loss-fn",
+        type=str,
+        default="kl_div",
+        choices=["kl_div", "ce"],
+        help=(
+            "Loss function used during draft model training. "
+            "'kl_div' = KL divergence (default). "
+            "'ce' = cross-entropy."
+        ),
+    )
+    parser.add_argument(
         "--seed", type=int, default=42, help="Random seed for reproducibility"
     )
     parser.add_argument(
@@ -603,6 +680,7 @@ def parse_args():
         help="Use RMSNorm before fc in Eagle3 draft path "
         "(e.g. for gpt-oss). Omit for other models.",
     )
+    # D-Flash specific parameters
     parser.add_argument(
         "--block-size",
         type=int,
@@ -614,6 +692,51 @@ def parse_args():
         type=int,
         default=256,
         help="Maximum anchor positions for DFlash training (default: 256)",
+    )
+    # P-EAGLE specific parameters
+    parser.add_argument(
+        "--num-depths",
+        type=int,
+        default=8,
+        help="Number of parallel prediction depths for P-EAGLE (default: 8)",
+    )
+    parser.add_argument(
+        "--down-sample-ratio",
+        type=float,
+        default=0.7,
+        help="Geometric decay ratio for COD sampling in P-EAGLE (default: 0.7)",
+    )
+    parser.add_argument(
+        "--down-sample-ratio-min",
+        type=float,
+        default=0.2,
+        help="Minimum retention ratio for COD sampling in P-EAGLE (default: 0.2)",
+    )
+    parser.add_argument(
+        "--sliding-window",
+        type=int,
+        default=2048,
+        help="Sliding window size for sliding window attention layers."
+        "Must also set --sliding-window-indices.",
+    )
+    parser.add_argument(
+        "--sliding-window-indices",
+        type=int,
+        nargs="+",
+        default=[],
+        help="(Optional) A (space separated) list of draft layer indices of sliding "
+        " window layers. All other draft layers are assumed to be full attention "
+        "layers. (e.g. 0 2 4 will make the first, third, and fifth layers use "
+        "sliding window attention and the second and fourth will be full attention)."
+        "Defaults to all layers using full attention.",
+    )
+    parser.add_argument(
+        "--sliding-window-non-causal",
+        action="store_true",
+        default=False,
+        help="Use non-causal (bidirectional) masking within draft blocks for sliding "
+        "window attention layers. Full attention layers are always bidirectional, for"
+        "DFlash. Note: vLLM currently doesn't support these models",
     )
     # Dataloader parameters
     parser.add_argument(
@@ -632,8 +755,9 @@ def parse_args():
     parser.add_argument(
         "--checkpoint-freq",
         type=_checkpoint_freq,
-        default=1,
-        help="Save a checkpoint every N epochs.",
+        default=1.0,
+        help="Save a checkpoint every N epochs. Values < 1 enable sub-epoch "
+        "checkpointing (e.g. 0.5 = every half epoch).",
     )
     parser.add_argument(
         "--save-best",
@@ -647,7 +771,10 @@ def parse_args():
     parser.add_argument("--scheduler-warmup-steps", type=int, default=None)
     parser.add_argument("--scheduler-total-steps", type=int, default=None)
     parser.add_argument("--scheduler-num-cosine-cycles", type=float, default=0.5)
-    return parser.parse_args()
+
+    args = parser.parse_args()
+    resolve_loss_fn(args.loss_fn)
+    return args
 
 
 if __name__ == "__main__":

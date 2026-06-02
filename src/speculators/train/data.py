@@ -7,7 +7,7 @@ import warnings
 from collections.abc import Callable
 from os import PathLike
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import openai
 import torch
@@ -19,7 +19,9 @@ from torch.utils.data import Dataset
 from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_REQUEST_TIMEOUT,
+    ClientItem,
     generate_hidden_states,
+    wait_for_lock,
 )
 from speculators.train.noise_transforms import TransformTensors
 
@@ -64,7 +66,7 @@ def split_files(datapath: str, ratio: float = 0.9, seed: int = 0):
 StandardizeFnSig = Callable[[dict[str, Any]], dict[str, Any]]
 
 
-def create_empty_sample(hidden_size: int):
+def create_empty_sample(hidden_size: int, dtype: torch.dtype = torch.bfloat16):
     # data structure: {
     #     "hidden_states": [seq_len, 3 * hidden_size],
     #     "input_ids": [seq_len],
@@ -73,12 +75,16 @@ def create_empty_sample(hidden_size: int):
     #     "lengths": [1],
     #     "position_ids": [seq_len],
     # }
+    # Default dtype is bfloat16 to match the hidden_states dtype used downstream.
+    # When this fallback is used (e.g. vLLM hidden-state extraction times out and
+    # we substitute an empty sample), the implicit float32 placeholders crashed
+    # bf16 EAGLE-3 layers (fc, verifier_lm_head) with a dtype mismatch.
 
     return {
-        "hidden_states": torch.empty(0, 3 * hidden_size),
-        "input_ids": torch.empty(0),
-        "verifier_last_hidden_states": torch.empty(0, hidden_size),
-        "loss_mask": torch.empty(0),
+        "hidden_states": torch.empty(0, 3 * hidden_size, dtype=dtype),
+        "input_ids": torch.empty(0, dtype=torch.long),
+        "verifier_last_hidden_states": torch.empty(0, hidden_size, dtype=dtype),
+        "loss_mask": torch.empty(0, dtype=torch.bool),
         "lengths": torch.tensor([0], dtype=torch.long),
         "position_ids": torch.arange(0, dtype=torch.long),
     }
@@ -105,12 +111,22 @@ def standardize_data_v1(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def build_client_item(dataset_item: dict) -> ClientItem:
+    out_dict = {}
+    out_dict["input_ids"] = dataset_item["input_ids"].tolist()
+
+    if "messages" in dataset_item:
+        out_dict["messages"] = dataset_item["messages"]
+
+    return cast("ClientItem", out_dict)
+
+
 class BaseDataset(Dataset):
     def __init__(
         self,
         max_len: int,
         transform: TransformTensors | None = None,
-        hidden_states_dtype=torch.float,
+        hidden_states_dtype=torch.bfloat16,
     ):
         self.max_len = max_len
         self.transform = transform
@@ -166,6 +182,17 @@ class BaseDataset(Dataset):
         return data
 
 
+def _maybe_load_hs_file(file_path: Path) -> dict[str, torch.Tensor] | None:
+    lock_path = str(file_path) + ".lock"
+    if Path(lock_path).exists():
+        wait_for_lock(lock_path)
+
+    if file_path.exists():
+        return load_file(file_path)
+
+    return None
+
+
 class ArrowDataset(BaseDataset):
     def __init__(
         self,
@@ -177,7 +204,7 @@ class ArrowDataset(BaseDataset):
         on_generate: Literal["cache", "delete"] = "delete",
         split_ratio: float = 1.0,
         transform: TransformTensors | None = None,
-        hidden_states_dtype=torch.float,
+        hidden_states_dtype=torch.bfloat16,
         model: str | None = None,
         request_timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
         max_retries: int = DEFAULT_MAX_RETRIES,
@@ -191,6 +218,7 @@ class ArrowDataset(BaseDataset):
             hidden_states_dtype: The dtype of the hidden states.
         """
         self.data = load_from_disk(datapath)
+        self.start_file_idx = 0
         if split_ratio == 1.0:
             pass
         elif 1.0 > split_ratio > 0:
@@ -233,7 +261,7 @@ class ArrowDataset(BaseDataset):
         if self.model and self.model != model_id:
             raise ValueError(
                 f"An explicit model name was passed ({self.model}) which doesn't match"
-                "found model_id {model_id}."
+                f" found model_id {model_id}."
                 "Please make sure --endpoint is set to the correct vllm instance."
             )
         self.model = model_id
@@ -245,45 +273,44 @@ class ArrowDataset(BaseDataset):
         """Get lengths of the dataset samples."""
         return list(self.data.with_format(None)["seq_len"])
 
-    def _maybe_load_hs_file(self, index: int) -> dict[str, torch.Tensor] | None:
-        file_idx = self._map_to_file_idx(index)
-        candidate_path = self.hidden_states_path / f"hs_{file_idx}.safetensors"
-        if candidate_path.exists():
-            return load_file(candidate_path)
-
-        return None
-
     def _maybe_generate_hs(self, index: int) -> dict[str, torch.Tensor] | None:
         if not self.client:
             self._setup_client()
 
-        input_ids = self.data[index]["input_ids"].tolist()
+        dataset_item = self.data[index]
+        client_item = build_client_item(dataset_item)
+
         try:
             hs_filepath = generate_hidden_states(
                 self.client,  # type:ignore[arg-type]
                 self.model,  # type:ignore[arg-type]
-                input_ids,
+                client_item,
                 timeout=self.request_timeout,
                 max_retries=self.max_retries,
             )
+
+            loaded_hs = _maybe_load_hs_file(Path(hs_filepath))
+
+            match self.on_generate:
+                case "cache":
+                    file_idx = self._map_to_file_idx(index)
+                    target_path = self.hidden_states_path / f"hs_{file_idx}.safetensors"
+                    shutil.move(hs_filepath, target_path)
+                case "delete":
+                    Path(hs_filepath).unlink()
         except Exception as e:  # noqa: BLE001
-            warnings.warn(str(e), stacklevel=1)
+            warnings.warn(
+                f"Failed to load/cache hidden states for sample {index}: {e}",
+                stacklevel=1,
+            )
             return None
-
-        loaded_hs = load_file(hs_filepath)
-
-        match self.on_generate:
-            case "cache":
-                file_idx = self._map_to_file_idx(index)
-                target_path = self.hidden_states_path / f"hs_{file_idx}.safetensors"
-                shutil.move(hs_filepath, target_path)
-            case "delete":
-                Path(hs_filepath).unlink()
 
         return loaded_hs
 
     def _get_raw_data(self, index):
-        loaded_hs = self._maybe_load_hs_file(index)
+        file_idx = self._map_to_file_idx(index)
+        candidate_path = self.hidden_states_path / f"hs_{file_idx}.safetensors"
+        loaded_hs = _maybe_load_hs_file(candidate_path)
 
         if loaded_hs is None:
             match self.on_missing:
@@ -337,7 +364,7 @@ class SampleFileDataset(BaseDataset):
         datapath: str | None = None,
         file_list: list[str] | None = None,
         transform: TransformTensors | None = None,
-        hidden_states_dtype=None,
+        hidden_states_dtype: torch.dtype = torch.bfloat16,
     ):
         """Initialize the SampleFileDataset.
         Args:
@@ -430,6 +457,7 @@ class SampleFileDataset(BaseDataset):
 def create_collate_fn(
     max_len: int,
     hidden_size: int,
+    dtype: torch.dtype = torch.bfloat16,
     preprocess: Callable[[BatchType], BatchType] | None = None,
 ):
     def collate_fn(batch: list[BatchType | None]) -> BatchType:
@@ -438,8 +466,11 @@ def create_collate_fn(
 
         if not batch:
             # Create empty sample which then gets padded to full
-            # batch size if no valid samples are found
-            batch = [create_empty_sample(hidden_size)]
+            # batch size if no valid samples are found.
+            # Match the configured `dtype` so the placeholder doesn't crash
+            # downstream layers loaded at a different precision (e.g. bf16
+            # weights vs fp32 default placeholders).
+            batch = [create_empty_sample(hidden_size, dtype=dtype)]
 
         collated_data = {}
         for key in batch[0]:  # type: ignore[union-attr]

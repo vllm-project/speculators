@@ -1,5 +1,6 @@
 """Metrics and loss functions for Eagle3 draft model."""
 
+from collections.abc import Callable
 from functools import partial
 
 import torch
@@ -54,6 +55,7 @@ def compute_metrics(
     prev_correct: torch.Tensor | None,
     ttt_step: int,
     ttt_step_loss_decay: float,
+    loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = kl_div_loss,
 ) -> tuple[torch.Tensor, dict]:
     """Compute metrics for a given ttt_step.
 
@@ -64,6 +66,7 @@ def compute_metrics(
         prev_correct: The previous correct predictions for the current ttt_step.
         ttt_step: The current ttt_step.
         ttt_step_loss_decay: The loss decay for the current ttt_step.
+        loss_fn: Loss function.
 
     Effects:
         Modifies prev_correct in place.
@@ -71,6 +74,8 @@ def compute_metrics(
     Returns:
         Loss value and metrics dictionary.
     """
+    if loss_fn is None:
+        loss_fn = kl_div_loss
     s_logits, s_targets, s_loss_mask, s_prev_correct = align_for_step(
         logits, targets, loss_mask, prev_correct, ttt_step
     )
@@ -88,20 +93,23 @@ def compute_metrics(
         s_targets,
         s_loss_mask,
         pos_idx,
-        loss_fn=kl_div_loss,
+        loss_fn=loss_fn,
         decay_fn=partial(exp_loss_decay, gamma=ttt_step_loss_decay),
     )
 
     pred_ids = torch.argmax(s_logits, dim=-1)
     target_ids = torch.argmax(s_targets, dim=-1)
 
-    s_full_acc, s_cond_acc = compute_accuracy_single_step(
+    full_correct, full_total, cond_correct, cond_total = compute_accuracy_single_step(
         pred_ids, target_ids, s_loss_mask, s_prev_correct
     )
 
     s_metrics = {}
-    s_metrics[f"loss_{ttt_step}"] = s_loss.detach().clone()
-    s_metrics[f"full_acc_{ttt_step}"] = s_full_acc
-    s_metrics[f"cond_acc_{ttt_step}"] = s_cond_acc
+    s_metrics[f"loss_{ttt_step}_sum"] = s_loss.detach().clone()
+    s_metrics[f"loss_{ttt_step}_total"] = torch.tensor(1.0, device=s_loss.device)
+    s_metrics[f"full_acc_{ttt_step}_sum"] = full_correct
+    s_metrics[f"full_acc_{ttt_step}_total"] = full_total
+    s_metrics[f"cond_acc_{ttt_step}_sum"] = cond_correct
+    s_metrics[f"cond_acc_{ttt_step}_total"] = cond_total
 
     return s_loss, s_metrics

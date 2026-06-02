@@ -154,6 +154,22 @@ output/hidden_states/
 python scripts/launch_vllm.py model -- --data-parallel-size 8
 ```
 
+**Use multiple nodes:**
+
+If you have access to multiple machines, each with its own vLLM server, you can split the dataset across them with `--world-size` and `--rank`. Each node generates a contiguous, non-overlapping chunk of the data into a shared (or later merged) output directory. See the [data_generation_offline.py cli reference](/cli/data_generation_offline.md) for details.
+
+```bash
+# On node 0
+python scripts/data_generation_offline.py \
+  --preprocessed-data ./output --output ./output/hidden_states \
+  --max-samples 5000 --world-size 2 --rank 0
+
+# On node 1
+python scripts/data_generation_offline.py \
+  --preprocessed-data ./output --output ./output/hidden_states \
+  --max-samples 5000 --world-size 2 --rank 1
+```
+
 **Skip validation:**
 
 Validation loads every single generated output file and confirms that the token ids match the sent request and the hidden states length matches expectation. This is generally not required but is a good sanity check. Turn this off to skip loading generated samples during data gen.
@@ -345,5 +361,5 @@ After training your model:
 
 1. **Evaluate performance** - See [Evaluating Performance](evaluating_performance.md)
 2. **Deploy to production** - See [Serve in vLLM](serve_vllm.md)
-3. **Fine-tune further** - Use `--from-pretrained ./checkpoints/latest` to continue training
+3. **Fine-tune further** - Use `--from-pretrained ./checkpoints/checkpoint_best` to continue training
 4. **Upload to HuggingFace** - Share your model with the community

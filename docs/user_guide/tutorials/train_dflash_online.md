@@ -122,7 +122,7 @@ python scripts/train.py \
   --block-size 8 \
   --max-anchors 3072 \
   --num-layers 5 \
-  --draft-vocab-size 8192 \
+  --draft-vocab-size 32000 \
   --target-layer-ids 2 18 33 \
   --epochs 5 \
   --lr 3e-4 \
@@ -147,7 +147,7 @@ CUDA_VISIBLE_DEVICES=2,3 torchrun \
   --block-size 8 \
   --max-anchors 3072 \
   --num-layers 5 \
-  --draft-vocab-size 8192 \
+  --draft-vocab-size 32000 \
   --target-layer-ids 2 18 33 \
   --epochs 5 \
   --lr 3e-4 \
@@ -162,7 +162,7 @@ CUDA_VISIBLE_DEVICES=2,3 torchrun \
 - `--block-size 8` - Number of tokens predicted per block
 - `--max-anchors 3072` - Maximum anchor positions during training
 - `--num-layers 5` - Number of draft transformer layers
-- `--draft-vocab-size 8192` - Reduced vocabulary size
+- `--draft-vocab-size 32000` - Reduced vocabulary size
 - `--target-layer-ids 2 18 33` - Target model layers to extract hidden states from (must match vLLM config)
 - `--on-missing generate` - Generate hidden states on-the-fly if not cached
 - `--on-generate delete` - Delete generated hidden states after use (saves disk space)
@@ -229,5 +229,5 @@ After training your model:
 
 1. **Evaluate performance** - See [Evaluating Performance](evaluating_performance.md)
 2. **Deploy to production** - See [Serve in vLLM](serve_vllm.md)
-3. **Fine-tune further** - Use `--from-pretrained ./checkpoints/latest` to continue training
+3. **Fine-tune further** - Use `--from-pretrained ./checkpoints/checkpoint_best` to continue training
 4. **Upload to HuggingFace** - Share your model with the community
