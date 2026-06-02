@@ -5,6 +5,7 @@ from typing import Any, ClassVar
 import torch
 from torch import nn
 from transformers import PretrainedConfig
+from transformers.masking_utils import create_causal_mask
 
 from speculators import SpeculatorModel
 from speculators.config import SpeculatorsConfig, VerifierConfig
@@ -18,6 +19,9 @@ from speculators.models.mtp.model_definitions import (
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 
 __all__ = ["MTPDraftModel", "compute_step_weights"]
+
+_IGNORE_INDEX = -100
+_2D = 2
 
 
 def compute_step_weights(beta: float = 0.6, num_steps: int = 3) -> list[float]:
@@ -137,10 +141,28 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
         batch_size, seq_len = input_ids.shape
         num_steps = self.config.num_speculative_steps
 
+        if step_weights is not None and len(step_weights) < num_steps:
+            raise ValueError(
+                f"step_weights has {len(step_weights)} entries but "
+                f"num_speculative_steps={num_steps}; expected at least "
+                f"{num_steps} weights."
+            )
+
         if position_ids is None:
             position_ids = (
                 torch.arange(seq_len, device=device).unsqueeze(0).expand(batch_size, -1)
             )
+
+        if attention_mask is not None and attention_mask.dim() == _2D:
+            causal_mask = create_causal_mask(
+                config=self.config.transformer_layer_config,
+                inputs_embeds=hidden_states,
+                attention_mask=attention_mask,
+                past_key_values=None,
+                position_ids=position_ids,
+            )
+        else:
+            causal_mask = attention_mask
 
         all_logits: list[torch.Tensor] = []
         total_loss = torch.tensor(0.0, device=device)
@@ -157,9 +179,10 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
             )
             step_pos_ids = position_ids[:, :valid_len]
             step_pos_emb = self.rotary_emb(step_hidden, step_pos_ids)
-            step_attn_mask = (
-                attention_mask[:, :valid_len] if attention_mask is not None else None
-            )
+            if causal_mask is not None:
+                step_attn_mask = causal_mask[:, :, :valid_len, :valid_len]
+            else:
+                step_attn_mask = None
 
             mtp_output = self.mtp_layers[0](
                 hidden_states=step_hidden,
@@ -176,13 +199,16 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
             if loss_mask is not None:
                 step_mask = loss_mask[:, step + 2 : step + 2 + valid_len]
                 step_targets = step_targets.clone()
-                step_targets[step_mask == 0] = -100
+                step_targets[step_mask == 0] = _IGNORE_INDEX
             weight = step_weights[step] if step_weights is not None else 1.0
-            step_loss = weight * nn.functional.cross_entropy(
+            unreduced = nn.functional.cross_entropy(
                 logits.reshape(-1, self.config.vocab_size),
                 step_targets.reshape(-1),
-                ignore_index=-100,
+                ignore_index=_IGNORE_INDEX,
+                reduction="none",
             )
+            valid_count = (step_targets.reshape(-1) != _IGNORE_INDEX).sum()
+            step_loss = weight * unreduced.sum() / valid_count.clamp(min=1)
             total_loss = total_loss + step_loss
             metrics[f"loss_step_{step}"] = step_loss.detach().clone()
 

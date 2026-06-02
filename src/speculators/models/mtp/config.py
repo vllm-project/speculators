@@ -66,6 +66,15 @@ class MTPSpeculatorConfig(SpeculatorModelConfig):
 
     @property
     def num_speculative_steps(self) -> int:
+        if (
+            self.speculators_config is None
+            or not self.speculators_config.proposal_methods
+        ):
+            raise ValueError(
+                "Cannot determine num_speculative_steps: "
+                "speculators_config is missing or has no proposal_methods. "
+                "Provide a SpeculatorsConfig with at least one proposal method."
+            )
         return self.speculators_config.proposal_methods[0].speculative_tokens  # type: ignore[union-attr,attr-defined]
 
     @field_validator("num_nextn_predict_layers")

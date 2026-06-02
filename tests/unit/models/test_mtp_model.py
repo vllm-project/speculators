@@ -59,9 +59,8 @@ class TestForwardOutputStructure:
 
 class TestLossMasking:
     def test_zero_mask_ignores_all_targets(self, mtp_model, seed):
-        """All-zero loss_mask sets every target to -100. cross_entropy(mean)
-        with all-ignored targets returns NaN (0/0), confirming the mask is
-        applied to every position."""
+        """All-zero loss_mask sets every target to -100. Loss returns 0.0
+        (not NaN) because the denominator is clamped to min=1."""
         hidden_size = mtp_model.config.hidden_size
         vocab_size = mtp_model.config.vocab_size
         input_ids = torch.randint(0, vocab_size, (BATCH, SEQ_LEN))
@@ -73,7 +72,7 @@ class TestLossMasking:
                 hidden_states=hidden_states,
                 loss_mask=loss_mask,
             )
-        assert total_loss.isnan()
+        assert total_loss == 0.0
 
     def test_partial_mask_reduces_loss(self, mtp_model, seed):
         """Masking some positions should change the loss vs no mask."""
