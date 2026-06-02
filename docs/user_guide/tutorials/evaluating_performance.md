@@ -23,7 +23,7 @@ For acceptance rates only (skips the sweep):
 python evaluate.py throughput --target http://localhost:8000/v1
 ```
 
-See [`examples/evaluate/`](../../../examples/evaluate/) for end-to-end examples that launch a vLLM server and run the pipeline.
+See [`examples/evaluate/`](https://github.com/vllm-project/speculators/tree/main/examples/evaluate) for end-to-end examples that launch a vLLM server and run the pipeline.
 
 ## Options
 
