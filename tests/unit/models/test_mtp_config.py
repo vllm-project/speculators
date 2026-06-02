@@ -1,4 +1,4 @@
-"""Unit tests for MTPConfig."""
+"""Unit tests for MTPSpeculatorConfig."""
 
 import tempfile
 from pathlib import Path
@@ -7,7 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 from speculators import SpeculatorModelConfig, SpeculatorsConfig, VerifierConfig
-from speculators.models.mtp import MTPConfig
+from speculators.models.mtp import MTPSpeculatorConfig
 from speculators.models.mtp.model_definitions import mtp_model_classes
 from speculators.proposals import GreedyTokenProposalConfig
 from tests.conftest import requires_transformers_version
@@ -36,7 +36,7 @@ def speculators_config():
 
 @pytest.fixture
 def mtp_config(qwen3_5_pretrained_config, speculators_config):
-    return MTPConfig(
+    return MTPSpeculatorConfig(
         transformer_layer_config=qwen3_5_pretrained_config,
         speculators_config=speculators_config,
     )
@@ -47,7 +47,7 @@ def mtp_config(qwen3_5_pretrained_config, speculators_config):
 
 class TestConstruction:
     def test_default_initialization(self):
-        config = MTPConfig()
+        config = MTPSpeculatorConfig()
         assert config.speculators_model_type == "mtp"
         assert config.architectures == ["MTPDraftModel"]
         assert config.num_nextn_predict_layers == 1
@@ -81,19 +81,19 @@ class TestConstruction:
 class TestValidation:
     def test_num_nextn_predict_layers_rejects_zero(self):
         with pytest.raises(ValidationError, match="1 layer"):
-            MTPConfig(num_nextn_predict_layers=0)
+            MTPSpeculatorConfig(num_nextn_predict_layers=0)
 
     def test_num_nextn_predict_layers_rejects_two(self):
         with pytest.raises(ValidationError, match="1 layer"):
-            MTPConfig(num_nextn_predict_layers=2)
+            MTPSpeculatorConfig(num_nextn_predict_layers=2)
 
     def test_num_nextn_predict_layers_accepts_one(self):
-        config = MTPConfig(num_nextn_predict_layers=1)
+        config = MTPSpeculatorConfig(num_nextn_predict_layers=1)
         assert config.num_nextn_predict_layers == 1
 
     def test_invalid_speculators_model_type(self):
         with pytest.raises(ValidationError, match="speculators_model_type"):
-            MTPConfig(speculators_model_type="invalid")  # type: ignore[arg-type]
+            MTPSpeculatorConfig(speculators_model_type="invalid")  # type: ignore[arg-type]
 
 
 # ===== Round-trip serialization =====
@@ -102,7 +102,7 @@ class TestValidation:
 class TestSerialization:
     def test_to_dict_roundtrip(self, mtp_config):
         config_dict = mtp_config.to_dict()
-        recreated = MTPConfig(**config_dict)
+        recreated = MTPSpeculatorConfig(**config_dict)
 
         assert recreated.speculators_model_type == "mtp"
         assert recreated.hidden_size == mtp_config.hidden_size
@@ -112,9 +112,9 @@ class TestSerialization:
 
     def test_model_dump_roundtrip(self, mtp_config):
         dumped = mtp_config.model_dump()
-        recreated = MTPConfig.model_validate(dumped)
+        recreated = MTPSpeculatorConfig.model_validate(dumped)
 
-        assert isinstance(recreated, MTPConfig)
+        assert isinstance(recreated, MTPSpeculatorConfig)
         assert recreated.speculators_model_type == "mtp"
         assert recreated.num_nextn_predict_layers == mtp_config.num_nextn_predict_layers
 
@@ -122,14 +122,14 @@ class TestSerialization:
         dumped = mtp_config.model_dump()
         recreated = SpeculatorModelConfig.model_validate(dumped)
 
-        assert isinstance(recreated, MTPConfig)
+        assert isinstance(recreated, MTPSpeculatorConfig)
         assert recreated.speculators_model_type == "mtp"
 
     def test_from_dict(self, mtp_config):
         config_dict = mtp_config.to_dict()
         recreated = SpeculatorModelConfig.from_dict(config_dict)
 
-        assert isinstance(recreated, MTPConfig)
+        assert isinstance(recreated, MTPSpeculatorConfig)
         assert recreated.hidden_size == mtp_config.hidden_size
 
     def test_save_and_load_pretrained(self, mtp_config):
@@ -140,7 +140,7 @@ class TestSerialization:
             assert (tmp_path / "config.json").exists()
 
             loaded = SpeculatorModelConfig.from_pretrained(tmp_path)
-            assert isinstance(loaded, MTPConfig)
+            assert isinstance(loaded, MTPSpeculatorConfig)
             assert loaded.speculators_model_type == "mtp"
             assert loaded.hidden_size == mtp_config.hidden_size
             assert loaded.vocab_size == mtp_config.vocab_size
@@ -160,12 +160,12 @@ class TestRegistration:
     def test_registered_as_mtp(self):
         assert SpeculatorModelConfig.registry is not None
         assert "mtp" in SpeculatorModelConfig.registry
-        assert SpeculatorModelConfig.registry["mtp"] == MTPConfig
+        assert SpeculatorModelConfig.registry["mtp"] == MTPSpeculatorConfig
 
     def test_discoverable_in_registered_classes(self):
         registered = SpeculatorModelConfig.registered_classes()
         class_names = [cls.__name__ for cls in registered]
-        assert "MTPConfig" in class_names
+        assert "MTPSpeculatorConfig" in class_names
 
 
 # ===== Multi-architecture parametrization =====
@@ -198,7 +198,7 @@ class TestModelTypes:
     def test_config_construction_with_model_type(
         self, model_type, qwen3_5_pretrained_config, speculators_config
     ):
-        config = MTPConfig(
+        config = MTPSpeculatorConfig(
             transformer_layer_config=qwen3_5_pretrained_config,
             speculators_config=speculators_config,
         )

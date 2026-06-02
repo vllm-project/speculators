@@ -10,7 +10,7 @@ from speculators import SpeculatorModel
 from speculators.config import SpeculatorsConfig, VerifierConfig
 from speculators.model import DraftVocabMixin
 from speculators.models.eagle3.core import conditional_torch_compile
-from speculators.models.mtp.config import MTPConfig
+from speculators.models.mtp.config import MTPSpeculatorConfig
 from speculators.models.mtp.model_definitions import (
     mtp_model_classes,
     resolve_model_type,
@@ -46,7 +46,7 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
     the MTP forward pass.
     """
 
-    config_class: ClassVar[type[MTPConfig]] = MTPConfig  # type: ignore[misc]
+    config_class: ClassVar[type[MTPSpeculatorConfig]] = MTPSpeculatorConfig  # type: ignore[misc]
     _keys_to_ignore_on_save: ClassVar[list[str]] = [  # type: ignore[misc,assignment]
         "embed_tokens.weight",
         "lm_head.weight",
@@ -62,7 +62,7 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
     t2d: torch.Tensor | None
     d2t: torch.Tensor | None
 
-    def __init__(self, config: MTPConfig) -> None:
+    def __init__(self, config: MTPSpeculatorConfig) -> None:
         if config.transformer_layer_config._attn_implementation is None:  # noqa: SLF001
             config.transformer_layer_config._attn_implementation = "eager"  # noqa: SLF001
         super().__init__(config=config)
@@ -199,7 +199,7 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
         verifier_name_or_path: str | None = None,
         **kwargs: Any,  # noqa: ARG003
     ) -> "MTPDraftModel":
-        config = MTPConfig(
+        config = MTPSpeculatorConfig(
             transformer_layer_config=verifier_config,
             speculators_config=SpeculatorsConfig(
                 algorithm="mtp",

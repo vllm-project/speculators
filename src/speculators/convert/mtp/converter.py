@@ -24,7 +24,7 @@ from speculators.convert.eagle.utils import (
     ensure_checkpoint_is_local,
     load_checkpoint_config,
 )
-from speculators.models.mtp import MTPConfig, MTPDraftModel
+from speculators.models.mtp import MTPDraftModel, MTPSpeculatorConfig
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 from speculators.utils.loading import list_checkpoint_keys
 
@@ -222,7 +222,7 @@ class MTPConverter:
         source_config: dict,
         base_model: str,
         num_speculative_steps: int,
-    ) -> MTPConfig:
+    ) -> MTPSpeculatorConfig:
         verifier_config_dict, _ = PretrainedConfig.get_config_dict(base_model)
 
         source_hidden = source_config.get("hidden_size")
@@ -245,14 +245,14 @@ class MTPConverter:
                 architectures=verifier_config_dict.get("architectures", []),
             ),
         )
-        return MTPConfig(
+        return MTPSpeculatorConfig(
             transformer_layer_config=source_config,  # type: ignore[arg-type]
             speculators_config=speculators_config,
         )
 
     def _save(
         self,
-        config: MTPConfig,
+        config: MTPSpeculatorConfig,
         weights: dict[str, torch.Tensor],
         output_path: str | Path,
     ) -> Path:

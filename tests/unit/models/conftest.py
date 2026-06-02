@@ -4,13 +4,13 @@ import pytest
 from torch import nn
 
 from speculators import SpeculatorsConfig, VerifierConfig
-from speculators.models.mtp import MTPConfig, MTPDraftModel
+from speculators.models.mtp import MTPDraftModel, MTPSpeculatorConfig
 from speculators.proposals import GreedyTokenProposalConfig
 
 
 @pytest.fixture
 def mtp_model_config(qwen3_5_pretrained_config):
-    return MTPConfig(
+    return MTPSpeculatorConfig(
         transformer_layer_config=qwen3_5_pretrained_config,
         speculators_config=SpeculatorsConfig(
             algorithm="mtp",

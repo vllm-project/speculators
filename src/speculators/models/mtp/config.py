@@ -8,11 +8,11 @@ from transformers.models.qwen2.configuration_qwen2 import Qwen2Config
 
 from speculators import SpeculatorModelConfig
 
-__all__ = ["MTPConfig"]
+__all__ = ["MTPSpeculatorConfig"]
 
 
 @SpeculatorModelConfig.register("mtp")
-class MTPConfig(SpeculatorModelConfig):
+class MTPSpeculatorConfig(SpeculatorModelConfig):
     """Configuration for MTP (Multi-Token Prediction) speculator.
 
     Architecture: a single MTP layer with attention and MLP, combining
