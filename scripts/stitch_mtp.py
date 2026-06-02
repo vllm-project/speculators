@@ -279,9 +279,7 @@ def stitch(
 
     with _spinner() as progress:
         progress.add_task("Copying verifier checkpoint", total=None)
-        if output_path.exists():
-            shutil.rmtree(output_path)
-        shutil.copytree(verifier_path, output_path)
+        shutil.copytree(verifier_path, output_path, dirs_exist_ok=True)
 
     index_path = output_path / "model.safetensors.index.json"
     if index_path.exists():

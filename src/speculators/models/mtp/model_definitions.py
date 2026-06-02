@@ -54,7 +54,7 @@ def _unsupported_model_type_error(model_type: str) -> ValueError:
 def _last_full_attention_idx(config: PretrainedConfig) -> int:
     """Return the last layer index whose type is ``full_attention``.
 
-    Hybrid models (Qwen3-Next, Qwen3.5, Qwen3.6) alternate
+    Hybrid models (Qwen3-Next, Qwen3.5-MoE) alternate
     linear_attention and full_attention layers. The MTP head always
     uses full_attention, so we must pick a matching index.
     """
