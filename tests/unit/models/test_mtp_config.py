@@ -53,18 +53,10 @@ class TestConstruction:
         assert config.num_nextn_predict_layers == 1
         assert config.model_type == "speculator_model"
 
-    def test_derived_hidden_size(self, mtp_config, qwen3_5_pretrained_config):
+    def test_derived_properties(self, mtp_config, qwen3_5_pretrained_config):
         assert mtp_config.hidden_size == qwen3_5_pretrained_config.hidden_size
-
-    def test_derived_vocab_size(self, mtp_config, qwen3_5_pretrained_config):
         assert mtp_config.vocab_size == qwen3_5_pretrained_config.vocab_size
-
-    def test_derived_num_speculative_steps(self, mtp_config):
         assert mtp_config.num_speculative_steps == 3
-
-    def test_transformer_layer_config_preserved(
-        self, mtp_config, qwen3_5_pretrained_config
-    ):
         assert (
             mtp_config.transformer_layer_config.hidden_size
             == qwen3_5_pretrained_config.hidden_size
@@ -79,17 +71,10 @@ class TestConstruction:
 
 
 class TestValidation:
-    def test_num_nextn_predict_layers_rejects_zero(self):
+    @pytest.mark.parametrize("value", [0, 2])
+    def test_num_nextn_predict_layers_rejects_invalid(self, value):
         with pytest.raises(ValidationError, match="1 layer"):
-            MTPSpeculatorConfig(num_nextn_predict_layers=0)
-
-    def test_num_nextn_predict_layers_rejects_two(self):
-        with pytest.raises(ValidationError, match="1 layer"):
-            MTPSpeculatorConfig(num_nextn_predict_layers=2)
-
-    def test_num_nextn_predict_layers_accepts_one(self):
-        config = MTPSpeculatorConfig(num_nextn_predict_layers=1)
-        assert config.num_nextn_predict_layers == 1
+            MTPSpeculatorConfig(num_nextn_predict_layers=value)
 
     def test_invalid_speculators_model_type(self):
         with pytest.raises(ValidationError, match="speculators_model_type"):
@@ -161,11 +146,6 @@ class TestRegistration:
         assert SpeculatorModelConfig.registry is not None
         assert "mtp" in SpeculatorModelConfig.registry
         assert SpeculatorModelConfig.registry["mtp"] == MTPSpeculatorConfig
-
-    def test_discoverable_in_registered_classes(self):
-        registered = SpeculatorModelConfig.registered_classes()
-        class_names = [cls.__name__ for cls in registered]
-        assert "MTPSpeculatorConfig" in class_names
 
 
 # ===== Multi-architecture parametrization =====

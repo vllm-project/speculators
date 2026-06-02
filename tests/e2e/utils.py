@@ -21,7 +21,6 @@ __all__ = [
     "launch_vllm_server",
     "launch_vllm_server_context",
     "run_data_generation_offline",
-    "run_mtp_engine",
     "run_prepare_data",
     "run_training",
     "run_vllm_engine",
@@ -401,23 +400,3 @@ def run_vllm_engine(
             assert acci >= thresholdi, (
                 f"Acceptance {acci} at token {i} is less than threshold {thresholdi}"
             )
-
-
-def run_mtp_engine(
-    model_path: str,
-    tmp_path: Path,
-    prompts: list[list[dict[str, str]]],
-    num_speculative_tokens: int = 1,
-    **kwargs,
-) -> None:
-    speculative_config = {
-        "method": "mtp",
-        "num_speculative_tokens": num_speculative_tokens,
-    }
-    run_vllm_engine(
-        model_path=model_path,
-        tmp_path=tmp_path,
-        prompts=prompts,
-        speculative_config=speculative_config,
-        **kwargs,
-    )
