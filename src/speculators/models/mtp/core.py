@@ -254,9 +254,14 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
         """
         step_weights = kwargs.get("step_weights")
         if step_weights is None:
+            if "num_speculative_steps" not in kwargs:
+                raise ValueError(
+                    "num_speculative_steps must be set from the model config "
+                    "before calling get_trainer_kwargs"
+                )
             step_weights = compute_step_weights(
                 beta=kwargs.get("step_weight_beta", 0.6),
-                num_steps=kwargs.get("num_speculative_steps", 3),
+                num_steps=kwargs["num_speculative_steps"],
             )
         train_kwargs: dict[str, Any] = {"step_weights": step_weights}
         val_kwargs = train_kwargs.copy()

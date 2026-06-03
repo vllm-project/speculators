@@ -353,6 +353,9 @@ def main(args: argparse.Namespace):
             **vars(args),
         )
 
+    if args.speculator_type == "mtp":
+        args.num_speculative_steps = draft_model.config.num_speculative_steps
+
     # Setup dataloaders
     preprocess_fns = {
         "eagle3": shift_batch,
@@ -660,7 +663,6 @@ def parse_args():
             "'ce' = cross-entropy."
         ),
     )
-    parser.add_argument("--num-speculative-steps", type=int, default=3)
     parser.add_argument("--step-weight-beta", type=float, default=0.6)
     parser.add_argument(
         "--seed", type=int, default=42, help="Random seed for reproducibility"

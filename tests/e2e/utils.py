@@ -22,6 +22,7 @@ __all__ = [
     "launch_vllm_server_context",
     "run_data_generation_offline",
     "run_prepare_data",
+    "run_stitch_mtp",
     "run_training",
     "run_vllm_engine",
     "stop_vllm_server",
@@ -301,6 +302,27 @@ def run_training(
         train_cmd, stderr=subprocess.PIPE, text=True, check=False, timeout=timeout
     )
     assert result.returncode == 0, f"train.py failed:\n{result.stderr}"
+
+
+def run_stitch_mtp(
+    finetuned_checkpoint: Path,
+    verifier_path: str,
+    output_path: Path,
+    timeout: float | None = None,
+):
+    cmd = [
+        sys.executable,
+        str(SCRIPTS_DIR / "stitch_mtp.py"),
+        str(finetuned_checkpoint),
+        verifier_path,
+        "--output-path",
+        str(output_path),
+    ]
+    logger.info("Stitching MTP weights: {}", " ".join(cmd))
+    result = subprocess.run(  # noqa: S603
+        cmd, capture_output=True, text=True, check=False, timeout=timeout
+    )
+    assert result.returncode == 0, f"stitch_mtp.py failed:\n{result.stderr}"
 
 
 def run_vllm_engine(
