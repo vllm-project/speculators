@@ -27,6 +27,42 @@ def conditional_torch_compile(func):
         return func
 
 
+def _wrap_qwen_omni_rotary_with_hf_layout(rotary_cls: type) -> type:
+    """Adapt a Qwen-Omni Thinker rotary to accept HF's ``[batch, 3, seq_len]``.
+
+    The Qwen3-Omni / Qwen3.6 family of rotary embeddings was written before HF
+    standardised on the Llama4/Gemma3 multimodal RoPE layout. Their ``forward``
+    expects ``position_ids`` shaped ``[3, batch, seq_len]`` (channel-first),
+    whereas the rest of the speculators training stack — including the
+    multipack collator in ``speculators.train.data.create_collate_fn`` and the
+    HF reference implementations — emit ``[batch, 3, seq_len]``.
+
+    Feeding the HF layout into a Qwen-Omni rotary silently broadcasts the
+    3 MRoPE channels through ``apply_rotary_pos_emb`` and the attention
+    reshape, ultimately exploding the feature dim of ``o_proj`` to
+    ``3 * num_heads * head_dim`` (e.g. 12288 instead of 4096 on Qwen3.6),
+    which surfaces as a torch.compile fake-tensor error like
+    ``a and b must have same reduction dim, but got [T, 3*H] X [H, hidden]``.
+
+    This wrapper transposes ``[batch, 3, seq_len] → [3, batch, seq_len]`` only
+    when it sees the HF layout, so collation can stay on the HF convention.
+    """
+
+    class HFLayoutMRoPE(rotary_cls):  # type: ignore[misc,valid-type]
+        def forward(self, x, position_ids):  # type: ignore[override]
+            # We only adapt the unambiguous HF case: a 3-D tensor whose middle
+            # dim is exactly 3. Anything else (already channel-first
+            # ``[3, B, T]``, plain ``[B, T]``, or sample-level ``[3, T]``) is
+            # forwarded untouched so we don't hide bugs upstream.
+            if position_ids.dim() == 3 and position_ids.shape[1] == 3:
+                position_ids = position_ids.transpose(0, 1).contiguous()
+            return super().forward(x, position_ids)
+
+    HFLayoutMRoPE.__name__ = f"{rotary_cls.__name__}HFLayout"
+    HFLayoutMRoPE.__qualname__ = HFLayoutMRoPE.__name__
+    return HFLayoutMRoPE
+
+
 def _select_rotary_emb_class(
     tl_config: PretrainedConfig,
     default_cls: type,
@@ -57,7 +93,9 @@ def _select_rotary_emb_class(
 
     partial_rotary_factor = float(rope_params.get("partial_rotary_factor", 1.0))
     if partial_rotary_factor >= 1.0:
-        return Qwen3OmniMoeThinkerTextRotaryEmbedding
+        return _wrap_qwen_omni_rotary_with_hf_layout(
+            Qwen3OmniMoeThinkerTextRotaryEmbedding
+        )
 
     warnings.warn(
         "Eagle3 draft config has partial_rotary_factor="
@@ -68,8 +106,10 @@ def _select_rotary_emb_class(
         UserWarning,
         stacklevel=2,
     )
-    return _make_partial_mrope_rotary_cls(
-        Qwen3OmniMoeThinkerTextRotaryEmbedding, partial_rotary_factor
+    return _wrap_qwen_omni_rotary_with_hf_layout(
+        _make_partial_mrope_rotary_cls(
+            Qwen3OmniMoeThinkerTextRotaryEmbedding, partial_rotary_factor
+        )
     )
 
 

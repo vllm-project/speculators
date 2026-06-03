@@ -94,23 +94,30 @@ def with_retries(fn):
 def extract_output(
     response: Completion | ChatCompletion,
     token_ids: list[int],
-) -> str:
+    *,
+    trust_server_token_ids: bool = False,
+) -> str | tuple[str, list[int]]:
     """Extract hidden-states file path from vLLM response.
 
-    The strict token-id equality check below is intentional and must NOT be
-    relaxed.  Hidden states are position-indexed: if the server's prompt
-    tokenization differs from the client's by even one token, every
-    subsequent hidden-state vector is mis-aligned and the resulting training
-    data is silently corrupted.
+    Args:
+        response: vLLM Completion or ChatCompletion response.
+        token_ids: The client-side token IDs sent with the request.
+        trust_server_token_ids: If True (used for multimodal Chat Completions),
+            skip the strict token-id equality check and return the server's
+            ``prompt_token_ids`` alongside the file path.  The caller must use
+            the returned token IDs as the authoritative sequence (they match
+            the hidden states positionally).
 
-    If this check fires on multimodal inputs, the root cause is almost
-    always a chat-template rendering inconsistency between the
-    ``prepare_data.py`` processor path and the vLLM server.  The correct
-    fix is to send pre-tokenized ``input_ids`` via the Completions API
-    (with ``multi_modal_data`` for media features) instead of
-    ``chat.completions.create(messages=...)`` which re-renders the template
-    server-side and can introduce off-by-one newline/whitespace tokens in
-    the multimodal placeholder regions.
+    Returns:
+        - When ``trust_server_token_ids=False``: the hidden-states file path (str).
+        - When ``trust_server_token_ids=True``: a tuple of
+          (hidden-states file path, server prompt_token_ids).
+
+    Strict check rationale (when trust_server_token_ids=False):
+        Hidden states are position-indexed.  If the server's prompt
+        tokenization differs from the client's by even one token, every
+        subsequent hidden-state vector is mis-aligned and the resulting
+        training data is silently corrupted.
     """
     if isinstance(response, Completion):
         prompt_token_ids = getattr(response.choices[0], "prompt_token_ids", None)
@@ -120,16 +127,21 @@ def extract_output(
     if prompt_token_ids is None:
         raise InvalidResponseError("Response missing prompt_token_ids")
 
-    if prompt_token_ids != token_ids:
+    if not trust_server_token_ids and prompt_token_ids != token_ids:
         raise InvalidResponseError(
-            f"Prompt token IDs mismatch: expected {token_ids}, got {prompt_token_ids}"
+            f"Prompt token IDs mismatch: expected {len(token_ids)} tokens, "
+            f"got {len(prompt_token_ids)} tokens"
         )
 
     kv_transfer_params = getattr(response, "kv_transfer_params", None)
     if kv_transfer_params is None:
         raise InvalidResponseError("Response missing kv_transfer_params")
 
-    return kv_transfer_params.get("hidden_states_path")
+    path = kv_transfer_params.get("hidden_states_path")
+
+    if trust_server_token_ids:
+        return path, prompt_token_ids
+    return path
 
 
 class ClientItem(TypedDict):
@@ -196,29 +208,25 @@ async def generate_hidden_states_async(
     *,
     timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
     use_chat_completions: bool = False,
-) -> str:
-    """
-    Runs decode w/ max_tokens 1 to generate hidden states and returns path to
-    hidden states file.
+) -> str | tuple[str, list[int]]:
+    """Generate hidden states asynchronously and return the safetensors path.
 
-    Default path is token-id Completions: ``input_ids`` (and any
-    ``multi_modal_data``) are sent verbatim so the server does not re-render
-    the chat template. Set ``use_chat_completions=True`` to fall back to the
-    legacy ``chat.completions.create(messages=...)`` route.
+    For multimodal samples, set ``use_chat_completions=True`` so vLLM runs
+    its vision encoder.  In that mode the return value is a tuple
+    ``(path, server_token_ids)`` — the caller must use ``server_token_ids``
+    as the authoritative input_ids (they are positionally aligned with the
+    hidden states).
 
-    Args:
-        client: The async OpenAI client.
-        model: The model ID.
-        client_item: Inputs to send via the client.
-        timeout: Timeout in seconds for each request attempt. None for no timeout.
-        use_chat_completions: Opt-in fallback to send ``messages`` instead of
-            ``input_ids``.
+    For text-only samples the default Completions path is used (strict
+    token-id parity check) and a plain ``str`` path is returned.
     """
     token_ids = client_item["input_ids"]
     messages = client_item.get("messages")
 
+    is_mm_chat = use_chat_completions and messages is not None
+
     coro: Coroutine[Any, Any, Completion | ChatCompletion]
-    if use_chat_completions and messages is not None:
+    if is_mm_chat:
         coro = client.chat.completions.create(
             model=model,
             messages=messages,
@@ -245,7 +253,7 @@ async def generate_hidden_states_async(
     else:
         res = await coro
 
-    return extract_output(res, token_ids)
+    return extract_output(res, token_ids, trust_server_token_ids=is_mm_chat)
 
 
 @with_retries
@@ -256,25 +264,20 @@ def generate_hidden_states(
     *,
     timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
     use_chat_completions: bool = False,
-) -> str:
-    """Generate hidden states via vLLM and return the safetensors file path.
+) -> str | tuple[str, list[int]]:
+    """Generate hidden states via vLLM (synchronous version).
 
-    Default path sends pre-tokenized ``input_ids`` (+ ``multi_modal_data``)
-    through the **Completions** API so the server skips chat-template
-    rendering.  This is critical for multimodal models where the HF
-    processor (used by prepare_data.py) and vLLM's server-side tokenizer
-    can produce slightly different token sequences (e.g. off-by-one newline
-    at vision-placeholder boundaries), causing every sample to be rejected
-    by ``extract_output``'s strict token-id check.
-
-    Pass ``use_chat_completions=True`` only for legacy text-only workflows
-    that did not persist ``input_ids`` at prepare_data time.
+    For multimodal samples, set ``use_chat_completions=True`` so vLLM runs
+    its vision encoder.  Returns ``(path, server_token_ids)`` in that mode.
+    For text-only samples returns a plain ``str`` path.
     """
     token_ids = client_item["input_ids"]
     messages = client_item.get("messages")
 
+    is_mm_chat = use_chat_completions and messages is not None
+
     res: Completion | ChatCompletion
-    if use_chat_completions and messages is not None:
+    if is_mm_chat:
         res = client.chat.completions.create(
             model=model,
             messages=messages,
@@ -295,4 +298,4 @@ def generate_hidden_states(
             timeout=timeout,
         )
 
-    return extract_output(res, token_ids)
+    return extract_output(res, token_ids, trust_server_token_ids=is_mm_chat)

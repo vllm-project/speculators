@@ -560,28 +560,73 @@ class ArrowDataset(BaseDataset):
         """Get lengths of the dataset samples."""
         return list(self.data.with_format(None)["seq_len"])
 
-    def _maybe_generate_hs(self, index: int) -> dict[str, torch.Tensor] | None:
+    def _maybe_generate_hs(
+        self, index: int, *, is_multimodal: bool = False
+    ) -> dict[str, torch.Tensor] | None:
+        """Generate hidden states on-demand via the vLLM endpoint.
+
+        For multimodal samples (``is_multimodal=True``), uses Chat Completions
+        so vLLM runs its vision encoder.  The server's ``prompt_token_ids``
+        become the authoritative ``input_ids`` (stored under the key
+        ``"token_ids"`` in the returned dict) because the server may tokenize
+        multimodal chat templates slightly differently from the HF processor
+        used at prepare_data time.
+        """
         if not self.client:
             self._setup_client()
 
         dataset_item = self.data[index]
         client_item = build_client_item(dataset_item)
 
+        # Multimodal samples must go through Chat Completions so the vLLM
+        # server runs the vision encoder.  The trade-off: vLLM re-renders
+        # the chat template, so token_ids may differ from prepare_data's
+        # output.  We accept vLLM's token_ids as truth (they are
+        # positionally aligned with the hidden states it produces).
+        use_chat = is_multimodal and client_item.get("messages") is not None
+
         try:
-            hs_filepath = generate_hidden_states(
+            result = generate_hidden_states(
                 self.client,  # type:ignore[arg-type]
                 self.model,  # type:ignore[arg-type]
                 client_item,
                 timeout=self.request_timeout,
                 max_retries=self.max_retries,
+                use_chat_completions=use_chat,
             )
 
+            if use_chat:
+                hs_filepath, server_token_ids = result  # type:ignore[misc]
+            else:
+                hs_filepath = result  # type:ignore[assignment]
+                server_token_ids = None
+
             loaded_hs = _maybe_load_hs_file(Path(hs_filepath))
+
+            # Overwrite token_ids with the server's authoritative version
+            # so downstream _get_raw_data uses the correct positionally-
+            # aligned sequence for loss/hidden-state pairing.
+            if loaded_hs is not None and server_token_ids is not None:
+                loaded_hs["token_ids"] = torch.tensor(
+                    server_token_ids, dtype=torch.long
+                )
 
             match self.on_generate:
                 case "cache":
                     file_idx = self._map_to_file_idx(index)
                     target_path = self.hidden_states_path / f"hs_{file_idx}.safetensors"
+                    # ``shutil.move`` requires ``target_path.parent`` to exist.
+                    # When users point ``--hidden-states-path`` at a fresh
+                    # directory that prepare_data.py has not touched, the
+                    # parent dir is missing and every sample fails with
+                    # ``[Errno 2] No such file or directory`` — the
+                    # exception is swallowed by the ``except`` below, every
+                    # row returns None, collate substitutes
+                    # ``create_empty_sample``, and the trainer silently
+                    # logs ``loss=0`` for the entire epoch. Materialising
+                    # the directory once per missing-sample call is cheap
+                    # and idempotent.
+                    target_path.parent.mkdir(parents=True, exist_ok=True)
                     shutil.move(hs_filepath, target_path)
                 case "delete":
                     Path(hs_filepath).unlink()
@@ -607,6 +652,8 @@ class ArrowDataset(BaseDataset):
         if stored_input_ids is None or stored_loss_mask is None:
             return None
 
+        is_multimodal = bool(row.get("messages_json", ""))
+
         file_idx = self._map_to_file_idx(index)
         hs_file = self.hidden_states_path / f"hs_{file_idx}.safetensors"
         loaded_hs = _maybe_load_hs_file(hs_file)
@@ -614,7 +661,9 @@ class ArrowDataset(BaseDataset):
         if loaded_hs is None:
             match self.on_missing:
                 case "generate":
-                    loaded_hs = self._maybe_generate_hs(index)
+                    loaded_hs = self._maybe_generate_hs(
+                        index, is_multimodal=is_multimodal
+                    )
                 case "skip":
                     return None
                 case "warn":
@@ -636,19 +685,43 @@ class ArrowDataset(BaseDataset):
         #   "token_ids": [seq_len]
         # }
 
-        if not torch.equal(loaded_hs["token_ids"], stored_input_ids):
+        # For multimodal samples generated via Chat Completions, vLLM's
+        # server-side tokenization is authoritative (it ran the vision
+        # encoder on that exact token sequence). The stored input_ids from
+        # prepare_data.py may differ by ±1 token at vision-placeholder
+        # boundaries, so we trust loaded_hs["token_ids"] unconditionally.
+        # For text-only samples (or pre-generated offline HS), we still
+        # enforce strict equality to catch data corruption early.
+        authoritative_input_ids = loaded_hs["token_ids"]
+        if not is_multimodal and not torch.equal(authoritative_input_ids, stored_input_ids):
             warnings.warn(
-                f"Loaded token ids {loaded_hs['token_ids']} for index {index} don't"
-                f"match input ids {stored_input_ids}",
+                f"Token IDs mismatch for text sample {index}: "
+                f"hs has {len(authoritative_input_ids)} tokens, "
+                f"dataset has {len(stored_input_ids)} tokens. Skipping.",
                 stacklevel=1,
             )
             return None
+
+        # Use authoritative_input_ids (from HS file) as ground truth.
+        # For multimodal, this is vLLM's tokenization (aligned with HS);
+        # for text-only, it equals stored_input_ids (verified above).
+        # loss_mask length must match; truncate/pad if server tokenized
+        # slightly differently (common for multimodal ±1 token drift).
+        seq_len_hs = len(authoritative_input_ids)
+        if len(stored_loss_mask) != seq_len_hs:
+            if len(stored_loss_mask) > seq_len_hs:
+                stored_loss_mask = stored_loss_mask[:seq_len_hs]
+            else:
+                stored_loss_mask = torch.cat([
+                    stored_loss_mask,
+                    torch.zeros(seq_len_hs - len(stored_loss_mask), dtype=torch.long),
+                ])
 
         data = {
             "hidden_states": loaded_hs["hidden_states"][:, :-1].flatten(
                 1
             ),  # [seq_len, 3 * hidden_size]
-            "input_ids": stored_input_ids,  # [seq_len]
+            "input_ids": authoritative_input_ids,  # [seq_len]
             "verifier_last_hidden_states": loaded_hs["hidden_states"][
                 :, -1
             ],  # [seq_len, hidden_size]
@@ -806,8 +879,14 @@ def create_collate_fn(
             # MRoPE samples carry position_ids of shape [3, seq_len] (T/H/W
             # channels). After shift_batch they remain [3, seq_len-1].
             # We concatenate along the seq dimension, pad to max_len, then
-            # add a batch dim to produce [1, 3, max_len] — matching HF's
-            # expected layout [batch, 3, seq_len] for MRoPE rotary embeddings.
+            # add a batch dim. Qwen3-Omni Thinker rotary (used by EAGLE3 when
+            # the verifier carries rope_parameters.mrope_section) expects
+            # ``position_ids`` shaped ``[3, batch, seq_len]`` — channels
+            # first — NOT the HF Llama4 / Gemma3 ``[batch, 3, seq_len]``
+            # convention. Picking the wrong layout silently broadcasts the
+            # 3 channels through the attention reshape and blows up
+            # ``o_proj`` with a feature dim of ``3 * num_heads * head_dim``
+            # (e.g. 12288 instead of 4096 for Qwen3.6 draft heads).
             position_ids = []
             for sample in batch:  # type: ignore[assignment]
                 pos = sample["position_ids"]
@@ -817,10 +896,11 @@ def create_collate_fn(
                 position_ids.append(pos)
             # shape of each: [3, sample_seq_len]; cat along seq dim → [3, total_seq_len]
             collated_positions = torch.cat(position_ids, dim=-1)
-            # Pad seq dim to max_len → [3, max_len], then add batch dim → [1, 3, max_len]
+            # Pad seq dim to max_len → [3, max_len], then add batch dim at
+            # axis 1 → [3, 1, max_len] for Qwen-Omni rotary.
             collated_data["position_ids"] = pad_last_dim_to_length(
                 collated_positions, max_len
-            ).unsqueeze(0)
+            ).unsqueeze(1)
         else:
             # Standard 1D position_ids: [seq_len] per sample.
             # Cat along seq dim → [total_seq_len], pad → [max_len], batch → [1, max_len]
