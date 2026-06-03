@@ -1,15 +1,47 @@
 """Metrics and loss functions for Eagle3 draft model."""
 
+import os
+import warnings
 from functools import partial
 
 import torch
 
 from speculators.models.metrics import (
+    ce_loss,
     compute_accuracy_single_step,
     exp_loss_decay,
     kl_div_loss,
     loss_function,
 )
+
+_EAGLE3_LOSS_CE_WEIGHT_RAW = os.getenv("EAGLE3_LOSS_CE_WEIGHT")
+if _EAGLE3_LOSS_CE_WEIGHT_RAW is None:
+    _EAGLE3_LOSS_CE_WEIGHT = 0.0
+else:
+    try:
+        _EAGLE3_LOSS_CE_WEIGHT = float(_EAGLE3_LOSS_CE_WEIGHT_RAW)
+    except ValueError:
+        warnings.warn(
+            f"EAGLE3_LOSS_CE_WEIGHT={_EAGLE3_LOSS_CE_WEIGHT_RAW!r} is not a "
+            "float; falling back to pure-KL legacy loss (weight=0.0).",
+            stacklevel=1,
+        )
+        _EAGLE3_LOSS_CE_WEIGHT = 0.0
+    if not 0.0 <= _EAGLE3_LOSS_CE_WEIGHT <= 1.0:
+        warnings.warn(
+            f"EAGLE3_LOSS_CE_WEIGHT={_EAGLE3_LOSS_CE_WEIGHT} clamped to [0, 1].",
+            stacklevel=1,
+        )
+        _EAGLE3_LOSS_CE_WEIGHT = max(0.0, min(1.0, _EAGLE3_LOSS_CE_WEIGHT))
+
+
+def eagle3_loss(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    """Per-token Eagle3 loss with optional CE(verifier argmax) mixture."""
+    kl = kl_div_loss(logits, targets)
+    if _EAGLE3_LOSS_CE_WEIGHT <= 0.0:
+        return kl
+    ce = ce_loss(logits, targets)
+    return (1.0 - _EAGLE3_LOSS_CE_WEIGHT) * kl + _EAGLE3_LOSS_CE_WEIGHT * ce
 
 
 def align_for_step(
@@ -88,7 +120,7 @@ def compute_metrics(
         s_targets,
         s_loss_mask,
         pos_idx,
-        loss_fn=kl_div_loss,
+        loss_fn=eagle3_loss,
         decay_fn=partial(exp_loss_decay, gamma=ttt_step_loss_decay),
     )
 

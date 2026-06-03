@@ -28,7 +28,10 @@ def shift_batch(batch: BatchType):
     verifier_last_hidden_states = verifier_last_hidden_states[1:]
     loss_mask = loss_mask[1:]
     lengths = lengths - 1
-    position_ids = position_ids[1:]  # Note: position_ids now start at 1
+    if position_ids.ndim == 2:
+        position_ids = position_ids[:, 1:]
+    else:
+        position_ids = position_ids[1:]  # Note: position_ids now start at 1
 
     return {
         "input_ids": input_ids,

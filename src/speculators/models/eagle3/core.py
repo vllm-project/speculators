@@ -1,4 +1,5 @@
 import copy
+import warnings
 from typing import ClassVar
 
 import torch
@@ -23,6 +24,117 @@ def conditional_torch_compile(func):
         return torch.compile(func)
     else:
         return func
+
+
+def _select_rotary_emb_class(
+    tl_config: PretrainedConfig,
+    default_cls: type,
+) -> type:
+    """Select an MRoPE-aware rotary class for multimodal Qwen draft configs."""
+    rope_params = getattr(tl_config, "rope_parameters", None)
+    has_mrope = (
+        isinstance(rope_params, dict) and rope_params.get("mrope_section") is not None
+    )
+    if not has_mrope:
+        return default_cls
+
+    try:
+        from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (  # noqa: PLC0415
+            Qwen3OmniMoeThinkerTextRotaryEmbedding,
+        )
+    except ImportError:
+        warnings.warn(
+            "Draft config carries rope_parameters.mrope_section but the installed "
+            "transformers does not expose Qwen3OmniMoeThinkerTextRotaryEmbedding. "
+            "Falling back to the architecture default rotary embedding, which "
+            "will ignore MRoPE and can cause a train/inference mismatch for "
+            "multimodal inputs.",
+            UserWarning,
+            stacklevel=2,
+        )
+        return default_cls
+
+    partial_rotary_factor = float(rope_params.get("partial_rotary_factor", 1.0))
+    if partial_rotary_factor >= 1.0:
+        return Qwen3OmniMoeThinkerTextRotaryEmbedding
+
+    warnings.warn(
+        "Eagle3 draft config has partial_rotary_factor="
+        f"{partial_rotary_factor} < 1.0. PartialMRoPE will identity-pad "
+        "cos/sin to head_dim for HF attention compatibility, but production "
+        "Qwen3.6 runs should keep --draft-mrope-full-head-hack enabled so "
+        "training and vLLM inference use bit-equivalent full-head rotation.",
+        UserWarning,
+        stacklevel=2,
+    )
+    return _make_partial_mrope_rotary_cls(
+        Qwen3OmniMoeThinkerTextRotaryEmbedding, partial_rotary_factor
+    )
+
+
+def _make_partial_mrope_rotary_cls(
+    base_cls: type, partial_rotary_factor: float
+) -> type:
+    """Return a Qwen MRoPE rotary subclass that respects partial_rotary_factor."""
+
+    class PartialMRoPE(base_cls):  # type: ignore[misc,valid-type]
+        _partial_rotary_factor: ClassVar[float] = partial_rotary_factor
+
+        @staticmethod
+        def compute_default_rope_parameters(config=None, device=None, seq_len=None):
+            base = config.rope_parameters["rope_theta"]
+            head_dim = (
+                getattr(config, "head_dim", None)
+                or config.hidden_size // config.num_attention_heads
+            )
+            rotary_dim = int(head_dim * PartialMRoPE._partial_rotary_factor)
+            rotary_dim = (rotary_dim // 2) * 2
+            attention_factor = 1.0
+            inv_freq = 1.0 / (
+                base
+                ** (
+                    torch.arange(0, rotary_dim, 2, dtype=torch.int64).to(
+                        device=device, dtype=torch.float
+                    )
+                    / rotary_dim
+                )
+            )
+            return inv_freq, attention_factor
+
+        def __init__(self, config, device=None):
+            super().__init__(config=config, device=device)
+            head_dim = (
+                getattr(config, "head_dim", None)
+                or config.hidden_size // config.num_attention_heads
+            )
+            rotary_dim = int(head_dim * self._partial_rotary_factor)
+            rotary_dim = (rotary_dim // 2) * 2
+            self._head_dim = head_dim
+            self._pad_half = (head_dim - rotary_dim) // 2
+
+        def forward(self, x, position_ids):
+            cos, sin = super().forward(x, position_ids)
+            if cos.shape[-1] == self._head_dim:
+                return cos, sin
+            pad_shape = (*cos.shape[:-1], self._pad_half)
+            pad_cos = torch.ones(pad_shape, dtype=cos.dtype, device=cos.device)
+            pad_sin = torch.zeros(pad_shape, dtype=sin.dtype, device=sin.device)
+            half = cos.shape[-1] // 2
+            cos_first, cos_second = cos[..., :half], cos[..., half:]
+            sin_first, sin_second = sin[..., :half], sin[..., half:]
+            cos_padded = torch.cat(
+                [cos_first, pad_cos, cos_second, pad_cos], dim=-1
+            )
+            sin_padded = torch.cat(
+                [sin_first, pad_sin, sin_second, pad_sin], dim=-1
+            )
+            return cos_padded, sin_padded
+
+    PartialMRoPE.__name__ = (
+        f"{base_cls.__name__}Partial{int(partial_rotary_factor * 100):03d}"
+    )
+    PartialMRoPE.__qualname__ = PartialMRoPE.__name__
+    return PartialMRoPE
 
 
 @SpeculatorModel.register("eagle3")
@@ -80,7 +192,10 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
         # Create a modified config for the rotary embedding to use 2x the hidden size
         modified_tl_config = copy.copy(config.transformer_layer_config)
         modified_tl_config.hidden_size *= 2
-        self.rotary_emb = self._model_definitions.rotary_emb_class(modified_tl_config)
+        rotary_cls = _select_rotary_emb_class(
+            modified_tl_config, self._model_definitions.rotary_emb_class
+        )
+        self.rotary_emb = rotary_cls(modified_tl_config)
 
         # LAYER NORMS
         norm_class = self._model_definitions.norm_class
@@ -107,7 +222,9 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
         verifier_config = self.config.speculators_config.verifier
         verifier_model_config = AutoConfig.from_pretrained(verifier_config.name_or_path)  # type: ignore[arg-type]
 
-        # For multimodal models (Qwen3VL, etc.), extract text_config
+        # For multimodal models (Qwen3VL/Omni/etc.), extract text_config
+        if hasattr(verifier_model_config, "thinker_config"):
+            verifier_model_config = verifier_model_config.thinker_config
         if hasattr(verifier_model_config, "text_config"):
             verifier_model_config = verifier_model_config.text_config
 
