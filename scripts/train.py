@@ -21,6 +21,7 @@ from speculators.data_generation.vllm_client import (
 from speculators.model import SpeculatorModel
 from speculators.models.eagle3.data import shift_batch
 from speculators.models.metrics import resolve_loss_fn
+from speculators.models.mtp.data import shift_batch_mtp
 from speculators.train.data import (
     ArrowDataset,
     BaseDataset,
@@ -291,30 +292,44 @@ def main(args: argparse.Namespace):
         )
     hidden_states_dtype = getattr(torch, args.hidden_states_dtype)
 
-    d2t, t2d, draft_vocab_size = parse_vocab_mappings(args)
+    if args.speculator_type == "mtp":
+        verifier_config = AutoConfig.from_pretrained(args.verifier_name_or_path)
+        if hasattr(verifier_config, "text_config"):
+            verifier_config = verifier_config.text_config
+        d2t, t2d, draft_vocab_size = None, None, verifier_config.vocab_size
+        transformer_layer_config = verifier_config
+        args.mask_token_id = None
+        if not args.from_pretrained:
+            logger.warning(
+                "MTP training without --from-pretrained: "
+                "the recommended workflow is to convert the native MTP head "
+                "first and pass the converted checkpoint via --from-pretrained."
+            )
+    else:
+        d2t, t2d, draft_vocab_size = parse_vocab_mappings(args)
 
-    if args.sliding_window_indices and args.speculator_type != "dflash":
-        raise ValueError(
-            "Currently sliding window attention is only supported by dflash "
-            "draft models. Please open an issue/pr if you would like to use "
-            "sliding window attention with a different speculator type"
+        if args.sliding_window_indices and args.speculator_type != "dflash":
+            raise ValueError(
+                "Currently sliding window attention is only supported by dflash "
+                "draft models. Please open an issue/pr if you would like to use "
+                "sliding window attention with a different speculator type"
+            )
+        # Setup speculator config
+        transformer_layer_config = create_transformer_layer_config(
+            verifier_name_or_path=args.verifier_name_or_path,
+            num_layers=args.num_layers,
+            draft_arch=args.draft_arch,
+            hidden_act=args.draft_hidden_act,
+            sliding_window=args.sliding_window,
+            sliding_window_indices=args.sliding_window_indices,
         )
-    # Setup speculator config
-    transformer_layer_config = create_transformer_layer_config(
-        verifier_name_or_path=args.verifier_name_or_path,
-        num_layers=args.num_layers,
-        draft_arch=args.draft_arch,
-        hidden_act=args.draft_hidden_act,
-        sliding_window=args.sliding_window,
-        sliding_window_indices=args.sliding_window_indices,
-    )
 
-    args.mask_token_id = resolve_mask_token_id(
-        args.verifier_name_or_path,
-        transformer_layer_config.vocab_size,
-        args.mask_token_id,
-        trust_remote_code=args.trust_remote_code,
-    )
+        args.mask_token_id = resolve_mask_token_id(
+            args.verifier_name_or_path,
+            transformer_layer_config.vocab_size,
+            args.mask_token_id,
+            trust_remote_code=args.trust_remote_code,
+        )
 
     registry = SpeculatorModel.registry
     if registry is None or args.speculator_type not in registry:
@@ -339,7 +354,12 @@ def main(args: argparse.Namespace):
         )
 
     # Setup dataloaders
-    preprocess = shift_batch if args.speculator_type in ("eagle3", "peagle") else None
+    preprocess_fns = {
+        "eagle3": shift_batch,
+        "peagle": shift_batch,
+        "mtp": shift_batch_mtp,
+    }
+    preprocess = preprocess_fns.get(args.speculator_type)
 
     noise_transform = AddUniformNoise(std=args.noise_std)
     if args.legacy_data:
@@ -462,7 +482,7 @@ def parse_args():
         "--speculator-type",
         type=str,
         default="eagle3",
-        help="Type of speculator model to train (e.g., eagle3)",
+        help="Type of speculator model to train (eagle3, dflash, peagle, mtp)",
     )
     parser.add_argument(
         "--from-pretrained",
@@ -640,6 +660,8 @@ def parse_args():
             "'ce' = cross-entropy."
         ),
     )
+    parser.add_argument("--num-speculative-steps", type=int, default=3)
+    parser.add_argument("--step-weight-beta", type=float, default=0.6)
     parser.add_argument(
         "--seed", type=int, default=42, help="Random seed for reproducibility"
     )
