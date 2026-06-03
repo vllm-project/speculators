@@ -31,8 +31,7 @@ Speculators standardizes this process by providing a productionized end-to-end f
 - **Standardized, Extensible Format:** Provides a Hugging Face-compatible format for defining speculative models, with tools to convert from external research repositories into a standard speculators format for easy adoption.
 - **Seamless vLLM Integration:** Built for direct deployment into vLLM, enabling low-latency, production-grade inference with minimal overhead.
 
-!!! tip
-    Read more about Speculators features in this [vLLM blog post](https://blog.vllm.ai/2025/12/13/speculators-v030.html).
+!!! tip Read more about Speculators features in this [vLLM blog post](https://blog.vllm.ai/2025/12/13/speculators-v030.html).
 
 ## Quick Start
 
@@ -143,6 +142,12 @@ The following table summarizes the models that have been trained end-to-end by o
 <td>675B-Instruct</td>
 <td>Eagle-3 ⏳</td>
 <td>⏳</td>
+</tr>
+<tr>
+<td>Qwen3-Next</td>
+<td>80B-A3B-Instruct</td>
+<td>MTP ✅</td>
+<td>✅</td>
 </tr>
 <tr>
 <td>Gemma 4</td>

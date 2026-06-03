@@ -32,6 +32,12 @@ Learn how to train a P-eagle speculator model with COD sampling.
 
 **Time required:** ~50 mins
 
+## [Train MTP Model Offline](train_mtp_offline.md)
+
+Learn how to finetune a model's native MTP head on domain-specific data using offline training.
+
+**Time required:** ~30 mins (varies by model size)
+
 ## [Response Regeneration](response_regeneration.md)
 
 Regenerate dataset responses using your target model for improved drafter alignment.
