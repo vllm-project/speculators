@@ -82,6 +82,71 @@ def test_normalize_conversation_unknown_role():
     assert result[1]["role"] == "assistant"
 
 
+@pytest.mark.sanity
+def test_normalize_conversation_tool_calls():
+    """Test that assistant tool_calls are preserved through normalization."""
+    tool_calls: list[dict] = [
+        {
+            "id": "call_123",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+        }
+    ]
+    conv: list[dict] = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "What is the weather in Paris?"},
+        {"role": "assistant", "content": None, "tool_calls": tool_calls},
+        {"role": "tool", "content": '{"temperature": 20}', "tool_call_id": "call_123"},
+        {"role": "assistant", "content": "The weather in Paris is 20°C."},
+    ]
+    result = _normalize_conversation(conv)
+
+    assert len(result) == 5
+    assert result[0]["role"] == "system"
+    assert result[1]["role"] == "user"
+    assert result[2]["role"] == "assistant"
+    assert result[2]["tool_calls"] == tool_calls
+    assert result[2]["content"] == ""
+    assert result[3]["role"] == "tool"
+    assert result[3]["tool_call_id"] == "call_123"
+    assert result[3]["content"] == '{"temperature": 20}'
+    assert result[4]["role"] == "assistant"
+    assert result[4]["content"] == "The weather in Paris is 20°C."
+    assert "tool_calls" not in result[4]
+    assert "tool_call_id" not in result[4]
+
+
+@pytest.mark.sanity
+def test_normalize_conversation_tool_role_preserved():
+    """Test that tool role messages are preserved and not skipped."""
+    conv = [
+        {"role": "user", "content": "Run a search"},
+        {"role": "tool", "content": "search results", "tool_call_id": "call_456"},
+        {"role": "assistant", "content": "Here are the results."},
+    ]
+    result = _normalize_conversation(conv)
+
+    assert len(result) == 3
+    assert result[1]["role"] == "tool"
+    assert result[1]["tool_call_id"] == "call_456"
+
+
+@pytest.mark.sanity
+def test_normalize_conversation_tool_calls_not_leaked():
+    """Test that tool_calls/tool_call_id are not added to turns that don't have them."""
+    conv = [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi!"},
+    ]
+    result = _normalize_conversation(conv)
+
+    assert len(result) == 2
+    assert "tool_calls" not in result[0]
+    assert "tool_call_id" not in result[0]
+    assert "tool_calls" not in result[1]
+    assert "tool_call_id" not in result[1]
+
+
 # Tests for _adapt_conv_for_hf
 @pytest.mark.sanity
 def test_adapt_conv_for_hf_text_only_processor():

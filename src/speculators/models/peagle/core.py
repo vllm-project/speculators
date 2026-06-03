@@ -9,6 +9,7 @@ from transformers import PretrainedConfig
 from speculators.config import SpeculatorsConfig, VerifierConfig
 from speculators.model import SpeculatorModel
 from speculators.models.eagle3.core import Eagle3DraftModel, conditional_torch_compile
+from speculators.models.metrics import kl_div_loss, resolve_loss_fn
 from speculators.models.peagle.attention import create_peagle_mask_mod
 from speculators.models.peagle.config import PEagleSpeculatorConfig
 from speculators.models.peagle.data import generate_cod_sample_indices
@@ -55,6 +56,7 @@ class PEagleDraftModel(Eagle3DraftModel):
         position_ids: torch.Tensor | None = None,
         loss_mask: torch.Tensor | None = None,
         verifier_last_hidden_states: torch.Tensor | None = None,
+        loss_fn=kl_div_loss,
         **kwargs,
     ):
         """
@@ -172,6 +174,7 @@ class PEagleDraftModel(Eagle3DraftModel):
             anchor_pos=anchor_pos,
             depth=depth,
             num_depths=self.num_depths,
+            loss_fn=loss_fn,
         )
 
         return None, loss, metrics
@@ -237,17 +240,15 @@ class PEagleDraftModel(Eagle3DraftModel):
         return model
 
     @staticmethod
-    def get_trainer_kwargs(**kwargs) -> tuple[dict, dict]:  # noqa: ARG004
+    def get_trainer_kwargs(**kwargs) -> tuple[dict, dict]:
         """
         Get training and validation kwargs for P-EAGLE.
 
-        P-EAGLE doesn't need extra kwargs for forward() - all parameters
-        are handled in the forward method (num_depths, down_sample_ratio, etc.)
-
         Args:
-            **kwargs: Training arguments (unused)
+            **kwargs: Training arguments
 
         Returns:
-            Tuple of (train_call_kwargs, val_call_kwargs) - both empty for P-EAGLE
+            Tuple of (train_call_kwargs, val_call_kwargs)
         """
-        return {}, {}
+        loss_fn = resolve_loss_fn(kwargs["loss_fn"])
+        return {"loss_fn": loss_fn}, {"loss_fn": loss_fn}

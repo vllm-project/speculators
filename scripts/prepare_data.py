@@ -25,6 +25,7 @@ Usage:
 import argparse
 import glob
 import logging
+import shutil
 import sys
 from pathlib import Path
 
@@ -165,6 +166,9 @@ def main():
                 "preprocessing. To existing overwrite files use --overwrite."
             )
             sys.exit(0)
+        if args.overwrite:
+            shutil.rmtree(output)
+            output.mkdir(parents=True)
     else:
         output.mkdir(parents=True)
 

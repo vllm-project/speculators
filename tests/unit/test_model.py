@@ -125,8 +125,8 @@ def test_speculator_model_registered_model_class_from_config_invalid():
         test_param=456,
         speculators_config=SpeculatorsConfig(
             algorithm="test_algorithm",
-            proposal_methods=[],
-            default_proposal_method="test_proposal",
+            proposal_methods=[GreedyTokenProposalConfig()],
+            default_proposal_method="greedy",
             verifier=VerifierConfig(
                 name_or_path="test/verifier",
                 architectures=["TestModel"],
@@ -146,8 +146,8 @@ def test_speculator_model_registered_model_class_from_config_invalid():
     config = UnregisteredConfig(
         speculators_config=SpeculatorsConfig(
             algorithm="test_algorithm",
-            proposal_methods=[],
-            default_proposal_method="test_proposal",
+            proposal_methods=[GreedyTokenProposalConfig()],
+            default_proposal_method="greedy",
             verifier=VerifierConfig(
                 name_or_path="test/verifier",
                 architectures=["TestModel"],
