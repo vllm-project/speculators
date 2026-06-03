@@ -192,7 +192,14 @@ def create_transformer_layer_config(  # noqa: C901
     # New rope parameters definition introduced in transformers 5.0
     if version.parse(transformers.__version__) >= version.parse("5.0.0"):
         if hasattr(verifier_config, "rope_parameters"):
-            config.rope_parameters = deepcopy(verifier_config.rope_parameters)
+            config.rope_parameters = {
+                "rope_theta": verifier_config.rope_parameters.get(
+                    "rope_theta", 10000.0
+                ),
+                "rope_type": verifier_config.rope_parameters.get(
+                    "rope_type", "default"
+                ),
+            }
     else:
         if hasattr(verifier_config, "rope_scaling"):
             config.rope_scaling = deepcopy(verifier_config.rope_scaling)
