@@ -341,6 +341,11 @@ class SpeculatorModelConfig(PydanticClassRegistryMixin, PretrainedConfig):
         for subcls in (cls.registry or {}).values():
             subcls.model_rebuild(force=True, _types_namespace={"torch": torch})
 
+    def __iter__(self):
+        # Pydantic's __iter__ yields (key, value) tuples, but transformers
+        # expects string keys. Delegate to PretrainedConfig's __iter__.
+        return PretrainedConfig.__iter__(self)
+
     # transformers >= 5.x adds validate() which conflicts with Pydantic v2's
     # validate() classmethod. Guard so we don't stub it on older transformers.
     if "validate" in vars(PretrainedConfig):
