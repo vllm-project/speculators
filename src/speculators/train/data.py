@@ -607,7 +607,9 @@ class ArrowDataset(BaseDataset):
         if stored_input_ids is None or stored_loss_mask is None:
             return None
 
-        loaded_hs = self._maybe_load_hs_file(index)
+        file_idx = self._map_to_file_idx(index)
+        hs_file = self.hidden_states_path / f"hs_{file_idx}.safetensors"
+        loaded_hs = _maybe_load_hs_file(hs_file)
 
         if loaded_hs is None:
             match self.on_missing:
@@ -801,17 +803,27 @@ def create_collate_fn(
                 # shape: [1, max_len, ...]
 
         if has_mrope:
+            # MRoPE samples carry position_ids of shape [3, seq_len] (T/H/W
+            # channels). After shift_batch they remain [3, seq_len-1].
+            # We concatenate along the seq dimension, pad to max_len, then
+            # add a batch dim to produce [1, 3, max_len] — matching HF's
+            # expected layout [batch, 3, seq_len] for MRoPE rotary embeddings.
             position_ids = []
             for sample in batch:  # type: ignore[assignment]
                 pos = sample["position_ids"]
                 if pos.ndim == 1:
+                    # Text-only sample in a mixed batch: broadcast to 3 channels
                     pos = pos.unsqueeze(0).expand(3, -1)
                 position_ids.append(pos)
+            # shape of each: [3, sample_seq_len]; cat along seq dim → [3, total_seq_len]
             collated_positions = torch.cat(position_ids, dim=-1)
+            # Pad seq dim to max_len → [3, max_len], then add batch dim → [1, 3, max_len]
             collated_data["position_ids"] = pad_last_dim_to_length(
                 collated_positions, max_len
-            ).unsqueeze(1)
+            ).unsqueeze(0)
         else:
+            # Standard 1D position_ids: [seq_len] per sample.
+            # Cat along seq dim → [total_seq_len], pad → [max_len], batch → [1, max_len]
             collated_positions = torch.cat([b["position_ids"] for b in batch], dim=0)  # type: ignore[index]
             collated_data["position_ids"] = slice_and_pad_to_length(
                 collated_positions, max_len
