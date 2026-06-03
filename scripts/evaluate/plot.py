@@ -79,8 +79,6 @@ def _plot_compare_subset(
     subset: str,
     all_data: dict[str, dict[str, list[tuple[float, float]]]],
     source_labels: list[str],
-    *,
-    increasing: bool,
 ) -> None:
     for i, label in enumerate(source_labels):
         points = all_data[label].get(subset, [])
@@ -94,8 +92,8 @@ def _plot_compare_subset(
 
         ax.scatter(xs, ys, color=color, alpha=0.35, s=25, zorder=3)
 
-        x_smooth, y_smooth = smooth_curve(xs, ys, increasing=increasing)
-        ax.plot(x_smooth, y_smooth, color=color, linewidth=2, label=label, zorder=4)
+        x_smooth, y_smooth = smooth_curve(xs, ys)
+        ax.plot(x_smooth, y_smooth, color=color, linewidth=2.5, label=label, zorder=4)
 
 
 def run_compare(args: argparse.Namespace) -> None:
@@ -113,7 +111,6 @@ def run_compare(args: argparse.Namespace) -> None:
 
     for metric_name in metrics:
         metric_cfg = METRICS[metric_name]
-        increasing = metric_cfg["increasing"]
         all_data = _collect_all_data(sources, metric_name)
 
         all_subsets: set[str] = set()
@@ -125,28 +122,34 @@ def run_compare(args: argparse.Namespace) -> None:
             print(f"[WARN] No data found for metric '{metric_name}'", file=sys.stderr)
             continue
 
-        for subset in sorted(all_subsets):
-            fig, ax = plt.subplots(figsize=(8, 5))
-            _plot_compare_subset(
-                ax,
-                subset,
-                all_data,
-                source_labels,
-                increasing=increasing,
-            )
+        combined: dict[str, list[tuple[float, float]]] = defaultdict(list)
+        for label in source_labels:
+            for subset in sorted(all_subsets):
+                combined[label].extend(all_data[label].get(subset, []))
 
-            title = f"{pretty_subset(subset)} - {metric_cfg['label']}"
-            ax.set_title(title, fontsize=14, fontweight="bold")
-            ax.set_xlabel("Requests per Second", fontsize=12)
-            ax.set_ylabel(metric_cfg["label"], fontsize=12)
-            ax.legend(framealpha=0.9)
-            ax.grid(True, alpha=0.3)
-            fig.tight_layout()
+        combined_data = {
+            label: {"__combined__": pts} for label, pts in combined.items()
+        }
 
-            outpath = args.output_dir / f"compare_{subset}_{metric_name}.png"
-            fig.savefig(outpath, dpi=150)
-            plt.close(fig)
-            print(f"[INFO] Saved {outpath}")
+        fig, ax = plt.subplots(figsize=(8, 5))
+        _plot_compare_subset(
+            ax,
+            "__combined__",
+            combined_data,
+            source_labels,
+        )
+
+        ax.set_title(metric_cfg["label"], fontsize=14, fontweight="bold")
+        ax.set_xlabel("Requests per Second", fontsize=12)
+        ax.set_ylabel(metric_cfg["label"], fontsize=12)
+        ax.legend(framealpha=0.9)
+        ax.grid(True, alpha=0.3)
+        fig.tight_layout()
+
+        outpath = args.output_dir / f"compare_{metric_name}.png"
+        fig.savefig(outpath, dpi=150)
+        plt.close(fig)
+        print(f"[INFO] Saved {outpath}")
 
 
 # ============================================================================
@@ -205,12 +208,10 @@ def _compute_speedup_curves(
     b_x_smooth, b_y_smooth = smooth_curve(
         [p[0] for p in b_pts],
         [p[1] for p in b_pts],
-        increasing=increasing,
     )
     t_x_smooth, t_y_smooth = smooth_curve(
         [p[0] for p in t_pts],
         [p[1] for p in t_pts],
-        increasing=increasing,
     )
 
     x_lo = max(b_x_smooth.min(), t_x_smooth.min())

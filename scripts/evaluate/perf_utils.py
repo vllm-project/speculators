@@ -23,13 +23,9 @@ from urllib.request import urlopen
 import numpy as np
 
 try:
-    from scipy.interpolate import PchipInterpolator
-    from scipy.stats import binned_statistic
-    from sklearn.isotonic import IsotonicRegression
+    from scipy.interpolate import UnivariateSpline
 except ImportError:
-    PchipInterpolator = None  # type: ignore[assignment,misc]
-    binned_statistic = None  # type: ignore[assignment]
-    IsotonicRegression = None  # type: ignore[assignment,misc]
+    UnivariateSpline = None  # type: ignore[assignment,misc]
 
 logger = logging.getLogger("evaluate")
 
@@ -138,7 +134,8 @@ def _load_csv(
             if row.get("strategy") != "constant":
                 continue
             try:
-                result[row.get("subset", "unknown")].append(
+                subset = re.sub(r"^run_", "", row.get("subset", "unknown"))
+                result[subset].append(
                     (float(row["rps_median"]), float(row[cfg["csv_col"]]))
                 )
             except (ValueError, KeyError):
@@ -205,10 +202,9 @@ def parse_source_args(source_args: list[str]) -> dict[str, list[Path]]:
 def smooth_curve(
     x: list[float] | np.ndarray,
     y: list[float] | np.ndarray,
-    n_dense: int = 200,
-    increasing: bool = True,
+    n_dense: int = 300,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Bin, apply isotonic regression, then PCHIP-interpolate."""
+    """Fit a smooth spline through noisy data."""
     x, y = np.asarray(x, dtype=float), np.asarray(y, dtype=float)
     order = np.argsort(x)
     x, y = x[order], y[order]
@@ -216,23 +212,11 @@ def smooth_curve(
     if len(x) < 2:  # noqa: PLR2004
         return x, y
 
-    n_bins = max(min(len(x) // 3, 15), 4)
-    bx = binned_statistic(x, x, statistic="mean", bins=n_bins).statistic
-    by = binned_statistic(x, y, statistic="mean", bins=n_bins).statistic
-    valid = ~np.isnan(by)
-    bx, by = bx[valid], by[valid]
-
-    by = IsotonicRegression(increasing=increasing).fit_transform(bx, by)
-    _, idx = np.unique(bx, return_index=True)
-    bx, by = bx[idx], by[idx]
-
-    if len(bx) < 2:  # noqa: PLR2004
-        return bx, by
-
+    spline = UnivariateSpline(x, y, s=len(x) * np.var(y))
     x_dense = np.linspace(x.min(), x.max(), n_dense)
-    y_dense = PchipInterpolator(bx, by)(x_dense)
-    acc = np.maximum.accumulate if increasing else np.minimum.accumulate
-    return x_dense, acc(y_dense)
+    y_dense = spline(x_dense)
+
+    return x_dense, y_dense
 
 
 def pretty_subset(name: str) -> str:
