@@ -1,0 +1,9 @@
+# Core dependencies for performance benchmarking with guidellm
+vllm>=0.12.0
+guidellm==0.6.0
+
+# Visualization dependencies
+matplotlib
+numpy
+scikit-learn
+scipy
