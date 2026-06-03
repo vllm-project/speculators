@@ -7,6 +7,7 @@ import warnings
 from collections.abc import Callable
 from os import PathLike
 from pathlib import Path
+from types import MethodType, SimpleNamespace
 from typing import Any, Literal, cast
 
 import openai
@@ -94,7 +95,7 @@ def split_files(datapath: str, ratio: float = 0.9, seed: int = 0):
 StandardizeFnSig = Callable[[dict[str, Any]], dict[str, Any]]
 
 
-def create_empty_sample(hidden_size: int):
+def create_empty_sample(hidden_size: int, hidden_states_dtype: torch.dtype = torch.bfloat16):
     # data structure: {
     #     "hidden_states": [seq_len, 3 * hidden_size],
     #     "input_ids": [seq_len],
@@ -105,9 +106,9 @@ def create_empty_sample(hidden_size: int):
     # }
 
     return {
-        "hidden_states": torch.empty(0, 3 * hidden_size),
+        "hidden_states": torch.empty(0, 3 * hidden_size, dtype=hidden_states_dtype),
         "input_ids": torch.empty(0, dtype=torch.long),
-        "verifier_last_hidden_states": torch.empty(0, hidden_size),
+        "verifier_last_hidden_states": torch.empty(0, hidden_size, dtype=hidden_states_dtype),
         "loss_mask": torch.empty(0, dtype=torch.long),
         "lengths": torch.tensor([0], dtype=torch.long),
         "position_ids": torch.arange(0, dtype=torch.long),
@@ -135,16 +136,87 @@ def standardize_data_v1(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _collect_mm_payload_from_messages(
+    messages: list[dict],
+) -> dict[str, list[str]]:
+    """Flatten image/video/audio URLs out of vLLM-style chat messages.
+
+    Why this exists (the "off-by-one newline" problem):
+
+    ``prepare_data.py`` tokenizes multimodal conversations via the HF
+    processor's ``apply_chat_template(tokenize=True)`` and persists the
+    resulting ``input_ids`` into the Arrow dataset.  If we then request
+    hidden states via ``chat.completions.create(messages=...)``, vLLM
+    **re-renders** the same chat template server-side.  Multimodal chat
+    templates (e.g. Qwen3-VL / Qwen3.6) insert media placeholder tokens
+    and surrounding whitespace slightly differently across library versions,
+    which causes an off-by-one token mismatch (typically a stray ``\\n``
+    at a vision-placeholder boundary).  The strict equality check in
+    ``extract_output`` then rejects every sample → loss=0 for the epoch.
+
+    The fix is to bypass server-side template rendering entirely: send the
+    pre-tokenized ``input_ids`` via the Completions API and attach the raw
+    media URLs through ``extra_body.multi_modal_data`` so vLLM can still
+    run the vision encoder without re-tokenizing.
+
+    This function extracts those media URLs from the persisted ``messages``
+    (which ``prepare_data.py`` already formatted as vLLM-compatible
+    ``{type: "image_url", image_url: {url: "file:///..."}}`` dicts).
+    """
+    bucket: dict[str, list[str]] = {}
+    for turn in messages:
+        content = turn.get("content")
+        if not isinstance(content, list):
+            continue
+        for seg in content:
+            if not isinstance(seg, dict):
+                continue
+            seg_type = seg.get("type", "")
+            for modality in ("image", "video", "audio"):
+                if seg_type == f"{modality}_url":
+                    url = (seg.get(f"{modality}_url") or {}).get("url")
+                    if url:
+                        bucket.setdefault(modality, []).append(url)
+    return bucket
+
+
 def build_client_item(dataset_item: dict) -> ClientItem:
-    out_dict = {}
+    """Build a vLLM ClientItem from a preprocessed dataset row.
+
+    The default path is **token-id Completions**: we send ``input_ids``
+    directly so the server does not re-render the chat template, which
+    avoids the off-by-one token drift between ``prepare_data.py``'s HF
+    processor tokenization and vLLM's server-side chat template rendering
+    (see the docstring on ``_collect_mm_payload_from_messages`` for the full
+    root-cause analysis).
+
+    For multimodal samples, media URLs are extracted from the persisted
+    ``messages_json`` and forwarded via ``multi_modal_data`` in the
+    Completions request ``extra_body``.  This lets vLLM attach vision/audio
+    encoder features to the exact token positions without re-tokenizing.
+
+    ``messages`` is still populated as a fallback for code paths that
+    explicitly opt into ``use_chat_completions=True`` (not recommended for
+    multimodal — see above).
+    """
+    out_dict: dict[str, Any] = {}
     input_ids = _maybe_tensor(dataset_item["input_ids"], torch.long)
     out_dict["input_ids"] = input_ids.tolist() if input_ids is not None else []
 
     messages_json = dataset_item.get("messages_json", "")
+    messages: list[dict] | None = None
     if messages_json:
-        out_dict["messages"] = json.loads(messages_json)
+        messages = json.loads(messages_json)
     elif "messages" in dataset_item:
-        out_dict["messages"] = dataset_item["messages"]
+        messages = dataset_item["messages"]
+
+    if messages:
+        # Keep messages around as a fallback path
+        out_dict["messages"] = messages
+        # Primary path: extract MM URLs so we can use Completions API
+        mm = _collect_mm_payload_from_messages(messages)
+        if mm:
+            out_dict["multi_modal_data"] = mm
 
     return cast("ClientItem", out_dict)
 
