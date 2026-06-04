@@ -10,12 +10,12 @@ from transformers.masking_utils import create_causal_mask
 from speculators import SpeculatorModel
 from speculators.config import SpeculatorsConfig, VerifierConfig
 from speculators.model import DraftVocabMixin
-from speculators.models.eagle3.core import conditional_torch_compile
 from speculators.models.mtp.config import MTPSpeculatorConfig
 from speculators.models.mtp.model_definitions import (
     mtp_model_classes,
     resolve_model_type,
 )
+from speculators.models.utils import conditional_torch_compile
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 
 __all__ = ["MTPDraftModel", "compute_step_weights"]

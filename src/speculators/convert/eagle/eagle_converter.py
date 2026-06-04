@@ -16,6 +16,8 @@ from speculators.convert.eagle.eagle_legacy_model import (
 from speculators.convert.eagle.utils import (
     build_llama_config_rope_kwargs,
     detect_fusion_bias_and_layernorms,
+)
+from speculators.convert.utils import (
     ensure_checkpoint_is_local,
     load_checkpoint_config,
     load_checkpoint_weights,
