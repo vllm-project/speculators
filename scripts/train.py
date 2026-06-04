@@ -114,6 +114,7 @@ def create_transformer_layer_config(  # noqa: C901
     hidden_act: str | None,
     sliding_window: int,
     sliding_window_indices: list[int],
+    disable_m_rope: bool,
 ) -> PretrainedConfig:
     if draft_arch not in DRAFT_ARCH_CONFIGS:
         raise ValueError(
@@ -192,14 +193,11 @@ def create_transformer_layer_config(  # noqa: C901
     # New rope parameters definition introduced in transformers 5.0
     if version.parse(transformers.__version__) >= version.parse("5.0.0"):
         if hasattr(verifier_config, "rope_parameters"):
-            config.rope_parameters = {
-                "rope_theta": verifier_config.rope_parameters.get(
-                    "rope_theta", 10000.0
-                ),
-                "rope_type": verifier_config.rope_parameters.get(
-                    "rope_type", "default"
-                ),
-            }
+            config.rope_parameters = deepcopy(verifier_config.rope_parameters)
+            if disable_m_rope:
+                del config.rope_parameters["mrope_interleaved"]
+                del config.rope_parameters["mrope_section"]
+                del config.rope_parameters["partial_rotary_factor"]
     else:
         if hasattr(verifier_config, "rope_scaling"):
             config.rope_scaling = deepcopy(verifier_config.rope_scaling)
@@ -314,6 +312,7 @@ def main(args: argparse.Namespace):
         hidden_act=args.draft_hidden_act,
         sliding_window=args.sliding_window,
         sliding_window_indices=args.sliding_window_indices,
+        disable_m_rope=args.disable_m_rope,
     )
 
     args.mask_token_id = resolve_mask_token_id(
@@ -693,6 +692,12 @@ def parse_args():
         type=int,
         default=8,
         help="Block size for DFlash model (default: 8)",
+    )
+    parser.add_argument(
+        "--disable-m-rope",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Whether to support m-rope positional encoding (default: True)",
     )
     parser.add_argument(
         "--max-anchors",
