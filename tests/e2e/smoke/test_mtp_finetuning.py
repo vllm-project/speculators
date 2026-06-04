@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 @pytest.mark.slow
 @requires_cuda
 @requires_transformers_version("5.2.0")
-@requires_vllm_version("0.22.1")
+@requires_vllm_version("0.22.0")
 def test_mtp_finetuning_smoke(
     tmp_path: Path,
     prompts: list[list[dict[str, str]]],

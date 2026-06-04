@@ -21,7 +21,7 @@ from tests.utils import requires_cadence
 @pytest.mark.regression
 @requires_cuda
 @requires_transformers_version("5.2.0")
-@requires_vllm_version("0.22.1")
+@requires_vllm_version("0.22.0")
 def test_mtp_online_regression(
     tmp_path: Path,
     prompts: list[list[dict[str, str]]],
@@ -40,5 +40,5 @@ def test_mtp_online_regression(
         # TODO: placeholder thresholds — calibrate from first successful run
         acceptance_thresholds=[0.3, 0.1, 0.01],
         train_timeout=60 * 60,
-        gpu_memory_utilization=0.75,
+        gpu_memory_utilization=0.45,
     )

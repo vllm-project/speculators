@@ -47,8 +47,7 @@ def requires_vllm_version(min_version: str):
         [
             VLLM_PYTHON,
             "-c",
-            "from importlib.metadata import version;"
-            " print(version('vllm'))",
+            "from importlib.metadata import version; print(version('vllm'))",
         ],
         text=True,
     )
