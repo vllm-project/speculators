@@ -8,13 +8,14 @@ nav:
                 - user_guide/algorithms/index.md
                 - Eagle3: user_guide/algorithms/eagle3.md
                 - Dflash: user_guide/algorithms/dflash.md
+                - P-Eagle: user_guide/algorithms/peagle.md
                 - Decision Guide: user_guide/algorithms/decision_guide.md
           - Tutorials:
                 - user_guide/tutorials/index.md
                 - Train Eagle3 Model Online: user_guide/tutorials/train_eagle3_online.md
                 - Train Eagle3 Model Offline: user_guide/tutorials/train_eagle3_offline.md
                 - Train Dflash Model Online: user_guide/tutorials/train_dflash_online.md
-                - Train Peagle Model Offline: user_guide/tutorials/train_peagle_offline.md
+                - Train P-Eagle Model Offline: user_guide/tutorials/train_peagle_offline.md
                 - Response Regeneration: user_guide/tutorials/response_regeneration.md
                 - Evaluating Model Performance: user_guide/tutorials/evaluating_performance.md
                 - Serve in vLLM: user_guide/tutorials/serve_vllm.md
