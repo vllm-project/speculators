@@ -20,7 +20,7 @@ from safetensors import safe_open
 from transformers import PretrainedConfig
 
 from speculators.config import SpeculatorsConfig, VerifierConfig
-from speculators.convert.eagle.utils import (
+from speculators.convert.utils import (
     ensure_checkpoint_is_local,
     load_checkpoint_config,
 )

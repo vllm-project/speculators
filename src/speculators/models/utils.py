@@ -1,6 +1,14 @@
 import warnings
 
+import torch
 from transformers import AutoConfig, PretrainedConfig
+
+
+def conditional_torch_compile(func):
+    if torch.cuda.is_available() and hasattr(torch, "compile"):
+        return torch.compile(func)
+    else:
+        return func
 
 
 def get_verifier_config(verifier_name_or_path: str) -> PretrainedConfig:

@@ -15,15 +15,8 @@ from speculators.models.eagle3.attention import (
 from speculators.models.eagle3.metrics import compute_metrics
 from speculators.models.eagle3.model_definitions import model_classes
 from speculators.models.metrics import kl_div_loss, resolve_loss_fn
-from speculators.models.utils import resolve_target_layer_ids
+from speculators.models.utils import conditional_torch_compile, resolve_target_layer_ids
 from speculators.proposals.greedy import GreedyTokenProposalConfig
-
-
-def conditional_torch_compile(func):
-    if torch.cuda.is_available() and hasattr(torch, "compile"):
-        return torch.compile(func)
-    else:
-        return func
 
 
 @SpeculatorModel.register("eagle3")
