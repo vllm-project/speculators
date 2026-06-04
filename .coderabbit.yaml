@@ -70,10 +70,6 @@ reviews:
     auto_incremental_review: false
     base_branches:
       - "main"
-knowledge_base:
-  linked_repositories:
-    - repository: "vllm-project/vllm"
-      instructions: "vLLM is used for hidden state extraction during data generation and as the inference backend for speculative decoding. Useful for understanding hidden state APIs, speculative decoding integration points, and how draft models are loaded and executed."
 chat:
   auto_reply: true
 issue_enrichment:
