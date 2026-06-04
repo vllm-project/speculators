@@ -3,11 +3,11 @@ language: "en"
 early_access: false
 reviews:
   request_changes_workflow: false # Prevent coderabbit from approving the PR
-  high_level_summary: true
-  high_level_summary_in_walkthrough: true
+  high_level_summary: false
+  high_level_summary_in_walkthrough: false
   poem: false
   review_status: true
-  collapse_walkthrough: false
+  collapse_walkthrough: true
   auto_apply_labels: true
   path_filters:
     - "!**/*.pyc"
