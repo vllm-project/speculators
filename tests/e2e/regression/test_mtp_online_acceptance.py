@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.conftest import requires_cuda, requires_transformers_version
+from tests.conftest import requires_cuda, requires_transformers_version, requires_vllm_version
 from tests.e2e.smoke.test_mtp_finetuning import run_mtp_finetuning_e2e
 from tests.utils import requires_cadence
 
@@ -17,6 +17,7 @@ from tests.utils import requires_cadence
 @pytest.mark.regression
 @requires_cuda
 @requires_transformers_version("5.2.0")
+@requires_vllm_version("0.22.0")
 def test_mtp_online_regression(
     tmp_path: Path,
     prompts: list[list[dict[str, str]]],

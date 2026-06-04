@@ -18,7 +18,7 @@ import pytest
 from huggingface_hub import hf_hub_download
 
 from speculators.convert.mtp import MTPConverter
-from tests.conftest import requires_cuda, requires_transformers_version
+from tests.conftest import requires_cuda, requires_transformers_version, requires_vllm_version
 from tests.e2e.utils import (
     launch_vllm_server_context,
     run_prepare_data,
@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 @pytest.mark.slow
 @requires_cuda
 @requires_transformers_version("5.2.0")
+@requires_vllm_version("0.22.0")
 def test_mtp_finetuning_smoke(
     tmp_path: Path,
     prompts: list[list[dict[str, str]]],

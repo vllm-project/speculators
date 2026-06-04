@@ -28,6 +28,7 @@ def requires_multi_gpu(fn):
 
 
 _TRANSFORMERS_VERSION = Version(pkg_version("transformers"))
+_VLLM_VERSION = Version(pkg_version("vllm"))
 
 
 def requires_transformers_version(min_version: str):
@@ -36,4 +37,11 @@ def requires_transformers_version(min_version: str):
         reason=(
             f"transformers>={min_version} required (installed: {_TRANSFORMERS_VERSION})"
         ),
+    )
+
+
+def requires_vllm_version(min_version: str):
+    return pytest.mark.skipif(
+        Version(min_version) >= _VLLM_VERSION,
+        reason=f"vllm>{min_version} required (installed: {_VLLM_VERSION})",
     )
