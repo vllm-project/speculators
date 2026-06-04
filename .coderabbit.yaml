@@ -6,6 +6,11 @@ reviews:
   high_level_summary: false
   high_level_summary_in_walkthrough: false
   poem: false
+  in_progress_fortune: false
+  sequence_diagrams: false
+  estimate_code_review_effort: false
+  suggested_labels: false
+  suggested_reviewers: false
   review_status: true
   collapse_walkthrough: true
   auto_apply_labels: true
