@@ -2,15 +2,14 @@
 
 Exercises the full pipeline:
   1. Download training data from HF
-  2. Convert Qwen3.5-0.8B MTP head to speculators format
+  2. Convert MTP head to speculators format
   3. Prepare tokenized data
   4. Launch vLLM server for hidden-state extraction
   5. Train online with --speculator-type mtp
   6. Stitch finetuned weights back into verifier
-  7. Evaluate via vLLM speculative decoding with acceptance thresholds
+  7. Validate via vLLM speculative decoding with MTP method
 """
 
-import json
 import logging
 import sys
 from pathlib import Path
@@ -30,33 +29,50 @@ from tests.e2e.utils import (
 
 logger = logging.getLogger(__name__)
 
-VERIFIER = "Qwen/Qwen3.5-0.8B"
-TRAINING_DATA_REPO = "inference-optimization/Qwen3.5-0.8B-responses"
-TRAINING_DATA_FILE = "gsm8k-test-50.json"
-EVAL_DATA_REPO = "RedHatAI/speculator_benchmarks"
-EVAL_DATA_FILE = "math_reasoning.jsonl"
-NUM_SPECULATIVE_TOKENS = 3
-TARGET_LAYER_IDS = [24]
-
-# TODO: Placeholders replace with measured baselines
-ACCEPTANCE_THRESHOLDS = [0.3, 0.1, 0.01]
-
-
-def _load_eval_prompts(path: Path) -> list[list[dict[str, str]]]:
-    prompts = []
-    with path.open() as f:
-        for line in f:
-            sample = json.loads(line)
-            text = sample.get("text") or sample.get("prompt", "")
-            prompts.append([{"role": "user", "content": text}])
-    return prompts
-
 
 @pytest.mark.e2e
 @pytest.mark.slow
 @requires_cuda
 @requires_transformers_version("5.2.0")
-def test_mtp_finetuning(tmp_path: Path):
+def test_mtp_finetuning_smoke(
+    tmp_path: Path,
+    prompts: list[list[dict[str, str]]],
+):
+    run_mtp_finetuning_e2e(
+        tmp_path=tmp_path,
+        verifier="Qwen/Qwen3.5-0.8B",
+        training_data_repo="inference-optimization/Qwen3.5-0.8B-responses",
+        num_speculative_tokens=3,
+        target_layer_ids=[24],
+        max_samples=50,
+        seq_length=512,
+        epochs=1,
+        lr=3e-4,
+        prompts=prompts,
+        enforce_eager=True,
+    )
+
+
+def run_mtp_finetuning_e2e(
+    tmp_path: Path,
+    verifier: str,
+    training_data_repo: str,
+    num_speculative_tokens: int = 3,
+    target_layer_ids: list[int] | None = None,
+    max_samples: int = 50,
+    seq_length: int = 512,
+    epochs: int = 1,
+    lr: float = 3e-4,
+    prompts: list[list[dict[str, str]]] | None = None,
+    acceptance_thresholds: list[float] | None = None,
+    train_timeout: int = 30 * 60,
+    gpu_memory_utilization: float = 0.5,
+    enforce_eager: bool = False,
+):
+    """Run MTP online finetuning E2E pipeline.
+
+    If prompts is None, skip stitch and vLLM inference steps.
+    """
     logging.basicConfig(
         level=logging.INFO,
         format="%(levelname)s %(name)s %(message)s",
@@ -71,106 +87,97 @@ def test_mtp_finetuning(tmp_path: Path):
     hidden_states_path = tmp_path / "hidden_states"
 
     port = 8321
-    seq_length = 512
 
-    # -- Step 1: Download training data --
-    logger.info("Downloading training data from %s", TRAINING_DATA_REPO)
+    # Step 1: Download training data
+    logger.info("Downloading training data from %s", training_data_repo)
     training_data_path = hf_hub_download(
-        repo_id=TRAINING_DATA_REPO,
-        filename=TRAINING_DATA_FILE,
+        repo_id=training_data_repo,
+        filename="gsm8k.jsonl",
         repo_type="dataset",
     )
     logger.info("Training data: %s", training_data_path)
 
-    # -- Step 2: Convert MTP head --
-    logger.info("Converting %s MTP head to speculators format", VERIFIER)
+    # Step 2: Convert MTP head
+    logger.info("Converting %s MTP head to speculators format", verifier)
     converter = MTPConverter()
     converter.convert(
-        input_path=VERIFIER,
+        input_path=verifier,
         output_path=str(converted_path),
-        base_model=VERIFIER,
-        num_speculative_steps=NUM_SPECULATIVE_TOKENS,
+        base_model=verifier,
+        num_speculative_steps=num_speculative_tokens,
         validate=False,
     )
     assert converted_path.exists()
     assert any(converted_path.glob("*.safetensors"))
     logger.info("Conversion complete: %s", converted_path)
 
-    # -- Step 3: Prepare data --
+    # Step 3: Prepare data
     logger.info("Preparing tokenized data")
     run_prepare_data(
-        model=VERIFIER,
+        model=verifier,
         data=training_data_path,
         data_path=data_path,
-        max_samples=50,
+        max_samples=max_samples,
         seq_length=seq_length,
     )
     logger.info("Data prepared: %s", data_path)
 
-    # -- Steps 4-6: Launch vLLM, train online, stop vLLM --
+    # Step 4-5: Launch vLLM, train online
     logger.info("Starting online training")
     with launch_vllm_server_context(
-        VERIFIER,
+        verifier,
         port,
         str(hidden_states_path),
         max_model_len=seq_length + 1,
-        target_layer_ids=TARGET_LAYER_IDS,
-        enforce_eager=True,
+        gpu_memory_utilization=gpu_memory_utilization,
+        target_layer_ids=target_layer_ids,
+        enforce_eager=enforce_eager,
     ):
         run_training(
-            model=VERIFIER,
+            model=verifier,
             data_path=data_path,
             save_path=save_path,
             seq_length=seq_length,
             port=port,
             speculator_type="mtp",
-            epochs=1,
-            lr=3e-4,
+            epochs=epochs,
+            lr=lr,
             hidden_states_path=hidden_states_path,
-            target_layer_ids=TARGET_LAYER_IDS,
+            target_layer_ids=target_layer_ids,
             extra_train_args=[
                 "--from-pretrained",
                 str(converted_path),
             ],
-            timeout=30 * 60,
+            timeout=train_timeout,
         )
     logger.info("Training complete")
 
-    # -- Step 7: Stitch finetuned weights --
-    checkpoint_path = save_path / "checkpoint_best"
-    assert checkpoint_path.exists(), f"No checkpoint at {checkpoint_path}"
+    # Step 6-7: Stitch and validate via vLLM
+    if prompts is not None:
+        checkpoint_path = save_path / "checkpoint_best"
+        assert checkpoint_path.exists(), f"No checkpoint at {checkpoint_path}"
 
-    logger.info("Stitching finetuned weights into verifier")
-    run_stitch_mtp(
-        finetuned_checkpoint=checkpoint_path,
-        verifier_path=VERIFIER,
-        output_path=stitched_path,
-        timeout=10 * 60,
-    )
-    assert stitched_path.exists()
-    logger.info("Stitch complete: %s", stitched_path)
+        logger.info("Stitching finetuned weights into verifier")
+        run_stitch_mtp(
+            finetuned_checkpoint=checkpoint_path,
+            verifier_path=verifier,
+            output_path=stitched_path,
+            timeout=10 * 60,
+        )
+        assert stitched_path.exists()
+        logger.info("Stitch complete: %s", stitched_path)
 
-    # -- Steps 8-10: Load eval data, run vLLM engine, assert thresholds --
-    logger.info("Downloading evaluation data")
-    eval_data_path = hf_hub_download(
-        repo_id=EVAL_DATA_REPO,
-        filename=EVAL_DATA_FILE,
-        repo_type="dataset",
-    )
-    prompts = _load_eval_prompts(Path(eval_data_path))
-    logger.info("Loaded %d evaluation prompts", len(prompts))
-
-    logger.info("Running vLLM MTP inference on stitched checkpoint")
-    run_vllm_engine(
-        model_path=str(stitched_path),
-        tmp_path=tmp_path,
-        prompts=prompts,
-        speculative_config={
-            "method": "mtp",
-            "num_speculative_tokens": NUM_SPECULATIVE_TOKENS,
-        },
-        enforce_eager=True,
-        acceptance_thresholds=ACCEPTANCE_THRESHOLDS,
-        timeout=15 * 60,
-    )
+        logger.info("Running vLLM MTP inference on stitched checkpoint")
+        run_vllm_engine(
+            model_path=str(stitched_path),
+            tmp_path=tmp_path,
+            prompts=prompts,
+            speculative_config={
+                "method": "mtp",
+                "num_speculative_tokens": num_speculative_tokens,
+            },
+            enforce_eager=enforce_eager,
+            acceptance_thresholds=acceptance_thresholds,
+            timeout=15 * 60,
+        )
     logger.info("MTP finetuning E2E test passed")
