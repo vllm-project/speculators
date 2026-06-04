@@ -470,7 +470,10 @@ def create_collate_fn(
             # Match the configured `dtype` so the placeholder doesn't crash
             # downstream layers loaded at a different precision (e.g. bf16
             # weights vs fp32 default placeholders).
-            batch = [create_empty_sample(hidden_size, dtype=dtype)]
+            empty = create_empty_sample(hidden_size, dtype=dtype)
+            if preprocess:
+                empty = preprocess(empty)
+            batch = [empty]
 
         collated_data = {}
         for key in batch[0]:  # type: ignore[union-attr]

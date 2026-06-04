@@ -15,7 +15,6 @@ from speculators.models.mtp.model_definitions import (
     mtp_model_classes,
     resolve_model_type,
 )
-from speculators.models.utils import conditional_torch_compile
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 
 __all__ = ["MTPDraftModel", "compute_step_weights"]
@@ -99,7 +98,6 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
         super().load_verifier_weights()
         del self.verifier_lm_head
 
-    @conditional_torch_compile
     def forward(
         self,
         input_ids: torch.Tensor,
@@ -209,6 +207,9 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
             metrics[f"loss_step_{step}"] = step_loss.detach().clone()
 
             current_hidden = mtp_output
+
+        metrics["loss_sum"] = total_loss.detach().clone()
+        metrics["loss_total"] = torch.tensor(1.0, device=device)
 
         return (all_logits, total_loss, metrics)
 
