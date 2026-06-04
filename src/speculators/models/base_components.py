@@ -51,6 +51,54 @@ model_classes: dict[str, ModelComponents] = {
     ),
 }
 
+try:
+    from transformers.models.qwen3_next.modeling_qwen3_next import (
+        Qwen3NextDecoderLayer,
+        Qwen3NextRMSNorm,
+        Qwen3NextRotaryEmbedding,
+    )
+
+    model_classes["qwen3_next"] = ModelComponents(
+        Qwen3NextDecoderLayer,
+        Qwen3NextDecoderLayer,
+        Qwen3NextRMSNorm,
+        Qwen3NextRotaryEmbedding,
+    )
+except ImportError:
+    pass
+
+try:
+    from transformers.models.qwen3_5.modeling_qwen3_5 import (
+        Qwen3_5DecoderLayer,
+        Qwen3_5RMSNorm,
+        Qwen3_5TextRotaryEmbedding,
+    )
+
+    model_classes["qwen3_5_text"] = ModelComponents(
+        Qwen3_5DecoderLayer,
+        Qwen3_5DecoderLayer,
+        Qwen3_5RMSNorm,
+        Qwen3_5TextRotaryEmbedding,
+    )
+except ImportError:
+    pass
+
+try:
+    from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import (
+        Qwen3_5MoeDecoderLayer,
+        Qwen3_5MoeRMSNorm,
+        Qwen3_5MoeTextRotaryEmbedding,
+    )
+
+    model_classes["qwen3_5_moe_text"] = ModelComponents(
+        Qwen3_5MoeDecoderLayer,
+        Qwen3_5MoeDecoderLayer,
+        Qwen3_5MoeRMSNorm,
+        Qwen3_5MoeTextRotaryEmbedding,
+    )
+except ImportError:
+    pass
+
 
 def override_components(model_type: str, **overrides) -> ModelComponents:
     """Override specific components from a base model architecture.

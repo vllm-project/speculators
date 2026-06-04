@@ -311,6 +311,7 @@ def run_vllm_engine(
     gpu_memory_utilization: float = 0.8,
     enforce_eager: bool = False,
     allowed_local_media_path: str | None = None,
+    speculative_config: dict | None = None,
     disable_compile_cache: bool = False,
     max_tokens: int = 50,
     ignore_eos: bool = True,
@@ -338,6 +339,8 @@ def run_vllm_engine(
     }
     if allowed_local_media_path is not None:
         llm_args_dict["allowed_local_media_path"] = allowed_local_media_path
+    if speculative_config is not None:
+        llm_args_dict["speculative_config"] = speculative_config
 
     command = [
         VLLM_PYTHON,
