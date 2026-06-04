@@ -1,22 +1,12 @@
 <!-- markdownlint-disable -->
 
-PLEASE FILL IN THE PR DESCRIPTION HERE ENSURING ALL CHECKLIST ITEMS (AT THE BOTTOM) HAVE BEEN CONSIDERED.
+<!-- PLEASE FILL IN THE PR DESCRIPTION HERE ENSURING ALL CHECKLIST ITEMS (AT THE BOTTOM) HAVE BEEN CONSIDERED. -->
 
 ## Purpose
 
-<!--- Why your changes are needed -->
-
-## Description
-
-<!--- High-level concise summary of changes -->
-
-## Related Issue
-
-<!--- Link related issue if applicable -->
-
 ## Tests
 
-<!--- Please describe in detail how you tested your changes. -->
+## Checklist
 
 I have filled in:
 
