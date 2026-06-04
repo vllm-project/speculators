@@ -143,29 +143,9 @@ def standardize_data_v1(data: dict[str, Any]) -> dict[str, Any]:
 def _collect_mm_payload_from_messages(
     messages: list[dict],
 ) -> dict[str, list[str]]:
-    """Flatten image/video/audio URLs out of vLLM-style chat messages.
+    """Extract image/video/audio URLs from vLLM-style messages.
 
-    Why this exists (the "off-by-one newline" problem):
-
-    ``prepare_data.py`` tokenizes multimodal conversations via the HF
-    processor's ``apply_chat_template(tokenize=True)`` and persists the
-    resulting ``input_ids`` into the Arrow dataset.  If we then request
-    hidden states via ``chat.completions.create(messages=...)``, vLLM
-    **re-renders** the same chat template server-side.  Multimodal chat
-    templates (e.g. Qwen3-VL / Qwen3.6) insert media placeholder tokens
-    and surrounding whitespace slightly differently across library versions,
-    which causes an off-by-one token mismatch (typically a stray ``\\n``
-    at a vision-placeholder boundary).  The strict equality check in
-    ``extract_output`` then rejects every sample → loss=0 for the epoch.
-
-    The fix is to bypass server-side template rendering entirely: send the
-    pre-tokenized ``input_ids`` via the Completions API and attach the raw
-    media URLs through ``extra_body.multi_modal_data`` so vLLM can still
-    run the vision encoder without re-tokenizing.
-
-    This function extracts those media URLs from the persisted ``messages``
-    (which ``prepare_data.py`` already formatted as vLLM-compatible
-    ``{type: "image_url", image_url: {url: "file:///..."}}`` dicts).
+    Used to populate ``extra_body.multi_modal_data`` for token-id completions.
     """
     bucket: dict[str, list[str]] = {}
     for turn in messages:
@@ -185,23 +165,11 @@ def _collect_mm_payload_from_messages(
 
 
 def build_client_item(dataset_item: dict) -> ClientItem:
-    """Build a vLLM ClientItem from a preprocessed dataset row.
+    """Build a vLLM client payload from one dataset row.
 
-    The default path is **token-id Completions**: we send ``input_ids``
-    directly so the server does not re-render the chat template, which
-    avoids the off-by-one token drift between ``prepare_data.py``'s HF
-    processor tokenization and vLLM's server-side chat template rendering
-    (see the docstring on ``_collect_mm_payload_from_messages`` for the full
-    root-cause analysis).
-
-    For multimodal samples, media URLs are extracted from the persisted
-    ``messages_json`` and forwarded via ``multi_modal_data`` in the
-    Completions request ``extra_body``.  This lets vLLM attach vision/audio
-    encoder features to the exact token positions without re-tokenizing.
-
-    ``messages`` is still populated as a fallback for code paths that
-    explicitly opt into ``use_chat_completions=True`` (not recommended for
-    multimodal — see above).
+    Default path sends ``input_ids`` (token-id completions). For multimodal
+    rows, URLs from ``messages_json`` are forwarded as ``multi_modal_data``.
+    ``messages`` is kept only for optional chat-completions fallback.
     """
     out_dict: dict[str, Any] = {}
     input_ids = _maybe_tensor(dataset_item["input_ids"], torch.long)
@@ -492,13 +460,8 @@ class ArrowDataset(BaseDataset):
             hidden_states_dtype: The dtype of the hidden states.
         """
         self.datapath = Path(datapath)
-        # ``prepare_data.py`` persists ``set_format(type="torch",
-        # columns=["input_ids","loss_mask","seq_len"])`` into state.json via
-        # save_to_disk.  That silently hides multimodal metadata columns
-        # (``mm_file``, ``messages_json``, ``use_audio_in_video``) on every
-        # subsequent ``load_from_disk`` call.  ``.with_format(None)`` is an
-        # O(1) metadata reset (no tensor copy) that makes all stored columns
-        # accessible again.
+        # Reset format after load so metadata columns remain visible
+        # (e.g. ``mm_file`` / ``messages_json``).
         self.data = load_from_disk(datapath).with_format(None)
         self.start_file_idx = 0
         if split_ratio == 1.0:
@@ -563,14 +526,10 @@ class ArrowDataset(BaseDataset):
     def _maybe_generate_hs(
         self, index: int, *, is_multimodal: bool = False
     ) -> dict[str, torch.Tensor] | None:
-        """Generate hidden states on-demand via the vLLM endpoint.
+        """Generate hidden states from vLLM on demand.
 
-        For multimodal samples (``is_multimodal=True``), uses Chat Completions
-        so vLLM runs its vision encoder.  The server's ``prompt_token_ids``
-        become the authoritative ``input_ids`` (stored under the key
-        ``"token_ids"`` in the returned dict) because the server may tokenize
-        multimodal chat templates slightly differently from the HF processor
-        used at prepare_data time.
+        For multimodal rows, Chat Completions is used and server token_ids are
+        treated as authoritative for HS alignment.
         """
         if not self.client:
             self._setup_client()
@@ -578,11 +537,8 @@ class ArrowDataset(BaseDataset):
         dataset_item = self.data[index]
         client_item = build_client_item(dataset_item)
 
-        # Multimodal samples must go through Chat Completions so the vLLM
-        # server runs the vision encoder.  The trade-off: vLLM re-renders
-        # the chat template, so token_ids may differ from prepare_data's
-        # output.  We accept vLLM's token_ids as truth (they are
-        # positionally aligned with the hidden states it produces).
+        # Use Chat Completions for multimodal rows to trigger vision encoding.
+        # If tokenization drifts, trust vLLM token_ids (HS-aligned).
         use_chat = is_multimodal and client_item.get("messages") is not None
 
         try:
@@ -615,17 +571,8 @@ class ArrowDataset(BaseDataset):
                 case "cache":
                     file_idx = self._map_to_file_idx(index)
                     target_path = self.hidden_states_path / f"hs_{file_idx}.safetensors"
-                    # ``shutil.move`` requires ``target_path.parent`` to exist.
-                    # When users point ``--hidden-states-path`` at a fresh
-                    # directory that prepare_data.py has not touched, the
-                    # parent dir is missing and every sample fails with
-                    # ``[Errno 2] No such file or directory`` — the
-                    # exception is swallowed by the ``except`` below, every
-                    # row returns None, collate substitutes
-                    # ``create_empty_sample``, and the trainer silently
-                    # logs ``loss=0`` for the entire epoch. Materialising
-                    # the directory once per missing-sample call is cheap
-                    # and idempotent.
+                    # Ensure destination directory exists before moving files.
+                    # Missing parent dir can cause all generated samples to fail.
                     target_path.parent.mkdir(parents=True, exist_ok=True)
                     shutil.move(hs_filepath, target_path)
                 case "delete":
@@ -640,11 +587,7 @@ class ArrowDataset(BaseDataset):
         return loaded_hs
 
     def _get_raw_data(self, index):
-        # Fetch the full row upfront so we can access both training tensors
-        # (input_ids, loss_mask) and multimodal metadata (mm_file,
-        # messages_json, use_audio_in_video) from the same object.
-        # Because with_format(None) is active, columns come back as raw
-        # Python/numpy types; _maybe_tensor normalises them to torch.Tensor.
+        # Read one row once, then normalize tensors and metadata together.
         row = self.data[index]
         stored_input_ids = _maybe_tensor(row["input_ids"], torch.long)
         stored_loss_mask = _maybe_tensor(row["loss_mask"], torch.long)

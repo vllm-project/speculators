@@ -97,27 +97,11 @@ def extract_output(
     *,
     trust_server_token_ids: bool = False,
 ) -> str | tuple[str, list[int]]:
-    """Extract hidden-states file path from vLLM response.
+    """Extract hidden-states path (and optionally server token ids).
 
-    Args:
-        response: vLLM Completion or ChatCompletion response.
-        token_ids: The client-side token IDs sent with the request.
-        trust_server_token_ids: If True (used for multimodal Chat Completions),
-            skip the strict token-id equality check and return the server's
-            ``prompt_token_ids`` alongside the file path.  The caller must use
-            the returned token IDs as the authoritative sequence (they match
-            the hidden states positionally).
-
-    Returns:
-        - When ``trust_server_token_ids=False``: the hidden-states file path (str).
-        - When ``trust_server_token_ids=True``: a tuple of
-          (hidden-states file path, server prompt_token_ids).
-
-    Strict check rationale (when trust_server_token_ids=False):
-        Hidden states are position-indexed.  If the server's prompt
-        tokenization differs from the client's by even one token, every
-        subsequent hidden-state vector is mis-aligned and the resulting
-        training data is silently corrupted.
+    By default, token ids must match exactly. Set
+    ``trust_server_token_ids=True`` to accept server tokenization and return
+    ``(path, prompt_token_ids)``.
     """
     if isinstance(response, Completion):
         prompt_token_ids = getattr(response.choices[0], "prompt_token_ids", None)

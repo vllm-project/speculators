@@ -15,6 +15,7 @@ from speculators.models.eagle3.attention import (
 )
 from speculators.models.eagle3.metrics import compute_metrics
 from speculators.models.eagle3.model_definitions import model_classes
+from speculators.models.eagle3.rotary_partial import install_partial_neox_rotary
 from speculators.models.metrics import kl_div_loss, resolve_loss_fn
 from speculators.models.utils import resolve_target_layer_ids
 from speculators.proposals.greedy import GreedyTokenProposalConfig
@@ -28,32 +29,17 @@ def conditional_torch_compile(func):
 
 
 def _wrap_qwen_omni_rotary_with_hf_layout(rotary_cls: type) -> type:
-    """Adapt a Qwen-Omni Thinker rotary to accept HF's ``[batch, 3, seq_len]``.
+    """Adapt Qwen-Omni rotary to HF MRoPE layout.
 
-    The Qwen3-Omni / Qwen3.6 family of rotary embeddings was written before HF
-    standardised on the Llama4/Gemma3 multimodal RoPE layout. Their ``forward``
-    expects ``position_ids`` shaped ``[3, batch, seq_len]`` (channel-first),
-    whereas the rest of the speculators training stack — including the
-    multipack collator in ``speculators.train.data.create_collate_fn`` and the
-    HF reference implementations — emit ``[batch, 3, seq_len]``.
-
-    Feeding the HF layout into a Qwen-Omni rotary silently broadcasts the
-    3 MRoPE channels through ``apply_rotary_pos_emb`` and the attention
-    reshape, ultimately exploding the feature dim of ``o_proj`` to
-    ``3 * num_heads * head_dim`` (e.g. 12288 instead of 4096 on Qwen3.6),
-    which surfaces as a torch.compile fake-tensor error like
-    ``a and b must have same reduction dim, but got [T, 3*H] X [H, hidden]``.
-
-    This wrapper transposes ``[batch, 3, seq_len] → [3, batch, seq_len]`` only
-    when it sees the HF layout, so collation can stay on the HF convention.
+    Qwen-Omni expects ``position_ids`` as ``[3, batch, seq_len]`` while our
+    training path emits ``[batch, 3, seq_len]``. This wrapper only transposes
+    the HF case to avoid MRoPE channel mis-broadcast and projection dim errors.
     """
 
     class HFLayoutMRoPE(rotary_cls):  # type: ignore[misc,valid-type]
         def forward(self, x, position_ids):  # type: ignore[override]
-            # We only adapt the unambiguous HF case: a 3-D tensor whose middle
-            # dim is exactly 3. Anything else (already channel-first
-            # ``[3, B, T]``, plain ``[B, T]``, or sample-level ``[3, T]``) is
-            # forwarded untouched so we don't hide bugs upstream.
+            # Only transpose clear HF layout ``[B, 3, T]``.
+            # Other shapes pass through unchanged.
             if position_ids.dim() == 3 and position_ids.shape[1] == 3:
                 position_ids = position_ids.transpose(0, 1).contiguous()
             return super().forward(x, position_ids)
@@ -97,15 +83,9 @@ def _select_rotary_emb_class(
             Qwen3OmniMoeThinkerTextRotaryEmbedding
         )
 
-    warnings.warn(
-        "Eagle3 draft config has partial_rotary_factor="
-        f"{partial_rotary_factor} < 1.0. PartialMRoPE will identity-pad "
-        "cos/sin to head_dim for HF attention compatibility, but production "
-        "Qwen3.6 runs should keep --draft-mrope-full-head-hack enabled so "
-        "training and vLLM inference use bit-equivalent full-head rotation.",
-        UserWarning,
-        stacklevel=2,
-    )
+    # Align HF partial rotation with vLLM partial-neox behavior.
+    # Keep native ``partial_rotary_factor``/``mrope_section`` unchanged.
+    install_partial_neox_rotary()
     return _wrap_qwen_omni_rotary_with_hf_layout(
         _make_partial_mrope_rotary_cls(
             Qwen3OmniMoeThinkerTextRotaryEmbedding, partial_rotary_factor
@@ -116,7 +96,12 @@ def _select_rotary_emb_class(
 def _make_partial_mrope_rotary_cls(
     base_cls: type, partial_rotary_factor: float
 ) -> type:
-    """Return a Qwen MRoPE rotary subclass that respects partial_rotary_factor."""
+    """Return a partial-MRoPE rotary class for Qwen drafts.
+
+    It emits unpadded ``[*, rotary_dim]`` cos/sin. The patched
+    ``apply_rotary_pos_emb`` rotates only the leading ``rotary_dim`` channels
+    and keeps the tail unchanged, matching vLLM partial-neox semantics.
+    """
 
     class PartialMRoPE(base_cls):  # type: ignore[misc,valid-type]
         _partial_rotary_factor: ClassVar[float] = partial_rotary_factor
@@ -151,25 +136,12 @@ def _make_partial_mrope_rotary_cls(
             rotary_dim = int(head_dim * self._partial_rotary_factor)
             rotary_dim = (rotary_dim // 2) * 2
             self._head_dim = head_dim
-            self._pad_half = (head_dim - rotary_dim) // 2
+            self._rotary_dim = rotary_dim
 
         def forward(self, x, position_ids):
-            cos, sin = super().forward(x, position_ids)
-            if cos.shape[-1] == self._head_dim:
-                return cos, sin
-            pad_shape = (*cos.shape[:-1], self._pad_half)
-            pad_cos = torch.ones(pad_shape, dtype=cos.dtype, device=cos.device)
-            pad_sin = torch.zeros(pad_shape, dtype=sin.dtype, device=sin.device)
-            half = cos.shape[-1] // 2
-            cos_first, cos_second = cos[..., :half], cos[..., half:]
-            sin_first, sin_second = sin[..., :half], sin[..., half:]
-            cos_padded = torch.cat(
-                [cos_first, pad_cos, cos_second, pad_cos], dim=-1
-            )
-            sin_padded = torch.cat(
-                [sin_first, pad_sin, sin_second, pad_sin], dim=-1
-            )
-            return cos_padded, sin_padded
+            # Keep cos/sin unpadded; patched apply_rotary_pos_emb handles
+            # partial-neox rotation on the leading rotary channels.
+            return super().forward(x, position_ids)
 
     PartialMRoPE.__name__ = (
         f"{base_cls.__name__}Partial{int(partial_rotary_factor * 100):03d}"
