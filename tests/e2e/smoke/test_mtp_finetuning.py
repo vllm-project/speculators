@@ -70,6 +70,7 @@ def run_mtp_finetuning_e2e(
     lr: float = 3e-4,
     prompts: list[list[dict[str, str]]] | None = None,
     acceptance_thresholds: list[float] | None = None,
+    max_tokens: int = 50,
     train_timeout: int = 30 * 60,
     gpu_memory_utilization: float = 0.5,
     enforce_eager: bool = False,
@@ -183,6 +184,7 @@ def run_mtp_finetuning_e2e(
             },
             enforce_eager=enforce_eager,
             acceptance_thresholds=acceptance_thresholds,
+            max_tokens=max_tokens,
             timeout=15 * 60,
         )
     logger.info("MTP finetuning E2E test passed")

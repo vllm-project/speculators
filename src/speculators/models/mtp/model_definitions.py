@@ -103,7 +103,7 @@ class MTPLayerMixin:
     ) -> torch.Tensor:
         hidden_normed = self.hidden_layernorm(hidden_states)
         embed_normed = self.token_layernorm(token_embeddings)
-        proj = self.input_proj(torch.cat([hidden_normed, embed_normed], dim=-1))
+        proj = self.input_proj(torch.cat([embed_normed, hidden_normed], dim=-1))
 
         output = super().forward(  # type: ignore[misc]
             hidden_states=proj,
