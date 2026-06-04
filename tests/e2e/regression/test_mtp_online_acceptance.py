@@ -21,7 +21,7 @@ from tests.utils import requires_cadence
 @pytest.mark.regression
 @requires_cuda
 @requires_transformers_version("5.2.0")
-@requires_vllm_version("0.22.0")
+@requires_vllm_version("0.22.1")
 def test_mtp_online_regression(
     tmp_path: Path,
     prompts: list[list[dict[str, str]]],
