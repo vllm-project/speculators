@@ -40,5 +40,5 @@ def test_mtp_online_regression(
         # TODO: placeholder thresholds — calibrate from first successful run
         acceptance_thresholds=[0.3, 0.1, 0.01],
         train_timeout=60 * 60,
-        gpu_memory_utilization=0.45,
+        gpu_memory_utilization=0.3,
     )
