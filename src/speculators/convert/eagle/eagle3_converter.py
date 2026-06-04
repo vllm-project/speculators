@@ -165,6 +165,7 @@ class Eagle3Converter:
             head_dim=eagle_config.get("head_dim"),
             **build_llama_config_rope_kwargs(
                 rope_theta=eagle_config.get("rope_theta", 10000.0),
+                rope_scaling=eagle_config.get("rope_scaling"),
             ),
             **build_llama_config_dtype_kwarg(eagle_config.get("torch_dtype")),
         )
