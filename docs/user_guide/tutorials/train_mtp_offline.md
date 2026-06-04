@@ -25,7 +25,7 @@ Create two virtual environments (recommended to keep separate so dependencies do
 # Speculators venv (for data prep and training)
 uv venv speculators_venv
 source speculators_venv/bin/activate
-uv pip install "speculators>=0.5.0"
+uv pip install "speculators>=0.6.0"
 ```
 
 ```bash
