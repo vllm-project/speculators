@@ -18,7 +18,11 @@ import pytest
 from huggingface_hub import hf_hub_download
 
 from speculators.convert.mtp import MTPConverter
-from tests.conftest import requires_cuda, requires_transformers_version, requires_vllm_version
+from tests.conftest import (
+    requires_cuda,
+    requires_transformers_version,
+    requires_vllm_version,
+)
 from tests.e2e.utils import (
     launch_vllm_server_context,
     run_prepare_data,

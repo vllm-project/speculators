@@ -8,7 +8,11 @@ from pathlib import Path
 
 import pytest
 
-from tests.conftest import requires_cuda, requires_transformers_version, requires_vllm_version
+from tests.conftest import (
+    requires_cuda,
+    requires_transformers_version,
+    requires_vllm_version,
+)
 from tests.e2e.smoke.test_mtp_finetuning import run_mtp_finetuning_e2e
 from tests.utils import requires_cadence
 
