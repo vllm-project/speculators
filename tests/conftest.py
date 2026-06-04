@@ -1,10 +1,13 @@
 """Shared pytest configuration and fixtures for all tests."""
 
+import subprocess
 from importlib.metadata import version as pkg_version
 
 import pytest
 import torch
 from packaging.version import Version
+
+from tests.e2e.utils import VLLM_PYTHON
 
 
 @pytest.fixture
@@ -28,7 +31,6 @@ def requires_multi_gpu(fn):
 
 
 _TRANSFORMERS_VERSION = Version(pkg_version("transformers"))
-_VLLM_VERSION = Version(pkg_version("vllm"))
 
 
 def requires_transformers_version(min_version: str):
@@ -41,7 +43,17 @@ def requires_transformers_version(min_version: str):
 
 
 def requires_vllm_version(min_version: str):
+    out = subprocess.check_output(  # noqa: S603
+        [
+            VLLM_PYTHON,
+            "-c",
+            "from importlib.metadata import version;"
+            " print(version('vllm'))",
+        ],
+        text=True,
+    )
+    installed = Version(out.strip())
     return pytest.mark.skipif(
-        Version(min_version) >= _VLLM_VERSION,
-        reason=f"vllm>{min_version} required (installed: {_VLLM_VERSION})",
+        Version(min_version) > installed,
+        reason=f"vllm>={min_version} required (installed: {installed})",
     )
