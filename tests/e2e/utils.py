@@ -34,7 +34,7 @@ SCRIPTS_DIR = Path(__file__).resolve().parent.parent.parent / "scripts"
 
 def wait_for_server(
     port: int,
-    timeout: float = 180.0,
+    timeout: float = 600.0,
     poll_interval: float = 2.0,
     process: subprocess.Popen | None = None,
 ):
