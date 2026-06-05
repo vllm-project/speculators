@@ -115,7 +115,7 @@ Start vLLM to serve the verifier for hidden state extraction:
 CUDA_VISIBLE_DEVICES=0,1 python scripts/launch_vllm.py \
   Qwen/Qwen3-Next-80B-A3B-Instruct \
   --target-layer-ids 48 \
-  -- --data-parallel-size 2 --port 8000
+  -- --data-parallel-size 2 --enable-expert-parallel --port 8000
 ```
 
 **The `--` separator:** Anything after `--` is passed directly to vLLM. Common options:
