@@ -249,6 +249,9 @@ Serve the stitched checkpoint with MTP speculative decoding enabled:
 ```bash
 # in vllm venv
 vllm serve ./output/stitched \
+  --tensor-parallel-size 8 \
+  --enable-auto-tool-choice \
+  --tool-call-parser hermes \
   --speculative-config '{"method":"mtp","num_speculative_tokens":3}' \
   --no-enable-chunked-prefill \
   --port 8000
