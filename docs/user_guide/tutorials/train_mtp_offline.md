@@ -32,7 +32,7 @@ uv pip install "speculators>=0.6.0"
 # vLLM venv (for serving the target model)
 uv venv vllm_venv
 source vllm_venv/bin/activate
-uv pip install "vllm>=0.18"
+uv pip install "vllm>=0.22.0"
 ```
 
 Note: if you are using an experiment tracker (e.g. trackio, wandb, tensorboard), install it in the speculators venv manually.
