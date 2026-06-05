@@ -114,4 +114,5 @@ python scripts/stitch_mtp.py \
     --output-path "$STITCHED_DIR"
 
 echo "Done. Stitched checkpoint saved to $STITCHED_DIR/"
-echo "Deploy with: vllm serve $STITCHED_DIR"
+echo "Deploy with: vllm serve $STITCHED_DIR --speculative-config '{\"method\":\"mtp\",\"num_speculative_tokens\":3}' --no-enable-chunked-prefill"
+echo "See https://recipes.vllm.ai/ for more deployment options."

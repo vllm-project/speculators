@@ -248,8 +248,13 @@ Serve the stitched checkpoint with MTP speculative decoding enabled:
 
 ```bash
 # in vllm venv
-vllm serve ./output/stitched --port 8000
+vllm serve ./output/stitched \
+  --speculative-config '{"method":"mtp","num_speculative_tokens":3}' \
+  --no-enable-chunked-prefill \
+  --port 8000
 ```
+
+See [vLLM Recipes](https://recipes.vllm.ai/) for more deployment options and configurations.
 
 ### Chat with the served model
 
@@ -269,6 +274,6 @@ Check vLLM logs for speculative decoding metrics.
 After training your model:
 
 1. **Evaluate performance** - See [Evaluating Performance](evaluating_performance.md)
-2. **Deploy to production** - See [Serve in vLLM](serve_vllm.md)
+2. **Deploy to production** - See [vLLM Recipes](https://recipes.vllm.ai/) for deployment commands
 3. **Fine-tune further** - Use `--from-pretrained ./output/mtp_qwen3next/checkpoints/checkpoint_best` to continue training
 4. **Upload to HuggingFace** - Share your model with the community
