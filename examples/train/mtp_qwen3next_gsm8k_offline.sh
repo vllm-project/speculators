@@ -64,6 +64,7 @@ python scripts/prepare_data.py \
 # Step 3: Launch vLLM server in the background
 echo "=== Step 3: Launching vLLM server ==="
 CUDA_VISIBLE_DEVICES="$GPUS" python scripts/launch_vllm.py "$MODEL" \
+    --target-layer-ids 48 \
     -- --data-parallel-size "$NUM_GPUS" --port "$VLLM_PORT" &
 VLLM_PID=$!
 
