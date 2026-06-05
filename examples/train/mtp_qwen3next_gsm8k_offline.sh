@@ -101,6 +101,7 @@ CUDA_VISIBLE_DEVICES="$GPUS" torchrun \
     --save-path "$OUTPUT_DIR/checkpoints" \
     --speculator-type mtp \
     --from-pretrained "$CONVERTED_DIR" \
+    --target-layer-ids 48 \
     --step-weight-beta "$STEP_WEIGHT_BETA" \
     --epochs "$EPOCHS" \
     --lr "$LR" \

@@ -184,6 +184,7 @@ python scripts/train.py \
   --save-path ./output/mtp_qwen3next/checkpoints \
   --speculator-type mtp \
   --from-pretrained ./output/converted_mtp \
+  --target-layer-ids 48 \
   --step-weight-beta 0.6 \
   --epochs 3 \
   --lr 1e-4 \
@@ -205,6 +206,7 @@ CUDA_VISIBLE_DEVICES=0,1 torchrun \
   --save-path ./output/mtp_qwen3next/checkpoints \
   --speculator-type mtp \
   --from-pretrained ./output/converted_mtp \
+  --target-layer-ids 48 \
   --step-weight-beta 0.6 \
   --epochs 3 \
   --lr 1e-4 \
