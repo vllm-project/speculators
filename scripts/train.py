@@ -663,7 +663,16 @@ def parse_args():
             "'ce' = cross-entropy."
         ),
     )
-    parser.add_argument("--step-weight-beta", type=float, default=0.6)
+    parser.add_argument(
+        "--step-weight-beta",
+        type=float,
+        default=0.6,
+        help=(
+            "Exponential decay factor for MTP step weights. "
+            "Higher values weight earlier prediction steps more heavily. "
+            "Only used with MTP algorithm."
+        ),
+    )
     parser.add_argument(
         "--seed", type=int, default=42, help="Random seed for reproducibility"
     )
