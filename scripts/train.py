@@ -300,10 +300,10 @@ def main(args: argparse.Namespace):
         transformer_layer_config = verifier_config
         args.mask_token_id = None
         if not args.from_pretrained:
-            logger.warning(
-                "MTP training without --from-pretrained: "
-                "the recommended workflow is to convert the native MTP head "
-                "first and pass the converted checkpoint via --from-pretrained."
+            raise ValueError(
+                "MTP requires --from-pretrained. Convert the native MTP head "
+                "first with `speculators convert MODEL --algorithm mtp` and "
+                "pass the converted checkpoint via --from-pretrained."
             )
     else:
         d2t, t2d, draft_vocab_size = parse_vocab_mappings(args)
