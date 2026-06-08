@@ -89,7 +89,10 @@ class Trainer:
                 )
                 self.current_epoch = 0
         else:
-            root_logger.info("No previous checkpoint found. Starting from scratch.")
+            root_logger.info(
+                "No previous training checkpoint found in "
+                f"'{self.checkpointer.path}'. Starting fresh training run."
+            )
             self.current_epoch = 0
         self.global_step = 0
         self.best_val_loss = float("inf")

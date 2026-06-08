@@ -32,7 +32,10 @@ def test_forward_output_structure(mtp_model, seed):
     assert torch.isfinite(total_loss)
     assert total_loss >= 0
 
-    expected_keys = {f"loss_step_{k}" for k in range(num_steps)}
+    expected_keys = {f"loss_step_{k}" for k in range(num_steps)} | {
+        "loss_sum",
+        "loss_total",
+    }
     assert set(metrics.keys()) == expected_keys
     for key in expected_keys:
         assert math.isfinite(metrics[key])
