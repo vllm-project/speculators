@@ -145,8 +145,8 @@ The following table summarizes the models that have been trained end-to-end by o
 <td>⏳</td>
 </tr>
 <tr>
-<td>Qwen3-Next</td>
-<td>80B-A3B-Instruct</td>
+<td>Qwen3.5</td>
+<td>9B</td>
 <td>MTP ✅</td>
 <td>✅</td>
 </tr>
