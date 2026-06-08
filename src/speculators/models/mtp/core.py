@@ -261,7 +261,9 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
         if load_native_weights:
             from speculators.convert.mtp.converter import MTPConverter  # noqa: PLC0415
 
-            state_dict = MTPConverter().convert_to_state_dict(verifier_name_or_path)
+            state_dict = MTPConverter().convert_to_state_dict(
+                verifier_name_or_path  # type: ignore[arg-type]
+            )
             model.load_state_dict(state_dict, strict=False)
         else:
             logger.info(
