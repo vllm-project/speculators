@@ -1,5 +1,6 @@
 """MTP speculator model implementation."""
 
+import logging
 from typing import Any, ClassVar
 
 import torch
@@ -16,6 +17,8 @@ from speculators.models.mtp.model_definitions import (
     resolve_model_type,
 )
 from speculators.proposals.greedy import GreedyTokenProposalConfig
+
+logger = logging.getLogger(__name__)
 
 __all__ = ["MTPDraftModel", "compute_step_weights"]
 
@@ -226,8 +229,16 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
         *,
         num_speculative_steps: int = 3,
         verifier_name_or_path: str | None = None,
+        load_native_weights: bool = True,
         **kwargs: Any,  # noqa: ARG003
     ) -> "MTPDraftModel":
+        if load_native_weights and verifier_name_or_path is None:
+            raise ValueError(
+                "verifier_name_or_path is required for MTP training. "
+                "The verifier model must contain native MTP weights "
+                "(mtp.* keys) to extract."
+            )
+
         config = MTPSpeculatorConfig(
             transformer_layer_config=verifier_config,
             speculators_config=SpeculatorsConfig(
@@ -246,6 +257,18 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
         )
 
         model = cls(config=config)
+
+        if load_native_weights:
+            from speculators.convert.mtp.converter import MTPConverter  # noqa: PLC0415
+
+            state_dict = MTPConverter().convert_to_state_dict(verifier_name_or_path)
+            model.load_state_dict(state_dict, strict=False)
+        else:
+            logger.info(
+                "Skipping native MTP weight extraction "
+                "(loading from training checkpoint)"
+            )
+
         model.load_verifier_weights()
         return model
 

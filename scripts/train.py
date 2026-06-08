@@ -274,6 +274,16 @@ def parse_vocab_mappings(args: argparse.Namespace):
     return None, None, verifier_config.vocab_size
 
 
+def _mtp_will_resume(args: argparse.Namespace) -> bool:
+    """Check if an MTP training run will resume from an existing checkpoint."""
+    if args.from_pretrained:
+        return False
+    save_path = Path(args.save_path)
+    if args.no_resume_from_checkpoint or not save_path.exists():
+        return False
+    return any(d.is_dir() and d.name.isdigit() for d in save_path.iterdir())
+
+
 def main(args: argparse.Namespace):
     # Set random seed for reproducibility
     set_seed(args.seed, args.deterministic_cuda)
@@ -299,12 +309,6 @@ def main(args: argparse.Namespace):
         d2t, t2d, draft_vocab_size = None, None, verifier_config.vocab_size
         transformer_layer_config = verifier_config
         args.mask_token_id = None
-        if not args.from_pretrained:
-            raise ValueError(
-                "MTP requires --from-pretrained. Convert the native MTP head "
-                "first with `speculators convert MODEL --algorithm mtp` and "
-                "pass the converted checkpoint via --from-pretrained."
-            )
     else:
         d2t, t2d, draft_vocab_size = parse_vocab_mappings(args)
 
@@ -340,6 +344,8 @@ def main(args: argparse.Namespace):
 
     model_class = registry[args.speculator_type]
 
+    will_resume = args.speculator_type == "mtp" and _mtp_will_resume(args)
+
     if args.from_pretrained:
         draft_model = model_class.from_pretrained(
             args.from_pretrained, t2d=t2d, d2t=d2t
@@ -350,6 +356,7 @@ def main(args: argparse.Namespace):
             verifier_config=transformer_layer_config,
             t2d=t2d,
             d2t=d2t,
+            load_native_weights=not will_resume,
             **vars(args),
         )
 
@@ -651,6 +658,12 @@ def parse_args():
     parser.add_argument("--t2d-path", type=str, default=None)
     parser.add_argument("--mask-token-id", type=int, default=None)
     parser.add_argument("--ttt-steps", type=int, default=3)
+    parser.add_argument(
+        "--num-speculative-steps",
+        type=int,
+        default=3,
+        help="Number of MTP prediction steps (default: 3). Only used with MTP.",
+    )
     parser.add_argument("--ttt-step-loss-decay", type=float, default=1.0)
     parser.add_argument(
         "--loss-fn",
