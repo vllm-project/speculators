@@ -14,9 +14,7 @@ import pytest
 import torch
 
 from speculators.convert.eagle.eagle3_converter import Eagle3Converter
-from speculators.convert.eagle.utils import (
-    load_checkpoint_config,
-)
+from speculators.convert.utils import load_checkpoint_config
 
 
 class TestEagle3ConverterFixes:

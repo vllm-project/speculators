@@ -26,6 +26,18 @@ Learn how to train a DFlash speculator model with block-based token generation.
 
 **Time required:** ~25 mins
 
+## [Train P-eagle Model offline](train_peagle_offline.md)
+
+Learn how to train a P-eagle speculator model with COD sampling.
+
+**Time required:** ~50 mins
+
+## [Train MTP Model Online](train_mtp_online.md)
+
+Learn how to finetune a model's native MTP head on domain-specific data using online training.
+
+**Time required:** ~8 mins for Qwen3.5-9B on 2x H100 GPUs (varies by model size)
+
 ## [Response Regeneration](response_regeneration.md)
 
 Regenerate dataset responses using your target model for improved drafter alignment.
@@ -33,7 +45,5 @@ Regenerate dataset responses using your target model for improved drafter alignm
 **Time required:** ~10 minutes
 
 ## [Evaluating Model Performance](evaluating_performance.md)
-
-**COMING SOON**
 
 Benchmark and evaluate your trained speculator models.

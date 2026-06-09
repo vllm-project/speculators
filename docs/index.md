@@ -145,6 +145,12 @@ The following table summarizes the models that have been trained end-to-end by o
 <td>⏳</td>
 </tr>
 <tr>
+<td>Qwen3.5</td>
+<td>9B</td>
+<td>MTP ✅</td>
+<td>✅</td>
+</tr>
+<tr>
 <td>Gemma 4</td>
 <td>31B-it</td>
 <td><a href="https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.eagle3">Eagle-3</a> ✅<br/><a href="https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.dflash">DFlash</a> ✅</td>

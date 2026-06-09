@@ -111,11 +111,41 @@ def standardize_data_v1(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def build_client_item(dataset_item: dict) -> ClientItem:
-    out_dict = {}
-    out_dict["input_ids"] = dataset_item["input_ids"].tolist()
+def _has_multimodal_content(messages: list[dict]) -> bool:
+    """True when any turn carries non-text content (images, video, audio).
 
-    if "messages" in dataset_item:
+    Text-only turns store ``content`` as a plain string.  Multimodal turns
+    (produced by ``_adapt_conv_for_vllm``) store it as a list of typed parts,
+    e.g. ``[{"type": "text", ...}, {"type": "image_url", ...}]``.
+    """
+    return any(isinstance(m.get("content"), list) for m in messages)
+
+
+def build_client_item(dataset_item: dict) -> ClientItem:
+    """Build a request payload for vLLM hidden-state extraction.
+
+    When ``messages`` is included, ``generate_hidden_states`` uses the Chat
+    Completions API and vLLM **re-tokenizes from the raw messages**, ignoring
+    ``input_ids``.  This is required for multimodal inputs (the Completions
+    API cannot carry image/video/audio references), but harmful for text-only
+    data: preprocessing truncates ``input_ids`` to ``seq_length``, yet the
+    ``messages`` column stores the original un-truncated conversation.
+    Re-tokenizing those messages produces a longer sequence that can exceed
+    ``max_model_len``.
+
+    We therefore only forward ``messages`` when the conversation actually
+    contains multimodal content.  Text-only conversations always go through
+    the Completions API with the pre-truncated ``input_ids``.
+
+    This matters for models like Qwen3.5-0.8B whose ``AutoProcessor`` returns
+    a ``ProcessorMixin`` (``Qwen3VLProcessor``), causing preprocessing to
+    populate the ``messages`` column even for purely text-only datasets.
+    Text-only EAGLE-3 models (e.g. Llama) use a plain tokenizer, so
+    ``messages`` is never created and this guard is a no-op.
+    """
+    out_dict: dict = {"input_ids": dataset_item["input_ids"].tolist()}
+
+    if "messages" in dataset_item and _has_multimodal_content(dataset_item["messages"]):
         out_dict["messages"] = dataset_item["messages"]
 
     return cast("ClientItem", out_dict)
@@ -470,7 +500,10 @@ def create_collate_fn(
             # Match the configured `dtype` so the placeholder doesn't crash
             # downstream layers loaded at a different precision (e.g. bf16
             # weights vs fp32 default placeholders).
-            batch = [create_empty_sample(hidden_size, dtype=dtype)]
+            empty = create_empty_sample(hidden_size, dtype=dtype)
+            if preprocess:
+                empty = preprocess(empty)
+            batch = [empty]
 
         collated_data = {}
         for key in batch[0]:  # type: ignore[union-attr]

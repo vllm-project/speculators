@@ -13,8 +13,10 @@ from speculators.convert.eagle.eagle3_legacy_model import Eagle3Speculator
 from speculators.convert.eagle.utils import (
     build_llama_config_dtype_kwarg,
     build_llama_config_rope_kwargs,
-    ensure_checkpoint_is_local,
     find_vocab_size,
+)
+from speculators.convert.utils import (
+    ensure_checkpoint_is_local,
     load_checkpoint_config,
     load_checkpoint_weights,
 )

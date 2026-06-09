@@ -20,7 +20,7 @@ from safetensors import safe_open
 from transformers import PretrainedConfig
 
 from speculators.config import SpeculatorsConfig, VerifierConfig
-from speculators.convert.eagle.utils import (
+from speculators.convert.utils import (
     ensure_checkpoint_is_local,
     load_checkpoint_config,
 )
@@ -273,7 +273,10 @@ class MTPConverter:
                     "unsupported format. "
                     f"Missing keys: {critical_missing}"
                 )
-            logger.debug(f"Keys not in extracted weights (filled by init): {missing}")
+            logger.debug(
+                f"Keys not in extracted weights (loaded from verifier at runtime): "
+                f"{missing}"
+            )
 
         float_dtypes = {t.dtype for t in weights.values() if t.is_floating_point()}
         if float_dtypes:
