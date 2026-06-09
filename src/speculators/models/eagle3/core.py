@@ -98,6 +98,8 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
     def load_verifier_weights(self):
         super().load_verifier_weights()
 
+        self.embed_tokens.weight.requires_grad_(self.config.embed_requires_grad)
+
         verifier_config = self.config.speculators_config.verifier
         verifier_model_config = AutoConfig.from_pretrained(verifier_config.name_or_path)  # type: ignore[arg-type]
 

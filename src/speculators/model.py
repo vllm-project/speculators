@@ -121,7 +121,7 @@ class DraftVocabMixin(nn.Module):
 
         self.load_state_dict({"t2d": t2d, "d2t": d2t}, strict=False)
 
-    def load_verifier_weights(self):
+    def load_verifier_weights(self):  # noqa: C901
         """Load verifier model weights (embeddings, lm_head, etc.).
 
         Loads embed_tokens, lm_head, and verifier_lm_head weights from the
@@ -190,6 +190,14 @@ class DraftVocabMixin(nn.Module):
             else:
                 verifier_norm_sd = {"weight": verifier_weights["model.norm.weight"]}
                 self.verifier_norm.load_state_dict(verifier_norm_sd)  # type: ignore[union-attr]
+
+        # HF's from_pretrained resets requires_grad=True on all parameters.
+        # Re-freeze verifier weights that should never be trained.
+        self.embed_tokens.weight.requires_grad_(False)
+        self.lm_head.weight.requires_grad_(False)
+        self.verifier_lm_head.weight.requires_grad_(False)
+        if hasattr(self, "verifier_norm"):
+            self.verifier_norm.weight.requires_grad_(False)  # type: ignore[union-attr]
 
 
 class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc]
