@@ -104,8 +104,8 @@ def setup_dataloader(
         collate_fn=create_collate_fn(
             args.total_seq_len,
             hidden_size,
-            dataset.hidden_states_dtype,
             args.num_layers,
+            dataset.hidden_states_dtype,
             preprocess,
         ),
         persistent_workers=True,
