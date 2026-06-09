@@ -299,12 +299,6 @@ def main(args: argparse.Namespace):
         d2t, t2d, draft_vocab_size = None, None, verifier_config.vocab_size
         transformer_layer_config = verifier_config
         args.mask_token_id = None
-        if not args.from_pretrained:
-            raise ValueError(
-                "MTP requires --from-pretrained. Convert the native MTP head "
-                "first with `speculators convert MODEL --algorithm mtp` and "
-                "pass the converted checkpoint via --from-pretrained."
-            )
     else:
         d2t, t2d, draft_vocab_size = parse_vocab_mappings(args)
 
@@ -651,6 +645,12 @@ def parse_args():
     parser.add_argument("--t2d-path", type=str, default=None)
     parser.add_argument("--mask-token-id", type=int, default=None)
     parser.add_argument("--ttt-steps", type=int, default=3)
+    parser.add_argument(
+        "--num-speculative-steps",
+        type=int,
+        default=3,
+        help="Number of MTP prediction steps (default: 3). Only used with MTP.",
+    )
     parser.add_argument("--ttt-step-loss-decay", type=float, default=1.0)
     parser.add_argument(
         "--loss-fn",
