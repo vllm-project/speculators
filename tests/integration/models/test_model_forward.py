@@ -338,6 +338,16 @@ class TestPEagleParams:
         assert loss.isfinite()
         loss.backward()
 
+    @pytest.mark.parametrize("max_anchors", [4, 16, None])
+    def test_varying_max_anchors(self, max_anchors):
+        model = make_peagle_model(max_anchors=max_anchors)
+        samples = _make_samples([128])
+        batch = make_batch(max_len=MAX_LEN, samples=samples, hidden_size=HIDDEN_SIZE)
+        draft_tokens, loss, metrics = model(**batch)
+
+        assert loss.isfinite()
+        loss.backward()
+
 
 @requires_cuda
 @requires_transformers_version("5.2.0")

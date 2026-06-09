@@ -748,8 +748,11 @@ def parse_args():
     parser.add_argument(
         "--max-anchors",
         type=int,
-        default=256,
-        help="Maximum anchor positions for DFlash training (default: 256)",
+        default=None,
+        help=(
+            "Maximum anchor positions for training. "
+            "Defaults to 256 for DFlash, unlimited for P-EAGLE."
+        ),
     )
     parser.add_argument(
         "--draft-attn-impl",
@@ -777,6 +780,15 @@ def parse_args():
         type=float,
         default=0.2,
         help="Minimum retention ratio for COD sampling in P-EAGLE (default: 0.2)",
+    )
+    parser.add_argument(
+        "--max-context-window",
+        type=int,
+        default=4096,
+        help=(
+            "Hard cap on contiguous window size when max-anchors is set "
+            "for P-EAGLE (default: 4096)"
+        ),
     )
     parser.add_argument(
         "--sliding-window",

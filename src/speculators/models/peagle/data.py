@@ -10,6 +10,8 @@ def generate_cod_sample_indices(
     down_sample_ratio: float = 0.7,
     down_sample_ratio_min: float = 0.2,
     filter_position_zero: bool = True,
+    max_anchors: int | None = None,
+    max_context_window: int = 4096,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Generate sampling indices for parallel sequences using COD sampling.
@@ -18,6 +20,11 @@ def generate_cod_sample_indices(
     decay: depth 0 retains all n positions, depth 1 retains n*r positions,
     depth 2 retains n*r^2 positions, etc.
 
+    When max_anchors is set, selects a contiguous window of the original sequence
+    containing up to max_anchors valid (loss_mask=1) positions as COD starting
+    points. The window preserves all intervening tokens (including prompts)
+    to maintain context.
+
     Args:
         seq_length: Length of the sequence
         loss_mask: Binary mask indicating valid training positions [batch, seq_len]
@@ -25,6 +32,10 @@ def generate_cod_sample_indices(
         down_sample_ratio: Geometric decay ratio r in (0,1)
         down_sample_ratio_min: Minimum retention ratio floor
         filter_position_zero: Whether to filter out position 0 from candidates
+        max_anchors: Maximum number of COD chain starting points. None means
+            use all positions.
+        max_context_window: Hard cap on contiguous window size to prevent
+            sparse loss masks from reinflating the window.
 
     Returns:
         Tuple of:
@@ -36,8 +47,27 @@ def generate_cod_sample_indices(
     device = loss_mask.device
     all_valid_indices = torch.where(loss_mask == 1)[0]
 
-    sample_indices = [torch.arange(seq_length, device=device)]
-    n_per_depth = [seq_length]
+    if max_anchors is not None and all_valid_indices.shape[0] > max_anchors:
+        n_valid = all_valid_indices.shape[0]
+        start_idx = int(torch.randint(0, n_valid - max_anchors + 1, (1,)).item())
+
+        window_start = int(all_valid_indices[start_idx].item())
+        window_end = int(all_valid_indices[start_idx + max_anchors - 1].item()) + 1
+
+        if (window_end - window_start) > max_context_window:
+            window_end = window_start + max_context_window
+            all_valid_indices = all_valid_indices[
+                (all_valid_indices >= window_start) & (all_valid_indices < window_end)
+            ]
+        else:
+            all_valid_indices = all_valid_indices[start_idx : start_idx + max_anchors]
+
+        sample_indices = [torch.arange(window_start, window_end, device=device)]
+        n_per_depth = [window_end - window_start]
+    else:
+        sample_indices = [torch.arange(seq_length, device=device)]
+        n_per_depth = [seq_length]
+
     prev_indices = all_valid_indices
 
     for d in range(1, num_depths):

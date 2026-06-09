@@ -42,6 +42,8 @@ class PEagleDraftModel(Eagle3DraftModel):
         self.num_depths = config.num_depths
         self.down_sample_ratio = config.down_sample_ratio
         self.down_sample_ratio_min = config.down_sample_ratio_min
+        self.max_anchors = config.max_anchors
+        self.max_context_window = config.max_context_window
         self.mask_token_id = config.mask_token_id
 
         # Learnable mask_hidden parameter for padding unsampled positions
@@ -91,6 +93,8 @@ class PEagleDraftModel(Eagle3DraftModel):
             num_depths=self.num_depths,
             down_sample_ratio=self.down_sample_ratio,
             down_sample_ratio_min=self.down_sample_ratio_min,
+            max_anchors=self.max_anchors,
+            max_context_window=self.max_context_window,
         )
         total_sampled = anchor_pos.shape[0]
 
@@ -214,6 +218,8 @@ class PEagleDraftModel(Eagle3DraftModel):
             num_depths=kwargs.get("num_depths", 8),
             down_sample_ratio=kwargs.get("down_sample_ratio", 0.7),
             down_sample_ratio_min=kwargs.get("down_sample_ratio_min", 0.2),
+            max_anchors=kwargs.get("max_anchors"),
+            max_context_window=kwargs.get("max_context_window", 4096),
             mask_token_id=kwargs.get("mask_token_id"),
             speculators_config=SpeculatorsConfig(
                 algorithm="peagle",

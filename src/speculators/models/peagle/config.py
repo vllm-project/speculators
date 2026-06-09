@@ -51,6 +51,25 @@ class PEagleSpeculatorConfig(Eagle3SpeculatorConfig):
         le=1.0,
     )
 
+    max_anchors: int | None = Field(
+        default=None,
+        description=(
+            "Maximum number of COD chain starting points (loss_mask=1 tokens) "
+            "to use during training. When set, selects a contiguous window of "
+            "the sequence to cap memory usage. None means use all positions."
+        ),
+        ge=1,
+    )
+
+    max_context_window: int = Field(
+        default=4096,
+        description=(
+            "Hard cap on the contiguous window size when max_anchors is set. "
+            "Prevents sparse loss masks from reinflating the window."
+        ),
+        ge=1,
+    )
+
     mask_token_id: int | None = Field(
         default=None,
         description="Token ID used for padding unused positions in parallel groups",

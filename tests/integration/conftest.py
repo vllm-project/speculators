@@ -163,6 +163,7 @@ def make_peagle_model(
     draft_vocab_size: int = 64,
     num_depths: int = 4,
     down_sample_ratio: float = 0.7,
+    max_anchors: int | None = None,
     device: str = "cuda:0",
     dtype: torch.dtype = torch.bfloat16,
 ) -> PEagleDraftModel:
@@ -175,6 +176,7 @@ def make_peagle_model(
         num_depths=num_depths,
         down_sample_ratio=down_sample_ratio,
         down_sample_ratio_min=0.2,
+        max_anchors=max_anchors,
         mask_token_id=0,
         speculators_config=SpeculatorsConfig(
             algorithm="peagle",
