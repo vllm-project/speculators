@@ -15,7 +15,6 @@ from speculators.models.mtp.model_definitions import (
     mtp_model_classes,
     resolve_model_type,
 )
-from speculators.models.utils import conditional_torch_compile
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 
 __all__ = ["MTPDraftModel", "compute_step_weights"]
@@ -92,14 +91,19 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
     def load_verifier_weights(self) -> None:
         """Re-set NaN sentinel before loading — meta-device init may clear
         it. Deletes verifier_lm_head after loading since MTP does not use it.
+
+        Re-freezes embed_tokens and lm_head after loading because HF's
+        from_pretrained resets requires_grad=True on all parameters,
+        overriding the intentional freeze set by _init_vocab.
         """
         with torch.no_grad():
             self.embed_tokens.weight.fill_(torch.nan)
             self.lm_head.weight.fill_(torch.nan)
         super().load_verifier_weights()
         del self.verifier_lm_head
+        self.embed_tokens.weight.requires_grad_(False)
+        self.lm_head.weight.requires_grad_(False)
 
-    @conditional_torch_compile
     def forward(
         self,
         input_ids: torch.Tensor,
