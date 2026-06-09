@@ -274,16 +274,6 @@ def parse_vocab_mappings(args: argparse.Namespace):
     return None, None, verifier_config.vocab_size
 
 
-def _mtp_will_resume(args: argparse.Namespace) -> bool:
-    """Check if an MTP training run will resume from an existing checkpoint."""
-    if args.from_pretrained:
-        return False
-    save_path = Path(args.save_path)
-    if args.no_resume_from_checkpoint or not save_path.exists():
-        return False
-    return any(d.is_dir() and d.name.isdigit() for d in save_path.iterdir())
-
-
 def main(args: argparse.Namespace):
     # Set random seed for reproducibility
     set_seed(args.seed, args.deterministic_cuda)
@@ -344,8 +334,6 @@ def main(args: argparse.Namespace):
 
     model_class = registry[args.speculator_type]
 
-    will_resume = args.speculator_type == "mtp" and _mtp_will_resume(args)
-
     if args.from_pretrained:
         draft_model = model_class.from_pretrained(
             args.from_pretrained, t2d=t2d, d2t=d2t
@@ -356,7 +344,6 @@ def main(args: argparse.Namespace):
             verifier_config=transformer_layer_config,
             t2d=t2d,
             d2t=d2t,
-            load_native_weights=not will_resume,
             **vars(args),
         )
 
