@@ -14,7 +14,7 @@ from speculators.models.peagle.attention import create_peagle_mask_mod
 from speculators.models.peagle.config import PEagleSpeculatorConfig
 from speculators.models.peagle.data import generate_cod_sample_indices
 from speculators.models.peagle.metrics import compute_metrics
-from speculators.models.utils import conditional_torch_compile
+from speculators.models.utils import conditional_torch_compile, resolve_target_layer_ids
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 
 
@@ -206,8 +206,6 @@ class PEagleDraftModel(Eagle3DraftModel):
         Returns:
             Initialized PEagleDraftModel
         """
-        from speculators.models.utils import resolve_target_layer_ids  # noqa: PLC0415
-
         # Resolve target layer IDs if not provided
         target_layer_ids = resolve_target_layer_ids(
             kwargs.get("target_layer_ids"), kwargs["verifier_name_or_path"]
