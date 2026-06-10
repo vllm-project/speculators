@@ -226,7 +226,7 @@ def make_batch(
     max_len: int,
     samples: list[dict[str, torch.Tensor]],
     hidden_size: int,
-    num_layers: int = 3,
+    num_target_layers: int = 3,
     device: str = "cuda:0",
 ) -> dict[str, torch.Tensor]:
     """Collate a list of samples into a single batch using the real collate_fn.
@@ -238,14 +238,15 @@ def make_batch(
         max_len: Target sequence length to pad/truncate to.
         samples: List of per-sample dicts (from ``make_sample``).
         hidden_size: Model hidden size (needed by collate for empty batches).
-        num_layers: Num of layers in the speculative decode algorithm (e.g 3 for Eagle).
+        num_target_layers: Num of target layers in the speculative decode
+            algorithm (e.g 3 for Eagle).
         device: Target device for the output tensors.
 
     Returns:
         Dict with keys matching model forward() signatures, all on ``device``.
     """
     collate_fn = create_collate_fn(
-        max_len=max_len, hidden_size=hidden_size, num_target_layers=num_layers
+        max_len=max_len, hidden_size=hidden_size, num_target_layers=num_target_layers
     )
     batch = collate_fn(samples)
     return {k: v.to(device) for k, v in batch.items()}
