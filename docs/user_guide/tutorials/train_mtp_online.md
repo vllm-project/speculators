@@ -8,7 +8,7 @@ For a ready-to-run version of this tutorial, see [`examples/train/mtp_qwen3_5_9b
 
 ## Overview
 
-**Time required:** Varies by model size. ~8 mins for Qwen3.5-9B on 2x H100 GPUs.
+**Time required:** Varies by model size. ~8 mins for Qwen3.5-9B on 2x H200 GPUs.
 
 **Prerequisites:**
 
