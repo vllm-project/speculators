@@ -54,6 +54,7 @@ pull_request_rules:
     conditions:
       - label != stale
       - check-failure ~= ^quality-checks
+      - -label = quality-failed
       - -closed
     actions:
       label:
@@ -69,7 +70,8 @@ pull_request_rules:
   - name: remove quality-failed label
     conditions:
       - label != stale
-      - -check-failure ~= ^quality-check
+      - "check-success = quality-checks (3.10)"
+      - "check-success = quality-checks (3.13)"
       - -closed
     actions:
       label:

@@ -37,10 +37,10 @@ keywords = [
 ]
 dependencies = [
     "click",
-    "datasets>=4.0.0,<=4.8.5",
+    "datasets>=4.0.0,<=5.0.0",
     "huggingface-hub",
     "loguru>=0.7.2,<=0.7.3",
-    "numpy>=2.0.0,<=2.4.2",
+    "numpy>=2.0.0,<=2.4.6",
     "openai>=2.0.0",
     "protobuf",
     "psutil",
@@ -51,8 +51,8 @@ dependencies = [
     "torch>=2.9.0,<=2.12.0",
     "torchaudio",
     "torchvision",
-    "tqdm>=4.66.3,<=4.67.3",
-    "transformers>=4.56.1,<5.10.0",
+    "tqdm>=4.66.3,<=4.68.2",
+    "transformers>=4.56.1,<5.11.0",
     "typer>=0.12.0",
 ]
 

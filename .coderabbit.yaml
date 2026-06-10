@@ -3,11 +3,16 @@ language: "en"
 early_access: false
 reviews:
   request_changes_workflow: false # Prevent coderabbit from approving the PR
-  high_level_summary: true
-  high_level_summary_in_walkthrough: true
+  high_level_summary: false
+  high_level_summary_in_walkthrough: false
   poem: false
+  in_progress_fortune: false
+  sequence_diagrams: false
+  estimate_code_review_effort: false
+  suggested_labels: false
+  suggested_reviewers: false
   review_status: true
-  collapse_walkthrough: false
+  collapse_walkthrough: true
   auto_apply_labels: true
   path_filters:
     - "!**/*.pyc"
@@ -57,7 +62,7 @@ reviews:
     - label: "dflash"
       instructions: "Apply to PRs that modify DFlash-specific model code under src/speculators/models/dflash/ (core architecture, attention, config, model definitions, metrics, or utilities). Match case-insensitively — 'dflash', 'DFlash', 'DFLASH' all qualify."
     - label: "mtp"
-      instructions: "Apply to PRs that affect Multi-Token Prediction (MTP) support, including evaluation configs and scripts under examples/evaluate/eval-guidellm/ that set METHOD=mtp or reference MTP models, or any vLLM integration changes specific to MTP-based speculative decoding. Match case-insensitively — 'mtp', 'MTP', 'Mtp' all qualify."
+      instructions: "Apply to PRs that affect Multi-Token Prediction (MTP) support, including any vLLM integration changes specific to MTP-based speculative decoding. Match case-insensitively — 'mtp', 'MTP', 'Mtp' all qualify."
     - label: "two-reviews"
       instructions: "Apply to PRs that make substantial changes warranting more than one reviewer. This includes: updates to critical dependencies such as torch or transformers in pyproject.toml or requirements files; broad changes to core shared infrastructure (src/speculators/model.py, src/speculators/config.py, src/speculators/models/base_components.py, src/speculators/models/attention.py); changes that span multiple subsystems (e.g., training + data generation, or multiple model architectures); or any PR flagged as high-risk due to distributed training correctness, checkpoint format changes, or vocabulary mapping logic."
   auto_review:
@@ -70,10 +75,6 @@ reviews:
     auto_incremental_review: false
     base_branches:
       - "main"
-knowledge_base:
-  linked_repositories:
-    - repository: "vllm-project/vllm"
-      instructions: "vLLM is used for hidden state extraction during data generation and as the inference backend for speculative decoding. Useful for understanding hidden state APIs, speculative decoding integration points, and how draft models are loaded and executed."
 chat:
   auto_reply: true
 issue_enrichment:

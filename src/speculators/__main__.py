@@ -96,7 +96,7 @@ def convert(
                 "The source repo/algorithm to convert from into the matching algorithm "
                 "in Speculators"
             ),
-            click_type=click.Choice(["eagle", "eagle3"]),
+            click_type=click.Choice(["eagle", "eagle3", "mtp"]),
         ),
     ],
     output_path: Annotated[
@@ -119,7 +119,8 @@ def convert(
                 "Additional keyword args for the conversion alg as a JSON string. "
                 'Options for Eagle: {"layernorms": true, "fusion_bias": true}. '
                 'Options for Eagle3: {"norm_before_residual": true, '
-                '"eagle_aux_hidden_state_layer_ids": [1,23,44]}.'
+                '"eagle_aux_hidden_state_layer_ids": [1,23,44]}. '
+                'Options for MTP: {"num_speculative_steps": 3}.'
             ),
         ),
     ] = None,
@@ -158,6 +159,16 @@ def convert(
             --algorithm eagle3
             --algorithm-kwargs '{"norm_before_residual": true}'
             --verifier "meta-llama/Llama-3.1-8B-Instruct"
+
+    \b
+    algorithm=="mtp":
+        MTP (Multi-Token Prediction): models with native MTP layers
+        (e.g. Qwen3-Next, Qwen3.5, Qwen3.5-MoE)
+        ::
+        speculators convert "Qwen/Qwen3-Next-80B-A3B-Instruct" \\
+            --algorithm mtp \\
+            --verifier "Qwen/Qwen3-Next-80B-A3B-Instruct" \\
+            --algorithm-kwargs '{"num_speculative_steps": 3}'
     """
     if not algorithm_kwargs:
         algorithm_kwargs = {}

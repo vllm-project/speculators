@@ -10,8 +10,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 import torch
 
-from speculators.convert.eagle.utils import (
-    detect_fusion_bias_and_layernorms,
+from speculators.convert.eagle.utils import detect_fusion_bias_and_layernorms
+from speculators.convert.utils import (
     download_checkpoint_from_hub,
     ensure_checkpoint_is_local,
     load_checkpoint_config,
@@ -22,7 +22,7 @@ from speculators.convert.eagle.utils import (
 class TestDownloadCheckpointFromHub:
     """Test download_checkpoint_from_hub function."""
 
-    @patch("speculators.convert.eagle.utils.snapshot_download")
+    @patch("speculators.convert.utils.snapshot_download")
     def test_successful_download(self, mock_snapshot_download, tmp_path):
         """Test successful checkpoint download."""
         mock_snapshot_download.return_value = str(tmp_path / "checkpoint")
@@ -37,7 +37,7 @@ class TestDownloadCheckpointFromHub:
             cache_dir=None,
         )
 
-    @patch("speculators.convert.eagle.utils.snapshot_download")
+    @patch("speculators.convert.utils.snapshot_download")
     def test_download_with_cache_dir(self, mock_snapshot_download, tmp_path):
         """Test download with custom cache directory."""
         cache_dir = tmp_path / "cache"
@@ -51,7 +51,7 @@ class TestDownloadCheckpointFromHub:
             cache_dir=str(cache_dir),
         )
 
-    @patch("speculators.convert.eagle.utils.snapshot_download")
+    @patch("speculators.convert.utils.snapshot_download")
     def test_download_failure(self, mock_snapshot_download):
         """Test handling of download failures."""
         mock_snapshot_download.side_effect = Exception("Network error")
@@ -72,7 +72,7 @@ class TestEnsureCheckpointIsLocal:
 
         assert result == checkpoint_dir
 
-    @patch("speculators.convert.eagle.utils.download_checkpoint_from_hub")
+    @patch("speculators.convert.utils.download_checkpoint_from_hub")
     def test_download_when_not_local(self, mock_download, tmp_path):
         """Test downloading when path doesn't exist locally."""
         mock_download.return_value = tmp_path / "downloaded"
@@ -84,7 +84,7 @@ class TestEnsureCheckpointIsLocal:
             model_id="test-model/checkpoint", cache_dir=None
         )
 
-    @patch("speculators.convert.eagle.utils.download_checkpoint_from_hub")
+    @patch("speculators.convert.utils.download_checkpoint_from_hub")
     def test_download_with_cache_dir(self, mock_download, tmp_path):
         """Test downloading with cache directory."""
         cache_dir = tmp_path / "cache"
@@ -135,7 +135,7 @@ class TestLoadCheckpointConfig:
 class TestLoadCheckpointWeights:
     """Test load_checkpoint_weights function."""
 
-    @patch("speculators.convert.eagle.utils.safe_open")
+    @patch("speculators.convert.utils.safe_open")
     def test_load_safetensors_weights(self, mock_safe_open, tmp_path):
         """Test loading weights from safetensors format."""
         checkpoint_dir = tmp_path / "checkpoint"
@@ -155,7 +155,7 @@ class TestLoadCheckpointWeights:
         assert "weight2" in weights
         assert all(isinstance(w, torch.Tensor) for w in weights.values())
 
-    @patch("speculators.convert.eagle.utils.torch.load")
+    @patch("speculators.convert.utils.torch.load")
     def test_load_pytorch_weights(self, mock_torch_load, tmp_path):
         """Test loading weights from PyTorch bin format."""
         checkpoint_dir = tmp_path / "checkpoint"
@@ -208,7 +208,7 @@ class TestLoadCheckpointWeights:
         (checkpoint_dir / "model.safetensors").touch()
         (checkpoint_dir / "pytorch_model.bin").touch()
 
-        with patch("speculators.convert.eagle.utils.safe_open") as mock_safe_open:
+        with patch("speculators.convert.utils.safe_open") as mock_safe_open:
             mock_file = MagicMock()
             mock_file.keys.return_value = ["weight1"]
             mock_file.get_tensor.return_value = torch.randn(10, 10)

@@ -9,6 +9,32 @@ from loguru import logger
 from safetensors import safe_open
 
 
+def list_checkpoint_keys(checkpoint_dir: str | Path) -> list[str]:
+    """List all tensor keys in a checkpoint without loading weights.
+
+    Supports sharded safetensors (via index) and single safetensors formats.
+
+    :param checkpoint_dir: Path to a local checkpoint directory.
+    :return: List of tensor key names present in the checkpoint.
+    """
+    checkpoint_dir = Path(checkpoint_dir)
+
+    index_path = checkpoint_dir / "model.safetensors.index.json"
+    if index_path.exists():
+        with index_path.open() as f:
+            return list(json.load(f)["weight_map"].keys())
+
+    single = checkpoint_dir / "model.safetensors"
+    if single.exists():
+        with safe_open(str(single), framework="pt") as f:
+            return list(f.keys())
+
+    raise FileNotFoundError(
+        f"No safetensors checkpoint found at {checkpoint_dir}. "
+        "Expected model.safetensors.index.json or model.safetensors."
+    )
+
+
 def load_model_layers(
     layer_names: list[str], model_path: str
 ) -> dict[str, torch.Tensor]:
@@ -48,7 +74,7 @@ def load_model_layers(
             if matched:
                 name_to_key[name] = matched
             else:
-                logger.error(f"Tensor '{name}' not found in weight_map.")
+                logger.warning(f"Tensor '{name}' not found in weight_map.")
 
     # group requested names by shard filename
     shard_to_names: dict[str, list[tuple[str, str]]] = {}

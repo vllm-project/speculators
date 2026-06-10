@@ -164,12 +164,19 @@ def _collect_mm_payload_from_messages(
     return bucket
 
 
-def build_client_item(dataset_item: dict) -> ClientItem:
-    """Build a vLLM client payload from one dataset row.
+def _has_multimodal_content(messages: list[dict]) -> bool:
+    """True when any turn carries non-text content (images, video, audio)."""
+    return any(isinstance(m.get("content"), list) for m in messages)
 
-    Default path sends ``input_ids`` (token-id completions). For multimodal
-    rows, URLs from ``messages_json`` are forwarded as ``multi_modal_data``.
-    ``messages`` is kept only for optional chat-completions fallback.
+
+def build_client_item(dataset_item: dict) -> ClientItem:
+    """Build a vLLM request payload for hidden-state extraction.
+
+    Default path sends ``input_ids`` to the Completions API. For multimodal
+    rows, URLs extracted from ``messages_json`` are forwarded as
+    ``extra_body.multi_modal_data``. ``messages`` is only forwarded when the
+    conversation actually contains multimodal content, so text-only rows avoid
+    chat re-tokenization.
     """
     out_dict: dict[str, Any] = {}
     input_ids = _maybe_tensor(dataset_item["input_ids"], torch.long)
@@ -183,12 +190,11 @@ def build_client_item(dataset_item: dict) -> ClientItem:
         messages = dataset_item["messages"]
 
     if messages:
-        # Keep messages around as a fallback path
-        out_dict["messages"] = messages
-        # Primary path: extract MM URLs so we can use Completions API
         mm = _collect_mm_payload_from_messages(messages)
         if mm:
             out_dict["multi_modal_data"] = mm
+        if _has_multimodal_content(messages):
+            out_dict["messages"] = messages
 
     return cast("ClientItem", out_dict)
 
@@ -797,7 +803,10 @@ def create_collate_fn(
             # Match the configured `dtype` so the placeholder doesn't crash
             # downstream layers loaded at a different precision (e.g. bf16
             # weights vs fp32 default placeholders).
-            batch = [create_empty_sample(hidden_size, dtype=dtype)]
+            empty = create_empty_sample(hidden_size, dtype=dtype)
+            if preprocess:
+                empty = preprocess(empty)
+            batch = [empty]
 
         collated_data = {}
         has_mrope = any(

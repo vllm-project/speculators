@@ -22,6 +22,7 @@ __all__ = [
     "launch_vllm_server_context",
     "run_data_generation_offline",
     "run_prepare_data",
+    "run_stitch_mtp",
     "run_training",
     "run_vllm_engine",
     "stop_vllm_server",
@@ -34,7 +35,7 @@ SCRIPTS_DIR = Path(__file__).resolve().parent.parent.parent / "scripts"
 
 def wait_for_server(
     port: int,
-    timeout: float = 180.0,
+    timeout: float = 600.0,
     poll_interval: float = 2.0,
     process: subprocess.Popen | None = None,
 ):
@@ -303,6 +304,27 @@ def run_training(
     assert result.returncode == 0, f"train.py failed:\n{result.stderr}"
 
 
+def run_stitch_mtp(
+    finetuned_checkpoint: Path,
+    verifier_path: str,
+    output_path: Path,
+    timeout: float | None = None,
+):
+    cmd = [
+        sys.executable,
+        str(SCRIPTS_DIR / "stitch_mtp.py"),
+        str(finetuned_checkpoint),
+        verifier_path,
+        "--output-path",
+        str(output_path),
+    ]
+    logger.info("Stitching MTP weights: {}", " ".join(cmd))
+    result = subprocess.run(  # noqa: S603
+        cmd, capture_output=True, text=True, check=False, timeout=timeout
+    )
+    assert result.returncode == 0, f"stitch_mtp.py failed:\n{result.stderr}"
+
+
 def run_vllm_engine(
     model_path: str,
     tmp_path: Path,
@@ -311,6 +333,7 @@ def run_vllm_engine(
     gpu_memory_utilization: float = 0.8,
     enforce_eager: bool = False,
     allowed_local_media_path: str | None = None,
+    speculative_config: dict | None = None,
     disable_compile_cache: bool = False,
     max_tokens: int = 50,
     ignore_eos: bool = True,
@@ -338,6 +361,8 @@ def run_vllm_engine(
     }
     if allowed_local_media_path is not None:
         llm_args_dict["allowed_local_media_path"] = allowed_local_media_path
+    if speculative_config is not None:
+        llm_args_dict["speculative_config"] = speculative_config
 
     command = [
         VLLM_PYTHON,
