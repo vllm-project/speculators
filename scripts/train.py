@@ -22,7 +22,6 @@ from speculators.model import SpeculatorModel
 from speculators.models.eagle3.data import shift_batch
 from speculators.models.metrics import resolve_loss_fn
 from speculators.models.mtp.data import shift_batch_mtp
-from speculators.models.utils import resolve_target_layer_ids
 from speculators.train.data import (
     ArrowDataset,
     BaseDataset,
@@ -340,25 +339,21 @@ def main(args: argparse.Namespace):
 
     model_class = registry[args.speculator_type]
 
-    # Resolve target layer IDs before model creation
-    target_layer_ids = resolve_target_layer_ids(
-        args.target_layer_ids, args.verifier_name_or_path
-    )
-    num_target_layers = len(target_layer_ids)
-
     if args.from_pretrained:
         draft_model = model_class.from_pretrained(
             args.from_pretrained, t2d=t2d, d2t=d2t
         )
     else:
         args.draft_vocab_size = draft_vocab_size
-        args.target_layer_ids = target_layer_ids
         draft_model = model_class.from_training_args(
             verifier_config=transformer_layer_config,
             t2d=t2d,
             d2t=d2t,
             **vars(args),
         )
+
+    # Get target layer IDs from the model (resolved at model level)
+    num_target_layers = len(draft_model.target_layer_ids)
 
     if args.speculator_type == "mtp":
         args.num_speculative_steps = draft_model.config.num_speculative_steps

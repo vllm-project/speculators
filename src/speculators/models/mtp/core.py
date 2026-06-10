@@ -16,6 +16,7 @@ from speculators.models.mtp.model_definitions import (
     mtp_model_classes,
     resolve_model_type,
 )
+from speculators.models.utils import resolve_target_layer_ids
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 
 logger = logging.getLogger(__name__)
@@ -90,6 +91,12 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
     def layers(self) -> nn.ModuleList:
         """Expose mtp_layers for FSDP wrapping compatibility."""
         return self.mtp_layers
+
+    @property
+    def target_layer_ids(self) -> list[int]:
+        """MTP doesn't use target layers, but return default for dataloader compatibility."""
+        verifier_name_or_path = self.config.speculators_config.verifier.name_or_path
+        return resolve_target_layer_ids(None, verifier_name_or_path)
 
     def load_verifier_weights(self) -> None:
         """Re-set NaN sentinel before loading — meta-device init may clear

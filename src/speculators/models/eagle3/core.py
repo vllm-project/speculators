@@ -15,7 +15,7 @@ from speculators.models.eagle3.attention import (
 from speculators.models.eagle3.metrics import compute_metrics
 from speculators.models.eagle3.model_definitions import model_classes
 from speculators.models.metrics import kl_div_loss, resolve_loss_fn
-from speculators.models.utils import conditional_torch_compile
+from speculators.models.utils import conditional_torch_compile, resolve_target_layer_ids
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 
 
@@ -94,6 +94,14 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
             self.input_norm = None
 
         self.post_init()
+
+    @property
+    def target_layer_ids(self) -> list[int]:
+        """Target layer IDs for auxiliary hidden states."""
+        verifier_name_or_path = self.config.speculators_config.verifier.name_or_path
+        return resolve_target_layer_ids(
+            self.config.eagle_aux_hidden_state_layer_ids, verifier_name_or_path
+        )
 
     def load_verifier_weights(self):
         super().load_verifier_weights()
