@@ -19,7 +19,7 @@
 
 ### Example E2E run for Qwen3.5-9B on GSM8K ###
 
-# Timing (on 2x NVIDIA H100 80GB GPUs)
+# Timing (on 2x NVIDIA H200 141GB GPUs)
 # Data Preprocessing: 31 seconds
 # vLLM Server Startup: 114 seconds (1 min 54 secs)
 # Training (3 epochs): 256 seconds (4 mins 16 secs)
