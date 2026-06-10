@@ -22,6 +22,7 @@ from speculators.model import SpeculatorModel
 from speculators.models.eagle3.data import shift_batch
 from speculators.models.metrics import resolve_loss_fn
 from speculators.models.mtp.data import shift_batch_mtp
+from speculators.models.utils import resolve_target_layer_ids
 from speculators.train.data import (
     ArrowDataset,
     BaseDataset,
@@ -72,6 +73,7 @@ def setup_dataloader(
     local_rank: int,
     hidden_size: int,
     num_workers: int = 12,
+    num_target_layers: int = 3,
     prefetch_factor: int = 4,
     preprocess=None,
 ) -> DataLoader:
@@ -104,9 +106,9 @@ def setup_dataloader(
         collate_fn=create_collate_fn(
             args.total_seq_len,
             hidden_size,
-            args.num_layers,
-            dataset.hidden_states_dtype,
-            preprocess,
+            num_target_layers=num_target_layers,
+            dtype=dataset.hidden_states_dtype,
+            preprocess=preprocess,
         ),
         persistent_workers=True,
     )
@@ -338,12 +340,19 @@ def main(args: argparse.Namespace):
 
     model_class = registry[args.speculator_type]
 
+    # Resolve target layer IDs before model creation
+    target_layer_ids = resolve_target_layer_ids(
+        args.target_layer_ids, args.verifier_name_or_path
+    )
+    num_target_layers = len(target_layer_ids)
+
     if args.from_pretrained:
         draft_model = model_class.from_pretrained(
             args.from_pretrained, t2d=t2d, d2t=d2t
         )
     else:
         args.draft_vocab_size = draft_vocab_size
+        args.target_layer_ids = target_layer_ids
         draft_model = model_class.from_training_args(
             verifier_config=transformer_layer_config,
             t2d=t2d,
@@ -415,6 +424,7 @@ def main(args: argparse.Namespace):
         world_size,
         local_rank,
         transformer_layer_config.hidden_size,
+        num_target_layers=num_target_layers,
         num_workers=args.num_workers,
         prefetch_factor=args.prefetch_factor,
         preprocess=preprocess,
@@ -424,6 +434,7 @@ def main(args: argparse.Namespace):
         world_size,
         local_rank,
         transformer_layer_config.hidden_size,
+        num_target_layers=num_target_layers,
         num_workers=args.num_workers,
         prefetch_factor=args.prefetch_factor,
         preprocess=preprocess,
