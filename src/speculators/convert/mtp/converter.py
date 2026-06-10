@@ -56,6 +56,27 @@ class MTPConverter:
     the weight index -- the main transformer stack is never loaded.
     """
 
+    def convert_to_state_dict(
+        self,
+        input_path: str | Path,
+        cache_dir: str | Path | None = None,
+    ) -> dict[str, torch.Tensor]:
+        """Extract native MTP weights and return them as a state dict.
+
+        Performs the full pipeline (download/locate → verify → extract →
+        remap → fuse MoE experts) without writing anything to disk.
+        """
+        logger.info(f"Extracting native MTP weights from {input_path}")
+
+        local_path = ensure_checkpoint_is_local(input_path, cache_dir)
+        all_keys = list_checkpoint_keys(local_path)
+        self._verify_mtp_format(all_keys)
+
+        weights = self._extract_weights(local_path, all_keys)
+        weights = self._fuse_moe_experts(weights)
+        logger.info(f"Extracted {len(weights)} MTP weight tensors")
+        return weights
+
     def convert(
         self,
         input_path: str | Path,
@@ -67,15 +88,10 @@ class MTPConverter:
     ) -> None:
         logger.info(f"Converting MTP checkpoint: {input_path}")
 
+        weights = self.convert_to_state_dict(input_path, cache_dir)
+
         local_path = ensure_checkpoint_is_local(input_path, cache_dir)
         source_config = load_checkpoint_config(local_path)
-
-        all_keys = list_checkpoint_keys(local_path)
-        self._verify_mtp_format(all_keys)
-
-        weights = self._extract_weights(local_path, all_keys)
-        weights = self._fuse_moe_experts(weights)
-        logger.info(f"Extracted {len(weights)} weight tensors")
 
         if "text_config" in source_config:
             source_config = source_config["text_config"]
