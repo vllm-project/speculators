@@ -93,8 +93,7 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
 
     @property
     def target_layer_ids(self) -> list[int]:
-        """MTP only uses the last hidden layer (verifier_last_hidden_states).
-        """
+        """MTP only uses the last hidden layer (verifier_last_hidden_states)."""
         return [self.config.transformer_layer_config.num_hidden_layers]
 
     def load_verifier_weights(self) -> None:
