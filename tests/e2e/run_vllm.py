@@ -122,11 +122,7 @@ def extract_metrics(raw_metrics: list[Metric], total_num_output_tokens: int) -> 
 
 def run_vllm(args: argparse.Namespace):
     sampling_params = SamplingParams(**json.loads(args.sampling_params_args))
-    llm = LLM(
-        **json.loads(args.llm_args),
-        disable_log_stats=False,
-        enable_chunked_prefill=False,
-    )
+    llm = LLM(**json.loads(args.llm_args), disable_log_stats=False)
     outputs = llm.chat(json.loads(args.prompts), sampling_params)
     total_num_output_tokens = sum(
         len(output.outputs[0].token_ids) for output in outputs
