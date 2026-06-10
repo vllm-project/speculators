@@ -404,7 +404,7 @@ def _get_input_ids_loss_mask(
         encoded_any = processor.apply_chat_template(
             hf_conv,
             tokenize=True,
-            tools=tools,
+            tools=tools,  # type: ignore[arg-type]
             add_generation_prompt=False,
             return_assistant_tokens_mask=True,
             return_dict=True,
@@ -465,7 +465,7 @@ def _get_input_ids_loss_mask(
         formatted_text = processor.apply_chat_template(
             hf_conv,
             tokenize=False,
-            tools=tools,
+            tools=tools,  # type: ignore[arg-type]
             add_generation_prompt=False,
         )
         assert isinstance(formatted_text, str)
