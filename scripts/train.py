@@ -194,6 +194,9 @@ def create_transformer_layer_config(  # noqa: C901
     if version.parse(transformers.__version__) >= version.parse("5.0.0"):
         if hasattr(verifier_config, "rope_parameters"):
             config.rope_parameters = deepcopy(verifier_config.rope_parameters)
+            _MROPE_KEYS = ("mrope_section", "mrope_interleaved", "type")  # noqa: N806
+            for key in _MROPE_KEYS:
+                config.rope_parameters.pop(key, None)
     else:
         if hasattr(verifier_config, "rope_scaling"):
             config.rope_scaling = deepcopy(verifier_config.rope_scaling)
