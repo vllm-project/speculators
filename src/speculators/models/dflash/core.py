@@ -98,10 +98,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
     @property
     def target_layer_ids(self) -> list[int]:
         """Target layer IDs for auxiliary hidden states."""
-        verifier_name_or_path = self.config.speculators_config.verifier.name_or_path
-        return resolve_target_layer_ids(
-            self.config.aux_hidden_state_layer_ids, verifier_name_or_path
-        )
+        return self.config.aux_hidden_state_layer_ids
 
     @classmethod
     def from_training_args(
@@ -140,12 +137,17 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             GreedyTokenProposalConfig,
         )
 
+        # Resolve target layer IDs if not provided
+        target_layer_ids = resolve_target_layer_ids(
+            kwargs.get("target_layer_ids"), kwargs["verifier_name_or_path"]
+        )
+
         config = DFlashSpeculatorConfig(
             transformer_layer_config=verifier_config,
             draft_vocab_size=kwargs["draft_vocab_size"],
             block_size=kwargs.get("block_size", 8),
             max_anchors=kwargs.get("max_anchors", 3072),
-            aux_hidden_state_layer_ids=kwargs.get("target_layer_ids"),
+            aux_hidden_state_layer_ids=target_layer_ids,
             mask_token_id=kwargs.get("mask_token_id"),
             sliding_window_non_causal=kwargs.get("sliding_window_non_causal", False),
             speculators_config=SpeculatorsConfig(
