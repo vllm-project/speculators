@@ -15,7 +15,7 @@ from speculators.models.eagle3.attention import (
 from speculators.models.eagle3.metrics import compute_metrics
 from speculators.models.eagle3.model_definitions import model_classes
 from speculators.models.metrics import kl_div_loss, resolve_loss_fn
-from speculators.models.utils import conditional_torch_compile, resolve_target_layer_ids
+from speculators.models.utils import conditional_torch_compile
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 
 
@@ -281,18 +281,13 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
         Returns:
             Initialized Eagle3DraftModel
         """
-        target_layer_ids = resolve_target_layer_ids(
-            kwargs.get("target_layer_ids"),
-            kwargs["verifier_name_or_path"],
-        )
-
         config = Eagle3SpeculatorConfig(
             transformer_layer_config=verifier_config,
             draft_vocab_size=kwargs["draft_vocab_size"],
             norm_before_residual=kwargs["norm_before_residual"],
             norm_before_fc=kwargs.get("norm_before_fc", False),
             embed_requires_grad=kwargs.get("embed_requires_grad", False),
-            eagle_aux_hidden_state_layer_ids=target_layer_ids,
+            eagle_aux_hidden_state_layer_ids=kwargs.get("target_layer_ids"),
             speculators_config=SpeculatorsConfig(
                 algorithm="eagle3",
                 proposal_methods=[

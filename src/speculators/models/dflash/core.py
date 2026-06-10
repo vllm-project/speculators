@@ -19,7 +19,6 @@ from speculators.models.dflash.utils import (
     select_anchors,
 )
 from speculators.models.metrics import kl_div_loss, resolve_loss_fn
-from speculators.models.utils import resolve_target_layer_ids
 
 
 @SpeculatorModel.register("dflash")
@@ -139,17 +138,12 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             GreedyTokenProposalConfig,
         )
 
-        target_layer_ids = resolve_target_layer_ids(
-            kwargs.get("target_layer_ids"),
-            kwargs["verifier_name_or_path"],
-        )
-
         config = DFlashSpeculatorConfig(
             transformer_layer_config=verifier_config,
             draft_vocab_size=kwargs["draft_vocab_size"],
             block_size=kwargs.get("block_size", 8),
             max_anchors=kwargs.get("max_anchors", 3072),
-            aux_hidden_state_layer_ids=target_layer_ids,
+            aux_hidden_state_layer_ids=kwargs.get("target_layer_ids"),
             mask_token_id=kwargs.get("mask_token_id"),
             sliding_window_non_causal=kwargs.get("sliding_window_non_causal", False),
             speculators_config=SpeculatorsConfig(

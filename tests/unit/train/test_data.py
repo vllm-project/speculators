@@ -132,7 +132,7 @@ def test_collate_fn_basic():
     max_len = 10
     hidden_size = 1
     num_layers = 3
-    collate_fn = create_collate_fn(max_len, hidden_size, num_layers)
+    collate_fn = create_collate_fn(max_len, hidden_size, num_target_layers=num_layers)
 
     batch = [
         {
@@ -208,7 +208,7 @@ def test_collate_fn_length_truncation():
     max_len = 11
     hidden_size = 8
     num_layers = 3
-    collate_fn = create_collate_fn(max_len, hidden_size, num_layers)
+    collate_fn = create_collate_fn(max_len, hidden_size, num_target_layers=num_layers)
 
     batch = [
         {

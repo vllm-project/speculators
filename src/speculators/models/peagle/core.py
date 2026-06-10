@@ -14,7 +14,7 @@ from speculators.models.peagle.attention import create_peagle_mask_mod
 from speculators.models.peagle.config import PEagleSpeculatorConfig
 from speculators.models.peagle.data import generate_cod_sample_indices
 from speculators.models.peagle.metrics import compute_metrics
-from speculators.models.utils import conditional_torch_compile, resolve_target_layer_ids
+from speculators.models.utils import conditional_torch_compile
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 
 
@@ -206,16 +206,11 @@ class PEagleDraftModel(Eagle3DraftModel):
         Returns:
             Initialized PEagleDraftModel
         """
-        target_layer_ids = resolve_target_layer_ids(
-            kwargs.get("target_layer_ids"),
-            kwargs["verifier_name_or_path"],
-        )
-
         config = PEagleSpeculatorConfig(
             transformer_layer_config=verifier_config,
             draft_vocab_size=kwargs["draft_vocab_size"],
             norm_before_residual=kwargs.get("norm_before_residual", False),
-            eagle_aux_hidden_state_layer_ids=target_layer_ids,
+            eagle_aux_hidden_state_layer_ids=kwargs.get("target_layer_ids"),
             num_depths=kwargs.get("num_depths", 8),
             down_sample_ratio=kwargs.get("down_sample_ratio", 0.7),
             down_sample_ratio_min=kwargs.get("down_sample_ratio_min", 0.2),

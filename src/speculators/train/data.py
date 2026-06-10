@@ -67,10 +67,10 @@ StandardizeFnSig = Callable[[dict[str, Any]], dict[str, Any]]
 
 
 def create_empty_sample(
-    hidden_size: int, num_layers: int, dtype: torch.dtype = torch.bfloat16
+    hidden_size: int, num_target_layers: int = 3, dtype: torch.dtype = torch.bfloat16
 ):
     # data structure: {
-    #     "hidden_states": [seq_len, 3 * hidden_size],
+    #     "hidden_states": [seq_len, num_target_layers * hidden_size],
     #     "input_ids": [seq_len],
     #     "verifier_last_hidden_states": [seq_len, hidden_size],
     #     "loss_mask": [seq_len],
@@ -83,7 +83,7 @@ def create_empty_sample(
     # bf16 EAGLE-3 layers (fc, verifier_lm_head) with a dtype mismatch.
 
     return {
-        "hidden_states": torch.empty(0, num_layers * hidden_size, dtype=dtype),
+        "hidden_states": torch.empty(0, num_target_layers * hidden_size, dtype=dtype),
         "input_ids": torch.empty(0, dtype=torch.long),
         "verifier_last_hidden_states": torch.empty(0, hidden_size, dtype=dtype),
         "loss_mask": torch.empty(0, dtype=torch.bool),
@@ -489,7 +489,7 @@ class SampleFileDataset(BaseDataset):
 def create_collate_fn(
     max_len: int,
     hidden_size: int,
-    num_layers: int,
+    num_target_layers: int = 3,
     dtype: torch.dtype = torch.bfloat16,
     preprocess: Callable[[BatchType], BatchType] | None = None,
 ):
@@ -503,7 +503,7 @@ def create_collate_fn(
             # Match the configured `dtype` so the placeholder doesn't crash
             # downstream layers loaded at a different precision (e.g. bf16
             # weights vs fp32 default placeholders).
-            empty = create_empty_sample(hidden_size, num_layers, dtype=dtype)
+            empty = create_empty_sample(hidden_size, num_target_layers, dtype=dtype)
             if preprocess:
                 empty = preprocess(empty)
             batch = [empty]

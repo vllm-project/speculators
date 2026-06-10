@@ -245,7 +245,7 @@ def make_batch(
         Dict with keys matching model forward() signatures, all on ``device``.
     """
     collate_fn = create_collate_fn(
-        max_len=max_len, hidden_size=hidden_size, num_layers=num_layers
+        max_len=max_len, hidden_size=hidden_size, num_target_layers=num_layers
     )
     batch = collate_fn(samples)
     return {k: v.to(device) for k, v in batch.items()}
