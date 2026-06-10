@@ -72,6 +72,7 @@ def setup_dataloader(
     local_rank: int,
     hidden_size: int,
     num_workers: int = 12,
+    num_target_layers: int = 3,
     prefetch_factor: int = 4,
     preprocess=None,
 ) -> DataLoader:
@@ -102,7 +103,11 @@ def setup_dataloader(
         prefetch_factor=prefetch_factor,
         pin_memory=True,
         collate_fn=create_collate_fn(
-            args.total_seq_len, hidden_size, dataset.hidden_states_dtype, preprocess
+            args.total_seq_len,
+            hidden_size,
+            num_target_layers=num_target_layers,
+            dtype=dataset.hidden_states_dtype,
+            preprocess=preprocess,
         ),
         persistent_workers=True,
     )
@@ -350,6 +355,9 @@ def main(args: argparse.Namespace):
             **vars(args),
         )
 
+    # Get target layer IDs from the model (resolved at model level)
+    num_target_layers = len(draft_model.target_layer_ids)
+
     if args.speculator_type == "mtp":
         args.num_speculative_steps = draft_model.config.num_speculative_steps
 
@@ -414,6 +422,7 @@ def main(args: argparse.Namespace):
         world_size,
         local_rank,
         transformer_layer_config.hidden_size,
+        num_target_layers=num_target_layers,
         num_workers=args.num_workers,
         prefetch_factor=args.prefetch_factor,
         preprocess=preprocess,
@@ -423,6 +432,7 @@ def main(args: argparse.Namespace):
         world_size,
         local_rank,
         transformer_layer_config.hidden_size,
+        num_target_layers=num_target_layers,
         num_workers=args.num_workers,
         prefetch_factor=args.prefetch_factor,
         preprocess=preprocess,

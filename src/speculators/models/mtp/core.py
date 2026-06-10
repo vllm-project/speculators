@@ -91,6 +91,11 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
         """Expose mtp_layers for FSDP wrapping compatibility."""
         return self.mtp_layers
 
+    @property
+    def target_layer_ids(self) -> list[int]:
+        """MTP only uses the last hidden layer (verifier_last_hidden_states)."""
+        return [self.config.transformer_layer_config.num_hidden_layers]
+
     def load_verifier_weights(self) -> None:
         """Re-set NaN sentinel before loading — meta-device init may clear
         it. Deletes verifier_lm_head after loading since MTP does not use it.

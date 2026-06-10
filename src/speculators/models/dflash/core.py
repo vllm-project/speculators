@@ -72,13 +72,6 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         self.uses_full_attn = bool(num_draft_layers - len(self.sliding_window_indices))
         self.sliding_window_non_causal = config.sliding_window_non_causal
 
-        if config.aux_hidden_state_layer_ids is None:
-            raise ValueError(
-                "aux_hidden_state_layer_ids must be set in DFlashSpeculatorConfig. "
-                "Use DFlashDraftModel.from_training_args() to resolve defaults."
-            )
-        self.target_layer_ids = config.aux_hidden_state_layer_ids
-
         self.norm = Qwen3RMSNorm(
             config.transformer_layer_config.hidden_size,
             eps=config.transformer_layer_config.rms_norm_eps,  # type: ignore[arg-type]
@@ -101,6 +94,11 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         self.verifier_norm.weight.requires_grad = False
         self.block_size = config.block_size
         self.post_init()
+
+    @property
+    def target_layer_ids(self) -> list[int]:
+        """Target layer IDs for auxiliary hidden states."""
+        return self.config.aux_hidden_state_layer_ids
 
     @classmethod
     def from_training_args(
@@ -139,9 +137,9 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             GreedyTokenProposalConfig,
         )
 
+        # Resolve target layer IDs if not provided
         target_layer_ids = resolve_target_layer_ids(
-            kwargs.get("target_layer_ids"),
-            kwargs["verifier_name_or_path"],
+            kwargs.get("target_layer_ids"), kwargs["verifier_name_or_path"]
         )
 
         config = DFlashSpeculatorConfig(

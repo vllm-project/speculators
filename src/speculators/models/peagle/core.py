@@ -206,9 +206,9 @@ class PEagleDraftModel(Eagle3DraftModel):
         Returns:
             Initialized PEagleDraftModel
         """
+        # Resolve target layer IDs if not provided
         target_layer_ids = resolve_target_layer_ids(
-            kwargs.get("target_layer_ids"),
-            kwargs["verifier_name_or_path"],
+            kwargs.get("target_layer_ids"), kwargs["verifier_name_or_path"]
         )
 
         config = PEagleSpeculatorConfig(
