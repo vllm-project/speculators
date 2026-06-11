@@ -5,6 +5,15 @@ steps:
         agents:
           queue: RedHat-L4-GCP
 
+        retry:
+          automatic:
+            - exit_status: -1
+              limit: 2
+            - exit_status: 255
+              limit: 2
+            - signal_reason: agent_stop
+              limit: 2
+
         plugins:
           - kubernetes:
               podSpec:
