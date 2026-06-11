@@ -1,0 +1,7 @@
+steps:
+  - label: ":pipeline: Upload GPU test pipeline"
+    command: |
+      chmod +x .buildkite/gpu-tests/scripts/check-ready-label.sh
+      .buildkite/gpu-tests/scripts/check-ready-label.sh
+      RUNNER=$$(buildkite-agent meta-data get "test-runner" --default "H100")
+      buildkite-agent pipeline upload .buildkite/gpu-tests/gpu-tests-$${RUNNER}.yml

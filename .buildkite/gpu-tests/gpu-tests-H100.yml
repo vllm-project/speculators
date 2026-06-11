@@ -1,0 +1,126 @@
+steps:
+  - group: ":test_tube: Unit Tests"
+    steps:
+      - label: "Unit Tests — py{{matrix.python}} / transformers {{matrix.transformers}}"
+        agents:
+          queue: RedHat-H100-WDC
+
+        plugins:
+          - kubernetes:
+              podSpec:
+                serviceAccountName: buildkite-anyuid
+                securityContext:
+                  fsGroup: 0
+                  runAsUser: 0
+                  runAsGroup: 0
+                nodeSelector:
+                  vllm.ci/gpu-pool: upstream-ci-h100
+
+                containers:
+                  - name: tests
+                    image: buildkite/agent:3-ubuntu
+                    command:
+                      - chmod +x .buildkite/gpu-tests/scripts/run-tests.sh
+                      - .buildkite/gpu-tests/scripts/run-tests.sh unit
+
+                    resources:
+                      limits:
+                        nvidia.com/gpu: 1
+
+                    volumeMounts:
+                      - name: ci-cache
+                        mountPath: /model-cache
+                        readOnly: false
+                      - name: devshm
+                        mountPath: /dev/shm
+
+                    env:
+                      - name: PYTHON_VERSION
+                        value: "{{matrix.python}}"
+                      - name: TRANSFORMERS_VERSION
+                        value: "{{matrix.transformers}}"
+                      - name: HF_TOKEN
+                        valueFrom:
+                          secretKeyRef:
+                            name: hf-token-secret
+                            key: token
+
+                volumes:
+                  - name: ci-cache
+                    hostPath:
+                      path: /var/mnt/ci-cache
+                      type: DirectoryOrCreate
+                  - name: devshm
+                    emptyDir:
+                      medium: Memory
+
+        matrix:
+          setup:
+            python: ["3.10", "3.13"]
+            transformers: ["<5.0.0", "latest"]
+          adjustments:
+            - with: { python: "3.13", transformers: "<5.0.0" }
+              skip: true
+
+  - group: ":test_tube: Integration Tests"
+    steps:
+      - label: "Integration Tests — py{{matrix.python}} / transformers {{matrix.transformers}}"
+        agents:
+          queue: RedHat-H100-WDC
+
+        plugins:
+          - kubernetes:
+              podSpec:
+                serviceAccountName: buildkite-anyuid
+                securityContext:
+                  fsGroup: 0
+                  runAsUser: 0
+                  runAsGroup: 0
+                nodeSelector:
+                  vllm.ci/gpu-pool: upstream-ci-h100
+
+                containers:
+                  - name: tests
+                    image: buildkite/agent:3-ubuntu
+                    command:
+                      - chmod +x .buildkite/gpu-tests/scripts/run-tests.sh
+                      - .buildkite/gpu-tests/scripts/run-tests.sh integration
+
+                    resources:
+                      limits:
+                        nvidia.com/gpu: 1
+
+                    volumeMounts:
+                      - name: ci-cache
+                        mountPath: /model-cache
+                        readOnly: false
+                      - name: devshm
+                        mountPath: /dev/shm
+
+                    env:
+                      - name: PYTHON_VERSION
+                        value: "{{matrix.python}}"
+                      - name: TRANSFORMERS_VERSION
+                        value: "{{matrix.transformers}}"
+                      - name: HF_TOKEN
+                        valueFrom:
+                          secretKeyRef:
+                            name: hf-token-secret
+                            key: token
+
+                volumes:
+                  - name: ci-cache
+                    hostPath:
+                      path: /var/mnt/ci-cache
+                      type: DirectoryOrCreate
+                  - name: devshm
+                    emptyDir:
+                      medium: Memory
+
+        matrix:
+          setup:
+            python: ["3.10", "3.13"]
+            transformers: ["<5.0.0", "latest"]
+          adjustments:
+            - with: { python: "3.13", transformers: "<5.0.0" }
+              skip: true
