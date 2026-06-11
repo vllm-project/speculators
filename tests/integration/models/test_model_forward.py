@@ -215,6 +215,46 @@ class TestDFlashParams:
         assert loss.isfinite()
         loss.backward()
 
+    @pytest.mark.parametrize("draft_attn_impl", ["sdpa", "eager"])
+    @pytest.mark.parametrize("seq_lengths", SAMPLE_CONFIGS)
+    def test_attention_backend(self, draft_attn_impl, seq_lengths):
+        model = make_dflash_model(draft_attn_impl=draft_attn_impl)
+        samples = _make_samples(seq_lengths)
+        batch = make_batch(max_len=MAX_LEN, samples=samples, hidden_size=HIDDEN_SIZE)
+        draft_tokens, loss, metrics = model(**batch)
+
+        assert loss.isfinite()
+        loss.backward()
+
+    ATTN_BACKENDS = ["simple_flex_attention", "sdpa", "eager"]
+
+    @pytest.mark.parametrize("seq_lengths", SAMPLE_CONFIGS)
+    def test_attention_backends_match(self, seq_lengths):
+        """All attention backends produce equivalent outputs for the same input."""
+        samples = _make_samples(seq_lengths)
+
+        results = {}
+        for backend in self.ATTN_BACKENDS:
+            torch.manual_seed(0)
+            model = make_dflash_model(draft_attn_impl=backend)
+            batch = make_batch(
+                max_len=MAX_LEN, samples=samples, hidden_size=HIDDEN_SIZE
+            )
+            _, loss, _ = model(**batch)
+            results[backend] = loss.detach().cpu()
+            del model
+            torch.cuda.empty_cache()
+
+        ref_backend = self.ATTN_BACKENDS[0]
+        for backend in self.ATTN_BACKENDS[1:]:
+            torch.testing.assert_close(
+                results[backend],
+                results[ref_backend],
+                atol=1e-3,
+                rtol=1e-3,
+                msg=f"{backend} loss diverges from {ref_backend}",
+            )
+
 
 @requires_cuda
 class TestEagle3Params:
