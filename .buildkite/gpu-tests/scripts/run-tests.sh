@@ -7,7 +7,7 @@ cat /etc/issue
 
 git fetch --tags --unshallow 2>/dev/null || git fetch --tags
 
-apt-get update && apt-get install -y curl g++ gcc make
+apt-get update && apt-get install -y curl g++ gcc make python3-dev
 
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
