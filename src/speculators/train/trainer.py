@@ -1,5 +1,7 @@
+import json
 import logging
 import warnings
+from pathlib import Path
 from typing import Literal, NamedTuple
 
 import torch
@@ -85,12 +87,58 @@ class Trainer:
         self.setup_model()
         self.setup_optimizer()
 
+    def _training_state_path(self, epoch: int) -> Path:
+        return self.checkpointer.path / str(epoch) / "training_state.json"
+
+    def _save_training_state(self, epoch: int, local_step: int) -> None:
+        if not self.is_distributed or dist.get_rank() == 0:
+            state = {
+                "epoch": epoch,
+                "local_step": local_step,
+                "global_step": self.global_step,
+            }
+            p = self._training_state_path(epoch)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(json.dumps(state))
+
+    def _load_training_state(self) -> dict:
+        epoch = self.checkpointer.previous_epoch
+        p = self._training_state_path(epoch)
+        if p.exists():
+            try:
+                return json.loads(p.read_text())
+            except Exception:
+                pass
+        return {}
+
     def setup_trainer(self):
         if self.checkpointer.previous_epoch != -1:
             root_logger.info(f"Found checkpoint at {self.checkpointer.prev_path}.")
             self.current_epoch = self.checkpointer.previous_epoch + 1
             if self.resume_from_checkpoint:
-                root_logger.info(f"Resuming training on {self.current_epoch} epoch.")
+                # Check if this was a mid-epoch checkpoint — if so, resume
+                # from within that epoch rather than jumping to the next one.
+                state = self._load_training_state()
+                is_mid_epoch = (
+                    state
+                    and state.get("epoch") == self.checkpointer.previous_epoch
+                    and state.get("local_step", 0) > 0  # 0 means end-of-epoch
+                )
+                if is_mid_epoch:
+                    # Resume within the same epoch from the exact step.
+                    self.current_epoch = state["epoch"]
+                    self._resume_local_step = state["local_step"]
+                    self._resume_global_step = state.get("global_step", 0)
+                    root_logger.info(
+                        f"Resuming mid-epoch from epoch={self.current_epoch} "
+                        f"local_step={self._resume_local_step} "
+                        f"global_step={self._resume_global_step}."
+                    )
+                else:
+                    # End-of-epoch or no state — advance to next epoch.
+                    self._resume_local_step = 0
+                    self._resume_global_step = state.get("global_step", 0) if state else 0
+                    root_logger.info(f"Resuming training on {self.current_epoch} epoch.")
             else:
                 root_logger.warning(
                     "`resume_from_checkpoint` is False, starting "
@@ -98,13 +146,17 @@ class Trainer:
                     f"existing checkpoints in {self.checkpointer.path}."
                 )
                 self.current_epoch = 0
+                self._resume_local_step = 0
+                self._resume_global_step = 0
         else:
             root_logger.info(
                 "No previous training checkpoint found in "
                 f"'{self.checkpointer.path}'. Starting fresh training run."
             )
             self.current_epoch = 0
-        self.global_step = 0
+            self._resume_local_step = 0
+            self._resume_global_step = 0
+        self.global_step = self._resume_global_step
         self.best_val_loss = float("inf")
 
         if self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1:
@@ -217,6 +269,27 @@ class Trainer:
         if hasattr(self.train_loader.batch_sampler, "set_epoch"):
             self.train_loader.batch_sampler.set_epoch(epoch)  # type: ignore[union-attr]
 
+        # Determine how many batches to skip for mid-epoch resume.
+        skip_steps = 0
+        if epoch == getattr(self, "current_epoch", epoch):
+            skip_steps = getattr(self, "_resume_local_step", 0)
+            # Only skip once — clear after use.
+            self._resume_local_step = 0
+
+        # Fast-skip: slice the sampler's pre-generated batch list so we never
+        # call __getitem__ (and thus never call vLLM) for skipped batches.
+        sampler = self.train_loader.batch_sampler
+        if skip_steps > 0 and hasattr(sampler, "_generate_batches"):
+            all_batches = sampler._generate_batches(epoch)
+            remaining = all_batches[skip_steps:]
+            # Temporarily override the sampler cache with the sliced list.
+            sampler._cached_generated_batches = (epoch, remaining)
+            root_logger.info(
+                f"Fast-skipping {skip_steps} batches via sampler slice "
+                f"(no vLLM calls for skipped batches). "
+                f"epoch={epoch}, global_step={self.global_step}."
+            )
+
         train_loader = self.train_loader
         if self.rank == 0:
             train_loader = tqdm(train_loader, desc=f"Epoch {epoch}")  # type: ignore[assignment]
@@ -227,7 +300,9 @@ class Trainer:
             if self.config.checkpoint_freq < 1
             else None
         )
-        for local_step, batch in enumerate(train_loader, 1):
+        for local_step_rel, batch in enumerate(train_loader, 1):
+            # local_step is 1-based index into the *full* epoch (not the slice).
+            local_step = local_step_rel + skip_steps
             gpu_batch = {
                 k: v.to(self.local_rank, non_blocking=True)
                 if isinstance(v, torch.Tensor)
@@ -280,7 +355,7 @@ class Trainer:
                 and num_steps - local_step >= step_interval * MIN_STEP_PCT
                 # Avoid saving back to back ay the end of each epoch
             ):
-                self.maybe_save_checkpoint(epoch)
+                self.maybe_save_checkpoint(epoch, local_step=local_step)
 
     @torch.no_grad()
     def val_epoch(self, epoch: int) -> dict[str, float] | None:
@@ -325,7 +400,7 @@ class Trainer:
 
         return val_metrics
 
-    def maybe_save_checkpoint(self, epoch: int | str):
+    def maybe_save_checkpoint(self, epoch: int | str, local_step: int = 0):
         if epoch != "interrupted" and (
             self.config.save_best
             or (
@@ -341,6 +416,22 @@ class Trainer:
         self.checkpointer.save_checkpoint(self.model, self.optimizers, epoch)
         if self.schedulers:
             self.checkpointer.save_scheduler_state_dict(self.schedulers, epoch)
+        if isinstance(epoch, int):
+            self._save_training_state(epoch, local_step)
+            # Create a human-readable symlink so it's obvious which step this is.
+            # e.g. epoch0_step16626 -> 0/  (mid-epoch)  or  epoch0_end -> 0/  (end-of-epoch)
+            if self.is_distributed and dist.get_rank() != 0:
+                pass  # only rank 0 manages symlinks
+            else:
+                ckpt_dir = self.checkpointer.path
+                suffix = f"step{local_step}" if local_step > 0 else "end"
+                link_name = ckpt_dir / f"epoch{epoch}_{suffix}"
+                target = Path(str(epoch))  # relative symlink
+                # Remove any previous link for this epoch
+                for old in ckpt_dir.glob(f"epoch{epoch}_*"):
+                    if old.is_symlink():
+                        old.unlink()
+                link_name.symlink_to(target)
         root_logger.info(f"Checkpoint saved to {self.checkpointer.path / str(epoch)}")
 
     def maybe_update_best(self, epoch: int, val_metrics: dict | None):
