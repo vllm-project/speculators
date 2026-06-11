@@ -229,6 +229,11 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
 
         self.post_init()
 
+    @property
+    def target_layer_ids(self) -> list[int]:
+        """Target layer IDs for auxiliary hidden states."""
+        return self.config.eagle_aux_hidden_state_layer_ids
+
     def load_verifier_weights(self):
         super().load_verifier_weights()
 
@@ -419,9 +424,9 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
         Returns:
             Initialized Eagle3DraftModel
         """
+        # Resolve target layer IDs if not provided
         target_layer_ids = resolve_target_layer_ids(
-            kwargs.get("target_layer_ids"),
-            kwargs["verifier_name_or_path"],
+            kwargs.get("target_layer_ids"), kwargs["verifier_name_or_path"]
         )
 
         config = Eagle3SpeculatorConfig(

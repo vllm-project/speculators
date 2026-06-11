@@ -103,6 +103,7 @@ def setup_dataloader(
     local_rank: int,
     hidden_size: int,
     num_workers: int = 12,
+    num_target_layers: int = 3,
     prefetch_factor: int = 4,
     preprocess=None,
 ) -> DataLoader:
@@ -133,7 +134,11 @@ def setup_dataloader(
         prefetch_factor=prefetch_factor,
         pin_memory=True,
         collate_fn=create_collate_fn(
-            args.total_seq_len, hidden_size, dataset.hidden_states_dtype, preprocess
+            args.total_seq_len,
+            hidden_size,
+            num_target_layers=num_target_layers,
+            dtype=dataset.hidden_states_dtype,
+            preprocess=preprocess,
         ),
         persistent_workers=True,
     )
@@ -314,15 +319,17 @@ def create_transformer_layer_config(  # noqa: C901
         layer_types=layer_types,
     )
 
-    # RoPE: use transformers >= 5.0 rope_parameters path
-    if hasattr(verifier_config, "rope_parameters"):
-        config.rope_parameters = deepcopy(verifier_config.rope_parameters)
-        # Apply CLI overrides into rope_parameters
-        if rope_kwargs.get("rope_scaling"):
-            config.rope_parameters = deepcopy(rope_kwargs["rope_scaling"])
-        if rope_kwargs.get("rope_theta") is not None:
-            if isinstance(config.rope_parameters, dict):
-                config.rope_parameters["rope_theta"] = rope_kwargs["rope_theta"]
+    # New rope parameters definition introduced in transformers 5.0
+    if version.parse(transformers.__version__) >= version.parse("5.0.0"):
+        if hasattr(verifier_config, "rope_parameters"):
+            config.rope_parameters = deepcopy(verifier_config.rope_parameters)
+            _MROPE_KEYS = ("mrope_section", "mrope_interleaved", "type")  # noqa: N806
+            for key in _MROPE_KEYS:
+                config.rope_parameters.pop(key, None)
+    else:
+        if hasattr(verifier_config, "rope_scaling"):
+            config.rope_scaling = deepcopy(verifier_config.rope_scaling)
+        config.rope_theta = getattr(verifier_config, "rope_theta", 10000.0)
 
     return config
 
@@ -480,6 +487,9 @@ def main(args: argparse.Namespace):
             **vars(args),
         )
 
+    # Get target layer IDs from the model (resolved at model level)
+    num_target_layers = len(draft_model.target_layer_ids)
+
     if args.speculator_type == "mtp":
         args.num_speculative_steps = draft_model.config.num_speculative_steps
 
@@ -546,6 +556,7 @@ def main(args: argparse.Namespace):
         world_size,
         local_rank,
         transformer_layer_config.hidden_size,
+        num_target_layers=num_target_layers,
         num_workers=args.num_workers,
         prefetch_factor=args.prefetch_factor,
         preprocess=preprocess,
@@ -555,6 +566,7 @@ def main(args: argparse.Namespace):
         world_size,
         local_rank,
         transformer_layer_config.hidden_size,
+        num_target_layers=num_target_layers,
         num_workers=args.num_workers,
         prefetch_factor=args.prefetch_factor,
         preprocess=preprocess,
