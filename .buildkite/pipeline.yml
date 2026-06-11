@@ -1,5 +1,5 @@
 steps:
-  - label: ":pipeline: Upload GPU test pipeline"
+  - label: ":gear: Speculators Unit and Integration Tests"
     command: |
       chmod +x .buildkite/gpu-tests/scripts/check-ready-label.sh
       .buildkite/gpu-tests/scripts/check-ready-label.sh

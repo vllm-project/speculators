@@ -1,7 +1,7 @@
 steps:
-  - group: ":test_tube: Unit Tests"
+  - group: ":test_tube: Unit Tests (H100)"
     steps:
-      - label: "Unit Tests — py{{matrix.python}} / transformers {{matrix.transformers}}"
+      - label: ":python: Unit Tests py{{matrix.python}} / transformers {{matrix.transformers}}"
         agents:
           queue: RedHat-H100-WDC
 
@@ -71,11 +71,20 @@ steps:
             - with: { python: "3.13", transformers: "<5.0.0" }
               skip: true
 
-  - group: ":test_tube: Integration Tests"
+  - group: ":test_tube: Integration Tests (H100)"
     steps:
-      - label: "Integration Tests — py{{matrix.python}} / transformers {{matrix.transformers}}"
+      - label: ":python: Integration Tests py{{matrix.python}} / transformers {{matrix.transformers}}"
         agents:
           queue: RedHat-H100-WDC
+
+        retry:
+          automatic:
+            - exit_status: -1
+              limit: 2
+            - exit_status: 255
+              limit: 2
+            - signal_reason: agent_stop
+              limit: 2
 
         plugins:
           - kubernetes:
