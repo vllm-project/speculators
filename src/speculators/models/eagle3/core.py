@@ -102,9 +102,7 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
 
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path, *args, **kwargs):
-        model = super().from_pretrained(
-            pretrained_model_name_or_path, *args, **kwargs
-        )
+        model = super().from_pretrained(pretrained_model_name_or_path, *args, **kwargs)
         verifier_path = model.config.speculators_config.verifier.name_or_path
         model.config.eagle_aux_hidden_state_layer_ids = resolve_target_layer_ids(
             model.config.eagle_aux_hidden_state_layer_ids, verifier_path
