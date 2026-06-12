@@ -1,14 +1,4 @@
-"""Unit tests for mid-epoch checkpoint save and resume.
-
-Verifies:
-1. training_state.json is saved alongside each fractional checkpoint
-2. On resume, epoch is correctly restored (not bumped to next epoch)
-3. local_step skip works — no duplicate or missing batches
-4. global_step continues from checkpoint value
-5. end-of-epoch checkpoint (local_step=0) causes resume to advance epoch
-6. 'interrupted' checkpoint does not write training_state.json
-7. Descriptive symlinks are created and updated correctly
-"""
+"""Unit tests for mid-epoch checkpoint save and resume."""
 
 import json
 import tempfile
@@ -16,7 +6,7 @@ from pathlib import Path
 
 import pytest
 import torch
-import torch.nn as nn
+from torch import nn
 from torch.utils.data import DataLoader, Dataset
 
 from speculators.train.checkpointer import SingleGPUCheckpointer
@@ -26,7 +16,11 @@ from speculators.train.trainer import Trainer, TrainerConfig
 # Fixtures / helpers
 # ---------------------------------------------------------------------------
 
-trained_steps: list[tuple[int, int, int]] = []
+
+@pytest.fixture
+def trained_steps() -> list[tuple[int, int, int]]:
+    """Per-test collection of (epoch, local_step, global_step) tuples."""
+    return []
 
 
 def _patch_checkpointer() -> None:
@@ -87,7 +81,7 @@ class _MockTrainer(Trainer):
         for local_step, _batch in enumerate(self.train_loader, 1):
             if local_step <= skip_steps:
                 continue
-            trained_steps.append((epoch, local_step, self.global_step))
+            self._trained_steps.append((epoch, local_step, self.global_step))
             self.global_step += 1
             if (
                 step_interval
@@ -98,7 +92,12 @@ class _MockTrainer(Trainer):
                 self.maybe_save_checkpoint(epoch, local_step=local_step)
 
 
-def _make_trainer(save_path: str, resume: bool = False, epochs: int = 1) -> _MockTrainer:
+def _make_trainer(
+    save_path: str,
+    trained_steps: list[tuple[int, int, int]],
+    resume: bool = False,
+    epochs: int = 1,
+) -> _MockTrainer:
     cfg = TrainerConfig(
         save_path=save_path,
         num_epochs=epochs,
@@ -110,7 +109,9 @@ def _make_trainer(save_path: str, resume: bool = False, epochs: int = 1) -> _Moc
         log_freq=1,
         scheduler_type="none",
     )
-    return _MockTrainer(cfg, cfg, _make_loader())
+    trainer = _MockTrainer(cfg, cfg, _make_loader())
+    trainer._trained_steps = trained_steps
+    return trainer
 
 
 # ---------------------------------------------------------------------------
@@ -118,13 +119,14 @@ def _make_trainer(save_path: str, resume: bool = False, epochs: int = 1) -> _Moc
 # ---------------------------------------------------------------------------
 
 
-def test_mid_epoch_checkpoint_saves_training_state() -> None:
+def test_mid_epoch_checkpoint_saves_training_state(
+    trained_steps: list[tuple[int, int, int]],
+) -> None:
     """training_state.json is written with correct epoch/local_step/global_step."""
-    trained_steps.clear()
     with tempfile.TemporaryDirectory() as tmpdir:
         num_steps = len(_make_loader())
         step_interval = max(1, round(num_steps * 0.3))
-        t = _make_trainer(tmpdir)
+        t = _make_trainer(tmpdir, trained_steps=trained_steps)
         for local_step, _batch in enumerate(t.train_loader, 1):
             trained_steps.append((0, local_step, t.global_step))
             t.global_step += 1
@@ -135,28 +137,36 @@ def test_mid_epoch_checkpoint_saves_training_state() -> None:
         state_file = Path(tmpdir) / "0" / "training_state.json"
         assert state_file.exists(), "training_state.json was not saved"
         state = json.loads(state_file.read_text())
-        assert state == {"epoch": 0, "local_step": step_interval, "global_step": step_interval}
+        expected = {
+            "epoch": 0,
+            "local_step": step_interval,
+            "global_step": step_interval,
+        }
+        assert state == expected
 
 
-def test_mid_epoch_resume_restores_epoch_and_step() -> None:
-    """Resume from mid-epoch checkpoint stays in same epoch and skips correct batches."""
-    trained_steps.clear()
+def test_mid_epoch_resume_restores_epoch_and_step(
+    trained_steps: list[tuple[int, int, int]],
+) -> None:
+    """Resume from mid-epoch checkpoint stays in same epoch and skips batches."""
     with tempfile.TemporaryDirectory() as tmpdir:
         num_steps = len(_make_loader())
-        step_interval = max(1, round(num_steps * 0.3))
+        step_fraction = round(num_steps * 0.3)
+        step_interval = max(1, step_fraction)
 
-        # Run 1: interrupt after first checkpoint
-        t1 = _make_trainer(tmpdir)
+        # Run 1: interrupt after first checkpoint.
+        run1_steps = trained_steps
+        t1 = _make_trainer(tmpdir, trained_steps=run1_steps)
         for local_step, _batch in enumerate(t1.train_loader, 1):
-            trained_steps.append((0, local_step, t1.global_step))
+            run1_steps.append((0, local_step, t1.global_step))
             t1.global_step += 1
             if local_step == step_interval:
                 t1.maybe_save_checkpoint(0, local_step=local_step)
                 break
 
-        # Run 2: resume
-        trained_steps.clear()
-        t2 = _make_trainer(tmpdir, resume=True)
+        # Run 2: resume.
+        run2_steps: list[tuple[int, int, int]] = []
+        t2 = _make_trainer(tmpdir, trained_steps=run2_steps, resume=True)
         assert t2.current_epoch == 0, f"Expected epoch 0, got {t2.current_epoch}"
         assert t2._resume_local_step == step_interval
         assert t2.global_step == step_interval
@@ -164,43 +174,46 @@ def test_mid_epoch_resume_restores_epoch_and_step() -> None:
         t2.train_epoch(t2.current_epoch)
 
         expected = num_steps - step_interval
-        assert len(trained_steps) == expected
-        assert trained_steps[0][1] == step_interval + 1  # first local_step after skip
-        assert trained_steps[0][2] == step_interval  # global_step continues
-        assert trained_steps[-1][1] == num_steps
+        assert len(run2_steps) == expected
+        assert run2_steps[0][1] == step_interval + 1  # first local_step after skip
+        assert run2_steps[0][2] == step_interval  # global_step continues
+        assert run2_steps[-1][1] == num_steps
 
 
-def test_end_of_epoch_checkpoint_advances_epoch() -> None:
-    """End-of-epoch checkpoint (local_step=0) causes resume to advance to next epoch."""
-    trained_steps.clear()
+def test_end_of_epoch_checkpoint_advances_epoch(
+    trained_steps: list[tuple[int, int, int]],
+) -> None:
+    """End-of-epoch checkpoint (local_step=0) resumes at next epoch."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        t = _make_trainer(tmpdir, epochs=2)
+        t = _make_trainer(tmpdir, trained_steps=trained_steps, epochs=2)
         t.train_epoch(0)
         t.maybe_save_checkpoint(0, local_step=0)
 
-        trained_steps.clear()
-        t2 = _make_trainer(tmpdir, resume=True, epochs=2)
+        run2_steps: list[tuple[int, int, int]] = []
+        t2 = _make_trainer(tmpdir, trained_steps=run2_steps, resume=True, epochs=2)
         assert t2.current_epoch == 1, f"Expected epoch 1, got {t2.current_epoch}"
         assert t2._resume_local_step == 0
 
 
-def test_interrupted_checkpoint_has_no_training_state() -> None:
+def test_interrupted_checkpoint_has_no_training_state(
+    trained_steps: list[tuple[int, int, int]],
+) -> None:
     """'interrupted' checkpoint does not write training_state.json."""
-    trained_steps.clear()
     with tempfile.TemporaryDirectory() as tmpdir:
-        t = _make_trainer(tmpdir)
+        t = _make_trainer(tmpdir, trained_steps=trained_steps)
         t.maybe_save_checkpoint("interrupted")
         state_file = Path(tmpdir) / "interrupted" / "training_state.json"
         assert not state_file.exists()
 
 
-def test_symlink_created_and_updated() -> None:
+def test_symlink_created_and_updated(
+    trained_steps: list[tuple[int, int, int]],
+) -> None:
     """Symlink is created for mid-epoch and updated when overwritten."""
-    trained_steps.clear()
     with tempfile.TemporaryDirectory() as tmpdir:
         num_steps = len(_make_loader())
         step_interval = max(1, round(num_steps * 0.3))
-        t = _make_trainer(tmpdir)
+        t = _make_trainer(tmpdir, trained_steps=trained_steps)
         t.maybe_save_checkpoint(0, local_step=step_interval)
         t.maybe_save_checkpoint(0, local_step=step_interval * 2)
 
@@ -213,11 +226,112 @@ def test_symlink_created_and_updated() -> None:
         assert state["local_step"] == step_interval * 2
 
 
-def test_end_of_epoch_symlink() -> None:
+def test_end_of_epoch_symlink(
+    trained_steps: list[tuple[int, int, int]],
+) -> None:
     """End-of-epoch checkpoint creates epoch{N}_end symlink."""
-    trained_steps.clear()
     with tempfile.TemporaryDirectory() as tmpdir:
-        t = _make_trainer(tmpdir)
+        t = _make_trainer(tmpdir, trained_steps=trained_steps)
         t.maybe_save_checkpoint(0, local_step=0)
         end_link = Path(tmpdir) / "epoch0_end"
         assert end_link.is_symlink()
+
+
+class _CountingDataset(Dataset):
+    def __init__(self, n_items: int):
+        self.n_items = n_items
+        self.seen_indices: list[int] = []
+
+    def __len__(self) -> int:
+        return self.n_items
+
+    def __getitem__(self, idx: int) -> dict:
+        self.seen_indices.append(idx)
+        return {
+            "input_ids": torch.tensor([idx]),
+            "loss_mask": torch.tensor([1.0]),
+        }
+
+
+class _FastSkipBatchSampler:
+    def __init__(self, n_items: int):
+        self.all_batches = [[i] for i in range(n_items)]
+        self._cached_generated_batches: tuple[int, list[list[int]]] | None = None
+        self.generated_for_epoch: int | None = None
+        self.current_epoch = 0
+
+    def __len__(self) -> int:
+        if self._cached_generated_batches is not None:
+            return len(self._cached_generated_batches[1])
+        return len(self.all_batches)
+
+    def set_epoch(self, epoch: int) -> None:
+        self.current_epoch = epoch
+
+    def _generate_batches(self, epoch: int) -> list[list[int]]:
+        self.generated_for_epoch = epoch
+        return list(self.all_batches)
+
+    def __iter__(self):
+        if (
+            self._cached_generated_batches is not None
+            and self._cached_generated_batches[0] == self.current_epoch
+        ):
+            yield from self._cached_generated_batches[1]
+            return
+        yield from self._generate_batches(self.current_epoch)
+
+
+class _FastSkipMockTrainer(_MockTrainer):
+    def train_epoch(self, epoch: int) -> None:
+        if hasattr(self.train_loader.batch_sampler, "set_epoch"):
+            self.train_loader.batch_sampler.set_epoch(epoch)
+
+        skip_steps = 0
+        if epoch == getattr(self, "current_epoch", epoch):
+            skip_steps = getattr(self, "_resume_local_step", 0)
+            self._resume_local_step = 0
+
+        sampler = self.train_loader.batch_sampler
+        has_fast_skip_api = hasattr(sampler, "_generate_batches") and hasattr(
+            sampler, "_cached_generated_batches"
+        )
+        if skip_steps > 0 and has_fast_skip_api:
+            all_batches = sampler._generate_batches(epoch)
+            remaining = all_batches[skip_steps:]
+            sampler._cached_generated_batches = (epoch, remaining)
+
+        for local_step_rel, _batch in enumerate(self.train_loader, 1):
+            local_step = local_step_rel + skip_steps
+            self._trained_steps.append((epoch, local_step, self.global_step))
+            self.global_step += 1
+
+
+def test_fast_skip_sampler_slice_avoids_skipped_getitem(
+    trained_steps: list[tuple[int, int, int]],
+) -> None:
+    """Fast-skip avoids __getitem__ calls for skipped batches."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        dataset = _CountingDataset(n_items=10)
+        sampler = _FastSkipBatchSampler(n_items=10)
+        loader = DataLoader(dataset, batch_sampler=sampler)
+        cfg = TrainerConfig(
+            save_path=tmpdir,
+            num_epochs=1,
+            lr=1e-4,
+            local_rank=0,
+            is_distributed=False,
+            resume_from_checkpoint=False,
+            checkpoint_freq=0.3,
+            log_freq=1,
+            scheduler_type="none",
+        )
+        trainer = _FastSkipMockTrainer(cfg, cfg, loader)
+        trainer._trained_steps = trained_steps
+        trainer._resume_local_step = 3
+
+        trainer.train_epoch(0)
+
+        assert sampler.generated_for_epoch == 0
+        assert sampler._cached_generated_batches == (0, sampler.all_batches[3:])
+        assert dataset.seen_indices == list(range(3, 10))

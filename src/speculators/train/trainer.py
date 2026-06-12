@@ -107,8 +107,10 @@ class Trainer:
         if p.exists():
             try:
                 return json.loads(p.read_text())
-            except Exception:
-                pass
+            except json.JSONDecodeError as e:
+                root_logger.warning(f"Failed to decode training state {p}: {e}")
+            except (FileNotFoundError, PermissionError, OSError) as e:
+                root_logger.warning(f"Failed to read training state {p}: {e}")
         return {}
 
     def setup_trainer(self):
@@ -137,8 +139,11 @@ class Trainer:
                 else:
                     # End-of-epoch or no state — advance to next epoch.
                     self._resume_local_step = 0
-                    self._resume_global_step = state.get("global_step", 0) if state else 0
-                    root_logger.info(f"Resuming training on {self.current_epoch} epoch.")
+                    resume_global = state.get("global_step", 0) if state else 0
+                    self._resume_global_step = resume_global
+                    root_logger.info(
+                        f"Resuming training on epoch {self.current_epoch}."
+                    )
             else:
                 root_logger.warning(
                     "`resume_from_checkpoint` is False, starting "
@@ -264,12 +269,8 @@ class Trainer:
         for scheduler in self.schedulers:
             scheduler.step()
 
-    def train_epoch(self, epoch: int):
-        self.model.train()
-        if hasattr(self.train_loader.batch_sampler, "set_epoch"):
-            self.train_loader.batch_sampler.set_epoch(epoch)  # type: ignore[union-attr]
-
-        # Determine how many batches to skip for mid-epoch resume.
+    def _prepare_resume_skip(self, epoch: int) -> int:
+        """Prepare fast-skip state for mid-epoch resume and return skipped steps."""
         skip_steps = 0
         if epoch == getattr(self, "current_epoch", epoch):
             skip_steps = getattr(self, "_resume_local_step", 0)
@@ -279,16 +280,33 @@ class Trainer:
         # Fast-skip: slice the sampler's pre-generated batch list so we never
         # call __getitem__ (and thus never call vLLM) for skipped batches.
         sampler = self.train_loader.batch_sampler
-        if skip_steps > 0 and hasattr(sampler, "_generate_batches"):
-            all_batches = sampler._generate_batches(epoch)
+        has_fast_skip_api = hasattr(sampler, "_generate_batches") and hasattr(
+            sampler, "_cached_generated_batches"
+        )
+        if skip_steps > 0 and has_fast_skip_api:
+            all_batches = sampler._generate_batches(epoch)  # noqa: SLF001
             remaining = all_batches[skip_steps:]
             # Temporarily override the sampler cache with the sliced list.
-            sampler._cached_generated_batches = (epoch, remaining)
+            sampler._cached_generated_batches = (epoch, remaining)  # noqa: SLF001
             root_logger.info(
                 f"Fast-skipping {skip_steps} batches via sampler slice "
                 f"(no vLLM calls for skipped batches). "
                 f"epoch={epoch}, global_step={self.global_step}."
             )
+        elif skip_steps > 0:
+            root_logger.warning(
+                "Sampler lacks fast-skip private API; falling back to "
+                f"iteration-based skip for {skip_steps} steps."
+            )
+        return skip_steps
+
+    def train_epoch(self, epoch: int):
+        self.model.train()
+        if hasattr(self.train_loader.batch_sampler, "set_epoch"):
+            self.train_loader.batch_sampler.set_epoch(epoch)  # type: ignore[union-attr]
+
+        # Determine how many batches to skip for mid-epoch resume.
+        skip_steps = self._prepare_resume_skip(epoch)
 
         train_loader = self.train_loader
         if self.rank == 0:
@@ -418,11 +436,9 @@ class Trainer:
             self.checkpointer.save_scheduler_state_dict(self.schedulers, epoch)
         if isinstance(epoch, int):
             self._save_training_state(epoch, local_step)
-            # Create a human-readable symlink so it's obvious which step this is.
-            # e.g. epoch0_step16626 -> 0/  (mid-epoch)  or  epoch0_end -> 0/  (end-of-epoch)
-            if self.is_distributed and dist.get_rank() != 0:
-                pass  # only rank 0 manages symlinks
-            else:
+            # Create a human-readable symlink for checkpoint readability.
+            # e.g. epoch0_step16626 -> 0/ (mid) or epoch0_end -> 0/ (end)
+            if not self.is_distributed or dist.get_rank() == 0:
                 ckpt_dir = self.checkpointer.path
                 suffix = f"step{local_step}" if local_step > 0 else "end"
                 link_name = ckpt_dir / f"epoch{epoch}_{suffix}"
