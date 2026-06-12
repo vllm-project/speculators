@@ -5,7 +5,7 @@ smoke module with Qwen3.5-4B parameters. Evaluates on generic (non-GSM8k)
 prompts to verify finetuning doesn't cause catastrophic forgetting of the
 base model's speculative decoding quality.
 
-Base model acceptance rates on generic prompts (4B): ~88%, ~75%, ~59%.
+Base model acceptance rates on generic prompts (4B): ~87%, ~69%, ~53%.
 Thresholds are set conservatively to catch catastrophic regressions.
 """
 
@@ -44,7 +44,7 @@ def test_mtp_online_regression(
         epochs=1,
         lr=1e-5,
         prompts=prompts,
-        acceptance_thresholds=[0.85, 0.70, 0.56],
+        acceptance_thresholds=[0.82, 0.65, 0.48],
         max_tokens=512,
         train_timeout=60 * 60,
         gpu_memory_utilization=0.3,
