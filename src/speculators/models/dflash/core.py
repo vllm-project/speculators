@@ -156,7 +156,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             transformer_layer_config=verifier_config,
             draft_vocab_size=kwargs["draft_vocab_size"],
             block_size=kwargs.get("block_size", 8),
-            max_anchors=kwargs.get("max_anchors") or 256,
+            max_anchors=kwargs.get("max_anchors") or 3072,
             aux_hidden_state_layer_ids=target_layer_ids,
             mask_token_id=kwargs.get("mask_token_id"),
             sliding_window_non_causal=kwargs.get("sliding_window_non_causal", False),
