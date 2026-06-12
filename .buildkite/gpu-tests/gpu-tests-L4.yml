@@ -8,11 +8,11 @@ steps:
         retry:
           automatic:
             - exit_status: -1
-              limit: 2
+              limit: 3
             - exit_status: 255
-              limit: 2
+              limit: 3
             - signal_reason: agent_stop
-              limit: 2
+              limit: 3
 
         plugins:
           - kubernetes:
@@ -43,11 +43,6 @@ steps:
                         value: "{{matrix.python}}"
                       - name: TRANSFORMERS_VERSION
                         value: "{{matrix.transformers}}"
-                      - name: HF_TOKEN
-                        valueFrom:
-                          secretKeyRef:
-                            name: hf-token-secret
-                            key: token
 
                 volumes:
                   - name: model-cache
@@ -74,11 +69,11 @@ steps:
         retry:
           automatic:
             - exit_status: -1
-              limit: 2
+              limit: 3
             - exit_status: 255
-              limit: 2
+              limit: 3
             - signal_reason: agent_stop
-              limit: 2
+              limit: 3
 
         plugins:
           - kubernetes:
@@ -109,11 +104,6 @@ steps:
                         value: "{{matrix.python}}"
                       - name: TRANSFORMERS_VERSION
                         value: "{{matrix.transformers}}"
-                      - name: HF_TOKEN
-                        valueFrom:
-                          secretKeyRef:
-                            name: hf-token-secret
-                            key: token
 
                 volumes:
                   - name: model-cache
