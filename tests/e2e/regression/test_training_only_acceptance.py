@@ -4,10 +4,11 @@ import pytest
 from huggingface_hub import snapshot_download
 from huggingface_hub.utils import LocalEntryNotFoundError
 
-from tests.e2e.utils import run_training, run_vllm_engine
+from tests.e2e.utils import purge_newfiles, run_training, run_vllm_engine
 from tests.utils import requires_cadence
 
 
+@purge_newfiles
 def _resolve_repo(repo_id: str, repo_type: str = "dataset") -> Path:
     """Return a local Path for a repo, downloading from HuggingFace if needed.
 
@@ -40,21 +41,23 @@ def _resolve_repo(repo_id: str, repo_type: str = "dataset") -> Path:
 @pytest.mark.regression
 def test_eagle3_qwen3_8b_sharegpt(tmp_path: Path, prompts: list[list[dict[str, str]]]):
     save_path = tmp_path / "checkpoints"
-    hidden_states_dir = _resolve_repo("inference-optimization/Qwen3-8b-sharegpt-5k")
-    epochs = 5
-    run_training(
-        model="Qwen/Qwen3-8B",
-        speculator_type="eagle3",
-        data_path=hidden_states_dir,
-        save_path=save_path,
-        seq_length=8192,
-        epochs=epochs,
-        lr=3e-4,
-        draft_vocab_size=32000,
-        online=False,
-        log_freq=50,
-        timeout=30 * 60,  # 30 mins
-    )
+    with _resolve_repo(
+        "inference-optimization/Qwen3-8b-sharegpt-5k"
+    ) as hidden_states_dir:
+        epochs = 5
+        run_training(
+            model="Qwen/Qwen3-8B",
+            speculator_type="eagle3",
+            data_path=hidden_states_dir,
+            save_path=save_path,
+            seq_length=8192,
+            epochs=epochs,
+            lr=3e-4,
+            draft_vocab_size=32000,
+            online=False,
+            log_freq=50,
+            timeout=30 * 60,  # 30 mins
+        )
     final_checkpoint = str(save_path / str(epochs - 1))
     run_vllm_engine(
         model_path=final_checkpoint,
@@ -70,22 +73,24 @@ def test_eagle3_qwen3_8b_sharegpt(tmp_path: Path, prompts: list[list[dict[str, s
 @pytest.mark.regression
 def test_dflash_qwen3_8b_sharegpt(tmp_path: Path, prompts: list[list[dict[str, str]]]):
     save_path = tmp_path / "checkpoints"
-    hidden_states_dir = _resolve_repo("inference-optimization/Qwen3-8b-sharegpt-5k")
-    epochs = 5
-    run_training(
-        model="Qwen/Qwen3-8b",
-        speculator_type="dflash",
-        data_path=hidden_states_dir,
-        save_path=save_path,
-        seq_length=8192,
-        epochs=epochs,
-        lr=3e-4,
-        draft_vocab_size=32000,
-        num_layers=3,
-        online=False,
-        log_freq=50,
-        timeout=30 * 60,  # 30 mins
-    )
+    with _resolve_repo(
+        "inference-optimization/Qwen3-8b-sharegpt-5k"
+    ) as hidden_states_dir:
+        epochs = 5
+        run_training(
+            model="Qwen/Qwen3-8b",
+            speculator_type="dflash",
+            data_path=hidden_states_dir,
+            save_path=save_path,
+            seq_length=8192,
+            epochs=epochs,
+            lr=3e-4,
+            draft_vocab_size=32000,
+            num_layers=3,
+            online=False,
+            log_freq=50,
+            timeout=30 * 60,  # 30 mins
+        )
     final_checkpoint = str(save_path / str(epochs - 1))
     run_vllm_engine(
         model_path=final_checkpoint,
@@ -101,27 +106,29 @@ def test_dflash_qwen3_8b_sharegpt(tmp_path: Path, prompts: list[list[dict[str, s
 @pytest.mark.regression
 def test_peagle_qwen3_8b_sharegpt(tmp_path: Path, prompts: list[list[dict[str, str]]]):
     save_path = tmp_path / "checkpoints"
-    hidden_states_dir = _resolve_repo("inference-optimization/Qwen3-8b-sharegpt-5k")
-    epochs = 5
-    run_training(
-        model="Qwen/Qwen3-8B",
-        speculator_type="peagle",
-        data_path=hidden_states_dir,
-        save_path=save_path,
-        seq_length=8192,
-        epochs=epochs,
-        lr=6e-4,
-        draft_vocab_size=32000,
-        num_layers=4,
-        online=False,
-        log_freq=50,
-        timeout=30 * 60,  # 30 mins
-        extra_train_args=[
-            "--no-norm-before-residual",
-            "--scheduler-type",
-            "cosine",
-        ],
-    )
+    with _resolve_repo(
+        "inference-optimization/Qwen3-8b-sharegpt-5k"
+    ) as hidden_states_dir:
+        epochs = 5
+        run_training(
+            model="Qwen/Qwen3-8B",
+            speculator_type="peagle",
+            data_path=hidden_states_dir,
+            save_path=save_path,
+            seq_length=8192,
+            epochs=epochs,
+            lr=6e-4,
+            draft_vocab_size=32000,
+            num_layers=4,
+            online=False,
+            log_freq=50,
+            timeout=30 * 60,  # 30 mins
+            extra_train_args=[
+                "--no-norm-before-residual",
+                "--scheduler-type",
+                "cosine",
+            ],
+        )
     final_checkpoint = str(save_path / str(epochs - 1))
     run_vllm_engine(
         model_path=final_checkpoint,
