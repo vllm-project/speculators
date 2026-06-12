@@ -105,7 +105,7 @@ def make_dflash_model(
     """Create a tiny DFlash model with real initialized weights."""
     transformer_config = copy.deepcopy(TINY_QWEN3_CONFIG)
     if draft_attn_impl is not None:
-        transformer_config._attn_implementation = draft_attn_impl  # noqa: SLF001
+        transformer_config._attn_implementation = draft_attn_impl
     config = DFlashSpeculatorConfig(
         transformer_layer_config=transformer_config,
         draft_vocab_size=draft_vocab_size,
