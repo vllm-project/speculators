@@ -751,7 +751,7 @@ def parse_args():
         default=None,
         help=(
             "Maximum anchor positions for training. "
-            "Defaults to 256 for DFlash, unlimited for P-EAGLE."
+            "Defaults to 3072 for DFlash, unlimited for P-EAGLE."
         ),
     )
     parser.add_argument(
