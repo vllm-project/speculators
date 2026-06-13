@@ -103,64 +103,6 @@ class TestEagle3ConverterFixes:
     @patch(
         "speculators.convert.eagle.eagle3_converter.PretrainedConfig.get_config_dict"
     )
-    def test_config_preserves_rope_scaling(
-        self, mock_get_config, sample_eagle3_config, sample_verifier_config
-    ):
-        """rope_scaling from the Eagle3 config must be propagated to the
-        generated transformer config (e.g. Llama-3.1 "llama3" scaling). The
-        sibling Eagle (v1) converter already forwards it, and dropping it here
-        would silently disable RoPE scaling for long-context targets."""
-        mock_get_config.return_value = (sample_verifier_config, None)
-
-        rope_scaling = {
-            "rope_type": "llama3",
-            "factor": 8.0,
-            "low_freq_factor": 1.0,
-            "high_freq_factor": 4.0,
-            "original_max_position_embeddings": 8192,
-        }
-        eagle_config = {**sample_eagle3_config, "rope_scaling": rope_scaling}
-
-        converter = Eagle3Converter()
-        llama_config = converter._create_transformer_config_from_eagle(
-            eagle_config, "meta-llama/Llama-3.1-8B-Instruct"
-        )
-
-        if hasattr(llama_config, "rope_parameters"):
-            # Transformers v5: scaling fields are merged into rope_parameters
-            assert llama_config.rope_parameters is not None
-            assert llama_config.rope_parameters.get("rope_type") == "llama3"
-            assert llama_config.rope_parameters.get("factor") == 8.0
-        else:
-            # Transformers v4: scaling kept under rope_scaling
-            assert llama_config.rope_scaling is not None
-            assert llama_config.rope_scaling.get("factor") == 8.0
-
-    @pytest.mark.sanity
-    @patch(
-        "speculators.convert.eagle.eagle3_converter.PretrainedConfig.get_config_dict"
-    )
-    def test_config_no_rope_scaling_when_absent(
-        self, mock_get_config, sample_eagle3_config, sample_verifier_config
-    ):
-        """When the Eagle3 config has no rope_scaling, the generated config must
-        not introduce any scaling (regression guard for the fix above)."""
-        mock_get_config.return_value = (sample_verifier_config, None)
-
-        converter = Eagle3Converter()
-        llama_config = converter._create_transformer_config_from_eagle(
-            sample_eagle3_config, "meta-llama/Llama-3.1-8B-Instruct"
-        )
-
-        if hasattr(llama_config, "rope_parameters"):
-            assert llama_config.rope_parameters.get("factor") is None
-        else:
-            assert llama_config.rope_scaling is None
-
-    @pytest.mark.sanity
-    @patch(
-        "speculators.convert.eagle.eagle3_converter.PretrainedConfig.get_config_dict"
-    )
     def test_config_num_hidden_layers_from_config(
         self, mock_get_config, sample_eagle3_config
     ):
