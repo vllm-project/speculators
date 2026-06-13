@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import socket
 import sys
 import warnings
 
@@ -40,6 +41,35 @@ def parse_args():
             "Append the last layer (num_hidden_layers) to "
             "target_layer_ids for verifier hidden states extraction. Default: True"
         ),
+    )
+    parser.add_argument(
+        "--hidden-states-backend",
+        choices=["file", "mooncake"],
+        default="file",
+        help=(
+            "Transport for extracted hidden states. 'file' writes safetensors to "
+            "--hidden-states-path (requires a shared filesystem). 'mooncake' writes "
+            "to a Mooncake distributed store, enabling the target and trainer to run "
+            "on different nodes with no shared filesystem. Default: 'file'."
+        ),
+    )
+    parser.add_argument(
+        "--mooncake-master",
+        type=str,
+        default="localhost:50051",
+        help="Mooncake master server address (host:port). Used with backend=mooncake.",
+    )
+    parser.add_argument(
+        "--mooncake-metadata-server",
+        type=str,
+        default="http://localhost:8080/metadata",
+        help="Mooncake metadata server URL. Used with backend=mooncake.",
+    )
+    parser.add_argument(
+        "--mooncake-protocol",
+        choices=["tcp", "rdma"],
+        default="tcp",
+        help="Mooncake transport protocol. Used with backend=mooncake.",
     )
     parser.add_argument(
         "--dry-run",
@@ -85,11 +115,32 @@ def main():
             "hf_config": {"eagle_aux_hidden_state_layer_ids": target_layer_ids}
         },
     }
-    kv_transfer_config = {
-        "kv_connector": "ExampleHiddenStatesConnector",
-        "kv_role": "kv_producer",
-        "kv_connector_extra_config": {"shared_storage_path": args.hidden_states_path},
-    }
+    if args.hidden_states_backend == "mooncake":
+        # Out-of-tree connector: vLLM imports it via kv_connector_module_path,
+        # so no registration in vLLM's factory is needed.
+        kv_transfer_config = {
+            "kv_connector": "MooncakeHiddenStatesConnector",
+            "kv_connector_module_path": (
+                "speculators.data_generation.mooncake_hidden_states_connector"
+            ),
+            "kv_role": "kv_producer",
+            "kv_connector_extra_config": {
+                "mooncake": {
+                    "local_hostname": socket.gethostbyname(socket.gethostname()),
+                    "master_server_address": args.mooncake_master,
+                    "metadata_server": args.mooncake_metadata_server,
+                    "protocol": args.mooncake_protocol,
+                }
+            },
+        }
+    else:
+        kv_transfer_config = {
+            "kv_connector": "ExampleHiddenStatesConnector",
+            "kv_role": "kv_producer",
+            "kv_connector_extra_config": {
+                "shared_storage_path": args.hidden_states_path
+            },
+        }
 
     cmd = [
         sys.executable,

@@ -7,7 +7,7 @@ import warnings
 from collections.abc import Callable
 from os import PathLike
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import openai
 import torch
@@ -24,6 +24,9 @@ from speculators.data_generation.vllm_client import (
     wait_for_lock,
 )
 from speculators.train.noise_transforms import TransformTensors
+
+if TYPE_CHECKING:
+    from speculators.data_generation.mooncake_store import MooncakeHiddenStatesStore
 
 BatchType = dict[str, Any]
 
@@ -240,6 +243,7 @@ class ArrowDataset(BaseDataset):
         model: str | None = None,
         request_timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
         max_retries: int = DEFAULT_MAX_RETRIES,
+        mooncake_store: "MooncakeHiddenStatesStore | None" = None,
     ):
         """Initialize the ArrowDataset.
         Args:
@@ -248,6 +252,10 @@ class ArrowDataset(BaseDataset):
             arrow dataset.
             transform: The transform to apply to the data.
             hidden_states_dtype: The dtype of the hidden states.
+            mooncake_store: If set, on-demand hidden states are read from this
+                Mooncake store (by the key vLLM returns) instead of a shared
+                filesystem. Requires the vLLM server launched with
+                ``--hidden-states-backend mooncake``.
         """
         self.data = load_from_disk(datapath)
         self.start_file_idx = 0
@@ -276,6 +284,9 @@ class ArrowDataset(BaseDataset):
         self.model = model
         self.request_timeout = request_timeout
         self.max_retries = max_retries
+        self.mooncake_store = mooncake_store
+        if self.mooncake_store is not None:
+            self.mooncake_store.setup()
 
         # Delay super init so that `_compute_approx_lengths` has required data
         super().__init__(max_len, transform, hidden_states_dtype)
@@ -313,7 +324,8 @@ class ArrowDataset(BaseDataset):
         client_item = build_client_item(dataset_item)
 
         try:
-            hs_filepath = generate_hidden_states(
+            # A file path (file backend) or a Mooncake key (mooncake backend).
+            handle = generate_hidden_states(
                 self.client,  # type:ignore[arg-type]
                 self.model,  # type:ignore[arg-type]
                 client_item,
@@ -321,15 +333,22 @@ class ArrowDataset(BaseDataset):
                 max_retries=self.max_retries,
             )
 
-            loaded_hs = _maybe_load_hs_file(Path(hs_filepath))
+            if self.mooncake_store is not None:
+                loaded_hs = self.mooncake_store.get_sample(handle)
+                if self.on_generate == "delete":
+                    self.mooncake_store.remove_sample(handle)
+            else:
+                loaded_hs = _maybe_load_hs_file(Path(handle))
 
-            match self.on_generate:
-                case "cache":
-                    file_idx = self._map_to_file_idx(index)
-                    target_path = self.hidden_states_path / f"hs_{file_idx}.safetensors"
-                    shutil.move(hs_filepath, target_path)
-                case "delete":
-                    Path(hs_filepath).unlink()
+                match self.on_generate:
+                    case "cache":
+                        file_idx = self._map_to_file_idx(index)
+                        target_path = (
+                            self.hidden_states_path / f"hs_{file_idx}.safetensors"
+                        )
+                        shutil.move(handle, target_path)
+                    case "delete":
+                        Path(handle).unlink()
         except Exception as e:  # noqa: BLE001
             warnings.warn(
                 f"Failed to load/cache hidden states for sample {index}: {e}",

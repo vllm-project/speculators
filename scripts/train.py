@@ -14,6 +14,10 @@ from transformers import LlamaConfig, PretrainedConfig
 from transformers.models.auto.configuration_auto import AutoConfig
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
+from speculators.data_generation.mooncake_store import (
+    MooncakeHiddenStatesStore,
+    MooncakeStoreConfig,
+)
 from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_REQUEST_TIMEOUT,
@@ -100,7 +104,9 @@ def setup_dataloader(
         dataset,
         batch_sampler=batch_sampler,
         num_workers=num_workers,
-        prefetch_factor=prefetch_factor,
+        # prefetch_factor is only valid with worker processes. num_workers=0 is
+        # required for non-fork-safe datasets (e.g. a live Mooncake client).
+        prefetch_factor=prefetch_factor if num_workers > 0 else None,
         pin_memory=True,
         collate_fn=create_collate_fn(
             args.total_seq_len,
@@ -109,7 +115,7 @@ def setup_dataloader(
             dtype=dataset.hidden_states_dtype,
             preprocess=preprocess,
         ),
-        persistent_workers=True,
+        persistent_workers=num_workers > 0,
     )
 
 
@@ -389,6 +395,16 @@ def main(args: argparse.Namespace):
             hidden_states_dtype=hidden_states_dtype,
         )
     else:
+        mooncake_store = None
+        if args.hidden_states_backend == "mooncake":
+            mooncake_store = MooncakeHiddenStatesStore(
+                MooncakeStoreConfig(
+                    local_hostname="127.0.0.1",
+                    metadata_server=args.mooncake_metadata_server,
+                    master_server_address=args.mooncake_master,
+                    protocol=args.mooncake_protocol,
+                )
+            )
         train_dataset = ArrowDataset(
             datapath=args.data_path,
             max_len=args.total_seq_len,
@@ -402,6 +418,7 @@ def main(args: argparse.Namespace):
             hidden_states_dtype=hidden_states_dtype,
             request_timeout=args.request_timeout,
             max_retries=args.max_retries,
+            mooncake_store=mooncake_store,
         )
         val_dataset = ArrowDataset(
             datapath=args.data_path,
@@ -415,6 +432,7 @@ def main(args: argparse.Namespace):
             hidden_states_dtype=hidden_states_dtype,
             request_timeout=args.request_timeout,
             max_retries=args.max_retries,
+            mooncake_store=mooncake_store,
         )
 
     train_loader = setup_dataloader(
@@ -574,6 +592,36 @@ def parse_args():
             f"(default: {DEFAULT_MAX_RETRIES}). "
             "Only applies if --on-missing=generate."
         ),
+    )
+    parser.add_argument(
+        "--hidden-states-backend",
+        choices=["file", "mooncake"],
+        default="file",
+        help=(
+            "Where on-demand generated hidden states are read from. 'file' (default) "
+            "reads safetensors from --hidden-states-path (shared filesystem). "
+            "'mooncake' reads from a Mooncake store by the key vLLM returns, removing "
+            "the shared-FS requirement (target and trainer can be on different nodes). "
+            "Requires the vLLM server launched with --hidden-states-backend mooncake."
+        ),
+    )
+    parser.add_argument(
+        "--mooncake-master",
+        type=str,
+        default="127.0.0.1:50051",
+        help="Mooncake master server address. Used with backend=mooncake.",
+    )
+    parser.add_argument(
+        "--mooncake-metadata-server",
+        type=str,
+        default="P2PHANDSHAKE",
+        help="Mooncake metadata server (or P2PHANDSHAKE). Used with backend=mooncake.",
+    )
+    parser.add_argument(
+        "--mooncake-protocol",
+        choices=["tcp", "rdma"],
+        default="tcp",
+        help="Mooncake transport protocol. Used with backend=mooncake.",
     )
     parser.add_argument(
         "--legacy-data",
