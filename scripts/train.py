@@ -18,6 +18,7 @@ from speculators.data_generation.mooncake_store import (
     MooncakeHiddenStatesStore,
     MooncakeStoreConfig,
 )
+from speculators.data_generation.transfer import FileTransfer, MooncakeTransfer
 from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_REQUEST_TIMEOUT,
@@ -396,20 +397,28 @@ def main(args: argparse.Namespace):
             hidden_states_dtype=hidden_states_dtype,
         )
     else:
-        mooncake_store = None
         if args.hidden_states_backend == "mooncake":
-            mooncake_store = MooncakeHiddenStatesStore(
-                MooncakeStoreConfig(
-                    local_hostname="127.0.0.1",
-                    metadata_server=args.mooncake_metadata_server,
-                    master_server_address=args.mooncake_master,
-                    protocol=args.mooncake_protocol,
+            transfer = MooncakeTransfer(
+                MooncakeHiddenStatesStore(
+                    MooncakeStoreConfig(
+                        local_hostname="127.0.0.1",
+                        metadata_server=args.mooncake_metadata_server,
+                        master_server_address=args.mooncake_master,
+                        protocol=args.mooncake_protocol,
+                    )
                 )
             )
+        else:
+            hs_path = (
+                Path(args.hidden_states_path)
+                if args.hidden_states_path
+                else Path(args.data_path) / "hidden_states"
+            )
+            transfer = FileTransfer(hs_path)
         train_dataset = ArrowDataset(
             datapath=args.data_path,
             max_len=args.total_seq_len,
-            hidden_states_path=args.hidden_states_path,
+            transfer=transfer,
             vllm_endpoint=args.vllm_endpoint,
             on_missing=args.on_missing,
             on_generate=args.on_generate,
@@ -419,12 +428,11 @@ def main(args: argparse.Namespace):
             hidden_states_dtype=hidden_states_dtype,
             request_timeout=args.request_timeout,
             max_retries=args.max_retries,
-            mooncake_store=mooncake_store,
         )
         val_dataset = ArrowDataset(
             datapath=args.data_path,
             max_len=args.total_seq_len,
-            hidden_states_path=args.hidden_states_path,
+            transfer=transfer,
             vllm_endpoint=args.vllm_endpoint,
             on_missing=args.on_missing,
             on_generate=args.on_generate,
@@ -433,7 +441,6 @@ def main(args: argparse.Namespace):
             hidden_states_dtype=hidden_states_dtype,
             request_timeout=args.request_timeout,
             max_retries=args.max_retries,
-            mooncake_store=mooncake_store,
         )
 
     train_loader = setup_dataloader(

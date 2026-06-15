@@ -2,31 +2,26 @@ import json
 import math
 import os
 import random
-import shutil
 import warnings
 from collections.abc import Callable
 from os import PathLike
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import Any, Literal, cast
 
 import openai
 import torch
 import torch.nn.functional as F  # noqa: N812
 from datasets import load_from_disk
-from safetensors.torch import load_file
 from torch.utils.data import Dataset
 
+from speculators.data_generation.transfer import FileTransfer, HiddenStatesTransfer
 from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_REQUEST_TIMEOUT,
     ClientItem,
     generate_hidden_states,
-    wait_for_lock,
 )
 from speculators.train.noise_transforms import TransformTensors
-
-if TYPE_CHECKING:
-    from speculators.data_generation.mooncake_store import MooncakeHiddenStatesStore
 
 BatchType = dict[str, Any]
 
@@ -217,23 +212,12 @@ class BaseDataset(Dataset):
         return data
 
 
-def _maybe_load_hs_file(file_path: Path) -> dict[str, torch.Tensor] | None:
-    lock_path = str(file_path) + ".lock"
-    if Path(lock_path).exists():
-        wait_for_lock(lock_path)
-
-    if file_path.exists():
-        return load_file(file_path)
-
-    return None
-
-
 class ArrowDataset(BaseDataset):
     def __init__(
         self,
         max_len: int,
         datapath: str | PathLike,
-        hidden_states_path: str | PathLike | None = None,
+        transfer: HiddenStatesTransfer | None = None,
         vllm_endpoint: str = "http://localhost:8000/v1",
         on_missing: Literal["generate", "skip", "warn", "raise"] = "generate",
         on_generate: Literal["cache", "delete"] = "delete",
@@ -243,20 +227,7 @@ class ArrowDataset(BaseDataset):
         model: str | None = None,
         request_timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
         max_retries: int = DEFAULT_MAX_RETRIES,
-        mooncake_store: "MooncakeHiddenStatesStore | None" = None,
     ):
-        """Initialize the ArrowDataset.
-        Args:
-            max_len: The maximum length of the sequence.
-            datapath: The path to the data directory that contains the preprocessed
-            arrow dataset.
-            transform: The transform to apply to the data.
-            hidden_states_dtype: The dtype of the hidden states.
-            mooncake_store: If set, on-demand hidden states are read from this
-                Mooncake store (by the key vLLM returns) instead of a shared
-                filesystem. Requires the vLLM server launched with
-                ``--hidden-states-backend mooncake``.
-        """
         self.data = load_from_disk(datapath)
         self.start_file_idx = 0
         if split_ratio == 1.0:
@@ -272,11 +243,7 @@ class ArrowDataset(BaseDataset):
         else:
             raise ValueError("split_ratio must be in range (-1.0, 1.0] excluding 0.0.")
 
-        self.hidden_states_path: Path = (
-            Path(datapath) / "hidden_states"
-            if hidden_states_path is None
-            else Path(hidden_states_path)
-        )
+        self.transfer = transfer or FileTransfer(Path(datapath) / "hidden_states")
         self.vllm_endpoint = vllm_endpoint
         self.on_missing = on_missing
         self.on_generate = on_generate
@@ -284,7 +251,6 @@ class ArrowDataset(BaseDataset):
         self.model = model
         self.request_timeout = request_timeout
         self.max_retries = max_retries
-        self.mooncake_store = mooncake_store
 
         # Delay super init so that `_compute_approx_lengths` has required data
         super().__init__(max_len, transform, hidden_states_dtype)
@@ -317,14 +283,12 @@ class ArrowDataset(BaseDataset):
     def _maybe_generate_hs(self, index: int) -> dict[str, torch.Tensor] | None:
         if not self.client:
             self._setup_client()
-        if self.mooncake_store is not None and self.mooncake_store._store is None:
-            self.mooncake_store.setup()
+        self.transfer.setup()
 
         dataset_item = self.data[index]
         client_item = build_client_item(dataset_item)
 
         try:
-            # A file path (file backend) or a Mooncake key (mooncake backend).
             handle = generate_hidden_states(
                 self.client,  # type:ignore[arg-type]
                 self.model,  # type:ignore[arg-type]
@@ -333,20 +297,14 @@ class ArrowDataset(BaseDataset):
                 max_retries=self.max_retries,
             )
 
-            if self.mooncake_store is not None:
-                loaded_hs = self.mooncake_store.get_sample(handle)
-            else:
-                loaded_hs = _maybe_load_hs_file(Path(handle))
+            loaded_hs = self.transfer.get_generated(handle)
 
-                match self.on_generate:
-                    case "cache":
-                        file_idx = self._map_to_file_idx(index)
-                        target_path = (
-                            self.hidden_states_path / f"hs_{file_idx}.safetensors"
-                        )
-                        shutil.move(handle, target_path)
-                    case "delete":
-                        Path(handle).unlink()
+            file_idx = self._map_to_file_idx(index)
+            match self.on_generate:
+                case "cache":
+                    self.transfer.cache(handle, file_idx)
+                case "delete":
+                    self.transfer.delete(handle)
         except Exception as e:  # noqa: BLE001
             warnings.warn(
                 f"Failed to load/cache hidden states for sample {index}: {e}",
@@ -358,8 +316,7 @@ class ArrowDataset(BaseDataset):
 
     def _get_raw_data(self, index):
         file_idx = self._map_to_file_idx(index)
-        candidate_path = self.hidden_states_path / f"hs_{file_idx}.safetensors"
-        loaded_hs = _maybe_load_hs_file(candidate_path)
+        loaded_hs = self.transfer.get_cached(file_idx)
 
         if loaded_hs is None:
             match self.on_missing:

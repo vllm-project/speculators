@@ -58,5 +58,3 @@ def test_meta_written_last_gates_visibility(store):
     store._store.kv["req-2:hidden_states"] = b"partial"
     with pytest.raises(TimeoutError):
         store.get_sample("req-2", timeout=0.2, poll_interval=0.02)
-
-

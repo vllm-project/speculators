@@ -56,6 +56,10 @@ class MooncakeHiddenStatesStore:
         self.config = config
         self._store = None
 
+    @property
+    def is_setup(self):
+        return self._store is not None
+
     def setup(self) -> MooncakeHiddenStatesStore:
         if self._store is not None:
             return self
