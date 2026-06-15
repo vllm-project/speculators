@@ -29,26 +29,28 @@ _ADAMW_NAME_HINTS = ("embed_tokens", "lm_head")
 _MATRIX_NDIM = 2
 
 
-def split_named_params_for_muon(model: Module) -> tuple[list[Tensor], list[Tensor]]:
+def split_named_params_for_muon(
+    model: Module,
+) -> tuple[list[tuple[str, Tensor]], list[tuple[str, Tensor]]]:
     """Split a model's trainable parameters into Muon and AdamW groups.
 
     A parameter goes to the Muon group iff it requires gradients, is 2D, and is not an
     embedding or LM-head weight. All other trainable parameters go to the AdamW group.
 
     :param model: The model whose parameters should be partitioned.
-    :return: A ``(muon_params, adamw_params)`` tuple of parameter lists.
+    :return: A ``(muon_params, adamw_params)`` tuple of named parameter lists.
     """
-    muon_params: list[Tensor] = []
-    adamw_params: list[Tensor] = []
+    muon_params: list[tuple[str, Tensor]] = []
+    adamw_params: list[tuple[str, Tensor]] = []
     for name, param in model.named_parameters():
         if not param.requires_grad:
             continue
         if param.ndim == _MATRIX_NDIM and not any(
             hint in name for hint in _ADAMW_NAME_HINTS
         ):
-            muon_params.append(param)
+            muon_params.append((name, param))
         else:
-            adamw_params.append(param)
+            adamw_params.append((name, param))
     return muon_params, adamw_params
 
 
@@ -76,6 +78,7 @@ def build_optimizers(model: Module, config) -> list[torch.optim.Optimizer]:
             len(muon_params),
             len(adamw_params),
         )
+
         optimizers: list[torch.optim.Optimizer] = []
         if muon_params:
             optimizers.append(

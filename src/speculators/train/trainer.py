@@ -239,7 +239,9 @@ class Trainer:
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
             self._optimizers_step()
 
-            current_lr = self.optimizers[0].param_groups[0]["lr"]
+            current_lrs = {
+                type(opt).__name__: opt.param_groups[0]["lr"] for opt in self.optimizers
+            }
             self._schedulers_step()
 
             if self.global_step % self.config.log_freq == 0:
@@ -250,11 +252,16 @@ class Trainer:
                 metrics = {k: v.item() for k, v in metrics.items()}
                 world_size = dist.get_world_size() if self.is_distributed else 1
                 metrics = normalize_counted_metrics(metrics, world_size)
+                lr_info = (
+                    current_lrs
+                    if len(current_lrs) > 1
+                    else next(iter(current_lrs.values()))
+                )
                 metric_logger.info(
                     {
                         "train": metrics,
                         "epoch": epoch,
-                        "lr": current_lr,
+                        "lr": lr_info,
                         "global_step": self.global_step,
                     },
                     extra={"step": self.global_step},

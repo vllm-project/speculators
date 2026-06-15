@@ -80,7 +80,7 @@ class BaseCheckpointer:
         loaded = torch.load(scheduler_path, weights_only=True)
         schedulers = _as_list(scheduler)
         loaded_list = loaded if isinstance(loaded, list) else [loaded]
-        for sched, state_dict in zip(schedulers, loaded_list, strict=False):
+        for sched, state_dict in zip(schedulers, loaded_list, strict=True):
             sched.load_state_dict(state_dict)
 
     def save_scheduler_state_dict(self, scheduler: SchedulerOrList, epoch: int | str):
@@ -269,7 +269,7 @@ class SingleGPUCheckpointer(BaseCheckpointer):
         optimizers = _as_list(optimizer)
         loaded_list = loaded if isinstance(loaded, list) else [loaded]
         dtype = float_dtype or model.dtype
-        for opt, state_dict in zip(optimizers, loaded_list, strict=False):
+        for opt, state_dict in zip(optimizers, loaded_list, strict=True):
             opt.load_state_dict(convert_float_dtype(state_dict, dtype))
 
     def save_checkpoint(
