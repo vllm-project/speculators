@@ -16,17 +16,25 @@ from speculators.data_generation.mooncake_store import (
 
 
 class _FakeMooncakeStore:
-    """In-memory stand-in for MooncakeDistributedStore's bytes API."""
+    """In-memory stand-in for MooncakeDistributedStore."""
 
     def __init__(self):
-        self.kv: dict[str, bytes] = {}
+        self.kv: dict[str, bytes | torch.Tensor] = {}
 
     def put(self, key: str, value: bytes) -> int:
         self.kv[key] = bytes(value)
         return 0
 
     def get(self, key: str) -> bytes:
-        return self.kv.get(key, b"")
+        v = self.kv.get(key, b"")
+        return v if isinstance(v, bytes) else b""
+
+    def put_tensor(self, key: str, tensor: torch.Tensor) -> int:
+        self.kv[key] = tensor.clone()
+        return 0
+
+    def get_tensor(self, key: str) -> torch.Tensor:
+        return self.kv[key].clone()
 
 
 @pytest.fixture
@@ -55,6 +63,6 @@ def test_put_get_roundtrip_preserves_shape_and_dtype(store):
 def test_meta_written_last_gates_visibility(store):
     # get_sample keys off the meta blob, which put_sample writes last. Simulate
     # a half-written sample (tensors present, meta absent) -> consumer waits.
-    store._store.kv["req-2:hidden_states"] = b"partial"
+    store._store.put_tensor("req-2:hidden_states", torch.zeros(1))
     with pytest.raises(TimeoutError):
         store.get_sample("req-2", timeout=0.2, poll_interval=0.02)

@@ -14,16 +14,6 @@ from dataclasses import dataclass
 
 import torch
 
-_DTYPE_TO_STR = {
-    torch.float32: "float32",
-    torch.bfloat16: "bfloat16",
-    torch.float16: "float16",
-    torch.int64: "int64",
-    torch.int32: "int32",
-    torch.bool: "bool",
-}
-_STR_TO_DTYPE = {v: k for k, v in _DTYPE_TO_STR.items()}
-
 
 @dataclass
 class MooncakeStoreConfig:
@@ -47,9 +37,9 @@ class MooncakeStoreConfig:
 class MooncakeHiddenStatesStore:
     """Stores/loads tensor dicts in a Mooncake store.
 
-    Each sample is written as raw tensor bytes under ``{key}:{name}`` plus a
-    ``{key}:meta`` JSON blob with shapes/dtypes. ``meta`` is written last, so its
-    presence marks the sample complete and ``get_sample`` can poll for it.
+    Each sample is written via ``put_tensor`` under ``{key}:{name}`` plus a
+    ``{key}:meta`` JSON marker listing tensor names. ``meta`` is written last,
+    so its presence marks the sample complete and ``get_sample`` can poll for it.
     """
 
     def __init__(self, config: MooncakeStoreConfig):
@@ -86,35 +76,20 @@ class MooncakeHiddenStatesStore:
 
     def put_sample(self, key: str, tensors: dict[str, torch.Tensor]) -> None:
         assert self._store is not None, "call setup() first"
-        meta: dict[str, dict] = {}
+        names = []
         for name, tensor in tensors.items():
-            cpu_t = tensor.detach().to("cpu").contiguous()
-            dtype_str = _DTYPE_TO_STR.get(cpu_t.dtype)
-            if dtype_str is None:
-                raise TypeError(
-                    f"Unsupported dtype for Mooncake transfer: {cpu_t.dtype}"
-                )
-            meta[name] = {"shape": list(cpu_t.shape), "dtype": dtype_str}
-            # uint8 view to get raw bytes for any dtype (numpy has no bfloat16).
-            raw = cpu_t.reshape(-1).view(torch.uint8).numpy().tobytes()
-            self._store.put(f"{key}:{name}", raw)
-        self._store.put(f"{key}:meta", json.dumps(meta).encode("utf-8"))
+            self._store.put_tensor(
+                f"{key}:{name}", tensor.detach().to("cpu").contiguous()
+            )
+            names.append(name)
+        self._store.put(f"{key}:meta", json.dumps(names).encode("utf-8"))
 
     def get_sample(
         self, key: str, timeout: float = 120.0, poll_interval: float = 0.05
     ) -> dict[str, torch.Tensor]:
         assert self._store is not None, "call setup() first"
-        meta = json.loads(self._wait_for(f"{key}:meta", timeout, poll_interval))
-        out: dict[str, torch.Tensor] = {}
-        for name, spec in meta.items():
-            raw = self._store.get(f"{key}:{name}")
-            dtype = _STR_TO_DTYPE[spec["dtype"]]
-            out[name] = (
-                torch.frombuffer(bytearray(raw), dtype=dtype)
-                .reshape(spec["shape"])
-                .clone()
-            )
-        return out
+        names = json.loads(self._wait_for(f"{key}:meta", timeout, poll_interval))
+        return {name: self._store.get_tensor(f"{key}:{name}") for name in names}
 
     def _wait_for(self, key: str, timeout: float, poll_interval: float) -> bytes:
         deadline = time.monotonic() + timeout
