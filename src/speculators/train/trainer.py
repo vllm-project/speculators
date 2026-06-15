@@ -284,10 +284,13 @@ class Trainer:
             sampler, "_cached_generated_batches"
         )
         if skip_steps > 0 and has_fast_skip_api:
-            all_batches = sampler._generate_batches(epoch)  # noqa: SLF001
+            all_batches = sampler._generate_batches(epoch)  # type: ignore[union-attr]  # noqa: SLF001
             remaining = all_batches[skip_steps:]
             # Temporarily override the sampler cache with the sliced list.
-            sampler._cached_generated_batches = (epoch, remaining)  # noqa: SLF001
+            sampler._cached_generated_batches = (  # type: ignore[union-attr]  # noqa: SLF001
+                epoch,
+                remaining,
+            )
             root_logger.info(
                 f"Fast-skipping {skip_steps} batches via sampler slice "
                 f"(no vLLM calls for skipped batches). "
@@ -295,8 +298,8 @@ class Trainer:
             )
         elif skip_steps > 0:
             root_logger.warning(
-                "Sampler lacks fast-skip private API; falling back to "
-                f"iteration-based skip for {skip_steps} steps."
+                "Sampler lacks fast-skip API; resume will replay "
+                f"{skip_steps} batches from the start of the epoch."
             )
         return skip_steps
 

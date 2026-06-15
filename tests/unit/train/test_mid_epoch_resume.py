@@ -3,13 +3,18 @@
 import json
 import tempfile
 from pathlib import Path
+from typing import Protocol, cast
 
 import pytest
 import torch
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
 
-from speculators.train.checkpointer import SingleGPUCheckpointer
+from speculators.model import SpeculatorModel
+from speculators.train.checkpointer import (
+    DistributedCheckpointer,
+    SingleGPUCheckpointer,
+)
 from speculators.train.trainer import Trainer, TrainerConfig
 
 # ---------------------------------------------------------------------------
@@ -23,20 +28,23 @@ def trained_steps() -> list[tuple[int, int, int]]:
     return []
 
 
-def _patch_checkpointer() -> None:
-    """Stub out all checkpointer I/O that requires real model weights."""
-    SingleGPUCheckpointer.save_checkpoint = (  # type: ignore[method-assign]
-        lambda self, model, opt, epoch: (self.path / str(epoch)).mkdir(
-            parents=True, exist_ok=True
-        )
-    )
-    SingleGPUCheckpointer.save_scheduler_state_dict = lambda *a: None  # type: ignore[method-assign]
-    SingleGPUCheckpointer.load_model_state_dict = lambda *a: None  # type: ignore[method-assign]
-    SingleGPUCheckpointer.load_optimizer_state_dict = lambda *a: None  # type: ignore[method-assign]
-    SingleGPUCheckpointer.load_scheduler_state_dict = lambda *a: None  # type: ignore[method-assign]
+@pytest.fixture(autouse=True)
+def patch_checkpointer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub checkpointer I/O that requires real model weights or process groups."""
 
+    def _save_checkpoint(self: object, *args: object, **kwargs: object) -> None:
+        epoch = args[2] if len(args) >= 3 else kwargs.get("epoch", "0")
+        self.path.joinpath(str(epoch)).mkdir(parents=True, exist_ok=True)  # type: ignore[attr-defined]
 
-_patch_checkpointer()
+    def _noop(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    for cls in (SingleGPUCheckpointer, DistributedCheckpointer):
+        monkeypatch.setattr(cls, "save_checkpoint", _save_checkpoint)
+        monkeypatch.setattr(cls, "save_scheduler_state_dict", _noop)
+        monkeypatch.setattr(cls, "load_model_state_dict", _noop)
+        monkeypatch.setattr(cls, "load_optimizer_state_dict", _noop)
+        monkeypatch.setattr(cls, "load_scheduler_state_dict", _noop)
 
 
 class _TinyDataset(Dataset):
@@ -51,20 +59,39 @@ def _make_loader() -> DataLoader:
     return DataLoader(_TinyDataset(), batch_size=10, shuffle=False)
 
 
+class _BatchSamplerWithSetEpoch(Protocol):
+    def set_epoch(self, epoch: int) -> None: ...
+
+
+class _FastSkipBatchSamplerProtocol(Protocol):
+    _cached_generated_batches: tuple[int, list[list[int]]] | None
+
+    def _generate_batches(self, epoch: int) -> list[list[int]]: ...
+
+
+def _dummy_model() -> SpeculatorModel:
+    return cast("SpeculatorModel", nn.Identity())
+
+
 class _MockTrainer(Trainer):
     """Trainer subclass that records steps without GPU/model ops."""
+
+    _trained_steps: list[tuple[int, int, int]]
 
     def setup_model(self) -> None:
         pass
 
     def setup_optimizer(self) -> None:
         p = nn.Parameter(torch.zeros(1))
-        self.opt = torch.optim.SGD([p], lr=1e-4)
+        self.opt = torch.optim.AdamW([p], lr=1e-4)
         self.scheduler = None
 
     def train_epoch(self, epoch: int) -> None:
         if hasattr(self.train_loader.batch_sampler, "set_epoch"):
-            self.train_loader.batch_sampler.set_epoch(epoch)
+            batch_sampler = cast(
+                "_BatchSamplerWithSetEpoch", self.train_loader.batch_sampler
+            )
+            batch_sampler.set_epoch(epoch)
 
         skip_steps = 0
         if epoch == getattr(self, "current_epoch", epoch):
@@ -97,19 +124,20 @@ def _make_trainer(
     trained_steps: list[tuple[int, int, int]],
     resume: bool = False,
     epochs: int = 1,
+    is_distributed: bool = False,
 ) -> _MockTrainer:
     cfg = TrainerConfig(
         save_path=save_path,
         num_epochs=epochs,
         lr=1e-4,
         local_rank=0,
-        is_distributed=False,
+        is_distributed=is_distributed,
         resume_from_checkpoint=resume,
         checkpoint_freq=0.3,
         log_freq=1,
         scheduler_type="none",
     )
-    trainer = _MockTrainer(cfg, cfg, _make_loader())
+    trainer = _MockTrainer(_dummy_model(), cfg, _make_loader())
     trainer._trained_steps = trained_steps
     return trainer
 
@@ -237,6 +265,44 @@ def test_end_of_epoch_symlink(
         assert end_link.is_symlink()
 
 
+def test_distributed_mid_epoch_checkpoint_rank_gate(
+    trained_steps: list[tuple[int, int, int]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rank-0 writes state/symlink while nonzero ranks skip side effects."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        num_steps = len(_make_loader())
+        step_interval = max(1, round(num_steps * 0.3))
+
+        rank0 = _make_trainer(
+            tmpdir,
+            trained_steps=trained_steps,
+            is_distributed=True,
+        )
+        monkeypatch.setattr(torch.distributed, "get_rank", lambda: 0)
+        rank0.maybe_save_checkpoint(0, local_step=step_interval)
+
+        state_rank0 = Path(tmpdir) / "0" / "training_state.json"
+        link_rank0 = Path(tmpdir) / f"epoch0_step{step_interval}"
+        assert state_rank0.exists()
+        assert link_rank0.is_symlink()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        rank1_steps: list[tuple[int, int, int]] = []
+        rank1 = _make_trainer(
+            tmpdir,
+            trained_steps=rank1_steps,
+            is_distributed=True,
+        )
+        monkeypatch.setattr(torch.distributed, "get_rank", lambda: 1)
+        rank1.maybe_save_checkpoint(0, local_step=step_interval)
+
+        state_rank1 = Path(tmpdir) / "0" / "training_state.json"
+        link_rank1 = Path(tmpdir) / f"epoch0_step{step_interval}"
+        assert not state_rank1.exists()
+        assert not link_rank1.exists()
+
+
 class _CountingDataset(Dataset):
     def __init__(self, n_items: int):
         self.n_items = n_items
@@ -285,7 +351,10 @@ class _FastSkipBatchSampler:
 class _FastSkipMockTrainer(_MockTrainer):
     def train_epoch(self, epoch: int) -> None:
         if hasattr(self.train_loader.batch_sampler, "set_epoch"):
-            self.train_loader.batch_sampler.set_epoch(epoch)
+            batch_sampler = cast(
+                "_BatchSamplerWithSetEpoch", self.train_loader.batch_sampler
+            )
+            batch_sampler.set_epoch(epoch)
 
         skip_steps = 0
         if epoch == getattr(self, "current_epoch", epoch):
@@ -297,9 +366,10 @@ class _FastSkipMockTrainer(_MockTrainer):
             sampler, "_cached_generated_batches"
         )
         if skip_steps > 0 and has_fast_skip_api:
-            all_batches = sampler._generate_batches(epoch)
+            fast_skip_sampler = cast("_FastSkipBatchSamplerProtocol", sampler)
+            all_batches = fast_skip_sampler._generate_batches(epoch)
             remaining = all_batches[skip_steps:]
-            sampler._cached_generated_batches = (epoch, remaining)
+            fast_skip_sampler._cached_generated_batches = (epoch, remaining)
 
         for local_step_rel, _batch in enumerate(self.train_loader, 1):
             local_step = local_step_rel + skip_steps
@@ -326,7 +396,7 @@ def test_fast_skip_sampler_slice_avoids_skipped_getitem(
             log_freq=1,
             scheduler_type="none",
         )
-        trainer = _FastSkipMockTrainer(cfg, cfg, loader)
+        trainer = _FastSkipMockTrainer(_dummy_model(), cfg, loader)
         trainer._trained_steps = trained_steps
         trainer._resume_local_step = 3
 
