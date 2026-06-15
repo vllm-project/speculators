@@ -285,8 +285,6 @@ class ArrowDataset(BaseDataset):
         self.request_timeout = request_timeout
         self.max_retries = max_retries
         self.mooncake_store = mooncake_store
-        if self.mooncake_store is not None:
-            self.mooncake_store.setup()
 
         # Delay super init so that `_compute_approx_lengths` has required data
         super().__init__(max_len, transform, hidden_states_dtype)
@@ -319,6 +317,8 @@ class ArrowDataset(BaseDataset):
     def _maybe_generate_hs(self, index: int) -> dict[str, torch.Tensor] | None:
         if not self.client:
             self._setup_client()
+        if self.mooncake_store is not None and self.mooncake_store._store is None:
+            self.mooncake_store.setup()
 
         dataset_item = self.data[index]
         client_item = build_client_item(dataset_item)
@@ -335,8 +335,6 @@ class ArrowDataset(BaseDataset):
 
             if self.mooncake_store is not None:
                 loaded_hs = self.mooncake_store.get_sample(handle)
-                if self.on_generate == "delete":
-                    self.mooncake_store.remove_sample(handle)
             else:
                 loaded_hs = _maybe_load_hs_file(Path(handle))
 

@@ -67,7 +67,6 @@ def main() -> None:
         )
     ).setup()
     out = store.get_sample(key, timeout=30.0)
-    store.remove_sample(key)
 
     hs, ids = out["hidden_states"], out["token_ids"]
     print(f"hidden_states={tuple(hs.shape)} {hs.dtype}  token_ids={tuple(ids.shape)}")

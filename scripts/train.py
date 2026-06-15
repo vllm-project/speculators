@@ -116,6 +116,7 @@ def setup_dataloader(
             preprocess=preprocess,
         ),
         persistent_workers=num_workers > 0,
+        in_order=False,
     )
 
 

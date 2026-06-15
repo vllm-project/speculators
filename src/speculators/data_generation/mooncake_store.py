@@ -112,19 +112,6 @@ class MooncakeHiddenStatesStore:
             )
         return out
 
-    def remove_sample(self, key: str) -> None:
-        assert self._store is not None, "call setup() first"
-        try:
-            raw = self._store.get(f"{key}:meta")
-            names = list(json.loads(raw.decode("utf-8")).keys()) if raw else []
-        except Exception:
-            names = []
-        for sub in [*names, "meta"]:
-            try:
-                self._store.remove(f"{key}:{sub}")
-            except Exception:
-                pass
-
     def _wait_for(self, key: str, timeout: float, poll_interval: float) -> bytes:
         deadline = time.monotonic() + timeout
         while True:

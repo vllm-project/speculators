@@ -3,7 +3,7 @@
 These exercise the producer/consumer payload contract without a real Mooncake
 cluster by swapping in a dict-backed fake for ``MooncakeDistributedStore``.
 The point is to prove the seam: a tensor dict written by the producer is read
-back byte-identical by the consumer, and read-once delete frees the keys.
+back byte-identical by the consumer.
 """
 
 import pytest
@@ -27,10 +27,6 @@ class _FakeMooncakeStore:
 
     def get(self, key: str) -> bytes:
         return self.kv.get(key, b"")
-
-    def remove(self, key: str) -> int:
-        self.kv.pop(key, None)
-        return 0
 
 
 @pytest.fixture
@@ -64,11 +60,3 @@ def test_meta_written_last_gates_visibility(store):
         store.get_sample("req-2", timeout=0.2, poll_interval=0.02)
 
 
-def test_remove_sample_frees_all_keys(store):
-    store.put_sample(
-        "req-3", {"hidden_states": torch.zeros(2, 2), "token_ids": torch.zeros(2)}
-    )
-    assert any(k.startswith("req-3:") for k in store._store.kv)
-
-    store.remove_sample("req-3")
-    assert not any(k.startswith("req-3:") for k in store._store.kv)
