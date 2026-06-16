@@ -1,4 +1,5 @@
 import argparse
+import gc
 import logging
 import random
 import warnings
@@ -465,6 +466,10 @@ def main(args: argparse.Namespace):
     trainer.run_training()
 
     # Cleanup
+    del trainer, draft_model
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
     maybe_destroy_distributed()
 
 
