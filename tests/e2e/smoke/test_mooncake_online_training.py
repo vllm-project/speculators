@@ -39,7 +39,7 @@ def mooncake_master_context(port: int = MOONCAKE_MASTER_PORT):
 
     cmd = [exe, "--port", str(port)]
     logger.info("Starting mooncake_master: {}", " ".join(cmd))
-    proc = subprocess.Popen(cmd)
+    proc = subprocess.Popen(cmd)  # noqa: S603
     time.sleep(2)
 
     if proc.poll() is not None:
@@ -70,7 +70,9 @@ def test_mooncake_online_smoke(
     seq_length = 512
     port = 8322
 
-    run_prepare_data(MODEL, "sharegpt", data_path, max_samples=50, seq_length=seq_length)
+    run_prepare_data(
+        MODEL, "sharegpt", data_path, max_samples=50, seq_length=seq_length
+    )
 
     mooncake_kwargs = {
         "hidden_states_backend": "mooncake",
@@ -79,28 +81,30 @@ def test_mooncake_online_smoke(
         "mooncake_protocol": "tcp",
     }
 
-    with mooncake_master_context():
-        with launch_vllm_server_context(
+    with (
+        mooncake_master_context(),
+        launch_vllm_server_context(
             MODEL,
             port,
             hidden_states_path=str(tmp_path / "hidden_states"),
             max_model_len=seq_length + 1,
             enforce_eager=True,
             **mooncake_kwargs,
-        ):
-            run_training(
-                MODEL,
-                data_path,
-                save_path,
-                seq_length,
-                port,
-                draft_vocab_size=8192,
-                epochs=1,
-                lr=3e-4,
-                log_freq=1,
-                timeout=30 * 60,
-                **mooncake_kwargs,
-            )
+        ),
+    ):
+        run_training(
+            MODEL,
+            data_path,
+            save_path,
+            seq_length,
+            port,
+            draft_vocab_size=8192,
+            epochs=1,
+            lr=3e-4,
+            log_freq=1,
+            timeout=30 * 60,
+            **mooncake_kwargs,  # type: ignore[arg-type]
+        )
 
     checkpoint_path = str(save_path / "checkpoint_best")
     run_vllm_engine(

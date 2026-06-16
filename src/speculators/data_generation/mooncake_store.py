@@ -55,7 +55,9 @@ class MooncakeHiddenStatesStore:
         if self._store is not None:
             return self
         try:
-            from mooncake.store import MooncakeDistributedStore  # noqa: PLC0415
+            from mooncake.store import (  # type: ignore[import-not-found] # noqa: PLC0415
+                MooncakeDistributedStore,
+            )
         except ImportError as e:  # pragma: no cover - optional dependency
             raise ImportError(
                 "Mooncake is required for the Mooncake hidden-states backend. "
@@ -93,6 +95,7 @@ class MooncakeHiddenStatesStore:
         return {name: self._store.get_tensor(f"{key}:{name}") for name in names}
 
     def _wait_for(self, key: str, timeout: float, poll_interval: float) -> bytes:
+        assert self._store is not None, "call setup() first"
         deadline = time.monotonic() + timeout
         while True:
             raw = self._store.get(key)

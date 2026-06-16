@@ -290,7 +290,7 @@ def parse_vocab_mappings(args: argparse.Namespace):
     return None, None, verifier_config.vocab_size
 
 
-def main(args: argparse.Namespace):
+def main(args: argparse.Namespace):  # noqa: PLR0912
     # Set random seed for reproducibility
     set_seed(args.seed, args.deterministic_cuda)
 
