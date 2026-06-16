@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ "${BUILDKITE_SOURCE:-}" == "ui" ]]; then
+  echo "Manual build — proceeding with GPU tests"
+  exit 0
+fi
+
 if [[ -z "${BUILDKITE_PULL_REQUEST:-}" ]] || [[ "${BUILDKITE_PULL_REQUEST}" == "false" ]]; then
   BRANCH="${BUILDKITE_BRANCH:-}"
   if [[ "$BRANCH" == "main" ]] || [[ "$BRANCH" == release* ]]; then
