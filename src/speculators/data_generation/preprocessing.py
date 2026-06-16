@@ -489,6 +489,8 @@ def _parse_conv_tools(conv_tools: object, idx: int) -> list | None:
     on invalid JSON or unexpected types."""
     if not conv_tools:
         return None
+    if isinstance(conv_tools, list):
+        return conv_tools
     if not isinstance(conv_tools, str):
         log.warning(
             f"Non-string value in tools column for conversation {idx}: "
