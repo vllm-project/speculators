@@ -2,14 +2,19 @@
 set -euo pipefail
 
 if [[ -z "${BUILDKITE_PULL_REQUEST:-}" ]] || [[ "${BUILDKITE_PULL_REQUEST}" == "false" ]]; then
-  echo "Not a pull request build, skipping label check"
-  exit 0
+  BRANCH="${BUILDKITE_BRANCH:-}"
+  if [[ "$BRANCH" == "main" ]] || [[ "$BRANCH" == release* ]]; then
+    echo "Push to ${BRANCH} — proceeding with GPU tests"
+    exit 0
+  else
+    echo "Push to ${BRANCH} — skipping GPU tests (only main and release branches run tests)"
+    exit 1
+  fi
 fi
 
 REPO=$(echo "${BUILDKITE_REPO}" | sed -E 's#.*github\.com[:/](.*)\.git#\1#')
 
 LABELS=$(curl -sf \
-  -H "Authorization: token ${GITHUB_TOKEN}" \
   -H "Accept: application/vnd.github.v3+json" \
   "https://api.github.com/repos/${REPO}/pulls/${BUILDKITE_PULL_REQUEST}" \
   | jq -r '.labels[].name')
