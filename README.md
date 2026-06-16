@@ -41,6 +41,9 @@ Big updates have landed in Speculators! To get a more in-depth look, check out t
 
 Some of the exciting new features include:
 
+- **P-EAGLE Training Support**: Added support for the [P-EAGLE training algorithm](https://docs.vllm.ai/projects/speculators/en/latest/user_guide/algorithms/peagle.html), which extends EAGLE-3's architecture with parallel multi-token prediction via Conditional-On-Distribution (COD) sampling. Rather than generating draft tokens sequentially, P-EAGLE predicts multiple tokens in a single forward pass, reducing drafting latency. The Red Hat team published a [P-EAGLE speculator for Qwen3-8B](https://huggingface.co/RedHatAI/Qwen3-8B-speculator.peagle).
+- **MTP Finetuning Support**: Added support for finetuning the native Multi-Token Prediction (MTP) heads of models like Qwen3-Next on domain-specific data, following the [FastMTP](https://arxiv.org/abs/2509.18362) approach. Because the MTP head is small (~100M–400M params), it can be trained on pre-extracted hidden states without loading the full verifier
+- **Sliding Window Attention for DFlash**: Added sliding window attention support to DFlash speculators via `--sliding-window` and `--swa-causal` training flags. Sliding window attention reduces KV cache allocation for long-context sequences and can improve per-position acceptance rates compared to full attention.
 - **Qwen3-8B DFlash Speculator**: The RedHat team published a [DFlash speculator for Qwen3-8B](https://huggingface.co/RedHatAI/Qwen3-8B-speculator.dflash), achieving average speculative token acceptance lengths of up to 3.74 on `math_reasoning`.
 - **Gemma 4 Speculators**: The RedHat team published speculators for Gemma 4 31B-it, including both [DFlash](https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.dflash) and [EAGLE-3](https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.eagle3) checkpoints, enabling production-grade speculative decoding for Gemma 4 models.
 - **DFlash Training Algorithm**: Added support for the DFlash training algorithm with anchored-block drafting, using auxiliary hidden states from multiple verifier layers. Includes CLI options for block size and max anchors, plus DFlash metrics, utilities, and draft model. DFlash models trained through Speculators can now run seamlessly in vLLM as of [vLLM PR #38300](https://github.com/vllm-project/vllm/pull/38300).
@@ -88,7 +91,7 @@ The following table summarizes the models that have been trained end-to-end by o
 <tr>
 <td rowspan="3">Qwen3</td>
 <td>8B</td>
-<td><a href="https://huggingface.co/RedHatAI/Qwen3-8B-speculator.eagle3">EAGLE-3</a> ✅<br/><a href="https://huggingface.co/RedHatAI/Qwen3-8B-speculator.dflash">DFlash</a> ✅</td>
+<td><a href="https://huggingface.co/RedHatAI/Qwen3-8B-speculator.eagle3">EAGLE-3</a> ✅<br/><a href="https://huggingface.co/RedHatAI/Qwen3-8B-speculator.dflash">DFlash</a> ✅<br/><a href="https://huggingface.co/RedHatAI/Qwen3-8B-speculator.peagle">P-EAGLE</a> ✅</td>
 <td>✅</td>
 </tr>
 <tr>
