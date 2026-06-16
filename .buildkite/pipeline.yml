@@ -1,8 +1,11 @@
 steps:
   - label: ":gear: Speculators Unit and Integration Tests"
+    if: >-
+      build.source == "ui" ||
+      build.branch == "main" ||
+      build.branch =~ /^release/ ||
+      build.pull_request.labels includes "ready"
     command: |
-      chmod +x .buildkite/gpu-tests/scripts/check-ready-label.sh
-      .buildkite/gpu-tests/scripts/check-ready-label.sh
       RUNNER=$$(buildkite-agent meta-data get "test-runner" --default "H100")
       echo "╔══════════════════════════════════════════╗"
       echo "║          BUILD SUMMARY                   ║"
