@@ -126,12 +126,16 @@ def make_dflash_model(
     draft_vocab_size: int = 64,
     block_size: int = 4,
     max_anchors: int = 8,
+    draft_attn_impl: str | None = None,
     device: str = "cuda:0",
     dtype: torch.dtype = torch.bfloat16,
 ) -> DFlashDraftModel:
     """Create a tiny DFlash model with real initialized weights."""
+    transformer_config = copy.deepcopy(TINY_QWEN3_CONFIG)
+    if draft_attn_impl is not None:
+        transformer_config._attn_implementation = draft_attn_impl
     config = DFlashSpeculatorConfig(
-        transformer_layer_config=copy.deepcopy(TINY_QWEN3_CONFIG),
+        transformer_layer_config=transformer_config,
         draft_vocab_size=draft_vocab_size,
         block_size=block_size,
         max_anchors=max_anchors,

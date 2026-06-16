@@ -744,6 +744,14 @@ def parse_args():
         default=256,
         help="Maximum anchor positions for DFlash training (default: 256)",
     )
+    parser.add_argument(
+        "--draft-attn-impl",
+        type=str,
+        default="simple_flex_attention",
+        choices=["simple_flex_attention", "sdpa", "eager"],
+        help="Attention implementation for the DFlash draft layers. "
+        "Use 'sdpa' or 'eager' for non-flex backends.",
+    )
     # P-EAGLE specific parameters
     parser.add_argument(
         "--num-depths",
