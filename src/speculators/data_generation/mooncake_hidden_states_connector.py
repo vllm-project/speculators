@@ -105,9 +105,7 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
         self._is_tp_rank_zero: bool = True
         self._store_ready: bool = False
         self._executor = ThreadPoolExecutor(
-            max_workers=self._kv_transfer_config.get_from_extra_config(
-                "num_writer_threads", 8
-            ),
+            max_workers=mooncake_cfg.num_writer_threads,
             thread_name_prefix="vllm-mooncake-hs",
         )
         self._req_futures: dict[str, Future] = {}
@@ -132,7 +130,7 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
         pass  # extraction happens in get_finished, once all tokens are done
 
     def wait_for_save(self) -> None:
-        pass  # no lock files to pre-create (Mooncake key presence gates reads)
+        pass
 
     def register_kv_caches(self, kv_caches: dict[str, torch.Tensor]):
         self._is_tp_rank_zero = get_tensor_model_parallel_rank() == 0

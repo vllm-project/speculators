@@ -23,9 +23,10 @@ class MooncakeStoreConfig:
     metadata_server: str = "http://localhost:8080/metadata"
     master_server_address: str = "localhost:50051"
     global_segment_size: int = 4 * 1024 * 1024 * 1024
-    local_buffer_size: int = 512 * 1024 * 1024
+    local_buffer_size: int = 2 * 1024 * 1024 * 1024
     protocol: str = "tcp"
     device_name: str = ""
+    num_writer_threads: int = 16
 
     @classmethod
     def from_dict(cls, d: dict | None) -> MooncakeStoreConfig:

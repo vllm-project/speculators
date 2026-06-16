@@ -72,6 +72,13 @@ def parse_args():
         help="Mooncake transport protocol. Used with backend=mooncake.",
     )
     parser.add_argument(
+        "--num-writer-threads",
+        type=int,
+        default=16,
+        help="Number of threads for async hidden-state writes. "
+        "Used with backend=mooncake.",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print the command that would be executed without running it",
@@ -130,6 +137,7 @@ def main():
                     "master_server_address": args.mooncake_master,
                     "metadata_server": args.mooncake_metadata_server,
                     "protocol": args.mooncake_protocol,
+                    "num_writer_threads": args.num_writer_threads,
                 }
             },
         }
