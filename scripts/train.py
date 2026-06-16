@@ -993,8 +993,14 @@ def parse_args():
     parser.add_argument(
         "--norm-before-fc",
         action="store_true",
-        help="Use RMSNorm before fc in Eagle3 draft path "
-        "(e.g. for gpt-oss). Omit for other models.",
+        help="Apply RMSNorm to concatenated target hidden states before the FC "
+        "projection layer (Eagle 3.1).",
+    )
+    parser.add_argument(
+        "--use-post-norm-feedback",
+        action="store_true",
+        help="Feed post-norm hidden states into the next TTT step (Eagle 3.1). "
+        "Reduces hidden-state magnitude drift across speculation depths.",
     )
     # D-Flash specific parameters
     parser.add_argument(
