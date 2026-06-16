@@ -122,10 +122,6 @@ def _normalize_conversation(
             normalized_turn["thinking"] = thinking
             normalized_turn["reasoning_content"] = thinking
 
-        # Preserve 'tool_calls' field if it exists
-        if "tool_calls" in turn and turn["tool_calls"]:
-            normalized_turn["tool_calls"] = turn["tool_calls"]
-
         normalized.append(normalized_turn)
 
         # Stop if we've reached the truncation point
