@@ -80,18 +80,21 @@ def setup_dataloader(
     hidden_size: int,
     num_workers: int = 12,
     num_target_layers: int = 3,
-    prefetch_factor: int = 4,
+    prefetch_factor: int | None = 4,
     preprocess=None,
 ) -> DataLoader:
     """Setup dataloader for training.
     Args:
-        file_list: List of file paths to load data from.
-        world_size: Number of processes in the distributed training.
-        rank: Global rank of the current process (shards data across nodes).
-        add_noise: Whether to add noise to the data.
-        noise_std: Standard deviation for noise augmentation.
+        dataset: The dataset to load data from.
+        world_size: Number of replicas for the batch sampler (dp_size when
+            using sequence parallelism, otherwise world_size).
+        rank: Rank for the batch sampler (dp_rank when using sequence
+            parallelism, otherwise rank).
+        hidden_size: Hidden size for the collate function.
         num_workers: Number of dataloader workers.
-        prefetch_factor: Dataloader prefetch factor.
+        num_target_layers: Number of target layers for the collate function.
+        prefetch_factor: Dataloader prefetch factor. None disables prefetch
+            (used for non-data SP ranks with num_workers=0).
         preprocess: Optional per-sample preprocessing function applied
             before collation (e.g. shift_batch for Eagle3).
     Returns:
@@ -103,11 +106,12 @@ def setup_dataloader(
         num_replicas=world_size,
         rank=rank,
     )
+    use_workers = num_workers > 0
     return DataLoader(
         dataset,
         batch_sampler=batch_sampler,
         num_workers=num_workers,
-        prefetch_factor=prefetch_factor,
+        prefetch_factor=prefetch_factor if use_workers else None,
         pin_memory=True,
         collate_fn=create_collate_fn(
             args.total_seq_len,
@@ -116,7 +120,7 @@ def setup_dataloader(
             dtype=dataset.hidden_states_dtype,
             preprocess=preprocess,
         ),
-        persistent_workers=True,
+        persistent_workers=use_workers,
     )
 
 
@@ -456,7 +460,9 @@ def main(args: argparse.Namespace):  # noqa: C901
     )
 
     # Setup distributed training
-    local_rank, world_size, rank, is_distributed = maybe_setup_distributed()
+    local_rank, world_size, rank, is_distributed = maybe_setup_distributed(
+        sp_size=args.sp_size,
+    )
     if not hasattr(torch, args.hidden_states_dtype):
         raise ValueError(
             "--hidden-states-dtype must be a dtype attribute of torch. e.g. `bfloat16`"
@@ -585,29 +591,88 @@ def main(args: argparse.Namespace):  # noqa: C901
             max_retries=args.max_retries,
         )
 
-    train_loader = setup_dataloader(
-        train_dataset,
-        world_size,
-        rank,
-        hidden_size,
-        num_target_layers=num_target_layers,
-        num_workers=args.num_workers,
-        prefetch_factor=args.prefetch_factor,
-        preprocess=preprocess,
-    )
-    val_loader = setup_dataloader(
-        val_dataset,
-        world_size,
-        rank,
-        hidden_size,
-        num_target_layers=num_target_layers,
-        num_workers=args.num_workers,
-        prefetch_factor=args.prefetch_factor,
-        preprocess=preprocess,
-    )
+    # Compute SP/DP topology
+    sp_size = args.sp_size
+    if sp_size > 1:
+        if world_size % sp_size != 0:
+            raise ValueError(
+                f"world_size ({world_size}) must be divisible by sp_size ({sp_size})"
+            )
+        if args.total_seq_len % sp_size != 0:
+            raise ValueError(
+                f"total_seq_len ({args.total_seq_len}) must be divisible by "
+                f"sp_size ({sp_size})"
+            )
+        from speculators.train.sequence_parallel import get_dp_rank, get_dp_size
+
+        dp_size = get_dp_size()
+        dp_rank = get_dp_rank()
+
+        # Switch attention to Ulysses SP variant for supported models
+        if args.speculator_type in ("eagle3",):
+            tl_cfg = draft_model.config.transformer_layer_config
+            tl_cfg._attn_implementation = "ulysses_flex_attention"  # noqa: SLF001
+    else:
+        dp_size = world_size
+        dp_rank = rank
+
+    # Only SP rank 0 in each group drives the DataLoader
+    is_sp_data_rank = sp_size <= 1 or (rank % sp_size == 0)
+
+    if is_sp_data_rank:
+        train_loader = setup_dataloader(
+            train_dataset,
+            dp_size,
+            dp_rank,
+            hidden_size,
+            num_target_layers=num_target_layers,
+            num_workers=args.num_workers,
+            prefetch_factor=args.prefetch_factor,
+            preprocess=preprocess,
+        )
+        val_loader = setup_dataloader(
+            val_dataset,
+            dp_size,
+            dp_rank,
+            hidden_size,
+            num_target_layers=num_target_layers,
+            num_workers=args.num_workers,
+            prefetch_factor=args.prefetch_factor,
+            preprocess=preprocess,
+        )
+    else:
+        # Non-data SP ranks receive batches via scatter; they still need a
+        # loader reference for len() in the trainer.  We create a minimal
+        # loader with the same sampler so len() matches.
+        train_loader = setup_dataloader(
+            train_dataset,
+            dp_size,
+            dp_rank,
+            hidden_size,
+            num_target_layers=num_target_layers,
+            num_workers=0,
+            prefetch_factor=None,
+            preprocess=preprocess,
+        )
+        val_loader = setup_dataloader(
+            val_dataset,
+            dp_size,
+            dp_rank,
+            hidden_size,
+            num_target_layers=num_target_layers,
+            num_workers=0,
+            prefetch_factor=None,
+            preprocess=preprocess,
+        )
 
     # Get trainer kwargs from model class
     train_call_kwargs, val_call_kwargs = model_class.get_trainer_kwargs(**vars(args))
+
+    # When SP is active, pass global_seq_len so the model creates masks for
+    # the full (ungathered) sequence length.
+    if sp_size > 1:
+        train_call_kwargs["global_seq_len"] = args.total_seq_len
+        val_call_kwargs["global_seq_len"] = args.total_seq_len
 
     trainer_config = TrainerConfig(
         num_epochs=args.epochs,
@@ -634,6 +699,7 @@ def main(args: argparse.Namespace):  # noqa: C901
         save_best=args.save_best,
         hidden_states_dtype=hidden_states_dtype,
         log_freq=args.log_freq,
+        sp_size=sp_size,
     )
     trainer = Trainer(draft_model, trainer_config, train_loader, val_loader)
 
@@ -1095,6 +1161,19 @@ def parse_args():
         action="store_true",
         default=False,
         help="Pointing to checkpoint with lowest validation loss.",
+    )
+
+    # Sequence parallelism
+    parser.add_argument(
+        "--sp-size",
+        type=int,
+        default=1,
+        help=(
+            "Sequence parallelism degree (Ulysses SP). Shards the sequence "
+            "dimension across this many GPUs, reducing per-GPU attention memory "
+            "linearly. Must divide world_size and total_seq_len evenly. "
+            "Currently supported for eagle3 only. (default: 1 = disabled)"
+        ),
     )
 
     # lr scheduler

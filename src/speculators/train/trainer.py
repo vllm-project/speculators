@@ -58,6 +58,7 @@ class TrainerConfig(NamedTuple):
     save_best: bool = False
     hidden_states_dtype: torch.dtype = torch.bfloat16
     log_freq: int = 1
+    sp_size: int = 1
 
 
 class Trainer:
@@ -65,7 +66,7 @@ class Trainer:
         self,
         model: SpeculatorModel,
         config: TrainerConfig,
-        train_loader: DataLoader,
+        train_loader: DataLoader | None,
         val_loader: DataLoader | None = None,
     ):
         self.model = model
@@ -76,6 +77,7 @@ class Trainer:
         self.val_loader = val_loader
         self.is_distributed = config.is_distributed
         self.resume_from_checkpoint = config.resume_from_checkpoint
+        self.sp_size = config.sp_size
         checkpointer_class = (
             DistributedCheckpointer if self.is_distributed else SingleGPUCheckpointer
         )
@@ -137,7 +139,12 @@ class Trainer:
         if not load_checkpoint and dist.get_rank() == 0:
             full_state_dict = self.model.state_dict()
 
-        apply_fully_sharded(self.model)
+        dp_group = None
+        if self.sp_size > 1:
+            from speculators.train.sequence_parallel import get_dp_group
+
+            dp_group = get_dp_group()
+        apply_fully_sharded(self.model, process_group=dp_group)
 
         if load_checkpoint:
             self.checkpointer.load_model_state_dict(self.model)
@@ -212,14 +219,38 @@ class Trainer:
         for scheduler in self.schedulers:
             scheduler.step()
 
+    def _iter_loader(self, loader, epoch: int):
+        """Iterate a DataLoader, scattering batches when SP is active."""
+        if self.sp_size > 1:
+            from speculators.train.sequence_parallel import (
+                get_sp_group,
+                get_sp_rank,
+                sp_data_iterator,
+            )
+
+            if hasattr(loader, "batch_sampler") and hasattr(
+                loader.batch_sampler, "set_epoch"
+            ):
+                loader.batch_sampler.set_epoch(epoch)
+
+            return sp_data_iterator(
+                loader,
+                sp_group=get_sp_group(),
+                sp_rank=get_sp_rank(),
+                sp_size=self.sp_size,
+                device=torch.device(self.local_rank),
+            )
+
+        return loader
+
     def train_epoch(self, epoch: int):
         self.model.train()
         if hasattr(self.train_loader.batch_sampler, "set_epoch"):
             self.train_loader.batch_sampler.set_epoch(epoch)  # type: ignore[union-attr]
 
-        train_loader = self.train_loader
+        train_iter = self._iter_loader(self.train_loader, epoch)
         if self.rank == 0:
-            train_loader = tqdm(train_loader, desc=f"Epoch {epoch}")  # type: ignore[assignment]
+            train_iter = tqdm(train_iter, desc=f"Epoch {epoch}")  # type: ignore[assignment]
 
         num_steps = len(self.train_loader)
         step_interval = (
@@ -227,7 +258,7 @@ class Trainer:
             if self.config.checkpoint_freq < 1
             else None
         )
-        for local_step, batch in enumerate(train_loader, 1):
+        for local_step, batch in enumerate(train_iter, 1):
             gpu_batch = {
                 k: v.to(self.local_rank, non_blocking=True)
                 if isinstance(v, torch.Tensor)
@@ -289,13 +320,14 @@ class Trainer:
         self.model.eval()
         if hasattr(self.val_loader.batch_sampler, "set_epoch"):
             self.val_loader.batch_sampler.set_epoch(epoch)  # type: ignore[union-attr]
-        val_loader = self.val_loader
+
+        val_iter = self._iter_loader(self.val_loader, epoch)
         if self.rank == 0:
-            val_loader = tqdm(val_loader, desc=f"Epoch {epoch}")  # type: ignore[assignment]
+            val_iter = tqdm(val_iter, desc=f"Epoch {epoch}")  # type: ignore[assignment]
 
         val_metrics: dict[str, float] = {}
-        num_batches = len(val_loader)
-        for batch in val_loader:
+        num_batches = len(self.val_loader)
+        for batch in val_iter:
             gpu_batch = {
                 k: v.to(self.local_rank, non_blocking=True)
                 if isinstance(v, torch.Tensor)

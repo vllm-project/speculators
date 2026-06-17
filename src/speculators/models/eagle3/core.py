@@ -156,6 +156,7 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
         loss_fn = loss_fn or kl_div_loss
         device = hidden_states.device
         total_seq_len = hidden_states.shape[1]
+        global_seq_len = kwargs.pop("global_seq_len", total_seq_len)
 
         if position_ids is None:
             position_ids = 1 + torch.arange(
@@ -166,15 +167,15 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
         past_key_values = DynamicCache(config=self.config.transformer_layer_config)
 
         combined_mask_mod = create_combined_mask_mod(
-            document_ids.squeeze(0).to(device), total_seq_len
+            document_ids.squeeze(0).to(device), global_seq_len
         )
         # Note: Attention mask is stored as a BlockMask object
         attention_mask = self._create_mask_fn(
             combined_mask_mod,
             B=None,
             H=None,
-            Q_LEN=total_seq_len,
-            KV_LEN=total_seq_len,
+            Q_LEN=global_seq_len,
+            KV_LEN=global_seq_len,
             device=device,
         )
 
@@ -286,6 +287,15 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
         if return_loss:
             metrics["loss_sum"] = loss.detach().clone()
             metrics["loss_total"] = torch.tensor(1.0, device=device)
+            # When using sequence parallelism, each SP rank computes loss on
+            # a chunk of the same batch. Adjust _total values so that after
+            # SUM reduction across all ranks, loss = sum / dp_size (not
+            # sum / world_size).
+            sp_size = global_seq_len // total_seq_len
+            if sp_size > 1:
+                for k in list(metrics):
+                    if k.endswith("_total") and metrics[k].numel() == 1:
+                        metrics[k] = metrics[k] / sp_size
             return draft_tokens, loss, metrics
         else:
             return draft_tokens

@@ -15,9 +15,14 @@ is_distributed = "LOCAL_RANK" in os.environ
 logger = logging.getLogger("speculators")
 
 
-def maybe_setup_distributed() -> tuple[int, int, int, bool]:
+def maybe_setup_distributed(
+    sp_size: int = 1,
+) -> tuple[int, int, int, bool]:
     """Sets up distributed training if the process was launched with `torchrun`.
     If not, returns single process training.
+
+    When ``sp_size > 1``, also initialises sequence-parallel and data-parallel
+    process groups via :func:`init_sp_process_groups`.
 
     Based on of https://docs.pytorch.org/tutorials/intermediate/ddp_tutorial.html#initialize-ddp-with-torch-distributed-run-torchrun
 
@@ -36,6 +41,15 @@ def maybe_setup_distributed() -> tuple[int, int, int, bool]:
     dist.init_process_group(backend, device_id=local_rank)
 
     rank = dist.get_rank()
+
+    if sp_size > 1:
+        from speculators.train.sequence_parallel import init_sp_process_groups
+
+        init_sp_process_groups(sp_size)
+        logger.info(
+            f"Initialised SP process groups with sp_size={sp_size}",
+            extra={"override_rank0_filter": True},
+        )
 
     logger.info(
         f"Started distributed with local_rank={local_rank},"
@@ -144,21 +158,34 @@ def normalize_counted_metrics(
     return metrics
 
 
-def apply_fully_sharded(model: torch.nn.Module):
+def apply_fully_sharded(
+    model: torch.nn.Module,
+    process_group: dist.ProcessGroup | None = None,
+):
     """Applies torch FSDP fully_shard to the model, wrapping layers in FSDPModule.
 
     Assumes the model has a `layers` attribute containing the decoder layers.
     Model should be validated with SpeculatorModel.verify_training_compatible()
     before calling this function.
+
+    Args:
+        model: The model to shard.
+        process_group: Optional process group for FSDP. When using sequence
+            parallelism, pass the DP group so FSDP shards only across
+            data-parallel ranks.
     """
     mp_policy = MixedPrecisionPolicy(
         param_dtype=torch.bfloat16,
         reduce_dtype=torch.float32,
     )
 
-    for layer in model.layers:  # type: ignore[union-attr]
-        fully_shard(layer, mp_policy=mp_policy)
+    fsdp_kwargs: dict = {"mp_policy": mp_policy}
+    if process_group is not None:
+        fsdp_kwargs["process_group"] = process_group
 
-    fully_shard(model)
+    for layer in model.layers:  # type: ignore[union-attr]
+        fully_shard(layer, **fsdp_kwargs)
+
+    fully_shard(model, **fsdp_kwargs)
 
     return model
