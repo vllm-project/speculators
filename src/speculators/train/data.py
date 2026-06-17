@@ -16,6 +16,7 @@ from datasets import load_from_disk
 from safetensors.torch import load_file
 from torch.utils.data import Dataset
 
+from speculators.data_generation.offline import check_safetensors_file
 from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_REQUEST_TIMEOUT,
@@ -323,6 +324,11 @@ class ArrowDataset(BaseDataset):
 
             loaded_hs = _maybe_load_hs_file(Path(hs_filepath))
 
+            check_safetensors_file(
+                Path(hs_filepath),
+                dataset_item["input_ids"].tolist(),
+            )
+
             match self.on_generate:
                 case "cache":
                     file_idx = self._map_to_file_idx(index)
@@ -331,6 +337,8 @@ class ArrowDataset(BaseDataset):
                 case "delete":
                     Path(hs_filepath).unlink()
         except Exception as e:  # noqa: BLE001
+            if isinstance(e, ValueError) and "NaN" in str(e):
+                raise
             warnings.warn(
                 f"Failed to load/cache hidden states for sample {index}: {e}",
                 stacklevel=1,
@@ -365,7 +373,7 @@ class ArrowDataset(BaseDataset):
             return loaded_hs
 
         # loaded_hs structure: {
-        #   "hidden_states": [seq_len, 4, hidden_size]
+        #   "hidden_states": [seq_len, num_layers, hidden_size]
         #   "token_ids": [seq_len]
         # }
 
