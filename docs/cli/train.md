@@ -138,6 +138,10 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--ttt-step-loss-decay`** (float, default: `1.0`) Loss decay factor for test-time training steps.
 
+### Attention Backend Arguments
+
+- **`--draft-attn-impl`** (str, default: `"simple_flex_attention"`) Attention implementation for draft layers. Options: `simple_flex_attention`, `sdpa`, `eager`. Use `sdpa` or `eager` on hardware where flex attention is unavailable (e.g. Ascend NPU). Applies to Eagle3, P-EAGLE, and DFlash. Not supported for MTP.
+
 ### DFlash-Specific Arguments
 
 - **`--block-size`** (int, default: `8`) Block size for DFlash model.

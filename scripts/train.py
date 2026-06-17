@@ -283,7 +283,7 @@ def parse_vocab_mappings(args: argparse.Namespace):
     return None, None, verifier_config.vocab_size
 
 
-def main(args: argparse.Namespace):
+def main(args: argparse.Namespace):  # noqa: C901, PLR0912
     # Set random seed for reproducibility
     set_seed(args.seed, args.deterministic_cuda)
 
@@ -302,6 +302,11 @@ def main(args: argparse.Namespace):
     hidden_states_dtype = getattr(torch, args.hidden_states_dtype)
 
     if args.speculator_type == "mtp":
+        if args.draft_attn_impl != "simple_flex_attention":
+            raise ValueError(
+                "--draft-attn-impl is not supported for MTP. "
+                "MTP uses standard causal attention (eager) by default."
+            )
         verifier_config = AutoConfig.from_pretrained(args.verifier_name_or_path)
         if hasattr(verifier_config, "text_config"):
             verifier_config = verifier_config.text_config
