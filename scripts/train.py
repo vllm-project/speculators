@@ -762,8 +762,8 @@ def parse_args():
         type=str,
         default="simple_flex_attention",
         choices=["simple_flex_attention", "sdpa", "eager"],
-        help="Attention implementation for the DFlash draft layers. "
-        "Use 'sdpa' or 'eager' for non-flex backends.",
+        help="Attention implementation for draft layers. "
+        "Use 'sdpa' or 'eager' for hardward that doesn't support flex attention",
     )
     # P-EAGLE specific parameters
     parser.add_argument(
