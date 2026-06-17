@@ -1,28 +1,22 @@
 import logging
 from pathlib import Path
 
-from safetensors import safe_open
-
 logger = logging.getLogger(__name__)
 
 
-def check_safetensors_file(path: Path, tokens: list[int]):
-    with safe_open(path, "pt") as f:
-        t_ids = f.get_tensor("token_ids").tolist()
-        if t_ids != tokens:
-            raise ValueError(
-                f"Token ids in {path} don't match expected token ids {tokens}"
-            )
+def check_hidden_states(data: dict, tokens: list[int]):
+    t_ids = data["token_ids"].tolist()
+    if t_ids != tokens:
+        raise ValueError(f"Token ids don't match expected token ids {tokens}")
 
-        hs = f.get_tensor("hidden_states")
-        if hs.isnan().any():
-            raise ValueError(f"Hidden states in {path} contain NaN values")
-        hs_shape = list(hs.shape)
-        if len(tokens) != hs_shape[0]:
-            raise ValueError(
-                f"Sequence length of hidden states {hs_shape[0]} in {path}"
-                f" doesn't match num tokens {len(tokens)}"
-            )
+    hs = data["hidden_states"]
+    if hs.isnan().any():
+        raise ValueError("Hidden states contain NaN values")
+    if len(tokens) != hs.shape[0]:
+        raise ValueError(
+            f"Sequence length of hidden states {hs.shape[0]}"
+            f" doesn't match num tokens {len(tokens)}"
+        )
 
 
 def get_existing_hidden_state_indices(output_path: Path) -> list[int]:

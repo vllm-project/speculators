@@ -23,10 +23,11 @@ from typing import Any
 
 import openai
 from datasets import load_from_disk
+from safetensors.torch import load_file
 from tqdm import tqdm
 
 from speculators.data_generation.offline import (
-    check_safetensors_file,
+    check_hidden_states,
     get_existing_hidden_state_indices,
     get_indices_to_process,
 )
@@ -241,9 +242,12 @@ async def worker(  # noqa: C901
                     shutil.move, hidden_states_path, target_hidden_states_path
                 )
                 if validate_outputs:
+                    loaded = await asyncio.to_thread(
+                        load_file, target_hidden_states_path
+                    )
                     await asyncio.to_thread(
-                        check_safetensors_file,
-                        target_hidden_states_path,
+                        check_hidden_states,
+                        loaded,
                         item["input_ids"],
                     )
         except Exception as e:
