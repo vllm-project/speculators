@@ -22,8 +22,10 @@ from speculators.train.checkpointer import (
     DistributedCheckpointer,
     SingleGPUCheckpointer,
 )
+from speculators.train.distributed import get_dp_group, get_sp_group, get_sp_rank
 from speculators.train.graceful_shutdown import with_graceful_shutdown
 from speculators.train.optimizers import build_optimizers
+from speculators.train.sequence_parallel import sp_data_iterator
 from speculators.train.utils import apply_fully_sharded, normalize_counted_metrics
 
 root_logger = logging.getLogger("speculators")
@@ -139,12 +141,7 @@ class Trainer:
         if not load_checkpoint and dist.get_rank() == 0:
             full_state_dict = self.model.state_dict()
 
-        dp_group = None
-        if self.sp_size > 1:
-            from speculators.train.sequence_parallel import get_dp_group
-
-            dp_group = get_dp_group()
-        apply_fully_sharded(self.model, process_group=dp_group)
+        apply_fully_sharded(self.model, process_group=get_dp_group())
 
         if load_checkpoint:
             self.checkpointer.load_model_state_dict(self.model)
@@ -222,11 +219,6 @@ class Trainer:
     def _iter_loader(self, loader, epoch: int):
         """Iterate a DataLoader, scattering batches when SP is active."""
         if self.sp_size > 1:
-            from speculators.train.sequence_parallel import (
-                get_sp_group,
-                get_sp_rank,
-                sp_data_iterator,
-            )
 
             if hasattr(loader, "batch_sampler") and hasattr(
                 loader.batch_sampler, "set_epoch"

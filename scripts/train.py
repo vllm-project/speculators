@@ -10,7 +10,6 @@ import numpy as np
 import torch
 import transformers
 from packaging import version
-from torch.utils.data import DataLoader
 from transformers import LlamaConfig, PretrainedConfig
 from transformers.models.auto.configuration_auto import AutoConfig
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
@@ -27,24 +26,18 @@ from speculators.models.utils import (
     get_verifier_config,
     resolve_draft_intermediate_size,
 )
-from speculators.train.data import (
-    ArrowDataset,
-    BaseDataset,
-    SampleFileDataset,
-    create_collate_fn,
-    split_files,
-)
-from speculators.train.distributed_batch_sampler import (
-    MultipackDistributedBatchSamplerV2,
-)
-from speculators.train.logger import setup_metric_logger, setup_root_logger
-from speculators.train.noise_transforms import AddUniformNoise
-from speculators.train.trainer import Trainer, TrainerConfig
-from speculators.train.utils import (
+from speculators.train.dataloader import create_train_val_loaders
+from speculators.train.distributed import (
+    get_local_rank,
+    get_rank,
+    get_sp_size,
+    is_distributed,
     maybe_destroy_distributed,
     maybe_setup_distributed,
-    resolve_mask_token_id,
 )
+from speculators.train.logger import setup_metric_logger, setup_root_logger
+from speculators.train.trainer import Trainer, TrainerConfig
+from speculators.train.utils import resolve_mask_token_id
 from speculators.train.vocab_mapping import (
     build_vocab_mappings_from_distribution,
     get_target_vocab_size,
@@ -71,57 +64,6 @@ def set_seed(seed: int, deterministic: bool = False):
         # For deterministic behavior (may impact performance)
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
-
-
-def setup_dataloader(
-    dataset: BaseDataset,
-    world_size: int,
-    rank: int,
-    hidden_size: int,
-    num_workers: int = 12,
-    num_target_layers: int = 3,
-    prefetch_factor: int | None = 4,
-    preprocess=None,
-) -> DataLoader:
-    """Setup dataloader for training.
-    Args:
-        dataset: The dataset to load data from.
-        world_size: Number of replicas for the batch sampler (dp_size when
-            using sequence parallelism, otherwise world_size).
-        rank: Rank for the batch sampler (dp_rank when using sequence
-            parallelism, otherwise rank).
-        hidden_size: Hidden size for the collate function.
-        num_workers: Number of dataloader workers.
-        num_target_layers: Number of target layers for the collate function.
-        prefetch_factor: Dataloader prefetch factor. None disables prefetch
-            (used for non-data SP ranks with num_workers=0).
-        preprocess: Optional per-sample preprocessing function applied
-            before collation (e.g. shift_batch for Eagle3).
-    Returns:
-        DataLoader: Dataloader for training.
-    """
-    batch_sampler = MultipackDistributedBatchSamplerV2(
-        batch_max_length=args.total_seq_len,
-        lengths=dataset.approx_lengths,
-        num_replicas=world_size,
-        rank=rank,
-    )
-    use_workers = num_workers > 0
-    return DataLoader(
-        dataset,
-        batch_sampler=batch_sampler,
-        num_workers=num_workers,
-        prefetch_factor=prefetch_factor if use_workers else None,
-        pin_memory=True,
-        collate_fn=create_collate_fn(
-            args.total_seq_len,
-            hidden_size,
-            num_target_layers=num_target_layers,
-            dtype=dataset.hidden_states_dtype,
-            preprocess=preprocess,
-        ),
-        persistent_workers=use_workers,
-    )
 
 
 def create_transformer_layer_config(  # noqa: C901
@@ -460,9 +402,7 @@ def main(args: argparse.Namespace):  # noqa: C901
     )
 
     # Setup distributed training
-    local_rank, world_size, rank, is_distributed = maybe_setup_distributed(
-        sp_size=args.sp_size,
-    )
+    maybe_setup_distributed(sp_size=args.sp_size)
     if not hasattr(torch, args.hidden_states_dtype):
         raise ValueError(
             "--hidden-states-dtype must be a dtype attribute of torch. e.g. `bfloat16`"
@@ -543,127 +483,39 @@ def main(args: argparse.Namespace):  # noqa: C901
     }
     preprocess = preprocess_fns.get(args.speculator_type)
 
-    noise_transform = AddUniformNoise(std=args.noise_std)
-    if args.legacy_data:
-        warnings.warn(
-            "Using '--legacy-data' is deprecated and will be removed soon.",
-            category=DeprecationWarning,
-            stacklevel=2,
-        )
-        train_files, val_files = split_files(args.data_path, ratio=0.9)
-        train_dataset: BaseDataset = SampleFileDataset(
-            file_list=train_files,
-            max_len=args.total_seq_len,
-            transform=noise_transform,
-            hidden_states_dtype=hidden_states_dtype,
-        )
-        val_dataset: BaseDataset = SampleFileDataset(
-            file_list=val_files,
-            max_len=args.total_seq_len,
-            hidden_states_dtype=hidden_states_dtype,
-        )
-    else:
-        train_dataset = ArrowDataset(
-            datapath=args.data_path,
-            max_len=args.total_seq_len,
-            hidden_states_path=args.hidden_states_path,
-            vllm_endpoint=args.vllm_endpoint,
-            on_missing=args.on_missing,
-            on_generate=args.on_generate,
-            transform=noise_transform,
-            split_ratio=0.9,
-            model=args.verifier_name_or_path,
-            hidden_states_dtype=hidden_states_dtype,
-            request_timeout=args.request_timeout,
-            max_retries=args.max_retries,
-        )
-        val_dataset = ArrowDataset(
-            datapath=args.data_path,
-            max_len=args.total_seq_len,
-            hidden_states_path=args.hidden_states_path,
-            vllm_endpoint=args.vllm_endpoint,
-            on_missing=args.on_missing,
-            on_generate=args.on_generate,
-            split_ratio=-0.1,
-            model=args.verifier_name_or_path,
-            hidden_states_dtype=hidden_states_dtype,
-            request_timeout=args.request_timeout,
-            max_retries=args.max_retries,
-        )
-
-    # Compute SP/DP topology
-    sp_size = args.sp_size
+    # SP setup
+    sp_size = get_sp_size()
     if sp_size > 1:
-        if world_size % sp_size != 0:
-            raise ValueError(
-                f"world_size ({world_size}) must be divisible by sp_size ({sp_size})"
-            )
         if args.total_seq_len % sp_size != 0:
             raise ValueError(
                 f"total_seq_len ({args.total_seq_len}) must be divisible by "
                 f"sp_size ({sp_size})"
             )
-        from speculators.train.sequence_parallel import get_dp_rank, get_dp_size
-
-        dp_size = get_dp_size()
-        dp_rank = get_dp_rank()
 
         # Switch attention to Ulysses SP variant for supported models
         if args.speculator_type in ("eagle3",):
             tl_cfg = draft_model.config.transformer_layer_config
             tl_cfg._attn_implementation = "ulysses_flex_attention"  # noqa: SLF001
-    else:
-        dp_size = world_size
-        dp_rank = rank
 
-    # Only SP rank 0 in each group drives the DataLoader
-    is_sp_data_rank = sp_size <= 1 or (rank % sp_size == 0)
-
-    if is_sp_data_rank:
-        train_loader = setup_dataloader(
-            train_dataset,
-            dp_size,
-            dp_rank,
-            hidden_size,
-            num_target_layers=num_target_layers,
-            num_workers=args.num_workers,
-            prefetch_factor=args.prefetch_factor,
-            preprocess=preprocess,
-        )
-        val_loader = setup_dataloader(
-            val_dataset,
-            dp_size,
-            dp_rank,
-            hidden_size,
-            num_target_layers=num_target_layers,
-            num_workers=args.num_workers,
-            prefetch_factor=args.prefetch_factor,
-            preprocess=preprocess,
-        )
-    else:
-        # Non-data SP ranks receive batches via scatter; they still need a
-        # loader reference for len() in the trainer.  We create a minimal
-        # loader with the same sampler so len() matches.
-        train_loader = setup_dataloader(
-            train_dataset,
-            dp_size,
-            dp_rank,
-            hidden_size,
-            num_target_layers=num_target_layers,
-            num_workers=0,
-            prefetch_factor=None,
-            preprocess=preprocess,
-        )
-        val_loader = setup_dataloader(
-            val_dataset,
-            dp_size,
-            dp_rank,
-            hidden_size,
-            num_target_layers=num_target_layers,
-            num_workers=0,
-            prefetch_factor=None,
-            preprocess=preprocess,
-        )
+    train_loader, val_loader = create_train_val_loaders(
+        data_path=args.data_path,
+        total_seq_len=args.total_seq_len,
+        hidden_states_dtype=hidden_states_dtype,
+        noise_std=args.noise_std,
+        legacy_data=args.legacy_data,
+        hidden_states_path=args.hidden_states_path,
+        vllm_endpoint=args.vllm_endpoint,
+        on_missing=args.on_missing,
+        on_generate=args.on_generate,
+        verifier_name_or_path=args.verifier_name_or_path,
+        request_timeout=args.request_timeout,
+        max_retries=args.max_retries,
+        hidden_size=hidden_size,
+        num_target_layers=num_target_layers,
+        num_workers=args.num_workers,
+        prefetch_factor=args.prefetch_factor,
+        preprocess=preprocess,
+    )
 
     # Get trainer kwargs from model class
     train_call_kwargs, val_call_kwargs = model_class.get_trainer_kwargs(**vars(args))
@@ -679,9 +531,9 @@ def main(args: argparse.Namespace):  # noqa: C901
         save_path=args.save_path,
         lr=args.lr,
         resume_from_checkpoint=not args.no_resume_from_checkpoint,
-        is_distributed=is_distributed,
-        local_rank=local_rank,
-        rank=rank,
+        is_distributed=is_distributed(),
+        local_rank=get_local_rank(),
+        rank=get_rank(),
         train_call_kwargs=train_call_kwargs,
         val_call_kwargs=val_call_kwargs,
         optimizer=args.optimizer,
