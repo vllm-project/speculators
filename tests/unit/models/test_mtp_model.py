@@ -24,8 +24,8 @@ def test_forward_output_structure(mtp_model, seed):
         )
 
     assert len(logits_list) == num_steps
+    expected_len = SEQ_LEN - num_steps - 1
     for step in range(num_steps):
-        expected_len = SEQ_LEN - step - 2
         assert logits_list[step].shape == (BATCH, expected_len, vocab_size)
 
     assert total_loss.dim() == 0

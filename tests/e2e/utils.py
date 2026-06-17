@@ -5,8 +5,9 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from contextlib import contextmanager
+from functools import wraps
 from pathlib import Path
 from textwrap import indent
 
@@ -20,6 +21,7 @@ __all__ = [
     "VLLM_PYTHON",
     "launch_vllm_server",
     "launch_vllm_server_context",
+    "purge_newfiles",
     "run_data_generation_offline",
     "run_prepare_data",
     "run_stitch_mtp",
@@ -28,6 +30,34 @@ __all__ = [
     "stop_vllm_server",
     "wait_for_server",
 ]
+
+
+def purge_newfiles(fn: Callable[..., Path]):
+    """Decorator that turns a Path-returning function into a context manager.
+
+    On exit, deletes top-level files in the resolved directory whose mtime is
+    newer than when the wrapped function returned.  Does not recurse into
+    subdirectories.  This prevents generated artifacts (e.g. ``d2t.npy``,
+    ``t2d.npy`` potentially cached by ``train.py``) from persisting in
+    shared directories (such as the HF snapshot cache) between test runs.
+    """
+
+    @wraps(fn)
+    @contextmanager
+    def wrapper(*args, **kwargs):
+        path = fn(*args, **kwargs)
+        cutoff = time.time()
+        try:
+            yield path
+        finally:
+            if path.is_dir():
+                for f in path.iterdir():
+                    if f.is_file() and f.stat().st_mtime > cutoff:
+                        f.unlink()
+                        logger.info("Purged generated artifact: {}", f.name)
+
+    return wrapper
+
 
 VLLM_PYTHON = os.environ.get("VLLM_PYTHON", sys.executable)
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent.parent / "scripts"

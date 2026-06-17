@@ -2,7 +2,7 @@ from typing import ClassVar
 
 import torch
 from torch import nn
-from torch.nn.attention.flex_attention import create_block_mask
+from torch.nn.attention.flex_attention import create_block_mask, create_mask
 from transformers import PretrainedConfig
 from transformers.models.qwen3.modeling_qwen3 import (
     Qwen3RMSNorm,
@@ -49,6 +49,12 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             config.transformer_layer_config._attn_implementation = (  # noqa: SLF001
                 "simple_flex_attention"
             )
+        self._attn_impl = config.transformer_layer_config._attn_implementation  # noqa: SLF001
+        self._create_mask_fn = (
+            create_block_mask
+            if self._attn_impl == "simple_flex_attention"
+            else create_mask
+        )
         super().__init__(config=config)
         self._init_vocab(config)
 
@@ -72,13 +78,6 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         self.uses_full_attn = bool(num_draft_layers - len(self.sliding_window_indices))
         self.sliding_window_non_causal = config.sliding_window_non_causal
 
-        if config.aux_hidden_state_layer_ids is None:
-            raise ValueError(
-                "aux_hidden_state_layer_ids must be set in DFlashSpeculatorConfig. "
-                "Use DFlashDraftModel.from_training_args() to resolve defaults."
-            )
-        self.target_layer_ids = config.aux_hidden_state_layer_ids
-
         self.norm = Qwen3RMSNorm(
             config.transformer_layer_config.hidden_size,
             eps=config.transformer_layer_config.rms_norm_eps,  # type: ignore[arg-type]
@@ -101,6 +100,11 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         self.verifier_norm.weight.requires_grad = False
         self.block_size = config.block_size
         self.post_init()
+
+    @property
+    def target_layer_ids(self) -> list[int]:
+        """Target layer IDs for auxiliary hidden states."""
+        return self.config.aux_hidden_state_layer_ids
 
     @classmethod
     def from_training_args(
@@ -139,9 +143,13 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             GreedyTokenProposalConfig,
         )
 
+        # Resolve target layer IDs if not provided
         target_layer_ids = resolve_target_layer_ids(
-            kwargs.get("target_layer_ids"),
-            kwargs["verifier_name_or_path"],
+            kwargs.get("target_layer_ids"), kwargs["verifier_name_or_path"]
+        )
+
+        verifier_config._attn_implementation = kwargs.get(  # noqa: SLF001
+            "draft_attn_impl", "simple_flex_attention"
         )
 
         config = DFlashSpeculatorConfig(
@@ -195,6 +203,32 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             )
         return self.config.mask_token_id
 
+    def _create_attention_mask(
+        self,
+        lengths: torch.Tensor,
+        total_seq_len: int,
+        anchor_positions: torch.Tensor,
+        device: torch.device,
+        sliding_window: int | None = None,
+        sliding_window_non_causal: bool = False,
+    ):
+        mask_mod, q_len, kv_len = create_anchor_block_mask_mod(
+            lengths=lengths.to(device),
+            total_seq_len=total_seq_len,
+            anchor_positions=anchor_positions,
+            block_size=self.block_size,
+            sliding_window=sliding_window,
+            sliding_window_non_causal=sliding_window_non_causal,
+        )
+        return self._create_mask_fn(
+            mask_mod,
+            B=None,
+            H=None,
+            Q_LEN=q_len,
+            KV_LEN=kv_len,
+            device=device,
+        )
+
     @torch.compiler.disable
     def _build_attention_mask(self, loss_mask, lengths, device):
         total_seq_len = loss_mask.shape[1]
@@ -205,29 +239,23 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
 
         full_attn_mask = None
         if self.uses_full_attn:
-            mask_mod, q_len, kv_len = create_anchor_block_mask_mod(
-                lengths=lengths.to(device),
+            full_attn_mask = self._create_attention_mask(
+                lengths=lengths,
                 total_seq_len=total_seq_len,
                 anchor_positions=anchor_positions,
-                block_size=self.block_size,
+                device=device,
                 sliding_window=None,
-            )
-            full_attn_mask = create_block_mask(
-                mask_mod, B=None, H=None, Q_LEN=q_len, KV_LEN=kv_len, device=device
             )
 
         sliding_window_attn_mask = None
         if self.uses_sliding_window_attn:
-            mask_mod, q_len, kv_len = create_anchor_block_mask_mod(
-                lengths=lengths.to(device),
+            sliding_window_attn_mask = self._create_attention_mask(
+                lengths=lengths,
                 total_seq_len=total_seq_len,
                 anchor_positions=anchor_positions,
-                block_size=self.block_size,
+                device=device,
                 sliding_window=self.sliding_window,
                 sliding_window_non_causal=self.sliding_window_non_causal,
-            )
-            sliding_window_attn_mask = create_block_mask(
-                mask_mod, B=None, H=None, Q_LEN=q_len, KV_LEN=kv_len, device=device
             )
 
         return full_attn_mask, sliding_window_attn_mask, anchor_positions, anchor_valid

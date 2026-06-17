@@ -1,14 +1,15 @@
 #!/bin/bash
 # Online MTP Finetuning Script
 #
-# Runs the full online MTP finetuning pipeline: convert native MTP head,
-# data preparation, vLLM server launch, and training (with hidden states
-# generated on-the-fly from the live server). After training, stitches
-# finetuned weights back into the verifier checkpoint.
+# Runs the full online MTP finetuning pipeline: data preparation, vLLM
+# server launch, and training (with hidden states generated on-the-fly
+# from the live server). After training, stitches finetuned weights back
+# into the verifier checkpoint.
 #
 # Unlike Eagle-3, DFlash, or P-EAGLE which train draft models from scratch,
-# MTP finetuning starts from the model's native MTP head (converted to
-# speculators format) and finetunes it on domain-specific data.
+# MTP finetuning starts from the model's native MTP head. The training script
+# automatically extracts native MTP weights from the verifier during
+# initialization -- no separate conversion step is needed.
 #
 # Usage: Copy this script, modify the configuration variables below, then run:
 #   bash examples/train/mtp_qwen3_5_9b_gsm8k_online.sh
@@ -18,13 +19,12 @@
 
 ### Example E2E run for Qwen3.5-9B on GSM8K ###
 
-# Timing (on 2x NVIDIA H100 80GB GPUs)
-# MTP Conversion: 26 seconds
+# Timing (on 2x NVIDIA H200 141GB GPUs)
 # Data Preprocessing: 31 seconds
 # vLLM Server Startup: 114 seconds (1 min 54 secs)
 # Training (3 epochs): 256 seconds (4 mins 16 secs)
 # Stitching: 42 seconds
-# Total: 469 seconds (7 mins 49 secs)
+# Total: 443 seconds (7 mins 23 secs)
 #
 # Results (3 generic prompts, 50 output tokens):
 # acceptance rate: 89.36%
@@ -45,7 +45,6 @@ MODEL="Qwen/Qwen3.5-9B"
 DATASET="inference-optimization/Qwen3.5-9B-responses"
 DATASET_FILE="gsm8k.jsonl"
 OUTPUT_DIR="./output"
-CONVERTED_DIR="$OUTPUT_DIR/converted_mtp"
 STITCHED_DIR="$OUTPUT_DIR/stitched"
 VLLM_PORT=8000
 MAX_SAMPLES=5000
@@ -59,21 +58,8 @@ VLLM_GPU="0"
 TRAIN_GPU="1"
 # =======================================
 
-# Step 1: Convert native MTP head to speculators format
-echo "=== Step 1: Converting native MTP head ==="
-python -c "
-from speculators.convert import convert_model
-convert_model(
-    model='$MODEL',
-    verifier='$MODEL',
-    algorithm='mtp',
-    output_path='$CONVERTED_DIR',
-    num_speculative_steps=3,
-)
-"
-
-# Step 2: Download regenerated dataset and prepare data
-echo "=== Step 2: Downloading dataset and preparing data ==="
+# Step 1: Download regenerated dataset and prepare data
+echo "=== Step 1: Downloading dataset and preparing data ==="
 DATASET_DIR="$OUTPUT_DIR/dataset"
 hf download "$DATASET" "$DATASET_FILE" --repo-type dataset --local-dir "$DATASET_DIR"
 
@@ -84,8 +70,8 @@ python scripts/prepare_data.py \
     --output "$OUTPUT_DIR" \
     --seq-length "$SEQ_LENGTH"
 
-# Step 3: Launch vLLM server in the background
-echo "=== Step 3: Launching vLLM server ==="
+# Step 2: Launch vLLM server in the background
+echo "=== Step 2: Launching vLLM server ==="
 CUDA_VISIBLE_DEVICES="$VLLM_GPU" python scripts/launch_vllm.py "$MODEL" \
     --target-layer-ids 32 \
     -- --port "$VLLM_PORT" &
@@ -105,8 +91,8 @@ until curl -sf "http://localhost:${VLLM_PORT}/health" > /dev/null 2>&1; do
 done
 echo "vLLM server ready."
 
-# Step 4: Train against the live vLLM server
-echo "=== Step 4: Training ==="
+# Step 3: Train against the live vLLM server
+echo "=== Step 3: Training ==="
 CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python \
     scripts/train.py \
     --verifier-name-or-path "$MODEL" \
@@ -114,7 +100,7 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python \
     --vllm-endpoint "http://localhost:${VLLM_PORT}/v1" \
     --save-path "$OUTPUT_DIR/checkpoints" \
     --speculator-type mtp \
-    --from-pretrained "$CONVERTED_DIR" \
+    --num-speculative-steps 3 \
     --target-layer-ids 32 \
     --step-weight-beta "$STEP_WEIGHT_BETA" \
     --epochs "$EPOCHS" \
@@ -123,8 +109,8 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPU" python \
     --on-missing generate \
     --on-generate delete
 
-# Step 5: Stitch finetuned weights back into the verifier
-echo "=== Step 5: Stitching finetuned weights ==="
+# Step 4: Stitch finetuned weights back into the verifier
+echo "=== Step 4: Stitching finetuned weights ==="
 python scripts/stitch_mtp.py \
     "$OUTPUT_DIR/checkpoints/checkpoint_best" \
     "$MODEL" \
