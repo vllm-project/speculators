@@ -16,9 +16,7 @@ def check_safetensors_file(path: Path, tokens: list[int]):
 
         hs = f.get_tensor("hidden_states")
         if hs.isnan().any():
-            raise ValueError(
-                f"Hidden states in {path} contain NaN values"
-            )
+            raise ValueError(f"Hidden states in {path} contain NaN values")
         hs_shape = list(hs.shape)
         if len(tokens) != hs_shape[0]:
             raise ValueError(

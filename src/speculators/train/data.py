@@ -336,7 +336,7 @@ class ArrowDataset(BaseDataset):
                     shutil.move(hs_filepath, target_path)
                 case "delete":
                     Path(hs_filepath).unlink()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             if isinstance(e, ValueError) and "NaN" in str(e):
                 raise
             warnings.warn(
