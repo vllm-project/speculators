@@ -242,14 +242,15 @@ async def worker(  # noqa: C901
                     shutil.move, hidden_states_path, target_hidden_states_path
                 )
                 if validate_outputs:
-                    loaded = await asyncio.to_thread(
-                        load_file, target_hidden_states_path
-                    )
-                    await asyncio.to_thread(
-                        check_hidden_states,
-                        loaded,
-                        item["input_ids"],
-                    )
+
+                    def _load_and_check(
+                        path=target_hidden_states_path,
+                        tokens=item["input_ids"],
+                    ):
+                        loaded = load_file(path)
+                        check_hidden_states(loaded, tokens)
+
+                    await asyncio.to_thread(_load_and_check)
         except Exception as e:
             if fail_on_error:
                 logger.exception(
