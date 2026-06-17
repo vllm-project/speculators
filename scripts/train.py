@@ -1,4 +1,5 @@
 import argparse
+import gc
 import logging
 import random
 import warnings
@@ -465,6 +466,10 @@ def main(args: argparse.Namespace):
     trainer.run_training()
 
     # Cleanup
+    del trainer, draft_model
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
     maybe_destroy_distributed()
 
 
@@ -738,6 +743,14 @@ def parse_args():
         type=int,
         default=256,
         help="Maximum anchor positions for DFlash training (default: 256)",
+    )
+    parser.add_argument(
+        "--draft-attn-impl",
+        type=str,
+        default="simple_flex_attention",
+        choices=["simple_flex_attention", "sdpa", "eager"],
+        help="Attention implementation for the DFlash draft layers. "
+        "Use 'sdpa' or 'eager' for non-flex backends.",
     )
     # P-EAGLE specific parameters
     parser.add_argument(
