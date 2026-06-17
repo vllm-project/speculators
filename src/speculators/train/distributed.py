@@ -85,7 +85,7 @@ def _init_sp_process_groups(sp_size: int) -> None:
     SP groups use contiguous ranks (e.g. sp_size=2, world_size=4: {0,1}, {2,3}).
     DP groups use strided ranks (e.g. sp_size=2, world_size=4: {0,2}, {1,3}).
     """
-    global _sp_group, _dp_group, _sp_size, _sp_rank, _dp_size, _dp_rank
+    global _sp_group, _dp_group, _sp_size, _sp_rank, _dp_size, _dp_rank  # noqa: PLW0603
 
     world_size = dist.get_world_size()
     rank = dist.get_rank()
@@ -111,8 +111,8 @@ def _init_sp_process_groups(sp_size: int) -> None:
         if rank in dp_ranks:
             dp_group = pg
 
-    assert sp_group is not None
-    assert dp_group is not None
+    assert sp_group is not None  # noqa: S101
+    assert dp_group is not None  # noqa: S101
 
     _sp_group = sp_group
     _dp_group = dp_group
@@ -131,7 +131,7 @@ def maybe_setup_distributed(sp_size: int = 1) -> None:
     ``sp_size == 1`` the DP group spans all ranks and each SP group
     contains a single rank.
     """
-    global _local_rank, _rank, _is_distributed
+    global _local_rank, _rank, _is_distributed  # noqa: PLW0603
 
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
     distributed = "LOCAL_RANK" in os.environ

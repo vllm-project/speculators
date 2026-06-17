@@ -10,8 +10,10 @@ Reference: DeepSpeed-Ulysses (https://arxiv.org/abs/2309.14509)
 
 from __future__ import annotations
 
-from collections.abc import Generator
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Generator
 
 import torch
 import torch.distributed as dist
@@ -37,7 +39,7 @@ class _AllToAllSP(torch.autograd.Function):
     @staticmethod
     def forward(
         ctx,
-        input: torch.Tensor,
+        input_tensor: torch.Tensor,
         sp_group: ProcessGroup,
         scatter_dim: int,
         gather_dim: int,
@@ -48,9 +50,9 @@ class _AllToAllSP(torch.autograd.Function):
 
         world_size = dist.get_world_size(sp_group)
         if world_size == 1:
-            return input
+            return input_tensor
 
-        input_chunks = input.chunk(world_size, dim=scatter_dim)
+        input_chunks = input_tensor.chunk(world_size, dim=scatter_dim)
         output_chunks = [torch.empty_like(c) for c in input_chunks]
         dist.all_to_all(output_chunks, list(input_chunks), group=sp_group)
         return torch.cat(output_chunks, dim=gather_dim).contiguous()
@@ -68,13 +70,13 @@ class _AllToAllSP(torch.autograd.Function):
 
 
 def all_to_all_sp(
-    input: torch.Tensor,
+    input_tensor: torch.Tensor,
     sp_group: ProcessGroup,
     scatter_dim: int,
     gather_dim: int,
 ) -> torch.Tensor:
     """Perform a differentiable all-to-all operation for sequence parallelism."""
-    return _AllToAllSP.apply(input, sp_group, scatter_dim, gather_dim)
+    return _AllToAllSP.apply(input_tensor, sp_group, scatter_dim, gather_dim)
 
 
 # ---------------------------------------------------------------------------
@@ -138,13 +140,13 @@ def ulysses_flex_attention_forward(
 
     The attention_mask (BlockMask) must cover the global sequence length.
     """
-    from torch.nn.attention.flex_attention import flex_attention
+    from torch.nn.attention.flex_attention import flex_attention  # noqa: PLC0415
 
     sp_group = get_sp_group()
     sp_size = get_sp_size()
 
     if sp_group is None or sp_size <= 1:
-        from speculators.models.attention import flex_attention_forward
+        from speculators.models.attention import flex_attention_forward  # noqa: PLC0415
 
         return flex_attention_forward(
             module, query, key, value, attention_mask, scaling=scaling, **_kwargs
@@ -194,7 +196,7 @@ _DTYPE_TO_CODE = {
 _CODE_TO_DTYPE = {v: k for k, v in _DTYPE_TO_CODE.items()}
 
 
-def sp_scatter_batch(
+def sp_scatter_batch(  # noqa: C901, PLR0912
     batch: BatchType | None,
     sp_group: ProcessGroup,
     sp_rank: int,
@@ -223,14 +225,14 @@ def sp_scatter_batch(
 
     # 1. Broadcast number of tensor entries
     if sp_rank == 0:
-        assert batch is not None
+        assert batch is not None  # noqa: S101
         tensor_items = [(k, v) for k, v in batch.items() if isinstance(v, torch.Tensor)]
         n = torch.tensor([len(tensor_items)], dtype=torch.long, device=device)
     else:
         tensor_items = []
         n = torch.tensor([0], dtype=torch.long, device=device)
     dist.broadcast(n, src=src, group=sp_group)
-    num_entries = n.item()
+    num_entries = int(n.item())
 
     result: BatchType = {}
 
@@ -248,14 +250,14 @@ def sp_scatter_batch(
         if sp_rank == 0:
             kbytes = torch.tensor(key_enc, dtype=torch.uint8, device=device)
         else:
-            kbytes = torch.empty(klen.item(), dtype=torch.uint8, device=device)
+            kbytes = torch.empty(int(klen.item()), dtype=torch.uint8, device=device)
         dist.broadcast(kbytes, src=src, group=sp_group)
         key = bytes(kbytes.cpu().tolist()).decode("utf-8")
 
         # --- tensor metadata: [ndim, dtype_code, is_broadcast] + shape ---
         if sp_rank == 0:
             tensor = tensor.to(device)
-            is_broadcast = key == "lengths" or tensor.dim() < 2
+            is_broadcast = key == "lengths" or tensor.dim() < 2  # noqa: PLR2004
             meta = torch.tensor(
                 [tensor.ndim, _DTYPE_TO_CODE[tensor.dtype], int(is_broadcast)],
                 dtype=torch.long,
@@ -270,8 +272,8 @@ def sp_scatter_batch(
             meta = torch.empty(3, dtype=torch.long, device=device)
         dist.broadcast(meta, src=src, group=sp_group)
 
-        ndim = meta[0].item()
-        dtype = _CODE_TO_DTYPE[meta[1].item()]
+        ndim = int(meta[0].item())
+        dtype = _CODE_TO_DTYPE[int(meta[1].item())]
         is_broadcast = bool(meta[2].item())
 
         if sp_rank == 0:
@@ -331,7 +333,7 @@ def sp_data_iterator(
         [len(dataloader) if sp_rank == 0 else 0], dtype=torch.long, device=device
     )
     dist.broadcast(count, src=dist.get_process_group_ranks(sp_group)[0], group=sp_group)
-    num_batches = count.item()
+    num_batches = int(count.item())
 
     if sp_rank == 0:
         for batch in dataloader:

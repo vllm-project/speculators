@@ -175,6 +175,7 @@ class Trainer:
             return
 
         # Compute defaults if None
+        assert self.train_loader is not None  # noqa: S101
         scheduler_warmup_steps = (
             self.config.scheduler_warmup_steps
             or (self.config.num_epochs * len(self.train_loader)) // 100
@@ -219,15 +220,18 @@ class Trainer:
     def _iter_loader(self, loader, epoch: int):
         """Iterate a DataLoader, scattering batches when SP is active."""
         if self.sp_size > 1:
-
             if hasattr(loader, "batch_sampler") and hasattr(
                 loader.batch_sampler, "set_epoch"
             ):
                 loader.batch_sampler.set_epoch(epoch)
 
+            sp_group = get_sp_group()
+            if sp_group is None:
+                raise RuntimeError("SP group not initialized but sp_size > 1")
+
             return sp_data_iterator(
                 loader,
-                sp_group=get_sp_group(),
+                sp_group=sp_group,
                 sp_rank=get_sp_rank(),
                 sp_size=self.sp_size,
                 device=torch.device(self.local_rank),
@@ -236,6 +240,7 @@ class Trainer:
         return loader
 
     def train_epoch(self, epoch: int):
+        assert self.train_loader is not None  # noqa: S101
         self.model.train()
         if hasattr(self.train_loader.batch_sampler, "set_epoch"):
             self.train_loader.batch_sampler.set_epoch(epoch)  # type: ignore[union-attr]

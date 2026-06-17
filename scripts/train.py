@@ -391,7 +391,7 @@ def build_draft_model(
     )
 
 
-def main(args: argparse.Namespace):  # noqa: C901
+def main(args: argparse.Namespace):  # noqa: C901, PLR0912
     # Set random seed for reproducibility
     set_seed(args.seed, args.deterministic_cuda)
 
@@ -458,7 +458,7 @@ def main(args: argparse.Namespace):  # noqa: C901
         # hidden_states_dtype, so save the dry-run checkpoint in that dtype too
         # rather than the float32 the model is built in.
         draft_model.to(hidden_states_dtype)
-        if local_rank == 0:
+        if get_rank() == 0:
             logger.info(
                 "[dry-run] Saving initialized checkpoint (%s) to '%s'",
                 hidden_states_dtype,
@@ -495,7 +495,7 @@ def main(args: argparse.Namespace):  # noqa: C901
         # Switch attention to Ulysses SP variant for supported models
         if args.speculator_type in ("eagle3",):
             tl_cfg = draft_model.config.transformer_layer_config
-            tl_cfg._attn_implementation = "ulysses_flex_attention"  # noqa: SLF001
+            tl_cfg._attn_implementation = "ulysses_flex_attention"
 
     train_loader, val_loader = create_train_val_loaders(
         data_path=args.data_path,

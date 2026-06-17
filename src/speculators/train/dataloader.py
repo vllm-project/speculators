@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import logging
 import warnings
-from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 import torch
 from torch.utils.data import DataLoader
@@ -15,10 +17,10 @@ from speculators.train.data import (
     create_collate_fn,
     split_files,
 )
+from speculators.train.distributed import get_dp_rank, get_dp_size, get_sp_rank
 from speculators.train.distributed_batch_sampler import (
     MultipackDistributedBatchSamplerV2,
 )
-from speculators.train.distributed import get_dp_rank, get_dp_size, get_sp_rank
 from speculators.train.noise_transforms import AddUniformNoise
 
 logger = logging.getLogger(__name__)
@@ -70,8 +72,8 @@ def create_train_val_loaders(
     legacy_data: bool,
     hidden_states_path: str | None,
     vllm_endpoint: str,
-    on_missing: str,
-    on_generate: str,
+    on_missing: Literal["generate", "skip", "warn", "raise"],
+    on_generate: Literal["cache", "delete"],
     verifier_name_or_path: str,
     request_timeout: float | None,
     max_retries: int,
