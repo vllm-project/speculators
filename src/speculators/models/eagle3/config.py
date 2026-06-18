@@ -2,7 +2,7 @@ from typing import Any, Literal
 
 from pydantic import Field, field_serializer, field_validator
 from transformers import AutoConfig, PretrainedConfig
-from transformers.models.llama.configuration_llama import LlamaConfig
+from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
 from speculators import SpeculatorModelConfig
 
@@ -31,7 +31,7 @@ class Eagle3SpeculatorConfig(SpeculatorModelConfig):
     )
 
     transformer_layer_config: PretrainedConfig = Field(
-        default_factory=LlamaConfig,
+        default_factory=Qwen3Config,
         description="Configuration for the transformer decoder layer",
     )
 
@@ -79,7 +79,7 @@ class Eagle3SpeculatorConfig(SpeculatorModelConfig):
     def validate_transformer_config(cls, value: Any) -> PretrainedConfig:
         """Validate and convert transformer config."""
         if isinstance(value, dict):
-            config_class: type[PretrainedConfig] = LlamaConfig
+            config_class: type[PretrainedConfig] = Qwen3Config
             if "model_type" in value:
                 config_class = AutoConfig.for_model(
                     model_type=value["model_type"]
