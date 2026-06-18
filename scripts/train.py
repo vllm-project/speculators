@@ -686,6 +686,9 @@ def validate_draft_init_args(
     options: it is mutually exclusive with ``--draft-config`` and with the
     decoder-shaping flags, since those values come from the checkpoint.
     ``--draft-config`` is likewise incompatible with the decoder-shaping flags.
+    MTP from scratch (``--speculator-type mtp`` without ``--from-pretrained``)
+    reuses the verifier's own decoder config, so ``--draft-config`` and the
+    decoder-shaping flags do not apply and are rejected.
 
     ``provided`` is the set of decoder-shaping dests the user explicitly passed
     (see :func:`speculators.utils.argparse_utils.explicitly_provided_dests`); a flag
@@ -698,15 +701,24 @@ def validate_draft_init_args(
             parser.error(
                 "--from-pretrained loads a complete draft model and takes precedence "
                 "over all other model-definition options, so these conflict with it "
-                f"(remove them): "
-                f"{', '.join(conflicting)}"
+                f"(remove them): {', '.join(conflicting)}"
+            )
+        return
+    if args.speculator_type == "mtp":
+        # MTP-from-scratch reuses the verifier's own decoder config and extracts the
+        # native MTP head weights; --draft-config and the decoder-shaping flags do not
+        # apply, so reject them rather than silently ignoring them.
+        conflicting = shaping + (["--draft-config"] if args.draft_config else [])
+        if conflicting:
+            parser.error(
+                "--speculator-type mtp reuses the verifier's decoder config, so these "
+                f"options do not apply (remove them): {', '.join(conflicting)}"
             )
         return
     if args.draft_config and shaping:
         parser.error(
             "--draft-config defines the draft decoder, so these flags conflict with "
-            "it (remove them): "
-            f"{', '.join(shaping)}"
+            f"it (remove them): {', '.join(shaping)}"
         )
 
 

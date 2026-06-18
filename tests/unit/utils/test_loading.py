@@ -42,6 +42,20 @@ def test_is_config_only_dir_detects_bin_weights(tmp_path):
     assert is_config_only_dir(tmp_path) is False
 
 
+@pytest.mark.smoke
+@pytest.mark.parametrize(
+    "index_file",
+    ["model.safetensors.index.json", "pytorch_model.bin.index.json"],
+)
+def test_is_config_only_dir_detects_sharded_index(tmp_path, index_file):
+    # A sharded-checkpoint manifest ends in .json (so it dodges the *.safetensors /
+    # *.bin globs); it must still count as weights, not config-only.
+    (tmp_path / "config.json").write_text("{}")
+    (tmp_path / index_file).write_text("{}")
+
+    assert is_config_only_dir(tmp_path) is False
+
+
 # _resolve_file Tests
 
 

@@ -179,6 +179,42 @@ def test_from_pretrained_with_explicit_default_flag_errors(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# CLI validation: MTP-from-scratch rejects inapplicable draft-definition flags
+# ---------------------------------------------------------------------------
+
+
+def test_mtp_from_scratch_alone_parses(monkeypatch):
+    args = _parse(monkeypatch, ["--speculator-type", "mtp"])
+    assert args.speculator_type == "mtp"
+    assert args.draft_config == ""
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        ["--draft-config", "c"],
+        ["--num-layers", "5"],
+        ["--draft-arch", "qwen3"],
+        ["--sliding-window", "1024"],
+    ],
+)
+def test_mtp_from_scratch_rejects_inapplicable_flags(monkeypatch, extra):
+    """MTP-from-scratch reuses the verifier decoder config, so --draft-config and
+    decoder-shaping flags do not apply and must error instead of being ignored."""
+    with pytest.raises(SystemExit):
+        _parse(monkeypatch, ["--speculator-type", "mtp", *extra])
+
+
+def test_mtp_with_from_pretrained_parses(monkeypatch):
+    """MTP + --from-pretrained (a converted checkpoint) parses; the MTP-from-scratch
+    rejection only applies when not loading from a checkpoint."""
+    args = _parse(
+        monkeypatch, ["--speculator-type", "mtp", "--from-pretrained", "ckpt"]
+    )
+    assert args.from_pretrained == "ckpt"
+
+
+# ---------------------------------------------------------------------------
 # load_draft_transformer_layer_config
 # ---------------------------------------------------------------------------
 

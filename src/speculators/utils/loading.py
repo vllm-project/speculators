@@ -23,7 +23,16 @@ def is_config_only_dir(path: str | Path) -> bool:
     if not directory.is_dir():
         return False
     has_config = (directory / "config.json").is_file()
-    has_weights = any(directory.glob("*.safetensors")) or any(directory.glob("*.bin"))
+    # Weight files, plus sharded-checkpoint index files (e.g.
+    # model.safetensors.index.json) -- the latter end in .json and would not match
+    # the *.safetensors / *.bin globs, so a shard manifest must be checked explicitly
+    # to avoid treating an incomplete sharded checkpoint as config-only.
+    has_weights = (
+        any(directory.glob("*.safetensors"))
+        or any(directory.glob("*.bin"))
+        or any(directory.glob("*.safetensors.index.json"))
+        or any(directory.glob("*.bin.index.json"))
+    )
     return has_config and not has_weights
 
 
