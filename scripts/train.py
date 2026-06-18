@@ -863,7 +863,10 @@ def parse_args():
         "--logger",
         type=str,
         default="",
-        help="One of 'trackio', 'wandb', 'tensorboard', 'mlflow' or comma separated list of them",
+        help=(
+            "One of 'trackio', 'wandb', 'tensorboard', 'mlflow' or "
+            "comma separated list.",
+        ),
     )
     parser.add_argument("--total-seq-len", type=int, default=8192)
     parser.add_argument(

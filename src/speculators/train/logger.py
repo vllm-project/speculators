@@ -49,6 +49,7 @@ Example Usage:
 # SPDX-License-Identifier: Apache-2.0
 
 # Standard
+import contextlib
 import importlib
 import json
 import logging
@@ -66,6 +67,9 @@ import torch
 from rich.logging import RichHandler
 
 if TYPE_CHECKING:
+    from types import ModuleType
+
+    from mlflow import ActiveRun  # type: ignore[import-not-found]
     from torch.utils.tensorboard import SummaryWriter
     from wandb import Run  # type: ignore[import-not-found]
 
@@ -492,97 +496,68 @@ class MLFlowHandler(logging.Handler):
         self,
         level: int = logging.INFO,
         run_name: str | None = None,
-        log_dir: str | os.PathLike = "logs",
-        **init_kwargs: Any,
+        log_dir: str | os.PathLike = "logs",  # noqa: ARG002
+        **init_kwargs: Any,  # noqa: ARG002
     ):
-        """Initialize the MLFlow logger and check for required dependencies.
-
-        Args:
-            level: The logging level for this handler
-            run_name: Name of the run, can contain placeholders
-            log_dir: Directory where MLFlow logs should be stored
-        """
         super().__init__(level)
-        self.init_kwargs = init_kwargs.copy()
-        self.init_kwargs.setdefault("dir", Path(log_dir))
-        self.init_kwargs.setdefault("name", _substitute_placeholders(run_name))
-        self.init_kwargs.setdefault("config", {})
-
-        self.client = None
+        self._run_name = _substitute_placeholders(run_name)
+        self._experiment_name = os.getenv("MLFLOW_EXPERIMENT_NAME", "speculators")
+        self._mlflow: ModuleType | None = None
+        self._run: ActiveRun | None = None
         self._auto_end_run = False
-        self._run_id = None
-        self._run = None
 
     def _setup(self):
         try:
-            self.client = importlib.import_module(self._package_name)
+            import mlflow  # noqa: PLC0415
         except ImportError as e:
             msg = (
-                f"Could not initialize {self.__class__.__name__} because package "
-                f"'{self._package_name}' could not be imported.\n Please ensure it is "
-                f"installed by running 'pip install {self._package_name}' or configure "
+                "Could not initialize MLFlowHandler because package "
+                "'mlflow' could not be imported. Please ensure it is "
+                "installed by running 'pip install mlflow' or configure "
                 "the logger to use a different backend."
             )
             raise RuntimeError(msg) from e
-    
-        self._tracking_uri = os.getenv("MLFLOW_TRACKING_URI")
-        self._experiment_name = os.getenv("MLFLOW_EXPERIMENT_NAME", "speculators")
-        self._run_name = self.init_kwargs["name"]
-        self._run_id = None
-        self._max_log_params = int(os.getenv("MLFLOW_MAX_LOG_PARAMS", "1000"))
+        self._mlflow = mlflow
 
-        if not self.client.is_tracking_uri_set():
-            if self._tracking_uri:
-                self.client.set_tracking_uri(self._tracking_uri)
-            else:
-                warnings.warn(
-                    (
-                        "Environment variable `MLFLOW_TRACKING_URI` is not provided "
-                        "and therefore will not be explicitly set."
-                    ),
-                    stacklevel=2,
-                )
-
-        active_run = self.client.active_run()
-        if active_run is None and self._run_name:
-            if self._experiment_name:
-                self.client.set_experiment(self._experiment_name)
-            current_exp = self.client.get_experiment_by_name(self._experiment_name)
-            # find if there is same run_name in the current experiment and get its run_id to resume
-            if current_exp:
-                past_runs = self.client.search_runs(
-                    experiment_ids=[current_exp.experiment_id],
-                    filter_string=f"tags.mlflow.runName = '{self._run_name}'",
-                    max_results=1
-                )
-                if not past_runs.empty:
-                    self._run_id = past_runs.run_id[0]
+        active_run = mlflow.active_run()
         if active_run is not None:
             self._run = active_run
             self._auto_end_run = False
-        elif self._run_id:  # resume
-            self._run = self.client.start_run(run_id=self._run_id)
-            self._auto_end_run = True
-        else:  # new run
-            self._run = self.client.start_run(run_name=self._run_name, nested=False)
-            self._auto_end_run = True
+            return
 
-        if self.client.active_run() is None or self._run_id:
-            if self._experiment_name:
-                self.client.set_experiment(self._experiment_name)
-            self._run = self.client.start_run(run_name=self._run_id , nested=False)
-            self._auto_end_run = True
+        mlflow.set_experiment(self._experiment_name)
+
+        # Resume an existing run with the same name if one exists
+        run_id = None
+        if self._run_name:
+            current_exp = mlflow.get_experiment_by_name(self._experiment_name)
+            if current_exp:
+                past_runs = mlflow.search_runs(
+                    experiment_ids=[current_exp.experiment_id],
+                    filter_string=f"tags.mlflow.runName = '{self._run_name}'",
+                    max_results=1,
+                )
+                if not past_runs.empty:  # type: ignore[union-attr]
+                    run_id = past_runs.run_id[0]  # type: ignore[union-attr]
+
+        if run_id:
+            self._run = mlflow.start_run(run_id=run_id)
         else:
-            self._run = self.client.active_run()
+            self._run = mlflow.start_run(run_name=self._run_name)
+        self._auto_end_run = True
 
-        mlflow_tags = os.getenv("MLFLOW_TAGS", None)
+        mlflow_tags = os.getenv("MLFLOW_TAGS")
         if mlflow_tags:
-            mlflow_tags = json.loads(mlflow_tags)
-            self.client.set_tags(mlflow_tags)
+            mlflow.set_tags(json.loads(mlflow_tags))
 
     def emit(self, record: logging.LogRecord):
         if self._run is None:
             self._setup()
+
+        mlflow = self._mlflow
+        run = self._run
+        if mlflow is None or run is None:
+            return
 
         if not isinstance(record.msg, Mapping):
             warnings.warn(
@@ -598,41 +573,27 @@ class MLFlowHandler(logging.Handler):
         flat_dict = _flatten_dict(record.msg)
         step = getattr(record, "step", None)
 
-        # Metrics: MLflow only accepts numeric values, so split out scalars.
         metrics = {}
         for k, v in flat_dict.items():
-            try:
+            with contextlib.suppress(ValueError, TypeError):
                 metrics[k] = float(v)
-            except ValueError:
-                # Occurs for strings that cannot be converted to floats (e.g. "3.2.3")
-                # and aren't "inf" or "nan"
-                self.client.log_text(str(v), artifact_path=f"texts/{k}/step_{step}.txt")
-            except TypeError:
-                warnings.warn(
-                    (
-                        f"{self.__class__.__name__} expected a scalar or text, got "
-                        f"{type(v)}. Skipping log. Please ensure metric logger is only "
-                        "called with mappings containing scalar values or text."
-                    ),
-                    stacklevel=2,
-                )
         if metrics:
-            self.client.log_metrics(
-                run_id=self._run.info.run_id, 
-                metrics=metrics, 
-                step=step
+            mlflow.log_metrics(
+                run_id=run.info.run_id,
+                metrics=metrics,
+                step=step,
             )
 
     def close(self):
-        """End the MLfow run and cleanup resources."""
-        if self._run is not None and self.client is not None:
-            # Only end the run if this handler started it
-            if self._auto_end_run and self.client.active_run() is not None:
-                self.client.end_run()
+        if self._run is not None and self._mlflow is not None:
+            if self._auto_end_run and self._mlflow.active_run() is not None:
+                self._mlflow.end_run()
             self._run = None
         super().close()
 
+
 ### Main functions
+
 
 def setup_root_logger(level="INFO"):
     """Configure the root logger with rich formatting.
@@ -724,7 +685,7 @@ def setup_metric_logger(loggers, run_name, output_dir):
                 "log_dir": output_dir,
                 "run_name": run_name,
                 "filters": ["is_mapping", "is_rank0"],
-            }
+            },
         },
         "loggers": {
             "speculators.metrics": {
