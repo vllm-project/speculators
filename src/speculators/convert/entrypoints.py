@@ -15,14 +15,18 @@ Functions:
     convert_model: Converts a model checkpoint to the Speculators format.
 """
 
+import tempfile
 from typing import Literal
+
+from loguru import logger
+from transformers import PretrainedConfig
 
 from speculators.convert.dflash.converter import DFlashConverter
 from speculators.convert.eagle.eagle3_converter import Eagle3Converter
 from speculators.convert.eagle.eagle_converter import EagleConverter
 from speculators.convert.mtp.converter import MTPConverter
 
-__all__ = ["convert_model"]
+__all__ = ["convert_model", "maybe_convert_external_checkpoint"]
 
 
 def convert_model(
@@ -141,3 +145,47 @@ def convert_model(
         )
     else:
         raise ValueError(f"Unsupported algorithm: {algorithm}")
+
+
+def maybe_convert_external_checkpoint(
+    model: str,
+    verifier: str | None = None,
+    cache_dir: str | None = None,
+    output_path: str | None = None,
+) -> str:
+    """Convert an external (non-speculators) checkpoint to speculators format.
+
+    A speculators checkpoint (config has ``speculators_model_type``) is returned
+    unchanged; otherwise the external format is detected and converted (which
+    requires ``verifier``) to ``output_path``, defaulting to a temp dir. Powers
+    the unified ``from_pretrained`` finetuning pathway.
+    """
+    config_dict, _ = PretrainedConfig.get_config_dict(model, cache_dir=cache_dir)
+    if "speculators_model_type" in config_dict:
+        return str(model)
+
+    architectures = config_dict.get("architectures") or []
+    if "dflash_config" in config_dict or any("DFlash" in a for a in architectures):
+        algorithm = "dflash"
+    else:
+        raise NotImplementedError(
+            f"Cannot auto-convert checkpoint '{model}': unrecognized external "
+            "format. Supported auto-conversion: DFlash."
+        )
+
+    if verifier is None:
+        raise ValueError(
+            f"Converting an external {algorithm} checkpoint requires a verifier. "
+            "Pass `verifier=<model id or path>`."
+        )
+
+    output_path = output_path or tempfile.mkdtemp(prefix="speculators_converted_")
+    logger.info(f"Auto-converting external {algorithm} checkpoint to {output_path}")
+    convert_model(
+        model=str(model),
+        verifier=verifier,
+        algorithm=algorithm,
+        output_path=output_path,
+        cache_dir=cache_dir,
+    )
+    return output_path
