@@ -203,9 +203,10 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             )
         return self.config.mask_token_id
 
+    @torch.compiler.disable
     def _create_attention_mask(
         self,
-        lengths: torch.Tensor,
+        document_ids: torch.Tensor,
         total_seq_len: int,
         anchor_positions: torch.Tensor,
         device: torch.device,
@@ -213,7 +214,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         sliding_window_non_causal: bool = False,
     ):
         mask_mod, q_len, kv_len = create_anchor_block_mask_mod(
-            lengths=lengths.to(device),
+            document_ids=document_ids.squeeze(0).to(device),
             total_seq_len=total_seq_len,
             anchor_positions=anchor_positions,
             block_size=self.block_size,
@@ -230,7 +231,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         )
 
     @torch.compiler.disable
-    def _build_attention_mask(self, loss_mask, lengths, device):
+    def _build_attention_mask(self, loss_mask, document_ids, device):
         total_seq_len = loss_mask.shape[1]
 
         anchor_positions, anchor_valid = select_anchors(
@@ -240,7 +241,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         full_attn_mask = None
         if self.uses_full_attn:
             full_attn_mask = self._create_attention_mask(
-                lengths=lengths,
+                document_ids=document_ids,
                 total_seq_len=total_seq_len,
                 anchor_positions=anchor_positions,
                 device=device,
@@ -250,7 +251,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         sliding_window_attn_mask = None
         if self.uses_sliding_window_attn:
             sliding_window_attn_mask = self._create_attention_mask(
-                lengths=lengths,
+                document_ids=document_ids,
                 total_seq_len=total_seq_len,
                 anchor_positions=anchor_positions,
                 device=device,
@@ -267,7 +268,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         input_ids: torch.Tensor,  # shape: [1, total_seq_len]
         loss_mask: torch.Tensor,  # shape: [1, total_seq_len]
         verifier_last_hidden_states: torch.Tensor,  # shape: [1, total_seq_len, hidden_size] # noqa: E501
-        lengths: torch.Tensor | None = None,  # shape: [batch_size]
+        document_ids: torch.Tensor,  # shape: [1, total_seq_len]
         position_ids: torch.Tensor | None = None,  # shape: [1, total_seq_len]
         loss_fn=kl_div_loss,
         **kwargs,
@@ -276,15 +277,13 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         total_seq_len = hidden_states.shape[1]
         num_anchors = self.config.max_anchors
 
-        if lengths is None:
-            lengths = torch.tensor([total_seq_len], dtype=torch.long, device=device)
         if position_ids is None:
             position_ids = 1 + torch.arange(
                 total_seq_len, dtype=torch.long, device=device
             ).unsqueeze(0)
 
         full_attn_mask, sliding_window_attn_mask, anchor_positions, anchor_valid = (
-            self._build_attention_mask(loss_mask, lengths, device)
+            self._build_attention_mask(loss_mask, document_ids, device)
         )
 
         mask_tokens_size = num_anchors * self.block_size
@@ -304,7 +303,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         # shape: [1, total_seq_len, hidden_size]
 
         mask_position_ids = get_base_indices_for_anchored_blocks(
-            position_ids[:, anchor_positions], self.block_size, input_ids.numel()
+            position_ids[0, anchor_positions], self.block_size
         )
         position_ids = torch.cat([position_ids, mask_position_ids.unsqueeze(0)], dim=1)
         # shape: [1, total_seq_len + num_anchors*block_size]
@@ -314,7 +313,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         position_embeddings = self.rotary_emb(hidden_states, position_ids)
 
         anchored_block_indices = get_base_indices_for_anchored_blocks(
-            anchor_positions, self.block_size, input_ids.numel()
+            anchor_positions, self.block_size
         )  # shape: [num_anchors*block_size]
 
         with torch.no_grad():

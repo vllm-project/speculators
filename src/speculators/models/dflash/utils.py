@@ -6,7 +6,6 @@ import torch
 def get_base_indices_for_anchored_blocks(
     anchor_positions: torch.Tensor,  # shape: [1, num_anchors]
     block_size: int,
-    total_seq_len: int | None = None,
 ) -> torch.Tensor:  # shape: [num_anchors*block_size]
     anchor_positions = anchor_positions.to(dtype=torch.long).view(-1)
     # dtype: long, shape: [num_anchors]
@@ -15,12 +14,6 @@ def get_base_indices_for_anchored_blocks(
     idx = (
         anchor_positions[:, None] + offsets[None, :]
     )  # shape: [num_anchors, block_size]
-
-    if (idx < 0).any() or (total_seq_len and (idx >= total_seq_len).any()):
-        raise ValueError(
-            "Some anchor_positions + offsets are out of range for total_seq_len"
-            f"={total_seq_len}. Max={idx.max().item()}, min={idx.min().item()}"
-        )
 
     return idx.reshape(-1)
 
@@ -60,10 +53,14 @@ def select_anchors(
     anchor_valid = torch.zeros(num_anchors, dtype=torch.bool, device=device)
 
     k = min(num_anchors, valid_indices.numel())
-    if k > 0:
-        perm = torch.randperm(valid_indices.numel(), device=loss_mask.device)
-        anchors[:k] = valid_indices[perm[:k]]
-        anchor_valid[:k] = True
+
+    # Constrain value of k for torch dynamo
+    torch._check(k <= valid_indices.numel())  # noqa: SLF001
+    torch._check(k >= 0)  # noqa: SLF001
+
+    perm = torch.randperm(valid_indices.numel(), device=loss_mask.device)
+    anchors[:k] = torch.gather(valid_indices, 0, perm[:k])
+    anchor_valid[:k] = True
 
     return anchors, anchor_valid
     # shape: [num_anchors], [num_anchors]
