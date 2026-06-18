@@ -188,7 +188,9 @@ def test_collate_fn_basic():
             [[[2.0], [3.0], [10.0], [11.0], [12.0], [13.0], [14.0], [15.0], [-1], [-1]]]
         ),
         "loss_mask": torch.tensor([[0, 1, 0, 0, 1, 0, 1, 1, -1, -1]], dtype=torch.long),
-        "lengths": torch.tensor([2, 6], dtype=torch.long),
+        "document_ids": torch.tensor(
+            [[0, 0, 1, 1, 1, 1, 1, 1, -1, -1]], dtype=torch.long
+        ),
         "position_ids": torch.tensor(
             [[0, 1, 0, 1, 2, 3, 4, 5, -1, -1]], dtype=torch.long
         ),
@@ -235,11 +237,13 @@ def test_collate_fn_length_truncation():
 
     collated = collate_fn(batch)
 
-    # Last length is truncated to fit in max_len
-    expected_lengths = torch.tensor([5, 6], dtype=torch.long)
+    # document_ids: doc 0 has length 5, doc 1 truncated to length 6, rest is padding
+    expected_document_ids = torch.tensor(
+        [[0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1]], dtype=torch.long
+    )
+    assert torch.equal(collated["document_ids"], expected_document_ids)
+    assert "lengths" not in collated
 
-    # All tensors (other than lengths) are concatenated then truncated to max_len
-    assert torch.equal(collated["lengths"], expected_lengths)
     for key in [
         "input_ids",
         "hidden_states",

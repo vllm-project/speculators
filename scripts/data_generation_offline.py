@@ -23,10 +23,11 @@ from typing import Any
 
 import openai
 from datasets import load_from_disk
-from safetensors import safe_open
+from safetensors.torch import load_file
 from tqdm import tqdm
 
 from speculators.data_generation.offline import (
+    check_hidden_states,
     get_existing_hidden_state_indices,
     get_indices_to_process,
 )
@@ -191,23 +192,6 @@ def parse_args():
     return parser.parse_args()
 
 
-def check_safetensors_file(path: Path, tokens: list[int]):
-    with safe_open(path, "pt") as f:
-        t_ids = f.get_tensor("token_ids").tolist()
-        if t_ids != tokens:
-            raise ValueError(
-                f"Token ids in {path} don't match expected token ids {tokens}"
-            )
-
-        hs_slice = f.get_slice("hidden_states")
-        hs_shape = list(hs_slice.get_shape())
-        if len(tokens) != hs_shape[0]:
-            raise ValueError(
-                f"Sequence length of hidden states {hs_shape[0]} in {path}"
-                f" doesn't match num tokens {len(tokens)}"
-            )
-
-
 async def worker(  # noqa: C901
     client,
     model: str,
@@ -258,11 +242,15 @@ async def worker(  # noqa: C901
                     shutil.move, hidden_states_path, target_hidden_states_path
                 )
                 if validate_outputs:
-                    await asyncio.to_thread(
-                        check_safetensors_file,
-                        target_hidden_states_path,
-                        item["input_ids"],
-                    )
+
+                    def _load_and_check(
+                        path=target_hidden_states_path,
+                        tokens=item["input_ids"],
+                    ):
+                        loaded = load_file(path)
+                        check_hidden_states(loaded, tokens)
+
+                    await asyncio.to_thread(_load_and_check)
         except Exception as e:
             if fail_on_error:
                 logger.exception(

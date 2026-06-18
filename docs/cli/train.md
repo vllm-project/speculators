@@ -108,6 +108,22 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--deterministic-cuda`** (flag) Enable deterministic CUDA operations. May impact performance.
 
+### Optimizer Arguments
+
+- **`--optimizer`** (str, default: `"adamw"`) Optimizer to use. Options: `adamw`, `muon`. The `muon` option applies the Muon optimizer to 2D weight matrices and AdamW to the remaining parameters (norms, biases, embeddings, lm_head).
+
+- **`--weight-decay`** (float, default: `0.01`) Weight decay for the AdamW optimizer (and the AdamW group in muon mode).
+
+- **`--muon-lr`** (float, default: `0.02`) Learning rate for the Muon (2D weights) group. Only used with `--optimizer muon`.
+
+- **`--muon-momentum`** (float, default: `0.95`) Momentum for the Muon optimizer. Only used with `--optimizer muon`.
+
+- **`--muon-weight-decay`** (float, default: `0.1`) Weight decay for the Muon optimizer. Only used with `--optimizer muon`.
+
+- **`--muon-ns-steps`** (int, default: `5`) Number of Newton-Schulz steps for Muon. Only used with `--optimizer muon`.
+
+- **`--muon-adjust-lr-fn`** (str, default: `"match_rms_adamw"`) Muon LR adjustment strategy. Options: `original`, `match_rms_adamw`. Only used with `--optimizer muon`.
+
 ### Eagle3-Specific Arguments
 
 - **`--use-off-policy-tokens`** (flag) Use off-policy tokens during training (required for [regenerated data](response_regeneration.md)).

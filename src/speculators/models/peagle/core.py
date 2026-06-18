@@ -52,7 +52,7 @@ class PEagleDraftModel(Eagle3DraftModel):
         self,
         hidden_states: torch.Tensor,
         input_ids: torch.Tensor,
-        lengths: torch.Tensor | None = None,
+        document_ids: torch.Tensor,
         position_ids: torch.Tensor | None = None,
         loss_mask: torch.Tensor | None = None,
         verifier_last_hidden_states: torch.Tensor | None = None,
@@ -62,12 +62,10 @@ class PEagleDraftModel(Eagle3DraftModel):
         """
         Forward pass for P-EAGLE model training with parallel group prediction.
 
-        Matches p-eagle-train implementation but accepts standard EAGLE3 data format.
-
         Args:
             hidden_states: Verifier hidden states [batch, seq_len, 3*hidden_size]
             input_ids: Input token IDs [batch, seq_len]
-            lengths: Sequence lengths for each sample in batch [batch_size]
+            document_ids: Document IDs [1, seq_len], maps positions to doc index, pad -1
             position_ids: Position IDs [batch, seq_len] (optional)
             loss_mask: Loss mask for which tokens to compute loss on
                 [batch, seq_len]
@@ -83,8 +81,6 @@ class PEagleDraftModel(Eagle3DraftModel):
         device = hidden_states.device
         seq_length = input_ids.shape[1]
 
-        if lengths is None:
-            lengths = torch.tensor([seq_length], dtype=torch.long, device=device)
         if loss_mask is None:
             loss_mask = torch.ones_like(input_ids, dtype=torch.float32)
 
@@ -133,8 +129,7 @@ class PEagleDraftModel(Eagle3DraftModel):
         mask_mod = create_peagle_mask_mod(
             anchor_pos=anchor_pos,
             depth=depth,
-            lengths=lengths,
-            total_seq_len=seq_length,
+            document_ids=document_ids.squeeze(0).to(device),
         )
 
         attention_mask = create_block_mask(  # type: ignore[assignment]

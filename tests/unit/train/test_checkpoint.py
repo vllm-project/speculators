@@ -35,8 +35,8 @@ def _make_minimal_trainer(tmp_path: Path, checkpoint_freq: int, save_best: bool)
     trainer.checkpointer = SingleGPUCheckpointer(str(tmp_path))
 
     trainer.model = cast("SpeculatorModel", object())
-    trainer.opt = cast("torch.optim.AdamW", object())
-    trainer.scheduler = None
+    trainer.optimizers = cast("list[torch.optim.Optimizer]", [object()])
+    trainer.schedulers = []
     return trainer
 
 
