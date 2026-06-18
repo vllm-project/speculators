@@ -23,6 +23,7 @@ from speculators.train.checkpointer import (
     SingleGPUCheckpointer,
 )
 from speculators.train.graceful_shutdown import with_graceful_shutdown
+from speculators.train.optimizers import build_optimizers
 from speculators.train.utils import apply_fully_sharded, normalize_counted_metrics
 
 root_logger = logging.getLogger("speculators")
@@ -41,6 +42,13 @@ class TrainerConfig(NamedTuple):
     local_rank: int = 0
     train_call_kwargs: dict = {}
     val_call_kwargs: dict = {}
+    optimizer: Literal["adamw", "muon"] = "adamw"
+    weight_decay: float = 0.01
+    muon_lr: float = 0.02
+    muon_momentum: float = 0.95
+    muon_weight_decay: float = 0.1
+    muon_ns_steps: int = 5
+    muon_adjust_lr_fn: str = "match_rms_adamw"
     scheduler_type: Literal["linear", "cosine", "none"] = "linear"
     scheduler_warmup_steps: int | None = None
     scheduler_total_steps: int | None = None
@@ -146,16 +154,18 @@ class Trainer:
             dist.barrier()
 
     def setup_optimizer(self):
-        # Setup optimizer
-        self.opt = torch.optim.AdamW(self.model.named_parameters(), lr=self.config.lr)
+        # Setup optimizer(s). The "muon" option returns two optimizers (Muon for the
+        # 2D weight matrices, AdamW for everything else); "adamw" returns a single one.
+        self.optimizers = build_optimizers(self.model, self.config)
         last_epoch = -1
         if self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1:
-            self.checkpointer.load_optimizer_state_dict(self.model, self.opt)
+            self.checkpointer.load_optimizer_state_dict(self.model, self.optimizers)
             last_epoch = self.checkpointer.previous_epoch
 
-        # Setup scheduler
+        # Setup scheduler(s) — one per optimizer so each optimizer's base LR (e.g.
+        # Muon's higher LR vs AdamW's) is warmed up / decayed independently.
         if self.config.scheduler_type == "none":
-            self.scheduler = None
+            self.schedulers: list[torch.optim.lr_scheduler.LRScheduler] = []
             return
 
         # Compute defaults if None
@@ -167,24 +177,38 @@ class Trainer:
             self.config.num_epochs * len(self.train_loader)
         )
 
-        if self.config.scheduler_type == "linear":
-            self.scheduler = get_linear_schedule_with_warmup(
-                self.opt,
-                num_warmup_steps=scheduler_warmup_steps,
-                num_training_steps=scheduler_total_steps,
-                last_epoch=last_epoch,
-            )
-        else:
-            self.scheduler = get_cosine_schedule_with_warmup(
-                self.opt,
+        def make_scheduler(opt: torch.optim.Optimizer):
+            if self.config.scheduler_type == "linear":
+                return get_linear_schedule_with_warmup(
+                    opt,
+                    num_warmup_steps=scheduler_warmup_steps,
+                    num_training_steps=scheduler_total_steps,
+                    last_epoch=last_epoch,
+                )
+            return get_cosine_schedule_with_warmup(
+                opt,
                 num_warmup_steps=scheduler_warmup_steps,
                 num_training_steps=scheduler_total_steps,
                 num_cycles=self.config.scheduler_num_cosine_cycles,
                 last_epoch=last_epoch,
             )
 
+        self.schedulers = [make_scheduler(opt) for opt in self.optimizers]
+
         if self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1:
-            self.checkpointer.load_scheduler_state_dict(self.scheduler)
+            self.checkpointer.load_scheduler_state_dict(self.schedulers)
+
+    def _optimizers_zero_grad(self):
+        for opt in self.optimizers:
+            opt.zero_grad()
+
+    def _optimizers_step(self):
+        for opt in self.optimizers:
+            opt.step()
+
+    def _schedulers_step(self):
+        for scheduler in self.schedulers:
+            scheduler.step()
 
     def train_epoch(self, epoch: int):
         self.model.train()
@@ -213,14 +237,15 @@ class Trainer:
                 **gpu_batch, **self.config.train_call_kwargs
             )
 
-            self.opt.zero_grad()
+            self._optimizers_zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-            self.opt.step()
+            self._optimizers_step()
 
-            current_lr = self.opt.param_groups[0]["lr"]
-            if self.scheduler is not None:
-                self.scheduler.step()
+            current_lrs = {
+                type(opt).__name__: opt.param_groups[0]["lr"] for opt in self.optimizers
+            }
+            self._schedulers_step()
 
             if self.global_step % self.config.log_freq == 0:
                 if self.is_distributed:
@@ -230,11 +255,16 @@ class Trainer:
                 metrics = {k: v.item() for k, v in metrics.items()}
                 world_size = dist.get_world_size() if self.is_distributed else 1
                 metrics = normalize_counted_metrics(metrics, world_size)
+                lr_info = (
+                    current_lrs
+                    if len(current_lrs) > 1
+                    else next(iter(current_lrs.values()))
+                )
                 metric_logger.info(
                     {
                         "train": metrics,
                         "epoch": epoch,
-                        "lr": current_lr,
+                        "lr": lr_info,
                         "global_step": self.global_step,
                     },
                     extra={"step": self.global_step},
@@ -306,9 +336,9 @@ class Trainer:
             return
 
         root_logger.info(f"Saving checkpoint to {self.checkpointer.path / str(epoch)}")
-        self.checkpointer.save_checkpoint(self.model, self.opt, epoch)
-        if self.scheduler is not None:
-            self.checkpointer.save_scheduler_state_dict(self.scheduler, epoch)
+        self.checkpointer.save_checkpoint(self.model, self.optimizers, epoch)
+        if self.schedulers:
+            self.checkpointer.save_scheduler_state_dict(self.schedulers, epoch)
         root_logger.info(f"Checkpoint saved to {self.checkpointer.path / str(epoch)}")
 
     def maybe_update_best(self, epoch: int, val_metrics: dict | None):
@@ -318,9 +348,9 @@ class Trainer:
             return
 
         if self.config.save_best:
-            self.checkpointer.save_checkpoint(self.model, self.opt, epoch)
-            if self.scheduler is not None:
-                self.checkpointer.save_scheduler_state_dict(self.scheduler, epoch)
+            self.checkpointer.save_checkpoint(self.model, self.optimizers, epoch)
+            if self.schedulers:
+                self.checkpointer.save_scheduler_state_dict(self.schedulers, epoch)
         elif self.config.checkpoint_freq >= 1 and not (
             epoch == 0 or (epoch + 1) % int(self.config.checkpoint_freq) == 0
         ):

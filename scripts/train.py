@@ -451,6 +451,13 @@ def main(args: argparse.Namespace):
         local_rank=local_rank,
         train_call_kwargs=train_call_kwargs,
         val_call_kwargs=val_call_kwargs,
+        optimizer=args.optimizer,
+        weight_decay=args.weight_decay,
+        muon_lr=args.muon_lr,
+        muon_momentum=args.muon_momentum,
+        muon_weight_decay=args.muon_weight_decay,
+        muon_ns_steps=args.muon_ns_steps,
+        muon_adjust_lr_fn=args.muon_adjust_lr_fn,
         scheduler_type=args.scheduler_type,
         scheduler_warmup_steps=args.scheduler_warmup_steps,
         scheduler_total_steps=args.scheduler_total_steps,
@@ -830,6 +837,40 @@ def parse_args():
     parser.add_argument("--scheduler-warmup-steps", type=int, default=None)
     parser.add_argument("--scheduler-total-steps", type=int, default=None)
     parser.add_argument("--scheduler-num-cosine-cycles", type=float, default=0.5)
+
+    # optimizer
+    parser.add_argument(
+        "--optimizer",
+        type=str,
+        default="adamw",
+        choices=["adamw", "muon"],
+        help=(
+            "Optimizer to use. 'muon' applies Muon to 2D weight matrices and AdamW to "
+            "the remaining params (norms, biases, embeddings, lm_head)."
+        ),
+    )
+    parser.add_argument(
+        "--weight-decay",
+        type=float,
+        default=0.01,
+        help="Weight decay for the AdamW optimizer (and the AdamW group in muon mode).",
+    )
+    parser.add_argument(
+        "--muon-lr",
+        type=float,
+        default=0.02,
+        help="LR for the Muon (2D weights) group. Only used with --optimizer muon.",
+    )
+    parser.add_argument("--muon-momentum", type=float, default=0.95)
+    parser.add_argument("--muon-weight-decay", type=float, default=0.1)
+    parser.add_argument("--muon-ns-steps", type=int, default=5)
+    parser.add_argument(
+        "--muon-adjust-lr-fn",
+        type=str,
+        default="match_rms_adamw",
+        choices=["original", "match_rms_adamw"],
+        help="Muon LR adjustment. 'match_rms_adamw' matches AdamW's update RMS.",
+    )
 
     args = parser.parse_args()
     resolve_loss_fn(args.loss_fn)
