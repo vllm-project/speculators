@@ -3,8 +3,37 @@
 from unittest.mock import patch
 
 import pytest
+from transformers import Qwen3Config
 
+from speculators.config import SpeculatorsConfig, VerifierConfig
 from speculators.convert.dflash.converter import DFlashConverter
+from speculators.models.dflash import DFlashSpeculatorConfig
+from speculators.proposals.greedy import GreedyTokenProposalConfig
+
+
+def _tiny_dflash_config():
+    return DFlashSpeculatorConfig(
+        transformer_layer_config=Qwen3Config(
+            vocab_size=32,
+            hidden_size=16,
+            intermediate_size=32,
+            num_hidden_layers=1,
+            num_attention_heads=2,
+            num_key_value_heads=1,
+            head_dim=8,
+            max_position_embeddings=32,
+        ),
+        draft_vocab_size=32,
+        block_size=4,
+        aux_hidden_state_layer_ids=[0],
+        mask_token_id=1,
+        speculators_config=SpeculatorsConfig(
+            algorithm="dflash",
+            proposal_methods=[GreedyTokenProposalConfig(speculative_tokens=3)],
+            default_proposal_method="greedy",
+            verifier=VerifierConfig(name_or_path="dummy", architectures=[]),
+        ),
+    )
 
 
 def _source_config(**overrides):
@@ -73,3 +102,12 @@ class TestBuildConfig:
         source = _source_config(dflash_config={"mask_token_id": 151669})
         with pytest.raises(ValueError, match="target_layer_ids"):
             DFlashConverter()._build_config(source, "Qwen/Qwen3-8B", None)
+
+
+class TestSave:
+    def test_missing_draft_weights_raise(self, tmp_path):
+        # No source weights: every draft-body weight (fc, norm, hidden_norm,
+        # layers.*) is missing and must be flagged, not silently kept as NaN.
+        # Raises before load_verifier_weights, so no verifier download.
+        with pytest.raises(ValueError, match="Draft weights missing"):
+            DFlashConverter()._save(_tiny_dflash_config(), {}, tmp_path)

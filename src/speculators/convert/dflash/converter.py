@@ -32,6 +32,19 @@ _NON_TRANSFORMER_KEYS = frozenset(
     {"architectures", "auto_map", "block_size", "dflash_config", "num_target_layers"}
 )
 
+# state dict keys that are filled from the verifier (not the source checkpoint), so
+# their absence from the source weights is expected, not a conversion error
+_VERIFIER_FILLED_KEYS = frozenset(
+    {
+        "embed_tokens.weight",
+        "lm_head.weight",
+        "verifier_lm_head.weight",
+        "verifier_norm.weight",
+        "t2d",
+        "d2t",
+    }
+)
+
 
 class DFlashConverter:
     """Convert an external DFlash checkpoint to speculators format.
@@ -136,11 +149,9 @@ class DFlashConverter:
                 "Unexpected keys in checkpoint -- the structure does not match "
                 f"DFlashDraftModel. Unexpected keys: {unexpected}"
             )
-        critical_missing = [k for k in missing if k.startswith("layers.")]
+        critical_missing = [k for k in missing if k not in _VERIFIER_FILLED_KEYS]
         if critical_missing:
-            raise ValueError(
-                f"Draft layer weights missing after load: {critical_missing}"
-            )
+            raise ValueError(f"Draft weights missing after load: {critical_missing}")
         logger.debug(f"Keys loaded from verifier at save time: {missing}")
 
         # embed_tokens / lm_head / verifier_lm_head / verifier_norm come from the
