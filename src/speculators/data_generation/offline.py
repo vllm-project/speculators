@@ -4,6 +4,21 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+def check_hidden_states(data: dict, tokens: list[int]):
+    t_ids = data["token_ids"].tolist()
+    if t_ids != tokens:
+        raise ValueError(f"Token ids don't match expected token ids {tokens}")
+
+    hs = data["hidden_states"]
+    if hs.isnan().any():
+        raise ValueError("Hidden states contain NaN values")
+    if len(tokens) != hs.shape[0]:
+        raise ValueError(
+            f"Sequence length of hidden states {hs.shape[0]}"
+            f" doesn't match num tokens {len(tokens)}"
+        )
+
+
 def get_existing_hidden_state_indices(output_path: Path) -> list[int]:
     """Find existing `hs_i.safetensors` files (where i is the file index)"""
 
