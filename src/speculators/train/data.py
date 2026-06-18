@@ -323,6 +323,8 @@ class ArrowDataset(BaseDataset):
             )
 
             loaded_hs = _maybe_load_hs_file(Path(hs_filepath))
+            if loaded_hs is None:
+                raise ValueError(f"Failed to load hidden states from {hs_filepath}")
 
             check_hidden_states(loaded_hs, dataset_item["input_ids"].tolist())
 
