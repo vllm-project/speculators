@@ -491,7 +491,7 @@ def setup_root_logger(level="INFO"):
     """
     handler = RichHandler()
     handler.addFilter(FormatDictFilter())
-    handler.addFilter(IsRank0Filter(local_rank=True))
+    handler.addFilter(IsRank0Filter())
     logging.basicConfig(
         level=level, format="%(message)s", datefmt="[%X]", handlers=[handler]
     )
