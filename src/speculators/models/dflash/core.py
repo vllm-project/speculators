@@ -19,7 +19,7 @@ from speculators.models.dflash.utils import (
     select_anchors,
 )
 from speculators.models.metrics import kl_div_loss, resolve_loss_fn
-from speculators.models.utils import resolve_target_layer_ids
+from speculators.models.utils import conditional_torch_compile, resolve_target_layer_ids
 
 
 @SpeculatorModel.register("dflash")
@@ -260,7 +260,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
 
         return full_attn_mask, sliding_window_attn_mask, anchor_positions, anchor_valid
 
-    @torch.compile
+    @conditional_torch_compile
     def forward(
         self,
         hidden_states: torch.Tensor,  # shape: [1,total_seq_len,num_hidden*hidden_size]
