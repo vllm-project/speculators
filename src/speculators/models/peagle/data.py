@@ -47,20 +47,23 @@ def generate_cod_sample_indices(
     device = loss_mask.device
     all_valid_indices = torch.where(loss_mask == 1)[0]
 
-    if max_anchors is not None and all_valid_indices.shape[0] > max_anchors:
-        n_valid = all_valid_indices.shape[0]
-        start_idx = int(torch.randint(0, n_valid - max_anchors + 1, (1,)).item())
+    if max_anchors is not None and all_valid_indices.shape[0] > 0:
+        if all_valid_indices.shape[0] > max_anchors:
+            n_valid = all_valid_indices.shape[0]
+            start_idx = int(torch.randint(0, n_valid - max_anchors + 1, (1,)).item())
+            selected_valid = all_valid_indices[start_idx : start_idx + max_anchors]
+        else:
+            selected_valid = all_valid_indices
 
-        window_start = int(all_valid_indices[start_idx].item())
-        window_end = int(all_valid_indices[start_idx + max_anchors - 1].item()) + 1
+        window_start = int(selected_valid[0].item())
+        window_end = int(selected_valid[-1].item()) + 1
 
         if (window_end - window_start) > max_context_window:
-            window_end = window_start + max_context_window
-            all_valid_indices = all_valid_indices[
-                (all_valid_indices >= window_start) & (all_valid_indices < window_end)
+            window_end = min(window_start + max_context_window, seq_length)
+            selected_valid = selected_valid[
+                (selected_valid >= window_start) & (selected_valid < window_end)
             ]
-        else:
-            all_valid_indices = all_valid_indices[start_idx : start_idx + max_anchors]
+        all_valid_indices = selected_valid
 
         sample_indices = [torch.arange(window_start, window_end, device=device)]
         n_per_depth = [window_end - window_start]

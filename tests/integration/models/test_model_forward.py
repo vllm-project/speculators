@@ -348,6 +348,15 @@ class TestPEagleParams:
         assert loss.isfinite()
         loss.backward()
 
+    def test_max_context_window(self):
+        model = make_peagle_model(max_anchors=16, max_context_window=32)
+        samples = _make_samples([128])
+        batch = make_batch(max_len=MAX_LEN, samples=samples, hidden_size=HIDDEN_SIZE)
+        draft_tokens, loss, metrics = model(**batch)
+
+        assert loss.isfinite()
+        loss.backward()
+
 
 @requires_cuda
 @requires_transformers_version("5.2.0")
