@@ -23,6 +23,10 @@ from speculators.model import SpeculatorModel
 from speculators.models.eagle3.data import shift_batch
 from speculators.models.metrics import resolve_loss_fn
 from speculators.models.mtp.data import shift_batch_mtp
+from speculators.models.utils import (
+    get_verifier_config,
+    resolve_draft_intermediate_size,
+)
 from speculators.train.data import (
     ArrowDataset,
     BaseDataset,
@@ -45,6 +49,8 @@ from speculators.train.vocab_mapping import (
     build_vocab_mappings_from_distribution,
     get_target_vocab_size,
 )
+from speculators.utils.argparse_utils import explicitly_provided_dests
+from speculators.utils.loading import is_config_only_dir
 
 logger = logging.getLogger(__name__)
 
@@ -128,11 +134,11 @@ def create_transformer_layer_config(  # noqa: C901
             f"Available: {list(DRAFT_ARCH_CONFIGS.keys())}"
         )
 
-    if draft_arch != "llama":
+    if draft_arch not in ("llama", "qwen3"):
         warnings.warn(
             f"Draft architecture '{draft_arch}' is not yet supported in vLLM. "
             "The trained model may not be usable for inference in vLLM. "
-            "Consider using 'llama' (the default) for full vLLM compatibility.",
+            "Consider using 'llama' or 'qwen3' for full vLLM compatibility.",
             stacklevel=2,
         )
 
@@ -182,7 +188,7 @@ def create_transformer_layer_config(  # noqa: C901
     config = config_class(
         vocab_size=verifier_config.vocab_size,
         hidden_size=verifier_config.hidden_size,
-        intermediate_size=verifier_config.intermediate_size,
+        intermediate_size=resolve_draft_intermediate_size(verifier_config),
         num_hidden_layers=num_layers,
         num_attention_heads=num_attention_heads,
         num_key_value_heads=num_key_value_heads,
@@ -209,6 +215,52 @@ def create_transformer_layer_config(  # noqa: C901
         config.rope_theta = getattr(verifier_config, "rope_theta", 10000.0)
 
     return config
+
+
+def load_draft_transformer_layer_config(
+    draft_config: str,
+    verifier_name_or_path: str,
+) -> PretrainedConfig:
+    """Load the draft decoder ``transformer_layer_config`` from a config source.
+
+    ``draft_config`` may be a HF hub id, a local directory containing a
+    ``config.json``, or a path to a config JSON file. It is expected to hold a
+    plain decoder config (``LlamaConfig`` for eagle3/peagle, ``Qwen3Config`` for
+    dflash). If a full speculator config is given instead, its nested
+    ``transformer_layer_config`` is extracted as a convenience.
+
+    The decoder is reconciled against the verifier: ``hidden_size`` must match
+    (draft/verifier hidden-size mismatch is not yet supported) and ``vocab_size``
+    is aligned to the verifier's target vocabulary. The pruned draft vocabulary
+    is controlled separately via ``--draft-vocab-size``.
+    """
+    config_dict, _ = PretrainedConfig.get_config_dict(draft_config)
+    if "transformer_layer_config" in config_dict:
+        # A full speculator config was passed; use only the decoder definition.
+        config_dict = config_dict["transformer_layer_config"]
+
+    model_type = config_dict.get("model_type")
+    config_class: type[PretrainedConfig] = (
+        type(AutoConfig.for_model(model_type)) if model_type else Qwen3Config
+    )
+    draft_config_obj = config_class.from_dict(config_dict)
+
+    verifier_config = get_verifier_config(verifier_name_or_path)
+    if draft_config_obj.hidden_size != verifier_config.hidden_size:
+        raise ValueError(
+            f"--draft-config hidden_size ({draft_config_obj.hidden_size}) must match "
+            f"the verifier hidden_size ({verifier_config.hidden_size}). Draft/verifier "
+            "hidden-size mismatch is not yet supported."
+        )
+    if draft_config_obj.vocab_size != verifier_config.vocab_size:
+        logger.warning(
+            "Overriding --draft-config vocab_size (%s) with the verifier vocab_size "
+            "(%s). Use --draft-vocab-size to control the pruned draft vocabulary.",
+            draft_config_obj.vocab_size,
+            verifier_config.vocab_size,
+        )
+        draft_config_obj.vocab_size = verifier_config.vocab_size
+    return draft_config_obj
 
 
 def _load_mappings(d2t_path, t2d_path, expected_draft_vocab_size: int | None):
@@ -283,6 +335,112 @@ def parse_vocab_mappings(args: argparse.Namespace):
     return None, None, verifier_config.vocab_size
 
 
+def _build_from_config_only(
+    model_class: type[SpeculatorModel],
+    path: str,
+    t2d: torch.Tensor | None,
+    d2t: torch.Tensor | None,
+    verifier_name_or_path: str | None = None,
+) -> SpeculatorModel:
+    """Initialize a fresh draft from a saved speculator *config* (no weights).
+
+    Mirrors the tail of ``from_training_args``: build the model from the full
+    speculator config, load vocab mappings, and pull verifier weights -- but with
+    no trained draft weights to restore (decoder weights are randomly initialized).
+    """
+    config = model_class.config_class.from_pretrained(path)
+    speculators_config = getattr(config, "speculators_config", None)
+    # Fall back to the CLI --verifier-name-or-path only when the saved config has
+    # no verifier path -- either null or blanked to "". A real path in the config
+    # takes precedence and the CLI value is ignored.
+    if (
+        verifier_name_or_path
+        and speculators_config is not None
+        and not getattr(speculators_config.verifier, "name_or_path", None)
+    ):
+        speculators_config.verifier.name_or_path = verifier_name_or_path
+    model = model_class(config=config)
+    if hasattr(model, "load_vocab_mappings"):
+        model.load_vocab_mappings(t2d, d2t)  # type: ignore[attr-defined]
+    if hasattr(model, "load_verifier_weights"):
+        model.load_verifier_weights()  # type: ignore[attr-defined]
+    return model
+
+
+def build_draft_model(
+    args: argparse.Namespace,
+    model_class: type[SpeculatorModel],
+    t2d: torch.Tensor | None,
+    d2t: torch.Tensor | None,
+    draft_vocab_size: int | None,
+) -> SpeculatorModel:
+    """Resolve the draft model from one of these sources:
+
+    * ``--from-pretrained``: finetune existing weights, or -- when the path is a
+      config-only directory -- initialize fresh weights from a full saved
+      speculator config.
+    * ``--draft-config``: take the decoder ``transformer_layer_config`` from a
+      config file; build the rest of the speculator from the other CLI args.
+    * neither: synthesize the decoder from the verifier config + CLI flags.
+
+    MTP is special-cased: when not loading ``--from-pretrained``, it reuses the
+    verifier's own decoder config as the draft ``transformer_layer_config`` and
+    extracts the native MTP head weights from the verifier, so the decoder-shaping
+    flags and ``--draft-config`` do not apply.
+    """
+    if args.from_pretrained:
+        if is_config_only_dir(args.from_pretrained):
+            logger.info(
+                "--from-pretrained points to a config-only directory ('%s'); "
+                "initializing fresh draft weights from the saved speculator config.",
+                args.from_pretrained,
+            )
+            return _build_from_config_only(
+                model_class,
+                args.from_pretrained,
+                t2d=t2d,
+                d2t=d2t,
+                verifier_name_or_path=args.verifier_name_or_path,
+            )
+        return model_class.from_pretrained(args.from_pretrained, t2d=t2d, d2t=d2t)
+
+    if args.speculator_type == "mtp":
+        # MTP uses the verifier's own decoder config as the draft
+        # transformer_layer_config and extracts the native MTP head weights from
+        # the verifier; the decoder-shaping flags and --draft-config do not apply,
+        # and there is no draft mask token to resolve.
+        transformer_layer_config = get_verifier_config(args.verifier_name_or_path)
+    else:
+        if args.draft_config:
+            transformer_layer_config = load_draft_transformer_layer_config(
+                args.draft_config, args.verifier_name_or_path
+            )
+        else:
+            transformer_layer_config = create_transformer_layer_config(
+                verifier_name_or_path=args.verifier_name_or_path,
+                num_layers=args.num_layers,
+                draft_arch=args.draft_arch,
+                hidden_act=args.draft_hidden_act,
+                sliding_window=args.sliding_window,
+                sliding_window_indices=args.sliding_window_indices,
+            )
+
+        args.mask_token_id = resolve_mask_token_id(
+            args.verifier_name_or_path,
+            transformer_layer_config.vocab_size,
+            args.mask_token_id,
+            trust_remote_code=args.trust_remote_code,
+        )
+
+    args.draft_vocab_size = draft_vocab_size
+    return model_class.from_training_args(
+        verifier_config=transformer_layer_config,
+        t2d=t2d,
+        d2t=d2t,
+        **vars(args),
+    )
+
+
 def main(args: argparse.Namespace):  # noqa: C901, PLR0912
     # Set random seed for reproducibility
     set_seed(args.seed, args.deterministic_cuda)
@@ -307,11 +465,13 @@ def main(args: argparse.Namespace):  # noqa: C901, PLR0912
                 "--draft-attn-impl is not configurable for MTP. "
                 "Must be left with the default value ('simple_flex_attention')."
             )
-        verifier_config = AutoConfig.from_pretrained(args.verifier_name_or_path)
-        if hasattr(verifier_config, "text_config"):
-            verifier_config = verifier_config.text_config
-        d2t, t2d, draft_vocab_size = None, None, verifier_config.vocab_size
-        transformer_layer_config = verifier_config
+        # MTP reuses the verifier's own decoder as the draft and extracts the
+        # native MTP head weights from the verifier, so there are no vocab
+        # mappings or draft mask token to resolve from the CLI. This works both
+        # with --from-pretrained (a previously converted checkpoint) and without
+        # it (weights are extracted from the verifier on the fly). The decoder
+        # transformer_layer_config is resolved later in build_draft_model.
+        d2t, t2d, draft_vocab_size = None, None, None
         args.mask_token_id = None
     else:
         d2t, t2d, draft_vocab_size = parse_vocab_mappings(args)
@@ -322,22 +482,6 @@ def main(args: argparse.Namespace):  # noqa: C901, PLR0912
                 "draft models. Please open an issue/pr if you would like to use "
                 "sliding window attention with a different speculator type"
             )
-        # Setup speculator config
-        transformer_layer_config = create_transformer_layer_config(
-            verifier_name_or_path=args.verifier_name_or_path,
-            num_layers=args.num_layers,
-            draft_arch=args.draft_arch,
-            hidden_act=args.draft_hidden_act,
-            sliding_window=args.sliding_window,
-            sliding_window_indices=args.sliding_window_indices,
-        )
-
-        args.mask_token_id = resolve_mask_token_id(
-            args.verifier_name_or_path,
-            transformer_layer_config.vocab_size,
-            args.mask_token_id,
-            trust_remote_code=args.trust_remote_code,
-        )
 
     registry = SpeculatorModel.registry
     if registry is None or args.speculator_type not in registry:
@@ -348,24 +492,38 @@ def main(args: argparse.Namespace):  # noqa: C901, PLR0912
 
     model_class = registry[args.speculator_type]
 
-    if args.from_pretrained:
-        draft_model = model_class.from_pretrained(
-            args.from_pretrained, t2d=t2d, d2t=d2t
-        )
-    else:
-        args.draft_vocab_size = draft_vocab_size
-        draft_model = model_class.from_training_args(
-            verifier_config=transformer_layer_config,
-            t2d=t2d,
-            d2t=d2t,
-            **vars(args),
-        )
+    draft_model = build_draft_model(args, model_class, t2d, d2t, draft_vocab_size)
 
     # Get target layer IDs from the model (resolved at model level)
     num_target_layers = len(draft_model.target_layer_ids)
 
     if args.speculator_type == "mtp":
         args.num_speculative_steps = draft_model.config.num_speculative_steps
+
+    # Dry-run: persist an initialized checkpoint and exit before training so the
+    # config/weights can be validated (e.g. in vLLM). The saved checkpoint can be
+    # fed straight back via --from-pretrained to start training.
+    if args.dry_run:
+        # Match Trainer.setup_model: weights are (re)initialized in
+        # hidden_states_dtype, so save the dry-run checkpoint in that dtype too
+        # rather than the float32 the model is built in.
+        draft_model.to(hidden_states_dtype)
+        if local_rank == 0:
+            logger.info(
+                "[dry-run] Saving initialized checkpoint (%s) to '%s'",
+                hidden_states_dtype,
+                args.save_path,
+            )
+            draft_model.save_pretrained(args.save_path)
+            logger.info(
+                "[dry-run] Done. Validate this checkpoint, then train with "
+                "'--from-pretrained %s'.",
+                args.save_path,
+            )
+        maybe_destroy_distributed()
+        return
+
+    hidden_size = draft_model.config.transformer_layer_config.hidden_size
 
     # Setup dataloaders
     preprocess_fns = {
@@ -427,7 +585,7 @@ def main(args: argparse.Namespace):  # noqa: C901, PLR0912
         train_dataset,
         world_size,
         rank,
-        transformer_layer_config.hidden_size,
+        hidden_size,
         num_target_layers=num_target_layers,
         num_workers=args.num_workers,
         prefetch_factor=args.prefetch_factor,
@@ -437,7 +595,7 @@ def main(args: argparse.Namespace):  # noqa: C901, PLR0912
         val_dataset,
         world_size,
         rank,
-        transformer_layer_config.hidden_size,
+        hidden_size,
         num_target_layers=num_target_layers,
         num_workers=args.num_workers,
         prefetch_factor=args.prefetch_factor,
@@ -498,6 +656,60 @@ def _checkpoint_freq(value: str) -> float:
     return fvalue
 
 
+# CLI flags that synthesize the draft decoder shape. They conflict with both
+# --from-pretrained and --draft-config, each of which fully defines the draft.
+DECODER_SHAPING_FLAGS: dict[str, str] = {
+    "num_layers": "--num-layers",
+    "draft_arch": "--draft-arch",
+    "draft_hidden_act": "--draft-hidden-act",
+    "sliding_window": "--sliding-window",
+    "sliding_window_indices": "--sliding-window-indices",
+}
+
+
+def validate_draft_init_args(
+    parser: argparse.ArgumentParser,
+    args: argparse.Namespace,
+    provided: set[str],
+) -> None:
+    """Enforce the draft-init contract.
+
+    The draft model may be defined in exactly one way:
+
+    * ``--from-pretrained`` -- load a complete speculator checkpoint (or a
+      config-only directory); or
+    * ``--draft-config`` -- load just the decoder config and build the rest of
+      the speculator from the other CLI args; or
+    * the decoder-shaping flags (``--num-layers`` etc.) -- synthesize everything.
+
+    ``--from-pretrained`` takes precedence over all other model-definition
+    options: it is mutually exclusive with ``--draft-config`` and with the
+    decoder-shaping flags, since those values come from the checkpoint.
+    ``--draft-config`` is likewise incompatible with the decoder-shaping flags.
+
+    ``provided`` is the set of decoder-shaping dests the user explicitly passed
+    (see :func:`speculators.utils.argparse_utils.explicitly_provided_dests`); a flag
+    passed at its default value still counts as a conflict.
+    """
+    shaping = [flag for dest, flag in DECODER_SHAPING_FLAGS.items() if dest in provided]
+    if args.from_pretrained:
+        conflicting = shaping + (["--draft-config"] if args.draft_config else [])
+        if conflicting:
+            parser.error(
+                "--from-pretrained loads a complete draft model and takes precedence "
+                "over all other model-definition options, so these conflict with it "
+                f"(remove them): "
+                f"{', '.join(conflicting)}"
+            )
+        return
+    if args.draft_config and shaping:
+        parser.error(
+            "--draft-config defines the draft decoder, so these flags conflict with "
+            "it (remove them): "
+            f"{', '.join(shaping)}"
+        )
+
+
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--verifier-name-or-path", type=str, required=True)
@@ -516,7 +728,32 @@ def parse_args():
         "--from-pretrained",
         type=str,
         default="",
-        help="The pretrained draft model to finetune",
+        help="Path or HF id of a pretrained draft. May also point to a "
+        "local directory containing only a config.json, in which case a "
+        "fresh draft is initialized from that full speculator config. Takes precedence "
+        "over and is mutually exclusive with --draft-config and the decoder-shaping "
+        "flags (--num-layers, --draft-arch, --draft-hidden-act, --sliding-window, "
+        "--sliding-window-indices).",
+    )
+    parser.add_argument(
+        "--draft-config",
+        type=str,
+        default="",
+        help="HF id, directory, or JSON path of a decoder config (LlamaConfig for "
+        "eagle3/peagle, Qwen3Config for dflash) to use as the draft "
+        "transformer_layer_config; the rest of the speculator is built from the other "
+        "CLI args. Mutually exclusive with --from-pretrained and with the "
+        "decoder-shaping flags (--num-layers, --draft-arch, --draft-hidden-act, "
+        "--sliding-window, --sliding-window-indices).",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=False,
+        help="Build the speculator, initialize weights, save a checkpoint to "
+        "--save-path, then exit before training. Useful to validate the config and "
+        "weights (e.g. in vLLM) before launching a full run. Can be combined with "
+        "--draft-config or --from-pretrained.",
     )
     parser.add_argument(
         "--data-path",
@@ -885,6 +1122,8 @@ def parse_args():
     )
 
     args = parser.parse_args()
+    provided = explicitly_provided_dests(parser, DECODER_SHAPING_FLAGS)
+    validate_draft_init_args(parser, args, provided)
     resolve_loss_fn(args.loss_fn)
     return args
 

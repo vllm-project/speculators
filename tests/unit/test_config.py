@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
-from transformers import PretrainedConfig
+from transformers import LlamaConfig, PretrainedConfig
 
 from speculators import (
     SpeculatorModelConfig,
@@ -117,6 +117,32 @@ def test_verifier_config_from_verifier_config(mock_pretrained_config):
 
     assert config.name_or_path == "test/verifier"
     assert config.architectures == ["TestModel"]
+
+
+@pytest.mark.smoke
+def test_verifier_config_from_pretrained_reads_architectures(tmp_path):
+    """from_pretrained reads architectures from the verifier's own config.json
+    (not from a draft decoder config, which has none)."""
+    LlamaConfig(
+        hidden_size=32,
+        num_hidden_layers=2,
+        architectures=["LlamaForCausalLM"],
+    ).save_pretrained(tmp_path)
+
+    config = VerifierConfig.from_pretrained(str(tmp_path))
+
+    assert config.name_or_path == str(tmp_path)
+    assert config.architectures == ["LlamaForCausalLM"]
+
+
+@pytest.mark.smoke
+def test_verifier_config_from_pretrained_defaults_to_empty(tmp_path):
+    """A config without an ``architectures`` entry yields an empty list."""
+    LlamaConfig(hidden_size=32, num_hidden_layers=2).save_pretrained(tmp_path)
+
+    config = VerifierConfig.from_pretrained(str(tmp_path))
+
+    assert config.architectures == []
 
 
 @pytest.mark.smoke

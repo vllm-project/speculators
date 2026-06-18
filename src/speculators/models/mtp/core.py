@@ -252,10 +252,12 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
                     )
                 ],
                 default_proposal_method="greedy",
-                verifier=VerifierConfig.from_config(
-                    verifier_config,
-                    name_or_path=verifier_name_or_path,
-                ),
+                # Read architectures from the verifier's published config.json (like
+                # eagle3/dflash/peagle and the MTP converter). from_config would read
+                # them off verifier_config, but that is the unwrapped text_config for
+                # composite verifiers (e.g. Qwen3.5-MoE), which carries no
+                # architectures -- leaving verifier.architectures empty.
+                verifier=VerifierConfig.from_pretrained(verifier_name_or_path),
             ),
         )
 

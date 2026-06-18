@@ -29,6 +29,9 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
     _keys_to_ignore_on_load_missing: ClassVar[list[str]] = [  # type: ignore[misc]
         "embed_tokens.weight",
         "verifier_norm.weight",
+        # verifier_lm_head is reloaded from the verifier (see load_verifier_weights)
+        # and excluded on save, so it is expected to be absent from checkpoints.
+        "verifier_lm_head.weight",
         "t2d",
         "d2t",
     ]
@@ -169,8 +172,8 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                     )
                 ],
                 default_proposal_method="greedy",
-                verifier=VerifierConfig.from_config(
-                    verifier_config, name_or_path=kwargs["verifier_name_or_path"]
+                verifier=VerifierConfig.from_pretrained(
+                    kwargs["verifier_name_or_path"]
                 ),
             ),
         )

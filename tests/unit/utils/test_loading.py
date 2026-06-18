@@ -6,11 +6,41 @@ import pytest
 import torch
 from transformers import AutoModelForCausalLM
 
-from speculators.utils.loading import _resolve_file, load_model_layers
+from speculators.utils.loading import (
+    _resolve_file,
+    is_config_only_dir,
+    load_model_layers,
+)
 
 # Test model from HuggingFace
 TEST_MODEL_REPO = "nm-testing/tiny-testing-random-weights"
 SMALL_MODEL_REPO = "nm-testing/tinysmokellama-3.2"
+
+# is_config_only_dir Tests
+
+
+@pytest.mark.smoke
+def test_is_config_only_dir(tmp_path):
+    # Missing directory and a directory without config.json are not config-only.
+    assert is_config_only_dir(tmp_path / "does-not-exist") is False
+    assert is_config_only_dir(tmp_path) is False
+
+    # config.json present, no weights -> config-only.
+    (tmp_path / "config.json").write_text("{}")
+    assert is_config_only_dir(tmp_path) is True
+
+    # A weight file makes it a full checkpoint.
+    (tmp_path / "model.safetensors").write_text("")
+    assert is_config_only_dir(tmp_path) is False
+
+
+@pytest.mark.smoke
+def test_is_config_only_dir_detects_bin_weights(tmp_path):
+    (tmp_path / "config.json").write_text("{}")
+    (tmp_path / "pytorch_model.bin").write_text("")
+
+    assert is_config_only_dir(tmp_path) is False
+
 
 # _resolve_file Tests
 
