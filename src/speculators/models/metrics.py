@@ -32,12 +32,24 @@ def compute_accuracy_single_step(
         counts suitable for distributed reduction before computing ratios.
     """
     correct = pred_ids == target_ids
-    cond_total = torch.tensor(correct.numel(), dtype=torch.float, device=correct.device)
+    mask = loss_mask.to(torch.bool) if loss_mask is not None else None
+
     if prev_correct is not None:
-        cond_total = prev_correct.sum().float()
+        # Conditional accuracy only ranges over positions that survive loss_mask,
+        # so its denominator must count previously-correct AND masked positions.
+        # Read prev_correct here, before the in-place logical_and below mutates it.
+        eligible = prev_correct & mask if mask is not None else prev_correct
+        cond_total = eligible.sum().float()
         correct = torch.logical_and(prev_correct, correct, out=prev_correct)
-    if loss_mask is not None:
-        correct = torch.masked_select(correct, loss_mask.to(torch.bool))
+    elif mask is not None:
+        cond_total = mask.sum().float()
+    else:
+        cond_total = torch.tensor(
+            correct.numel(), dtype=torch.float, device=correct.device
+        )
+
+    if mask is not None:
+        correct = torch.masked_select(correct, mask)
 
     correct_sum = correct.float().sum()
     full_total = torch.tensor(correct.numel(), dtype=torch.float, device=correct.device)
