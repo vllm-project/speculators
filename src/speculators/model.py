@@ -242,7 +242,6 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
         revision: str = "main",
         use_safetensors: bool | None = None,
         weights_only: bool = True,
-        verifier: str | None = None,
         t2d: torch.Tensor | None = None,
         d2t: torch.Tensor | None = None,
         **kwargs,
@@ -314,7 +313,9 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
             )
 
             pretrained_model_name_or_path = maybe_convert_external_checkpoint(
-                pretrained_model_name_or_path, verifier=verifier, cache_dir=cache_dir
+                pretrained_model_name_or_path,
+                verifier=kwargs.get("verifier"),
+                cache_dir=cache_dir,
             )
             config = cls.config_class.from_pretrained(
                 pretrained_model_name_or_path,

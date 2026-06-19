@@ -75,7 +75,7 @@ class TestBuildConfig:
         assert config.block_size == 16
         assert config.draft_vocab_size == 151936
         assert config.mask_token_id == 151669
-        assert config.speculators_config.proposal_methods[0].speculative_tokens == 15
+        assert config.speculators_config.proposal_methods[0].speculative_tokens == 15  # type: ignore[attr-defined]
         # z-lab target_layer_ids are offset by +1 to speculators layer ids
         assert config.aux_hidden_state_layer_ids == [2, 10, 18, 26, 34]
         # non-transformer keys are stripped from transformer_layer_config

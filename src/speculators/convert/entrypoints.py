@@ -15,6 +15,7 @@ Functions:
     convert_model: Converts a model checkpoint to the Speculators format.
 """
 
+import os
 import tempfile
 from typing import Literal
 
@@ -148,9 +149,9 @@ def convert_model(
 
 
 def maybe_convert_external_checkpoint(
-    model: str,
+    model: str | os.PathLike,
     verifier: str | None = None,
-    cache_dir: str | None = None,
+    cache_dir: str | os.PathLike | None = None,
     output_path: str | None = None,
 ) -> str:
     """Convert an external (non-speculators) checkpoint to speculators format.
@@ -165,9 +166,10 @@ def maybe_convert_external_checkpoint(
         return str(model)
 
     architectures = config_dict.get("architectures") or []
-    if "dflash_config" in config_dict or any("DFlash" in a for a in architectures):
-        algorithm = "dflash"
-    else:
+    algorithm: Literal["dflash"] = "dflash"
+    if not (
+        "dflash_config" in config_dict or any("DFlash" in a for a in architectures)
+    ):
         raise NotImplementedError(
             f"Cannot auto-convert checkpoint '{model}': unrecognized external "
             "format. Supported auto-conversion: DFlash."
