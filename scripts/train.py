@@ -128,14 +128,6 @@ def create_transformer_layer_config(  # noqa: C901
             f"Available: {list(DRAFT_ARCH_CONFIGS.keys())}"
         )
 
-    if draft_arch != "llama":
-        warnings.warn(
-            f"Draft architecture '{draft_arch}' is not yet supported in vLLM. "
-            "The trained model may not be usable for inference in vLLM. "
-            "Consider using 'llama' (the default) for full vLLM compatibility.",
-            stacklevel=2,
-        )
-
     config_class = DRAFT_ARCH_CONFIGS[draft_arch]
     verifier_config = AutoConfig.from_pretrained(verifier_name_or_path)
 
