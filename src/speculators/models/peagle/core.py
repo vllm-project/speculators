@@ -216,6 +216,7 @@ class PEagleDraftModel(Eagle3DraftModel):
             draft_vocab_size=kwargs["draft_vocab_size"],
             norm_before_residual=kwargs.get("norm_before_residual", False),
             norm_before_fc=kwargs.get("norm_before_fc", False),
+            eagle31=kwargs.get("eagle31", False),
             eagle_aux_hidden_state_layer_ids=target_layer_ids,
             num_depths=kwargs.get("num_depths", 8),
             down_sample_ratio=kwargs.get("down_sample_ratio", 0.7),

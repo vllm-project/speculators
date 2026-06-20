@@ -59,16 +59,16 @@ class Eagle3SpeculatorConfig(SpeculatorModelConfig):
         default=False,
         description=(
             "Apply RMSNorm to concatenated target hidden states before the FC "
-            "projection layer (Eagle 3.1)."
+            "projection layer (e.g. for gpt-oss draft checkpoints)."
         ),
     )
 
-    use_post_norm_feedback: bool = Field(
+    eagle31: bool = Field(
         default=False,
         description=(
-            "Feed post-norm hidden states into the next decoding step during TTT "
-            "(Eagle 3.1). Reduces hidden-state magnitude drift across speculation "
-            "depths."
+            "Enable Eagle 3.1 training mode: implies norm_before_fc and adds "
+            "post-norm hidden state feedback across TTT steps to stabilize "
+            "magnitude drift across speculation depths."
         ),
     )
 

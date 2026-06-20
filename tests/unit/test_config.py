@@ -483,51 +483,44 @@ def _make_eagle3_speculators_config():
 
 
 @pytest.mark.sanity
-def test_eagle3_config_eagle31_fields_roundtrip():
+def test_eagle3_config_eagle31_roundtrip():
     original = Eagle3SpeculatorConfig(
         transformer_layer_config=copy.deepcopy(TINY_LLAMA_CONFIG),
         draft_vocab_size=32000,
         norm_before_residual=False,
-        norm_before_fc=True,
-        use_post_norm_feedback=True,
+        eagle31=True,
         speculators_config=_make_eagle3_speculators_config(),
     )
 
     config_dict = original.model_dump()
-    assert config_dict["norm_before_fc"] is True
-    assert config_dict["use_post_norm_feedback"] is True
+    assert config_dict["eagle31"] is True
 
     recreated = Eagle3SpeculatorConfig.model_validate(config_dict)
-    assert recreated.norm_before_fc is True
-    assert recreated.use_post_norm_feedback is True
+    assert recreated.eagle31 is True
 
 
 @pytest.mark.sanity
-def test_eagle3_config_eagle31_fields_dict_roundtrip():
+def test_eagle3_config_eagle31_dict_roundtrip():
     original = Eagle3SpeculatorConfig(
         transformer_layer_config=copy.deepcopy(TINY_LLAMA_CONFIG),
         draft_vocab_size=32000,
-        norm_before_fc=True,
-        use_post_norm_feedback=True,
+        eagle31=True,
         speculators_config=_make_eagle3_speculators_config(),
     )
 
     config_dict = original.to_dict()
-    assert config_dict["norm_before_fc"] is True
-    assert config_dict["use_post_norm_feedback"] is True
+    assert config_dict["eagle31"] is True
 
     reloaded = SpeculatorModelConfig.from_dict(config_dict)
-    assert reloaded.norm_before_fc is True
-    assert reloaded.use_post_norm_feedback is True
+    assert reloaded.eagle31 is True
 
 
 @pytest.mark.sanity
-def test_eagle3_config_eagle31_fields_pretrained_roundtrip():
+def test_eagle3_config_eagle31_pretrained_roundtrip():
     original = Eagle3SpeculatorConfig(
         transformer_layer_config=copy.deepcopy(TINY_LLAMA_CONFIG),
         draft_vocab_size=32000,
-        norm_before_fc=True,
-        use_post_norm_feedback=True,
+        eagle31=True,
         speculators_config=_make_eagle3_speculators_config(),
     )
 
@@ -535,8 +528,7 @@ def test_eagle3_config_eagle31_fields_pretrained_roundtrip():
         original.save_pretrained(tmp_dir)
         reloaded = SpeculatorModelConfig.from_pretrained(tmp_dir)
 
-    assert reloaded.norm_before_fc is True
-    assert reloaded.use_post_norm_feedback is True
+    assert reloaded.eagle31 is True
 
 
 @pytest.mark.sanity
@@ -545,5 +537,4 @@ def test_eagle3_config_eagle31_defaults():
         transformer_layer_config=copy.deepcopy(TINY_LLAMA_CONFIG),
         speculators_config=_make_eagle3_speculators_config(),
     )
-    assert config.norm_before_fc is False
-    assert config.use_post_norm_feedback is False
+    assert config.eagle31 is False

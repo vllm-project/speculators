@@ -93,8 +93,7 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
         self.verifier_norm = norm_class(self.hidden_size, eps=tl_config.rms_norm_eps)
         self.verifier_norm.weight.requires_grad = False
 
-        # Eagle 3.1: normalize concatenated target hidden states before FC
-        if config.norm_before_fc:
+        if config.eagle31 or config.norm_before_fc:
             self.input_norm = self._model_definitions.norm_class(
                 3 * self.hidden_size,
                 eps=config.transformer_layer_config.rms_norm_eps,
@@ -235,7 +234,7 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
 
             # Eagle 3.1: apply norm to hidden_states so post-norm values
             # propagate to the next TTT step, stabilizing magnitude growth.
-            if self.config.use_post_norm_feedback:
+            if self.config.eagle31:
                 hidden_states = self.norm(hidden_states)
                 logits = self.lm_head(hidden_states)
             else:
@@ -333,7 +332,7 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
             draft_vocab_size=kwargs["draft_vocab_size"],
             norm_before_residual=kwargs["norm_before_residual"],
             norm_before_fc=kwargs.get("norm_before_fc", False),
-            use_post_norm_feedback=kwargs.get("use_post_norm_feedback", False),
+            eagle31=kwargs.get("eagle31", False),
             embed_requires_grad=kwargs.get("embed_requires_grad", False),
             eagle_aux_hidden_state_layer_ids=target_layer_ids,
             speculators_config=SpeculatorsConfig(

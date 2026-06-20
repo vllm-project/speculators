@@ -138,6 +138,8 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--norm-before-fc`** (flag) Use RMSNorm before FC layer in draft path (e.g., for gpt-oss models).
 
+- **`--eagle31`** (flag) Enable Eagle 3.1 training: RMSNorm before FC projection and post-norm hidden state feedback across TTT steps.
+
 - **`--ttt-steps`** (int, default: `3`) Number of test-time training steps
 
 - **`--ttt-step-loss-decay`** (float, default: `1.0`) Loss decay factor for test-time training steps.
