@@ -1,9 +1,7 @@
 import asyncio
-import base64
 import fcntl
 import functools
 import logging
-import mimetypes
 import os
 import time
 from pathlib import Path
@@ -14,6 +12,8 @@ import openai
 from openai.types.chat import ChatCompletion, ChatCompletionMessageParam
 from openai.types.completion import Completion
 from typing_extensions import NotRequired
+
+from speculators.data_generation.media import get_image_ref
 
 if TYPE_CHECKING:
     from collections.abc import Coroutine
@@ -50,28 +50,12 @@ def _image_ref_to_chat_url(image_ref: Any) -> str:
 
     path = Path(ref).expanduser()
     if path.exists() and path.is_file():
-        mime_type = mimetypes.guess_type(path.name)[0] or "image/jpeg"
-        encoded = base64.b64encode(path.read_bytes()).decode("ascii")
-        return f"data:{mime_type};base64,{encoded}"
+        return path.resolve().as_uri()
 
     if path.is_absolute():
         return path.as_uri()
 
     return ref
-
-
-def _get_image_ref(part: dict[str, Any]) -> Any | None:
-    if part.get("type") not in ("image", "image_url", "input_image"):
-        return None
-
-    image_ref = part.get("image")
-    if image_ref is not None:
-        return image_ref
-
-    image_url = part.get("image_url")
-    if isinstance(image_url, dict):
-        return image_url.get("url")
-    return image_url
 
 
 def _prepare_chat_message_content(content: Any) -> Any:
@@ -88,7 +72,7 @@ def _prepare_chat_message_content(content: Any) -> Any:
             prepared.append(part)
             continue
 
-        image_ref = _get_image_ref(part)
+        image_ref = get_image_ref(part)
         if image_ref is not None:
             prepared.append(
                 {

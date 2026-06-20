@@ -187,7 +187,7 @@ def test_generate_hidden_states_multimodal_messages():
     }
 
 
-def test_generate_hidden_states_multimodal_messages_inlines_local_image(tmp_path):
+def test_generate_hidden_states_multimodal_messages_uses_local_file_url(tmp_path):
     client = _DummySyncClient()
     image_path = tmp_path / "cat.png"
     image_path.write_bytes(b"\x89PNG\r\n\x1a\n")
@@ -195,7 +195,7 @@ def test_generate_hidden_states_multimodal_messages_inlines_local_image(tmp_path
         {
             "role": "user",
             "content": [
-                {"type": "image", "image": str(image_path)},
+                {"type": "image", "path": str(image_path)},
                 {"type": "text", "text": "describe"},
             ],
         },
@@ -212,7 +212,7 @@ def test_generate_hidden_states_multimodal_messages_inlines_local_image(tmp_path
     sent_content = client.chat.completions.calls[0]["messages"][0]["content"]
     assert result == "/tmp/hs_0.safetensors"
     assert sent_content[0]["type"] == "image_url"
-    assert sent_content[0]["image_url"]["url"].startswith("data:image/png;base64,")
+    assert sent_content[0]["image_url"]["url"] == image_path.resolve().as_uri()
     assert sent_content[1] == {"type": "text", "text": "describe"}
 
 

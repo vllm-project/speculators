@@ -24,6 +24,7 @@ from transformers.image_utils import load_image
 
 from speculators.data_generation.configs import DATASET_CONFIGS
 from speculators.data_generation.logging_utils import PipelineLogger
+from speculators.data_generation.media import get_image_ref
 from speculators.data_generation.torch_utils import set_default_torch_num_threads
 from speculators.train.vocab_mapping import save_token_frequency_distribution
 
@@ -54,7 +55,7 @@ def _normalize_content(content: Any) -> Any:
                 )
                 continue
             if isinstance(item, dict):
-                image_ref = _get_image_ref(item)
+                image_ref = get_image_ref(item)
                 if image_ref is not None:
                     normalized_items.append({"type": "image", "image": image_ref})
                     continue
@@ -102,22 +103,6 @@ def _load_image_for_processor(image_ref: Any) -> Any:
     return load_image(image_ref)
 
 
-def _get_image_ref(item: dict) -> Any | None:
-    """Extract a serializable image reference from a multimodal content item."""
-    if item.get("type") not in ("image", "image_url", "input_image"):
-        return None
-
-    for key in ("image", "path", "url"):
-        image_ref = item.get(key)
-        if image_ref is not None:
-            return image_ref
-
-    image_url = item.get("image_url")
-    if isinstance(image_url, dict):
-        return image_url.get("url")
-    return image_url
-
-
 def _extract_processor_images_from_conversation(conv: list[dict]) -> list[Any]:
     """Extract image inputs in the same order as the chat template placeholders."""
     images = []
@@ -129,7 +114,7 @@ def _extract_processor_images_from_conversation(conv: list[dict]) -> list[Any]:
         for item in content:
             if not isinstance(item, dict):
                 continue
-            image_ref = _get_image_ref(item)
+            image_ref = get_image_ref(item)
             if image_ref is not None:
                 images.append(_load_image_for_processor(image_ref))
 
