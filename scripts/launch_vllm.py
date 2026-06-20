@@ -64,7 +64,7 @@ def _is_multimodal_config(config) -> bool:
     model_type = str(getattr(config, "model_type", "")).lower()
     if any(
         marker in model_type
-        for marker in ("vl", "vision", "llava", "mllama", "paligemma", "pixtral")
+        for marker in ("vision", "llava", "mllama", "paligemma", "pixtral")
     ):
         return True
 
@@ -73,7 +73,6 @@ def _is_multimodal_config(config) -> bool:
         any(
             marker in str(architecture).lower()
             for marker in (
-                "vl",
                 "vision",
                 "llava",
                 "mllama",
@@ -97,12 +96,10 @@ def main():
     num_hidden_layers = text_config.num_hidden_layers
 
     if _is_multimodal_config(config) and "--enforce-eager" not in vllm_args:
-        # vLLM 0.20 multimodal hidden-state extraction can hit CUDA graph
-        # shape mismatches after image/video token expansion. Eager mode avoids
-        # that runtime crash.
-        vllm_args.append("--enforce-eager")
         warnings.warn(
-            "Adding --enforce-eager for multimodal hidden-state extraction.",
+            "Detected a multimodal verifier config. If your vLLM version has "
+            "CUDA graph shape issues for multimodal hidden-state extraction, "
+            "pass --enforce-eager explicitly after the launcher '--'.",
             stacklevel=2,
         )
 
