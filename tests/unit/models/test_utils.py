@@ -6,12 +6,57 @@ from typing import cast
 import pytest
 from transformers import PretrainedConfig
 
+from speculators.models import utils as model_utils
 from speculators.models.utils import resolve_draft_intermediate_size
 
 
 def _fake_verifier(**fields) -> PretrainedConfig:
     """Lightweight stand-in verifier config (the resolver only reads attributes)."""
     return cast("PretrainedConfig", SimpleNamespace(**fields))
+
+
+# ---------------------------------------------------------------------------
+# target layer resolution
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.regression
+def test_resolve_target_layer_ids_preserves_explicit_checkpoint_layers(monkeypatch):
+    """Explicit checkpoint layer IDs should load without verifier config access."""
+
+    def raise_if_called(_name_or_path):
+        raise AssertionError(
+            "explicit checkpoint layers should not load verifier config"
+        )
+
+    monkeypatch.setattr(
+        model_utils,
+        "get_verifier_config",
+        raise_if_called,
+    )
+
+    layer_ids = model_utils.resolve_target_layer_ids(
+        [2, 18, 33, 36], "unused-verifier-path"
+    )
+
+    assert layer_ids == [2, 18, 33, 36]
+
+
+@pytest.mark.regression
+def test_strip_verifier_final_layer_id_keeps_aux_layers_only(monkeypatch):
+    """Training config keeps final verifier hidden state out of aux layers."""
+    monkeypatch.setattr(
+        model_utils,
+        "get_verifier_config",
+        lambda _name_or_path: SimpleNamespace(num_hidden_layers=36),
+    )
+
+    with pytest.warns(UserWarning, match="Stripping the verifier's final layer"):
+        layer_ids = model_utils.strip_verifier_final_layer_id(
+            [2, 18, 33, 36], "unused-verifier-path"
+        )
+
+    assert layer_ids == [2, 18, 33]
 
 
 # ---------------------------------------------------------------------------

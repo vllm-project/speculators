@@ -17,7 +17,11 @@ from speculators.models.eagle3.attention import (
 from speculators.models.eagle3.metrics import compute_metrics
 from speculators.models.eagle3.model_definitions import model_classes
 from speculators.models.metrics import LossConfig, resolve_loss_config
-from speculators.models.utils import conditional_torch_compile, resolve_target_layer_ids
+from speculators.models.utils import (
+    conditional_torch_compile,
+    resolve_target_layer_ids,
+    strip_verifier_final_layer_id,
+)
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 
 
@@ -392,6 +396,10 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
         target_layer_ids = resolve_target_layer_ids(
             kwargs.get("target_layer_ids"), kwargs["verifier_name_or_path"]
         )
+        if kwargs.get("target_layer_ids") is not None:
+            target_layer_ids = strip_verifier_final_layer_id(
+                target_layer_ids, kwargs["verifier_name_or_path"]
+            )
 
         verifier_config._attn_implementation = kwargs.get(  # noqa: SLF001
             "draft_attn_impl", "simple_flex_attention"
