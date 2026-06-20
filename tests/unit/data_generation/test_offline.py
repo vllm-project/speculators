@@ -1,6 +1,7 @@
 import pytest
 import torch
 
+from scripts.data_generation_offline import _align_and_write_hidden_states
 from speculators.data_generation.offline import (
     align_hidden_states_to_tokens,
     get_existing_hidden_state_indices,
@@ -38,6 +39,33 @@ def test_align_hidden_states_to_tokens_rejects_non_prefix_mismatch():
             [1, 2, 3],
             allow_prefix_truncation=True,
         )
+
+
+def test_align_and_write_hidden_states_moves_without_load_when_validation_disabled(
+    tmp_path,
+    monkeypatch,
+):
+    source_path = tmp_path / "source.safetensors"
+    target_path = tmp_path / "target.safetensors"
+    source_path.write_bytes(b"raw hidden states")
+
+    def raise_if_loaded(*args, **kwargs):
+        del args, kwargs
+        raise AssertionError("load_file should not be called")
+
+    monkeypatch.setattr("scripts.data_generation_offline.load_file", raise_if_loaded)
+
+    _align_and_write_hidden_states(
+        source_path,
+        target_path,
+        [1, 2, 3],
+        allow_prefix_truncation=False,
+        validate_outputs=False,
+    )
+
+    assert not source_path.exists()
+    assert target_path.read_bytes() == b"raw hidden states"
+
 
 # ===== get_indices_to_process Tests =====
 
