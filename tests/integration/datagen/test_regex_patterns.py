@@ -45,7 +45,14 @@ def processor(request):
     try:
         # Using trust_remote_code=True for variety of templates
         return load_processor(model_id, trust_remote_code=True)
-    except (TypeError, ValueError, KeyError, AttributeError, RuntimeError) as e:
+    except (
+        TypeError,
+        ValueError,
+        OSError,
+        KeyError,
+        AttributeError,
+        RuntimeError,
+    ) as e:
         pytest.skip(f"Failed to load processor for {model_id}: {e}")
 
 

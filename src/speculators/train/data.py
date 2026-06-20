@@ -79,15 +79,15 @@ def create_empty_sample(
     #     "position_ids": [seq_len],
     # }
     # Default dtype is bfloat16 to match the hidden_states dtype used downstream.
-    # When this fallback is used (e.g. vLLM hidden-state extraction times out and
-    # we substitute an empty sample), the implicit float32 placeholders crashed
+    # When this fallback is used for explicitly skipped samples, the implicit
+    # float32 placeholders crashed
     # bf16 EAGLE-3 layers (fc, verifier_lm_head) with a dtype mismatch.
 
     return {
         "hidden_states": torch.empty(0, num_target_layers * hidden_size, dtype=dtype),
         "input_ids": torch.empty(0, dtype=torch.long),
         "verifier_last_hidden_states": torch.empty(0, hidden_size, dtype=dtype),
-        "loss_mask": torch.empty(0, dtype=torch.bool),
+        "loss_mask": torch.empty(0, dtype=torch.long),
         "lengths": torch.tensor([0], dtype=torch.long),
         "position_ids": torch.arange(0, dtype=torch.long),
     }
@@ -121,7 +121,36 @@ def _has_multimodal_content(messages: list[dict]) -> bool:
     (produced by ``_adapt_conv_for_vllm``) store it as a list of typed parts,
     e.g. ``[{"type": "text", ...}, {"type": "image_url", ...}]``.
     """
-    return any(isinstance(m.get("content"), list) for m in messages)
+    multimodal_types = {
+        "audio",
+        "audio_url",
+        "image",
+        "image_url",
+        "input_audio",
+        "input_image",
+        "input_video",
+        "video",
+        "video_url",
+    }
+    text_types = {None, "input_text", "text"}
+
+    for message in messages:
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+
+        for part in content:
+            if isinstance(part, str):
+                continue
+            if not isinstance(part, dict):
+                return True
+            part_type = part.get("type")
+            if part_type in multimodal_types:
+                return True
+            if part_type not in text_types:
+                return True
+
+    return False
 
 
 def build_client_item(dataset_item: dict) -> ClientItem:
@@ -146,7 +175,12 @@ def build_client_item(dataset_item: dict) -> ClientItem:
     Text-only EAGLE-3 models (e.g. Llama) use a plain tokenizer, so
     ``messages`` is never created and this guard is a no-op.
     """
-    out_dict: dict = {"input_ids": dataset_item["input_ids"].tolist()}
+    input_ids = dataset_item["input_ids"]
+    out_dict: dict = {
+        "input_ids": input_ids.tolist()
+        if hasattr(input_ids, "tolist")
+        else list(input_ids)
+    }
 
     if "messages" in dataset_item and _has_multimodal_content(dataset_item["messages"]):
         out_dict["messages"] = dataset_item["messages"]
@@ -308,43 +342,37 @@ class ArrowDataset(BaseDataset):
         """Get lengths of the dataset samples."""
         return list(self.data.with_format(None)["seq_len"])
 
-    def _maybe_generate_hs(self, index: int) -> dict[str, torch.Tensor] | None:
+    def _maybe_generate_hs(self, index: int) -> dict[str, torch.Tensor]:
         if not self.client:
             self._setup_client()
 
         dataset_item = self.data[index]
         client_item = build_client_item(dataset_item)
 
-        try:
-            hs_filepath = generate_hidden_states(
-                self.client,  # type:ignore[arg-type]
-                self.model,  # type:ignore[arg-type]
-                client_item,
-                timeout=self.request_timeout,
-                max_retries=self.max_retries,
+        hs_filepath = generate_hidden_states(
+            self.client,  # type:ignore[arg-type]
+            self.model,  # type:ignore[arg-type]
+            client_item,
+            timeout=self.request_timeout,
+            max_retries=self.max_retries,
+        )
+
+        loaded_hs = _maybe_load_hs_file(Path(hs_filepath))
+        if loaded_hs is None:
+            raise RuntimeError(
+                f"vLLM returned hidden-state path for sample {index}, "
+                f"but no file was written: {hs_filepath}"
             )
 
-            loaded_hs = _maybe_load_hs_file(Path(hs_filepath))
-            if loaded_hs is None:
-                raise ValueError(f"Failed to load hidden states from {hs_filepath}")
+        check_hidden_states(loaded_hs, dataset_item["input_ids"].tolist())
 
-            check_hidden_states(loaded_hs, dataset_item["input_ids"].tolist())
-
-            match self.on_generate:
-                case "cache":
-                    file_idx = self._map_to_file_idx(index)
-                    target_path = self.hidden_states_path / f"hs_{file_idx}.safetensors"
-                    shutil.move(hs_filepath, target_path)
-                case "delete":
-                    Path(hs_filepath).unlink()
-        except Exception as e:
-            if isinstance(e, ValueError) and "NaN" in str(e):
-                raise
-            warnings.warn(
-                f"Failed to load/cache hidden states for sample {index}: {e}",
-                stacklevel=1,
-            )
-            return None
+        match self.on_generate:
+            case "cache":
+                file_idx = self._map_to_file_idx(index)
+                target_path = self.hidden_states_path / f"hs_{file_idx}.safetensors"
+                shutil.move(hs_filepath, target_path)
+            case "delete":
+                Path(hs_filepath).unlink()
 
         return loaded_hs
 
@@ -370,21 +398,23 @@ class ArrowDataset(BaseDataset):
                         f"Failed to load hidden states for sample {index}."
                     )
 
-        if loaded_hs is None:
-            return loaded_hs
-
         # loaded_hs structure: {
         #   "hidden_states": [seq_len, num_layers, hidden_size]
         #   "token_ids": [seq_len]
         # }
 
-        if not torch.equal(loaded_hs["token_ids"], self.data[index]["input_ids"]):
-            warnings.warn(
+        dataset_item = self.data[index]
+        expected_token_ids = torch.as_tensor(
+            dataset_item["input_ids"],
+            dtype=loaded_hs["token_ids"].dtype,
+            device=loaded_hs["token_ids"].device,
+        )
+
+        if not torch.equal(loaded_hs["token_ids"], expected_token_ids):
+            raise RuntimeError(
                 f"Loaded token ids {loaded_hs['token_ids']} for index {index} don't"
-                f"match input ids {self.data[index]['input_ids']}",
-                stacklevel=1,
+                f" match input ids {expected_token_ids}"
             )
-            return None
 
         return {
             "hidden_states": loaded_hs["hidden_states"][:, :-1].flatten(
@@ -394,7 +424,9 @@ class ArrowDataset(BaseDataset):
             "verifier_last_hidden_states": loaded_hs["hidden_states"][
                 :, -1
             ],  # [seq_len, hidden_size]
-            "loss_mask": self.data[index]["loss_mask"],  # [seq_len]
+            "loss_mask": torch.as_tensor(
+                dataset_item["loss_mask"], dtype=torch.long
+            ),  # [seq_len]
         }
 
 
@@ -499,9 +531,18 @@ def create_collate_fn(
     max_len: int,
     hidden_size: int,
     num_target_layers: int = 3,
-    dtype: torch.dtype = torch.bfloat16,
+    dtype: torch.dtype | None = None,
+    hidden_states_dtype: torch.dtype | None = None,
     preprocess: Callable[[BatchType], BatchType] | None = None,
 ):
+    if (
+        dtype is not None
+        and hidden_states_dtype is not None
+        and dtype != hidden_states_dtype
+    ):
+        raise ValueError("dtype and hidden_states_dtype must match when both are set")
+    dtype = dtype or hidden_states_dtype or torch.bfloat16
+
     def collate_fn(batch: list[BatchType | None]) -> BatchType:
         # Apply per-sample preprocessing and filter failed samples
         batch = [preprocess(b) if preprocess else b for b in batch if b is not None]

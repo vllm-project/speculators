@@ -2,14 +2,18 @@
 
 import json
 from pathlib import Path
+from typing import Any, cast
 
+import pytest
 import torch
 from datasets import Dataset
+from safetensors.torch import save_file
 
 from speculators.models.eagle3.data import shift_batch
 from speculators.train.data import (
     ArrowDataset,
     SampleFileDataset,
+    build_client_item,
     create_collate_fn,
     standardize_data_v1,
 )
@@ -125,6 +129,43 @@ def test_standardize_data_v1():
 
     for key, value in standardized.items():
         assert torch.allclose(value, expected_output[key])
+
+
+def test_build_client_item_omits_text_only_message_parts():
+    """Text-only list content must not force chat retokenization."""
+    dataset_item = {
+        "input_ids": torch.tensor([1, 2, 3]),
+        "messages": [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "Hello"}],
+            },
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Hi"}],
+            },
+        ],
+    }
+
+    assert build_client_item(dataset_item) == {"input_ids": [1, 2, 3]}
+
+
+def test_build_client_item_includes_actual_multimodal_parts():
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Describe"},
+                {"type": "image_url", "image_url": {"url": "file:///tmp/cat.png"}},
+            ],
+        }
+    ]
+    dataset_item = {"input_ids": [1, 2, 3], "messages": messages}
+
+    assert build_client_item(dataset_item) == {
+        "input_ids": [1, 2, 3],
+        "messages": messages,
+    }
 
 
 def test_collate_fn_basic():
@@ -253,6 +294,26 @@ def test_collate_fn_length_truncation():
     ]:
         assert collated[key].shape[0] == 1
         assert collated[key].shape[1] == max_len
+
+
+def test_collate_fn_empty_batch_uses_training_dtypes():
+    """Test that all-skipped batches keep training-compatible dtypes."""
+    max_len = 8
+    hidden_size = 4
+    collate_fn = create_collate_fn(
+        max_len,
+        hidden_size,
+        hidden_states_dtype=torch.bfloat16,
+    )
+
+    collated = collate_fn([None])
+
+    assert collated["hidden_states"].dtype == torch.bfloat16
+    assert collated["verifier_last_hidden_states"].dtype == torch.bfloat16
+    assert collated["input_ids"].dtype == torch.long
+    assert collated["loss_mask"].dtype == torch.long
+    assert collated["position_ids"].dtype == torch.long
+    assert collated["lengths"].dtype == torch.long
 
 
 def test_dataset_getitem_v1_format(tmp_path: Path):
@@ -492,3 +553,70 @@ def test_arrow_dataset_on_generate_cache_creates_hidden_states_dir(tmp_path: Pat
     )
 
     assert arrow_ds.hidden_states_path.is_dir()
+
+
+def test_arrow_dataset_generate_failure_raises(tmp_path: Path, monkeypatch):
+    """on_missing=generate should fail fast when vLLM generation fails."""
+    ds = Dataset.from_dict(
+        {
+            "input_ids": [[1, 2, 3]],
+            "loss_mask": [[1, 1, 1]],
+            "seq_len": [3],
+        }
+    )
+    ds.save_to_disk(str(tmp_path / "data"))
+    hidden_states_path = tmp_path / "hidden_states"
+    hidden_states_path.mkdir()
+
+    def raise_generation_error(*args, **kwargs):
+        del args, kwargs
+        raise RuntimeError("vLLM request failed")
+
+    monkeypatch.setattr(
+        "speculators.train.data.generate_hidden_states",
+        raise_generation_error,
+    )
+
+    arrow_ds = ArrowDataset(
+        max_len=128,
+        datapath=str(tmp_path / "data"),
+        hidden_states_path=hidden_states_path,
+        on_missing="generate",
+    )
+    arrow_ds.client = cast("Any", object())
+    arrow_ds.model = "dummy-model"
+
+    with pytest.raises(RuntimeError, match="vLLM request failed"):
+        arrow_ds[0]
+
+
+def test_arrow_dataset_token_id_mismatch_raises(tmp_path: Path):
+    """Loaded/generated hidden states must match the preprocessed token IDs."""
+    ds = Dataset.from_dict(
+        {
+            "input_ids": [[1, 2, 3]],
+            "loss_mask": [[1, 1, 1]],
+            "seq_len": [3],
+        }
+    )
+    ds.save_to_disk(str(tmp_path / "data"))
+    hidden_states_path = tmp_path / "hidden_states"
+    hidden_states_path.mkdir()
+
+    save_file(
+        {
+            "hidden_states": torch.randn(3, 4, 2),
+            "token_ids": torch.tensor([1, 2, 4], dtype=torch.long),
+        },
+        hidden_states_path / "hs_0.safetensors",
+    )
+
+    arrow_ds = ArrowDataset(
+        max_len=128,
+        datapath=str(tmp_path / "data"),
+        hidden_states_path=hidden_states_path,
+        on_missing="raise",
+    )
+
+    with pytest.raises(RuntimeError, match="don't match input ids"):
+        arrow_ds[0]

@@ -5,7 +5,8 @@ from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
 from re import Pattern
-from typing import cast
+from typing import Any, cast
+from urllib.parse import unquote, urlparse
 
 import torch
 from datasets import Dataset as HFDataset
@@ -19,6 +20,7 @@ from transformers import (
     ProcessorMixin,
 )
 from transformers import __version__ as TRANSFORMERS_VERSION  # noqa: N812
+from transformers.image_utils import load_image
 
 from speculators.data_generation.configs import DATASET_CONFIGS
 from speculators.data_generation.logging_utils import PipelineLogger
@@ -35,6 +37,207 @@ log = PipelineLogger(__name__)
 
 
 ProcessorLike = PreTrainedTokenizerBase | ProcessorMixin
+
+
+def _normalize_content(content: Any) -> Any:
+    """Normalize multimodal content into a processor-friendly representation."""
+
+    def _strip_image_tokens(text: str) -> str:
+        return re.sub(r"<image\s*/?>", "", text, flags=re.IGNORECASE).strip()
+
+    if isinstance(content, list):
+        normalized_items = []
+        for item in content:
+            if isinstance(item, str):
+                normalized_items.append(
+                    {"type": "text", "text": _strip_image_tokens(item)}
+                )
+                continue
+            if isinstance(item, dict):
+                image_ref = _get_image_ref(item)
+                if image_ref is not None:
+                    normalized_items.append({"type": "image", "image": image_ref})
+                    continue
+                text_val = item.get("text")
+                if text_val is not None:
+                    normalized_items.append(
+                        {"type": "text", "text": _strip_image_tokens(text_val)}
+                    )
+                    continue
+            normalized_items.append(item)
+        return normalized_items
+    return content
+
+
+def _get_conversations_from_examples(examples: dict) -> list:
+    """Extract conversations/messages from a batched dataset example."""
+    if "conversations" in examples:
+        return examples.get("conversations", [])
+    if "messages" in examples:
+        return examples.get("messages", [])
+    return []
+
+
+def _flatten_singleton_batch(value: Any, *, field_name: str) -> Any:
+    """Collapse a singleton batch dimension from HF outputs."""
+    if isinstance(value, torch.Tensor):
+        value = value.tolist()
+
+    if isinstance(value, list) and value and isinstance(value[0], list):
+        if len(value) != 1:
+            raise ValueError(
+                f"{field_name} returned non-singleton batch: batch_size={len(value)}"
+            )
+        return value[0]
+
+    return value
+
+
+def _load_image_for_processor(image_ref: Any) -> Any:
+    """Load a local/data image reference for HF multimodal processors."""
+    if isinstance(image_ref, str):
+        parsed = urlparse(image_ref)
+        if parsed.scheme == "file":
+            image_ref = unquote(parsed.path)
+    return load_image(image_ref)
+
+
+def _get_image_ref(item: dict) -> Any | None:
+    """Extract a serializable image reference from a multimodal content item."""
+    if item.get("type") not in ("image", "image_url", "input_image"):
+        return None
+
+    for key in ("image", "path", "url"):
+        image_ref = item.get(key)
+        if image_ref is not None:
+            return image_ref
+
+    image_url = item.get("image_url")
+    if isinstance(image_url, dict):
+        return image_url.get("url")
+    return image_url
+
+
+def _extract_processor_images_from_conversation(conv: list[dict]) -> list[Any]:
+    """Extract image inputs in the same order as the chat template placeholders."""
+    images = []
+    for turn in conv:
+        content = turn.get("content")
+        if not isinstance(content, list):
+            continue
+
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            image_ref = _get_image_ref(item)
+            if image_ref is not None:
+                images.append(_load_image_for_processor(image_ref))
+
+    return images
+
+
+def _get_image_token_ids(tokenizer: PreTrainedTokenizerBase) -> set[int]:
+    """Return known image placeholder token IDs for VL token expansion."""
+    image_token_ids: set[int] = set()
+    convert_tokens_to_ids = getattr(tokenizer, "convert_tokens_to_ids", None)
+    if not callable(convert_tokens_to_ids):
+        return image_token_ids
+
+    unk_token_id = getattr(tokenizer, "unk_token_id", None)
+    for token in ("<|image_pad|>", "<image>", "<image_pad>"):
+        token_id = convert_tokens_to_ids(token)
+        if isinstance(token_id, int) and token_id >= 0 and token_id != unk_token_id:
+            image_token_ids.add(token_id)
+
+    return image_token_ids
+
+
+def _expand_loss_mask_for_multimodal_tokens(
+    input_ids: list[int],
+    loss_mask: torch.Tensor,
+    expanded_input_ids: list[int],
+    image_token_ids: set[int],
+) -> torch.Tensor:
+    """Expand loss masks when a processor expands image placeholders."""
+    if input_ids == expanded_input_ids:
+        return loss_mask
+
+    if not image_token_ids:
+        raise ValueError("Cannot align expanded multimodal input IDs without image IDs")
+
+    mask_values = loss_mask.tolist()
+    expanded_mask: list[int] = []
+    src_idx = 0
+    dst_idx = 0
+
+    while src_idx < len(input_ids):
+        token_id = input_ids[src_idx]
+        if dst_idx >= len(expanded_input_ids):
+            break
+
+        if token_id in image_token_ids:
+            start_idx = dst_idx
+            while (
+                dst_idx < len(expanded_input_ids)
+                and expanded_input_ids[dst_idx] == token_id
+            ):
+                dst_idx += 1
+            if dst_idx == start_idx:
+                raise ValueError(
+                    f"Unable to align image token {token_id} at position {src_idx}"
+                )
+            expanded_mask.extend([0] * (dst_idx - start_idx))
+            src_idx += 1
+            continue
+
+        if expanded_input_ids[dst_idx] != token_id:
+            raise ValueError(
+                "Unable to align expanded multimodal input IDs at "
+                f"source={src_idx}, expanded={dst_idx}: "
+                f"{token_id} != {expanded_input_ids[dst_idx]}"
+            )
+        expanded_mask.append(int(mask_values[src_idx]))
+        src_idx += 1
+        dst_idx += 1
+
+    if dst_idx != len(expanded_input_ids):
+        raise ValueError(
+            "Expanded multimodal input IDs contain trailing tokens after alignment"
+        )
+
+    return torch.tensor(expanded_mask, dtype=loss_mask.dtype)
+
+
+def _expand_multimodal_inputs_with_images(
+    processor: ProcessorMixin,
+    tokenizer: PreTrainedTokenizerBase,
+    formatted_text: str,
+    normalized_conv: list[dict],
+    input_ids: list[int],
+    loss_mask: torch.Tensor,
+    max_length: int,
+) -> tuple[list[int], torch.Tensor]:
+    """Use actual images so HF preprocessing matches vLLM VL token expansion."""
+    images = _extract_processor_images_from_conversation(normalized_conv)
+    if not images:
+        return input_ids[:max_length], loss_mask[:max_length]
+
+    encoded = processor(
+        text=[formatted_text],
+        images=images,
+        truncation=False,
+    )
+    expanded_input_ids = _flatten_singleton_batch(
+        encoded["input_ids"],
+        field_name="Multimodal processor input_ids with images",
+    )
+    expanded_loss_mask = _expand_loss_mask_for_multimodal_tokens(
+        input_ids,
+        loss_mask,
+        expanded_input_ids,
+        _get_image_token_ids(tokenizer),
+    )
+    return expanded_input_ids[:max_length], expanded_loss_mask[:max_length]
 
 
 def _visualize_sample(preprocessed: HFDataset, processor: ProcessorLike, idx: int = 0):
@@ -88,6 +291,7 @@ def _normalize_conversation(
     for turn in conv:
         role = turn.get("from", turn.get("role", ""))
         content = turn.get("value") or turn.get("content") or ""
+        content = _normalize_content(content)
 
         # Map various role names to standard user/assistant
         if role in ("human", "user"):
@@ -160,6 +364,22 @@ def _adapt_part_for_vllm(part: str | dict):
                 return {"type": f"{modality}_url", f"{modality}_url": {"url": file_url}}
             if url := part.get("url"):
                 return {"type": f"{modality}_url", f"{modality}_url": {"url": url}}
+            if media_ref := part.get(modality):
+                if not isinstance(media_ref, str | Path):
+                    expr = {"type": modality, modality: "..."}
+                    raise ValueError(
+                        f"Content part {expr} is not supported. To avoid copying "
+                        f"the {modality} when saving the preprocessed dataset, "
+                        f"please express {modality} inputs using file paths or URLs."
+                    )
+                media_text = str(media_ref)
+                if media_text.startswith(("http://", "https://", "data:", "file://")):
+                    return {
+                        "type": f"{modality}_url",
+                        f"{modality}_url": {"url": media_text},
+                    }
+                file_url = f"file://{Path(media_text).absolute()}"
+                return {"type": f"{modality}_url", f"{modality}_url": {"url": file_url}}
 
             if part.get("base64"):
                 expr = {"type": modality, "base64": "..."}
@@ -168,14 +388,6 @@ def _adapt_part_for_vllm(part: str | dict):
                     f"the {modality} when saving the preprocessed dataset, "
                     f"please express {modality} inputs using file paths or URLs."
                 )
-            if part.get(modality):
-                expr = {"type": modality, modality: "..."}
-                raise ValueError(
-                    f"Content part {expr} is not supported. To avoid copying "
-                    f"the {modality} when saving the preprocessed dataset, "
-                    f"please express {modality} inputs using file paths or URLs."
-                )
-
             expr = {"type": modality} | {k: "..." for k in part if k != "type"}
             raise NotImplementedError(f"Unknown content part: {expr}")
 
@@ -224,6 +436,7 @@ def _supports_assistant_mask(processor: ProcessorLike) -> bool:
             return False
 
         # Verify the mask is not all zeros
+        mask = _flatten_singleton_batch(mask, field_name="assistant mask support check")
         return any(m == 1 for m in mask)
     except (TypeError, ValueError, KeyError, AttributeError) as e:
         log.warning(f"An error occurred when trying to return assistant mask: {e}")
@@ -397,22 +610,34 @@ def _get_input_ids_loss_mask(
         encoded = cast("BatchEncoding | BatchFeature", encoded_any)
 
         # input IDs and loss mask
-        input_ids = encoded["input_ids"]
+        input_ids = _flatten_singleton_batch(
+            encoded["input_ids"],
+            field_name="apply_chat_template input_ids",
+        )
         # HF uses 'assistant_masks' in recent versions
         mask_key = (
             "assistant_masks" if "assistant_masks" in encoded else "assistant_mask"
         )
-        loss_mask = torch.tensor(encoded[mask_key], dtype=torch.long)
+        loss_mask = torch.tensor(
+            _flatten_singleton_batch(
+                encoded[mask_key],
+                field_name="apply_chat_template assistant mask",
+            ),
+            dtype=torch.long,
+        )
 
-        return input_ids, loss_mask
+        if isinstance(processor, ProcessorMixin):
+            return input_ids, loss_mask
+
+        return input_ids[:max_length], loss_mask[:max_length]
 
     # Fallback: regex-based detection
     assert assistant_pattern is not None, "Assistant pattern required for fallback"
 
     processor_kwargs: dict = {
         "return_offsets_mapping": True,
-        "max_length": max_length,
-        "truncation": True,
+        # Multimodal processors must expand image tokens before truncation.
+        "truncation": False,
         "add_special_tokens": False,
     }
 
@@ -438,14 +663,22 @@ def _get_input_ids_loss_mask(
 
         encoded = cast("BatchFeature", encoded_any)
 
-        # Remove batch dimension
-        (input_ids,) = encoded["input_ids"]
-        (offsets,) = encoded["offset_mapping"]
+        input_ids = _flatten_singleton_batch(
+            encoded["input_ids"],
+            field_name="processor apply_chat_template input_ids",
+        )
+        offsets = _flatten_singleton_batch(
+            encoded["offset_mapping"],
+            field_name="processor apply_chat_template offset_mapping",
+        )
 
         # MM placeholder tokens are inserted separate from chat template
         formatted_text = processor.decode(input_ids)
         assert isinstance(formatted_text, str)
     else:
+        processor_kwargs["max_length"] = max_length
+        processor_kwargs["truncation"] = True
+
         # More optimized flow for text-only processors (i.e. tokenizers)
         formatted_text = processor.apply_chat_template(
             hf_conv,
@@ -459,8 +692,12 @@ def _get_input_ids_loss_mask(
         encoded_any = processor(formatted_text, **processor_kwargs)
         encoded = cast("BatchEncoding", encoded_any)
 
-        input_ids = encoded["input_ids"]
-        offsets = encoded["offset_mapping"]
+        input_ids = _flatten_singleton_batch(
+            encoded["input_ids"], field_name="tokenizer input_ids"
+        )
+        offsets = _flatten_singleton_batch(
+            encoded["offset_mapping"], field_name="tokenizer offset_mapping"
+        )
 
     loss_mask = _create_loss_mask_from_offsets(
         formatted_text,
@@ -542,7 +779,7 @@ def _preprocess_batch(
         return _passthrough_pretokenized(examples, max_length, minimum_valid_tokens)
 
     results: dict[str, list] = {"input_ids": [], "loss_mask": [], "seq_len": []}
-    conversations: list[dict] = examples.get("conversations", [])
+    conversations = _get_conversations_from_examples(examples)
 
     # MM inputs must use Chat Completions API
     if isinstance(processor, ProcessorMixin):
@@ -574,6 +811,16 @@ def _preprocess_batch(
         parsed_tools = _parse_conv_tools(conv_tools, idx)
 
         try:
+            formatted_raw = None
+            if isinstance(processor, ProcessorMixin):
+                formatted_raw_any = processor.apply_chat_template(
+                    _adapt_conv_for_hf(normalized_conv, processor),
+                    tokenize=False,
+                    add_generation_prompt=False,
+                )
+                assert isinstance(formatted_raw_any, str)
+                formatted_raw = formatted_raw_any
+
             input_ids, loss_mask = _get_input_ids_loss_mask(
                 normalized_conv,
                 processor,
@@ -582,12 +829,28 @@ def _preprocess_batch(
                 tools=parsed_tools,
                 conv_idx=idx,
             )
-        except (TypeError, ValueError, KeyError, AttributeError, RuntimeError) as e:
-            log.error(
+            if isinstance(processor, ProcessorMixin):
+                input_ids, loss_mask = _expand_multimodal_inputs_with_images(
+                    processor,
+                    get_tokenizer(processor),
+                    formatted_raw or "",
+                    normalized_conv,
+                    list(input_ids),
+                    loss_mask,
+                    max_length,
+                )
+        except (
+            TypeError,
+            ValueError,
+            KeyError,
+            AttributeError,
+            RuntimeError,
+            OSError,
+        ) as e:
+            raise RuntimeError(
                 f"Failed to process conversation {idx} "
                 f"(assistant_pattern={assistant_pattern is not None}): {e}"
-            )
-            continue
+            ) from e
 
         # Assert shapes match
         assert len(input_ids) == len(loss_mask), (
@@ -659,6 +922,10 @@ def build_eagle3_dataset(
         assistant_pattern = _detect_assistant_pattern(processor)
         log.info(f"Detected assistant pattern: {str(assistant_pattern)[:80]}...")
 
+    remove_cols = original_cols
+    if isinstance(processor, ProcessorMixin):
+        remove_cols = [col for col in original_cols if col != "messages"]
+
     # Avoid CPU contention for MM processing:
     # https://github.com/vllm-project/vllm/pull/31879
     with (
@@ -676,12 +943,21 @@ def build_eagle3_dataset(
             ),
             batched=True,
             num_proc=num_proc,
-            batch_size=1000,
-            remove_columns=original_cols,
+            # Multimodal preprocessing loads each image and asks the processor to
+            # expand image placeholders into the real visual-token length. Large
+            # batches can look stuck because a worker must finish the whole batch
+            # before datasets updates progress.
+            batch_size=32 if isinstance(processor, ProcessorMixin) else 1000,
+            remove_columns=remove_cols,
             keep_in_memory=True,  # skip caching
         )
 
-    dataset.set_format(type="torch")
+    if isinstance(processor, ProcessorMixin):
+        dataset.set_format(
+            type="torch", columns=["input_ids", "loss_mask"], output_all_columns=True
+        )
+    else:
+        dataset.set_format(type="torch")
     return dataset
 
 
@@ -831,6 +1107,7 @@ def load_and_preprocess_dataset(
     minimum_valid_tokens: int | None = None,
     allow_empty_output: bool = False,
     trust_remote_code: bool = False,
+    is_multimodal: bool | None = None,
 ) -> tuple[HFDataset, ProcessorLike]:
     """Load, tokenize, and preprocess a dataset for EAGLE3 training.
 
@@ -853,6 +1130,9 @@ def load_and_preprocess_dataset(
         allow_empty_output: If True, allow returning an empty dataset instead of
                           raising when no samples survive preprocessing.
         trust_remote_code: If True, allows executing code from HF Hub.
+        is_multimodal: Optional compatibility flag. When True, require a
+                       ProcessorMixin-backed processor. When None, detect
+                       multimodal preprocessing automatically.
 
     Returns:
         Tuple of (preprocessed_dataset, processor)
@@ -867,6 +1147,12 @@ def load_and_preprocess_dataset(
 
     log.subsection("Loading processor")
     processor = load_processor(target_model_path, trust_remote_code=trust_remote_code)
+    processor_is_multimodal = isinstance(processor, ProcessorMixin)
+    if is_multimodal and not processor_is_multimodal:
+        raise ValueError(
+            f"Processor for {target_model_path} is not a multimodal ProcessorMixin."
+        )
+    log.info(f"Using multimodal mode: {processor_is_multimodal}")
 
     if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
         raise ValueError(

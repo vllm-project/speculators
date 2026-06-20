@@ -1,0 +1,233 @@
+#!/bin/bash
+# Online Eagle3 Training Script for Qwen3-VL-4B on hao05/llava-cot-48k-reannotated
+#
+# Runs the full online training pipeline:
+#   1. Download the multimodal Parquet dataset snapshot from Hugging Face
+#   2. Materialize local image files and an absolute-path JSONL
+#   3. Prepare arrow data with multimodal preprocessing
+#   4. Launch a hidden-state extraction vLLM server
+#   5. Train Eagle3 with on-the-fly hidden-state generation
+#
+# Usage:
+#   bash examples/train/eagle3_qwen3_vl_4b_llava_cot_48k_online_full.sh
+#
+# Notes:
+# - This mirrors the 5k online example, but defaults to the full 47,905-row
+#   `hao05/llava-cot-48k-reannotated` Parquet dataset.
+# - `prepare_data.py` currently accepts local json/jsonl files or built-in dataset
+#   aliases. This example snapshots the public HF Parquet dataset locally first.
+# - The uploaded dataset stores image bytes in Parquet and preserves original
+#   relative paths in `image_path`. This script materializes image files and a
+#   JSONL with absolute image paths so vLLM can load images reliably during
+#   online training.
+#
+# The 48k dataset is much larger than the 5k sanity-check dataset. Expect the
+# download, image materialization, and training stages to take substantially
+# longer and use more local disk.
+
+set -euo pipefail
+
+# ============ Configuration ============
+MODEL="${MODEL:-Qwen/Qwen3-VL-4B-Instruct}"
+DATASET_REPO="${DATASET_REPO:-hao05/llava-cot-48k-reannotated}"
+DATASET_DIR="${DATASET_DIR:-./data/llava-cot-48k-reannotated}"
+DATASET_JSONL="$DATASET_DIR/train.absolute_paths.jsonl"
+OUTPUT_DIR="${OUTPUT_DIR:-./output_qwen3_vl_4b_llava_cot_48k_online_full}"
+HIDDEN_STATES_DIR="$OUTPUT_DIR/hidden_states_online"
+CHECKPOINT_DIR="$OUTPUT_DIR/checkpoints"
+VLLM_PORT="${VLLM_PORT:-8000}"
+MAX_SAMPLES="${MAX_SAMPLES:-47905}"
+SEQ_LENGTH="${SEQ_LENGTH:-8192}"
+VLLM_MAX_MODEL_LEN="${VLLM_MAX_MODEL_LEN:-9216}"
+VLLM_TP="${VLLM_TP:-2}"
+EPOCHS="${EPOCHS:-5}"
+LR="${LR:-1e-4}"
+NUM_PREPROCESSING_WORKERS="${NUM_PREPROCESSING_WORKERS:-12}"
+VLLM_EXTRA_ARGS="${VLLM_EXTRA_ARGS:-}"
+VLLM_LOG_FILE="${VLLM_LOG_FILE:-./vllm_server_48k_full.log}"
+VLLM_STARTUP_TIMEOUT="${VLLM_STARTUP_TIMEOUT:-600}"
+
+# GPU assignments
+VLLM_GPUS="${VLLM_GPUS:-0,1}"
+TRAIN_GPUS="${TRAIN_GPUS:-2}"
+if [[ -z "${NUM_TRAIN_GPUS:-}" ]]; then
+    IFS=',' read -r -a TRAIN_GPU_ARR <<< "$TRAIN_GPUS"
+    NUM_TRAIN_GPUS="${#TRAIN_GPU_ARR[@]}"
+fi
+# =======================================
+
+# Optional mirror for environments without direct access to huggingface.co
+# export HF_ENDPOINT=https://hf-mirror.com
+
+mkdir -p "$DATASET_DIR" "$OUTPUT_DIR"
+if [[ -z "${VLLM_ALLOWED_LOCAL_MEDIA_PATH:-}" ]]; then
+    VLLM_ALLOWED_LOCAL_MEDIA_PATH="$(cd "$DATASET_DIR" && pwd)"
+fi
+read -r -a VLLM_EXTRA_ARR <<< "$VLLM_EXTRA_ARGS"
+
+echo "=== Step 1: Downloading dataset snapshot ==="
+hf download "$DATASET_REPO" \
+    --repo-type dataset \
+    --local-dir "$DATASET_DIR" \
+    --include "README.md" \
+    --include "data/*.parquet"
+
+echo "=== Step 2: Materializing Parquet dataset to absolute-path JSONL ==="
+python - "$DATASET_DIR" "$MAX_SAMPLES" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+from datasets import Image, load_dataset
+
+dataset_dir = Path(sys.argv[1]).resolve()
+max_samples_arg = sys.argv[2]
+max_samples = None
+if max_samples_arg and max_samples_arg.lower() not in {"0", "all", "none"}:
+    max_samples = int(max_samples_arg)
+dst = dataset_dir / "train.absolute_paths.jsonl"
+parquet_files = sorted((dataset_dir / "data").glob("train-*.parquet"))
+if not parquet_files:
+    raise FileNotFoundError(f"No Parquet shards found under {dataset_dir / 'data'}")
+
+
+def absolutize_image_ref(image_ref: object) -> object:
+    if not isinstance(image_ref, str):
+        return image_ref
+    if image_ref.startswith(("http://", "https://", "/")):
+        return image_ref
+    return str((dataset_dir / image_ref).resolve())
+
+
+def safe_relative_path(image_path: object, row_idx: int) -> Path:
+    path_text = str(image_path) if isinstance(image_path, str) else f"images/{row_idx:08d}.jpg"
+    path = Path(path_text)
+    if path.is_absolute() or ".." in path.parts:
+        path = Path("images") / path.name
+    return path
+
+
+def materialize_image(sample: dict, row_idx: int) -> str:
+    image = sample.get("image")
+    image_path = sample.get("image_path")
+    image_bytes = None
+    if isinstance(image, dict):
+        image_path = image_path or image.get("path")
+        image_bytes = image.get("bytes")
+    rel_path = safe_relative_path(image_path, row_idx)
+    image_file = dataset_dir / rel_path
+    if image_bytes is not None:
+        image_file.parent.mkdir(parents=True, exist_ok=True)
+        image_file.write_bytes(image_bytes)
+    elif not image_file.exists():
+        raise FileNotFoundError(f"Missing image bytes and file for row {row_idx}: {image_path}")
+    return str(image_file.resolve())
+
+
+ds = load_dataset(
+    "parquet",
+    data_files={"train": [str(path) for path in parquet_files]},
+    split="train",
+).cast_column("image", Image(decode=False))
+
+count = 0
+with dst.open("w", encoding="utf-8") as fout:
+    for row_idx, sample in enumerate(ds):
+        if max_samples is not None and count >= max_samples:
+            break
+
+        sample["image"] = materialize_image(sample, row_idx)
+        sample.pop("image_path", None)
+
+        for turn in sample.get("conversations", []):
+            content = turn.get("content")
+            if not isinstance(content, list):
+                continue
+            for item in content:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("type") in {"image", "image_url"}:
+                    if "image" in item:
+                        item["image"] = absolutize_image_ref(item["image"])
+                    elif isinstance(item.get("image_url"), dict):
+                        url = item["image_url"].get("url")
+                        item["image_url"]["url"] = absolutize_image_ref(url)
+
+        fout.write(json.dumps(sample, ensure_ascii=False) + "\n")
+        count += 1
+
+print(f"Wrote {count} rows to {dst}")
+PY
+
+echo "=== Step 3: Preparing multimodal data ==="
+python scripts/prepare_data.py \
+    --model "$MODEL" \
+    --data "$DATASET_JSONL" \
+    --output "$OUTPUT_DIR" \
+    --max-samples "$MAX_SAMPLES" \
+    --seq-length "$SEQ_LENGTH" \
+    --num-preprocessing-workers "$NUM_PREPROCESSING_WORKERS" \
+    --multimodal
+
+echo "=== Step 4: Launching vLLM server ==="
+echo "vLLM logs will be written to: $VLLM_LOG_FILE"
+
+CUDA_VISIBLE_DEVICES="$VLLM_GPUS" python scripts/launch_vllm.py "$MODEL" \
+    --hidden-states-path "$HIDDEN_STATES_DIR" \
+    -- \
+    --port "$VLLM_PORT" \
+    --tensor-parallel-size "$VLLM_TP" \
+    --max-model-len "$VLLM_MAX_MODEL_LEN" \
+    --limit-mm-per-prompt '{"image":1}' \
+    --allowed-local-media-path "$VLLM_ALLOWED_LOCAL_MEDIA_PATH" \
+    "${VLLM_EXTRA_ARR[@]}" \
+    > "$VLLM_LOG_FILE" 2>&1 &
+VLLM_PID=$!
+
+cleanup() {
+    echo "Stopping vLLM server..."
+    kill "$VLLM_PID" 2>/dev/null || true
+    wait "$VLLM_PID" 2>/dev/null || true
+}
+trap cleanup EXIT
+
+echo "Waiting for vLLM server to be ready..."
+VLLM_START_TIME="$(date +%s)"
+until curl -sf "http://localhost:${VLLM_PORT}/health" > /dev/null 2>&1; do
+    if ! kill -0 "$VLLM_PID" 2>/dev/null; then
+        echo "vLLM server exited before becoming healthy. See $VLLM_LOG_FILE" >&2
+        wait "$VLLM_PID" 2>/dev/null || true
+        exit 1
+    fi
+
+    VLLM_ELAPSED="$(( $(date +%s) - VLLM_START_TIME ))"
+    if (( VLLM_ELAPSED >= VLLM_STARTUP_TIMEOUT )); then
+        echo "Timed out after ${VLLM_STARTUP_TIMEOUT}s waiting for vLLM health." >&2
+        echo "See $VLLM_LOG_FILE for startup logs." >&2
+        exit 1
+    fi
+
+    sleep 2
+done
+echo "vLLM server ready."
+
+echo "=== Step 5: Online training ==="
+CUDA_VISIBLE_DEVICES="$TRAIN_GPUS" torchrun \
+    --standalone --nproc_per_node "$NUM_TRAIN_GPUS" \
+    scripts/train.py \
+    --verifier-name-or-path "$MODEL" \
+    --data-path "$OUTPUT_DIR" \
+    --hidden-states-path "$HIDDEN_STATES_DIR" \
+    --vllm-endpoint "http://localhost:${VLLM_PORT}/v1" \
+    --save-path "$CHECKPOINT_DIR" \
+    --epochs "$EPOCHS" \
+    --lr "$LR" \
+    --total-seq-len "$SEQ_LENGTH" \
+    --num-layers 1 \
+    --ttt-steps 3 \
+    --ttt-step-loss-decay 1.0 \
+    --on-missing generate \
+    --on-generate cache \
+    --run-name eagle3_qwen3_vl_4b_llava_cot_48k_online_full
+
+echo "Done. Checkpoints saved to $CHECKPOINT_DIR"

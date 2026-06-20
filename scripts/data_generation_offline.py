@@ -325,6 +325,8 @@ async def generate_and_save_hidden_states(args, dataset):
 
     existing_file_indices = get_existing_hidden_state_indices(hidden_states_dir)
     num_samples = len(dataset)
+    if "messages" in dataset.column_names:
+        logger.info("Detected multimodal preprocessed dataset")
 
     to_process = get_indices_to_process(
         num_samples,
@@ -389,7 +391,7 @@ async def generate_and_save_hidden_states(args, dataset):
             await _shutdown_workers(workers, queue, cancel_event)
 
     num_saved = len(to_process) - len(skipped_indices)
-    logger.info(f"Saved {num_saved} new data points to {args.output}")
+    logger.info(f"Saved {num_saved} new data points to {hidden_states_dir}")
     if skipped_indices:
         logger.warning(
             f"Skipped {len(skipped_indices)} samples due to errors: {skipped_indices}"

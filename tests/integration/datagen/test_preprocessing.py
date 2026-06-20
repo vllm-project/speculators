@@ -4,14 +4,14 @@ Unit tests for the preprocessing module in the Speculators data generation.
 
 import json
 import re
-from typing import Any
+from typing import Any, cast
 from unittest.mock import patch
 
 import pytest
 import torch
 from datasets import Dataset as HFDataset
 from PIL import Image
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, PreTrainedTokenizerBase, ProcessorMixin
 
 from speculators.data_generation.configs import (
     DATASET_CONFIGS,
@@ -22,6 +22,7 @@ from speculators.data_generation.preprocessing import (
     _adapt_conv_for_vllm,
     _create_loss_mask_from_offsets,
     _detect_assistant_pattern,
+    _expand_loss_mask_for_multimodal_tokens,
     _load_hf_dataset,
     _normalize_conversation,
     _preprocess_batch,
@@ -39,6 +40,95 @@ from speculators.data_generation.preprocessing import (
 TEXT_MODEL_REPO = "Qwen/Qwen2-0.5B-Instruct"
 # For testing multi-modal support
 MM_MODEL_REPO = "Qwen/Qwen3.5-0.8B"
+
+_TINY_IMAGE_DATA_URL = (
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/"
+    "x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+)
+
+
+class _DummyMultimodalTokenizer:
+    pad_token = "<pad>"
+    eos_token = "<eos>"
+    unk_token_id = -1
+
+    def convert_tokens_to_ids(self, token):
+        if token == "<|image_pad|>":
+            return 999
+        return self.unk_token_id
+
+    def __call__(
+        self,
+        text,
+        return_offsets_mapping=False,
+        max_length=None,
+        truncation=False,
+        add_special_tokens=False,
+    ):
+        del text, max_length, truncation, add_special_tokens
+        if return_offsets_mapping:
+            return {
+                "input_ids": [101, 102, 103],
+                "offset_mapping": [(0, 1), (1, 2), (2, 3)],
+            }
+        return {"input_ids": [101, 102, 103]}
+
+    def decode(self, input_ids):
+        del input_ids
+        return "formatted multimodal prompt"
+
+
+class _DummyMultimodalProcessor(ProcessorMixin):
+    def __init__(self):
+        self.tokenizer = _DummyMultimodalTokenizer()
+        self.chat_template = "dummy-template"
+
+    def __call__(self, *args, **kwargs):
+        del args
+        images = kwargs["images"]
+        assert len(images) == 1
+        assert getattr(images[0], "mode", None) == "RGB"
+        return {"input_ids": [[101, 999, 999, 999, 103]]}
+
+    def apply_chat_template(self, *args, **kwargs):
+        if kwargs.get("tokenize"):
+            return {"input_ids": [[101, 999, 103]], "assistant_mask": [[0, 0, 1]]}
+
+        messages = args[0]
+        rendered = []
+        for message in messages:
+            content = message["content"]
+            if isinstance(content, list):
+                content = "".join(
+                    part.get("text", "")
+                    for part in content
+                    if part.get("type") == "text"
+                )
+            rendered.append(f"<|{message['role']}|>{content}")
+        return "\n".join(rendered)
+
+    def decode(self, input_ids):
+        return self.tokenizer.decode(input_ids)
+
+
+class _NoProcessorTruncationMultimodalProcessor(_DummyMultimodalProcessor):
+    def __call__(self, *args, **kwargs):
+        if kwargs.get("truncation"):
+            raise ValueError("processor-side image truncation is invalid")
+        return super().__call__(*args, **kwargs)
+
+    def apply_chat_template(self, *args, **kwargs):
+        if kwargs.get("tokenize"):
+            processor_kwargs = kwargs.get("processor_kwargs", kwargs)
+            if processor_kwargs.get("truncation"):
+                raise ValueError("processor-side image truncation is invalid")
+            return {
+                "input_ids": [[101, 999, 103]],
+                "offset_mapping": [[(0, 1), (1, 2), (2, 3)]],
+            }
+
+        return super().apply_chat_template(*args, **kwargs)
 
 
 # Tests for _normalize_conversation
@@ -1365,6 +1455,89 @@ def test_normalize_conversation_tool_calls_with_empty_content():
     assert assistant_tool_call_turn["role"] == "assistant"
     assert assistant_tool_call_turn["content"] == ""
     assert assistant_tool_call_turn["tool_calls"] == tool_calls
+
+
+@pytest.mark.sanity
+def test_build_eagle3_dataset_multimodal_expands_image_tokens_and_preserves_messages():
+    """Test multimodal preprocessing expands image tokens and preserves messages."""
+    dataset = HFDataset.from_dict(
+        {
+            "messages": [
+                [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Describe <image>"},
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": _TINY_IMAGE_DATA_URL},
+                            },
+                        ],
+                    },
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "A cat."}],
+                    },
+                ]
+            ]
+        }
+    )
+
+    processor = _DummyMultimodalProcessor()
+    result = build_eagle3_dataset(
+        dataset,
+        cast("PreTrainedTokenizerBase", processor),
+        max_length=64,
+        num_proc=1,
+    )
+
+    assert "messages" in result.column_names
+    assert result[0]["input_ids"].tolist() == [101, 999, 999, 999, 103]
+    assert result[0]["loss_mask"].tolist() == [0, 0, 0, 0, 1]
+    assert result[0]["seq_len"] == 5
+
+    messages = result[0]["messages"]
+    assert messages[0]["role"] == "user"
+    assert messages[0]["content"][0]["type"] == "text"
+    assert messages[0]["content"][0]["text"] == "Describe"
+    assert messages[0]["content"][1]["type"] == "image_url"
+    assert messages[0]["content"][1]["image_url"]["url"] == _TINY_IMAGE_DATA_URL
+    assert messages[1]["role"] == "assistant"
+    assert messages[1]["content"][0]["text"] == "A cat."
+
+
+@pytest.mark.sanity
+def test_multimodal_regex_path_truncates_after_image_expansion():
+    """Avoid processor-side truncation that can corrupt image token counts."""
+    examples = {
+        "messages": [
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Describe"},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": _TINY_IMAGE_DATA_URL},
+                        },
+                    ],
+                },
+                {"role": "assistant", "content": [{"type": "text", "text": "A cat."}]},
+            ]
+        ]
+    }
+
+    processor = _NoProcessorTruncationMultimodalProcessor()
+    results = _preprocess_batch(
+        examples,
+        cast("PreTrainedTokenizerBase", processor),
+        max_length=4,
+        assistant_pattern=r"(.+)",
+    )
+
+    assert results["input_ids"][0].tolist() == [101, 999, 999, 999]
+    assert results["loss_mask"][0].tolist() == [1, 0, 0, 0]
+    assert results["seq_len"][0] == 4
 
 
 # Tests for load_raw_dataset resolution chain (issue #661)
