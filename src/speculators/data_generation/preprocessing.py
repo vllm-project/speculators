@@ -253,10 +253,6 @@ def _expand_loss_mask_for_multimodal_tokens(
         raise ValueError(
             "Expanded multimodal input IDs contain trailing tokens after alignment"
         )
-    if src_idx != len(input_ids):
-        raise ValueError(
-            "Expanded multimodal input IDs ended before source alignment completed"
-        )
 
     return torch.tensor(expanded_mask, dtype=loss_mask.dtype)
 
