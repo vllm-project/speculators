@@ -59,13 +59,15 @@ VLLM_MAX_MODEL_LEN="${VLLM_MAX_MODEL_LEN:-5120}"
 VLLM_TP="${VLLM_TP:-2}"
 EPOCHS="${EPOCHS:-5}"
 LR="${LR:-1e-4}"
-VLLM_EXTRA_ARGS="${VLLM_EXTRA_ARGS:-}"
 VLLM_LOG_FILE="${VLLM_LOG_FILE:-./vllm_server.log}"
 VLLM_STARTUP_TIMEOUT="${VLLM_STARTUP_TIMEOUT:-600}"
+if [[ -z "${VLLM_EXTRA_ARGS+x}" ]]; then
+    VLLM_EXTRA_ARGS="--enforce-eager"
+fi
 
 # GPU assignments
 VLLM_GPUS="${VLLM_GPUS:-0,1}"
-TRAIN_GPUS="${TRAIN_GPUS:-2,3}"
+TRAIN_GPUS="${TRAIN_GPUS:-2}"
 if [[ -z "${NUM_TRAIN_GPUS:-}" ]]; then
     IFS=',' read -r -a TRAIN_GPU_ARR <<< "$TRAIN_GPUS"
     NUM_TRAIN_GPUS="${#TRAIN_GPU_ARR[@]}"
