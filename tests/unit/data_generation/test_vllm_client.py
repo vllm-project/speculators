@@ -292,7 +292,9 @@ def test_generate_hidden_states_async_multimodal_messages():
     }
 
 
-def test_generate_hidden_states_truncates_multimodal_prefix_match(tmp_path):
+def test_generate_hidden_states_accepts_multimodal_prefix_match_without_rewrite(
+    tmp_path,
+):
     hs_path = tmp_path / "hs_0.safetensors"
     save_file(
         {
@@ -320,12 +322,8 @@ def test_generate_hidden_states_truncates_multimodal_prefix_match(tmp_path):
 
     tensors = load_file(result)
     assert result == str(hs_path)
-    assert tensors["token_ids"].tolist() == [1, 2, 3]
-    assert tensors["hidden_states"].shape == (3, 2, 3)
-    assert torch.equal(
-        tensors["hidden_states"],
-        torch.arange(5 * 2 * 3, dtype=torch.float32).reshape(5, 2, 3)[:3],
-    )
+    assert tensors["token_ids"].tolist() == [1, 2, 3, 4, 5]
+    assert tensors["hidden_states"].shape == (5, 2, 3)
 
 
 def test_generate_hidden_states_rejects_multimodal_non_prefix_mismatch(tmp_path):

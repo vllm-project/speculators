@@ -23,10 +23,11 @@ from typing import Any
 
 import openai
 from datasets import load_from_disk
-from safetensors.torch import load_file
+from safetensors.torch import load_file, save_file
 from tqdm import tqdm
 
 from speculators.data_generation.offline import (
+    align_hidden_states_to_tokens,
     check_hidden_states,
     get_existing_hidden_state_indices,
     get_indices_to_process,
@@ -238,9 +239,30 @@ async def worker(  # noqa: C901
                 await wait_for_lock_async(lock_path)
 
             async with write_semaphore:  # Limit number of active disk writes
-                await asyncio.to_thread(
-                    shutil.move, hidden_states_path, target_hidden_states_path
-                )
+                allow_prefix_truncation = "messages" in item
+
+                def _align_and_write(
+                    source_path=Path(hidden_states_path),
+                    target_path=target_hidden_states_path,
+                    tokens=item["input_ids"],
+                ):
+                    loaded = load_file(source_path)
+                    aligned, truncated = align_hidden_states_to_tokens(
+                        loaded,
+                        tokens,
+                        allow_prefix_truncation=allow_prefix_truncation,
+                    )
+                    if truncated:
+                        save_file(
+                            {key: value.contiguous() for key, value in aligned.items()},
+                            target_path,
+                        )
+                        if source_path != target_path:
+                            source_path.unlink()
+                    elif source_path != target_path:
+                        shutil.move(source_path, target_path)
+
+                await asyncio.to_thread(_align_and_write)
                 if validate_outputs:
 
                     def _load_and_check(

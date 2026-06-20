@@ -13,10 +13,10 @@ import openai
 import torch
 import torch.nn.functional as F  # noqa: N812
 from datasets import load_from_disk
-from safetensors.torch import load_file
+from safetensors.torch import load_file, save_file
 from torch.utils.data import Dataset
 
-from speculators.data_generation.offline import check_hidden_states
+from speculators.data_generation.offline import align_hidden_states_to_tokens
 from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_REQUEST_TIMEOUT,
@@ -364,13 +364,25 @@ class ArrowDataset(BaseDataset):
                 f"but no file was written: {hs_filepath}"
             )
 
-        check_hidden_states(loaded_hs, dataset_item["input_ids"].tolist())
+        loaded_hs, truncated = align_hidden_states_to_tokens(
+            loaded_hs,
+            dataset_item["input_ids"].tolist(),
+            allow_prefix_truncation="messages" in client_item,
+        )
 
         match self.on_generate:
             case "cache":
                 file_idx = self._map_to_file_idx(index)
                 target_path = self.hidden_states_path / f"hs_{file_idx}.safetensors"
-                shutil.move(hs_filepath, target_path)
+                if truncated:
+                    save_file(
+                        {key: value.contiguous() for key, value in loaded_hs.items()},
+                        target_path,
+                    )
+                    if Path(hs_filepath) != target_path:
+                        Path(hs_filepath).unlink()
+                elif Path(hs_filepath) != target_path:
+                    shutil.move(hs_filepath, target_path)
             case "delete":
                 Path(hs_filepath).unlink()
 

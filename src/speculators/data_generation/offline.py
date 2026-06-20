@@ -19,6 +19,34 @@ def check_hidden_states(data: dict, tokens: list[int]):
         )
 
 
+def align_hidden_states_to_tokens(
+    data: dict,
+    tokens: list[int],
+    *,
+    allow_prefix_truncation: bool = False,
+) -> tuple[dict, bool]:
+    """Validate and optionally trim hidden states to the preprocessed token prefix."""
+    t_ids = data["token_ids"].tolist()
+    if t_ids == tokens:
+        check_hidden_states(data, tokens)
+        return data, False
+
+    expected_len = len(tokens)
+    if (
+        allow_prefix_truncation
+        and t_ids[:expected_len] == tokens
+        and data["hidden_states"].shape[0] >= expected_len
+    ):
+        aligned = dict(data)
+        aligned["token_ids"] = data["token_ids"][:expected_len].contiguous()
+        aligned["hidden_states"] = data["hidden_states"][:expected_len].contiguous()
+        check_hidden_states(aligned, tokens)
+        return aligned, True
+
+    check_hidden_states(data, tokens)
+    return data, False
+
+
 def get_existing_hidden_state_indices(output_path: Path) -> list[int]:
     """Find existing `hs_i.safetensors` files (where i is the file index)"""
 

@@ -1,7 +1,43 @@
+import pytest
+import torch
+
 from speculators.data_generation.offline import (
+    align_hidden_states_to_tokens,
     get_existing_hidden_state_indices,
     get_indices_to_process,
 )
+
+
+def test_align_hidden_states_to_tokens_truncates_prefix_match():
+    data = {
+        "token_ids": torch.tensor([1, 2, 3, 4, 5], dtype=torch.long),
+        "hidden_states": torch.arange(5 * 2 * 3, dtype=torch.float32).reshape(5, 2, 3),
+    }
+
+    aligned, truncated = align_hidden_states_to_tokens(
+        data,
+        [1, 2, 3],
+        allow_prefix_truncation=True,
+    )
+
+    assert truncated is True
+    assert aligned["token_ids"].tolist() == [1, 2, 3]
+    assert aligned["hidden_states"].shape == (3, 2, 3)
+    assert torch.equal(aligned["hidden_states"], data["hidden_states"][:3])
+
+
+def test_align_hidden_states_to_tokens_rejects_non_prefix_mismatch():
+    data = {
+        "token_ids": torch.tensor([1, 9, 3], dtype=torch.long),
+        "hidden_states": torch.zeros(3, 2, 3),
+    }
+
+    with pytest.raises(ValueError, match="Token ids don't match"):
+        align_hidden_states_to_tokens(
+            data,
+            [1, 2, 3],
+            allow_prefix_truncation=True,
+        )
 
 # ===== get_indices_to_process Tests =====
 
