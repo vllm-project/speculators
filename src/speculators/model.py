@@ -307,16 +307,22 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
                     "provided to load a SpeculatorModel."
                 )
             # Auto-convert external (non-speculators) checkpoints so one
-            # `from_pretrained` pathway finetunes both formats.
-            from speculators.convert.entrypoints import (  # noqa: PLC0415
-                maybe_convert_external_checkpoint,
+            # `from_pretrained` pathway finetunes both formats. Detect format
+            # once here and only invoke the converter when needed.
+            config_dict, _ = PretrainedConfig.get_config_dict(
+                pretrained_model_name_or_path, cache_dir=cache_dir
             )
+            if "speculators_model_type" not in config_dict:
+                from speculators.convert.entrypoints import (  # noqa: PLC0415
+                    maybe_convert_external_checkpoint,
+                )
 
-            pretrained_model_name_or_path = maybe_convert_external_checkpoint(
-                pretrained_model_name_or_path,
-                verifier=kwargs.get("verifier"),
-                cache_dir=cache_dir,
-            )
+                pretrained_model_name_or_path = maybe_convert_external_checkpoint(
+                    pretrained_model_name_or_path,
+                    verifier=kwargs.get("verifier"),
+                    cache_dir=cache_dir,
+                    config_dict=config_dict,
+                )
             config = cls.config_class.from_pretrained(
                 pretrained_model_name_or_path,
                 cache_dir=cache_dir,

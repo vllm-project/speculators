@@ -153,15 +153,18 @@ def maybe_convert_external_checkpoint(
     verifier: str | None = None,
     cache_dir: str | os.PathLike | None = None,
     output_path: str | None = None,
+    config_dict: dict | None = None,
 ) -> str:
     """Convert an external (non-speculators) checkpoint to speculators format.
 
     A speculators checkpoint (config has ``speculators_model_type``) is returned
     unchanged; otherwise the external format is detected and converted (which
     requires ``verifier``) to ``output_path``, defaulting to a temp dir. Powers
-    the unified ``from_pretrained`` finetuning pathway.
+    the unified ``from_pretrained`` finetuning pathway. Pass ``config_dict`` to
+    reuse an already-loaded config and skip re-reading it.
     """
-    config_dict, _ = PretrainedConfig.get_config_dict(model, cache_dir=cache_dir)
+    if config_dict is None:
+        config_dict, _ = PretrainedConfig.get_config_dict(model, cache_dir=cache_dir)
     if "speculators_model_type" in config_dict:
         return str(model)
 
