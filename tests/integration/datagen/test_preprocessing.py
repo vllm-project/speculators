@@ -1540,6 +1540,68 @@ def test_multimodal_regex_path_truncates_after_image_expansion():
     assert results["seq_len"][0] == 4
 
 
+@pytest.mark.sanity
+def test_multimodal_truncation_rejects_partial_image_block():
+    """Do not save input IDs that cut through an expanded image-token block."""
+    examples = {
+        "messages": [
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Describe"},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": _TINY_IMAGE_DATA_URL},
+                        },
+                    ],
+                },
+                {"role": "assistant", "content": [{"type": "text", "text": "A cat."}]},
+            ]
+        ]
+    }
+
+    processor = _NoProcessorTruncationMultimodalProcessor()
+    with pytest.raises(RuntimeError, match="middle of an image token block"):
+        _preprocess_batch(
+            examples,
+            cast("PreTrainedTokenizerBase", processor),
+            max_length=3,
+            assistant_pattern=r"(.+)",
+        )
+
+
+@pytest.mark.sanity
+def test_multimodal_preprocessing_rejects_unsupported_media_modality():
+    """Video/audio parts are not silently treated like image inputs."""
+    examples = {
+        "messages": [
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Describe"},
+                        {"type": "video", "video": "file:///tmp/clip.mp4"},
+                    ],
+                },
+                {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "A clip."}],
+                },
+            ]
+        ]
+    }
+
+    processor = _NoProcessorTruncationMultimodalProcessor()
+    with pytest.raises(RuntimeError, match="Only image inputs are supported"):
+        _preprocess_batch(
+            examples,
+            cast("PreTrainedTokenizerBase", processor),
+            max_length=64,
+            assistant_pattern=r"(.+)",
+        )
+
+
 # Tests for load_raw_dataset resolution chain (issue #661)
 
 PREFIX = "speculators.data_generation.preprocessing"

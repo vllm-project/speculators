@@ -136,20 +136,84 @@ def _extract_processor_images_from_conversation(conv: list[dict]) -> list[Any]:
     return images
 
 
-def _get_image_token_ids(tokenizer: PreTrainedTokenizerBase) -> set[int]:
+def _get_image_token_ids(
+    processor: ProcessorMixin,
+    tokenizer: PreTrainedTokenizerBase,
+) -> set[int]:
     """Return known image placeholder token IDs for VL token expansion."""
     image_token_ids: set[int] = set()
+
+    def _add_token_id(token_id: Any) -> None:
+        unk_token_id = getattr(tokenizer, "unk_token_id", None)
+        if isinstance(token_id, int) and token_id >= 0 and token_id != unk_token_id:
+            image_token_ids.add(token_id)
+
+    for source in (processor, tokenizer, getattr(processor, "tokenizer", None)):
+        if source is None:
+            continue
+        for attr_name in ("image_token_id", "image_token_index"):
+            _add_token_id(getattr(source, attr_name, None))
+
     convert_tokens_to_ids = getattr(tokenizer, "convert_tokens_to_ids", None)
     if not callable(convert_tokens_to_ids):
         return image_token_ids
 
-    unk_token_id = getattr(tokenizer, "unk_token_id", None)
-    for token in ("<|image_pad|>", "<image>", "<image_pad>"):
-        token_id = convert_tokens_to_ids(token)
-        if isinstance(token_id, int) and token_id >= 0 and token_id != unk_token_id:
-            image_token_ids.add(token_id)
+    image_tokens = {"<|image_pad|>", "<image>", "<image_pad>"}
+    for source in (processor, tokenizer, getattr(processor, "tokenizer", None)):
+        if source is None:
+            continue
+        for attr_name in ("image_token", "image_pad_token"):
+            token = getattr(source, attr_name, None)
+            if isinstance(token, str):
+                image_tokens.add(token)
+
+    for token in image_tokens:
+        _add_token_id(convert_tokens_to_ids(token))
 
     return image_token_ids
+
+
+def _validate_supported_multimodal_content(conv: list[dict]) -> None:
+    """Fail fast for media modalities not expanded by this preprocessing path."""
+    unsupported_types = {
+        "audio",
+        "audio_url",
+        "input_audio",
+        "input_video",
+        "video",
+        "video_url",
+    }
+    for turn in conv:
+        content = turn.get("content")
+        if not isinstance(content, list):
+            continue
+        for item in content:
+            if isinstance(item, dict) and item.get("type") in unsupported_types:
+                raise ValueError(
+                    "Only image inputs are supported for multimodal preprocessing; "
+                    f"got content part type={item.get('type')!r}"
+                )
+
+
+def _validate_multimodal_truncation_boundary(
+    input_ids: list[int],
+    max_length: int,
+    image_token_ids: set[int],
+) -> None:
+    """Reject truncation in the middle of an expanded image-token block."""
+    if max_length <= 0 or max_length >= len(input_ids):
+        return
+    if not image_token_ids:
+        raise ValueError("Cannot validate multimodal truncation without image IDs")
+
+    prev_token_id = input_ids[max_length - 1]
+    next_token_id = input_ids[max_length]
+    if prev_token_id in image_token_ids and next_token_id in image_token_ids:
+        raise ValueError(
+            "Refusing to truncate multimodal input in the middle of an image "
+            f"token block at max_length={max_length}. Increase --seq-length "
+            "or filter this sample."
+        )
 
 
 def _expand_loss_mask_for_multimodal_tokens(
@@ -204,6 +268,10 @@ def _expand_loss_mask_for_multimodal_tokens(
         raise ValueError(
             "Expanded multimodal input IDs contain trailing tokens after alignment"
         )
+    if src_idx != len(input_ids):
+        raise ValueError(
+            "Expanded multimodal input IDs ended before source alignment completed"
+        )
 
     return torch.tensor(expanded_mask, dtype=loss_mask.dtype)
 
@@ -218,6 +286,7 @@ def _expand_multimodal_inputs_with_images(
     max_length: int,
 ) -> tuple[list[int], torch.Tensor]:
     """Use actual images so HF preprocessing matches vLLM VL token expansion."""
+    _validate_supported_multimodal_content(normalized_conv)
     images = _extract_processor_images_from_conversation(normalized_conv)
     if not images:
         return input_ids[:max_length], loss_mask[:max_length]
@@ -231,11 +300,17 @@ def _expand_multimodal_inputs_with_images(
         encoded["input_ids"],
         field_name="Multimodal processor input_ids with images",
     )
+    image_token_ids = _get_image_token_ids(processor, tokenizer)
     expanded_loss_mask = _expand_loss_mask_for_multimodal_tokens(
         input_ids,
         loss_mask,
         expanded_input_ids,
-        _get_image_token_ids(tokenizer),
+        image_token_ids,
+    )
+    _validate_multimodal_truncation_boundary(
+        expanded_input_ids,
+        max_length,
+        image_token_ids,
     )
     return expanded_input_ids[:max_length], expanded_loss_mask[:max_length]
 
