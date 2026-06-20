@@ -84,6 +84,18 @@ def _is_multimodal_config(config) -> bool:
     )
 
 
+def _ensure_hidden_state_extraction_defaults(cmd: list[str]) -> None:
+    disable_cp_arg = "--no-enable-chunked-prefill"
+    if disable_cp_arg not in cmd:
+        cmd.append(disable_cp_arg)
+
+    # The hidden-state connector must receive slot mappings for the full prompt.
+    if not any(
+        arg in cmd for arg in ("--enable-prefix-caching", "--no-enable-prefix-caching")
+    ):
+        cmd.append("--no-enable-prefix-caching")
+
+
 def main():
     args, vllm_args = parse_args()
     if "--" in vllm_args:
@@ -165,9 +177,7 @@ def main():
         *vllm_args,
     ]
 
-    disable_cp_arg = "--no-enable-chunked-prefill"
-    if disable_cp_arg not in cmd:
-        cmd.append(disable_cp_arg)
+    _ensure_hidden_state_extraction_defaults(cmd)
 
     print("Running command:")
     print(" ".join(cmd))
