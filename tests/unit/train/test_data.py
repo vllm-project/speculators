@@ -313,7 +313,7 @@ def test_collate_fn_empty_batch_uses_training_dtypes():
     assert collated["input_ids"].dtype == torch.long
     assert collated["loss_mask"].dtype == torch.long
     assert collated["position_ids"].dtype == torch.long
-    assert collated["lengths"].dtype == torch.long
+    assert collated["document_ids"].dtype == torch.long
 
 
 def test_dataset_getitem_v1_format(tmp_path: Path):

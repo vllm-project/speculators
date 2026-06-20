@@ -118,7 +118,9 @@ class PydanticClassRegistryMixin(ReloadableBaseModel, ABC, ClassRegistryMixin):
                 "Pydantic BaseModel"
             )
 
-        return super().register_decorator(clazz, name=name)
+        registered_class = super().register_decorator(clazz, name=name)
+        registered_class.model_rebuild(force=True, _types_namespace={"torch": torch})
+        return registered_class
 
     @classmethod
     def __get_pydantic_core_schema__(
