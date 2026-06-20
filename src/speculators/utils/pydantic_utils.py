@@ -120,6 +120,7 @@ class PydanticClassRegistryMixin(ReloadableBaseModel, ABC, ClassRegistryMixin):
 
         registered_class = super().register_decorator(clazz, name=name)
         registered_class.model_rebuild(force=True, _types_namespace={"torch": torch})
+        cls.model_rebuild(force=True, _types_namespace={"torch": torch})
         return registered_class
 
     @classmethod
