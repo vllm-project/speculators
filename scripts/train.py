@@ -620,10 +620,9 @@ def parse_args():
     parser.add_argument(
         "--draft-arch",
         type=str,
-        default="llama",
+        default="qwen3",
         choices=list(DRAFT_ARCH_CONFIGS.keys()),
-        help="Architecture for draft decoder layers. Defaults to 'llama'. "
-        "Note: only 'llama' is currently supported in vLLM for inference.",
+        help="Architecture for draft decoder layers. Defaults to 'qwen3'.",
     )
     parser.add_argument(
         "--draft-hidden-act",
