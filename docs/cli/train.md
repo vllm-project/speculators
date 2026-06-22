@@ -144,6 +144,8 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--max-anchors`** (int, default: `256`) Maximum anchor positions for DFlash training.
 
+- **`--dflash-decay-gamma`** (float, default: `4.0`) Decay gamma for DFlash loss weighting.
+
 ### Dataloader Arguments
 
 - **`--num-workers`** (int, default: `12`) Number of dataloader worker processes.
