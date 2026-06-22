@@ -1,7 +1,7 @@
 steps:
   - label: ":gear: Speculators Unit and Integration Tests"
     command: |
-      RUNNER=$$(buildkite-agent meta-data get "test-runner" --default "L4")
+      RUNNER=$$(buildkite-agent meta-data get "test-runner" --default "H100")
       echo "╔══════════════════════════════════════════╗"
       echo "║          BUILD SUMMARY                   ║"
       echo "╠══════════════════════════════════════════╣"
