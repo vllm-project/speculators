@@ -73,60 +73,60 @@ def _visualize_sample(preprocessed: HFDataset, processor: ProcessorLike, idx: in
 
     log.info(highlighted)
 
+ROLE_ALIASES = {
+    "human": "user",
+    "user": "user",
+    "gpt": "assistant",
+    "assistant": "assistant",
+    "system": "system",
+    "tool": "tool",
+    "observation": "user",
+    "model": "assistant",
+}
 
+def _normalize_turn(turn: dict) -> dict | None:
+    role = turn.get("from", turn.get("role", ""))
+    content = turn.get("value", turn.get("content", ""))
+    
+    # Handle list content (multimodal) by deferring to adaptation later
+    if not isinstance(content, str) and not isinstance(content, list):
+        content = ""
+        
+    role = ROLE_ALIASES.get(str(role).lower())
+    if not role:
+        log.warning(f"Unknown role '{turn.get('from', turn.get('role', ''))}', skipping turn")
+        return None
+
+    normalized_turn = {"role": role, "content": content}
+
+    if turn.get("tool_calls"):
+        normalized_turn["tool_calls"] = turn["tool_calls"]
+    if turn.get("tool_call_id"):
+        normalized_turn["tool_call_id"] = turn["tool_call_id"]
+
+    thinking = turn.get("thinking") or turn.get("reasoning_content")
+    if thinking:
+        normalized_turn["thinking"] = thinking
+        normalized_turn["reasoning_content"] = thinking
+
+    return normalized_turn
 def _normalize_conversation(
     conv: list[dict],
     turn_dropout: bool = False,
 ) -> list[dict]:
-    """Normalize conversation to standard format with role/content keys.
-
-    Args:
-        conv: Raw conversation turns
-        turn_dropout: If True, randomly keeps first N consecutive turns (1 to len(conv))
-
-    Returns:
-        Normalized conversation with optional turn dropout applied
-    """
-    # Randomly pick how many consecutive turns to keep from the start
+    """Normalize conversation to standard format with role/content keys."""
     num_turns_to_keep = random.randint(1, len(conv)) if turn_dropout else len(conv)
 
     normalized = []
     for i, turn in enumerate(conv):
-        role = turn.get("from", turn.get("role", ""))
-        content = turn.get("value") or turn.get("content") or ""
-
-        # Map various role names to standard user/assistant
-        if role in ("human", "user"):
-            role = "user"
-        elif role in ("gpt", "assistant"):
-            role = "assistant"
-        elif role == "system":
-            role = "system"
-        elif role == "tool":
-            role = "tool"
-        else:
-            log.warning(f"Unknown role '{role}', skipping turn")
+        normalized_turn = _normalize_turn(turn)
+        if not normalized_turn:
             continue
-
-        # Build normalized turn with role and content
-        normalized_turn = {"role": role, "content": content}
-
-        # Preserve tool_calls and tool_call_id if present
-        if turn.get("tool_calls"):
-            normalized_turn["tool_calls"] = turn["tool_calls"]
-        if turn.get("tool_call_id"):
-            normalized_turn["tool_call_id"] = turn["tool_call_id"]
-
-        thinking = turn.get("thinking") or turn.get("reasoning_content")
-        if thinking:
-            normalized_turn["thinking"] = thinking
-            normalized_turn["reasoning_content"] = thinking
-
+            
         normalized.append(normalized_turn)
 
         # Stop if we've reached the truncation point
-        if i + 1 >= num_turns_to_keep and role == "assistant":
-            # Only break after an assistant turn
+        if i + 1 >= num_turns_to_keep and normalized_turn["role"] == "assistant":
             break
 
     return normalized
@@ -654,23 +654,45 @@ def build_eagle3_dataset(
 def load_raw_dataset(
     train_data_path: str,
 ) -> tuple[HFDataset, Callable[[dict], dict] | None]:
-    """Load raw dataset from local file or HuggingFace."""
-    if train_data_path.endswith((".jsonl", ".json")):
-        return load_dataset("json", data_files=train_data_path, split="train"), None
+    """Load raw dataset following RFC 583 ingestion rules."""
+    
+    # 1. Local file
+    path = Path(train_data_path)
+    if path.is_file():
+        if path.suffix in [".json", ".jsonl"]:
+            return load_dataset("json", data_files=str(path), split="train"), None
+        elif path.suffix == ".parquet":
+            return load_dataset("parquet", data_files=str(path), split="train"), None
+            
+    # 2. Local directory bundle
+    if path.is_dir():
+        json_files = [str(p) for p in path.rglob("*.json")] + [str(p) for p in path.rglob("*.jsonl")]
+        parquet_files = [str(p) for p in path.rglob("*.parquet")]
+        if parquet_files:
+            return load_dataset("parquet", data_files=parquet_files, split="train"), None
+        elif json_files:
+            return load_dataset("json", data_files=json_files, split="train"), None
 
-    if train_data_path not in DATASET_CONFIGS:
-        raise ValueError(
-            f"Unsupported dataset: {train_data_path}. "
-            f"Supported: local .json/.jsonl files or {list(DATASET_CONFIGS.keys())}"
-        )
+    # 3. Named preset
+    if train_data_path in DATASET_CONFIGS:
+        config = DATASET_CONFIGS[train_data_path]
+        raw_dataset = load_dataset(config.hf_path, name=config.subset, split=config.split)
+        if config.filter_fn is not None:
+            raw_dataset = raw_dataset.filter(config.filter_fn)
+        return raw_dataset, config.normalize_fn
 
-    config = DATASET_CONFIGS[train_data_path]
-    raw_dataset = load_dataset(config.hf_path, name=config.subset, split=config.split)
-
-    if config.filter_fn is not None:
-        raw_dataset = raw_dataset.filter(config.filter_fn)
-
-    return raw_dataset, config.normalize_fn
+    # 4. HF hub path with optional split e.g. "HuggingFaceH4/ultrachat_200k:train_sft"
+    hf_path = train_data_path
+    split = "train"
+    if ":" in hf_path:
+        hf_path, split_str = hf_path.split(":", 1)
+        split = split_str.replace("|", "+")
+        
+    try:
+        # Default to loading as generic HF dataset
+        return load_dataset(hf_path, split=split), None
+    except Exception as e:
+        raise ValueError(f"Failed to load '{train_data_path}' as a local file, directory bundle, preset, or HF dataset. Error: {e}")
 
 
 def get_tokenizer(processor: ProcessorLike):
@@ -770,6 +792,10 @@ def load_and_preprocess_dataset(
                 num_proc=build_dataset_num_proc,
                 keep_in_memory=True,  # skip caching
             )
+            
+        # Rename messages to conversations if applicable (Schema Normalization)
+        if "messages" in raw_dataset.column_names and "conversations" not in raw_dataset.column_names:
+            raw_dataset = raw_dataset.rename_column("messages", "conversations")
 
         log.info(f"Loaded {len(raw_dataset)} samples")
 
