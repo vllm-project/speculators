@@ -42,7 +42,9 @@ def test_packed_batch_attention_is_document_local(mtp_model, monkeypatch):
             position_ids=position_ids,
         )
 
-    allow = captured["mask"][0, 0] == 0  # additive mask -> "may attend"
+    mask = captured["mask"]
+    assert isinstance(mask, torch.Tensor)  # dense mask path, not BlockMask/None
+    allow = mask[0, 0] == 0  # additive mask -> "may attend"
     n_q = allow.shape[0]  # == valid_len == n
     idx = torch.arange(n_q)
     doc = document_ids[:n_q]
