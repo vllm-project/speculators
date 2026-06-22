@@ -183,6 +183,16 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
             position_ids=step_pos_ids,
         )
 
+        document_ids = kwargs.get("document_ids")
+        if document_ids is not None:
+            doc_ids_step = document_ids[:, :valid_len]
+            same_doc_mask = (doc_ids_step.unsqueeze(-1) == doc_ids_step.unsqueeze(-2)) & (
+                doc_ids_step.unsqueeze(-1) != -1
+            )
+            same_doc_mask = same_doc_mask.unsqueeze(1)
+            min_dtype = torch.finfo(causal_mask.dtype).min
+            causal_mask = causal_mask.masked_fill(~same_doc_mask, min_dtype)
+
         current_hidden = hidden_states
         for step in range(effective_steps):
             step_hidden = current_hidden[:, :valid_len]
