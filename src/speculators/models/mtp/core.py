@@ -1,5 +1,6 @@
 """MTP speculator model implementation."""
 
+import logging
 from typing import Any, ClassVar
 
 import torch
@@ -17,6 +18,8 @@ from speculators.models.mtp.model_definitions import (
 )
 from speculators.models.utils import conditional_torch_compile
 from speculators.proposals.greedy import GreedyTokenProposalConfig
+
+logger = logging.getLogger(__name__)
 
 __all__ = ["MTPDraftModel", "compute_step_weights"]
 
@@ -89,6 +92,11 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
         """Expose mtp_layers for FSDP wrapping compatibility."""
         return self.mtp_layers
 
+    @property
+    def target_layer_ids(self) -> list[int]:
+        """MTP only uses the last hidden layer (verifier_last_hidden_states)."""
+        return [self.config.transformer_layer_config.num_hidden_layers]
+
     def load_verifier_weights(self) -> None:
         """Re-set NaN sentinel before loading — meta-device init may clear
         it. Deletes verifier_lm_head after loading since MTP does not use it.
@@ -152,38 +160,41 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
                 torch.arange(seq_len, device=device).unsqueeze(0).expand(batch_size, -1)
             )
 
-        causal_mask = create_causal_mask(
-            config=self.config.transformer_layer_config,
-            inputs_embeds=hidden_states,
-            attention_mask=attention_mask,
-            past_key_values=None,
-            position_ids=position_ids,
-        )
-
         all_logits: list[torch.Tensor] = []
         total_loss = torch.tensor(0.0, device=device)
         metrics: dict[str, float | torch.Tensor] = {}
 
+        # Uniform valid_len keeps tensor shapes identical across loop
+        # iterations, which torch.compile requires for stable codegen.
+        # Cap steps so short sequences still produce partial results.
+        effective_steps = min(num_steps, max(0, seq_len - 2))
+        valid_len = seq_len - effective_steps - 1
+        if valid_len <= 0 or effective_steps == 0:
+            metrics["loss_sum"] = total_loss.detach().clone()
+            metrics["loss_total"] = torch.tensor(1.0, device=device)
+            return (all_logits, total_loss, metrics)
+
+        step_pos_ids = position_ids[:, :valid_len]
+        causal_mask = create_causal_mask(
+            config=self.config.transformer_layer_config,
+            inputs_embeds=hidden_states[:, :valid_len],
+            attention_mask=attention_mask,
+            past_key_values=None,
+            position_ids=step_pos_ids,
+        )
+
         current_hidden = hidden_states
-        for step in range(num_steps):
-            valid_len = seq_len - step - 2
-            if valid_len <= 0:
-                break
+        for step in range(effective_steps):
             step_hidden = current_hidden[:, :valid_len]
             step_embeds = self.embed_tokens(
                 input_ids[:, step + 1 : step + 1 + valid_len]
             )
-            step_pos_ids = position_ids[:, :valid_len]
             step_pos_emb = self.rotary_emb(step_hidden, step_pos_ids)
-            if causal_mask is not None:
-                step_attn_mask = causal_mask[:, :, :valid_len, :valid_len]
-            else:
-                step_attn_mask = None
 
             mtp_output = self.mtp_layers[0](
                 hidden_states=step_hidden,
                 token_embeddings=step_embeds,
-                attention_mask=step_attn_mask,
+                attention_mask=causal_mask,
                 position_ids=step_pos_ids,
                 position_embeddings=step_pos_emb,
             )
@@ -198,12 +209,12 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
                 step_targets[step_mask == 0] = _IGNORE_INDEX
             weight = step_weights[step] if step_weights is not None else 1.0
             unreduced = nn.functional.cross_entropy(
-                logits.reshape(-1, self.config.vocab_size),
-                step_targets.reshape(-1),
+                logits.permute(0, 2, 1),
+                step_targets,
                 ignore_index=_IGNORE_INDEX,
                 reduction="none",
             )
-            valid_count = (step_targets.reshape(-1) != _IGNORE_INDEX).sum()
+            valid_count = (step_targets != _IGNORE_INDEX).sum()
             step_loss = weight * unreduced.sum() / valid_count.clamp(min=1)
             total_loss = total_loss + step_loss
             metrics[f"loss_step_{step}"] = step_loss.detach().clone()
@@ -224,6 +235,13 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
         verifier_name_or_path: str | None = None,
         **kwargs: Any,  # noqa: ARG003
     ) -> "MTPDraftModel":
+        if verifier_name_or_path is None:
+            raise ValueError(
+                "verifier_name_or_path is required for MTP training. "
+                "The verifier model must contain native MTP weights "
+                "(mtp.* keys) to extract."
+            )
+
         config = MTPSpeculatorConfig(
             transformer_layer_config=verifier_config,
             speculators_config=SpeculatorsConfig(
@@ -242,6 +260,14 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
         )
 
         model = cls(config=config)
+
+        from speculators.convert.mtp.converter import MTPConverter  # noqa: PLC0415
+
+        state_dict = MTPConverter().convert_to_state_dict(
+            verifier_name_or_path  # type: ignore[arg-type]
+        )
+        model.load_state_dict(state_dict, strict=False)
+
         model.load_verifier_weights()
         return model
 

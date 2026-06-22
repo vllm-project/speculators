@@ -34,6 +34,8 @@ python scripts/prepare_data.py \
 
   Example: `--data sharegpt --data ./custom_data.jsonl`
 
+  The input conversation should be provided in the `conversations` column. Tool-calling datasets that include separate columns for tools are also supported, as demonstrated in [llamafactory/reason-tool-use-demo-1500](https://huggingface.co/datasets/llamafactory/reason-tool-use-demo-1500) and [interstellarninja/hermes_reasoning_tool_use](https://huggingface.co/datasets/interstellarninja/hermes_reasoning_tool_use).
+
 - **`--seq-length`** (int, default: `8192`) Maximum sequence length for each sample. Longer samples will be truncated.
 
 - **`--max-samples`** (int, default: `None`) Maximum number of samples to process. If `None`, processes all samples.

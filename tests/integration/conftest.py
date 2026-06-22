@@ -1,6 +1,7 @@
 """Shared fixtures and factories for integration tests."""
 
 import copy
+from collections.abc import Callable
 
 import pytest
 import torch
@@ -12,6 +13,8 @@ from speculators.models.dflash import DFlashSpeculatorConfig
 from speculators.models.dflash.core import DFlashDraftModel
 from speculators.models.eagle3 import Eagle3SpeculatorConfig
 from speculators.models.eagle3.core import Eagle3DraftModel
+from speculators.models.mtp import MTPSpeculatorConfig
+from speculators.models.mtp.core import MTPDraftModel
 from speculators.models.peagle.config import PEagleSpeculatorConfig
 from speculators.models.peagle.core import PEagleDraftModel
 from speculators.proposals.greedy import GreedyTokenProposalConfig
@@ -47,6 +50,31 @@ TINY_QWEN3_CONFIG = Qwen3Config(
     rms_norm_eps=1e-6,
     tie_word_embeddings=False,
 )
+
+TINY_QWEN3_5_KWARGS: dict = {
+    "vocab_size": 128,
+    "hidden_size": 64,
+    "intermediate_size": 256,
+    "num_hidden_layers": 4,
+    "num_attention_heads": 4,
+    "num_key_value_heads": 2,
+    "head_dim": 16,
+    "max_position_embeddings": 256,
+    "rms_norm_eps": 1e-6,
+    "tie_word_embeddings": True,
+    "layer_types": [
+        "linear_attention",
+        "full_attention",
+        "linear_attention",
+        "full_attention",
+    ],
+    "linear_key_head_dim": 16,
+    "linear_value_head_dim": 16,
+    "linear_num_key_heads": 4,
+    "linear_num_value_heads": 4,
+    "linear_conv_kernel_dim": 4,
+    "partial_rotary_factor": 0.25,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -98,12 +126,16 @@ def make_dflash_model(
     draft_vocab_size: int = 64,
     block_size: int = 4,
     max_anchors: int = 8,
+    draft_attn_impl: str | None = None,
     device: str = "cuda:0",
     dtype: torch.dtype = torch.bfloat16,
 ) -> DFlashDraftModel:
     """Create a tiny DFlash model with real initialized weights."""
+    transformer_config = copy.deepcopy(TINY_QWEN3_CONFIG)
+    if draft_attn_impl is not None:
+        transformer_config._attn_implementation = draft_attn_impl
     config = DFlashSpeculatorConfig(
-        transformer_layer_config=copy.deepcopy(TINY_QWEN3_CONFIG),
+        transformer_layer_config=transformer_config,
         draft_vocab_size=draft_vocab_size,
         block_size=block_size,
         max_anchors=max_anchors,
@@ -155,6 +187,38 @@ def make_peagle_model(
         ),
     )
     model = PEagleDraftModel(config)
+    _fill_nan_weights(model)
+    return model.to(device=device, dtype=dtype)  # type: ignore[call-arg]
+
+
+def make_mtp_model(
+    *,
+    num_speculative_steps: int = 3,
+    device: str = "cuda:0",
+    dtype: torch.dtype = torch.bfloat16,
+) -> MTPDraftModel:
+    """Create a tiny MTP model mirroring Qwen3.5-0.8B architecture."""
+    from transformers.models.qwen3_5.configuration_qwen3_5 import (  # noqa: PLC0415
+        Qwen3_5TextConfig,
+    )
+
+    config = MTPSpeculatorConfig(
+        transformer_layer_config=Qwen3_5TextConfig(**TINY_QWEN3_5_KWARGS),
+        speculators_config=SpeculatorsConfig(
+            algorithm="mtp",
+            proposal_methods=[
+                GreedyTokenProposalConfig(
+                    speculative_tokens=num_speculative_steps,
+                )
+            ],
+            default_proposal_method="greedy",
+            verifier=VerifierConfig(
+                name_or_path=None,
+                architectures=["Qwen3_5ForCausalLM"],
+            ),
+        ),
+    )
+    model = MTPDraftModel(config)
     _fill_nan_weights(model)
     return model.to(device=device, dtype=dtype)  # type: ignore[call-arg]
 
@@ -226,6 +290,8 @@ def make_batch(
     max_len: int,
     samples: list[dict[str, torch.Tensor]],
     hidden_size: int,
+    num_target_layers: int = 3,
+    preprocess: Callable | None = None,
     device: str = "cuda:0",
 ) -> dict[str, torch.Tensor]:
     """Collate a list of samples into a single batch using the real collate_fn.
@@ -237,12 +303,20 @@ def make_batch(
         max_len: Target sequence length to pad/truncate to.
         samples: List of per-sample dicts (from ``make_sample``).
         hidden_size: Model hidden size (needed by collate for empty batches).
+        num_target_layers: Num of target layers in the speculative decode
+            algorithm (e.g 3 for Eagle).
+        preprocess: Optional per-sample transform (e.g. ``shift_batch_mtp``).
         device: Target device for the output tensors.
 
     Returns:
         Dict with keys matching model forward() signatures, all on ``device``.
     """
-    collate_fn = create_collate_fn(max_len=max_len, hidden_size=hidden_size)
+    collate_fn = create_collate_fn(
+        max_len=max_len,
+        hidden_size=hidden_size,
+        num_target_layers=num_target_layers,
+        preprocess=preprocess,
+    )
     batch = collate_fn(samples)
     return {k: v.to(device) for k, v in batch.items()}
 

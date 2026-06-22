@@ -8,23 +8,7 @@ from torch.nn.attention.flex_attention import (
 from speculators.models.attention import ALL_ATTENTION_FUNCTIONS  # noqa: F401
 
 
-def create_combined_mask_mod(lengths: torch.Tensor, total_seq_len: int):
-    document_ids = torch.repeat_interleave(
-        torch.arange(lengths.shape[0], device=lengths.device, dtype=torch.long), lengths
-    )
-    # Pad ids with -1 to indicate padding
-    document_ids = torch.cat(
-        [
-            document_ids,
-            -1
-            * torch.ones(
-                total_seq_len - document_ids.shape[0],
-                device=lengths.device,
-                dtype=torch.long,
-            ),
-        ]
-    ).contiguous()
-
+def create_combined_mask_mod(document_ids: torch.Tensor, total_seq_len: int):
     def causal_mask_mod(_b, _h, q_idx, kv_idx):
         return q_idx >= kv_idx
 

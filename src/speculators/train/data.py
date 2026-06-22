@@ -16,6 +16,7 @@ from datasets import load_from_disk
 from safetensors.torch import load_file
 from torch.utils.data import Dataset
 
+from speculators.data_generation.offline import check_hidden_states
 from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_REQUEST_TIMEOUT,
@@ -66,9 +67,11 @@ def split_files(datapath: str, ratio: float = 0.9, seed: int = 0):
 StandardizeFnSig = Callable[[dict[str, Any]], dict[str, Any]]
 
 
-def create_empty_sample(hidden_size: int, dtype: torch.dtype = torch.bfloat16):
+def create_empty_sample(
+    hidden_size: int, num_target_layers: int = 3, dtype: torch.dtype = torch.bfloat16
+):
     # data structure: {
-    #     "hidden_states": [seq_len, 3 * hidden_size],
+    #     "hidden_states": [seq_len, num_target_layers * hidden_size],
     #     "input_ids": [seq_len],
     #     "verifier_last_hidden_states": [seq_len, hidden_size],
     #     "loss_mask": [seq_len],
@@ -81,7 +84,7 @@ def create_empty_sample(hidden_size: int, dtype: torch.dtype = torch.bfloat16):
     # bf16 EAGLE-3 layers (fc, verifier_lm_head) with a dtype mismatch.
 
     return {
-        "hidden_states": torch.empty(0, 3 * hidden_size, dtype=dtype),
+        "hidden_states": torch.empty(0, num_target_layers * hidden_size, dtype=dtype),
         "input_ids": torch.empty(0, dtype=torch.long),
         "verifier_last_hidden_states": torch.empty(0, hidden_size, dtype=dtype),
         "loss_mask": torch.empty(0, dtype=torch.bool),
@@ -320,6 +323,10 @@ class ArrowDataset(BaseDataset):
             )
 
             loaded_hs = _maybe_load_hs_file(Path(hs_filepath))
+            if loaded_hs is None:
+                raise ValueError(f"Failed to load hidden states from {hs_filepath}")
+
+            check_hidden_states(loaded_hs, dataset_item["input_ids"].tolist())
 
             match self.on_generate:
                 case "cache":
@@ -328,7 +335,9 @@ class ArrowDataset(BaseDataset):
                     shutil.move(hs_filepath, target_path)
                 case "delete":
                     Path(hs_filepath).unlink()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
+            if isinstance(e, ValueError) and "NaN" in str(e):
+                raise
             warnings.warn(
                 f"Failed to load/cache hidden states for sample {index}: {e}",
                 stacklevel=1,
@@ -363,7 +372,7 @@ class ArrowDataset(BaseDataset):
             return loaded_hs
 
         # loaded_hs structure: {
-        #   "hidden_states": [seq_len, 4, hidden_size]
+        #   "hidden_states": [seq_len, num_layers, hidden_size]
         #   "token_ids": [seq_len]
         # }
 
@@ -487,6 +496,7 @@ class SampleFileDataset(BaseDataset):
 def create_collate_fn(
     max_len: int,
     hidden_size: int,
+    num_target_layers: int = 3,
     dtype: torch.dtype = torch.bfloat16,
     preprocess: Callable[[BatchType], BatchType] | None = None,
 ):
@@ -500,7 +510,7 @@ def create_collate_fn(
             # Match the configured `dtype` so the placeholder doesn't crash
             # downstream layers loaded at a different precision (e.g. bf16
             # weights vs fp32 default placeholders).
-            empty = create_empty_sample(hidden_size, dtype=dtype)
+            empty = create_empty_sample(hidden_size, num_target_layers, dtype=dtype)
             if preprocess:
                 empty = preprocess(empty)
             batch = [empty]
@@ -521,7 +531,7 @@ def create_collate_fn(
         # Include lengths until while they fit in max_len
         # The last included length is (if necessary) truncated
         # Any additional lengths are discarded
-        lengths = collated_data["lengths"]
+        lengths = collated_data.pop("lengths")
         new_lengths = []
         cum_length = 0
         for length in lengths:
@@ -530,7 +540,21 @@ def create_collate_fn(
                 break
             new_lengths.append(length)
             cum_length += length
-        collated_data["lengths"] = torch.tensor(new_lengths, dtype=torch.long)
+        lengths = torch.tensor(new_lengths, dtype=torch.long)
+
+        # Create document_ids: maps each position to its document index, -1 for padding
+        document_ids = torch.repeat_interleave(
+            torch.arange(lengths.shape[0], dtype=torch.long), lengths
+        )
+        document_ids = torch.cat(
+            [
+                document_ids,
+                -1 * torch.ones(max_len - document_ids.shape[0], dtype=torch.long),
+            ]
+        ).unsqueeze(0)
+        # shape: [1, max_len]
+        collated_data["document_ids"] = document_ids
+
         return collated_data
 
     return collate_fn
