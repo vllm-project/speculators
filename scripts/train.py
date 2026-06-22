@@ -179,22 +179,43 @@ def create_transformer_layer_config(  # noqa: C901
         for i in range(num_layers)
     ]
 
-    config = config_class(
-        vocab_size=verifier_config.vocab_size,
-        hidden_size=verifier_config.hidden_size,
-        intermediate_size=verifier_config.intermediate_size,
-        num_hidden_layers=num_layers,
-        num_attention_heads=num_attention_heads,
-        num_key_value_heads=num_key_value_heads,
-        hidden_act=hidden_act,
-        max_position_embeddings=verifier_config.max_position_embeddings,
-        initializer_range=verifier_config.initializer_range,
-        rms_norm_eps=verifier_config.rms_norm_eps,
-        head_dim=head_dim,
-        tie_word_embeddings=False,
-        sliding_window=sliding_window,
-        layer_types=layer_types,
-    )
+    if verifier_name_or_path.startswith("Qwen/Qwen3.5-35B-A3B"):
+        config = config_class(
+            vocab_size=verifier_config.vocab_size,
+            hidden_size=verifier_config.hidden_size,
+            intermediate_size=6144,
+            num_hidden_layers=num_layers,
+            num_attention_heads=num_attention_heads * 2,
+            num_key_value_heads=num_key_value_heads * 2,
+            hidden_act=hidden_act,
+            max_position_embeddings=verifier_config.max_position_embeddings,
+            initializer_range=verifier_config.initializer_range,
+            rms_norm_eps=verifier_config.rms_norm_eps,
+            head_dim=None if head_dim is None else head_dim // 2,
+            tie_word_embeddings=False,
+            sliding_window=sliding_window,
+            layer_types=layer_types,
+        )
+    if verifier_name_or_path.startswith("google/gemma-4-26B-A4B-it"):
+        config = config_class(
+            vocab_size=verifier_config.vocab_size,
+            hidden_size=verifier_config.hidden_size,
+            intermediate_size=5632,
+            num_hidden_layers=num_layers,
+            num_attention_heads=num_attention_heads * 2,
+            num_key_value_heads=num_key_value_heads,
+            hidden_act=hidden_act,
+            max_position_embeddings=verifier_config.max_position_embeddings,
+            initializer_range=verifier_config.initializer_range,
+            rms_norm_eps=verifier_config.rms_norm_eps,
+            head_dim=None if head_dim is None else head_dim // 2,
+            tie_word_embeddings=False,
+            sliding_window=sliding_window,
+            layer_types=layer_types,
+        )
+        verifier_config.rope_parameters = verifier_config.rope_parameters["full_attention"]
+    else:
+        raise NotImplementedError(verifier_config.model_type)
 
     # New rope parameters definition introduced in transformers 5.0
     if version.parse(transformers.__version__) >= version.parse("5.0.0"):

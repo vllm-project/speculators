@@ -102,6 +102,7 @@ class Qwen3DFlashAttention(nn.Module):
         attention_mask: torch.Tensor | None,
         past_key_values: Cache | None = None,
         cache_position: torch.LongTensor | None = None,
+        return_intermediates: bool = False,
         **kwargs: Unpack[FlashAttentionKwargs],
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         # Instead of computing the k and v matricies from the hidden states,
@@ -109,14 +110,34 @@ class Qwen3DFlashAttention(nn.Module):
         # length + block size)
         bsz, q_len = hidden_states.shape[:-1]
         ctx_len = target_hidden.shape[1]
+        
+        intermediates = {} if return_intermediates else None
+        
+        # Project only query tokens
         q = self.q_proj(hidden_states)
         q = q.view(bsz, q_len, -1, self.head_dim)
-        q = self.q_norm(q).transpose(1, 2)
-        # This is the main difference from the usual attention mechanism.
-        k_ctx = self.k_proj(target_hidden)
+
+        # Log q after projection but BEFORE q_norm (matches vLLM save point)
+        if return_intermediates:
+            intermediates["q_after_proj"] = q.clone()
+
+        q = self.q_norm(q)
+
         k_noise = self.k_proj(hidden_states)
-        v_ctx = self.v_proj(target_hidden)
         v_noise = self.v_proj(hidden_states)
+
+        # Log intermediate values after normalization (before transpose)
+        if return_intermediates:
+            intermediates["q_after_norm"] = q.clone()
+            intermediates["k_noise_after_proj"] = k_noise.clone()
+            intermediates["v_noise_after_proj"] = v_noise.clone()
+
+        # Transpose for attention
+        q = q.transpose(1, 2)
+
+        k_ctx = self.k_proj(target_hidden)
+        v_ctx = self.v_proj(target_hidden)
+
         k = torch.cat([k_ctx, k_noise], dim=1).view(
             bsz, ctx_len + q_len, -1, self.head_dim
         )
@@ -126,11 +147,31 @@ class Qwen3DFlashAttention(nn.Module):
         )
         k = self.k_norm(k).transpose(1, 2)
         v = v.transpose(1, 2)
+
+        if return_intermediates:
+            # Log only the noise portion of k/v after norm and transpose
+            # Shape: [batch, heads, seq_len, head_dim]
+            # Noise tokens are the last q_len tokens
+            intermediates["k_after_norm"] = k[:, :, -q_len:, :].clone()
+            intermediates["v_after_transpose"] = v[:, :, -q_len:, :].clone()
+        
         cos, sin = position_embeddings
         q, k = apply_rotary_pos_emb(q, k, cos, sin)
+
+        if return_intermediates:
+            intermediates["q_after_rope"] = q.clone()
+            # Log the full K after rope (context + noise)
+            # Shape: [batch, heads, seq_len, head_dim]
+            intermediates["k_after_rope_full"] = k.clone()
+            # Log only the noise portion of k after rope
+            # Shape: [batch, heads, seq_len, head_dim]
+            # Noise tokens are the last q_len tokens
+            intermediates["k_after_rope"] = k[:, :, -q_len:, :].clone()
+        
         if past_key_values is not None:
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
             k, v = past_key_values.update(k, v, self.layer_idx, cache_kwargs)
+
         attn_fn: Callable = eager_attention_forward
         if (
             self.config._attn_implementation is not None  # noqa: SLF001
@@ -139,6 +180,7 @@ class Qwen3DFlashAttention(nn.Module):
             attn_fn = ALL_ATTENTION_FUNCTIONS[
                 self.config._attn_implementation  # noqa: SLF001
             ]
+
         attn_output, attn_weights = attn_fn(
             self,
             q,
@@ -150,9 +192,19 @@ class Qwen3DFlashAttention(nn.Module):
             sliding_window=self.sliding_window,
             **kwargs,
         )
+        
+        if return_intermediates:
+            intermediates["attn_output"] = attn_output.clone()
+            if attention_mask is not None:
+                intermediates["attention_mask"] = attention_mask.clone()
+
         attn_output = attn_output.reshape(bsz, q_len, -1)
         attn_output = self.o_proj(attn_output)
-        return attn_output, attn_weights
+        
+        if return_intermediates:
+            intermediates["attn_after_o_proj"] = attn_output.clone()
+        
+        return attn_output, attn_weights, intermediates if return_intermediates else None
 
 
 class Qwen3DFlashDecoderLayer(GradientCheckpointingLayer):
@@ -179,6 +231,7 @@ class Qwen3DFlashDecoderLayer(GradientCheckpointingLayer):
         cache_position: torch.LongTensor | None = None,
         # necessary, but kept here for BC
         position_embeddings: tuple[torch.Tensor, torch.Tensor] | None = None,
+        return_intermediates: bool = False,
         **kwargs: Unpack[FlashAttentionKwargs],
     ) -> tuple[torch.FloatTensor, tuple[torch.FloatTensor, torch.FloatTensor] | None]:
         # The main difference between this method and the qwen 3 layer it is
@@ -188,7 +241,7 @@ class Qwen3DFlashDecoderLayer(GradientCheckpointingLayer):
         assert hidden_states is not None  # noqa: S101
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
-        hidden_states = self.self_attn(
+        attn_output = self.self_attn(
             hidden_states=hidden_states,
             target_hidden=target_hidden,
             attention_mask=attention_mask,
@@ -198,10 +251,25 @@ class Qwen3DFlashDecoderLayer(GradientCheckpointingLayer):
             use_cache=use_cache,
             cache_position=cache_position,
             position_embeddings=position_embeddings,
+            return_intermediates=return_intermediates,
             **kwargs,
-        )[0]
+        )
+        
+        # Handle the new return value (3 values instead of 2)
+        if return_intermediates:
+            hidden_states, attn_weights, attn_intermediates = attn_output
+        else:
+            hidden_states, attn_weights = attn_output
+            attn_intermediates = None
+
         hidden_states = residual + hidden_states  # type: ignore[operator]
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
-        hidden_states = self.mlp(hidden_states)
-        return residual + hidden_states  # type: ignore[operator,return-value]
+        mlp_output = self.mlp(hidden_states)
+        output = residual + mlp_output  # type: ignore[operator]
+
+        if return_intermediates:
+            # Save the MLP output (before residual is added) to match vLLM's layer_output
+            attn_intermediates["mlp_output"] = mlp_output
+            return output, attn_intermediates
+        return output  # type: ignore[return-value]

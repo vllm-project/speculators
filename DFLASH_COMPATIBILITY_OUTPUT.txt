@@ -1,0 +1,1711 @@
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+================================================================================
+DFlash Unified Validation
+Speculators ↔ vLLM Consistency Check
+================================================================================
+Clearing output directory: /tmp/dflash_comparison
+Cleaning 5 stale vLLM intermediate files from /tmp
+
+Checking server status...
+  Hidden states server: ✗ not running
+  Inference server: ✗ not running
+  Starting hs server...
+  Starting inference server...
+
+Loading dataset from ./output...
+  ✓ Loaded 50027 samples
+
+================================================================================
+Step 1: Extract hidden states from training server
+================================================================================
+  Sample index: 0
+  Input tokens: 478
+
+  Sending request to http://localhost:8001/v1...
+  ✓ Hidden states extracted: torch.Size([478, 14, 2816])
+
+Split hidden states into two groups:
+  +1 offset layers [2,7,12,18,23,28]: torch.Size([478, 6, 2816])
+  non-offset layers [1,6,11,17,22,27]: torch.Size([478, 6, 2816])
+
+  Note: +1 offset layers show better similarity (~0.99) for both image and text tokens
+        This is the correct layer selection for DFlash inference
+
+============================================================
+Testing +1 offset layers [2,7,12,18,23,28] (primary)
+============================================================
+
+================================================================================
+Step 2: Run DFlash forward pass in speculators
+================================================================================
+  Loading checkpoint: z-lab/gemma-4-26B-A4B-it-DFlash
+  Converted legacy config format
+Loading weights:   0%|          | 0/58 [00:00<?, ?it/s]Loading weights: 100%|██████████| 58/58 [00:00<00:00, 5344.71it/s]
+2026-06-22 18:53:13.752 | INFO     | speculators.utils.loading:_resolve_file:115 - Loading from huggingface directory: google/gemma-4-26B-A4B-it: model.safetensors.index.json
+2026-06-22 18:53:13.955 | WARNING  | speculators.utils.loading:load_model_layers:77 - Tensor 'lm_head.weight' not found in weight_map.
+2026-06-22 18:53:13.956 | INFO     | speculators.utils.loading:_resolve_file:115 - Loading from huggingface directory: google/gemma-4-26B-A4B-it: model-00001-of-00002.safetensors
+2026-06-22 18:53:16.421 | INFO     | speculators.utils.loading:_resolve_file:115 - Loading from huggingface directory: google/gemma-4-26B-A4B-it: model.safetensors.index.json
+2026-06-22 18:53:16.625 | WARNING  | speculators.utils.loading:load_model_layers:77 - Tensor 'lm_head.weight' not found in weight_map.
+2026-06-22 18:53:16.626 | INFO     | speculators.utils.loading:_resolve_file:115 - Loading from huggingface directory: google/gemma-4-26B-A4B-it: model-00001-of-00002.safetensors
+  Using sdpa attention for speculators
+  Note: vLLM uses different attention backends (FLEX_ATTENTION/FLASH_ATTN)
+        Some divergence in attn_output is expected
+  Loading verifier weights...
+  Running forward pass...
+  ✓ Forward pass complete with 12 intermediate tensors
+  ✓ Saved +1 offset intermediates to /tmp/dflash_comparison/speculators_intermediates.pt
+
+============================================================
+Testing non-offset layers [1,6,11,17,22,27] (comparison)
+============================================================
+
+================================================================================
+Step 2: Run DFlash forward pass in speculators
+================================================================================
+  Loading checkpoint: z-lab/gemma-4-26B-A4B-it-DFlash
+  Converted legacy config format
+Loading weights:   0%|          | 0/58 [00:00<?, ?it/s]Loading weights: 100%|██████████| 58/58 [00:00<00:00, 4856.94it/s]
+2026-06-22 18:53:20.891 | INFO     | speculators.utils.loading:_resolve_file:115 - Loading from huggingface directory: google/gemma-4-26B-A4B-it: model.safetensors.index.json
+2026-06-22 18:53:21.100 | WARNING  | speculators.utils.loading:load_model_layers:77 - Tensor 'lm_head.weight' not found in weight_map.
+2026-06-22 18:53:21.101 | INFO     | speculators.utils.loading:_resolve_file:115 - Loading from huggingface directory: google/gemma-4-26B-A4B-it: model-00001-of-00002.safetensors
+2026-06-22 18:53:23.439 | INFO     | speculators.utils.loading:_resolve_file:115 - Loading from huggingface directory: google/gemma-4-26B-A4B-it: model.safetensors.index.json
+2026-06-22 18:53:23.641 | WARNING  | speculators.utils.loading:load_model_layers:77 - Tensor 'lm_head.weight' not found in weight_map.
+2026-06-22 18:53:23.641 | INFO     | speculators.utils.loading:_resolve_file:115 - Loading from huggingface directory: google/gemma-4-26B-A4B-it: model-00001-of-00002.safetensors
+/home/cyrus/vllm/.venv/lib/python3.13/site-packages/numpy/_core/fromnumeric.py:3824: RuntimeWarning: Mean of empty slice
+  return _methods._mean(a, axis=axis, dtype=dtype,
+/home/cyrus/vllm/.venv/lib/python3.13/site-packages/numpy/_core/_methods.py:142: RuntimeWarning: invalid value encountered in scalar divide
+  ret = ret.dtype.type(ret / rcount)
+/home/cyrus/vllm/.venv/lib/python3.13/site-packages/numpy/_core/fromnumeric.py:3824: RuntimeWarning: Mean of empty slice
+  return _methods._mean(a, axis=axis, dtype=dtype,
+/home/cyrus/vllm/.venv/lib/python3.13/site-packages/numpy/_core/_methods.py:142: RuntimeWarning: invalid value encountered in scalar divide
+  ret = ret.dtype.type(ret / rcount)
+  Using sdpa attention for speculators
+  Note: vLLM uses different attention backends (FLEX_ATTENTION/FLASH_ATTN)
+        Some divergence in attn_output is expected
+  Loading verifier weights...
+  Running forward pass...
+  ✓ Forward pass complete with 12 intermediate tensors
+
+  DEBUG: q_plus1 norm(pos1)=3326.8621, q_non_offset norm(pos1)=3326.8621
+  DEBUG: same data_ptr=False, cos(plus1 vs non_offset)=1.00000012
+
+================================================================================
+Step 3: Run inference in vLLM
+================================================================================
+  Sending request to http://localhost:8000/v1...
+  ✓ Prompt token IDs match (478 tokens)
+  ✓ Inference complete
+
+================================================================================
+Step 4: Compare intermediate outputs
+================================================================================
+  ✓ Loaded vLLM FC output
+  ✓ Loaded vLLM hidden_states before FC
+  ✓ Loaded vLLM hidden norm output
+  ✓ Loaded vLLM logits
+  ✓ Loaded vLLM forward pass outputs (5 layers)
+  ✓ Loaded vLLM attention intermediates (5 layers)
+
+  Token breakdown:
+    Multimodal tokens (token ID 258880): 260
+    Text tokens: 218
+
+  [1/7] Comparing hidden_states before FC layer:
+
+  [2/7] Comparing FC output:
+
+  [3/7] Comparing hidden_norm output:
+
+  [4/7] Comparing embed output:
+
+  [5/7] Comparing 5 transformer layers:
+
+  === Layer 0 ===
+  Attention intermediates:
+    spec_q_after_proj: shape=[1, 16, 32, 128]
+    vllm_q_after_proj: shape=[15, 4096]
+    spec_k_noise_after_proj: shape=[1, 16, 1024]
+    vllm_k_noise_after_proj: shape=[15, 1024]
+    spec_v_noise_after_proj: shape=[1, 16, 1024]
+    vllm_v_noise_after_proj: shape=[15, 1024]
+    spec_k_after_norm: shape=[1, 8, 16, 128]
+    vllm_k_after_norm: shape=[15, 1024]
+    spec_q_after_norm: shape=[1, 16, 32, 128]
+    vllm_q_after_norm: shape=[15, 4096]
+    spec_q_after_rope: shape=[1, 32, 16, 128]
+    vllm_q_after_rope: shape=[15, 4096]
+    spec_k_after_rope: shape=[1, 8, 16, 128]
+    vllm_k_after_rope: shape=[15, 1024]
+    spec_attn_output: shape=[1, 16, 32, 128]
+    vllm_attn_output: shape=[15, 4096]
+    spec_attn_after_o_proj: shape=[1, 16, 2816]
+    vllm_attn_after_o_proj: shape=[15, 2816]
+  Layer output:
+
+  === Layer 1 ===
+  Attention intermediates:
+    spec_q_after_proj: shape=[1, 16, 32, 128]
+    vllm_q_after_proj: shape=[15, 4096]
+    spec_k_noise_after_proj: shape=[1, 16, 1024]
+    vllm_k_noise_after_proj: shape=[15, 1024]
+    spec_v_noise_after_proj: shape=[1, 16, 1024]
+    vllm_v_noise_after_proj: shape=[15, 1024]
+    spec_k_after_norm: shape=[1, 8, 16, 128]
+    vllm_k_after_norm: shape=[15, 1024]
+    spec_q_after_norm: shape=[1, 16, 32, 128]
+    vllm_q_after_norm: shape=[15, 4096]
+    spec_q_after_rope: shape=[1, 32, 16, 128]
+    vllm_q_after_rope: shape=[15, 4096]
+    spec_k_after_rope: shape=[1, 8, 16, 128]
+    vllm_k_after_rope: shape=[15, 1024]
+    spec_attn_output: shape=[1, 16, 32, 128]
+    vllm_attn_output: shape=[15, 4096]
+    spec_attn_after_o_proj: shape=[1, 16, 2816]
+    vllm_attn_after_o_proj: shape=[15, 2816]
+  Layer output:
+
+  === Layer 2 ===
+  Attention intermediates:
+    spec_q_after_proj: shape=[1, 16, 32, 128]
+    vllm_q_after_proj: shape=[15, 4096]
+    spec_k_noise_after_proj: shape=[1, 16, 1024]
+    vllm_k_noise_after_proj: shape=[15, 1024]
+    spec_v_noise_after_proj: shape=[1, 16, 1024]
+    vllm_v_noise_after_proj: shape=[15, 1024]
+    spec_k_after_norm: shape=[1, 8, 16, 128]
+    vllm_k_after_norm: shape=[15, 1024]
+    spec_q_after_norm: shape=[1, 16, 32, 128]
+    vllm_q_after_norm: shape=[15, 4096]
+    spec_q_after_rope: shape=[1, 32, 16, 128]
+    vllm_q_after_rope: shape=[15, 4096]
+    spec_k_after_rope: shape=[1, 8, 16, 128]
+    vllm_k_after_rope: shape=[15, 1024]
+    spec_attn_output: shape=[1, 16, 32, 128]
+    vllm_attn_output: shape=[15, 4096]
+    spec_attn_after_o_proj: shape=[1, 16, 2816]
+    vllm_attn_after_o_proj: shape=[15, 2816]
+  Layer output:
+
+  === Layer 3 ===
+  Attention intermediates:
+    spec_q_after_proj: shape=[1, 16, 32, 128]
+    vllm_q_after_proj: shape=[15, 4096]
+    spec_k_noise_after_proj: shape=[1, 16, 1024]
+    vllm_k_noise_after_proj: shape=[15, 1024]
+    spec_v_noise_after_proj: shape=[1, 16, 1024]
+    vllm_v_noise_after_proj: shape=[15, 1024]
+    spec_k_after_norm: shape=[1, 8, 16, 128]
+    vllm_k_after_norm: shape=[15, 1024]
+    spec_q_after_norm: shape=[1, 16, 32, 128]
+    vllm_q_after_norm: shape=[15, 4096]
+    spec_q_after_rope: shape=[1, 32, 16, 128]
+    vllm_q_after_rope: shape=[15, 4096]
+    spec_k_after_rope: shape=[1, 8, 16, 128]
+    vllm_k_after_rope: shape=[15, 1024]
+    spec_attn_output: shape=[1, 16, 32, 128]
+    vllm_attn_output: shape=[15, 4096]
+    spec_attn_after_o_proj: shape=[1, 16, 2816]
+    vllm_attn_after_o_proj: shape=[15, 2816]
+  Layer output:
+
+  === Layer 4 ===
+  Attention intermediates:
+    spec_q_after_proj: shape=[1, 16, 32, 128]
+    vllm_q_after_proj: shape=[15, 4096]
+    spec_k_noise_after_proj: shape=[1, 16, 1024]
+    vllm_k_noise_after_proj: shape=[15, 1024]
+    spec_v_noise_after_proj: shape=[1, 16, 1024]
+    vllm_v_noise_after_proj: shape=[15, 1024]
+    spec_k_after_norm: shape=[1, 8, 16, 128]
+    vllm_k_after_norm: shape=[15, 1024]
+    spec_q_after_norm: shape=[1, 16, 32, 128]
+    vllm_q_after_norm: shape=[15, 4096]
+    spec_q_after_rope: shape=[1, 32, 16, 128]
+    vllm_q_after_rope: shape=[15, 4096]
+    spec_k_after_rope: shape=[1, 8, 16, 128]
+    vllm_k_after_rope: shape=[15, 1024]
+    spec_attn_output: shape=[1, 16, 32, 128]
+    vllm_attn_output: shape=[15, 4096]
+    spec_attn_after_o_proj: shape=[1, 16, 2816]
+    vllm_attn_after_o_proj: shape=[15, 2816]
+  Layer output:
+
+  [6/7] Comparing final_norm output:
+
+  [7/7] Comparing logits:
+
+================================================================================
+Step 4: Compare intermediate outputs
+================================================================================
+  ✓ Loaded vLLM FC output
+  ✓ Loaded vLLM hidden_states before FC
+  ✓ Loaded vLLM hidden norm output
+  ✓ Loaded vLLM logits
+  ✓ Loaded vLLM forward pass outputs (5 layers)
+  ✓ Loaded vLLM attention intermediates (5 layers)
+
+  Token breakdown:
+    Multimodal tokens (token ID 258880): 260
+    Text tokens: 218
+
+  [1/7] Comparing hidden_states before FC layer:
+
+  [2/7] Comparing FC output:
+
+  [3/7] Comparing hidden_norm output:
+
+  [4/7] Comparing embed output:
+
+  [5/7] Comparing 5 transformer layers:
+
+  === Layer 0 ===
+  Attention intermediates:
+    spec_q_after_proj: shape=[1, 16, 32, 128]
+    vllm_q_after_proj: shape=[15, 4096]
+    spec_k_noise_after_proj: shape=[1, 16, 1024]
+    vllm_k_noise_after_proj: shape=[15, 1024]
+    spec_v_noise_after_proj: shape=[1, 16, 1024]
+    vllm_v_noise_after_proj: shape=[15, 1024]
+    spec_k_after_norm: shape=[1, 8, 16, 128]
+    vllm_k_after_norm: shape=[15, 1024]
+    spec_q_after_norm: shape=[1, 16, 32, 128]
+    vllm_q_after_norm: shape=[15, 4096]
+    spec_q_after_rope: shape=[1, 32, 16, 128]
+    vllm_q_after_rope: shape=[15, 4096]
+    spec_k_after_rope: shape=[1, 8, 16, 128]
+    vllm_k_after_rope: shape=[15, 1024]
+    spec_attn_output: shape=[1, 16, 32, 128]
+    vllm_attn_output: shape=[15, 4096]
+    spec_attn_after_o_proj: shape=[1, 16, 2816]
+    vllm_attn_after_o_proj: shape=[15, 2816]
+  Layer output:
+
+  === Layer 1 ===
+  Attention intermediates:
+    spec_q_after_proj: shape=[1, 16, 32, 128]
+    vllm_q_after_proj: shape=[15, 4096]
+    spec_k_noise_after_proj: shape=[1, 16, 1024]
+    vllm_k_noise_after_proj: shape=[15, 1024]
+    spec_v_noise_after_proj: shape=[1, 16, 1024]
+    vllm_v_noise_after_proj: shape=[15, 1024]
+    spec_k_after_norm: shape=[1, 8, 16, 128]
+    vllm_k_after_norm: shape=[15, 1024]
+    spec_q_after_norm: shape=[1, 16, 32, 128]
+    vllm_q_after_norm: shape=[15, 4096]
+    spec_q_after_rope: shape=[1, 32, 16, 128]
+    vllm_q_after_rope: shape=[15, 4096]
+    spec_k_after_rope: shape=[1, 8, 16, 128]
+    vllm_k_after_rope: shape=[15, 1024]
+    spec_attn_output: shape=[1, 16, 32, 128]
+    vllm_attn_output: shape=[15, 4096]
+    spec_attn_after_o_proj: shape=[1, 16, 2816]
+    vllm_attn_after_o_proj: shape=[15, 2816]
+  Layer output:
+
+  === Layer 2 ===
+  Attention intermediates:
+    spec_q_after_proj: shape=[1, 16, 32, 128]
+    vllm_q_after_proj: shape=[15, 4096]
+    spec_k_noise_after_proj: shape=[1, 16, 1024]
+    vllm_k_noise_after_proj: shape=[15, 1024]
+    spec_v_noise_after_proj: shape=[1, 16, 1024]
+    vllm_v_noise_after_proj: shape=[15, 1024]
+    spec_k_after_norm: shape=[1, 8, 16, 128]
+    vllm_k_after_norm: shape=[15, 1024]
+    spec_q_after_norm: shape=[1, 16, 32, 128]
+    vllm_q_after_norm: shape=[15, 4096]
+    spec_q_after_rope: shape=[1, 32, 16, 128]
+    vllm_q_after_rope: shape=[15, 4096]
+    spec_k_after_rope: shape=[1, 8, 16, 128]
+    vllm_k_after_rope: shape=[15, 1024]
+    spec_attn_output: shape=[1, 16, 32, 128]
+    vllm_attn_output: shape=[15, 4096]
+    spec_attn_after_o_proj: shape=[1, 16, 2816]
+    vllm_attn_after_o_proj: shape=[15, 2816]
+  Layer output:
+
+  === Layer 3 ===
+  Attention intermediates:
+    spec_q_after_proj: shape=[1, 16, 32, 128]
+    vllm_q_after_proj: shape=[15, 4096]
+    spec_k_noise_after_proj: shape=[1, 16, 1024]
+    vllm_k_noise_after_proj: shape=[15, 1024]
+    spec_v_noise_after_proj: shape=[1, 16, 1024]
+    vllm_v_noise_after_proj: shape=[15, 1024]
+    spec_k_after_norm: shape=[1, 8, 16, 128]
+    vllm_k_after_norm: shape=[15, 1024]
+    spec_q_after_norm: shape=[1, 16, 32, 128]
+    vllm_q_after_norm: shape=[15, 4096]
+    spec_q_after_rope: shape=[1, 32, 16, 128]
+    vllm_q_after_rope: shape=[15, 4096]
+    spec_k_after_rope: shape=[1, 8, 16, 128]
+    vllm_k_after_rope: shape=[15, 1024]
+    spec_attn_output: shape=[1, 16, 32, 128]
+    vllm_attn_output: shape=[15, 4096]
+    spec_attn_after_o_proj: shape=[1, 16, 2816]
+    vllm_attn_after_o_proj: shape=[15, 2816]
+  Layer output:
+
+  === Layer 4 ===
+  Attention intermediates:
+    spec_q_after_proj: shape=[1, 16, 32, 128]
+    vllm_q_after_proj: shape=[15, 4096]
+    spec_k_noise_after_proj: shape=[1, 16, 1024]
+    vllm_k_noise_after_proj: shape=[15, 1024]
+    spec_v_noise_after_proj: shape=[1, 16, 1024]
+    vllm_v_noise_after_proj: shape=[15, 1024]
+    spec_k_after_norm: shape=[1, 8, 16, 128]
+    vllm_k_after_norm: shape=[15, 1024]
+    spec_q_after_norm: shape=[1, 16, 32, 128]
+    vllm_q_after_norm: shape=[15, 4096]
+    spec_q_after_rope: shape=[1, 32, 16, 128]
+    vllm_q_after_rope: shape=[15, 4096]
+    spec_k_after_rope: shape=[1, 8, 16, 128]
+    vllm_k_after_rope: shape=[15, 1024]
+    spec_attn_output: shape=[1, 16, 32, 128]
+    vllm_attn_output: shape=[15, 4096]
+    spec_attn_after_o_proj: shape=[1, 16, 2816]
+    vllm_attn_after_o_proj: shape=[15, 2816]
+  Layer output:
+
+  [6/7] Comparing final_norm output:
+
+  [7/7] Comparing logits:
+
+================================================================================
+Step 5: Validate training consistency
+================================================================================
+  ✓ FC and hidden norm outputs are finite
+  ✓ Logits are valid
+  ✓ Draft tokens are valid
+
+================================================================================
+VALIDATION RESULTS
+================================================================================
+
+1. Training Consistency Checks:
+--------------------------------------------------------------------------------
+  ✓ FC and hidden norm outputs: All values finite
+  ✓ Logits: Finite and reasonable range
+  ✓ Draft tokens: All tokens non-negative
+
+  Training: 3 passed, 0 failed
+
+2. Intermediate Output Comparisons:
+--------------------------------------------------------------------------------
+
+============================================================
+Comparing +1 offset layers against vLLM
+============================================================
+  ✓ hidden_states_before_fc: cosine_sim=1.000000
+      Per-position: mean=1.000000, median=1.000000, min=0.999999, max=1.000002
+      Multimodal tokens (260): 1.000450
+      Text tokens (218): 1.000433
+  ✓ fc_output: cosine_sim=1.000000
+      Per-position: mean=1.000000, median=1.000000, min=1.000000, max=1.000001
+      Multimodal tokens (260): 1.000037
+      Text tokens (218): 1.000022
+  ✓ hidden_norm_output: cosine_sim=1.000001
+      Per-position: mean=1.000001, median=1.000001, min=1.000000, max=1.000001
+      Multimodal tokens (260): 0.999946
+      Text tokens (218): 0.999958
+  ✓ embed_output: cosine_sim=1.000001
+      Per-position: mean=1.000001, median=1.000001, min=1.000001, max=1.000001
+  ✓ layer_0_attn_q_after_proj: cosine_sim=1.000001
+       (shapes differ: [15, 32, 128] vs [15, 4096], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=1.000001, median=1.000001, min=1.000001, max=1.000001
+  ✓ layer_0_attn_k_noise_after_proj: cosine_sim=0.999999
+      Per-position: mean=0.999999, median=0.999999, min=0.999999, max=0.999999
+  ✓ layer_0_attn_v_noise_after_proj: cosine_sim=0.999997
+      Per-position: mean=0.999997, median=0.999997, min=0.999997, max=0.999997
+  ✓ layer_0_attn_k_after_norm: cosine_sim=0.999999
+       (shapes differ: [8, 15, 128] vs [15, 1024], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.999999, median=0.999999, min=0.999999, max=0.999999
+  ✓ layer_0_attn_q_after_norm: cosine_sim=1.000000
+       (shapes differ: [15, 32, 128] vs [15, 4096], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=1.000000, median=1.000000, min=1.000000, max=1.000000
+  ✓ layer_0_attn_q_after_rope: cosine_sim=1.000000
+       (shapes differ: [32, 15, 128] vs [15, 4096], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=1.000000, median=1.000000, min=1.000000, max=1.000001
+  ✓ layer_0_attn_k_after_rope: cosine_sim=0.999996
+       (shapes differ: [8, 15, 128] vs [15, 1024], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.999996, median=0.999996, min=0.999995, max=0.999997
+  ✗ layer_0_attn_attn_output: Low cosine similarity
+       (shapes differ: [15, 32, 128] vs [15, 4096], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.911032, median=0.918032, min=0.815538, max=0.964989
+      Cosine similarity (filtered): 0.930040 (threshold: 0.999)
+      Cosine similarity (overall): 0.911032
+      Outliers: 4 / 15 positions (threshold: 0.9)
+      Outlier positions: [0, 1, 2, 3]
+      Spec norm: 173.801666, vLLM norm: 172.188522
+      First 10 values:
+        spec:  [-0.21875, -0.56640625, -0.08203125, 0.458984375, 0.1865234375, -0.140625, -0.78125, -0.5703125, 0.66796875, -0.2060546875]
+        vllm:  [0.193359375, -2.515625, -0.130859375, 0.283203125, 0.24609375, 0.193359375, -0.96484375, -0.236328125, 0.6640625, 0.0291748046875]
+  ✗ layer_0_attn_attn_after_o_proj: Low cosine similarity
+      Per-position: mean=0.996320, median=0.997014, min=0.990114, max=0.998445
+      Cosine similarity (filtered): 0.996320 (threshold: 0.999)
+      Cosine similarity (overall): 0.996320
+      Spec norm: 4986.101074, vLLM norm: 5114.310547
+      First 10 values:
+        spec:  [-6.78125, -5.8125, -2.484375, -8.125, 5.78125, -0.58984375, -6.0, 12.5625, 23.875, -3.09375]
+        vllm:  [1.046875, 3.53125, 5.46875, -4.875, -10.1875, 0.52734375, -6.625, 14.5625, 15.5625, -7.75]
+  ✗ layer_outputs[0]: Low cosine similarity
+      Per-position: mean=0.902398, median=0.918388, min=0.825401, max=0.963982
+      Cosine similarity (filtered): 0.932830 (threshold: 0.999)
+      Cosine similarity (overall): 0.902398
+      Outliers: 6 / 15 positions (threshold: 0.9)
+      Outlier positions: [0, 1, 2, 3, 4, 5]
+      Spec norm: 1702.915771, vLLM norm: 1886.856812
+      First 10 values:
+        spec:  [0.8984375, 6.53125, 7.21875, 0.84375, 2.546875, -19.25, -7.5625, 5.90625, 6.6875, -0.9140625]
+        vllm:  [-2.734375, 2.28125, 17.375, 7.3125, 8.875, -22.0, -19.875, 7.3125, -8.4375, 1.515625]
+  ✗ layer_1_attn_q_after_proj: Low cosine similarity
+       (shapes differ: [15, 32, 128] vs [15, 4096], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.926448, median=0.928594, min=0.909135, max=0.948223
+      Cosine similarity (filtered): 0.926448 (threshold: 0.999)
+      Cosine similarity (overall): 0.926448
+      Spec norm: 845.932251, vLLM norm: 1038.367554
+      First 10 values:
+        spec:  [-0.5234375, -2.90625, 2.71875, -1.9375, -0.1630859375, -19.625, 2.0625, 2.5625, -2.71875, -4.40625]
+        vllm:  [-1.5859375, -3.953125, 6.8125, -2.5625, 0.046142578125, -17.625, -0.54296875, 3.125, -3.40625, -4.8125]
+  ✗ layer_1_attn_k_noise_after_proj: Low cosine similarity
+      Per-position: mean=0.924642, median=0.923362, min=0.909674, max=0.951121
+      Cosine similarity (filtered): 0.924642 (threshold: 0.999)
+      Cosine similarity (overall): 0.924642
+      Spec norm: 292.596588, vLLM norm: 318.177155
+      First 10 values:
+        spec:  [-1.0625, -2.015625, 5.0625, 0.87890625, 0.023193359375, -4.0625, -4.09375, 5.90625, -2.109375, -2.890625]
+        vllm:  [-3.65625, -0.3828125, 6.4375, 1.46875, 1.9609375, -5.25, -4.0, 7.28125, 0.4296875, -3.703125]
+  ✗ layer_1_attn_v_noise_after_proj: Low cosine similarity
+      Per-position: mean=0.827516, median=0.828687, min=0.737643, max=0.925036
+      Cosine similarity (filtered): 0.914056 (threshold: 0.999)
+      Cosine similarity (overall): 0.827516
+      Outliers: 13 / 15 positions (threshold: 0.9)
+      Outlier positions: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+      Spec norm: 143.592361, vLLM norm: 159.607437
+      First 10 values:
+        spec:  [0.19140625, -0.1650390625, 1.1640625, -0.11865234375, -0.734375, 0.058837890625, -0.357421875, 1.1796875, -2.328125, 2.21875]
+        vllm:  [0.78125, -0.79296875, -0.040771484375, 0.59375, -0.2470703125, 0.0002765655517578125, -0.474609375, -0.0191650390625, -1.09375, 1.6875]
+  ✗ layer_1_attn_k_after_norm: Low cosine similarity
+       (shapes differ: [8, 15, 128] vs [15, 1024], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.922810, median=0.921332, min=0.909465, max=0.951674
+      Cosine similarity (filtered): 0.922810 (threshold: 0.999)
+      Cosine similarity (overall): 0.922810
+      Spec norm: 180.800690, vLLM norm: 182.723755
+      First 10 values:
+        spec:  [-0.40625, -0.89453125, 1.2890625, 0.279296875, 0.007568359375, -0.546875, -0.9765625, 2.90625, -0.8359375, -0.99609375]
+        vllm:  [-1.265625, -0.154296875, 1.484375, 0.423828125, 0.578125, -0.640625, -0.8671875, 3.25, 0.154296875, -1.15625]
+  ✗ layer_1_attn_q_after_norm: Low cosine similarity
+       (shapes differ: [15, 32, 128] vs [15, 4096], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.896468, median=0.896586, min=0.874104, max=0.929146
+      Cosine similarity (filtered): 0.913403 (threshold: 0.999)
+      Cosine similarity (overall): 0.896468
+      Outliers: 10 / 15 positions (threshold: 0.9)
+      Outlier positions: [0, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+      Spec norm: 313.569122, vLLM norm: 318.677124
+      First 10 values:
+        spec:  [-0.15234375, -0.875, 0.466796875, -0.51171875, -0.040283203125, -2.671875, 0.390625, 0.7734375, -0.69921875, -1.28125]
+        vllm:  [-0.44140625, -1.140625, 1.125, -0.6484375, 0.01092529296875, -2.3125, -0.0986328125, 0.90234375, -0.83984375, -1.34375]
+  ✗ layer_1_attn_q_after_rope: Low cosine similarity
+       (shapes differ: [32, 15, 128] vs [15, 4096], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.896461, median=0.896579, min=0.874048, max=0.929120
+      Cosine similarity (filtered): 0.913402 (threshold: 0.999)
+      Cosine similarity (overall): 0.896461
+      Outliers: 10 / 15 positions (threshold: 0.9)
+      Outlier positions: [0, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+      Spec norm: 313.605927, vLLM norm: 318.712830
+      First 10 values:
+        spec:  [1.4375, 1.1015625, -0.36328125, -1.0390625, 0.859375, -1.75, 0.322265625, 0.126953125, 0.9609375, -0.93359375]
+        vllm:  [1.109375, 1.4375, -1.0625, -0.99609375, 1.3515625, -1.359375, -0.06494140625, 0.1865234375, 0.91015625, -1.0703125]
+  ✗ layer_1_attn_k_after_rope: Low cosine similarity
+       (shapes differ: [8, 15, 128] vs [15, 1024], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.922798, median=0.921302, min=0.909456, max=0.951697
+      Cosine similarity (filtered): 0.922798 (threshold: 0.999)
+      Cosine similarity (overall): 0.922798
+      Spec norm: 180.810593, vLLM norm: 182.748764
+      First 10 values:
+        spec:  [1.9140625, 0.3203125, -1.2421875, -0.8359375, 1.0625, 0.064453125, -1.015625, 1.0078125, 0.875, -0.671875]
+        vllm:  [1.96875, -0.46875, -1.4296875, -1.015625, 1.484375, -0.119140625, -1.125, 1.2578125, 0.1162109375, -0.828125]
+  ✗ layer_1_attn_attn_output: Low cosine similarity
+       (shapes differ: [15, 32, 128] vs [15, 4096], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.752421, median=0.739380, min=0.653058, max=0.843054
+      All 15 positions are outliers (threshold: 0.9)
+      Overall cosine similarity: 0.752421
+      Spec norm: 152.333130, vLLM norm: 189.338272
+      First 10 values:
+        spec:  [0.2431640625, 0.0126953125, 0.34765625, -0.05419921875, -0.2138671875, 0.150390625, 0.20703125, 0.482421875, -1.078125, 1.46875]
+        vllm:  [0.609375, -0.57421875, -0.0771484375, 0.09765625, 0.0908203125, 0.02490234375, -0.408203125, 0.0260009765625, -0.60546875, 1.1796875]
+  ✗ layer_1_attn_attn_after_o_proj: Low cosine similarity
+      Per-position: mean=0.712433, median=0.678530, min=0.583780, max=0.871238
+      All 15 positions are outliers (threshold: 0.9)
+      Overall cosine similarity: 0.712433
+      Spec norm: 1125.213501, vLLM norm: 1354.165283
+      First 10 values:
+        spec:  [3.78125, -8.875, -5.34375, -4.09375, 5.9375, 1.265625, 4.8125, -4.53125, 1.4375, 3.90625]
+        vllm:  [11.4375, -9.375, -2.28125, -7.28125, -5.1875, 5.8125, 1.296875, -3.671875, -9.0625, 9.25]
+  ✗ layer_outputs[1]: Low cosine similarity
+      Per-position: mean=0.779000, median=0.772966, min=0.661869, max=0.905946
+      Cosine similarity (filtered): 0.905946 (threshold: 0.999)
+      Cosine similarity (overall): 0.779000
+      Outliers: 14 / 15 positions (threshold: 0.9)
+      Outlier positions: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+      Spec norm: 1895.131714, vLLM norm: 1947.160400
+      First 10 values:
+        spec:  [6.25, -1.21875, 2.21875, -5.28125, -20.25, 24.125, -23.75, -1.7734375, 11.6875, 5.1875]
+        vllm:  [7.6875, -5.46875, -20.75, -2.9375, 2.046875, 22.625, -19.125, 11.5, 18.375, 13.0]
+  ✗ layer_2_attn_q_after_proj: Low cosine similarity
+       (shapes differ: [15, 32, 128] vs [15, 4096], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.932431, median=0.938284, min=0.879208, max=0.972563
+      Cosine similarity (filtered): 0.943366 (threshold: 0.999)
+      Cosine similarity (overall): 0.932431
+      Outliers: 3 / 15 positions (threshold: 0.9)
+      Outlier positions: [0, 1, 2]
+      Spec norm: 1480.364502, vLLM norm: 1456.995850
+      First 10 values:
+        spec:  [0.88671875, -5.90625, -3.515625, 1.7578125, 3.671875, 5.5, 1.5078125, -8.125, 3.515625, 0.427734375]
+        vllm:  [2.5625, -6.6875, -6.0, 0.58203125, 7.1875, 8.375, 8.9375, -9.4375, 3.96875, -2.5625]
+  ✗ layer_2_attn_k_noise_after_proj: Low cosine similarity
+      Per-position: mean=0.930858, median=0.932823, min=0.891738, max=0.974515
+      Cosine similarity (filtered): 0.936843 (threshold: 0.999)
+      Cosine similarity (overall): 0.930858
+      Outliers: 2 / 15 positions (threshold: 0.9)
+      Outlier positions: [2, 3]
+      Spec norm: 555.941345, vLLM norm: 534.955994
+      First 10 values:
+        spec:  [-8.4375, 6.84375, -7.9375, -12.6875, -4.84375, 20.375, 9.875, -8.9375, 1.3984375, -8.8125]
+        vllm:  [-13.9375, 4.875, 3.734375, -15.125, -3.921875, 22.375, 8.6875, -10.1875, -2.125, -1.5]
+  ✗ layer_2_attn_v_noise_after_proj: Low cosine similarity
+      Per-position: mean=0.756225, median=0.749544, min=0.683275, max=0.890490
+      All 15 positions are outliers (threshold: 0.9)
+      Overall cosine similarity: 0.756225
+      Spec norm: 265.320923, vLLM norm: 259.786987
+      First 10 values:
+        spec:  [1.03125, 0.1630859375, -1.8515625, -2.90625, 0.287109375, 2.34375, 1.203125, -0.8515625, 0.25, -0.75]
+        vllm:  [0.3125, 0.034423828125, -4.28125, 0.73828125, -1.03125, 3.46875, 1.0703125, -2.828125, 1.5, -0.51953125]
+  ✗ layer_2_attn_k_after_norm: Low cosine similarity
+       (shapes differ: [8, 15, 128] vs [15, 1024], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.930156, median=0.931187, min=0.894596, max=0.971159
+      Cosine similarity (filtered): 0.935307 (threshold: 0.999)
+      Cosine similarity (overall): 0.930156
+      Outliers: 2 / 15 positions (threshold: 0.9)
+      Outlier positions: [1, 2]
+      Spec norm: 197.237167, vLLM norm: 198.708740
+      First 10 values:
+        spec:  [-1.90625, 1.296875, -1.453125, -1.1875, -0.7890625, 3.125, 1.3671875, -0.515625, 0.11865234375, -0.53125]
+        vllm:  [-3.140625, 0.921875, 0.68359375, -1.4140625, -0.640625, 3.421875, 1.203125, -0.58984375, -0.1806640625, -0.09033203125]
+  ✗ layer_2_attn_q_after_norm: Low cosine similarity
+       (shapes differ: [15, 32, 128] vs [15, 4096], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.873266, median=0.873995, min=0.811945, max=0.940944
+      Cosine similarity (filtered): 0.918593 (threshold: 0.999)
+      Cosine similarity (overall): 0.873266
+      Outliers: 10 / 15 positions (threshold: 0.9)
+      Outlier positions: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+      Spec norm: 287.140839, vLLM norm: 289.213318
+      First 10 values:
+        spec:  [0.314453125, -1.765625, -0.96875, 0.1572265625, 0.8203125, 1.546875, 0.427734375, -1.046875, 0.87890625, 0.1220703125]
+        vllm:  [0.7265625, -1.6015625, -1.3203125, 0.04150390625, 1.28125, 1.8828125, 2.03125, -0.97265625, 0.79296875, -0.5859375]
+  ✗ layer_2_attn_q_after_rope: Low cosine similarity
+       (shapes differ: [32, 15, 128] vs [15, 4096], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.873261, median=0.874026, min=0.811961, max=0.940941
+      Cosine similarity (filtered): 0.918600 (threshold: 0.999)
+      Cosine similarity (overall): 0.873261
+      Outliers: 10 / 15 positions (threshold: 0.9)
+      Outlier positions: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+      Spec norm: 287.187256, vLLM norm: 289.262054
+      First 10 values:
+        spec:  [0.05322265625, 1.640625, 0.953125, 0.369140625, 1.3203125, 1.59375, -0.458984375, -0.953125, -0.25, -1.9375]
+        vllm:  [0.609375, 1.1796875, 1.3046875, 0.2353515625, 1.9453125, 1.578125, 0.71875, -0.45703125, -0.06884765625, -2.8125]
+  ✗ layer_2_attn_k_after_rope: Low cosine similarity
+       (shapes differ: [8, 15, 128] vs [15, 1024], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.930153, median=0.931230, min=0.894650, max=0.971169
+      Cosine similarity (filtered): 0.935302 (threshold: 0.999)
+      Cosine similarity (overall): 0.930153
+      Outliers: 2 / 15 positions (threshold: 0.9)
+      Outlier positions: [1, 2]
+      Spec norm: 197.288055, vLLM norm: 198.747330
+      First 10 values:
+        spec:  [1.875, -0.318359375, 1.390625, -0.79296875, -1.515625, 3.40625, 1.125, -0.322265625, 0.388671875, -0.80078125]
+        vllm:  [2.109375, 0.083984375, -0.76953125, -1.015625, -2.09375, 4.3125, 0.8359375, -0.1962890625, -0.035400390625, -0.890625]
+  ✗ layer_2_attn_attn_output: Low cosine similarity
+       (shapes differ: [15, 32, 128] vs [15, 4096], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.752464, median=0.791989, min=0.553981, max=0.852245
+      All 15 positions are outliers (threshold: 0.9)
+      Overall cosine similarity: 0.752464
+      Spec norm: 245.535873, vLLM norm: 241.993576
+      First 10 values:
+        spec:  [0.5703125, 1.3125, -1.1796875, 0.1962890625, -0.2119140625, 0.201171875, 0.373046875, -1.515625, 0.55859375, 0.2421875]
+        vllm:  [0.353515625, 0.625, -0.66796875, -0.318359375, -0.37109375, 0.039306640625, 0.28125, -1.3359375, 0.40234375, 0.07470703125]
+  ✗ layer_2_attn_attn_after_o_proj: Low cosine similarity
+      Per-position: mean=0.821965, median=0.863359, min=0.620756, max=0.906862
+      Cosine similarity (filtered): 0.906862 (threshold: 0.999)
+      Cosine similarity (overall): 0.821965
+      Outliers: 14 / 15 positions (threshold: 0.9)
+      Outlier positions: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+      Spec norm: 2529.660889, vLLM norm: 2348.295410
+      First 10 values:
+        spec:  [-3.4375, 0.109375, 2.3125, 1.125, 13.375, -8.9375, -18.0, -12.875, 3.59375, -0.48828125]
+        vllm:  [-6.71875, 2.125, -2.90625, -3.515625, 13.625, -15.4375, -19.75, -7.125, 2.609375, -2.90625]
+  ✗ layer_outputs[2]: Low cosine similarity
+      Per-position: mean=0.724817, median=0.753656, min=0.565158, max=0.863634
+      All 15 positions are outliers (threshold: 0.9)
+      Overall cosine similarity: 0.724817
+      Spec norm: 2966.165039, vLLM norm: 2783.916016
+      First 10 values:
+        spec:  [12.0625, 12.125, -14.9375, -22.5, -1.828125, 0.201171875, -7.0625, 17.625, -0.2265625, 10.375]
+        vllm:  [15.125, -4.65625, -10.75, -21.375, -13.375, 6.09375, -9.75, 13.0625, 2.34375, 23.0]
+  ✗ layer_3_attn_q_after_proj: Low cosine similarity
+       (shapes differ: [15, 32, 128] vs [15, 4096], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.951001, median=0.959236, min=0.919467, max=0.980698
+      Cosine similarity (filtered): 0.951001 (threshold: 0.999)
+      Cosine similarity (overall): 0.951001
+      Spec norm: 2332.076660, vLLM norm: 2375.183594
+      First 10 values:
+        spec:  [-0.296875, 1.84375, 2.4375, -64.0, -21.25, 5.0, -2.828125, 5.3125, 7.875, -6.71875]
+        vllm:  [-4.9375, -0.6796875, 0.193359375, -72.5, -26.5, 3.390625, -2.5, 4.375, 8.625, -7.65625]
+  ✗ layer_3_attn_k_noise_after_proj: Low cosine similarity
+      Per-position: mean=0.930283, median=0.935195, min=0.880339, max=0.975799
+      Cosine similarity (filtered): 0.941260 (threshold: 0.999)
+      Cosine similarity (overall): 0.930283
+      Outliers: 3 / 15 positions (threshold: 0.9)
+      Outlier positions: [2, 3, 4]
+      Spec norm: 813.317200, vLLM norm: 781.007446
+      First 10 values:
+        spec:  [-4.59375, -1.921875, 7.40625, -1.125, -4.28125, -3.140625, -3.71875, 10.9375, -4.5, 1.0703125]
+        vllm:  [-6.71875, -1.5, 9.3125, -0.92578125, -4.46875, -0.19921875, -3.84375, 10.0625, -3.4375, 0.25390625]
+  ✗ layer_3_attn_v_noise_after_proj: Low cosine similarity
+      Per-position: mean=0.821200, median=0.834257, min=0.726563, max=0.924216
+      Cosine similarity (filtered): 0.924216 (threshold: 0.999)
+      Cosine similarity (overall): 0.821200
+      Outliers: 14 / 15 positions (threshold: 0.9)
+      Outlier positions: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+      Spec norm: 557.847473, vLLM norm: 549.026489
+      First 10 values:
+        spec:  [-4.0625, 3.96875, 5.0625, 1.1484375, 4.78125, -3.21875, -3.109375, 4.9375, -6.0625, 0.609375]
+        vllm:  [-2.078125, 3.421875, 6.65625, -0.326171875, 4.3125, -5.21875, -2.546875, 2.328125, -8.1875, -0.51953125]
+  ✗ layer_3_attn_k_after_norm: Low cosine similarity
+       (shapes differ: [8, 15, 128] vs [15, 1024], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.930427, median=0.932901, min=0.889996, max=0.974578
+      Cosine similarity (filtered): 0.936052 (threshold: 0.999)
+      Cosine similarity (overall): 0.930427
+      Outliers: 2 / 15 positions (threshold: 0.9)
+      Outlier positions: [2, 3]
+      Spec norm: 210.729340, vLLM norm: 211.140381
+      First 10 values:
+        spec:  [-0.953125, -0.294921875, 1.265625, -0.1328125, -0.392578125, -0.369140625, -0.365234375, 1.6796875, -1.3671875, 0.296875]
+        vllm:  [-1.4375, -0.2373046875, 1.6328125, -0.1123046875, -0.421875, -0.0240478515625, -0.38671875, 1.59375, -1.0703125, 0.07275390625]
+  ✗ layer_3_attn_q_after_norm: Low cosine similarity
+       (shapes differ: [15, 32, 128] vs [15, 4096], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.906813, median=0.917909, min=0.851420, max=0.957166
+      Cosine similarity (filtered): 0.928717 (threshold: 0.999)
+      Cosine similarity (overall): 0.906813
+      Outliers: 5 / 15 positions (threshold: 0.9)
+      Outlier positions: [0, 1, 2, 3, 4]
+      Spec norm: 307.739044, vLLM norm: 306.076935
+      First 10 values:
+        spec:  [-0.04638671875, 0.18359375, 0.294921875, -6.34375, -1.765625, 0.515625, -0.1396484375, 0.458984375, 1.4609375, -1.1484375]
+        vllm:  [-0.703125, -0.061279296875, 0.021240234375, -6.53125, -2.0, 0.318359375, -0.1123046875, 0.34375, 1.453125, -1.1875]
+  ✗ layer_3_attn_q_after_rope: Low cosine similarity
+       (shapes differ: [32, 15, 128] vs [15, 4096], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.906805, median=0.917874, min=0.851380, max=0.957157
+      Cosine similarity (filtered): 0.928704 (threshold: 0.999)
+      Cosine similarity (overall): 0.906805
+      Outliers: 5 / 15 positions (threshold: 0.9)
+      Outlier positions: [0, 1, 2, 3, 4]
+      Spec norm: 307.775604, vLLM norm: 306.111115
+      First 10 values:
+        spec:  [1.375, 0.25390625, -0.328125, -8.0625, -0.6015625, 0.0869140625, -0.7265625, -0.515625, -1.296875, -1.09375]
+        vllm:  [0.70703125, 0.546875, -0.053955078125, -8.125, -0.181640625, 0.044921875, -0.7265625, -0.4453125, -1.3125, -1.234375]
+  ✗ layer_3_attn_k_after_rope: Low cosine similarity
+       (shapes differ: [8, 15, 128] vs [15, 1024], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.930411, median=0.932855, min=0.889981, max=0.974574
+      Cosine similarity (filtered): 0.936040 (threshold: 0.999)
+      Cosine similarity (overall): 0.930411
+      Outliers: 2 / 15 positions (threshold: 0.9)
+      Outlier positions: [2, 3]
+      Spec norm: 210.754562, vLLM norm: 211.160721
+      First 10 values:
+        spec:  [-1.3203125, 0.6484375, -1.2734375, -0.0228271484375, -0.51171875, -0.263671875, -1.15625, 0.79296875, 0.9921875, 0.37109375]
+        vllm:  [-1.53125, 0.6328125, -1.6484375, 0.02392578125, -0.2890625, -0.05029296875, -0.96875, 0.921875, 0.75390625, 0.2255859375]
+  ✗ layer_3_attn_attn_output: Low cosine similarity
+       (shapes differ: [15, 32, 128] vs [15, 4096], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.688234, median=0.736319, min=0.336971, max=0.839838
+      All 15 positions are outliers (threshold: 0.9)
+      Overall cosine similarity: 0.688234
+      Spec norm: 376.600433, vLLM norm: 394.674042
+      First 10 values:
+        spec:  [-0.68359375, -0.05908203125, 0.0189208984375, -0.37109375, 0.059814453125, -0.2099609375, -0.427734375, 0.3359375, 0.03759765625, -0.162109375]
+        vllm:  [-0.64453125, 0.138671875, 0.2216796875, -0.38671875, 0.130859375, -0.3984375, -0.515625, 0.50390625, -0.25, -0.07177734375]
+  ✗ layer_3_attn_attn_after_o_proj: Low cosine similarity
+      Per-position: mean=0.771418, median=0.788360, min=0.422261, max=0.920646
+      Cosine similarity (filtered): 0.915097 (threshold: 0.999)
+      Cosine similarity (overall): 0.771418
+      Outliers: 13 / 15 positions (threshold: 0.9)
+      Outlier positions: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+      Spec norm: 4100.032715, vLLM norm: 4046.909912
+      First 10 values:
+        spec:  [-14.0, -16.125, -13.8125, -6.0, -1.90625, 6.625, -10.3125, -7.84375, 9.25, -13.75]
+        vllm:  [-9.0, -10.0, 11.5, -3.984375, 19.5, -16.0, -3.46875, -0.59765625, -1.640625, -3.234375]
+  ✗ layer_outputs[3]: Low cosine similarity
+      Per-position: mean=0.668531, median=0.713807, min=0.450234, max=0.831151
+      All 15 positions are outliers (threshold: 0.9)
+      Overall cosine similarity: 0.668531
+      Spec norm: 4739.436035, vLLM norm: 4647.479004
+      First 10 values:
+        spec:  [-5.5625, 24.875, -14.5, 40.75, -18.875, 22.5, -3.984375, -7.21875, -14.5, 11.5625]
+        vllm:  [-18.125, 31.875, -10.875, 10.75, -23.0, 26.75, 2.875, 19.625, -12.8125, -7.15625]
+  ✗ layer_4_attn_q_after_proj: Low cosine similarity
+       (shapes differ: [15, 32, 128] vs [15, 4096], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.957482, median=0.968392, min=0.913798, max=0.979705
+      Cosine similarity (filtered): 0.957482 (threshold: 0.999)
+      Cosine similarity (overall): 0.957482
+      Spec norm: 4041.033447, vLLM norm: 4081.693604
+      First 10 values:
+        spec:  [-7.875, -18.5, 0.86328125, -8.0625, -29.375, -20.25, 2.390625, 9.4375, -7.40625, -6.65625]
+        vllm:  [-8.875, -6.15625, 8.9375, -4.3125, -19.25, -14.3125, 7.59375, 12.0625, 0.671875, 4.09375]
+  ✗ layer_4_attn_k_noise_after_proj: Low cosine similarity
+      Per-position: mean=0.945992, median=0.948737, min=0.904094, max=0.978423
+      Cosine similarity (filtered): 0.945992 (threshold: 0.999)
+      Cosine similarity (overall): 0.945992
+      Spec norm: 1521.598999, vLLM norm: 1496.433472
+      First 10 values:
+        spec:  [22.25, -4.25, -9.6875, -2.765625, -12.75, 1.1875, -2.296875, 14.0, 14.4375, -4.21875]
+        vllm:  [8.25, -5.96875, -5.6875, -4.65625, -21.25, 8.0625, 12.875, 8.4375, 13.9375, 5.25]
+  ✗ layer_4_attn_v_noise_after_proj: Low cosine similarity
+      Per-position: mean=0.747099, median=0.772504, min=0.637012, max=0.867463
+      All 15 positions are outliers (threshold: 0.9)
+      Overall cosine similarity: 0.747099
+      Spec norm: 1082.783081, vLLM norm: 1048.151245
+      First 10 values:
+        spec:  [-10.5625, -12.1875, 8.5, 8.5625, -12.125, -15.0, -3.8125, 1.0234375, -8.0, -6.09375]
+        vllm:  [-1.40625, -12.0, 4.59375, 7.1875, -2.203125, -4.78125, -2.140625, 2.890625, -1.9765625, -0.68359375]
+  ✗ layer_4_attn_k_after_norm: Low cosine similarity
+       (shapes differ: [8, 15, 128] vs [15, 1024], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.946918, median=0.950980, min=0.901290, max=0.978985
+      Cosine similarity (filtered): 0.946918 (threshold: 0.999)
+      Cosine similarity (overall): 0.946918
+      Spec norm: 200.933609, vLLM norm: 202.226898
+      First 10 values:
+        spec:  [3.828125, -0.62109375, -1.171875, -0.5546875, -1.171875, 0.11572265625, -0.154296875, 1.3203125, 0.94921875, -1.03125]
+        vllm:  [1.390625, -0.85546875, -0.671875, -0.91796875, -1.9140625, 0.7734375, 0.84765625, 0.77734375, 0.8984375, 1.2578125]
+  ✗ layer_4_attn_q_after_norm: Low cosine similarity
+       (shapes differ: [15, 32, 128] vs [15, 4096], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.897688, median=0.925232, min=0.787290, max=0.950835
+      Cosine similarity (filtered): 0.932618 (threshold: 0.999)
+      Cosine similarity (overall): 0.897688
+      Outliers: 6 / 15 positions (threshold: 0.9)
+      Outlier positions: [0, 1, 2, 3, 4, 5]
+      Spec norm: 270.801636, vLLM norm: 275.273987
+      First 10 values:
+        spec:  [-0.8515625, -1.8515625, 0.08544921875, -0.5390625, -1.5625, -1.4921875, 0.2080078125, 0.84375, -0.68359375, -0.71875]
+        vllm:  [-0.94140625, -0.6015625, 0.86328125, -0.283203125, -1.0, -1.03125, 0.6484375, 1.0546875, 0.060546875, 0.43359375]
+  ✗ layer_4_attn_q_after_rope: Low cosine similarity
+       (shapes differ: [32, 15, 128] vs [15, 4096], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.897687, median=0.925248, min=0.787379, max=0.950824
+      Cosine similarity (filtered): 0.932616 (threshold: 0.999)
+      Cosine similarity (overall): 0.897687
+      Outliers: 6 / 15 positions (threshold: 0.9)
+      Outlier positions: [0, 1, 2, 3, 4, 5]
+      Spec norm: 270.841614, vLLM norm: 275.308838
+      First 10 values:
+        spec:  [0.8984375, 1.0546875, -0.10107421875, 1.1171875, -0.8828125, -1.0, -1.75, -0.314453125, 0.048095703125, -0.7265625]
+        vllm:  [1.2265625, -0.056396484375, -0.8828125, 0.9296875, -0.2158203125, -0.259765625, -0.294921875, -0.5390625, -0.6484375, 0.27734375]
+  ✗ layer_4_attn_k_after_rope: Low cosine similarity
+       (shapes differ: [8, 15, 128] vs [15, 1024], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.946898, median=0.951011, min=0.901223, max=0.978985
+      Cosine similarity (filtered): 0.946898 (threshold: 0.999)
+      Cosine similarity (overall): 0.946898
+      Spec norm: 200.947800, vLLM norm: 202.242508
+      First 10 values:
+        spec:  [-0.1455078125, 1.296875, 1.21875, 0.036376953125, -0.625, 0.3203125, -2.875, -1.0703125, -0.2451171875, -0.859375]
+        vllm:  [-0.83203125, 1.140625, 0.76953125, -0.28515625, -0.921875, 1.421875, -1.546875, -0.10107421875, -0.56640625, 1.328125]
+  ✗ layer_4_attn_attn_output: Low cosine similarity
+       (shapes differ: [15, 32, 128] vs [15, 4096], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.707488, median=0.749984, min=0.448210, max=0.861019
+      All 15 positions are outliers (threshold: 0.9)
+      Overall cosine similarity: 0.707488
+      Spec norm: 666.352966, vLLM norm: 707.937317
+      First 10 values:
+        spec:  [-0.18359375, 0.83984375, 1.390625, -0.1513671875, 0.7734375, 0.1748046875, -0.83984375, -0.85546875, 0.388671875, -0.44140625]
+        vllm:  [0.455078125, 1.21875, 1.796875, 1.5, 0.392578125, -0.76171875, -0.27734375, -0.65625, 0.34765625, -1.6640625]
+  ✗ layer_4_attn_attn_after_o_proj: Low cosine similarity
+      Per-position: mean=0.817185, median=0.848589, min=0.625982, max=0.940089
+      Cosine similarity (filtered): 0.917317 (threshold: 0.999)
+      Cosine similarity (overall): 0.817185
+      Outliers: 10 / 15 positions (threshold: 0.9)
+      Outlier positions: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+      Spec norm: 7367.586914, vLLM norm: 7921.850098
+      First 10 values:
+        spec:  [0.7578125, -38.75, 1.109375, -27.125, -23.5, -17.625, 10.375, -8.0, 28.125, -20.5]
+        vllm:  [1.1640625, -43.0, -3.09375, -5.15625, -31.25, -14.375, 23.25, 13.5625, 66.5, -24.25]
+  ✗ layer_outputs[4]: Low cosine similarity
+      Per-position: mean=0.928702, median=0.935759, min=0.847292, max=0.987941
+      Cosine similarity (filtered): 0.959587 (threshold: 0.999)
+      Cosine similarity (overall): 0.928702
+      Outliers: 5 / 15 positions (threshold: 0.9)
+      Outlier positions: [0, 1, 2, 3, 4]
+      Spec norm: 17767.531250, vLLM norm: 16754.187500
+      First 10 values:
+        spec:  [-12.875, 58.75, 15.0625, -22.125, -19.625, 5.625, 54.25, -0.10546875, 50.0, -50.75]
+        vllm:  [-15.625, 85.0, -1.984375, -0.078125, -4.125, -10.0, 20.25, 5.4375, 61.0, -28.75]
+  ✗ final_norm_output: Low cosine similarity
+      Per-position: mean=0.875257, median=0.880171, min=0.738879, max=0.948380
+      Cosine similarity (filtered): 0.926009 (threshold: 0.999)
+      Cosine similarity (overall): 0.875257
+      Outliers: 8 / 15 positions (threshold: 0.9)
+      Outlier positions: [0, 1, 2, 3, 4, 5, 6, 7]
+      Spec norm: 676.820190, vLLM norm: 668.005737
+      First 10 values:
+        spec:  [-0.94140625, 1.5625, -1.109375, -2.609375, -3.03125, 0.6953125, -0.361328125, -0.365234375, 5.90625, -2.953125]
+        vllm:  [-0.74609375, 2.46875, -0.84375, -1.4609375, -2.125, -0.76171875, -1.453125, 3.984375, 6.3125, -1.3125]
+  ✗ logits (draft tokens only, 15 positions): Low cosine similarity
+      Per-position: mean=0.909206, median=0.941423, min=0.645375, max=0.982940
+      Cosine similarity (filtered): 0.909206 (threshold: 0.999)
+      Cosine similarity (overall): 0.909206
+      Spec norm: 15040.048828, vLLM norm: 15852.828125
+
+============================================================
+Comparing non-offset layers against vLLM
+============================================================
+  ✗ hidden_states_before_fc: Low cosine similarity
+      Per-position: mean=0.800162, median=0.792047, min=0.664221, max=0.905079
+      Cosine similarity (filtered): 0.905079 (threshold: 0.999)
+      Cosine similarity (overall): 0.800162
+      Outliers: 477 / 478 positions (threshold: 0.9)
+      Spec norm: 4916.232910, vLLM norm: 4767.210938
+      Multimodal tokens (260): 0.780472
+      Text tokens (218): 0.832056
+      First 10 values:
+        spec:  [-0.01080322265625, 0.287109375, -0.05908203125, 0.07177734375, 0.0927734375, 0.03271484375, 0.490234375, 0.40234375, 0.19140625, -0.0830078125]
+        vllm:  [-0.049560546875, 0.09375, -0.0240478515625, 1.5703125, 0.02197265625, 0.02734375, 0.087890625, 0.111328125, 0.119140625, -0.0172119140625]
+      Max diff at index 776640:
+        spec:  75.500000
+        vllm:  5.312500
+        diff:  70.187500
+      Speculator stats:
+        min=-143.000000, max=110.500000, mean=-0.011998, std=1.730869
+      vLLM stats:
+        min=-132.000000, max=114.000000, mean=-0.008643, std=1.678261
+  ✗ fc_output: Low cosine similarity
+      Per-position: mean=0.909711, median=0.911156, min=0.720838, max=0.999316
+      Cosine similarity (filtered): 0.929468 (threshold: 0.999)
+      Cosine similarity (overall): 0.909711
+      Outliers: 179 / 478 positions (threshold: 0.9)
+      Spec norm: 46314.718750, vLLM norm: 55070.855469
+      Multimodal tokens (260): 0.933545
+      Text tokens (218): 0.956855
+      First 10 values:
+        spec:  [-35.5, -7.84375, 34.5, 185.0, 6.4375, 4.34375, -0.86328125, -13.3125, -22.25, -18.875]
+        vllm:  [-17.375, 17.875, 6.59375, 142.0, -12.125, 5.625, -6.96875, -14.875, -12.4375, -22.375]
+      Max diff at index 127886:
+        spec:  -12032.000000
+        vllm:  -16192.000000
+        diff:  4160.000000
+      Speculator stats:
+        min=-12032.000000, max=8832.000000, mean=0.761670, std=39.913048
+      vLLM stats:
+        min=-16192.000000, max=11648.000000, mean=0.804345, std=47.462513
+  ✗ hidden_norm_output: Low cosine similarity
+      Per-position: mean=0.802251, median=0.801349, min=0.645292, max=0.890697
+      All 478 positions are outliers (threshold: 0.9)
+      Overall cosine similarity: 0.802251
+      Spec norm: 566.653809, vLLM norm: 503.206848
+      Multimodal tokens (260): 0.777279
+      Text tokens (218): 0.827763
+      First 10 values:
+        spec:  [-0.1181640625, -0.0380859375, 0.16796875, 0.67578125, 0.0296630859375, 0.0203857421875, -0.0034637451171875, -0.05712890625, -0.09130859375, -0.0703125]
+        vllm:  [-0.046142578125, 0.0693359375, 0.025634765625, 0.412109375, -0.044677734375, 0.0211181640625, -0.0223388671875, -0.05078125, -0.04052734375, -0.06640625]
+      Max diff at index 746401:
+        spec:  2.968750
+        vllm:  6.343750
+        diff:  3.375000
+      Speculator stats:
+        min=-5.281250, max=8.562500, mean=0.002477, std=0.488391
+      vLLM stats:
+        min=-6.656250, max=10.250000, mean=-0.000356, std=0.433712
+  ✓ embed_output: cosine_sim=1.000001
+      Per-position: mean=1.000001, median=1.000001, min=1.000001, max=1.000001
+  ✓ layer_0_attn_q_after_proj: cosine_sim=1.000001
+       (shapes differ: [15, 32, 128] vs [15, 4096], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=1.000001, median=1.000001, min=1.000001, max=1.000001
+  ✓ layer_0_attn_k_noise_after_proj: cosine_sim=0.999999
+      Per-position: mean=0.999999, median=0.999999, min=0.999999, max=0.999999
+  ✓ layer_0_attn_v_noise_after_proj: cosine_sim=0.999997
+      Per-position: mean=0.999997, median=0.999997, min=0.999997, max=0.999997
+  ✓ layer_0_attn_k_after_norm: cosine_sim=0.999999
+       (shapes differ: [8, 15, 128] vs [15, 1024], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.999999, median=0.999999, min=0.999999, max=0.999999
+  ✓ layer_0_attn_q_after_norm: cosine_sim=1.000000
+       (shapes differ: [15, 32, 128] vs [15, 4096], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=1.000000, median=1.000000, min=1.000000, max=1.000000
+  ✓ layer_0_attn_q_after_rope: cosine_sim=1.000000
+       (shapes differ: [32, 15, 128] vs [15, 4096], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=1.000000, median=1.000000, min=1.000000, max=1.000001
+  ✓ layer_0_attn_k_after_rope: cosine_sim=0.999996
+       (shapes differ: [8, 15, 128] vs [15, 1024], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.999996, median=0.999996, min=0.999995, max=0.999997
+  ✗ layer_0_attn_attn_output: Low cosine similarity
+       (shapes differ: [15, 32, 128] vs [15, 4096], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.710541, median=0.706668, min=0.647239, max=0.823810
+      All 15 positions are outliers (threshold: 0.9)
+      Overall cosine similarity: 0.710541
+      Spec norm: 205.886597, vLLM norm: 172.188522
+      First 10 values:
+        spec:  [-0.0283203125, -0.58984375, 0.177734375, 0.0888671875, 0.154296875, -0.478515625, -0.46875, -0.8515625, 0.71484375, -0.06982421875]
+        vllm:  [0.193359375, -2.515625, -0.130859375, 0.283203125, 0.24609375, 0.193359375, -0.96484375, -0.236328125, 0.6640625, 0.0291748046875]
+      Max diff at index 3982:
+        spec:  5.937500
+        vllm:  -0.750000
+        diff:  6.687500
+      Speculator stats:
+        min=-7.343750, max=9.187500, mean=0.018093, std=0.830430
+      vLLM stats:
+        min=-9.000000, max=7.687500, mean=-0.000826, std=0.694675
+  ✗ layer_0_attn_attn_after_o_proj: Low cosine similarity
+      Per-position: mean=0.986577, median=0.988534, min=0.973981, max=0.992682
+      Cosine similarity (filtered): 0.986577 (threshold: 0.999)
+      Cosine similarity (overall): 0.986577
+      Spec norm: 4900.462402, vLLM norm: 5114.310547
+      First 10 values:
+        spec:  [-9.0, -0.69921875, -5.53125, -16.25, 9.1875, 0.099609375, -12.1875, 6.8125, 6.25, -6.6875]
+        vllm:  [1.046875, 3.53125, 5.46875, -4.875, -10.1875, 0.52734375, -6.625, 14.5625, 15.5625, -7.75]
+      Max diff at index 2575:
+        spec:  1528.000000
+        vllm:  1656.000000
+        diff:  128.000000
+      Speculator stats:
+        min=-68.000000, max=1528.000000, mean=0.374429, std=23.841135
+      vLLM stats:
+        min=-40.500000, max=1656.000000, mean=0.369624, std=24.881882
+  ✗ layer_outputs[0]: Low cosine similarity
+      Per-position: mean=0.828414, median=0.847728, min=0.743918, max=0.903375
+      Cosine similarity (filtered): 0.903375 (threshold: 0.999)
+      Cosine similarity (overall): 0.828414
+      Outliers: 14 / 15 positions (threshold: 0.9)
+      Outlier positions: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+      Spec norm: 2462.678955, vLLM norm: 1886.856812
+      First 10 values:
+        spec:  [4.59375, 12.5625, -7.34375, -4.03125, -4.90625, -33.0, 7.1875, -5.9375, 2.234375, 0.046875]
+        vllm:  [-2.734375, 2.28125, 17.375, 7.3125, 8.875, -22.0, -19.875, 7.3125, -8.4375, 1.515625]
+      Max diff at index 2575:
+        spec:  1004.000000
+        vllm:  564.000000
+        diff:  440.000000
+      Speculator stats:
+        min=-48.500000, max=1004.000000, mean=0.183814, std=11.981180
+      vLLM stats:
+        min=-40.500000, max=564.000000, mean=0.049562, std=9.180700
+  ✗ layer_1_attn_q_after_proj: Low cosine similarity
+       (shapes differ: [15, 32, 128] vs [15, 4096], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.871818, median=0.873127, min=0.816387, max=0.892474
+      All 15 positions are outliers (threshold: 0.9)
+      Overall cosine similarity: 0.871818
+      Spec norm: 1045.981201, vLLM norm: 1038.367554
+      First 10 values:
+        spec:  [-0.0267333984375, -6.625, 2.1875, -2.1875, 2.34375, -26.25, 0.78515625, 2.125, -2.078125, -4.75]
+        vllm:  [-1.5859375, -3.953125, 6.8125, -2.5625, 0.046142578125, -17.625, -0.54296875, 3.125, -3.40625, -4.8125]
+      Max diff at index 1669:
+        spec:  -26.375000
+        vllm:  -8.750000
+        diff:  17.625000
+      Speculator stats:
+        min=-35.250000, max=47.000000, mean=-0.020199, std=4.219848
+      vLLM stats:
+        min=-35.000000, max=36.000000, mean=0.042492, std=4.188966
+  ✗ layer_1_attn_k_noise_after_proj: Low cosine similarity
+      Per-position: mean=0.857052, median=0.859077, min=0.831958, max=0.881352
+      All 15 positions are outliers (threshold: 0.9)
+      Overall cosine similarity: 0.857052
+      Spec norm: 353.677032, vLLM norm: 318.177155
+      First 10 values:
+        spec:  [-1.765625, -4.84375, 4.5625, 3.171875, -1.6015625, -3.140625, -5.0625, 3.890625, -6.28125, -0.84375]
+        vllm:  [-3.65625, -0.3828125, 6.4375, 1.46875, 1.9609375, -5.25, -4.0, 7.28125, 0.4296875, -3.703125]
+      Max diff at index 576:
+        spec:  10.750000
+        vllm:  -2.140625
+        diff:  12.890625
+      Speculator stats:
+        min=-22.375000, max=19.875000, mean=0.040153, std=2.853533
+      vLLM stats:
+        min=-28.375000, max=19.875000, mean=0.001592, std=2.567367
+  ✗ layer_1_attn_v_noise_after_proj: Low cosine similarity
+      Per-position: mean=0.651028, median=0.658038, min=0.510291, max=0.783781
+      All 15 positions are outliers (threshold: 0.9)
+      Overall cosine similarity: 0.651028
+      Spec norm: 174.007950, vLLM norm: 159.607437
+      First 10 values:
+        spec:  [1.1640625, -1.4296875, 1.75, 0.57421875, -3.109375, 0.0791015625, -0.091796875, 1.0859375, -3.0, 4.03125]
+        vllm:  [0.78125, -0.79296875, -0.040771484375, 0.59375, -0.2470703125, 0.0002765655517578125, -0.474609375, -0.0191650390625, -1.09375, 1.6875]
+      Max diff at index 435:
+        spec:  -3.078125
+        vllm:  3.750000
+        diff:  6.828125
+      Speculator stats:
+        min=-7.781250, max=5.968750, mean=-0.013558, std=1.404003
+      vLLM stats:
+        min=-8.312500, max=5.812500, mean=0.058598, std=1.286537
+  ✗ layer_1_attn_k_after_norm: Low cosine similarity
+       (shapes differ: [8, 15, 128] vs [15, 1024], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.848887, median=0.852320, min=0.822142, max=0.872445
+      All 15 positions are outliers (threshold: 0.9)
+      Overall cosine similarity: 0.848887
+      Spec norm: 181.607941, vLLM norm: 182.723755
+      First 10 values:
+        spec:  [-0.5625, -1.796875, 0.96875, 0.84375, -0.435546875, -0.3515625, -1.0078125, 1.6015625, -2.078125, -0.2431640625]
+        vllm:  [-1.265625, -0.154296875, 1.484375, 0.423828125, 0.578125, -0.640625, -0.8671875, 3.25, 0.154296875, -1.15625]
+      Max diff at index 576:
+        spec:  3.015625
+        vllm:  -0.671875
+        diff:  3.687500
+      Speculator stats:
+        min=-6.656250, max=6.000000, mean=0.016424, std=1.465300
+      vLLM stats:
+        min=-5.718750, max=5.843750, mean=-0.008703, std=1.474370
+  ✗ layer_1_attn_q_after_norm: Low cosine similarity
+       (shapes differ: [15, 32, 128] vs [15, 4096], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.816720, median=0.814957, min=0.771043, max=0.838579
+      All 15 positions are outliers (threshold: 0.9)
+      Overall cosine similarity: 0.816720
+      Spec norm: 313.536652, vLLM norm: 318.677124
+      First 10 values:
+        spec:  [-0.0057373046875, -1.4765625, 0.27734375, -0.42578125, 0.42578125, -2.640625, 0.10986328125, 0.47265625, -0.39453125, -1.015625]
+        vllm:  [-0.44140625, -1.140625, 1.125, -0.6484375, 0.01092529296875, -2.3125, -0.0986328125, 0.90234375, -0.83984375, -1.34375]
+      Max diff at index 3756:
+        spec:  0.902344
+        vllm:  -3.921875
+        diff:  4.824219
+      Speculator stats:
+        min=-7.500000, max=8.187500, mean=-0.004099, std=1.264923
+      vLLM stats:
+        min=-6.875000, max=7.437500, mean=0.014554, std=1.285587
+  ✗ layer_1_attn_q_after_rope: Low cosine similarity
+       (shapes differ: [32, 15, 128] vs [15, 4096], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.816695, median=0.814829, min=0.770984, max=0.838603
+      All 15 positions are outliers (threshold: 0.9)
+      Overall cosine similarity: 0.816695
+      Spec norm: 313.567993, vLLM norm: 318.712830
+      First 10 values:
+        spec:  [1.625, 1.4609375, -0.1455078125, -0.53125, 0.96484375, -1.65625, -0.19140625, -0.11181640625, 0.6953125, -1.0]
+        vllm:  [1.109375, 1.4375, -1.0625, -0.99609375, 1.3515625, -1.359375, -0.06494140625, 0.1865234375, 0.91015625, -1.0703125]
+      Max diff at index 3756:
+        spec:  0.863281
+        vllm:  -3.921875
+        diff:  4.785156
+      Speculator stats:
+        min=-7.187500, max=6.875000, mean=0.004642, std=1.265048
+      vLLM stats:
+        min=-6.500000, max=6.781250, mean=-0.001115, std=1.285812
+  ✗ layer_1_attn_k_after_rope: Low cosine similarity
+       (shapes differ: [8, 15, 128] vs [15, 1024], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.848872, median=0.852277, min=0.822162, max=0.872367
+      All 15 positions are outliers (threshold: 0.9)
+      Overall cosine similarity: 0.848872
+      Spec norm: 181.621048, vLLM norm: 182.748764
+      First 10 values:
+        spec:  [1.4140625, 1.1953125, -0.91796875, 0.1796875, -0.038330078125, 0.298828125, -1.4296875, 0.484375, 2.125, 0.177734375]
+        vllm:  [1.96875, -0.46875, -1.4296875, -1.015625, 1.484375, -0.119140625, -1.125, 1.2578125, 0.1162109375, -0.828125]
+      Max diff at index 512:
+        spec:  -2.656250
+        vllm:  1.007812
+        diff:  3.664062
+      Speculator stats:
+        min=-5.750000, max=6.031250, mean=0.016134, std=1.465409
+      vLLM stats:
+        min=-5.687500, max=5.718750, mean=0.010873, std=1.474558
+  ✗ layer_1_attn_attn_output: Low cosine similarity
+       (shapes differ: [15, 32, 128] vs [15, 4096], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.494655, median=0.497295, min=0.429705, max=0.536941
+      All 15 positions are outliers (threshold: 0.9)
+      Overall cosine similarity: 0.494655
+      Spec norm: 190.446198, vLLM norm: 189.338272
+      First 10 values:
+        spec:  [1.109375, -0.2177734375, 0.26171875, -0.083984375, -0.50390625, -0.302734375, 0.609375, -0.1875, -1.0, 1.5859375]
+        vllm:  [0.609375, -0.57421875, -0.0771484375, 0.09765625, 0.0908203125, 0.02490234375, -0.408203125, 0.0260009765625, -0.60546875, 1.1796875]
+      Max diff at index 1748:
+        spec:  1.703125
+        vllm:  7.093750
+        diff:  5.390625
+      Speculator stats:
+        min=-4.375000, max=4.906250, mean=0.001005, std=0.768334
+      vLLM stats:
+        min=-4.312500, max=7.093750, mean=0.020555, std=0.763589
+  ✗ layer_1_attn_attn_after_o_proj: Low cosine similarity
+      Per-position: mean=0.522851, median=0.521506, min=0.417114, max=0.603921
+      All 15 positions are outliers (threshold: 0.9)
+      Overall cosine similarity: 0.522851
+      Spec norm: 1367.030884, vLLM norm: 1354.165283
+      First 10 values:
+        spec:  [6.0, -15.8125, -6.6875, -15.1875, 0.265625, -3.28125, 4.3125, 5.375, 2.21875, 2.875]
+        vllm:  [11.4375, -9.375, -2.28125, -7.28125, -5.1875, 5.8125, 1.296875, -3.671875, -9.0625, 9.25]
+      Max diff at index 2575:
+        spec:  203.000000
+        vllm:  39.250000
+        diff:  163.750000
+      Speculator stats:
+        min=-29.125000, max=203.000000, mean=0.076352, std=6.651101
+      vLLM stats:
+        min=-35.000000, max=157.000000, mean=0.045213, std=6.588789
+  ✗ layer_outputs[1]: Low cosine similarity
+      Per-position: mean=0.576560, median=0.566533, min=0.525096, max=0.673104
+      All 15 positions are outliers (threshold: 0.9)
+      Overall cosine similarity: 0.576560
+      Spec norm: 2096.524170, vLLM norm: 1947.160400
+      First 10 values:
+        spec:  [-3.921875, -4.21875, 7.03125, -12.0, -8.625, 19.75, -16.75, 0.046875, 13.5, 18.375]
+        vllm:  [7.6875, -5.46875, -20.75, -2.9375, 2.046875, 22.625, -19.125, 11.5, 18.375, 13.0]
+      Max diff at index 39183:
+        spec:  286.000000
+        vllm:  376.000000
+        diff:  90.000000
+      Speculator stats:
+        min=-54.500000, max=436.000000, mean=0.021093, std=10.201003
+      vLLM stats:
+        min=-58.000000, max=508.000000, mean=0.207206, std=9.471986
+  ✗ layer_2_attn_q_after_proj: Low cosine similarity
+       (shapes differ: [15, 32, 128] vs [15, 4096], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.871454, median=0.870888, min=0.812968, max=0.910160
+      Cosine similarity (filtered): 0.908054 (threshold: 0.999)
+      Cosine similarity (overall): 0.871454
+      Outliers: 13 / 15 positions (threshold: 0.9)
+      Outlier positions: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+      Spec norm: 1432.435303, vLLM norm: 1456.995850
+      First 10 values:
+        spec:  [2.78125, -2.875, -6.9375, -2.546875, 10.3125, 6.9375, 2.203125, -8.25, 5.0625, -0.19140625]
+        vllm:  [2.5625, -6.6875, -6.0, 0.58203125, 7.1875, 8.375, 8.9375, -9.4375, 3.96875, -2.5625]
+      Max diff at index 3782:
+        spec:  9.437500
+        vllm:  -10.750000
+        diff:  20.187500
+      Speculator stats:
+        min=-70.000000, max=57.250000, mean=-0.136038, std=5.777398
+      vLLM stats:
+        min=-73.000000, max=64.500000, mean=-0.121542, std=5.876829
+  ✗ layer_2_attn_k_noise_after_proj: Low cosine similarity
+      Per-position: mean=0.865160, median=0.862439, min=0.848625, max=0.897573
+      All 15 positions are outliers (threshold: 0.9)
+      Overall cosine similarity: 0.865160
+      Spec norm: 562.603760, vLLM norm: 534.955994
+      First 10 values:
+        spec:  [-6.09375, 3.140625, -6.28125, -9.6875, -2.234375, 16.375, 10.875, -5.375, 0.421875, -10.625]
+        vllm:  [-13.9375, 4.875, 3.734375, -15.125, -3.921875, 22.375, 8.6875, -10.1875, -2.125, -1.5]
+      Max diff at index 4458:
+        spec:  -7.500000
+        vllm:  4.031250
+        diff:  11.531250
+      Speculator stats:
+        min=-40.500000, max=28.750000, mean=-0.193200, std=4.535531
+      vLLM stats:
+        min=-38.750000, max=26.875000, mean=-0.188545, std=4.312435
+  ✗ layer_2_attn_v_noise_after_proj: Low cosine similarity
+      Per-position: mean=0.562385, median=0.558573, min=0.528527, max=0.623883
+      All 15 positions are outliers (threshold: 0.9)
+      Overall cosine similarity: 0.562385
+      Spec norm: 289.585999, vLLM norm: 259.786987
+      First 10 values:
+        spec:  [2.3125, -0.15234375, -1.640625, -2.421875, -0.31640625, 2.65625, 2.765625, -1.1640625, 1.4296875, 1.234375]
+        vllm:  [0.3125, 0.034423828125, -4.28125, 0.73828125, -1.03125, 3.46875, 1.0703125, -2.828125, 1.5, -0.51953125]
+      Max diff at index 11932:
+        spec:  -3.812500
+        vllm:  5.000000
+        diff:  8.812500
+      Speculator stats:
+        min=-11.062500, max=9.437500, mean=0.055827, std=2.336000
+      vLLM stats:
+        min=-7.875000, max=8.500000, mean=-0.001895, std=2.096219
+  ✗ layer_2_attn_k_after_norm: Low cosine similarity
+       (shapes differ: [8, 15, 128] vs [15, 1024], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.860305, median=0.861318, min=0.842055, max=0.889636
+      All 15 positions are outliers (threshold: 0.9)
+      Overall cosine similarity: 0.860305
+      Spec norm: 201.218491, vLLM norm: 198.708740
+      First 10 values:
+        spec:  [-1.5625, 0.67578125, -1.3046875, -1.03125, -0.416015625, 2.859375, 1.7109375, -0.353515625, 0.040771484375, -0.7265625]
+        vllm:  [-3.140625, 0.921875, 0.68359375, -1.4140625, -0.640625, 3.421875, 1.203125, -0.58984375, -0.1806640625, -0.09033203125]
+      Max diff at index 4458:
+        spec:  -3.187500
+        vllm:  1.828125
+        diff:  5.015625
+      Speculator stats:
+        min=-10.437500, max=7.562500, mean=-0.074539, std=1.621917
+      vLLM stats:
+        min=-10.312500, max=7.687500, mean=-0.085806, std=1.601081
+  ✗ layer_2_attn_q_after_norm: Low cosine similarity
+       (shapes differ: [15, 32, 128] vs [15, 4096], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.755508, median=0.755722, min=0.722573, max=0.800229
+      All 15 positions are outliers (threshold: 0.9)
+      Overall cosine similarity: 0.755508
+      Spec norm: 299.891052, vLLM norm: 289.213318
+      First 10 values:
+        spec:  [0.953125, -0.828125, -1.84375, -0.2197265625, 2.21875, 1.8828125, 0.6015625, -1.03125, 1.2265625, -0.052734375]
+        vllm:  [0.7265625, -1.6015625, -1.3203125, 0.04150390625, 1.28125, 1.8828125, 2.03125, -0.97265625, 0.79296875, -0.5859375]
+      Max diff at index 5037:
+        spec:  -2.859375
+        vllm:  2.359375
+        diff:  5.218750
+      Speculator stats:
+        min=-9.062500, max=8.375000, mean=-0.037454, std=1.209297
+      vLLM stats:
+        min=-9.125000, max=7.875000, mean=-0.022868, std=1.166576
+  ✗ layer_2_attn_q_after_rope: Low cosine similarity
+       (shapes differ: [32, 15, 128] vs [15, 4096], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.755484, median=0.755713, min=0.722456, max=0.800229
+      All 15 positions are outliers (threshold: 0.9)
+      Overall cosine similarity: 0.755484
+      Spec norm: 299.929291, vLLM norm: 289.262054
+      First 10 values:
+        spec:  [0.26171875, 0.9296875, 1.84375, 0.06396484375, 2.234375, 1.6328125, -0.012451171875, -0.61328125, -0.53125, -2.1875]
+        vllm:  [0.609375, 1.1796875, 1.3046875, 0.2353515625, 1.9453125, 1.578125, 0.71875, -0.45703125, -0.06884765625, -2.8125]
+      Max diff at index 5037:
+        spec:  -2.875000
+        vllm:  2.328125
+        diff:  5.203125
+      Speculator stats:
+        min=-8.062500, max=8.687500, mean=-0.039099, std=1.209400
+      vLLM stats:
+        min=-8.562500, max=7.343750, mean=-0.016507, std=1.166879
+  ✗ layer_2_attn_k_after_rope: Low cosine similarity
+       (shapes differ: [8, 15, 128] vs [15, 1024], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.860333, median=0.861399, min=0.842092, max=0.889630
+      All 15 positions are outliers (threshold: 0.9)
+      Overall cosine similarity: 0.860333
+      Spec norm: 201.258957, vLLM norm: 198.747330
+      First 10 values:
+        spec:  [2.0625, 0.380859375, 1.2734375, -0.55078125, -1.2265625, 3.1875, 1.1796875, -0.181640625, 0.375, -0.8828125]
+        vllm:  [2.109375, 0.083984375, -0.76953125, -1.015625, -2.09375, 4.3125, 0.8359375, -0.1962890625, -0.035400390625, -0.890625]
+      Max diff at index 4458:
+        spec:  -3.328125
+        vllm:  1.804688
+        diff:  5.132812
+      Speculator stats:
+        min=-10.437500, max=8.062500, mean=-0.098389, std=1.620973
+      vLLM stats:
+        min=-10.312500, max=6.937500, mean=-0.114724, std=1.599580
+  ✗ layer_2_attn_attn_output: Low cosine similarity
+       (shapes differ: [15, 32, 128] vs [15, 4096], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.494105, median=0.496056, min=0.401836, max=0.560866
+      All 15 positions are outliers (threshold: 0.9)
+      Overall cosine similarity: 0.494105
+      Spec norm: 310.178131, vLLM norm: 241.993576
+      First 10 values:
+        spec:  [1.8671875, 1.9453125, -2.09375, 0.60546875, -0.671875, 0.4765625, -0.265625, -1.96875, 0.2890625, -0.625]
+        vllm:  [0.353515625, 0.625, -0.66796875, -0.318359375, -0.37109375, 0.039306640625, 0.28125, -1.3359375, 0.40234375, 0.07470703125]
+      Max diff at index 2625:
+        spec:  8.500000
+        vllm:  -0.304688
+        diff:  8.804688
+      Speculator stats:
+        min=-7.718750, max=8.750000, mean=0.030849, std=1.251000
+      vLLM stats:
+        min=-8.250000, max=9.062500, mean=-0.002728, std=0.976295
+  ✗ layer_2_attn_attn_after_o_proj: Low cosine similarity
+      Per-position: mean=0.588306, median=0.596963, min=0.395573, max=0.729251
+      All 15 positions are outliers (threshold: 0.9)
+      Overall cosine similarity: 0.588306
+      Spec norm: 2597.500000, vLLM norm: 2348.295410
+      First 10 values:
+        spec:  [14.375, -15.125, -7.0625, -3.640625, 24.0, -16.125, -13.8125, -8.0625, 8.6875, 1.71875]
+        vllm:  [-6.71875, 2.125, -2.90625, -3.515625, 13.625, -15.4375, -19.75, -7.125, 2.609375, -2.90625]
+      Max diff at index 2575:
+        spec:  -52.500000
+        vllm:  208.000000
+        diff:  260.500000
+      Speculator stats:
+        min=-71.000000, max=326.000000, mean=0.128369, std=12.637966
+      vLLM stats:
+        min=-86.000000, max=386.000000, mean=0.148933, std=11.425097
+  ✗ layer_outputs[2]: Low cosine similarity
+      Per-position: mean=0.506607, median=0.495645, min=0.373421, max=0.671477
+      All 15 positions are outliers (threshold: 0.9)
+      Overall cosine similarity: 0.506607
+      Spec norm: 3522.500732, vLLM norm: 2783.916016
+      First 10 values:
+        spec:  [15.6875, 3.53125, -30.125, -10.125, 4.53125, -8.0625, -13.1875, 4.5, 6.9375, 6.25]
+        vllm:  [15.125, -4.65625, -10.75, -21.375, -13.375, 6.09375, -9.75, 13.0625, 2.34375, 23.0]
+      Max diff at index 30735:
+        spec:  480.000000
+        vllm:  374.000000
+        diff:  106.000000
+      Speculator stats:
+        min=-107.500000, max=480.000000, mean=0.389616, std=17.134954
+      vLLM stats:
+        min=-89.000000, max=374.000000, mean=-0.021823, std=13.545632
+  ✗ layer_3_attn_q_after_proj: Low cosine similarity
+       (shapes differ: [15, 32, 128] vs [15, 4096], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.906083, median=0.914723, min=0.849363, max=0.934155
+      Cosine similarity (filtered): 0.919920 (threshold: 0.999)
+      Cosine similarity (overall): 0.906083
+      Outliers: 5 / 15 positions (threshold: 0.9)
+      Outlier positions: [0, 1, 2, 3, 4]
+      Spec norm: 2356.534424, vLLM norm: 2375.183594
+      First 10 values:
+        spec:  [-0.439453125, 4.375, 3.4375, -60.75, -18.25, 4.4375, 2.953125, 7.34375, 12.75, -6.90625]
+        vllm:  [-4.9375, -0.6796875, 0.193359375, -72.5, -26.5, 3.390625, -2.5, 4.375, 8.625, -7.65625]
+      Max diff at index 14086:
+        spec:  77.000000
+        vllm:  40.750000
+        diff:  36.250000
+      Speculator stats:
+        min=-96.000000, max=84.500000, mean=0.383579, std=9.499427
+      vLLM stats:
+        min=-98.500000, max=88.500000, mean=0.442142, std=9.572193
+  ✗ layer_3_attn_k_noise_after_proj: Low cosine similarity
+      Per-position: mean=0.861407, median=0.870332, min=0.802810, max=0.910463
+      Cosine similarity (filtered): 0.905928 (threshold: 0.999)
+      Cosine similarity (overall): 0.861407
+      Outliers: 13 / 15 positions (threshold: 0.9)
+      Outlier positions: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+      Spec norm: 835.647705, vLLM norm: 781.007446
+      First 10 values:
+        spec:  [-3.75, -2.75, 3.109375, -1.2265625, -1.4375, -3.53125, -6.46875, 10.4375, -2.359375, 1.390625]
+        vllm:  [-6.71875, -1.5, 9.3125, -0.92578125, -4.46875, -0.19921875, -3.84375, 10.0625, -3.4375, 0.25390625]
+      Max diff at index 2526:
+        spec:  45.000000
+        vllm:  17.125000
+        diff:  27.875000
+      Speculator stats:
+        min=-32.750000, max=45.500000, mean=0.367230, std=6.732823
+      vLLM stats:
+        min=-38.750000, max=44.500000, mean=0.269712, std=6.296165
+  ✗ layer_3_attn_v_noise_after_proj: Low cosine similarity
+      Per-position: mean=0.649184, median=0.653874, min=0.573188, max=0.764545
+      All 15 positions are outliers (threshold: 0.9)
+      Overall cosine similarity: 0.649184
+      Spec norm: 612.982300, vLLM norm: 549.026489
+      First 10 values:
+        spec:  [2.015625, 6.21875, 2.859375, 6.40625, 3.515625, -2.59375, -8.4375, 3.375, -2.265625, 2.359375]
+        vllm:  [-2.078125, 3.421875, 6.65625, -0.326171875, 4.3125, -5.21875, -2.546875, 2.328125, -8.1875, -0.51953125]
+      Max diff at index 6384:
+        spec:  11.187500
+        vllm:  -5.750000
+        diff:  16.937500
+      Speculator stats:
+        min=-24.250000, max=18.500000, mean=-0.038261, std=4.946000
+      vLLM stats:
+        min=-22.125000, max=19.000000, mean=-0.026134, std=4.430013
+  ✗ layer_3_attn_k_after_norm: Low cosine similarity
+       (shapes differ: [8, 15, 128] vs [15, 1024], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.852501, median=0.862679, min=0.789124, max=0.916468
+      Cosine similarity (filtered): 0.910151 (threshold: 0.999)
+      Cosine similarity (overall): 0.852501
+      Outliers: 13 / 15 positions (threshold: 0.9)
+      Outlier positions: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+      Spec norm: 211.539230, vLLM norm: 211.140381
+      First 10 values:
+        spec:  [-0.8203125, -0.4453125, 0.55859375, -0.15234375, -0.138671875, -0.4375, -0.66796875, 1.6875, -0.75390625, 0.40625]
+        vllm:  [-1.4375, -0.2373046875, 1.6328125, -0.1123046875, -0.421875, -0.0240478515625, -0.38671875, 1.59375, -1.0703125, 0.07275390625]
+      Max diff at index 5740:
+        spec:  -3.468750
+        vllm:  1.679688
+        diff:  5.148438
+      Speculator stats:
+        min=-8.062500, max=8.875000, mean=0.098191, std=1.704080
+      vLLM stats:
+        min=-7.156250, max=8.937500, mean=0.053010, std=1.702864
+  ✗ layer_3_attn_q_after_norm: Low cosine similarity
+       (shapes differ: [15, 32, 128] vs [15, 4096], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.823502, median=0.831324, min=0.758447, max=0.863789
+      All 15 positions are outliers (threshold: 0.9)
+      Overall cosine similarity: 0.823502
+      Spec norm: 311.758392, vLLM norm: 306.076935
+      First 10 values:
+        spec:  [-0.068359375, 0.431640625, 0.412109375, -5.96875, -1.5078125, 0.455078125, 0.1455078125, 0.62890625, 2.359375, -1.171875]
+        vllm:  [-0.703125, -0.061279296875, 0.021240234375, -6.53125, -2.0, 0.318359375, -0.1123046875, 0.34375, 1.453125, -1.1875]
+      Max diff at index 11045:
+        spec:  5.062500
+        vllm:  0.468750
+        diff:  4.593750
+      Speculator stats:
+        min=-8.062500, max=7.656250, mean=0.057980, std=1.256418
+      vLLM stats:
+        min=-7.968750, max=7.750000, mean=0.069028, std=1.232903
+  ✗ layer_3_attn_q_after_rope: Low cosine similarity
+       (shapes differ: [32, 15, 128] vs [15, 4096], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.823464, median=0.831254, min=0.758385, max=0.863761
+      All 15 positions are outliers (threshold: 0.9)
+      Overall cosine similarity: 0.823464
+      Spec norm: 311.785553, vLLM norm: 306.111115
+      First 10 values:
+        spec:  [1.71875, 0.059326171875, -0.470703125, -7.71875, -0.373046875, 0.11962890625, -0.64453125, -0.361328125, -2.0625, -1.15625]
+        vllm:  [0.70703125, 0.546875, -0.053955078125, -8.125, -0.181640625, 0.044921875, -0.7265625, -0.4453125, -1.3125, -1.234375]
+      Max diff at index 11045:
+        spec:  5.156250
+        vllm:  0.699219
+        diff:  4.457031
+      Speculator stats:
+        min=-9.625000, max=9.562500, mean=0.041815, std=1.257169
+      vLLM stats:
+        min=-9.875000, max=9.937500, mean=0.038295, std=1.234378
+  ✗ layer_3_attn_k_after_rope: Low cosine similarity
+       (shapes differ: [8, 15, 128] vs [15, 1024], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.852477, median=0.862712, min=0.789110, max=0.916498
+      Cosine similarity (filtered): 0.910172 (threshold: 0.999)
+      Cosine similarity (overall): 0.852477
+      Outliers: 13 / 15 positions (threshold: 0.9)
+      Outlier positions: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+      Spec norm: 211.572937, vLLM norm: 211.160721
+      First 10 values:
+        spec:  [-1.3515625, 0.78515625, -0.56640625, -0.005218505859375, -0.4140625, -0.2314453125, -0.9296875, 0.5859375, 0.380859375, 0.482421875]
+        vllm:  [-1.53125, 0.6328125, -1.6484375, 0.02392578125, -0.2890625, -0.05029296875, -0.96875, 0.921875, 0.75390625, 0.2255859375]
+      Max diff at index 5740:
+        spec:  -3.484375
+        vllm:  1.695312
+        diff:  5.179688
+      Speculator stats:
+        min=-8.125000, max=7.531250, mean=0.063685, std=1.705992
+      vLLM stats:
+        min=-8.375000, max=8.125000, mean=0.024843, std=1.703672
+  ✗ layer_3_attn_attn_output: Low cosine similarity
+       (shapes differ: [15, 32, 128] vs [15, 4096], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.480479, median=0.458248, min=0.299932, max=0.625409
+      All 15 positions are outliers (threshold: 0.9)
+      Overall cosine similarity: 0.480479
+      Spec norm: 438.631989, vLLM norm: 394.674042
+      First 10 values:
+        spec:  [-0.296875, -2.84375, 0.0732421875, -1.046875, -0.8125, -1.3671875, -0.81640625, 1.7890625, -0.671875, 0.85546875]
+        vllm:  [-0.64453125, 0.138671875, 0.2216796875, -0.38671875, 0.130859375, -0.3984375, -0.515625, 0.50390625, -0.25, -0.07177734375]
+      Max diff at index 34571:
+        spec:  -3.328125
+        vllm:  9.437500
+        diff:  12.765625
+      Speculator stats:
+        min=-13.687500, max=14.187500, mean=0.038061, std=1.769205
+      vLLM stats:
+        min=-15.750000, max=12.312500, mean=0.046540, std=1.591589
+  ✗ layer_3_attn_attn_after_o_proj: Low cosine similarity
+      Per-position: mean=0.639829, median=0.619901, min=0.398991, max=0.769775
+      All 15 positions are outliers (threshold: 0.9)
+      Overall cosine similarity: 0.639829
+      Spec norm: 4683.151855, vLLM norm: 4046.909912
+      First 10 values:
+        spec:  [-2.765625, -17.625, 5.71875, -8.9375, 24.0, -0.875, 14.0, -12.0, -6.28125, -13.4375]
+        vllm:  [-9.0, -10.0, 11.5, -3.984375, 19.5, -16.0, -3.46875, -0.59765625, -1.640625, -3.234375]
+      Max diff at index 22287:
+        spec:  588.000000
+        vllm:  338.000000
+        diff:  250.000000
+      Speculator stats:
+        min=-210.000000, max=648.000000, mean=0.203476, std=22.785837
+      vLLM stats:
+        min=-211.000000, max=648.000000, mean=0.033108, std=19.690958
+  ✗ layer_outputs[3]: Low cosine similarity
+      Per-position: mean=0.419259, median=0.386749, min=0.267503, max=0.588496
+      All 15 positions are outliers (threshold: 0.9)
+      Overall cosine similarity: 0.419259
+      Spec norm: 5060.853027, vLLM norm: 4647.479004
+      First 10 values:
+        spec:  [-14.3125, -16.25, -2.59375, 25.875, -25.875, 30.25, -7.6875, 2.03125, 3.3125, 14.0625]
+        vllm:  [-18.125, 31.875, -10.875, 10.75, -23.0, 26.75, 2.875, 19.625, -12.8125, -7.15625]
+      Max diff at index 22287:
+        spec:  298.000000
+        vllm:  632.000000
+        diff:  334.000000
+      Speculator stats:
+        min=-137.000000, max=528.000000, mean=0.120844, std=24.624228
+      vLLM stats:
+        min=-158.000000, max=632.000000, mean=0.191017, std=22.612364
+  ✗ layer_4_attn_q_after_proj: Low cosine similarity
+       (shapes differ: [15, 32, 128] vs [15, 4096], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.910399, median=0.912576, min=0.865748, max=0.939291
+      Cosine similarity (filtered): 0.922555 (threshold: 0.999)
+      Cosine similarity (overall): 0.910399
+      Outliers: 5 / 15 positions (threshold: 0.9)
+      Outlier positions: [0, 1, 2, 3, 4]
+      Spec norm: 4027.953125, vLLM norm: 4081.693604
+      First 10 values:
+        spec:  [-2.921875, -25.75, -8.9375, -23.875, -37.25, -11.6875, 1.046875, 14.125, -7.75, -9.0625]
+        vllm:  [-8.875, -6.15625, 8.9375, -4.3125, -19.25, -14.3125, 7.59375, 12.0625, 0.671875, 4.09375]
+      Max diff at index 5131:
+        spec:  -28.625000
+        vllm:  -121.000000
+        diff:  92.375000
+      Speculator stats:
+        min=-153.000000, max=129.000000, mean=-0.782484, std=16.231466
+      vLLM stats:
+        min=-136.000000, max=123.000000, mean=-0.805202, std=16.447430
+  ✗ layer_4_attn_k_noise_after_proj: Low cosine similarity
+      Per-position: mean=0.910288, median=0.912175, min=0.877542, max=0.946238
+      Cosine similarity (filtered): 0.919308 (threshold: 0.999)
+      Cosine similarity (overall): 0.910288
+      Outliers: 4 / 15 positions (threshold: 0.9)
+      Outlier positions: [2, 3, 4, 5]
+      Spec norm: 1580.100586, vLLM norm: 1496.433472
+      First 10 values:
+        spec:  [18.875, -8.25, -7.0, -3.953125, -16.625, 4.4375, 3.046875, 13.5625, 15.75, -3.859375]
+        vllm:  [8.25, -5.96875, -5.6875, -4.65625, -21.25, 8.0625, 12.875, 8.4375, 13.9375, 5.25]
+      Max diff at index 11200:
+        spec:  -98.000000
+        vllm:  -63.500000
+        diff:  34.500000
+      Speculator stats:
+        min=-108.000000, max=73.500000, mean=-0.393211, std=12.743745
+      vLLM stats:
+        min=-110.500000, max=72.500000, mean=-0.225645, std=12.072593
+  ✗ layer_4_attn_v_noise_after_proj: Low cosine similarity
+      Per-position: mean=0.539435, median=0.532921, min=0.390111, max=0.650576
+      All 15 positions are outliers (threshold: 0.9)
+      Overall cosine similarity: 0.539435
+      Spec norm: 1171.283569, vLLM norm: 1048.151245
+      First 10 values:
+        spec:  [-6.15625, -1.484375, 11.5625, 5.0625, -8.0625, -11.125, -12.125, 3.359375, -4.25, -9.6875]
+        vllm:  [-1.40625, -12.0, 4.59375, 7.1875, -2.203125, -4.78125, -2.140625, 2.890625, -1.9765625, -0.68359375]
+      Max diff at index 3566:
+        spec:  28.875000
+        vllm:  -16.750000
+        diff:  45.625000
+      Speculator stats:
+        min=-37.250000, max=48.000000, mean=0.040727, std=9.450988
+      vLLM stats:
+        min=-43.250000, max=45.250000, mean=0.171641, std=8.455780
+  ✗ layer_4_attn_k_after_norm: Low cosine similarity
+       (shapes differ: [8, 15, 128] vs [15, 1024], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.910858, median=0.913969, min=0.872154, max=0.947859
+      Cosine similarity (filtered): 0.921087 (threshold: 0.999)
+      Cosine similarity (overall): 0.910858
+      Outliers: 5 / 15 positions (threshold: 0.9)
+      Outlier positions: [1, 2, 3, 4, 5]
+      Spec norm: 201.249084, vLLM norm: 202.226898
+      First 10 values:
+        spec:  [3.28125, -1.2109375, -0.8515625, -0.80078125, -1.5390625, 0.4375, 0.2060546875, 1.2890625, 1.046875, -0.953125]
+        vllm:  [1.390625, -0.85546875, -0.671875, -0.91796875, -1.9140625, 0.7734375, 0.84765625, 0.77734375, 0.8984375, 1.2578125]
+      Max diff at index 2805:
+        spec:  0.030273
+        vllm:  -4.375000
+        diff:  4.405273
+      Speculator stats:
+        min=-9.375000, max=8.687500, mean=-0.052487, std=1.623028
+      vLLM stats:
+        min=-9.812500, max=8.687500, mean=-0.031687, std=1.631458
+  ✗ layer_4_attn_q_after_norm: Low cosine similarity
+       (shapes differ: [15, 32, 128] vs [15, 4096], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.790555, median=0.814082, min=0.663859, max=0.842515
+      All 15 positions are outliers (threshold: 0.9)
+      Overall cosine similarity: 0.790555
+      Spec norm: 278.653168, vLLM norm: 275.273987
+      First 10 values:
+        spec:  [-0.32421875, -2.625, -0.90234375, -1.6328125, -2.03125, -0.87890625, 0.09326171875, 1.2890625, -0.73046875, -1.0]
+        vllm:  [-0.94140625, -0.6015625, 0.86328125, -0.283203125, -1.0, -1.03125, 0.6484375, 1.0546875, 0.060546875, 0.43359375]
+      Max diff at index 10478:
+        spec:  -0.123535
+        vllm:  4.593750
+        diff:  4.717285
+      Speculator stats:
+        min=-6.625000, max=6.250000, mean=-0.046519, std=1.123234
+      vLLM stats:
+        min=-6.375000, max=6.062500, mean=-0.050930, std=1.109395
+  ✗ layer_4_attn_q_after_rope: Low cosine similarity
+       (shapes differ: [32, 15, 128] vs [15, 4096], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.790553, median=0.814159, min=0.663981, max=0.842522
+      All 15 positions are outliers (threshold: 0.9)
+      Overall cosine similarity: 0.790553
+      Spec norm: 278.686005, vLLM norm: 275.308838
+      First 10 values:
+        spec:  [0.404296875, 2.25, 0.890625, -0.1298828125, -1.0703125, -0.455078125, -1.78125, 0.0263671875, -0.1943359375, -1.0390625]
+        vllm:  [1.2265625, -0.056396484375, -0.8828125, 0.9296875, -0.2158203125, -0.259765625, -0.294921875, -0.5390625, -0.6484375, 0.27734375]
+      Max diff at index 10478:
+        spec:  -0.111816
+        vllm:  4.656250
+        diff:  4.768066
+      Speculator stats:
+        min=-6.906250, max=6.718750, mean=-0.032134, std=1.123870
+      vLLM stats:
+        min=-6.562500, max=6.468750, mean=-0.025143, std=1.110420
+  ✗ layer_4_attn_k_after_rope: Low cosine similarity
+       (shapes differ: [8, 15, 128] vs [15, 1024], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.910841, median=0.913963, min=0.872072, max=0.947803
+      Cosine similarity (filtered): 0.921079 (threshold: 0.999)
+      Cosine similarity (overall): 0.910841
+      Outliers: 5 / 15 positions (threshold: 0.9)
+      Outlier positions: [1, 2, 3, 4, 5]
+      Spec norm: 201.269791, vLLM norm: 202.242508
+      First 10 values:
+        spec:  [-0.255859375, 1.7578125, 0.8984375, -0.2890625, -1.015625, 0.76171875, -2.421875, 0.220703125, -0.53515625, -0.84765625]
+        vllm:  [-0.83203125, 1.140625, 0.76953125, -0.28515625, -0.921875, 1.421875, -1.546875, -0.10107421875, -0.56640625, 1.328125]
+      Max diff at index 2805:
+        spec:  0.038574
+        vllm:  -4.375000
+        diff:  4.413574
+      Speculator stats:
+        min=-10.000000, max=9.687500, mean=-0.015744, std=1.623967
+      vLLM stats:
+        min=-8.812500, max=10.500000, mean=0.001582, std=1.631891
+  ✗ layer_4_attn_attn_output: Low cosine similarity
+       (shapes differ: [15, 32, 128] vs [15, 4096], but same element count) [reshaped to match vLLM layout]
+      Per-position: mean=0.531605, median=0.517079, min=0.420472, max=0.635970
+      All 15 positions are outliers (threshold: 0.9)
+      Overall cosine similarity: 0.531605
+      Spec norm: 855.359558, vLLM norm: 707.937317
+      First 10 values:
+        spec:  [-0.74609375, -0.0517578125, 1.4375, 0.984375, -0.0308837890625, -1.796875, -2.578125, 0.6015625, 1.671875, -0.2890625]
+        vllm:  [0.455078125, 1.21875, 1.796875, 1.5, 0.392578125, -0.76171875, -0.27734375, -0.65625, 0.34765625, -1.6640625]
+      Max diff at index 24260:
+        spec:  12.937500
+        vllm:  -12.687500
+        diff:  25.625000
+      Speculator stats:
+        min=-21.375000, max=21.250000, mean=-0.018024, std=3.450814
+      vLLM stats:
+        min=-25.250000, max=20.375000, mean=-0.024154, std=2.855995
+  ✗ layer_4_attn_attn_after_o_proj: Low cosine similarity
+      Per-position: mean=0.643892, median=0.650775, min=0.510653, max=0.717337
+      All 15 positions are outliers (threshold: 0.9)
+      Overall cosine similarity: 0.643892
+      Spec norm: 9659.769531, vLLM norm: 7921.850098
+      First 10 values:
+        spec:  [16.25, -41.0, 42.0, -21.0, -24.875, 24.0, 43.25, 24.875, 11.375, -30.25]
+        vllm:  [1.1640625, -43.0, -3.09375, -5.15625, -31.25, -14.375, 23.25, 13.5625, 66.5, -24.25]
+      Max diff at index 13839:
+        spec:  608.000000
+        vllm:  378.000000
+        diff:  230.000000
+      Speculator stats:
+        min=-266.000000, max=656.000000, mean=-0.082735, std=47.001335
+      vLLM stats:
+        min=-250.000000, max=804.000000, mean=-0.158863, std=38.544930
+  ✗ layer_outputs[4]: Low cosine similarity
+      Per-position: mean=0.852454, median=0.850681, min=0.799707, max=0.894556
+      All 15 positions are outliers (threshold: 0.9)
+      Overall cosine similarity: 0.852454
+      Spec norm: 17725.437500, vLLM norm: 16754.187500
+      First 10 values:
+        spec:  [31.0, 39.5, -18.25, -10.75, -67.0, 10.4375, 14.0, 14.0, 83.5, -29.5]
+        vllm:  [-15.625, 85.0, -1.984375, -0.078125, -4.125, -10.0, 20.25, 5.4375, 61.0, -28.75]
+      Max diff at index 33551:
+        spec:  -2320.000000
+        vllm:  -3840.000000
+        diff:  1520.000000
+      Speculator stats:
+        min=-2976.000000, max=436.000000, mean=-1.356618, std=86.235733
+      vLLM stats:
+        min=-4256.000000, max=356.000000, mean=-0.602061, std=81.518288
+  ✗ final_norm_output: Low cosine similarity
+      Per-position: mean=0.768810, median=0.775035, min=0.629601, max=0.823109
+      All 15 positions are outliers (threshold: 0.9)
+      Overall cosine similarity: 0.768810
+      Spec norm: 675.192078, vLLM norm: 668.005737
+      First 10 values:
+        spec:  [2.828125, -2.65625, -1.0703125, -3.703125, -3.515625, 1.1328125, 0.9140625, 1.765625, 6.375, -1.8046875]
+        vllm:  [-0.74609375, 2.46875, -0.84375, -1.4609375, -2.125, -0.76171875, -1.453125, 3.984375, 6.3125, -1.3125]
+      Max diff at index 955:
+        spec:  21.250000
+        vllm:  3.031250
+        diff:  18.218750
+      Speculator stats:
+        min=-31.250000, max=25.750000, mean=-0.001503, std=3.285268
+      vLLM stats:
+        min=-26.500000, max=41.500000, mean=0.004265, std=3.250299
+  ✗ logits (draft tokens only, 15 positions): Low cosine similarity
+      Per-position: mean=0.783060, median=0.817951, min=0.349890, max=0.912654
+      Cosine similarity (filtered): 0.783060 (threshold: 0.999)
+      Cosine similarity (overall): 0.783060
+      Spec norm: 13770.008789, vLLM norm: 15852.828125
+
+  Intermediates (+1 offset): 19 passed, 93 failed, 0 info
+
+3. Inference Output Validation:
+--------------------------------------------------------------------------------
+  ✗ Inference produced empty output
+
+================================================================================
+✗ SOME VALIDATIONS FAILED
+================================================================================
+
+Please review the failed checks above.
