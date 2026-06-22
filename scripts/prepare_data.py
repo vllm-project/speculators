@@ -63,9 +63,10 @@ def parse_args():
     parser.add_argument(
         "--data",
         type=str,
-        action="append",
+        nargs="+",
+        action="extend",
         required=True,
-        help="Path to training data (same as used in preprocessing)",
+        help="Path to training data. Accepts multiple paths space-separated or multiple --data flags.",
     )
     parser.add_argument(
         "--seq-length",
@@ -117,8 +118,13 @@ def parse_args():
         "--overwrite",
         action="store_true",
         help=(
-            "Forcibly rerun `prepare_data.py`.Deletes existing content in output dir"
+            "Forcibly rerun `prepare_data.py`. Deletes existing artifact files in output dir."
         ),
+    )
+    parser.add_argument(
+        "--allow-empty-output",
+        action="store_true",
+        help="Allow writing an empty dataset. Otherwise raises an error.",
     )
 
     # Processing arguments
@@ -167,8 +173,15 @@ def main():
             )
             sys.exit(0)
         if args.overwrite:
-            shutil.rmtree(output)
-            output.mkdir(parents=True)
+            # Safety: Only delete known dataset artifact files instead of rmtree
+            for f in output.glob("*.arrow"):
+                if f.is_file():
+                    f.unlink()
+                elif f.is_dir():
+                    shutil.rmtree(f)
+            for fname in ["token_freq.pt", "state.json", "dataset_info.json"]:
+                if (output / fname).exists():
+                    (output / fname).unlink()
     else:
         output.mkdir(parents=True)
 
@@ -193,6 +206,11 @@ def main():
     )
 
     log.info("Done preparing data")
+    
+    if len(dataset) == 0 and not args.allow_empty_output:
+        log.error("Dataset is empty after preprocessing. Use --allow-empty-output to bypass this error.")
+        sys.exit(1)
+        
     log.section(f"Writing dataset to {args.output}")
     dataset.save_to_disk(args.output)
 
