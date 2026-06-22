@@ -752,6 +752,12 @@ def parse_args():
         help="Maximum anchor positions for DFlash training (default: 256)",
     )
     parser.add_argument(
+        "--dflash-decay-gamma",
+        type=float,
+        default=4.0,
+        help="Decay gamma for DFlash loss weighting (default: 4.0)",
+    )
+    parser.add_argument(
         "--draft-attn-impl",
         type=str,
         default="simple_flex_attention",
