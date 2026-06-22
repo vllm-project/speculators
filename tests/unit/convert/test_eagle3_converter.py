@@ -141,6 +141,52 @@ class TestEagle3ConverterFixes:
     @patch(
         "speculators.convert.eagle.eagle3_converter.PretrainedConfig.get_config_dict"
     )
+    def test_config_num_key_value_heads_from_config(
+        self, mock_get_config, sample_eagle3_config
+    ):
+        """Test that num_key_value_heads is taken from eagle_config when present."""
+        mock_get_config.return_value = ({}, None)
+        converter = Eagle3Converter()
+
+        sample_eagle3_config["num_attention_heads"] = 32
+        sample_eagle3_config["num_key_value_heads"] = 8
+
+        llama_config = converter._create_transformer_config_from_eagle(
+            sample_eagle3_config, "meta-llama/Llama-3.1-8B-Instruct"
+        )
+        assert llama_config.num_key_value_heads == 8
+
+    @pytest.mark.sanity
+    @patch(
+        "speculators.convert.eagle.eagle3_converter.PretrainedConfig.get_config_dict"
+    )
+    def test_config_num_key_value_heads_defaults_to_attention_heads(
+        self, mock_get_config, sample_eagle3_config
+    ):
+        """num_key_value_heads should fall back to num_attention_heads (MHA).
+
+        When the draft config omits num_key_value_heads, the Eagle3 converter
+        must leave it None so LlamaConfig defaults it to num_attention_heads,
+        matching the Eagle1 converter. Previously it was hardcoded to 8, which
+        silently forced GQA with the wrong group count.
+        """
+        mock_get_config.return_value = ({}, None)
+        converter = Eagle3Converter()
+
+        sample_eagle3_config["num_attention_heads"] = 32
+        sample_eagle3_config.pop("num_key_value_heads", None)
+
+        llama_config = converter._create_transformer_config_from_eagle(
+            sample_eagle3_config, "meta-llama/Llama-3.1-8B-Instruct"
+        )
+        assert llama_config.num_key_value_heads == llama_config.num_attention_heads
+        assert llama_config.num_key_value_heads == 32
+        assert llama_config.num_key_value_heads != 8
+
+    @pytest.mark.sanity
+    @patch(
+        "speculators.convert.eagle.eagle3_converter.PretrainedConfig.get_config_dict"
+    )
     def test_config_fallback_when_verifier_unavailable(
         self, mock_get_config, sample_eagle3_config
     ):
