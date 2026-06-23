@@ -226,8 +226,8 @@ class PEagleDraftModel(Eagle3DraftModel):
                     )
                 ],
                 default_proposal_method="greedy",
-                verifier=VerifierConfig.from_config(
-                    verifier_config, name_or_path=kwargs["verifier_name_or_path"]
+                verifier=VerifierConfig.from_pretrained(
+                    kwargs["verifier_name_or_path"]
                 ),
             ),
         )

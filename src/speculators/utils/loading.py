@@ -9,6 +9,33 @@ from loguru import logger
 from safetensors import safe_open
 
 
+def is_config_only_dir(path: str | Path) -> bool:
+    """Return True if ``path`` is a local directory with a ``config.json`` but no
+    weight files (``*.safetensors`` / ``*.bin``).
+
+    Used to distinguish a saved speculator *config* (from which a fresh draft is
+    initialized) from a full checkpoint whose weights should be loaded.
+
+    :param path: A local directory path. Hub ids and non-directories return False.
+    :return: True when the directory holds a config but no weights.
+    """
+    directory = Path(path)
+    if not directory.is_dir():
+        return False
+    has_config = (directory / "config.json").is_file()
+    # Weight files, plus sharded-checkpoint index files (e.g.
+    # model.safetensors.index.json) -- the latter end in .json and would not match
+    # the *.safetensors / *.bin globs, so a shard manifest must be checked explicitly
+    # to avoid treating an incomplete sharded checkpoint as config-only.
+    has_weights = (
+        any(directory.glob("*.safetensors"))
+        or any(directory.glob("*.bin"))
+        or any(directory.glob("*.safetensors.index.json"))
+        or any(directory.glob("*.bin.index.json"))
+    )
+    return has_config and not has_weights
+
+
 def list_checkpoint_keys(checkpoint_dir: str | Path) -> list[str]:
     """List all tensor keys in a checkpoint without loading weights.
 

@@ -757,13 +757,15 @@ def test_load_vocab_mappings_validation(draft_vocab_config, vocab_mappings):
 
 
 def test_load_vocab_mappings_not_needed():
-    """load_vocab_mappings raises when vocab sizes match (no mapping needed)."""
+    """load_vocab_mappings is a no-op when vocab sizes match."""
     config = _make_eagle3_config(draft_vocab_size=64)  # same as verifier
     model = Eagle3DraftModel(config)
     t2d, d2t = _make_vocab_mappings(verifier_vocab_size=64, draft_vocab_size=64)
 
-    with pytest.raises(RuntimeError, match="not needed"):
-        model.load_vocab_mappings(t2d, d2t)
+    model.load_vocab_mappings(t2d, d2t)
+
+    assert model.t2d is None
+    assert model.d2t is None
 
 
 def test_from_training_args_loads_vocab_mappings(vocab_mappings):
