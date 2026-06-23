@@ -468,12 +468,14 @@ def main(args: argparse.Namespace):  # noqa: C901
         args.speculator_type in ("eagle3", "peagle")
         and getattr(args, "draft_arch", None) == "llama"
     ):
-        if not args.norm_before_fc:
+        if args.norm_before_fc is None:
             args.norm_before_fc = True
             logger.info("Defaulting --norm-before-fc for llama draft arch")
-        if not args.norm_output:
+        if args.norm_output is None:
             args.norm_output = True
             logger.info("Defaulting --norm-output for llama draft arch")
+    args.norm_before_fc = args.norm_before_fc or False
+    args.norm_output = args.norm_output or False
 
     if args.speculator_type == "mtp":
         if args.draft_attn_impl != "simple_flex_attention":
@@ -1004,15 +1006,18 @@ def parse_args():
     )
     parser.add_argument(
         "--norm-before-fc",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=None,
         help="Apply RMSNorm to concatenated target hidden states before the FC "
-        "projection layer (e.g. for gpt-oss).",
+        "projection layer. Defaults to True for llama draft arch.",
     )
     parser.add_argument(
         "--norm-output",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=None,
         help="Feed post-norm hidden states back across TTT steps to stabilize "
-        "magnitude drift across speculation depths (Eagle 3.1).",
+        "magnitude drift across speculation depths (Eagle 3.1). "
+        "Defaults to True for llama draft arch.",
     )
     # D-Flash specific parameters
     parser.add_argument(
