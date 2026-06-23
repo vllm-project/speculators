@@ -101,6 +101,19 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
         else:
             self.input_norm = None
 
+        if config.fc_norm:
+            self.fc_norms = torch.nn.ModuleList(
+                [
+                    self._model_definitions.norm_class(
+                        self.hidden_size,
+                        eps=config.transformer_layer_config.rms_norm_eps,
+                    )
+                    for _ in range(3)
+                ]
+            )
+        else:
+            self.fc_norms = None
+
         self.post_init()
 
     @property
@@ -179,6 +192,15 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
 
         if self.input_norm is not None:
             hidden_states = self.input_norm(hidden_states)
+        if self.fc_norms is not None:
+            chunks = hidden_states.chunk(len(self.fc_norms), dim=-1)
+            hidden_states = torch.cat(
+                [
+                    norm(chunk)
+                    for norm, chunk in zip(self.fc_norms, chunks, strict=True)
+                ],
+                dim=-1,
+            )
         hidden_states = self.fc(hidden_states)
         # shape: [1, total_seq_len, hidden_size]
 
@@ -330,6 +352,7 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
             draft_vocab_size=kwargs["draft_vocab_size"],
             norm_before_residual=kwargs["norm_before_residual"],
             norm_before_fc=kwargs.get("norm_before_fc", False),
+            fc_norm=kwargs.get("fc_norm", False),
             norm_output=kwargs.get("norm_output", False),
             embed_requires_grad=kwargs.get("embed_requires_grad", False),
             eagle_aux_hidden_state_layer_ids=target_layer_ids,

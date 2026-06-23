@@ -136,7 +136,9 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--embed-requires-grad` / `--no-embed-requires-grad`** (flag, default: `False`) Whether to train embedding layer weights.
 
-- **`--norm-before-fc`** (flag, default: `False`) Use RMSNorm before FC layer in draft path (e.g., for Eagle 3.1 / gpt-oss models).
+- **`--norm-before-fc` / `--no-norm-before-fc`** (flag, default: `False`) Apply a single RMSNorm to concatenated target hidden states before the FC projection layer. See `--fc-norm` for the per-layer alternative.
+
+- **`--fc-norm` / `--no-fc-norm`** (flag, default: `True` for llama arch, `False` otherwise) Apply per-layer RMSNorm to each auxiliary hidden state before concatenation and FC projection — i.e. `concat(Norm(h_a), Norm(h_b), Norm(h_c))`.
 
 - **`--norm-output`** (flag, default: `False`) Feed post-norm hidden states back across TTT steps to stabilize magnitude drift across speculation depths (Eagle 3.1).
 

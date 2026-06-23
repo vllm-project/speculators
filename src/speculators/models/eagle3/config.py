@@ -63,6 +63,16 @@ class Eagle3SpeculatorConfig(SpeculatorModelConfig):
         ),
     )
 
+    fc_norm: bool = Field(
+        default=False,
+        description=(
+            "Apply per-layer RMSNorm to each auxiliary hidden state before "
+            "concatenation and FC projection — i.e. "
+            "concat(Norm(h_a), Norm(h_b), Norm(h_c)) instead of the single "
+            "Norm(concat(h_a, h_b, h_c)) used by norm_before_fc."
+        ),
+    )
+
     norm_output: bool = Field(
         default=False,
         description=(
