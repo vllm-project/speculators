@@ -97,12 +97,15 @@ def make_eagle3_model(
     *,
     draft_vocab_size: int = 64,
     norm_before_residual: bool = False,
+    draft_attn_impl: str | None = None,
     device: str = "cuda:0",
     dtype: torch.dtype = torch.bfloat16,
 ) -> Eagle3DraftModel:
     """Create a tiny Eagle3 model with real initialized weights."""
+    transformer_config = copy.deepcopy(TINY_LLAMA_CONFIG)
+    transformer_config._attn_implementation = draft_attn_impl or "simple_flex_attention"
     config = Eagle3SpeculatorConfig(
-        transformer_layer_config=copy.deepcopy(TINY_LLAMA_CONFIG),
+        transformer_layer_config=transformer_config,
         draft_vocab_size=draft_vocab_size,
         norm_before_residual=norm_before_residual,
         embed_requires_grad=False,
@@ -163,12 +166,15 @@ def make_peagle_model(
     draft_vocab_size: int = 64,
     num_depths: int = 4,
     down_sample_ratio: float = 0.7,
+    draft_attn_impl: str | None = None,
     device: str = "cuda:0",
     dtype: torch.dtype = torch.bfloat16,
 ) -> PEagleDraftModel:
     """Create a tiny PEagle model with real initialized weights."""
+    transformer_config = copy.deepcopy(TINY_LLAMA_CONFIG)
+    transformer_config._attn_implementation = draft_attn_impl or "simple_flex_attention"
     config = PEagleSpeculatorConfig(
-        transformer_layer_config=copy.deepcopy(TINY_LLAMA_CONFIG),
+        transformer_layer_config=transformer_config,
         draft_vocab_size=draft_vocab_size,
         norm_before_residual=False,
         embed_requires_grad=True,
