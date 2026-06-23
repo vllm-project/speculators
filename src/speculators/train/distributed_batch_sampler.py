@@ -41,7 +41,7 @@ class _Bin(NamedTuple):
     """Helper named tuple for `lpt_packed_batch`"""
 
     fill: int  # sum of items in _Bin
-    rank: int  # device rank _Bin is associated with
+    rank: int  # global rank _Bin is associated with
 
 
 def _lpt_packed_batch(
@@ -49,7 +49,7 @@ def _lpt_packed_batch(
 ) -> None | list:
     """
     Check if lengths can be distributed into `num_replicas` machines with at most
-    `max_len` tokens per machine and return local rank's batch.
+    `max_len` tokens per machine and return this rank's batch.
 
     Uses the LPT (Longest processing time first scheduling) algorithm
     Time: O(|lengths| log |lengths| + |lengths| log replicas)
@@ -74,7 +74,7 @@ def _lpt_packed_batch(
             return None
 
         if heap[0].rank == rank:
-            # minimum bucket corresponds to the local rank -> add idx to local batch
+            # minimum bucket corresponds to this rank -> add idx to local batch
             local_batch.append(start_index + idx)
 
         _ = heapreplace(heap, _Bin(new_fill, heap[0].rank))
@@ -91,12 +91,12 @@ def _assign_to_packed_batches(
     Args:
         lengths (np.ndarray): array of dataset sample lengths
         max_len (int): maximum allowed sum of lengths in batch
-        rank (int): local rank to collect batches for
+        rank (int): global rank to collect batches for
         replicas (int): world size to distribute batches to
 
     Returns:
         tuple[list, int, int]:
-            - list of np.arrays containing the indices for each batch on the local rank
+            - list of np.arrays containing the indices for each batch on this rank
             - sum of dataset lengths included (total sum of lengths in dataset minus any
               that were dropped at end of dataset)
             - total token capacity if each batch maxed out max_length
@@ -109,7 +109,7 @@ def _assign_to_packed_batches(
 
     # binary search for max integer x such that the next x elements in shuffled lengths
     # array can be packed into `replicas` batches.
-    # Add the local rank's batch to `result` and repeat until end of dataset
+    # Add this rank's batch to `result` and repeat until end of dataset
     while True:
         if len(lengths) - ind < replicas:
             # Not enough lengths left to pack into `num_replicas` batches
@@ -141,7 +141,7 @@ def _assign_to_packed_batches(
         ind += left
         lengths_so_far = lengths_cumsum[ind - 1]
 
-        # append only result for local rank (already filtered in lpt_packed_batch)
+        # append only result for this rank (already filtered in lpt_packed_batch)
         result.append(batch)
 
     return result
@@ -163,7 +163,7 @@ class MultipackDistributedBatchSamplerV2(Sampler):
             batch_max_length (int): max number of tokens in a single batch per device
             lengths (ArrayLike[int]): the lengths of each sample in the dataset
             num_replicas (int): The number of replicas to split the dataset across.
-            rank (int): The local rank to collect batches for.
+            rank (int): The global rank to collect batches for.
             truncate_long_samples (bool, optional): Whether to truncate long samples
             (True) or drop them (False). Default is True.
             seed (int, optional): Seed for RNG, must be the same on all ranks. Default 0
@@ -209,11 +209,11 @@ class MultipackDistributedBatchSamplerV2(Sampler):
         self.epoch = epoch
 
     def _generate_batches(self, epoch: int) -> list[NDArray]:
-        """Generate batches for local rank
+        """Generate batches for this rank
 
         Returns:
             list[NDArray]: list of np.arrays containing the indices for each batch on
-            the local rank
+            this rank
         """
         if self._cached_generated_batches[0] == epoch:
             return self._cached_generated_batches[1]
