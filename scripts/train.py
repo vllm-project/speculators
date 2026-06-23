@@ -445,7 +445,7 @@ def build_draft_model(
     )
 
 
-def main(args: argparse.Namespace):  # noqa: C901
+def main(args: argparse.Namespace):  # noqa: C901, PLR0912
     # Set random seed for reproducibility
     set_seed(args.seed, args.deterministic_cuda)
 
