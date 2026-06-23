@@ -240,9 +240,13 @@ def load_draft_transformer_layer_config(
         config_dict = config_dict["transformer_layer_config"]
 
     model_type = config_dict.get("model_type")
-    config_class: type[PretrainedConfig] = (
-        type(AutoConfig.for_model(model_type)) if model_type else Qwen3Config
-    )
+    if not model_type:
+        raise ValueError(
+            "--draft-config must define a 'model_type' (e.g. 'llama' for "
+            "eagle3/peagle, 'qwen3' for dflash); none was found in the config "
+            f"loaded from '{draft_config}'."
+        )
+    config_class: type[PretrainedConfig] = type(AutoConfig.for_model(model_type))
     draft_config_obj = config_class.from_dict(config_dict)
 
     verifier_config = get_verifier_config(verifier_name_or_path)
@@ -441,7 +445,7 @@ def build_draft_model(
     )
 
 
-def main(args: argparse.Namespace):  # noqa: C901, PLR0912
+def main(args: argparse.Namespace):  # noqa: C901
     # Set random seed for reproducibility
     set_seed(args.seed, args.deterministic_cuda)
 

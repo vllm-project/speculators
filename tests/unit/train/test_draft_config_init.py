@@ -14,6 +14,7 @@ Covers the three mutually exclusive init paths and their guard rails:
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -37,7 +38,7 @@ from speculators.utils.loading import is_config_only_dir
 # Helpers
 # ---------------------------------------------------------------------------
 
-TINY_LLAMA_KWARGS = {
+TINY_LLAMA_KWARGS: dict[str, Any] = {
     "vocab_size": 64,
     "hidden_size": 32,
     "intermediate_size": 128,
@@ -60,7 +61,7 @@ def _parse(monkeypatch, extra: list[str]):
 def _make_eagle3_config(verifier_name_or_path: str | None = "some-verifier"):
     return Eagle3SpeculatorConfig(
         transformer_layer_config=LlamaConfig(
-            _attn_implementation="eager", **TINY_LLAMA_KWARGS
+            **{"_attn_implementation": "eager", **TINY_LLAMA_KWARGS}
         ),
         draft_vocab_size=64,
         norm_before_residual=False,
@@ -264,6 +265,17 @@ def test_load_draft_config_extracts_nested_from_full_config(tmp_path, monkeypatc
     assert out.num_hidden_layers == 5
 
 
+def test_load_draft_config_missing_model_type_raises(tmp_path, monkeypatch):
+    """A --draft-config without a model_type fails loudly rather than silently
+    defaulting to a particular decoder class."""
+    cfg = {"hidden_size": 64, "num_hidden_layers": 2, "vocab_size": 100}
+    (tmp_path / "config.json").write_text(json.dumps(cfg))
+    _patch_verifier(monkeypatch, hidden_size=64, vocab_size=100)
+
+    with pytest.raises(ValueError, match="model_type"):
+        load_draft_transformer_layer_config(str(tmp_path), "dummy-verifier")
+
+
 # ---------------------------------------------------------------------------
 # _build_from_config_only
 # ---------------------------------------------------------------------------
@@ -364,7 +376,7 @@ def test_build_draft_model_mtp_from_scratch_uses_verifier_decoder(monkeypatch):
         num_speculative_steps=3,
     )
 
-    built = build_draft_model(args, _FakeMTP, None, None, None)
+    built = build_draft_model(args, _FakeMTP, None, None, None)  # type: ignore[arg-type]
 
     assert built == "MTP_MODEL"
     assert captured["verifier_config"] is verifier_cfg
@@ -403,7 +415,7 @@ def _create_layer_config_for(verifier: SimpleNamespace):
             num_layers=2,
             draft_arch="qwen3",
             hidden_act=None,
-            sliding_window=None,
+            sliding_window=2048,
             sliding_window_indices=[],
         )
 
