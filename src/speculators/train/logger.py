@@ -534,7 +534,9 @@ class MLFlowHandler(logging.Handler):
             if current_exp:
                 past_runs = mlflow.search_runs(
                     experiment_ids=[current_exp.experiment_id],
-                    filter_string=f"tags.mlflow.runName = '{self._run_name}'",
+                    filter_string="tags.mlflow.runName = '{}'".format(
+                        self._run_name.replace("'", r"\'")
+                    ),
                     max_results=1,
                 )
                 if not past_runs.empty:  # type: ignore[union-attr]

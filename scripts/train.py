@@ -865,7 +865,7 @@ def parse_args():
         default="",
         help=(
             "One of 'trackio', 'wandb', 'tensorboard', 'mlflow' or "
-            "comma separated list.",
+            "comma separated list."
         ),
     )
     parser.add_argument("--total-seq-len", type=int, default=8192)
