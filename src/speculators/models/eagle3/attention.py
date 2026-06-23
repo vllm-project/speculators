@@ -105,6 +105,26 @@ def extend_mask_for_draft_tokens(block_mask):
     )
 
 
+def extend_dense_mask_for_draft_tokens(mask: torch.Tensor, total_seq_len: int):
+    """Extend a dense attention mask with a diagonal block for new draft tokens.
+
+    Dense-mask equivalent of extend_mask_for_draft_tokens (which operates on
+    BlockMask). Appends total_seq_len new KV columns where only position
+    (q, new_offset + q) is True — the same diagonal pattern.
+
+    Args:
+        mask: Dense boolean mask of shape [1, 1, total_seq_len, kv_len].
+        total_seq_len: Number of query positions (= original sequence length).
+
+    Returns:
+        Extended mask of shape [1, 1, total_seq_len, kv_len + total_seq_len].
+    """
+    idx = torch.arange(total_seq_len, device=mask.device)
+    diag = idx.unsqueeze(1) == idx.unsqueeze(0)
+    diag = diag.to(dtype=mask.dtype).unsqueeze(0).unsqueeze(0)
+    return torch.cat([mask, diag], dim=-1)
+
+
 def block_mask_to_dense_attention_mask(
     block_mask: BlockMask, device: torch.device, dtype: torch.dtype
 ):

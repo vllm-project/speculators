@@ -283,7 +283,7 @@ def parse_vocab_mappings(args: argparse.Namespace):
     return None, None, verifier_config.vocab_size
 
 
-def main(args: argparse.Namespace):
+def main(args: argparse.Namespace):  # noqa: C901, PLR0912
     # Set random seed for reproducibility
     set_seed(args.seed, args.deterministic_cuda)
 
@@ -302,6 +302,11 @@ def main(args: argparse.Namespace):
     hidden_states_dtype = getattr(torch, args.hidden_states_dtype)
 
     if args.speculator_type == "mtp":
+        if args.draft_attn_impl != "simple_flex_attention":
+            raise ValueError(
+                "--draft-attn-impl is not configurable for MTP. "
+                "Must be left with the default value ('simple_flex_attention')."
+            )
         verifier_config = AutoConfig.from_pretrained(args.verifier_name_or_path)
         if hasattr(verifier_config, "text_config"):
             verifier_config = verifier_config.text_config
@@ -762,8 +767,9 @@ def parse_args():
         type=str,
         default="simple_flex_attention",
         choices=["simple_flex_attention", "sdpa", "eager"],
-        help="Attention implementation for the DFlash draft layers. "
-        "Use 'sdpa' or 'eager' for non-flex backends.",
+        help="Attention implementation for draft layers. "
+        "Use 'sdpa' or 'eager' for hardware that doesn't support flex attention."
+        "Not supported for MTP.",
     )
     # P-EAGLE specific parameters
     parser.add_argument(

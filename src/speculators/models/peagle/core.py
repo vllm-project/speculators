@@ -3,7 +3,6 @@
 from typing import ClassVar
 
 import torch
-from torch.nn.attention.flex_attention import create_block_mask
 from transformers import PretrainedConfig
 
 from speculators.config import SpeculatorsConfig, VerifierConfig
@@ -132,7 +131,7 @@ class PEagleDraftModel(Eagle3DraftModel):
             document_ids=document_ids.squeeze(0).to(device),
         )
 
-        attention_mask = create_block_mask(  # type: ignore[assignment]
+        attention_mask = self._create_mask_fn(
             mask_mod,
             B=None,
             H=None,
@@ -204,6 +203,10 @@ class PEagleDraftModel(Eagle3DraftModel):
         # Resolve target layer IDs if not provided
         target_layer_ids = resolve_target_layer_ids(
             kwargs.get("target_layer_ids"), kwargs["verifier_name_or_path"]
+        )
+
+        verifier_config._attn_implementation = kwargs.get(  # noqa: SLF001
+            "draft_attn_impl", "simple_flex_attention"
         )
 
         config = PEagleSpeculatorConfig(
