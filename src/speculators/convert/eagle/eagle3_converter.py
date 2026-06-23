@@ -40,7 +40,7 @@ class Eagle3Converter:
         validate: bool = True,
         norm_before_residual: bool = False,
         norm_before_fc: bool = False,
-        eagle31: bool = False,
+        norm_output: bool = False,
         eagle_aux_hidden_state_layer_ids: list[int] | None = None,
         cache_dir: str | Path | None = None,
     ) -> None:
@@ -80,7 +80,7 @@ class Eagle3Converter:
             base_model,
             norm_before_residual,
             norm_before_fc,
-            eagle31,
+            norm_output,
             eagle_aux_hidden_state_layer_ids,
         )
 
@@ -111,7 +111,7 @@ class Eagle3Converter:
         base_model: str,
         norm_before_residual: bool = False,
         norm_before_fc: bool = False,
-        eagle31: bool = False,
+        norm_output: bool = False,
         eagle_aux_hidden_state_layer_ids: list[int] | None = None,
     ) -> Eagle3SpeculatorConfig:
         transformer_config = self._create_transformer_config_from_eagle(
@@ -138,7 +138,7 @@ class Eagle3Converter:
             norm_before_residual=norm_before_residual,
             norm_before_fc=norm_before_fc
             or eagle_config.get("norm_before_fc", False),
-            eagle31=eagle31,
+            norm_output=norm_output,
             target_hidden_size=eagle_config.get("target_hidden_size"),
             eagle_aux_hidden_state_layer_ids=eagle_aux_hidden_state_layer_ids,
         )

@@ -483,44 +483,44 @@ def _make_eagle3_speculators_config():
 
 
 @pytest.mark.sanity
-def test_eagle3_config_eagle31_roundtrip():
+def test_eagle3_config_norm_output_roundtrip():
     original = Eagle3SpeculatorConfig(
         transformer_layer_config=copy.deepcopy(TINY_LLAMA_CONFIG),
         draft_vocab_size=32000,
         norm_before_residual=False,
-        eagle31=True,
+        norm_output=True,
         speculators_config=_make_eagle3_speculators_config(),
     )
 
     config_dict = original.model_dump()
-    assert config_dict["eagle31"] is True
+    assert config_dict["norm_output"] is True
 
     recreated = Eagle3SpeculatorConfig.model_validate(config_dict)
-    assert recreated.eagle31 is True
+    assert recreated.norm_output is True
 
 
 @pytest.mark.sanity
-def test_eagle3_config_eagle31_dict_roundtrip():
+def test_eagle3_config_norm_output_dict_roundtrip():
     original = Eagle3SpeculatorConfig(
         transformer_layer_config=copy.deepcopy(TINY_LLAMA_CONFIG),
         draft_vocab_size=32000,
-        eagle31=True,
+        norm_output=True,
         speculators_config=_make_eagle3_speculators_config(),
     )
 
     config_dict = original.to_dict()
-    assert config_dict["eagle31"] is True
+    assert config_dict["norm_output"] is True
 
     reloaded = SpeculatorModelConfig.from_dict(config_dict)
-    assert reloaded.eagle31 is True
+    assert reloaded.norm_output is True
 
 
 @pytest.mark.sanity
-def test_eagle3_config_eagle31_pretrained_roundtrip():
+def test_eagle3_config_norm_output_pretrained_roundtrip():
     original = Eagle3SpeculatorConfig(
         transformer_layer_config=copy.deepcopy(TINY_LLAMA_CONFIG),
         draft_vocab_size=32000,
-        eagle31=True,
+        norm_output=True,
         speculators_config=_make_eagle3_speculators_config(),
     )
 
@@ -528,13 +528,13 @@ def test_eagle3_config_eagle31_pretrained_roundtrip():
         original.save_pretrained(tmp_dir)
         reloaded = SpeculatorModelConfig.from_pretrained(tmp_dir)
 
-    assert reloaded.eagle31 is True
+    assert reloaded.norm_output is True
 
 
 @pytest.mark.sanity
-def test_eagle3_config_eagle31_defaults():
+def test_eagle3_config_norm_output_defaults():
     config = Eagle3SpeculatorConfig(
         transformer_layer_config=copy.deepcopy(TINY_LLAMA_CONFIG),
         speculators_config=_make_eagle3_speculators_config(),
     )
-    assert config.eagle31 is False
+    assert config.norm_output is False

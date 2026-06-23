@@ -463,6 +463,18 @@ def main(args: argparse.Namespace):  # noqa: C901
         )
     hidden_states_dtype = getattr(torch, args.hidden_states_dtype)
 
+    # Default to Eagle 3.1 (norm_before_fc + norm_output) for llama arch
+    if (
+        args.speculator_type in ("eagle3", "peagle")
+        and getattr(args, "draft_arch", None) == "llama"
+    ):
+        if not args.norm_before_fc:
+            args.norm_before_fc = True
+            logger.info("Defaulting --norm-before-fc for llama draft arch")
+        if not args.norm_output:
+            args.norm_output = True
+            logger.info("Defaulting --norm-output for llama draft arch")
+
     if args.speculator_type == "mtp":
         if args.draft_attn_impl != "simple_flex_attention":
             raise ValueError(
@@ -997,10 +1009,10 @@ def parse_args():
         "projection layer (e.g. for gpt-oss).",
     )
     parser.add_argument(
-        "--eagle31",
+        "--norm-output",
         action="store_true",
-        help="Enable Eagle 3.1 training: RMSNorm before FC projection and "
-        "post-norm hidden state feedback across TTT steps.",
+        help="Feed post-norm hidden states back across TTT steps to stabilize "
+        "magnitude drift across speculation depths (Eagle 3.1).",
     )
     # D-Flash specific parameters
     parser.add_argument(

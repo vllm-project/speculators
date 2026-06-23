@@ -63,12 +63,11 @@ class Eagle3SpeculatorConfig(SpeculatorModelConfig):
         ),
     )
 
-    eagle31: bool = Field(
+    norm_output: bool = Field(
         default=False,
         description=(
-            "Enable Eagle 3.1 training mode: implies norm_before_fc and adds "
-            "post-norm hidden state feedback across TTT steps to stabilize "
-            "magnitude drift across speculation depths."
+            "Feed post-norm hidden states back across TTT steps to stabilize "
+            "magnitude drift across speculation depths (Eagle 3.1)."
         ),
     )
 
