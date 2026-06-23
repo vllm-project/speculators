@@ -464,18 +464,14 @@ def main(args: argparse.Namespace):  # noqa: C901
     hidden_states_dtype = getattr(torch, args.hidden_states_dtype)
 
     # Default to Eagle 3.1 (norm_before_fc + norm_output) for llama arch
-    if (
+    is_llama_eagle = (
         args.speculator_type in ("eagle3", "peagle")
         and getattr(args, "draft_arch", None) == "llama"
-    ):
-        if args.norm_before_fc is None:
-            args.norm_before_fc = True
-            logger.info("Defaulting --norm-before-fc for llama draft arch")
-        if args.norm_output is None:
-            args.norm_output = True
-            logger.info("Defaulting --norm-output for llama draft arch")
-    args.norm_before_fc = args.norm_before_fc or False
-    args.norm_output = args.norm_output or False
+    )
+    if args.norm_before_fc is None:
+        args.norm_before_fc = is_llama_eagle
+    if args.norm_output is None:
+        args.norm_output = is_llama_eagle
 
     if args.speculator_type == "mtp":
         if args.draft_attn_impl != "simple_flex_attention":
