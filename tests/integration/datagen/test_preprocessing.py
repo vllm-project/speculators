@@ -674,6 +674,34 @@ def test_preprocess_batch_truncation():
 
 
 @pytest.mark.sanity
+def test_preprocess_batch_truncation_hf_mask_path():
+    """Test that the HF assistant-mask path also truncates to max_length."""
+    processor = load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
+
+    if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
+        pytest.skip("Processor does not support chat templates")
+
+    examples = {
+        "conversations": [
+            [
+                {"role": "user", "content": "word " * 1000},
+                {"role": "assistant", "content": "Short reply"},
+            ]
+        ]
+    }
+
+    max_length = 100
+    # assistant_pattern=None selects the HF mask path
+    results = _preprocess_batch(
+        examples, processor, max_length=max_length, assistant_pattern=None
+    )
+
+    assert len(results["input_ids"]) == 1
+    assert len(results["input_ids"][0]) <= max_length
+    assert len(results["loss_mask"][0]) <= max_length
+
+
+@pytest.mark.sanity
 def test_preprocess_batch_uses_hf_assistant_mask():
     """Test that HF assistant token mask is used when supported."""
     processor = load_processor(TEXT_MODEL_REPO, trust_remote_code=True)

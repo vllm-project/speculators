@@ -385,7 +385,14 @@ def _get_input_ids_loss_mask(
     hf_conv = _adapt_conv_for_hf(normalized_conv, processor)
 
     if assistant_pattern is None:
-        # HF assistant token mask
+        # HF assistant token mask. Multimodal input_ids are re-tokenized by vLLM
+        # from `messages`, so truncating them here would desync the two; only
+        # truncate text-only inputs, which are sent to vLLM as input_ids.
+        truncation_kwargs: dict = (
+            {}
+            if isinstance(processor, ProcessorMixin)
+            else {"max_length": max_length, "truncation": True}
+        )
         encoded_any = processor.apply_chat_template(
             hf_conv,
             tokenize=True,
@@ -393,6 +400,7 @@ def _get_input_ids_loss_mask(
             add_generation_prompt=False,
             return_assistant_tokens_mask=True,
             return_dict=True,
+            **truncation_kwargs,
         )
         encoded = cast("BatchEncoding | BatchFeature", encoded_any)
 
