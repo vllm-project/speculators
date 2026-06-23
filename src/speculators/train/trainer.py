@@ -308,6 +308,9 @@ class Trainer:
         if hasattr(self.train_loader.batch_sampler, "set_epoch"):
             self.train_loader.batch_sampler.set_epoch(epoch)  # type: ignore[union-attr]
 
+        # Capture full-epoch step count before any resume fast-skip mutation.
+        num_steps = len(self.train_loader)
+
         # Determine how many batches to skip for mid-epoch resume.
         skip_steps = self._prepare_resume_skip(epoch)
 
@@ -315,7 +318,6 @@ class Trainer:
         if self.rank == 0:
             train_loader = tqdm(train_loader, desc=f"Epoch {epoch}")  # type: ignore[assignment]
 
-        num_steps = len(self.train_loader)
         step_interval = (
             max(1, round(num_steps * self.config.checkpoint_freq))
             if self.config.checkpoint_freq < 1
