@@ -95,12 +95,11 @@ class DraftVocabMixin(nn.Module):
             )
 
         if not self.use_draft_vocab:
-            raise RuntimeError(
-                "Vocab mappings (t2d/d2t) are not needed because "
-                "draft_vocab_size equals verifier vocab_size. "
-                "Set draft_vocab_size < verifier_vocab_size or "
-                "omit t2d/d2t arguments."
-            )
+            # draft_vocab_size == verifier_vocab_size, so the mappings would be
+            # identity no-ops; accept and ignore them rather than erroring. Real
+            # data directories may carry full-vocab t2d/d2t files alongside a
+            # checkpoint that does not prune the vocabulary.
+            return
 
         if t2d.shape[0] != self.verifier_vocab_size:
             raise ValueError(

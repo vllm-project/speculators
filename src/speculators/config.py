@@ -75,6 +75,28 @@ class VerifierConfig(BaseModel):
             architectures=config_dict.get("architectures") or [],
         )
 
+    @classmethod
+    def from_pretrained(cls, name_or_path: str, **kwargs: Any) -> "VerifierConfig":
+        """
+        Create a VerifierConfig by reading the verifier's published config.json.
+
+        Unlike :meth:`from_config`, which extracts fields from an already-loaded
+        ``PretrainedConfig`` object (e.g. a freshly built draft decoder config that
+        has no ``architectures`` set), this reads the verifier's ``config.json``
+        directly so ``architectures`` reflects the real verifier (for example
+        ``["Qwen3ForCausalLM"]``).
+
+        :param name_or_path: The Hugging Face id or local path of the verifier model.
+        :param kwargs: Forwarded to ``PretrainedConfig.get_config_dict`` (e.g.
+            ``cache_dir``, ``revision``).
+        :return: A VerifierConfig with the verifier's name_or_path and architectures.
+        """
+        config_dict, _ = PretrainedConfig.get_config_dict(name_or_path, **kwargs)
+        return cls(
+            name_or_path=name_or_path,
+            architectures=config_dict.get("architectures") or [],
+        )
+
     name_or_path: str | None = Field(
         description=(
             "The name as a Hugging Face id or path to the verifier model "
