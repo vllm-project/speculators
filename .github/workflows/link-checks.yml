@@ -24,7 +24,7 @@ jobs:
       id-token: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
       - name: (DOCS) Link Checker
         id: lychee_docs
         uses: lycheeverse/lychee-action@v2
