@@ -7,6 +7,7 @@ def create_peagle_mask_mod(
     anchor_pos: torch.Tensor,  # shape: [total_sampled]
     depth: torch.Tensor,  # shape: [total_sampled]
     document_ids: torch.Tensor,  # shape: [total_seq_len]
+    valid_mask: torch.Tensor | None = None,  # shape: [total_sampled]
 ):
     """
     Create a flex attention mask modifier for P-EAGLE parallel groups.
@@ -55,10 +56,15 @@ def create_peagle_mask_mod(
         in_depth_order = q_depth >= kv_depth
         is_anchor_causal = q_anchor_pos >= kv_anchor_pos
 
-        return (
+        result = (
             is_not_padding
             & same_document
             & ((kv_depth0 & is_anchor_causal) | (same_rollout & in_depth_order))
         )
+
+        if valid_mask is not None:
+            result = result & valid_mask[q_idx] & valid_mask[kv_idx]
+
+        return result
 
     return peagle_mask_mod

@@ -179,6 +179,76 @@ def ulysses_flex_attention_forward(
     return attn_output, None
 
 
+def ulysses_dflash_flex_attention_forward(
+    module: torch.nn.Module,
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    attention_mask,
+    scaling: float | None = None,
+    **kwargs,
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    """Ulysses SP attention for DFlash with asymmetric Q/KV.
+
+    DFlash K/V are ``[context | noise]`` concatenated along the sequence dim.
+    A naive all-to-all would interleave context and noise from different ranks,
+    breaking the mask. This function splits K/V at ``ctx_len``, does separate
+    all-to-alls, and concatenates ``[global_ctx | global_noise]`` to preserve
+    the layout that ``create_anchor_block_mask_mod`` expects.
+    """
+    from torch.nn.attention.flex_attention import flex_attention  # noqa: PLC0415
+
+    sp_group = get_sp_group()
+    sp_size = get_sp_size()
+
+    if sp_group is None or sp_size <= 1:
+        from speculators.models.attention import flex_attention_forward  # noqa: PLC0415
+
+        return flex_attention_forward(
+            module, query, key, value, attention_mask, scaling=scaling, **kwargs
+        )
+
+    ctx_len = kwargs.pop("ctx_len", None)
+    if ctx_len is None:
+        raise ValueError("ctx_len must be provided for DFlash Ulysses attention")
+
+    num_kv_heads = key.shape[1]
+    key, value = maybe_replicate_kv_heads(key, value, num_kv_heads, sp_size)
+
+    # Split K/V into context and noise parts
+    k_ctx, k_noise = key.split([ctx_len, key.shape[2] - ctx_len], dim=2)
+    v_ctx, v_noise = value.split([ctx_len, value.shape[2] - ctx_len], dim=2)
+
+    # All-to-all: scatter heads (dim=1), gather seq (dim=2)
+    query = all_to_all_sp(query, sp_group, scatter_dim=1, gather_dim=2)
+    k_ctx = all_to_all_sp(k_ctx, sp_group, scatter_dim=1, gather_dim=2)
+    k_noise = all_to_all_sp(k_noise, sp_group, scatter_dim=1, gather_dim=2)
+    v_ctx = all_to_all_sp(v_ctx, sp_group, scatter_dim=1, gather_dim=2)
+    v_noise = all_to_all_sp(v_noise, sp_group, scatter_dim=1, gather_dim=2)
+
+    # Concatenate: [global_ctx | global_noise]
+    key = torch.cat([k_ctx, k_noise], dim=2)
+    value = torch.cat([v_ctx, v_noise], dim=2)
+
+    num_q_local = query.shape[1]
+    num_kv_local = key.shape[1]
+
+    attn_output = flex_attention(
+        query.contiguous(),
+        key.contiguous(),
+        value.contiguous(),
+        score_mod=None,
+        block_mask=attention_mask,
+        enable_gqa=num_q_local != num_kv_local,
+        scale=scaling,
+    )
+
+    # Post-attention: scatter seq (dim=2), gather heads (dim=1)
+    attn_output = all_to_all_sp(attn_output, sp_group, scatter_dim=2, gather_dim=1)
+    attn_output = attn_output.transpose(1, 2).contiguous()
+    return attn_output, None
+
+
 # ---------------------------------------------------------------------------
 # Data scatter — SP rank 0 scatters collated batches to all SP ranks
 # ---------------------------------------------------------------------------
@@ -257,7 +327,7 @@ def sp_scatter_batch(  # noqa: C901, PLR0912
         # --- tensor metadata: [ndim, dtype_code, is_broadcast] + shape ---
         if sp_rank == 0:
             tensor = tensor.to(device)
-            is_broadcast = key == "lengths" or tensor.dim() < 2  # noqa: PLR2004
+            is_broadcast = key == "document_ids" or tensor.dim() < 2  # noqa: PLR2004
             meta = torch.tensor(
                 [tensor.ndim, _DTYPE_TO_CODE[tensor.dtype], int(is_broadcast)],
                 dtype=torch.long,

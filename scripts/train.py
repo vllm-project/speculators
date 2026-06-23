@@ -493,9 +493,12 @@ def main(args: argparse.Namespace):  # noqa: C901, PLR0912
             )
 
         # Switch attention to Ulysses SP variant for supported models
-        if args.speculator_type in ("eagle3",):
+        if args.speculator_type in ("eagle3", "peagle"):
             tl_cfg = draft_model.config.transformer_layer_config
             tl_cfg._attn_implementation = "ulysses_flex_attention"
+        elif args.speculator_type == "dflash":
+            tl_cfg = draft_model.config.transformer_layer_config
+            tl_cfg._attn_implementation = "ulysses_dflash_flex_attention"
 
     train_loader, val_loader = create_train_val_loaders(
         data_path=args.data_path,
@@ -1024,7 +1027,7 @@ def parse_args():
             "Sequence parallelism degree (Ulysses SP). Shards the sequence "
             "dimension across this many GPUs, reducing per-GPU attention memory "
             "linearly. Must divide world_size and total_seq_len evenly. "
-            "Currently supported for eagle3 only. (default: 1 = disabled)"
+            "Supported for eagle3, dflash, and peagle. (default: 1 = disabled)"
         ),
     )
 
