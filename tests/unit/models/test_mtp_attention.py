@@ -42,11 +42,13 @@ def test_packed_batch_attention_is_document_local(mtp_model, monkeypatch):
             position_ids=position_ids,
         )
 
+    assert "mask" in captured, "create_causal_mask was never called"
     mask = captured["mask"]
     assert isinstance(mask, torch.Tensor)  # dense mask path, not BlockMask/None
+    # [batch, 1, q, kv]: broadcast over heads, so head 0 is authoritative
+    assert mask.shape == (1, 1, n, n)
     allow = mask[0, 0] == 0  # additive mask -> "may attend"
-    n_q = allow.shape[0]  # == valid_len == n
-    idx = torch.arange(n_q)
-    doc = document_ids[:n_q]
+    idx = torch.arange(n)
+    doc = document_ids
     expected = (idx[:, None] >= idx[None, :]) & (doc[:, None] == doc[None, :])
     assert torch.equal(allow, expected)
