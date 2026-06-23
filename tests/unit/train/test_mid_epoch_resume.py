@@ -83,8 +83,11 @@ class _MockTrainer(Trainer):
 
     def setup_optimizer(self) -> None:
         p = nn.Parameter(torch.zeros(1))
-        self.opt = torch.optim.AdamW([p], lr=1e-4)
+        opt = torch.optim.AdamW([p], lr=1e-4)
+        self.opt = opt
+        self.optimizers = [opt]
         self.scheduler = None
+        self.schedulers = []
 
     def train_epoch(self, epoch: int) -> None:
         if hasattr(self.train_loader.batch_sampler, "set_epoch"):
