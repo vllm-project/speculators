@@ -365,7 +365,7 @@ class TestNormOutputParams:
         assert model.input_norm is not None
         samples = _make_samples([128])
         batch = make_batch(max_len=MAX_LEN, samples=samples, hidden_size=HIDDEN_SIZE)
-        draft_tokens, loss, metrics = model(**batch, ttt_steps=3)
+        draft_tokens, loss, _metrics = model(**batch, ttt_steps=3)
 
         assert len(draft_tokens) == 3
         assert loss.isfinite()
@@ -376,7 +376,7 @@ class TestNormOutputParams:
         assert model.input_norm is None
         samples = _make_samples([128])
         batch = make_batch(max_len=MAX_LEN, samples=samples, hidden_size=HIDDEN_SIZE)
-        draft_tokens, loss, metrics = model(**batch, ttt_steps=3)
+        draft_tokens, loss, _metrics = model(**batch, ttt_steps=3)
 
         assert len(draft_tokens) == 3
         assert loss.isfinite()
@@ -390,7 +390,7 @@ class TestNormOutputParams:
         assert model.input_norm is not None
         samples = _make_samples([128])
         batch = make_batch(max_len=MAX_LEN, samples=samples, hidden_size=HIDDEN_SIZE)
-        draft_tokens, loss, metrics = model(**batch)
+        _draft_tokens, loss, _metrics = model(**batch)
 
         assert loss.isfinite()
         loss.backward()

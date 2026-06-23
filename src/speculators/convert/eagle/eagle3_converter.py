@@ -137,7 +137,7 @@ class Eagle3Converter:
             draft_vocab_size=eagle_config.get("draft_vocab_size", 32000),
             norm_before_residual=norm_before_residual,
             norm_before_fc=norm_before_fc or eagle_config.get("norm_before_fc", False),
-            norm_output=norm_output,
+            norm_output=norm_output or eagle_config.get("norm_output", False),
             target_hidden_size=eagle_config.get("target_hidden_size"),
             eagle_aux_hidden_state_layer_ids=eagle_aux_hidden_state_layer_ids,
         )
