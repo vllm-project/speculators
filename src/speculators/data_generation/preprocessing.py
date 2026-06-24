@@ -80,7 +80,7 @@ ROLE_ALIASES = {
     "assistant": "assistant",
     "system": "system",
     "tool": "tool",
-    "observation": "user",
+    "observation": "tool",
     "model": "assistant",
 }
 
@@ -104,10 +104,10 @@ def _normalize_turn(turn: dict) -> dict | None:
     if turn.get("tool_call_id"):
         normalized_turn["tool_call_id"] = turn["tool_call_id"]
 
-    thinking = turn.get("thinking") or turn.get("reasoning_content")
-    if thinking:
-        normalized_turn["thinking"] = thinking
-        normalized_turn["reasoning_content"] = thinking
+    if "thinking" in turn:
+        normalized_turn["thinking"] = turn["thinking"]
+    if "reasoning_content" in turn:
+        normalized_turn["reasoning_content"] = turn["reasoning_content"]
 
     return normalized_turn
 def _normalize_conversation(
@@ -115,6 +115,8 @@ def _normalize_conversation(
     turn_dropout: bool = False,
 ) -> list[dict]:
     """Normalize conversation to standard format with role/content keys."""
+    if not conv:
+        return []
     num_turns_to_keep = random.randint(1, len(conv)) if turn_dropout else len(conv)
 
     normalized = []
@@ -692,7 +694,10 @@ def load_raw_dataset(
         # Default to loading as generic HF dataset
         return load_dataset(hf_path, split=split), None
     except Exception as e:
-        raise ValueError(f"Failed to load '{train_data_path}' as a local file, directory bundle, preset, or HF dataset. Error: {e}")
+        raise ValueError(
+            f"Failed to load '{train_data_path}' as a local file, directory bundle, "
+            f"preset, or HF dataset. Error: {e}"
+        ) from e
 
 
 def get_tokenizer(processor: ProcessorLike):
