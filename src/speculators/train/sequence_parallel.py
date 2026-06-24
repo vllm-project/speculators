@@ -1,0 +1,391 @@
+"""Ulysses Sequence Parallelism utilities.
+
+Implements the all-to-all communication pattern for distributing attention
+computation across GPUs by sharding the sequence dimension. Non-attention
+operations (FC, MLP, norms) operate on local sequence chunks without
+communication.
+
+Reference: DeepSpeed-Ulysses (https://arxiv.org/abs/2309.14509)
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Generator
+
+import torch
+import torch.distributed as dist
+from torch.distributed import ProcessGroup
+
+from speculators.train.distributed import get_sp_group, get_sp_size
+
+BatchType = dict[str, Any]
+
+
+# ---------------------------------------------------------------------------
+# All-to-all for attention redistribution
+# ---------------------------------------------------------------------------
+
+
+class _AllToAllSP(torch.autograd.Function):
+    """Differentiable all-to-all for sequence parallelism.
+
+    Scatters along one dimension and gathers along another.
+    The backward pass reverses the operation.
+    """
+
+    @staticmethod
+    def forward(
+        ctx,
+        input_tensor: torch.Tensor,
+        sp_group: ProcessGroup,
+        scatter_dim: int,
+        gather_dim: int,
+    ) -> torch.Tensor:
+        ctx.sp_group = sp_group
+        ctx.scatter_dim = scatter_dim
+        ctx.gather_dim = gather_dim
+
+        world_size = dist.get_world_size(sp_group)
+        if world_size == 1:
+            return input_tensor
+
+        input_chunks = input_tensor.chunk(world_size, dim=scatter_dim)
+        output_chunks = [torch.empty_like(c) for c in input_chunks]
+        dist.all_to_all(output_chunks, list(input_chunks), group=sp_group)
+        return torch.cat(output_chunks, dim=gather_dim).contiguous()
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor):
+        return (
+            _AllToAllSP.apply(
+                grad_output, ctx.sp_group, ctx.gather_dim, ctx.scatter_dim
+            ),
+            None,
+            None,
+            None,
+        )
+
+
+def all_to_all_sp(
+    input_tensor: torch.Tensor,
+    sp_group: ProcessGroup,
+    scatter_dim: int,
+    gather_dim: int,
+) -> torch.Tensor:
+    """Perform a differentiable all-to-all operation for sequence parallelism."""
+    return _AllToAllSP.apply(input_tensor, sp_group, scatter_dim, gather_dim)
+
+
+# ---------------------------------------------------------------------------
+# GQA head replication
+# ---------------------------------------------------------------------------
+
+
+def maybe_replicate_kv_heads(
+    key: torch.Tensor,
+    value: torch.Tensor,
+    num_kv_heads: int,
+    sp_size: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Replicate KV heads when sp_size > num_kv_heads for GQA models.
+
+    Args:
+        key: [batch, num_kv_heads, seq_len, head_dim]
+        value: [batch, num_kv_heads, seq_len, head_dim]
+        num_kv_heads: Number of key-value heads.
+        sp_size: Sequence parallel world size.
+    """
+    if sp_size <= num_kv_heads:
+        if num_kv_heads % sp_size != 0:
+            raise ValueError(
+                f"num_kv_heads ({num_kv_heads}) must be divisible by "
+                f"sp_size ({sp_size})"
+            )
+        return key, value
+
+    if sp_size % num_kv_heads != 0:
+        raise ValueError(
+            f"sp_size ({sp_size}) must be divisible by "
+            f"num_kv_heads ({num_kv_heads}) when sp_size > num_kv_heads"
+        )
+
+    replication_factor = sp_size // num_kv_heads
+    key = key.repeat_interleave(replication_factor, dim=1)
+    value = value.repeat_interleave(replication_factor, dim=1)
+    return key, value
+
+
+# ---------------------------------------------------------------------------
+# Ulysses attention function
+# ---------------------------------------------------------------------------
+
+
+def ulysses_flex_attention_forward(
+    module: torch.nn.Module,
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    attention_mask,
+    scaling: float | None = None,
+    **_kwargs,
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    """Ulysses SP attention: wraps flex_attention with all-to-all communication.
+
+    Input Q, K, V have shape [batch, num_heads, local_seq, head_dim] (all heads,
+    local sequence chunk). The all-to-all redistributes to [batch, local_heads,
+    global_seq, head_dim] for attention, then reverses.
+
+    The attention_mask (BlockMask) must cover the global sequence length.
+    """
+    from torch.nn.attention.flex_attention import flex_attention  # noqa: PLC0415
+
+    sp_group = get_sp_group()
+    sp_size = get_sp_size()
+
+    if sp_group is None or sp_size <= 1:
+        from speculators.models.attention import flex_attention_forward  # noqa: PLC0415
+
+        return flex_attention_forward(
+            module, query, key, value, attention_mask, scaling=scaling, **_kwargs
+        )
+
+    num_kv_heads = key.shape[1]
+    key, value = maybe_replicate_kv_heads(key, value, num_kv_heads, sp_size)
+
+    # Pre-attention: scatter heads (dim=1), gather seq (dim=2)
+    query = all_to_all_sp(query, sp_group, scatter_dim=1, gather_dim=2)
+    key = all_to_all_sp(key, sp_group, scatter_dim=1, gather_dim=2)
+    value = all_to_all_sp(value, sp_group, scatter_dim=1, gather_dim=2)
+
+    num_q_local = query.shape[1]
+    num_kv_local = key.shape[1]
+
+    attn_output = flex_attention(
+        query.contiguous(),
+        key.contiguous(),
+        value.contiguous(),
+        score_mod=None,
+        block_mask=attention_mask,
+        enable_gqa=num_q_local != num_kv_local,
+        scale=scaling,
+    )
+
+    # Post-attention: scatter seq (dim=2), gather heads (dim=1)
+    attn_output = all_to_all_sp(attn_output, sp_group, scatter_dim=2, gather_dim=1)
+    attn_output = attn_output.transpose(1, 2).contiguous()
+    return attn_output, None
+
+
+def ulysses_dflash_flex_attention_forward(
+    module: torch.nn.Module,
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    attention_mask,
+    scaling: float | None = None,
+    **kwargs,
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    """Ulysses SP attention for DFlash with asymmetric Q/KV.
+
+    DFlash K/V are ``[context | noise]`` concatenated along the sequence dim.
+    A naive all-to-all would interleave context and noise from different ranks,
+    breaking the mask. This function splits K/V at ``ctx_len``, does separate
+    all-to-alls, and concatenates ``[global_ctx | global_noise]`` to preserve
+    the layout that ``create_anchor_block_mask_mod`` expects.
+    """
+    from torch.nn.attention.flex_attention import flex_attention  # noqa: PLC0415
+
+    sp_group = get_sp_group()
+    sp_size = get_sp_size()
+
+    if sp_group is None or sp_size <= 1:
+        from speculators.models.attention import flex_attention_forward  # noqa: PLC0415
+
+        return flex_attention_forward(
+            module, query, key, value, attention_mask, scaling=scaling, **kwargs
+        )
+
+    ctx_len = kwargs.pop("ctx_len", None)
+    if ctx_len is None:
+        raise ValueError("ctx_len must be provided for DFlash Ulysses attention")
+
+    num_kv_heads = key.shape[1]
+    key, value = maybe_replicate_kv_heads(key, value, num_kv_heads, sp_size)
+
+    # Split K/V into context and noise parts
+    k_ctx, k_noise = key.split([ctx_len, key.shape[2] - ctx_len], dim=2)
+    v_ctx, v_noise = value.split([ctx_len, value.shape[2] - ctx_len], dim=2)
+
+    # All-to-all: scatter heads (dim=1), gather seq (dim=2)
+    query = all_to_all_sp(query, sp_group, scatter_dim=1, gather_dim=2)
+    k_ctx = all_to_all_sp(k_ctx, sp_group, scatter_dim=1, gather_dim=2)
+    k_noise = all_to_all_sp(k_noise, sp_group, scatter_dim=1, gather_dim=2)
+    v_ctx = all_to_all_sp(v_ctx, sp_group, scatter_dim=1, gather_dim=2)
+    v_noise = all_to_all_sp(v_noise, sp_group, scatter_dim=1, gather_dim=2)
+
+    # Concatenate: [global_ctx | global_noise]
+    key = torch.cat([k_ctx, k_noise], dim=2)
+    value = torch.cat([v_ctx, v_noise], dim=2)
+
+    num_q_local = query.shape[1]
+    num_kv_local = key.shape[1]
+
+    attn_output = flex_attention(
+        query.contiguous(),
+        key.contiguous(),
+        value.contiguous(),
+        score_mod=None,
+        block_mask=attention_mask,
+        enable_gqa=num_q_local != num_kv_local,
+        scale=scaling,
+    )
+
+    # Post-attention: scatter seq (dim=2), gather heads (dim=1)
+    attn_output = all_to_all_sp(attn_output, sp_group, scatter_dim=2, gather_dim=1)
+    attn_output = attn_output.transpose(1, 2).contiguous()
+    return attn_output, None
+
+
+# ---------------------------------------------------------------------------
+# Data broadcast — SP rank 0 broadcasts collated batches to all SP ranks
+# ---------------------------------------------------------------------------
+
+_DTYPE_TO_CODE = {
+    torch.float32: 0,
+    torch.float16: 1,
+    torch.bfloat16: 2,
+    torch.int64: 3,
+    torch.int32: 4,
+    torch.bool: 5,
+    torch.uint8: 6,
+    torch.float64: 7,
+}
+_CODE_TO_DTYPE = {v: k for k, v in _DTYPE_TO_CODE.items()}
+
+
+def sp_broadcast_batch(
+    batch: BatchType | None,
+    sp_group: ProcessGroup,
+    sp_rank: int,
+    device: torch.device,
+) -> BatchType:
+    """Broadcast a collated batch from SP rank 0 to all SP ranks.
+
+    All SP ranks must call this collectively. SP rank 0 passes the full
+    collated batch; other ranks pass None. Every tensor is broadcast so
+    all ranks receive an identical full copy. Models handle local slicing
+    internally.
+
+    Args:
+        batch: Full collated batch on SP rank 0, None on other ranks.
+        sp_group: The SP process group.
+        sp_rank: This rank's position within the SP group.
+        device: Device to place output tensors on.
+
+    Returns:
+        Full batch with all tensors broadcast to every rank.
+    """
+    src = dist.get_process_group_ranks(sp_group)[0]
+
+    # 1. Broadcast number of tensor entries
+    if sp_rank == 0:
+        assert batch is not None  # noqa: S101
+        tensor_items = [(k, v) for k, v in batch.items() if isinstance(v, torch.Tensor)]
+        n = torch.tensor([len(tensor_items)], dtype=torch.long, device=device)
+    else:
+        tensor_items = []
+        n = torch.tensor([0], dtype=torch.long, device=device)
+    dist.broadcast(n, src=src, group=sp_group)
+    num_entries = int(n.item())
+
+    result: BatchType = {}
+
+    # 2. For each tensor, broadcast metadata then broadcast data
+    for i in range(num_entries):
+        # --- key name ---
+        if sp_rank == 0:
+            key, tensor = tensor_items[i]
+            key_enc = list(key.encode("utf-8"))
+            klen = torch.tensor([len(key_enc)], dtype=torch.long, device=device)
+        else:
+            klen = torch.tensor([0], dtype=torch.long, device=device)
+        dist.broadcast(klen, src=src, group=sp_group)
+
+        if sp_rank == 0:
+            kbytes = torch.tensor(key_enc, dtype=torch.uint8, device=device)
+        else:
+            kbytes = torch.empty(int(klen.item()), dtype=torch.uint8, device=device)
+        dist.broadcast(kbytes, src=src, group=sp_group)
+        key = bytes(kbytes.cpu().tolist()).decode("utf-8")
+
+        # --- tensor metadata: [ndim, dtype_code] + shape ---
+        if sp_rank == 0:
+            tensor = tensor.to(device)
+            meta = torch.tensor(
+                [tensor.ndim, _DTYPE_TO_CODE[tensor.dtype]],
+                dtype=torch.long,
+                device=device,
+            )
+            shape_list = list(tensor.shape)
+        else:
+            meta = torch.empty(2, dtype=torch.long, device=device)
+        dist.broadcast(meta, src=src, group=sp_group)
+
+        ndim = int(meta[0].item())
+        dtype = _CODE_TO_DTYPE[int(meta[1].item())]
+
+        if sp_rank == 0:
+            shape_t = torch.tensor(shape_list, dtype=torch.long, device=device)
+        else:
+            shape_t = torch.empty(ndim, dtype=torch.long, device=device)
+        if ndim > 0:
+            dist.broadcast(shape_t, src=src, group=sp_group)
+        out_shape = [int(s) for s in shape_t.tolist()] if ndim > 0 else []
+
+        # --- broadcast data ---
+        if sp_rank == 0:
+            buf = tensor
+        else:
+            buf = torch.empty(out_shape, dtype=dtype, device=device)
+        dist.broadcast(buf, src=src, group=sp_group)
+        result[key] = buf
+
+    return result
+
+
+def sp_data_iterator(
+    dataloader,
+    sp_group: ProcessGroup,
+    sp_rank: int,
+    sp_size: int,
+    device: torch.device,
+) -> Generator[BatchType, None, None]:
+    """Iterate a DataLoader with SP broadcast.
+
+    SP rank 0 drives the DataLoader; all ranks call ``sp_broadcast_batch``
+    collectively. Only SP rank 0 loads/generates data.
+
+    Args:
+        dataloader: DataLoader instance. Only iterated on SP rank 0;
+            other ranks pass it only for ``len()``.
+        sp_group: The SP process group.
+        sp_rank: This rank's position within the SP group.
+        sp_size: Number of ranks in the SP group.
+        device: Device to place output tensors on.
+    """
+    # Synchronize batch count
+    count = torch.tensor(
+        [len(dataloader) if sp_rank == 0 else 0], dtype=torch.long, device=device
+    )
+    dist.broadcast(count, src=dist.get_process_group_ranks(sp_group)[0], group=sp_group)
+    num_batches = int(count.item())
+
+    if sp_rank == 0:
+        for batch in dataloader:
+            yield sp_broadcast_batch(batch, sp_group, sp_rank, device)
+    else:
+        for _ in range(num_batches):
+            yield sp_broadcast_batch(None, sp_group, sp_rank, device)

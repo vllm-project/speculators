@@ -8,6 +8,11 @@ import torch
 from torch.nn.attention.flex_attention import BlockMask, flex_attention
 from transformers.modeling_utils import AttentionInterface
 
+from speculators.train.sequence_parallel import (
+    ulysses_dflash_flex_attention_forward,
+    ulysses_flex_attention_forward,
+)
+
 
 def flex_attention_forward(
     module: torch.nn.Module,  # noqa: ARG001
@@ -76,3 +81,9 @@ def block_mask_to_dense_attention_mask(
 # Singleton registry for attention functions (shared across all models)
 ALL_ATTENTION_FUNCTIONS = AttentionInterface()
 ALL_ATTENTION_FUNCTIONS.register("simple_flex_attention", flex_attention_forward)
+ALL_ATTENTION_FUNCTIONS.register(
+    "ulysses_flex_attention", ulysses_flex_attention_forward
+)
+ALL_ATTENTION_FUNCTIONS.register(
+    "ulysses_dflash_flex_attention", ulysses_dflash_flex_attention_forward
+)

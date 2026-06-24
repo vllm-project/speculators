@@ -20,6 +20,7 @@ def compute_metrics(
     depth: torch.Tensor,
     num_depths: int,
     loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = kl_div_loss,
+    valid_mask: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, Any]]:
     """Compute loss and accuracy metrics for P-EAGLE predictions.
 
@@ -32,6 +33,7 @@ def compute_metrics(
         depth: Which COD sampling round each element belongs to [total_sampled]
         num_depths: Number of parallel depths
         loss_fn: Loss function.
+        valid_mask: Boolean mask [total_sampled] for SP padding exclusion.
 
     Returns:
         Tuple of (loss, metrics_dict)
@@ -43,7 +45,13 @@ def compute_metrics(
     # TODO: batch size is always 1 for P-EAGLE; unsqueeze is only to match the
     # shared loss_function/compute_accuracy_multi_step shape contract
     orig_positions = anchor_pos + depth  # [total_sampled]
-    sampled_loss_mask = loss_mask[:, orig_positions]  # [1, total_sampled]
+    local_orig = torch.clamp(orig_positions, 0, loss_mask.shape[1] - 1)
+    sampled_loss_mask = loss_mask[:, local_orig]  # [1, total_sampled]
+
+    if valid_mask is not None:
+        sampled_loss_mask = sampled_loss_mask * valid_mask.unsqueeze(0).to(
+            sampled_loss_mask.dtype
+        )
 
     loss = loss_function(
         logits, targets, sampled_loss_mask, depth.unsqueeze(0), loss_fn=loss_fn

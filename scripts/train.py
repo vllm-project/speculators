@@ -10,7 +10,6 @@ import numpy as np
 import torch
 import transformers
 from packaging import version
-from torch.utils.data import DataLoader
 from transformers import LlamaConfig, PretrainedConfig
 from transformers.models.auto.configuration_auto import AutoConfig
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
@@ -27,24 +26,18 @@ from speculators.models.utils import (
     get_verifier_config,
     resolve_draft_intermediate_size,
 )
-from speculators.train.data import (
-    ArrowDataset,
-    BaseDataset,
-    SampleFileDataset,
-    create_collate_fn,
-    split_files,
-)
-from speculators.train.distributed_batch_sampler import (
-    MultipackDistributedBatchSamplerV2,
-)
-from speculators.train.logger import setup_metric_logger, setup_root_logger
-from speculators.train.noise_transforms import AddUniformNoise
-from speculators.train.trainer import Trainer, TrainerConfig
-from speculators.train.utils import (
+from speculators.train.dataloader import create_train_val_loaders
+from speculators.train.distributed import (
+    get_local_rank,
+    get_rank,
+    get_sp_size,
+    is_distributed,
     maybe_destroy_distributed,
     maybe_setup_distributed,
-    resolve_mask_token_id,
 )
+from speculators.train.logger import setup_metric_logger, setup_root_logger
+from speculators.train.trainer import Trainer, TrainerConfig
+from speculators.train.utils import resolve_mask_token_id
 from speculators.train.vocab_mapping import (
     build_vocab_mappings_from_distribution,
     get_target_vocab_size,
@@ -71,53 +64,6 @@ def set_seed(seed: int, deterministic: bool = False):
         # For deterministic behavior (may impact performance)
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
-
-
-def setup_dataloader(
-    dataset: BaseDataset,
-    world_size: int,
-    rank: int,
-    hidden_size: int,
-    num_workers: int = 12,
-    num_target_layers: int = 3,
-    prefetch_factor: int = 4,
-    preprocess=None,
-) -> DataLoader:
-    """Setup dataloader for training.
-    Args:
-        file_list: List of file paths to load data from.
-        world_size: Number of processes in the distributed training.
-        rank: Global rank of the current process (shards data across nodes).
-        add_noise: Whether to add noise to the data.
-        noise_std: Standard deviation for noise augmentation.
-        num_workers: Number of dataloader workers.
-        prefetch_factor: Dataloader prefetch factor.
-        preprocess: Optional per-sample preprocessing function applied
-            before collation (e.g. shift_batch for Eagle3).
-    Returns:
-        DataLoader: Dataloader for training.
-    """
-    batch_sampler = MultipackDistributedBatchSamplerV2(
-        batch_max_length=args.total_seq_len,
-        lengths=dataset.approx_lengths,
-        num_replicas=world_size,
-        rank=rank,
-    )
-    return DataLoader(
-        dataset,
-        batch_sampler=batch_sampler,
-        num_workers=num_workers,
-        prefetch_factor=prefetch_factor,
-        pin_memory=True,
-        collate_fn=create_collate_fn(
-            args.total_seq_len,
-            hidden_size,
-            num_target_layers=num_target_layers,
-            dtype=dataset.hidden_states_dtype,
-            preprocess=preprocess,
-        ),
-        persistent_workers=True,
-    )
 
 
 def create_transformer_layer_config(  # noqa: C901
@@ -445,7 +391,7 @@ def build_draft_model(
     )
 
 
-def main(args: argparse.Namespace):  # noqa: C901
+def main(args: argparse.Namespace):  # noqa: C901, PLR0912
     # Set random seed for reproducibility
     set_seed(args.seed, args.deterministic_cuda)
 
@@ -456,7 +402,7 @@ def main(args: argparse.Namespace):  # noqa: C901
     )
 
     # Setup distributed training
-    local_rank, world_size, rank, is_distributed = maybe_setup_distributed()
+    maybe_setup_distributed(sp_size=args.sp_size)
     if not hasattr(torch, args.hidden_states_dtype):
         raise ValueError(
             "--hidden-states-dtype must be a dtype attribute of torch. e.g. `bfloat16`"
@@ -512,7 +458,7 @@ def main(args: argparse.Namespace):  # noqa: C901
         # hidden_states_dtype, so save the dry-run checkpoint in that dtype too
         # rather than the float32 the model is built in.
         draft_model.to(hidden_states_dtype)
-        if local_rank == 0:
+        if get_rank() == 0:
             logger.info(
                 "[dry-run] Saving initialized checkpoint (%s) to '%s'",
                 hidden_states_dtype,
@@ -537,69 +483,37 @@ def main(args: argparse.Namespace):  # noqa: C901
     }
     preprocess = preprocess_fns.get(args.speculator_type)
 
-    noise_transform = AddUniformNoise(std=args.noise_std)
-    if args.legacy_data:
-        warnings.warn(
-            "Using '--legacy-data' is deprecated and will be removed soon.",
-            category=DeprecationWarning,
-            stacklevel=2,
-        )
-        train_files, val_files = split_files(args.data_path, ratio=0.9)
-        train_dataset: BaseDataset = SampleFileDataset(
-            file_list=train_files,
-            max_len=args.total_seq_len,
-            transform=noise_transform,
-            hidden_states_dtype=hidden_states_dtype,
-        )
-        val_dataset: BaseDataset = SampleFileDataset(
-            file_list=val_files,
-            max_len=args.total_seq_len,
-            hidden_states_dtype=hidden_states_dtype,
-        )
-    else:
-        train_dataset = ArrowDataset(
-            datapath=args.data_path,
-            max_len=args.total_seq_len,
-            hidden_states_path=args.hidden_states_path,
-            vllm_endpoint=args.vllm_endpoint,
-            on_missing=args.on_missing,
-            on_generate=args.on_generate,
-            transform=noise_transform,
-            split_ratio=0.9,
-            model=args.verifier_name_or_path,
-            hidden_states_dtype=hidden_states_dtype,
-            request_timeout=args.request_timeout,
-            max_retries=args.max_retries,
-        )
-        val_dataset = ArrowDataset(
-            datapath=args.data_path,
-            max_len=args.total_seq_len,
-            hidden_states_path=args.hidden_states_path,
-            vllm_endpoint=args.vllm_endpoint,
-            on_missing=args.on_missing,
-            on_generate=args.on_generate,
-            split_ratio=-0.1,
-            model=args.verifier_name_or_path,
-            hidden_states_dtype=hidden_states_dtype,
-            request_timeout=args.request_timeout,
-            max_retries=args.max_retries,
-        )
+    # SP setup
+    sp_size = get_sp_size()
+    if sp_size > 1:
+        if args.total_seq_len % sp_size != 0:
+            raise ValueError(
+                f"total_seq_len ({args.total_seq_len}) must be divisible by "
+                f"sp_size ({sp_size})"
+            )
 
-    train_loader = setup_dataloader(
-        train_dataset,
-        world_size,
-        rank,
-        hidden_size,
-        num_target_layers=num_target_layers,
-        num_workers=args.num_workers,
-        prefetch_factor=args.prefetch_factor,
-        preprocess=preprocess,
-    )
-    val_loader = setup_dataloader(
-        val_dataset,
-        world_size,
-        rank,
-        hidden_size,
+        # Switch attention to Ulysses SP variant for supported models
+        if args.speculator_type in ("eagle3", "peagle"):
+            tl_cfg = draft_model.config.transformer_layer_config
+            tl_cfg._attn_implementation = "ulysses_flex_attention"
+        elif args.speculator_type == "dflash":
+            tl_cfg = draft_model.config.transformer_layer_config
+            tl_cfg._attn_implementation = "ulysses_dflash_flex_attention"
+
+    train_loader, val_loader = create_train_val_loaders(
+        data_path=args.data_path,
+        total_seq_len=args.total_seq_len,
+        hidden_states_dtype=hidden_states_dtype,
+        noise_std=args.noise_std,
+        legacy_data=args.legacy_data,
+        hidden_states_path=args.hidden_states_path,
+        vllm_endpoint=args.vllm_endpoint,
+        on_missing=args.on_missing,
+        on_generate=args.on_generate,
+        verifier_name_or_path=args.verifier_name_or_path,
+        request_timeout=args.request_timeout,
+        max_retries=args.max_retries,
+        hidden_size=hidden_size,
         num_target_layers=num_target_layers,
         num_workers=args.num_workers,
         prefetch_factor=args.prefetch_factor,
@@ -614,9 +528,9 @@ def main(args: argparse.Namespace):  # noqa: C901
         save_path=args.save_path,
         lr=args.lr,
         resume_from_checkpoint=not args.no_resume_from_checkpoint,
-        is_distributed=is_distributed,
-        local_rank=local_rank,
-        rank=rank,
+        is_distributed=is_distributed(),
+        local_rank=get_local_rank(),
+        rank=get_rank(),
         train_call_kwargs=train_call_kwargs,
         val_call_kwargs=val_call_kwargs,
         optimizer=args.optimizer,
@@ -634,6 +548,7 @@ def main(args: argparse.Namespace):  # noqa: C901
         save_best=args.save_best,
         hidden_states_dtype=hidden_states_dtype,
         log_freq=args.log_freq,
+        sp_size=sp_size,
     )
     trainer = Trainer(draft_model, trainer_config, train_loader, val_loader)
 
@@ -1098,6 +1013,19 @@ def parse_args():
         action="store_true",
         default=False,
         help="Pointing to checkpoint with lowest validation loss.",
+    )
+
+    # Sequence parallelism
+    parser.add_argument(
+        "--sp-size",
+        type=int,
+        default=1,
+        help=(
+            "Sequence parallelism degree (Ulysses SP). Shards the sequence "
+            "dimension across this many GPUs, reducing per-GPU attention memory "
+            "linearly. Must divide world_size and total_seq_len evenly. "
+            "Supported for eagle3, dflash, and peagle. (default: 1 = disabled)"
+        ),
     )
 
     # lr scheduler

@@ -18,6 +18,7 @@ from speculators.models.eagle3.model_definitions import model_classes
 from speculators.models.metrics import kl_div_loss, resolve_loss_fn
 from speculators.models.utils import conditional_torch_compile, resolve_target_layer_ids
 from speculators.proposals.greedy import GreedyTokenProposalConfig
+from speculators.train.distributed import get_sp_rank, get_sp_size
 
 
 @SpeculatorModel.register("eagle3")
@@ -138,7 +139,7 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
             )
 
     @conditional_torch_compile
-    def forward(  # noqa: C901
+    def forward(  # noqa: C901, PLR0912
         self,
         hidden_states: torch.Tensor,  # shape: [1, total_seq_len, 3 * hidden_size]
         input_ids: torch.Tensor,  # shape: [1, total_seq_len]
@@ -155,26 +156,48 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
     ):
         loss_fn = loss_fn or kl_div_loss
         device = hidden_states.device
+        sp_size = get_sp_size()
+        global_seq_len = hidden_states.shape[1]
+
+        # SP: slice broadcast data to local partition
+        if sp_size > 1:
+            sp_rank = get_sp_rank()
+            local_seq_len = global_seq_len // sp_size
+            sp_start = sp_rank * local_seq_len
+            original_input_ids_global = input_ids.detach().clone()
+            hidden_states = hidden_states[:, sp_start : sp_start + local_seq_len]
+            input_ids = input_ids[:, sp_start : sp_start + local_seq_len]
+            if loss_mask is not None:
+                loss_mask = loss_mask[:, sp_start : sp_start + local_seq_len]
+            if verifier_last_hidden_states is not None:
+                verifier_last_hidden_states = verifier_last_hidden_states[
+                    :, sp_start : sp_start + local_seq_len
+                ]
+        else:
+            original_input_ids_global = None
+
         total_seq_len = hidden_states.shape[1]
 
         if position_ids is None:
             position_ids = 1 + torch.arange(
                 total_seq_len, dtype=torch.long, device=device
             ).unsqueeze(0)
+            if sp_size > 1:
+                position_ids = position_ids + sp_start
             # shape: [1, total_seq_len]
 
         past_key_values = DynamicCache(config=self.config.transformer_layer_config)
 
         combined_mask_mod = create_combined_mask_mod(
-            document_ids.squeeze(0).to(device), total_seq_len
+            document_ids.squeeze(0).to(device), global_seq_len
         )
         # Note: Attention mask is stored as a BlockMask object
         attention_mask = self._create_mask_fn(
             combined_mask_mod,
             B=None,
             H=None,
-            Q_LEN=total_seq_len,
-            KV_LEN=total_seq_len,
+            Q_LEN=global_seq_len,
+            KV_LEN=global_seq_len,
             device=device,
         )
 
@@ -259,18 +282,29 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
                 input_ids = input_ids + self.d2t[input_ids]  # type: ignore[index]
 
             if use_off_policy_tokens:
-                # Overwrite input_ids with ground truth tokens
-                # shift input_ids by 1 to the left and pad with 0
-                # note: inputs_ids no longer line up with verifier_last_hidden_states
-                # the draft logits generated from the padded tokens are ignored
-                # and sliced out for loss calculation
-                input_ids = torch.cat(
-                    [
-                        original_input_ids[:, 1 + ttt_step :],
-                        original_input_ids.new_zeros(1, 1 + ttt_step),
-                    ],
-                    dim=-1,
-                )
+                if original_input_ids_global is not None:
+                    # SP: shift global input_ids, then slice to local
+                    input_ids = torch.cat(
+                        [
+                            original_input_ids_global[:, 1 + ttt_step :],
+                            original_input_ids_global.new_zeros(1, 1 + ttt_step),
+                        ],
+                        dim=-1,
+                    )[:, sp_start : sp_start + total_seq_len]
+                else:
+                    # Overwrite input_ids with ground truth tokens
+                    # shift input_ids by 1 to the left and pad with 0
+                    # note: inputs_ids no longer line up with
+                    # verifier_last_hidden_states the draft logits generated
+                    # from the padded tokens are ignored and sliced out for
+                    # loss calculation
+                    input_ids = torch.cat(
+                        [
+                            original_input_ids[:, 1 + ttt_step :],
+                            original_input_ids.new_zeros(1, 1 + ttt_step),
+                        ],
+                        dim=-1,
+                    )
                 # shape: [1, total_seq_len]
 
             if self._attn_impl == "simple_flex_attention":
@@ -278,7 +312,7 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
             else:
                 attention_mask = extend_dense_mask_for_draft_tokens(
                     attention_mask,  # type: ignore[arg-type]
-                    total_seq_len,
+                    global_seq_len,
                 )
             position_ids = position_ids + 1
             # shape: [1, total_seq_len]
@@ -286,6 +320,10 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
         if return_loss:
             metrics["loss_sum"] = loss.detach().clone()
             metrics["loss_total"] = torch.tensor(1.0, device=device)
+            if sp_size > 1:
+                for k in list(metrics):
+                    if k.endswith("_total") and metrics[k].numel() == 1:
+                        metrics[k] = metrics[k] / sp_size
             return draft_tokens, loss, metrics
         else:
             return draft_tokens
