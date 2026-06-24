@@ -406,7 +406,12 @@ def build_draft_model(
                 d2t=d2t,
                 verifier_name_or_path=args.verifier_name_or_path,
             )
-        return model_class.from_pretrained(args.from_pretrained, t2d=t2d, d2t=d2t)
+        return model_class.from_pretrained(
+            args.from_pretrained,
+            t2d=t2d,
+            d2t=d2t,
+            verifier=args.verifier_name_or_path,
+        )
 
     if args.speculator_type == "mtp":
         # MTP uses the verifier's own decoder config as the draft
