@@ -11,6 +11,8 @@ from speculators.models.metrics import (
     exp_loss_decay,
     kl_div_loss,
     loss_function,
+    resolve_loss_fn,
+    tv_loss,
 )
 
 
@@ -86,6 +88,34 @@ class TestKLDivLoss:
         torch.manual_seed(0)
         loss_random = kl_div_loss(torch.randn(1, 4, 8), torch.randn(1, 4, 8))
         assert (loss_random >= -1e-6).all()
+
+
+class TestTVLoss:
+    def test_identical_is_zero(self):
+        """TV distance between identical distributions is ~0."""
+        x = torch.randn(1, 4, 50)
+        loss = tv_loss(x, x)
+        assert torch.allclose(loss, torch.zeros(1, 4), atol=1e-6)
+
+    def test_matches_l1_form_shape_and_range(self):
+        """Overlap form equals 0.5 * L1; output is [1, seq_len] within [0, 1]."""
+        torch.manual_seed(0)
+        logits = torch.randn(1, 4, 50)
+        targets = torch.randn(1, 4, 50)
+        out = tv_loss(logits, targets)
+
+        p = torch.softmax(targets, dim=-1)
+        q = torch.softmax(logits, dim=-1)
+        l1 = 0.5 * (p - q).abs().sum(dim=-1)
+
+        assert out.shape == (1, 4)
+        assert torch.allclose(out, l1, atol=1e-6)
+        assert (out >= 0).all()
+        assert (out <= 1).all()
+
+    def test_resolve_tv(self):
+        """resolve_loss_fn maps 'tv' to tv_loss."""
+        assert resolve_loss_fn("tv") is tv_loss
 
 
 class TestComputeAccuracySingleStep:
