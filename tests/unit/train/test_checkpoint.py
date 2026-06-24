@@ -19,9 +19,6 @@ def _make_minimal_trainer(tmp_path: Path, checkpoint_freq: int, save_best: bool)
         num_epochs=0,
         save_path=str(tmp_path),
         resume_from_checkpoint=False,
-        is_distributed=False,
-        rank=0,
-        local_rank=0,
         checkpoint_freq=checkpoint_freq,
         save_best=save_best,
     )
