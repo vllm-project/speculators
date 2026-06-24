@@ -205,7 +205,23 @@ def create_transformer_layer_config(  # noqa: C901
     # New rope parameters definition introduced in transformers 5.0
     if version.parse(transformers.__version__) >= version.parse("5.0.0"):
         if hasattr(verifier_config, "rope_parameters"):
-            config.rope_parameters = deepcopy(verifier_config.rope_parameters)
+            rope_params = deepcopy(verifier_config.rope_parameters)
+            # Some verifiers (e.g. Laguna) use the nested per-layer-type rope format
+            # {"full_attention": {...}, "sliding_attention": {...}} with no top-level
+            # "rope_theta". The llama-style draft uses a single rope, so collapse it to
+            # a flat default rope (preferring the sliding-attention theta).
+            if isinstance(rope_params, dict) and "rope_theta" not in rope_params:
+                sub = (
+                        rope_params.get("sliding_attention")
+                        or rope_params.get("full_attention")
+                        or {}
+                )
+                rope_params = {
+                        "rope_type": "default",
+                        "rope_theta": sub.get("rope_theta", 10000.0),
+                }
+            config.rope_parameters = rope_params
+
             _MROPE_KEYS = ("mrope_section", "mrope_interleaved", "type")  # noqa: N806
             for key in _MROPE_KEYS:
                 config.rope_parameters.pop(key, None)
