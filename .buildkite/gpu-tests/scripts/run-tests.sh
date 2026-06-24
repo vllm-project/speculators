@@ -7,7 +7,7 @@ cat /etc/issue
 
 git fetch --tags --unshallow 2>/dev/null || git fetch --tags
 
-apt-get update && apt-get install -y curl g++ gcc make python3-dev
+apt-get update -qq && apt-get install -y -qq curl g++ gcc make python3-dev
 
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
@@ -15,6 +15,7 @@ export LD_LIBRARY_PATH=/usr/local/nvidia/lib64
 export PATH="$HOME/.local/bin:/usr/local/nvidia/bin:$PATH"
 nvidia-smi
 
+export UV_NO_PROGRESS=1
 uv venv testvenv --python "${PYTHON_VERSION}"
 source testvenv/bin/activate
 
