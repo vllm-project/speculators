@@ -31,7 +31,7 @@ source vllm_venv/bin/activate
 uv pip install "vllm>=0.18"
 ```
 
-Note: if you are using an experiment tracker (e.g. trackio, wandb, tensorboard), install it in the speculators venv manually.
+Note: if you are using an experiment tracker (e.g. trackio, wandb, tensorboard, mlflow), install it in the speculators venv manually.
 
 ## Step 1: Prepare Your Data
 
