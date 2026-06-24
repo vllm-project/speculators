@@ -162,6 +162,7 @@ ignore = [
     "RET506", # allow `else` blocks
     "PD011", # ignore .values usage since ruff assumes it's a Pandas DataFrame
     "PLR0915", # too-many-statements
+    "PLR0912", # too-many-branches
 ]
 select = [
     # Rules reference: https://docs.astral.sh/ruff/rules/
