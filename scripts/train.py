@@ -212,13 +212,13 @@ def create_transformer_layer_config(  # noqa: C901
             # a flat default rope (preferring the sliding-attention theta).
             if isinstance(rope_params, dict) and "rope_theta" not in rope_params:
                 sub = (
-                        rope_params.get("sliding_attention")
-                        or rope_params.get("full_attention")
-                        or {}
+                    rope_params.get("sliding_attention")
+                    or rope_params.get("full_attention")
+                    or {}
                 )
                 rope_params = {
-                        "rope_type": "default",
-                        "rope_theta": sub.get("rope_theta", 10000.0),
+                    "rope_type": "default",
+                    "rope_theta": sub.get("rope_theta", 10000.0),
                 }
             config.rope_parameters = rope_params
 
