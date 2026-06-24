@@ -16,6 +16,7 @@ export PATH="$HOME/.local/bin:/usr/local/nvidia/bin:$PATH"
 nvidia-smi
 
 export UV_NO_PROGRESS=1
+export UV_CACHE_DIR="$PWD/.uv-cache"
 uv venv testvenv --python "${PYTHON_VERSION}"
 source testvenv/bin/activate
 
