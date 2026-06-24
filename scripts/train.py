@@ -523,12 +523,6 @@ def main(args: argparse.Namespace):  # noqa: C901, PLR0912
     # Get trainer kwargs from model class
     train_call_kwargs, val_call_kwargs = model_class.get_trainer_kwargs(**vars(args))
 
-    # When SP is active, pass global_seq_len so the model creates masks for
-    # the full (ungathered) sequence length.
-    if sp_size > 1:
-        train_call_kwargs["global_seq_len"] = args.total_seq_len
-        val_call_kwargs["global_seq_len"] = args.total_seq_len
-
     trainer_config = TrainerConfig(
         num_epochs=args.epochs,
         save_path=args.save_path,

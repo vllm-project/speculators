@@ -250,7 +250,7 @@ def ulysses_dflash_flex_attention_forward(
 
 
 # ---------------------------------------------------------------------------
-# Data scatter — SP rank 0 scatters collated batches to all SP ranks
+# Data broadcast — SP rank 0 broadcasts collated batches to all SP ranks
 # ---------------------------------------------------------------------------
 
 _DTYPE_TO_CODE = {
@@ -266,30 +266,27 @@ _DTYPE_TO_CODE = {
 _CODE_TO_DTYPE = {v: k for k, v in _DTYPE_TO_CODE.items()}
 
 
-def sp_scatter_batch(  # noqa: C901, PLR0912
+def sp_broadcast_batch(
     batch: BatchType | None,
     sp_group: ProcessGroup,
     sp_rank: int,
-    sp_size: int,
     device: torch.device,
 ) -> BatchType:
-    """Scatter a collated batch from SP rank 0 to all SP ranks.
+    """Broadcast a collated batch from SP rank 0 to all SP ranks.
 
     All SP ranks must call this collectively. SP rank 0 passes the full
-    collated batch; other ranks pass None. Metadata (keys, shapes, dtypes)
-    is broadcast so receivers can allocate buffers. Sequence-dim tensors
-    are scattered (dim 1); `lengths` is broadcast (all ranks need the full
-    tensor for mask creation).
+    collated batch; other ranks pass None. Every tensor is broadcast so
+    all ranks receive an identical full copy. Models handle local slicing
+    internally.
 
     Args:
         batch: Full collated batch on SP rank 0, None on other ranks.
         sp_group: The SP process group.
         sp_rank: This rank's position within the SP group.
-        sp_size: Number of ranks in the SP group.
         device: Device to place output tensors on.
 
     Returns:
-        Sharded batch with local sequence chunks and ``global_seq_len`` key.
+        Full batch with all tensors broadcast to every rank.
     """
     src = dist.get_process_group_ranks(sp_group)[0]
 
@@ -306,7 +303,7 @@ def sp_scatter_batch(  # noqa: C901, PLR0912
 
     result: BatchType = {}
 
-    # 2. For each tensor, broadcast metadata then scatter/broadcast data
+    # 2. For each tensor, broadcast metadata then broadcast data
     for i in range(num_entries):
         # --- key name ---
         if sp_rank == 0:
@@ -324,27 +321,21 @@ def sp_scatter_batch(  # noqa: C901, PLR0912
         dist.broadcast(kbytes, src=src, group=sp_group)
         key = bytes(kbytes.cpu().tolist()).decode("utf-8")
 
-        # --- tensor metadata: [ndim, dtype_code, is_broadcast] + shape ---
+        # --- tensor metadata: [ndim, dtype_code] + shape ---
         if sp_rank == 0:
             tensor = tensor.to(device)
-            is_broadcast = key == "document_ids" or tensor.dim() < 2  # noqa: PLR2004
             meta = torch.tensor(
-                [tensor.ndim, _DTYPE_TO_CODE[tensor.dtype], int(is_broadcast)],
+                [tensor.ndim, _DTYPE_TO_CODE[tensor.dtype]],
                 dtype=torch.long,
                 device=device,
             )
-            if is_broadcast:
-                shape_list = list(tensor.shape)
-            else:
-                shape_list = list(tensor.shape)
-                shape_list[1] = shape_list[1] // sp_size
+            shape_list = list(tensor.shape)
         else:
-            meta = torch.empty(3, dtype=torch.long, device=device)
+            meta = torch.empty(2, dtype=torch.long, device=device)
         dist.broadcast(meta, src=src, group=sp_group)
 
         ndim = int(meta[0].item())
         dtype = _CODE_TO_DTYPE[int(meta[1].item())]
-        is_broadcast = bool(meta[2].item())
 
         if sp_rank == 0:
             shape_t = torch.tensor(shape_list, dtype=torch.long, device=device)
@@ -354,26 +345,13 @@ def sp_scatter_batch(  # noqa: C901, PLR0912
             dist.broadcast(shape_t, src=src, group=sp_group)
         out_shape = [int(s) for s in shape_t.tolist()] if ndim > 0 else []
 
-        # --- data transfer ---
-        if is_broadcast:
-            if sp_rank == 0:
-                buf = tensor
-            else:
-                buf = torch.empty(out_shape, dtype=dtype, device=device)
-            dist.broadcast(buf, src=src, group=sp_group)
-            result[key] = buf
+        # --- broadcast data ---
+        if sp_rank == 0:
+            buf = tensor
         else:
-            recv = torch.empty(out_shape, dtype=dtype, device=device)
-            if sp_rank == 0:
-                chunks = [c.contiguous() for c in tensor.chunk(sp_size, dim=1)]
-            else:
-                chunks = None
-            dist.scatter(recv, chunks, src=src, group=sp_group)
-            result[key] = recv
-
-    # global_seq_len metadata
-    if "hidden_states" in result:
-        result["global_seq_len"] = result["hidden_states"].shape[1] * sp_size
+            buf = torch.empty(out_shape, dtype=dtype, device=device)
+        dist.broadcast(buf, src=src, group=sp_group)
+        result[key] = buf
 
     return result
 
@@ -385,9 +363,9 @@ def sp_data_iterator(
     sp_size: int,
     device: torch.device,
 ) -> Generator[BatchType, None, None]:
-    """Iterate a DataLoader with SP scatter.
+    """Iterate a DataLoader with SP broadcast.
 
-    SP rank 0 drives the DataLoader; all ranks call ``sp_scatter_batch``
+    SP rank 0 drives the DataLoader; all ranks call ``sp_broadcast_batch``
     collectively. Only SP rank 0 loads/generates data.
 
     Args:
@@ -407,7 +385,7 @@ def sp_data_iterator(
 
     if sp_rank == 0:
         for batch in dataloader:
-            yield sp_scatter_batch(batch, sp_group, sp_rank, sp_size, device)
+            yield sp_broadcast_batch(batch, sp_group, sp_rank, device)
     else:
         for _ in range(num_batches):
-            yield sp_scatter_batch(None, sp_group, sp_rank, sp_size, device)
+            yield sp_broadcast_batch(None, sp_group, sp_rank, device)

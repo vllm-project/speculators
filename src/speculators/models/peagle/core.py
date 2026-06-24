@@ -3,7 +3,6 @@
 from typing import ClassVar
 
 import torch
-import torch.distributed as dist
 from transformers import PretrainedConfig
 
 from speculators.config import SpeculatorsConfig, VerifierConfig
@@ -16,24 +15,7 @@ from speculators.models.peagle.data import generate_cod_sample_indices
 from speculators.models.peagle.metrics import compute_metrics
 from speculators.models.utils import conditional_torch_compile, resolve_target_layer_ids
 from speculators.proposals.greedy import GreedyTokenProposalConfig
-
-
-def _compute_max_cod_samples(
-    seq_length: int,
-    num_depths: int,
-    down_sample_ratio: float,
-    down_sample_ratio_min: float,
-) -> int:
-    """Deterministic upper bound on COD sample count for a given seq_length."""
-    total = seq_length
-    for d in range(1, num_depths):
-        valid_length = max(0, seq_length - d)
-        ratio = max(down_sample_ratio**d, down_sample_ratio_min)
-        sample_size = int(valid_length * ratio)
-        if sample_size <= 0:
-            break
-        total += sample_size
-    return total
+from speculators.train.distributed import get_sp_rank, get_sp_size
 
 
 @SpeculatorModel.register("peagle")
@@ -66,68 +48,72 @@ class PEagleDraftModel(Eagle3DraftModel):
         self.mask_hidden = torch.nn.Parameter(torch.randn(1, 1, 3 * self.hidden_size))
 
     @torch.compiler.disable
-    def _prepare_sp_cod_mask(
-        self,
-        anchor_pos: torch.Tensor,
-        depth: torch.Tensor,
-        document_ids: torch.Tensor,
-        device: torch.device,
-        global_seq_len: int,
-        local_seq_len: int,
+    def _sync_and_partition_cod(
+        self, anchor_pos, depth, document_ids, device
     ):
-        """Pad COD samples, all-gather across SP ranks, and create global mask."""
+        """Broadcast COD samples from rank 0, pad for SP divisibility, create mask, partition."""
+        import torch.distributed as dist  # noqa: PLC0415
+
         from speculators.train.distributed import get_sp_group  # noqa: PLC0415
 
+        sp_size = get_sp_size()
+        sp_rank = get_sp_rank()
         sp_group = get_sp_group()
-        sp_size = global_seq_len // local_seq_len
-        sp_rank = dist.get_rank(sp_group)
+        src = dist.get_process_group_ranks(sp_group)[0]
 
-        max_total = _compute_max_cod_samples(
-            local_seq_len,
-            self.num_depths,
-            self.down_sample_ratio,
-            self.down_sample_ratio_min,
+        actual_total = torch.tensor(
+            [anchor_pos.shape[0]], dtype=torch.long, device=device
         )
-        max_total = ((max_total + sp_size - 1) // sp_size) * sp_size
+        dist.broadcast(actual_total, src=src, group=sp_group)
+        actual_total = int(actual_total.item())
 
-        actual_total = anchor_pos.shape[0]
-        valid_mask = torch.zeros(max_total, dtype=torch.bool, device=device)
-        valid_mask[:actual_total] = True
-        padded_anchor = torch.zeros(max_total, dtype=torch.long, device=device)
-        padded_anchor[:actual_total] = anchor_pos
-        padded_depth = torch.zeros(max_total, dtype=torch.long, device=device)
-        padded_depth[:actual_total] = depth
+        if anchor_pos.shape[0] != actual_total:
+            anchor_pos = torch.zeros(actual_total, dtype=torch.long, device=device)
+            depth = torch.zeros(actual_total, dtype=torch.long, device=device)
+        dist.broadcast(anchor_pos, src=src, group=sp_group)
+        dist.broadcast(depth, src=src, group=sp_group)
 
-        global_anchor = padded_anchor + sp_rank * local_seq_len
+        padded_total = ((actual_total + sp_size - 1) // sp_size) * sp_size
+        pad_amount = padded_total - actual_total
 
-        all_anchors = [torch.empty_like(global_anchor) for _ in range(sp_size)]
-        all_depths = [torch.empty_like(padded_depth) for _ in range(sp_size)]
-        all_valid = [torch.empty_like(valid_mask) for _ in range(sp_size)]
-        dist.all_gather(all_anchors, global_anchor, group=sp_group)
-        dist.all_gather(all_depths, padded_depth, group=sp_group)
-        dist.all_gather(all_valid, valid_mask, group=sp_group)
-
-        mask_anchor = torch.cat(all_anchors)
-        mask_depth = torch.cat(all_depths)
-        mask_valid = torch.cat(all_valid)
-        global_total = sp_size * max_total
+        valid_mask = torch.ones(padded_total, dtype=torch.bool, device=device)
+        if pad_amount > 0:
+            valid_mask[actual_total:] = False
+            anchor_pos = torch.cat(
+                [
+                    anchor_pos,
+                    torch.zeros(pad_amount, dtype=torch.long, device=device),
+                ]
+            )
+            depth = torch.cat(
+                [
+                    depth,
+                    torch.zeros(pad_amount, dtype=torch.long, device=device),
+                ]
+            )
 
         mask_mod = create_peagle_mask_mod(
-            anchor_pos=mask_anchor,
-            depth=mask_depth,
+            anchor_pos=anchor_pos,
+            depth=depth,
             document_ids=document_ids.squeeze(0).to(device),
-            valid_mask=mask_valid,
+            valid_mask=valid_mask,
         )
         attention_mask = self._create_mask_fn(
             mask_mod,
             B=None,
             H=None,
-            Q_LEN=global_total,
-            KV_LEN=global_total,
+            Q_LEN=padded_total,
+            KV_LEN=padded_total,
             device=device,
         )
 
-        return padded_anchor, padded_depth, valid_mask, attention_mask, max_total
+        n_per_rank = padded_total // sp_size
+        local_start = sp_rank * n_per_rank
+        anchor_pos = anchor_pos[local_start : local_start + n_per_rank]
+        depth = depth[local_start : local_start + n_per_rank]
+        valid_mask = valid_mask[local_start : local_start + n_per_rank]
+
+        return anchor_pos, depth, valid_mask, attention_mask, n_per_rank
 
     @conditional_torch_compile
     def forward(
@@ -161,8 +147,8 @@ class PEagleDraftModel(Eagle3DraftModel):
             raise ValueError("verifier_last_hidden_states required for training")
 
         device = hidden_states.device
+        sp_size = get_sp_size()
         seq_length = input_ids.shape[1]
-        global_seq_len = kwargs.pop("global_seq_len", seq_length)
 
         if loss_mask is None:
             loss_mask = torch.ones_like(input_ids, dtype=torch.float32)
@@ -176,16 +162,11 @@ class PEagleDraftModel(Eagle3DraftModel):
             down_sample_ratio_min=self.down_sample_ratio_min,
         )
 
-        sp_size = global_seq_len // seq_length
+        # SP: sync COD samples across ranks, pad, create global mask, partition
         if sp_size > 1:
             anchor_pos, depth, valid_mask, attention_mask, total_sampled = (
-                self._prepare_sp_cod_mask(
-                    anchor_pos,
-                    depth,
-                    document_ids,
-                    device,
-                    global_seq_len,
-                    seq_length,
+                self._sync_and_partition_cod(
+                    anchor_pos, depth, document_ids, device
                 )
             )
         else:
@@ -195,12 +176,13 @@ class PEagleDraftModel(Eagle3DraftModel):
         orig_positions = anchor_pos + depth
         is_depth_0 = depth == 0  # [total_sampled]
 
+        # Clamp for safe indexing (SP padding positions may exceed seq_length)
+        clamped_orig = torch.clamp(orig_positions, 0, seq_length - 1)
+
         # Build sampled input_ids: real tokens for depth 0, mask for others
-        # Clamp orig_positions to valid local range for indexing
-        local_orig = torch.clamp(orig_positions, 0, seq_length - 1)
         sampled_ids = torch.where(
             is_depth_0,
-            input_ids[0, local_orig],
+            input_ids[0, clamped_orig],
             torch.tensor(self.mask_token_id, dtype=input_ids.dtype, device=device),
         ).unsqueeze(0)  # [1, total_sampled]
         inputs_embeds = self.embed_tokens(sampled_ids).to(
@@ -211,7 +193,7 @@ class PEagleDraftModel(Eagle3DraftModel):
         mask_hidden = self.mask_hidden.to(device=device, dtype=hidden_states.dtype)
         sampled_hidden = torch.where(
             is_depth_0.unsqueeze(-1),
-            hidden_states[0, local_orig],
+            hidden_states[0, clamped_orig],
             mask_hidden.squeeze(0).expand(total_sampled, -1),
         ).unsqueeze(0)  # [1, total_sampled, 3*hidden_size]
 
@@ -222,13 +204,7 @@ class PEagleDraftModel(Eagle3DraftModel):
             [inputs_embeds, sampled_hidden], dim=-1
         )  # [1, total_sampled, 2*hidden_size]
 
-        if sp_size > 1:
-            from speculators.train.distributed import get_sp_group  # noqa: PLC0415
-
-            sp_rank = dist.get_rank(get_sp_group())
-            position_ids = (orig_positions + sp_rank * seq_length).unsqueeze(0)
-        else:
-            position_ids = orig_positions.unsqueeze(0)  # [1, total_sampled]
+        position_ids = orig_positions.unsqueeze(0)  # [1, total_sampled]
 
         position_embeddings = self.rotary_emb(layer_input, position_ids)
 
@@ -263,10 +239,9 @@ class PEagleDraftModel(Eagle3DraftModel):
 
         with torch.no_grad():
             targets = self.verifier_lm_head(
-                self.verifier_norm(verifier_last_hidden_states)
+                self.verifier_norm(verifier_last_hidden_states[:, clamped_orig])
             )
-
-        targets = targets[:, local_orig, :]  # [1, total_sampled, vocab_size]
+            # [1, total_sampled, vocab_size]
 
         loss, metrics = compute_metrics(
             logits=logits,
