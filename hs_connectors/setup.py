@@ -8,8 +8,9 @@ setup(
     python_requires=">=3.10",
     install_requires=[
         "torch",
+        "mooncake-transfer-engine",
     ],
     extras_require={
-        "mooncake": ["mooncake-transfer-engine"],
+        "vllm": ["vllm"],
     },
 )
