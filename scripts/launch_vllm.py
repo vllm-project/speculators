@@ -128,7 +128,7 @@ def main():
         kv_transfer_config = {
             "kv_connector": "MooncakeHiddenStatesConnector",
             "kv_connector_module_path": (
-                "speculators.data_generation.mooncake_hidden_states_connector"
+                "hs_connectors.mooncake_hidden_states_connector"
             ),
             "kv_role": "kv_producer",
             "kv_connector_extra_config": {

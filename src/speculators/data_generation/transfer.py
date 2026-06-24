@@ -13,7 +13,7 @@ from safetensors.torch import load_file
 from speculators.data_generation.vllm_client import wait_for_lock
 
 if TYPE_CHECKING:
-    from speculators.data_generation.mooncake_store import MooncakeHiddenStatesStore
+    from hs_connectors.mooncake_store import MooncakeHiddenStatesStore
 
 
 class HiddenStatesTransfer(ABC):

@@ -22,7 +22,7 @@ import argparse
 import json
 import urllib.request
 
-from speculators.data_generation.mooncake_store import (
+from hs_connectors.mooncake_store import (
     MooncakeHiddenStatesStore,
     MooncakeStoreConfig,
 )

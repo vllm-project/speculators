@@ -9,7 +9,7 @@ back byte-identical by the consumer.
 import pytest
 import torch
 
-from speculators.data_generation.mooncake_store import (
+from hs_connectors.mooncake_store import (
     MooncakeHiddenStatesStore,
     MooncakeStoreConfig,
 )
