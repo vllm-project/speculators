@@ -136,6 +136,7 @@ class _DummyAsyncClient:
 
 
 def test_generate_hidden_states_text_prompt():
+    """Text-only items stay on the token-id Completions path."""
     client = _DummySyncClient()
 
     result = generate_hidden_states(
@@ -147,6 +148,7 @@ def test_generate_hidden_states_text_prompt():
 
 
 def test_generate_hidden_states_multimodal_messages():
+    """Multimodal items are converted to Chat Completions messages."""
     client = _DummySyncClient()
     messages = [
         {
@@ -188,6 +190,7 @@ def test_generate_hidden_states_multimodal_messages():
 
 
 def test_generate_hidden_states_multimodal_messages_uses_local_file_url(tmp_path):
+    """Local image paths are sent as file URLs for vLLM media loading."""
     client = _DummySyncClient()
     image_path = tmp_path / "cat.png"
     image_path.write_bytes(b"\x89PNG\r\n\x1a\n")
@@ -217,6 +220,7 @@ def test_generate_hidden_states_multimodal_messages_uses_local_file_url(tmp_path
 
 
 def test_generate_hidden_states_preserves_extra_chat_message_fields():
+    """Tool-call metadata should survive multimodal message conversion."""
     client = _DummySyncClient()
     messages = [
         {
@@ -250,6 +254,7 @@ def test_generate_hidden_states_preserves_extra_chat_message_fields():
 
 
 def test_generate_hidden_states_async_multimodal_messages():
+    """Async multimodal generation uses the same Chat Completions payload."""
     client = _DummyAsyncClient()
     messages = [
         {
@@ -295,6 +300,7 @@ def test_generate_hidden_states_async_multimodal_messages():
 def test_generate_hidden_states_accepts_multimodal_prefix_match_without_rewrite(
     tmp_path,
 ):
+    """Prefix matches are accepted without rewriting locked safetensors files."""
     hs_path = tmp_path / "hs_0.safetensors"
     save_file(
         {
@@ -327,6 +333,7 @@ def test_generate_hidden_states_accepts_multimodal_prefix_match_without_rewrite(
 
 
 def test_generate_hidden_states_rejects_multimodal_non_prefix_mismatch(tmp_path):
+    """Non-prefix multimodal token mismatches fail fast."""
     hs_path = tmp_path / "hs_0.safetensors"
     save_file(
         {
@@ -353,6 +360,8 @@ def test_generate_hidden_states_rejects_multimodal_non_prefix_mismatch(tmp_path)
 
 
 def test_generate_hidden_states_text_path_rejects_prefix_mismatch():
+    """Text completions require exact token IDs, not prefix matches."""
+
     class _PrefixTextCompletions:
         def create(self, **kwargs):
             return _DummyCompletion([1, 2, 3, 4])

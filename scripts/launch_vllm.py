@@ -89,7 +89,8 @@ def _ensure_hidden_state_extraction_defaults(cmd: list[str]) -> None:
     if disable_cp_arg not in cmd:
         cmd.append(disable_cp_arg)
 
-    # The hidden-state connector must receive slot mappings for the full prompt.
+    # Prefix caching can make vLLM return full prompt IDs while the hidden-state
+    # connector only writes uncached slots, so default extraction to full prompts.
     if not any(
         arg in cmd for arg in ("--enable-prefix-caching", "--no-enable-prefix-caching")
     ):

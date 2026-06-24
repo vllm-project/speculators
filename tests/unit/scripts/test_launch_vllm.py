@@ -20,6 +20,7 @@ def _run_launch_vllm_dry_run(monkeypatch, capsys, args: list[str]) -> str:
 
 
 def test_launch_vllm_disables_prefix_cache_by_default(monkeypatch, capsys):
+    """Hidden-state extraction needs full-prompt slots by default."""
     output = _run_launch_vllm_dry_run(monkeypatch, capsys, ["dummy", "--dry-run"])
 
     assert "--no-enable-prefix-caching" in output
@@ -27,6 +28,7 @@ def test_launch_vllm_disables_prefix_cache_by_default(monkeypatch, capsys):
 
 
 def test_launch_vllm_preserves_explicit_prefix_cache_arg(monkeypatch, capsys):
+    """User-provided prefix-cache flags override extraction defaults."""
     output = _run_launch_vllm_dry_run(
         monkeypatch,
         capsys,

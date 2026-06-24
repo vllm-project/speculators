@@ -10,6 +10,7 @@ from speculators.data_generation.offline import (
 
 
 def test_align_hidden_states_to_tokens_truncates_prefix_match():
+    """Multimodal prefix matches are trimmed to the preprocessed token length."""
     data = {
         "token_ids": torch.tensor([1, 2, 3, 4, 5], dtype=torch.long),
         "hidden_states": torch.arange(5 * 2 * 3, dtype=torch.float32).reshape(5, 2, 3),
@@ -28,6 +29,7 @@ def test_align_hidden_states_to_tokens_truncates_prefix_match():
 
 
 def test_align_hidden_states_to_tokens_rejects_non_prefix_mismatch():
+    """Token drift should fail instead of aligning unrelated hidden states."""
     data = {
         "token_ids": torch.tensor([1, 9, 3], dtype=torch.long),
         "hidden_states": torch.zeros(3, 2, 3),
@@ -45,6 +47,7 @@ def test_align_and_write_hidden_states_moves_without_load_when_validation_disabl
     tmp_path,
     monkeypatch,
 ):
+    """Text offline datagen should move files without unnecessary reads."""
     source_path = tmp_path / "source.safetensors"
     target_path = tmp_path / "target.safetensors"
     source_path.write_bytes(b"raw hidden states")

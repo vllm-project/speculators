@@ -151,6 +151,7 @@ def test_build_client_item_omits_text_only_message_parts():
 
 
 def test_build_client_item_includes_actual_multimodal_parts():
+    """Real media parts must be preserved for vLLM chat generation."""
     messages = [
         {
             "role": "user",
