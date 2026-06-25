@@ -18,10 +18,15 @@ echo "~~~ GPU info"
 nvidia-smi
 
 echo "--- Setting up Python environment"
+BUILD_DIR="/model-cache/.builds/${BUILDKITE_BUILD_ID}"
+rm -rf "$BUILD_DIR"
+mkdir -p "$BUILD_DIR"
+trap "rm -rf $BUILD_DIR" EXIT
+
 export UV_NO_PROGRESS=1
-export UV_CACHE_DIR="$PWD/.uv-cache"
-uv venv testvenv --python "${PYTHON_VERSION}"
-source testvenv/bin/activate
+export UV_CACHE_DIR="$BUILD_DIR/.uv-cache"
+uv venv "$BUILD_DIR/testvenv" --python "${PYTHON_VERSION}"
+source "$BUILD_DIR/testvenv/bin/activate"
 
 export UV_TORCH_BACKEND=cu130
 export HF_HOME=/model-cache
