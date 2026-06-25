@@ -146,6 +146,35 @@ def tv_loss(
     return elementwise_loss  # noqa: RET504
 
 
+def neg_log_acceptance_loss(
+    logits: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
+    targets: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
+):
+    """Compute per-position negative log-acceptance (LK) loss.
+
+    The speculative-decoding acceptance rate equals the draft/target distribution
+    overlap, ``alpha = sum_v min(p_v, q_v)`` (the same quantity computed in
+    ``tv_loss``). This loss is ``-log(alpha)``. Its gradient is
+    ``(1 / alpha) * grad(TV)``: the ``1 / alpha`` factor amplifies the otherwise
+    vanishing TV gradient when overlap is low (early training), giving TV's
+    acceptance-optimal target a usable gradient from a cold start. When the target
+    is a point mass, this loss reduces to cross-entropy.
+
+    Args:
+        logits: Draft model logits (softmax applied internally to form q).
+        targets: Target model logits (softmax applied internally to form p).
+
+    Returns:
+        Per-position negative log-acceptance with shape [1, seq_len].
+    """
+    draft_p = torch.nn.functional.softmax(logits, dim=-1)
+    target_p = torch.nn.functional.softmax(targets, dim=-1)
+    overlap = torch.minimum(draft_p, target_p).sum(dim=-1)  # alpha, shape: [1, seq_len]
+    elementwise_loss = -torch.log(overlap.clamp_min(_EPS))
+
+    return elementwise_loss  # noqa: RET504
+
+
 def dflash_loss_decay(pos_idx: torch.Tensor, gamma: float):
     """Compute DFlash-style exponential decay weights per position.
 
@@ -186,8 +215,9 @@ def resolve_loss_fn(
     """Resolves a loss function given its abbreviated name.
 
     Args:
-        name: ``"kl_div"`` for KL-divergence, ``"ce"`` for cross-entropy, or
-            ``"tv"`` for total variation.
+        name: ``"kl_div"`` for KL-divergence, ``"ce"`` for cross-entropy,
+            ``"tv"`` for total variation, or ``"nla"`` for negative
+            log-acceptance.
 
     Returns:
         The corresponding loss function.
@@ -199,6 +229,7 @@ def resolve_loss_fn(
         "kl_div": kl_div_loss,
         "ce": ce_loss,
         "tv": tv_loss,
+        "nla": neg_log_acceptance_loss,
     }
     if name not in loss_fn_map:
         raise ValueError(

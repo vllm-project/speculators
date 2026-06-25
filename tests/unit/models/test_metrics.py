@@ -6,11 +6,13 @@ import pytest
 import torch
 
 from speculators.models.metrics import (
+    ce_loss,
     compute_accuracy_single_step,
     dflash_loss_decay,
     exp_loss_decay,
     kl_div_loss,
     loss_function,
+    neg_log_acceptance_loss,
     resolve_loss_fn,
     tv_loss,
 )
@@ -116,6 +118,50 @@ class TestTVLoss:
     def test_resolve_tv(self):
         """resolve_loss_fn maps 'tv' to tv_loss."""
         assert resolve_loss_fn("tv") is tv_loss
+
+
+class TestNegLogAcceptanceLoss:
+    def test_identical_is_zero(self):
+        """Negative log-acceptance of identical distributions is ~0."""
+        logits = torch.randn(1, 4, 50)
+        loss = neg_log_acceptance_loss(logits, logits)
+        assert torch.allclose(loss, torch.zeros(1, 4), atol=1e-5)
+
+    def test_equals_neg_log_overlap_and_shape(self):
+        """Loss equals -log(overlap); output is [1, seq_len] and non-negative."""
+        torch.manual_seed(0)
+        logits = torch.randn(1, 4, 50)
+        targets = torch.randn(1, 4, 50)
+        out = neg_log_acceptance_loss(logits, targets)
+
+        overlap = 1.0 - tv_loss(logits, targets)  # tv = 1 - alpha
+        assert out.shape == (1, 4)
+        assert torch.allclose(out, -torch.log(overlap.clamp_min(1e-5)), atol=1e-6)
+        assert (out >= 0).all()
+
+    def test_reduces_to_cross_entropy_at_point_mass_target(self):
+        """At a point-mass target the loss reduces to cross-entropy."""
+        torch.manual_seed(0)
+        logits = torch.randn(1, 1, 50)
+        targets = torch.full((1, 1, 50), -30.0)
+        targets[0, 0, 7] = 30.0  # ~one-hot target
+        assert torch.allclose(
+            neg_log_acceptance_loss(logits, targets),
+            ce_loss(logits, targets),
+            atol=1e-3,
+        )
+
+    def test_finite_at_zero_overlap(self):
+        """The _EPS floor keeps the loss finite when overlap collapses to ~0."""
+        logits = torch.full((1, 1, 50), -30.0)
+        logits[0, 0, 0] = 30.0
+        targets = torch.full((1, 1, 50), -30.0)
+        targets[0, 0, 1] = 30.0
+        assert torch.isfinite(neg_log_acceptance_loss(logits, targets)).all()
+
+    def test_resolve_nla(self):
+        """resolve_loss_fn maps 'nla' to neg_log_acceptance_loss."""
+        assert resolve_loss_fn("nla") is neg_log_acceptance_loss
 
 
 class TestComputeAccuracySingleStep:
