@@ -18,10 +18,10 @@ echo "~~~ GPU info"
 nvidia-smi
 
 echo "--- Setting up Python environment"
-BUILD_DIR="/model-cache/.builds/${BUILDKITE_BUILD_ID}"
-rm -rf "$BUILD_DIR"
+find /model-cache/.builds -maxdepth 1 -type d -mmin +240 -exec rm -rf {} + 2>/dev/null || true
+BUILD_DIR="/model-cache/.builds/${BUILDKITE_JOB_ID}"
 mkdir -p "$BUILD_DIR"
-trap "rm -rf $BUILD_DIR" EXIT
+trap 'rm -rf "$BUILD_DIR" || true' EXIT
 
 export UV_NO_PROGRESS=1
 export UV_CACHE_DIR="$BUILD_DIR/.uv-cache"
