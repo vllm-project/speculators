@@ -762,6 +762,89 @@ def test_distributed_from_pretrained(pretrained_dir, tmp_path):
 
 
 # ===================================================================
+# Distributed — Norm Weights Stay Float32 Under FSDP Mixed Precision
+# ===================================================================
+
+
+def _worker_distributed_norm_float32(rank, world_size, results_dir):
+    """Worker for test_distributed_norm_weights_float32_after_fsdp."""
+    _dist_setup(rank, world_size)
+    try:
+        model = _make_tiny_model()
+
+        trainer = _make_trainer_no_init(
+            model,
+            is_distributed=True,
+            local_rank=rank,
+            hidden_states_dtype=torch.bfloat16,
+        )
+        trainer.checkpointer = MagicMock()
+        trainer.checkpointer.previous_epoch = -1
+
+        trainer.setup_model()
+
+        # After FSDP wrapping, check the local sharded parameter dtypes.
+        # FSDP stores sharded parameters in the "original" dtype (the dtype
+        # at wrap time), which is what the optimizer sees.
+        norm_names = set()
+        param_dtypes = {}
+        for mod_name, module in model.named_modules():
+            is_norm = isinstance(module, torch.nn.LayerNorm) or type(
+                module
+            ).__name__.endswith("RMSNorm")
+            for param_name, param in module.named_parameters(recurse=False):
+                full_name = f"{mod_name}.{param_name}" if mod_name else param_name
+                param_dtypes[full_name] = str(param.dtype)
+                if is_norm:
+                    norm_names.add(full_name)
+
+        if rank == 0:
+            torch.save(
+                {"norm_names": norm_names, "param_dtypes": param_dtypes},
+                results_dir / "results.pt",
+            )
+    finally:
+        _dist_teardown()
+
+
+@requires_multi_gpu
+def test_distributed_norm_weights_float32_after_fsdp(tmp_path):
+    """FSDP mixed precision must not override norm weights back to bfloat16.
+
+    FSDP's MixedPrecisionPolicy(param_dtype=bfloat16) casts parameters to
+    bfloat16 for forward/backward, but the sharded master copy (used by the
+    optimizer) must stay in the original dtype — float32 for norms."""
+    world_size = 2
+    results_dir = tmp_path / "results"
+    results_dir.mkdir()
+
+    mp.spawn(
+        _worker_distributed_norm_float32,
+        args=(world_size, results_dir),
+        nprocs=world_size,
+        join=True,
+    )
+
+    results = torch.load(results_dir / "results.pt", weights_only=False)
+    norm_names = results["norm_names"]
+    param_dtypes = results["param_dtypes"]
+
+    assert norm_names, "expected at least one norm parameter"
+
+    for name in norm_names:
+        assert param_dtypes[name] == str(torch.float32), (
+            f"Norm {name} has dtype {param_dtypes[name]} after FSDP, "
+            f"expected {torch.float32}"
+        )
+
+    for name, dtype_str in param_dtypes.items():
+        if name not in norm_names:
+            assert dtype_str == str(torch.bfloat16), (
+                f"Non-norm {name} has dtype {dtype_str}, expected {torch.bfloat16}"
+            )
+
+
+# ===================================================================
 # Vocab Mapping Loading (t2d / d2t)
 # ===================================================================
 
