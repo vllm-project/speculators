@@ -36,7 +36,7 @@ def render_conversation(
     if chat_template_kwargs is not None:
         body["chat_template_kwargs"] = chat_template_kwargs
     if max_length is not None:
-        body["max_tokens"] = max_length
+        body["truncate_prompt_tokens"] = max_length
 
     resp = httpx.post(url, json=body, timeout=timeout)
 
