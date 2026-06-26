@@ -102,7 +102,7 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
             self.input_norm = None
 
         if config.fc_norm:
-            self.fc_norms = torch.nn.ModuleList(
+            self.fc_norm = torch.nn.ModuleList(
                 [
                     self._model_definitions.norm_class(
                         self.hidden_size,
@@ -112,7 +112,7 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
                 ]
             )
         else:
-            self.fc_norms = None
+            self.fc_norm = None
 
         self.post_init()
 
@@ -192,13 +192,10 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
 
         if self.input_norm is not None:
             hidden_states = self.input_norm(hidden_states)
-        if self.fc_norms is not None:
-            chunks = hidden_states.chunk(len(self.fc_norms), dim=-1)
+        if self.fc_norm is not None:
+            chunks = hidden_states.chunk(len(self.fc_norm), dim=-1)
             hidden_states = torch.cat(
-                [
-                    norm(chunk)
-                    for norm, chunk in zip(self.fc_norms, chunks, strict=True)
-                ],
+                [norm(chunk) for norm, chunk in zip(self.fc_norm, chunks, strict=True)],
                 dim=-1,
             )
         hidden_states = self.fc(hidden_states)

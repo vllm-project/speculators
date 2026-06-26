@@ -496,7 +496,6 @@ def main(args: argparse.Namespace):  # noqa: C901
     if args.norm_output is None:
         args.norm_output = is_llama_eagle
 
-
     if args.speculator_type == "mtp":
         if args.draft_attn_impl != "simple_flex_attention":
             raise ValueError(

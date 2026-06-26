@@ -117,12 +117,12 @@ class PEagleDraftModel(Eagle3DraftModel):
         # Project concatenated hidden states (3*hidden_size) -> hidden_size
         if self.input_norm is not None:
             sampled_hidden = self.input_norm(sampled_hidden)
-        if self.fc_norms is not None:
-            chunks = sampled_hidden.chunk(len(self.fc_norms), dim=-1)
+        if self.fc_norm is not None:
+            chunks = sampled_hidden.chunk(len(self.fc_norm), dim=-1)
             sampled_hidden = torch.cat(
                 [
                     norm(chunk)
-                    for norm, chunk in zip(self.fc_norms, chunks, strict=True)
+                    for norm, chunk in zip(self.fc_norm, chunks, strict=True)
                 ],
                 dim=-1,
             )

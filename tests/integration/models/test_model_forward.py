@@ -384,8 +384,8 @@ class TestNormOutputParams:
 
     def test_fc_norm(self):
         model = make_eagle3_model(fc_norm=True, norm_output=True)
-        assert model.fc_norms is not None
-        assert len(model.fc_norms) == 3
+        assert model.fc_norm is not None
+        assert len(model.fc_norm) == 3
         assert model.input_norm is None
         samples = _make_samples([128])
         batch = make_batch(max_len=MAX_LEN, samples=samples, hidden_size=HIDDEN_SIZE)
@@ -397,8 +397,8 @@ class TestNormOutputParams:
 
     def test_peagle_fc_norm(self):
         model = make_peagle_model(fc_norm=True)
-        assert model.fc_norms is not None
-        assert len(model.fc_norms) == 3
+        assert model.fc_norm is not None
+        assert len(model.fc_norm) == 3
         samples = _make_samples([128])
         batch = make_batch(max_len=MAX_LEN, samples=samples, hidden_size=HIDDEN_SIZE)
         _draft_tokens, loss, _metrics = model(**batch)
