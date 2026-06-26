@@ -995,8 +995,8 @@ def parse_args():
         "--norm-before-fc",
         action="store_true",
         default=False,
-        help="Apply RMSNorm to concatenated target hidden states before the FC "
-        "projection layer (Eagle 3.1).",
+        help="Use RMSNorm before FC layer in draft path "
+        "(e.g., for Eagle 3.1 / gpt-oss models).",
     )
     parser.add_argument(
         "--norm-output",
