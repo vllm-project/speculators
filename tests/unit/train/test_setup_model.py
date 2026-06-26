@@ -264,6 +264,57 @@ def test_single_gpu_fresh_init(tiny_model, mock_checkpointer):
     mock_checkpointer.load_model_state_dict.assert_not_called()
 
 
+@requires_cuda
+def test_norm_weights_stay_float32_under_bfloat16(tiny_model, mock_checkpointer):
+    """Norm weights must remain float32 after setup_model with bfloat16 dtype,
+    otherwise Adam updates (~1e-4) vanish due to bf16 precision at 1.0."""
+    trainer = _make_trainer_no_init(
+        tiny_model, is_distributed=False, hidden_states_dtype=torch.bfloat16
+    )
+    trainer.checkpointer = mock_checkpointer
+    trainer.setup_model()
+
+    for name, param in tiny_model.named_parameters():
+        if "norm" in name:
+            assert param.dtype == torch.float32, (
+                f"{name} is {param.dtype}, expected float32"
+            )
+        else:
+            assert param.dtype == torch.bfloat16, (
+                f"{name} is {param.dtype}, expected bfloat16"
+            )
+
+
+@requires_cuda
+def test_norm_weights_learn_under_bfloat16(tiny_model, mock_checkpointer):
+    """Norm weights initialized at 1.0 must change after an optimizer step
+    with bfloat16 hidden states (regression test for bf16 precision issue)."""
+    trainer = _make_trainer_no_init(
+        tiny_model, is_distributed=False, hidden_states_dtype=torch.bfloat16
+    )
+    trainer.checkpointer = mock_checkpointer
+    trainer.setup_model()
+
+    trainable_norms = {
+        name: param.clone()
+        for name, param in tiny_model.named_parameters()
+        if "norm" in name and param.requires_grad
+    }
+    assert trainable_norms, "expected at least one trainable norm weight"
+
+    optimizer = torch.optim.AdamW(tiny_model.parameters(), lr=1e-3)
+    dummy_loss = sum(p.sum() for p in tiny_model.parameters() if p.requires_grad)
+    dummy_loss.backward()
+    optimizer.step()
+
+    for name, original in trainable_norms.items():
+        current = dict(tiny_model.named_parameters())[name]
+        assert not torch.equal(current, original), (
+            f"{name} did not change after optimizer step — "
+            f"norm weights are not learning (dtype={current.dtype})"
+        )
+
+
 # ===================================================================
 # Single GPU — Resume from Checkpoint
 # ===================================================================

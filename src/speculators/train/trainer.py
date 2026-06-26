@@ -177,6 +177,13 @@ class Trainer:
         SpeculatorModel.verify_training_compatible(self.model)
 
         self.model.to(self.config.hidden_states_dtype)  # type: ignore[arg-type]
+        # Keep norm weights in float32 so Adam updates (~1e-4) aren't lost to
+        # bfloat16's precision limit (~8e-3 at 1.0).
+        for module in self.model.modules():
+            if isinstance(module, (torch.nn.LayerNorm,)) or type(
+                module
+            ).__name__.endswith("RMSNorm"):
+                module.float()
         load_checkpoint = (
             self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1
         )
