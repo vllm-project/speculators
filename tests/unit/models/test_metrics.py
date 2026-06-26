@@ -15,6 +15,7 @@ from speculators.models.metrics import (
     loss_function,
     neg_log_acceptance_loss,
     resolve_loss_fn,
+    reverse_kl_div_loss,
     tv_loss,
 )
 
@@ -91,6 +92,33 @@ class TestKLDivLoss:
         torch.manual_seed(0)
         loss_random = kl_div_loss(torch.randn(1, 4, 8), torch.randn(1, 4, 8))
         assert (loss_random >= -1e-6).all()
+
+
+class TestReverseKLDivLoss:
+    def test_identical_zero_and_random_nonnegative(self):
+        """Reverse KL of identical distributions is ~0; random inputs are >= 0."""
+        x = torch.randn(1, 4, 8)
+        loss_identical = reverse_kl_div_loss(x, x)
+        assert loss_identical.sum().item() == pytest.approx(0.0, abs=1e-4)
+
+        torch.manual_seed(0)
+        loss_random = reverse_kl_div_loss(torch.randn(1, 4, 8), torch.randn(1, 4, 8))
+        assert (loss_random >= -1e-6).all()
+
+    def test_equals_forward_kl_with_swapped_args(self):
+        """KL(q||p) equals forward KL with draft and target swapped."""
+        torch.manual_seed(0)
+        logits = torch.randn(1, 4, 8)
+        targets = torch.randn(1, 4, 8)
+        assert torch.allclose(
+            reverse_kl_div_loss(logits, targets),
+            kl_div_loss(targets, logits),
+            atol=1e-6,
+        )
+
+    def test_resolve_rkl(self):
+        """resolve_loss_fn maps 'rkl' to reverse_kl_div_loss."""
+        assert resolve_loss_fn("rkl") is reverse_kl_div_loss
 
 
 class TestTVLoss:
