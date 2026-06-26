@@ -477,12 +477,12 @@ def _save_train_command(save_path: str) -> None:
     """Write the launch command and provenance header to save_path/train_command.txt."""
     try:
         sha = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
+            ["git", "rev-parse", "HEAD"],  # noqa: S607
             capture_output=True,
             text=True,
             check=True,
         ).stdout.strip()
-    except Exception:
+    except (OSError, subprocess.CalledProcessError):
         sha = "unknown"
 
     pkg_versions: list[str] = []
