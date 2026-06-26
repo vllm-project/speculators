@@ -1,7 +1,14 @@
 import argparse
+import datetime
 import gc
+import importlib.metadata
 import logging
+import os
 import random
+import shlex
+import subprocess
+import sys
+import tempfile
 import warnings
 from copy import deepcopy
 from pathlib import Path
@@ -466,6 +473,49 @@ def build_draft_model(
     )
 
 
+def _save_train_command(save_path: str) -> None:
+    """Write the launch command and provenance header to save_path/train_command.txt."""
+    try:
+        sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+    except Exception:
+        sha = "unknown"
+
+    pkg_versions: list[str] = []
+    for pkg in ("speculators", "vllm", "transformers", "torch"):
+        try:
+            ver = importlib.metadata.version(pkg)
+        except importlib.metadata.PackageNotFoundError:
+            ver = "not installed"
+        pkg_versions.append(f"# {pkg}: {ver}")
+
+    header = "\n".join(
+        [
+            f"# Timestamp: {datetime.datetime.now(datetime.timezone.utc).isoformat()}",
+            f"# Git SHA: {sha}",
+            f"# World size: {os.environ.get('WORLD_SIZE', '1')}",
+            *pkg_versions,
+        ]
+    )
+
+    command = shlex.join(sys.argv)
+    content = f"{header}\n{command}\n"
+
+    os.makedirs(save_path, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=save_path, prefix=".train_command_", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(content)
+        os.replace(tmp, os.path.join(save_path, "train_command.txt"))
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
 def main(args: argparse.Namespace):  # noqa: C901
     # Set random seed for reproducibility
     set_seed(args.seed, args.deterministic_cuda)
@@ -478,6 +528,10 @@ def main(args: argparse.Namespace):  # noqa: C901
 
     # Setup distributed training
     local_rank, world_size, rank, is_distributed = maybe_setup_distributed()
+
+    if local_rank == 0:
+        _save_train_command(args.save_path)
+
     if not hasattr(torch, args.hidden_states_dtype):
         raise ValueError(
             "--hidden-states-dtype must be a dtype attribute of torch. e.g. `bfloat16`"
