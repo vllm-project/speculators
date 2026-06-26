@@ -89,9 +89,13 @@ class TestRenderConversation:
         transport, body = _capturing_transport()
         tools = [{"type": "function", "function": {"name": "f", "parameters": {}}}]
         _call_render(
-            transport, tools=tools, chat_template_kwargs={"enable_thinking": True}
+            transport,
+            tools=tools,
+            chat_template_kwargs={"enable_thinking": True},
+            max_length=4096,
         )
 
         assert body["tools"] == tools
         assert body["chat_template_kwargs"] == {"enable_thinking": True}
         assert body["add_generation_prompt"] is False
+        assert body["truncate_prompt_tokens"] == 4096

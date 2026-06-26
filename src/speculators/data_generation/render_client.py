@@ -37,6 +37,7 @@ def render_conversation(
         body["chat_template_kwargs"] = chat_template_kwargs
     if max_length is not None:
         body["truncate_prompt_tokens"] = max_length
+        body["truncation_side"] = "right"
 
     resp = httpx.post(url, json=body, timeout=timeout)
 
