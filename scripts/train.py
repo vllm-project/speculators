@@ -529,7 +529,7 @@ def main(args: argparse.Namespace):  # noqa: C901
     # Setup distributed training
     local_rank, world_size, rank, is_distributed = maybe_setup_distributed()
 
-    if local_rank == 0:
+    if rank == 0:
         _save_train_command(args.save_path)
 
     if not hasattr(torch, args.hidden_states_dtype):
