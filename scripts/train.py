@@ -445,7 +445,7 @@ def build_draft_model(
     )
 
 
-def main(args: argparse.Namespace):  # noqa: C901, PLR0912
+def main(args: argparse.Namespace):  # noqa: C901
     # Set random seed for reproducibility
     set_seed(args.seed, args.deterministic_cuda)
 
@@ -462,7 +462,6 @@ def main(args: argparse.Namespace):  # noqa: C901, PLR0912
             "--hidden-states-dtype must be a dtype attribute of torch. e.g. `bfloat16`"
         )
     hidden_states_dtype = getattr(torch, args.hidden_states_dtype)
-
 
     if args.speculator_type == "mtp":
         if args.draft_attn_impl != "simple_flex_attention":
