@@ -105,6 +105,8 @@ class BaseCheckpointer:
             return -1
         last_checkpoint_num = -1
         for d in self.path.iterdir():
+            if d.is_symlink():
+                continue  # skip descriptive symlinks like epoch0_step16626
             if d.is_dir():
                 if d.name == "interrupted":
                     logger.warning(

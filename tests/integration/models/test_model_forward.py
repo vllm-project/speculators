@@ -357,6 +357,46 @@ class TestEagle3Params:
 
 
 @requires_cuda
+class TestNormOutputParams:
+    """Tests for Eagle 3.1: norm_before_fc + norm_output."""
+
+    def test_norm_output(self):
+        model = make_eagle3_model(norm_before_fc=True, norm_output=True)
+        assert model.input_norm is not None
+        samples = _make_samples([128])
+        batch = make_batch(max_len=MAX_LEN, samples=samples, hidden_size=HIDDEN_SIZE)
+        draft_tokens, loss, _metrics = model(**batch, ttt_steps=3)
+
+        assert len(draft_tokens) == 3
+        assert loss.isfinite()
+        loss.backward()
+
+    def test_norm_output_without_norm_before_fc(self):
+        model = make_eagle3_model(norm_output=True)
+        assert model.input_norm is None
+        samples = _make_samples([128])
+        batch = make_batch(max_len=MAX_LEN, samples=samples, hidden_size=HIDDEN_SIZE)
+        draft_tokens, loss, _metrics = model(**batch, ttt_steps=3)
+
+        assert len(draft_tokens) == 3
+        assert loss.isfinite()
+        loss.backward()
+
+    def test_peagle_norm_before_fc(self):
+        model = make_peagle_model()
+        assert model.input_norm is None
+
+        model = make_peagle_model(norm_before_fc=True)
+        assert model.input_norm is not None
+        samples = _make_samples([128])
+        batch = make_batch(max_len=MAX_LEN, samples=samples, hidden_size=HIDDEN_SIZE)
+        _draft_tokens, loss, _metrics = model(**batch)
+
+        assert loss.isfinite()
+        loss.backward()
+
+
+@requires_cuda
 class TestPEagleParams:
     @pytest.mark.parametrize("num_depths", [2, 4, 8])
     def test_varying_num_depths(self, num_depths):

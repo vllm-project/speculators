@@ -205,7 +205,23 @@ def create_transformer_layer_config(  # noqa: C901
     # New rope parameters definition introduced in transformers 5.0
     if version.parse(transformers.__version__) >= version.parse("5.0.0"):
         if hasattr(verifier_config, "rope_parameters"):
-            config.rope_parameters = deepcopy(verifier_config.rope_parameters)
+            rope_params = deepcopy(verifier_config.rope_parameters)
+            # Some verifiers (e.g. Laguna) use the nested per-layer-type rope format
+            # {"full_attention": {...}, "sliding_attention": {...}} with no top-level
+            # "rope_theta". The llama-style draft uses a single rope, so collapse it to
+            # a flat default rope (preferring the sliding-attention theta).
+            if isinstance(rope_params, dict) and "rope_theta" not in rope_params:
+                sub = (
+                    rope_params.get("sliding_attention")
+                    or rope_params.get("full_attention")
+                    or {}
+                )
+                rope_params = {
+                    "rope_type": "default",
+                    "rope_theta": sub.get("rope_theta", 10000.0),
+                }
+            config.rope_parameters = rope_params
+
             _MROPE_KEYS = ("mrope_section", "mrope_interleaved", "type")  # noqa: N806
             for key in _MROPE_KEYS:
                 config.rope_parameters.pop(key, None)
@@ -406,7 +422,12 @@ def build_draft_model(
                 d2t=d2t,
                 verifier_name_or_path=args.verifier_name_or_path,
             )
-        return model_class.from_pretrained(args.from_pretrained, t2d=t2d, d2t=d2t)
+        return model_class.from_pretrained(
+            args.from_pretrained,
+            t2d=t2d,
+            d2t=d2t,
+            verifier=args.verifier_name_or_path,
+        )
 
     if args.speculator_type == "mtp":
         # MTP uses the verifier's own decoder config as the draft
@@ -863,7 +884,10 @@ def parse_args():
         "--logger",
         type=str,
         default="",
-        help="One of 'trackio', 'wandb', 'tensorboard' or comma separated list of them",
+        help=(
+            "One of 'trackio', 'wandb', 'tensorboard', 'mlflow' or "
+            "comma separated list."
+        ),
     )
     parser.add_argument("--total-seq-len", type=int, default=8192)
     parser.add_argument(
@@ -993,8 +1017,16 @@ def parse_args():
     parser.add_argument(
         "--norm-before-fc",
         action="store_true",
-        help="Use RMSNorm before fc in Eagle3 draft path "
-        "(e.g. for gpt-oss). Omit for other models.",
+        default=False,
+        help="Use RMSNorm before FC layer in draft path "
+        "(e.g., for Eagle 3.1 / gpt-oss models).",
+    )
+    parser.add_argument(
+        "--norm-output",
+        action="store_true",
+        default=False,
+        help="Feed post-norm hidden states back across TTT steps to stabilize "
+        "magnitude drift across speculation depths (Eagle 3.1).",
     )
     # D-Flash specific parameters
     parser.add_argument(
