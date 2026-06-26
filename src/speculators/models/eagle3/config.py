@@ -58,8 +58,8 @@ class Eagle3SpeculatorConfig(SpeculatorModelConfig):
     norm_before_fc: bool = Field(
         default=False,
         description=(
-            "Apply RMSNorm to concatenated target hidden states before the FC "
-            "projection layer (e.g. for gpt-oss draft checkpoints)."
+            "Use RMSNorm before FC layer in draft path "
+            "(e.g., for Eagle 3.1 / gpt-oss models)."
         ),
     )
 
