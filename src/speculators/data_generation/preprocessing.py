@@ -23,11 +23,13 @@ from transformers import __version__ as TRANSFORMERS_VERSION  # noqa: N812
 
 from speculators.data_generation.configs import DATASET_CONFIGS
 from speculators.data_generation.logging_utils import PipelineLogger
+from speculators.data_generation.render_client import render_conversation
 from speculators.data_generation.torch_utils import set_default_torch_num_threads
 from speculators.train.vocab_mapping import save_token_frequency_distribution
 
 __all__ = [
     "build_eagle3_dataset",
+    "build_dataset_from_render",
     "load_and_preprocess_dataset",
     "load_raw_dataset",
 ]
@@ -651,6 +653,62 @@ def build_eagle3_dataset(
     return dataset
 
 
+def build_dataset_from_render(
+    dataset: HFDataset,
+    render_endpoint: str,
+    max_length: int = 2048,
+    chat_template_kwargs: dict | None = None,
+    minimum_valid_tokens: int | None = None,
+) -> HFDataset:
+    """Tokenize via vLLM render endpoint instead of local HF apply_chat_template."""
+    results: dict[str, list] = {"input_ids": [], "loss_mask": [], "seq_len": []}
+
+    has_tools = "tools" in dataset.column_names
+
+    for idx in range(len(dataset)):
+        row = dataset[idx]
+        conv = row.get("conversations")
+        if not conv or not isinstance(conv, list):
+            continue
+
+        normalized = _normalize_conversation(conv)
+        if not normalized:
+            continue
+
+        vllm_messages = _adapt_conv_for_vllm(normalized)
+
+        conv_tools = _parse_conv_tools(row.get("tools"), idx) if has_tools else None
+
+        rendered = render_conversation(
+            render_endpoint,
+            vllm_messages,
+            tools=conv_tools,
+            chat_template_kwargs=chat_template_kwargs,
+            max_length=max_length,
+        )
+
+        token_ids = rendered["token_ids"]
+        loss_mask = rendered["loss_mask"]
+
+        if loss_mask is None:
+            raise NotImplementedError(
+                "render endpoint does not yet return loss_mask; pending vLLM PR"
+            )
+
+        if minimum_valid_tokens is not None:
+            num_valid = sum(1 for m in loss_mask if m == 1)
+            if num_valid < minimum_valid_tokens:
+                continue
+
+        results["input_ids"].append(torch.tensor(token_ids, dtype=torch.long))
+        results["loss_mask"].append(torch.tensor(loss_mask, dtype=torch.long))
+        results["seq_len"].append(len(token_ids))
+
+    out = HFDataset.from_dict(results)
+    out.set_format(type="torch")
+    return out
+
+
 def load_raw_dataset(
     train_data_path: str,
 ) -> tuple[HFDataset, Callable[[dict], dict] | None]:
@@ -709,32 +767,10 @@ def load_and_preprocess_dataset(
     turn_dropout: bool = False,
     minimum_valid_tokens: int | None = None,
     trust_remote_code: bool = False,
+    render_endpoint: str | None = None,
+    chat_template_kwargs: dict | None = None,
 ) -> tuple[HFDataset, ProcessorLike]:
-    """Load, tokenize, and preprocess a dataset for EAGLE3 training.
-
-    Uses the processor's built-in chat template via apply_chat_template.
-    Caching is handled automatically by HuggingFace datasets.
-
-    Args:
-        target_model_path: HuggingFace model ID or local path
-        train_data_path: Dataset name or path to JSON/JSONL file
-        seq_length: Maximum sequence length
-        build_dataset_num_proc: Number of processes for dataset building
-        seed: Random seed for shuffling
-        max_samples: Optional limit on number of samples
-        token_freq_path: Path to save token frequency distribution
-        cache_dir: Directory to cache HuggingFace datasets (optional)
-        assistant_pattern: Optional custom regex pattern for matching assistant
-                          responses. If None, pattern will be auto-detected from
-                          chat template.
-        turn_dropout: If True, randomly keeps first N consecutive turns per
-                     conversation
-        minimum_valid_tokens: Number of tokens to consider for a valid sample
-        trust_remote_code: If True, allows executing code from HF Hub.
-
-    Returns:
-        Tuple of (preprocessed_dataset, processor)
-    """
+    """Load, tokenize, and preprocess a dataset for EAGLE3 training."""
     if minimum_valid_tokens is not None and minimum_valid_tokens < 0:
         raise ValueError("minimum_valid_tokens must be >= 0")
     log.section("Starting dataset preprocessing")
@@ -746,7 +782,11 @@ def load_and_preprocess_dataset(
     log.subsection("Loading processor")
     processor = load_processor(target_model_path, trust_remote_code=trust_remote_code)
 
-    if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
+    if render_endpoint is not None:
+        log.info(f"Using render endpoint: {render_endpoint}")
+    elif (
+        not hasattr(processor, "apply_chat_template") or processor.chat_template is None
+    ):
         raise ValueError(
             f"Processor for {target_model_path} does not support chat templates. "
             "Please use a model with a pre-configured chat template."
@@ -773,18 +813,27 @@ def load_and_preprocess_dataset(
 
         log.info(f"Loaded {len(raw_dataset)} samples")
 
-        if turn_dropout:
-            log.info("Turn dropout enabled: randomly keeping N consecutive turns")
+        if render_endpoint is not None:
+            preprocessed_dataset = build_dataset_from_render(
+                dataset=raw_dataset,
+                render_endpoint=render_endpoint,
+                max_length=seq_length,
+                chat_template_kwargs=chat_template_kwargs,
+                minimum_valid_tokens=minimum_valid_tokens,
+            )
+        else:
+            if turn_dropout:
+                log.info("Turn dropout enabled: randomly keeping N consecutive turns")
 
-        preprocessed_dataset = build_eagle3_dataset(
-            dataset=raw_dataset,
-            processor=processor,
-            max_length=seq_length,
-            num_proc=build_dataset_num_proc,
-            assistant_pattern=assistant_pattern,
-            turn_dropout=turn_dropout,
-            minimum_valid_tokens=minimum_valid_tokens,
-        )
+            preprocessed_dataset = build_eagle3_dataset(
+                dataset=raw_dataset,
+                processor=processor,
+                max_length=seq_length,
+                num_proc=build_dataset_num_proc,
+                assistant_pattern=assistant_pattern,
+                turn_dropout=turn_dropout,
+                minimum_valid_tokens=minimum_valid_tokens,
+            )
         if minimum_valid_tokens is not None:
             log.info(f"Kept {len(preprocessed_dataset)} samples after filtering")
         processed_datasets.append(preprocessed_dataset)

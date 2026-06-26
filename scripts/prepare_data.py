@@ -105,6 +105,17 @@ def parse_args():
             "per conversation for data augmentation."
         ),
     )
+    parser.add_argument(
+        "--render-endpoint",
+        type=str,
+        default=None,
+        help=(
+            "URL of a vLLM render service "
+            "(e.g. http://localhost:8000). When set, tokenization is "
+            "delegated to the render endpoint instead of local HF "
+            "apply_chat_template. See RFC #652."
+        ),
+    )
 
     # Output arguments
     parser.add_argument(
@@ -190,6 +201,7 @@ def main():
         turn_dropout=args.turn_dropout,
         minimum_valid_tokens=args.minimum_valid_tokens,
         trust_remote_code=args.trust_remote_code,
+        render_endpoint=args.render_endpoint,
     )
 
     log.info("Done preparing data")
