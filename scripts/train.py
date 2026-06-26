@@ -1017,8 +1017,16 @@ def parse_args():
     parser.add_argument(
         "--norm-before-fc",
         action="store_true",
-        help="Use RMSNorm before fc in Eagle3 draft path "
-        "(e.g. for gpt-oss). Omit for other models.",
+        default=False,
+        help="Use RMSNorm before FC layer in draft path "
+        "(e.g., for Eagle 3.1 / gpt-oss models).",
+    )
+    parser.add_argument(
+        "--norm-output",
+        action="store_true",
+        default=False,
+        help="Feed post-norm hidden states back across TTT steps to stabilize "
+        "magnitude drift across speculation depths (Eagle 3.1).",
     )
     # D-Flash specific parameters
     parser.add_argument(
