@@ -29,6 +29,7 @@ def render_conversation(
     body: dict = {
         "messages": messages,
         "add_generation_prompt": False,
+        "return_loss_mask": True,
     }
     if tools is not None:
         body["tools"] = tools

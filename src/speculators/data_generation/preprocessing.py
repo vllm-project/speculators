@@ -28,8 +28,8 @@ from speculators.data_generation.torch_utils import set_default_torch_num_thread
 from speculators.train.vocab_mapping import save_token_frequency_distribution
 
 __all__ = [
-    "build_eagle3_dataset",
     "build_dataset_from_render",
+    "build_eagle3_dataset",
     "load_and_preprocess_dataset",
     "load_raw_dataset",
 ]
@@ -656,14 +656,20 @@ def build_eagle3_dataset(
 def build_dataset_from_render(
     dataset: HFDataset,
     render_endpoint: str,
+    processor: ProcessorLike,
     max_length: int = 2048,
     chat_template_kwargs: dict | None = None,
+    turn_dropout: bool = False,
     minimum_valid_tokens: int | None = None,
 ) -> HFDataset:
     """Tokenize via vLLM render endpoint instead of local HF apply_chat_template."""
     results: dict[str, list] = {"input_ids": [], "loss_mask": [], "seq_len": []}
-
     has_tools = "tools" in dataset.column_names
+
+    # Regex fallback for when the render endpoint returns loss_mask=null
+    # (template lacks {% generation %} tags).
+    assistant_pattern = _detect_assistant_pattern(processor)
+    tokenizer = get_tokenizer(processor)
 
     for idx in range(len(dataset)):
         row = dataset[idx]
@@ -671,12 +677,11 @@ def build_dataset_from_render(
         if not conv or not isinstance(conv, list):
             continue
 
-        normalized = _normalize_conversation(conv)
+        normalized = _normalize_conversation(conv, turn_dropout)
         if not normalized:
             continue
 
         vllm_messages = _adapt_conv_for_vllm(normalized)
-
         conv_tools = _parse_conv_tools(row.get("tools"), idx) if has_tools else None
 
         rendered = render_conversation(
@@ -688,20 +693,36 @@ def build_dataset_from_render(
         )
 
         token_ids = rendered["token_ids"]
-        loss_mask = rendered["loss_mask"]
+        loss_mask_raw = rendered["loss_mask"]
 
-        if loss_mask is None:
-            raise NotImplementedError(
-                "render endpoint does not yet return loss_mask; pending vLLM PR"
+        if loss_mask_raw is not None:
+            loss_mask = torch.tensor(loss_mask_raw, dtype=torch.long)
+        else:
+            text = tokenizer.decode(token_ids)
+            encoded = tokenizer(
+                text,
+                return_offsets_mapping=True,
+                max_length=max_length,
+                truncation=True,
+                add_special_tokens=False,
+            )
+            loss_mask = _create_loss_mask_from_offsets(
+                text,
+                encoded["offset_mapping"],
+                assistant_pattern,
+                conv_idx=idx,
+                max_length=max_length,
             )
 
+        if len(loss_mask) != len(token_ids):
+            loss_mask = loss_mask[: len(token_ids)]
+
         if minimum_valid_tokens is not None:
-            num_valid = sum(1 for m in loss_mask if m == 1)
-            if num_valid < minimum_valid_tokens:
+            if int(loss_mask.sum().item()) < minimum_valid_tokens:
                 continue
 
         results["input_ids"].append(torch.tensor(token_ids, dtype=torch.long))
-        results["loss_mask"].append(torch.tensor(loss_mask, dtype=torch.long))
+        results["loss_mask"].append(loss_mask)
         results["seq_len"].append(len(token_ids))
 
     out = HFDataset.from_dict(results)
@@ -817,8 +838,10 @@ def load_and_preprocess_dataset(
             preprocessed_dataset = build_dataset_from_render(
                 dataset=raw_dataset,
                 render_endpoint=render_endpoint,
+                processor=processor,
                 max_length=seq_length,
                 chat_template_kwargs=chat_template_kwargs,
+                turn_dropout=turn_dropout,
                 minimum_valid_tokens=minimum_valid_tokens,
             )
         else:
