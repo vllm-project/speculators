@@ -180,6 +180,23 @@ def _param_checksums(state_dict: dict[str, torch.Tensor]) -> dict[str, float]:
     }
 
 
+def _is_norm_module(module: torch.nn.Module) -> bool:
+    """Match the same predicate used by Trainer.setup_model."""
+    return isinstance(module, torch.nn.LayerNorm) or type(
+        module
+    ).__name__.endswith("RMSNorm")
+
+
+def _norm_param_names(model: torch.nn.Module) -> set[str]:
+    """Return the set of parameter names owned by norm modules."""
+    names: set[str] = set()
+    for mod_name, module in model.named_modules():
+        if _is_norm_module(module):
+            for param_name, _ in module.named_parameters(recurse=False):
+                names.add(f"{mod_name}.{param_name}" if mod_name else param_name)
+    return names
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -274,8 +291,11 @@ def test_norm_weights_stay_float32_under_bfloat16(tiny_model, mock_checkpointer)
     trainer.checkpointer = mock_checkpointer
     trainer.setup_model()
 
+    norm_names = _norm_param_names(tiny_model)
+    assert norm_names, "expected at least one norm parameter"
+
     for name, param in tiny_model.named_parameters():
-        if "norm" in name:
+        if name in norm_names:
             assert param.dtype == torch.float32, (
                 f"{name} is {param.dtype}, expected float32"
             )
@@ -295,10 +315,11 @@ def test_norm_weights_learn_under_bfloat16(tiny_model, mock_checkpointer):
     trainer.checkpointer = mock_checkpointer
     trainer.setup_model()
 
+    norm_names = _norm_param_names(tiny_model)
     trainable_norms = {
         name: param.clone()
         for name, param in tiny_model.named_parameters()
-        if "norm" in name and param.requires_grad
+        if name in norm_names and param.requires_grad
     }
     assert trainable_norms, "expected at least one trainable norm weight"
 
