@@ -672,7 +672,7 @@ def test_eagle_speculator_from_pretrained_different_layers(
     model = SpeculatorModel.from_pretrained(
         None,
         config=eagle_config,
-        verifier=mock_verifier,  # type: ignore[arg-type]
+        verifier=mock_verifier,
         state_dict=state_dict,
     )
 
@@ -713,13 +713,13 @@ def test_eagle_speculator_local_marshalling_different_layers(
         model = SpeculatorModel.from_pretrained(
             None,
             config=eagle_config,
-            verifier=mock_verifier,  # type: ignore[arg-type]
+            verifier=mock_verifier,
             state_dict=state_dict,
         )
         model.save_pretrained(tmpdir)  # type: ignore[attr-defined]
 
         # Load model from saved directory
-        loaded_model = SpeculatorModel.from_pretrained(tmpdir, verifier=mock_verifier)  # type: ignore[arg-type]
+        loaded_model = SpeculatorModel.from_pretrained(tmpdir, verifier=mock_verifier)
 
         assert isinstance(loaded_model, EagleSpeculator)
         assert isinstance(loaded_model.config, EagleSpeculatorConfig)
