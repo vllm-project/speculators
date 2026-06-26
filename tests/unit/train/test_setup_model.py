@@ -182,9 +182,9 @@ def _param_checksums(state_dict: dict[str, torch.Tensor]) -> dict[str, float]:
 
 def _is_norm_module(module: torch.nn.Module) -> bool:
     """Match the same predicate used by Trainer.setup_model."""
-    return isinstance(module, torch.nn.LayerNorm) or type(
-        module
-    ).__name__.endswith("RMSNorm")
+    return isinstance(module, torch.nn.LayerNorm) or type(module).__name__.endswith(
+        "RMSNorm"
+    )
 
 
 def _norm_param_names(model: torch.nn.Module) -> set[str]:
