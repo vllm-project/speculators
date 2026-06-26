@@ -463,15 +463,6 @@ def main(args: argparse.Namespace):  # noqa: C901, PLR0912
         )
     hidden_states_dtype = getattr(torch, args.hidden_states_dtype)
 
-    # Default to Eagle 3.1 (norm_before_fc + norm_output) for llama arch
-    is_llama_eagle = (
-        args.speculator_type in ("eagle3", "peagle")
-        and getattr(args, "draft_arch", None) == "llama"
-    )
-    if args.norm_before_fc is None:
-        args.norm_before_fc = is_llama_eagle
-    if args.norm_output is None:
-        args.norm_output = is_llama_eagle
 
     if args.speculator_type == "mtp":
         if args.draft_attn_impl != "simple_flex_attention":
@@ -1002,18 +993,17 @@ def parse_args():
     )
     parser.add_argument(
         "--norm-before-fc",
-        action=argparse.BooleanOptionalAction,
-        default=None,
+        action="store_true",
+        default=False,
         help="Apply RMSNorm to concatenated target hidden states before the FC "
-        "projection layer. Defaults to True for llama draft arch.",
+        "projection layer (Eagle 3.1).",
     )
     parser.add_argument(
         "--norm-output",
-        action=argparse.BooleanOptionalAction,
-        default=None,
+        action="store_true",
+        default=False,
         help="Feed post-norm hidden states back across TTT steps to stabilize "
-        "magnitude drift across speculation depths (Eagle 3.1). "
-        "Defaults to True for llama draft arch.",
+        "magnitude drift across speculation depths (Eagle 3.1).",
     )
     # D-Flash specific parameters
     parser.add_argument(
