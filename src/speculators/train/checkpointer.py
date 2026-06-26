@@ -139,6 +139,13 @@ class BaseCheckpointer:
     def val_metrics_path(self, epoch: int) -> Path:
         return self.path / str(epoch) / "val_metrics.json"
 
+    TRAIN_COMMAND_FILENAME = "train_command.txt"
+
+    def _copy_train_command(self, epoch: int | str) -> None:
+        src = self.path / self.TRAIN_COMMAND_FILENAME
+        if src.exists():
+            shutil.copy2(src, self.path / str(epoch) / self.TRAIN_COMMAND_FILENAME)
+
     def save_val_metrics(self, epoch: int, val_metrics: dict[str, float]):
         path = self.val_metrics_path(epoch)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -290,6 +297,7 @@ class SingleGPUCheckpointer(BaseCheckpointer):
         # Preserve the legacy single-optimizer format when there is only one.
         payload = state_dicts[0] if len(state_dicts) == 1 else state_dicts
         torch.save(payload, self.optimizer_path(epoch))
+        self._copy_train_command(epoch)
 
 
 class DistributedCheckpointer(BaseCheckpointer):
@@ -368,6 +376,7 @@ class DistributedCheckpointer(BaseCheckpointer):
             # Only rank 0 saves the checkpoint
             model.save_pretrained(self.path / str(epoch), state_dict=model_state_dict)
             torch.save(optimizer_state_dict, self.optimizer_path(epoch))
+            self._copy_train_command(epoch)
 
         dist.barrier()
 
