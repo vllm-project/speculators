@@ -486,7 +486,7 @@ def _save_train_command(save_path: str) -> None:
         sha = "unknown"
 
     pkg_versions: list[str] = []
-    for pkg in ("speculators", "vllm", "transformers", "torch"):
+    for pkg in ("speculators", "vllm", "transformers", "torch", "compressed-tensors"):
         try:
             ver = importlib.metadata.version(pkg)
         except importlib.metadata.PackageNotFoundError:
