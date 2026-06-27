@@ -23,6 +23,7 @@ __all__ = [
     "launch_vllm_server_context",
     "purge_newfiles",
     "run_data_generation_offline",
+    "run_gemma4_kv_extraction",
     "run_prepare_data",
     "run_stitch_mtp",
     "run_training",
@@ -30,6 +31,13 @@ __all__ = [
     "stop_vllm_server",
     "wait_for_server",
 ]
+
+GEMMA4_KV_KEYS = (
+    "kv_last_local_k",
+    "kv_last_local_v",
+    "kv_last_global_k",
+    "kv_last_global_v",
+)
 
 
 def purge_newfiles(fn: Callable[..., Path]):
@@ -452,3 +460,124 @@ def run_vllm_engine(
             assert acci >= thresholdi, (
                 f"Acceptance {acci} at token {i} is less than threshold {thresholdi}"
             )
+
+
+def run_gemma4_kv_extraction(
+    model: str,
+    tmp_path: Path,
+    tensor_parallel_size: int = 1,
+    aux_layer_ids: Iterable[int] = (2, 21, 39, 42),
+    max_model_len: int = 2048,
+    gpu_memory_utilization: float = 0.4,
+    timeout: float | None = None,
+):
+    """Drive Gemma4KVConnector extraction via run_gemma4_kv_extraction.py."""
+    logger.info("vLLM Python executable: {}", VLLM_PYTHON)
+
+    driver_file = str(Path(__file__).with_name("run_gemma4_kv_extraction.py"))
+    shared_storage = tmp_path / "kv_out"
+    shared_storage.mkdir(exist_ok=True)
+    results_file = tmp_path / "results.json"
+    aux_layer_ids = list(aux_layer_ids)
+
+    llm_args_dict = {
+        "model": model,
+        "tensor_parallel_size": tensor_parallel_size,
+        "speculative_config": {
+            "method": "extract_hidden_states",
+            "num_speculative_tokens": 1,
+            "draft_model_config": {
+                "hf_config": {"eagle_aux_hidden_state_layer_ids": aux_layer_ids}
+            },
+        },
+        "kv_transfer_config": {
+            "kv_connector": "Gemma4KVConnector",
+            "kv_connector_module_path": (
+                "speculators.data_generation.gemma4_kv_connector"
+            ),
+            "kv_role": "kv_producer",
+            "kv_connector_extra_config": {"shared_storage_path": str(shared_storage)},
+        },
+        "max_model_len": max_model_len,
+        "enforce_eager": True,
+        "enable_chunked_prefill": False,
+        "gpu_memory_utilization": gpu_memory_utilization,
+        "load_format": "dummy",
+    }
+
+    # Short, and a long prompt past the 512 sliding window, in one batch.
+    prompts = [
+        "Hello world",
+        "Test prompt with several tokens",
+        " ".join(["word"] * 600),
+    ]
+
+    command = [
+        VLLM_PYTHON,
+        driver_file,
+        "--llm-args",
+        json.dumps(llm_args_dict),
+        "--prompts",
+        json.dumps(prompts),
+        "--results-file",
+        str(results_file),
+    ]
+    logger.info("run_gemma4_kv_extraction.py command:\n    {}", command)
+
+    env = os.environ.copy()
+    # Avoid a flashinfer JIT-build failure.
+    env["VLLM_USE_FLASHINFER_SAMPLER"] = "0"
+
+    result = subprocess.run(  # noqa: S603
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        check=False,
+        env=env,
+        timeout=timeout,
+    )
+    logger.info(
+        "run_gemma4_kv_extraction.py output:\n{}", indent(result.stdout, "    ")
+    )
+    assert result.returncode == 0, (
+        f"run_gemma4_kv_extraction.py exited with non-zero return code: "
+        f"{result.returncode}"
+    )
+
+    with results_file.open(encoding="utf-8") as f:
+        results = json.load(f)
+
+    assert results["num_outputs"] == len(prompts)
+    assert len(results["per_request"]) == len(prompts)
+    expected_heads = {
+        "kv_last_local_k": results["local_total_heads"],
+        "kv_last_local_v": results["local_total_heads"],
+        "kv_last_global_k": results["global_total_heads"],
+        "kv_last_global_v": results["global_total_heads"],
+    }
+    hidden_size = results["hidden_size"]
+    for req in results["per_request"]:
+        path = req.get("hidden_states_path")
+        assert path is not None, "request produced no hidden_states_path"
+        n = req["num_tokens"]
+        assert req["token_ids_aligned"], "saved token_ids do not match prompt tokens"
+        assert req["hidden_states_shape"] == [n, len(aux_layer_ids), hidden_size]
+        for key in GEMMA4_KV_KEYS:
+            kv = req["kv"][key]
+            assert kv["present"], f"missing {key}"
+            shape = kv["shape"]
+            assert len(shape) == 3, f"{key} expected 3-D, got {shape}"
+            assert shape[0] == n, f"{key} rows {shape[0]} != n_tokens {n}"
+            # full (unsharded) head count even under TP
+            assert shape[1] == expected_heads[key], (
+                f"{key} head count {shape[1]} != unsharded {expected_heads[key]} "
+                f"(tp={tensor_parallel_size})"
+            )
+            assert kv["finite"], f"{key} has non-finite values"
+        # local (sliding) and global (full) caches use different head dims.
+        local_shape = req["kv"]["kv_last_local_k"]["shape"]
+        global_shape = req["kv"]["kv_last_global_k"]["shape"]
+        assert local_shape[1:] != global_shape[1:]
+
+    return results
