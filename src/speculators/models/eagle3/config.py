@@ -58,9 +58,16 @@ class Eagle3SpeculatorConfig(SpeculatorModelConfig):
     norm_before_fc: bool = Field(
         default=False,
         description=(
-            "If True, vLLM will add and apply RMSNorm before the fc layer when loading "
-            "this draft model (e.g. for gpt-oss draft checkpoints). Set in config when "
-            "converting or saving gpt-oss draft models."
+            "Use RMSNorm before FC layer in draft path "
+            "(e.g., for Eagle 3.1 / gpt-oss models)."
+        ),
+    )
+
+    norm_output: bool = Field(
+        default=False,
+        description=(
+            "Feed post-norm hidden states back across TTT steps to stabilize "
+            "magnitude drift across speculation depths (Eagle 3.1)."
         ),
     )
 
