@@ -651,26 +651,110 @@ def build_eagle3_dataset(
     return dataset
 
 
+def _load_hf_dataset(spec: str) -> tuple[HFDataset, None]:
+    """Load an arbitrary HuggingFace dataset from an ``hf:`` spec.
+
+    Args:
+        spec: ``hf:<dataset_id>[:<subset>:<split>]``. The split defaults to
+            ``train``. A single suffix (``hf:<id>:<split>``) selects a split
+            without a subset; both can be given as ``hf:<id>:<subset>:<split>``.
+
+    Returns:
+        Tuple of (raw_dataset, None). No normalize_fn is applied: the dataset
+        must already be in conversations format.
+
+    Raises:
+        ValueError: If the spec is malformed or the loaded dataset has no
+            ``conversations`` column.
+    """
+    subset: str | None
+    match spec.removeprefix("hf:").split(":"):
+        case [hf_id]:
+            subset, split = None, "train"
+        case [hf_id, split]:
+            subset = None
+        case [hf_id, subset, split]:
+            pass
+        case _:
+            raise ValueError(
+                f"Invalid hf: spec '{spec}'. "
+                f"Expected hf:<dataset_id>[:<subset>:<split>]."
+            )
+
+    if not hf_id:
+        raise ValueError(f"Invalid hf: spec '{spec}': missing dataset id.")
+
+    raw_dataset = load_dataset(hf_id, name=subset, split=split)
+
+    if "conversations" not in raw_dataset.column_names:
+        raise ValueError(
+            f"HuggingFace dataset '{hf_id}' (split '{split}') is not in "
+            f"conversations format: expected a 'conversations' column but found "
+            f"{raw_dataset.column_names}. Pass a dataset already in conversations "
+            f"format, or add a preset to DATASET_CONFIGS with a normalize_fn."
+        )
+
+    return raw_dataset, None
+
+
 def load_raw_dataset(
     train_data_path: str,
 ) -> tuple[HFDataset, Callable[[dict], dict] | None]:
-    """Load raw dataset from local file or HuggingFace."""
+    """Load a raw dataset from one of several source types.
+
+    Resolution order:
+        1. Local ``.json``/``.jsonl`` file.
+        2. Local directory: recursively load all ``*.json``/``*.jsonl`` files
+           as a single dataset.
+        3. Named preset from ``DATASET_CONFIGS``.
+        4. ``hf:<id>[:<subset>:<split>]`` for an arbitrary HuggingFace dataset.
+
+    Args:
+        train_data_path: File path, directory path, preset name, or ``hf:`` spec.
+
+    Returns:
+        Tuple of (raw_dataset, normalize_fn). normalize_fn is None for sources
+        already in conversations format.
+
+    Raises:
+        ValueError: If the source cannot be resolved or a local directory
+            contains no ``.json``/``.jsonl`` files.
+    """
+    # 1. Local file
     if train_data_path.endswith((".jsonl", ".json")):
         return load_dataset("json", data_files=train_data_path, split="train"), None
 
-    if train_data_path not in DATASET_CONFIGS:
-        raise ValueError(
-            f"Unsupported dataset: {train_data_path}. "
-            f"Supported: local .json/.jsonl files or {list(DATASET_CONFIGS.keys())}"
+    # 2. Local directory
+    path = Path(train_data_path)
+    if path.is_dir():
+        data_files = sorted(
+            str(p) for p in (*path.rglob("*.json"), *path.rglob("*.jsonl"))
         )
+        if not data_files:
+            raise ValueError(
+                f"No .json/.jsonl files found in directory: {train_data_path}"
+            )
+        return load_dataset("json", data_files=data_files, split="train"), None
 
-    config = DATASET_CONFIGS[train_data_path]
-    raw_dataset = load_dataset(config.hf_path, name=config.subset, split=config.split)
+    # 3. Named preset
+    if train_data_path in DATASET_CONFIGS:
+        config = DATASET_CONFIGS[train_data_path]
+        raw_dataset = load_dataset(
+            config.hf_path, name=config.subset, split=config.split
+        )
+        if config.filter_fn is not None:
+            raw_dataset = raw_dataset.filter(config.filter_fn)
+        return raw_dataset, config.normalize_fn
 
-    if config.filter_fn is not None:
-        raw_dataset = raw_dataset.filter(config.filter_fn)
+    # 4. Arbitrary HuggingFace dataset
+    if train_data_path.startswith("hf:"):
+        return _load_hf_dataset(train_data_path)
 
-    return raw_dataset, config.normalize_fn
+    raise ValueError(
+        f"Unsupported dataset: {train_data_path}. Supported: local .json/.jsonl "
+        f"file, local directory of .json/.jsonl files, hf:<id>[:<subset>:<split>], "
+        f"or a preset {list(DATASET_CONFIGS.keys())}."
+    )
 
 
 def get_tokenizer(processor: ProcessorLike):

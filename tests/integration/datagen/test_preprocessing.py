@@ -5,6 +5,7 @@ Unit tests for the preprocessing module in the Speculators data generation.
 import json
 import re
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 import torch
@@ -12,16 +13,22 @@ from datasets import Dataset as HFDataset
 from PIL import Image
 from transformers import AutoTokenizer
 
+from speculators.data_generation.configs import (
+    DATASET_CONFIGS,
+    _normalize_nemotron,
+)
 from speculators.data_generation.preprocessing import (
     _adapt_conv_for_hf,
     _adapt_conv_for_vllm,
     _create_loss_mask_from_offsets,
     _detect_assistant_pattern,
+    _load_hf_dataset,
     _normalize_conversation,
     _preprocess_batch,
     _supports_assistant_mask,
     build_eagle3_dataset,
     load_processor,
+    load_raw_dataset,
 )
 
 # Test model from HuggingFace with chat template
@@ -1393,3 +1400,153 @@ def test_normalize_conversation_tool_calls_with_empty_content():
     assert assistant_tool_call_turn["role"] == "assistant"
     assert assistant_tool_call_turn["content"] == ""
     assert assistant_tool_call_turn["tool_calls"] == tool_calls
+
+
+# Tests for load_raw_dataset resolution chain (issue #661)
+
+PREFIX = "speculators.data_generation.preprocessing"
+
+
+def _write_jsonl(path, rows):
+    path.write_text("\n".join(json.dumps(r) for r in rows))
+
+
+def _conv_row(prompt: str) -> dict:
+    return {
+        "conversations": [
+            {"from": "human", "value": prompt},
+            {"from": "gpt", "value": f"answer to {prompt}"},
+        ]
+    }
+
+
+@pytest.mark.sanity
+def test_load_raw_dataset_local_file(tmp_path):
+    """A local .jsonl file loads with no normalize_fn."""
+    data_file = tmp_path / "data.jsonl"
+    _write_jsonl(data_file, [_conv_row("a"), _conv_row("b")])
+
+    dataset, normalize_fn = load_raw_dataset(str(data_file))
+
+    assert len(dataset) == 2
+    assert normalize_fn is None
+
+
+@pytest.mark.sanity
+def test_load_raw_dataset_local_directory(tmp_path):
+    """A directory of .json/.jsonl shards loads as one combined dataset."""
+    _write_jsonl(tmp_path / "shard1.jsonl", [_conv_row("a"), _conv_row("b")])
+    _write_jsonl(tmp_path / "shard2.jsonl", [_conv_row("c")])
+    # Nested file is discovered recursively; .json extension also matched.
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    _write_jsonl(nested / "shard3.json", [_conv_row("d")])
+
+    dataset, normalize_fn = load_raw_dataset(str(tmp_path))
+
+    assert len(dataset) == 4
+    assert normalize_fn is None
+
+
+@pytest.mark.sanity
+def test_load_raw_dataset_empty_directory_raises(tmp_path):
+    """A directory with no .json/.jsonl files raises an actionable error."""
+    empty_dir = tmp_path / "empty"
+    empty_dir.mkdir()
+
+    with pytest.raises(ValueError, match="No .json/.jsonl files found"):
+        load_raw_dataset(str(empty_dir))
+
+
+@pytest.mark.sanity
+def test_load_raw_dataset_named_preset():
+    """A named preset resolves through DATASET_CONFIGS to load_dataset."""
+    sentinel = HFDataset.from_list([_conv_row("x")])
+    with patch(f"{PREFIX}.load_dataset", return_value=sentinel) as mock_load:
+        dataset, normalize_fn = load_raw_dataset("sharegpt")
+
+    config = DATASET_CONFIGS["sharegpt"]
+    mock_load.assert_called_once_with(
+        config.hf_path, name=config.subset, split=config.split
+    )
+    assert dataset is sentinel
+    assert normalize_fn is config.normalize_fn
+
+
+@pytest.mark.sanity
+def test_load_raw_dataset_unsupported_source_raises():
+    """An unknown source that is not a file/dir/preset/hf: spec raises."""
+    with pytest.raises(ValueError, match="Unsupported dataset"):
+        load_raw_dataset("not_a_real_preset")
+
+
+@pytest.mark.sanity
+@pytest.mark.parametrize(
+    ("spec", "expected_id", "expected_name", "expected_split"),
+    [
+        ("hf:org/name", "org/name", None, "train"),
+        ("hf:org/name:custom_split", "org/name", None, "custom_split"),
+        ("hf:org/name:subset:custom_split", "org/name", "subset", "custom_split"),
+    ],
+)
+def test_load_hf_dataset_spec_parsing(spec, expected_id, expected_name, expected_split):
+    """hf: specs parse into (id, subset, split) and call load_dataset."""
+    sentinel = HFDataset.from_list([_conv_row("x")])
+    with patch(f"{PREFIX}.load_dataset", return_value=sentinel) as mock_load:
+        dataset, normalize_fn = load_raw_dataset(spec)
+
+    mock_load.assert_called_once_with(
+        expected_id, name=expected_name, split=expected_split
+    )
+    assert dataset is sentinel
+    assert normalize_fn is None
+
+
+@pytest.mark.sanity
+def test_load_hf_dataset_non_conversations_raises():
+    """An hf: dataset without a conversations column fails loudly."""
+    non_conv = HFDataset.from_list([{"prompt": "hi", "response": "there"}])
+    with (
+        patch(f"{PREFIX}.load_dataset", return_value=non_conv),
+        pytest.raises(ValueError, match="conversations format"),
+    ):
+        _load_hf_dataset("hf:org/name")
+
+
+@pytest.mark.sanity
+@pytest.mark.parametrize(
+    "spec",
+    ["hf:org/name:a:b:c", "hf:"],
+)
+def test_load_hf_dataset_malformed_spec_raises(spec):
+    """Malformed hf: specs raise without touching the network."""
+    with (
+        patch(f"{PREFIX}.load_dataset") as mock_load,
+        pytest.raises(ValueError, match="Invalid hf: spec"),
+    ):
+        _load_hf_dataset(spec)
+    mock_load.assert_not_called()
+
+
+@pytest.mark.sanity
+def test_dataset_configs_has_magpie_and_nemotron():
+    """magpie and nemotron presets are registered."""
+    assert "magpie" in DATASET_CONFIGS
+    assert "nemotron" in DATASET_CONFIGS
+    # magpie ships conversations already, so needs no normalize_fn.
+    assert DATASET_CONFIGS["magpie"].normalize_fn is None
+
+
+@pytest.mark.sanity
+def test_normalize_nemotron_builds_conversations():
+    """nemotron normalize_fn appends the output as an assistant turn."""
+    example = {
+        "input": [{"role": "user", "content": "hi"}],
+        "output": "hello",
+    }
+    result = _normalize_nemotron(example)
+
+    assert result["conversations"] == [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hello"},
+    ]
