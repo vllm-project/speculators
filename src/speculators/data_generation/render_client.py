@@ -29,7 +29,7 @@ def render_conversation(
     body: dict = {
         "messages": messages,
         "add_generation_prompt": False,
-        "return_loss_mask": True,
+        "return_assistant_tokens_mask": True,
     }
     if tools is not None:
         body["tools"] = tools
@@ -47,4 +47,7 @@ def render_conversation(
         )
 
     data = resp.json()
-    return {"token_ids": data["token_ids"], "loss_mask": data.get("loss_mask")}
+    return {
+        "token_ids": data["token_ids"],
+        "loss_mask": data.get("assistant_tokens_mask"),
+    }

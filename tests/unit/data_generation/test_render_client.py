@@ -32,13 +32,13 @@ MESSAGES = [
 ]
 
 
-def _make_transport(*, token_ids=None, loss_mask=None, status_code=200):
+def _make_transport(*, token_ids=None, assistant_tokens_mask=None, status_code=200):
     def handler(request: httpx.Request) -> httpx.Response:
         if status_code != 200:
             return httpx.Response(status_code, text="error from mock")
         body = {"token_ids": token_ids or MOCK_TOKEN_IDS}
-        if loss_mask is not None:
-            body["loss_mask"] = loss_mask
+        if assistant_tokens_mask is not None:
+            body["assistant_tokens_mask"] = assistant_tokens_mask
         return httpx.Response(200, json=body)
 
     return httpx.MockTransport(handler)
@@ -78,7 +78,7 @@ class TestRenderConversation:
 
     def test_loss_mask_passthrough(self):
         mask = [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0]
-        result = _call_render(_make_transport(loss_mask=mask))
+        result = _call_render(_make_transport(assistant_tokens_mask=mask))
         assert result["loss_mask"] == mask
 
     def test_error_raises(self):

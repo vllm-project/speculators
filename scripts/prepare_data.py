@@ -110,10 +110,11 @@ def parse_args():
         type=str,
         default=None,
         help=(
-            "URL of a vLLM render service "
-            "(e.g. http://localhost:8000). When set, tokenization is "
-            "delegated to the render endpoint instead of local HF "
-            "apply_chat_template. See RFC #652."
+            "URL of the vLLM server, typically the same instance used "
+            "for hidden-state extraction (e.g. http://localhost:8000). "
+            "When set, tokenization is delegated to the server's "
+            "/v1/chat/completions/render endpoint instead of local HF "
+            "apply_chat_template."
         ),
     )
 
