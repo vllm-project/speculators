@@ -62,13 +62,12 @@ def extract_real_kv_from_cache(
         A (K, V) tuple, each of shape
         (num_tokens, num_kv_heads, head_size).
     """
-    _bad_layout_msg = (
-        "Gemma4KVConnector expects the 5-D KV layout "
-        "(num_blocks, 2, block_size, num_kv_heads, head_size) used by the "
-        f"FlashAttention/Triton backends; got shape {tuple(kv_cache.shape)}."
-    )
-    assert kv_cache.dim() == _KV_CACHE_NDIM, _bad_layout_msg
-    assert kv_cache.shape[1] == _KV_CACHE_KV_AXIS_SIZE, _bad_layout_msg
+    if kv_cache.dim() != _KV_CACHE_NDIM or kv_cache.shape[1] != _KV_CACHE_KV_AXIS_SIZE:
+        raise ValueError(
+            "Gemma4KVConnector expects the 5-D KV layout "
+            "(num_blocks, 2, block_size, num_kv_heads, head_size) used by the "
+            f"FlashAttention/Triton backends; got shape {tuple(kv_cache.shape)}."
+        )
     block_size = kv_cache.shape[2]
     block_idx = slot_mapping // block_size
     block_off = slot_mapping % block_size
@@ -99,10 +98,11 @@ class Gemma4KVConnector(ExampleHiddenStatesConnector):
 
         self._tp_size = vllm_config.parallel_config.tensor_parallel_size
         pp = vllm_config.parallel_config.pipeline_parallel_size
-        assert pp == 1, (
-            f"Gemma4KVConnector does not support pipeline_parallel_size>1 "
-            f"(got pp={pp})."
-        )
+        if pp != 1:
+            raise ValueError(
+                f"Gemma4KVConnector does not support pipeline_parallel_size>1 "
+                f"(got pp={pp})."
+            )
 
         tcfg = vllm_config.model_config.hf_config.get_text_config()
         self._local_total_kv_heads = tcfg.num_key_value_heads
@@ -111,11 +111,12 @@ class Gemma4KVConnector(ExampleHiddenStatesConnector):
         self._global_total_kv_heads = global_kv or tcfg.num_key_value_heads
 
         cache_dtype = vllm_config.cache_config.cache_dtype
-        assert cache_dtype == "auto", (
-            "Gemma4KVConnector requires an unquantized KV cache "
-            f"(cache_dtype='auto'); got {cache_dtype!r}. Quantized-cache "
-            "handling (per-token head scales) is not yet supported."
-        )
+        if cache_dtype != "auto":
+            raise ValueError(
+                "Gemma4KVConnector requires an unquantized KV cache "
+                f"(cache_dtype='auto'); got {cache_dtype!r}. Quantized-cache "
+                "handling (per-token head scales) is not yet supported."
+            )
 
         self.verifier_local_layer, self._local_group_idx = self._resolve_layer(
             "sliding_attention"
