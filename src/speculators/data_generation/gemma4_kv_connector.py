@@ -69,10 +69,12 @@ def extract_real_kv_from_cache(
             f"FlashAttention/Triton backends; got shape {tuple(kv_cache.shape)}."
         )
     block_size = kv_cache.shape[2]
+
+    slot_mapping = slot_mapping[:num_tokens]
     block_idx = slot_mapping // block_size
     block_off = slot_mapping % block_size
-    k = kv_cache[:, 0][block_idx, block_off][:num_tokens]
-    v = kv_cache[:, 1][block_idx, block_off][:num_tokens]
+    k = kv_cache[:, 0][block_idx, block_off]
+    v = kv_cache[:, 1][block_idx, block_off]
     return k, v
 
 
