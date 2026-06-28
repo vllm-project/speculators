@@ -501,11 +501,14 @@ def main(args: argparse.Namespace):  # noqa: C901
     else:
         d2t, t2d, draft_vocab_size = parse_vocab_mappings(args)
 
-        if args.sliding_window_indices and args.speculator_type != "dflash":
+        if args.sliding_window_indices and args.speculator_type not in (
+            "dflash",
+            "dspark",
+        ):
             raise ValueError(
                 "Currently sliding window attention is only supported by dflash "
-                "draft models. Please open an issue/pr if you would like to use "
-                "sliding window attention with a different speculator type"
+                "and dspark draft models. Please open an issue/pr if you would like "
+                "to use sliding window attention with a different speculator type"
             )
 
     registry = SpeculatorModel.registry
@@ -759,7 +762,7 @@ def parse_args():
         "--speculator-type",
         type=str,
         default="eagle3",
-        help="Type of speculator model to train (eagle3, dflash, peagle, mtp)",
+        help="Type of speculator model to train (eagle3, dflash, dspark, peagle, mtp)",
     )
     parser.add_argument(
         "--from-pretrained",
@@ -1045,7 +1048,52 @@ def parse_args():
         "--dflash-decay-gamma",
         type=float,
         default=4.0,
-        help="Decay gamma for DFlash loss weighting (default: 4.0)",
+        help="Decay gamma for DFlash/DSpark loss weighting (default: 4.0)",
+    )
+    # DSpark-specific arguments (sequential Markov head + confidence head).
+    parser.add_argument(
+        "--markov-rank",
+        type=int,
+        default=256,
+        help="DSpark: low-rank dim of the Markov logit-bias head (0 disables it).",
+    )
+    parser.add_argument(
+        "--markov-head-type",
+        type=str,
+        default="vanilla",
+        choices=["vanilla", "gated", "rnn"],
+        help="DSpark: sequential head variant (default: vanilla).",
+    )
+    parser.add_argument(
+        "--enable-confidence-head",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="DSpark: attach the per-position acceptance confidence head.",
+    )
+    parser.add_argument(
+        "--confidence-head-with-markov",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="DSpark: feed the Markov previous-token embedding into the "
+        "confidence head alongside the backbone hidden state.",
+    )
+    parser.add_argument(
+        "--ce-loss-alpha",
+        type=float,
+        default=0.1,
+        help="DSpark: weight of the cross-entropy loss term (default: 0.1).",
+    )
+    parser.add_argument(
+        "--l1-loss-alpha",
+        type=float,
+        default=0.9,
+        help="DSpark: weight of the total-variation loss term (default: 0.9).",
+    )
+    parser.add_argument(
+        "--confidence-head-alpha",
+        type=float,
+        default=1.0,
+        help="DSpark: weight of the confidence-head BCE term (default: 1.0).",
     )
     parser.add_argument(
         "--draft-attn-impl",
