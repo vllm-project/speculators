@@ -192,7 +192,7 @@ class DSparkDraftModel(DFlashDraftModel):
         hidden = self.norm(noise_embedding)  # [1, T, hidden_size]
         logits = self.lm_head(hidden)  # [1, T, draft_vocab_size]
 
-        # ---- DSpark: semi-autoregressive Markov bias + confidence head ----
+        # DSpark: add the Markov logit bias and predict per-position confidence.
         num_blocks = num_anchors
         block = self.block_size
         # Ground-truth block tokens (verifier vocab); position 0 is the anchor.
@@ -217,7 +217,9 @@ class DSparkDraftModel(DFlashDraftModel):
             )
 
         if self.confidence_head is not None:
-            if self.config.confidence_head_with_markov:
+            # confidence_head_with_markov requires markov_rank > 0 (enforced in
+            # __init__), so prev_emb is always set when the flag is on.
+            if self.config.confidence_head_with_markov and prev_emb is not None:
                 conf_features = torch.cat(
                     [hidden_blocks, prev_emb.to(hidden_blocks.dtype)], dim=-1
                 )

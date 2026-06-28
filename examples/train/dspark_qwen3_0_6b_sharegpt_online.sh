@@ -2,26 +2,22 @@
 # Online DSpark Training Script
 #
 # Runs the full online DSpark training pipeline: data preparation, vLLM server
-# launch, and training with hidden states generated on-the-fly from the live
-# server. DSpark extends DFlash with a sequential Markov head (intra-block token
-# dependency) and a confidence head (per-position acceptance prediction), so the
-# pipeline is identical to the DFlash one plus a few DSpark-specific flags.
-#
-# Unlike DeepSeek's DeepSpec reference (which precomputes a very large offline
-# target-hidden-state cache), this trains DSpark fully online.
+# launch, and training (with hidden states generated on-the-fly from the live
+# server). DSpark extends DFlash with a Markov head (intra-block token
+# dependency) and a confidence head (per-position acceptance prediction); the
+# pipeline is the DFlash one plus a few DSpark-specific flags.
 #
 # Usage: Copy this script, modify the configuration variables below, then run:
 #   bash examples/train/dspark_qwen3_0_6b_sharegpt_online.sh
 #
-# See the DFlash online tutorial for a detailed walkthrough of the shared steps:
+# For a detailed walkthrough, see
 # https://docs.vllm.ai/projects/speculators/en/latest/user_guide/tutorials/train_dflash_online/
 
 ### Example E2E run for DSpark Qwen3-0.6B on 5k samples from ShareGPT ###
 
-# Note: With just 5k samples the absolute acceptance length will be low; the run
-# is meant to verify the pipeline works and that DSpark is learning (in
-# particular that the Markov head lifts later-position accuracy over plain DFlash
-# and that the confidence head calibrates).
+# Note: With just 5k samples, performance will be low, but it is enough to verify
+# the pipeline works and DSpark is learning (the Markov head should lift
+# later-position accuracy over plain DFlash).
 
 set -euo pipefail
 
@@ -50,14 +46,13 @@ CE_LOSS_ALPHA=0.1
 L1_LOSS_ALPHA=0.9
 CONFIDENCE_HEAD_ALPHA=1.0
 
-# GPU assignments (online training needs separate GPUs for vLLM and training).
-# Pick currently-idle devices (check `nvidia-smi`).
+# GPU assignments (online training needs separate GPUs for vLLM and training)
 VLLM_GPUS="0"
 TRAIN_GPUS="1"
 NUM_TRAIN_GPUS=1
 # =======================================
 
-# Step 1: Prepare data (also writes token_freq.pt used to build the draft vocab)
+# Step 1: Prepare data
 echo "=== Step 1: Preparing data ==="
 python scripts/prepare_data.py \
     --model "$MODEL" \
@@ -66,7 +61,7 @@ python scripts/prepare_data.py \
     --max-samples "$MAX_SAMPLES" \
     --seq-length "$SEQ_LENGTH"
 
-# Step 2: Launch vLLM server in the background (exposes the aux hidden states)
+# Step 2: Launch vLLM server in the background
 echo "=== Step 2: Launching vLLM server ==="
 CUDA_VISIBLE_DEVICES="$VLLM_GPUS" python scripts/launch_vllm.py "$MODEL" \
     --target-layer-ids $TARGET_LAYER_IDS \

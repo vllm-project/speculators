@@ -1,6 +1,6 @@
 """Loss and metrics for the DSpark draft model.
 
-    loss = ce_alpha * CE + l1_alpha * TV + conf_alpha * BCE(confidence, accept_rate)
+loss = ce_alpha * CE + l1_alpha * TV + conf_alpha * BCE(confidence, accept_rate)
 
 The confidence target ``accept_rate = sum_v min(q_v, p_v) = 1 - d_TV`` is the
 analytical acceptance rate (the overlap ``tv_loss`` already computes).
