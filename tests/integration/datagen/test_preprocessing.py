@@ -1408,10 +1408,12 @@ PREFIX = "speculators.data_generation.preprocessing"
 
 
 def _write_jsonl(path, rows):
+    """Write rows as newline-delimited JSON to path."""
     path.write_text("\n".join(json.dumps(r) for r in rows))
 
 
 def _conv_row(prompt: str) -> dict:
+    """Return one conversations-format row for the given prompt."""
     return {
         "conversations": [
             {"from": "human", "value": prompt},
@@ -1516,10 +1518,16 @@ def test_load_hf_dataset_non_conversations_raises():
 @pytest.mark.sanity
 @pytest.mark.parametrize(
     "spec",
-    ["hf:org/name:a:b:c", "hf:"],
+    [
+        "hf:org/name:a:b:c",  # too many segments
+        "hf:",  # missing id
+        "hf:org/name:",  # trailing colon -> empty split
+        "hf:org/name:subset:",  # empty split with subset
+        "hf:org/name::split",  # empty subset
+    ],
 )
 def test_load_hf_dataset_malformed_spec_raises(spec):
-    """Malformed hf: specs raise without touching the network."""
+    """Malformed hf: specs raise locally without touching the network."""
     with (
         patch(f"{PREFIX}.load_dataset") as mock_load,
         pytest.raises(ValueError, match="Invalid hf: spec"),

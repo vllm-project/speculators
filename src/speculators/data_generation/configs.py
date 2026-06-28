@@ -38,6 +38,7 @@ def _normalize_gsm8k(example: dict) -> dict:
 
 
 def _normalize_nemotron(example: dict) -> dict:
+    """Build a conversation from Nemotron ``input`` turns plus ``output``."""
     return {
         "conversations": [
             *example["input"],

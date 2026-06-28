@@ -683,6 +683,10 @@ def _load_hf_dataset(spec: str) -> tuple[HFDataset, None]:
 
     if not hf_id:
         raise ValueError(f"Invalid hf: spec '{spec}': missing dataset id.")
+    if subset == "":
+        raise ValueError(f"Invalid hf: spec '{spec}': empty subset.")
+    if not split:
+        raise ValueError(f"Invalid hf: spec '{spec}': empty split.")
 
     raw_dataset = load_dataset(hf_id, name=subset, split=split)
 
