@@ -85,6 +85,14 @@ class DFlashConverter:
         aux_hidden_state_layer_ids: list[int] | None,
     ) -> DFlashSpeculatorConfig:
         dflash = source_config.get("dflash_config", {})
+        # block_size lives at the top level in older checkpoints (Qwen3, LLaMA)
+        # and inside dflash_config in newer ones (Qwen3.5+)
+        block_size = source_config.get("block_size") or dflash.get("block_size")
+        if block_size is None:
+            raise ValueError(
+                "Checkpoint config has no `block_size` (checked both top-level "
+                "and `dflash_config`)"
+            )
         transformer_config = {
             k: v for k, v in source_config.items() if k not in _NON_TRANSFORMER_KEYS
         }
@@ -115,7 +123,7 @@ class DFlashConverter:
             algorithm="dflash",
             proposal_methods=[
                 GreedyTokenProposalConfig(
-                    speculative_tokens=source_config["block_size"] - 1,
+                    speculative_tokens=block_size - 1,
                 )
             ],
             default_proposal_method="greedy",
@@ -128,7 +136,7 @@ class DFlashConverter:
         return DFlashSpeculatorConfig(
             transformer_layer_config=transformer_config,  # type: ignore[arg-type]
             draft_vocab_size=transformer_config["vocab_size"],
-            block_size=source_config["block_size"],
+            block_size=block_size,
             aux_hidden_state_layer_ids=aux_hidden_state_layer_ids,
             mask_token_id=dflash.get("mask_token_id"),
             speculators_config=speculators_config,
