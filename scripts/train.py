@@ -103,11 +103,10 @@ def setup_dataloader(
         num_replicas=world_size,
         rank=rank,
     )
-    return DataLoader(
-        dataset,
+    dl_kwargs = dict(
+        dataset=dataset,
         batch_sampler=batch_sampler,
         num_workers=num_workers,
-        prefetch_factor=prefetch_factor,
         pin_memory=True,
         collate_fn=create_collate_fn(
             args.total_seq_len,
@@ -116,8 +115,11 @@ def setup_dataloader(
             dtype=dataset.hidden_states_dtype,
             preprocess=preprocess,
         ),
-        persistent_workers=True,
     )
+    if num_workers > 0:
+        dl_kwargs["prefetch_factor"] = prefetch_factor
+        dl_kwargs["persistent_workers"] = True
+    return DataLoader(**dl_kwargs)
 
 
 def create_transformer_layer_config(  # noqa: C901
@@ -759,7 +761,7 @@ def parse_args():
         "--speculator-type",
         type=str,
         default="eagle3",
-        help="Type of speculator model to train (eagle3, dflash, peagle, mtp)",
+        help="Type of speculator model to train (eagle3, dflash, dspark, peagle, mtp)",
     )
     parser.add_argument(
         "--from-pretrained",
@@ -1033,7 +1035,7 @@ def parse_args():
         "--block-size",
         type=int,
         default=8,
-        help="Block size for DFlash model (default: 8)",
+        help="Block size for DFlash/DSpark model (default: 8)",
     )
     parser.add_argument(
         "--max-anchors",
@@ -1046,6 +1048,62 @@ def parse_args():
         type=float,
         default=4.0,
         help="Decay gamma for DFlash loss weighting (default: 4.0)",
+    )
+    # DSpark-specific parameters
+    parser.add_argument(
+        "--num-anchors",
+        type=int,
+        default=256,
+        help="Number of anchor positions for DSpark training (default: 256)",
+    )
+    parser.add_argument(
+        "--markov-rank",
+        type=int,
+        default=0,
+        help="Rank of the Markov head. 0 disables the Markov head (default: 0)",
+    )
+    parser.add_argument(
+        "--markov-head-type",
+        type=str,
+        default="vanilla",
+        choices=["vanilla", "gated", "rnn"],
+        help="Type of Markov head: vanilla, gated, or rnn (default: vanilla)",
+    )
+    parser.add_argument(
+        "--enable-confidence-head",
+        action="store_true",
+        default=False,
+        help="Enable the confidence head for early-stop prediction",
+    )
+    parser.add_argument(
+        "--confidence-head-with-markov",
+        action="store_true",
+        default=False,
+        help="Use Markov embeddings as input to the confidence head",
+    )
+    parser.add_argument(
+        "--ce-loss-alpha",
+        type=float,
+        default=1.0,
+        help="Weight for cross-entropy loss (default: 1.0)",
+    )
+    parser.add_argument(
+        "--l1-loss-alpha",
+        type=float,
+        default=0.0,
+        help="Weight for L1 distribution matching loss (default: 0.0)",
+    )
+    parser.add_argument(
+        "--confidence-head-alpha",
+        type=float,
+        default=0.0,
+        help="Weight for confidence head calibration loss (default: 0.0)",
+    )
+    parser.add_argument(
+        "--loss-decay-gamma",
+        type=float,
+        default=None,
+        help="Decay rate for position-wise loss weighting (default: None)",
     )
     parser.add_argument(
         "--draft-attn-impl",
