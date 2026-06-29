@@ -25,7 +25,7 @@ MODEL="/home/data/weights/Qwen3-4B"
 # To generate your own, see:
 # https://docs.vllm.ai/projects/speculators/en/latest/user_guide/tutorials/response_regeneration/
 DATASET="inference-optimization/Qwen3-8B-responses"
-DATASET_FILE="/home/w00664509/regenerated_0_to_568.json"
+DATASET_FILE="/home/regenerated_0_to_568.json"
 OUTPUT_DIR="./output/dspark_qwen3_8b_gsm8k"
 VLLM_PORT=8000
 MAX_SAMPLES=5000
