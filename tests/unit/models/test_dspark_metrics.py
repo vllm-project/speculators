@@ -5,6 +5,8 @@ import torch
 from speculators.models.dspark.metrics import compute_metrics
 from speculators.models.metrics import resolve_loss_config
 
+_DEFAULT_LOSS = resolve_loss_config('{"ce": 0.1, "tv": 0.9}')
+
 
 def _ids_to_logits(ids: torch.Tensor, vocab_size: int) -> torch.Tensor:
     logits = torch.zeros(*ids.shape, vocab_size)
@@ -20,7 +22,13 @@ class TestComputeMetrics:
         targets = logits.clone()
         loss_mask = torch.tensor([[0, 1, 0, 1]], dtype=torch.float32)
         loss, metrics = compute_metrics(
-            logits, targets, None, loss_mask, block_size=2, gamma=4.0
+            logits,
+            targets,
+            None,
+            loss_mask,
+            2,
+            gamma=4.0,
+            loss_config=_DEFAULT_LOSS,
         )
         assert torch.isfinite(loss)
         # Matching distributions -> CE/TV ~ 0 and acceptance ~ 1.
@@ -46,6 +54,7 @@ class TestComputeMetrics:
             loss_mask,
             block_size=2,
             gamma=4.0,
+            loss_config=_DEFAULT_LOSS,
         )
         abs_err = (
             metrics["confidence_abs_error_sum"] / metrics["confidence_abs_error_total"]
@@ -59,7 +68,12 @@ class TestComputeMetrics:
         targets = _ids_to_logits(torch.tensor([[0, 3, 0, 4]]), 8)
         loss_mask = torch.tensor([[0, 1, 0, 1]], dtype=torch.float32)
         loss_no_conf, _ = compute_metrics(
-            logits, targets, None, loss_mask, block_size=2
+            logits,
+            targets,
+            None,
+            loss_mask,
+            block_size=2,
+            loss_config=_DEFAULT_LOSS,
         )
         # A badly-calibrated confidence head (predicts accept~1 when accept~0)
         # must add positive BCE on top of the base loss.
@@ -70,6 +84,7 @@ class TestComputeMetrics:
             confidence_logits,
             loss_mask,
             block_size=2,
+            loss_config=_DEFAULT_LOSS,
             confidence_head_alpha=1.0,
         )
         assert float(loss_conf) > float(loss_no_conf)
@@ -83,7 +98,12 @@ class TestComputeMetrics:
         loss_mask = torch.tensor([[0, 1, 0, 1]], dtype=torch.float32)
         confidence_logits = torch.full((1, 4), 20.0)  # sigmoid ~ 1.0
         _, metrics = compute_metrics(
-            logits, targets, confidence_logits, loss_mask, block_size=2
+            logits,
+            targets,
+            confidence_logits,
+            loss_mask,
+            block_size=2,
+            loss_config=_DEFAULT_LOSS,
         )
         bias = (
             metrics["confidence_cumprod_bias_sum"]
@@ -120,7 +140,12 @@ class TestComputeMetrics:
         targets = logits.clone()
         loss_mask = torch.tensor([[0, 1, 0, 1]], dtype=torch.float32)
         _, metrics = compute_metrics(
-            logits, targets, torch.zeros(1, 4), loss_mask, block_size=2
+            logits,
+            targets,
+            torch.zeros(1, 4),
+            loss_mask,
+            block_size=2,
+            loss_config=_DEFAULT_LOSS,
         )
         for key in (
             "loss_sum",

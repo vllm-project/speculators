@@ -8,8 +8,10 @@ from speculators.models.dflash.core import DFlashDraftModel
 from speculators.models.dspark.config import DSparkSpeculatorConfig
 from speculators.models.dspark.metrics import compute_metrics
 from speculators.models.dspark.model_definitions import ConfidenceHead, MarkovHead
-from speculators.models.metrics import LossConfig, resolve_loss_config
+from speculators.models.metrics import LossConfig, kl_div_loss, resolve_loss_config
 from speculators.models.utils import conditional_torch_compile
+
+_DEFAULT_LOSS_CONFIG: LossConfig = {"kl_div": (kl_div_loss, 1.0)}
 
 __all__ = [
     "DSparkDraftModel",
@@ -158,8 +160,8 @@ class DSparkDraftModel(DFlashDraftModel):
             confidence_logits,
             aligned_loss_mask,
             self.block_size,
+            loss_config=loss_config or _DEFAULT_LOSS_CONFIG,
             gamma=gamma,
-            loss_config=loss_config,
             confidence_head_alpha=confidence_head_alpha,
         )
         draft_tokens = torch.argmax(logits, dim=-1)

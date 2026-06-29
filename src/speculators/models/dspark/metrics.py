@@ -47,16 +47,12 @@ def compute_metrics(
     targets: torch.Tensor,  # [1, T, draft_vocab_size]
     confidence_logits: torch.Tensor | None,  # [1, T] or None
     loss_mask: torch.Tensor,  # [1, T]
-    block_size: int = 8,
+    block_size: int,
+    loss_config: LossConfig,
     gamma: float = 4.0,
-    loss_config: LossConfig | None = None,
     confidence_head_alpha: float = 1.0,
 ) -> tuple[torch.Tensor, dict]:
     """Compute the DSpark loss and a metrics dict (``*_sum``/``*_total`` pairs)."""
-    if loss_config is None:
-        from speculators.models.metrics import ce_loss, tv_loss  # noqa: PLC0415
-
-        loss_config = {"ce": (ce_loss, 0.1), "tv": (tv_loss, 0.9)}
 
     device = logits.device
     seq_len = logits.shape[1]

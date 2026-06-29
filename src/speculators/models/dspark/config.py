@@ -53,4 +53,3 @@ class DSparkSpeculatorConfig(DFlashSpeculatorConfig):
             "hidden state as the confidence-head input."
         ),
     )
-

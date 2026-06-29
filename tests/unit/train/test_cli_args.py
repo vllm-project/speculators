@@ -2,8 +2,9 @@
 
 from scripts.train import parse_args
 from speculators.models.dflash.core import DFlashDraftModel
+from speculators.models.dspark.core import DSparkDraftModel
 from speculators.models.eagle3.core import Eagle3DraftModel
-from speculators.models.metrics import ce_loss, kl_div_loss
+from speculators.models.metrics import ce_loss, kl_div_loss, tv_loss
 from speculators.models.peagle.core import PEagleDraftModel
 
 
@@ -93,3 +94,33 @@ def test_peagle_explicit_ce(monkeypatch):
     assert "ce" in train_kw["loss_config"]
     assert train_kw["loss_config"]["ce"][0] is ce_loss
     assert "ce" in val_kw["loss_config"]
+
+
+def test_dspark_default_uses_kl(monkeypatch):
+    args = _parse(monkeypatch, [])
+    train_kw, val_kw = DSparkDraftModel.get_trainer_kwargs(**vars(args))
+    assert "kl_div" in train_kw["loss_config"]
+    assert train_kw["loss_config"]["kl_div"][0] is kl_div_loss
+    assert "kl_div" in val_kw["loss_config"]
+    assert train_kw["confidence_head_alpha"] == 1.0
+    assert val_kw["confidence_head_alpha"] == 1.0
+
+
+def test_dspark_compound_loss(monkeypatch):
+    args = _parse(monkeypatch, ["--loss-fn", '{"ce": 0.1, "tv": 0.9}'])
+    train_kw, val_kw = DSparkDraftModel.get_trainer_kwargs(**vars(args))
+    assert "ce" in train_kw["loss_config"]
+    assert train_kw["loss_config"]["ce"][0] is ce_loss
+    assert train_kw["loss_config"]["ce"][1] == 0.1
+    assert "tv" in train_kw["loss_config"]
+    assert train_kw["loss_config"]["tv"][0] is tv_loss
+    assert train_kw["loss_config"]["tv"][1] == 0.9
+    assert "ce" in val_kw["loss_config"]
+    assert "tv" in val_kw["loss_config"]
+
+
+def test_dspark_confidence_head_alpha(monkeypatch):
+    args = _parse(monkeypatch, ["--confidence-head-alpha", "0.5"])
+    train_kw, val_kw = DSparkDraftModel.get_trainer_kwargs(**vars(args))
+    assert train_kw["confidence_head_alpha"] == 0.5
+    assert val_kw["confidence_head_alpha"] == 0.5
