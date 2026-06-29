@@ -333,9 +333,9 @@ class Trainer:
                 for k, v in batch.items()
             }
 
-            _draft_tokens, loss, metrics = self.model(
-                **gpu_batch, **self.config.train_call_kwargs
-            )
+            train_kwargs = dict(self.config.train_call_kwargs)
+            train_kwargs["global_step"] = self.global_step
+            _draft_tokens, loss, metrics = self.model(**gpu_batch, **train_kwargs)
 
             self._optimizers_zero_grad()
             loss.backward()
@@ -401,9 +401,9 @@ class Trainer:
                 for k, v in batch.items()
             }
 
-            _draft_tokens, _loss, metrics = self.model(
-                **gpu_batch, **self.config.val_call_kwargs
-            )
+            val_kwargs = dict(self.config.val_call_kwargs)
+            val_kwargs["global_step"] = self.global_step
+            _draft_tokens, _loss, metrics = self.model(**gpu_batch, **val_kwargs)
 
             if self.is_distributed:
                 for m in metrics.values():
