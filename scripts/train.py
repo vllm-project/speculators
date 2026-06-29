@@ -1018,8 +1018,9 @@ def parse_args():
         "--norm-before-fc",
         action="store_true",
         default=False,
-        help="Use RMSNorm before FC layer in draft path "
-        "(e.g., for Eagle 3.1 / gpt-oss models).",
+        help="Apply a single RMSNorm to the concatenated auxiliary hidden states "
+        "before the FC projection (gpt-oss style). See --fc-norm for the "
+        "per-layer alternative from the Eagle 3.1 paper.",
     )
     parser.add_argument(
         "--fc-norm",
