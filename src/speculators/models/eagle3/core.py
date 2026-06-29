@@ -15,7 +15,7 @@ from speculators.models.eagle3.attention import (
 )
 from speculators.models.eagle3.metrics import compute_metrics
 from speculators.models.eagle3.model_definitions import model_classes
-from speculators.models.metrics import kl_div_loss, resolve_loss_fn
+from speculators.models.metrics import LossConfig, resolve_loss_config
 from speculators.models.utils import conditional_torch_compile, resolve_target_layer_ids
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 
@@ -93,7 +93,6 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
         self.verifier_norm = norm_class(self.hidden_size, eps=tl_config.rms_norm_eps)
         self.verifier_norm.weight.requires_grad = False
 
-        # Normalize draft path input (gpt-oss only)
         if config.norm_before_fc:
             self.input_norm = self._model_definitions.norm_class(
                 3 * self.hidden_size,
@@ -150,10 +149,9 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
         ttt_steps: int = 3,
         ttt_step_loss_decay: float = 1.0,
         use_off_policy_tokens: bool = False,
-        loss_fn=kl_div_loss,
+        loss_config: LossConfig | None = None,
         **kwargs,
     ):
-        loss_fn = loss_fn or kl_div_loss
         device = hidden_states.device
         total_seq_len = hidden_states.shape[1]
 
@@ -233,7 +231,11 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
                     **kwargs,
                 )
 
-            logits = self.lm_head(self.norm(hidden_states))
+            if self.config.norm_output:
+                hidden_states = self.norm(hidden_states)
+                logits = self.lm_head(hidden_states)
+            else:
+                logits = self.lm_head(self.norm(hidden_states))
             # shape: [1, total_seq_len, draft_vocab_size]
 
             if return_loss:
@@ -244,7 +246,7 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
                     prev_correct,
                     ttt_step,
                     ttt_step_loss_decay,
-                    loss_fn=loss_fn,
+                    loss_config=loss_config,
                 )
                 loss += s_loss
                 metrics.update(s_metrics)
@@ -327,6 +329,7 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
             draft_vocab_size=kwargs["draft_vocab_size"],
             norm_before_residual=kwargs["norm_before_residual"],
             norm_before_fc=kwargs.get("norm_before_fc", False),
+            norm_output=kwargs.get("norm_output", False),
             embed_requires_grad=kwargs.get("embed_requires_grad", False),
             eagle_aux_hidden_state_layer_ids=target_layer_ids,
             speculators_config=SpeculatorsConfig(
@@ -357,17 +360,17 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
         Returns:
             Tuple of (train_call_kwargs, val_call_kwargs)
         """
-        loss_fn = resolve_loss_fn(kwargs["loss_fn"])
+        loss_config = resolve_loss_config(kwargs["loss_fn"])
         train_kwargs = {
             "use_off_policy_tokens": kwargs["use_off_policy_tokens"],
             "ttt_steps": kwargs["ttt_steps"],
             "ttt_step_loss_decay": kwargs["ttt_step_loss_decay"],
-            "loss_fn": loss_fn,
+            "loss_config": loss_config,
         }
         val_kwargs = {
             "use_off_policy_tokens": False,
             "ttt_steps": kwargs["ttt_steps"],
             "ttt_step_loss_decay": kwargs["ttt_step_loss_decay"],
-            "loss_fn": loss_fn,
+            "loss_config": loss_config,
         }
         return train_kwargs, val_kwargs

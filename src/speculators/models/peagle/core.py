@@ -8,7 +8,7 @@ from transformers import PretrainedConfig
 from speculators.config import SpeculatorsConfig, VerifierConfig
 from speculators.model import SpeculatorModel
 from speculators.models.eagle3.core import Eagle3DraftModel
-from speculators.models.metrics import kl_div_loss, resolve_loss_fn
+from speculators.models.metrics import LossConfig, resolve_loss_config
 from speculators.models.peagle.attention import create_peagle_mask_mod
 from speculators.models.peagle.config import PEagleSpeculatorConfig
 from speculators.models.peagle.data import generate_cod_sample_indices
@@ -55,7 +55,7 @@ class PEagleDraftModel(Eagle3DraftModel):
         position_ids: torch.Tensor | None = None,
         loss_mask: torch.Tensor | None = None,
         verifier_last_hidden_states: torch.Tensor | None = None,
-        loss_fn=kl_div_loss,
+        loss_config: LossConfig | None = None,
         **kwargs,
     ):
         """
@@ -115,6 +115,8 @@ class PEagleDraftModel(Eagle3DraftModel):
         ).unsqueeze(0)  # [1, total_sampled, 3*hidden_size]
 
         # Project concatenated hidden states (3*hidden_size) -> hidden_size
+        if self.input_norm is not None:
+            sampled_hidden = self.input_norm(sampled_hidden)
         sampled_hidden = self.fc(sampled_hidden)  # [1, total_sampled, hidden_size]
 
         layer_input = torch.cat(
@@ -168,7 +170,7 @@ class PEagleDraftModel(Eagle3DraftModel):
             anchor_pos=anchor_pos,
             depth=depth,
             num_depths=self.num_depths,
-            loss_fn=loss_fn,
+            loss_config=loss_config,
         )
 
         return None, loss, metrics
@@ -213,6 +215,8 @@ class PEagleDraftModel(Eagle3DraftModel):
             transformer_layer_config=verifier_config,
             draft_vocab_size=kwargs["draft_vocab_size"],
             norm_before_residual=kwargs.get("norm_before_residual", False),
+            norm_before_fc=kwargs.get("norm_before_fc", False),
+            norm_output=kwargs.get("norm_output", False),
             eagle_aux_hidden_state_layer_ids=target_layer_ids,
             num_depths=kwargs.get("num_depths", 8),
             down_sample_ratio=kwargs.get("down_sample_ratio", 0.7),
@@ -248,5 +252,5 @@ class PEagleDraftModel(Eagle3DraftModel):
         Returns:
             Tuple of (train_call_kwargs, val_call_kwargs)
         """
-        loss_fn = resolve_loss_fn(kwargs["loss_fn"])
-        return {"loss_fn": loss_fn}, {"loss_fn": loss_fn}
+        loss_config = resolve_loss_config(kwargs["loss_fn"])
+        return {"loss_config": loss_config}, {"loss_config": loss_config}

@@ -2,6 +2,7 @@
 Unit tests for the config module in the Speculators library.
 """
 
+import copy
 import json
 import tempfile
 from pathlib import Path
@@ -19,6 +20,8 @@ from speculators import (
     VerifierConfig,
     reload_schemas,
 )
+from speculators.models.eagle3 import Eagle3SpeculatorConfig
+from speculators.proposals.greedy import GreedyTokenProposalConfig
 
 # ===== TokenProposalConfig Tests =====
 
@@ -449,3 +452,89 @@ def test_speculator_model_config_from_pretrained_conversion(sample_speculators_c
     assert "Loading a non-speculator model config is not supported yet" in str(
         exc_info.value
     )
+
+
+# ===== Eagle3SpeculatorConfig Tests =====
+
+TINY_LLAMA_CONFIG = LlamaConfig(
+    vocab_size=64,
+    hidden_size=32,
+    intermediate_size=128,
+    num_hidden_layers=1,
+    num_attention_heads=4,
+    num_key_value_heads=4,
+    head_dim=8,
+    max_position_embeddings=32,
+    rms_norm_eps=1e-6,
+    tie_word_embeddings=False,
+)
+
+
+def _make_eagle3_speculators_config():
+    return SpeculatorsConfig(
+        algorithm="eagle3",
+        proposal_methods=[GreedyTokenProposalConfig(speculative_tokens=1)],
+        default_proposal_method="greedy",
+        verifier=VerifierConfig(
+            name_or_path=None,
+            architectures=["LlamaForCausalLM"],
+        ),
+    )
+
+
+@pytest.mark.sanity
+def test_eagle3_config_norm_output_roundtrip():
+    original = Eagle3SpeculatorConfig(
+        transformer_layer_config=copy.deepcopy(TINY_LLAMA_CONFIG),
+        draft_vocab_size=32000,
+        norm_before_residual=False,
+        norm_output=True,
+        speculators_config=_make_eagle3_speculators_config(),
+    )
+
+    config_dict = original.model_dump()
+    assert config_dict["norm_output"] is True
+
+    recreated = Eagle3SpeculatorConfig.model_validate(config_dict)
+    assert recreated.norm_output is True
+
+
+@pytest.mark.sanity
+def test_eagle3_config_norm_output_dict_roundtrip():
+    original = Eagle3SpeculatorConfig(
+        transformer_layer_config=copy.deepcopy(TINY_LLAMA_CONFIG),
+        draft_vocab_size=32000,
+        norm_output=True,
+        speculators_config=_make_eagle3_speculators_config(),
+    )
+
+    config_dict = original.to_dict()
+    assert config_dict["norm_output"] is True
+
+    reloaded = SpeculatorModelConfig.from_dict(config_dict)
+    assert reloaded.norm_output is True
+
+
+@pytest.mark.sanity
+def test_eagle3_config_norm_output_pretrained_roundtrip():
+    original = Eagle3SpeculatorConfig(
+        transformer_layer_config=copy.deepcopy(TINY_LLAMA_CONFIG),
+        draft_vocab_size=32000,
+        norm_output=True,
+        speculators_config=_make_eagle3_speculators_config(),
+    )
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        original.save_pretrained(tmp_dir)
+        reloaded = SpeculatorModelConfig.from_pretrained(tmp_dir)
+
+    assert reloaded.norm_output is True
+
+
+@pytest.mark.sanity
+def test_eagle3_config_norm_output_defaults():
+    config = Eagle3SpeculatorConfig(
+        transformer_layer_config=copy.deepcopy(TINY_LLAMA_CONFIG),
+        speculators_config=_make_eagle3_speculators_config(),
+    )
+    assert config.norm_output is False

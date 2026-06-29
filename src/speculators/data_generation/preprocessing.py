@@ -878,7 +878,7 @@ def load_and_preprocess_dataset(
         processed_datasets.append(preprocessed_dataset)
 
     combined_dataset = concatenate_datasets(processed_datasets)
-    combined_dataset.shuffle(seed=seed)
+    combined_dataset = combined_dataset.shuffle(seed=seed)
     if max_samples is not None and len(combined_dataset) > max_samples:
         combined_dataset = combined_dataset.select(range(max_samples))
 
