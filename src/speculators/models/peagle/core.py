@@ -120,10 +120,7 @@ class PEagleDraftModel(Eagle3DraftModel):
         if self.fc_norm is not None:
             chunks = sampled_hidden.chunk(len(self.fc_norm), dim=-1)
             sampled_hidden = torch.cat(
-                [
-                    norm(chunk)
-                    for norm, chunk in zip(self.fc_norm, chunks, strict=True)
-                ],
+                [norm(chunk) for norm, chunk in zip(self.fc_norm, chunks, strict=True)],
                 dim=-1,
             )
         sampled_hidden = self.fc(sampled_hidden)  # [1, total_sampled, hidden_size]
