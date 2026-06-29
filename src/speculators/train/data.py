@@ -385,7 +385,7 @@ class ArrowDataset(BaseDataset):
             return None
 
         return {
-            "hidden_states": loaded_hs["hidden_states"][:, :-1].flatten(
+            "hidden_states": loaded_hs["hidden_states"].flatten(
                 1
             ),  # [seq_len, 3 * hidden_size]
             "input_ids": loaded_hs["token_ids"],  # [seq_len]
