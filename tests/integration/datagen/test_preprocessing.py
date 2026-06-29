@@ -21,6 +21,8 @@ from speculators.data_generation.preprocessing import (
     _preprocess_batch,
     _supports_assistant_mask,
     build_eagle3_dataset,
+    get_tokenizer,
+    load_and_preprocess_dataset,
     load_processor,
 )
 
@@ -1393,3 +1395,45 @@ def test_normalize_conversation_tool_calls_with_empty_content():
     assert assistant_tool_call_turn["role"] == "assistant"
     assert assistant_tool_call_turn["content"] == ""
     assert assistant_tool_call_turn["tool_calls"] == tool_calls
+
+
+# Tests for load_and_preprocess_dataset
+
+
+@pytest.mark.sanity
+def test_load_and_preprocess_dataset_shuffles_combined_datasets(tmp_path):
+    """Combined datasets must be shuffled before truncating to max_samples,
+    otherwise only samples from the first dataset are kept."""
+    paths = []
+    for marker in ("ALPHA", "BETA"):
+        path = tmp_path / f"{marker.lower()}.jsonl"
+        path.write_text(
+            "\n".join(
+                json.dumps(
+                    {
+                        "conversations": [
+                            {"role": "user", "content": f"Question {i}?"},
+                            {"role": "assistant", "content": f"{marker} answer {i}."},
+                        ]
+                    }
+                )
+                for i in range(12)
+            )
+        )
+        paths.append(str(path))
+
+    dataset, processor = load_and_preprocess_dataset(
+        TEXT_MODEL_REPO,
+        paths,
+        seq_length=128,
+        build_dataset_num_proc=1,
+        seed=0,
+        max_samples=12,
+        token_freq_path=tmp_path / "token_freq.pt",
+        trust_remote_code=True,
+    )
+
+    assert len(dataset) == 12
+    tokenizer = get_tokenizer(processor)
+    decoded = [tokenizer.decode(row["input_ids"]) for row in dataset]
+    assert any("BETA" in text for text in decoded)
