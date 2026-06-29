@@ -783,24 +783,66 @@ def _worker_distributed_norm_float32(rank, world_size, results_dir):
 
         trainer.setup_model()
 
-        # After FSDP wrapping, check the local sharded parameter dtypes.
-        # FSDP stores sharded parameters in the "original" dtype (the dtype
-        # at wrap time), which is what the optimizer sees.
-        norm_names = set()
-        param_dtypes = {}
-        for mod_name, module in model.named_modules():
-            is_norm = isinstance(module, torch.nn.LayerNorm) or type(
-                module
-            ).__name__.endswith("RMSNorm")
-            for param_name, param in module.named_parameters(recurse=False):
-                full_name = f"{mod_name}.{param_name}" if mod_name else param_name
-                param_dtypes[full_name] = str(param.dtype)
-                if is_norm:
-                    norm_names.add(full_name)
+        seq_len = 4
+        hidden_size = TINY_LLAMA_CONFIG.hidden_size
+        hidden = torch.randn(
+            1, seq_len, 3 * hidden_size, dtype=torch.bfloat16, device=rank
+        )
+        ids = torch.zeros(1, seq_len, dtype=torch.long, device=rank)
+        doc_ids = torch.zeros(1, seq_len, dtype=torch.long, device=rank)
+        verifier_hidden = torch.randn(
+            1, seq_len, hidden_size, dtype=torch.bfloat16, device=rank
+        )
 
+        # Forward triggers FSDP's lazy_init which asserts uniform param dtype.
+        # Mixed dtypes (norms float32, rest bfloat16) would crash here with:
+        #   AssertionError: FSDP expects uniform original parameter dtype
+        #                   but got {torch.bfloat16, torch.float32}
+        _, loss, _ = model(
+            hidden,
+            input_ids=ids,
+            document_ids=doc_ids,
+            verifier_last_hidden_states=verifier_hidden,
+            ttt_steps=1,
+        )
+
+        # Full backward + optimizer step to verify norm weights actually learn
+        # (the whole point of float32 master weights).
+        norm_names = _norm_param_names(model)
+
+        sd_opts = StateDictOptions(full_state_dict=True, cpu_offload=True)
+        before = {
+            k: v.clone()
+            for k, v in get_model_state_dict(model, options=sd_opts).items()
+            if k in norm_names
+        }
+
+        optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        loss.backward()
+
+        # Only check norms that received gradients (e.g. verifier_norm is
+        # used inside torch.no_grad() for target computation, so it never
+        # gets gradients — that's expected).
+        graded_norms = {
+            n
+            for n, p in model.named_parameters()
+            if n in norm_names and p.grad is not None
+        }
+
+        optimizer.step()
+
+        after = {
+            k: v.clone()
+            for k, v in get_model_state_dict(model, options=sd_opts).items()
+            if k in graded_norms
+        }
+
+        changed = {}
         if rank == 0:
+            for name, val in after.items():
+                changed[name] = not torch.equal(before[name], val)
             torch.save(
-                {"norm_names": norm_names, "param_dtypes": param_dtypes},
+                {"norm_names": list(graded_norms), "changed": changed},
                 results_dir / "results.pt",
             )
     finally:
@@ -809,11 +851,13 @@ def _worker_distributed_norm_float32(rank, world_size, results_dir):
 
 @requires_multi_gpu
 def test_distributed_norm_weights_float32_after_fsdp(tmp_path):
-    """FSDP mixed precision must not override norm weights back to bfloat16.
+    """FSDP training step must succeed end-to-end and norm weights must learn.
 
-    FSDP's MixedPrecisionPolicy(param_dtype=bfloat16) casts parameters to
-    bfloat16 for forward/backward, but the sharded master copy (used by the
-    optimizer) must stay in the original dtype — float32 for norms."""
+    Regression test: casting norms to float32 while other weights are bfloat16
+    causes 'FSDP expects uniform original parameter dtype' on the first forward.
+    The fix keeps all master weights in float32 and lets MixedPrecisionPolicy
+    handle bf16 compute. We verify the full forward+backward+optimizer path and
+    that norm weights actually change (they're initialized to 1.0)."""
     world_size = 2
     results_dir = tmp_path / "results"
     results_dir.mkdir()
@@ -826,22 +870,13 @@ def test_distributed_norm_weights_float32_after_fsdp(tmp_path):
     )
 
     results = torch.load(results_dir / "results.pt", weights_only=False)
-    norm_names = results["norm_names"]
-    param_dtypes = results["param_dtypes"]
+    assert results["norm_names"], "expected at least one norm parameter"
 
-    assert norm_names, "expected at least one norm parameter"
-
-    for name in norm_names:
-        assert param_dtypes[name] == str(torch.float32), (
-            f"Norm {name} has dtype {param_dtypes[name]} after FSDP, "
-            f"expected {torch.float32}"
+    for name, did_change in results["changed"].items():
+        assert did_change, (
+            f"{name} did not change after optimizer step — "
+            f"norm weights are not learning under FSDP"
         )
-
-    for name, dtype_str in param_dtypes.items():
-        if name not in norm_names:
-            assert dtype_str == str(torch.bfloat16), (
-                f"Non-norm {name} has dtype {dtype_str}, expected {torch.bfloat16}"
-            )
 
 
 # ===================================================================

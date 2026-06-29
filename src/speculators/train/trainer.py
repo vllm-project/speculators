@@ -176,26 +176,34 @@ class Trainer:
         # Verify model is compatible with training infrastructure
         SpeculatorModel.verify_training_compatible(self.model)
 
-        self.model.to(self.config.hidden_states_dtype)  # type: ignore[arg-type]
-        # Keep norm weights in float32 so Adam updates (~1e-4) aren't lost to
-        # bfloat16's precision limit (~8e-3 at 1.0).
-        for module in self.model.modules():
-            if isinstance(module, (torch.nn.LayerNorm,)) or type(
-                module
-            ).__name__.endswith("RMSNorm"):
-                module.float()
         load_checkpoint = (
             self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1
         )
 
         if not self.is_distributed:
-            # Single device case
+            # Single device: cast to the compute dtype, but keep norm weights in
+            # float32 so Adam updates (~1e-4) aren't lost to bfloat16's precision
+            # limit (~8e-3 at 1.0). No FSDP here, so mixed param dtypes are fine.
+            self.model.to(self.config.hidden_states_dtype)  # type: ignore[arg-type]
+            for module in self.model.modules():
+                if isinstance(module, torch.nn.LayerNorm) or type(
+                    module
+                ).__name__.endswith("RMSNorm"):
+                    module.float()
             self.model.to(self.local_rank)  # type: ignore[arg-type]
             if load_checkpoint:
                 self.checkpointer.load_model_state_dict(self.model)
             return
 
-        # Distributed case
+        # Distributed case.
+        # FSDP2 (fully_shard) requires a uniform original parameter dtype within
+        # each sharded group, so we cannot keep norms in float32 while other
+        # weights are bfloat16. Instead keep all master weights in float32 and let
+        # MixedPrecisionPolicy do the bfloat16 compute cast. This preserves
+        # float32 norm (and all) master weights for stable optimizer updates
+        # without mixing dtypes inside an FSDP group.
+        self.model.float()
+
         # Capture full state dict on rank 0 before FSDP sharding
         full_state_dict = {}
         if not load_checkpoint and dist.get_rank() == 0:
