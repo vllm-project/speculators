@@ -24,9 +24,15 @@ from speculators.train.checkpointer import (
     DistributedCheckpointer,
     SingleGPUCheckpointer,
 )
+from speculators.train.distributed import (
+    apply_fully_sharded,
+    get_local_rank,
+    get_rank,
+    is_distributed,
+)
 from speculators.train.graceful_shutdown import with_graceful_shutdown
 from speculators.train.optimizers import build_optimizers
-from speculators.train.utils import apply_fully_sharded, normalize_counted_metrics
+from speculators.train.utils import normalize_counted_metrics
 
 root_logger = logging.getLogger("speculators")
 metric_logger = logging.getLogger("speculators.metrics")
@@ -40,9 +46,6 @@ class TrainerConfig(NamedTuple):
     num_epochs: int
     save_path: str
     resume_from_checkpoint: bool = False
-    is_distributed: bool = False
-    local_rank: int = 0
-    rank: int = 0
     train_call_kwargs: dict = {}
     val_call_kwargs: dict = {}
     optimizer: Literal["adamw", "muon"] = "adamw"
@@ -72,11 +75,11 @@ class Trainer:
     ):
         self.model = model
         self.config = config
-        self.local_rank = config.local_rank
-        self.rank = config.rank
+        self.local_rank = get_local_rank()
+        self.rank = get_rank()
         self.train_loader = train_loader
         self.val_loader = val_loader
-        self.is_distributed = config.is_distributed
+        self.is_distributed = is_distributed()
         self.resume_from_checkpoint = config.resume_from_checkpoint
         checkpointer_class = (
             DistributedCheckpointer if self.is_distributed else SingleGPUCheckpointer
