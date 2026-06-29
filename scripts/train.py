@@ -44,6 +44,7 @@ from speculators.train.utils import (
     maybe_destroy_distributed,
     maybe_setup_distributed,
     resolve_mask_token_id,
+    save_train_command,
 )
 from speculators.train.vocab_mapping import (
     build_vocab_mappings_from_distribution,
@@ -478,6 +479,10 @@ def main(args: argparse.Namespace):  # noqa: C901
 
     # Setup distributed training
     local_rank, world_size, rank, is_distributed = maybe_setup_distributed()
+
+    if rank == 0:
+        save_train_command(args.save_path)
+
     if not hasattr(torch, args.hidden_states_dtype):
         raise ValueError(
             "--hidden-states-dtype must be a dtype attribute of torch. e.g. `bfloat16`"
