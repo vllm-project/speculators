@@ -102,6 +102,12 @@ def test_finetuning_weight_sanity(tmp_path: Path):
             logger.debug("Training stdout:\n%s", result.stdout)
     assert result.returncode == 0, f"Training failed:\n{result.stderr}"
 
+    # Verify train_command.txt was saved and copied into epoch checkpoint dirs
+    assert (tmp_path / "ckpt" / "train_command.txt").exists()
+    for ckpt_dir in (tmp_path / "ckpt").iterdir():
+        if ckpt_dir.is_dir() and ckpt_dir.name.isdigit():
+            assert (ckpt_dir / "train_command.txt").exists()
+
     logger.info(
         "Training finished. Loading finetuned weights from %s", tmp_path / "ckpt"
     )
