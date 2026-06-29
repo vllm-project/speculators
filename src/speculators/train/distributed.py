@@ -23,7 +23,7 @@ logger = logging.getLogger("speculators")
 
 _local_rank: int = 0
 _rank: int = 0
-_world_size = 1
+_world_size: int = 1
 _is_distributed: bool = False
 
 _sp_size: int = 1
