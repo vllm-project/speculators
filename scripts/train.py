@@ -618,8 +618,10 @@ def parse_args():
     parser.add_argument(
         "--max-anchors",
         type=int,
-        default=256,
-        help="Maximum anchor positions for DFlash training (default: 256)",
+        default=None,
+        help="Maximum anchor positions. For DFlash: caps training anchors "
+        "(default: 3072). For P-EAGLE: caps COD chain starting points; "
+        "depth 0 always retains the full sequence (default: unlimited).",
     )
     # P-EAGLE specific parameters
     parser.add_argument(

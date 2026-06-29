@@ -10,6 +10,7 @@ def generate_cod_sample_indices(
     down_sample_ratio: float = 0.7,
     down_sample_ratio_min: float = 0.2,
     filter_position_zero: bool = True,
+    max_anchors: int | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Generate sampling indices for parallel sequences using COD sampling.
@@ -25,6 +26,9 @@ def generate_cod_sample_indices(
         down_sample_ratio: Geometric decay ratio r in (0,1)
         down_sample_ratio_min: Minimum retention ratio floor
         filter_position_zero: Whether to filter out position 0 from candidates
+        max_anchors: Maximum number of COD chain starting points. When set and
+            there are more valid positions, a random subset is sampled. Depth 0
+            always retains the full sequence. None means use all positions.
 
     Returns:
         Tuple of:
@@ -35,6 +39,10 @@ def generate_cod_sample_indices(
     loss_mask = loss_mask.squeeze(0)
     device = loss_mask.device
     all_valid_indices = torch.where(loss_mask == 1)[0]
+
+    if max_anchors is not None and all_valid_indices.shape[0] > max_anchors:
+        perm = torch.randperm(all_valid_indices.shape[0], device=device)[:max_anchors]
+        all_valid_indices = all_valid_indices[perm].sort()[0]
 
     sample_indices = [torch.arange(seq_length, device=device)]
     n_per_depth = [seq_length]
