@@ -10,7 +10,6 @@ import numpy as np
 import torch
 import transformers
 from packaging import version
-from torch.utils.data import DataLoader
 from transformers import LlamaConfig, PretrainedConfig
 from transformers.models.auto.configuration_auto import AutoConfig
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
@@ -27,25 +26,15 @@ from speculators.models.utils import (
     get_verifier_config,
     resolve_draft_intermediate_size,
 )
-from speculators.train.data import (
-    ArrowDataset,
-    BaseDataset,
-    SampleFileDataset,
-    create_collate_fn,
-    split_files,
-)
-from speculators.train.distributed_batch_sampler import (
-    MultipackDistributedBatchSamplerV2,
-)
-from speculators.train.logger import setup_metric_logger, setup_root_logger
-from speculators.train.noise_transforms import AddUniformNoise
-from speculators.train.trainer import Trainer, TrainerConfig
-from speculators.train.utils import (
+from speculators.train.dataloader import create_train_val_loaders
+from speculators.train.distributed import (
+    get_rank,
     maybe_destroy_distributed,
     maybe_setup_distributed,
-    resolve_mask_token_id,
-    save_train_command,
 )
+from speculators.train.logger import setup_metric_logger, setup_root_logger
+from speculators.train.trainer import Trainer, TrainerConfig
+from speculators.train.utils import resolve_mask_token_id, save_train_command
 from speculators.train.vocab_mapping import (
     build_vocab_mappings_from_distribution,
     get_target_vocab_size,
@@ -72,53 +61,6 @@ def set_seed(seed: int, deterministic: bool = False):
         # For deterministic behavior (may impact performance)
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
-
-
-def setup_dataloader(
-    dataset: BaseDataset,
-    world_size: int,
-    rank: int,
-    hidden_size: int,
-    num_workers: int = 12,
-    num_target_layers: int = 3,
-    prefetch_factor: int = 4,
-    preprocess=None,
-) -> DataLoader:
-    """Setup dataloader for training.
-    Args:
-        file_list: List of file paths to load data from.
-        world_size: Number of processes in the distributed training.
-        rank: Global rank of the current process (shards data across nodes).
-        add_noise: Whether to add noise to the data.
-        noise_std: Standard deviation for noise augmentation.
-        num_workers: Number of dataloader workers.
-        prefetch_factor: Dataloader prefetch factor.
-        preprocess: Optional per-sample preprocessing function applied
-            before collation (e.g. shift_batch for Eagle3).
-    Returns:
-        DataLoader: Dataloader for training.
-    """
-    batch_sampler = MultipackDistributedBatchSamplerV2(
-        batch_max_length=args.total_seq_len,
-        lengths=dataset.approx_lengths,
-        num_replicas=world_size,
-        rank=rank,
-    )
-    return DataLoader(
-        dataset,
-        batch_sampler=batch_sampler,
-        num_workers=num_workers,
-        prefetch_factor=prefetch_factor,
-        pin_memory=True,
-        collate_fn=create_collate_fn(
-            args.total_seq_len,
-            hidden_size,
-            num_target_layers=num_target_layers,
-            dtype=dataset.hidden_states_dtype,
-            preprocess=preprocess,
-        ),
-        persistent_workers=True,
-    )
 
 
 def create_transformer_layer_config(  # noqa: C901
@@ -478,9 +420,9 @@ def main(args: argparse.Namespace):  # noqa: C901
     )
 
     # Setup distributed training
-    local_rank, world_size, rank, is_distributed = maybe_setup_distributed()
+    maybe_setup_distributed()
 
-    if rank == 0:
+    if get_rank() == 0:
         save_train_command(args.save_path)
 
     if not hasattr(torch, args.hidden_states_dtype):
@@ -538,7 +480,7 @@ def main(args: argparse.Namespace):  # noqa: C901
         # hidden_states_dtype, so save the dry-run checkpoint in that dtype too
         # rather than the float32 the model is built in.
         draft_model.to(hidden_states_dtype)
-        if local_rank == 0:
+        if get_rank() == 0:
             logger.info(
                 "[dry-run] Saving initialized checkpoint (%s) to '%s'",
                 hidden_states_dtype,
@@ -563,69 +505,20 @@ def main(args: argparse.Namespace):  # noqa: C901
     }
     preprocess = preprocess_fns.get(args.speculator_type)
 
-    noise_transform = AddUniformNoise(std=args.noise_std)
-    if args.legacy_data:
-        warnings.warn(
-            "Using '--legacy-data' is deprecated and will be removed soon.",
-            category=DeprecationWarning,
-            stacklevel=2,
-        )
-        train_files, val_files = split_files(args.data_path, ratio=0.9)
-        train_dataset: BaseDataset = SampleFileDataset(
-            file_list=train_files,
-            max_len=args.total_seq_len,
-            transform=noise_transform,
-            hidden_states_dtype=hidden_states_dtype,
-        )
-        val_dataset: BaseDataset = SampleFileDataset(
-            file_list=val_files,
-            max_len=args.total_seq_len,
-            hidden_states_dtype=hidden_states_dtype,
-        )
-    else:
-        train_dataset = ArrowDataset(
-            datapath=args.data_path,
-            max_len=args.total_seq_len,
-            hidden_states_path=args.hidden_states_path,
-            vllm_endpoint=args.vllm_endpoint,
-            on_missing=args.on_missing,
-            on_generate=args.on_generate,
-            transform=noise_transform,
-            split_ratio=0.9,
-            model=args.verifier_name_or_path,
-            hidden_states_dtype=hidden_states_dtype,
-            request_timeout=args.request_timeout,
-            max_retries=args.max_retries,
-        )
-        val_dataset = ArrowDataset(
-            datapath=args.data_path,
-            max_len=args.total_seq_len,
-            hidden_states_path=args.hidden_states_path,
-            vllm_endpoint=args.vllm_endpoint,
-            on_missing=args.on_missing,
-            on_generate=args.on_generate,
-            split_ratio=-0.1,
-            model=args.verifier_name_or_path,
-            hidden_states_dtype=hidden_states_dtype,
-            request_timeout=args.request_timeout,
-            max_retries=args.max_retries,
-        )
-
-    train_loader = setup_dataloader(
-        train_dataset,
-        world_size,
-        rank,
-        hidden_size,
-        num_target_layers=num_target_layers,
-        num_workers=args.num_workers,
-        prefetch_factor=args.prefetch_factor,
-        preprocess=preprocess,
-    )
-    val_loader = setup_dataloader(
-        val_dataset,
-        world_size,
-        rank,
-        hidden_size,
+    train_loader, val_loader = create_train_val_loaders(
+        data_path=args.data_path,
+        total_seq_len=args.total_seq_len,
+        hidden_states_dtype=hidden_states_dtype,
+        noise_std=args.noise_std,
+        legacy_data=args.legacy_data,
+        hidden_states_path=args.hidden_states_path,
+        vllm_endpoint=args.vllm_endpoint,
+        on_missing=args.on_missing,
+        on_generate=args.on_generate,
+        verifier_name_or_path=args.verifier_name_or_path,
+        request_timeout=args.request_timeout,
+        max_retries=args.max_retries,
+        hidden_size=hidden_size,
         num_target_layers=num_target_layers,
         num_workers=args.num_workers,
         prefetch_factor=args.prefetch_factor,
@@ -640,9 +533,6 @@ def main(args: argparse.Namespace):  # noqa: C901
         save_path=args.save_path,
         lr=args.lr,
         resume_from_checkpoint=not args.no_resume_from_checkpoint,
-        is_distributed=is_distributed,
-        local_rank=local_rank,
-        rank=rank,
         train_call_kwargs=train_call_kwargs,
         val_call_kwargs=val_call_kwargs,
         optimizer=args.optimizer,
