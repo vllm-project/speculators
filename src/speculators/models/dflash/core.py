@@ -422,7 +422,6 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 max_anchors=max_anchors,
                 **kwargs,
             )
-        )
 
         if self.projector_type == "domino":
             global_step = kwargs.get("global_step", 0)

@@ -82,12 +82,10 @@ class DSparkDraftModel(DFlashDraftModel):
         """Resolve DSpark's compound loss from ``--loss-fn``."""
         loss_config = resolve_loss_config(kwargs["loss_fn"])
         gamma = kwargs.get("dflash_decay_gamma", 4.0)
-        max_anchors = kwargs.get("max_anchors", 3072)
         confidence_head_alpha = kwargs.get("confidence_head_alpha", 1.0)
         shared = {
             "loss_config": loss_config,
             "gamma": gamma,
-            "max_anchors": max_anchors,
             "confidence_head_alpha": confidence_head_alpha,
         }
         return dict(shared), dict(shared)
@@ -103,7 +101,6 @@ class DSparkDraftModel(DFlashDraftModel):
         position_ids: torch.Tensor | None = None,  # [1, total_seq_len]
         loss_config: LossConfig | None = None,
         gamma: float = 4.0,
-        max_anchors: int = 3072,
         confidence_head_alpha: float = 1.0,
         **kwargs,
     ):
@@ -115,13 +112,12 @@ class DSparkDraftModel(DFlashDraftModel):
                 verifier_last_hidden_states,
                 document_ids,
                 position_ids,
-                max_anchors=max_anchors,
                 **kwargs,
             )
         )
 
         # DSpark: add the Markov logit bias and predict per-position confidence.
-        num_blocks = max_anchors
+        num_blocks = self.config.max_anchors
         block = self.block_size
         mask_tokens_size = num_blocks * block
         # Ground-truth block tokens (verifier vocab); position 0 is the anchor.
