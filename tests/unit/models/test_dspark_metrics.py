@@ -3,6 +3,7 @@
 import torch
 
 from speculators.models.dspark.metrics import compute_metrics
+from speculators.models.metrics import resolve_loss_config
 
 
 def _ids_to_logits(ids: torch.Tensor, vocab_size: int) -> torch.Tensor:
@@ -101,8 +102,7 @@ class TestComputeMetrics:
             None,
             loss_mask,
             block_size=2,
-            ce_loss_alpha=0.0,
-            l1_loss_alpha=0.1,
+            loss_config=resolve_loss_config('{"tv": 0.1}'),
         )
         loss_large, _ = compute_metrics(
             logits,
@@ -110,8 +110,7 @@ class TestComputeMetrics:
             None,
             loss_mask,
             block_size=2,
-            ce_loss_alpha=0.0,
-            l1_loss_alpha=1.0,
+            loss_config=resolve_loss_config('{"tv": 1.0}'),
         )
         assert float(loss_large) > float(loss_small)
 

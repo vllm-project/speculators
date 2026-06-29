@@ -18,7 +18,7 @@ from speculators.models.dflash.utils import (
     get_base_indices_for_anchored_blocks,
     select_anchors,
 )
-from speculators.models.metrics import kl_div_loss, resolve_loss_fn
+from speculators.models.metrics import LossConfig, resolve_loss_config
 from speculators.models.utils import conditional_torch_compile, resolve_target_layer_ids
 
 
@@ -203,12 +203,10 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         Returns:
             Tuple of (train_call_kwargs, val_call_kwargs)
         """
-        loss_fn = resolve_loss_fn(kwargs["loss_fn"])
+        loss_config = resolve_loss_config(kwargs["loss_fn"])
         gamma = kwargs.get("dflash_decay_gamma", 4.0)
-        return {"loss_fn": loss_fn, "gamma": gamma}, {
-            "loss_fn": loss_fn,
-            "gamma": gamma,
-        }
+        shared = {"loss_config": loss_config, "gamma": gamma}
+        return dict(shared), dict(shared)
 
     @property
     def mask_token_id(self) -> int:
@@ -386,7 +384,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         verifier_last_hidden_states: torch.Tensor,  # shape: [1, total_seq_len, hidden_size] # noqa: E501
         document_ids: torch.Tensor,  # shape: [1, total_seq_len]
         position_ids: torch.Tensor | None = None,  # shape: [1, total_seq_len]
-        loss_fn=kl_div_loss,
+        loss_config: LossConfig | None = None,
         gamma: float = 4.0,
         **kwargs,
     ):
@@ -405,7 +403,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             aligned_loss_mask,
             self.block_size,
             gamma=gamma,
-            loss_fn=loss_fn,
+            loss_config=loss_config,
         )
         draft_tokens = torch.argmax(logits, dim=-1)
 

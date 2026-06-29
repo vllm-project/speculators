@@ -54,17 +54,3 @@ class DSparkSpeculatorConfig(DFlashSpeculatorConfig):
         ),
     )
 
-    # DSpark loss weights.
-    ce_loss_alpha: float = Field(
-        default=0.1, description="Weight of the cross-entropy term."
-    )
-    l1_loss_alpha: float = Field(
-        default=0.9,
-        description=(
-            "Weight of the total-variation (distribution-matching) term, which "
-            "directly optimizes the acceptance rate."
-        ),
-    )
-    confidence_head_alpha: float = Field(
-        default=1.0, description="Weight of the confidence-head BCE term."
-    )

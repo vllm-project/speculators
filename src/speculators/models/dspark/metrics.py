@@ -1,6 +1,6 @@
 """Loss and metrics for the DSpark draft model.
 
-loss = ce_alpha * CE + l1_alpha * TV + conf_alpha * BCE(confidence, accept_rate)
+loss = compound_loss(logits, targets) + conf_alpha * BCE(confidence, accept_rate)
 
 The confidence target ``accept_rate = sum_v min(q_v, p_v) = 1 - d_TV`` is the
 analytical acceptance rate (the overlap ``tv_loss`` already computes).
@@ -14,11 +14,10 @@ import torch
 from torch.nn.functional import binary_cross_entropy_with_logits, softmax
 
 from speculators.models.metrics import (
-    ce_loss,
+    LossConfig,
+    compound_loss,
     compute_accuracy_multi_step,
     dflash_loss_decay,
-    loss_function,
-    tv_loss,
 )
 
 __all__ = [
@@ -50,23 +49,23 @@ def compute_metrics(
     loss_mask: torch.Tensor,  # [1, T]
     block_size: int = 8,
     gamma: float = 4.0,
-    ce_loss_alpha: float = 0.1,
-    l1_loss_alpha: float = 0.9,
+    loss_config: LossConfig | None = None,
     confidence_head_alpha: float = 1.0,
 ) -> tuple[torch.Tensor, dict]:
     """Compute the DSpark loss and a metrics dict (``*_sum``/``*_total`` pairs)."""
+    if loss_config is None:
+        from speculators.models.metrics import ce_loss, tv_loss  # noqa: PLC0415
+
+        loss_config = {"ce": (ce_loss, 0.1), "tv": (tv_loss, 0.9)}
+
     device = logits.device
     seq_len = logits.shape[1]
     pos_idx = (torch.arange(seq_len, device=device) % block_size).unsqueeze(0)
     decay_fn = partial(dflash_loss_decay, gamma=gamma)
 
-    ce = loss_function(
-        logits, targets, loss_mask, pos_idx, loss_fn=ce_loss, decay_fn=decay_fn
+    loss, term_losses = compound_loss(
+        logits, targets, loss_mask, pos_idx, loss_config=loss_config, decay_fn=decay_fn
     )
-    tv = loss_function(
-        logits, targets, loss_mask, pos_idx, loss_fn=tv_loss, decay_fn=decay_fn
-    )
-    loss = ce_loss_alpha * ce + l1_loss_alpha * tv
 
     # Analytical per-position acceptance rate = distributional overlap.
     with torch.no_grad():
@@ -112,13 +111,12 @@ def compute_metrics(
             ).sum()
             metrics["confidence_cumprod_bias_total"] = draft_mask.sum().clamp_min(1.0)
 
-    # Component + total loss logging.
-    metrics["ce_loss_sum"] = ce.detach().clone()
-    metrics["ce_loss_total"] = torch.ones((), device=device)
-    metrics["tv_loss_sum"] = tv.detach().clone()
-    metrics["tv_loss_total"] = torch.ones((), device=device)
+    ones = torch.ones((), device=device)
     metrics["loss_sum"] = loss.detach().clone()
-    metrics["loss_total"] = torch.ones((), device=device)
+    metrics["loss_total"] = ones
+    for term_name, term_val in term_losses.items():
+        metrics[f"{term_name}_sum"] = term_val
+        metrics[f"{term_name}_total"] = ones
 
     # Mean acceptance rate of the (Markov-corrected) drafter.
     with torch.no_grad():

@@ -21,7 +21,7 @@ from speculators.data_generation.vllm_client import (
 )
 from speculators.model import SpeculatorModel
 from speculators.models.eagle3.data import shift_batch
-from speculators.models.metrics import resolve_loss_fn
+from speculators.models.metrics import resolve_loss_config
 from speculators.models.mtp.data import shift_batch_mtp
 from speculators.models.utils import (
     get_verifier_config,
@@ -966,11 +966,10 @@ def parse_args():
         "--loss-fn",
         type=str,
         default="kl_div",
-        choices=["kl_div", "ce"],
         help=(
-            "Loss function used during draft model training. "
-            "'kl_div' = KL divergence (default). "
-            "'ce' = cross-entropy."
+            "Loss function specification. Pass a name for a single loss "
+            "(kl_div, ce, tv, nla) or a JSON dict for a weighted combination, "
+            'e.g. \'{"ce": 0.1, "tv": 0.9}\'.'
         ),
     )
     parser.add_argument(
@@ -1076,18 +1075,6 @@ def parse_args():
         default=True,
         help="DSpark: feed the Markov previous-token embedding into the "
         "confidence head alongside the backbone hidden state.",
-    )
-    parser.add_argument(
-        "--ce-loss-alpha",
-        type=float,
-        default=0.1,
-        help="DSpark: weight of the cross-entropy loss term (default: 0.1).",
-    )
-    parser.add_argument(
-        "--l1-loss-alpha",
-        type=float,
-        default=0.9,
-        help="DSpark: weight of the total-variation loss term (default: 0.9).",
     )
     parser.add_argument(
         "--confidence-head-alpha",
@@ -1220,7 +1207,7 @@ def parse_args():
     args = parser.parse_args()
     provided = explicitly_provided_dests(parser, DECODER_SHAPING_FLAGS)
     validate_draft_init_args(parser, args, provided)
-    resolve_loss_fn(args.loss_fn)
+    resolve_loss_config(args.loss_fn)
     return args
 
 

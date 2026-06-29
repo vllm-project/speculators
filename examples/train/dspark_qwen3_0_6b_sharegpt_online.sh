@@ -42,8 +42,7 @@ TARGET_LAYER_IDS="2 14 25"  # Must match vLLM's eagle_aux_hidden_state_layer_ids
 # Markov + confidence head settings
 MARKOV_RANK=256
 MARKOV_HEAD_TYPE="vanilla"   # vanilla | gated | rnn
-CE_LOSS_ALPHA=0.1
-L1_LOSS_ALPHA=0.9
+LOSS_FN='{"ce": 0.1, "tv": 0.9}'
 CONFIDENCE_HEAD_ALPHA=1.0
 
 # GPU assignments (online training needs separate GPUs for vLLM and training)
@@ -104,8 +103,7 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPUS" torchrun \
     --markov-head-type "$MARKOV_HEAD_TYPE" \
     --enable-confidence-head \
     --confidence-head-with-markov \
-    --ce-loss-alpha "$CE_LOSS_ALPHA" \
-    --l1-loss-alpha "$L1_LOSS_ALPHA" \
+    --loss-fn "$LOSS_FN" \
     --confidence-head-alpha "$CONFIDENCE_HEAD_ALPHA" \
     --on-missing generate \
     --on-generate delete

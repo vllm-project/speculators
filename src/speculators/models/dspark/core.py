@@ -8,6 +8,7 @@ from speculators.models.dflash.core import DFlashDraftModel
 from speculators.models.dspark.config import DSparkSpeculatorConfig
 from speculators.models.dspark.metrics import compute_metrics
 from speculators.models.dspark.model_definitions import ConfidenceHead, MarkovHead
+from speculators.models.metrics import LossConfig, resolve_loss_config
 from speculators.models.utils import conditional_torch_compile
 
 __all__ = [
@@ -67,9 +68,6 @@ class DSparkDraftModel(DFlashDraftModel):
             markov_head_type=kwargs.get("markov_head_type", "vanilla"),
             enable_confidence_head=kwargs.get("enable_confidence_head", True),
             confidence_head_with_markov=kwargs.get("confidence_head_with_markov", True),
-            ce_loss_alpha=kwargs.get("ce_loss_alpha", 0.1),
-            l1_loss_alpha=kwargs.get("l1_loss_alpha", 0.9),
-            confidence_head_alpha=kwargs.get("confidence_head_alpha", 1.0),
         )
 
         model = cls(config=config)
@@ -79,13 +77,16 @@ class DSparkDraftModel(DFlashDraftModel):
 
     @staticmethod
     def get_trainer_kwargs(**kwargs) -> tuple[dict, dict]:
-        """DSpark owns its multi-term loss; only the decay gamma flows through.
-
-        The ``ce``/``tv``/``confidence`` weights are read from the saved config, and
-        ``--loss-fn`` is intentionally ignored for DSpark.
-        """
+        """Resolve DSpark's compound loss from ``--loss-fn``."""
+        loss_config = resolve_loss_config(kwargs["loss_fn"])
         gamma = kwargs.get("dflash_decay_gamma", 4.0)
-        return {"gamma": gamma}, {"gamma": gamma}
+        confidence_head_alpha = kwargs.get("confidence_head_alpha", 1.0)
+        shared = {
+            "loss_config": loss_config,
+            "gamma": gamma,
+            "confidence_head_alpha": confidence_head_alpha,
+        }
+        return dict(shared), dict(shared)
 
     @conditional_torch_compile
     def forward(
@@ -96,11 +97,11 @@ class DSparkDraftModel(DFlashDraftModel):
         verifier_last_hidden_states: torch.Tensor,  # [1, total_seq_len, hidden_size]
         document_ids: torch.Tensor,  # [1, total_seq_len]
         position_ids: torch.Tensor | None = None,  # [1, total_seq_len]
-        loss_fn=None,  # accepted for trainer-kwarg compatibility; unused by DSpark
+        loss_config: LossConfig | None = None,
         gamma: float = 4.0,
+        confidence_head_alpha: float = 1.0,
         **kwargs,
     ):
-        del loss_fn
         hidden, logits, targets, aligned_loss_mask, anchored_block_indices = (
             self._backbone_forward(
                 hidden_states,
@@ -158,9 +159,8 @@ class DSparkDraftModel(DFlashDraftModel):
             aligned_loss_mask,
             self.block_size,
             gamma=gamma,
-            ce_loss_alpha=self.config.ce_loss_alpha,
-            l1_loss_alpha=self.config.l1_loss_alpha,
-            confidence_head_alpha=self.config.confidence_head_alpha,
+            loss_config=loss_config,
+            confidence_head_alpha=confidence_head_alpha,
         )
         draft_tokens = torch.argmax(logits, dim=-1)
         return draft_tokens, loss, metrics
