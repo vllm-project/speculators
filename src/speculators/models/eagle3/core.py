@@ -102,7 +102,7 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
             self.input_norm = None
 
         if config.fc_norm:
-            self.fc_norm = torch.nn.ModuleList(
+            self.fc_norm: torch.nn.ModuleList | None = torch.nn.ModuleList(
                 [
                     self._model_definitions.norm_class(
                         self.hidden_size,
