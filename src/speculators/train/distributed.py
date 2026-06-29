@@ -93,6 +93,9 @@ def _init_sp_process_groups(rank: int, world_size: int, sp_size: int) -> None:
     """
     global _sp_group, _dp_group, _sp_size, _sp_rank, _dp_size, _dp_rank  # noqa: PLW0603
 
+    if sp_size <= 0:
+        raise ValueError(f"sp_size must be positive, got {sp_size}")
+
     if world_size % sp_size != 0:
         raise ValueError(
             f"world_size ({world_size}) must be divisible by sp_size ({sp_size})"
@@ -114,8 +117,8 @@ def _init_sp_process_groups(rank: int, world_size: int, sp_size: int) -> None:
         if rank in dp_ranks:
             dp_group = pg
 
-    assert sp_group is not None  # noqa: S101
-    assert dp_group is not None  # noqa: S101
+    if sp_group is None or dp_group is None:
+        raise RuntimeError("Failed to initialize SP/DP process groups")
 
     _sp_group = sp_group
     _dp_group = dp_group
