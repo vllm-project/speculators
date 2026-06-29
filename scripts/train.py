@@ -640,6 +640,22 @@ def parse_args():
         default=0.2,
         help="Minimum retention ratio for COD sampling in P-EAGLE (default: 0.2)",
     )
+    parser.add_argument(
+        "--sink-size",
+        type=int,
+        default=None,
+        help="Number of initial tokens per document to retain as attention sinks "
+        "(StreamingLLM). Must be set together with --max-context-window. "
+        "When unset, P-EAGLE uses full causal attention for depth-0 tokens.",
+    )
+    parser.add_argument(
+        "--max-context-window",
+        type=int,
+        default=None,
+        help="Size of the local sliding window for depth-0 KV attention "
+        "(StreamingLLM). Must be set together with --sink-size. "
+        "When unset, P-EAGLE uses full causal attention for depth-0 tokens.",
+    )
     # Dataloader parameters
     parser.add_argument(
         "--num-workers", type=int, default=12, help="Number of dataloader workers"

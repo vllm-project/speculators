@@ -133,6 +133,8 @@ class PEagleDraftModel(Eagle3DraftModel):
             depth=depth,
             lengths=lengths,
             total_seq_len=seq_length,
+            sink_size=self.config.sink_size,
+            max_context_window=self.config.max_context_window,
         )
 
         attention_mask = create_block_mask(  # type: ignore[assignment]
@@ -217,6 +219,8 @@ class PEagleDraftModel(Eagle3DraftModel):
             down_sample_ratio=kwargs.get("down_sample_ratio", 0.7),
             down_sample_ratio_min=kwargs.get("down_sample_ratio_min", 0.2),
             mask_token_id=kwargs.get("mask_token_id"),
+            sink_size=kwargs.get("sink_size"),
+            max_context_window=kwargs.get("max_context_window"),
             speculators_config=SpeculatorsConfig(
                 algorithm="peagle",
                 proposal_methods=[
