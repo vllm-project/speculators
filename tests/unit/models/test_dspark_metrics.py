@@ -26,6 +26,9 @@ class TestComputeMetrics:
         assert float(loss) < 1e-2
         accept = metrics["accept_rate_sum"] / metrics["accept_rate_total"]
         assert float(accept) > 0.99
+        # One draft slot per block accepted w.p. ~1, plus the anchor token -> ~2.
+        accept_len = metrics["accept_len_sum"] / metrics["accept_len_total"]
+        assert abs(float(accept_len) - 2.0) < 1e-2
 
     def test_confidence_target_is_overlap(self):
         # When draft == target, accept rate == 1, so a confidence logit that is
@@ -70,6 +73,23 @@ class TestComputeMetrics:
         )
         assert float(loss_conf) > float(loss_no_conf)
 
+    def test_confidence_cumprod_bias_sign(self):
+        # Draft != target so accept rate is ~0; an over-confident head (predicts
+        # accept ~1) must show a positive cumulative-product calibration bias.
+        ids = torch.tensor([[0, 1, 0, 2]])
+        logits = _ids_to_logits(ids, 8)
+        targets = _ids_to_logits(torch.tensor([[0, 3, 0, 4]]), 8)
+        loss_mask = torch.tensor([[0, 1, 0, 1]], dtype=torch.float32)
+        confidence_logits = torch.full((1, 4), 20.0)  # sigmoid ~ 1.0
+        _, metrics = compute_metrics(
+            logits, targets, confidence_logits, loss_mask, block_size=2
+        )
+        bias = (
+            metrics["confidence_cumprod_bias_sum"]
+            / metrics["confidence_cumprod_bias_total"]
+        )
+        assert float(bias) > 0.5
+
     def test_alpha_weighting(self):
         ids = torch.tensor([[0, 1, 0, 2]])
         logits = _ids_to_logits(ids, 8)
@@ -111,6 +131,9 @@ class TestComputeMetrics:
             "full_acc_sum",
             "full_acc_total",
             "position_1_acc_sum",
+            "accept_len_sum",
+            "accept_len_total",
+            "confidence_cumprod_bias_sum",
         ):
             assert key in metrics
         # all metric values must be tensors (so dist.reduce works in the trainer)

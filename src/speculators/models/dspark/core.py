@@ -5,11 +5,10 @@ from transformers import PretrainedConfig
 
 from speculators.model import SpeculatorModel
 from speculators.models.dflash.core import DFlashDraftModel
-from speculators.models.dflash.utils import get_base_indices_for_anchored_blocks
 from speculators.models.dspark.config import DSparkSpeculatorConfig
 from speculators.models.dspark.metrics import compute_metrics
 from speculators.models.dspark.model_definitions import ConfidenceHead, MarkovHead
-from speculators.models.utils import conditional_torch_compile, resolve_target_layer_ids
+from speculators.models.utils import conditional_torch_compile
 
 __all__ = [
     "DSparkDraftModel",
@@ -62,30 +61,8 @@ class DSparkDraftModel(DFlashDraftModel):
         **kwargs,
     ) -> "DSparkDraftModel":
         """Create a DSpark model from training arguments (mirrors DFlash)."""
-        from speculators.config import (  # noqa: PLC0415
-            SpeculatorsConfig,
-            VerifierConfig,
-        )
-        from speculators.proposals.greedy import (  # noqa: PLC0415
-            GreedyTokenProposalConfig,
-        )
-
-        target_layer_ids = resolve_target_layer_ids(
-            kwargs.get("target_layer_ids"), kwargs["verifier_name_or_path"]
-        )
-        verifier_config._attn_implementation = kwargs.get(  # noqa: SLF001
-            "draft_attn_impl", "simple_flex_attention"
-        )
-
-        block_size = kwargs.get("block_size", 8)
         config = DSparkSpeculatorConfig(
-            transformer_layer_config=verifier_config,
-            draft_vocab_size=kwargs["draft_vocab_size"],
-            block_size=block_size,
-            max_anchors=kwargs.get("max_anchors", 3072),
-            aux_hidden_state_layer_ids=target_layer_ids,
-            mask_token_id=kwargs.get("mask_token_id"),
-            sliding_window_non_causal=kwargs.get("sliding_window_non_causal", False),
+            **cls._build_base_config_kwargs("dspark", verifier_config, **kwargs),
             markov_rank=kwargs.get("markov_rank", 256),
             markov_head_type=kwargs.get("markov_head_type", "vanilla"),
             enable_confidence_head=kwargs.get("enable_confidence_head", True),
@@ -93,19 +70,6 @@ class DSparkDraftModel(DFlashDraftModel):
             ce_loss_alpha=kwargs.get("ce_loss_alpha", 0.1),
             l1_loss_alpha=kwargs.get("l1_loss_alpha", 0.9),
             confidence_head_alpha=kwargs.get("confidence_head_alpha", 1.0),
-            speculators_config=SpeculatorsConfig(
-                algorithm="dspark",
-                proposal_methods=[
-                    GreedyTokenProposalConfig(
-                        # First block position is the anchor, not emitted during gen.
-                        speculative_tokens=block_size - 1,
-                    )
-                ],
-                default_proposal_method="greedy",
-                verifier=VerifierConfig.from_pretrained(
-                    kwargs["verifier_name_or_path"]
-                ),
-            ),
         )
 
         model = cls(config=config)
@@ -137,64 +101,22 @@ class DSparkDraftModel(DFlashDraftModel):
         **kwargs,
     ):
         del loss_fn
-        device = hidden_states.device
-        total_seq_len = hidden_states.shape[1]
-        num_anchors = self.config.max_anchors
-
-        if position_ids is None:
-            position_ids = 1 + torch.arange(
-                total_seq_len, dtype=torch.long, device=device
-            ).unsqueeze(0)
-
-        full_attn_mask, sliding_window_attn_mask, anchor_positions, anchor_valid = (
-            self._build_attention_mask(loss_mask, document_ids, device)
-        )
-
-        mask_tokens_size = num_anchors * self.block_size
-        mask_token_ids = torch.full(
-            (1, mask_tokens_size), self.mask_token_id, dtype=torch.long, device=device
-        )
-        mask_token_ids[:, :: self.block_size] = input_ids[:, anchor_positions]
-        noise_embedding = self.embed_tokens(mask_token_ids)
-
-        fc_output = self.hidden_norm(self.fc(hidden_states))
-
-        mask_position_ids = get_base_indices_for_anchored_blocks(
-            position_ids[0, anchor_positions], self.block_size
-        )
-        position_ids = torch.cat([position_ids, mask_position_ids.unsqueeze(0)], dim=1)
-        position_embeddings = self.rotary_emb(hidden_states, position_ids)
-
-        anchored_block_indices = get_base_indices_for_anchored_blocks(
-            anchor_positions, self.block_size
-        )  # [num_anchors*block_size]
-
-        with torch.no_grad():
-            verifier_logits = self.verifier_lm_head(
-                self.verifier_norm(verifier_last_hidden_states)
-            )
-            verifier_logits = torch.roll(verifier_logits, 1, dims=1)
-            targets = verifier_logits[:, anchored_block_indices]
-
-        for layer_idx, layer in enumerate(self.layers):
-            noise_embedding = layer(
-                hidden_states=noise_embedding,
-                target_hidden=fc_output,
-                attention_mask=sliding_window_attn_mask
-                if layer_idx in self.sliding_window_indices
-                else full_attn_mask,
-                position_ids=position_ids,
-                use_cache=False,
-                position_embeddings=position_embeddings,
+        hidden, logits, targets, aligned_loss_mask, anchored_block_indices = (
+            self._backbone_forward(
+                hidden_states,
+                input_ids,
+                loss_mask,
+                verifier_last_hidden_states,
+                document_ids,
+                position_ids,
                 **kwargs,
             )
-
-        hidden = self.norm(noise_embedding)  # [1, T, hidden_size]
-        logits = self.lm_head(hidden)  # [1, T, draft_vocab_size]
+        )
 
         # DSpark: add the Markov logit bias and predict per-position confidence.
-        num_blocks = num_anchors
+        num_blocks = self.config.max_anchors
         block = self.block_size
+        mask_tokens_size = num_blocks * block
         # Ground-truth block tokens (verifier vocab); position 0 is the anchor.
         block_tokens = input_ids[0, anchored_block_indices].view(num_blocks, block)
         # prev_token_ids[:, k] is the token preceding draft position k within the block.
@@ -228,14 +150,6 @@ class DSparkDraftModel(DFlashDraftModel):
             confidence_logits = self.confidence_head(conf_features).reshape(
                 1, mask_tokens_size
             )
-
-        aligned_loss_mask = loss_mask.clone()[:, anchored_block_indices]
-        aligned_loss_mask = aligned_loss_mask * (
-            anchor_valid.repeat_interleave(self.block_size)
-            .unsqueeze(0)
-            .to(aligned_loss_mask.dtype)
-        )
-        aligned_loss_mask[:, :: self.block_size] = 0
 
         loss, metrics = compute_metrics(
             logits,

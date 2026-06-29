@@ -138,6 +138,25 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             The number of draft layers is encoded in verifier_config.num_hidden_layers,
             following the same pattern as EAGLE3.
         """
+        config = DFlashSpeculatorConfig(
+            **cls._build_base_config_kwargs("dflash", verifier_config, **kwargs)
+        )
+
+        model = cls(config=config)
+        model.load_vocab_mappings(t2d, d2t)
+        model.load_verifier_weights()
+        return model
+
+    @staticmethod
+    def _build_base_config_kwargs(
+        algorithm: str,
+        verifier_config: "PretrainedConfig",
+        **kwargs,
+    ) -> dict:
+        """Shared DFlash-family config kwargs for ``from_training_args``.
+
+        DSpark reuses this and appends its Markov/confidence/loss fields.
+        """
         from speculators.config import (  # noqa: PLC0415
             SpeculatorsConfig,
             VerifierConfig,
@@ -146,42 +165,33 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             GreedyTokenProposalConfig,
         )
 
-        # Resolve target layer IDs if not provided
         target_layer_ids = resolve_target_layer_ids(
             kwargs.get("target_layer_ids"), kwargs["verifier_name_or_path"]
         )
-
         verifier_config._attn_implementation = kwargs.get(  # noqa: SLF001
             "draft_attn_impl", "simple_flex_attention"
         )
-
-        config = DFlashSpeculatorConfig(
-            transformer_layer_config=verifier_config,
-            draft_vocab_size=kwargs["draft_vocab_size"],
-            block_size=kwargs.get("block_size", 8),
-            max_anchors=kwargs.get("max_anchors", 3072),
-            aux_hidden_state_layer_ids=target_layer_ids,
-            mask_token_id=kwargs.get("mask_token_id"),
-            sliding_window_non_causal=kwargs.get("sliding_window_non_causal", False),
-            speculators_config=SpeculatorsConfig(
-                algorithm="dflash",
+        block_size = kwargs.get("block_size", 8)
+        return {
+            "transformer_layer_config": verifier_config,
+            "draft_vocab_size": kwargs["draft_vocab_size"],
+            "block_size": block_size,
+            "max_anchors": kwargs.get("max_anchors", 3072),
+            "aux_hidden_state_layer_ids": target_layer_ids,
+            "mask_token_id": kwargs.get("mask_token_id"),
+            "sliding_window_non_causal": kwargs.get("sliding_window_non_causal", False),
+            "speculators_config": SpeculatorsConfig(
+                algorithm=algorithm,
                 proposal_methods=[
-                    GreedyTokenProposalConfig(
-                        # DFlash first position is anchor position, not used during gen
-                        speculative_tokens=kwargs.get("block_size", 8) - 1,
-                    )
+                    # First block position is the anchor, not emitted during gen.
+                    GreedyTokenProposalConfig(speculative_tokens=block_size - 1)
                 ],
                 default_proposal_method="greedy",
                 verifier=VerifierConfig.from_pretrained(
                     kwargs["verifier_name_or_path"]
                 ),
             ),
-        )
-
-        model = cls(config=config)
-        model.load_vocab_mappings(t2d, d2t)
-        model.load_verifier_weights()
-        return model
+        }
 
     @staticmethod
     def get_trainer_kwargs(**kwargs) -> tuple[dict, dict]:
@@ -268,19 +278,22 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
 
         return full_attn_mask, sliding_window_attn_mask, anchor_positions, anchor_valid
 
-    @conditional_torch_compile
-    def forward(
+    def _backbone_forward(
         self,
-        hidden_states: torch.Tensor,  # shape: [1,total_seq_len,num_hidden*hidden_size]
-        input_ids: torch.Tensor,  # shape: [1, total_seq_len]
-        loss_mask: torch.Tensor,  # shape: [1, total_seq_len]
-        verifier_last_hidden_states: torch.Tensor,  # shape: [1, total_seq_len, hidden_size] # noqa: E501
-        document_ids: torch.Tensor,  # shape: [1, total_seq_len]
-        position_ids: torch.Tensor | None = None,  # shape: [1, total_seq_len]
-        loss_fn=kl_div_loss,
-        gamma: float = 4.0,
+        hidden_states: torch.Tensor,  # [1, total_seq_len, num_hidden*hidden_size]
+        input_ids: torch.Tensor,  # [1, total_seq_len]
+        loss_mask: torch.Tensor,  # [1, total_seq_len]
+        verifier_last_hidden_states: torch.Tensor,  # [1, total_seq_len, hidden_size]
+        document_ids: torch.Tensor,  # [1, total_seq_len]
+        position_ids: torch.Tensor | None = None,  # [1, total_seq_len]
         **kwargs,
     ):
+        """Run the anchored-block draft transformer up to the draft logits.
+
+        Returns ``(hidden, logits, targets, aligned_loss_mask,
+        anchored_block_indices)``. DSpark reuses this and adds its Markov and
+        confidence heads before computing its own loss.
+        """
         device = hidden_states.device
         total_seq_len = hidden_states.shape[1]
         num_anchors = self.config.max_anchors
@@ -346,7 +359,8 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 **kwargs,
             )
 
-        logits = self.lm_head(self.norm(noise_embedding))
+        hidden = self.norm(noise_embedding)
+        logits = self.lm_head(hidden)
         # shape: [1, num_anchors*block_size, vocab_size]
 
         aligned_loss_mask = loss_mask.clone()[:, anchored_block_indices]
@@ -360,6 +374,31 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         )  # shape: [1, num_anchors*block_size]
 
         aligned_loss_mask[:, :: self.block_size] = 0
+
+        return hidden, logits, targets, aligned_loss_mask, anchored_block_indices
+
+    @conditional_torch_compile
+    def forward(
+        self,
+        hidden_states: torch.Tensor,  # shape: [1,total_seq_len,num_hidden*hidden_size]
+        input_ids: torch.Tensor,  # shape: [1, total_seq_len]
+        loss_mask: torch.Tensor,  # shape: [1, total_seq_len]
+        verifier_last_hidden_states: torch.Tensor,  # shape: [1, total_seq_len, hidden_size] # noqa: E501
+        document_ids: torch.Tensor,  # shape: [1, total_seq_len]
+        position_ids: torch.Tensor | None = None,  # shape: [1, total_seq_len]
+        loss_fn=kl_div_loss,
+        gamma: float = 4.0,
+        **kwargs,
+    ):
+        _, logits, targets, aligned_loss_mask, _ = self._backbone_forward(
+            hidden_states,
+            input_ids,
+            loss_mask,
+            verifier_last_hidden_states,
+            document_ids,
+            position_ids,
+            **kwargs,
+        )
         loss, metrics = compute_metrics(
             logits,
             targets,

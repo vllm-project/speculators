@@ -73,6 +73,12 @@ def compute_metrics(
         draft_p = softmax(logits.float(), dim=-1)
         target_p = softmax(targets.float(), dim=-1)
         accept_rate = torch.minimum(draft_p, target_p).sum(dim=-1)  # [1, T]
+        # Per-block cumulative acceptance product over the draft slots (slot 0
+        # is the anchor), shared by the accept-length and calibration metrics.
+        num_blocks = seq_len // block_size
+        accept_blocks = accept_rate.view(num_blocks, block_size)
+        draft_mask = loss_mask.to(accept_rate.dtype).view(num_blocks, block_size)[:, 1:]
+        accept_prefix = (accept_blocks[:, 1:] * draft_mask).cumprod(dim=-1)
 
     metrics: dict[str, Any] = {}
     if confidence_logits is not None:
@@ -96,6 +102,15 @@ def compute_metrics(
             # Mean predicted vs. observed acceptance — a calibration sanity check.
             metrics["confidence_pred_mean_sum"] = (conf_prob * mask_f).sum()
             metrics["confidence_pred_mean_total"] = mask_total
+            # Calibration of the cumulative acceptance product, which is what
+            # dynamic draft-length thresholding consumes (signed pred - target).
+            conf_prefix = (
+                conf_prob.view(num_blocks, block_size)[:, 1:] * draft_mask
+            ).cumprod(dim=-1)
+            metrics["confidence_cumprod_bias_sum"] = (
+                (conf_prefix - accept_prefix) * draft_mask
+            ).sum()
+            metrics["confidence_cumprod_bias_total"] = draft_mask.sum().clamp_min(1.0)
 
     # Component + total loss logging.
     metrics["ce_loss_sum"] = ce.detach().clone()
@@ -110,6 +125,14 @@ def compute_metrics(
         mask_f = loss_mask.to(accept_rate.dtype)
         metrics["accept_rate_sum"] = (accept_rate * mask_f).sum()
         metrics["accept_rate_total"] = mask_f.sum().clamp_min(1.0)
+
+    # Expected accepted draft length per block (DSpark's tau): the cumulative
+    # acceptance product summed over draft slots, plus the always-emitted anchor.
+    with torch.no_grad():
+        per_block_len = accept_prefix.sum(dim=-1) + 1.0
+        block_valid = (draft_mask.sum(dim=-1) > 0).to(accept_rate.dtype)
+        metrics["accept_len_sum"] = (per_block_len * block_valid).sum()
+        metrics["accept_len_total"] = block_valid.sum().clamp_min(1.0)
 
     # Per-position greedy accuracy (position 0 is the anchor — excluded).
     pred_ids = torch.argmax(logits, dim=-1)
