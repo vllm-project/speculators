@@ -18,6 +18,10 @@ Training metrics can be logged to TensorBoard, Weights & Biases, TrackIO, and ML
 
 During data preparation, Speculators automatically detects assistant response boundaries to build loss masks. It first tries HuggingFace's native `assistant_tokens_mask` support, then falls back to regex-based pattern detection — including stripping `<think>` blocks from reasoning models. No manual template configuration is needed for most models.
 
+## Domino Correction Head for DFlash
+
+The [DFlash](algorithms/dflash.md) speculator supports an optional **Domino correction head** that improves per-position draft accuracy with a causal GRU. The GRU encodes previous-token embeddings in each block, concatenates with backbone hidden states, and produces additive logit deltas. Training uses a scheduled dual loss that smoothly transitions from base-only to refined-only over a configurable number of steps. The Domino head adds negligible training overhead (~5%) and requires no changes at inference time.
+
 ## Performant Flex Attention
 
 Both [Eagle-3](algorithms/eagle3.md) and [DFlash](algorithms/dflash.md) models use PyTorch's `flex_attention` with `BlockMask` for efficient, structured attention patterns (causal, document-aware, and anchor-based). The Eagle-3 forward pass is wrapped with `torch.compile` for additional runtime optimization.
