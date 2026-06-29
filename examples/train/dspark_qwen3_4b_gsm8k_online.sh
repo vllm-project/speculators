@@ -119,7 +119,7 @@ python \
     --draft-vocab-size "$DRAFT_VOCAB_SIZE" \
     --epochs "$EPOCHS" \
     --lr "$LR" \
-    --scheduler-warmup-steps 100 
+    --scheduler-warmup-steps 100 \
     --total-seq-len "$SEQ_LENGTH" \
     --speculator-type "$SPECULATOR_TYPE" \
     --block-size "$BLOCK_SIZE" \
