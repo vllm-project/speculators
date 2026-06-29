@@ -812,7 +812,7 @@ def _worker_distributed_norm_float32(rank, world_size, results_dir):
 
         sd_opts = StateDictOptions(full_state_dict=True, cpu_offload=True)
         before = {
-            k: v.clone()
+            k: v.clone()  # type: ignore[union-attr]
             for k, v in get_model_state_dict(model, options=sd_opts).items()
             if k in norm_names
         }
@@ -832,7 +832,7 @@ def _worker_distributed_norm_float32(rank, world_size, results_dir):
         optimizer.step()
 
         after = {
-            k: v.clone()
+            k: v.clone()  # type: ignore[union-attr]
             for k, v in get_model_state_dict(model, options=sd_opts).items()
             if k in graded_norms
         }
