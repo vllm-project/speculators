@@ -9,6 +9,10 @@ import tempfile
 import warnings
 from pathlib import Path
 
+import torch
+import torch.distributed as dist
+from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
+
 from speculators.data_generation.preprocessing import get_tokenizer, load_processor
 
 logger = logging.getLogger("speculators")
@@ -111,6 +115,42 @@ def save_train_command(save_path: str) -> None:
         ).stdout.strip()
     except (OSError, subprocess.CalledProcessError):
         sha = "unknown"
+
+    pkg_versions: list[str] = []
+    for pkg in ("speculators", "vllm", "transformers", "torch", "compressed-tensors"):
+        try:
+            ver = importlib.metadata.version(pkg)
+        except importlib.metadata.PackageNotFoundError:
+            ver = "not installed"
+        pkg_versions.append(f"# {pkg}: {ver}")
+
+    header = "\n".join(
+        [
+            f"# Timestamp: {datetime.datetime.now(datetime.timezone.utc).isoformat()}",
+            f"# Git SHA: {sha}",
+            f"# World size: {os.environ.get('WORLD_SIZE', '1')}",
+            *pkg_versions,
+        ]
+    )
+
+    command = shlex.join(sys.argv)
+    content = f"{header}\n{command}\n"
+
+    path = Path(save_path)
+    path.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=save_path, prefix=".train_command_", suffix=".tmp")
+    tmp_path = Path(tmp)
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(content)
+        tmp_path.replace(path / "train_command.txt")
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
+
+
+def apply_fully_sharded(model: torch.nn.Module):
+    """Applies torch FSDP fully_shard to the model, wrapping layers in FSDPModule.
 
     pkg_versions: list[str] = []
     for pkg in ("speculators", "vllm", "transformers", "torch", "compressed-tensors"):
