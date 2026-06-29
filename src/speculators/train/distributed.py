@@ -169,6 +169,10 @@ def maybe_setup_distributed(sp_size: int = 1) -> None:
 
 def maybe_destroy_distributed() -> None:
     """Destroy the distributed process group if using distributed training."""
+    global _is_distributed, _local_rank, _rank, _world_size  # noqa: PLW0603
+    global _sp_size, _sp_rank, _dp_size, _dp_rank  # noqa: PLW0603
+    global _sp_group, _dp_group  # noqa: PLW0603
+
     if not _is_distributed:
         return
 
@@ -177,6 +181,17 @@ def maybe_destroy_distributed() -> None:
         "Destroyed distributed process group",
         extra={"override_rank0_filter": True},
     )
+
+    _is_distributed = False
+    _local_rank = 0
+    _rank = 0
+    _world_size = 1
+    _sp_size = 1
+    _sp_rank = 0
+    _dp_size = 1
+    _dp_rank = 0
+    _sp_group = None
+    _dp_group = None
 
 
 def apply_fully_sharded(model: torch.nn.Module):
