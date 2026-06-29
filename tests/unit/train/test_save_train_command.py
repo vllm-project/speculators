@@ -121,3 +121,16 @@ class TestCopyTrainCommand:
         cp._copy_train_command("interrupted")
 
         assert (tmp_path / "interrupted" / "train_command.txt").exists()
+
+    def test_cleanup_keep_only_best_preserves_train_command(self, tmp_path: Path):
+        (tmp_path / "train_command.txt").write_text("content")
+        (tmp_path / "0").mkdir()
+        (tmp_path / "1").mkdir()
+        (tmp_path / "1" / "model.safetensors").touch()
+
+        cp = SingleGPUCheckpointer(str(tmp_path))
+        cp.update_best_symlink(1)
+        cp.cleanup_keep_only_best(1)
+
+        assert (tmp_path / "train_command.txt").exists()
+        assert not (tmp_path / "0").exists()

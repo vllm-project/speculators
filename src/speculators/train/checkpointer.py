@@ -212,6 +212,8 @@ class BaseCheckpointer:
         if not keep_dir.exists() or not keep_dir.is_dir():
             raise FileNotFoundError(f"Best epoch dir does not exist: {keep_dir}")
 
+        train_cmd_file = self.path / self.TRAIN_COMMAND_FILENAME
+
         for child in self.path.iterdir():
             # Keep the symlink itself
             if child == best_link:
@@ -219,6 +221,9 @@ class BaseCheckpointer:
 
             # Keep the best epoch directory
             if child == keep_dir:
+                continue
+
+            if child == train_cmd_file:
                 continue
 
             # Delete numbered epoch directories and any other stray dirs/files
