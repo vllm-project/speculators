@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from speculators import SpeculatorModelConfig
 from speculators.models.eagle3.config import Eagle3SpeculatorConfig
@@ -56,6 +56,26 @@ class PEagleSpeculatorConfig(Eagle3SpeculatorConfig):
         description="Token ID used for padding unused positions in parallel groups",
     )
 
+    sink_size: int | None = Field(
+        default=None,
+        description=(
+            "Number of initial tokens per document retained as attention "
+            "sinks (StreamingLLM). Must be set together with "
+            "max_context_window. When None, full causal attention is used."
+        ),
+        ge=1,
+    )
+
+    max_context_window: int | None = Field(
+        default=None,
+        description=(
+            "Size of the local sliding window for depth-0 KV attention "
+            "(StreamingLLM). Must be set together with sink_size. "
+            "When None, full causal attention is used."
+        ),
+        ge=1,
+    )
+
     # Override Eagle3 default: P-EAGLE requires trainable embeddings
     # (matches p-eagle-train)
     embed_requires_grad: bool = Field(
@@ -65,3 +85,11 @@ class PEagleSpeculatorConfig(Eagle3SpeculatorConfig):
             "training (True for P-EAGLE)"
         ),
     )
+
+    @model_validator(mode="after")
+    def _validate_streaming_llm(self) -> "PEagleSpeculatorConfig":
+        if (self.sink_size is None) != (self.max_context_window is None):
+            raise ValueError(
+                "sink_size and max_context_window must both be set or both be None"
+            )
+        return self
