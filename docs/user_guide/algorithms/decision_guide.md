@@ -8,7 +8,7 @@ Speculators currently supports four speculative decoding algorithms: **Eagle-3**
 
 **P-EAGLE** extends Eagle-3 with parallel multi-token prediction across multiple depths, using COD sampling for memory-efficient training.
 
-**DFlash** predicts all draft tokens in a single forward pass using block-based prediction with anchor points.
+**DFlash** predicts all draft tokens in a single forward pass using block-based prediction with anchor points. DFlash also supports an optional **Domino correction head** — a causal GRU that refines base logits for improved per-position accuracy at negligible training overhead.
 
 **MTP** finetunes the model's native multi-token prediction head on domain-specific data. Unlike the other algorithms, MTP does not train from scratch -- it starts from pre-existing MTP layers and is only available for models with native MTP support.
 

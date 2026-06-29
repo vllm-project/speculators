@@ -27,6 +27,19 @@ Pretrained DFlash speculator models are available on HuggingFace from the [RedHa
 
 > **Note:** DFlash is under active development. Not all hardware configurations have been validated yet — refer to individual model cards for details.
 
+## Domino Variant
+
+Domino is a lightweight causal correction head that can be added on top of the DFlash backbone. Instead of using the raw DFlash base logits at every block position, Domino refines the suffix positions with a single-layer GRU that encodes previous-token embeddings, concatenates the GRU output with the backbone hidden states, and projects through a bottleneck MLP to produce additive logit deltas.
+
+|                           | DFlash               | DFlash + Domino                                              |
+| ------------------------- | -------------------- | ------------------------------------------------------------ |
+| **Draft path**            | Base logits → argmax | Base logits → GRU correction → refined logits                |
+| **Per-position accuracy** | Good                 | Better (GRU conditions on prior tokens)                      |
+| **Training cost**         | ~1×                  | ~1.05× (negligible overhead)                                 |
+| **Inference**             | Same                 | Same (Domino is training-only; fused into base at inference) |
+
+Select Domino via `--projector-type domino` when training (see the [Train DFlash tutorial](../tutorials/train_dflash_online.md#domino-variant)). No changes are needed for inference — the trained checkpoint loads as a standard DFlash speculator.
+
 ## Research & Citation
 
 DFlash is based on research from Z Lab: [DFlash Project Page](https://z-lab.ai/projects/dflash/) | [arXiv Paper](https://arxiv.org/abs/2602.06036)
