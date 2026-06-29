@@ -150,36 +150,17 @@ def save_train_command(save_path: str) -> None:
 
 
 def apply_fully_sharded(model: torch.nn.Module):
-    """Applies torch FSDP fully_shard to the model, wrapping layers in FSDPModule.
-
-    pkg_versions: list[str] = []
-    for pkg in ("speculators", "vllm", "transformers", "torch", "compressed-tensors"):
-        try:
-            ver = importlib.metadata.version(pkg)
-        except importlib.metadata.PackageNotFoundError:
-            ver = "not installed"
-        pkg_versions.append(f"# {pkg}: {ver}")
-
-    header = "\n".join(
-        [
-            f"# Timestamp: {datetime.datetime.now(datetime.timezone.utc).isoformat()}",
-            f"# Git SHA: {sha}",
-            f"# World size: {os.environ.get('WORLD_SIZE', '1')}",
-            *pkg_versions,
-        ]
+    """Applies torch FSDP fully_shard to the model, wrapping layers in FSDPModule."""
+    mp_policy = MixedPrecisionPolicy(
+        param_dtype=torch.bfloat16,
+        reduce_dtype=torch.float32,
     )
-
-    command = shlex.join(sys.argv)
-    content = f"{header}\n{command}\n"
-
-    path = Path(save_path)
-    path.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=save_path, prefix=".train_command_", suffix=".tmp")
-    tmp_path = Path(tmp)
-    try:
-        with os.fdopen(fd, "w") as f:
-            f.write(content)
-        tmp_path.replace(path / "train_command.txt")
-    finally:
-        if tmp_path.exists():
-            tmp_path.unlink()
+    for name, module in model.named_modules():
+        if len(list(module.children())) == 0 and len(list(module.parameters())) > 0:
+            # Skip buffer-only modules (no trainable params)
+            fully_shard(module, mp_policy=mp_policy)
+        elif isinstance(module, torch.nn.ModuleList):
+            for child in module:
+                if len(list(child.parameters())) > 0:
+                    fully_shard(child, mp_policy=mp_policy)
+    fully_shard(model, mp_policy=mp_policy)
