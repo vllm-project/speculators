@@ -1504,6 +1504,21 @@ def test_load_hf_dataset_spec_parsing(spec, expected_id, expected_name, expected
     assert normalize_fn is None
 
 
+# A small public dataset already in conversations format, used to exercise the
+# real hf: download path end to end (the RFC asks for a small public dataset).
+HF_CONV_DATASET = "philschmid/guanaco-sharegpt-style"
+
+
+@pytest.mark.sanity
+def test_load_raw_dataset_hf_real_download():
+    """End-to-end hf: load of a small public conversations dataset."""
+    dataset, normalize_fn = load_raw_dataset(f"hf:{HF_CONV_DATASET}")
+
+    assert normalize_fn is None
+    assert "conversations" in dataset.column_names
+    assert len(dataset) > 0
+
+
 @pytest.mark.sanity
 def test_load_hf_dataset_non_conversations_raises():
     """An hf: dataset without a conversations column fails loudly."""
