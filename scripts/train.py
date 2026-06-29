@@ -994,6 +994,55 @@ def parse_args():
         default=1.0,
         help="DSpark: weight of the confidence-head BCE term (default: 1.0).",
     )
+    # Domino-specific arguments (DFlash sub-mode)
+    parser.add_argument(
+        "--projector-type",
+        type=str,
+        default="dflash",
+        choices=["dflash", "domino"],
+        help="Projector type for DFlash. 'dflash' (default) uses standard parallel "
+        "logits. 'domino' adds a causal GRU correction head.",
+    )
+    parser.add_argument(
+        "--gru-hidden-dim",
+        type=int,
+        default=1024,
+        help="Hidden dimension for Domino GRU head (default: 1024)",
+    )
+    parser.add_argument(
+        "--emb-dim",
+        type=int,
+        default=256,
+        help="Bottleneck dimension for Domino embed projection (default: 256)",
+    )
+    parser.add_argument(
+        "--pure-draft-prefix-len",
+        type=int,
+        default=1,
+        help="Number of leading positions using pure DFlash without Domino correction "
+        "(default: 1)",
+    )
+    parser.add_argument(
+        "--shift-label",
+        action="store_true",
+        default=True,
+        help="Shift labels so the first predicted position is anchor+1 "
+        "(enabled by default for Domino)",
+    )
+    parser.add_argument(
+        "--domino-lambda-start",
+        type=float,
+        default=1.0,
+        help="Initial weight of the base loss in the Domino loss schedule "
+        "(default: 1.0)",
+    )
+    parser.add_argument(
+        "--domino-lambda-decay-steps",
+        type=int,
+        default=None,
+        help="Number of training steps to decay lambda_base from start to 0 "
+        "(default: None, no decay). Suggested: ~15000 for typical runs.",
+    )
     parser.add_argument(
         "--draft-attn-impl",
         type=str,

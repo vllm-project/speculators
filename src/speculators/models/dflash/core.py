@@ -13,6 +13,7 @@ from speculators.model import DraftVocabMixin, SpeculatorModel
 from speculators.models.attention import create_float_mask
 from speculators.models.dflash import DFlashSpeculatorConfig
 from speculators.models.dflash.attention import create_anchor_block_mask_mod
+from speculators.models.dflash.domino import DominoHead
 from speculators.models.dflash.metrics import compute_metrics
 from speculators.models.dflash.model_definitions import Qwen3DFlashDecoderLayer
 from speculators.models.dflash.utils import (
@@ -105,6 +106,14 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         )
         self.verifier_norm.weight.requires_grad = False
         self.block_size = config.block_size
+        self.projector_type = config.projector_type
+        if self.projector_type == "domino":
+            self.domino_head = DominoHead(
+                hidden_size=self.hidden_size,
+                gru_hidden_dim=config.gru_hidden_dim,
+                emb_dim=config.emb_dim,
+                draft_vocab_size=self.draft_vocab_size,
+            )
         self.post_init()
 
     @property
@@ -181,6 +190,13 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             "aux_hidden_state_layer_ids": target_layer_ids,
             "mask_token_id": kwargs.get("mask_token_id"),
             "sliding_window_non_causal": kwargs.get("sliding_window_non_causal", False),
+            "projector_type": kwargs.get("projector_type", "dflash"),
+            "shift_label": kwargs.get("shift_label", True),
+            "pure_draft_prefix_len": kwargs.get("pure_draft_prefix_len", 1),
+            "emb_dim": kwargs.get("emb_dim", 256),
+            "gru_hidden_dim": kwargs.get("gru_hidden_dim", 1024),
+            "lambda_base_start": kwargs.get("lambda_base_start", 1.0),
+            "lambda_base_decay_steps": kwargs.get("lambda_base_decay_steps"),
             "speculators_config": SpeculatorsConfig(
                 algorithm=algorithm,
                 proposal_methods=[
@@ -379,8 +395,6 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
 
         aligned_loss_mask[:, :: self.block_size] = 0
 
-        return hidden, logits, targets, aligned_loss_mask, anchored_block_indices
-
     @conditional_torch_compile
     def forward(
         self,
@@ -395,24 +409,92 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         max_anchors: int = 3072,
         **kwargs,
     ):
-        _, logits, targets, aligned_loss_mask, _ = self._backbone_forward(
-            hidden_states,
-            input_ids,
-            loss_mask,
-            verifier_last_hidden_states,
-            document_ids,
-            position_ids,
-            max_anchors=max_anchors,
-            **kwargs,
+        hidden, logits, targets, aligned_loss_mask, anchored_block_indices = (
+            self._backbone_forward(
+                hidden_states,
+                input_ids,
+                loss_mask,
+                verifier_last_hidden_states,
+                document_ids,
+                position_ids,
+                max_anchors=max_anchors,
+                **kwargs,
+            )
         )
-        loss, metrics = compute_metrics(
-            logits,
-            targets,
-            aligned_loss_mask,
-            self.block_size,
-            gamma=gamma,
-            loss_config=loss_config,
-        )
-        draft_tokens = torch.argmax(logits, dim=-1)
+
+        if self.projector_type == "domino":
+            global_step = kwargs.get("global_step", 0)
+            decay_steps = self.config.lambda_base_decay_steps
+            if decay_steps is not None and decay_steps > 0:
+                progress = min(global_step / decay_steps, 1.0)
+                lambda_base = self.config.lambda_base_start * (1.0 - progress)
+                lambda_base = max(0.0, min(1.0, lambda_base))
+            else:
+                lambda_base = 0.0
+
+            num_anchors = hidden.shape[1] // self.block_size
+            hidden_4d = hidden.reshape(1, num_anchors, self.block_size, -1)
+            base_logits_4d = logits.reshape(1, num_anchors, self.block_size, -1)
+
+            suffix_start = self.config.pure_draft_prefix_len
+            if not self.config.shift_label:
+                suffix_start = 1 + self.config.pure_draft_prefix_len
+
+            prev_token_ids = input_ids[:, anchored_block_indices]
+            prev_token_ids_4d = prev_token_ids.reshape(1, num_anchors, self.block_size)
+
+            refined_logits_4d = self.domino_head(
+                hidden_states_4d=hidden_4d,
+                base_logits_4d=base_logits_4d,
+                prev_token_ids=prev_token_ids_4d,
+                suffix_start=suffix_start,
+                embed_tokens=self.embed_tokens,
+            )
+            refined_logits = refined_logits_4d.reshape(
+                1, num_anchors * self.block_size, -1
+            )
+
+            base_loss, base_metrics = compute_metrics(
+                logits,
+                targets,
+                aligned_loss_mask,
+                self.block_size,
+                gamma=gamma,
+                loss_config=loss_config,
+            )
+            final_loss, final_metrics = compute_metrics(
+                refined_logits,
+                targets,
+                aligned_loss_mask,
+                self.block_size,
+                gamma=gamma,
+                loss_config=loss_config,
+            )
+            loss = (1.0 - lambda_base) * final_loss + lambda_base * base_loss
+
+            metrics = {
+                "loss_sum": loss.detach().clone(),
+                "loss_total": torch.tensor(1.0, device=logits.device),
+                "base_loss_sum": base_loss.detach().clone(),
+                "base_loss_total": torch.tensor(1.0, device=logits.device),
+                "full_acc_sum": base_metrics["full_acc_sum"],
+                "full_acc_total": base_metrics["full_acc_total"],
+                "final_loss_sum": final_loss.detach().clone(),
+                "final_loss_total": torch.tensor(1.0, device=logits.device),
+                "final_full_acc_sum": final_metrics["full_acc_sum"],
+                "final_full_acc_total": final_metrics["full_acc_total"],
+                **{k: v for k, v in final_metrics.items() if k.startswith("position_")},
+            }
+            draft_tokens = torch.argmax(refined_logits, dim=-1)
+        else:
+            loss, metrics = compute_metrics(
+                logits,
+                targets,
+                aligned_loss_mask,
+                self.block_size,
+                gamma=gamma,
+                loss_config=loss_config,
+            )
+            draft_tokens = torch.argmax(logits, dim=-1)
 
         return draft_tokens, loss, metrics

@@ -70,6 +70,46 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
         "bidirectional.",
     )
 
+    projector_type: str = Field(
+        default="dflash",
+        description="Projector type: 'dflash' (default) or 'domino' (adds causal "
+        "correction head)",
+    )
+
+    shift_label: bool = Field(
+        default=True,
+        description="Shift labels by 1 so the first predicted position is anchor+1 "
+        "(aligns with DFlash's implicit target shift via torch.roll)",
+    )
+
+    pure_draft_prefix_len: int = Field(
+        default=1,
+        description="Number of leading block positions that use pure DFlash without "
+        "Domino correction",
+    )
+
+    emb_dim: int = Field(
+        default=256,
+        description="Bottleneck dimension for Domino embed projection MLP",
+    )
+
+    gru_hidden_dim: int = Field(
+        default=1024,
+        description="Hidden dimension for Domino prefix GRU",
+    )
+
+    lambda_base_start: float = Field(
+        default=1.0,
+        description="Initial weight of the base loss in the Domino loss schedule",
+    )
+
+    lambda_base_decay_steps: int | None = Field(
+        default=None,
+        description="Number of training steps over which lambda_base decays from "
+        "lambda_base_start to 0. If None, no decay is applied (lambda_base stays "
+        "at start value)",
+    )
+
     @field_serializer("transformer_layer_config")
     def serialize_transformer_config(self, value: PretrainedConfig) -> dict:
         """Serialize transformer config to dict."""
