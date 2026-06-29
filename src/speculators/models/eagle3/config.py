@@ -1,6 +1,6 @@
 from typing import Any, Literal
 
-from pydantic import Field, field_serializer, field_validator
+from pydantic import Field, field_serializer, field_validator, model_validator
 from transformers import AutoConfig, PretrainedConfig
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
@@ -85,6 +85,15 @@ class Eagle3SpeculatorConfig(SpeculatorModelConfig):
         default=False,
         description="Whether embedding layer weights require gradients during training",
     )
+
+    @model_validator(mode="after")
+    def _check_norm_flags(self) -> "Eagle3SpeculatorConfig":
+        if self.norm_before_fc and self.fc_norm:
+            raise ValueError(
+                "norm_before_fc and fc_norm are mutually exclusive — "
+                "enable one or the other, not both."
+            )
+        return self
 
     @field_serializer("transformer_layer_config")
     def serialize_transformer_config(self, value: PretrainedConfig) -> dict:

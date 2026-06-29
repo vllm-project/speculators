@@ -542,6 +542,17 @@ def test_eagle3_config_norm_output_defaults():
 
 
 @pytest.mark.sanity
+def test_eagle3_config_rejects_both_norm_before_fc_and_fc_norm():
+    with pytest.raises(ValidationError, match="mutually exclusive"):
+        Eagle3SpeculatorConfig(
+            transformer_layer_config=copy.deepcopy(TINY_LLAMA_CONFIG),
+            norm_before_fc=True,
+            fc_norm=True,
+            speculators_config=_make_eagle3_speculators_config(),
+        )
+
+
+@pytest.mark.sanity
 def test_eagle3_config_fc_norm_roundtrip():
     original = Eagle3SpeculatorConfig(
         transformer_layer_config=copy.deepcopy(TINY_LLAMA_CONFIG),
