@@ -665,11 +665,14 @@ def build_dataset_from_render(
     """Tokenize via vLLM render endpoint instead of local HF apply_chat_template."""
     results: dict[str, list] = {"input_ids": [], "loss_mask": [], "seq_len": []}
     has_tools = "tools" in dataset.column_names
-
-    # Regex fallback for when the render endpoint returns loss_mask=null
-    # (template lacks {% generation %} tags).
-    assistant_pattern = _detect_assistant_pattern(processor)
     tokenizer = get_tokenizer(processor)
+
+    # Regex fallback for conversations the render endpoint returns no mask for
+    # (template lacks {% generation %} tags). Detected lazily, so a run the
+    # server masks completely never fails here.
+    assistant_pattern: str | None = None
+    server_mask_count = 0
+    regex_fallback_count = 0
 
     for idx in range(len(dataset)):
         row = dataset[idx]
@@ -697,7 +700,11 @@ def build_dataset_from_render(
 
         if loss_mask_raw is not None:
             loss_mask = torch.tensor(loss_mask_raw, dtype=torch.long)
+            server_mask_count += 1
         else:
+            if assistant_pattern is None:
+                assistant_pattern = _detect_assistant_pattern(processor)
+            regex_fallback_count += 1
             text = tokenizer.decode(token_ids)
             encoded = tokenizer(
                 text,
@@ -724,6 +731,11 @@ def build_dataset_from_render(
         results["input_ids"].append(torch.tensor(token_ids, dtype=torch.long))
         results["loss_mask"].append(loss_mask)
         results["seq_len"].append(len(token_ids))
+
+    log.info(
+        f"Render masking: {server_mask_count} conversations used the vLLM server "
+        f"mask, {regex_fallback_count} used the local regex fallback."
+    )
 
     out = HFDataset.from_dict(results)
     out.set_format(type="torch")

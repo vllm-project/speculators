@@ -88,3 +88,29 @@ def test_regex_fallback_when_loss_mask_is_none(processor, tokenizer):
     masked_ids = [t for t, m in zip(ids, mask.tolist(), strict=False) if m]
     decoded = tokenizer.decode(masked_ids)
     assert "Paris" in decoded
+
+
+@pytest.mark.sanity
+def test_full_server_mask_skips_local_pattern_detection(processor, tokenizer):
+    """When the server masks every conversation, the local regex pattern is
+    never detected -- so a model whose detection would raise still succeeds."""
+    ids = tokenizer.apply_chat_template(
+        CONV, tokenize=True, add_generation_prompt=False, return_dict=False
+    )
+    mask = [0] * len(ids)
+    mask[-1] = 1
+
+    with (
+        _mock_render(list(ids), loss_mask=mask),
+        patch(
+            "speculators.data_generation.preprocessing._detect_assistant_pattern",
+            side_effect=ValueError("cannot detect"),
+        ) as detect,
+    ):
+        ds = build_dataset_from_render(
+            _make_dataset(), "http://fake", processor, max_length=4096
+        )
+
+    detect.assert_not_called()
+    assert len(ds) == 1
+    assert ds[0]["loss_mask"].sum().item() == 1
