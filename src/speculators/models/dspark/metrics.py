@@ -57,7 +57,7 @@ def compute_dspark_metrics(
     flat_logits = logits.reshape(-1, vocab_size)
     flat_targets = targets.reshape(-1)
     flat_weights = loss_weight_mask.reshape(-1)
-    loss_per_token = F.cross_entropy(flat_logits, flat_targets, reduction="none")
+    loss_per_token = F.cross_entropy(flat_logits.float(), flat_targets, reduction="none")
     ce_loss_num = (loss_per_token * flat_weights).sum()
     ce_loss_den = flat_weights.sum()
 

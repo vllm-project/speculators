@@ -31,7 +31,7 @@ VLLM_PORT=8000
 MAX_SAMPLES=5000
 SEQ_LENGTH=4096
 EPOCHS=5
-LR=3e-4
+LR=5e-5
 
 # DSpark-specific parameters
 SPECULATOR_TYPE="dspark"
@@ -119,6 +119,7 @@ python \
     --draft-vocab-size "$DRAFT_VOCAB_SIZE" \
     --epochs "$EPOCHS" \
     --lr "$LR" \
+    --scheduler-warmup-steps 100 
     --total-seq-len "$SEQ_LENGTH" \
     --speculator-type "$SPECULATOR_TYPE" \
     --block-size "$BLOCK_SIZE" \
