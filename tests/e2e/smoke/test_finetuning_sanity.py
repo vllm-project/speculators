@@ -111,7 +111,9 @@ def test_finetuning_weight_sanity(tmp_path: Path):
     logger.info(
         "Training finished. Loading finetuned weights from %s", tmp_path / "ckpt"
     )
-    ckpt_dir = next((tmp_path / "ckpt").glob("*"))
+    ckpt_dir = next(
+        d for d in (tmp_path / "ckpt").iterdir() if d.is_dir() and d.name.isdigit()
+    )
     finetuned_sd = {}
     for f in ckpt_dir.glob("*.safetensors"):
         finetuned_sd.update(load_file(str(f)))

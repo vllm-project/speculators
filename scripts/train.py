@@ -538,7 +538,7 @@ def main(args: argparse.Namespace):  # noqa: C901
         # hidden_states_dtype, so save the dry-run checkpoint in that dtype too
         # rather than the float32 the model is built in.
         draft_model.to(hidden_states_dtype)
-        if local_rank == 0:
+        if rank == 0:
             logger.info(
                 "[dry-run] Saving initialized checkpoint (%s) to '%s'",
                 hidden_states_dtype,
