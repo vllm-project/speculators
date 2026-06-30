@@ -127,14 +127,11 @@ def _make_trainer(
     trained_steps: list[tuple[int, int, int]],
     resume: bool = False,
     epochs: int = 1,
-    is_distributed: bool = False,
 ) -> _MockTrainer:
     cfg = TrainerConfig(
         save_path=save_path,
         num_epochs=epochs,
         lr=1e-4,
-        local_rank=0,
-        is_distributed=is_distributed,
         resume_from_checkpoint=resume,
         checkpoint_freq=0.3,
         log_freq=1,
@@ -280,8 +277,8 @@ def test_distributed_mid_epoch_checkpoint_rank_gate(
         rank0 = _make_trainer(
             tmpdir,
             trained_steps=trained_steps,
-            is_distributed=True,
         )
+        rank0.is_distributed = True
         monkeypatch.setattr(torch.distributed, "get_rank", lambda: 0)
         rank0.maybe_save_checkpoint(0, local_step=step_interval)
 
@@ -295,8 +292,8 @@ def test_distributed_mid_epoch_checkpoint_rank_gate(
         rank1 = _make_trainer(
             tmpdir,
             trained_steps=rank1_steps,
-            is_distributed=True,
         )
+        rank1.is_distributed = True
         monkeypatch.setattr(torch.distributed, "get_rank", lambda: 1)
         rank1.maybe_save_checkpoint(0, local_step=step_interval)
 
@@ -392,8 +389,6 @@ def test_fast_skip_sampler_slice_avoids_skipped_getitem(
             save_path=tmpdir,
             num_epochs=1,
             lr=1e-4,
-            local_rank=0,
-            is_distributed=False,
             resume_from_checkpoint=False,
             checkpoint_freq=0.3,
             log_freq=1,

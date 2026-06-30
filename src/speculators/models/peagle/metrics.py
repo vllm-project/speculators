@@ -1,15 +1,17 @@
 """Metrics and loss functions for P-EAGLE draft model."""
 
-from collections.abc import Callable
 from typing import Any
 
 import torch
 
 from speculators.models.metrics import (
+    LossConfig,
+    compound_loss,
     compute_accuracy_multi_step,
     kl_div_loss,
-    loss_function,
 )
+
+_DEFAULT_LOSS_CONFIG: LossConfig = {"kl_div": (kl_div_loss, 1.0)}
 
 
 def compute_metrics(
@@ -19,7 +21,7 @@ def compute_metrics(
     anchor_pos: torch.Tensor,
     depth: torch.Tensor,
     num_depths: int,
-    loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = kl_div_loss,
+    loss_config: LossConfig | None = None,
 ) -> tuple[torch.Tensor, dict[str, Any]]:
     """Compute loss and accuracy metrics for P-EAGLE predictions.
 
@@ -31,13 +33,13 @@ def compute_metrics(
             sampling chain started from [total_sampled]
         depth: Which COD sampling round each element belongs to [total_sampled]
         num_depths: Number of parallel depths
-        loss_fn: Loss function.
+        loss_config: Mapping of ``{name: (loss_fn, weight)}``.
 
     Returns:
         Tuple of (loss, metrics_dict)
     """
-    if loss_fn is None:
-        loss_fn = kl_div_loss
+    if loss_config is None:
+        loss_config = _DEFAULT_LOSS_CONFIG
     device = logits.device
 
     # TODO: batch size is always 1 for P-EAGLE; unsqueeze is only to match the
@@ -45,8 +47,8 @@ def compute_metrics(
     orig_positions = anchor_pos + depth  # [total_sampled]
     sampled_loss_mask = loss_mask[:, orig_positions]  # [1, total_sampled]
 
-    loss = loss_function(
-        logits, targets, sampled_loss_mask, depth.unsqueeze(0), loss_fn=loss_fn
+    loss, term_losses = compound_loss(
+        logits, targets, sampled_loss_mask, depth.unsqueeze(0), loss_config=loss_config
     )
 
     with torch.no_grad():
@@ -58,12 +60,16 @@ def compute_metrics(
             pred_ids, target_ids, sampled_loss_mask, depth.unsqueeze(0), num_depths
         )
 
+    ones = torch.tensor(1.0, device=device)
     metrics: dict[str, Any] = {
         "loss_sum": loss.detach(),
-        "loss_total": torch.tensor(1.0, device=device),
+        "loss_total": ones,
         "full_acc_sum": correct_per_pos.sum(),
         "full_acc_total": total_per_pos.sum(),
     }
+    for term_name, term_val in term_losses.items():
+        metrics[f"{term_name}_sum"] = term_val
+        metrics[f"{term_name}_total"] = ones
     for d in range(num_depths):
         metrics[f"position_{d}_acc_sum"] = correct_per_pos[d]
         metrics[f"position_{d}_acc_total"] = total_per_pos[d]
