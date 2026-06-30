@@ -184,11 +184,11 @@ python scripts/train.py \
   --num-layers 5 \
   --draft-vocab-size 32000 \
   --target-layer-ids 2 18 33 \
-  --gru-hidden-dim 1024 \
-  --emb-dim 256 \
-  --pure-draft-prefix-len 1 \
+  --domino-gru-hidden-dim 1024 \
+  --domino-emb-dim 256 \
+  --domino-pure-draft-prefix-len 1 \
   --domino-lambda-start 1.0 \
-  --domino-lambda-decay-steps 15000 \
+  --domino-lambda-decay-steps 30000 \
   --epochs 5 \
   --lr 1e-4
 ```
@@ -196,11 +196,11 @@ python scripts/train.py \
 **Additional Domino-specific parameters:**
 
 - `--projector-type domino` — Enable the Domino correction head (default: `dflash`)
-- `--gru-hidden-dim 1024` — Hidden dimension for the GRU
-- `--emb-dim 256` — Bottleneck dimension for the projection MLP
-- `--pure-draft-prefix-len 1` — Number of suffix positions left uncorrected
+- `--domino-gru-hidden-dim 1024` — Hidden dimension for the GRU
+- `--domino-emb-dim 256` — Bottleneck dimension for the projection MLP
+- `--domino-pure-draft-prefix-len 1` — Number of suffix positions left uncorrected
 - `--domino-lambda-start 1.0` — Base loss starts at 100% weight
-- `--domino-lambda-decay-steps 15000` — Linearly transitions to 100% final loss over 15K steps
+- `--domino-lambda-decay-steps 30000` — Linearly transitions to 100% final loss over 30K steps
 
 During inference, the same checkpoint loads as a DFlash speculator — no extra serving configuration is needed.
 

@@ -108,11 +108,10 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
         description="Initial weight of the base loss in the Domino loss schedule",
     )
 
-    lambda_base_decay_steps: int | None = Field(
-        default=None,
+    lambda_base_decay_steps: int = Field(
+        default=30000,
         description="Number of training steps over which lambda_base decays from "
-        "lambda_base_start to 0. If None, no decay is applied (lambda_base stays "
-        "at start value)",
+        "lambda_base_start to 0 (default: 30000). Pass 0 to disable decay.",
     )
 
     @field_serializer("transformer_layer_config")

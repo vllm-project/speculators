@@ -69,6 +69,11 @@ class ModelSpec:
 DFLASH_SPEC = ModelSpec(
     name="dflash", factory=make_dflash_model, forward_kwargs={"max_anchors": 8}
 )
+DOMINO_SPEC = ModelSpec(
+    name="domino",
+    factory=partial(make_dflash_model, projector_type="domino", lambda_base_start=0.0),
+    forward_kwargs={"max_anchors": 8},
+)
 EAGLE3_SPEC = ModelSpec(
     name="eagle3", factory=make_eagle3_model, forward_kwargs={"ttt_steps": 2}
 )
@@ -92,6 +97,7 @@ MTP_SPEC = ModelSpec(
 
 ALL_SPECS = [
     pytest.param(DFLASH_SPEC, id="dflash"),
+    pytest.param(DOMINO_SPEC, id="domino"),
     pytest.param(EAGLE3_SPEC, id="eagle3"),
     pytest.param(PEAGLE_SPEC, id="peagle"),
     pytest.param(MTP_SPEC, id="mtp", marks=_requires_qwen3_5),
@@ -307,6 +313,60 @@ class TestDFlashParams:
                 rtol=1e-3,
                 msg=f"{backend} loss diverges from {ref_backend}",
             )
+
+
+@requires_cuda
+class TestDominoParams:
+    def test_domino_head_receives_gradient(self):
+        model = make_dflash_model(projector_type="domino", lambda_base_start=0.0)
+        samples = _make_samples([128])
+        batch = make_batch(max_len=MAX_LEN, samples=samples, hidden_size=HIDDEN_SIZE)
+        _, loss, metrics = model(**batch)
+        loss.backward()
+        grad = model.domino_head.prefix_gru.weight_ih_l0.grad
+        assert isinstance(grad, torch.Tensor)
+        assert grad.abs().sum().item() > 0
+
+    @pytest.mark.parametrize(
+        ("lambda_base_start", "lambda_base_decay_steps"),
+        [
+            (1.0, 100),
+            (0.5, 0),
+            (0.0, 0),
+        ],
+    )
+    def test_lambda_schedule_variants(self, lambda_base_start, lambda_base_decay_steps):
+        model = make_dflash_model(
+            projector_type="domino",
+            lambda_base_start=lambda_base_start,
+            lambda_base_decay_steps=lambda_base_decay_steps,
+        )
+        samples = _make_samples([128])
+        batch = make_batch(max_len=MAX_LEN, samples=samples, hidden_size=HIDDEN_SIZE)
+        _, loss, metrics = model(**batch, global_step=50)
+        assert loss.isfinite()
+        loss.backward()
+
+    def test_domino_reports_dual_metrics(self):
+        model = make_dflash_model(projector_type="domino", lambda_base_start=0.0)
+        samples = _make_samples([128])
+        batch = make_batch(max_len=MAX_LEN, samples=samples, hidden_size=HIDDEN_SIZE)
+        _, _, metrics = model(**batch)
+        for key in ["base_loss_sum", "final_loss_sum", "final_full_acc_sum"]:
+            assert key in metrics, f"Missing domino metric: {key}"
+
+    @pytest.mark.parametrize("pure_draft_prefix_len", [0, 1, 3])
+    def test_varying_prefix_len(self, pure_draft_prefix_len):
+        model = make_dflash_model(
+            projector_type="domino",
+            lambda_base_start=0.0,
+            pure_draft_prefix_len=pure_draft_prefix_len,
+        )
+        samples = _make_samples([128])
+        batch = make_batch(max_len=MAX_LEN, samples=samples, hidden_size=HIDDEN_SIZE)
+        _, loss, _ = model(**batch)
+        assert loss.isfinite()
+        loss.backward()
 
 
 @requires_cuda
