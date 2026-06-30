@@ -395,6 +395,8 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
 
         aligned_loss_mask[:, :: self.block_size] = 0
 
+        return hidden, logits, targets, aligned_loss_mask, anchored_block_indices
+
     @conditional_torch_compile
     def forward(
         self,
@@ -430,7 +432,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 lambda_base = self.config.lambda_base_start * (1.0 - progress)
                 lambda_base = max(0.0, min(1.0, lambda_base))
             else:
-                lambda_base = self.config.lambda_base_start
+                lambda_base = 0.0
 
             num_anchors = hidden.shape[1] // self.block_size
             hidden_4d = hidden.reshape(1, num_anchors, self.block_size, -1)
@@ -485,7 +487,6 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 "final_full_acc_total": final_metrics["full_acc_total"],
                 **{k: v for k, v in final_metrics.items() if k.startswith("position_")},
             }
-            draft_tokens = torch.argmax(refined_logits, dim=-1)
         else:
             loss, metrics = compute_metrics(
                 logits,
