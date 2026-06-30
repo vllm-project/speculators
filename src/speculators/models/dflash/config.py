@@ -78,7 +78,7 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
         "bidirectional.",
     )
 
-    projector_type: str = Field(
+    projector_type: Literal["dflash", "domino"] = Field(
         default="dflash",
         description="Projector type: 'dflash' (default) or 'domino' (adds causal "
         "correction head)",
@@ -92,22 +92,27 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
 
     pure_draft_prefix_len: int = Field(
         default=1,
+        ge=0,
         description="Number of leading block positions that use pure DFlash without "
         "Domino correction",
     )
 
     emb_dim: int = Field(
         default=256,
+        gt=0,
         description="Bottleneck dimension for Domino embed projection MLP",
     )
 
     gru_hidden_dim: int = Field(
         default=1024,
+        gt=0,
         description="Hidden dimension for Domino prefix GRU",
     )
 
     lambda_base_start: float = Field(
         default=1.0,
+        ge=0.0,
+        le=1.0,
         description="Initial weight of the base loss in the Domino loss schedule",
     )
 
