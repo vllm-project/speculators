@@ -141,22 +141,65 @@ class TestDominoHeadForward:
 
 
 class TestDominoHeadShiftLabel:
-    def test_shift_label_true_suffix_start_equals_prefix_len(self):
-        pure_draft_prefix_len = 2
-        suffix_start = pure_draft_prefix_len
-        assert suffix_start == 2
+    HIDDEN_SIZE = 64
+    GRU_DIM = 128
+    EMB_DIM = 32
+    VOCAB_SIZE = 100
+    NUM_ANCHORS = 4
+    BLOCK_SIZE = 8
 
-    def test_shift_label_false_suffix_start_is_prefix_len_plus_one(self):
-        pure_draft_prefix_len = 2
-        suffix_start = 1 + pure_draft_prefix_len
-        assert suffix_start == 3
+    @pytest.fixture
+    def head(self):
+        return DominoHead(
+            hidden_size=self.HIDDEN_SIZE,
+            gru_hidden_dim=self.GRU_DIM,
+            emb_dim=self.EMB_DIM,
+            draft_vocab_size=self.VOCAB_SIZE,
+        )
 
-    def test_suffix_start_zero_when_prefix_len_zero_and_shift_label_true(self):
-        pure_draft_prefix_len = 0
-        suffix_start = pure_draft_prefix_len
-        assert suffix_start == 0
+    @pytest.fixture
+    def embed_tokens(self):
+        emb = nn.Embedding(self.VOCAB_SIZE, self.HIDDEN_SIZE)
+        nn.init.normal_(emb.weight, std=0.02)
+        return emb
 
-    def test_suffix_start_one_when_prefix_len_zero_and_shift_label_false(self):
-        pure_draft_prefix_len = 0
-        suffix_start = 1 + pure_draft_prefix_len
-        assert suffix_start == 1
+    @pytest.fixture
+    def inputs(self, embed_tokens):
+        hidden = torch.randn(1, self.NUM_ANCHORS, self.BLOCK_SIZE, self.HIDDEN_SIZE)
+        logits = torch.randn(1, self.NUM_ANCHORS, self.BLOCK_SIZE, self.VOCAB_SIZE)
+        prev_ids = torch.randint(
+            0, self.VOCAB_SIZE, (1, self.NUM_ANCHORS, self.BLOCK_SIZE)
+        )
+        return hidden, logits, prev_ids, embed_tokens
+
+    # suffix_start = pure_draft_prefix_len
+    # if not shift_label: suffix_start = 1 + pure_draft_prefix_len
+    # (see core.py DFlashDraftModel._backbone_forward)
+    @pytest.mark.parametrize(
+        ("pure_draft_prefix_len", "shift_label"),
+        [
+            (2, True),
+            (2, False),
+            (0, True),
+            (0, False),
+        ],
+    )
+    def test_suffix_start_applied_via_domino_head(
+        self, head, inputs, pure_draft_prefix_len, shift_label
+    ):
+        hidden, logits, prev_ids, embed_tokens = inputs
+        suffix_start = (
+            pure_draft_prefix_len if shift_label else 1 + pure_draft_prefix_len
+        )
+        out = head(
+            hidden,
+            logits,
+            prev_ids,
+            suffix_start=suffix_start,
+            embed_tokens=embed_tokens,
+        )
+        assert torch.equal(out[:, :, :suffix_start], logits[:, :, :suffix_start])
+        if suffix_start < self.BLOCK_SIZE:
+            assert not torch.equal(
+                out[:, :, suffix_start:], logits[:, :, suffix_start:]
+            )
