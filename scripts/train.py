@@ -800,9 +800,9 @@ def parse_args():
     parser.add_argument(
         "--draft-arch",
         type=str,
-        default="qwen3",
+        default="llama",
         choices=list(DRAFT_ARCH_CONFIGS.keys()),
-        help="Architecture for draft decoder layers. Defaults to 'qwen3'.",
+        help="Architecture for draft decoder layers (default: 'llama').",
     )
     parser.add_argument(
         "--draft-hidden-act",
@@ -913,17 +913,18 @@ def parse_args():
     )
     parser.add_argument(
         "--norm-before-fc",
-        action="store_true",
-        default=False,
-        help="Use RMSNorm before FC layer in draft path "
-        "(e.g., for Eagle 3.1 / gpt-oss models).",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Apply RMSNorm before the FC layer in the draft path "
+        "(Eagle 3.1, default: True). Disable with --no-norm-before-fc.",
     )
     parser.add_argument(
         "--norm-output",
-        action="store_true",
-        default=False,
+        action=argparse.BooleanOptionalAction,
+        default=True,
         help="Feed post-norm hidden states back across TTT steps to stabilize "
-        "magnitude drift across speculation depths (Eagle 3.1).",
+        "magnitude drift across speculation depths "
+        "(Eagle 3.1, default: True). Disable with --no-norm-output.",
     )
     # D-Flash specific parameters
     parser.add_argument(
