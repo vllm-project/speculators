@@ -20,7 +20,7 @@ from speculators.data_generation.vllm_client import (
 )
 from speculators.model import SpeculatorModel
 from speculators.models.eagle3.data import shift_batch
-from speculators.models.metrics import resolve_loss_fn
+from speculators.models.metrics import resolve_loss_config
 from speculators.models.mtp.data import shift_batch_mtp
 from speculators.models.utils import (
     get_verifier_config,
@@ -448,11 +448,14 @@ def main(args: argparse.Namespace):  # noqa: C901
     else:
         d2t, t2d, draft_vocab_size = parse_vocab_mappings(args)
 
-        if args.sliding_window_indices and args.speculator_type != "dflash":
+        if args.sliding_window_indices and args.speculator_type not in (
+            "dflash",
+            "dspark",
+        ):
             raise ValueError(
                 "Currently sliding window attention is only supported by dflash "
-                "draft models. Please open an issue/pr if you would like to use "
-                "sliding window attention with a different speculator type"
+                "and dspark draft models. Please open an issue/pr if you would like "
+                "to use sliding window attention with a different speculator type"
             )
 
     registry = SpeculatorModel.registry
@@ -654,7 +657,7 @@ def parse_args():
         "--speculator-type",
         type=str,
         default="eagle3",
-        help="Type of speculator model to train (eagle3, dflash, peagle, mtp)",
+        help="Type of speculator model to train (eagle3, dflash, dspark, peagle, mtp)",
     )
     parser.add_argument(
         "--from-pretrained",
@@ -858,11 +861,10 @@ def parse_args():
         "--loss-fn",
         type=str,
         default="kl_div",
-        choices=["kl_div", "ce"],
         help=(
-            "Loss function used during draft model training. "
-            "'kl_div' = KL divergence (default). "
-            "'ce' = cross-entropy."
+            "Loss function specification. Pass a name for a single loss "
+            "(kl_div, ce, tv, nla) or a JSON dict for a weighted combination, "
+            'e.g. \'{"ce": 0.1, "tv": 0.9}\'.'
         ),
     )
     parser.add_argument(
@@ -940,7 +942,40 @@ def parse_args():
         "--dflash-decay-gamma",
         type=float,
         default=4.0,
-        help="Decay gamma for DFlash loss weighting (default: 4.0)",
+        help="Decay gamma for DFlash/DSpark loss weighting (default: 4.0)",
+    )
+    # DSpark-specific arguments (sequential Markov head + confidence head).
+    parser.add_argument(
+        "--markov-rank",
+        type=int,
+        default=256,
+        help="DSpark: low-rank dim of the Markov logit-bias head (0 disables it).",
+    )
+    parser.add_argument(
+        "--markov-head-type",
+        type=str,
+        default="vanilla",
+        choices=["vanilla", "gated", "rnn"],
+        help="DSpark: sequential head variant (default: vanilla).",
+    )
+    parser.add_argument(
+        "--enable-confidence-head",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="DSpark: attach the per-position acceptance confidence head.",
+    )
+    parser.add_argument(
+        "--confidence-head-with-markov",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="DSpark: feed the Markov previous-token embedding into the "
+        "confidence head alongside the backbone hidden state.",
+    )
+    parser.add_argument(
+        "--confidence-head-alpha",
+        type=float,
+        default=1.0,
+        help="DSpark: weight of the confidence-head BCE term (default: 1.0).",
     )
     # Domino-specific arguments (DFlash sub-mode)
     parser.add_argument(
@@ -1116,7 +1151,7 @@ def parse_args():
     args = parser.parse_args()
     provided = explicitly_provided_dests(parser, DECODER_SHAPING_FLAGS)
     validate_draft_init_args(parser, args, provided)
-    resolve_loss_fn(args.loss_fn)
+    resolve_loss_config(args.loss_fn)
     return args
 
 

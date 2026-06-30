@@ -301,6 +301,12 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         # hidden_size]
         document_ids: torch.Tensor,  # shape: [1, total_seq_len]
         position_ids: torch.Tensor | None = None,
+        hidden_states: torch.Tensor,  # [1, total_seq_len, num_hidden*hidden_size]
+        input_ids: torch.Tensor,  # [1, total_seq_len]
+        loss_mask: torch.Tensor,  # [1, total_seq_len]
+        verifier_last_hidden_states: torch.Tensor,  # [1, total_seq_len, hidden_size]
+        document_ids: torch.Tensor,  # [1, total_seq_len]
+        position_ids: torch.Tensor | None = None,  # [1, total_seq_len]
         **kwargs,
     ):
         """Run the anchored-block draft transformer up to the draft logits.
@@ -401,6 +407,12 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         verifier_last_hidden_states: torch.Tensor,
         document_ids: torch.Tensor,
         position_ids: torch.Tensor | None = None,
+        hidden_states: torch.Tensor,  # shape: [1,total_seq_len,num_hidden*hidden_size]
+        input_ids: torch.Tensor,  # shape: [1, total_seq_len]
+        loss_mask: torch.Tensor,  # shape: [1, total_seq_len]
+        verifier_last_hidden_states: torch.Tensor,  # shape: [1, total_seq_len, hidden_size] # noqa: E501
+        document_ids: torch.Tensor,  # shape: [1, total_seq_len]
+        position_ids: torch.Tensor | None = None,  # shape: [1, total_seq_len]
         loss_config: LossConfig | None = None,
         gamma: float = 4.0,
         **kwargs,
@@ -415,6 +427,22 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 position_ids,
                 **kwargs,
             )
+        _, logits, targets, aligned_loss_mask, _ = self._backbone_forward(
+            hidden_states,
+            input_ids,
+            loss_mask,
+            verifier_last_hidden_states,
+            document_ids,
+            position_ids,
+            **kwargs,
+        )
+        loss, metrics = compute_metrics(
+            logits,
+            targets,
+            aligned_loss_mask,
+            self.block_size,
+            gamma=gamma,
+            loss_config=loss_config,
         )
 
         if self.projector_type == "domino":
