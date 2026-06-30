@@ -8,6 +8,7 @@ from pathlib import Path
 from re import Pattern
 from typing import cast
 
+import httpx
 import torch
 from datasets import Dataset as HFDataset
 from datasets import concatenate_datasets, load_dataset
@@ -23,7 +24,7 @@ from transformers import __version__ as TRANSFORMERS_VERSION  # noqa: N812
 
 from speculators.data_generation.configs import DATASET_CONFIGS
 from speculators.data_generation.logging_utils import PipelineLogger
-from speculators.data_generation.render_client import render_conversation
+from speculators.data_generation.render_client import RenderError, render_conversation
 from speculators.data_generation.torch_utils import set_default_torch_num_threads
 from speculators.train.vocab_mapping import save_token_frequency_distribution
 
@@ -667,12 +668,20 @@ def build_dataset_from_render(
     has_tools = "tools" in dataset.column_names
     tokenizer = get_tokenizer(processor)
 
+    # Multimodal models extract hidden states via the Chat Completions API, which
+    # needs the original messages -- token_ids alone cannot carry the images.
+    # Mirror the default path and keep messages for ProcessorMixin processors so
+    # render-path multimodal rows can be extracted downstream.
+    if isinstance(processor, ProcessorMixin):
+        results["messages"] = []
+
     # Regex fallback for conversations the render endpoint returns no mask for
     # (template lacks {% generation %} tags). Detected lazily, so a run the
     # server masks completely never fails here.
     assistant_pattern: str | None = None
     server_mask_count = 0
     regex_fallback_count = 0
+    dropped_count = 0
 
     for idx in range(len(dataset)):
         row = dataset[idx]
@@ -687,30 +696,46 @@ def build_dataset_from_render(
         vllm_messages = _adapt_conv_for_vllm(normalized)
         conv_tools = _parse_conv_tools(row.get("tools"), idx) if has_tools else None
 
-        rendered = render_conversation(
-            render_endpoint,
-            vllm_messages,
-            tools=conv_tools,
-            chat_template_kwargs=chat_template_kwargs,
-            max_length=max_length,
-        )
+        # Resilience parity with the default path (_preprocess_batch wraps each
+        # conversation in try/except): one conversation that fails to render must
+        # not abort the whole run.
+        try:
+            rendered = render_conversation(
+                render_endpoint,
+                vllm_messages,
+                tools=conv_tools,
+                chat_template_kwargs=chat_template_kwargs,
+                max_length=max_length,
+            )
+        except (RenderError, httpx.HTTPError) as exc:
+            log.error(f"Render failed for conversation {idx}: {exc}")
+            dropped_count += 1
+            continue
 
         token_ids = rendered["token_ids"]
         loss_mask_raw = rendered["loss_mask"]
 
+        # vLLM does not truncate multimodal prompts -- it cannot split an image's
+        # placeholder block -- so token_ids can exceed max_length. The default
+        # pipeline drops these rows; match it instead of emitting an over-length
+        # (and, after local masking, misaligned) sample.
+        if len(token_ids) > max_length:
+            dropped_count += 1
+            continue
+
         if loss_mask_raw is not None:
-            loss_mask = torch.tensor(loss_mask_raw, dtype=torch.long)
+            loss_mask = torch.as_tensor(loss_mask_raw, dtype=torch.long)
             server_mask_count += 1
         else:
             if assistant_pattern is None:
                 assistant_pattern = _detect_assistant_pattern(processor)
-            regex_fallback_count += 1
+            # token_ids is already within max_length (over-length rows dropped
+            # above), so re-tokenize without truncation -- it round-trips to the
+            # same tokens and the offsets line up with the server's token_ids.
             text = tokenizer.decode(token_ids)
             encoded = tokenizer(
                 text,
                 return_offsets_mapping=True,
-                max_length=max_length,
-                truncation=True,
                 add_special_tokens=False,
             )
             loss_mask = _create_loss_mask_from_offsets(
@@ -720,9 +745,18 @@ def build_dataset_from_render(
                 conv_idx=idx,
                 max_length=max_length,
             )
+            loss_mask = torch.as_tensor(loss_mask, dtype=torch.long)
+            regex_fallback_count += 1
 
+        # Parity with the default path's `assert len(input_ids) == len(loss_mask)`:
+        # never emit a misaligned pair -- drop it rather than corrupt the sample.
         if len(loss_mask) != len(token_ids):
-            loss_mask = loss_mask[: len(token_ids)]
+            log.error(
+                f"Render mask/token length mismatch for conversation {idx} "
+                f"(input_ids={len(token_ids)}, loss_mask={len(loss_mask)}); dropping"
+            )
+            dropped_count += 1
+            continue
 
         if minimum_valid_tokens is not None:
             if int(loss_mask.sum().item()) < minimum_valid_tokens:
@@ -731,10 +765,13 @@ def build_dataset_from_render(
         results["input_ids"].append(torch.tensor(token_ids, dtype=torch.long))
         results["loss_mask"].append(loss_mask)
         results["seq_len"].append(len(token_ids))
+        if "messages" in results:
+            results["messages"].append(vllm_messages)
 
     log.info(
-        f"Render masking: {server_mask_count} conversations used the vLLM server "
-        f"mask, {regex_fallback_count} used the local regex fallback."
+        f"Render masking: {server_mask_count} used the vLLM server mask, "
+        f"{regex_fallback_count} used the local regex fallback, "
+        f"{dropped_count} dropped (render error / over-length / misaligned)."
     )
 
     out = HFDataset.from_dict(results)
