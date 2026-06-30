@@ -422,6 +422,9 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 max_anchors=max_anchors,
                 **kwargs,
             )
+        )
+
+        draft_tokens = torch.argmax(logits, dim=-1)
 
         if self.projector_type == "domino":
             global_step = kwargs.get("global_step", 0)
@@ -495,6 +498,5 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 gamma=gamma,
                 loss_config=loss_config,
             )
-            draft_tokens = torch.argmax(logits, dim=-1)
 
         return draft_tokens, loss, metrics
