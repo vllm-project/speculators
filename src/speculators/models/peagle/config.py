@@ -56,6 +56,17 @@ class PEagleSpeculatorConfig(Eagle3SpeculatorConfig):
         description="Token ID used for padding unused positions in parallel groups",
     )
 
+    max_anchors: int | None = Field(
+        default=None,
+        description=(
+            "Maximum number of COD chain starting points. When set, "
+            "randomly subsamples valid positions for depth-1+ chains. "
+            "Depth 0 always retains the full sequence. "
+            "None means use all valid positions."
+        ),
+        ge=1,
+    )
+
     # Override Eagle3 default: P-EAGLE requires trainable embeddings
     # (matches p-eagle-train)
     embed_requires_grad: bool = Field(

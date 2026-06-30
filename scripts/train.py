@@ -935,8 +935,9 @@ def parse_args():
     parser.add_argument(
         "--max-anchors",
         type=int,
-        default=256,
-        help="Maximum anchor positions for DFlash training (default: 256)",
+        default=None,
+        help="Maximum anchor positions. "
+        "DFlash default: 3072, P-EAGLE default: None (all).",
     )
     parser.add_argument(
         "--dflash-decay-gamma",
