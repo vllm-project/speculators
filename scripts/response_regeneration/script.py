@@ -104,6 +104,43 @@ def sanitize_filename(name: str) -> str:
     return name.strip("._")
 
 
+def extract_turns(row, prompt_field):
+    """Extract ordered system/user turns from a dataset row.
+
+    Multi-turn conversations are read from a ``messages`` or ``conversations``
+    field (either the role/content or from/value schema), preserving any system
+    prompt and dropping the original assistant turns so they can be regenerated.
+    Rows without a usable conversation fall back to a single user turn taken
+    from ``prompt_field``.
+    """
+    convs = row.get("messages")
+    if not (isinstance(convs, list) and convs):
+        convs = row.get("conversations")
+
+    if isinstance(convs, list) and convs:
+        turns = []
+        for m in convs:
+            if not isinstance(m, dict):
+                continue
+            role = m.get("role") or m.get("from")
+            content = m.get("content") or m.get("value")
+            if not content:
+                continue
+            if role == "system":
+                turns.append({"role": "system", "content": content})
+            elif role in ("user", "human"):
+                turns.append({"role": "user", "content": content})
+            # original assistant/gpt turns are dropped and regenerated
+        if any(turn["role"] == "user" for turn in turns):
+            return turns
+        # no usable user turn: fall through to the prompt_field fallback
+
+    prompt = row.get(prompt_field)
+    if prompt:
+        return [{"role": "user", "content": prompt}]
+    return []
+
+
 def load_seen(path: str):
     """Load previously processed record IDs from output file."""
     seen = set()
@@ -154,11 +191,18 @@ async def worker(
     queue: "asyncio.Queue[dict[str, Any]]",
     args,
     out_fh,
+    err_fh,
     endpoint: str,
     progress,
     stats: dict[str, int],
 ):
-    """Worker that pulls items from queue and sends them to the vLLM endpoint."""
+    """Worker that pulls conversations from the queue and regenerates them.
+
+    Each user turn is sent to the endpoint with the freshly generated prefix
+    (system + regenerated history); the original assistant turns are discarded
+    and replaced by the model's responses. Single-turn rows are the degenerate
+    case of one user turn.
+    """
     while True:
         item = await queue.get()
         if item is None:
@@ -166,62 +210,88 @@ async def worker(
             return
 
         idx = item["idx"]
-        payload = {
-            "model": args.model,
-            "messages": [{"role": "user", "content": item["prompt"]}],
-            "max_tokens": args.max_tokens,
-        }
+        turns = item["turns"]
 
+        # The API prefix (role/content) and the output conversation (from/value)
+        # are built in lockstep as we walk the turns.
+        prefix: list[dict[str, Any]] = []
+        out_convs: list[dict[str, Any]] = []
+        finish_reason = None
+        usage = None
         start_time = time.time()
         try:
-            async with sem, session.post(endpoint, json=payload) as response:
-                data = await response.json()
+            for turn in turns:
+                if turn["role"] == "system":
+                    prefix.append({"role": "system", "content": turn["content"]})
+                    out_convs.append({"from": "system", "value": turn["content"]})
+                    continue
 
-            choice = data["choices"][0]
-            message = choice["message"]
-            generated_text = message["content"]
-            reasoning_content = message.get("reasoning_content")
-            if reasoning_content is None:
-                reasoning_content = message.get("reasoning")
-            finish_reason = choice.get("finish_reason")
-            latency = time.time() - start_time
+                prefix.append({"role": "user", "content": turn["content"]})
+                out_convs.append({"from": "human", "value": turn["content"]})
 
-            # Format output in conversations structure
+                payload = {
+                    "model": args.model,
+                    "messages": prefix,
+                    "max_tokens": args.max_tokens,
+                }
+                async with sem, session.post(endpoint, json=payload) as response:
+                    data = await response.json()
+
+                choice = data["choices"][0]
+                message = choice["message"]
+                generated_text = message.get("content")
+                reasoning_content = message.get("reasoning_content")
+                if reasoning_content is None:
+                    reasoning_content = message.get("reasoning")
+                finish_reason = choice.get("finish_reason")
+                usage = data.get("usage")
+
+                # An empty/None content (e.g. a response truncated mid-reasoning)
+                # would corrupt the prefix of every following turn and emit a
+                # null assistant target; treat it as a failed conversation.
+                if not generated_text:
+                    raise ValueError(f"empty assistant content (turn {len(out_convs)})")
+
+                prefix.append({"role": "assistant", "content": generated_text})
+                gpt_turn = {"from": "gpt", "value": generated_text}
+                # Reasoning is stored per assistant turn: data preparation reads
+                # it from the turn, whereas top-level metadata is dropped.
+                if reasoning_content is not None:
+                    gpt_turn["reasoning_content"] = reasoning_content
+                out_convs.append(gpt_turn)
+
             metadata = {
                 "idx": idx,
                 "finish_reason": finish_reason,
-                "latency_s": round(latency, 3),
-                "usage": data.get("usage"),
+                "latency_s": round(time.time() - start_time, 3),
+                "usage": usage,
                 "endpoint": endpoint,
             }
 
-            # Only include reasoning_content if it exists
-            if reasoning_content is not None:
-                metadata["reasoning_content"] = reasoning_content
-
             output = {
                 "id": item.get("uuid") or f"sample_{idx}",
-                "conversations": [
-                    {"from": "human", "value": item["prompt"]},
-                    {"from": "gpt", "value": generated_text},
-                ],
+                "conversations": out_convs,
                 "metadata": metadata,
             }
             out_fh.write(json.dumps(output, ensure_ascii=False) + "\n")
             out_fh.flush()
             stats["ok"] += 1
         except Exception as e:  # noqa: BLE001
+            # Failed / partial conversations go to a SEPARATE error file so the
+            # training output is never polluted with truncated records (the
+            # downstream pipeline drops metadata, so an in-band error marker
+            # would be invisible).
             error_output = {
                 "id": item.get("uuid") or f"sample_{idx}",
-                "conversations": [{"from": "human", "value": item["prompt"]}],
+                "conversations": out_convs,
                 "metadata": {
                     "idx": idx,
                     "error": repr(e),
                     "endpoint": endpoint,
                 },
             }
-            out_fh.write(json.dumps(error_output, ensure_ascii=False) + "\n")
-            out_fh.flush()
+            err_fh.write(json.dumps(error_output, ensure_ascii=False) + "\n")
+            err_fh.flush()
             stats["errors"] += 1
         finally:
             progress.set_postfix(
@@ -262,10 +332,15 @@ async def main():
         model_name = sanitize_filename(model_name)
         args.outfile = f"{args.dataset}_{model_name}.jsonl"
 
+    # Failed / partial conversations are written here instead of the training file.
+    base, ext = os.path.splitext(args.outfile)
+    error_outfile = f"{base}.errors{ext or '.jsonl'}"
+
     print(f"Using dataset: {dataset_id}")
     print(f"Split: {split}")
     print(f"Prompt field: {prompt_field}")
     print(f"Output file: {args.outfile}")
+    print(f"Error file: {error_outfile}")
     print()
 
     seen_ids = load_seen(args.outfile) if args.resume else set()
@@ -288,6 +363,7 @@ async def main():
     ) as session:
         with (
             open(args.outfile, "a", encoding="utf-8") as output_file,  # noqa: ASYNC230
+            open(error_outfile, "a", encoding="utf-8") as error_file,  # noqa: ASYNC230
             tqdm(
                 total=args.limit,
                 desc="Generating responses",
@@ -304,6 +380,7 @@ async def main():
                         queue,
                         args,
                         output_file,
+                        error_file,
                         endpoint,
                         progress,
                         stats,
@@ -320,8 +397,8 @@ async def main():
                 if args.language_filter and row.get("language") != args.language_filter:
                     continue
 
-                prompt = row.get(prompt_field)
-                if not prompt:
+                turns = extract_turns(row, prompt_field)
+                if not any(turn["role"] == "user" for turn in turns):
                     continue
 
                 uuid = row.get("uuid")
@@ -333,7 +410,7 @@ async def main():
                     {
                         "idx": index,
                         "uuid": uuid,
-                        "prompt": prompt,
+                        "turns": turns,
                     }
                 )
                 processed_count += 1
