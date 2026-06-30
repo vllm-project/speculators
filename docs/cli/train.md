@@ -106,6 +106,10 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--fsdp-shard`** (flag) Shard model parameters across GPUs with FSDP. By default, parameters are fully replicated (DDP-like). Enable this when the model does not fit in a single GPU's memory.
 
+### Distributed Training Arguments
+
+- **`--fsdp-shard`** (flag) Shard model parameters across GPUs with FSDP. By default, parameters are fully replicated (DDP-like). Enable this when the model does not fit in a single GPU's memory.
+
 ### Training Arguments
 
 - **`--save-path`** (str, default: `"./checkpoints"`) Directory to save model checkpoints.
