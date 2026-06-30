@@ -160,17 +160,17 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--projector-type`** (choice: `dflash`|`domino`, default: `"dflash"`) Projector type for DFlash. `"dflash"` uses standard parallel logits. `"domino"` adds a lightweight causal GRU correction head that refines base logits with a recurrent state built from previous draft tokens.
 
-- **`--gru-hidden-dim`** (int, default: `1024`) Hidden dimension for the Domino GRU correction head.
+- **`--domino-gru-hidden-dim`** (int, default: `1024`) Hidden dimension for the Domino GRU correction head.
 
-- **`--emb-dim`** (int, default: `256`) Bottleneck dimension for the Domino embed projection MLP that combines GRU output with backbone hidden states.
+- **`--domino-emb-dim`** (int, default: `256`) Bottleneck dimension for the Domino embed projection MLP that combines GRU output with backbone hidden states.
 
-- **`--pure-draft-prefix-len`** (int, default: `1`) Number of leading block positions (after the anchor) that use pure DFlash logits without Domino correction. The suffix positions are refined by the Domino head.
+- **`--domino-pure-draft-prefix-len`** (int, default: `1`) Number of leading block positions (after the anchor) that use pure DFlash logits without Domino correction. The suffix positions are refined by the Domino head.
 
-- **`--shift-label`** (flag, default: `True`) Shift labels by 1 so the first predicted position is anchor+1. Enabled by default for Domino (aligns with DFlash's implicit target shift via `torch.roll`).
+- **`--domino-shift-label`** (flag, default: `True`) Shift labels by 1 so the first predicted position is anchor+1. Enabled by default for Domino (aligns with DFlash's implicit target shift via `torch.roll`).
 
 - **`--domino-lambda-start`** (float, default: `1.0`) Initial weight of the base loss in the Domino dual-loss schedule. The combined loss is `(1-λ) * final_loss + λ * base_loss`.
 
-- **`--domino-lambda-decay-steps`** (int, default: `None`) Number of training steps over which lambda_base decays from `--domino-lambda-start` to 0. If not set, no decay is applied (lambda_base stays at `--domino-lambda-start`). Suggested value: ~15000 for typical runs.
+- **`--domino-lambda-decay-steps`** (int, default: `30000`) Number of training steps over which lambda_base decays from `--domino-lambda-start` to 0. Set to 0 to disable decay (lambda_base stays at `--domino-lambda-start`).
 
 ### Dataloader Arguments
 

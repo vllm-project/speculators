@@ -952,26 +952,26 @@ def parse_args():
         "logits. 'domino' adds a causal GRU correction head.",
     )
     parser.add_argument(
-        "--gru-hidden-dim",
+        "--domino-gru-hidden-dim",
         type=int,
         default=1024,
         help="Hidden dimension for Domino GRU head (default: 1024)",
     )
     parser.add_argument(
-        "--emb-dim",
+        "--domino-emb-dim",
         type=int,
         default=256,
         help="Bottleneck dimension for Domino embed projection (default: 256)",
     )
     parser.add_argument(
-        "--pure-draft-prefix-len",
+        "--domino-pure-draft-prefix-len",
         type=int,
         default=1,
         help="Number of leading positions using pure DFlash without Domino correction "
         "(default: 1)",
     )
     parser.add_argument(
-        "--shift-label",
+        "--domino-shift-label",
         default=True,
         action=argparse.BooleanOptionalAction,
         help="Shift labels so the first predicted position is anchor+1 "
@@ -987,9 +987,9 @@ def parse_args():
     parser.add_argument(
         "--domino-lambda-decay-steps",
         type=int,
-        default=None,
+        default=30000,
         help="Number of training steps to decay lambda_base from start to 0 "
-        "(default: None, no decay). Suggested: ~15000 for typical runs.",
+        "(default: 30000). Set to 0 to disable decay (lambda_base stays at start).",
     )
     parser.add_argument(
         "--draft-attn-impl",

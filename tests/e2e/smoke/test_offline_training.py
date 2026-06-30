@@ -44,6 +44,24 @@ MM_MODEL = "Qwen/Qwen3-VL-2B-Instruct"
         (
             TEXT_MODEL,
             "sharegpt",
+            "dflash",
+            [
+                "--block-size",
+                "8",
+                "--max-anchors",
+                "256",
+                "--num-layers",
+                "3",
+                "--projector-type",
+                "domino",
+                "--domino-lambda-decay-steps",
+                "100",
+            ],
+            [1, 13, 25],
+        ),  # Domino (DFlash + Domino correction head)
+        (
+            TEXT_MODEL,
+            "sharegpt",
             "peagle",
             [
                 "--num-layers",

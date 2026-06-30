@@ -190,12 +190,12 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             "mask_token_id": kwargs.get("mask_token_id"),
             "sliding_window_non_causal": kwargs.get("sliding_window_non_causal", False),
             "projector_type": kwargs.get("projector_type", "dflash"),
-            "shift_label": kwargs.get("shift_label", True),
-            "pure_draft_prefix_len": kwargs.get("pure_draft_prefix_len", 1),
-            "emb_dim": kwargs.get("emb_dim", 256),
-            "gru_hidden_dim": kwargs.get("gru_hidden_dim", 1024),
-            "lambda_base_start": kwargs.get("lambda_base_start", 1.0),
-            "lambda_base_decay_steps": kwargs.get("lambda_base_decay_steps"),
+            "shift_label": kwargs.get("domino_shift_label", True),
+            "pure_draft_prefix_len": kwargs.get("domino_pure_draft_prefix_len", 1),
+            "emb_dim": kwargs.get("domino_emb_dim", 256),
+            "gru_hidden_dim": kwargs.get("domino_gru_hidden_dim", 1024),
+            "lambda_base_start": kwargs.get("domino_lambda_start", 1.0),
+            "lambda_base_decay_steps": kwargs.get("domino_lambda_decay_steps", 30000),
             "speculators_config": SpeculatorsConfig(
                 algorithm=algorithm,
                 proposal_methods=[
@@ -294,11 +294,12 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
 
     def _backbone_forward(
         self,
-        hidden_states: torch.Tensor,  # [1, total_seq_len, num_hidden*hidden_size]
-        input_ids: torch.Tensor,  # [1, total_seq_len]
-        loss_mask: torch.Tensor,  # [1, total_seq_len]
-        verifier_last_hidden_states: torch.Tensor,  # [1, total_seq_len, hidden_size]
-        document_ids: torch.Tensor,  # [1, total_seq_len]
+        hidden_states: torch.Tensor,  # shape: [1,total_seq_len,num_hidden*hidden_size]
+        input_ids: torch.Tensor,  # shape: [1, total_seq_len]
+        loss_mask: torch.Tensor,  # shape: [1, total_seq_len]
+        verifier_last_hidden_states: torch.Tensor,  # shape: [1, total_seq_len,
+        # hidden_size]
+        document_ids: torch.Tensor,  # shape: [1, total_seq_len]
         position_ids: torch.Tensor | None = None,
         **kwargs,
     ):
@@ -419,7 +420,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         if self.projector_type == "domino":
             global_step = kwargs.get("global_step", 0)
             decay_steps = self.config.lambda_base_decay_steps
-            if decay_steps is not None and decay_steps > 0:
+            if decay_steps > 0:
                 progress = min(global_step / decay_steps, 1.0)
                 lambda_base = self.config.lambda_base_start * (1.0 - progress)
                 lambda_base = max(0.0, min(1.0, lambda_base))
