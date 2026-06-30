@@ -681,9 +681,7 @@ def main(args: argparse.Namespace):  # noqa: C901
     # config/weights can be validated (e.g. in vLLM). The saved checkpoint can be
     # fed straight back via --from-pretrained to start training.
     if args.dry_run:
-        # Match Trainer.setup_model: weights are (re)initialized in
-        # hidden_states_dtype, so save the dry-run checkpoint in that dtype too
-        # rather than the float32 the model is built in.
+        # Save in hidden_states_dtype (bf16) for compact checkpoints.
         draft_model.to(hidden_states_dtype)
         if get_rank() == 0:
             logger.info(
@@ -757,6 +755,7 @@ def main(args: argparse.Namespace):  # noqa: C901
         save_best=args.save_best,
         hidden_states_dtype=hidden_states_dtype,
         log_freq=args.log_freq,
+        fsdp_shard=args.fsdp_shard,
     )
     trainer = Trainer(draft_model, trainer_config, train_loader, val_loader)
 
@@ -1309,6 +1308,16 @@ def parse_args():
         help="Pointing to checkpoint with lowest validation loss.",
     )
 
+    # distributed strategy
+    parser.add_argument(
+        "--fsdp-shard",
+        action="store_true",
+        default=False,
+        help="Shard model parameters across GPUs with FSDP. By default, "
+        "parameters are fully replicated (DDP-like). Enable this when the "
+        "model does not fit in a single GPU's memory.",
+    )
+
     # lr scheduler
     parser.add_argument(
         "--scheduler-type",
@@ -1396,7 +1405,10 @@ if __name__ == "__main__":
 
 # RUN WITH:
 # torchrun --standalone --nproc_per_node=<num_gpus>  scripts/train.py
-# for FSDP training
+# for multi-GPU training (DDP by default)
+# OR
+# torchrun --standalone --nproc_per_node=<num_gpus>  scripts/train.py --fsdp-shard
+# for FSDP sharded training (when model doesn't fit in a single GPU)
 # OR
 # python scripts/train.py
 # for single GPU training
