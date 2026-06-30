@@ -10,6 +10,7 @@ from torch.distributed.checkpoint.state_dict import (
     StateDictOptions,
     set_model_state_dict,
 )
+from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 from tqdm import TqdmExperimentalWarning
 from tqdm.rich import tqdm
@@ -63,6 +64,7 @@ class TrainerConfig(NamedTuple):
     save_best: bool = False
     hidden_states_dtype: torch.dtype = torch.bfloat16
     log_freq: int = 1
+    fsdp_shard: bool = False
 
 
 class Trainer:
@@ -81,8 +83,12 @@ class Trainer:
         self.val_loader = val_loader
         self.is_distributed = is_distributed()
         self.resume_from_checkpoint = config.resume_from_checkpoint
-        checkpointer_class = (
-            DistributedCheckpointer if self.is_distributed else SingleGPUCheckpointer
+        acc = torch.accelerator.current_accelerator()
+        self.device_type = acc.type if acc is not None else "cuda"
+        checkpointer_class: type[BaseCheckpointer] = (
+            DistributedCheckpointer
+            if self.is_distributed and config.fsdp_shard
+            else SingleGPUCheckpointer
         )
         self.checkpointer: BaseCheckpointer = checkpointer_class(self.config.save_path)
 
@@ -179,19 +185,22 @@ class Trainer:
         # Verify model is compatible with training infrastructure
         SpeculatorModel.verify_training_compatible(self.model)
 
-        self.model.to(self.config.hidden_states_dtype)  # type: ignore[arg-type]
         load_checkpoint = (
             self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1
         )
 
         if not self.is_distributed:
-            # Single device case
             self.model.to(self.local_rank)  # type: ignore[arg-type]
             if load_checkpoint:
                 self.checkpointer.load_model_state_dict(self.model)
             return
 
-        # Distributed case
+        if self.config.fsdp_shard:
+            self._setup_model_fsdp(load_checkpoint)
+        else:
+            self._setup_model_ddp(load_checkpoint)
+
+    def _setup_model_fsdp(self, load_checkpoint: bool):
         # Capture full state dict on rank 0 before FSDP sharding
         full_state_dict = {}
         if not load_checkpoint and dist.get_rank() == 0:
@@ -214,6 +223,18 @@ class Trainer:
             )
             del full_state_dict
             dist.barrier()
+
+    def _setup_model_ddp(self, load_checkpoint: bool):
+        self.model.to(self.local_rank)  # type: ignore[arg-type]
+
+        if load_checkpoint:
+            self.checkpointer.load_model_state_dict(self.model)
+        else:
+            for param in self.model.parameters():
+                dist.broadcast(param.data, src=0)
+            dist.barrier()
+
+        self.model = DistributedDataParallel(self.model)  # type: ignore[assignment]
 
     def setup_optimizer(self):
         # Setup optimizer(s). The "muon" option returns two optimizers (Muon for the
@@ -336,9 +357,12 @@ class Trainer:
                 for k, v in batch.items()
             }
 
-            _draft_tokens, loss, metrics = self.model(
-                **gpu_batch, **self.config.train_call_kwargs
-            )
+            with torch.autocast(
+                self.device_type, dtype=self.config.hidden_states_dtype
+            ):
+                _draft_tokens, loss, metrics = self.model(
+                    **gpu_batch, **self.config.train_call_kwargs
+                )
 
             self._optimizers_zero_grad()
             loss.backward()
@@ -404,9 +428,12 @@ class Trainer:
                 for k, v in batch.items()
             }
 
-            _draft_tokens, _loss, metrics = self.model(
-                **gpu_batch, **self.config.val_call_kwargs
-            )
+            with torch.autocast(
+                self.device_type, dtype=self.config.hidden_states_dtype
+            ):
+                _draft_tokens, _loss, metrics = self.model(
+                    **gpu_batch, **self.config.val_call_kwargs
+                )
 
             if self.is_distributed:
                 for m in metrics.values():
