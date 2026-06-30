@@ -57,11 +57,12 @@ def assert_safe_to_overwrite(output: Path, token_freq_path: Path) -> None:
     metadata, and the token frequency file) may be deleted.
     """
     unexpected_paths = []
+    resolved_token_freq_path = token_freq_path.resolve()
     for path in output.iterdir():
         if path.is_file() and (
             path.suffix == ".arrow"
             or path.name in PREPARE_DATA_OVERWRITE_ALLOWED_FILES
-            or path == token_freq_path
+            or path.resolve() == resolved_token_freq_path
         ):
             continue
         unexpected_paths.append(path)
