@@ -75,13 +75,10 @@ def create_float_mask(
     device: torch.device | str | None = None,
     dtype: torch.dtype = torch.bfloat16,
 ) -> torch.Tensor:
-    """Create a float attention mask compatible with eager and SDPA backends.
+    """Wrap ``create_mask`` and convert the boolean result to a float mask.
 
-    Our ``mask_mod`` functions return boolean tensors (True = attend), but
-    ``eager_attention_forward`` from transformers adds the mask numerically
-    (``scores + mask``), so it needs a float tensor where attended positions
-    are 0 and masked positions are ``-inf``.  This wrapper calls
-    ``create_mask`` and converts the boolean result to that float format.
+    ``eager_attention_forward`` adds the mask numerically (``scores + mask``),
+    so it needs 0 for attended positions and ``-inf`` for masked positions.
     """
     bool_mask = _create_mask(
         mask_mod, B=B, H=H, Q_LEN=Q_LEN, KV_LEN=KV_LEN, device=device
