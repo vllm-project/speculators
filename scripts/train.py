@@ -915,16 +915,16 @@ def parse_args():
         "--norm-before-fc",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Apply RMSNorm before the FC layer in the draft path "
-        "(Eagle 3.1, default: True). Disable with --no-norm-before-fc.",
+        help="Apply RMSNorm before the FC layer in the draft path. "
+        "Disable with --no-norm-before-fc.",
     )
     parser.add_argument(
         "--norm-output",
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Feed post-norm hidden states back across TTT steps to stabilize "
-        "magnitude drift across speculation depths "
-        "(Eagle 3.1, default: True). Disable with --no-norm-output.",
+        "magnitude drift across speculation depths. "
+        "Disable with --no-norm-output.",
     )
     # D-Flash specific parameters
     parser.add_argument(
