@@ -8,7 +8,6 @@ back byte-identical by the consumer.
 
 import pytest
 import torch
-
 from hs_connectors.mooncake_store import (
     MooncakeHiddenStatesStore,
     MooncakeStoreConfig,
