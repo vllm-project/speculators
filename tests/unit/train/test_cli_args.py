@@ -124,3 +124,33 @@ def test_dspark_confidence_head_alpha(monkeypatch):
     train_kw, val_kw = DSparkDraftModel.get_trainer_kwargs(**vars(args))
     assert train_kw["confidence_head_alpha"] == 0.5
     assert val_kw["confidence_head_alpha"] == 0.5
+
+
+# ---------------------------------------------------------------------------
+# Argparse defaults for draft_arch, norm_before_fc, norm_output
+# ---------------------------------------------------------------------------
+
+
+def test_draft_arch_defaults_to_llama(monkeypatch):
+    args = _parse(monkeypatch, [])
+    assert args.draft_arch == "llama"
+
+
+def test_norm_before_fc_defaults_to_true(monkeypatch):
+    args = _parse(monkeypatch, [])
+    assert args.norm_before_fc is True
+
+
+def test_norm_output_defaults_to_true(monkeypatch):
+    args = _parse(monkeypatch, [])
+    assert args.norm_output is True
+
+
+def test_no_norm_before_fc_flag(monkeypatch):
+    args = _parse(monkeypatch, ["--no-norm-before-fc"])
+    assert args.norm_before_fc is False
+
+
+def test_no_norm_output_flag(monkeypatch):
+    args = _parse(monkeypatch, ["--no-norm-output"])
+    assert args.norm_output is False
