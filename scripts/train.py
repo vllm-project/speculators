@@ -11,10 +11,6 @@ from pathlib import Path
 import numpy as np
 import torch
 import transformers
-from hs_connectors.mooncake_store import (
-    MooncakeHiddenStatesStore,
-    MooncakeStoreConfig,
-)
 from packaging import version
 from transformers import LlamaConfig, PretrainedConfig
 from transformers.models.auto.configuration_auto import AutoConfig
@@ -520,6 +516,13 @@ def main(args: argparse.Namespace):  # noqa: C901
     preprocess = preprocess_fns.get(args.speculator_type)
 
     if args.hidden_states_backend == "mooncake":
+        # Imported lazily: hs_connectors is an optional dependency only needed
+        # for the mooncake backend, so importing train.py must not require it.
+        from hs_connectors.mooncake_store import (  # noqa: PLC0415
+            MooncakeHiddenStatesStore,
+            MooncakeStoreConfig,
+        )
+
         # For multinode training the store client must advertise an address the
         # producer/peers can route to (not loopback). Resolve the node's own IP,
         # overridable via MOONCAKE_LOCAL_HOSTNAME when auto-detection picks the

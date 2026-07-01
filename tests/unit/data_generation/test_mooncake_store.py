@@ -8,6 +8,10 @@ back byte-identical by the consumer.
 
 import pytest
 import torch
+
+# hs_connectors is an optional dependency (the mooncake extra); skip when absent.
+pytest.importorskip("hs_connectors.mooncake_store")
+
 from hs_connectors.mooncake_store import (
     MooncakeHiddenStatesStore,
     MooncakeStoreConfig,
