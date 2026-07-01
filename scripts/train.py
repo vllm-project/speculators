@@ -142,6 +142,7 @@ def create_transformer_layer_config(  # noqa: C901
         head_dim=head_dim,
         tie_word_embeddings=False,
         sliding_window=sliding_window,
+        use_sliding_window=bool(sliding_window_indices),
         layer_types=layer_types,
     )
 
