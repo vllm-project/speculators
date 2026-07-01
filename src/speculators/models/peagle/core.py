@@ -62,14 +62,14 @@ class PEagleDraftModel(Eagle3DraftModel):
         Forward pass for P-EAGLE model training with parallel group prediction.
 
         Args:
-            hidden_states: Verifier hidden states [batch, seq_len, 3*hidden_size]
-            input_ids: Input token IDs [batch, seq_len]
+            hidden_states: Verifier hidden states [1, seq_len, 3*hidden_size]
+            input_ids: Input token IDs [1, seq_len]
             document_ids: Document IDs [1, seq_len], maps positions to doc index, pad -1
-            position_ids: Position IDs [batch, seq_len] (optional)
+            position_ids: Position IDs [1, seq_len] (optional)
             loss_mask: Loss mask for which tokens to compute loss on
-                [batch, seq_len]
+                [1, seq_len]
             verifier_last_hidden_states: Verifier final hidden states for
-                targets [batch, seq_len, hidden_size]
+                targets [1, seq_len, hidden_size]
 
         Returns:
             Tuple of (draft_tokens, loss, metrics)
