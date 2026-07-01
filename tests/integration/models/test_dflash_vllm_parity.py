@@ -7,7 +7,6 @@ are consistent between speculators and vLLM-style masking.
 See: https://github.com/vllm-project/speculators/issues/686
 """
 
-import pytest
 import torch
 from torch.nn import functional as F  # noqa: N812
 
@@ -66,17 +65,18 @@ def _build_anchor_block_mask(
 class TestDFlashAttentionParity:
     """Verify attention backend parity for DFlash."""
 
-    @pytest.mark.parametrize(
-        ("backend_a", "backend_b"),
-        [("eager", "sdpa"), ("eager", "simple_flex_attention")],
-    )
-    def test_attention_backends_agree(self, backend_a, backend_b):
-        """All attention backends must produce near-identical outputs.
+    def _run_backend(self, backend, batch, state):
+        torch.manual_seed(42)
+        m = make_dflash_model(block_size=4, max_anchors=4, draft_attn_impl=backend)
+        m.load_state_dict(state)
+        with torch.no_grad():
+            _, loss, _ = m(**batch)
+        result = loss.item()
+        del m
+        torch.cuda.empty_cache()
+        return result
 
-        Regression test for the boolean-mask bug where create_mask returned
-        a bool tensor but eager_attention_forward added it numerically,
-        effectively ignoring the mask.
-        """
+    def _make_shared_inputs(self):
         torch.manual_seed(42)
         ref = make_dflash_model(block_size=4, max_anchors=4, draft_attn_impl="eager")
         samples = [
@@ -89,22 +89,35 @@ class TestDFlashAttentionParity:
             )
         ]
         batch = make_batch(max_len=64, samples=samples, hidden_size=HIDDEN_SIZE)
-        state = ref.state_dict()
+        return batch, ref.state_dict()
 
-        outputs = {}
-        for backend in (backend_a, backend_b):
-            torch.manual_seed(42)
-            m = make_dflash_model(block_size=4, max_anchors=4, draft_attn_impl=backend)
-            m.load_state_dict(state)
-            with torch.no_grad():
-                _, loss, _ = m(**batch)
-            outputs[backend] = loss.item()
-            del m
-            torch.cuda.empty_cache()
+    def test_eager_matches_sdpa(self):
+        """Eager and SDPA must produce identical outputs.
 
-        assert abs(outputs[backend_a] - outputs[backend_b]) < 0.01, (
-            f"Backend divergence: {backend_a} loss={outputs[backend_a]:.4f}, "
-            f"{backend_b} loss={outputs[backend_b]:.4f}"
+        Regression test for the boolean-mask bug where create_mask returned
+        a bool tensor but eager_attention_forward added it numerically,
+        effectively ignoring the mask.
+        """
+        batch, state = self._make_shared_inputs()
+        eager_loss = self._run_backend("eager", batch, state)
+        sdpa_loss = self._run_backend("sdpa", batch, state)
+
+        assert abs(eager_loss - sdpa_loss) < 1e-4, (
+            f"eager loss={eager_loss:.6f}, sdpa loss={sdpa_loss:.6f}"
+        )
+
+    def test_eager_close_to_flex(self):
+        """Eager and flex_attention must produce similar outputs.
+
+        Small numerical differences are expected because flex_attention uses
+        a fused kernel, but large divergence indicates a masking bug.
+        """
+        batch, state = self._make_shared_inputs()
+        eager_loss = self._run_backend("eager", batch, state)
+        flex_loss = self._run_backend("simple_flex_attention", batch, state)
+
+        assert abs(eager_loss - flex_loss) < 0.005, (
+            f"eager loss={eager_loss:.6f}, flex loss={flex_loss:.6f}"
         )
 
     def test_single_doc_mask_matches_vllm_semantics(self):
