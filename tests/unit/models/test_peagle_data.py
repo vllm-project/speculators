@@ -33,8 +33,8 @@ class TestMaxAnchors:
             num_depths=4,
             max_anchors=max_anchors,
         )
-        depth1_count = (depth == 1).sum().item()
-        assert depth1_count <= max_anchors
+        for d in range(1, 4):
+            assert (depth == d).sum().item() <= max_anchors
 
     def test_max_anchors_preserves_full_depth0(self):
         """Depth 0 count should equal seq_length even with small max_anchors."""
@@ -71,14 +71,23 @@ class TestMaxAnchors:
         seq_len = 16
         loss_mask = torch.zeros(1, seq_len)
         loss_mask[0, :5] = 1
-        anchor_pos, depth = generate_cod_sample_indices(
+        torch.manual_seed(42)
+        anchor_pos_capped, depth_capped = generate_cod_sample_indices(
             seq_length=seq_len,
             loss_mask=loss_mask,
             num_depths=4,
             max_anchors=100,
         )
-        assert (depth == 0).sum().item() == seq_len
-        assert (depth == 1).sum().item() > 1
+        torch.manual_seed(42)
+        anchor_pos_none, depth_none = generate_cod_sample_indices(
+            seq_length=seq_len,
+            loss_mask=loss_mask,
+            num_depths=4,
+            max_anchors=None,
+        )
+        assert (depth_capped == 0).sum().item() == seq_len
+        assert torch.equal(anchor_pos_capped, anchor_pos_none)
+        assert torch.equal(depth_capped, depth_none)
 
     def test_max_anchors_sorted_order(self):
         """Subsampled anchors should be in sorted order for causal masking."""
