@@ -77,11 +77,11 @@ def create_float_mask(
 ) -> torch.Tensor:
     """Create a float attention mask compatible with eager and SDPA backends.
 
-    ``torch.nn.attention.flex_attention.create_mask`` returns a **boolean**
-    tensor (True = attend).  ``eager_attention_forward`` from transformers
-    adds the mask numerically (``scores + mask``), so it needs a **float**
-    tensor where attended positions are 0 and masked positions are ``-inf``.
-    SDPA also accepts float masks, so this format works for all non-flex backends.
+    Our ``mask_mod`` functions return boolean tensors (True = attend), but
+    ``eager_attention_forward`` from transformers adds the mask numerically
+    (``scores + mask``), so it needs a float tensor where attended positions
+    are 0 and masked positions are ``-inf``.  This wrapper calls
+    ``create_mask`` and converts the boolean result to that float format.
     """
     bool_mask = _create_mask(
         mask_mod, B=B, H=H, Q_LEN=Q_LEN, KV_LEN=KV_LEN, device=device
