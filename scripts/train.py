@@ -1,6 +1,8 @@
 import argparse
 import logging
+import os
 import random
+import socket
 import warnings
 from copy import deepcopy
 from pathlib import Path
@@ -398,10 +400,17 @@ def main(args: argparse.Namespace):  # noqa: PLR0912
         )
     else:
         if args.hidden_states_backend == "mooncake":
+            # For multinode training the store client must advertise an address
+            # the producer/peers can route to (not loopback). Resolve the node's
+            # own IP, overridable via MOONCAKE_LOCAL_HOSTNAME when auto-detection
+            # picks the wrong interface.
+            local_hostname = os.environ.get(
+                "MOONCAKE_LOCAL_HOSTNAME"
+            ) or socket.gethostbyname(socket.gethostname())
             transfer = MooncakeTransfer(
                 MooncakeHiddenStatesStore(
                     MooncakeStoreConfig(
-                        local_hostname="127.0.0.1",
+                        local_hostname=local_hostname,
                         metadata_server=args.mooncake_metadata_server,
                         master_server_address=args.mooncake_master,
                         protocol=args.mooncake_protocol,
