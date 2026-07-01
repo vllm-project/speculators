@@ -5,7 +5,13 @@ speculator architectures (EAGLE3, DFlash, etc.) to avoid code duplication.
 """
 
 import torch
-from torch.nn.attention.flex_attention import BlockMask, flex_attention
+from torch.nn.attention.flex_attention import (
+    BlockMask,
+    flex_attention,
+)
+from torch.nn.attention.flex_attention import (
+    create_mask as _create_mask,
+)
 from transformers.modeling_utils import AttentionInterface
 
 
@@ -56,6 +62,31 @@ def flex_attention_forward(
     attention_output: torch.Tensor = flex_attention_output
     attention_output = attention_output.transpose(1, 2).contiguous()
     return attention_output, None
+
+
+def create_float_mask(
+    mask_mod,
+    B=None,  # noqa: N803
+    H=None,  # noqa: N803
+    Q_LEN=0,  # noqa: N803
+    KV_LEN=0,  # noqa: N803
+    device=None,
+    dtype=torch.bfloat16,
+):
+    """Create a float attention mask compatible with eager and SDPA backends.
+
+    ``torch.nn.attention.flex_attention.create_mask`` returns a **boolean**
+    tensor (True = attend).  ``eager_attention_forward`` from transformers
+    adds the mask numerically (``scores + mask``), so it needs a **float**
+    tensor where attended positions are 0 and masked positions are ``-inf``.
+    SDPA also accepts float masks, so this format works for all non-flex backends.
+    """
+    bool_mask = _create_mask(
+        mask_mod, B=B, H=H, Q_LEN=Q_LEN, KV_LEN=KV_LEN, device=device
+    )
+    float_mask = torch.zeros(bool_mask.shape, dtype=dtype, device=device)
+    float_mask.masked_fill_(~bool_mask, float("-inf"))
+    return float_mask
 
 
 def block_mask_to_dense_attention_mask(

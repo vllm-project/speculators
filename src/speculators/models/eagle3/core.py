@@ -2,11 +2,12 @@ import copy
 from typing import ClassVar
 
 import torch
-from torch.nn.attention.flex_attention import create_block_mask, create_mask
+from torch.nn.attention.flex_attention import create_block_mask
 from transformers import AutoConfig, DynamicCache, PretrainedConfig
 
 from speculators.config import SpeculatorsConfig, VerifierConfig
 from speculators.model import DraftVocabMixin, SpeculatorModel
+from speculators.models.attention import create_float_mask
 from speculators.models.eagle3 import Eagle3SpeculatorConfig
 from speculators.models.eagle3.attention import (
     create_combined_mask_mod,
@@ -49,7 +50,7 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
         self._create_mask_fn = (
             create_block_mask
             if self._attn_impl == "simple_flex_attention"
-            else create_mask
+            else create_float_mask
         )
         super().__init__(config=config)
         self._init_vocab(config)
