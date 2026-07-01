@@ -2,6 +2,7 @@
 Unit tests for the config module in the Speculators library.
 """
 
+import copy
 import json
 import tempfile
 from pathlib import Path
@@ -10,7 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
-from transformers import PretrainedConfig
+from transformers import LlamaConfig, PretrainedConfig
 
 from speculators import (
     SpeculatorModelConfig,
@@ -19,6 +20,8 @@ from speculators import (
     VerifierConfig,
     reload_schemas,
 )
+from speculators.models.eagle3 import Eagle3SpeculatorConfig
+from speculators.proposals.greedy import GreedyTokenProposalConfig
 
 # ===== TokenProposalConfig Tests =====
 
@@ -117,6 +120,32 @@ def test_verifier_config_from_verifier_config(mock_pretrained_config):
 
     assert config.name_or_path == "test/verifier"
     assert config.architectures == ["TestModel"]
+
+
+@pytest.mark.smoke
+def test_verifier_config_from_pretrained_reads_architectures(tmp_path):
+    """from_pretrained reads architectures from the verifier's own config.json
+    (not from a draft decoder config, which has none)."""
+    LlamaConfig(
+        hidden_size=32,
+        num_hidden_layers=2,
+        architectures=["LlamaForCausalLM"],
+    ).save_pretrained(tmp_path)
+
+    config = VerifierConfig.from_pretrained(str(tmp_path))
+
+    assert config.name_or_path == str(tmp_path)
+    assert config.architectures == ["LlamaForCausalLM"]
+
+
+@pytest.mark.smoke
+def test_verifier_config_from_pretrained_defaults_to_empty(tmp_path):
+    """A config without an ``architectures`` entry yields an empty list."""
+    LlamaConfig(hidden_size=32, num_hidden_layers=2).save_pretrained(tmp_path)
+
+    config = VerifierConfig.from_pretrained(str(tmp_path))
+
+    assert config.architectures == []
 
 
 @pytest.mark.smoke
@@ -423,3 +452,89 @@ def test_speculator_model_config_from_pretrained_conversion(sample_speculators_c
     assert "Loading a non-speculator model config is not supported yet" in str(
         exc_info.value
     )
+
+
+# ===== Eagle3SpeculatorConfig Tests =====
+
+TINY_LLAMA_CONFIG = LlamaConfig(
+    vocab_size=64,
+    hidden_size=32,
+    intermediate_size=128,
+    num_hidden_layers=1,
+    num_attention_heads=4,
+    num_key_value_heads=4,
+    head_dim=8,
+    max_position_embeddings=32,
+    rms_norm_eps=1e-6,
+    tie_word_embeddings=False,
+)
+
+
+def _make_eagle3_speculators_config():
+    return SpeculatorsConfig(
+        algorithm="eagle3",
+        proposal_methods=[GreedyTokenProposalConfig(speculative_tokens=1)],
+        default_proposal_method="greedy",
+        verifier=VerifierConfig(
+            name_or_path=None,
+            architectures=["LlamaForCausalLM"],
+        ),
+    )
+
+
+@pytest.mark.sanity
+def test_eagle3_config_norm_output_roundtrip():
+    original = Eagle3SpeculatorConfig(
+        transformer_layer_config=copy.deepcopy(TINY_LLAMA_CONFIG),
+        draft_vocab_size=32000,
+        norm_before_residual=False,
+        norm_output=True,
+        speculators_config=_make_eagle3_speculators_config(),
+    )
+
+    config_dict = original.model_dump()
+    assert config_dict["norm_output"] is True
+
+    recreated = Eagle3SpeculatorConfig.model_validate(config_dict)
+    assert recreated.norm_output is True
+
+
+@pytest.mark.sanity
+def test_eagle3_config_norm_output_dict_roundtrip():
+    original = Eagle3SpeculatorConfig(
+        transformer_layer_config=copy.deepcopy(TINY_LLAMA_CONFIG),
+        draft_vocab_size=32000,
+        norm_output=True,
+        speculators_config=_make_eagle3_speculators_config(),
+    )
+
+    config_dict = original.to_dict()
+    assert config_dict["norm_output"] is True
+
+    reloaded = SpeculatorModelConfig.from_dict(config_dict)
+    assert reloaded.norm_output is True
+
+
+@pytest.mark.sanity
+def test_eagle3_config_norm_output_pretrained_roundtrip():
+    original = Eagle3SpeculatorConfig(
+        transformer_layer_config=copy.deepcopy(TINY_LLAMA_CONFIG),
+        draft_vocab_size=32000,
+        norm_output=True,
+        speculators_config=_make_eagle3_speculators_config(),
+    )
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        original.save_pretrained(tmp_dir)
+        reloaded = SpeculatorModelConfig.from_pretrained(tmp_dir)
+
+    assert reloaded.norm_output is True
+
+
+@pytest.mark.sanity
+def test_eagle3_config_norm_output_defaults():
+    config = Eagle3SpeculatorConfig(
+        transformer_layer_config=copy.deepcopy(TINY_LLAMA_CONFIG),
+        speculators_config=_make_eagle3_speculators_config(),
+    )
+    assert config.norm_output is False

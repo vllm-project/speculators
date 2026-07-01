@@ -258,6 +258,46 @@ class TestDFlashParams:
         assert loss.isfinite()
         loss.backward()
 
+    @pytest.mark.parametrize("draft_attn_impl", ["sdpa", "eager"])
+    @pytest.mark.parametrize("seq_lengths", SAMPLE_CONFIGS)
+    def test_attention_backend(self, draft_attn_impl, seq_lengths):
+        model = make_dflash_model(draft_attn_impl=draft_attn_impl)
+        samples = _make_samples(seq_lengths)
+        batch = make_batch(max_len=MAX_LEN, samples=samples, hidden_size=HIDDEN_SIZE)
+        draft_tokens, loss, metrics = model(**batch)
+
+        assert loss.isfinite()
+        loss.backward()
+
+    ATTN_BACKENDS = ["simple_flex_attention", "sdpa", "eager"]
+
+    @pytest.mark.parametrize("seq_lengths", SAMPLE_CONFIGS)
+    def test_attention_backends_match(self, seq_lengths):
+        """All attention backends produce equivalent outputs for the same input."""
+        samples = _make_samples(seq_lengths)
+
+        results = {}
+        for backend in self.ATTN_BACKENDS:
+            torch.manual_seed(0)
+            model = make_dflash_model(draft_attn_impl=backend)
+            batch = make_batch(
+                max_len=MAX_LEN, samples=samples, hidden_size=HIDDEN_SIZE
+            )
+            _, loss, _ = model(**batch)
+            results[backend] = loss.detach().cpu()
+            del model
+            torch.cuda.empty_cache()
+
+        ref_backend = self.ATTN_BACKENDS[0]
+        for backend in self.ATTN_BACKENDS[1:]:
+            torch.testing.assert_close(
+                results[backend],
+                results[ref_backend],
+                atol=1e-3,
+                rtol=1e-3,
+                msg=f"{backend} loss diverges from {ref_backend}",
+            )
+
 
 @requires_cuda
 class TestEagle3Params:
@@ -272,6 +312,86 @@ class TestEagle3Params:
         for dt in draft_tokens:
             assert dt.shape == (1, MAX_LEN)
             assert dt.dtype == torch.long
+        assert loss.isfinite()
+        loss.backward()
+
+    @pytest.mark.parametrize("draft_attn_impl", ["sdpa", "eager"])
+    @pytest.mark.parametrize("seq_lengths", SAMPLE_CONFIGS)
+    def test_attention_backend(self, draft_attn_impl, seq_lengths):
+        model = make_eagle3_model(draft_attn_impl=draft_attn_impl)
+        samples = _make_samples(seq_lengths)
+        batch = make_batch(max_len=MAX_LEN, samples=samples, hidden_size=HIDDEN_SIZE)
+        draft_tokens, loss, metrics = model(**batch, ttt_steps=2)
+
+        assert loss.isfinite()
+        loss.backward()
+
+    ATTN_BACKENDS = ["simple_flex_attention", "sdpa", "eager"]
+
+    @pytest.mark.parametrize("seq_lengths", SAMPLE_CONFIGS)
+    def test_attention_backends_match(self, seq_lengths):
+        """All attention backends produce equivalent outputs for the same input."""
+        samples = _make_samples(seq_lengths)
+
+        results = {}
+        for backend in self.ATTN_BACKENDS:
+            torch.manual_seed(0)
+            model = make_eagle3_model(draft_attn_impl=backend)
+            batch = make_batch(
+                max_len=MAX_LEN, samples=samples, hidden_size=HIDDEN_SIZE
+            )
+            _, loss, _ = model(**batch, ttt_steps=2)
+            results[backend] = loss.detach().cpu()
+            del model
+            torch.cuda.empty_cache()
+
+        ref_backend = self.ATTN_BACKENDS[0]
+        for backend in self.ATTN_BACKENDS[1:]:
+            torch.testing.assert_close(
+                results[backend],
+                results[ref_backend],
+                atol=1e-3,
+                rtol=1e-3,
+                msg=f"{backend} loss diverges from {ref_backend}",
+            )
+
+
+@requires_cuda
+class TestNormOutputParams:
+    """Tests for Eagle 3.1: norm_before_fc + norm_output."""
+
+    def test_norm_output(self):
+        model = make_eagle3_model(norm_before_fc=True, norm_output=True)
+        assert model.input_norm is not None
+        samples = _make_samples([128])
+        batch = make_batch(max_len=MAX_LEN, samples=samples, hidden_size=HIDDEN_SIZE)
+        draft_tokens, loss, _metrics = model(**batch, ttt_steps=3)
+
+        assert len(draft_tokens) == 3
+        assert loss.isfinite()
+        loss.backward()
+
+    def test_norm_output_without_norm_before_fc(self):
+        model = make_eagle3_model(norm_output=True)
+        assert model.input_norm is None
+        samples = _make_samples([128])
+        batch = make_batch(max_len=MAX_LEN, samples=samples, hidden_size=HIDDEN_SIZE)
+        draft_tokens, loss, _metrics = model(**batch, ttt_steps=3)
+
+        assert len(draft_tokens) == 3
+        assert loss.isfinite()
+        loss.backward()
+
+    def test_peagle_norm_before_fc(self):
+        model = make_peagle_model()
+        assert model.input_norm is None
+
+        model = make_peagle_model(norm_before_fc=True)
+        assert model.input_norm is not None
+        samples = _make_samples([128])
+        batch = make_batch(max_len=MAX_LEN, samples=samples, hidden_size=HIDDEN_SIZE)
+        _draft_tokens, loss, _metrics = model(**batch)
+
         assert loss.isfinite()
         loss.backward()
 
@@ -297,6 +417,46 @@ class TestPEagleParams:
 
         assert loss.isfinite()
         loss.backward()
+
+    @pytest.mark.parametrize("draft_attn_impl", ["sdpa", "eager"])
+    @pytest.mark.parametrize("seq_lengths", SAMPLE_CONFIGS)
+    def test_attention_backend(self, draft_attn_impl, seq_lengths):
+        model = make_peagle_model(draft_attn_impl=draft_attn_impl)
+        samples = _make_samples(seq_lengths)
+        batch = make_batch(max_len=MAX_LEN, samples=samples, hidden_size=HIDDEN_SIZE)
+        draft_tokens, loss, metrics = model(**batch)
+
+        assert loss.isfinite()
+        loss.backward()
+
+    ATTN_BACKENDS = ["simple_flex_attention", "sdpa", "eager"]
+
+    @pytest.mark.parametrize("seq_lengths", SAMPLE_CONFIGS)
+    def test_attention_backends_match(self, seq_lengths):
+        """All attention backends produce equivalent outputs for the same input."""
+        samples = _make_samples(seq_lengths)
+
+        results = {}
+        for backend in self.ATTN_BACKENDS:
+            torch.manual_seed(0)
+            model = make_peagle_model(draft_attn_impl=backend)
+            batch = make_batch(
+                max_len=MAX_LEN, samples=samples, hidden_size=HIDDEN_SIZE
+            )
+            _, loss, _ = model(**batch)
+            results[backend] = loss.detach().cpu()
+            del model
+            torch.cuda.empty_cache()
+
+        ref_backend = self.ATTN_BACKENDS[0]
+        for backend in self.ATTN_BACKENDS[1:]:
+            torch.testing.assert_close(
+                results[backend],
+                results[ref_backend],
+                atol=1e-3,
+                rtol=1e-3,
+                msg=f"{backend} loss diverges from {ref_backend}",
+            )
 
 
 @requires_cuda

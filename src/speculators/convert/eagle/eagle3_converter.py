@@ -39,6 +39,8 @@ class Eagle3Converter:
         base_model: str,
         validate: bool = True,
         norm_before_residual: bool = False,
+        norm_before_fc: bool = False,
+        norm_output: bool = False,
         eagle_aux_hidden_state_layer_ids: list[int] | None = None,
         cache_dir: str | Path | None = None,
     ) -> None:
@@ -77,6 +79,8 @@ class Eagle3Converter:
             eagle_config,
             base_model,
             norm_before_residual,
+            norm_before_fc,
+            norm_output,
             eagle_aux_hidden_state_layer_ids,
         )
 
@@ -106,6 +110,8 @@ class Eagle3Converter:
         eagle_config: dict,
         base_model: str,
         norm_before_residual: bool = False,
+        norm_before_fc: bool = False,
+        norm_output: bool = False,
         eagle_aux_hidden_state_layer_ids: list[int] | None = None,
     ) -> Eagle3SpeculatorConfig:
         transformer_config = self._create_transformer_config_from_eagle(
@@ -130,6 +136,8 @@ class Eagle3Converter:
             speculators_config=speculators_config,
             draft_vocab_size=eagle_config.get("draft_vocab_size", 32000),
             norm_before_residual=norm_before_residual,
+            norm_before_fc=norm_before_fc or eagle_config.get("norm_before_fc", False),
+            norm_output=norm_output or eagle_config.get("norm_output", False),
             target_hidden_size=eagle_config.get("target_hidden_size"),
             eagle_aux_hidden_state_layer_ids=eagle_aux_hidden_state_layer_ids,
         )
@@ -167,6 +175,7 @@ class Eagle3Converter:
             head_dim=eagle_config.get("head_dim"),
             **build_llama_config_rope_kwargs(
                 rope_theta=eagle_config.get("rope_theta", 10000.0),
+                rope_scaling=eagle_config.get("rope_scaling"),
             ),
             **build_llama_config_dtype_kwarg(eagle_config.get("torch_dtype")),
         )

@@ -1,8 +1,13 @@
+import json
 from collections.abc import Callable
 
 import torch
 
 _EPS = 1e-5
+
+LossConfig = dict[
+    str, tuple[Callable[[torch.Tensor, torch.Tensor], torch.Tensor], float]
+]
 
 
 def compute_accuracy_single_step(
@@ -119,6 +124,104 @@ def ce_loss(
     return elementwise_loss  # noqa: RET504
 
 
+def tv_loss(
+    logits: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
+    targets: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
+):
+    """Compute per-position total variation (TV) distance from draft to target.
+
+    The rejection-sampling acceptance rate of speculative decoding equals the
+    distributional overlap between target and draft,
+    ``alpha = sum_v min(p_v, q_v) = 1 - d_TV(p, q)``. Minimizing this TV distance
+    therefore directly optimizes the acceptance rate, whereas cross-entropy and
+    KL only optimize it indirectly (KL is a loose upper bound on TV via Pinsker).
+
+    Args:
+        logits: Draft model logits (softmax applied internally to form q).
+        targets: Target model logits (softmax applied internally to form p).
+
+    Returns:
+        Per-position TV distance with shape [1, seq_len].
+    """
+    draft_p = torch.nn.functional.softmax(logits, dim=-1)
+    target_p = torch.nn.functional.softmax(targets, dim=-1)
+    overlap = torch.minimum(draft_p, target_p).sum(dim=-1)  # shape: [1, seq_len]
+    elementwise_loss = 1.0 - overlap
+
+    return elementwise_loss  # noqa: RET504
+
+
+def neg_log_acceptance_loss(
+    logits: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
+    targets: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
+):
+    """Compute per-position negative log-acceptance (LK) loss.
+
+    The speculative-decoding acceptance rate equals the draft/target distribution
+    overlap, ``alpha = sum_v min(p_v, q_v)`` (the same quantity computed in
+    ``tv_loss``). This loss is ``-log(alpha)``. Its gradient is
+    ``(1 / alpha) * grad(TV)``: the ``1 / alpha`` factor amplifies the otherwise
+    vanishing TV gradient when overlap is low (early training), giving TV's
+    acceptance-optimal target a usable gradient from a cold start. When the target
+    is a point mass, this loss reduces to cross-entropy.
+
+    Args:
+        logits: Draft model logits (softmax applied internally to form q).
+        targets: Target model logits (softmax applied internally to form p).
+
+    Returns:
+        Per-position negative log-acceptance with shape [1, seq_len].
+    """
+    draft_p = torch.nn.functional.softmax(logits, dim=-1)
+    target_p = torch.nn.functional.softmax(targets, dim=-1)
+    overlap = torch.minimum(draft_p, target_p).sum(dim=-1)  # alpha, shape: [1, seq_len]
+    elementwise_loss = -torch.log(overlap.clamp_min(_EPS))
+
+    return elementwise_loss  # noqa: RET504
+
+
+def lk_hybrid_loss(
+    logits: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
+    targets: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
+    eta: float = 3.0,
+):
+    """Compute per-position hybrid LK loss (adaptive KL/TV blend).
+
+    Blends KL divergence and total variation per position:
+    ``L = lambda * KL(p||q) + (1 - lambda) * TV(p, q)`` with adaptive weight
+    ``lambda = exp(-eta * sg[alpha])``, where ``alpha = sum_v min(p_v, q_v)`` is the
+    acceptance rate (overlap) and ``sg`` is stop-gradient. When overlap is low
+    (early training, misaligned draft) ``lambda -> 1`` and the loss leans on KL's
+    strong gradient; as overlap grows ``lambda -> 0`` and it shifts to TV, which
+    optimizes acceptance directly. This gives TV's acceptance-optimal target a
+    usable gradient from a cold start.
+
+    ``alpha`` in the weight is detached: it controls the blend but is not
+    differentiated through; gradients flow only through the KL and TV terms.
+
+    Source: Samarin et al., "LK Losses: Direct Acceptance Rate Optimization for
+    Speculative Decoding" (arXiv 2602.23881), hybrid objective.
+
+    Args:
+        logits: Draft model logits (softmax applied internally to form q).
+        targets: Target model logits (softmax applied internally to form p).
+        eta: Blend temperature; larger shifts toward TV sooner. Default 3.0
+            (the paper's best hybrid setting).
+
+    Returns:
+        Per-position hybrid loss with shape [1, seq_len].
+    """
+    draft_p = torch.nn.functional.softmax(logits, dim=-1)
+    target_p = torch.nn.functional.softmax(targets, dim=-1)
+    overlap = torch.minimum(draft_p, target_p).sum(dim=-1)  # alpha, shape: [1, seq_len]
+    tv = 1.0 - overlap
+    kl = kl_div_loss(logits, targets)  # reuse existing KL, shape: [1, seq_len]
+    weight = torch.exp(-eta * overlap.detach())  # lambda = exp(-eta * sg[alpha])
+    elementwise_loss = weight * kl + (1.0 - weight) * tv
+
+    return elementwise_loss  # noqa: RET504
+
+
 def dflash_loss_decay(pos_idx: torch.Tensor, gamma: float):
     """Compute DFlash-style exponential decay weights per position.
 
@@ -153,13 +256,24 @@ def exp_loss_decay(pos_idx: torch.Tensor, gamma: float):
     return gamma**pos_idx
 
 
+_LOSS_FN_MAP: dict[str, Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = {
+    "kl_div": kl_div_loss,
+    "ce": ce_loss,
+    "tv": tv_loss,
+    "nla": neg_log_acceptance_loss,
+    "lk_hybrid": lk_hybrid_loss,
+}
+
+
 def resolve_loss_fn(
     name: str,
 ) -> "Callable[[torch.Tensor, torch.Tensor], torch.Tensor]":
     """Resolves a loss function given its abbreviated name.
 
     Args:
-        name: ``"kl_div"`` for KL-divergence or ``"ce"`` for cross-entropy.
+        name: ``"kl_div"`` for KL-divergence, ``"ce"`` for cross-entropy,
+            ``"tv"`` for total variation, ``"nla"`` for negative
+            log-acceptance, or ``"lk_hybrid"`` for the adaptive KL/TV blend.
 
     Returns:
         The corresponding loss function.
@@ -167,15 +281,84 @@ def resolve_loss_fn(
     Raises:
         ValueError: If *name* is not a recognised loss function.
     """
-    loss_fn_map: dict[str, Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = {
-        "kl_div": kl_div_loss,
-        "ce": ce_loss,
-    }
-    if name not in loss_fn_map:
+    if name not in _LOSS_FN_MAP:
         raise ValueError(
-            f"Unknown loss function '{name}'. Choose from: {sorted(loss_fn_map.keys())}"
+            f"Unknown loss function '{name}'. "
+            f"Choose from: {sorted(_LOSS_FN_MAP.keys())}"
         )
-    return loss_fn_map[name]
+    return _LOSS_FN_MAP[name]
+
+
+def resolve_loss_config(spec: str) -> LossConfig:
+    """Parse a loss spec into ``{name: (loss_fn, weight)}``.
+
+    Accepts either a plain loss name (``"kl_div"``) or a JSON dict mapping
+    loss names to weights (``'{"ce": 0.1, "tv": 0.9}'``).
+    """
+    if spec in _LOSS_FN_MAP:
+        return {spec: (_LOSS_FN_MAP[spec], 1.0)}
+
+    try:
+        parsed = json.loads(spec)
+    except json.JSONDecodeError:
+        raise ValueError(
+            f"Unknown loss function '{spec}'. Pass a known name "
+            f"({sorted(_LOSS_FN_MAP.keys())}) or a JSON dict, "
+            f'e.g. \'{{"ce": 0.1, "tv": 0.9}}\'.'
+        ) from None
+
+    if not isinstance(parsed, dict) or not parsed:
+        raise ValueError(
+            "Loss config must be a non-empty JSON dict mapping loss names to weights, "
+            f'e.g. \'{{"ce": 0.1, "tv": 0.9}}\'. Got: {spec}'
+        )
+
+    config: LossConfig = {}
+    for name, weight in parsed.items():
+        if name not in _LOSS_FN_MAP:
+            raise ValueError(
+                f"Unknown loss function '{name}' in loss config. "
+                f"Choose from: {sorted(_LOSS_FN_MAP.keys())}"
+            )
+        if not isinstance(weight, (int, float)):
+            raise ValueError(
+                f"Loss weight for '{name}' must be a number, "
+                f"got {type(weight).__name__}"
+            )
+        config[name] = (_LOSS_FN_MAP[name], float(weight))
+
+    return config
+
+
+def compound_loss(
+    logits: torch.Tensor,
+    targets: torch.Tensor,
+    loss_mask: torch.Tensor,
+    pos_idx: torch.Tensor,
+    loss_config: LossConfig,
+    decay_fn: Callable[[torch.Tensor], torch.Tensor] | None = None,
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """Compute a weighted sum of loss terms.
+
+    Each entry in *loss_config* maps a name to ``(loss_fn, weight)``; the
+    result is ``sum(weight * loss_function(logits, targets, ..., loss_fn))``
+    over all entries.
+
+    Returns the total loss and a dict of per-term (unweighted) scalar losses
+    keyed as ``"{name}_loss"``.  When the config contains a single term the
+    dict is empty (the overall loss already captures it).
+    """
+    total = torch.tensor(0.0, device=logits.device, dtype=logits.dtype)
+    term_losses: dict[str, torch.Tensor] = {}
+    multi = len(loss_config) > 1
+    for name, (fn, weight) in loss_config.items():
+        term = loss_function(
+            logits, targets, loss_mask, pos_idx, loss_fn=fn, decay_fn=decay_fn
+        )
+        if multi:
+            term_losses[f"{name}_loss"] = term.detach()
+        total = total + weight * term
+    return total, term_losses
 
 
 def loss_function(

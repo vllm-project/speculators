@@ -1,4 +1,5 @@
 import bisect
+import json
 import random
 import re
 from collections.abc import Callable
@@ -388,6 +389,7 @@ def _get_input_ids_loss_mask(
     max_length: int,
     assistant_pattern: str | Pattern[str] | None,
     *,
+    tools: list[dict] | None = None,
     # For logging
     conv_idx: int | None = None,
 ):
@@ -398,6 +400,7 @@ def _get_input_ids_loss_mask(
         encoded_any = processor.apply_chat_template(
             hf_conv,
             tokenize=True,
+            tools=tools,  # type: ignore[arg-type]
             add_generation_prompt=False,
             return_assistant_tokens_mask=True,
             return_dict=True,
@@ -429,6 +432,7 @@ def _get_input_ids_loss_mask(
             encoded_any = processor.apply_chat_template(
                 hf_conv,
                 tokenize=True,
+                tools=tools,
                 add_generation_prompt=False,
                 return_dict=True,
                 processor_kwargs=processor_kwargs,
@@ -437,6 +441,7 @@ def _get_input_ids_loss_mask(
             encoded_any = processor.apply_chat_template(
                 hf_conv,
                 tokenize=True,
+                tools=tools,
                 add_generation_prompt=False,
                 return_dict=True,
                 **processor_kwargs,
@@ -456,6 +461,7 @@ def _get_input_ids_loss_mask(
         formatted_text = processor.apply_chat_template(
             hf_conv,
             tokenize=False,
+            tools=tools,  # type: ignore[arg-type]
             add_generation_prompt=False,
         )
         assert isinstance(formatted_text, str)
@@ -476,6 +482,29 @@ def _get_input_ids_loss_mask(
     )
 
     return input_ids, loss_mask
+
+
+def _parse_conv_tools(conv_tools: object, idx: int) -> list | None:
+    """Parse the tools JSON string for one conversation; warn and return None
+    on invalid JSON or unexpected types."""
+    if not conv_tools:
+        return None
+    if isinstance(conv_tools, list):
+        return conv_tools
+    if not isinstance(conv_tools, str):
+        log.warning(
+            f"Non-string value in tools column for conversation {idx}: "
+            f"{type(conv_tools).__name__}, proceeding without tools"
+        )
+        return None
+    try:
+        return json.loads(conv_tools)
+    except json.JSONDecodeError as e:
+        log.warning(
+            f"Invalid JSON in tools column for conversation {idx}: {e}, "
+            "proceeding without tools"
+        )
+        return None
 
 
 def _preprocess_batch(
@@ -499,7 +528,17 @@ def _preprocess_batch(
         log.warning(f"No conversations key found. Keys: {list(examples.keys())}")
         return results
 
+    tools_col = examples.get("tools")
+    if tools_col is not None and len(tools_col) != len(conversations):
+        log.warning(
+            f"Tools column length ({len(tools_col)}) does not match "
+            f"conversations length ({len(conversations)}), proceeding without tools"
+        )
+        tools_col = None
+
     for idx, conv in enumerate(conversations):
+        conv_tools = tools_col[idx] if tools_col is not None else None
+
         if not conv or not isinstance(conv, list):
             continue
 
@@ -508,12 +547,15 @@ def _preprocess_batch(
         if not normalized_conv:
             continue
 
+        parsed_tools = _parse_conv_tools(conv_tools, idx)
+
         try:
             input_ids, loss_mask = _get_input_ids_loss_mask(
                 normalized_conv,
                 processor,
                 max_length=max_length,
                 assistant_pattern=assistant_pattern,
+                tools=parsed_tools,
                 conv_idx=idx,
             )
         except (TypeError, ValueError, KeyError, AttributeError, RuntimeError) as e:
@@ -748,7 +790,7 @@ def load_and_preprocess_dataset(
         processed_datasets.append(preprocessed_dataset)
 
     combined_dataset = concatenate_datasets(processed_datasets)
-    combined_dataset.shuffle(seed=seed)
+    combined_dataset = combined_dataset.shuffle(seed=seed)
     if max_samples is not None and len(combined_dataset) > max_samples:
         combined_dataset = combined_dataset.select(range(max_samples))
 

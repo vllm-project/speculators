@@ -97,14 +97,21 @@ def make_eagle3_model(
     *,
     draft_vocab_size: int = 64,
     norm_before_residual: bool = False,
+    norm_before_fc: bool = False,
+    norm_output: bool = False,
+    draft_attn_impl: str | None = None,
     device: str = "cuda:0",
     dtype: torch.dtype = torch.bfloat16,
 ) -> Eagle3DraftModel:
     """Create a tiny Eagle3 model with real initialized weights."""
+    transformer_config = copy.deepcopy(TINY_LLAMA_CONFIG)
+    transformer_config._attn_implementation = draft_attn_impl or "simple_flex_attention"
     config = Eagle3SpeculatorConfig(
-        transformer_layer_config=copy.deepcopy(TINY_LLAMA_CONFIG),
+        transformer_layer_config=transformer_config,
         draft_vocab_size=draft_vocab_size,
         norm_before_residual=norm_before_residual,
+        norm_before_fc=norm_before_fc,
+        norm_output=norm_output,
         embed_requires_grad=False,
         speculators_config=SpeculatorsConfig(
             algorithm="eagle3",
@@ -126,12 +133,16 @@ def make_dflash_model(
     draft_vocab_size: int = 64,
     block_size: int = 4,
     max_anchors: int = 8,
+    draft_attn_impl: str | None = None,
     device: str = "cuda:0",
     dtype: torch.dtype = torch.bfloat16,
 ) -> DFlashDraftModel:
     """Create a tiny DFlash model with real initialized weights."""
+    transformer_config = copy.deepcopy(TINY_QWEN3_CONFIG)
+    if draft_attn_impl is not None:
+        transformer_config._attn_implementation = draft_attn_impl
     config = DFlashSpeculatorConfig(
-        transformer_layer_config=copy.deepcopy(TINY_QWEN3_CONFIG),
+        transformer_layer_config=transformer_config,
         draft_vocab_size=draft_vocab_size,
         block_size=block_size,
         max_anchors=max_anchors,
@@ -159,14 +170,21 @@ def make_peagle_model(
     draft_vocab_size: int = 64,
     num_depths: int = 4,
     down_sample_ratio: float = 0.7,
+    norm_before_fc: bool = False,
+    norm_output: bool = False,
+    draft_attn_impl: str | None = None,
     device: str = "cuda:0",
     dtype: torch.dtype = torch.bfloat16,
 ) -> PEagleDraftModel:
     """Create a tiny PEagle model with real initialized weights."""
+    transformer_config = copy.deepcopy(TINY_LLAMA_CONFIG)
+    transformer_config._attn_implementation = draft_attn_impl or "simple_flex_attention"
     config = PEagleSpeculatorConfig(
-        transformer_layer_config=copy.deepcopy(TINY_LLAMA_CONFIG),
+        transformer_layer_config=transformer_config,
         draft_vocab_size=draft_vocab_size,
         norm_before_residual=False,
+        norm_before_fc=norm_before_fc,
+        norm_output=norm_output,
         embed_requires_grad=True,
         num_depths=num_depths,
         down_sample_ratio=down_sample_ratio,

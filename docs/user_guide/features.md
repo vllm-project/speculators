@@ -12,7 +12,7 @@ Draft models use a reduced vocabulary for faster inference. Speculators automati
 
 ## Multi-Backend Metric Logging
 
-Training metrics can be logged to TensorBoard, Weights & Biases, and TrackIO — individually or simultaneously, so that you can use your preferred experiment tracking tool.
+Training metrics can be logged to TensorBoard, Weights & Biases, TrackIO, and MLflow — individually or simultaneously, so that you can use your preferred experiment tracking tool.
 
 ## Automatic Chat Template Detection
 

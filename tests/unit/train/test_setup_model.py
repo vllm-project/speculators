@@ -121,24 +121,26 @@ def _make_trainer_no_init(
     is_distributed=False,
     resume_from_checkpoint=False,
     local_rank=0,
+    rank=None,
     save_path="/tmp/test_ckpt",
     hidden_states_dtype=torch.bfloat16,
 ):
     """Create a Trainer instance bypassing __init__ to control setup order."""
+    if rank is None:
+        rank = local_rank
     config = TrainerConfig(
         lr=1e-4,
         num_epochs=1,
         save_path=save_path,
         resume_from_checkpoint=resume_from_checkpoint,
-        is_distributed=is_distributed,
-        local_rank=local_rank,
         hidden_states_dtype=hidden_states_dtype,
     )
     trainer = Trainer.__new__(Trainer)
     trainer.model = model
     trainer.config = config
-    trainer.local_rank = config.local_rank
-    trainer.is_distributed = config.is_distributed
+    trainer.local_rank = local_rank
+    trainer.rank = rank
+    trainer.is_distributed = is_distributed
     trainer.resume_from_checkpoint = config.resume_from_checkpoint
     trainer.train_loader = MagicMock(__len__=MagicMock(return_value=1))
     trainer.val_loader = None
@@ -731,13 +733,15 @@ def test_load_vocab_mappings_validation(draft_vocab_config, vocab_mappings):
 
 
 def test_load_vocab_mappings_not_needed():
-    """load_vocab_mappings raises when vocab sizes match (no mapping needed)."""
+    """load_vocab_mappings is a no-op when vocab sizes match."""
     config = _make_eagle3_config(draft_vocab_size=64)  # same as verifier
     model = Eagle3DraftModel(config)
     t2d, d2t = _make_vocab_mappings(verifier_vocab_size=64, draft_vocab_size=64)
 
-    with pytest.raises(RuntimeError, match="not needed"):
-        model.load_vocab_mappings(t2d, d2t)
+    model.load_vocab_mappings(t2d, d2t)
+
+    assert model.t2d is None
+    assert model.d2t is None
 
 
 def test_from_training_args_loads_vocab_mappings(vocab_mappings):

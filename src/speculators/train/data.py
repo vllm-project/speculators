@@ -14,6 +14,7 @@ import torch.nn.functional as F  # noqa: N812
 from datasets import load_from_disk
 from torch.utils.data import Dataset
 
+from speculators.data_generation.offline import check_hidden_states
 from speculators.data_generation.transfer import FileTransfer, HiddenStatesTransfer
 from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
@@ -298,6 +299,10 @@ class ArrowDataset(BaseDataset):
             )
 
             loaded_hs = self.transfer.get_generated(handle)
+            if loaded_hs is None:
+                raise ValueError(f"Failed to load hidden states for handle {handle}")
+
+            check_hidden_states(loaded_hs, dataset_item["input_ids"].tolist())
 
             file_idx = self._map_to_file_idx(index)
             match self.on_generate:
@@ -305,7 +310,10 @@ class ArrowDataset(BaseDataset):
                     self.transfer.cache(handle, file_idx)
                 case "delete":
                     self.transfer.delete(handle)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
+            if isinstance(e, ValueError) and "NaN" in str(e):
+                raise
+
             warnings.warn(
                 f"Failed to load/cache hidden states for sample {index}: {e}",
                 stacklevel=1,
@@ -339,7 +347,7 @@ class ArrowDataset(BaseDataset):
             return loaded_hs
 
         # loaded_hs structure: {
-        #   "hidden_states": [seq_len, 4, hidden_size]
+        #   "hidden_states": [seq_len, num_layers, hidden_size]
         #   "token_ids": [seq_len]
         # }
 
@@ -498,7 +506,7 @@ def create_collate_fn(
         # Include lengths until while they fit in max_len
         # The last included length is (if necessary) truncated
         # Any additional lengths are discarded
-        lengths = collated_data["lengths"]
+        lengths = collated_data.pop("lengths")
         new_lengths = []
         cum_length = 0
         for length in lengths:
@@ -507,7 +515,21 @@ def create_collate_fn(
                 break
             new_lengths.append(length)
             cum_length += length
-        collated_data["lengths"] = torch.tensor(new_lengths, dtype=torch.long)
+        lengths = torch.tensor(new_lengths, dtype=torch.long)
+
+        # Create document_ids: maps each position to its document index, -1 for padding
+        document_ids = torch.repeat_interleave(
+            torch.arange(lengths.shape[0], dtype=torch.long), lengths
+        )
+        document_ids = torch.cat(
+            [
+                document_ids,
+                -1 * torch.ones(max_len - document_ids.shape[0], dtype=torch.long),
+            ]
+        ).unsqueeze(0)
+        # shape: [1, max_len]
+        collated_data["document_ids"] = document_ids
+
         return collated_data
 
     return collate_fn

@@ -8,23 +8,7 @@ from torch.nn.attention.flex_attention import (
 from speculators.models.attention import ALL_ATTENTION_FUNCTIONS  # noqa: F401
 
 
-def create_combined_mask_mod(lengths: torch.Tensor, total_seq_len: int):
-    document_ids = torch.repeat_interleave(
-        torch.arange(lengths.shape[0], device=lengths.device, dtype=torch.long), lengths
-    )
-    # Pad ids with -1 to indicate padding
-    document_ids = torch.cat(
-        [
-            document_ids,
-            -1
-            * torch.ones(
-                total_seq_len - document_ids.shape[0],
-                device=lengths.device,
-                dtype=torch.long,
-            ),
-        ]
-    ).contiguous()
-
+def create_combined_mask_mod(document_ids: torch.Tensor, total_seq_len: int):
     def causal_mask_mod(_b, _h, q_idx, kv_idx):
         return q_idx >= kv_idx
 
@@ -119,6 +103,26 @@ def extend_mask_for_draft_tokens(block_mask):
         extended_full_kv_indices,
         mask_mod=block_mask.mask_mod,
     )
+
+
+def extend_dense_mask_for_draft_tokens(mask: torch.Tensor, total_seq_len: int):
+    """Extend a dense attention mask with a diagonal block for new draft tokens.
+
+    Dense-mask equivalent of extend_mask_for_draft_tokens (which operates on
+    BlockMask). Appends total_seq_len new KV columns where only position
+    (q, new_offset + q) is True — the same diagonal pattern.
+
+    Args:
+        mask: Dense boolean mask of shape [1, 1, total_seq_len, kv_len].
+        total_seq_len: Number of query positions (= original sequence length).
+
+    Returns:
+        Extended mask of shape [1, 1, total_seq_len, kv_len + total_seq_len].
+    """
+    idx = torch.arange(total_seq_len, device=mask.device)
+    diag = idx.unsqueeze(1) == idx.unsqueeze(0)
+    diag = diag.to(dtype=mask.dtype).unsqueeze(0).unsqueeze(0)
+    return torch.cat([mask, diag], dim=-1)
 
 
 def block_mask_to_dense_attention_mask(

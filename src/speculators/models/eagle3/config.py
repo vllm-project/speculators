@@ -2,7 +2,7 @@ from typing import Any, Literal
 
 from pydantic import Field, field_serializer, field_validator
 from transformers import AutoConfig, PretrainedConfig
-from transformers.models.llama.configuration_llama import LlamaConfig
+from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
 from speculators import SpeculatorModelConfig
 
@@ -31,7 +31,7 @@ class Eagle3SpeculatorConfig(SpeculatorModelConfig):
     )
 
     transformer_layer_config: PretrainedConfig = Field(
-        default_factory=LlamaConfig,
+        default_factory=Qwen3Config,
         description="Configuration for the transformer decoder layer",
     )
 
@@ -58,9 +58,16 @@ class Eagle3SpeculatorConfig(SpeculatorModelConfig):
     norm_before_fc: bool = Field(
         default=False,
         description=(
-            "If True, vLLM will add and apply RMSNorm before the fc layer when loading "
-            "this draft model (e.g. for gpt-oss draft checkpoints). Set in config when "
-            "converting or saving gpt-oss draft models."
+            "Use RMSNorm before FC layer in draft path "
+            "(e.g., for Eagle 3.1 / gpt-oss models)."
+        ),
+    )
+
+    norm_output: bool = Field(
+        default=False,
+        description=(
+            "Feed post-norm hidden states back across TTT steps to stabilize "
+            "magnitude drift across speculation depths (Eagle 3.1)."
         ),
     )
 
@@ -79,7 +86,7 @@ class Eagle3SpeculatorConfig(SpeculatorModelConfig):
     def validate_transformer_config(cls, value: Any) -> PretrainedConfig:
         """Validate and convert transformer config."""
         if isinstance(value, dict):
-            config_class: type[PretrainedConfig] = LlamaConfig
+            config_class: type[PretrainedConfig] = Qwen3Config
             if "model_type" in value:
                 config_class = AutoConfig.for_model(
                     model_type=value["model_type"]
