@@ -180,6 +180,48 @@ def neg_log_acceptance_loss(
     return elementwise_loss  # noqa: RET504
 
 
+def lk_hybrid_loss(
+    logits: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
+    targets: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
+    eta: float = 3.0,
+):
+    """Compute per-position hybrid LK loss (adaptive KL/TV blend).
+
+    Blends KL divergence and total variation per position:
+    ``L = lambda * KL(p||q) + (1 - lambda) * TV(p, q)`` with adaptive weight
+    ``lambda = exp(-eta * sg[alpha])``, where ``alpha = sum_v min(p_v, q_v)`` is the
+    acceptance rate (overlap) and ``sg`` is stop-gradient. When overlap is low
+    (early training, misaligned draft) ``lambda -> 1`` and the loss leans on KL's
+    strong gradient; as overlap grows ``lambda -> 0`` and it shifts to TV, which
+    optimizes acceptance directly. This gives TV's acceptance-optimal target a
+    usable gradient from a cold start.
+
+    ``alpha`` in the weight is detached: it controls the blend but is not
+    differentiated through; gradients flow only through the KL and TV terms.
+
+    Source: Samarin et al., "LK Losses: Direct Acceptance Rate Optimization for
+    Speculative Decoding" (arXiv 2602.23881), hybrid objective.
+
+    Args:
+        logits: Draft model logits (softmax applied internally to form q).
+        targets: Target model logits (softmax applied internally to form p).
+        eta: Blend temperature; larger shifts toward TV sooner. Default 3.0
+            (the paper's best hybrid setting).
+
+    Returns:
+        Per-position hybrid loss with shape [1, seq_len].
+    """
+    draft_p = torch.nn.functional.softmax(logits, dim=-1)
+    target_p = torch.nn.functional.softmax(targets, dim=-1)
+    overlap = torch.minimum(draft_p, target_p).sum(dim=-1)  # alpha, shape: [1, seq_len]
+    tv = 1.0 - overlap
+    kl = kl_div_loss(logits, targets)  # reuse existing KL, shape: [1, seq_len]
+    weight = torch.exp(-eta * overlap.detach())  # lambda = exp(-eta * sg[alpha])
+    elementwise_loss = weight * kl + (1.0 - weight) * tv
+
+    return elementwise_loss  # noqa: RET504
+
+
 def dflash_loss_decay(pos_idx: torch.Tensor, gamma: float):
     """Compute DFlash-style exponential decay weights per position.
 
@@ -219,6 +261,7 @@ _LOSS_FN_MAP: dict[str, Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = 
     "ce": ce_loss,
     "tv": tv_loss,
     "nla": neg_log_acceptance_loss,
+    "lk_hybrid": lk_hybrid_loss,
 }
 
 
@@ -229,8 +272,8 @@ def resolve_loss_fn(
 
     Args:
         name: ``"kl_div"`` for KL-divergence, ``"ce"`` for cross-entropy,
-            ``"tv"`` for total variation, or ``"nla"`` for negative
-            log-acceptance.
+            ``"tv"`` for total variation, ``"nla"`` for negative
+            log-acceptance, or ``"lk_hybrid"`` for the adaptive KL/TV blend.
 
     Returns:
         The corresponding loss function.
