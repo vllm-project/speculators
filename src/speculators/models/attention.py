@@ -77,8 +77,8 @@ def create_float_mask(
 ) -> torch.Tensor:
     """Wrap ``create_mask`` and convert the boolean result to a float mask.
 
-    ``eager_attention_forward`` adds the mask numerically (``scores + mask``),
-    so it needs 0 for attended positions and ``-inf`` for masked positions.
+    Non-flex attention backends (eager, SDPA) add the mask numerically
+    (``scores + mask``) and need 0 for attended and ``-inf`` for masked.
     """
     bool_mask = _create_mask(
         mask_mod, B=B, H=H, Q_LEN=Q_LEN, KV_LEN=KV_LEN, device=device
