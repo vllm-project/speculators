@@ -4,6 +4,8 @@ This module contains attention functions and utilities shared across different
 speculator architectures (EAGLE3, DFlash, etc.) to avoid code duplication.
 """
 
+from collections.abc import Callable
+
 import torch
 from torch.nn.attention.flex_attention import (
     BlockMask,
@@ -65,14 +67,14 @@ def flex_attention_forward(
 
 
 def create_float_mask(
-    mask_mod,
-    B=None,  # noqa: N803
-    H=None,  # noqa: N803
-    Q_LEN=0,  # noqa: N803
-    KV_LEN=0,  # noqa: N803
-    device=None,
-    dtype=torch.bfloat16,
-):
+    mask_mod: Callable,
+    B: int | None = None,  # noqa: N803
+    H: int | None = None,  # noqa: N803
+    Q_LEN: int = 0,  # noqa: N803
+    KV_LEN: int = 0,  # noqa: N803
+    device: torch.device | str | None = None,
+    dtype: torch.dtype = torch.bfloat16,
+) -> torch.Tensor:
     """Create a float attention mask compatible with eager and SDPA backends.
 
     ``torch.nn.attention.flex_attention.create_mask`` returns a **boolean**
