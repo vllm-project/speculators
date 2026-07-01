@@ -177,9 +177,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             "draft_vocab_size": kwargs["draft_vocab_size"],
             "block_size": block_size,
             "max_anchors": (
-                3072
-                if kwargs.get("max_anchors") is None
-                else kwargs["max_anchors"]
+                3072 if kwargs.get("max_anchors") is None else kwargs["max_anchors"]
             ),
             "aux_hidden_state_layer_ids": target_layer_ids,
             "mask_token_id": kwargs.get("mask_token_id"),
