@@ -87,7 +87,7 @@ def parse_args():
     parser.add_argument(
         "--resume",
         action="store_true",
-        help="Skip rows already in outfile (by uuid or idx)",
+        help="Skip successfully-processed rows in outfile; errored rows are retried",
     )
     parser.add_argument(
         "--language-filter",
@@ -116,7 +116,12 @@ def load_seen(path: str):
                 obj = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            key = obj.get("uuid") or obj.get("idx")
+            # Only treat successful rows as seen so errored rows are retried.
+            if "error" in obj.get("metadata", {}):
+                continue
+            key = obj.get("id")
+            if key is None:
+                key = obj.get("metadata", {}).get("idx")
             if key is not None:
                 seen.add(str(key))
     return seen
@@ -325,7 +330,7 @@ async def main():
                     continue
 
                 uuid = row.get("uuid")
-                key = str(uuid or index)
+                key = str(uuid) if uuid else f"sample_{index}"
                 if key in seen_ids:
                     continue
 
