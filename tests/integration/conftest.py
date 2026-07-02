@@ -169,7 +169,6 @@ def make_peagle_model(
     *,
     draft_vocab_size: int = 64,
     num_depths: int = 4,
-    down_sample_ratio: float = 0.7,
     norm_before_fc: bool = False,
     fc_norm: bool = False,
     norm_output: bool = False,
@@ -188,9 +187,6 @@ def make_peagle_model(
         fc_norm=fc_norm,
         norm_output=norm_output,
         embed_requires_grad=True,
-        num_depths=num_depths,
-        down_sample_ratio=down_sample_ratio,
-        down_sample_ratio_min=0.2,
         mask_token_id=0,
         speculators_config=SpeculatorsConfig(
             algorithm="peagle",
