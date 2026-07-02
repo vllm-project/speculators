@@ -44,7 +44,14 @@ class PEagleDraftModel(Eagle3DraftModel):
         self.mask_token_id = config.mask_token_id
 
         # Learnable mask_hidden parameter for padding unsampled positions
-        self.mask_hidden = torch.nn.Parameter(torch.randn(1, 1, 3 * self.hidden_size))
+        num_aux = (
+            len(self.config.eagle_aux_hidden_state_layer_ids)
+            if self.config.eagle_aux_hidden_state_layer_ids
+            else 3
+        )
+        self.mask_hidden = torch.nn.Parameter(
+            torch.randn(1, 1, num_aux * self.hidden_size)
+        )
 
     @conditional_torch_compile
     def forward(

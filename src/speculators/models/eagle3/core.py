@@ -61,7 +61,14 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
         self.embed_tokens.weight.requires_grad = self.config.embed_requires_grad
 
         # FC LAYER
-        self.fc = torch.nn.Linear(3 * self.hidden_size, self.hidden_size, bias=False)
+        num_aux = (
+            len(config.eagle_aux_hidden_state_layer_ids)
+            if config.eagle_aux_hidden_state_layer_ids
+            else 3
+        )
+        self.fc = torch.nn.Linear(
+            num_aux * self.hidden_size, self.hidden_size, bias=False
+        )
 
         # DECODER LAYERS
         num_layers = tl_config.num_hidden_layers
@@ -95,7 +102,7 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
 
         if config.norm_before_fc:
             self.input_norm = self._model_definitions.norm_class(
-                3 * self.hidden_size,
+                num_aux * self.hidden_size,
                 eps=config.transformer_layer_config.rms_norm_eps,
             )
         else:
@@ -108,7 +115,7 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
                         self.hidden_size,
                         eps=config.transformer_layer_config.rms_norm_eps,
                     )
-                    for _ in range(3)
+                    for _ in range(num_aux)
                 ]
             )
         else:
@@ -152,7 +159,7 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
     @conditional_torch_compile
     def forward(  # noqa: C901
         self,
-        hidden_states: torch.Tensor,  # shape: [1, total_seq_len, 3 * hidden_size]
+        hidden_states: torch.Tensor,  # shape: [1, total_seq_len, num_aux * hidden_size]
         input_ids: torch.Tensor,  # shape: [1, total_seq_len]
         document_ids: torch.Tensor,  # shape: [1, total_seq_len]
         loss_mask: torch.Tensor | None = None,  # shape: [1, total_seq_len]
