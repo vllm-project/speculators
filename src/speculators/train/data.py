@@ -2,8 +2,10 @@ import json
 import math
 import os
 import random
+import threading
 import warnings
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from os import PathLike
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -212,6 +214,26 @@ class BaseDataset(Dataset):
 
         return data
 
+    def __getitems__(self, indices: list[int]) -> list[BatchType | None]:
+        """Fetch all samples of a packed batch concurrently.
+
+        The multipack batch sampler hands the dataloader worker one whole
+        packed batch, which the default fetcher would load sample by sample.
+        In online mode each fetch blocks on I/O for seconds (a generation
+        request plus a hidden-states load), so loading serially puts the sum
+        of those waits on every step's critical path. The work is I/O-bound,
+        so a small thread pool is enough.
+        """
+        if len(indices) <= 1:
+            return [self[i] for i in indices]
+        with ThreadPoolExecutor(max_workers=min(8, len(indices))) as pool:
+            return list(pool.map(self.__getitem__, indices))
+
+
+# Guards lazy per-process client creation now that __getitems__ fetches
+# concurrently. Module-level so it is never pickled into dataloader workers.
+_client_setup_lock = threading.Lock()
+
 
 class ArrowDataset(BaseDataset):
     def __init__(
@@ -283,8 +305,10 @@ class ArrowDataset(BaseDataset):
 
     def _maybe_generate_hs(self, index: int) -> dict[str, torch.Tensor] | None:
         if not self.client:
-            self._setup_client()
-        self.transfer.setup()
+            with _client_setup_lock:
+                if not self.client:
+                    self._setup_client()
+                    self.transfer.setup()
 
         dataset_item = self.data[index]
         client_item = build_client_item(dataset_item)
