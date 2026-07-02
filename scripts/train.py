@@ -800,9 +800,10 @@ def parse_args():
     parser.add_argument(
         "--draft-arch",
         type=str,
-        default="qwen3",
+        default=None,
         choices=list(DRAFT_ARCH_CONFIGS.keys()),
-        help="Architecture for draft decoder layers. Defaults to 'qwen3'.",
+        help="Architecture for draft decoder layers "
+        "(default: 'llama' for eagle3, 'qwen3' otherwise).",
     )
     parser.add_argument(
         "--draft-hidden-act",
@@ -913,17 +914,29 @@ def parse_args():
     )
     parser.add_argument(
         "--norm-before-fc",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Apply a single RMSNorm to the concatenated auxiliary hidden states "
+        "before the FC projection (gpt-oss style). See --fc-norm for the "
+        "per-layer alternative from the Eagle 3.1 paper. "
+        "(default: True for eagle3, False otherwise). "
+        "Disable with --no-norm-before-fc.",
+    )
+    parser.add_argument(
+        "--fc-norm",
         action="store_true",
         default=False,
-        help="Use RMSNorm before FC layer in draft path "
-        "(e.g., for Eagle 3.1 / gpt-oss models).",
+        help="Apply per-layer RMSNorm to each auxiliary hidden state before "
+        "concatenation and FC projection (Eagle 3.1 paper approach).",
     )
     parser.add_argument(
         "--norm-output",
-        action="store_true",
-        default=False,
+        action=argparse.BooleanOptionalAction,
+        default=None,
         help="Feed post-norm hidden states back across TTT steps to stabilize "
-        "magnitude drift across speculation depths (Eagle 3.1).",
+        "magnitude drift across speculation depths "
+        "(default: True for eagle3, False otherwise). "
+        "Disable with --no-norm-output.",
     )
     # D-Flash specific parameters
     parser.add_argument(
@@ -1149,6 +1162,15 @@ def parse_args():
     )
 
     args = parser.parse_args()
+
+    is_eagle3 = args.speculator_type == "eagle3"
+    if args.draft_arch is None:
+        args.draft_arch = "llama" if is_eagle3 else "qwen3"
+    if args.norm_before_fc is None:
+        args.norm_before_fc = is_eagle3
+    if args.norm_output is None:
+        args.norm_output = is_eagle3
+
     provided = explicitly_provided_dests(parser, DECODER_SHAPING_FLAGS)
     validate_draft_init_args(parser, args, provided)
     resolve_loss_config(args.loss_fn)
