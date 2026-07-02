@@ -136,9 +136,9 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--embed-requires-grad` / `--no-embed-requires-grad`** (flag, default: `False`) Whether to train embedding layer weights.
 
-- **`--norm-before-fc` / `--no-norm-before-fc`** (flag, default: `True`) Apply RMSNorm before the FC layer in the draft path. Use `--no-norm-before-fc` to disable.
+- **`--norm-before-fc` / `--no-norm-before-fc`** (flag, default: `True` for eagle3, `False` otherwise) Apply RMSNorm before the FC layer in the draft path.
 
-- **`--norm-output` / `--no-norm-output`** (flag, default: `True`) Feed post-norm hidden states back across TTT steps to stabilize magnitude drift across speculation depths. Use `--no-norm-output` to disable.
+- **`--norm-output` / `--no-norm-output`** (flag, default: `True` for eagle3, `False` otherwise) Feed post-norm hidden states back across TTT steps to stabilize magnitude drift across speculation depths.
 
 - **`--ttt-steps`** (int, default: `3`) Number of test-time training steps
 
