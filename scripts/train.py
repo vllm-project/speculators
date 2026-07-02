@@ -755,11 +755,14 @@ def parse_args():
         type=str,
         default="http://localhost:8000/v1",
         help=(
-            "vLLM endpoint address to use if generating hidden states on-demand."
+            "vLLM endpoint(s) to use if generating hidden states on-demand;"
+            " comma-separated for multiple independent instances serving the"
+            " same model (samples are sharded by index, with one-hop failover)."
             " Only required if `--on-missing=generate` and samples are missing."
-            " Note: the vLLM instance must be configured to cache hidden states"
-            " to a location that is accessible from the training instance. i.e."
-            " on the same node, or a shared network drive. (Default: 'http://localhost:8000/v1')"
+            " Note: every vLLM instance must write hidden states to a location"
+            " reachable from the training instance: a shared filesystem for the"
+            " file backend, or one shared Mooncake store (single master) for"
+            " the mooncake backend. (Default: 'http://localhost:8000/v1')"
         ),
     )
     parser.add_argument(

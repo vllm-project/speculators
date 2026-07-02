@@ -267,10 +267,18 @@ class ArrowDataset(BaseDataset):
             raise ValueError("split_ratio must be in range (-1.0, 1.0] excluding 0.0.")
 
         self.transfer = transfer or FileTransfer(Path(datapath) / "hidden_states")
-        self.vllm_endpoint = vllm_endpoint
+        # One or more vLLM producer endpoints (comma-separated string or list).
+        # Samples are assigned by index, so the assignment is stable across
+        # epochs and each producer keeps prefix-cache locality for its shard.
+        if isinstance(vllm_endpoint, str):
+            self.vllm_endpoints = [
+                e.strip() for e in vllm_endpoint.split(",") if e.strip()
+            ]
+        else:
+            self.vllm_endpoints = list(vllm_endpoint)
         self.on_missing = on_missing
         self.on_generate = on_generate
-        self.client: openai.OpenAI | None = None
+        self.clients: list[openai.OpenAI] | None = None
         self.model = model
         self.request_timeout = request_timeout
         self.max_retries = max_retries
@@ -281,20 +289,39 @@ class ArrowDataset(BaseDataset):
     def _map_to_file_idx(self, index: int):
         return index + self.start_file_idx
 
-    def _setup_client(self):
+    def _setup_clients(self):
         # Delay client setup so it runs in dataloader thread if on_missing="generate"
-        self.client = openai.OpenAI(
-            base_url=self.vllm_endpoint, api_key="EMPTY", max_retries=0
-        )
-        list_models = self.client.models.list()
-        model_id = list_models.data[0].id
-        if self.model and self.model != model_id:
-            raise ValueError(
-                f"An explicit model name was passed ({self.model}) which doesn't match"
-                f" found model_id {model_id}."
-                "Please make sure --endpoint is set to the correct vllm instance."
+        clients = []
+        reachable = 0
+        for endpoint in self.vllm_endpoints:
+            client = openai.OpenAI(base_url=endpoint, api_key="EMPTY", max_retries=0)
+            try:
+                model_id = client.models.list().data[0].id
+            except (openai.OpenAIError, IndexError) as e:
+                # Keep the client anyway: an endpoint that is down right now is
+                # covered by per-request failover (and may come back). The
+                # model-id check only runs against reachable endpoints.
+                warnings.warn(
+                    f"vLLM endpoint {endpoint} unreachable at setup ({e}); "
+                    "requests assigned to it will fail over.",
+                    stacklevel=1,
+                )
+                clients.append(client)
+                continue
+            if self.model and self.model != model_id:
+                raise ValueError(
+                    f"Model name mismatch: expected {self.model} but endpoint "
+                    f"{endpoint} serves {model_id}. All --vllm-endpoint entries "
+                    "must serve the same model."
+                )
+            self.model = model_id
+            reachable += 1
+            clients.append(client)
+        if reachable == 0:
+            raise RuntimeError(
+                f"No reachable vLLM endpoint among {self.vllm_endpoints}"
             )
-        self.model = model_id
+        self.clients = clients
 
     def __len__(self):
         return len(self.data)
@@ -303,24 +330,42 @@ class ArrowDataset(BaseDataset):
         """Get lengths of the dataset samples."""
         return list(self.data.with_format(None)["seq_len"])
 
+    def _generate_with_failover(self, index: int, client_item) -> str:
+        """Generate on the sample's assigned producer, failing over once.
+
+        Index-based assignment keeps the sample on the same producer every
+        epoch; on failure the next endpoint regenerates it (a fresh request
+        yields a fresh handle, so the retry is self-contained).
+        """
+        clients = self.clients or []
+        attempts = min(2, len(clients))
+        for attempt in range(attempts):
+            client = clients[(index + attempt) % len(clients)]
+            try:
+                return generate_hidden_states(
+                    client,
+                    self.model,  # type:ignore[arg-type]
+                    client_item,
+                    timeout=self.request_timeout,
+                    max_retries=self.max_retries,
+                )
+            except Exception:
+                if attempt + 1 >= attempts:
+                    raise
+        raise RuntimeError("no vLLM endpoints configured")
+
     def _maybe_generate_hs(self, index: int) -> dict[str, torch.Tensor] | None:
-        if not self.client:
+        if not self.clients:
             with _client_setup_lock:
-                if not self.client:
-                    self._setup_client()
+                if not self.clients:
+                    self._setup_clients()
                     self.transfer.setup()
 
         dataset_item = self.data[index]
         client_item = build_client_item(dataset_item)
 
         try:
-            handle = generate_hidden_states(
-                self.client,  # type:ignore[arg-type]
-                self.model,  # type:ignore[arg-type]
-                client_item,
-                timeout=self.request_timeout,
-                max_retries=self.max_retries,
-            )
+            handle = self._generate_with_failover(index, client_item)
 
             loaded_hs = self.transfer.get_generated(handle)
             if loaded_hs is None:

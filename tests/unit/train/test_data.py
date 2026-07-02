@@ -6,6 +6,7 @@ from pathlib import Path
 import torch
 from datasets import Dataset
 
+import speculators.train.data as data_mod
 from speculators.models.eagle3.data import shift_batch
 from speculators.train.data import (
     ArrowDataset,
@@ -514,3 +515,44 @@ def test_getitems_single_index():
     ds = _StubDataset(max_len=16)
     (sample,) = ds.__getitems__([1])
     assert torch.equal(sample["input_ids"], torch.arange(3))
+
+
+def test_arrow_dataset_parses_multiple_endpoints(tmp_path: Path, monkeypatch):
+    data = Dataset.from_dict(
+        {
+            "input_ids": [[0, 1, 2]],
+            "loss_mask": [[0, 1, 1]],
+            "seq_len": [3],
+        }
+    )
+    data.save_to_disk(tmp_path / "ds")
+
+    ds = ArrowDataset(
+        max_len=8,
+        datapath=tmp_path / "ds",
+        vllm_endpoint="http://a:8000/v1, http://b:8000/v1,",
+    )
+    assert ds.vllm_endpoints == ["http://a:8000/v1", "http://b:8000/v1"]
+
+    # Index-based assignment with one-hop failover: the assigned client is
+    # tried first, its successor on failure.
+    calls = []
+
+    class _Client:
+        def __init__(self, name):
+            self.name = name
+
+    ds.clients = [_Client("a"), _Client("b")]
+    ds.model = "m"
+
+    def _fake_generate(client, model, item, **kwargs):
+        calls.append(client.name)
+        if client.name == "a":
+            raise RuntimeError("endpoint a down")
+        return "handle-from-b"
+
+    monkeypatch.setattr(data_mod, "generate_hidden_states", _fake_generate)
+    handle = ds._generate_with_failover(0, client_item=None)
+
+    assert handle == "handle-from-b"
+    assert calls == ["a", "b"]
