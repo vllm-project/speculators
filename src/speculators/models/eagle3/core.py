@@ -108,8 +108,9 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
         else:
             self.input_norm = None
 
+        self.fc_norm: torch.nn.ModuleList | None = None
         if config.fc_norm:
-            self.fc_norm: torch.nn.ModuleList | None = torch.nn.ModuleList(
+            self.fc_norm = torch.nn.ModuleList(
                 [
                     self._model_definitions.norm_class(
                         self.hidden_size,
@@ -118,8 +119,6 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
                     for _ in range(num_aux)
                 ]
             )
-        else:
-            self.fc_norm = None
 
         self.post_init()
 
