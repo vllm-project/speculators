@@ -58,6 +58,10 @@ class _FakeMooncakeStore:
         self._keepalive.append(cbuf)
         return _FakeHandle(ctypes.addressof(cbuf), len(data))
 
+    def remove(self, key: str, force: bool = False) -> int:
+        self._blobs.pop(key, None)
+        return 0
+
 
 
 @pytest.fixture
@@ -91,3 +95,13 @@ def test_missing_key_times_out(store):
     # get_sample polls is_exist; a key that was never written must time out.
     with pytest.raises(TimeoutError):
         store.get_sample("never-written", timeout=0.2, poll_interval=0.02)
+
+
+def test_remove_sample_frees_the_key(store):
+    # on_generate="delete" relies on remove_sample; without it consumed samples
+    # accumulate until the store hits capacity and producer puts stall.
+    store.put_sample("req-3", {"token_ids": torch.arange(4)})
+    store.remove_sample("req-3")
+
+    with pytest.raises(TimeoutError):
+        store.get_sample("req-3", timeout=0.2, poll_interval=0.02)

@@ -84,3 +84,8 @@ class MooncakeTransfer(HiddenStatesTransfer):
 
     def get_generated(self, handle: str) -> dict[str, torch.Tensor] | None:
         return self.store.get_sample(handle)
+
+    def delete(self, handle: str) -> None:
+        # Required for on_generate="delete": without it consumed samples
+        # accumulate in the distributed store until puts stall at capacity.
+        self.store.remove_sample(handle)

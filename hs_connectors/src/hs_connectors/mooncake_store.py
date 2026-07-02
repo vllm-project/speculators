@@ -248,6 +248,11 @@ class MooncakeHiddenStatesStore:
             raise RuntimeError(f"mooncake get_buffer returned no data for {key}")
         return _unpack_from(handle.ptr(), handle.size())
 
+    def remove_sample(self, key: str) -> None:
+        """Delete a consumed sample; otherwise the store fills up and puts stall."""
+        assert self._store is not None, "call setup() first"
+        self._store.remove(key, force=True)
+
     def _wait_exists(self, key: str, timeout: float, poll_interval: float) -> None:
         # Existence polls are metadata-only; the key normally already exists by
         # the time the trainer holds it, so this rarely loops.

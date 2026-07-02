@@ -8,7 +8,9 @@ setup(
     python_requires=">=3.10",
     install_requires=[
         "torch",
-        "mooncake-transfer-engine",
+        # >=0.3.10.post1 for force-delete support (remove(key, force=True)),
+        # required to reclaim store capacity as samples are consumed.
+        "mooncake-transfer-engine>=0.3.10.post1",
     ],
     extras_require={
         "vllm": ["vllm"],
