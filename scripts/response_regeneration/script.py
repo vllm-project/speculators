@@ -216,8 +216,12 @@ async def worker(
         # are built in lockstep as we walk the turns.
         prefix: list[dict[str, Any]] = []
         out_convs: list[dict[str, Any]] = []
-        finish_reason = None
-        usage = None
+        # Finish reasons are collected per turn: recording only the last would
+        # hide an earlier turn truncated at max_tokens (finish_reason "length").
+        finish_reasons: list[str | None] = []
+        # Usage is summed across turns: each user turn is a separate API call, so
+        # the conversation's cost is the sum, not just the final call's counts.
+        usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         start_time = time.time()
         try:
             for turn in turns:
@@ -235,6 +239,14 @@ async def worker(
                     "max_tokens": args.max_tokens,
                 }
                 async with sem, session.post(endpoint, json=payload) as response:
+                    # A non-2xx reply has no `choices` array; surface the status
+                    # and a short body so `.errors.jsonl` is diagnosable instead
+                    # of recording a bare KeyError('choices').
+                    if not response.ok:
+                        body = (await response.text())[:500]
+                        raise RuntimeError(
+                            f"HTTP {response.status} from {endpoint}: {body}"
+                        )
                     data = await response.json()
 
                 choice = data["choices"][0]
@@ -243,8 +255,10 @@ async def worker(
                 reasoning_content = message.get("reasoning_content")
                 if reasoning_content is None:
                     reasoning_content = message.get("reasoning")
-                finish_reason = choice.get("finish_reason")
-                usage = data.get("usage")
+                finish_reasons.append(choice.get("finish_reason"))
+                turn_usage = data.get("usage") or {}
+                for key in usage:
+                    usage[key] += turn_usage.get(key) or 0
 
                 # An empty/None content (e.g. a response truncated mid-reasoning)
                 # would corrupt the prefix of every following turn and emit a
@@ -262,7 +276,7 @@ async def worker(
 
             metadata = {
                 "idx": idx,
-                "finish_reason": finish_reason,
+                "finish_reasons": finish_reasons,
                 "latency_s": round(time.time() - start_time, 3),
                 "usage": usage,
                 "endpoint": endpoint,
@@ -398,7 +412,8 @@ async def main():
                     continue
 
                 turns = extract_turns(row, prompt_field)
-                if not any(turn["role"] == "user" for turn in turns):
+                # extract_turns returns [] when there is no usable user turn.
+                if not turns:
                     continue
 
                 uuid = row.get("uuid")
