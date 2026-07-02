@@ -66,7 +66,9 @@ class ModelSpec:
     batch_factory: Callable[..., Any] = make_batch
 
 
-DFLASH_SPEC = ModelSpec(name="dflash", factory=make_dflash_model)
+DFLASH_SPEC = ModelSpec(
+    name="dflash", factory=make_dflash_model, forward_kwargs={"max_anchors": 8}
+)
 EAGLE3_SPEC = ModelSpec(
     name="eagle3", factory=make_eagle3_model, forward_kwargs={"ttt_steps": 2}
 )
@@ -240,20 +242,20 @@ class TestVocabBoundary:
 class TestDFlashParams:
     @pytest.mark.parametrize("block_size", [2, 4, 8])
     def test_varying_block_size(self, block_size):
-        model = make_dflash_model(block_size=block_size, max_anchors=4)
+        model = make_dflash_model(block_size=block_size)
         samples = _make_samples([128])
         batch = make_batch(max_len=MAX_LEN, samples=samples, hidden_size=HIDDEN_SIZE)
-        draft_tokens, loss, metrics = model(**batch)
+        draft_tokens, loss, metrics = model(**batch, max_anchors=4)
 
         assert loss.isfinite()
         loss.backward()
 
     @pytest.mark.parametrize("max_anchors", [2, 8, 16])
     def test_varying_max_anchors(self, max_anchors):
-        model = make_dflash_model(max_anchors=max_anchors)
+        model = make_dflash_model()
         samples = _make_samples([128])
         batch = make_batch(max_len=MAX_LEN, samples=samples, hidden_size=HIDDEN_SIZE)
-        draft_tokens, loss, metrics = model(**batch)
+        draft_tokens, loss, metrics = model(**batch, max_anchors=max_anchors)
 
         assert loss.isfinite()
         loss.backward()
@@ -264,7 +266,7 @@ class TestDFlashParams:
         model = make_dflash_model(draft_attn_impl=draft_attn_impl)
         samples = _make_samples(seq_lengths)
         batch = make_batch(max_len=MAX_LEN, samples=samples, hidden_size=HIDDEN_SIZE)
-        draft_tokens, loss, metrics = model(**batch)
+        draft_tokens, loss, metrics = model(**batch, max_anchors=8)
 
         assert loss.isfinite()
         loss.backward()
@@ -283,7 +285,7 @@ class TestDFlashParams:
             batch = make_batch(
                 max_len=MAX_LEN, samples=samples, hidden_size=HIDDEN_SIZE
             )
-            _, loss, _ = model(**batch)
+            _, loss, _ = model(**batch, max_anchors=8)
             results[backend] = loss.detach().cpu()
             del model
             torch.cuda.empty_cache()

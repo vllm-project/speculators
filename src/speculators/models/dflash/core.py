@@ -128,7 +128,6 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             **kwargs: Training arguments with DFlash-specific params
                 - draft_vocab_size: Size of draft vocabulary
                 - block_size: Block size for draft predictions (default: 8)
-                - max_anchors: Max anchor positions during training (default: 256)
                 - verifier_name_or_path: Path to verifier model
 
         Returns:
@@ -176,9 +175,6 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             "transformer_layer_config": verifier_config,
             "draft_vocab_size": kwargs["draft_vocab_size"],
             "block_size": block_size,
-            "max_anchors": (
-                3072 if kwargs.get("max_anchors") is None else kwargs["max_anchors"]
-            ),
             "aux_hidden_state_layer_ids": target_layer_ids,
             "mask_token_id": kwargs.get("mask_token_id"),
             "sliding_window_non_causal": kwargs.get("sliding_window_non_causal", False),
@@ -207,7 +203,12 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         """
         loss_config = resolve_loss_config(kwargs["loss_fn"])
         gamma = kwargs.get("dflash_decay_gamma", 4.0)
-        shared = {"loss_config": loss_config, "gamma": gamma}
+        max_anchors = kwargs.get("max_anchors", 3072)
+        shared = {
+            "loss_config": loss_config,
+            "gamma": gamma,
+            "max_anchors": max_anchors,
+        }
         return dict(shared), dict(shared)
 
     @property
@@ -248,11 +249,11 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         )
 
     @torch.compiler.disable
-    def _build_attention_mask(self, loss_mask, document_ids, device):
+    def _build_attention_mask(self, loss_mask, max_anchors, document_ids, device):
         total_seq_len = loss_mask.shape[1]
 
         anchor_positions, anchor_valid = select_anchors(
-            loss_mask, self.config.max_anchors, self.block_size
+            loss_mask, max_anchors, self.block_size
         )
 
         full_attn_mask = None
@@ -296,7 +297,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         """
         device = hidden_states.device
         total_seq_len = hidden_states.shape[1]
-        num_anchors = self.config.max_anchors
+        num_anchors = kwargs.pop("max_anchors", 3072)
 
         if position_ids is None:
             position_ids = 1 + torch.arange(
@@ -304,7 +305,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             ).unsqueeze(0)
 
         full_attn_mask, sliding_window_attn_mask, anchor_positions, anchor_valid = (
-            self._build_attention_mask(loss_mask, document_ids, device)
+            self._build_attention_mask(loss_mask, num_anchors, document_ids, device)
         )
 
         mask_tokens_size = num_anchors * self.block_size
@@ -388,6 +389,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         position_ids: torch.Tensor | None = None,  # shape: [1, total_seq_len]
         loss_config: LossConfig | None = None,
         gamma: float = 4.0,
+        max_anchors: int = 3072,
         **kwargs,
     ):
         _, logits, targets, aligned_loss_mask, _ = self._backbone_forward(
@@ -397,6 +399,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             verifier_last_hidden_states,
             document_ids,
             position_ids,
+            max_anchors=max_anchors,
             **kwargs,
         )
         loss, metrics = compute_metrics(

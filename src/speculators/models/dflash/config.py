@@ -48,14 +48,6 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
         ),
     )
 
-    max_anchors: int = Field(
-        default=256,
-        description=(
-            "Maximum number of anchor positions to sample during training "
-            "(controls memory usage and training efficiency)"
-        ),
-    )
-
     target_hidden_size: int | None = Field(
         default=None,
         description="Hidden size of the target model (if different from draft model)",
