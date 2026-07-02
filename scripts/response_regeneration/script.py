@@ -185,6 +185,25 @@ async def detect_model(endpoint: str) -> str:
         ) from e
 
 
+async def _post_chat(
+    sem: asyncio.Semaphore,
+    session: aiohttp.ClientSession,
+    endpoint: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """POST one chat-completion request and return the parsed response.
+
+    A non-2xx reply has no ``choices`` array, so raise with the status and a
+    short body; otherwise the caller records a bare ``KeyError('choices')`` and
+    the real cause is lost.
+    """
+    async with sem, session.post(endpoint, json=payload) as response:
+        if not response.ok:
+            body = (await response.text())[:500]
+            raise RuntimeError(f"HTTP {response.status} from {endpoint}: {body}")
+        return await response.json()
+
+
 async def worker(
     sem: asyncio.Semaphore,
     session: aiohttp.ClientSession,
@@ -216,11 +235,7 @@ async def worker(
         # are built in lockstep as we walk the turns.
         prefix: list[dict[str, Any]] = []
         out_convs: list[dict[str, Any]] = []
-        # Finish reasons are collected per turn: recording only the last would
-        # hide an earlier turn truncated at max_tokens (finish_reason "length").
         finish_reasons: list[str | None] = []
-        # Usage is summed across turns: each user turn is a separate API call, so
-        # the conversation's cost is the sum, not just the final call's counts.
         usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         start_time = time.time()
         try:
@@ -238,16 +253,7 @@ async def worker(
                     "messages": prefix,
                     "max_tokens": args.max_tokens,
                 }
-                async with sem, session.post(endpoint, json=payload) as response:
-                    # A non-2xx reply has no `choices` array; surface the status
-                    # and a short body so `.errors.jsonl` is diagnosable instead
-                    # of recording a bare KeyError('choices').
-                    if not response.ok:
-                        body = (await response.text())[:500]
-                        raise RuntimeError(
-                            f"HTTP {response.status} from {endpoint}: {body}"
-                        )
-                    data = await response.json()
+                data = await _post_chat(sem, session, endpoint, payload)
 
                 choice = data["choices"][0]
                 message = choice["message"]
@@ -260,16 +266,14 @@ async def worker(
                 for key in usage:
                     usage[key] += turn_usage.get(key) or 0
 
-                # An empty/None content (e.g. a response truncated mid-reasoning)
-                # would corrupt the prefix of every following turn and emit a
-                # null assistant target; treat it as a failed conversation.
+                # Empty content (e.g. truncated mid-reasoning) would corrupt the
+                # next turn's prefix and emit a null target; fail the conversation.
                 if not generated_text:
                     raise ValueError(f"empty assistant content (turn {len(out_convs)})")
 
                 prefix.append({"role": "assistant", "content": generated_text})
                 gpt_turn = {"from": "gpt", "value": generated_text}
-                # Reasoning is stored per assistant turn: data preparation reads
-                # it from the turn, whereas top-level metadata is dropped.
+                # Stored per turn: data prep reads it here, not top-level metadata.
                 if reasoning_content is not None:
                     gpt_turn["reasoning_content"] = reasoning_content
                 out_convs.append(gpt_turn)
@@ -291,10 +295,8 @@ async def worker(
             out_fh.flush()
             stats["ok"] += 1
         except Exception as e:  # noqa: BLE001
-            # Failed / partial conversations go to a SEPARATE error file so the
-            # training output is never polluted with truncated records (the
-            # downstream pipeline drops metadata, so an in-band error marker
-            # would be invisible).
+            # Failures go to a separate error file, not the training output; an
+            # in-band marker would be invisible (the pipeline drops metadata).
             error_output = {
                 "id": item.get("uuid") or f"sample_{idx}",
                 "conversations": out_convs,
