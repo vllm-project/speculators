@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import warnings
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -83,9 +84,18 @@ class MooncakeTransfer(HiddenStatesTransfer):
         return None
 
     def get_generated(self, handle: str) -> dict[str, torch.Tensor] | None:
-        return self.store.get_sample(handle)
+        # The producer writes before its request completes, so the key exists
+        # by the first poll unless the write failed (dead key). A short
+        # timeout turns that into a skipped sample instead of a two-minute
+        # dataloader stall.
+        return self.store.get_sample(handle, timeout=10.0)
 
     def delete(self, handle: str) -> None:
         # Required for on_generate="delete": without it consumed samples
         # accumulate in the distributed store until puts stall at capacity.
-        self.store.remove_sample(handle)
+        # Best-effort: the sample is already loaded, and a failed delete must
+        # not discard it — lease-TTL eviction is the backstop.
+        try:
+            self.store.remove_sample(handle)
+        except Exception as e:
+            warnings.warn(f"Failed to delete Mooncake key {handle}: {e}", stacklevel=1)

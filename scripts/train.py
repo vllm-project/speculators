@@ -1,9 +1,7 @@
 import argparse
 import gc
 import logging
-import os
 import random
-import socket
 import warnings
 from copy import deepcopy
 from pathlib import Path
@@ -521,22 +519,25 @@ def main(args: argparse.Namespace):  # noqa: C901
         from hs_connectors.mooncake_store import (  # noqa: PLC0415
             MooncakeHiddenStatesStore,
             MooncakeStoreConfig,
+            resolve_local_hostname,
         )
 
-        # For multinode training the store client must advertise an address the
-        # producer/peers can route to (not loopback). Resolve the node's own IP,
-        # overridable via MOONCAKE_LOCAL_HOSTNAME when auto-detection picks the
-        # wrong interface.
-        local_hostname = os.environ.get(
-            "MOONCAKE_LOCAL_HOSTNAME"
-        ) or socket.gethostbyname(socket.gethostname())
+        # Reads stage through the client's registered local buffer, so it must
+        # hold the largest sample: seq_len x num_target_layers x hidden bf16
+        # plus int64 token ids.
+        max_blob_bytes = (
+            args.total_seq_len * (num_target_layers * hidden_size * 2 + 8) + 4096
+        )
         transfer: HiddenStatesTransfer = MooncakeTransfer(
             MooncakeHiddenStatesStore(
-                MooncakeStoreConfig(
-                    local_hostname=local_hostname,
+                # Trainers are read-only clients: no segment contribution.
+                MooncakeStoreConfig.for_consumer(
+                    local_hostname=resolve_local_hostname(args.mooncake_master),
                     metadata_server=args.mooncake_metadata_server,
                     master_server_address=args.mooncake_master,
                     protocol=args.mooncake_protocol,
+                    device_name=args.mooncake_device,
+                    local_buffer_size=max(512 * 1024 * 1024, 2 * max_blob_bytes),
                 )
             )
         )
@@ -834,6 +835,15 @@ def parse_args():
         choices=["tcp", "rdma"],
         default="tcp",
         help="Mooncake transport protocol. Used with backend=mooncake.",
+    )
+    parser.add_argument(
+        "--mooncake-device",
+        type=str,
+        default="",
+        help=(
+            "Mooncake RDMA device (e.g. 'mlx5_bond_0'). Empty means auto-detect. "
+            "Used with backend=mooncake and --mooncake-protocol rdma."
+        ),
     )
     parser.add_argument(
         "--legacy-data",

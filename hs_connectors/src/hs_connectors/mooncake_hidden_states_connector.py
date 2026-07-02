@@ -9,6 +9,7 @@ speculative method.
 
 from __future__ import annotations
 
+import math
 import re
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -90,9 +91,11 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
             "speculative method"
         )
 
-        mooncake_cfg = MooncakeStoreConfig.from_dict(
-            self._kv_transfer_config.get_from_extra_config("mooncake", {})
+        raw_mooncake_cfg = self._kv_transfer_config.get_from_extra_config(
+            "mooncake", {}
         )
+        mooncake_cfg = MooncakeStoreConfig.from_dict(raw_mooncake_cfg)
+        self._transfer_buffer_user_set = "transfer_buffer_size" in raw_mooncake_cfg
         self._store = MooncakeHiddenStatesStore(mooncake_cfg)
 
         # Scheduler-side state.
@@ -147,6 +150,26 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
             f"Expected 1 CacheOnlyAttentionLayer, got {len(cache_layers)}"
         )
         self._kv_cache = kv_caches[cache_layers[0]]
+
+        if not self._transfer_buffer_user_set:
+            # Size transfer buffers for a max_model_len sample (hidden states
+            # + token ids + header): undersized buffers make long requests
+            # fail to write, leaving consumers a dead key. Costs
+            # transfer_pool_size x this size in pinned host memory.
+            per_token_bytes = (
+                math.prod(self._kv_cache.shape[2:]) * self._kv_cache.element_size()
+                + 8  # int64 token id
+            )
+            max_len = self._vllm_config.model_config.max_model_len
+            self._store.config.transfer_buffer_size = max_len * per_token_bytes + 4096
+            logger.info(
+                "Auto-sized mooncake transfer buffers to %.1f MB "
+                "(max_model_len=%d x %d B/token; pool of %d)",
+                self._store.config.transfer_buffer_size / 1e6,
+                max_len,
+                per_token_bytes,
+                self._store.config.transfer_pool_size,
+            )
 
         if self._kv_cache_config is not None:
             for i, group in enumerate(self._kv_cache_config.kv_cache_groups):

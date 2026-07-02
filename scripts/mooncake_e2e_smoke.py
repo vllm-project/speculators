@@ -25,6 +25,7 @@ import urllib.request
 from hs_connectors.mooncake_store import (
     MooncakeHiddenStatesStore,
     MooncakeStoreConfig,
+    resolve_local_hostname,
 )
 
 
@@ -36,6 +37,14 @@ def main() -> None:
     ap.add_argument("--prompt", default="The capital of France is")
     ap.add_argument("--num-aux", type=int, default=4, help="len(target_layer_ids)")
     ap.add_argument("--hidden", type=int, default=2048, help="model hidden size")
+    ap.add_argument(
+        "--local-hostname",
+        default=None,
+        help="This client's routable address for P2P handshake (cross-node "
+        "reads). Default: auto-resolved from the route to the master.",
+    )
+    ap.add_argument("--protocol", default="tcp", choices=["tcp", "rdma"])
+    ap.add_argument("--device", default="", help="RDMA device for --protocol rdma")
     args = ap.parse_args()
 
     # 1) Producer: vLLM extracts hidden states into Mooncake, returns the key.
@@ -57,13 +66,12 @@ def main() -> None:
 
     # 2) Consumer (trainer): read the sample back over the network by key.
     store = MooncakeHiddenStatesStore(
-        MooncakeStoreConfig(
-            local_hostname="127.0.0.1",
+        MooncakeStoreConfig.for_consumer(
+            local_hostname=args.local_hostname or resolve_local_hostname(args.master),
             metadata_server="P2PHANDSHAKE",
             master_server_address=args.master,
-            protocol="tcp",
-            global_segment_size=256 * 1024 * 1024,
-            local_buffer_size=128 * 1024 * 1024,
+            protocol=args.protocol,
+            device_name=args.device,
         )
     ).setup()
     out = store.get_sample(key, timeout=30.0)

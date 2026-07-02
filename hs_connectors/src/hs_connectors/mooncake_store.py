@@ -17,13 +17,57 @@ transfer cost over TCP.
 from __future__ import annotations
 
 import ctypes
+import inspect
 import json
+import os
 import queue
+import socket
 import threading
 import time
 from dataclasses import dataclass
 
 import torch
+
+
+def resolve_local_hostname(master_server_address: str) -> str:
+    """Routable address for this client, as seen on the route to the master.
+
+    ``gethostbyname(gethostname())`` resolves to loopback on many hosts, which
+    breaks cross-node transfers. A UDP socket toward the master (no packets
+    sent) yields the interface the OS actually routes through. Override with
+    ``MOONCAKE_LOCAL_HOSTNAME`` if auto-detection picks the wrong interface.
+    """
+    override = os.environ.get("MOONCAKE_LOCAL_HOSTNAME")
+    if override:
+        return override
+    host = master_server_address.rsplit(":", 1)[0]
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect((host, 1))
+            return s.getsockname()[0]
+    except OSError:
+        return socket.gethostbyname(socket.gethostname())
+
+
+def _ensure_remove_force(store) -> None:
+    """Fail fast if the mooncake build lacks ``remove(key, force=True)``.
+
+    Without ``force=`` deletes fail, and the store silently fills under load
+    until producer puts stall. Requires mooncake >= 0.3.10.post1; checked at
+    runtime because the ``mooncake-transfer-engine-cuda13`` wheel's package
+    name evades the setup.py pin.
+    """
+    try:
+        has_force = "force" in inspect.signature(store.remove).parameters
+    except (TypeError, ValueError):  # pybind methods aren't introspectable
+        has_force = "force" in (getattr(store.remove, "__doc__", None) or "")
+    if not has_force:
+        raise RuntimeError(
+            "mooncake-transfer-engine >= 0.3.10.post1 is required: this build's "
+            "remove() lacks force=, so consumed samples can never be deleted "
+            "and the store would fill until puts stall."
+        )
+
 
 # Process-wide DtoH staging stream, mirroring vLLM's aux_stream pattern:
 # lazily created once and reused for the process lifetime.
@@ -152,6 +196,18 @@ class MooncakeStoreConfig:
         known = set(cls.__dataclass_fields__)  # type: ignore[attr-defined]
         return cls(**{k: v for k, v in d.items() if k in known})
 
+    @classmethod
+    def for_consumer(cls, **kwargs) -> MooncakeStoreConfig:
+        """Config for read-only clients (trainer dataloader workers).
+
+        Consumers mount no segment (``global_segment_size=0``): samples only
+        land in producer segments, and worker processes avoid registering GBs
+        of memory each. The local buffer only covers in-flight reads.
+        """
+        kwargs.setdefault("global_segment_size", 0)
+        kwargs.setdefault("local_buffer_size", 512 * 1024 * 1024)
+        return cls(**kwargs)
+
 
 class MooncakeHiddenStatesStore:
     """Stores/loads tensor dicts in a Mooncake store via zero-copy buffers."""
@@ -180,7 +236,8 @@ class MooncakeHiddenStatesStore:
             ) from e
 
         store = MooncakeDistributedStore()
-        store.setup(
+        _ensure_remove_force(store)
+        rc = store.setup(
             self.config.local_hostname,
             self.config.metadata_server,
             self.config.global_segment_size,
@@ -189,6 +246,14 @@ class MooncakeHiddenStatesStore:
             self.config.device_name,
             self.config.master_server_address,
         )
+        if rc != 0:
+            # Raising (instead of caching a half-dead client) lets callers with
+            # lazy setup retry later, e.g. a producer that outlives a master
+            # restart.
+            raise RuntimeError(
+                f"mooncake store setup failed (rc={rc}): master "
+                f"{self.config.master_server_address} unreachable?"
+            )
         self._store = store
         return self
 
@@ -234,7 +299,11 @@ class MooncakeHiddenStatesStore:
             with self._put_lock:
                 rc = self._store.put_from(key, buf.data_ptr(), size)
             if rc != 0:
-                raise RuntimeError(f"mooncake put_from failed for {key} (rc={rc})")
+                raise RuntimeError(
+                    f"mooncake put_from failed for {key} (rc={rc}). Note all "
+                    "clients of one master must use the same protocol "
+                    "(tcp vs rdma); mixed-protocol segments cannot transfer."
+                )
         finally:
             pool.release(buf)
 
@@ -245,7 +314,11 @@ class MooncakeHiddenStatesStore:
         self._wait_exists(key, timeout, poll_interval)
         handle = self._store.get_buffer(key)
         if handle is None:
-            raise RuntimeError(f"mooncake get_buffer returned no data for {key}")
+            raise RuntimeError(
+                f"mooncake get_buffer returned no data for {key}: evicted "
+                "(store full — is the delete path running?) or the producer's "
+                "segment uses an incompatible protocol."
+            )
         return _unpack_from(handle.ptr(), handle.size())
 
     def remove_sample(self, key: str) -> None:

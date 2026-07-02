@@ -18,6 +18,8 @@ pytest.importorskip("hs_connectors.mooncake_store")
 from hs_connectors.mooncake_store import (
     MooncakeHiddenStatesStore,
     MooncakeStoreConfig,
+    _ensure_remove_force,
+    resolve_local_hostname,
 )
 
 
@@ -63,7 +65,6 @@ class _FakeMooncakeStore:
         return 0
 
 
-
 @pytest.fixture
 def store() -> MooncakeHiddenStatesStore:
     # Tiny transfer buffer/pool: test samples are a few KB.
@@ -105,3 +106,44 @@ def test_remove_sample_frees_the_key(store):
 
     with pytest.raises(TimeoutError):
         store.get_sample("req-3", timeout=0.2, poll_interval=0.02)
+
+
+def test_resolve_local_hostname_is_routable():
+    # Auto-detection must never return loopback for a remote master: the
+    # advertised address is what remote peers connect back to.
+    addr = resolve_local_hostname("8.8.8.8:50051")
+    assert not addr.startswith("127.")
+
+    # A loopback master is a single-node deployment: loopback is correct.
+    assert resolve_local_hostname("127.0.0.1:50051").startswith("127.")
+
+
+def test_resolve_local_hostname_env_override(monkeypatch):
+    monkeypatch.setenv("MOONCAKE_LOCAL_HOSTNAME", "10.0.0.99")
+    assert resolve_local_hostname("8.8.8.8:50051") == "10.0.0.99"
+
+
+def test_for_consumer_mounts_no_segment():
+    # Read-only clients must not contribute store capacity; placement then
+    # only ever targets producer segments.
+    cfg = MooncakeStoreConfig.for_consumer(protocol="rdma")
+    assert cfg.global_segment_size == 0
+    assert cfg.protocol == "rdma"
+    assert cfg.local_buffer_size > 0
+
+
+def test_ensure_remove_force_accepts_force_kwarg():
+    class _Store:
+        def remove(self, key, force=False):
+            return 0
+
+    _ensure_remove_force(_Store())  # must not raise
+
+
+def test_ensure_remove_force_rejects_old_builds():
+    class _OldStore:
+        def remove(self, key):
+            return 0
+
+    with pytest.raises(RuntimeError, match="0.3.10.post1"):
+        _ensure_remove_force(_OldStore())
