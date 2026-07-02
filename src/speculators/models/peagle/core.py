@@ -44,7 +44,14 @@ class PEagleDraftModel(Eagle3DraftModel):
         self.mask_token_id = config.mask_token_id
 
         # Learnable mask_hidden parameter for padding unsampled positions
-        self.mask_hidden = torch.nn.Parameter(torch.randn(1, 1, 3 * self.hidden_size))
+        num_aux = (
+            len(self.config.eagle_aux_hidden_state_layer_ids)
+            if self.config.eagle_aux_hidden_state_layer_ids
+            else 3
+        )
+        self.mask_hidden = torch.nn.Parameter(
+            torch.randn(1, 1, num_aux * self.hidden_size)
+        )
 
     @conditional_torch_compile
     def forward(
@@ -118,6 +125,12 @@ class PEagleDraftModel(Eagle3DraftModel):
         # Project concatenated hidden states (3*hidden_size) -> hidden_size
         if self.input_norm is not None:
             sampled_hidden = self.input_norm(sampled_hidden)
+        if self.fc_norm is not None:
+            chunks = sampled_hidden.chunk(len(self.fc_norm), dim=-1)
+            sampled_hidden = torch.cat(
+                [norm(chunk) for norm, chunk in zip(self.fc_norm, chunks, strict=True)],
+                dim=-1,
+            )
         sampled_hidden = self.fc(sampled_hidden)  # [1, total_sampled, hidden_size]
 
         layer_input = torch.cat(
@@ -217,6 +230,7 @@ class PEagleDraftModel(Eagle3DraftModel):
             draft_vocab_size=kwargs["draft_vocab_size"],
             norm_before_residual=kwargs.get("norm_before_residual", False),
             norm_before_fc=kwargs.get("norm_before_fc", False),
+            fc_norm=kwargs.get("fc_norm", False),
             norm_output=kwargs.get("norm_output", False),
             eagle_aux_hidden_state_layer_ids=target_layer_ids,
             num_depths=kwargs.get("num_depths", 8),

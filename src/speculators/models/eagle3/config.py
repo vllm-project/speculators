@@ -1,6 +1,6 @@
 from typing import Any, Literal
 
-from pydantic import Field, field_serializer, field_validator
+from pydantic import Field, field_serializer, field_validator, model_validator
 from transformers import AutoConfig, PretrainedConfig
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
@@ -58,8 +58,18 @@ class Eagle3SpeculatorConfig(SpeculatorModelConfig):
     norm_before_fc: bool = Field(
         default=False,
         description=(
-            "Use RMSNorm before FC layer in draft path "
-            "(e.g., for Eagle 3.1 / gpt-oss models)."
+            "Apply a single RMSNorm to the concatenated auxiliary hidden states "
+            "before the FC projection (gpt-oss style)."
+        ),
+    )
+
+    fc_norm: bool = Field(
+        default=False,
+        description=(
+            "Apply per-layer RMSNorm to each auxiliary hidden state before "
+            "concatenation and FC projection — i.e. "
+            "concat(Norm(h_a), Norm(h_b), Norm(h_c)) instead of the single "
+            "Norm(concat(h_a, h_b, h_c)) used by norm_before_fc."
         ),
     )
 
@@ -75,6 +85,15 @@ class Eagle3SpeculatorConfig(SpeculatorModelConfig):
         default=False,
         description="Whether embedding layer weights require gradients during training",
     )
+
+    @model_validator(mode="after")
+    def _check_norm_flags(self) -> "Eagle3SpeculatorConfig":
+        if self.norm_before_fc and self.fc_norm:
+            raise ValueError(
+                "norm_before_fc and fc_norm are mutually exclusive — "
+                "enable one or the other, not both."
+            )
+        return self
 
     @field_serializer("transformer_layer_config")
     def serialize_transformer_config(self, value: PretrainedConfig) -> dict:
