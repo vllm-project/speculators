@@ -35,10 +35,20 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         "verifier_lm_head.weight",
         "t2d",
         "d2t",
+        # Domino head is training-only; weights are not saved to checkpoints.
+        "domino_head.prefix_gru.weight_ih_l0",
+        "domino_head.prefix_gru.weight_hh_l0",
+        "domino_head.embed_proj.0.weight",
+        "domino_head.embed_proj.2.weight",
     ]
     _keys_to_ignore_on_save: ClassVar[list[str]] = [  # type: ignore[misc,assignment]
         "verifier_lm_head.weight",
         "verifier_norm.weight",
+        # Domino head is training-only; not needed at inference.
+        "domino_head.prefix_gru.weight_ih_l0",
+        "domino_head.prefix_gru.weight_hh_l0",
+        "domino_head.embed_proj.0.weight",
+        "domino_head.embed_proj.2.weight",
     ]
 
     t2d: torch.Tensor | None
