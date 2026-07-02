@@ -119,4 +119,9 @@ DATASET_CONFIGS: dict[str, DatasetConfig] = {
         filter_fn=_filter_sharegpt4v_coco,
         normalize_fn=_normalize_sharegpt4v_coco,
     ),
+    "open-perfectblend": DatasetConfig(
+        name="open-perfectblend",
+        hf_path="mlabonne/open-perfectblend",
+        split="train",
+    ),
 }
