@@ -63,6 +63,7 @@ class PEagleDraftModel(Eagle3DraftModel):
         loss_mask: torch.Tensor | None = None,
         verifier_last_hidden_states: torch.Tensor | None = None,
         loss_config: LossConfig | None = None,
+        max_anchors: int | None = None,
         **kwargs,
     ):
         """
@@ -97,7 +98,7 @@ class PEagleDraftModel(Eagle3DraftModel):
             num_depths=self.num_depths,
             down_sample_ratio=self.down_sample_ratio,
             down_sample_ratio_min=self.down_sample_ratio_min,
-            max_anchors=kwargs.get("max_anchors"),
+            max_anchors=max_anchors,
         )
         total_sampled = anchor_pos.shape[0]
 
