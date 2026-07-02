@@ -142,6 +142,7 @@ def create_transformer_layer_config(  # noqa: C901
         head_dim=head_dim,
         tie_word_embeddings=False,
         sliding_window=sliding_window,
+        use_sliding_window=bool(sliding_window_indices),
         layer_types=layer_types,
     )
 
@@ -948,8 +949,9 @@ def parse_args():
     parser.add_argument(
         "--max-anchors",
         type=int,
-        default=256,
-        help="Maximum anchor positions for DFlash training (default: 256)",
+        default=3072,
+        help="Maximum anchor positions for DFlash, DSpark, "
+        "and P-EAGLE training (default: 3072).",
     )
     parser.add_argument(
         "--dflash-decay-gamma",
