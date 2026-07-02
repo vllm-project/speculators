@@ -2,9 +2,12 @@
 
 These exercise the producer/consumer payload contract without a real Mooncake
 cluster by swapping in a dict-backed fake for ``MooncakeDistributedStore``.
-The point is to prove the seam: a tensor dict written by the producer is read
-back byte-identical by the consumer.
+The fake models the zero-copy buffer API (``put_from``/``get_buffer``), so the
+real pack/unpack code path is covered: a tensor dict staged into a buffer by the
+producer is read back byte-identical by the consumer.
 """
+
+import ctypes
 
 import pytest
 import torch
@@ -18,31 +21,51 @@ from hs_connectors.mooncake_store import (
 )
 
 
+class _FakeHandle:
+    """Stand-in for mooncake.store.BufferHandle."""
+
+    def __init__(self, ptr: int, size: int):
+        self._ptr = ptr
+        self._size = size
+
+    def ptr(self) -> int:
+        return self._ptr
+
+    def size(self) -> int:
+        return self._size
+
+
 class _FakeMooncakeStore:
-    """In-memory stand-in for MooncakeDistributedStore."""
+    """In-memory stand-in modeling the zero-copy buffer API."""
 
     def __init__(self):
-        self._bytes: dict[str, bytes] = {}
-        self._tensors: dict[str, torch.Tensor] = {}
+        self._blobs: dict[str, bytes] = {}
+        self._keepalive: list = []  # keep get_buffer backing memory alive
 
-    def put(self, key: str, value: bytes) -> int:
-        self._bytes[key] = bytes(value)
+    def register_buffer(self, ptr: int, size: int) -> int:
         return 0
 
-    def get(self, key: str) -> bytes:
-        return self._bytes.get(key, b"")
-
-    def put_tensor(self, key: str, tensor: torch.Tensor) -> int:
-        self._tensors[key] = tensor.clone()
+    def put_from(self, key: str, ptr: int, size: int) -> int:
+        self._blobs[key] = ctypes.string_at(ptr, size)
         return 0
 
-    def get_tensor(self, key: str) -> torch.Tensor:
-        return self._tensors[key].clone()
+    def is_exist(self, key: str) -> int:
+        return 1 if key in self._blobs else 0
+
+    def get_buffer(self, key: str):
+        data = self._blobs[key]
+        cbuf = ctypes.create_string_buffer(data, len(data))
+        self._keepalive.append(cbuf)
+        return _FakeHandle(ctypes.addressof(cbuf), len(data))
+
 
 
 @pytest.fixture
 def store() -> MooncakeHiddenStatesStore:
-    s = MooncakeHiddenStatesStore(MooncakeStoreConfig())
+    # Tiny transfer buffer/pool: test samples are a few KB.
+    s = MooncakeHiddenStatesStore(
+        MooncakeStoreConfig(transfer_buffer_size=1 << 20, transfer_pool_size=1)
+    )
     # bypass setup(); no real cluster needed
     s._store = _FakeMooncakeStore()  # type: ignore[assignment]
     return s
@@ -64,9 +87,7 @@ def test_put_get_roundtrip_preserves_shape_and_dtype(store):
     assert torch.equal(out["token_ids"], token_ids)
 
 
-def test_meta_written_last_gates_visibility(store):
-    # get_sample keys off the meta blob, which put_sample writes last. Simulate
-    # a half-written sample (tensors present, meta absent) -> consumer waits.
-    store._store._tensors["req-2:hidden_states"] = torch.zeros(1)
+def test_missing_key_times_out(store):
+    # get_sample polls is_exist; a key that was never written must time out.
     with pytest.raises(TimeoutError):
-        store.get_sample("req-2", timeout=0.2, poll_interval=0.02)
+        store.get_sample("never-written", timeout=0.2, poll_interval=0.02)

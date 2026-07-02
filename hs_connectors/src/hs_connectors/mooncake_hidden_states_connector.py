@@ -171,9 +171,10 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
 
         num_tokens = pending.token_ids.shape[0]
         slot_mapping = slot_mapping.to(self._kv_cache.device)
-        hidden_states = extract_from_kv_cache(
-            self._kv_cache, slot_mapping, num_tokens
-        ).to("cpu")
+        # Keep the gathered hidden states on the GPU: put_sample stages them
+        # straight into its pinned transfer buffer on a dedicated copy stream,
+        # avoiding a blocking default-stream DtoH plus a pageable-memory hop.
+        hidden_states = extract_from_kv_cache(self._kv_cache, slot_mapping, num_tokens)
 
         self._store.put_sample(
             pending.mooncake_key,
