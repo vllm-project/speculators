@@ -79,7 +79,6 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         ]
         self.uses_sliding_window_attn = bool(self.sliding_window_indices)
         self.uses_full_attn = bool(num_draft_layers - len(self.sliding_window_indices))
-        self.sliding_window_non_causal = config.sliding_window_non_causal
 
         self.norm = Qwen3RMSNorm(
             config.transformer_layer_config.hidden_size,
@@ -177,7 +176,6 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             "block_size": block_size,
             "aux_hidden_state_layer_ids": target_layer_ids,
             "mask_token_id": kwargs.get("mask_token_id"),
-            "sliding_window_non_causal": kwargs.get("sliding_window_non_causal", False),
             "speculators_config": SpeculatorsConfig(
                 algorithm=algorithm,
                 proposal_methods=[
@@ -204,10 +202,12 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         loss_config = resolve_loss_config(kwargs["loss_fn"])
         gamma = kwargs.get("dflash_decay_gamma", 4.0)
         max_anchors = kwargs.get("max_anchors", 3072)
+        sliding_window_non_causal = kwargs.get("sliding_window_non_causal", False)
         shared = {
             "loss_config": loss_config,
             "gamma": gamma,
             "max_anchors": max_anchors,
+            "sliding_window_non_causal": sliding_window_non_causal,
         }
         return dict(shared), dict(shared)
 
@@ -249,7 +249,9 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         )
 
     @torch.compiler.disable
-    def _build_attention_mask(self, loss_mask, max_anchors, document_ids, device):
+    def _build_attention_mask(
+        self, loss_mask, max_anchors, document_ids, device, sliding_window_non_causal
+    ):
         total_seq_len = loss_mask.shape[1]
 
         anchor_positions, anchor_valid = select_anchors(
@@ -274,7 +276,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 anchor_positions=anchor_positions,
                 device=device,
                 sliding_window=self.sliding_window,
-                sliding_window_non_causal=self.sliding_window_non_causal,
+                sliding_window_non_causal=sliding_window_non_causal,
             )
 
         return full_attn_mask, sliding_window_attn_mask, anchor_positions, anchor_valid
@@ -298,6 +300,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         device = hidden_states.device
         total_seq_len = hidden_states.shape[1]
         num_anchors = kwargs.pop("max_anchors", 3072)
+        sliding_window_non_causal = kwargs.pop("sliding_window_non_causal", False)
 
         if position_ids is None:
             position_ids = 1 + torch.arange(
@@ -305,7 +308,13 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             ).unsqueeze(0)
 
         full_attn_mask, sliding_window_attn_mask, anchor_positions, anchor_valid = (
-            self._build_attention_mask(loss_mask, num_anchors, document_ids, device)
+            self._build_attention_mask(
+                loss_mask,
+                num_anchors,
+                document_ids,
+                device,
+                sliding_window_non_causal,
+            )
         )
 
         mask_tokens_size = num_anchors * self.block_size
@@ -390,6 +399,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         loss_config: LossConfig | None = None,
         gamma: float = 4.0,
         max_anchors: int = 3072,
+        sliding_window_non_causal: bool = False,
         **kwargs,
     ):
         _, logits, targets, aligned_loss_mask, _ = self._backbone_forward(
@@ -400,6 +410,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             document_ids,
             position_ids,
             max_anchors=max_anchors,
+            sliding_window_non_causal=sliding_window_non_causal,
             **kwargs,
         )
         loss, metrics = compute_metrics(
