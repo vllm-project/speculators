@@ -11,9 +11,11 @@ from speculators.models.metrics import (
     dflash_loss_decay,
     exp_loss_decay,
     kl_div_loss,
+    lk_hybrid_loss,
     loss_function,
     neg_log_acceptance_loss,
     resolve_loss_fn,
+    reverse_kl_div_loss,
     tv_loss,
 )
 
@@ -92,6 +94,33 @@ class TestKLDivLoss:
         assert (loss_random >= -1e-6).all()
 
 
+class TestReverseKLDivLoss:
+    def test_identical_zero_and_random_nonnegative(self):
+        """Reverse KL of identical distributions is ~0; random inputs are >= 0."""
+        x = torch.randn(1, 4, 8)
+        loss_identical = reverse_kl_div_loss(x, x)
+        assert loss_identical.sum().item() == pytest.approx(0.0, abs=1e-4)
+
+        torch.manual_seed(0)
+        loss_random = reverse_kl_div_loss(torch.randn(1, 4, 8), torch.randn(1, 4, 8))
+        assert (loss_random >= -1e-6).all()
+
+    def test_equals_forward_kl_with_swapped_args(self):
+        """KL(q||p) equals forward KL with draft and target swapped."""
+        torch.manual_seed(0)
+        logits = torch.randn(1, 4, 8)
+        targets = torch.randn(1, 4, 8)
+        assert torch.allclose(
+            reverse_kl_div_loss(logits, targets),
+            kl_div_loss(targets, logits),
+            atol=1e-6,
+        )
+
+    def test_resolve_rkl(self):
+        """resolve_loss_fn maps 'rkl' to reverse_kl_div_loss."""
+        assert resolve_loss_fn("rkl") is reverse_kl_div_loss
+
+
 class TestTVLoss:
     def test_identical_is_zero(self):
         """TV distance between identical distributions is ~0."""
@@ -162,6 +191,65 @@ class TestNegLogAcceptanceLoss:
     def test_resolve_nla(self):
         """resolve_loss_fn maps 'nla' to neg_log_acceptance_loss."""
         assert resolve_loss_fn("nla") is neg_log_acceptance_loss
+
+
+class TestLKHybridLoss:
+    def test_eta_zero_reduces_to_kl(self):
+        """eta=0 gives lambda=1 everywhere, so the loss is pure KL."""
+        torch.manual_seed(0)
+        logits, targets = torch.randn(1, 4, 50), torch.randn(1, 4, 50)
+        assert torch.allclose(
+            lk_hybrid_loss(logits, targets, eta=0.0),
+            kl_div_loss(logits, targets),
+            atol=1e-6,
+        )
+
+    def test_large_eta_reduces_to_tv(self):
+        """Large eta drives lambda->0, so the loss approaches pure TV."""
+        torch.manual_seed(0)
+        logits, targets = torch.randn(1, 4, 50), torch.randn(1, 4, 50)
+        assert torch.allclose(
+            lk_hybrid_loss(logits, targets, eta=1e6),
+            tv_loss(logits, targets),
+            atol=1e-5,
+        )
+
+    def test_shape_and_finite(self):
+        """Output is [1, seq_len] and finite at the default blend setting."""
+        torch.manual_seed(0)
+        logits, targets = torch.randn(1, 4, 50), torch.randn(1, 4, 50)
+        out = lk_hybrid_loss(logits, targets, eta=3.0)
+        assert out.shape == (1, 4)
+        assert torch.isfinite(out).all()
+
+    def test_alpha_is_detached_in_weight(self):
+        """The alpha inside lambda must be stop-gradient.
+
+        Verify the impl's gradient matches the detached form, and that NOT
+        detaching would differ.
+        """
+        torch.manual_seed(0)
+        logits = torch.randn(1, 3, 40, requires_grad=True)
+        targets = torch.randn(1, 3, 40)
+        g_impl = torch.autograd.grad(
+            lk_hybrid_loss(logits, targets, eta=3.0).sum(), logits
+        )[0]
+
+        def manual(detach):
+            dp, tp = torch.softmax(logits, -1), torch.softmax(targets, -1)
+            ov = torch.minimum(dp, tp).sum(-1)
+            alpha = ov.detach() if detach else ov
+            lam = torch.exp(-3.0 * alpha)
+            return (lam * kl_div_loss(logits, targets) + (1 - lam) * (1 - ov)).sum()
+
+        g_detached = torch.autograd.grad(manual(True), logits, retain_graph=True)[0]
+        g_nodetach = torch.autograd.grad(manual(False), logits)[0]
+        assert torch.allclose(g_impl, g_detached, atol=1e-5)
+        assert not torch.allclose(g_detached, g_nodetach, atol=1e-4)
+
+    def test_resolve_lk_hybrid(self):
+        """resolve_loss_fn maps 'lk_hybrid' to lk_hybrid_loss."""
+        assert resolve_loss_fn("lk_hybrid") is lk_hybrid_loss
 
 
 class TestComputeAccuracySingleStep:

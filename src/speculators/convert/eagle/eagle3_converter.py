@@ -39,6 +39,9 @@ class Eagle3Converter:
         base_model: str,
         validate: bool = True,
         norm_before_residual: bool = False,
+        norm_before_fc: bool = False,
+        fc_norm: bool = False,
+        norm_output: bool = False,
         eagle_aux_hidden_state_layer_ids: list[int] | None = None,
         cache_dir: str | Path | None = None,
     ) -> None:
@@ -77,6 +80,9 @@ class Eagle3Converter:
             eagle_config,
             base_model,
             norm_before_residual,
+            norm_before_fc,
+            fc_norm,
+            norm_output,
             eagle_aux_hidden_state_layer_ids,
         )
 
@@ -106,6 +112,9 @@ class Eagle3Converter:
         eagle_config: dict,
         base_model: str,
         norm_before_residual: bool = False,
+        norm_before_fc: bool = False,
+        fc_norm: bool = False,
+        norm_output: bool = False,
         eagle_aux_hidden_state_layer_ids: list[int] | None = None,
     ) -> Eagle3SpeculatorConfig:
         transformer_config = self._create_transformer_config_from_eagle(
@@ -130,6 +139,9 @@ class Eagle3Converter:
             speculators_config=speculators_config,
             draft_vocab_size=eagle_config.get("draft_vocab_size", 32000),
             norm_before_residual=norm_before_residual,
+            norm_before_fc=norm_before_fc or eagle_config.get("norm_before_fc", False),
+            fc_norm=fc_norm or eagle_config.get("fc_norm", False),
+            norm_output=norm_output or eagle_config.get("norm_output", False),
             target_hidden_size=eagle_config.get("target_hidden_size"),
             eagle_aux_hidden_state_layer_ids=eagle_aux_hidden_state_layer_ids,
         )

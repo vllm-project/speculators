@@ -98,6 +98,8 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--lr`** (float, default: `1e-4`) Learning rate.
 
+- **`--train-data-ratio`** (float, default: `0.9`) Ratio of data to use for training, the rest of the provided data will be used for validation.
+
 - **`--no-resume-from-checkpoint`** (flag) Disable automatic checkpoint resumption. Without this flag, this script will automatically load the latest checkpoint in `{save-path}` if one exists.
 
 - **`--logger`** (str, default: `""`) Metric logging backend(s). Options: `trackio`, `wandb`, `tensorboard`, `mlflow` Can specify multiple comma-separated: `--logger tensorboard,wandb`. **Warning:** backend must be pip installed before using.
@@ -136,7 +138,11 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--embed-requires-grad` / `--no-embed-requires-grad`** (flag, default: `False`) Whether to train embedding layer weights.
 
-- **`--norm-before-fc`** (flag) Use RMSNorm before FC layer in draft path (e.g., for gpt-oss models).
+- **`--norm-before-fc` / `--no-norm-before-fc`** (flag, default: `True` for eagle3, `False` otherwise) Apply a single RMSNorm to the concatenated auxiliary hidden states before the FC projection (gpt-oss style). See `--fc-norm` for the per-layer alternative from the Eagle 3.1 paper.
+
+- **`--fc-norm`** (flag, default: `False`) Apply per-layer RMSNorm to each auxiliary hidden state before concatenation and FC projection (Eagle 3.1 paper approach).
+
+- **`--norm-output` / `--no-norm-output`** (flag, default: `True` for eagle3, `False` otherwise) Feed post-norm hidden states back across TTT steps to stabilize magnitude drift across speculation depths.
 
 - **`--ttt-steps`** (int, default: `3`) Number of test-time training steps
 

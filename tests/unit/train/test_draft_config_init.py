@@ -413,7 +413,7 @@ def _create_layer_config_for(verifier: SimpleNamespace):
         return create_transformer_layer_config(
             "target",
             num_layers=2,
-            draft_arch="qwen3",
+            draft_arch="llama",
             hidden_act=None,
             sliding_window=2048,
             sliding_window_indices=[],
