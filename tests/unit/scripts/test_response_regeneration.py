@@ -243,57 +243,46 @@ def test_emitted_conversation_survives_downstream_normalization():
 #
 # The prior resume keyed rows on ``uuid or idx`` (idx = streaming enumeration
 # index), which is unstable across --limit/--language-filter/order changes and
-# never matched the emitted output (which stores ``id`` + ``metadata.idx``, not
-# top-level ``uuid``/``idx``). These tests pin the stable key and the
-# input->output->resume round-trip.
+# never matched the emitted output (which stored ``id`` + ``metadata.idx``, not
+# top-level ``uuid``/``idx``). Resume now reads a single stable
+# ``metadata.primary_id`` written by the script.
 # ---------------------------------------------------------------------------
 
 
 def test_primary_identifier_prefers_explicit_id_over_uuid():
-    assert regen._primary_identifier({"id": "abc", "uuid": "zzz"}) == ("abc", "id")
+    assert regen._primary_identifier({"id": "abc", "uuid": "zzz"}) == "abc"
 
 
-def test_primary_identifier_uuid_then_nested_metadata():
-    assert regen._primary_identifier({"uuid": "u1"}) == ("u1", "uuid")
-    assert regen._primary_identifier({"metadata": {"sample_id": 7}}) == (
-        "7",
-        "metadata.sample_id",
-    )
+def test_primary_identifier_uuid_when_no_id():
+    assert regen._primary_identifier({"uuid": "u1"}) == "u1"
 
 
 def test_primary_identifier_ignores_empty_values():
     # An empty-string id is not "present"; resolution falls through to uuid.
-    assert regen._primary_identifier({"id": "", "uuid": "u"}) == ("u", "uuid")
+    assert regen._primary_identifier({"id": "", "uuid": "u"}) == "u"
 
 
-def test_primary_identifier_content_hash_is_stable_and_order_independent():
+def test_primary_identifier_falls_back_to_content_hash():
+    # No explicit id/uuid -> deterministic content hash. Nested metadata ids are
+    # intentionally not consulted (the inputs that need this have no id at all).
     row = {"question": "What is 6*7?", "answer": "42"}
     reordered = {"answer": "42", "question": "What is 6*7?"}
-    pid, source = regen._primary_identifier(row)
+    pid = regen._primary_identifier(row)
 
-    assert source == "content_hash"
     assert pid.startswith("hash_")
     # Same content, different key order -> same key (JSON is sorted).
-    assert regen._primary_identifier(reordered)[0] == pid
+    assert regen._primary_identifier(reordered) == pid
     # Different content -> different key.
-    assert regen._primary_identifier({"question": "other"})[0] != pid
-
-
-def test_output_seen_ids_prefers_primary_id():
-    obj = {"id": "legacy", "metadata": {"primary_id": "P", "idx": 5}}
-    assert regen._output_seen_ids(obj) == {"P"}
-
-
-def test_output_seen_ids_legacy_fallback_without_primary_id():
-    obj = {"id": "L", "metadata": {"idx": 5, "sample_id": "S"}}
-    assert regen._output_seen_ids(obj) == {"L", "5", "S"}
+    assert regen._primary_identifier({"question": "other"}) != pid
+    # A nested metadata id is not used as a source.
+    assert regen._primary_identifier({"metadata": {"sample_id": 7}}).startswith("hash_")
 
 
 def test_load_seen_missing_file_returns_empty(tmp_path):
     assert regen.load_seen(str(tmp_path / "nope.jsonl")) == set()
 
 
-def test_load_seen_skips_malformed_lines(tmp_path):
+def test_load_seen_reads_primary_id_and_skips_malformed_lines(tmp_path):
     out = tmp_path / "out.jsonl"
     out.write_text(
         "not json\n" + json.dumps({"metadata": {"primary_id": "P"}}) + "\n",
@@ -302,12 +291,23 @@ def test_load_seen_skips_malformed_lines(tmp_path):
     assert regen.load_seen(str(out)) == {"P"}
 
 
+def test_load_seen_ignores_rows_without_primary_id(tmp_path):
+    # Resume is not back-compatible with pre-primary_id outputs (it never worked
+    # before), so a row lacking metadata.primary_id contributes no resume key.
+    out = tmp_path / "out.jsonl"
+    out.write_text(
+        json.dumps({"id": "legacy", "metadata": {"idx": 3}}) + "\n",
+        encoding="utf-8",
+    )
+    assert regen.load_seen(str(out)) == set()
+
+
 def test_resume_roundtrip_hash_only_row(tmp_path):
     # A row with no explicit id resolves to a content hash; the written output
     # stores that hash as metadata.primary_id, and load_seen must recover it so
     # a re-run skips the row. This is the exact case the old resume missed.
     row = {"question": "What is 6*7?", "answer": "42"}
-    primary_id, primary_id_source = regen._primary_identifier(row)
+    primary_id = regen._primary_identifier(row)
 
     out = tmp_path / "out.jsonl"
     out.write_text(
@@ -315,11 +315,7 @@ def test_resume_roundtrip_hash_only_row(tmp_path):
             {
                 "id": "sample_0",
                 "conversations": [],
-                "metadata": {
-                    "primary_id": primary_id,
-                    "primary_id_source": primary_id_source,
-                    "idx": 0,
-                },
+                "metadata": {"primary_id": primary_id, "idx": 0},
             }
         )
         + "\n",
@@ -378,7 +374,6 @@ def test_post_chat_retries_transient_failure_then_succeeds():
 
     async def scenario():
         return await regen._post_chat(
-            asyncio.Semaphore(1),
             session,
             "http://x/v1/chat/completions",
             {"model": "m"},
@@ -398,7 +393,6 @@ def test_post_chat_raises_after_exhausting_retries():
     async def scenario():
         with pytest.raises(RuntimeError, match="failed after 3 attempt"):
             await regen._post_chat(
-                asyncio.Semaphore(1),
                 session,
                 "http://x/v1/chat/completions",
                 {"model": "m"},
@@ -408,3 +402,55 @@ def test_post_chat_raises_after_exhausting_retries():
 
     asyncio.run(scenario())
     assert session.calls == 3
+
+
+class _RaisingFakeResponse:
+    """A response whose context-manager entry raises (network-error path)."""
+
+    async def __aenter__(self):
+        raise ConnectionError("boom")
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+def test_post_chat_retries_on_network_error_then_succeeds():
+    ok_payload = {"choices": [{"message": {"content": "hi"}}]}
+    session = _FakeSession(
+        [
+            _RaisingFakeResponse(),
+            _FakeResponse(ok=True, status=200, text="", payload=ok_payload),
+        ]
+    )
+
+    async def scenario():
+        return await regen._post_chat(
+            session,
+            "http://x/v1/chat/completions",
+            {"model": "m"},
+            max_retries=1,
+            retry_backoff=0,
+        )
+
+    assert asyncio.run(scenario()) == ok_payload
+    assert session.calls == 2
+
+
+def test_post_chat_fails_fast_on_permanent_status():
+    # A permanent (non-transient) status must not be retried: one attempt only.
+    session = _FakeSession(
+        [_FakeResponse(ok=False, status=404, text="nope", payload={})]
+    )
+
+    async def scenario():
+        with pytest.raises(RuntimeError, match="HTTP 404"):
+            await regen._post_chat(
+                session,
+                "http://x/v1/chat/completions",
+                {"model": "m"},
+                max_retries=3,
+                retry_backoff=0,
+            )
+
+    asyncio.run(scenario())
+    assert session.calls == 1

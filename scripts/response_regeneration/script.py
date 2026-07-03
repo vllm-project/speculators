@@ -116,7 +116,12 @@ def parse_args():
             f"(default: {DEFAULT_RETRY_BACKOFF})"
         ),
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.max_retries < 0:
+        parser.error("--max-retries must be >= 0")
+    if args.retry_backoff < 0:
+        parser.error("--retry-backoff must be >= 0")
+    return args
 
 
 def sanitize_filename(name: str) -> str:
@@ -169,62 +174,32 @@ def _is_present(value: Any) -> bool:
 
 
 def _content_hash(row: dict[str, Any]) -> str:
-    """Deterministic hash of a row, used as a last-resort stable identifier."""
+    """Deterministic hash of a row, used when it has no explicit id."""
     payload = json.dumps(row, sort_keys=True, ensure_ascii=False, default=str)
     return "hash_" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _primary_identifier(row: dict[str, Any]) -> tuple[str, str]:
-    """Return a stable ``(id, source)`` for a dataset row.
+def _primary_identifier(row: dict[str, Any]) -> str:
+    """Return a stable primary id for a dataset row.
 
-    Prefers an explicit ``id``/``uuid``, then a nested ``metadata`` id, and
-    finally a content hash. Unlike a streaming enumeration index, this key does
-    not shift when ``--limit``/``--language-filter`` or the input order change,
-    so ``--resume`` stays correct across runs.
+    Prefers an explicit ``id``/``uuid``; otherwise a deterministic content hash.
+    Unlike a streaming enumeration index, this key does not shift when
+    ``--limit``/``--language-filter`` or the input order change, so ``--resume``
+    stays correct across runs.
     """
     for field in ("id", "uuid"):
         value = row.get(field)
         if _is_present(value):
-            return str(value), field
-
-    metadata = row.get("metadata")
-    if isinstance(metadata, dict):
-        for field in ("id", "uuid", "sample_id", "idx", "index"):
-            value = metadata.get(field)
-            if _is_present(value):
-                return str(value), f"metadata.{field}"
-
-    return _content_hash(row), "content_hash"
-
-
-def _output_seen_ids(obj: dict[str, Any]) -> set[str]:
-    """Extract resume keys from one previously written output row.
-
-    Prefers ``metadata.primary_id`` (written by this script); falls back to
-    legacy top-level ``id``/``uuid`` and nested metadata ids so output files
-    written before this change still resume for rows that carried a real id.
-    """
-    metadata = obj.get("metadata")
-    if isinstance(metadata, dict):
-        primary_id = metadata.get("primary_id")
-        if _is_present(primary_id):
-            return {str(primary_id)}
-
-    ids: set[str] = set()
-    for field in ("id", "uuid"):
-        value = obj.get(field)
-        if _is_present(value):
-            ids.add(str(value))
-    if isinstance(metadata, dict):
-        for field in ("id", "uuid", "sample_id", "idx", "index"):
-            value = metadata.get(field)
-            if _is_present(value):
-                ids.add(str(value))
-    return ids
+            return str(value)
+    return _content_hash(row)
 
 
 def load_seen(path: str) -> set[str]:
-    """Load previously processed primary IDs from output file."""
+    """Load previously written ``metadata.primary_id`` values from the output.
+
+    Resume is not back-compatible with pre-``primary_id`` outputs; since resume
+    never worked before this change, there are no such files to support.
+    """
     seen: set[str] = set()
     if not os.path.isfile(path):
         return seen
@@ -235,7 +210,9 @@ def load_seen(path: str) -> set[str]:
                 obj = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            seen.update(_output_seen_ids(obj))
+            metadata = obj.get("metadata")
+            if isinstance(metadata, dict) and _is_present(metadata.get("primary_id")):
+                seen.add(str(metadata["primary_id"]))
     return seen
 
 
@@ -265,6 +242,21 @@ async def detect_model(endpoint: str) -> str:
         ) from e
 
 
+# Transient statuses worth retrying: request timeout, conflict, too-early, and
+# rate limiting, plus all 5xx. Other non-2xx replies (e.g. 400/401/404) are
+# permanent config/client errors and fail fast.
+SERVER_ERROR_STATUS = 500
+RETRYABLE_HTTP_STATUSES = {408, 409, 425, 429}
+
+
+class _NonRetryableChatError(RuntimeError):
+    """A non-2xx reply that should fail fast instead of being retried."""
+
+
+def _is_retryable_http_status(status: int) -> bool:
+    return status >= SERVER_ERROR_STATUS or status in RETRYABLE_HTTP_STATUSES
+
+
 async def _post_chat(
     session: aiohttp.ClientSession,
     endpoint: str,
@@ -277,10 +269,11 @@ async def _post_chat(
 
     A non-2xx reply has no ``choices`` array, so raise with the status and a
     short body; otherwise the caller records a bare ``KeyError('choices')`` and
-    the real cause is lost. Transient failures (network errors or non-2xx
-    replies) are retried up to ``max_retries`` times with exponential backoff;
-    the semaphore is released between attempts so a backing-off request does not
-    hold a concurrency slot.
+    the real cause is lost. Transient failures (network errors or transient
+    HTTP statuses) are retried up to ``max_retries`` times with exponential
+    backoff; a backing-off worker just sleeps without pulling new work, so it
+    does not block the other workers. Permanent non-2xx replies (e.g. 400/404)
+    fail fast without retrying.
     """
     total_attempts = max_retries + 1
     last_error: Exception | None = None
@@ -289,10 +282,15 @@ async def _post_chat(
             async with session.post(endpoint, json=payload) as response:
                 if not response.ok:
                     body = (await response.text())[:500]
-                    raise RuntimeError(
-                        f"HTTP {response.status} from {endpoint}: {body}"
+                    error_cls = (
+                        RuntimeError
+                        if _is_retryable_http_status(response.status)
+                        else _NonRetryableChatError
                     )
+                    raise error_cls(f"HTTP {response.status} from {endpoint}: {body}")
                 return await response.json()
+        except _NonRetryableChatError:
+            raise
         except Exception as e:  # noqa: BLE001
             last_error = e
             if attempt >= total_attempts:
@@ -385,7 +383,6 @@ async def worker(
 
             metadata = {
                 "primary_id": item["primary_id"],
-                "primary_id_source": item["primary_id_source"],
                 "idx": idx,
                 "finish_reasons": finish_reasons,
                 "latency_s": round(time.time() - start_time, 3),
@@ -409,7 +406,6 @@ async def worker(
                 "conversations": out_convs,
                 "metadata": {
                     "primary_id": item["primary_id"],
-                    "primary_id_source": item["primary_id_source"],
                     "idx": idx,
                     "error": repr(e),
                     "endpoint": endpoint,
@@ -526,7 +522,7 @@ async def main():
                     continue
 
                 uuid = row.get("uuid")
-                primary_id, primary_id_source = _primary_identifier(row)
+                primary_id = _primary_identifier(row)
                 if primary_id in seen_ids:
                     continue
 
@@ -535,7 +531,6 @@ async def main():
                         "idx": index,
                         "uuid": uuid,
                         "primary_id": primary_id,
-                        "primary_id_source": primary_id_source,
                         "turns": turns,
                     }
                 )
