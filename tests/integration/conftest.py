@@ -134,7 +134,6 @@ def make_dflash_model(
     *,
     draft_vocab_size: int = 64,
     block_size: int = 4,
-    max_anchors: int = 8,
     draft_attn_impl: str | None = None,
     device: str = "cuda:0",
     dtype: torch.dtype = torch.bfloat16,
@@ -147,7 +146,6 @@ def make_dflash_model(
         transformer_layer_config=transformer_config,
         draft_vocab_size=draft_vocab_size,
         block_size=block_size,
-        max_anchors=max_anchors,
         aux_hidden_state_layer_ids=[0, 1, 2],
         mask_token_id=0,
         speculators_config=SpeculatorsConfig(
@@ -171,7 +169,6 @@ def make_peagle_model(
     *,
     draft_vocab_size: int = 64,
     num_depths: int = 4,
-    down_sample_ratio: float = 0.7,
     norm_before_fc: bool = False,
     fc_norm: bool = False,
     norm_output: bool = False,
@@ -190,9 +187,6 @@ def make_peagle_model(
         fc_norm=fc_norm,
         norm_output=norm_output,
         embed_requires_grad=True,
-        num_depths=num_depths,
-        down_sample_ratio=down_sample_ratio,
-        down_sample_ratio_min=0.2,
         mask_token_id=0,
         speculators_config=SpeculatorsConfig(
             algorithm="peagle",
