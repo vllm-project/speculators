@@ -302,7 +302,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         num_anchors = self.config.max_anchors
 
         if position_ids is None:
-            position_ids = 1 + torch.arange(
+            position_ids = torch.arange(
                 total_seq_len, dtype=torch.long, device=device
             ).unsqueeze(0)
 
