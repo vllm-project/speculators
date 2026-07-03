@@ -3,6 +3,19 @@ from torch import nn
 
 
 class DominoHead(nn.Module):
+    """GRU-based correction head that refines draft model logits.
+
+    Processes previous token embeddings through a GRU, concatenates the
+    resulting hidden states with the original hidden states, and projects
+    them to produce logit deltas that are added to the suffix portion of
+    the base logits.
+
+    Parameters:
+        hidden_size: Size of the transformer hidden states.
+        gru_hidden_dim: Hidden dimension of the prefix GRU.
+        emb_dim: Intermediate embedding dimension for the projection head.
+        draft_vocab_size: Size of the draft model's vocabulary.
+    """
     def __init__(
         self,
         hidden_size: int,
@@ -28,6 +41,18 @@ class DominoHead(nn.Module):
         suffix_start: int,
         embed_tokens: nn.Embedding,
     ) -> torch.Tensor:
+        """Apply GRU-based prefix refinement to logits.
+
+        Parameters:
+            hidden_states_4d: Tensor of shape ``(batch, num_anchors, block_size, hidden_size)``.
+            base_logits_4d: Tensor of shape ``(batch, num_anchors, block_size, vocab_size)``.
+            prev_token_ids: Tensor of shape ``(batch, num_anchors * block_size)`` with previous token IDs.
+            suffix_start: Position index within a block where the suffix begins.
+            embed_tokens: Embedding layer for token lookup.
+
+        Returns:
+            Refined logits tensor with the same shape as ``base_logits_4d``.
+        """
         batch, num_anchors, block_size, hidden_size = hidden_states_4d.shape
         flat_batch = batch * num_anchors
 
