@@ -10,6 +10,7 @@ def generate_cod_sample_indices(
     down_sample_ratio: float = 0.7,
     down_sample_ratio_min: float = 0.2,
     filter_position_zero: bool = True,
+    max_anchors: int | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Generate sampling indices for parallel sequences using COD sampling.
@@ -36,12 +37,18 @@ def generate_cod_sample_indices(
     device = loss_mask.device
     all_valid_indices = torch.where(loss_mask == 1)[0]
 
+    if max_anchors is not None and all_valid_indices.shape[0] > max_anchors:
+        perm = torch.randperm(all_valid_indices.shape[0], device=device)[:max_anchors]
+        seed_indices = all_valid_indices[perm].sort()[0]
+    else:
+        seed_indices = all_valid_indices
+
     sample_indices = [torch.arange(seq_length, device=device)]
     n_per_depth = [seq_length]
-    prev_indices = all_valid_indices
+    prev_indices = seed_indices
 
     for d in range(1, num_depths):
-        valid_length = max(0, all_valid_indices.shape[0] - d)
+        valid_length = max(0, seed_indices.shape[0] - d)
         ratio = max(down_sample_ratio**d, down_sample_ratio_min)
         sample_size = int(valid_length * ratio)
 
