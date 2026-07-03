@@ -438,7 +438,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 document_ids,
                 position_ids,
                 max_anchors=max_anchors,
-                shift_targets=True,
+                shift_targets=False,
                 **kwargs,
             )
         )
