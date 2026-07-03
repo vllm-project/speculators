@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -30,6 +31,9 @@ DATASET_CONFIGS = {
         "subset": "main",
     },
 }
+
+DEFAULT_MAX_RETRIES = 3
+DEFAULT_RETRY_BACKOFF = 2.0
 
 
 def parse_args():
@@ -87,12 +91,30 @@ def parse_args():
     parser.add_argument(
         "--resume",
         action="store_true",
-        help="Skip rows already in outfile (by uuid or idx)",
+        help="Skip rows already in outfile (by stable primary id)",
     )
     parser.add_argument(
         "--language-filter",
         default=None,
         help="Only process rows where language==this (e.g., EN)",
+    )
+    parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=DEFAULT_MAX_RETRIES,
+        help=(
+            "Max retry attempts per request on transient failure "
+            f"(default: {DEFAULT_MAX_RETRIES})"
+        ),
+    )
+    parser.add_argument(
+        "--retry-backoff",
+        type=float,
+        default=DEFAULT_RETRY_BACKOFF,
+        help=(
+            "Initial retry backoff in seconds; doubles after each failed attempt "
+            f"(default: {DEFAULT_RETRY_BACKOFF})"
+        ),
     )
     return parser.parse_args()
 
@@ -141,9 +163,69 @@ def extract_turns(row, prompt_field):
     return []
 
 
-def load_seen(path: str):
-    """Load previously processed record IDs from output file."""
-    seen = set()
+def _is_present(value: Any) -> bool:
+    """Return True for a usable identifier (not None / not empty string)."""
+    return value is not None and str(value) != ""
+
+
+def _content_hash(row: dict[str, Any]) -> str:
+    """Deterministic hash of a row, used as a last-resort stable identifier."""
+    payload = json.dumps(row, sort_keys=True, ensure_ascii=False, default=str)
+    return "hash_" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _primary_identifier(row: dict[str, Any]) -> tuple[str, str]:
+    """Return a stable ``(id, source)`` for a dataset row.
+
+    Prefers an explicit ``id``/``uuid``, then a nested ``metadata`` id, and
+    finally a content hash. Unlike a streaming enumeration index, this key does
+    not shift when ``--limit``/``--language-filter`` or the input order change,
+    so ``--resume`` stays correct across runs.
+    """
+    for field in ("id", "uuid"):
+        value = row.get(field)
+        if _is_present(value):
+            return str(value), field
+
+    metadata = row.get("metadata")
+    if isinstance(metadata, dict):
+        for field in ("id", "uuid", "sample_id", "idx", "index"):
+            value = metadata.get(field)
+            if _is_present(value):
+                return str(value), f"metadata.{field}"
+
+    return _content_hash(row), "content_hash"
+
+
+def _output_seen_ids(obj: dict[str, Any]) -> set[str]:
+    """Extract resume keys from one previously written output row.
+
+    Prefers ``metadata.primary_id`` (written by this script); falls back to
+    legacy top-level ``id``/``uuid`` and nested metadata ids so output files
+    written before this change still resume for rows that carried a real id.
+    """
+    metadata = obj.get("metadata")
+    if isinstance(metadata, dict):
+        primary_id = metadata.get("primary_id")
+        if _is_present(primary_id):
+            return {str(primary_id)}
+
+    ids: set[str] = set()
+    for field in ("id", "uuid"):
+        value = obj.get(field)
+        if _is_present(value):
+            ids.add(str(value))
+    if isinstance(metadata, dict):
+        for field in ("id", "uuid", "sample_id", "idx", "index"):
+            value = metadata.get(field)
+            if _is_present(value):
+                ids.add(str(value))
+    return ids
+
+
+def load_seen(path: str) -> set[str]:
+    """Load previously processed primary IDs from output file."""
+    seen: set[str] = set()
     if not os.path.isfile(path):
         return seen
 
@@ -153,9 +235,7 @@ def load_seen(path: str):
                 obj = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            key = obj.get("uuid") or obj.get("idx")
-            if key is not None:
-                seen.add(str(key))
+            seen.update(_output_seen_ids(obj))
     return seen
 
 
@@ -189,18 +269,39 @@ async def _post_chat(
     session: aiohttp.ClientSession,
     endpoint: str,
     payload: dict[str, Any],
+    *,
+    max_retries: int = DEFAULT_MAX_RETRIES,
+    retry_backoff: float = DEFAULT_RETRY_BACKOFF,
 ) -> dict[str, Any]:
     """POST one chat-completion request and return the parsed response.
 
     A non-2xx reply has no ``choices`` array, so raise with the status and a
     short body; otherwise the caller records a bare ``KeyError('choices')`` and
-    the real cause is lost.
+    the real cause is lost. Transient failures (network errors or non-2xx
+    replies) are retried up to ``max_retries`` times with exponential backoff;
+    the semaphore is released between attempts so a backing-off request does not
+    hold a concurrency slot.
     """
-    async with session.post(endpoint, json=payload) as response:
-        if not response.ok:
-            body = (await response.text())[:500]
-            raise RuntimeError(f"HTTP {response.status} from {endpoint}: {body}")
-        return await response.json()
+    total_attempts = max_retries + 1
+    last_error: Exception | None = None
+    for attempt in range(1, total_attempts + 1):
+        try:
+            async with session.post(endpoint, json=payload) as response:
+                if not response.ok:
+                    body = (await response.text())[:500]
+                    raise RuntimeError(
+                        f"HTTP {response.status} from {endpoint}: {body}"
+                    )
+                return await response.json()
+        except Exception as e:  # noqa: BLE001
+            last_error = e
+            if attempt >= total_attempts:
+                break
+            await asyncio.sleep(retry_backoff * (2 ** (attempt - 1)))
+
+    raise RuntimeError(
+        f"chat request failed after {total_attempts} attempt(s)"
+    ) from last_error
 
 
 async def worker(
@@ -251,7 +352,13 @@ async def worker(
                     "messages": prefix,
                     "max_tokens": args.max_tokens,
                 }
-                data = await _post_chat(session, endpoint, payload)
+                data = await _post_chat(
+                    session,
+                    endpoint,
+                    payload,
+                    max_retries=args.max_retries,
+                    retry_backoff=args.retry_backoff,
+                )
 
                 choice = data["choices"][0]
                 message = choice["message"]
@@ -277,6 +384,8 @@ async def worker(
                 out_convs.append(gpt_turn)
 
             metadata = {
+                "primary_id": item["primary_id"],
+                "primary_id_source": item["primary_id_source"],
                 "idx": idx,
                 "finish_reasons": finish_reasons,
                 "latency_s": round(time.time() - start_time, 3),
@@ -299,6 +408,8 @@ async def worker(
                 "id": item.get("uuid") or f"sample_{idx}",
                 "conversations": out_convs,
                 "metadata": {
+                    "primary_id": item["primary_id"],
+                    "primary_id_source": item["primary_id_source"],
                     "idx": idx,
                     "error": repr(e),
                     "endpoint": endpoint,
@@ -415,14 +526,16 @@ async def main():
                     continue
 
                 uuid = row.get("uuid")
-                key = str(uuid or index)
-                if key in seen_ids:
+                primary_id, primary_id_source = _primary_identifier(row)
+                if primary_id in seen_ids:
                     continue
 
                 await queue.put(
                     {
                         "idx": index,
                         "uuid": uuid,
+                        "primary_id": primary_id,
+                        "primary_id_source": primary_id_source,
                         "turns": turns,
                     }
                 )
