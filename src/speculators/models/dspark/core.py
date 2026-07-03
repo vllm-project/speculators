@@ -83,13 +83,11 @@ class DSparkDraftModel(DFlashDraftModel):
         loss_config = resolve_loss_config(kwargs["loss_fn"])
         gamma = kwargs.get("dflash_decay_gamma", 4.0)
         max_anchors = kwargs.get("max_anchors", 3072)
-        sliding_window_non_causal = kwargs.get("sliding_window_non_causal", False)
         confidence_head_alpha = kwargs.get("confidence_head_alpha", 1.0)
         shared = {
             "loss_config": loss_config,
             "gamma": gamma,
             "max_anchors": max_anchors,
-            "sliding_window_non_causal": sliding_window_non_causal,
             "confidence_head_alpha": confidence_head_alpha,
         }
         return dict(shared), dict(shared)
@@ -106,7 +104,6 @@ class DSparkDraftModel(DFlashDraftModel):
         loss_config: LossConfig | None = None,
         gamma: float = 4.0,
         max_anchors: int = 3072,
-        sliding_window_non_causal: bool = False,
         confidence_head_alpha: float = 1.0,
         **kwargs,
     ):
@@ -119,7 +116,6 @@ class DSparkDraftModel(DFlashDraftModel):
                 document_ids,
                 position_ids,
                 max_anchors=max_anchors,
-                sliding_window_non_causal=sliding_window_non_causal,
                 **kwargs,
             )
         )
