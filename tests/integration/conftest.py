@@ -214,6 +214,7 @@ def make_mtp_model(
     num_speculative_steps: int = 3,
     device: str = "cuda:0",
     dtype: torch.dtype = torch.bfloat16,
+    torch_compile: bool = True,
 ) -> MTPDraftModel:
     """Create a tiny MTP model mirroring Qwen3.5-0.8B architecture."""
     from transformers.models.qwen3_5.configuration_qwen3_5 import (  # noqa: PLC0415
@@ -238,7 +239,13 @@ def make_mtp_model(
     )
     model = MTPDraftModel(config)
     _fill_nan_weights(model)
-    return model.to(device=device, dtype=dtype)  # type: ignore[call-arg]
+    model = model.to(device=device, dtype=dtype)  # type: ignore[call-arg]
+    if not torch_compile:
+        import types  # noqa: PLC0415
+
+        orig = model.forward._torchdynamo_orig_callable
+        model.forward = types.MethodType(orig, model)
+    return model
 
 
 # ---------------------------------------------------------------------------
