@@ -91,6 +91,9 @@ def create_train_val_loaders(
     """
     noise_transform = AddUniformNoise(std=noise_std)
 
+    if not (0.0 < train_data_ratio < 1.0):
+        raise ValueError(f"train_data_ratio must be in (0, 1), got {train_data_ratio}")
+
     if legacy_data:
         warnings.warn(
             "Using '--legacy-data' is deprecated and will be removed soon.",
