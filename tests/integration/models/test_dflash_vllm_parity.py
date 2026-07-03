@@ -67,10 +67,10 @@ class TestDFlashAttentionParity:
 
     def _run_backend(self, backend, batch, state):
         torch.manual_seed(42)
-        m = make_dflash_model(block_size=4, max_anchors=4, draft_attn_impl=backend)
+        m = make_dflash_model(block_size=4, draft_attn_impl=backend)
         m.load_state_dict(state)
         with torch.no_grad():
-            _, loss, _ = m(**batch)
+            _, loss, _ = m(**batch, max_anchors=4)
         result = loss.item()
         del m
         torch.cuda.empty_cache()
@@ -78,7 +78,7 @@ class TestDFlashAttentionParity:
 
     def _make_shared_inputs(self):
         torch.manual_seed(42)
-        ref = make_dflash_model(block_size=4, max_anchors=4, draft_attn_impl="eager")
+        ref = make_dflash_model(block_size=4, draft_attn_impl="eager")
         samples = [
             make_sample(
                 seq_len=64,
