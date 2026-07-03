@@ -26,6 +26,7 @@ from speculators.data_generation.configs import DATASET_CONFIGS
 from speculators.data_generation.logging_utils import PipelineLogger
 from speculators.data_generation.render_client import RenderError, render_conversation
 from speculators.data_generation.torch_utils import set_default_torch_num_threads
+from speculators.data_generation.vllm_client import InvalidResponseError
 from speculators.train.vocab_mapping import save_token_frequency_distribution
 
 __all__ = [
@@ -707,7 +708,7 @@ def build_dataset_from_render(
                 chat_template_kwargs=chat_template_kwargs,
                 max_length=max_length,
             )
-        except (RenderError, httpx.HTTPError) as exc:
+        except (RenderError, InvalidResponseError, httpx.HTTPError) as exc:
             log.error(f"Render failed for conversation {idx}: {exc}")
             dropped_count += 1
             continue

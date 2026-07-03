@@ -4,7 +4,7 @@ from http import HTTPStatus
 
 import httpx
 
-from speculators.data_generation.vllm_client import with_retries
+from speculators.data_generation.vllm_client import InvalidResponseError, with_retries
 
 DEFAULT_RENDER_TIMEOUT = 30
 
@@ -41,12 +41,23 @@ def render_conversation(
 
     resp = httpx.post(url, json=body, timeout=timeout)
 
+    if HTTPStatus.BAD_REQUEST <= resp.status_code < HTTPStatus.INTERNAL_SERVER_ERROR:
+        # Deterministic client error (bad request, wrong URL) -- retrying wastes
+        # requests without changing the outcome. InvalidResponseError short-
+        # circuits @with_retries (see vllm_client._handle_retry_error).
+        raise InvalidResponseError(
+            f"Render endpoint returned {resp.status_code}: {resp.text[:500]}"
+        )
     if resp.status_code != HTTPStatus.OK:
         raise RenderError(
             f"Render endpoint returned {resp.status_code}: {resp.text[:500]}"
         )
 
     data = resp.json()
+    if "token_ids" not in data:
+        raise RenderError(
+            f"Render endpoint response missing 'token_ids': {str(data)[:500]}"
+        )
     return {
         "token_ids": data["token_ids"],
         "loss_mask": data.get("assistant_tokens_mask"),
