@@ -142,6 +142,7 @@ def create_transformer_layer_config(  # noqa: C901
         head_dim=head_dim,
         tie_word_embeddings=False,
         sliding_window=sliding_window,
+        use_sliding_window=bool(sliding_window_indices),
         layer_types=layer_types,
     )
 
@@ -510,6 +511,7 @@ def main(args: argparse.Namespace):  # noqa: C901
 
     train_loader, val_loader = create_train_val_loaders(
         data_path=args.data_path,
+        train_data_ratio=args.train_data_ratio,
         total_seq_len=args.total_seq_len,
         hidden_states_dtype=hidden_states_dtype,
         noise_std=args.noise_std,
@@ -777,6 +779,7 @@ def parse_args():
     parser.add_argument("--save-path", type=str, default="./output/checkpoints")
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument("--train-data-ratio", type=float, default=0.9)
     parser.add_argument("--no-resume-from-checkpoint", action="store_true")
     parser.add_argument(
         "--logger",
@@ -948,8 +951,9 @@ def parse_args():
     parser.add_argument(
         "--max-anchors",
         type=int,
-        default=256,
-        help="Maximum anchor positions for DFlash training (default: 256)",
+        default=3072,
+        help="Maximum anchor positions for DFlash, DSpark, "
+        "and P-EAGLE training (default: 3072).",
     )
     parser.add_argument(
         "--dflash-decay-gamma",

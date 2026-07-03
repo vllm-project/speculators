@@ -7,6 +7,7 @@ from transformers import AutoConfig, DynamicCache, PretrainedConfig
 
 from speculators.config import SpeculatorsConfig, VerifierConfig
 from speculators.model import DraftVocabMixin, SpeculatorModel
+from speculators.models.attention import create_float_mask
 from speculators.models.eagle3 import Eagle3SpeculatorConfig
 from speculators.models.eagle3.attention import (
     create_combined_mask_mod,
@@ -49,6 +50,8 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
         self._create_mask_fn = (
             create_block_mask
             if self._attn_impl == "simple_flex_attention"
+            else create_float_mask
+            if self._attn_impl == "eager"
             else create_mask
         )
         super().__init__(config=config)
