@@ -24,6 +24,7 @@ Usage:
 
 import argparse
 import glob
+import json
 import logging
 import shutil
 import sys
@@ -106,15 +107,25 @@ def parse_args():
         ),
     )
     parser.add_argument(
-        "--render-endpoint",
+        "--vllm-server-url",
         type=str,
         default=None,
         help=(
-            "URL of the vLLM server, typically the same instance used "
+            "Base URL of the vLLM server, typically the same instance used "
             "for hidden-state extraction (e.g. http://localhost:8000). "
             "When set, tokenization is delegated to the server's "
             "/v1/chat/completions/render endpoint instead of local HF "
             "apply_chat_template."
+        ),
+    )
+    parser.add_argument(
+        "--chat-template-kwargs",
+        type=str,
+        default=None,
+        help=(
+            "JSON object of extra kwargs forwarded to the chat template, "
+            'e.g. \'{"enable_thinking": true}\'. Only supported on the render '
+            "path (requires --vllm-server-url)."
         ),
     )
 
@@ -189,6 +200,11 @@ def main():
         if args.token_freq_path is None
         else Path(args.token_freq_path)
     )
+    chat_template_kwargs = (
+        json.loads(args.chat_template_kwargs)
+        if args.chat_template_kwargs is not None
+        else None
+    )
 
     dataset, _ = load_and_preprocess_dataset(
         target_model_path=args.model,
@@ -202,7 +218,8 @@ def main():
         turn_dropout=args.turn_dropout,
         minimum_valid_tokens=args.minimum_valid_tokens,
         trust_remote_code=args.trust_remote_code,
-        render_endpoint=args.render_endpoint,
+        render_endpoint=args.vllm_server_url,
+        chat_template_kwargs=chat_template_kwargs,
     )
 
     log.info("Done preparing data")

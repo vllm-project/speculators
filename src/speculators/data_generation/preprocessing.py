@@ -840,9 +840,51 @@ def load_and_preprocess_dataset(
     render_endpoint: str | None = None,
     chat_template_kwargs: dict | None = None,
 ) -> tuple[HFDataset, ProcessorLike]:
-    """Load, tokenize, and preprocess a dataset for EAGLE3 training."""
+    """Load, tokenize, and preprocess a dataset for EAGLE3 training.
+
+    Uses the processor's built-in chat template via apply_chat_template, or
+    delegates tokenization to a running vLLM render server when render_endpoint
+    is set. Caching is handled automatically by HuggingFace datasets.
+
+    Args:
+        target_model_path: HuggingFace model ID or local path.
+        train_data_paths: Dataset names or paths to JSON/JSONL files.
+        seq_length: Maximum sequence length.
+        build_dataset_num_proc: Number of processes for dataset building.
+        seed: Random seed for shuffling.
+        max_samples: Optional limit on number of samples.
+        token_freq_path: Path to save token frequency distribution.
+        assistant_pattern: Optional custom regex pattern for matching assistant
+            responses. If None, pattern will be auto-detected from the chat
+            template. Mutually exclusive with render_endpoint -- the render
+            path always auto-detects its own pattern.
+        turn_dropout: If True, randomly keeps first N consecutive turns per
+            conversation.
+        minimum_valid_tokens: Number of tokens to consider for a valid sample.
+        trust_remote_code: If True, allows executing code from HF Hub.
+        render_endpoint: URL of a running vLLM server. When set, tokenization
+            is delegated to the server's /v1/chat/completions/render endpoint
+            instead of local HF apply_chat_template.
+        chat_template_kwargs: Extra kwargs forwarded to the chat template
+            (e.g. {"enable_thinking": True}). Only supported on the render
+            path (requires render_endpoint).
+
+    Returns:
+        Tuple of (preprocessed_dataset, processor).
+    """
     if minimum_valid_tokens is not None and minimum_valid_tokens < 0:
         raise ValueError("minimum_valid_tokens must be >= 0")
+    if render_endpoint is not None and assistant_pattern is not None:
+        raise ValueError(
+            "assistant_pattern has no effect when render_endpoint is set -- the "
+            "render path always auto-detects its own pattern from the chat "
+            "template. Pass only one of assistant_pattern / render_endpoint."
+        )
+    if chat_template_kwargs is not None and render_endpoint is None:
+        raise ValueError(
+            "chat_template_kwargs is only supported on the render path; pass "
+            "render_endpoint or drop chat_template_kwargs."
+        )
     log.section("Starting dataset preprocessing")
     if minimum_valid_tokens is not None:
         log.info(
