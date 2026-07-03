@@ -31,11 +31,11 @@ from speculators.data_generation.preprocessing import (
     build_dataset_from_render,
     load_processor,
 )
+from tests.e2e.utils import VLLM_PYTHON
 
-VLLM_PYTHON = "/home/ran/workspace/vllm/.venv/bin/python"
 MODEL = "Qwen/Qwen3-VL-2B-Instruct"
 MEDIA_DIR = "/tmp"
-IMG_PATH = "/tmp/specforge_render_mm_test.png"
+IMG_PATH = "/tmp/speculators_render_mm_test.png"
 
 
 def _find_free_port():

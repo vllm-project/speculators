@@ -20,7 +20,8 @@ try:
 except ImportError:
     pytest.skip("httpx not available", allow_module_level=True)
 
-VLLM_PYTHON = "/home/ran/workspace/vllm/.venv/bin/python"
+from tests.e2e.utils import VLLM_PYTHON
+
 MODEL = "Qwen/Qwen3-0.6B"
 # Short enough to force truncation on a multi-turn conversation.
 SEQ_LENGTH = 30
