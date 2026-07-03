@@ -22,7 +22,6 @@ from speculators.data_generation.preprocessing import (
     _adapt_conv_for_vllm,
     _create_loss_mask_from_offsets,
     _detect_assistant_pattern,
-    _expand_loss_mask_for_multimodal_tokens,
     _load_hf_dataset,
     _normalize_conversation,
     _preprocess_batch,
