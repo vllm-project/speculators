@@ -119,7 +119,8 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
     lambda_base_decay_steps: int = Field(
         default=30000,
         description="Number of training steps over which lambda_base decays from "
-        "lambda_base_start to 0 (default: 30000). Pass 0 to disable decay.",
+        "lambda_base_start to 0. Set to 0 to keep lambda_base at lambda_base_start "
+        "(no decay). (default: 30000)",
     )
 
     @field_serializer("transformer_layer_config")

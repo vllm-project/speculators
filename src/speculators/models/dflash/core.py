@@ -313,6 +313,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         # hidden_size]
         document_ids: torch.Tensor,  # shape: [1, total_seq_len]
         position_ids: torch.Tensor | None = None,
+        shift_targets: bool = False,
         **kwargs,
     ):
         """Run the anchored-block draft transformer up to the draft logits.
@@ -370,7 +371,9 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             )
             # Shift right by 1 so verifier_logits[i] predicts token at position i
             verifier_logits = torch.roll(verifier_logits, 1, dims=1)
-            targets = verifier_logits[:, anchored_block_indices]
+            target_indices = anchored_block_indices + (1 if shift_targets else 0)
+            target_indices = target_indices.clamp(max=verifier_logits.shape[1] - 1)
+            targets = verifier_logits[:, target_indices]
             # shape: [1, num_anchors*block_size, draft_vocab_size]
 
         for layer_idx, layer in enumerate(self.layers):
@@ -402,6 +405,10 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
 
         aligned_loss_mask[:, :: self.block_size] = 0
 
+        if shift_targets:
+            oob = (anchored_block_indices + 1) >= verifier_logits.shape[1]
+            aligned_loss_mask[:, oob] = 0
+
         return hidden, logits, targets, aligned_loss_mask, anchored_block_indices
 
     @conditional_torch_compile
@@ -415,6 +422,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         position_ids: torch.Tensor | None = None,
         loss_config: LossConfig | None = None,
         gamma: float = 4.0,
+        global_step: int = 0,
         **kwargs,
     ):
         hidden, logits, targets, aligned_loss_mask, anchored_block_indices = (
@@ -425,6 +433,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 verifier_last_hidden_states,
                 document_ids,
                 position_ids,
+                shift_targets=True,
                 **kwargs,
             )
         )
@@ -432,7 +441,6 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         draft_tokens = torch.argmax(logits, dim=-1)
 
         if self.projector_type == "domino":
-            global_step = kwargs.get("global_step", 0)
             decay_steps = self.config.lambda_base_decay_steps
             if decay_steps > 0:
                 progress = min(global_step / decay_steps, 1.0)
@@ -463,10 +471,19 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 1, num_anchors * self.block_size, -1
             )
 
+            if self.config.shift_label:
+                domino_loss_mask = aligned_loss_mask.clone()
+                anchor_pos_in_mask = anchored_block_indices[:: self.block_size]
+                domino_loss_mask[:, :: self.block_size] = loss_mask[
+                    :, anchor_pos_in_mask
+                ]
+            else:
+                domino_loss_mask = aligned_loss_mask
+
             base_loss, base_metrics = compute_metrics(
                 logits,
                 targets,
-                aligned_loss_mask,
+                domino_loss_mask,
                 self.block_size,
                 gamma=gamma,
                 loss_config=loss_config,
@@ -474,7 +491,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             final_loss, final_metrics = compute_metrics(
                 refined_logits,
                 targets,
-                aligned_loss_mask,
+                domino_loss_mask,
                 self.block_size,
                 gamma=gamma,
                 loss_config=loss_config,
