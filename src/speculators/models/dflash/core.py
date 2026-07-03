@@ -10,6 +10,7 @@ from transformers.models.qwen3.modeling_qwen3 import (
 )
 
 from speculators.model import DraftVocabMixin, SpeculatorModel
+from speculators.models.attention import create_float_mask
 from speculators.models.dflash import DFlashSpeculatorConfig
 from speculators.models.dflash.attention import create_anchor_block_mask_mod
 from speculators.models.dflash.metrics import compute_metrics
@@ -56,6 +57,8 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         self._create_mask_fn = (
             create_block_mask
             if self._attn_impl == "simple_flex_attention"
+            else create_float_mask
+            if self._attn_impl == "eager"
             else create_mask
         )
         super().__init__(config=config)
@@ -300,7 +303,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         num_anchors = kwargs.pop("max_anchors", 3072)
 
         if position_ids is None:
-            position_ids = 1 + torch.arange(
+            position_ids = torch.arange(
                 total_seq_len, dtype=torch.long, device=device
             ).unsqueeze(0)
 
