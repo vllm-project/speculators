@@ -2,7 +2,7 @@ from typing import ClassVar
 
 import torch
 from torch import nn
-from torch.nn.attention.flex_attention import create_block_mask
+from torch.nn.attention.flex_attention import create_block_mask, create_mask
 from transformers import PretrainedConfig
 from transformers.models.qwen3.modeling_qwen3 import (
     Qwen3RMSNorm,
@@ -58,6 +58,8 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             create_block_mask
             if self._attn_impl == "simple_flex_attention"
             else create_float_mask
+            if self._attn_impl == "eager"
+            else create_mask
         )
         super().__init__(config=config)
         self._init_vocab(config)
