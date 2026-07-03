@@ -538,3 +538,31 @@ def test_eagle3_config_norm_output_defaults():
         speculators_config=_make_eagle3_speculators_config(),
     )
     assert config.norm_output is False
+    assert config.fc_norm is False
+
+
+@pytest.mark.sanity
+def test_eagle3_config_rejects_both_norm_before_fc_and_fc_norm():
+    with pytest.raises(ValidationError, match="mutually exclusive"):
+        Eagle3SpeculatorConfig(
+            transformer_layer_config=copy.deepcopy(TINY_LLAMA_CONFIG),
+            norm_before_fc=True,
+            fc_norm=True,
+            speculators_config=_make_eagle3_speculators_config(),
+        )
+
+
+@pytest.mark.sanity
+def test_eagle3_config_fc_norm_roundtrip():
+    original = Eagle3SpeculatorConfig(
+        transformer_layer_config=copy.deepcopy(TINY_LLAMA_CONFIG),
+        draft_vocab_size=32000,
+        fc_norm=True,
+        speculators_config=_make_eagle3_speculators_config(),
+    )
+
+    config_dict = original.to_dict()
+    assert config_dict["fc_norm"] is True
+
+    reloaded = SpeculatorModelConfig.from_dict(config_dict)
+    assert reloaded.fc_norm is True
