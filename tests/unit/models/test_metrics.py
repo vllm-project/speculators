@@ -81,6 +81,66 @@ class TestLossFunction:
         expected = (elementwise * loss_mask).sum() / (loss_mask.sum() + 1e-5)
         assert torch.isclose(result, expected)
 
+    def test_normalize_by_decay_changes_denominator(self):
+        """With non-uniform decay, normalize_by_decay must produce different loss."""
+        torch.manual_seed(42)
+        B, T, V = 1, 8, 4
+        logits = torch.randn(B, T, V)
+        targets = torch.randn(B, T, V)
+        loss_mask = torch.ones(B, T)
+        pos_idx = torch.arange(T).unsqueeze(0) % 4
+
+        decay_fn = partial(dflash_loss_decay, gamma=4.0)
+
+        loss_default = loss_function(
+            logits, targets, loss_mask, pos_idx,
+            decay_fn=decay_fn, normalize_by_decay=False,
+        )
+        loss_normalized = loss_function(
+            logits, targets, loss_mask, pos_idx,
+            decay_fn=decay_fn, normalize_by_decay=True,
+        )
+        assert not torch.isclose(loss_default, loss_normalized)
+
+    def test_normalize_by_decay_no_decay_fn_ignored(self):
+        """When decay_fn is None, normalize_by_decay has no effect."""
+        torch.manual_seed(42)
+        logits = torch.randn(1, 8, 4)
+        targets = torch.randn(1, 8, 4)
+        loss_mask = torch.ones(1, 8)
+        pos_idx = torch.zeros(1, 8, dtype=torch.long)
+
+        loss_off = loss_function(
+            logits, targets, loss_mask, pos_idx,
+            decay_fn=None, normalize_by_decay=False,
+        )
+        loss_on = loss_function(
+            logits, targets, loss_mask, pos_idx,
+            decay_fn=None, normalize_by_decay=True,
+        )
+        assert torch.isclose(loss_off, loss_on)
+
+    def test_normalize_by_decay_matches_manual_computation(self):
+        """Verify normalize_by_decay produces sum(loss*decay) / sum(decay)."""
+        torch.manual_seed(7)
+        logits = torch.randn(1, 4, 6)
+        targets = torch.randn(1, 4, 6)
+        loss_mask = torch.tensor([[1, 1, 1, 1]], dtype=torch.float)
+        pos_idx = torch.tensor([[0, 1, 2, 3]])
+
+        decay_fn = partial(exp_loss_decay, gamma=0.5)
+        result = loss_function(
+            logits, targets, loss_mask, pos_idx,
+            loss_fn=kl_div_loss, decay_fn=decay_fn, normalize_by_decay=True,
+        )
+
+        elementwise = kl_div_loss(logits, targets)
+        decay_mult = exp_loss_decay(pos_idx.float(), gamma=0.5)
+        expected = (elementwise * loss_mask * decay_mult).sum() / (
+            (loss_mask * decay_mult).sum() + 1e-5
+        )
+        assert torch.isclose(result, expected, rtol=1e-4)
+
 
 class TestKLDivLoss:
     def test_identical_zero_and_random_nonnegative(self):
