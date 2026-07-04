@@ -8,6 +8,23 @@ from huggingface_hub.errors import EntryNotFoundError
 from loguru import logger
 from safetensors import safe_open
 
+_WEIGHT_ALIASES: dict[str, list[str]] = {
+    "embed_tokens.weight": ["tok_embeddings.weight"],
+    "lm_head.weight": ["output.weight"],
+    "model.norm.weight": ["norm.weight"],
+}
+
+
+def _resolve_key(name: str, weight_map: dict[str, str]) -> str | None:
+    """Try exact match, then suffix match, then known aliases."""
+    for candidate in [name, *_WEIGHT_ALIASES.get(name, [])]:
+        if candidate in weight_map:
+            return candidate
+        matched = next((k for k in weight_map if k.endswith(candidate)), None)
+        if matched:
+            return matched
+    return None
+
 
 def is_config_only_dir(path: str | Path) -> bool:
     """Return True if ``path`` is a local directory with a ``config.json`` but no
@@ -91,17 +108,14 @@ def load_model_layers(
         with safe_open(model_file, framework="pt", device="cpu") as f:
             weight_map = dict.fromkeys(f.keys(), "model.safetensors")
 
-    # Resolve names: try exact match first, then suffix match
+    # Resolve names: try exact match, then suffix match, then known aliases
     name_to_key = {}  # Maps input name to actual checkpoint key
     for name in layer_names:
-        if name in weight_map:
-            name_to_key[name] = name
+        key = _resolve_key(name, weight_map)
+        if key:
+            name_to_key[name] = key
         else:
-            matched = next((k for k in weight_map if k.endswith(name)), None)
-            if matched:
-                name_to_key[name] = matched
-            else:
-                logger.warning(f"Tensor '{name}' not found in weight_map.")
+            logger.warning(f"Tensor '{name}' not found in weight_map.")
 
     # group requested names by shard filename
     shard_to_names: dict[str, list[tuple[str, str]]] = {}
