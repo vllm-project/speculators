@@ -298,6 +298,7 @@ class TestBackboneTargetAlignment:
             data["verifier_last_hidden_states"],
             data["document_ids"],
             shift_targets=True,
+            max_anchors=8,
         )
 
         bs = model.block_size
@@ -328,6 +329,7 @@ class TestBackboneTargetAlignment:
             data["verifier_last_hidden_states"],
             data["document_ids"],
             shift_targets=False,
+            max_anchors=8,
         )
 
         bs = model.block_size
@@ -362,6 +364,7 @@ class TestBackboneTargetAlignment:
             data["verifier_last_hidden_states"],
             data["document_ids"],
             shift_targets=True,
+            max_anchors=4,
         )
 
         # Positions where anchored_block_indices + 1 >= verifier_logits.shape[1]
@@ -397,6 +400,7 @@ class TestDominoLossMask:
             data["verifier_last_hidden_states"],
             data["document_ids"],
             shift_targets=True,
+            max_anchors=8,
         )
 
         bs = model.block_size
@@ -429,6 +433,7 @@ class TestDominoLossMask:
             data["verifier_last_hidden_states"],
             data["document_ids"],
             shift_targets=True,
+            max_anchors=8,
         )
 
         bs = model.block_size
@@ -466,6 +471,7 @@ class TestLambdaBaseDecay:
             data["verifier_last_hidden_states"],
             data["document_ids"],
             global_step=1000,
+            max_anchors=8,
         )
 
         # loss = (1-lambda) * final + lambda * base
@@ -495,6 +501,7 @@ class TestLambdaBaseDecay:
             data["verifier_last_hidden_states"],
             data["document_ids"],
             global_step=decay_steps,
+            max_anchors=8,
         )
 
         # With lambda=0: loss = final_loss
@@ -523,6 +530,7 @@ class TestLambdaBaseDecay:
             data["verifier_last_hidden_states"],
             data["document_ids"],
             global_step=decay_steps // 2,
+            max_anchors=8,
         )
 
         ls = metrics_mid["loss_sum"]

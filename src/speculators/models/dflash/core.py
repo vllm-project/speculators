@@ -452,7 +452,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 lambda_base = self.config.lambda_base_start * (1.0 - progress)
                 lambda_base = max(0.0, min(1.0, lambda_base))
             else:
-                lambda_base = 0.0
+                lambda_base = self.config.lambda_base_start
 
             num_anchors = hidden.shape[1] // self.block_size
             hidden_4d = hidden.reshape(1, num_anchors, self.block_size, -1)
