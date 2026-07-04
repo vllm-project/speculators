@@ -476,9 +476,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
 
             domino_loss_mask = aligned_loss_mask.clone()
             anchor_pos_in_mask = anchored_block_indices[:: self.block_size]
-            domino_loss_mask[:, :: self.block_size] = loss_mask[
-                :, anchor_pos_in_mask
-            ]
+            domino_loss_mask[:, :: self.block_size] = loss_mask[:, anchor_pos_in_mask]
 
             base_loss, base_metrics = compute_metrics(
                 logits,

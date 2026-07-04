@@ -220,7 +220,6 @@ class TestDominoHeadShiftLabel:
 
 def _make_tiny_domino_model(
     block_size: int = 4,
-    max_anchors: int = 8,
     shift_label: bool = True,
     lambda_base_start: float = 1.0,
     lambda_base_decay_steps: int = 0,
@@ -232,7 +231,6 @@ def _make_tiny_domino_model(
         transformer_layer_config=transformer_config,
         draft_vocab_size=64,
         block_size=block_size,
-        max_anchors=max_anchors,
         aux_hidden_state_layer_ids=[0, 1, 2],
         mask_token_id=0,
         projector_type="domino",
@@ -289,7 +287,7 @@ def _make_synthetic_data(
 class TestBackboneTargetAlignment:
     def test_shift_targets_true_shifts_by_one(self):
         torch.manual_seed(42)
-        model = _make_tiny_domino_model(block_size=4, max_anchors=4)
+        model = _make_tiny_domino_model(block_size=4)
         data = _make_synthetic_data(seq_len=32, loss_mask_all=False)
         loss_mask = data["loss_mask"]
 
@@ -319,7 +317,7 @@ class TestBackboneTargetAlignment:
 
     def test_shift_targets_false_no_shift(self):
         torch.manual_seed(42)
-        model = _make_tiny_domino_model(block_size=4, max_anchors=4)
+        model = _make_tiny_domino_model(block_size=4)
         data = _make_synthetic_data(seq_len=32, loss_mask_all=False)
         loss_mask = data["loss_mask"]
 
@@ -351,7 +349,7 @@ class TestBackboneTargetAlignment:
         torch.manual_seed(42)
         block_size = 8
         seq_len = 32
-        model = _make_tiny_domino_model(block_size=block_size, max_anchors=4)
+        model = _make_tiny_domino_model(block_size=block_size)
         loss_mask = torch.ones(1, seq_len, dtype=torch.bfloat16, device="cuda:0")
         loss_mask[:, -(block_size - 1) :] = 0  # force anchors near the end
         data = _make_synthetic_data(seq_len=seq_len, loss_mask_all=False)
@@ -388,7 +386,7 @@ class TestBackboneTargetAlignment:
 class TestDominoLossMask:
     def test_position_zero_in_shift_label_true(self):
         torch.manual_seed(42)
-        model = _make_tiny_domino_model(block_size=4, max_anchors=4, shift_label=True)
+        model = _make_tiny_domino_model(block_size=4, shift_label=True)
         data = _make_synthetic_data(seq_len=32, loss_mask_all=False)
         loss_mask = data["loss_mask"]
 
@@ -420,7 +418,7 @@ class TestDominoLossMask:
 
     def test_position_zero_excluded_when_shift_label_false(self):
         torch.manual_seed(42)
-        model = _make_tiny_domino_model(block_size=4, max_anchors=4, shift_label=False)
+        model = _make_tiny_domino_model(block_size=4, shift_label=False)
         data = _make_synthetic_data(seq_len=32, loss_mask_all=False)
         loss_mask = data["loss_mask"]
 
@@ -453,7 +451,6 @@ class TestLambdaBaseDecay:
         torch.compiler.reset()
         model = _make_tiny_domino_model(
             block_size=4,
-            max_anchors=4,
             lambda_base_start=1.0,
             lambda_base_decay_steps=0,
         )
@@ -484,7 +481,6 @@ class TestLambdaBaseDecay:
         decay_steps = 100
         model = _make_tiny_domino_model(
             block_size=4,
-            max_anchors=4,
             lambda_base_start=1.0,
             lambda_base_decay_steps=decay_steps,
         )
@@ -513,7 +509,6 @@ class TestLambdaBaseDecay:
         decay_steps = 100
         model = _make_tiny_domino_model(
             block_size=4,
-            max_anchors=4,
             lambda_base_start=1.0,
             lambda_base_decay_steps=decay_steps,
         )

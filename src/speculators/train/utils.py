@@ -10,7 +10,6 @@ import warnings
 from pathlib import Path
 
 import torch
-import torch.distributed as dist
 from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
 
 from speculators.data_generation.preprocessing import get_tokenizer, load_processor
@@ -155,7 +154,7 @@ def apply_fully_sharded(model: torch.nn.Module):
         param_dtype=torch.bfloat16,
         reduce_dtype=torch.float32,
     )
-    for name, module in model.named_modules():
+    for _name, module in model.named_modules():
         if len(list(module.children())) == 0 and len(list(module.parameters())) > 0:
             # Skip buffer-only modules (no trainable params)
             fully_shard(module, mp_policy=mp_policy)
