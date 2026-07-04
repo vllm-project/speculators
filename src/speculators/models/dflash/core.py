@@ -458,9 +458,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             hidden_4d = hidden.reshape(1, num_anchors, self.block_size, -1)
             base_logits_4d = logits.reshape(1, num_anchors, self.block_size, -1)
 
-            suffix_start = self.config.pure_draft_prefix_len
-            if not self.config.shift_label:
-                suffix_start = 1 + self.config.pure_draft_prefix_len
+            suffix_start = 1 + self.config.pure_draft_prefix_len
 
             prev_token_ids = input_ids[:, anchored_block_indices]
             prev_token_ids_4d = prev_token_ids.reshape(1, num_anchors, self.block_size)
@@ -476,14 +474,11 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 1, num_anchors * self.block_size, -1
             )
 
-            if self.config.shift_label:
-                domino_loss_mask = aligned_loss_mask.clone()
-                anchor_pos_in_mask = anchored_block_indices[:: self.block_size]
-                domino_loss_mask[:, :: self.block_size] = loss_mask[
-                    :, anchor_pos_in_mask
-                ]
-            else:
-                domino_loss_mask = aligned_loss_mask
+            domino_loss_mask = aligned_loss_mask.clone()
+            anchor_pos_in_mask = anchored_block_indices[:: self.block_size]
+            domino_loss_mask[:, :: self.block_size] = loss_mask[
+                :, anchor_pos_in_mask
+            ]
 
             base_loss, base_metrics = compute_metrics(
                 logits,
