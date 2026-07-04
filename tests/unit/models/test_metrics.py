@@ -93,12 +93,20 @@ class TestLossFunction:
         decay_fn = partial(dflash_loss_decay, gamma=4.0)
 
         loss_default = loss_function(
-            logits, targets, loss_mask, pos_idx,
-            decay_fn=decay_fn, normalize_by_decay=False,
+            logits,
+            targets,
+            loss_mask,
+            pos_idx,
+            decay_fn=decay_fn,
+            normalize_by_decay=False,
         )
         loss_normalized = loss_function(
-            logits, targets, loss_mask, pos_idx,
-            decay_fn=decay_fn, normalize_by_decay=True,
+            logits,
+            targets,
+            loss_mask,
+            pos_idx,
+            decay_fn=decay_fn,
+            normalize_by_decay=True,
         )
         assert not torch.isclose(loss_default, loss_normalized)
 
@@ -111,12 +119,20 @@ class TestLossFunction:
         pos_idx = torch.zeros(1, 8, dtype=torch.long)
 
         loss_off = loss_function(
-            logits, targets, loss_mask, pos_idx,
-            decay_fn=None, normalize_by_decay=False,
+            logits,
+            targets,
+            loss_mask,
+            pos_idx,
+            decay_fn=None,
+            normalize_by_decay=False,
         )
         loss_on = loss_function(
-            logits, targets, loss_mask, pos_idx,
-            decay_fn=None, normalize_by_decay=True,
+            logits,
+            targets,
+            loss_mask,
+            pos_idx,
+            decay_fn=None,
+            normalize_by_decay=True,
         )
         assert torch.isclose(loss_off, loss_on)
 
@@ -130,8 +146,13 @@ class TestLossFunction:
 
         decay_fn = partial(exp_loss_decay, gamma=0.5)
         result = loss_function(
-            logits, targets, loss_mask, pos_idx,
-            loss_fn=kl_div_loss, decay_fn=decay_fn, normalize_by_decay=True,
+            logits,
+            targets,
+            loss_mask,
+            pos_idx,
+            loss_fn=kl_div_loss,
+            decay_fn=decay_fn,
+            normalize_by_decay=True,
         )
 
         elementwise = kl_div_loss(logits, targets)
