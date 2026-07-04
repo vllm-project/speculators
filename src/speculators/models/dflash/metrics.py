@@ -23,6 +23,7 @@ def compute_metrics(
     block_size: int = 1,
     gamma: float = 4.0,
     loss_config: LossConfig | None = None,
+    normalize_by_decay: bool = False,
 ) -> tuple[torch.Tensor, dict]:
     """Compute loss and accuracy metrics for draft model predictions.
 
@@ -53,6 +54,7 @@ def compute_metrics(
         pos_idx,
         loss_config=loss_config,
         decay_fn=partial(dflash_loss_decay, gamma=gamma),
+        normalize_by_decay=normalize_by_decay,
     )
 
     pred_ids = torch.argmax(logits, dim=-1)

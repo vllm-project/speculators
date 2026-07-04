@@ -233,10 +233,12 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         loss_config = resolve_loss_config(kwargs["loss_fn"])
         gamma = kwargs.get("dflash_decay_gamma", 4.0)
         max_anchors = kwargs.get("max_anchors", 3072)
+        normalize_by_decay = kwargs.get("normalize_loss_by_decay", False)
         shared = {
             "loss_config": loss_config,
             "gamma": gamma,
             "max_anchors": max_anchors,
+            "normalize_by_decay": normalize_by_decay,
         }
         return dict(shared), dict(shared)
 
@@ -426,8 +428,9 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         position_ids: torch.Tensor | None = None,
         loss_config: LossConfig | None = None,
         gamma: float = 4.0,
-        global_step: int = 0,
         max_anchors: int = 3072,
+        normalize_by_decay: bool = False,
+        global_step: int = 0,
         **kwargs,
     ):
         hidden, logits, targets, aligned_loss_mask, anchored_block_indices = (
@@ -488,6 +491,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 self.block_size,
                 gamma=gamma,
                 loss_config=loss_config,
+                normalize_by_decay=normalize_by_decay,
             )
             final_loss, final_metrics = compute_metrics(
                 refined_logits,
@@ -496,6 +500,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 self.block_size,
                 gamma=gamma,
                 loss_config=loss_config,
+                normalize_by_decay=normalize_by_decay,
             )
             loss = (1.0 - lambda_base) * final_loss + lambda_base * base_loss
 
@@ -520,6 +525,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 self.block_size,
                 gamma=gamma,
                 loss_config=loss_config,
+                normalize_by_decay=normalize_by_decay,
             )
 
         return draft_tokens, loss, metrics

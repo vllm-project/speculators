@@ -84,11 +84,13 @@ class DSparkDraftModel(DFlashDraftModel):
         gamma = kwargs.get("dflash_decay_gamma", 4.0)
         max_anchors = kwargs.get("max_anchors", 3072)
         confidence_head_alpha = kwargs.get("confidence_head_alpha", 1.0)
+        normalize_by_decay = kwargs.get("normalize_loss_by_decay", False)
         shared = {
             "loss_config": loss_config,
             "gamma": gamma,
             "max_anchors": max_anchors,
             "confidence_head_alpha": confidence_head_alpha,
+            "normalize_by_decay": normalize_by_decay,
         }
         return dict(shared), dict(shared)
 
@@ -105,6 +107,7 @@ class DSparkDraftModel(DFlashDraftModel):
         gamma: float = 4.0,
         max_anchors: int = 3072,
         confidence_head_alpha: float = 1.0,
+        normalize_by_decay: bool = False,
         **kwargs,
     ):
         hidden, logits, targets, aligned_loss_mask, anchored_block_indices = (
@@ -167,6 +170,7 @@ class DSparkDraftModel(DFlashDraftModel):
             loss_config=loss_config or _DEFAULT_LOSS_CONFIG,
             gamma=gamma,
             confidence_head_alpha=confidence_head_alpha,
+            normalize_by_decay=normalize_by_decay,
         )
         draft_tokens = torch.argmax(logits, dim=-1)
         return draft_tokens, loss, metrics
