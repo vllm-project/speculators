@@ -36,20 +36,10 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         "verifier_lm_head.weight",
         "t2d",
         "d2t",
-        # Domino head is training-only; weights are not saved to checkpoints.
-        "domino_head.prefix_gru.weight_ih_l0",
-        "domino_head.prefix_gru.weight_hh_l0",
-        "domino_head.embed_proj.0.weight",
-        "domino_head.embed_proj.2.weight",
     ]
     _keys_to_ignore_on_save: ClassVar[list[str]] = [  # type: ignore[misc,assignment]
         "verifier_lm_head.weight",
         "verifier_norm.weight",
-        # Domino head is training-only; not needed at inference.
-        "domino_head.prefix_gru.weight_ih_l0",
-        "domino_head.prefix_gru.weight_hh_l0",
-        "domino_head.embed_proj.0.weight",
-        "domino_head.embed_proj.2.weight",
     ]
 
     t2d: torch.Tensor | None
@@ -193,6 +183,8 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             "draft_attn_impl", "simple_flex_attention"
         )
         block_size = kwargs.get("block_size", 8)
+        shift_label = kwargs.get("domino_shift_label", True)
+        spec_tokens = block_size if shift_label else block_size - 1
         return {
             "transformer_layer_config": verifier_config,
             "draft_vocab_size": kwargs["draft_vocab_size"],
@@ -210,8 +202,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             "speculators_config": SpeculatorsConfig(
                 algorithm=algorithm,
                 proposal_methods=[
-                    # First block position is the anchor, not emitted during gen.
-                    GreedyTokenProposalConfig(speculative_tokens=block_size - 1)
+                    GreedyTokenProposalConfig(speculative_tokens=spec_tokens)
                 ],
                 default_proposal_method="greedy",
                 verifier=VerifierConfig.from_pretrained(
@@ -441,7 +432,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 document_ids,
                 position_ids,
                 max_anchors=max_anchors,
-                shift_targets=False,
+                shift_targets=True,
                 **kwargs,
             )
         )

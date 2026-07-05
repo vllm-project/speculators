@@ -181,7 +181,14 @@ def run_offline_e2e(
     )
 
     # Step 4: Validate trained checkpoint with vLLM inference
-    if prompts is not None:
+    # Skip vLLM validation for Domino until vLLM Domino inference PR merges.
+    _args = extra_train_args or []
+    is_domino = any(
+        _args[i + 1] == "domino"
+        for i, arg in enumerate(_args)
+        if arg == "--projector-type"
+    )
+    if prompts is not None and not is_domino:
         checkpoint_path = str(save_path / "checkpoint_best")
         run_vllm_engine(
             model_path=checkpoint_path,
