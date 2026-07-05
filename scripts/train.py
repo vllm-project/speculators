@@ -1009,9 +1009,9 @@ def parse_args():
     parser.add_argument(
         "--domino-pure-draft-prefix-len",
         type=int,
-        default=1,
+        default=0,
         help="Number of leading positions using pure DFlash without Domino correction "
-        "(default: 1)",
+        "(default: 0)",
     )
     parser.add_argument(
         "--domino-shift-label",

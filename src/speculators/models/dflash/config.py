@@ -83,7 +83,7 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
     )
 
     pure_draft_prefix_len: int = Field(
-        default=1,
+        default=0,
         ge=0,
         description="Number of leading block positions that use pure DFlash without "
         "Domino correction",

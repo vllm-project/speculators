@@ -194,7 +194,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             "sliding_window_non_causal": kwargs.get("sliding_window_non_causal", False),
             "projector_type": kwargs.get("projector_type", "dflash"),
             "shift_label": kwargs.get("domino_shift_label", True),
-            "pure_draft_prefix_len": kwargs.get("domino_pure_draft_prefix_len", 1),
+            "pure_draft_prefix_len": kwargs.get("domino_pure_draft_prefix_len", 0),
             "emb_dim": kwargs.get("domino_emb_dim", 256),
             "gru_hidden_dim": kwargs.get("domino_gru_hidden_dim", 1024),
             "lambda_base_start": kwargs.get("domino_lambda_start", 1.0),
