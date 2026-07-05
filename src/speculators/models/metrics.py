@@ -98,6 +98,20 @@ def kl_div_loss(
     return elementwise_loss  # noqa: RET504
 
 
+def reverse_kl_div_loss(
+    logits: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
+    targets: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
+):
+    """Compute per-position reverse KL divergence from draft logits to target logits."""
+    draft_logq = torch.nn.functional.log_softmax(logits, dim=-1)
+    target_logp = torch.nn.functional.log_softmax(targets, dim=-1)
+    elementwise_loss = torch.nn.functional.kl_div(
+        target_logp, draft_logq, reduction="none", log_target=True
+    ).sum(dim=-1)  # shape: [1, seq_len]
+
+    return elementwise_loss  # noqa: RET504
+
+
 def ce_loss(
     logits: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
     targets: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
@@ -120,6 +134,28 @@ def ce_loss(
         reduction="none",
         ignore_index=-100,
     ).reshape(batch_size, seq_len)
+
+    return elementwise_loss  # noqa: RET504
+
+
+def lk_hybrid_loss(
+    logits: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
+    targets: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
+    eta: float = 3.0,
+):
+    """Compute per-position hybrid LK loss (adaptive KL/TV blend).
+
+    Blends KL divergence and total variation per position:
+    ``L = lambda * KL(p||q) + (1 - lambda) * TV(p, q)`` with adaptive weight
+    ``lambda = exp(-eta * sg[alpha])``, where ``alpha = sum_v min(p_v, q_v)``.
+    """
+    draft_p = torch.nn.functional.softmax(logits, dim=-1)
+    target_p = torch.nn.functional.softmax(targets, dim=-1)
+    overlap = torch.minimum(draft_p, target_p).sum(dim=-1)  # alpha
+    tv = 1.0 - overlap
+    kl = kl_div_loss(logits, targets)
+    weight = torch.exp(-eta * overlap.detach())
+    elementwise_loss = weight * kl + (1.0 - weight) * tv
 
     return elementwise_loss  # noqa: RET504
 

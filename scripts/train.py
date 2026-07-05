@@ -324,9 +324,9 @@ def _build_from_config_only(
         speculators_config.verifier.name_or_path = verifier_name_or_path
     model = model_class(config=config)
     if hasattr(model, "load_vocab_mappings"):
-        model.load_vocab_mappings(t2d, d2t)  # type: ignore[attr-defined]
+        model.load_vocab_mappings(t2d, d2t)  # type: ignore[attr-defined,operator]
     if hasattr(model, "load_verifier_weights"):
-        model.load_verifier_weights()  # type: ignore[attr-defined]
+        model.load_verifier_weights()  # type: ignore[attr-defined,operator]
     return model
 
 
@@ -420,9 +420,9 @@ def main(args: argparse.Namespace):  # noqa: C901
     )
 
     # Setup distributed training
-    local_rank, world_size, rank, is_distributed = maybe_setup_distributed()
+    maybe_setup_distributed()
 
-    if rank == 0:
+    if get_rank() == 0:
         save_train_command(args.save_path)
 
     if not hasattr(torch, args.hidden_states_dtype):
@@ -470,7 +470,7 @@ def main(args: argparse.Namespace):  # noqa: C901
     draft_model = build_draft_model(args, model_class, t2d, d2t, draft_vocab_size)
 
     # Get target layer IDs from the model (resolved at model level)
-    num_target_layers = len(draft_model.target_layer_ids)
+    num_target_layers = len(draft_model.target_layer_ids)  # type: ignore[arg-type]
 
     if args.speculator_type == "mtp":
         args.num_speculative_steps = draft_model.config.num_speculative_steps
@@ -510,6 +510,7 @@ def main(args: argparse.Namespace):  # noqa: C901
 
     train_loader, val_loader = create_train_val_loaders(
         data_path=args.data_path,
+        train_data_ratio=args.train_data_ratio,
         total_seq_len=args.total_seq_len,
         hidden_states_dtype=hidden_states_dtype,
         noise_std=args.noise_std,
@@ -1089,6 +1090,12 @@ def parse_args():
         "DFlash. Note: vLLM currently doesn't support these models",
     )
     # Dataloader parameters
+    parser.add_argument(
+        "--train-data-ratio",
+        type=float,
+        default=0.9,
+        help="Ratio of data to use for training",
+    )
     parser.add_argument(
         "--num-workers", type=int, default=12, help="Number of dataloader workers"
     )
