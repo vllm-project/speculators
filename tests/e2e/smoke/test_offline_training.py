@@ -165,6 +165,7 @@ def run_offline_e2e(
     # Step 4: Validate trained checkpoint with vLLM inference
     if prompts is not None:
         checkpoint_path = str(save_path / "checkpoint_best")
+        inference_kwargs = {**(vllm_kwargs or {}), "gpu_memory_utilization": 0.8}
         run_vllm_engine(
             model_path=checkpoint_path,
             tmp_path=tmp_path,
@@ -173,5 +174,5 @@ def run_offline_e2e(
             max_tokens=max_tokens,
             ignore_eos=ignore_eos,
             acceptance_thresholds=acceptance_thresholds,
-            **(vllm_kwargs or {}),
+            **inference_kwargs,
         )
