@@ -549,6 +549,7 @@ def main(args: argparse.Namespace):  # noqa: C901
         muon_adjust_lr_fn=args.muon_adjust_lr_fn,
         scheduler_type=args.scheduler_type,
         scheduler_warmup_steps=args.scheduler_warmup_steps,
+        scheduler_warmup_ratio=args.scheduler_warmup_ratio,
         scheduler_total_steps=args.scheduler_total_steps,
         scheduler_num_cosine_cycles=args.scheduler_num_cosine_cycles,
         checkpoint_freq=args.checkpoint_freq,
@@ -1077,8 +1078,22 @@ def parse_args():
     )
 
     # lr scheduler
-    parser.add_argument("--scheduler-type", type=str, default="linear")
+    parser.add_argument(
+        "--scheduler-type",
+        type=str,
+        default="linear",
+        choices=["linear", "cosine", "none"],
+    )
     parser.add_argument("--scheduler-warmup-steps", type=int, default=None)
+    parser.add_argument(
+        "--scheduler-warmup-ratio",
+        type=float,
+        default=None,
+        help=(
+            "Warmup as a fraction of total scheduler steps, in [0, 1]. Ignored "
+            "(with a warning) when --scheduler-warmup-steps is also set."
+        ),
+    )
     parser.add_argument("--scheduler-total-steps", type=int, default=None)
     parser.add_argument("--scheduler-num-cosine-cycles", type=float, default=0.5)
 
