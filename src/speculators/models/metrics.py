@@ -278,6 +278,46 @@ def exp_loss_decay(pos_idx: torch.Tensor, gamma: float):
     return gamma**pos_idx
 
 
+def dpace_loss_weight(
+    neg_log_q: torch.Tensor,  # shape: [1, seq_len]
+    loss_mask: torch.Tensor,  # shape: [1, seq_len]
+    block_size: int,
+    alpha: float = 0.5,
+):
+    """
+    Per-position block-drafting loss weight based on D-PACE
+
+    Args:
+        neg_log_q: per-draft-position confidence (negative log-likelihood)
+        alpha: confidence smoothing constant
+    """
+    with torch.no_grad():
+        # convert CE to per-position confidence
+        q = torch.exp(-neg_log_q).float()
+
+        # reshape loss to [num_anchors, block_size]
+        # for intra-block cumulative multiplication
+        num_anchors = q.shape[1] // block_size
+        q = q.reshape(num_anchors, block_size)
+        mask = loss_mask.reshape(num_anchors, block_size).to(q.dtype)
+
+        # smoothed confidence for numerical stability
+        smooth = (1.0 - alpha) * q + alpha
+        smooth = torch.where(mask > 0, smooth, torch.ones_like(smooth))
+
+        # prefix cumulative production
+        prefix = torch.cumprod(smooth, dim=-1)
+
+        # suffix summation: flip -> cumsum -> flip
+        weight = torch.flip(
+            torch.cumsum(torch.flip(prefix * mask, dims=[-1]), dim=-1), dims=[-1]
+        )
+        weight = weight * mask
+
+    # reshape weight
+    return weight.reshape(1, -1)
+
+
 _LOSS_FN_MAP: dict[str, Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = {
     "kl_div": kl_div_loss,
     "rkl": reverse_kl_div_loss,
@@ -361,6 +401,7 @@ def compound_loss(
     pos_idx: torch.Tensor,
     loss_config: LossConfig,
     decay_fn: Callable[[torch.Tensor], torch.Tensor] | None = None,
+    dpace_precomputed_ce: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """Compute a weighted sum of loss terms.
 
@@ -377,7 +418,8 @@ def compound_loss(
     multi = len(loss_config) > 1
     for name, (fn, weight) in loss_config.items():
         term = loss_function(
-            logits, targets, loss_mask, pos_idx, loss_fn=fn, decay_fn=decay_fn
+            logits, targets, loss_mask, pos_idx, loss_fn=fn, decay_fn=decay_fn,
+            dpace_precomputed_ce=dpace_precomputed_ce
         )
         if multi:
             term_losses[f"{name}_loss"] = term.detach()
@@ -392,6 +434,7 @@ def loss_function(
     pos_idx: torch.Tensor,  # shape: [1, seq_len]
     loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = kl_div_loss,
     decay_fn: Callable[[torch.Tensor], torch.Tensor] | None = None,
+    dpace_precomputed_ce: torch.Tensor | None = None,
 ):
     """Compute masked, optionally position-decayed training loss.
 
@@ -406,7 +449,10 @@ def loss_function(
     Returns:
         Scalar mean loss across the batch.
     """
-    elementwise_loss = loss_fn(logits, targets)  # shape: [1, seq_len]
+    if dpace_precomputed_ce is not None:
+        elementwise_loss = dpace_precomputed_ce
+    else:
+        elementwise_loss = loss_fn(logits, targets)  # shape: [1, seq_len]
 
     loss_mask = loss_mask.to(elementwise_loss.dtype)
     elementwise_loss = elementwise_loss * loss_mask

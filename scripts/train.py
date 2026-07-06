@@ -961,6 +961,19 @@ def parse_args():
         default=4.0,
         help="Decay gamma for DFlash/DSpark loss weighting (default: 4.0)",
     )
+    # D-Pace specific arguments (loss weight option + smoothing)
+    parser.add_argument(
+        "--per-position-loss-weight",
+        choices=["fixed-exp-decay", "dpace"],
+        default="fixed-exp-decay",
+        help="Per-position loss weight option for D-PACE support (default: fixed-exp-decay)",
+    )
+    parser.add_argument(
+        "--dpace-alpha",
+        type=float,
+        default=0.5,
+        help="Smoothing constant for D-PACE loss (default: 0.5)"
+    )
     # DSpark-specific arguments (sequential Markov head + confidence head).
     parser.add_argument(
         "--markov-rank",
