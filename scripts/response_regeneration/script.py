@@ -162,7 +162,7 @@ def extract_turns(row, prompt_field):
 
 def _is_present(value: Any) -> bool:
     """Return True for a usable identifier (not None / not empty string)."""
-    return value is not None and str(value) != ""
+    return value not in (None, "")
 
 
 def _content_hash(row: dict[str, Any]) -> str:
@@ -187,10 +187,11 @@ def _primary_identifier(row: dict[str, Any]) -> str:
 
 
 def load_seen(path: str) -> set[str]:
-    """Load previously written ``metadata.primary_id`` values from the output.
+    """Load previously written output ids from the output file.
 
-    Resume is not back-compatible with pre-``primary_id`` outputs; since resume
-    never worked before this change, there are no such files to support.
+    Each record stores its stable id under the top-level ``id`` (equal to the
+    row's :func:`_primary_identifier`), so a resumed run skips a row when its
+    recomputed id is already present.
     """
     seen: set[str] = set()
     if not os.path.isfile(path):
@@ -202,9 +203,8 @@ def load_seen(path: str) -> set[str]:
                 obj = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            metadata = obj.get("metadata")
-            if isinstance(metadata, dict) and _is_present(metadata.get("primary_id")):
-                seen.add(str(metadata["primary_id"]))
+            if _is_present(obj.get("id")):
+                seen.add(str(obj["id"]))
     return seen
 
 
@@ -241,10 +241,6 @@ SERVER_ERROR_STATUS = 500
 RETRYABLE_HTTP_STATUSES = {408, 409, 425, 429}
 
 
-def _is_retryable_http_status(status: int) -> bool:
-    return status >= SERVER_ERROR_STATUS or status in RETRYABLE_HTTP_STATUSES
-
-
 @with_retries
 async def _post_chat(
     session: aiohttp.ClientSession,
@@ -264,7 +260,11 @@ async def _post_chat(
         if not response.ok:
             body = (await response.text())[:500]
             message = f"HTTP {response.status} from {endpoint}: {body}"
-            if _is_retryable_http_status(response.status):
+            # Retry transient statuses (408/409/425/429/5xx); fail fast otherwise.
+            if (
+                response.status >= SERVER_ERROR_STATUS
+                or response.status in RETRYABLE_HTTP_STATUSES
+            ):
                 raise RuntimeError(message)
             raise InvalidResponseError(message)
         return await response.json()
@@ -349,7 +349,6 @@ async def worker(
                 out_convs.append(gpt_turn)
 
             metadata = {
-                "primary_id": item["primary_id"],
                 "idx": idx,
                 "finish_reasons": finish_reasons,
                 "latency_s": round(time.time() - start_time, 3),
@@ -372,7 +371,6 @@ async def worker(
                 "id": item["primary_id"],
                 "conversations": out_convs,
                 "metadata": {
-                    "primary_id": item["primary_id"],
                     "idx": idx,
                     "error": repr(e),
                     "endpoint": endpoint,

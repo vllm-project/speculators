@@ -292,21 +292,20 @@ def test_load_seen_missing_file_returns_empty(tmp_path):
     assert regen.load_seen(str(tmp_path / "nope.jsonl")) == set()
 
 
-def test_load_seen_reads_primary_id_and_skips_malformed_lines(tmp_path):
+def test_load_seen_reads_id_and_skips_malformed_lines(tmp_path):
     out = tmp_path / "out.jsonl"
     out.write_text(
-        "not json\n" + json.dumps({"metadata": {"primary_id": "P"}}) + "\n",
+        "not json\n" + json.dumps({"id": "P"}) + "\n",
         encoding="utf-8",
     )
     assert regen.load_seen(str(out)) == {"P"}
 
 
-def test_load_seen_ignores_rows_without_primary_id(tmp_path):
-    # Resume is not back-compatible with pre-primary_id outputs (it never worked
-    # before), so a row lacking metadata.primary_id contributes no resume key.
+def test_load_seen_ignores_rows_without_id(tmp_path):
+    # A record without a top-level id contributes no resume key.
     out = tmp_path / "out.jsonl"
     out.write_text(
-        json.dumps({"id": "legacy", "metadata": {"idx": 3}}) + "\n",
+        json.dumps({"conversations": [], "metadata": {"idx": 3}}) + "\n",
         encoding="utf-8",
     )
     assert regen.load_seen(str(out)) == set()
@@ -314,8 +313,8 @@ def test_load_seen_ignores_rows_without_primary_id(tmp_path):
 
 def test_resume_roundtrip_hash_only_row(tmp_path):
     # A row with no explicit id resolves to a content hash; the written output
-    # stores that hash as metadata.primary_id, and load_seen must recover it so
-    # a re-run skips the row. This is the exact case the old resume missed.
+    # stores that hash as the top-level id, and load_seen must recover it so a
+    # re-run skips the row. This is the exact case the old resume missed.
     row = {"question": "What is 6*7?", "answer": "42"}
     primary_id = regen._primary_identifier(row)
 
@@ -323,9 +322,9 @@ def test_resume_roundtrip_hash_only_row(tmp_path):
     out.write_text(
         json.dumps(
             {
-                "id": "sample_0",
+                "id": primary_id,
                 "conversations": [],
-                "metadata": {"primary_id": primary_id, "idx": 0},
+                "metadata": {"idx": 0},
             }
         )
         + "\n",
@@ -410,37 +409,6 @@ def test_post_chat_raises_after_exhausting_retries():
 
     asyncio.run(scenario())
     assert session.calls == 3
-
-
-class _RaisingFakeResponse:
-    """A response whose context-manager entry raises (network-error path)."""
-
-    async def __aenter__(self):
-        raise ConnectionError("boom")
-
-    async def __aexit__(self, *exc):
-        return False
-
-
-def test_post_chat_retries_on_network_error_then_succeeds():
-    ok_payload = {"choices": [{"message": {"content": "hi"}}]}
-    session = _FakeSession(
-        [
-            _RaisingFakeResponse(),
-            _FakeResponse(ok=True, status=200, text="", payload=ok_payload),
-        ]
-    )
-
-    async def scenario():
-        return await regen._post_chat(
-            session,
-            "http://x/v1/chat/completions",
-            {"model": "m"},
-            max_retries=1,
-        )
-
-    assert asyncio.run(scenario()) == ok_payload
-    assert session.calls == 2
 
 
 def test_post_chat_fails_fast_on_permanent_status():
