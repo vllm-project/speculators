@@ -319,17 +319,39 @@ def create_transformer_layer_config(  # noqa: C901
         layer_types=layer_types,
     )
 
+    # Apply the processed rope settings to the draft config. ``rope_kwargs``
+    # already carries CLI overrides, recovered rope_theta and any
+    # ``mrope_full_head_hack`` rescaling computed above. We deliberately keep
+    # the MRoPE fields (``mrope_section`` / ``mrope_interleaved`` /
+    # ``partial_rotary_factor``) so the draft can train with true MRoPE
+    # semantics; ``_select_rotary_emb_class`` relies on ``mrope_section`` being
+    # present to enable the MRoPE-aware rotary embedding.
+    processed_rope_scaling = rope_kwargs.get("rope_scaling")
+
     # New rope parameters definition introduced in transformers 5.0
     if version.parse(transformers.__version__) >= version.parse("5.0.0"):
-        if hasattr(verifier_config, "rope_parameters"):
-            config.rope_parameters = deepcopy(verifier_config.rope_parameters)
-            _MROPE_KEYS = ("mrope_section", "mrope_interleaved", "type")  # noqa: N806
-            for key in _MROPE_KEYS:
-                config.rope_parameters.pop(key, None)
+        rope_parameters: dict | None = None
+        if isinstance(processed_rope_scaling, dict):
+            rope_parameters = dict(processed_rope_scaling)
+        elif isinstance(getattr(verifier_config, "rope_parameters", None), dict):
+            rope_parameters = deepcopy(verifier_config.rope_parameters)
+
+        if rope_parameters is not None:
+            if "rope_theta" in rope_kwargs:
+                rope_parameters["rope_theta"] = rope_kwargs["rope_theta"]
+            # ``type`` is a legacy alias (only "mrope" on VL models) that
+            # transformers strips during validation and that breaks vLLM's
+            # config checks; drop it while keeping the real MRoPE fields.
+            rope_parameters.pop("type", None)
+            config.rope_parameters = rope_parameters
     else:
-        if hasattr(verifier_config, "rope_scaling"):
+        if isinstance(processed_rope_scaling, dict):
+            config.rope_scaling = dict(processed_rope_scaling)
+        elif hasattr(verifier_config, "rope_scaling"):
             config.rope_scaling = deepcopy(verifier_config.rope_scaling)
-        config.rope_theta = getattr(verifier_config, "rope_theta", 10000.0)
+        config.rope_theta = rope_kwargs.get(
+            "rope_theta", getattr(verifier_config, "rope_theta", 10000.0)
+        )
 
     return config
 
