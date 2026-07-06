@@ -22,7 +22,17 @@ from pathlib import Path
 
 import pytest
 
+from speculators.data_generation import vllm_client
 from speculators.data_generation.preprocessing import _normalize_conversation
+from speculators.data_generation.vllm_client import InvalidResponseError
+
+
+@pytest.fixture(autouse=True)
+def _no_retry_backoff(monkeypatch):
+    # with_retries sleeps RETRY_BACKOFF_BASE ** attempt between retries; zero it
+    # so the retry tests don't actually sleep.
+    monkeypatch.setattr(vllm_client, "RETRY_BACKOFF_BASE", 0)
+
 
 _SCRIPT_PATH = (
     Path(__file__).resolve().parents[3]
@@ -378,7 +388,6 @@ def test_post_chat_retries_transient_failure_then_succeeds():
             "http://x/v1/chat/completions",
             {"model": "m"},
             max_retries=3,
-            retry_backoff=0,
         )
 
     assert asyncio.run(scenario()) == ok_payload
@@ -391,13 +400,12 @@ def test_post_chat_raises_after_exhausting_retries():
     )
 
     async def scenario():
-        with pytest.raises(RuntimeError, match="failed after 3 attempt"):
+        with pytest.raises(RuntimeError, match="HTTP 500"):
             await regen._post_chat(
                 session,
                 "http://x/v1/chat/completions",
                 {"model": "m"},
                 max_retries=2,
-                retry_backoff=0,
             )
 
     asyncio.run(scenario())
@@ -429,7 +437,6 @@ def test_post_chat_retries_on_network_error_then_succeeds():
             "http://x/v1/chat/completions",
             {"model": "m"},
             max_retries=1,
-            retry_backoff=0,
         )
 
     assert asyncio.run(scenario()) == ok_payload
@@ -437,19 +444,19 @@ def test_post_chat_retries_on_network_error_then_succeeds():
 
 
 def test_post_chat_fails_fast_on_permanent_status():
-    # A permanent (non-transient) status must not be retried: one attempt only.
+    # A permanent (non-transient) status raises InvalidResponseError, which
+    # with_retries never retries: one attempt only.
     session = _FakeSession(
         [_FakeResponse(ok=False, status=404, text="nope", payload={})]
     )
 
     async def scenario():
-        with pytest.raises(RuntimeError, match="HTTP 404"):
+        with pytest.raises(InvalidResponseError, match="HTTP 404"):
             await regen._post_chat(
                 session,
                 "http://x/v1/chat/completions",
                 {"model": "m"},
                 max_retries=3,
-                retry_backoff=0,
             )
 
     asyncio.run(scenario())

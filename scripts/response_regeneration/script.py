@@ -13,6 +13,12 @@ import aiohttp
 from datasets import load_dataset
 from tqdm import tqdm
 
+from speculators.data_generation.vllm_client import (
+    DEFAULT_MAX_RETRIES,
+    InvalidResponseError,
+    with_retries,
+)
+
 DATASET_CONFIGS = {
     "magpie": {
         "id": "Magpie-Align/Magpie-Llama-3.1-Pro-300K-Filtered",
@@ -31,9 +37,6 @@ DATASET_CONFIGS = {
         "subset": "main",
     },
 }
-
-DEFAULT_MAX_RETRIES = 3
-DEFAULT_RETRY_BACKOFF = 2.0
 
 
 def parse_args():
@@ -107,20 +110,9 @@ def parse_args():
             f"(default: {DEFAULT_MAX_RETRIES})"
         ),
     )
-    parser.add_argument(
-        "--retry-backoff",
-        type=float,
-        default=DEFAULT_RETRY_BACKOFF,
-        help=(
-            "Initial retry backoff in seconds; doubles after each failed attempt "
-            f"(default: {DEFAULT_RETRY_BACKOFF})"
-        ),
-    )
     args = parser.parse_args()
     if args.max_retries < 0:
         parser.error("--max-retries must be >= 0")
-    if args.retry_backoff < 0:
-        parser.error("--retry-backoff must be >= 0")
     return args
 
 
@@ -249,57 +241,33 @@ SERVER_ERROR_STATUS = 500
 RETRYABLE_HTTP_STATUSES = {408, 409, 425, 429}
 
 
-class _NonRetryableChatError(RuntimeError):
-    """A non-2xx reply that should fail fast instead of being retried."""
-
-
 def _is_retryable_http_status(status: int) -> bool:
     return status >= SERVER_ERROR_STATUS or status in RETRYABLE_HTTP_STATUSES
 
 
+@with_retries
 async def _post_chat(
     session: aiohttp.ClientSession,
     endpoint: str,
     payload: dict[str, Any],
-    *,
-    max_retries: int = DEFAULT_MAX_RETRIES,
-    retry_backoff: float = DEFAULT_RETRY_BACKOFF,
 ) -> dict[str, Any]:
     """POST one chat-completion request and return the parsed response.
 
-    A non-2xx reply has no ``choices`` array, so raise with the status and a
-    short body; otherwise the caller records a bare ``KeyError('choices')`` and
-    the real cause is lost. Transient failures (network errors or transient
-    HTTP statuses) are retried up to ``max_retries`` times with exponential
-    backoff; a backing-off worker just sleeps without pulling new work, so it
-    does not block the other workers. Permanent non-2xx replies (e.g. 400/404)
-    fail fast without retrying.
+    Wrapped by ``with_retries`` (adds a ``max_retries`` kwarg): transient
+    failures — network errors and transient HTTP statuses (408/409/425/429/5xx)
+    — are retried with exponential backoff. Permanent non-2xx replies (e.g.
+    400/404) raise ``InvalidResponseError``, which ``with_retries`` never
+    retries, so they fail fast. A non-2xx reply is surfaced with its status and
+    a short body so the caller does not record a bare ``KeyError('choices')``.
     """
-    total_attempts = max_retries + 1
-    last_error: Exception | None = None
-    for attempt in range(1, total_attempts + 1):
-        try:
-            async with session.post(endpoint, json=payload) as response:
-                if not response.ok:
-                    body = (await response.text())[:500]
-                    error_cls = (
-                        RuntimeError
-                        if _is_retryable_http_status(response.status)
-                        else _NonRetryableChatError
-                    )
-                    raise error_cls(f"HTTP {response.status} from {endpoint}: {body}")
-                return await response.json()
-        except _NonRetryableChatError:
-            raise
-        except Exception as e:  # noqa: BLE001
-            last_error = e
-            if attempt >= total_attempts:
-                break
-            await asyncio.sleep(retry_backoff * (2 ** (attempt - 1)))
-
-    raise RuntimeError(
-        f"chat request failed after {total_attempts} attempt(s)"
-    ) from last_error
+    async with session.post(endpoint, json=payload) as response:
+        if not response.ok:
+            body = (await response.text())[:500]
+            message = f"HTTP {response.status} from {endpoint}: {body}"
+            if _is_retryable_http_status(response.status):
+                raise RuntimeError(message)
+            raise InvalidResponseError(message)
+        return await response.json()
 
 
 async def worker(
@@ -355,7 +323,6 @@ async def worker(
                     endpoint,
                     payload,
                     max_retries=args.max_retries,
-                    retry_backoff=args.retry_backoff,
                 )
 
                 choice = data["choices"][0]
@@ -391,7 +358,7 @@ async def worker(
             }
 
             output = {
-                "id": item.get("uuid") or f"sample_{idx}",
+                "id": item["primary_id"],
                 "conversations": out_convs,
                 "metadata": metadata,
             }
@@ -402,7 +369,7 @@ async def worker(
             # Failures go to a separate error file, not the training output; an
             # in-band marker would be invisible (the pipeline drops metadata).
             error_output = {
-                "id": item.get("uuid") or f"sample_{idx}",
+                "id": item["primary_id"],
                 "conversations": out_convs,
                 "metadata": {
                     "primary_id": item["primary_id"],
@@ -521,7 +488,6 @@ async def main():
                 if not turns:
                     continue
 
-                uuid = row.get("uuid")
                 primary_id = _primary_identifier(row)
                 if primary_id in seen_ids:
                     continue
@@ -529,7 +495,6 @@ async def main():
                 await queue.put(
                     {
                         "idx": index,
-                        "uuid": uuid,
                         "primary_id": primary_id,
                         "turns": turns,
                     }
