@@ -26,11 +26,17 @@ Learn how to train a DFlash speculator model with block-based token generation.
 
 **Time required:** ~25 mins
 
-## [Train P-eagle Model offline](train_peagle_offline.md)
+## [Train P-EAGLE Model Online](train_peagle_online.md)
 
-Learn how to train a P-eagle speculator model with COD sampling.
+Learn how to train a P-EAGLE speculator model with COD sampling using online training, where hidden states are generated on-demand during training.
 
 **Time required:** ~50 mins
+
+## [Train P-EAGLE Model Offline](train_peagle_offline.md)
+
+Learn how to train a P-EAGLE speculator model with COD sampling using offline training with pre-generated hidden states.
+
+**Time required:** ~55 mins
 
 ## [Train MTP Model Online](train_mtp_online.md)
 
