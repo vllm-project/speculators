@@ -1,14 +1,16 @@
 import warnings
+from functools import partial
 
 import torch
 from transformers import AutoConfig, PretrainedConfig
 
 
-def conditional_torch_compile(func):
+def conditional_torch_compile(func=None, *args, **kwargs):
+    if func is None:
+        return partial(conditional_torch_compile, *args, **kwargs)
     if torch.cuda.is_available() and hasattr(torch, "compile"):
-        return torch.compile(func)
-    else:
-        return func
+        return torch.compile(func, *args, **kwargs)
+    return func
 
 
 def get_verifier_config(verifier_name_or_path: str) -> PretrainedConfig:
@@ -39,3 +41,40 @@ def resolve_target_layer_ids(
         stacklevel=3,
     )
     return target_layer_ids
+
+
+def resolve_draft_intermediate_size(verifier_config: PretrainedConfig) -> int:
+    """Resolve a dense draft MLP ``intermediate_size`` from a verifier config.
+
+    The draft is an independent small *dense* decoder, so its FFN width is a design
+    choice rather than something to reconcile with the verifier's routed capacity:
+
+    * Dense verifiers expose ``intermediate_size`` directly; the draft mirrors it.
+    * MoE verifiers have no dense ``intermediate_size`` (their FFN is a routed set of
+      small experts), so the draft falls back to the widely used ``3 * hidden_size``
+      gated-MLP ratio -- the Qwen3 dense convention that the dflash draft decoder
+      follows. Pass ``--draft-config`` to set it explicitly instead.
+
+    :raises ValueError: when the verifier config exposes neither ``intermediate_size``
+        nor ``hidden_size`` (degenerate config; pass ``--draft-config``).
+    """
+    dense = getattr(verifier_config, "intermediate_size", None)
+    if dense is not None:
+        return int(dense)
+
+    hidden_size = getattr(verifier_config, "hidden_size", None)
+    if hidden_size is None:
+        raise ValueError(
+            "Verifier config exposes neither `intermediate_size` nor `hidden_size`, "
+            "so a draft intermediate_size cannot be inferred. Pass --draft-config to "
+            "set the draft architecture explicitly."
+        )
+
+    intermediate_size = 3 * int(hidden_size)
+    warnings.warn(
+        "Verifier config has no dense intermediate_size (likely MoE); using draft "
+        f"intermediate_size={intermediate_size} (3 x hidden_size = {hidden_size}). "
+        "Pass --draft-config to override.",
+        stacklevel=3,
+    )
+    return intermediate_size

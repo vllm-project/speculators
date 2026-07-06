@@ -19,8 +19,6 @@ def _make_minimal_trainer(tmp_path: Path, checkpoint_freq: int, save_best: bool)
         num_epochs=0,
         save_path=str(tmp_path),
         resume_from_checkpoint=False,
-        is_distributed=False,
-        local_rank=0,
         checkpoint_freq=checkpoint_freq,
         save_best=save_best,
     )
@@ -28,6 +26,7 @@ def _make_minimal_trainer(tmp_path: Path, checkpoint_freq: int, save_best: bool)
     trainer.current_epoch = 0
     trainer.global_step = 0
     trainer.is_distributed = False
+    trainer.rank = 0
     trainer.local_rank = 0
     trainer.resume_from_checkpoint = False
     trainer.train_loader = cast("DataLoader[Any]", [])
@@ -35,8 +34,8 @@ def _make_minimal_trainer(tmp_path: Path, checkpoint_freq: int, save_best: bool)
     trainer.checkpointer = SingleGPUCheckpointer(str(tmp_path))
 
     trainer.model = cast("SpeculatorModel", object())
-    trainer.opt = cast("torch.optim.AdamW", object())
-    trainer.scheduler = None
+    trainer.optimizers = cast("list[torch.optim.Optimizer]", [object()])
+    trainer.schedulers = []
     return trainer
 
 
@@ -240,6 +239,7 @@ def test_best_val_loss_restored_on_resume(tmp_path: Path):
     trainer = Trainer.__new__(Trainer)
     trainer.resume_from_checkpoint = True
     trainer.is_distributed = False
+    trainer.rank = 0
     trainer.local_rank = 0
     trainer.checkpointer = cp
 

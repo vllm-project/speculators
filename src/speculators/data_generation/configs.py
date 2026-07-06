@@ -37,6 +37,16 @@ def _normalize_gsm8k(example: dict) -> dict:
     }
 
 
+def _normalize_nemotron(example: dict) -> dict:
+    """Build a conversation from Nemotron ``input`` turns plus ``output``."""
+    return {
+        "conversations": [
+            *example["input"],
+            {"role": "assistant", "content": example["output"]},
+        ]
+    }
+
+
 def get_coco_dir():
     return os.getenv("COCO_DIR") or "coco/"
 
@@ -110,6 +120,18 @@ DATASET_CONFIGS: dict[str, DatasetConfig] = {
         split="train",
         normalize_fn=_normalize_gsm8k,
     ),
+    "magpie": DatasetConfig(
+        name="magpie",
+        hf_path="Magpie-Align/Magpie-Llama-3.1-Pro-300K-Filtered",
+        split="train",
+    ),
+    "nemotron": DatasetConfig(
+        name="nemotron",
+        hf_path="nvidia/Llama-Nemotron-Post-Training-Dataset",
+        subset="SFT",
+        split="chat",
+        normalize_fn=_normalize_nemotron,
+    ),
     # NOTE: You need to serve vLLM with `--allowed-local-media-path /path/to/coco`
     "sharegpt4v_coco": DatasetConfig(
         name="sharegpt4v_coco",
@@ -118,5 +140,10 @@ DATASET_CONFIGS: dict[str, DatasetConfig] = {
         split="train",
         filter_fn=_filter_sharegpt4v_coco,
         normalize_fn=_normalize_sharegpt4v_coco,
+    ),
+    "open-perfectblend": DatasetConfig(
+        name="open-perfectblend",
+        hf_path="mlabonne/open-perfectblend",
+        split="train",
     ),
 }

@@ -36,11 +36,15 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--speculator-type`** (str, default: `"eagle3"`) Type of speculator model to train. Options: `eagle3`, `dflash`
 
-- **`--from-pretrained`** (str, default: `""`) Path to a pretrained draft model to finetune.
+- **`--from-pretrained`** (str, default: `""`) Path or HF id of an existing draft checkpoint to load weights from and train — either a previously trained draft or the initialized-but-untrained checkpoint produced by `--dry-run`. May also point to a local directory containing only a `config.json`, in which case a fresh draft is initialized from that full speculator config. Takes precedence over all other model-definition options: it is mutually exclusive with `--draft-config` and the decoder-shaping flags (`--num-layers`, `--draft-arch`, `--draft-hidden-act`, `--sliding-window`, `--sliding-window-indices`).
+
+- **`--draft-config`** (str, default: `""`) HF id, directory, or JSON path of a decoder config (`LlamaConfig` for eagle3/peagle, `Qwen3Config` for dflash) used as the draft `transformer_layer_config`; the rest of the speculator is built from the other CLI args. The draft `hidden_size` must match the verifier (mismatch is not yet supported). If a full speculator config is passed, its nested `transformer_layer_config` is extracted. Mutually exclusive with `--from-pretrained` and with the decoder-shaping flags (`--num-layers`, `--draft-arch`, `--draft-hidden-act`, `--sliding-window`, `--sliding-window-indices`).
+
+- **`--dry-run`** (flag) Build the speculator, initialize weights, save a checkpoint to `--save-path`, then exit before training. Useful to validate the config/weights in vLLM before launching a full run; the saved checkpoint can be fed straight back via `--from-pretrained`.
 
 - **`--num-layers`** (int, default: `1`) Number of transformer layers in the draft model.
 
-- **`--draft-arch`** (str, default: `"llama"`) Architecture for draft decoder layers (only applies to Eagle3 currently). Options: `llama`, `qwen3` **Warning:** Only `llama` is currently supported in vLLM for inference.
+- **`--draft-arch`** (str, default: `"llama"`) Architecture for the synthesized draft decoder layers. Options: `llama`, `qwen3`. Used by Eagle3 and P-EAGLE, which select the decoder layer class from this value; DFlash always uses a Qwen3-style decoder regardless. Both are supported in vLLM for inference, and the target and draft architectures do not have to match.
 
 - **`--draft-hidden-act`** (str, default: `"silu"`) Activation function for draft decoder layers. Setting as `None` will inherit activation function from the verifier model.
 
@@ -94,9 +98,11 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--lr`** (float, default: `1e-4`) Learning rate.
 
+- **`--train-data-ratio`** (float, default: `0.9`) Ratio of data to use for training, the rest of the provided data will be used for validation.
+
 - **`--no-resume-from-checkpoint`** (flag) Disable automatic checkpoint resumption. Without this flag, this script will automatically load the latest checkpoint in `{save-path}` if one exists.
 
-- **`--logger`** (str, default: `""`) Metric logging backend(s). Options: `trackio`, `wandb`, `tensorboard` Can specify multiple comma-separated: `--logger tensorboard,wandb`. **Warning:** backend must be pip installed before using.
+- **`--logger`** (str, default: `""`) Metric logging backend(s). Options: `trackio`, `wandb`, `tensorboard`, `mlflow` Can specify multiple comma-separated: `--logger tensorboard,wandb`. **Warning:** backend must be pip installed before using.
 
 - **`--log-dir`** (str, default: `"./logs"`) Directory to save training logs. Only applies to some logging backends (e.g. `tensorboard`)
 
@@ -108,6 +114,22 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--deterministic-cuda`** (flag) Enable deterministic CUDA operations. May impact performance.
 
+### Optimizer Arguments
+
+- **`--optimizer`** (str, default: `"adamw"`) Optimizer to use. Options: `adamw`, `muon`. The `muon` option applies the Muon optimizer to 2D weight matrices and AdamW to the remaining parameters (norms, biases, embeddings, lm_head).
+
+- **`--weight-decay`** (float, default: `0.01`) Weight decay for the AdamW optimizer (and the AdamW group in muon mode).
+
+- **`--muon-lr`** (float, default: `0.02`) Learning rate for the Muon (2D weights) group. Only used with `--optimizer muon`.
+
+- **`--muon-momentum`** (float, default: `0.95`) Momentum for the Muon optimizer. Only used with `--optimizer muon`.
+
+- **`--muon-weight-decay`** (float, default: `0.1`) Weight decay for the Muon optimizer. Only used with `--optimizer muon`.
+
+- **`--muon-ns-steps`** (int, default: `5`) Number of Newton-Schulz steps for Muon. Only used with `--optimizer muon`.
+
+- **`--muon-adjust-lr-fn`** (str, default: `"match_rms_adamw"`) Muon LR adjustment strategy. Options: `original`, `match_rms_adamw`. Only used with `--optimizer muon`.
+
 ### Eagle3-Specific Arguments
 
 - **`--use-off-policy-tokens`** (flag) Use off-policy tokens during training (required for [regenerated data](response_regeneration.md)).
@@ -116,17 +138,27 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--embed-requires-grad` / `--no-embed-requires-grad`** (flag, default: `False`) Whether to train embedding layer weights.
 
-- **`--norm-before-fc`** (flag) Use RMSNorm before FC layer in draft path (e.g., for gpt-oss models).
+- **`--norm-before-fc` / `--no-norm-before-fc`** (flag, default: `True` for eagle3, `False` otherwise) Apply a single RMSNorm to the concatenated auxiliary hidden states before the FC projection (gpt-oss style). See `--fc-norm` for the per-layer alternative from the Eagle 3.1 paper.
+
+- **`--fc-norm`** (flag, default: `False`) Apply per-layer RMSNorm to each auxiliary hidden state before concatenation and FC projection (Eagle 3.1 paper approach).
+
+- **`--norm-output` / `--no-norm-output`** (flag, default: `True` for eagle3, `False` otherwise) Feed post-norm hidden states back across TTT steps to stabilize magnitude drift across speculation depths.
 
 - **`--ttt-steps`** (int, default: `3`) Number of test-time training steps
 
 - **`--ttt-step-loss-decay`** (float, default: `1.0`) Loss decay factor for test-time training steps.
+
+### Attention Backend Arguments
+
+- **`--draft-attn-impl`** (str, default: `"simple_flex_attention"`) Attention implementation for draft layers. Options: `simple_flex_attention`, `sdpa`, `eager`. Use `sdpa` or `eager` on hardware where flex attention is unavailable (e.g. Ascend NPU). Applies to Eagle3, P-EAGLE, and DFlash. Not supported for MTP.
 
 ### DFlash-Specific Arguments
 
 - **`--block-size`** (int, default: `8`) Block size for DFlash model.
 
 - **`--max-anchors`** (int, default: `256`) Maximum anchor positions for DFlash training.
+
+- **`--dflash-decay-gamma`** (float, default: `4.0`) Decay gamma for DFlash loss weighting.
 
 ### Dataloader Arguments
 
@@ -237,6 +269,29 @@ python scripts/train.py \
   --data-path ./new_training_data \
   --hidden-states-path ./hidden_states \
   --save-path ./finetuned_checkpoints \
+  --epochs 5 \
+  --lr 5e-6
+```
+
+### Initializing From a Decoder Config (with Dry-Run Validation)
+
+```bash
+# Build the speculator from a plain decoder config, initialize weights, save a
+# checkpoint, and exit before training so it can be validated in vLLM first.
+python scripts/train.py \
+  --verifier-name-or-path Qwen/Qwen3-8B \
+  --speculator-type dflash \
+  --draft-config ./qwen3_draft_decoder_config.json \
+  --draft-vocab-size 32000 \
+  --save-path ./draft_init \
+  --dry-run
+
+# After validating ./draft_init in vLLM, train starting from it:
+python scripts/train.py \
+  --verifier-name-or-path Qwen/Qwen3-8B \
+  --speculator-type dflash \
+  --from-pretrained ./draft_init \
+  --data-path ./training_data \
   --epochs 5 \
   --lr 5e-6
 ```

@@ -684,6 +684,7 @@ def _get_input_ids_loss_mask(
     max_length: int,
     assistant_pattern: str | Pattern[str] | None,
     *,
+    tools: list[dict] | None = None,
     # For logging
     conv_idx: int | None = None,
 ):
@@ -694,6 +695,7 @@ def _get_input_ids_loss_mask(
         encoded_any = processor.apply_chat_template(
             hf_conv,
             tokenize=True,
+            tools=tools,  # type: ignore[arg-type]
             add_generation_prompt=False,
             return_assistant_tokens_mask=True,
             return_dict=True,
@@ -725,6 +727,7 @@ def _get_input_ids_loss_mask(
             encoded_any = processor.apply_chat_template(
                 hf_conv,
                 tokenize=True,
+                tools=tools,
                 add_generation_prompt=False,
                 return_dict=True,
                 processor_kwargs=processor_kwargs,
@@ -733,6 +736,7 @@ def _get_input_ids_loss_mask(
             encoded_any = processor.apply_chat_template(
                 hf_conv,
                 tokenize=True,
+                tools=tools,
                 add_generation_prompt=False,
                 return_dict=True,
                 **processor_kwargs,
@@ -752,6 +756,7 @@ def _get_input_ids_loss_mask(
         formatted_text = processor.apply_chat_template(
             hf_conv,
             tokenize=False,
+            tools=tools,  # type: ignore[arg-type]
             add_generation_prompt=False,
         )
         assert isinstance(formatted_text, str)
@@ -772,6 +777,29 @@ def _get_input_ids_loss_mask(
     )
 
     return input_ids, loss_mask
+
+
+def _parse_conv_tools(conv_tools: object, idx: int) -> list | None:
+    """Parse the tools JSON string for one conversation; warn and return None
+    on invalid JSON or unexpected types."""
+    if not conv_tools:
+        return None
+    if isinstance(conv_tools, list):
+        return conv_tools
+    if not isinstance(conv_tools, str):
+        log.warning(
+            f"Non-string value in tools column for conversation {idx}: "
+            f"{type(conv_tools).__name__}, proceeding without tools"
+        )
+        return None
+    try:
+        return json.loads(conv_tools)
+    except json.JSONDecodeError as e:
+        log.warning(
+            f"Invalid JSON in tools column for conversation {idx}: {e}, "
+            "proceeding without tools"
+        )
+        return None
 
 
 def _preprocess_batch(
@@ -806,8 +834,18 @@ def _preprocess_batch(
         log.warning(f"No conversations key found. Keys: {list(examples.keys())}")
         return results
 
+    tools_col = examples.get("tools")
+    if tools_col is not None and len(tools_col) != len(conversations):
+        log.warning(
+            f"Tools column length ({len(tools_col)}) does not match "
+            f"conversations length ({len(conversations)}), proceeding without tools"
+        )
+        tools_col = None
+
     for idx, conv in enumerate(conversations):
         sample_idx = indices[idx] if indices is not None else idx
+        conv_tools = tools_col[idx] if tools_col is not None else None
+
         if not conv or not isinstance(conv, list):
             log.warning(
                 f"[DROP sample_idx={sample_idx}] reason=empty_or_non_list_conversation "
@@ -823,6 +861,7 @@ def _preprocess_batch(
             )
             continue
 
+        parsed_tools = _parse_conv_tools(conv_tools, idx)
         is_multimodal = include_messages and _is_multimodal_conversation(normalized_conv)
         messages = _adapt_conv_for_vllm(normalized_conv) if include_messages else []
         messages_json = _serialize_messages(messages) if is_multimodal else ""
@@ -839,6 +878,8 @@ def _preprocess_batch(
                     return_tensors="pt",
                     processor_kwargs={},
                 )
+                if parsed_tools is not None:
+                    call_kwargs["tools"] = parsed_tools
                 for key in (
                     "load_audio",
                     "load_image",
@@ -872,7 +913,11 @@ def _preprocess_batch(
                     candidate_loss_mask = _maybe_strip_batch_dim(encoded[mask_key]).to(
                         torch.long
                     )
-                    base_loss_mask = candidate_loss_mask if _mask_has_positive(candidate_loss_mask) else None
+                    base_loss_mask = (
+                        candidate_loss_mask
+                        if _mask_has_positive(candidate_loss_mask)
+                        else None
+                    )
                 else:
                     base_loss_mask = None
 
@@ -910,6 +955,7 @@ def _preprocess_batch(
                     processor,
                     max_length=max_length,
                     assistant_pattern=assistant_pattern,
+                    tools=parsed_tools,
                     conv_idx=idx,
                 )
                 input_ids = torch.tensor(input_ids, dtype=torch.long)
@@ -1025,26 +1071,114 @@ def build_eagle3_dataset(
     return dataset
 
 
+def _load_hf_dataset(spec: str) -> tuple[HFDataset, None]:
+    """Load an arbitrary HuggingFace dataset from an ``hf:`` spec.
+
+    Args:
+        spec: ``hf:<dataset_id>[:<subset>:<split>]``. The split defaults to
+            ``train``. A single suffix (``hf:<id>:<split>``) selects a split
+            without a subset; both can be given as ``hf:<id>:<subset>:<split>``.
+
+    Returns:
+        Tuple of (raw_dataset, None). No normalize_fn is applied: the dataset
+        must already be in conversations format.
+
+    Raises:
+        ValueError: If the spec is malformed or the loaded dataset has no
+            ``conversations`` column.
+    """
+    subset: str | None
+    match spec.removeprefix("hf:").split(":"):
+        case [hf_id]:
+            subset, split = None, "train"
+        case [hf_id, split]:
+            subset = None
+        case [hf_id, subset, split]:
+            pass
+        case _:
+            raise ValueError(
+                f"Invalid hf: spec '{spec}'. "
+                f"Expected hf:<dataset_id>[:<subset>:<split>]."
+            )
+
+    if not hf_id:
+        raise ValueError(f"Invalid hf: spec '{spec}': missing dataset id.")
+    if subset == "":
+        raise ValueError(f"Invalid hf: spec '{spec}': empty subset.")
+    if not split:
+        raise ValueError(f"Invalid hf: spec '{spec}': empty split.")
+
+    raw_dataset = load_dataset(hf_id, name=subset, split=split)
+
+    if "conversations" not in raw_dataset.column_names:
+        raise ValueError(
+            f"HuggingFace dataset '{hf_id}' (split '{split}') is not in "
+            f"conversations format: expected a 'conversations' column but found "
+            f"{raw_dataset.column_names}. Pass a dataset already in conversations "
+            f"format, or add a preset to DATASET_CONFIGS with a normalize_fn."
+        )
+
+    return raw_dataset, None
+
+
 def load_raw_dataset(
     train_data_path: str,
 ) -> tuple[HFDataset, Callable[[dict], dict] | None]:
-    """Load raw dataset from local file or HuggingFace."""
+    """Load a raw dataset from one of several source types.
+
+    Resolution order:
+        1. Local ``.json``/``.jsonl`` file.
+        2. Local directory: recursively load all ``*.json``/``*.jsonl`` files
+           as a single dataset.
+        3. Named preset from ``DATASET_CONFIGS``.
+        4. ``hf:<id>[:<subset>:<split>]`` for an arbitrary HuggingFace dataset.
+
+    Args:
+        train_data_path: File path, directory path, preset name, or ``hf:`` spec.
+
+    Returns:
+        Tuple of (raw_dataset, normalize_fn). normalize_fn is None for sources
+        already in conversations format.
+
+    Raises:
+        ValueError: If the source cannot be resolved or a local directory
+            contains no ``.json``/``.jsonl`` files.
+    """
+    # 1. Local file
     if train_data_path.endswith((".jsonl", ".json")):
         return load_dataset("json", data_files=train_data_path, split="train"), None
 
-    if train_data_path not in DATASET_CONFIGS:
-        raise ValueError(
-            f"Unsupported dataset: {train_data_path}. "
-            f"Supported: local .json/.jsonl files or {list(DATASET_CONFIGS.keys())}"
+    # 2. Local directory
+    path = Path(train_data_path)
+    if path.is_dir():
+        data_files = sorted(
+            str(p) for p in (*path.rglob("*.json"), *path.rglob("*.jsonl"))
         )
+        if not data_files:
+            raise ValueError(
+                f"No .json/.jsonl files found in directory: {train_data_path}"
+            )
+        return load_dataset("json", data_files=data_files, split="train"), None
 
-    config = DATASET_CONFIGS[train_data_path]
-    raw_dataset = load_dataset(config.hf_path, name=config.subset, split=config.split)
+    # 3. Named preset
+    if train_data_path in DATASET_CONFIGS:
+        config = DATASET_CONFIGS[train_data_path]
+        raw_dataset = load_dataset(
+            config.hf_path, name=config.subset, split=config.split
+        )
+        if config.filter_fn is not None:
+            raw_dataset = raw_dataset.filter(config.filter_fn)
+        return raw_dataset, config.normalize_fn
 
-    if config.filter_fn is not None:
-        raw_dataset = raw_dataset.filter(config.filter_fn)
+    # 4. Arbitrary HuggingFace dataset
+    if train_data_path.startswith("hf:"):
+        return _load_hf_dataset(train_data_path)
 
-    return raw_dataset, config.normalize_fn
+    raise ValueError(
+        f"Unsupported dataset: {train_data_path}. Supported: local .json/.jsonl "
+        f"file, local directory of .json/.jsonl files, hf:<id>[:<subset>:<split>], "
+        f"or a preset {list(DATASET_CONFIGS.keys())}."
+    )
 
 
 def get_tokenizer(processor: ProcessorLike):
@@ -1182,7 +1316,7 @@ def load_and_preprocess_dataset(
         processed_datasets.append(preprocessed_dataset)
 
     combined_dataset = concatenate_datasets(processed_datasets)
-    combined_dataset.shuffle(seed=seed)
+    combined_dataset = combined_dataset.shuffle(seed=seed)
     if max_samples is not None and len(combined_dataset) > max_samples:
         combined_dataset = combined_dataset.select(range(max_samples))
 

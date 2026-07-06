@@ -16,6 +16,7 @@ from speculators.models.mtp.model_definitions import (
     mtp_model_classes,
     resolve_model_type,
 )
+from speculators.models.utils import conditional_torch_compile
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 
 logger = logging.getLogger(__name__)
@@ -106,6 +107,7 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
         super().load_verifier_weights()
         del self.verifier_lm_head
 
+    @conditional_torch_compile
     def forward(
         self,
         input_ids: torch.Tensor,
@@ -128,12 +130,12 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
         separate label tensor is needed. Use loss_mask to exclude positions
         (e.g. prompt tokens) from the loss.
 
-        :param input_ids: Token IDs [batch, seq_len]. Serves as both the
+        :param input_ids: Token IDs [1, seq_len]. Serves as both the
             embedding source and the prediction target (offset by step+2).
-        :param hidden_states: Hidden states from verifier [batch, seq_len, hidden_size]
-        :param attention_mask: Optional attention mask [batch, seq_len]
-        :param position_ids: Optional position IDs [batch, seq_len]
-        :param loss_mask: Optional binary mask [batch, seq_len]; 1=compute loss,
+        :param hidden_states: Hidden states from verifier [1, seq_len, hidden_size]
+        :param attention_mask: Optional attention mask [1, seq_len]
+        :param position_ids: Optional position IDs [1, seq_len]
+        :param loss_mask: Optional binary mask [1, seq_len]; 1=compute loss,
             0=ignore.
         :param step_weights: Per-step loss weights (None = uniform). Training only.
         :param return_dict: Unused, kept for interface compatibility.
@@ -158,38 +160,41 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
                 torch.arange(seq_len, device=device).unsqueeze(0).expand(batch_size, -1)
             )
 
-        causal_mask = create_causal_mask(
-            config=self.config.transformer_layer_config,
-            inputs_embeds=hidden_states,
-            attention_mask=attention_mask,
-            past_key_values=None,
-            position_ids=position_ids,
-        )
-
         all_logits: list[torch.Tensor] = []
         total_loss = torch.tensor(0.0, device=device)
         metrics: dict[str, float | torch.Tensor] = {}
 
+        # Uniform valid_len keeps tensor shapes identical across loop
+        # iterations, which torch.compile requires for stable codegen.
+        # Cap steps so short sequences still produce partial results.
+        effective_steps = min(num_steps, max(0, seq_len - 2))
+        valid_len = seq_len - effective_steps - 1
+        if valid_len <= 0 or effective_steps == 0:
+            metrics["loss_sum"] = total_loss.detach().clone()
+            metrics["loss_total"] = torch.tensor(1.0, device=device)
+            return (all_logits, total_loss, metrics)
+
+        step_pos_ids = position_ids[:, :valid_len]
+        causal_mask = create_causal_mask(
+            config=self.config.transformer_layer_config,
+            inputs_embeds=hidden_states[:, :valid_len],
+            attention_mask=attention_mask,
+            past_key_values=None,
+            position_ids=step_pos_ids,
+        )
+
         current_hidden = hidden_states
-        for step in range(num_steps):
-            valid_len = seq_len - step - 2
-            if valid_len <= 0:
-                break
+        for step in range(effective_steps):
             step_hidden = current_hidden[:, :valid_len]
             step_embeds = self.embed_tokens(
                 input_ids[:, step + 1 : step + 1 + valid_len]
             )
-            step_pos_ids = position_ids[:, :valid_len]
             step_pos_emb = self.rotary_emb(step_hidden, step_pos_ids)
-            if causal_mask is not None:
-                step_attn_mask = causal_mask[:, :, :valid_len, :valid_len]
-            else:
-                step_attn_mask = None
 
             mtp_output = self.mtp_layers[0](
                 hidden_states=step_hidden,
                 token_embeddings=step_embeds,
-                attention_mask=step_attn_mask,
+                attention_mask=causal_mask,
                 position_ids=step_pos_ids,
                 position_embeddings=step_pos_emb,
             )
@@ -204,12 +209,12 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
                 step_targets[step_mask == 0] = _IGNORE_INDEX
             weight = step_weights[step] if step_weights is not None else 1.0
             unreduced = nn.functional.cross_entropy(
-                logits.reshape(-1, self.config.vocab_size),
-                step_targets.reshape(-1),
+                logits.permute(0, 2, 1),
+                step_targets,
                 ignore_index=_IGNORE_INDEX,
                 reduction="none",
             )
-            valid_count = (step_targets.reshape(-1) != _IGNORE_INDEX).sum()
+            valid_count = (step_targets != _IGNORE_INDEX).sum()
             step_loss = weight * unreduced.sum() / valid_count.clamp(min=1)
             total_loss = total_loss + step_loss
             metrics[f"loss_step_{step}"] = step_loss.detach().clone()
@@ -247,10 +252,12 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
                     )
                 ],
                 default_proposal_method="greedy",
-                verifier=VerifierConfig.from_config(
-                    verifier_config,
-                    name_or_path=verifier_name_or_path,
-                ),
+                # Read architectures from the verifier's published config.json (like
+                # eagle3/dflash/peagle and the MTP converter). from_config would read
+                # them off verifier_config, but that is the unwrapped text_config for
+                # composite verifiers (e.g. Qwen3.5-MoE), which carries no
+                # architectures -- leaving verifier.architectures empty.
+                verifier=VerifierConfig.from_pretrained(verifier_name_or_path),
             ),
         )
 

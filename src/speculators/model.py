@@ -95,12 +95,11 @@ class DraftVocabMixin(nn.Module):
             )
 
         if not self.use_draft_vocab:
-            raise RuntimeError(
-                "Vocab mappings (t2d/d2t) are not needed because "
-                "draft_vocab_size equals verifier vocab_size. "
-                "Set draft_vocab_size < verifier_vocab_size or "
-                "omit t2d/d2t arguments."
-            )
+            # draft_vocab_size == verifier_vocab_size, so the mappings would be
+            # identity no-ops; accept and ignore them rather than erroring. Real
+            # data directories may carry full-vocab t2d/d2t files alongside a
+            # checkpoint that does not prune the vocabulary.
+            return
 
         if t2d.shape[0] != self.verifier_vocab_size:
             raise ValueError(
@@ -245,6 +244,7 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
         weights_only: bool = True,
         t2d: torch.Tensor | None = None,
         d2t: torch.Tensor | None = None,
+        verifier: str | None = None,
         **kwargs,
     ) -> "SpeculatorModel":
         """
@@ -294,6 +294,8 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
             If None, automatically detects the available format.
         :param weights_only: Whether to only load model weights without optimizer
             states or other training artifacts.
+        :param verifier: Verifier model id/path used to auto-convert an external
+            (non-speculators) checkpoint; ignored for speculators checkpoints.
         :param kwargs: Additional keyword arguments passed to the model constructor
             and loading process.
         :return: A SpeculatorModel instance of the appropriate subclass, loaded with
@@ -305,6 +307,23 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
                     "Either `config` or `pretrained_model_name_or_path` must be "
                     "provided to load a SpeculatorModel."
                 )
+            # Auto-convert external (non-speculators) checkpoints so one
+            # `from_pretrained` pathway finetunes both formats. Detect format
+            # once here and only invoke the converter when needed.
+            config_dict, _ = PretrainedConfig.get_config_dict(
+                pretrained_model_name_or_path, cache_dir=cache_dir
+            )
+            if "speculators_model_type" not in config_dict:
+                from speculators.convert.entrypoints import (  # noqa: PLC0415
+                    maybe_convert_external_checkpoint,
+                )
+
+                pretrained_model_name_or_path = maybe_convert_external_checkpoint(
+                    pretrained_model_name_or_path,
+                    verifier=verifier,
+                    cache_dir=cache_dir,
+                    config_dict=config_dict,
+                )
             config = cls.config_class.from_pretrained(
                 pretrained_model_name_or_path,
                 cache_dir=cache_dir,
@@ -315,8 +334,6 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
             )
 
         if not isinstance(config, SpeculatorModelConfig):
-            # once conversion is added, need to handle the case where a non speculator
-            # config is passed in as a kwarg and auto convert
             raise TypeError(
                 f"Expected config to be an instance of SpeculatorModelConfig, "
                 f"got {type(config)}."
@@ -346,6 +363,7 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
                 weights_only=weights_only,
                 t2d=t2d,
                 d2t=d2t,
+                verifier=verifier,
                 **kwargs,
             )
 

@@ -2,7 +2,7 @@
 
 This module provides a logging system for training machine learning models,
 supporting multiple logging backends including TensorBoard (tensorboard),
-    Weights & Biases (wandb), and Trackio (trackio).
+    Weights & Biases (wandb), Trackio (trackio), and MLflow (mlflow).
 
 Example Usage:
     ```python
@@ -49,7 +49,9 @@ Example Usage:
 # SPDX-License-Identifier: Apache-2.0
 
 # Standard
+import contextlib
 import importlib
+import json
 import logging
 import os
 import warnings
@@ -65,6 +67,9 @@ import torch
 from rich.logging import RichHandler
 
 if TYPE_CHECKING:
+    from types import ModuleType
+
+    from mlflow import ActiveRun  # type: ignore[import-not-found]
     from torch.utils.tensorboard import SummaryWriter
     from wandb import Run  # type: ignore[import-not-found]
 
@@ -479,6 +484,116 @@ class TrackioHandler(WandbHandler):
         self._run: Run | None = None
 
 
+class MLFlowHandler(logging.Handler):
+    """Logger that sends metrics to MLFlow.
+
+    This handler expects a (nested) dictionary of metrics or text to be logged with
+    string keys. A step can be specified by passing `extra={"step": <step>}` to the
+    logging method.
+    """
+
+    def __init__(
+        self,
+        level: int = logging.INFO,
+        run_name: str | None = None,
+        log_dir: str | os.PathLike = "logs",  # noqa: ARG002
+        **init_kwargs: Any,  # noqa: ARG002
+    ):
+        super().__init__(level)
+        self._run_name = _substitute_placeholders(run_name)
+        self._experiment_name = os.getenv("MLFLOW_EXPERIMENT_NAME", "speculators")
+        self._mlflow: ModuleType | None = None
+        self._run: ActiveRun | None = None
+        self._auto_end_run = False
+
+    def _setup(self):
+        try:
+            import mlflow  # noqa: PLC0415
+        except ImportError as e:
+            msg = (
+                "Could not initialize MLFlowHandler because package "
+                "'mlflow' could not be imported. Please ensure it is "
+                "installed by running 'pip install mlflow' or configure "
+                "the logger to use a different backend."
+            )
+            raise RuntimeError(msg) from e
+        self._mlflow = mlflow
+
+        active_run = mlflow.active_run()
+        if active_run is not None:
+            self._run = active_run
+            self._auto_end_run = False
+            return
+
+        mlflow.set_experiment(self._experiment_name)
+
+        # Resume an existing run with the same name if one exists
+        run_id = None
+        if self._run_name:
+            current_exp = mlflow.get_experiment_by_name(self._experiment_name)
+            if current_exp:
+                past_runs = mlflow.search_runs(
+                    experiment_ids=[current_exp.experiment_id],
+                    filter_string="tags.mlflow.runName = '{}'".format(
+                        self._run_name.replace("'", r"\'")
+                    ),
+                    max_results=1,
+                )
+                if not past_runs.empty:  # type: ignore[union-attr]
+                    run_id = past_runs.run_id[0]  # type: ignore[union-attr]
+
+        if run_id:
+            self._run = mlflow.start_run(run_id=run_id)
+        else:
+            self._run = mlflow.start_run(run_name=self._run_name)
+        self._auto_end_run = True
+
+        mlflow_tags = os.getenv("MLFLOW_TAGS")
+        if mlflow_tags:
+            mlflow.set_tags(json.loads(mlflow_tags))
+
+    def emit(self, record: logging.LogRecord):
+        if self._run is None:
+            self._setup()
+
+        mlflow = self._mlflow
+        run = self._run
+        if mlflow is None or run is None:
+            return
+
+        if not isinstance(record.msg, Mapping):
+            warnings.warn(
+                (
+                    f"{self.__class__.__name__} expected a mapping, got "
+                    f"{type(record.msg)}. Skipping log. Please ensure the handler is "
+                    "configured correctly to filter out non-mapping objects."
+                ),
+                stacklevel=2,
+            )
+            return
+
+        flat_dict = _flatten_dict(record.msg)
+        step = getattr(record, "step", None)
+
+        metrics = {}
+        for k, v in flat_dict.items():
+            with contextlib.suppress(ValueError, TypeError):
+                metrics[k] = float(v)
+        if metrics:
+            mlflow.log_metrics(
+                run_id=run.info.run_id,
+                metrics=metrics,
+                step=step,
+            )
+
+    def close(self):
+        if self._run is not None and self._mlflow is not None:
+            if self._auto_end_run and self._mlflow.active_run() is not None:
+                self._mlflow.end_run()
+            self._run = None
+        super().close()
+
+
 ### Main functions
 
 
@@ -491,7 +606,7 @@ def setup_root_logger(level="INFO"):
     """
     handler = RichHandler()
     handler.addFilter(FormatDictFilter())
-    handler.addFilter(IsRank0Filter(local_rank=True))
+    handler.addFilter(IsRank0Filter())
     logging.basicConfig(
         level=level, format="%(message)s", datefmt="[%X]", handlers=[handler]
     )
@@ -563,6 +678,12 @@ def setup_metric_logger(loggers, run_name, output_dir):
             },
             "trackio": {
                 "()": TrackioHandler,
+                "log_dir": output_dir,
+                "run_name": run_name,
+                "filters": ["is_mapping", "is_rank0"],
+            },
+            "mlflow": {
+                "()": MLFlowHandler,
                 "log_dir": output_dir,
                 "run_name": run_name,
                 "filters": ["is_mapping", "is_rank0"],
