@@ -423,6 +423,4 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             per_position_loss_weight=per_position_loss_weight,
             dpace_alpha=dpace_alpha,
         )
-        draft_tokens = torch.argmax(logits, dim=-1)
-
-        return draft_tokens, loss, metrics
+        return None, loss, metrics
