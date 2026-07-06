@@ -70,20 +70,6 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
         "bidirectional.",
     )
 
-    per_position_loss_weight: Literal["fixed-exp-decay", "dpace"] = Field(
-        default="fixed-exp-decay",
-        description="Per-position weighting of the block-drafting loss: "
-        "fixed-exp-decay uses original D-Flash loss. dpace uses confidence"
-        "to change per-position weights dynamically."
-    )
-
-    dpace_alpha: float = Field(
-        default=0.5,
-        ge=0.0,
-        le=1.0,
-        description="Smoothing constant for D-PACE loss"
-    )
-
     @field_serializer("transformer_layer_config")
     def serialize_transformer_config(self, value: PretrainedConfig) -> dict:
         """Serialize transformer config to dict."""

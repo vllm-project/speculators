@@ -105,8 +105,6 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         )
         self.verifier_norm.weight.requires_grad = False
         self.block_size = config.block_size
-        self.per_position_loss_weight = config.per_position_loss_weight
-        self.dpace_alpha = config.dpace_alpha
         self.post_init()
 
     @property
@@ -183,8 +181,6 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             "aux_hidden_state_layer_ids": target_layer_ids,
             "mask_token_id": kwargs.get("mask_token_id"),
             "sliding_window_non_causal": kwargs.get("sliding_window_non_causal", False),
-            "per_position_loss_weight": kwargs.get("per_position_loss_weight", "fixed-exp-decay"),
-            "dpace_alpha": kwargs.get("dpace_alpha", 0.5),
             "speculators_config": SpeculatorsConfig(
                 algorithm=algorithm,
                 proposal_methods=[
@@ -401,6 +397,8 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         loss_config: LossConfig | None = None,
         gamma: float = 4.0,
         max_anchors: int = 3072,
+        per_position_loss_weight: str = "fixed-exp-decay",
+        dpace_alpha: float = 0.5,
         **kwargs,
     ):
         _, logits, targets, aligned_loss_mask, _ = self._backbone_forward(
@@ -420,8 +418,8 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             self.block_size,
             gamma=gamma,
             loss_config=loss_config,
-            per_position_loss_weight=self.per_position_loss_weight,
-            dpace_alpha=self.dpace_alpha,
+            per_position_loss_weight=per_position_loss_weight,
+            dpace_alpha=dpace_alpha,
         )
         draft_tokens = torch.argmax(logits, dim=-1)
 
