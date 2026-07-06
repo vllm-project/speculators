@@ -93,7 +93,7 @@ def create_empty_sample(
     }
 
 
-def standardize_data_v1(data: dict[str, Any]) -> dict[str, Any]:
+def standardize_data_v1(data: dict[str, Any], include_last_layer: bool = True) -> dict[str, Any]:
     # v1 data format:
     # {
     #  "input_ids": [seq_len],
@@ -107,7 +107,7 @@ def standardize_data_v1(data: dict[str, Any]) -> dict[str, Any]:
     # }
 
     return {
-        "hidden_states": torch.cat(data["hidden_states"][:-1], dim=-1),
+        "hidden_states": torch.cat(data["hidden_states"][:-1], dim=-1) if include_last_layer else torch.cat(data["hidden_states"], dim=-1),
         "input_ids": data["input_ids"],
         "verifier_last_hidden_states": data["hidden_states"][-1],
         "loss_mask": data["loss_mask"],
@@ -160,10 +160,12 @@ class BaseDataset(Dataset):
         max_len: int,
         transform: TransformTensors | None = None,
         hidden_states_dtype=torch.bfloat16,
+        include_last_layer: bool = True,
     ):
         self.max_len = max_len
         self.transform = transform
         self.hidden_states_dtype = hidden_states_dtype
+        self.include_last_layer = include_last_layer
         self.approx_lengths = self._compute_approx_lengths()
 
     def _compute_approx_lengths(self):
@@ -241,6 +243,7 @@ class ArrowDataset(BaseDataset):
         model: str | None = None,
         request_timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
         max_retries: int = DEFAULT_MAX_RETRIES,
+        include_last_layer: bool = True,
     ):
         """Initialize the ArrowDataset.
         Args:
@@ -279,7 +282,7 @@ class ArrowDataset(BaseDataset):
         self.max_retries = max_retries
 
         # Delay super init so that `_compute_approx_lengths` has required data
-        super().__init__(max_len, transform, hidden_states_dtype)
+        super().__init__(max_len, transform, hidden_states_dtype, include_last_layer)
 
     def _map_to_file_idx(self, index: int):
         return index + self.start_file_idx
@@ -384,14 +387,11 @@ class ArrowDataset(BaseDataset):
             )
             return None
 
+        hs = loaded_hs["hidden_states"]
         return {
-            "hidden_states": loaded_hs["hidden_states"][:, :-1].flatten(
-                1
-            ),  # [seq_len, 3 * hidden_size]
+            "hidden_states": hs[:, :-1].flatten(1) if self.include_last_layer else hs.flatten(1),
             "input_ids": loaded_hs["token_ids"],  # [seq_len]
-            "verifier_last_hidden_states": loaded_hs["hidden_states"][
-                :, -1
-            ],  # [seq_len, hidden_size]
+            "verifier_last_hidden_states": hs[:, -1],  # [seq_len, hidden_size]
             "loss_mask": self.data[index]["loss_mask"],  # [seq_len]
         }
 
@@ -404,6 +404,7 @@ class SampleFileDataset(BaseDataset):
         file_list: list[str] | None = None,
         transform: TransformTensors | None = None,
         hidden_states_dtype: torch.dtype = torch.bfloat16,
+        include_last_layer: bool = True,
     ):
         """Initialize the SampleFileDataset.
         Args:
@@ -442,7 +443,7 @@ class SampleFileDataset(BaseDataset):
         self.data: list[str] = file_list
 
         # Delay super init so that `_compute_approx_lengths` has required data
-        super().__init__(max_len, transform, hidden_states_dtype)
+        super().__init__(max_len, transform, hidden_states_dtype, include_last_layer)
 
     def __len__(self):
         return len(self.data)
@@ -489,7 +490,8 @@ class SampleFileDataset(BaseDataset):
         return standardize_data_v1(
             torch.load(
                 self.data[index], mmap=True, weights_only=True, map_location="cpu"
-            )
+            ),
+            include_last_layer=self.include_last_layer,
         )
 
 

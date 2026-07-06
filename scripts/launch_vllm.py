@@ -63,8 +63,8 @@ def main():
 
     if args.target_layer_ids:
         target_layer_ids = args.target_layer_ids
-        if args.include_last_layer and num_hidden_layers not in target_layer_ids:
-            target_layer_ids.append(num_hidden_layers)
+        if args.include_last_layer and (num_hidden_layers - 1) not in target_layer_ids:
+            target_layer_ids.append(num_hidden_layers - 1)
         warnings.warn(
             f"Using custom target layer ids {target_layer_ids}. These "
             "must also be explicitly passed into the training script.",
@@ -75,7 +75,7 @@ def main():
             2,
             num_hidden_layers // 2,
             num_hidden_layers - 3,
-            num_hidden_layers,
+            num_hidden_layers - 1,
         ]
 
     speculative_config = {
