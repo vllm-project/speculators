@@ -86,6 +86,14 @@ def parse_args():
         help="max_tokens for generation",
     )
     parser.add_argument(
+        "--sampling-params",
+        default=None,
+        help=(
+            "JSON object merged into each chat-completion request, "
+            'e.g. \'{"temperature": 0.6, "top_p": 0.95, "seed": 0}\''
+        ),
+    )
+    parser.add_argument(
         "--outfile",
         default=None,
         help="Output JSONL path (auto-generated if not specified)",
@@ -112,6 +120,14 @@ def parse_args():
     args = parser.parse_args()
     if args.max_retries < 0:
         parser.error("--max-retries must be >= 0")
+    try:
+        args.sampling_params = (
+            json.loads(args.sampling_params) if args.sampling_params else {}
+        )
+    except json.JSONDecodeError as e:
+        parser.error(f"--sampling-params is not valid JSON: {e}")
+    if not isinstance(args.sampling_params, dict):
+        parser.error("--sampling-params must be a JSON object")
     return args
 
 
@@ -330,6 +346,7 @@ async def worker(
                     "messages": prefix,
                     "max_tokens": args.max_tokens,
                     "return_token_ids": True,  # prompt_token_ids + completion token_ids
+                    **args.sampling_params,
                 }
                 data = await _post_chat(
                     session,
@@ -374,6 +391,7 @@ async def worker(
                             "finish_reason": choice.get("finish_reason"),
                             "usage": data.get("usage") or {},
                             "endpoint": endpoint,
+                            "sampling_params": args.sampling_params,
                         },
                     }
                 )

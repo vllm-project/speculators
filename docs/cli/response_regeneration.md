@@ -89,6 +89,8 @@ python scripts/response_regeneration/script.py --dataset magpie
 
 - **`--max-tokens`** (int, default: `8192`) Max tokens for generation.
 
+- **`--sampling-params`** (str, default: `None`) JSON object merged into each chat-completion request, e.g. `'{"temperature": 0.6, "top_p": 0.95, "seed": 0}'`. Unset keys use the server defaults.
+
 #### Output Arguments
 
 - **`--outfile`** (str, default: auto-generated) Output JSONL path. If not specified, auto-generated as `{dataset}_{model}.jsonl`.
@@ -133,7 +135,8 @@ Rows are pre-tokenized and ready for training: one row per assistant turn, holdi
     "idx": 0,
     "finish_reason": "stop",
     "usage": {...},
-    "endpoint": "http://127.0.0.1:8000/v1/chat/completions"
+    "endpoint": "http://127.0.0.1:8000/v1/chat/completions",
+    "sampling_params": {...}
   }
 }
 ```
