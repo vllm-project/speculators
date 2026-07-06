@@ -953,7 +953,7 @@ def parse_args():
         default="kl_div",
         help=(
             "Loss function specification. Pass a name for a single loss "
-            "(kl_div, rkl, ce, tv, nla, lk_hybrid) or a JSON dict for a weighted "
+            "(kl_div, rkl, jsd, ce, tv, nla, lk_hybrid) or a JSON dict for a weighted "
             'combination, e.g. \'{"ce": 0.1, "tv": 0.9}\'.'
         ),
     )

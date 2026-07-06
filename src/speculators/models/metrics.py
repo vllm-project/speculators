@@ -1,4 +1,5 @@
 import json
+import math
 from collections.abc import Callable
 
 import torch
@@ -116,6 +117,43 @@ def reverse_kl_div_loss(
     elementwise_loss = torch.nn.functional.kl_div(
         target_logp, draft_logq, reduction="none", log_target=True
     ).sum(dim=-1)  # shape: [1, seq_len]
+
+    return elementwise_loss  # noqa: RET504
+
+
+def js_div_loss(
+    logits: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
+    targets: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
+):
+    """Compute per-position Jensen-Shannon divergence between draft and target.
+
+    ``JSD(p, q) = 0.5 * KL(p || m) + 0.5 * KL(q || m)`` with ``m = (p + q) / 2``.
+    Symmetric and bounded by ``log 2`` (Lin 1991, "Divergence measures based on
+    the Shannon entropy"), it balances forward KL's mass-covering pull with
+    reverse KL's mode-seeking pull and keeps gradients finite where either
+    distribution assigns near-zero probability. Compared to plain KL, this
+    avoids unbounded penalties on tokens the target barely supports; compared
+    to TV, it provides smoother, better-conditioned gradients for draft
+    training.
+
+    Args:
+        logits: Draft model logits (log-softmax applied internally).
+        targets: Target model logits (log-softmax applied internally).
+
+    Returns:
+        Per-position JS divergence with shape [1, seq_len].
+    """
+    draft_logq = torch.nn.functional.log_softmax(logits, dim=-1)
+    target_logp = torch.nn.functional.log_softmax(targets, dim=-1)
+    # log m = log((p + q) / 2), computed in log space for stability
+    log_m = torch.logaddexp(draft_logq, target_logp) - math.log(2.0)
+    kl_target_to_mix = torch.nn.functional.kl_div(
+        log_m, target_logp, reduction="none", log_target=True
+    ).sum(dim=-1)
+    kl_draft_to_mix = torch.nn.functional.kl_div(
+        log_m, draft_logq, reduction="none", log_target=True
+    ).sum(dim=-1)
+    elementwise_loss = 0.5 * (kl_target_to_mix + kl_draft_to_mix)  # [1, seq_len]
 
     return elementwise_loss  # noqa: RET504
 
@@ -332,6 +370,7 @@ def dpace_loss_decay(
 _LOSS_FN_MAP: dict[str, Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = {
     "kl_div": kl_div_loss,
     "rkl": reverse_kl_div_loss,
+    "jsd": js_div_loss,
     "ce": ce_loss,
     "tv": tv_loss,
     "nla": neg_log_acceptance_loss,
@@ -346,9 +385,9 @@ def resolve_loss_fn(
 
     Args:
         name: ``"kl_div"`` for KL-divergence, ``"rkl"`` for reverse KL-divergence,
-            ``"ce"`` for cross-entropy, ``"tv"`` for total variation, ``"nla"``
-            for negative log-acceptance, or ``"lk_hybrid"`` for the adaptive
-            KL/TV blend.
+            ``"jsd"`` for Jensen-Shannon divergence, ``"ce"`` for cross-entropy,
+            ``"tv"`` for total variation, ``"nla"`` for negative log-acceptance,
+            or ``"lk_hybrid"`` for the adaptive KL/TV blend.
 
     Returns:
         The corresponding loss function.
