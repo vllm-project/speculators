@@ -226,6 +226,22 @@ def test_pretokenized_rows_pass_through_preprocessing():
     assert "conversations" not in out
 
 
+def test_pretokenized_passthrough_truncates_and_filters():
+    # Truncation can cut the completion span away (all-zero mask); such a row must
+    # be dropped by minimum_valid_tokens, like the tokenized path.
+    kept = regen.build_boundary_sample([1, 2], [3, 4])  # fits max_length=4
+    cut = regen.build_boundary_sample([1, 2, 3, 4], [5, 6])  # completion truncated off
+    out = _preprocess_batch(
+        {"input_ids": [kept[0], cut[0]], "loss_mask": [kept[1], cut[1]]},
+        processor=None,
+        max_length=4,
+        assistant_pattern=None,
+        minimum_valid_tokens=1,
+    )
+    assert [t.tolist() for t in out["input_ids"]] == [[1, 2, 3, 4]]
+    assert [m.tolist() for m in out["loss_mask"]] == [[0, 0, 1, 1]]
+
+
 # ---------------------------------------------------------------------------
 # 3. Stable resume identity.
 #
@@ -455,28 +471,28 @@ def _chat_response(prompt_token_ids, completion_token_ids, text):
 
 
 def _run_worker(session, item, out_path, err_path):
-    async def scenario():
+    async def scenario(out_fh, err_fh):
         queue: asyncio.Queue = asyncio.Queue()
         await queue.put(item)
         await queue.put(None)
         stats = {"ok": 0, "errors": 0}
-        with (
-            open(out_path, "w", encoding="utf-8") as out_fh,
-            open(err_path, "w", encoding="utf-8") as err_fh,
-        ):
-            await regen.worker(
-                session,
-                queue,
-                _Args(),
-                out_fh,
-                err_fh,
-                "http://x/v1/chat/completions",
-                _NullProgress(),
-                stats,
-            )
+        await regen.worker(
+            session,
+            queue,
+            _Args(),
+            out_fh,
+            err_fh,
+            "http://x/v1/chat/completions",
+            _NullProgress(),
+            stats,
+        )
         return stats
 
-    return asyncio.run(scenario())
+    with (
+        out_path.open("w", encoding="utf-8") as out_fh,
+        err_path.open("w", encoding="utf-8") as err_fh,
+    ):
+        return asyncio.run(scenario(out_fh, err_fh))
 
 
 def test_worker_stamps_primary_id_and_resume_recovers_it(tmp_path):
