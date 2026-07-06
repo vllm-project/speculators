@@ -507,6 +507,21 @@ def _parse_conv_tools(conv_tools: object, idx: int) -> list | None:
         return None
 
 
+def _passthrough_pretokenized(examples: dict, max_length: int) -> dict[str, list]:
+    """Carry pre-tokenized ``(input_ids, loss_mask)`` rows through, truncated only.
+
+    On-policy regeneration already applied the boundary as the mask, so these rows
+    need no chat-template rendering or regex span detection.
+    """
+    results: dict[str, list] = {"input_ids": [], "loss_mask": [], "seq_len": []}
+    for ids, mask in zip(examples["input_ids"], examples["loss_mask"], strict=True):
+        trimmed_ids = ids[:max_length]
+        results["input_ids"].append(torch.tensor(trimmed_ids, dtype=torch.long))
+        results["loss_mask"].append(torch.tensor(mask[:max_length], dtype=torch.long))
+        results["seq_len"].append(len(trimmed_ids))
+    return results
+
+
 def _preprocess_batch(
     examples: dict,
     processor: ProcessorLike,
@@ -516,6 +531,11 @@ def _preprocess_batch(
     minimum_valid_tokens: int | None = None,
 ) -> dict[str, list]:
     """Process a batch of conversations into tokenized format with loss masks."""
+
+    # On-policy regeneration rows are already masked (boundary); pass them through
+    # instead of re-tokenizing and re-masking.
+    if "input_ids" in examples and "loss_mask" in examples:
+        return _passthrough_pretokenized(examples, max_length)
 
     results: dict[str, list] = {"input_ids": [], "loss_mask": [], "seq_len": []}
     conversations: list[dict] = examples.get("conversations", [])

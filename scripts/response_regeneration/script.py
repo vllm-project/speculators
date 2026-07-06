@@ -6,7 +6,6 @@ import json
 import os
 import re
 import sys
-import time
 from typing import Any
 
 import aiohttp
@@ -187,11 +186,16 @@ def _primary_identifier(row: dict[str, Any]) -> str:
 
 
 def load_seen(path: str) -> set[str]:
-    """Load previously written output ids from the output file.
+    """Load previously completed conversation ids from the output file.
 
-    Each record stores its stable id under the top-level ``id`` (equal to the
-    row's :func:`_primary_identifier`), so a resumed run skips a row when its
-    recomputed id is already present.
+    A conversation fans out to one row per assistant turn, whose ``id`` carries a
+    ``_turn<N>`` suffix; the conversation's own :func:`_primary_identifier` is
+    kept alongside it as ``primary_id``. Resume keys on that, since the suffixed
+    ids never match a recomputed one. Rows are written only after every turn
+    succeeds, so one row is enough to mark the conversation done.
+
+    ``id`` is the fallback for output files written before the fan-out, where the
+    top-level ``id`` *was* the primary identifier.
     """
     seen: set[str] = set()
     if not os.path.isfile(path):
@@ -203,8 +207,11 @@ def load_seen(path: str) -> set[str]:
                 obj = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if _is_present(obj.get("id")):
-                seen.add(str(obj["id"]))
+            key = obj.get("primary_id")
+            if not _is_present(key):
+                key = obj.get("id")
+            if _is_present(key):
+                seen.add(str(key))
     return seen
 
 
@@ -270,6 +277,19 @@ async def _post_chat(
         return await response.json()
 
 
+def build_boundary_sample(
+    prompt_token_ids: list[int],
+    completion_token_ids: list[int],
+) -> tuple[list[int], list[int]]:
+    """Build one training sample: prompt (loss_mask 0) + generated tokens (1).
+
+    The generation boundary is the mask -- no ``{% generation %}`` markers, no regex.
+    """
+    input_ids = [*prompt_token_ids, *completion_token_ids]
+    loss_mask = [0] * len(prompt_token_ids) + [1] * len(completion_token_ids)
+    return input_ids, loss_mask
+
+
 async def worker(
     session: aiohttp.ClientSession,
     queue: "asyncio.Queue[dict[str, Any]]",
@@ -280,12 +300,10 @@ async def worker(
     progress,
     stats: dict[str, int],
 ):
-    """Worker that pulls conversations from the queue and regenerates them.
+    """Regenerate each queued conversation into pre-tokenized training samples.
 
-    Each user turn is sent to the endpoint with the freshly generated prefix
-    (system + regenerated history); the original assistant turns are discarded
-    and replaced by the model's responses. Single-turn rows are the degenerate
-    case of one user turn.
+    One sample per assistant turn: the prompt the target conditioned on
+    (loss_mask 0) followed by the tokens it generated (1).
     """
     while True:
         item = await queue.get()
@@ -295,28 +313,23 @@ async def worker(
 
         idx = item["idx"]
         turns = item["turns"]
+        conv_id = item["primary_id"]
 
-        # The API prefix (role/content) and the output conversation (from/value)
-        # are built in lockstep as we walk the turns.
         prefix: list[dict[str, Any]] = []
-        out_convs: list[dict[str, Any]] = []
-        finish_reasons: list[str | None] = []
-        usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-        start_time = time.time()
+        samples: list[dict[str, Any]] = []
         try:
             for turn in turns:
                 if turn["role"] == "system":
                     prefix.append({"role": "system", "content": turn["content"]})
-                    out_convs.append({"from": "system", "value": turn["content"]})
                     continue
 
                 prefix.append({"role": "user", "content": turn["content"]})
-                out_convs.append({"from": "human", "value": turn["content"]})
 
                 payload = {
                     "model": args.model,
                     "messages": prefix,
                     "max_tokens": args.max_tokens,
+                    "return_token_ids": True,  # prompt_token_ids + completion token_ids
                 }
                 data = await _post_chat(
                     session,
@@ -326,53 +339,60 @@ async def worker(
                 )
 
                 choice = data["choices"][0]
-                message = choice["message"]
-                generated_text = message.get("content")
-                reasoning_content = message.get("reasoning_content")
-                if reasoning_content is None:
-                    reasoning_content = message.get("reasoning")
-                finish_reasons.append(choice.get("finish_reason"))
-                turn_usage = data.get("usage") or {}
-                for key in usage:
-                    usage[key] += turn_usage.get(key) or 0
+                generated_text = choice["message"].get("content")
 
-                # Empty content (e.g. truncated mid-reasoning) would corrupt the
-                # next turn's prefix and emit a null target; fail the conversation.
+                # Empty content corrupts the next turn's prefix; fail the conversation.
                 if not generated_text:
-                    raise ValueError(f"empty assistant content (turn {len(out_convs)})")
+                    raise ValueError(f"empty assistant content (turn {len(samples)})")
 
-                prefix.append({"role": "assistant", "content": generated_text})
-                gpt_turn = {"from": "gpt", "value": generated_text}
-                # Stored per turn: data prep reads it here, not top-level metadata.
-                if reasoning_content is not None:
-                    gpt_turn["reasoning_content"] = reasoning_content
-                out_convs.append(gpt_turn)
+                prompt_token_ids = data.get("prompt_token_ids")
+                completion_token_ids = choice.get("token_ids")
+                if not prompt_token_ids or not completion_token_ids:
+                    raise ValueError(
+                        "endpoint returned no token ids; it must support "
+                        "return_token_ids"
+                    )
 
-            metadata = {
-                "idx": idx,
-                "finish_reasons": finish_reasons,
-                "latency_s": round(time.time() - start_time, 3),
-                "usage": usage,
-                "endpoint": endpoint,
-            }
+                input_ids, loss_mask = build_boundary_sample(
+                    prompt_token_ids, completion_token_ids
+                )
+                # History keeps parsed content; the generated <think> is supervised
+                # in this turn's completion tokens above.
+                assistant_msg = {"role": "assistant", "content": generated_text}
+                samples.append(
+                    {
+                        "id": f"{conv_id}_turn{len(samples)}",
+                        # Conversation-level key for --resume; the row `id` is
+                        # turn-suffixed and would never match a recomputed one.
+                        "primary_id": conv_id,
+                        "input_ids": input_ids,
+                        "loss_mask": loss_mask,
+                        # Review-only twin of input_ids; ignored by training.
+                        "conversations": [*prefix, assistant_msg],
+                        "metadata": {
+                            "idx": idx,
+                            "finish_reason": choice.get("finish_reason"),
+                            "usage": data.get("usage") or {},
+                            "endpoint": endpoint,
+                        },
+                    }
+                )
+                prefix.append(assistant_msg)
 
-            output = {
-                "id": item["primary_id"],
-                "conversations": out_convs,
-                "metadata": metadata,
-            }
-            out_fh.write(json.dumps(output, ensure_ascii=False) + "\n")
+            # Written only after every turn succeeds, so any row in the output
+            # file means the whole conversation is done (see load_seen).
+            for sample in samples:
+                out_fh.write(json.dumps(sample, ensure_ascii=False) + "\n")
             out_fh.flush()
             stats["ok"] += 1
         except Exception as e:  # noqa: BLE001
-            # Failures go to a separate error file, not the training output; an
-            # in-band marker would be invisible (the pipeline drops metadata).
+            # Failures go to a separate error file, not the training output.
             error_output = {
-                "id": item["primary_id"],
-                "conversations": out_convs,
+                "id": conv_id,
                 "metadata": {
                     "idx": idx,
                     "error": repr(e),
+                    "turns_completed": len(samples),
                     "endpoint": endpoint,
                 },
             }
