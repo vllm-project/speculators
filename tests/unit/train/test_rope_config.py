@@ -126,6 +126,31 @@ def test_full_head_hack_disabled_keeps_partial(patch_verifier):
     assert config.rope_parameters["partial_rotary_factor"] == 0.5
 
 
+def test_partial_rotary_factor_not_leaked(patch_verifier):
+    """Regression for #613: partial_rotary_factor must not cause
+    a train/inference rotary dimension mismatch."""
+    vc = _make_verifier_config(
+        rope_parameters={
+            "rope_type": "default",
+            "mrope_section": [8, 12, 12],
+            "partial_rotary_factor": 0.25,
+            "rope_theta": 1000000.0,
+        },
+        head_dim=256,
+    )
+    patch_verifier(vc, "5.0.0")
+
+    config = _build()
+
+    partial = config.rope_parameters.get("partial_rotary_factor", 1.0)
+    inference_rotary_dim = int(config.head_dim * partial)
+
+    assert inference_rotary_dim == config.head_dim, (
+        f"Train/inference rotary dim mismatch: training uses {config.head_dim}, "
+        f"inference would use {inference_rotary_dim} (partial_rotary_factor={partial})"
+    )
+
+
 def test_full_head_hack_non_integer_inverse_raises(patch_verifier):
     """Non-integer 1/partial_rotary_factor cannot be rescaled cleanly."""
     vc = _make_verifier_config(
