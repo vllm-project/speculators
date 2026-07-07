@@ -7,12 +7,12 @@ import torch
 
 from speculators.models.metrics import (
     LossConfig,
+    ce_loss,
     compound_loss,
     compute_accuracy_multi_step,
     dflash_loss_decay,
+    dpace_loss_weight,
     kl_div_loss,
-    ce_loss,
-    dpace_loss_weight
 )
 
 _DEFAULT_LOSS_CONFIG: LossConfig = {"kl_div": (kl_div_loss, 1.0)}
@@ -58,7 +58,11 @@ def compute_metrics(
         decay_mult = dpace_loss_weight(
             elementwise_ce, loss_mask, block_size, alpha=dpace_alpha
         )
-        decay_fn = lambda pos_idx: decay_mult
+
+        def decay_fn(
+            _pos_idx: torch.Tensor, _weight: torch.Tensor = decay_mult
+        ) -> torch.Tensor:
+            return _weight
     else:
         decay_fn = partial(dflash_loss_decay, gamma=gamma)
 

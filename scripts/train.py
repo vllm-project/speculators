@@ -966,13 +966,14 @@ def parse_args():
         "--per-position-loss-weight",
         choices=["fixed-exp-decay", "dpace"],
         default="fixed-exp-decay",
-        help="Per-position loss weight option for D-PACE support (default: fixed-exp-decay)",
+        help="Per-position loss weight option for D-PACE support"
+        "default: fixed-exp-decay",
     )
     parser.add_argument(
         "--dpace-alpha",
         type=float,
         default=0.5,
-        help="Smoothing constant for D-PACE loss (default: 0.5)"
+        help="Smoothing constant for D-PACE loss (default: 0.5)",
     )
     # DSpark-specific arguments (sequential Markov head + confidence head).
     parser.add_argument(

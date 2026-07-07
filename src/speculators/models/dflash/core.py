@@ -207,7 +207,9 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         loss_config = resolve_loss_config(kwargs["loss_fn"])
         gamma = kwargs.get("dflash_decay_gamma", 4.0)
         max_anchors = kwargs.get("max_anchors", 3072)
-        per_position_loss_weight = kwargs.get("per_position_loss_weight", "fixed-exp-decay")
+        per_position_loss_weight = kwargs.get(
+            "per_position_loss_weight", "fixed-exp-decay"
+        )
         dpace_alpha = kwargs.get("dpace_alpha", 0.5)
         shared = {
             "loss_config": loss_config,

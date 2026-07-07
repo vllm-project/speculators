@@ -292,11 +292,18 @@ def dpace_loss_weight(
         alpha: confidence smoothing constant
     """
     with torch.no_grad():
+        if not 0.0 < alpha <= 1.0:
+            raise ValueError(f"alpha must be in (0, 1], got {alpha}")
         # convert CE to per-position confidence
         q = torch.exp(-neg_log_q).float()
 
         # reshape loss to [num_anchors, block_size]
         # for intra-block cumulative multiplication
+        if q.shape[1] % block_size != 0:
+            raise ValueError(
+                f"q.shape[1] ({q.shape[1]}) must be divisible by "
+                f"block_size ({block_size})"
+            )
         num_anchors = q.shape[1] // block_size
         q = q.reshape(num_anchors, block_size)
         mask = loss_mask.reshape(num_anchors, block_size).to(q.dtype)
@@ -418,8 +425,13 @@ def compound_loss(
     multi = len(loss_config) > 1
     for name, (fn, weight) in loss_config.items():
         term = loss_function(
-            logits, targets, loss_mask, pos_idx, loss_fn=fn, decay_fn=decay_fn,
-            dpace_precomputed_ce=dpace_precomputed_ce
+            logits,
+            targets,
+            loss_mask,
+            pos_idx,
+            loss_fn=fn,
+            decay_fn=decay_fn,
+            dpace_precomputed_ce=dpace_precomputed_ce,
         )
         if multi:
             term_losses[f"{name}_loss"] = term.detach()
