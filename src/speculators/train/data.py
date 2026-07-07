@@ -14,8 +14,8 @@ import torch.nn.functional as F  # noqa: N812
 from datasets import load_from_disk
 from torch.utils.data import Dataset
 
+from hs_connectors import FileTransfer, HiddenStatesTransfer
 from speculators.data_generation.offline import check_hidden_states
-from speculators.data_generation.transfer import FileTransfer, HiddenStatesTransfer
 from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_REQUEST_TIMEOUT,
