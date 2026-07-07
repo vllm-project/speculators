@@ -14,6 +14,11 @@ from transformers import LlamaConfig, PretrainedConfig
 from transformers.models.auto.configuration_auto import AutoConfig
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
+from speculators.data_generation.transfer import (
+    FileTransfer,
+    HiddenStatesTransfer,
+    MooncakeTransfer,
+)
 from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_REQUEST_TIMEOUT,
@@ -509,6 +514,42 @@ def main(args: argparse.Namespace):  # noqa: C901
     }
     preprocess = preprocess_fns.get(args.speculator_type)
 
+    if args.hidden_states_backend == "mooncake":
+        # Imported lazily: hs_connectors is an optional dependency only needed
+        # for the mooncake backend, so importing train.py must not require it.
+        from hs_connectors.mooncake_store import (  # noqa: PLC0415
+            MooncakeHiddenStatesStore,
+            MooncakeStoreConfig,
+            resolve_local_hostname,
+        )
+
+        # Reads stage through the client's registered local buffer, so it must
+        # hold the largest sample: seq_len x num_target_layers x hidden bf16
+        # plus int64 token ids.
+        max_blob_bytes = (
+            args.total_seq_len * (num_target_layers * hidden_size * 2 + 8) + 4096
+        )
+        transfer: HiddenStatesTransfer = MooncakeTransfer(
+            MooncakeHiddenStatesStore(
+                # Trainers are read-only clients: no segment contribution.
+                MooncakeStoreConfig.for_consumer(
+                    local_hostname=resolve_local_hostname(args.mooncake_master),
+                    metadata_server=args.mooncake_metadata_server,
+                    master_server_address=args.mooncake_master,
+                    protocol=args.mooncake_protocol,
+                    device_name=args.mooncake_device,
+                    local_buffer_size=max(512 * 1024 * 1024, 2 * max_blob_bytes),
+                )
+            )
+        )
+    else:
+        hs_path = (
+            Path(args.hidden_states_path)
+            if args.hidden_states_path
+            else Path(args.data_path) / "hidden_states"
+        )
+        transfer = FileTransfer(hs_path)
+
     train_loader, val_loader = create_train_val_loaders(
         data_path=args.data_path,
         train_data_ratio=args.train_data_ratio,
@@ -516,7 +557,7 @@ def main(args: argparse.Namespace):  # noqa: C901
         hidden_states_dtype=hidden_states_dtype,
         noise_std=args.noise_std,
         legacy_data=args.legacy_data,
-        hidden_states_path=args.hidden_states_path,
+        transfer=transfer,
         vllm_endpoint=args.vllm_endpoint,
         on_missing=args.on_missing,
         on_generate=args.on_generate,
@@ -716,11 +757,14 @@ def parse_args():
         type=str,
         default="http://localhost:8000/v1",
         help=(
-            "vLLM endpoint address to use if generating hidden states on-demand."
+            "vLLM endpoint(s) to use if generating hidden states on-demand;"
+            " comma-separated for multiple independent instances serving the"
+            " same model (samples are sharded by index, with one-hop failover)."
             " Only required if `--on-missing=generate` and samples are missing."
-            " Note: the vLLM instance must be configured to cache hidden states"
-            " to a location that is accessible from the training instance. i.e."
-            " on the same node, or a shared network drive. (Default: 'http://localhost:8000/v1')"
+            " Note: every vLLM instance must write hidden states to a location"
+            " reachable from the training instance: a shared filesystem for the"
+            " file backend, or one shared Mooncake store (single master) for"
+            " the mooncake backend. (Default: 'http://localhost:8000/v1')"
         ),
     )
     parser.add_argument(
@@ -765,6 +809,45 @@ def parse_args():
             "Maximum number of retry attempts per vLLM request on failure "
             f"(default: {DEFAULT_MAX_RETRIES}). "
             "Only applies if --on-missing=generate."
+        ),
+    )
+    parser.add_argument(
+        "--hidden-states-backend",
+        choices=["file", "mooncake"],
+        default="file",
+        help=(
+            "Where on-demand generated hidden states are read from. 'file' (default) "
+            "reads safetensors from --hidden-states-path (shared filesystem). "
+            "'mooncake' reads from a Mooncake store by the key vLLM returns, removing "
+            "the shared-FS requirement (target and trainer can be on different nodes). "
+            "Requires the vLLM server launched with --hidden-states-backend mooncake."
+        ),
+    )
+    parser.add_argument(
+        "--mooncake-master",
+        type=str,
+        default="127.0.0.1:50051",
+        help="Mooncake master server address. Used with backend=mooncake.",
+    )
+    parser.add_argument(
+        "--mooncake-metadata-server",
+        type=str,
+        default="P2PHANDSHAKE",
+        help="Mooncake metadata server (or P2PHANDSHAKE). Used with backend=mooncake.",
+    )
+    parser.add_argument(
+        "--mooncake-protocol",
+        choices=["tcp", "rdma"],
+        default="tcp",
+        help="Mooncake transport protocol. Used with backend=mooncake.",
+    )
+    parser.add_argument(
+        "--mooncake-device",
+        type=str,
+        default="",
+        help=(
+            "Mooncake RDMA device (e.g. 'mlx5_bond_0'). Empty means auto-detect. "
+            "Used with backend=mooncake and --mooncake-protocol rdma."
         ),
     )
     parser.add_argument(

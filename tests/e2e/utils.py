@@ -105,6 +105,10 @@ def launch_vllm_server(
     target_layer_ids: list[int] | None = None,
     enforce_eager: bool = False,
     allowed_local_media_path: str | None = None,
+    hidden_states_backend: str = "file",
+    mooncake_master: str | None = None,
+    mooncake_metadata_server: str | None = None,
+    mooncake_protocol: str | None = None,
 ) -> subprocess.Popen:
     """Launch a vLLM server configured for hidden-state extraction.
 
@@ -117,7 +121,15 @@ def launch_vllm_server(
         model,
         "--hidden-states-path",
         str(hidden_states_path),
+        "--hidden-states-backend",
+        hidden_states_backend,
     ]
+    if mooncake_master is not None:
+        cmd += ["--mooncake-master", mooncake_master]
+    if mooncake_metadata_server is not None:
+        cmd += ["--mooncake-metadata-server", mooncake_metadata_server]
+    if mooncake_protocol is not None:
+        cmd += ["--mooncake-protocol", mooncake_protocol]
     if target_layer_ids is not None:
         cmd += ["--target-layer-ids"] + [str(lid) for lid in target_layer_ids]
     if enforce_eager:
@@ -281,6 +293,10 @@ def run_training(
     target_layer_ids: list[int] | None = None,
     num_layers: int | None = None,
     log_freq: int = 1,
+    hidden_states_backend: str = "file",
+    mooncake_master: str | None = None,
+    mooncake_metadata_server: str | None = None,
+    mooncake_protocol: str | None = None,
 ):
     train_cmd = [
         sys.executable,
@@ -305,7 +321,15 @@ def run_training(
         speculator_type,
         "--log-freq",
         str(log_freq),
+        "--hidden-states-backend",
+        hidden_states_backend,
     ]
+    if mooncake_master is not None:
+        train_cmd += ["--mooncake-master", mooncake_master]
+    if mooncake_metadata_server is not None:
+        train_cmd += ["--mooncake-metadata-server", mooncake_metadata_server]
+    if mooncake_protocol is not None:
+        train_cmd += ["--mooncake-protocol", mooncake_protocol]
     if online:
         train_cmd += [
             "--on-missing",

@@ -2,9 +2,10 @@ import json
 import math
 import os
 import random
-import shutil
+import threading
 import warnings
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from os import PathLike
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -13,16 +14,15 @@ import openai
 import torch
 import torch.nn.functional as F  # noqa: N812
 from datasets import load_from_disk
-from safetensors.torch import load_file
 from torch.utils.data import Dataset
 
 from speculators.data_generation.offline import check_hidden_states
+from speculators.data_generation.transfer import FileTransfer, HiddenStatesTransfer
 from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_REQUEST_TIMEOUT,
     ClientItem,
     generate_hidden_states,
-    wait_for_lock,
 )
 from speculators.train.noise_transforms import TransformTensors
 
@@ -214,16 +214,25 @@ class BaseDataset(Dataset):
 
         return data
 
+    def __getitems__(self, indices: list[int]) -> list[BatchType | None]:
+        """Fetch all samples of a packed batch concurrently.
 
-def _maybe_load_hs_file(file_path: Path) -> dict[str, torch.Tensor] | None:
-    lock_path = str(file_path) + ".lock"
-    if Path(lock_path).exists():
-        wait_for_lock(lock_path)
+        The multipack batch sampler hands the dataloader worker one whole
+        packed batch, which the default fetcher would load sample by sample.
+        In online mode each fetch blocks on I/O for seconds (a generation
+        request plus a hidden-states load), so loading serially puts the sum
+        of those waits on every step's critical path. The work is I/O-bound,
+        so a small thread pool is enough.
+        """
+        if len(indices) <= 1:
+            return [self[i] for i in indices]
+        with ThreadPoolExecutor(max_workers=min(8, len(indices))) as pool:
+            return list(pool.map(self.__getitem__, indices))
 
-    if file_path.exists():
-        return load_file(file_path)
 
-    return None
+# Guards lazy per-process client creation now that __getitems__ fetches
+# concurrently. Module-level so it is never pickled into dataloader workers.
+_client_setup_lock = threading.Lock()
 
 
 class ArrowDataset(BaseDataset):
@@ -231,7 +240,7 @@ class ArrowDataset(BaseDataset):
         self,
         max_len: int,
         datapath: str | PathLike,
-        hidden_states_path: str | PathLike | None = None,
+        transfer: HiddenStatesTransfer | None = None,
         vllm_endpoint: str = "http://localhost:8000/v1",
         on_missing: Literal["generate", "skip", "warn", "raise"] = "generate",
         on_generate: Literal["cache", "delete"] = "delete",
@@ -242,14 +251,6 @@ class ArrowDataset(BaseDataset):
         request_timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
         max_retries: int = DEFAULT_MAX_RETRIES,
     ):
-        """Initialize the ArrowDataset.
-        Args:
-            max_len: The maximum length of the sequence.
-            datapath: The path to the data directory that contains the preprocessed
-            arrow dataset.
-            transform: The transform to apply to the data.
-            hidden_states_dtype: The dtype of the hidden states.
-        """
         self.data = load_from_disk(datapath)
         self.start_file_idx = 0
         if split_ratio == 1.0:
@@ -265,15 +266,19 @@ class ArrowDataset(BaseDataset):
         else:
             raise ValueError("split_ratio must be in range (-1.0, 1.0] excluding 0.0.")
 
-        self.hidden_states_path: Path = (
-            Path(datapath) / "hidden_states"
-            if hidden_states_path is None
-            else Path(hidden_states_path)
-        )
-        self.vllm_endpoint = vllm_endpoint
+        self.transfer = transfer or FileTransfer(Path(datapath) / "hidden_states")
+        # One or more vLLM producer endpoints (comma-separated string or list).
+        # Samples are assigned by index, so the assignment is stable across
+        # epochs and each producer keeps prefix-cache locality for its shard.
+        if isinstance(vllm_endpoint, str):
+            self.vllm_endpoints = [
+                e.strip() for e in vllm_endpoint.split(",") if e.strip()
+            ]
+        else:
+            self.vllm_endpoints = list(vllm_endpoint)
         self.on_missing = on_missing
         self.on_generate = on_generate
-        self.client: openai.OpenAI | None = None
+        self.clients: list[openai.OpenAI] | None = None
         self.model = model
         self.request_timeout = request_timeout
         self.max_retries = max_retries
@@ -284,20 +289,39 @@ class ArrowDataset(BaseDataset):
     def _map_to_file_idx(self, index: int):
         return index + self.start_file_idx
 
-    def _setup_client(self):
+    def _setup_clients(self):
         # Delay client setup so it runs in dataloader thread if on_missing="generate"
-        self.client = openai.OpenAI(
-            base_url=self.vllm_endpoint, api_key="EMPTY", max_retries=0
-        )
-        list_models = self.client.models.list()
-        model_id = list_models.data[0].id
-        if self.model and self.model != model_id:
-            raise ValueError(
-                f"An explicit model name was passed ({self.model}) which doesn't match"
-                f" found model_id {model_id}."
-                "Please make sure --endpoint is set to the correct vllm instance."
+        clients = []
+        reachable = 0
+        for endpoint in self.vllm_endpoints:
+            client = openai.OpenAI(base_url=endpoint, api_key="EMPTY", max_retries=0)
+            try:
+                model_id = client.models.list().data[0].id
+            except (openai.OpenAIError, IndexError) as e:
+                # Keep the client anyway: an endpoint that is down right now is
+                # covered by per-request failover (and may come back). The
+                # model-id check only runs against reachable endpoints.
+                warnings.warn(
+                    f"vLLM endpoint {endpoint} unreachable at setup ({e}); "
+                    "requests assigned to it will fail over.",
+                    stacklevel=1,
+                )
+                clients.append(client)
+                continue
+            if self.model and self.model != model_id:
+                raise ValueError(
+                    f"Model name mismatch: expected {self.model} but endpoint "
+                    f"{endpoint} serves {model_id}. All --vllm-endpoint entries "
+                    "must serve the same model."
+                )
+            self.model = model_id
+            reachable += 1
+            clients.append(client)
+        if reachable == 0:
+            raise RuntimeError(
+                f"No reachable vLLM endpoint among {self.vllm_endpoints}"
             )
-        self.model = model_id
+        self.clients = clients
 
     def __len__(self):
         return len(self.data)
@@ -306,38 +330,59 @@ class ArrowDataset(BaseDataset):
         """Get lengths of the dataset samples."""
         return list(self.data.with_format(None)["seq_len"])
 
+    def _generate_with_failover(self, index: int, client_item) -> str:
+        """Generate on the sample's assigned producer, failing over once.
+
+        Index-based assignment keeps the sample on the same producer every
+        epoch; on failure the next endpoint regenerates it (a fresh request
+        yields a fresh handle, so the retry is self-contained).
+        """
+        clients = self.clients or []
+        attempts = min(2, len(clients))
+        for attempt in range(attempts):
+            client = clients[(index + attempt) % len(clients)]
+            try:
+                return generate_hidden_states(
+                    client,
+                    self.model,  # type:ignore[arg-type]
+                    client_item,
+                    timeout=self.request_timeout,
+                    max_retries=self.max_retries,
+                )
+            except Exception:
+                if attempt + 1 >= attempts:
+                    raise
+        raise RuntimeError("no vLLM endpoints configured")
+
     def _maybe_generate_hs(self, index: int) -> dict[str, torch.Tensor] | None:
-        if not self.client:
-            self._setup_client()
+        if not self.clients:
+            with _client_setup_lock:
+                if not self.clients:
+                    self._setup_clients()
+                    self.transfer.setup()
 
         dataset_item = self.data[index]
         client_item = build_client_item(dataset_item)
 
         try:
-            hs_filepath = generate_hidden_states(
-                self.client,  # type:ignore[arg-type]
-                self.model,  # type:ignore[arg-type]
-                client_item,
-                timeout=self.request_timeout,
-                max_retries=self.max_retries,
-            )
+            handle = self._generate_with_failover(index, client_item)
 
-            loaded_hs = _maybe_load_hs_file(Path(hs_filepath))
+            loaded_hs = self.transfer.get_generated(handle)
             if loaded_hs is None:
-                raise ValueError(f"Failed to load hidden states from {hs_filepath}")
+                raise ValueError(f"Failed to load hidden states for handle {handle}")
 
             check_hidden_states(loaded_hs, dataset_item["input_ids"].tolist())
 
+            file_idx = self._map_to_file_idx(index)
             match self.on_generate:
                 case "cache":
-                    file_idx = self._map_to_file_idx(index)
-                    target_path = self.hidden_states_path / f"hs_{file_idx}.safetensors"
-                    shutil.move(hs_filepath, target_path)
+                    self.transfer.cache(handle, file_idx)
                 case "delete":
-                    Path(hs_filepath).unlink()
+                    self.transfer.delete(handle)
         except Exception as e:
             if isinstance(e, ValueError) and "NaN" in str(e):
                 raise
+
             warnings.warn(
                 f"Failed to load/cache hidden states for sample {index}: {e}",
                 stacklevel=1,
@@ -348,8 +393,7 @@ class ArrowDataset(BaseDataset):
 
     def _get_raw_data(self, index):
         file_idx = self._map_to_file_idx(index)
-        candidate_path = self.hidden_states_path / f"hs_{file_idx}.safetensors"
-        loaded_hs = _maybe_load_hs_file(candidate_path)
+        loaded_hs = self.transfer.get_cached(file_idx)
 
         if loaded_hs is None:
             match self.on_missing:

@@ -42,6 +42,61 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--hidden-states-backend",
+        choices=["file", "mooncake"],
+        default="file",
+        help=(
+            "Transport for extracted hidden states. 'file' writes safetensors to "
+            "--hidden-states-path (requires a shared filesystem). 'mooncake' writes "
+            "to a Mooncake distributed store, enabling the target and trainer to run "
+            "on different nodes with no shared filesystem. Default: 'file'."
+        ),
+    )
+    parser.add_argument(
+        "--mooncake-master",
+        type=str,
+        default="localhost:50051",
+        help="Mooncake master server address (host:port). Used with backend=mooncake.",
+    )
+    parser.add_argument(
+        "--mooncake-metadata-server",
+        type=str,
+        default="http://localhost:8080/metadata",
+        help="Mooncake metadata server URL. Used with backend=mooncake.",
+    )
+    parser.add_argument(
+        "--mooncake-protocol",
+        choices=["tcp", "rdma"],
+        default="tcp",
+        help="Mooncake transport protocol. Used with backend=mooncake.",
+    )
+    parser.add_argument(
+        "--mooncake-device",
+        type=str,
+        default="",
+        help=(
+            "Mooncake RDMA device (e.g. 'mlx5_bond_0'). Empty means auto-detect. "
+            "Used with backend=mooncake and --mooncake-protocol rdma."
+        ),
+    )
+    parser.add_argument(
+        "--num-writer-threads",
+        type=int,
+        default=16,
+        help="Number of threads for async hidden-state writes. "
+        "Used with backend=mooncake.",
+    )
+    parser.add_argument(
+        "--mooncake-segment-gb",
+        type=float,
+        default=16.0,
+        help=(
+            "Host memory (GiB) this producer contributes to the Mooncake store; "
+            "bounds how many extracted samples can be in flight before consumers "
+            "read+delete them. Used with backend=mooncake."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print the command that would be executed without running it",
@@ -85,11 +140,39 @@ def main():
             "hf_config": {"eagle_aux_hidden_state_layer_ids": target_layer_ids}
         },
     }
-    kv_transfer_config = {
-        "kv_connector": "ExampleHiddenStatesConnector",
-        "kv_role": "kv_producer",
-        "kv_connector_extra_config": {"shared_storage_path": args.hidden_states_path},
-    }
+    if args.hidden_states_backend == "mooncake":
+        from hs_connectors.mooncake_store import (  # noqa: PLC0415
+            resolve_local_hostname,
+        )
+
+        # Out-of-tree connector: vLLM imports it via kv_connector_module_path,
+        # so no registration in vLLM's factory is needed.
+        kv_transfer_config = {
+            "kv_connector": "MooncakeHiddenStatesConnector",
+            "kv_connector_module_path": (
+                "hs_connectors.mooncake_hidden_states_connector"
+            ),
+            "kv_role": "kv_producer",
+            "kv_connector_extra_config": {
+                "mooncake": {
+                    "local_hostname": resolve_local_hostname(args.mooncake_master),
+                    "master_server_address": args.mooncake_master,
+                    "metadata_server": args.mooncake_metadata_server,
+                    "protocol": args.mooncake_protocol,
+                    "device_name": args.mooncake_device,
+                    "num_writer_threads": args.num_writer_threads,
+                    "global_segment_size": int(args.mooncake_segment_gb * (1 << 30)),
+                }
+            },
+        }
+    else:
+        kv_transfer_config = {
+            "kv_connector": "ExampleHiddenStatesConnector",
+            "kv_role": "kv_producer",
+            "kv_connector_extra_config": {
+                "shared_storage_path": args.hidden_states_path
+            },
+        }
 
     cmd = [
         sys.executable,

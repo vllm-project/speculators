@@ -6,9 +6,11 @@ from pathlib import Path
 import torch
 from datasets import Dataset
 
+import speculators.train.data as data_mod
 from speculators.models.eagle3.data import shift_batch
 from speculators.train.data import (
     ArrowDataset,
+    BaseDataset,
     SampleFileDataset,
     create_collate_fn,
     standardize_data_v1,
@@ -469,3 +471,88 @@ def test_arrow_dataset_default_split_ratio_does_not_crash(tmp_path: Path):
     # Should not raise AttributeError
     assert arrow_ds._map_to_file_idx(0) == 0
     assert arrow_ds._map_to_file_idx(5) == 5
+
+
+class _StubDataset(BaseDataset):
+    """Deterministic BaseDataset for exercising the batched fetch path."""
+
+    def _compute_approx_lengths(self):
+        return [3, 4, 5, 6, 7]
+
+    def _get_raw_data(self, index):
+        if index == 2:
+            return None  # failed samples must pass through as None
+        seq_len = index + 2
+        return {
+            "hidden_states": torch.arange(seq_len * 4, dtype=torch.float32).reshape(
+                seq_len, 4
+            ),
+            "input_ids": torch.arange(seq_len),
+            "loss_mask": torch.ones(seq_len, dtype=torch.long),
+        }
+
+
+def test_getitems_matches_serial_fetch():
+    """__getitems__ (used by torch's fetcher for whole packed batches) must
+    return exactly what per-index __getitem__ does, in order."""
+    ds = _StubDataset(max_len=16)
+    indices = [4, 2, 0, 3, 1]
+
+    serial = [ds[i] for i in indices]
+    batched = ds.__getitems__(indices)
+
+    assert len(batched) == len(serial)
+    for got, expected in zip(batched, serial, strict=True):
+        if expected is None:
+            assert got is None
+            continue
+        assert got.keys() == expected.keys()
+        for key in expected:
+            assert torch.equal(got[key], expected[key])
+
+
+def test_getitems_single_index():
+    ds = _StubDataset(max_len=16)
+    (sample,) = ds.__getitems__([1])
+    assert torch.equal(sample["input_ids"], torch.arange(3))
+
+
+def test_arrow_dataset_parses_multiple_endpoints(tmp_path: Path, monkeypatch):
+    data = Dataset.from_dict(
+        {
+            "input_ids": [[0, 1, 2]],
+            "loss_mask": [[0, 1, 1]],
+            "seq_len": [3],
+        }
+    )
+    data.save_to_disk(tmp_path / "ds")
+
+    ds = ArrowDataset(
+        max_len=8,
+        datapath=tmp_path / "ds",
+        vllm_endpoint="http://a:8000/v1, http://b:8000/v1,",
+    )
+    assert ds.vllm_endpoints == ["http://a:8000/v1", "http://b:8000/v1"]
+
+    # Index-based assignment with one-hop failover: the assigned client is
+    # tried first, its successor on failure.
+    calls = []
+
+    class _Client:
+        def __init__(self, name):
+            self.name = name
+
+    ds.clients = [_Client("a"), _Client("b")]
+    ds.model = "m"
+
+    def _fake_generate(client, model, item, **kwargs):
+        calls.append(client.name)
+        if client.name == "a":
+            raise RuntimeError("endpoint a down")
+        return "handle-from-b"
+
+    monkeypatch.setattr(data_mod, "generate_hidden_states", _fake_generate)
+    handle = ds._generate_with_failover(0, client_item=None)
+
+    assert handle == "handle-from-b"
+    assert calls == ["a", "b"]
