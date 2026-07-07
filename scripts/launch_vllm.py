@@ -4,24 +4,34 @@ import os
 import sys
 import warnings
 
+from speculators.data_generation.transfer import HiddenStatesBackend
+
 
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Launch vLLM for hidden states extraction",
         usage=(
-            "launch_vllm.py [-h] MODEL [--hidden-states-path HIDDEN_STATES_PATH] "
+            "launch_vllm.py [-h] MODEL [--hidden-states-backend BACKEND] "
             "[--target-layer-ids TARGET_LAYER_IDS [TARGET_LAYER_IDS ...]] -- *VLLM_ARGS"
         ),
     )
     parser.add_argument(
         "model", type=str, help="Model name or path to extract hidden states from"
     )
+
+    backend_registry = HiddenStatesBackend.registry or {}
     parser.add_argument(
-        "--hidden-states-path",
-        type=str,
-        default="/tmp/hidden_states",  # noqa: S108
-        help="The directory to save hidden states to. Default '/tmp/hidden_states'.",
+        "--hidden-states-backend",
+        choices=list(backend_registry.keys()),
+        default="file",
+        help=(
+            "Hidden states transfer backend. Each backend may add its own "
+            "CLI arguments (see below). Default: 'file'."
+        ),
     )
+    for backend_cls in backend_registry.values():
+        backend_cls.add_launch_args(parser)
+
     parser.add_argument(
         "--target-layer-ids",
         type=int,
@@ -85,11 +95,9 @@ def main():
             "hf_config": {"eagle_aux_hidden_state_layer_ids": target_layer_ids}
         },
     }
-    kv_transfer_config = {
-        "kv_connector": "ExampleHiddenStatesConnector",
-        "kv_role": "kv_producer",
-        "kv_connector_extra_config": {"shared_storage_path": args.hidden_states_path},
-    }
+    backend_registry = HiddenStatesBackend.registry or {}
+    backend_cls = backend_registry[args.hidden_states_backend]
+    kv_transfer_config = backend_cls.build_kv_transfer_config(args)
 
     cmd = [
         sys.executable,

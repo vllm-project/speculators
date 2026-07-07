@@ -14,6 +14,7 @@ from transformers import LlamaConfig, PretrainedConfig
 from transformers.models.auto.configuration_auto import AutoConfig
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
+from speculators.data_generation.transfer import HiddenStatesBackend
 from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_REQUEST_TIMEOUT,
@@ -625,14 +626,17 @@ def main(args: argparse.Namespace):  # noqa: C901
     }
     preprocess = preprocess_fns.get(args.speculator_type)
 
+    backend_registry = HiddenStatesBackend.registry or {}
+    backend_cls = backend_registry[args.hidden_states_backend]
+    transfer = backend_cls.from_train_args(args, args.data_path)
+
     train_loader, val_loader = create_train_val_loaders(
         data_path=args.data_path,
-        train_data_ratio=args.train_data_ratio,
         total_seq_len=args.total_seq_len,
         hidden_states_dtype=hidden_states_dtype,
         noise_std=args.noise_std,
         legacy_data=args.legacy_data,
-        hidden_states_path=args.hidden_states_path,
+        transfer=transfer,
         vllm_endpoint=args.vllm_endpoint,
         on_missing=args.on_missing,
         on_generate=args.on_generate,
@@ -644,6 +648,7 @@ def main(args: argparse.Namespace):  # noqa: C901
         num_workers=args.num_workers,
         prefetch_factor=args.prefetch_factor,
         preprocess=preprocess,
+        train_data_ratio=args.train_data_ratio,
     )
 
     # Get trainer kwargs from model class
@@ -820,15 +825,19 @@ def parse_args():
             "(token_freq.pt), and hidden states (default: ./output)"
         ),
     )
+    backend_registry = HiddenStatesBackend.registry or {}
     parser.add_argument(
-        "--hidden-states-path",
-        type=str,
-        default=None,
+        "--hidden-states-backend",
+        choices=list(backend_registry.keys()),
+        default="file",
         help=(
-            "The path where cached hidden states files are stored. (Default: "
-            "args.data_path / 'hidden_states')"
+            "Hidden states transfer backend. Each backend may add its own "
+            "CLI arguments (see below). Default: 'file'."
         ),
     )
+    for backend_cls in backend_registry.values():
+        backend_cls.add_train_args(parser)
+
     parser.add_argument(
         "--vllm-endpoint",
         type=str,
