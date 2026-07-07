@@ -63,6 +63,47 @@ def set_seed(seed: int, deterministic: bool = False):
         torch.backends.cudnn.benchmark = False
 
 
+def _maybe_apply_mrope_full_head_hack(
+    rope_params: dict,
+    resolved_head_dim: int,
+    enabled: bool,
+) -> None:
+    """Optionally rescale partial MRoPE settings to full-head semantics."""
+    if "mrope_section" not in rope_params:
+        return
+
+    inherited_partial = float(rope_params.get("partial_rotary_factor", 1.0))
+    if enabled and inherited_partial < 1.0:
+        old_section = list(rope_params["mrope_section"])
+        inv = 1.0 / inherited_partial
+        if abs(inv - round(inv)) > 1e-6:
+            raise ValueError(
+                "mrope_full_head_hack cannot rescale mrope_section because "
+                f"1/partial_rotary_factor={inv} is not an integer."
+            )
+        scale = int(round(inv))
+        new_section = [int(x) * scale for x in old_section]
+        if 2 * sum(new_section) != resolved_head_dim:
+            raise ValueError(
+                "mrope_full_head_hack rescaling produced inconsistent "
+                f"mrope_section {new_section}: 2*sum={2 * sum(new_section)} "
+                f"but head_dim={resolved_head_dim}."
+            )
+        rope_params["mrope_section"] = new_section
+        rope_params["partial_rotary_factor"] = 1.0
+        logger.warning(
+            "MRoPE full-head hack applied: partial_rotary_factor "
+            f"{inherited_partial} -> 1.0, mrope_section {old_section} -> "
+            f"{new_section}."
+        )
+    elif not enabled and inherited_partial < 1.0:
+        logger.warning(
+            "mrope_full_head_hack=False with partial_rotary_factor="
+            f"{inherited_partial} < 1.0 can cause HF trainer / vLLM "
+            "partial-rotation mismatch."
+        )
+
+
 def create_transformer_layer_config(  # noqa: C901
     verifier_name_or_path: str,
     num_layers: int,
@@ -160,18 +201,30 @@ def create_transformer_layer_config(  # noqa: C901
                     or rope_params.get("full_attention")
                     or {}
                 )
-                rope_params = {
-                    "rope_type": "default",
-                    "rope_theta": sub.get("rope_theta", 10000.0),
-                }
-            config.rope_parameters = rope_params
+                if isinstance(sub, dict):
+                    rope_params = dict(sub)
+                    rope_params.setdefault("rope_type", "default")
+                    rope_params.setdefault("rope_theta", 10000.0)
+                else:
+                    rope_params = {"rope_type": "default", "rope_theta": 10000.0}
 
-            _MROPE_KEYS = ("mrope_section", "mrope_interleaved", "type")  # noqa: N806
-            for key in _MROPE_KEYS:
-                config.rope_parameters.pop(key, None)
+            if isinstance(rope_params, dict):
+                _maybe_apply_mrope_full_head_hack(
+                    rope_params, resolved_head_dim, mrope_full_head_hack
+                )
+                # ``type`` is a legacy alias (only "mrope" on VL models) that
+                # transformers strips during validation and that breaks vLLM's
+                # config checks; drop it while keeping the real MRoPE fields.
+                rope_params.pop("type", None)
+            config.rope_parameters = rope_params
     else:
         if hasattr(verifier_config, "rope_scaling"):
-            config.rope_scaling = deepcopy(verifier_config.rope_scaling)
+            rope_scaling = deepcopy(verifier_config.rope_scaling)
+            if isinstance(rope_scaling, dict):
+                _maybe_apply_mrope_full_head_hack(
+                    rope_scaling, resolved_head_dim, mrope_full_head_hack
+                )
+            config.rope_scaling = rope_scaling
         config.rope_theta = getattr(verifier_config, "rope_theta", 10000.0)
 
     return config
@@ -392,6 +445,7 @@ def build_draft_model(
                 hidden_act=args.draft_hidden_act,
                 sliding_window=args.sliding_window,
                 sliding_window_indices=args.sliding_window_indices,
+                mrope_full_head_hack=args.draft_mrope_full_head_hack,
             )
 
         args.mask_token_id = resolve_mask_token_id(
@@ -816,6 +870,16 @@ def parse_args():
         "sigmoid linear unit. Qwen3 layers of dflash expect 'silu' activation for "
         "vLLM deployment. If another function is desired, set as a string or leave "
         "as None to automatically fall back to the verifier's activation function.",
+    )
+    parser.add_argument(
+        "--draft-mrope-full-head-hack",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "For MRoPE configs with partial_rotary_factor < 1, rescale "
+            "mrope_section and set partial_rotary_factor=1.0 so HF training "
+            "and vLLM inference use equivalent full-head rotary semantics."
+        ),
     )
     parser.add_argument(
         "--target-layer-ids",
