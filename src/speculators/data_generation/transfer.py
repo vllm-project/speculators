@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 import shutil
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -15,7 +14,7 @@ from speculators.data_generation.vllm_client import wait_for_lock
 from speculators.utils.registry import ClassRegistryMixin
 
 if TYPE_CHECKING:
-    pass
+    import argparse
 
 
 class HiddenStatesTransfer(ABC):
@@ -57,7 +56,9 @@ class HiddenStatesBackend(ClassRegistryMixin):
 
     @staticmethod
     @abstractmethod
-    def from_train_args(args: argparse.Namespace, data_path: str) -> HiddenStatesTransfer:
+    def from_train_args(
+        args: argparse.Namespace, data_path: str
+    ) -> HiddenStatesTransfer:
         """Construct a :class:`HiddenStatesTransfer` from parsed train args."""
         ...
 
@@ -127,13 +128,11 @@ class FileBackend(HiddenStatesBackend):
             "--hidden-states-path",
             type=str,
             default="/tmp/hidden_states",  # noqa: S108
-            help="The directory to save hidden states to. Default '/tmp/hidden_states'.",
+            help="The directory to save hidden states to. Default '/tmp/hidden_states'",
         )
 
     @staticmethod
-    def from_train_args(
-        args: argparse.Namespace, data_path: str
-    ) -> FileTransfer:
+    def from_train_args(args: argparse.Namespace, data_path: str) -> FileTransfer:
         hs_path = (
             Path(args.hidden_states_path)
             if args.hidden_states_path
