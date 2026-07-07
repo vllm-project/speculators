@@ -105,8 +105,19 @@ def _resolve_speedbench(
     """
     parts = spec.removeprefix("speedbench/").split("/")
     config = parts[0]
-    # Build a glob pattern from however much of the path was specified
-    suffix = "_".join(parts[1:]) if len(parts) > 1 else ""
+    rest = parts[1:]
+    # Build glob pattern matching prepare_speedbench.py's naming convention:
+    #   qualitative/coding          → qualitative_coding*.jsonl
+    #   throughput_1k/high_entropy  → throughput_1k_high_entropy_*.jsonl
+    #   throughput_1k/high_entropy/code_completion
+    #                               → throughput_1k_high_entropy__code_completion*.jsonl
+    # Entropy level and subcategory are separated by "__" in the filename.
+    if not rest:
+        suffix = ""
+    elif len(rest) == 1:
+        suffix = rest[0]
+    else:
+        suffix = rest[0] + "__" + "_".join(rest[1:])
     pattern = f"{config}_{suffix}*.jsonl" if suffix else f"{config}_*.jsonl"
 
     files = sorted(data_dir.glob(pattern))

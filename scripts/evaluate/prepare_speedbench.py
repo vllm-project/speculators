@@ -60,7 +60,8 @@ def split_config(flat_file: Path, out_dir: Path, config: str) -> int:
     Returns the number of output files written.
     """
     logger.info("Loading %s ...", flat_file)
-    rows = [json.loads(line) for line in flat_file.open() if line.strip()]
+    with flat_file.open() as f:
+        rows = [json.loads(line) for line in f if line.strip()]
 
     use_category_only = config == "qualitative"
     buckets: dict[str, list[str]] = {}
