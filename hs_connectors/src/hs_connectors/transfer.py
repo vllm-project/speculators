@@ -2,19 +2,41 @@
 
 from __future__ import annotations
 
+import fcntl
+import os
 import shutil
+import time
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import torch
 from safetensors.torch import load_file
 
-from speculators.data_generation.vllm_client import wait_for_lock
-from speculators.utils.registry import ClassRegistryMixin
-
 if TYPE_CHECKING:
     import argparse
+    from collections.abc import Callable
+
+
+def wait_for_lock(lock_path: str, timeout: float = 10.0, poll_interval: float = 0.1):
+    fd = os.open(lock_path, os.O_RDONLY)
+    try:
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        f"Timed out waiting for lock: {lock_path}"
+                    ) from None
+                time.sleep(poll_interval)
+    except BaseException:
+        os.close(fd)
+        raise
+    os.close(fd)
+    os.remove(lock_path)
 
 
 class HiddenStatesTransfer(ABC):
@@ -38,13 +60,30 @@ class HiddenStatesTransfer(ABC):
         """Clean up a generated sample (e.g. delete a temp file)."""
 
 
-class HiddenStatesBackend(ClassRegistryMixin):
+class HiddenStatesBackend:
     """Plugin interface for hidden-states transfer backends.
 
     Each backend registers itself via ``@HiddenStatesBackend.register(name)``
     and implements these four static hooks so that scripts (``train.py``,
     ``launch_vllm.py``) can discover and configure backends without hardcoding.
     """
+
+    registry: ClassVar[dict[str, type[HiddenStatesBackend]]] = {}
+
+    @classmethod
+    def register(
+        cls,
+        name: str,
+    ) -> Callable[[type[HiddenStatesBackend]], type[HiddenStatesBackend]]:
+        def decorator(
+            subclass: type[HiddenStatesBackend],
+        ) -> type[HiddenStatesBackend]:
+            if name in cls.registry:
+                raise ValueError(f"Backend '{name}' is already registered.")
+            cls.registry[name] = subclass
+            return subclass
+
+        return decorator
 
     @staticmethod
     def add_train_args(parser: argparse.ArgumentParser) -> None:
@@ -57,7 +96,8 @@ class HiddenStatesBackend(ClassRegistryMixin):
     @staticmethod
     @abstractmethod
     def from_train_args(
-        args: argparse.Namespace, data_path: str
+        args: argparse.Namespace,
+        data_path: str,
     ) -> HiddenStatesTransfer:
         """Construct a :class:`HiddenStatesTransfer` from parsed train args."""
         ...
@@ -132,7 +172,11 @@ class FileBackend(HiddenStatesBackend):
         )
 
     @staticmethod
-    def from_train_args(args: argparse.Namespace, data_path: str) -> FileTransfer:
+    def from_train_args(
+        args: argparse.Namespace,
+        data_path: str,
+        **_kwargs: Any,
+    ) -> FileTransfer:
         hs_path = (
             Path(args.hidden_states_path)
             if args.hidden_states_path

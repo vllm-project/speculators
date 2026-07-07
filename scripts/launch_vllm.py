@@ -4,7 +4,7 @@ import os
 import sys
 import warnings
 
-from speculators.data_generation.transfer import HiddenStatesBackend
+from hs_connectors import HiddenStatesBackend
 
 
 def parse_args():
