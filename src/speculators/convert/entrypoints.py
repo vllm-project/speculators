@@ -97,6 +97,7 @@ def convert_model(
         "eagle_aux_hidden_state_layer_ids": [1,23,44]}.
         Options for MTP: {"num_speculative_steps": 3}.
         Options for DFlash: {"aux_hidden_state_layer_ids": [2,10,18,26,34]}.
+        Options for DSpark: {"aux_hidden_state_layer_ids": [2,10,18,26,34]}.
     """
 
     if algorithm == "eagle3":

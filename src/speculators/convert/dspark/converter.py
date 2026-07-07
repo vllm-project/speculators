@@ -134,6 +134,10 @@ class DSparkConverter:
                 0 if i == -1 else i + 1 for i in target_layer_ids
             ]
 
+        mask_token_id = source_config.get("mask_token_id")
+        if mask_token_id is None:
+            raise ValueError("Checkpoint config has no top-level `mask_token_id`")
+
         speculators_config = SpeculatorsConfig(
             algorithm="dspark",
             proposal_methods=[
@@ -153,7 +157,7 @@ class DSparkConverter:
             draft_vocab_size=transformer_config["vocab_size"],
             block_size=block_size,
             aux_hidden_state_layer_ids=aux_hidden_state_layer_ids,
-            mask_token_id=source_config.get("mask_token_id"),
+            mask_token_id=mask_token_id,
             markov_rank=source_config.get("markov_rank", 256),
             markov_head_type=source_config.get("markov_head_type", "vanilla"),
             enable_confidence_head=source_config.get("enable_confidence_head", True),

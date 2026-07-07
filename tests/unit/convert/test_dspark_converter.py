@@ -132,6 +132,14 @@ class TestBuildConfig:
         with pytest.raises(ValueError, match="block_size"):
             DSparkConverter()._build_config(source, "Qwen/Qwen3-8B", None)
 
+    @patch("speculators.convert.dspark.converter.PretrainedConfig.get_config_dict")
+    def test_missing_mask_token_id_raises(self, mock_get_config):
+        mock_get_config.return_value = ({"hidden_size": 4096}, None)
+        source = _source_config()
+        del source["mask_token_id"]
+        with pytest.raises(ValueError, match="mask_token_id"):
+            DSparkConverter()._build_config(source, "Qwen/Qwen3-8B", None)
+
 
 class TestSave:
     def test_missing_draft_weights_raise(self, tmp_path):
