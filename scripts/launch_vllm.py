@@ -4,7 +4,40 @@ import os
 import sys
 import warnings
 
-from hs_connectors import HiddenStatesBackend
+try:
+    from hs_connectors import HiddenStatesBackend
+
+    _backend_registry: dict[str, type] = dict(HiddenStatesBackend.registry)
+except ImportError:
+    _backend_registry = {}
+
+
+if "file" not in _backend_registry:
+    # Vendored File backend in case hs_connectors is not available
+    class _InlineFileBackend:
+        @staticmethod
+        def add_launch_args(parser: argparse.ArgumentParser) -> None:
+            parser.add_argument(
+                "--hidden-states-path",
+                type=str,
+                default="/tmp/hidden_states",  # noqa: S108
+                help=(
+                    "The directory to save hidden states to. "
+                    "Default '/tmp/hidden_states'"
+                ),
+            )
+
+        @staticmethod
+        def build_kv_transfer_config(args: argparse.Namespace) -> dict:
+            return {
+                "kv_connector": "ExampleHiddenStatesConnector",
+                "kv_role": "kv_producer",
+                "kv_connector_extra_config": {
+                    "shared_storage_path": args.hidden_states_path,
+                },
+            }
+
+    _backend_registry["file"] = _InlineFileBackend  # type: ignore[assignment]
 
 
 def parse_args():
@@ -19,17 +52,16 @@ def parse_args():
         "model", type=str, help="Model name or path to extract hidden states from"
     )
 
-    backend_registry = HiddenStatesBackend.registry or {}
     parser.add_argument(
         "--hidden-states-backend",
-        choices=list(backend_registry.keys()),
+        choices=list(_backend_registry.keys()),
         default="file",
         help=(
             "Hidden states transfer backend. Each backend may add its own "
             "CLI arguments (see below). Default: 'file'."
         ),
     )
-    for backend_cls in backend_registry.values():
+    for backend_cls in _backend_registry.values():
         backend_cls.add_launch_args(parser)
 
     parser.add_argument(
@@ -95,8 +127,7 @@ def main():
             "hf_config": {"eagle_aux_hidden_state_layer_ids": target_layer_ids}
         },
     }
-    backend_registry = HiddenStatesBackend.registry or {}
-    backend_cls = backend_registry[args.hidden_states_backend]
+    backend_cls = _backend_registry[args.hidden_states_backend]
     kv_transfer_config = backend_cls.build_kv_transfer_config(args)
 
     cmd = [
