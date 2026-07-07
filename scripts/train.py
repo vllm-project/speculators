@@ -777,7 +777,7 @@ def parse_args():
     )
     parser.add_argument("--save-path", type=str, default="./output/checkpoints")
     parser.add_argument("--epochs", type=int, default=20)
-    parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument("--lr", type=float, default=6e-4)
     parser.add_argument("--no-resume-from-checkpoint", action="store_true")
     parser.add_argument(
         "--logger",
@@ -943,7 +943,11 @@ def parse_args():
         "--dflash-decay-gamma",
         type=float,
         default=4.0,
-        help="Decay gamma for DFlash/DSpark loss weighting (default: 4.0)",
+        help="Decay gamma for DFlash/DSpark/Domino loss weighting (default: 4.0). "
+        "Suggested values by block size (matching SGLang SpecForge): "
+        "gamma=7 for block_size=16, gamma=5 for block_size=10, "
+        "gamma=4 for block_size=8. Higher gamma flattens the decay to give "
+        "more weight to later block positions.",
     )
     parser.add_argument(
         "--normalize-loss-by-decay",
@@ -1029,11 +1033,13 @@ def parse_args():
         "(default: 1.0)",
     )
     parser.add_argument(
-        "--domino-lambda-decay-steps",
-        type=int,
-        default=30000,
-        help="Number of training steps to decay lambda_base from start to 0 "
-        "(default: 30000). Set to 0 to disable decay (lambda_base stays at start).",
+        "--domino-lambda-decay-ratio",
+        type=float,
+        default=0.5,
+        help="Fraction of total training steps over which lambda_base decays "
+        "from lambda_start to 0 (default: 0.5). Decays proportionally to "
+        "total training steps, matching SGLang SpecForge's "
+        "--lambda-base-decay-ratio. Set to 0 to disable decay.",
     )
     parser.add_argument(
         "--draft-attn-impl",

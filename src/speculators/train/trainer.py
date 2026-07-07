@@ -238,6 +238,7 @@ class Trainer:
         scheduler_total_steps = self.config.scheduler_total_steps or (
             self.config.num_epochs * len(self.train_loader)
         )
+        self.total_steps = scheduler_total_steps
 
         def make_scheduler(opt: torch.optim.Optimizer):
             if self.config.scheduler_type == "linear":
@@ -338,6 +339,7 @@ class Trainer:
 
             train_kwargs = dict(self.config.train_call_kwargs)
             train_kwargs["global_step"] = self.global_step
+            train_kwargs["total_steps"] = self.total_steps
             _draft_tokens, loss, metrics = self.model(**gpu_batch, **train_kwargs)
 
             self._optimizers_zero_grad()
@@ -406,6 +408,7 @@ class Trainer:
 
             val_kwargs = dict(self.config.val_call_kwargs)
             val_kwargs["global_step"] = self.global_step
+            val_kwargs["total_steps"] = self.total_steps
             _draft_tokens, _loss, metrics = self.model(**gpu_batch, **val_kwargs)
 
             if self.is_distributed:

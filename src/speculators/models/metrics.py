@@ -237,6 +237,31 @@ def dflash_loss_decay(pos_idx: torch.Tensor, gamma: float):
     return decay_mult  # noqa: RET504
 
 
+def domino_loss_decay(pos_idx: torch.Tensor, gamma: float) -> torch.Tensor:
+    """Compute Domino / SGLang-style exponential decay weights per position.
+
+    Uses :math:`w_k = \\exp(-k / \\gamma)` for position *k* within each block,
+    matching Eq. 4 in the Domino paper and the SGLang SpecForge implementation.
+
+    Position 0 (first predicted token after the anchor) receives weight 1.0
+    since it gates acceptance of the entire block. Subsequent positions decay
+    as :math:`\\exp(-k / \\gamma)`.
+
+    Suggested gamma values by block size (from SGLang SpecForge):
+        - block_size=16: gamma=7
+        - block_size=10: gamma=5
+        - block_size=8:  gamma=4
+
+    Args:
+        pos_idx: Position indices within each speculative block.
+        gamma: Decay rate (higher = slower decay).
+
+    Returns:
+        Decay multiplier tensor with same shape as pos_idx.
+    """
+    return torch.exp(-pos_idx.float() / gamma)
+
+
 def exp_loss_decay(pos_idx: torch.Tensor, gamma: float):
     """Compute simple exponential decay weights as gamma^pos_idx.
 

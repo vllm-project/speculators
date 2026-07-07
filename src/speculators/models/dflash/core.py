@@ -198,7 +198,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             "emb_dim": kwargs.get("domino_emb_dim", 256),
             "gru_hidden_dim": kwargs.get("domino_gru_hidden_dim", 1024),
             "lambda_base_start": kwargs.get("domino_lambda_start", 1.0),
-            "lambda_base_decay_steps": kwargs.get("domino_lambda_decay_steps", 30000),
+            "lambda_base_decay_ratio": kwargs.get("domino_lambda_decay_ratio", 0.5),
             "speculators_config": SpeculatorsConfig(
                 algorithm=algorithm,
                 proposal_methods=[
@@ -421,6 +421,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         max_anchors: int = 3072,
         normalize_by_decay: bool = False,
         global_step: int = 0,
+        total_steps: int | None = None,
         **kwargs,
     ):
         hidden, logits, targets, aligned_loss_mask, anchored_block_indices = (
@@ -440,8 +441,9 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         draft_tokens = torch.argmax(logits, dim=-1)
 
         if self.projector_type == "domino":
-            decay_steps = self.config.lambda_base_decay_steps
-            if decay_steps > 0:
+            decay_ratio = self.config.lambda_base_decay_ratio
+            if total_steps is not None and decay_ratio > 0:
+                decay_steps = max(1, int(total_steps * decay_ratio))
                 progress = min(global_step / decay_steps, 1.0)
                 lambda_base = self.config.lambda_base_start * (1.0 - progress)
                 lambda_base = max(0.0, min(1.0, lambda_base))
@@ -480,6 +482,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 gamma=gamma,
                 loss_config=loss_config,
                 normalize_by_decay=normalize_by_decay,
+                decay_mode="domino",
             )
             final_loss, final_metrics = compute_metrics(
                 refined_logits,
@@ -489,6 +492,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 gamma=gamma,
                 loss_config=loss_config,
                 normalize_by_decay=normalize_by_decay,
+                decay_mode="domino",
             )
             loss = (1.0 - lambda_base) * final_loss + lambda_base * base_loss
 

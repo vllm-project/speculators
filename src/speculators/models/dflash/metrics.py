@@ -1,7 +1,7 @@
 """Metrics and loss functions for DFlash draft model."""
 
 from functools import partial
-from typing import Any
+from typing import Any, Literal
 
 import torch
 
@@ -10,6 +10,7 @@ from speculators.models.metrics import (
     compound_loss,
     compute_accuracy_multi_step,
     dflash_loss_decay,
+    domino_loss_decay,
     kl_div_loss,
 )
 
@@ -24,6 +25,7 @@ def compute_metrics(
     gamma: float = 4.0,
     loss_config: LossConfig | None = None,
     normalize_by_decay: bool = False,
+    decay_mode: Literal["dflash", "domino"] = "dflash",
 ) -> tuple[torch.Tensor, dict]:
     """Compute loss and accuracy metrics for draft model predictions.
 
@@ -34,6 +36,8 @@ def compute_metrics(
         block_size: Block size for per-position metrics
         gamma: Temperature for exponential decay in loss weighting
         loss_config: Mapping of ``{name: (loss_fn, weight)}``
+        decay_mode: ``"dflash"`` (position 0 weight 0, position 1 weight 1) or
+            ``"domino"`` (position 0 weight 1, SGLang-style exp(-k/gamma))
 
     Returns:
         Tuple of (loss, metrics_dict) where metrics_dict contains:
@@ -47,13 +51,19 @@ def compute_metrics(
     pos_idx = torch.arange(seq_len, device=logits.device) % block_size
     pos_idx = pos_idx.unsqueeze(0)  # shape: [1, T]
 
+    decay_fn = (
+        partial(domino_loss_decay, gamma=gamma)
+        if decay_mode == "domino"
+        else partial(dflash_loss_decay, gamma=gamma)
+    )
+
     loss, term_losses = compound_loss(
         logits,
         targets,
         loss_mask,
         pos_idx,
         loss_config=loss_config,
-        decay_fn=partial(dflash_loss_decay, gamma=gamma),
+        decay_fn=decay_fn,
         normalize_by_decay=normalize_by_decay,
     )
 
@@ -71,11 +81,13 @@ def compute_metrics(
     for term_name, term_val in term_losses.items():
         metrics[f"{term_name}_sum"] = term_val
         metrics[f"{term_name}_total"] = ones
-    # Position 0 is the anchor — intentionally excluded from accuracy
-    metrics["full_acc_sum"] = correct_per_pos[1:].sum()
-    metrics["full_acc_total"] = total_per_pos[1:].sum()
+    # Position 0 is the anchor in DFlash — excluded from accuracy.
+    # In Domino mode with shift_label, position 0 predicts a+1 and is included.
+    start_pos = 0 if decay_mode == "domino" else 1
+    metrics["full_acc_sum"] = correct_per_pos[start_pos:].sum()
+    metrics["full_acc_total"] = total_per_pos[start_pos:].sum()
 
-    for pos in range(1, block_size):
+    for pos in range(start_pos, block_size):
         metrics[f"position_{pos}_acc_sum"] = correct_per_pos[pos]
         metrics[f"position_{pos}_acc_total"] = total_per_pos[pos]
     return loss, metrics

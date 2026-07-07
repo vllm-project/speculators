@@ -328,18 +328,18 @@ class TestDominoParams:
         assert grad.abs().sum().item() > 0
 
     @pytest.mark.parametrize(
-        ("lambda_base_start", "lambda_base_decay_steps"),
+        ("lambda_base_start", "lambda_base_decay_ratio"),
         [
-            (1.0, 100),
-            (0.5, 0),
-            (0.0, 0),
+            (1.0, 1.0),
+            (0.5, 0.0),
+            (0.0, 0.0),
         ],
     )
-    def test_lambda_schedule_variants(self, lambda_base_start, lambda_base_decay_steps):
+    def test_lambda_schedule_variants(self, lambda_base_start, lambda_base_decay_ratio):
         model = make_dflash_model(
             projector_type="domino",
             lambda_base_start=lambda_base_start,
-            lambda_base_decay_steps=lambda_base_decay_steps,
+            lambda_base_decay_ratio=lambda_base_decay_ratio,
         )
         samples = _make_samples([128])
         batch = make_batch(max_len=MAX_LEN, samples=samples, hidden_size=HIDDEN_SIZE)
