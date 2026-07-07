@@ -186,7 +186,6 @@ async def detect_model(endpoint: str) -> str:
 
 
 async def _post_chat(
-    sem: asyncio.Semaphore,
     session: aiohttp.ClientSession,
     endpoint: str,
     payload: dict[str, Any],
@@ -197,7 +196,7 @@ async def _post_chat(
     short body; otherwise the caller records a bare ``KeyError('choices')`` and
     the real cause is lost.
     """
-    async with sem, session.post(endpoint, json=payload) as response:
+    async with session.post(endpoint, json=payload) as response:
         if not response.ok:
             body = (await response.text())[:500]
             raise RuntimeError(f"HTTP {response.status} from {endpoint}: {body}")
@@ -205,7 +204,6 @@ async def _post_chat(
 
 
 async def worker(
-    sem: asyncio.Semaphore,
     session: aiohttp.ClientSession,
     queue: "asyncio.Queue[dict[str, Any]]",
     args,
@@ -253,7 +251,7 @@ async def worker(
                     "messages": prefix,
                     "max_tokens": args.max_tokens,
                 }
-                data = await _post_chat(sem, session, endpoint, payload)
+                data = await _post_chat(session, endpoint, payload)
 
                 choice = data["choices"][0]
                 message = choice["message"]
@@ -363,7 +361,6 @@ async def main():
     dataset = load_dataset(dataset_id, name=subset, split=split, streaming=True)
 
     queue: asyncio.Queue = asyncio.Queue(maxsize=args.concurrency * 4)
-    semaphore = asyncio.Semaphore(args.concurrency)
 
     timeout = aiohttp.ClientTimeout(total=None, sock_connect=90, sock_read=None)
     connector = aiohttp.TCPConnector(
@@ -391,7 +388,6 @@ async def main():
             workers = [
                 asyncio.create_task(
                     worker(
-                        semaphore,
                         session,
                         queue,
                         args,
