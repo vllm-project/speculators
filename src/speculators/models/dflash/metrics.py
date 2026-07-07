@@ -7,11 +7,10 @@ import torch
 
 from speculators.models.metrics import (
     LossConfig,
-    ce_loss,
     compound_loss,
     compute_accuracy_multi_step,
     dflash_loss_decay,
-    dpace_loss_weight,
+    dpace_loss_decay,
     kl_div_loss,
 )
 
@@ -52,17 +51,13 @@ def compute_metrics(
     pos_idx = torch.arange(seq_len, device=logits.device) % block_size
     pos_idx = pos_idx.unsqueeze(0)  # shape: [1, T]
 
-    elementwise_ce = None
     if per_position_loss_weight == "dpace":
-        elementwise_ce = ce_loss(logits, targets)
-        decay_mult = dpace_loss_weight(
-            elementwise_ce, loss_mask, block_size, alpha=dpace_alpha
+        decay_fn = partial(
+            dpace_loss_decay,
+            loss_mask=loss_mask,
+            block_size=block_size,
+            dpace_alpha=dpace_alpha,
         )
-
-        def decay_fn(
-            _pos_idx: torch.Tensor, _weight: torch.Tensor = decay_mult
-        ) -> torch.Tensor:
-            return _weight
     else:
         decay_fn = partial(dflash_loss_decay, gamma=gamma)
 
@@ -73,7 +68,6 @@ def compute_metrics(
         pos_idx,
         loss_config=loss_config,
         decay_fn=decay_fn,
-        dpace_precomputed_ce=elementwise_ce,
     )
 
     pred_ids = torch.argmax(logits, dim=-1)

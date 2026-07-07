@@ -1143,6 +1143,13 @@ def parse_args():
     provided = explicitly_provided_dests(parser, DECODER_SHAPING_FLAGS)
     validate_draft_init_args(parser, args, provided)
     resolve_loss_config(args.loss_fn)
+
+    if args.per_position_loss_weight == "dpace":
+        if args.loss_fn != "ce":
+            parser.error("--per-position-loss-weight=dpace requires --loss-fn=ce")
+        if not 0.0 < args.dpace_alpha <= 1.0:
+            raise ValueError(f"alpha must be in (0, 1], got {args.dpace_alpha}")
+
     return args
 
 

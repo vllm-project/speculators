@@ -244,7 +244,7 @@ def lk_hybrid_loss(
     return elementwise_loss  # noqa: RET504
 
 
-def dflash_loss_decay(pos_idx: torch.Tensor, gamma: float):
+def dflash_loss_decay(pos_idx: torch.Tensor, gamma: float, **kwargs):
     """Compute DFlash-style exponential decay weights per position.
 
     Position 0 gets weight 0, position 1 gets weight 1, and subsequent positions
@@ -265,7 +265,7 @@ def dflash_loss_decay(pos_idx: torch.Tensor, gamma: float):
     return decay_mult  # noqa: RET504
 
 
-def exp_loss_decay(pos_idx: torch.Tensor, gamma: float):
+def exp_loss_decay(pos_idx: torch.Tensor, gamma: float, **kwargs):
     """Compute simple exponential decay weights as gamma^pos_idx.
 
     Args:
@@ -278,24 +278,28 @@ def exp_loss_decay(pos_idx: torch.Tensor, gamma: float):
     return gamma**pos_idx
 
 
-def dpace_loss_weight(
-    neg_log_q: torch.Tensor,  # shape: [1, seq_len]
-    loss_mask: torch.Tensor,  # shape: [1, seq_len]
+def dpace_loss_decay(
+    pos_idx: torch.Tensor,
+    loss_mask: torch.Tensor,
     block_size: int,
-    alpha: float = 0.5,
+    dpace_alpha: float,
+    elementwise_loss: torch.Tensor,
+    **kwargs,
 ):
     """
     Per-position block-drafting loss weight based on D-PACE
 
     Args:
-        neg_log_q: per-draft-position confidence (negative log-likelihood)
-        alpha: confidence smoothing constant
+        elementwise_loss: requires to be cross-entropy loss, negative log-likelihood
+            of per-position confidence
+        dpace_alpha: confidence smoothing constant
+
+    Returns:
+        Decay multiplier tensor with same shape as pos_idx.
     """
     with torch.no_grad():
-        if not 0.0 < alpha <= 1.0:
-            raise ValueError(f"alpha must be in (0, 1], got {alpha}")
         # convert CE to per-position confidence
-        q = torch.exp(-neg_log_q).float()
+        q = torch.exp(-elementwise_loss).float()
 
         # reshape loss to [num_anchors, block_size]
         # for intra-block cumulative multiplication
@@ -309,7 +313,7 @@ def dpace_loss_weight(
         mask = loss_mask.reshape(num_anchors, block_size).to(q.dtype)
 
         # smoothed confidence for numerical stability
-        smooth = (1.0 - alpha) * q + alpha
+        smooth = (1.0 - dpace_alpha) * q + dpace_alpha
         smooth = torch.where(mask > 0, smooth, torch.ones_like(smooth))
 
         # prefix cumulative production
@@ -408,7 +412,6 @@ def compound_loss(
     pos_idx: torch.Tensor,
     loss_config: LossConfig,
     decay_fn: Callable[[torch.Tensor], torch.Tensor] | None = None,
-    dpace_precomputed_ce: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """Compute a weighted sum of loss terms.
 
@@ -431,7 +434,6 @@ def compound_loss(
             pos_idx,
             loss_fn=fn,
             decay_fn=decay_fn,
-            dpace_precomputed_ce=dpace_precomputed_ce,
         )
         if multi:
             term_losses[f"{name}_loss"] = term.detach()
@@ -446,7 +448,6 @@ def loss_function(
     pos_idx: torch.Tensor,  # shape: [1, seq_len]
     loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = kl_div_loss,
     decay_fn: Callable[[torch.Tensor], torch.Tensor] | None = None,
-    dpace_precomputed_ce: torch.Tensor | None = None,
 ):
     """Compute masked, optionally position-decayed training loss.
 
@@ -461,16 +462,15 @@ def loss_function(
     Returns:
         Scalar mean loss across the batch.
     """
-    if dpace_precomputed_ce is not None:
-        elementwise_loss = dpace_precomputed_ce
-    else:
-        elementwise_loss = loss_fn(logits, targets)  # shape: [1, seq_len]
+    elementwise_loss = loss_fn(logits, targets)  # shape: [1, seq_len]
 
     loss_mask = loss_mask.to(elementwise_loss.dtype)
     elementwise_loss = elementwise_loss * loss_mask
 
     if decay_fn is not None:
-        decay_mult = decay_fn(pos_idx.to(elementwise_loss.dtype))
+        decay_mult = decay_fn(
+            pos_idx.to(elementwise_loss.dtype), elementwise_loss=elementwise_loss
+        )
         elementwise_loss = elementwise_loss * decay_mult
 
     denominator = loss_mask.sum(dim=1) + _EPS
