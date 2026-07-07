@@ -32,6 +32,7 @@ TRAINING_DATA_REPO = "inference-optimization/Qwen3.5-4B-responses"
 def test_mtp_online_regression(
     tmp_path: Path,
     prompts: list[list[dict[str, str]]],
+    log_perf: dict,
 ):
     run_mtp_finetuning_e2e(
         tmp_path=tmp_path,
@@ -48,4 +49,5 @@ def test_mtp_online_regression(
         max_tokens=512,
         train_timeout=60 * 60,
         gpu_memory_utilization=0.3,
+        perf=log_perf,
     )

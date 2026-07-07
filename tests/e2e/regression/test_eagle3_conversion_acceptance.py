@@ -1,7 +1,7 @@
 import pytest
 
 from speculators.convert.eagle.eagle3_converter import Eagle3Converter
-from tests.e2e.utils import run_vllm_engine
+from tests.e2e.utils import record_perf, run_vllm_engine
 from tests.utils import requires_cadence
 
 
@@ -42,7 +42,7 @@ class TestEagle3vLLM:
         ],
     )
     def test_convert_run_vllm_engine_eagle3(
-        self, model_info, temp_cache_dir, prompts, tmp_path
+        self, model_info, temp_cache_dir, prompts, tmp_path, log_perf
     ):
         unconverted_model = model_info.get("unconverted_model")
         base_model = model_info.get("base_model")
@@ -65,16 +65,18 @@ class TestEagle3vLLM:
                 "eagle_aux_hidden_state_layer_ids"
             ]
 
-        converter.convert(**convert_kwargs)
-        run_vllm_engine(
-            model_path=str(converted_path),
-            tmp_path=tmp_path,
-            enforce_eager=False,
-            disable_compile_cache=disable_compile_cache,
-            prompts=prompts,
-            acceptance_thresholds=acceptance_thresholds,
-            ignore_eos=True,
-        )
+        with record_perf("conversion", log_perf):
+            converter.convert(**convert_kwargs)
+        with record_perf("vllm_inference", log_perf):
+            run_vllm_engine(
+                model_path=str(converted_path),
+                tmp_path=tmp_path,
+                enforce_eager=False,
+                disable_compile_cache=disable_compile_cache,
+                prompts=prompts,
+                acceptance_thresholds=acceptance_thresholds,
+                ignore_eos=True,
+            )
 
     @requires_cadence("nightly")
     @pytest.mark.smoke
@@ -94,13 +96,14 @@ class TestEagle3vLLM:
         ],
     )
     def test_vllm_engine_eagle3(
-        self, model_path, acceptance_thresholds, prompts, tmp_path
+        self, model_path, acceptance_thresholds, prompts, tmp_path, log_perf
     ):
-        run_vllm_engine(
-            model_path=model_path,
-            tmp_path=tmp_path,
-            prompts=prompts,
-            acceptance_thresholds=acceptance_thresholds,
-            enforce_eager=True,
-            ignore_eos=True,
-        )
+        with record_perf("vllm_inference", log_perf):
+            run_vllm_engine(
+                model_path=model_path,
+                tmp_path=tmp_path,
+                prompts=prompts,
+                acceptance_thresholds=acceptance_thresholds,
+                enforce_eager=True,
+                ignore_eos=True,
+            )

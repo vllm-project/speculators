@@ -22,6 +22,7 @@ __all__ = [
     "launch_vllm_server",
     "launch_vllm_server_context",
     "purge_newfiles",
+    "record_perf",
     "run_data_generation_offline",
     "run_prepare_data",
     "run_stitch_mtp",
@@ -452,3 +453,12 @@ def run_vllm_engine(
             assert acci >= thresholdi, (
                 f"Acceptance {acci} at token {i} is less than threshold {thresholdi}"
             )
+
+@contextmanager
+def record_perf(label: str, results: dict | None):
+    if results is None:
+        yield
+        return
+    t0 = time.perf_counter()
+    yield
+    results[label] = time.perf_counter() - t0
