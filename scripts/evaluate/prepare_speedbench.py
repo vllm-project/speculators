@@ -1,13 +1,26 @@
 #!/usr/bin/env python3
 """Split SPEED-Bench flat files into per-category/subcategory JSONL files.
 
-Run NVIDIA's prepare.py first to materialise prompts::
+**Step 1** — run NVIDIA's prepare.py to materialise prompts from their
+original sources (fetched at runtime due to redistribution restrictions)::
 
     curl -LsSf https://raw.githubusercontent.com/NVIDIA-NeMo/Skills/ \\
         refs/heads/main/nemo_skills/dataset/speed-bench/prepare.py \\
         | python3 - --output_dir ./speedbench_data
 
-Then run this script to produce the per-category files that evaluate.py expects::
+.. note::
+    The URL above points to the ``main`` branch of an external repository
+    maintained by NVIDIA.  Save a local copy of the script if you anticipate
+    running data preparation again::
+
+        curl -LsSf <url> -o prepare_nvidia_speedbench.py
+
+    The output files produced by prepare.py contain data fetched from
+    third-party sources that carry their own licences.  Do not redistribute
+    the materialised JSONL files.
+
+**Step 2** — run this script to split the flat files into per-category files
+that evaluate.py can consume directly::
 
     python prepare_speedbench.py --data-dir ./speedbench_data
 
