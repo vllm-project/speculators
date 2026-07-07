@@ -34,8 +34,6 @@ from speculators.data_generation.preprocessing import (
 from tests.e2e.utils import VLLM_PYTHON
 
 MODEL = "Qwen/Qwen3-VL-2B-Instruct"
-MEDIA_DIR = "/tmp"
-IMG_PATH = "/tmp/speculators_render_mm_test.png"
 
 
 def _find_free_port():
@@ -45,17 +43,25 @@ def _find_free_port():
 
 
 @pytest.fixture(scope="module")
-def image():
+def test_dir(tmp_path_factory):
+    """Module-scoped isolated temp dir: holds the generated image and doubles
+    as the server's --allowed-local-media-path root."""
+    return tmp_path_factory.mktemp("speculators_render")
+
+
+@pytest.fixture(scope="module")
+def image(test_dir):
+    img_path = test_dir / "render_mm_test.png"
     arr = np.zeros((128, 128, 3), dtype=np.uint8)
     arr[:64, :, 0] = 200
     arr[64:, :, 2] = 200
     arr[32:96, 32:96, 1] = 180
-    Image.fromarray(arr).save(IMG_PATH)
-    return IMG_PATH
+    Image.fromarray(arr).save(img_path)
+    return str(img_path)
 
 
 @pytest.fixture(scope="module")
-def render_server():
+def render_server(test_dir):
     env_endpoint = os.environ.get("RENDER_ENDPOINT")
     if env_endpoint:
         yield env_endpoint.rstrip("/")
@@ -70,7 +76,7 @@ def render_server():
             VLLM_PYTHON, "-m", "vllm.entrypoints.cli.main", "launch", "render",
             "--model", MODEL, "--port", str(port), "--host", "127.0.0.1",
             "--max-model-len", "4096", "--gpu-memory-utilization", "0.3",
-            "--allowed-local-media-path", MEDIA_DIR,
+            "--allowed-local-media-path", str(test_dir),
         ],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         env={**os.environ, "HF_HUB_OFFLINE": "1"},
