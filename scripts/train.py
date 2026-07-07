@@ -111,6 +111,7 @@ def create_transformer_layer_config(  # noqa: C901
     hidden_act: str | None,
     sliding_window: int,
     sliding_window_indices: list[int],
+    mrope_full_head_hack: bool = True,
 ) -> PretrainedConfig:
     if draft_arch not in DRAFT_ARCH_CONFIGS:
         raise ValueError(
@@ -156,6 +157,9 @@ def create_transformer_layer_config(  # noqa: C901
         num_attention_heads = verifier_config.hidden_size // head_dim
         if num_attention_heads % num_key_value_heads != 0:
             num_key_value_heads = num_attention_heads
+
+    # Resolve head_dim for MRoPE processing
+    resolved_head_dim = head_dim or (verifier_config.hidden_size // num_attention_heads)
 
     if sliding_window_indices and (
         min(sliding_window_indices) < 0 or max(sliding_window_indices) >= num_layers
@@ -216,6 +220,7 @@ def create_transformer_layer_config(  # noqa: C901
                 # transformers strips during validation and that breaks vLLM's
                 # config checks; drop it while keeping the real MRoPE fields.
                 rope_params.pop("type", None)
+                rope_params.pop("mrope_interleaved", None)
             config.rope_parameters = rope_params
     else:
         if hasattr(verifier_config, "rope_scaling"):
@@ -224,6 +229,9 @@ def create_transformer_layer_config(  # noqa: C901
                 _maybe_apply_mrope_full_head_hack(
                     rope_scaling, resolved_head_dim, mrope_full_head_hack
                 )
+                # Strip legacy fields for consistency with rope_parameters path
+                rope_scaling.pop("type", None)
+                rope_scaling.pop("mrope_interleaved", None)
             config.rope_scaling = rope_scaling
         config.rope_theta = getattr(verifier_config, "rope_theta", 10000.0)
 
@@ -476,6 +484,18 @@ def main(args: argparse.Namespace):  # noqa: C901
 
     # Setup distributed training
     maybe_setup_distributed()
+
+    # Install partial-neox rotary patch if not using full-head hack
+    if not args.draft_mrope_full_head_hack:
+        from speculators.models.eagle3.rotary_partial import (
+            install_partial_neox_rotary,
+        )
+
+        install_partial_neox_rotary()
+        logger.info(
+            "Installed partial-neox rotary patch for HF/vLLM RoPE alignment "
+            "(draft_mrope_full_head_hack=False)"
+        )
 
     if get_rank() == 0:
         save_train_command(args.save_path)

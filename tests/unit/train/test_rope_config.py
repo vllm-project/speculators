@@ -69,12 +69,13 @@ def _build(**kwargs):
 
 
 def test_mrope_section_preserved_and_type_alias_dropped(patch_verifier):
-    """``mrope_section`` is kept; the legacy ``type`` alias is removed."""
+    """``mrope_section`` is kept; the legacy ``type`` and ``mrope_interleaved`` are removed."""
     vc = _make_verifier_config(
         rope_parameters={
             "rope_type": "default",
             "type": "mrope",
             "mrope_section": [16, 24, 24],
+            "mrope_interleaved": True,
             "rope_theta": 1000000.0,
         }
     )
@@ -85,8 +86,9 @@ def test_mrope_section_preserved_and_type_alias_dropped(patch_verifier):
     assert config.rope_parameters["mrope_section"] == [16, 24, 24]
     assert config.rope_parameters["rope_theta"] == 1000000.0
     assert config.rope_parameters["rope_type"] == "default"
-    # Legacy alias must be stripped so it doesn't break vLLM config checks.
+    # Legacy fields must be stripped so they don't break vLLM config checks.
     assert "type" not in config.rope_parameters
+    assert "mrope_interleaved" not in config.rope_parameters
 
 
 def test_full_head_hack_rescales_partial_mrope(patch_verifier):
@@ -195,7 +197,12 @@ def test_pre_transformers_5_preserves_mrope_in_rope_scaling(patch_verifier):
     """On legacy transformers, MRoPE lives in ``rope_scaling``."""
     vc = _make_verifier_config(
         rope_theta=1000000.0,
-        rope_scaling={"rope_type": "default", "mrope_section": [16, 24, 24]},
+        rope_scaling={
+            "rope_type": "default",
+            "mrope_section": [16, 24, 24],
+            "type": "mrope",
+            "mrope_interleaved": True,
+        },
     )
     patch_verifier(vc, "4.46.0")
 
@@ -203,3 +210,6 @@ def test_pre_transformers_5_preserves_mrope_in_rope_scaling(patch_verifier):
 
     assert config.rope_scaling["mrope_section"] == [16, 24, 24]
     assert config.rope_theta == 1000000.0
+    # Legacy fields should be stripped from rope_scaling too
+    assert "type" not in config.rope_scaling
+    assert "mrope_interleaved" not in config.rope_scaling
