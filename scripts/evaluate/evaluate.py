@@ -6,10 +6,18 @@ Modes:
     sweep        Full pipeline (gen-len, sweep, CSV)
 
 Examples:
-    python evaluate.py --target http://localhost:8108/v1 throughput
+    python evaluate.py --target http://localhost:8000/v1 throughput
     python evaluate.py --target http://localhost:8000/v1 sweep
     python evaluate.py --target http://localhost:8000/v1 sweep \\
         --subsets "HumanEval,qa" --gen-kwargs '{"temperature":0.6}'
+
+    # SPEED-Bench (run prepare_speedbench.py once first to split data):
+    python evaluate.py --target http://localhost:8000/v1 throughput \\
+        --dataset speedbench/qualitative \\
+        --speedbench-data-dir ./speedbench_data
+    python evaluate.py --target http://localhost:8000/v1 throughput \\
+        --dataset speedbench/qualitative/coding \\
+        --speedbench-data-dir ./speedbench_data
 """
 
 from __future__ import annotations
@@ -50,6 +58,12 @@ DEFAULT_MAX_REQUESTS = 80
 DEFAULT_GEN_LEN_RATE = 128
 DEFAULT_DATA_COLUMN_MAPPER = '{"text_column":"prompt"}'
 
+# ---------------------------------------------------------------------------
+# SPEED-Bench constants
+# ---------------------------------------------------------------------------
+
+_SPEEDBENCH_COLUMN_MAPPER = '{"text_column":"turns"}'
+
 
 def _fetch_model_name(target: str) -> str | None:
     base = target.rstrip("/")
@@ -79,6 +93,43 @@ def _require_metrics(metrics_url: str) -> list:
     return parse_prometheus_metrics(text)
 
 
+def _resolve_speedbench(
+    spec: str,
+    data_dir: Path,
+) -> list[tuple[str, Path]]:
+    """Resolve a ``speedbench/<config>[/<category>[/<subcategory>]]`` spec.
+
+    Returns ``(label, path)`` pairs for pre-split JSONL files produced by
+    ``scripts/evaluate/prepare_speedbench.py``.  Run that script once after
+    NVIDIA's ``prepare.py`` to create per-category/subcategory files.
+    """
+    parts = spec.removeprefix("speedbench/").split("/")
+    config = parts[0]
+    # Build a glob pattern from however much of the path was specified
+    suffix = "_".join(parts[1:]) if len(parts) > 1 else ""
+    pattern = f"{config}_{suffix}*.jsonl" if suffix else f"{config}_*.jsonl"
+
+    files = sorted(data_dir.glob(pattern))
+    if not files:
+        logger.error(
+            "--speedbench-data-dir='%s': no files matching '%s'.\n"
+            "Run scripts/evaluate/prepare_speedbench.py first.",
+            data_dir,
+            pattern,
+        )
+        sys.exit(1)
+
+    results = []
+    for path in files:
+        # Derive label: qualitative_coding → speedbench/qualitative/coding
+        stem = path.stem.removeprefix(f"{config}_")
+        label = f"speedbench/{config}/{stem.replace('__', '/')}"
+        results.append((label, path))
+        logger.info("  %s: %s", label, path.name)
+
+    return results
+
+
 def _run_subset(
     subset: str,
     args: argparse.Namespace,
@@ -90,17 +141,28 @@ def _run_subset(
     guidellm_common: dict,
     acceptance_csv: CsvWriter | None,
     perf_csv: CsvWriter | None,
+    hf_subset: str | None = None,
 ) -> tuple[CsvWriter | None, CsvWriter | None, int | None]:
+    """Run benchmark for one subset.
+
+    *subset* is used as the human-readable label and for output file names.
+    *hf_subset* is the HF subset name passed to guidellm ``--data-args``.
+    Pass the same value as *subset* for standard HF datasets.  Pass ``None``
+    when the dataset IS the file (e.g. a local JSONL from SPEED-Bench) so no
+    ``--data-args`` is added to the guidellm command.
+    """
+
     logger.info("[%s] Starting", subset)
+    safe = subset.replace("/", "_").replace(" ", "_")
     max_tokens = 4096
 
     if is_sweep:
         gen_len_dir = artifacts_dir / "gen_len"
         gen_len_dir.mkdir(parents=True, exist_ok=True)
-        gen_len_output = gen_len_dir / f"gen_len_{subset}.json"
+        gen_len_output = gen_len_dir / f"gen_len_{safe}.json"
         run_guidellm(
             **guidellm_common,
-            subset=subset,
+            subset=hf_subset,
             profile="throughput",
             max_requests=None,
             output_path=gen_len_output,
@@ -108,17 +170,19 @@ def _run_subset(
         )
         mapping = parse_gen_len_results(
             [gen_len_output],
-            gen_len_dir / f"max_tokens_{subset}.json",
+            gen_len_dir / f"max_tokens_{safe}.json",
         )
-        max_tokens = mapping[subset]
+        key = hf_subset if hf_subset else safe
+        max_tokens = mapping.get(key, max_tokens)
+        logger.info("[%s] max_tokens=%d", subset, max_tokens)
         logger.info("[%s] max_tokens=%d", subset, max_tokens)
 
     baseline = _require_metrics(metrics_url)
     profile = "sweep" if is_sweep else "throughput"
-    run_output = artifacts_dir / f"run_{subset}.json"
+    run_output = artifacts_dir / f"run_{safe}.json"
     run_guidellm(
         **guidellm_common,
-        subset=subset,
+        subset=hf_subset,
         profile=profile,
         max_requests=args.max_requests,
         output_path=run_output,
@@ -172,40 +236,81 @@ def run_benchmark(args: argparse.Namespace) -> None:
     artifacts_dir = output_dir / "artifacts"
     artifacts_dir.mkdir(parents=True, exist_ok=True)
 
-    subsets = args.subsets.split(",")
-    logger.info(
-        "Mode: %s | %d subsets | Output: %s",
-        args.mode,
-        len(subsets),
-        output_dir,
-    )
-
-    guidellm_common = {
-        "target": args.target,
-        "dataset": args.dataset,
-        "data_column_mapper": args.data_column_mapper,
-        "rate": args.gen_len_rate,
-        "max_concurrency": args.max_concurrency,
-    }
-
     acceptance_csv = None
     perf_csv = None
     all_max_tokens: dict[str, int] = {}
 
-    for subset in subsets:
-        acceptance_csv, perf_csv, mt = _run_subset(
-            subset,
-            args,
-            is_sweep=is_sweep,
-            metrics_url=metrics_url,
-            artifacts_dir=artifacts_dir,
-            output_dir=output_dir,
-            guidellm_common=guidellm_common,
-            acceptance_csv=acceptance_csv,
-            perf_csv=perf_csv,
+    dataset_spec = args.dataset
+    is_speedbench = dataset_spec.startswith("speedbench/")
+
+    if is_speedbench:
+        if not getattr(args, "speedbench_data_dir", None):
+            logger.error(
+                "--speedbench-data-dir is required for speedbench/ datasets.\n"
+                "Run scripts/evaluate/prepare_speedbench.py first, then add"
+                " --speedbench-data-dir <dir>.",
+            )
+            sys.exit(1)
+
+        pairs = _resolve_speedbench(dataset_spec, Path(args.speedbench_data_dir))
+        logger.info(
+            "Mode: %s | %d speedbench subsets | Output: %s",
+            args.mode,
+            len(pairs),
+            output_dir,
         )
-        if mt is not None:
-            all_max_tokens[subset] = mt
+        for label, local_path in pairs:
+            sb_common = {
+                "target": args.target,
+                "dataset": str(local_path),
+                "data_column_mapper": _SPEEDBENCH_COLUMN_MAPPER,
+                "rate": args.gen_len_rate,
+                "max_concurrency": args.max_concurrency,
+            }
+            acceptance_csv, perf_csv, mt = _run_subset(
+                label,
+                args,
+                is_sweep=is_sweep,
+                metrics_url=metrics_url,
+                artifacts_dir=artifacts_dir,
+                output_dir=output_dir,
+                guidellm_common=sb_common,
+                acceptance_csv=acceptance_csv,
+                perf_csv=perf_csv,
+                hf_subset=None,  # local JSONL is the dataset, no --data-args needed
+            )
+            if mt is not None:
+                all_max_tokens[label] = mt
+    else:
+        subsets = [s.strip() for s in args.subsets.split(",") if s.strip()]
+        logger.info(
+            "Mode: %s | %d subsets | Output: %s",
+            args.mode,
+            len(subsets),
+            output_dir,
+        )
+        guidellm_common = {
+            "target": args.target,
+            "dataset": dataset_spec,
+            "data_column_mapper": args.data_column_mapper,
+            "rate": args.gen_len_rate,
+            "max_concurrency": args.max_concurrency,
+        }
+        for subset in subsets:
+            acceptance_csv, perf_csv, mt = _run_subset(
+                subset,
+                args,
+                is_sweep=is_sweep,
+                metrics_url=metrics_url,
+                artifacts_dir=artifacts_dir,
+                output_dir=output_dir,
+                guidellm_common=guidellm_common,
+                acceptance_csv=acceptance_csv,
+                perf_csv=perf_csv,
+                hf_subset=subset,  # HF dataset: subset name = --data-args filter
+            )
+            if mt is not None:
+                all_max_tokens[subset] = mt
 
     if acceptance_csv is None:
         logger.error("No acceptance metrics collected from any subset")
@@ -292,6 +397,15 @@ def main() -> None:
         "--data-column-mapper",
         default=DEFAULT_DATA_COLUMN_MAPPER,
         help=f"Column mapping for guidellm (default: {DEFAULT_DATA_COLUMN_MAPPER})",
+    )
+    parser.add_argument(
+        "--speedbench-data-dir",
+        default=None,
+        dest="speedbench_data_dir",
+        help=(
+            "Path to directory produced by SPEED-Bench prepare.py. "
+            "Required when --dataset is a speedbench/ spec."
+        ),
     )
 
     args = parser.parse_args()

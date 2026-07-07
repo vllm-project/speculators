@@ -29,6 +29,7 @@ except ImportError:
 
 logger = logging.getLogger("evaluate")
 
+
 # ---------------------------------------------------------------------------
 # Metric definitions (for plotting)
 # ---------------------------------------------------------------------------
@@ -186,7 +187,7 @@ def parse_source_args(source_args: list[str]) -> dict[str, list[Path]]:
     for arg in source_args:
         if "=" not in arg:
             raise ValueError(f"Invalid source format: '{arg}'. Expected 'LABEL=PATH'.")
-        label, path_str = arg.split("=", 1)
+        label, path_str = arg.rsplit("=", 1)
         path = Path(path_str.strip())
         if not path.exists():
             raise FileNotFoundError(f"File not found: {path}")
@@ -551,7 +552,7 @@ def fetch_metrics(metrics_url: str, retries: int = 3, delay: float = 2.0) -> str
 def run_guidellm(
     target: str,
     dataset: str,
-    subset: str,
+    subset: str | None,
     data_column_mapper: str,
     profile: str,
     rate: int | str,
@@ -567,8 +568,6 @@ def run_guidellm(
         target,
         "--data",
         dataset,
-        "--data-args",
-        json.dumps({"data_files": f"{subset}.jsonl"}),
         "--data-column-mapper",
         data_column_mapper,
         "--profile",
@@ -580,6 +579,10 @@ def run_guidellm(
         "--backend-args",
         backend_args,
     ]
+    # When subset is given, filter to that file within the HF dataset.
+    # When subset is None the dataset IS the file (e.g. a local JSONL).
+    if subset is not None:
+        cmd.extend(["--data-args", json.dumps({"data_files": f"{subset}.jsonl"})])
     if max_requests is not None:
         cmd.extend(["--max-requests", str(max_requests)])
 
