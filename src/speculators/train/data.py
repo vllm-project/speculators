@@ -2,7 +2,6 @@ import json
 import math
 import os
 import random
-import shutil
 import warnings
 from collections.abc import Callable
 from os import PathLike
@@ -13,16 +12,15 @@ import openai
 import torch
 import torch.nn.functional as F  # noqa: N812
 from datasets import load_from_disk
-from safetensors.torch import load_file
 from torch.utils.data import Dataset
 
 from speculators.data_generation.offline import check_hidden_states
+from speculators.data_generation.transfer import FileTransfer, HiddenStatesTransfer
 from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_REQUEST_TIMEOUT,
     ClientItem,
     generate_hidden_states,
-    wait_for_lock,
 )
 from speculators.train.noise_transforms import TransformTensors
 
@@ -215,23 +213,12 @@ class BaseDataset(Dataset):
         return data
 
 
-def _maybe_load_hs_file(file_path: Path) -> dict[str, torch.Tensor] | None:
-    lock_path = str(file_path) + ".lock"
-    if Path(lock_path).exists():
-        wait_for_lock(lock_path)
-
-    if file_path.exists():
-        return load_file(file_path)
-
-    return None
-
-
 class ArrowDataset(BaseDataset):
     def __init__(
         self,
         max_len: int,
         datapath: str | PathLike,
-        hidden_states_path: str | PathLike | None = None,
+        transfer: HiddenStatesTransfer | None = None,
         vllm_endpoint: str = "http://localhost:8000/v1",
         on_missing: Literal["generate", "skip", "warn", "raise"] = "generate",
         on_generate: Literal["cache", "delete"] = "delete",
@@ -242,14 +229,6 @@ class ArrowDataset(BaseDataset):
         request_timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
         max_retries: int = DEFAULT_MAX_RETRIES,
     ):
-        """Initialize the ArrowDataset.
-        Args:
-            max_len: The maximum length of the sequence.
-            datapath: The path to the data directory that contains the preprocessed
-            arrow dataset.
-            transform: The transform to apply to the data.
-            hidden_states_dtype: The dtype of the hidden states.
-        """
         self.data = load_from_disk(datapath)
         self.start_file_idx = 0
         if split_ratio == 1.0:
@@ -265,11 +244,7 @@ class ArrowDataset(BaseDataset):
         else:
             raise ValueError("split_ratio must be in range (-1.0, 1.0] excluding 0.0.")
 
-        self.hidden_states_path: Path = (
-            Path(datapath) / "hidden_states"
-            if hidden_states_path is None
-            else Path(hidden_states_path)
-        )
+        self.transfer = transfer or FileTransfer(Path(datapath) / "hidden_states")
         self.vllm_endpoint = vllm_endpoint
         self.on_missing = on_missing
         self.on_generate = on_generate
@@ -285,7 +260,6 @@ class ArrowDataset(BaseDataset):
         return index + self.start_file_idx
 
     def _setup_client(self):
-        # Delay client setup so it runs in dataloader thread if on_missing="generate"
         self.client = openai.OpenAI(
             base_url=self.vllm_endpoint, api_key="EMPTY", max_retries=0
         )
@@ -298,6 +272,7 @@ class ArrowDataset(BaseDataset):
                 "Please make sure --endpoint is set to the correct vllm instance."
             )
         self.model = model_id
+        self.transfer.setup()
 
     def __len__(self):
         return len(self.data)
@@ -314,7 +289,7 @@ class ArrowDataset(BaseDataset):
         client_item = build_client_item(dataset_item)
 
         try:
-            hs_filepath = generate_hidden_states(
+            handle = generate_hidden_states(
                 self.client,  # type:ignore[arg-type]
                 self.model,  # type:ignore[arg-type]
                 client_item,
@@ -322,19 +297,18 @@ class ArrowDataset(BaseDataset):
                 max_retries=self.max_retries,
             )
 
-            loaded_hs = _maybe_load_hs_file(Path(hs_filepath))
+            loaded_hs = self.transfer.get_generated(handle)
             if loaded_hs is None:
-                raise ValueError(f"Failed to load hidden states from {hs_filepath}")
+                raise ValueError(f"Failed to load hidden states for handle {handle}")
 
             check_hidden_states(loaded_hs, dataset_item["input_ids"].tolist())
 
+            file_idx = self._map_to_file_idx(index)
             match self.on_generate:
                 case "cache":
-                    file_idx = self._map_to_file_idx(index)
-                    target_path = self.hidden_states_path / f"hs_{file_idx}.safetensors"
-                    shutil.move(hs_filepath, target_path)
+                    self.transfer.cache(handle, file_idx)
                 case "delete":
-                    Path(hs_filepath).unlink()
+                    self.transfer.delete(handle)
         except Exception as e:
             if isinstance(e, ValueError) and "NaN" in str(e):
                 raise
@@ -348,8 +322,7 @@ class ArrowDataset(BaseDataset):
 
     def _get_raw_data(self, index):
         file_idx = self._map_to_file_idx(index)
-        candidate_path = self.hidden_states_path / f"hs_{file_idx}.safetensors"
-        loaded_hs = _maybe_load_hs_file(candidate_path)
+        loaded_hs = self.transfer.get_cached(file_idx)
 
         if loaded_hs is None:
             match self.on_missing:

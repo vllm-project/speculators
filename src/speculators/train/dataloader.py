@@ -10,6 +10,7 @@ if TYPE_CHECKING:
 import torch
 from torch.utils.data import DataLoader
 
+from speculators.data_generation.transfer import HiddenStatesTransfer
 from speculators.train.data import (
     ArrowDataset,
     BaseDataset,
@@ -64,12 +65,11 @@ def _setup_dataloader(
 def create_train_val_loaders(
     *,
     data_path: str,
-    train_data_ratio: float,
     total_seq_len: int,
     hidden_states_dtype: torch.dtype,
     noise_std: float,
     legacy_data: bool,
-    hidden_states_path: str | None,
+    transfer: HiddenStatesTransfer | None = None,
     vllm_endpoint: str,
     on_missing: Literal["generate", "skip", "warn", "raise"],
     on_generate: Literal["cache", "delete"],
@@ -81,6 +81,7 @@ def create_train_val_loaders(
     num_workers: int,
     prefetch_factor: int,
     preprocess: Callable[[BatchType], BatchType] | None,
+    train_data_ratio: float = 0.9,
 ) -> tuple[DataLoader, DataLoader]:
     """Create training and validation DataLoaders.
 
@@ -116,7 +117,7 @@ def create_train_val_loaders(
         train_dataset = ArrowDataset(
             datapath=data_path,
             max_len=total_seq_len,
-            hidden_states_path=hidden_states_path,
+            transfer=transfer,
             vllm_endpoint=vllm_endpoint,
             on_missing=on_missing,
             on_generate=on_generate,
@@ -130,7 +131,7 @@ def create_train_val_loaders(
         val_dataset = ArrowDataset(
             datapath=data_path,
             max_len=total_seq_len,
-            hidden_states_path=hidden_states_path,
+            transfer=transfer,
             vllm_endpoint=vllm_endpoint,
             on_missing=on_missing,
             on_generate=on_generate,
