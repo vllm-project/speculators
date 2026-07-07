@@ -45,11 +45,6 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
     _keys_to_ignore_on_save: ClassVar[list[str]] = [  # type: ignore[misc,assignment]
         "verifier_lm_head.weight",
         "verifier_norm.weight",
-        # Domino head is training-only; not needed at inference.
-        "domino_head.prefix_gru.weight_ih_l0",
-        "domino_head.prefix_gru.weight_hh_l0",
-        "domino_head.embed_proj.0.weight",
-        "domino_head.embed_proj.2.weight",
     ]
 
     t2d: torch.Tensor | None
@@ -441,7 +436,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 verifier_last_hidden_states,
                 document_ids,
                 position_ids,
-                shift_targets=False,
+                shift_targets=self.config.shift_label,
                 max_anchors=max_anchors,
                 **kwargs,
             )

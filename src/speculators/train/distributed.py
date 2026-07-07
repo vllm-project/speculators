@@ -202,13 +202,15 @@ def apply_fully_sharded(model: torch.nn.Module):
     before calling this function.
     """
     mp_policy = MixedPrecisionPolicy(
-        param_dtype=torch.bfloat16,
         reduce_dtype=torch.float32,
     )
 
     for layer in model.layers:  # type: ignore[union-attr]
         fully_shard(layer, mp_policy=mp_policy)
 
-    fully_shard(model)
+    if hasattr(model, "domino_head"):
+        fully_shard(model.domino_head, mp_policy=mp_policy)
+
+    fully_shard(model, mp_policy=mp_policy)
 
     return model
