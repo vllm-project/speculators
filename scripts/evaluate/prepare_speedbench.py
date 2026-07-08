@@ -61,10 +61,16 @@ _ALL_CONFIGS = [
 
 
 def _extract_text(row: dict) -> str:
-    """Return prompt text — supports both ``turns`` and ``messages`` columns."""
+    """Return prompt text — supports both ``turns`` and ``messages`` columns.
+
+    .. note::
+        For multi-turn rows only the first turn is extracted.  Full multi-turn
+        conversation support is out of scope for this initial implementation.
+    """
     text = row.get("turns") or ""
     if not text:
         msgs = row.get("messages") or []
+        # TODO: support multi-turn by concatenating all turns
         text = msgs[0].get("content", "") if msgs else ""
     return text
 
