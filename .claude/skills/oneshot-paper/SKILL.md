@@ -9,6 +9,19 @@ You are running the full autonomous pipeline for a speculative decoding paper. T
 
 **IMPORTANT: Do not stop to ask the user questions. Make reasonable decisions and document them. If something is ambiguous, pick the most conservative option and note it in the final report.**
 
+## Context Management
+
+This pipeline is long. To avoid running out of context, **compact after each phase**:
+
+1. After each phase completes, append a status summary to `.claude/agent_state/specs/<algo_name>.md` (the spec file is your persistent state across compactions):
+   ```markdown
+   ## Phase N Status
+   - Result: PASS/FAIL
+   - Key outputs: [files created, branch name, loss values, PR URLs, etc.]
+   - Decisions: [any non-obvious choices made]
+   ```
+2. Then run `/compact` to free context. After compaction, re-read the spec file to recover state before continuing to the next phase.
+
 ## Phase 1: Analyze the Paper
 
 Follow the instructions in `.claude/skills/analyze-paper.md` but skip the "Present to User" step. Write the spec to `.claude/agent_state/specs/<algo_name>.md` and continue immediately.
