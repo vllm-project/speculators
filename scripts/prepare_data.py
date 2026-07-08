@@ -190,6 +190,7 @@ def main():
         turn_dropout=args.turn_dropout,
         minimum_valid_tokens=args.minimum_valid_tokens,
         trust_remote_code=args.trust_remote_code,
+        multimodal_output_dir=output,
     )
 
     log.info("Done preparing data")

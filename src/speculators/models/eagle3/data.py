@@ -32,7 +32,10 @@ def shift_batch(batch: BatchType):
     # Clamp to 0 so the collate_fn fallback empty sample (seq_len=0) doesn't
     # produce a negative length.
     lengths = torch.clamp(lengths - 1, min=0)
-    position_ids = position_ids[1:]  # Note: position_ids now start at 1
+    if position_ids.ndim == 2:
+        position_ids = position_ids[:, 1:]
+    else:
+        position_ids = position_ids[1:]  # Note: position_ids now start at 1
 
     return {
         "input_ids": input_ids,

@@ -1,4 +1,5 @@
 import copy
+import warnings
 from typing import ClassVar
 
 import torch
@@ -16,9 +17,139 @@ from speculators.models.eagle3.attention import (
 )
 from speculators.models.eagle3.metrics import compute_metrics
 from speculators.models.eagle3.model_definitions import model_classes
+from speculators.models.eagle3.rotary_partial import install_partial_neox_rotary
 from speculators.models.metrics import LossConfig, resolve_loss_config
 from speculators.models.utils import conditional_torch_compile, resolve_target_layer_ids
 from speculators.proposals.greedy import GreedyTokenProposalConfig
+
+
+def conditional_torch_compile(func):
+    if torch.cuda.is_available() and hasattr(torch, "compile"):
+        return torch.compile(func)
+    else:
+        return func
+
+
+def _wrap_qwen_omni_rotary_with_hf_layout(rotary_cls: type) -> type:
+    """Adapt Qwen-Omni rotary to HF MRoPE layout.
+
+    Qwen-Omni expects ``position_ids`` as ``[3, batch, seq_len]`` while our
+    training path emits ``[batch, 3, seq_len]``. This wrapper only transposes
+    the HF case to avoid MRoPE channel mis-broadcast and projection dim errors.
+    """
+
+    class HFLayoutMRoPE(rotary_cls):  # type: ignore[misc,valid-type]
+        def forward(self, x, position_ids):  # type: ignore[override]
+            # Only transpose clear HF layout ``[B, 3, T]``.
+            # Other shapes pass through unchanged.
+            if position_ids.dim() == 3 and position_ids.shape[1] == 3:
+                position_ids = position_ids.transpose(0, 1).contiguous()
+            return super().forward(x, position_ids)
+
+    HFLayoutMRoPE.__name__ = f"{rotary_cls.__name__}HFLayout"
+    HFLayoutMRoPE.__qualname__ = HFLayoutMRoPE.__name__
+    return HFLayoutMRoPE
+
+
+def _select_rotary_emb_class(
+    tl_config: PretrainedConfig,
+    default_cls: type,
+) -> type:
+    """Select an MRoPE-aware rotary class for multimodal Qwen draft configs."""
+    rope_params = getattr(tl_config, "rope_parameters", None)
+    has_mrope = (
+        isinstance(rope_params, dict) and rope_params.get("mrope_section") is not None
+    )
+    if not has_mrope:
+        return default_cls
+
+    try:
+        from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (  # noqa: PLC0415
+            Qwen3OmniMoeThinkerTextRotaryEmbedding,
+        )
+    except ImportError:
+        warnings.warn(
+            "Draft config carries rope_parameters.mrope_section but the installed "
+            "transformers does not expose Qwen3OmniMoeThinkerTextRotaryEmbedding. "
+            "Falling back to the architecture default rotary embedding, which "
+            "will ignore MRoPE and can cause a train/inference mismatch for "
+            "multimodal inputs.",
+            UserWarning,
+            stacklevel=2,
+        )
+        return default_cls
+
+    partial_rotary_factor = float(rope_params.get("partial_rotary_factor", 1.0))
+    if partial_rotary_factor >= 1.0:
+        return _wrap_qwen_omni_rotary_with_hf_layout(
+            Qwen3OmniMoeThinkerTextRotaryEmbedding
+        )
+
+    # Align HF partial rotation with vLLM partial-neox behavior.
+    # Keep native ``partial_rotary_factor``/``mrope_section`` unchanged.
+    install_partial_neox_rotary()
+    return _wrap_qwen_omni_rotary_with_hf_layout(
+        _make_partial_mrope_rotary_cls(
+            Qwen3OmniMoeThinkerTextRotaryEmbedding, partial_rotary_factor
+        )
+    )
+
+
+def _make_partial_mrope_rotary_cls(
+    base_cls: type, partial_rotary_factor: float
+) -> type:
+    """Return a partial-MRoPE rotary class for Qwen drafts.
+
+    It emits unpadded ``[*, rotary_dim]`` cos/sin. The patched
+    ``apply_rotary_pos_emb`` rotates only the leading ``rotary_dim`` channels
+    and keeps the tail unchanged, matching vLLM partial-neox semantics.
+    """
+
+    class PartialMRoPE(base_cls):  # type: ignore[misc,valid-type]
+        _partial_rotary_factor: ClassVar[float] = partial_rotary_factor
+
+        @staticmethod
+        def compute_default_rope_parameters(config=None, device=None, seq_len=None):
+            base = config.rope_parameters["rope_theta"]
+            head_dim = (
+                getattr(config, "head_dim", None)
+                or config.hidden_size // config.num_attention_heads
+            )
+            rotary_dim = int(head_dim * PartialMRoPE._partial_rotary_factor)
+            rotary_dim = (rotary_dim // 2) * 2
+            attention_factor = 1.0
+            inv_freq = 1.0 / (
+                base
+                ** (
+                    torch.arange(0, rotary_dim, 2, dtype=torch.int64).to(
+                        device=device, dtype=torch.float
+                    )
+                    / rotary_dim
+                )
+            )
+            return inv_freq, attention_factor
+
+        def __init__(self, config, device=None):
+            super().__init__(config=config, device=device)
+            head_dim = (
+                getattr(config, "head_dim", None)
+                or config.hidden_size // config.num_attention_heads
+            )
+            rotary_dim = int(head_dim * self._partial_rotary_factor)
+            rotary_dim = (rotary_dim // 2) * 2
+            self._head_dim = head_dim
+            self._rotary_dim = rotary_dim
+
+        def forward(self, x, position_ids):
+            # Keep cos/sin unpadded; patched apply_rotary_pos_emb handles
+            # partial-neox rotation on the leading rotary channels.
+            return super().forward(x, position_ids)
+
+    PartialMRoPE.__name__ = (
+        f"{base_cls.__name__}Partial{int(partial_rotary_factor * 100):03d}"
+    )
+    PartialMRoPE.__qualname__ = PartialMRoPE.__name__
+    return PartialMRoPE
 
 
 @SpeculatorModel.register("eagle3")
@@ -93,7 +224,10 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
         # Create a modified config for the rotary embedding to use 2x the hidden size
         modified_tl_config = copy.copy(config.transformer_layer_config)
         modified_tl_config.hidden_size *= 2
-        self.rotary_emb = self._model_definitions.rotary_emb_class(modified_tl_config)
+        rotary_cls = _select_rotary_emb_class(
+            modified_tl_config, self._model_definitions.rotary_emb_class
+        )
+        self.rotary_emb = rotary_cls(modified_tl_config)
 
         # LAYER NORMS
         norm_class = self._model_definitions.norm_class
@@ -148,7 +282,9 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
         verifier_config = self.config.speculators_config.verifier
         verifier_model_config = AutoConfig.from_pretrained(verifier_config.name_or_path)  # type: ignore[arg-type]
 
-        # For multimodal models (Qwen3VL, etc.), extract text_config
+        # For multimodal models (Qwen3VL/Omni/etc.), extract text_config
+        if hasattr(verifier_model_config, "thinker_config"):
+            verifier_model_config = verifier_model_config.thinker_config
         if hasattr(verifier_model_config, "text_config"):
             verifier_model_config = verifier_model_config.text_config
 

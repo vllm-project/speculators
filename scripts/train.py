@@ -1,5 +1,6 @@
 import argparse
 import gc
+import json
 import logging
 import random
 import warnings
@@ -63,13 +64,32 @@ def set_seed(seed: int, deterministic: bool = False):
         torch.backends.cudnn.benchmark = False
 
 
+def unwrap_verifier_text_config(verifier_config: PretrainedConfig) -> PretrainedConfig:
+    """Unwrap multimodal verifier configs to their text backbone config."""
+    if hasattr(verifier_config, "thinker_config"):
+        verifier_config = verifier_config.thinker_config
+    if hasattr(verifier_config, "text_config"):
+        verifier_config = verifier_config.text_config
+    return verifier_config
+
+
 def create_transformer_layer_config(  # noqa: C901
     verifier_name_or_path: str,
     num_layers: int,
     draft_arch: str,
     hidden_act: str | None,
+    # --- DFlash Hybrid Attention sliding window support ---
     sliding_window: int,
     sliding_window_indices: list[int],
+    # --- Qwen3.6 Hybrid Attention support ---
+    draft_intermediate_size: int | None = None,
+    draft_num_attention_heads: int | None = None,
+    draft_num_key_value_heads: int | None = None,
+    draft_head_dim: int | None = None,
+    draft_rope_scaling: dict | None = None,
+    draft_rope_theta: float | None = None,
+    draft_max_position_embeddings: int | None = None,
+    mrope_full_head_hack: bool = True,
 ) -> PretrainedConfig:
     if draft_arch not in DRAFT_ARCH_CONFIGS:
         raise ValueError(
@@ -86,11 +106,9 @@ def create_transformer_layer_config(  # noqa: C901
         )
 
     config_class = DRAFT_ARCH_CONFIGS[draft_arch]
-    verifier_config = AutoConfig.from_pretrained(verifier_name_or_path)
-
-    # For multimodal models (Qwen3VL, etc.), extract text_config
-    if hasattr(verifier_config, "text_config"):
-        verifier_config = verifier_config.text_config
+    verifier_config = unwrap_verifier_text_config(
+        AutoConfig.from_pretrained(verifier_name_or_path, trust_remote_code=True)
+    )
 
     hidden_act = (
         hidden_act
@@ -103,76 +121,183 @@ def create_transformer_layer_config(  # noqa: C901
             "nor 'hidden_activation'"
         )
 
-    head_dim = getattr(verifier_config, "head_dim", None)
-    num_attention_heads = verifier_config.num_attention_heads
-    num_key_value_heads = verifier_config.num_key_value_heads
+    if draft_intermediate_size is None:
+        draft_intermediate_size = resolve_draft_intermediate_size(verifier_config)
 
-    if (
-        head_dim
-        and verifier_config.hidden_size % num_attention_heads != 0
-        and verifier_config.hidden_size % head_dim == 0
-    ):
-        num_attention_heads = verifier_config.hidden_size // head_dim
-        if num_attention_heads % num_key_value_heads != 0:
-            num_key_value_heads = num_attention_heads
+    n_heads = draft_num_attention_heads or verifier_config.num_attention_heads
+    n_kv = draft_num_key_value_heads or verifier_config.num_key_value_heads
+    hd = draft_head_dim or getattr(verifier_config, "head_dim", None)
+    hidden_size = verifier_config.hidden_size
+    resolved_head_dim = hd or hidden_size // n_heads
+    if n_heads % n_kv != 0:
+        raise ValueError(
+            f"Invalid GQA ratio: num_attention_heads({n_heads}) must be divisible "
+            f"by num_key_value_heads({n_kv})."
+        )
+    if resolved_head_dim <= 0:
+        raise ValueError(f"Invalid head_dim({resolved_head_dim}); must be positive.")
 
+    rope_kwargs: dict = {}
+    verifier_rope_theta = getattr(verifier_config, "rope_theta", None)
+    if verifier_rope_theta is None:
+        for src_name in ("rope_parameters", "rope_scaling"):
+            src = getattr(verifier_config, src_name, None)
+            if isinstance(src, dict) and src.get("rope_theta") is not None:
+                verifier_rope_theta = src["rope_theta"]
+                logger.info(
+                    "Drafter rope_theta recovered from verifier "
+                    f"{src_name}.rope_theta = {verifier_rope_theta}."
+                )
+                break
+    if verifier_rope_theta is not None:
+        rope_kwargs["rope_theta"] = verifier_rope_theta
+
+    verifier_rope_scaling = getattr(verifier_config, "rope_scaling", None)
+    verifier_rope_parameters = getattr(verifier_config, "rope_parameters", None)
+    if verifier_rope_scaling is not None:
+        rope_kwargs["rope_scaling"] = dict(verifier_rope_scaling)
+    elif isinstance(verifier_rope_parameters, dict):
+        rope_kwargs["rope_scaling"] = dict(verifier_rope_parameters)
+
+    if draft_rope_scaling is not None:
+        cli_rope_scaling = dict(draft_rope_scaling)
+        cli_rope_theta = cli_rope_scaling.pop("rope_theta", None)
+        if cli_rope_theta is not None:
+            rope_kwargs["rope_theta"] = cli_rope_theta
+        rope_kwargs["rope_scaling"] = cli_rope_scaling
+        logger.info(f"Drafter rope_scaling overridden via CLI: {cli_rope_scaling}")
+
+    if draft_rope_theta is not None:
+        rope_kwargs["rope_theta"] = float(draft_rope_theta)
+        logger.info(
+            "Drafter rope_theta overridden via --draft-rope-theta: "
+            f"{rope_kwargs['rope_theta']}"
+        )
+
+    rope_scaling_dict = rope_kwargs.get("rope_scaling")
+    if isinstance(rope_scaling_dict, dict) and "mrope_section" in rope_scaling_dict:
+        if draft_rope_theta is not None:
+            rope_scaling_dict["rope_theta"] = float(draft_rope_theta)
+        elif "rope_theta" in rope_kwargs and "rope_theta" not in rope_scaling_dict:
+            rope_scaling_dict["rope_theta"] = rope_kwargs["rope_theta"]
+
+        inherited_partial = float(rope_scaling_dict.get("partial_rotary_factor", 1.0))
+        if mrope_full_head_hack and inherited_partial < 1.0:
+            old_section = list(rope_scaling_dict["mrope_section"])
+            inv = 1.0 / inherited_partial
+            if abs(inv - round(inv)) > 1e-6:
+                raise ValueError(
+                    "mrope_full_head_hack cannot rescale mrope_section because "
+                    f"1/partial_rotary_factor={inv} is not an integer."
+                )
+            scale = int(round(inv))
+            new_section = [int(x) * scale for x in old_section]
+            if 2 * sum(new_section) != resolved_head_dim:
+                raise ValueError(
+                    "mrope_full_head_hack rescaling produced inconsistent "
+                    f"mrope_section {new_section}: 2*sum={2 * sum(new_section)} "
+                    f"but head_dim={resolved_head_dim}."
+                )
+            rope_scaling_dict["mrope_section"] = new_section
+            rope_scaling_dict["partial_rotary_factor"] = 1.0
+            logger.warning(
+                "MRoPE full-head hack applied: partial_rotary_factor "
+                f"{inherited_partial} -> 1.0, mrope_section {old_section} -> "
+                f"{new_section}."
+            )
+        elif not mrope_full_head_hack and inherited_partial < 1.0:
+            logger.warning(
+                "mrope_full_head_hack=False with partial_rotary_factor="
+                f"{inherited_partial} < 1.0 can cause HF trainer / vLLM "
+                "partial-rotation mismatch."
+            )
+
+    max_pos = (
+        int(draft_max_position_embeddings)
+        if draft_max_position_embeddings is not None
+        else verifier_config.max_position_embeddings
+    )
+
+    # --- DFlash sliding window layer_types ---
     if sliding_window_indices and (
         min(sliding_window_indices) < 0 or max(sliding_window_indices) >= num_layers
     ):
         raise ValueError(
-            "Sliding window indices must be validate draft layer ids "
+            "Sliding window indices must be valid draft layer ids "
             "in range [0, num_layers)."
         )
     layer_types = [
-        "sliding_attention" if i in sliding_window_indices else "full_attention"
+        "sliding_attention" if i in (sliding_window_indices or []) else "full_attention"
         for i in range(num_layers)
     ]
 
     config = config_class(
         vocab_size=verifier_config.vocab_size,
-        hidden_size=verifier_config.hidden_size,
-        intermediate_size=resolve_draft_intermediate_size(verifier_config),
+        hidden_size=hidden_size,
+        intermediate_size=draft_intermediate_size,
         num_hidden_layers=num_layers,
-        num_attention_heads=num_attention_heads,
-        num_key_value_heads=num_key_value_heads,
+        num_attention_heads=n_heads,
+        num_key_value_heads=n_kv,
         hidden_act=hidden_act,
-        max_position_embeddings=verifier_config.max_position_embeddings,
+        max_position_embeddings=max_pos,
         initializer_range=verifier_config.initializer_range,
         rms_norm_eps=verifier_config.rms_norm_eps,
-        head_dim=head_dim,
+        head_dim=resolved_head_dim,
         tie_word_embeddings=False,
         sliding_window=sliding_window,
         use_sliding_window=bool(sliding_window_indices),
         layer_types=layer_types,
     )
 
+    # Apply the processed rope settings to the draft config. ``rope_kwargs``
+    # already carries CLI overrides, recovered rope_theta and any
+    # ``mrope_full_head_hack`` rescaling computed above. We deliberately keep
+    # the MRoPE fields (``mrope_section`` / ``mrope_interleaved`` /
+    # ``partial_rotary_factor``) so the draft can train with true MRoPE
+    # semantics; ``_select_rotary_emb_class`` relies on ``mrope_section`` being
+    # present to enable the MRoPE-aware rotary embedding.
+    processed_rope_scaling = rope_kwargs.get("rope_scaling")
+
     # New rope parameters definition introduced in transformers 5.0
     if version.parse(transformers.__version__) >= version.parse("5.0.0"):
-        if hasattr(verifier_config, "rope_parameters"):
-            rope_params = deepcopy(verifier_config.rope_parameters)
-            # Some verifiers (e.g. Laguna) use the nested per-layer-type rope format
-            # {"full_attention": {...}, "sliding_attention": {...}} with no top-level
-            # "rope_theta". The llama-style draft uses a single rope, so collapse it to
-            # a flat default rope (preferring the sliding-attention theta).
-            if isinstance(rope_params, dict) and "rope_theta" not in rope_params:
-                sub = (
-                    rope_params.get("sliding_attention")
-                    or rope_params.get("full_attention")
-                    or {}
-                )
-                rope_params = {
-                    "rope_type": "default",
-                    "rope_theta": sub.get("rope_theta", 10000.0),
-                }
-            config.rope_parameters = rope_params
+        rope_parameters: dict | None = None
+        if isinstance(processed_rope_scaling, dict):
+            rope_parameters = dict(processed_rope_scaling)
+        elif isinstance(getattr(verifier_config, "rope_parameters", None), dict):
+            rope_parameters = deepcopy(verifier_config.rope_parameters)
 
-            _MROPE_KEYS = ("mrope_section", "mrope_interleaved", "type")  # noqa: N806
-            for key in _MROPE_KEYS:
-                config.rope_parameters.pop(key, None)
+        if rope_parameters is not None:
+            # Some verifiers use nested per-layer-type rope parameters like
+            # {"full_attention": {...}, "sliding_attention": {...}}. The draft
+            # uses a single rope, so flatten to one set of parameters while keeping
+            # any real MRoPE fields present in the selected nested config.
+            if "rope_theta" not in rope_parameters:
+                nested_rope = None
+                for rope_key in ("sliding_attention", "full_attention"):
+                    candidate = rope_parameters.get(rope_key)
+                    if isinstance(candidate, dict):
+                        nested_rope = candidate
+                        break
+                if nested_rope is not None:
+                    rope_parameters = dict(nested_rope)
+                    rope_parameters.setdefault("rope_type", "default")
+                    rope_parameters.setdefault("rope_theta", 10000.0)
+
+            if "rope_theta" in rope_kwargs:
+                rope_parameters["rope_theta"] = rope_kwargs["rope_theta"]
+            # ``type`` is a legacy alias (only "mrope" on VL models) that
+            # transformers strips during validation and that breaks vLLM's
+            # config checks; drop it while keeping the real MRoPE fields.
+            rope_parameters.pop("type", None)
+            config.rope_parameters = rope_parameters
     else:
-        if hasattr(verifier_config, "rope_scaling"):
+        if isinstance(processed_rope_scaling, dict):
+            config.rope_scaling = dict(processed_rope_scaling)
+        elif hasattr(verifier_config, "rope_scaling"):
             config.rope_scaling = deepcopy(verifier_config.rope_scaling)
-        config.rope_theta = getattr(verifier_config, "rope_theta", 10000.0)
+        config.rope_theta = rope_kwargs.get(
+            "rope_theta", getattr(verifier_config, "rope_theta", 10000.0)
+        )
 
     return config
 
@@ -293,9 +418,9 @@ def parse_vocab_mappings(args: argparse.Namespace):
         "None. Using full verifier vocab"
     )
     # When vocab mapping is not provided, use the full verifier vocab
-    verifier_config = AutoConfig.from_pretrained(args.verifier_name_or_path)
-    if hasattr(verifier_config, "text_config"):
-        verifier_config = verifier_config.text_config
+    verifier_config = unwrap_verifier_text_config(
+        AutoConfig.from_pretrained(args.verifier_name_or_path, trust_remote_code=True)
+    )
     return None, None, verifier_config.vocab_size
 
 
@@ -390,6 +515,14 @@ def build_draft_model(
                 num_layers=args.num_layers,
                 draft_arch=args.draft_arch,
                 hidden_act=args.draft_hidden_act,
+                draft_intermediate_size=args.draft_intermediate_size,
+                draft_num_attention_heads=args.draft_num_attention_heads,
+                draft_num_key_value_heads=args.draft_num_key_value_heads,
+                draft_head_dim=args.draft_head_dim,
+                draft_rope_scaling=args.draft_rope_scaling,
+                draft_rope_theta=args.draft_rope_theta,
+                draft_max_position_embeddings=args.draft_max_position_embeddings,
+                mrope_full_head_hack=args.draft_mrope_full_head_hack,
                 sliding_window=args.sliding_window,
                 sliding_window_indices=args.sliding_window_indices,
             )
@@ -458,6 +591,7 @@ def main(args: argparse.Namespace):  # noqa: C901
                 "and dspark draft models. Please open an issue/pr if you would like "
                 "to use sliding window attention with a different speculator type"
             )
+
 
     registry = SpeculatorModel.registry
     if registry is None or args.speculator_type not in registry:
@@ -816,6 +950,58 @@ def parse_args():
         "sigmoid linear unit. Qwen3 layers of dflash expect 'silu' activation for "
         "vLLM deployment. If another function is desired, set as a string or leave "
         "as None to automatically fall back to the verifier's activation function.",
+    )
+    parser.add_argument(
+        "--draft-intermediate-size",
+        type=int,
+        default=None,
+        help="Override draft FFN intermediate size; useful for MoE verifiers.",
+    )
+    parser.add_argument(
+        "--draft-num-attention-heads",
+        type=int,
+        default=None,
+        help="Override the drafter's num_attention_heads.",
+    )
+    parser.add_argument(
+        "--draft-num-key-value-heads",
+        type=int,
+        default=None,
+        help="Override the drafter's num_key_value_heads.",
+    )
+    parser.add_argument(
+        "--draft-head-dim",
+        type=int,
+        default=None,
+        help="Override the drafter's per-head hidden dimension.",
+    )
+    parser.add_argument(
+        "--draft-rope-scaling",
+        type=lambda s: json.loads(s) if s else None,
+        default=None,
+        help="JSON RoPE scaling dict to apply to the drafter during training.",
+    )
+    parser.add_argument(
+        "--draft-rope-theta",
+        type=float,
+        default=None,
+        help="Override the drafter's RoPE frequency base.",
+    )
+    parser.add_argument(
+        "--draft-max-position-embeddings",
+        type=int,
+        default=None,
+        help="Override the drafter's max_position_embeddings.",
+    )
+    parser.add_argument(
+        "--draft-mrope-full-head-hack",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "For MRoPE configs with partial_rotary_factor < 1, rescale "
+            "mrope_section and set partial_rotary_factor=1.0 so HF training "
+            "and vLLM inference use equivalent full-head rotary semantics."
+        ),
     )
     parser.add_argument(
         "--target-layer-ids",

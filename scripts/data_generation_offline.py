@@ -404,7 +404,20 @@ def main():
 
     logger.info("EAGLE Offline Data Generation")
 
-    dataset = load_from_disk(args.preprocessed_data)
+    # `prepare_data.py` persists dataset formatting metadata. If we load it as-is,
+    # only torch-formatted training columns may be exposed, hiding multimodal
+    # metadata columns like `messages_json`/`mm_file`. That would prevent
+    # `build_client_item` from forwarding `multi_modal_data` to vLLM and can
+    # produce degenerate image placeholder hidden states.
+    dataset = load_from_disk(args.preprocessed_data).with_format(None)
+
+    columns = dataset.column_names
+    logger.info("Loaded dataset columns: %s", columns)
+    if "messages_json" not in columns and "messages" not in columns:
+        logger.warning(
+            "Dataset has no `messages_json`/`messages` column. "
+            "If this dataset is multimodal, vLLM requests may miss multi_modal_data."
+        )
 
     try:
         asyncio.run(generate_and_save_hidden_states(args, dataset))

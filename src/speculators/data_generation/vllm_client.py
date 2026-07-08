@@ -94,7 +94,15 @@ def with_retries(fn):
 def extract_output(
     response: Completion | ChatCompletion,
     token_ids: list[int],
-) -> str:
+    *,
+    trust_server_token_ids: bool = False,
+) -> str | tuple[str, list[int]]:
+    """Extract hidden-states path (and optionally server token ids).
+
+    By default, token ids must match exactly. Set
+    ``trust_server_token_ids=True`` to accept server tokenization and return
+    ``(path, prompt_token_ids)``.
+    """
     if isinstance(response, Completion):
         prompt_token_ids = getattr(response.choices[0], "prompt_token_ids", None)
     else:
@@ -103,25 +111,36 @@ def extract_output(
     if prompt_token_ids is None:
         raise InvalidResponseError("Response missing prompt_token_ids")
 
-    if prompt_token_ids != token_ids:
+    if not trust_server_token_ids and prompt_token_ids != token_ids:
         raise InvalidResponseError(
-            f"Prompt token IDs mismatch: expected {token_ids}, got {prompt_token_ids}"
+            f"Prompt token IDs mismatch: expected {len(token_ids)} tokens, "
+            f"got {len(prompt_token_ids)} tokens"
         )
 
     kv_transfer_params = getattr(response, "kv_transfer_params", None)
     if kv_transfer_params is None:
         raise InvalidResponseError("Response missing kv_transfer_params")
 
-    return kv_transfer_params.get("hidden_states_path")
+    path = kv_transfer_params.get("hidden_states_path")
+
+    if trust_server_token_ids:
+        return path, prompt_token_ids
+    return path
 
 
 class ClientItem(TypedDict):
     input_ids: list[int]
     """The input token IDs."""
 
+    multi_modal_data: NotRequired[dict[str, list]]
+    """Per-modality URL/path lists (image/video/audio) forwarded to vLLM via
+    ``extra_body.multi_modal_data`` so the server can attach media features
+    without re-rendering the chat template."""
+
     messages: NotRequired[list[ChatCompletionMessageParam]]
-    """If provided, pass `messages` to Chat Completions API
-    instead of passing `token_ids` to Completions API."""
+    """Optional fallback. Only consumed when ``use_chat_completions=True`` is
+    passed to :func:`generate_hidden_states`. The default token-id path
+    ignores this field."""
 
 
 async def _poll_lock_async(fd, poll_interval):
@@ -172,35 +191,43 @@ async def generate_hidden_states_async(
     client_item: ClientItem,
     *,
     timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
-) -> str:
-    """
-    Runs decode w/ max_tokens 1 to generate hidden states and returns path to
-    hidden states file.
+    use_chat_completions: bool = False,
+) -> str | tuple[str, list[int]]:
+    """Generate hidden states asynchronously and return the safetensors path.
 
-    Args:
-        client: The async OpenAI client.
-        model: The model ID.
-        client_item: Inputs to send via the client.
-        timeout: Timeout in seconds for each request attempt. None for no timeout.
+    For multimodal samples, set ``use_chat_completions=True`` so vLLM runs
+    its vision encoder.  In that mode the return value is a tuple
+    ``(path, server_token_ids)`` — the caller must use ``server_token_ids``
+    as the authoritative input_ids (they are positionally aligned with the
+    hidden states).
+
+    For text-only samples the default Completions path is used (strict
+    token-id parity check) and a plain ``str`` path is returned.
     """
     token_ids = client_item["input_ids"]
     messages = client_item.get("messages")
 
+    is_mm_chat = use_chat_completions and messages is not None
+
     coro: Coroutine[Any, Any, Completion | ChatCompletion]
-    if messages is None:
-        coro = client.completions.create(
-            model=model,
-            prompt=token_ids,
-            max_tokens=1,
-            extra_body={"return_token_ids": True},
-            timeout=timeout,
-        )
-    else:
+    if is_mm_chat:
         coro = client.chat.completions.create(
             model=model,
             messages=messages,
             max_tokens=1,
             extra_body={"add_generation_prompt": False, "return_token_ids": True},
+            timeout=timeout,
+        )
+    else:
+        extra_body: dict[str, Any] = {"return_token_ids": True}
+        mm = client_item.get("multi_modal_data")
+        if mm:
+            extra_body["multi_modal_data"] = mm
+        coro = client.completions.create(
+            model=model,
+            prompt=token_ids,
+            max_tokens=1,
+            extra_body=extra_body,
             timeout=timeout,
         )
 
@@ -210,7 +237,7 @@ async def generate_hidden_states_async(
     else:
         res = await coro
 
-    return extract_output(res, token_ids)
+    return extract_output(res, token_ids, trust_server_token_ids=is_mm_chat)
 
 
 @with_retries
@@ -220,24 +247,21 @@ def generate_hidden_states(
     client_item: ClientItem,
     *,
     timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
-) -> str:
-    """
-    Runs decode w/ max_tokens 1 to generate hidden states and returns path to
-    hidden states file.
+    use_chat_completions: bool = False,
+) -> str | tuple[str, list[int]]:
+    """Generate hidden states via vLLM (synchronous version).
+
+    For multimodal samples, set ``use_chat_completions=True`` so vLLM runs
+    its vision encoder.  Returns ``(path, server_token_ids)`` in that mode.
+    For text-only samples returns a plain ``str`` path.
     """
     token_ids = client_item["input_ids"]
     messages = client_item.get("messages")
 
+    is_mm_chat = use_chat_completions and messages is not None
+
     res: Completion | ChatCompletion
-    if messages is None:
-        res = client.completions.create(
-            model=model,
-            prompt=token_ids,
-            max_tokens=1,
-            extra_body={"return_token_ids": True},
-            timeout=timeout,
-        )
-    else:
+    if is_mm_chat:
         res = client.chat.completions.create(
             model=model,
             messages=messages,
@@ -245,5 +269,17 @@ def generate_hidden_states(
             extra_body={"add_generation_prompt": False, "return_token_ids": True},
             timeout=timeout,
         )
+    else:
+        extra_body: dict[str, Any] = {"return_token_ids": True}
+        mm = client_item.get("multi_modal_data")
+        if mm:
+            extra_body["multi_modal_data"] = mm
+        res = client.completions.create(
+            model=model,
+            prompt=token_ids,
+            max_tokens=1,
+            extra_body=extra_body,
+            timeout=timeout,
+        )
 
-    return extract_output(res, token_ids)
+    return extract_output(res, token_ids, trust_server_token_ids=is_mm_chat)

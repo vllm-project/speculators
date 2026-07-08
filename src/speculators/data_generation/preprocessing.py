@@ -1,4 +1,5 @@
 import bisect
+import inspect
 import json
 import random
 import re
@@ -6,13 +7,15 @@ from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
 from re import Pattern
-from typing import cast
+from typing import Any, cast
 
 import torch
 from datasets import Dataset as HFDataset
 from datasets import concatenate_datasets, load_dataset
 from packaging.version import Version
+from safetensors.torch import save_file
 from transformers import (
+    AutoConfig,
     AutoProcessor,
     BatchEncoding,
     BatchFeature,
@@ -36,6 +39,18 @@ log = PipelineLogger(__name__)
 
 
 ProcessorLike = PreTrainedTokenizerBase | ProcessorMixin
+MULTIMODAL_SIDECAR_DIR = "multimodal"
+MULTIMODAL_MEDIA_TYPES = {"image", "video", "audio"}
+MULTIMODAL_ENCODER_KEYS = (
+    "pixel_values",
+    "image_grid_thw",
+    "pixel_values_videos",
+    "video_grid_thw",
+    "second_per_grids",
+    "input_features",
+    "feature_attention_mask",
+    "audio_feature_lengths",
+)
 
 
 def _visualize_sample(preprocessed: HFDataset, processor: ProcessorLike, idx: int = 0):
@@ -74,6 +89,196 @@ def _visualize_sample(preprocessed: HFDataset, processor: ProcessorLike, idx: in
     log.info(highlighted)
 
 
+def _normalize_media_value(value: Any) -> Any:
+    if isinstance(value, Path):
+        return str(value)
+    filename = getattr(value, "filename", None)
+    if filename:
+        return str(filename)
+    return value
+
+
+def _to_json_compatible(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {k: _to_json_compatible(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_to_json_compatible(v) for v in value]
+    if isinstance(value, tuple):
+        return [_to_json_compatible(v) for v in value]
+    if isinstance(value, Path):
+        return str(value)
+    filename = getattr(value, "filename", None)
+    if filename:
+        return str(filename)
+    return value
+
+
+def _normalize_content_segment(segment: Any) -> dict[str, Any]:
+    if isinstance(segment, str):
+        return {"type": "text", "text": segment}
+    if not isinstance(segment, dict):
+        return {"type": "text", "text": str(segment)}
+
+    seg_type = str(segment.get("type", "text"))
+    normalized = {"type": seg_type}
+    if seg_type == "text":
+        normalized["text"] = (
+            segment.get("text")
+            or segment.get("value")
+            or segment.get("content")
+            or ""
+        )
+    elif seg_type in MULTIMODAL_MEDIA_TYPES:
+        normalized[seg_type] = _normalize_media_value(
+            segment.get(seg_type)
+            or segment.get("value")
+            or segment.get("url")
+            or segment.get("path")
+            or segment.get("source")
+        )
+    else:
+        normalized["text"] = segment.get("text") or segment.get("value") or ""
+
+    for key, value in segment.items():
+        if key in normalized or key in {"content", "value", "url", "path", "source"}:
+            continue
+        normalized[key] = _to_json_compatible(value)
+    return normalized
+
+
+def _normalize_turn_content(content: Any) -> str | list[dict[str, Any]]:
+    if isinstance(content, list):
+        return [_normalize_content_segment(seg) for seg in content]
+    return content if isinstance(content, str) else str(content or "")
+
+
+def _has_multimodal_segments(content: Any) -> bool:
+    return isinstance(content, list) and any(
+        isinstance(seg, dict) and seg.get("type") in MULTIMODAL_MEDIA_TYPES
+        for seg in content
+    )
+
+
+def _is_multimodal_conversation(conv: list[dict[str, Any]]) -> bool:
+    return any(_has_multimodal_segments(turn.get("content")) for turn in conv)
+
+
+def _serialize_messages(messages: list[dict[str, Any]]) -> str:
+    return json.dumps(_to_json_compatible(messages), ensure_ascii=False)
+
+
+def _sanitize_sidecar_prefix(prefix: str) -> str:
+    return re.sub(r"[^a-zA-Z0-9_.-]+", "_", prefix).strip("_") or "dataset"
+
+
+def _build_sidecar_path(
+    multimodal_output_dir: str | Path,
+    sample_idx: int,
+    sidecar_prefix: str,
+) -> Path:
+    base_dir = Path(multimodal_output_dir) / MULTIMODAL_SIDECAR_DIR
+    base_dir.mkdir(parents=True, exist_ok=True)
+    safe_prefix = _sanitize_sidecar_prefix(sidecar_prefix)
+    return base_dir / f"{safe_prefix}_{sample_idx}.safetensors"
+
+
+def _maybe_strip_batch_dim(value: Any) -> torch.Tensor:
+    tensor = value if isinstance(value, torch.Tensor) else torch.as_tensor(value)
+    tensor = tensor.detach().cpu().contiguous()
+    if tensor.ndim > 0 and tensor.shape[0] == 1:
+        tensor = tensor.squeeze(0)
+    return tensor
+
+
+def _save_multimodal_sidecar(
+    encoded: dict[str, Any],
+    multimodal_output_dir: str | Path,
+    sample_idx: int,
+    sidecar_prefix: str,
+) -> str:
+    sidecar_path = _build_sidecar_path(multimodal_output_dir, sample_idx, sidecar_prefix)
+    payload = {
+        key: _maybe_strip_batch_dim(encoded[key])
+        for key in MULTIMODAL_ENCODER_KEYS
+        if key in encoded
+    }
+    if not payload:
+        raise ValueError("Multimodal sample did not produce sidecar tensor fields")
+    save_file(payload, sidecar_path)
+    return str(sidecar_path.relative_to(Path(multimodal_output_dir)))
+
+
+def _build_multimodal_loss_mask(
+    input_ids: torch.Tensor,
+    base_loss_mask: torch.Tensor,
+    placeholder_token_ids: tuple[int, ...],
+) -> torch.Tensor:
+    loss_mask = base_loss_mask.to(dtype=torch.long).clone()
+    valid_ids = [tid for tid in placeholder_token_ids if tid >= 0]
+    if not valid_ids:
+        return loss_mask
+    placeholder_tensor = torch.as_tensor(
+        valid_ids, dtype=input_ids.dtype, device=input_ids.device
+    )
+    loss_mask.masked_fill_(torch.isin(input_ids, placeholder_tensor), 0)
+    return loss_mask
+
+
+def _mask_has_positive(mask: Any) -> bool:
+    mask_tensor = _maybe_strip_batch_dim(mask)
+    return bool(mask_tensor.numel() > 0 and torch.count_nonzero(mask_tensor).item() > 0)
+
+
+_PROCESSOR_KW_CACHE: dict[int, set[str]] = {}
+
+
+def _processor_kwargs(processor: Any) -> set[str]:
+    key = id(processor)
+    cached = _PROCESSOR_KW_CACHE.get(key)
+    if cached is not None:
+        return cached
+    try:
+        sig = inspect.signature(processor.apply_chat_template)
+        names = {
+            name
+            for name, param in sig.parameters.items()
+            if param.kind is not inspect.Parameter.VAR_KEYWORD
+        }
+    except (TypeError, ValueError):
+        names = set()
+    _PROCESSOR_KW_CACHE[key] = names
+    return names
+
+
+def _conversation_use_audio_in_video(conv: list[dict[str, Any]]) -> bool:
+    for turn in conv:
+        content = turn.get("content")
+        if not isinstance(content, list):
+            continue
+        for seg in content:
+            if isinstance(seg, dict) and seg.get("use_audio_in_video"):
+                return True
+    return False
+
+
+def _as_processor_content_blocks(content: Any) -> list[dict[str, Any]]:
+    if isinstance(content, list):
+        return [
+            seg if isinstance(seg, dict) else {"type": "text", "text": str(seg)}
+            for seg in content
+        ]
+    return [
+        {"type": "text", "text": content if isinstance(content, str) else str(content or "")}
+    ]
+
+
+def _conversation_for_processor(conv: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {**turn, "content": _as_processor_content_blocks(turn.get("content", ""))}
+        for turn in conv
+    ]
+
+
 def _normalize_conversation(
     conv: list[dict],
     turn_dropout: bool = False,
@@ -93,7 +298,7 @@ def _normalize_conversation(
     normalized = []
     for i, turn in enumerate(conv):
         role = turn.get("from", turn.get("role", ""))
-        content = turn.get("value") or turn.get("content") or ""
+        content = _normalize_turn_content(turn.get("value") or turn.get("content") or "")
 
         # Map various role names to standard user/assistant
         if role in ("human", "user"):
@@ -166,21 +371,16 @@ def _adapt_part_for_vllm(part: str | dict):
 
     for modality in ("image", "video", "audio"):
         if part_type == modality:
-            if local_path := part.get("path"):
-                file_url = f"file://{Path(local_path).absolute()}"
-                return {"type": f"{modality}_url", f"{modality}_url": {"url": file_url}}
-            if url := part.get("url"):
+            media_value = part.get(modality) or part.get("path") or part.get("url")
+            if isinstance(media_value, str):
+                if media_value.startswith(("http://", "https://", "file://")):
+                    url = media_value
+                else:
+                    url = f"file://{Path(media_value).absolute()}"
                 return {"type": f"{modality}_url", f"{modality}_url": {"url": url}}
 
             if part.get("base64"):
                 expr = {"type": modality, "base64": "..."}
-                raise ValueError(
-                    f"Content part {expr} is not supported. To avoid copying "
-                    f"the {modality} when saving the preprocessed dataset, "
-                    f"please express {modality} inputs using file paths or URLs."
-                )
-            if part.get(modality):
-                expr = {"type": modality, modality: "..."}
                 raise ValueError(
                     f"Content part {expr} is not supported. To avoid copying "
                     f"the {modality} when saving the preprocessed dataset, "
@@ -235,7 +435,7 @@ def _supports_assistant_mask(processor: ProcessorLike) -> bool:
             return False
 
         # Verify the mask is not all zeros
-        return any(m == 1 for m in mask)
+        return _mask_has_positive(mask)
     except (TypeError, ValueError, KeyError, AttributeError) as e:
         log.warning(f"An error occurred when trying to return assistant mask: {e}")
         return False
@@ -290,11 +490,8 @@ def _detect_assistant_pattern(processor: ProcessorLike) -> str:
     else:
         role_marker = prefix
 
-    # Strip <think>...</think> blocks from the role marker. Thinking model
-    # templates wrap assistant content in these tags, but the test messages
-    # can produce empty blocks (e.g. "<think>\n\n</think>\n") with reasoning models,
-    # which then get baked into the regex as literals. Removing them ensures
-    # that reasoning stays within the assistant content group.
+    # Remove optional <think>...</think> wrappers from role markers so
+    # regex capture focuses on assistant content boundaries.
     role_marker = re.sub(r"<think>.*?</think>\s*", "", role_marker, flags=re.DOTALL)
 
     # Determine the stable TURN-LEVEL suffix
@@ -381,6 +578,104 @@ def _create_loss_mask_from_offsets(
         log.warning(f"{warning_msg}. {suggestion_msg}")
 
     return loss_mask
+
+
+def _content_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            str(seg.get("text", "")) if isinstance(seg, dict) else str(seg)
+            for seg in content
+        )
+    return str(content or "")
+
+
+def _find_token_subsequence(
+    haystack: torch.Tensor,
+    needle: torch.Tensor,
+    start: int,
+) -> int | None:
+    if needle.numel() == 0 or haystack.numel() < needle.numel():
+        return None
+    for idx in range(start, int(haystack.numel() - needle.numel()) + 1):
+        if torch.equal(haystack[idx : idx + needle.numel()], needle):
+            return idx
+    return None
+
+
+def _loss_mask_from_assistant_token_spans(
+    input_ids: torch.Tensor,
+    normalized_conv: list[dict[str, Any]],
+    tokenizer: PreTrainedTokenizerBase,
+) -> torch.Tensor | None:
+    loss_mask = torch.zeros_like(input_ids, dtype=torch.long)
+    cursor = 0
+    matches_found = 0
+    for turn in normalized_conv:
+        if turn.get("role") != "assistant":
+            continue
+        text = _content_text(turn.get("content", ""))
+        if not text:
+            continue
+        tokenized = tokenizer(text, add_special_tokens=False)
+        token_ids = tokenized.get("input_ids", [])
+        if not token_ids:
+            continue
+        needle = torch.as_tensor(token_ids, dtype=torch.long, device=input_ids.device)
+        span_start = _find_token_subsequence(input_ids, needle, cursor)
+        if span_start is None:
+            log.warning("Could not align assistant content tokens in processor input_ids")
+            continue
+        span_end = span_start + int(needle.numel())
+        loss_mask[span_start:span_end] = 1
+        cursor = span_end
+        matches_found += 1
+    return loss_mask if matches_found else None
+
+
+def _loss_mask_from_ids_fallback(
+    input_ids: torch.Tensor,
+    normalized_conv: list[dict[str, Any]],
+    tokenizer: PreTrainedTokenizerBase,
+    assistant_pattern: str | Pattern[str],
+    placeholder_token_ids: tuple[int, ...] = (),
+) -> torch.Tensor:
+    formatted_raw_any = tokenizer.apply_chat_template(
+        normalized_conv,
+        tokenize=False,
+        add_generation_prompt=False,
+    )
+    formatted_raw = formatted_raw_any if isinstance(formatted_raw_any, str) else ""
+    encoding = tokenizer(
+        formatted_raw,
+        return_offsets_mapping=True,
+        add_special_tokens=False,
+    )
+    mask_text = _create_loss_mask_from_offsets(
+        formatted_raw, encoding["offset_mapping"], assistant_pattern
+    ).to(torch.long)
+
+    target_len = int(input_ids.shape[0])
+    if placeholder_token_ids:
+        placeholder_tensor = torch.as_tensor(
+            placeholder_token_ids, dtype=input_ids.dtype, device=input_ids.device
+        )
+        is_placeholder = torch.isin(input_ids, placeholder_tensor)
+        if bool(is_placeholder.any()):
+            aligned = torch.zeros(target_len, dtype=torch.long)
+            text_positions = (~is_placeholder).nonzero(as_tuple=True)[0]
+            copy_len = min(int(text_positions.shape[0]), int(mask_text.shape[0]))
+            if copy_len > 0:
+                aligned.index_copy_(0, text_positions[:copy_len], mask_text[:copy_len])
+            return aligned
+
+    if mask_text.shape[0] == target_len:
+        return mask_text
+    if mask_text.shape[0] > target_len:
+        return mask_text[:target_len]
+    pad = torch.zeros(target_len - mask_text.shape[0], dtype=torch.long)
+    return torch.cat([mask_text, pad], dim=0)
 
 
 def _get_input_ids_loss_mask(
@@ -514,15 +809,26 @@ def _preprocess_batch(
     assistant_pattern: str | Pattern[str] | None,
     turn_dropout: bool = False,
     minimum_valid_tokens: int | None = None,
+    *,
+    indices: list[int] | None = None,
+    placeholder_token_ids: tuple[int, ...] = (),
+    multimodal_output_dir: str | Path | None = None,
+    sidecar_prefix: str = "dataset",
 ) -> dict[str, list]:
     """Process a batch of conversations into tokenized format with loss masks."""
 
-    results: dict[str, list] = {"input_ids": [], "loss_mask": [], "seq_len": []}
-    conversations: list[dict] = examples.get("conversations", [])
-
-    # MM inputs must use Chat Completions API
-    if isinstance(processor, ProcessorMixin):
+    results: dict[str, list] = {
+        "input_ids": [],
+        "loss_mask": [],
+        "seq_len": [],
+        "messages_json": [],
+        "mm_file": [],
+        "use_audio_in_video": [],
+    }
+    include_messages = isinstance(processor, ProcessorMixin)
+    if include_messages:
         results["messages"] = []
+    conversations: list[dict] = examples.get("conversations", [])
 
     if not conversations:
         log.warning(f"No conversations key found. Keys: {list(examples.keys())}")
@@ -537,52 +843,153 @@ def _preprocess_batch(
         tools_col = None
 
     for idx, conv in enumerate(conversations):
+        sample_idx = indices[idx] if indices is not None else idx
         conv_tools = tools_col[idx] if tools_col is not None else None
 
         if not conv or not isinstance(conv, list):
+            log.warning(
+                f"[DROP sample_idx={sample_idx}] reason=empty_or_non_list_conversation "
+                f"type={type(conv).__name__}"
+            )
             continue
 
-        # Normalize to standard format with optional turn dropout
         normalized_conv = _normalize_conversation(conv, turn_dropout)
         if not normalized_conv:
+            log.warning(
+                f"[DROP sample_idx={sample_idx}] reason=normalized_conversation_empty "
+                f"raw_turns={len(conv)}"
+            )
             continue
 
         parsed_tools = _parse_conv_tools(conv_tools, idx)
+        is_multimodal = include_messages and _is_multimodal_conversation(normalized_conv)
+        messages = _adapt_conv_for_vllm(normalized_conv) if include_messages else []
+        messages_json = _serialize_messages(messages) if is_multimodal else ""
+        mm_file = ""
+        use_audio_in_video = int(_conversation_use_audio_in_video(normalized_conv))
 
         try:
-            input_ids, loss_mask = _get_input_ids_loss_mask(
-                normalized_conv,
-                processor,
-                max_length=max_length,
-                assistant_pattern=assistant_pattern,
-                tools=parsed_tools,
-                conv_idx=idx,
+            if is_multimodal:
+                allowed = _processor_kwargs(processor)
+                call_kwargs: dict[str, Any] = dict(
+                    tokenize=True,
+                    add_generation_prompt=False,
+                    return_dict=True,
+                    return_tensors="pt",
+                    processor_kwargs={},
+                )
+                if parsed_tools is not None:
+                    call_kwargs["tools"] = parsed_tools
+                for key in (
+                    "load_audio",
+                    "load_image",
+                    "load_video",
+                    "load_audios",
+                    "load_images",
+                    "load_videos",
+                ):
+                    if key in allowed:
+                        call_kwargs[key] = True
+                supports_mask = (
+                    assistant_pattern is None
+                    and "return_assistant_tokens_mask" in allowed
+                )
+                if supports_mask:
+                    call_kwargs["return_assistant_tokens_mask"] = True
+
+                encoded_any = processor.apply_chat_template(
+                    _conversation_for_processor(normalized_conv), **call_kwargs
+                )
+                encoded = cast("dict[str, Any]", encoded_any)
+                input_ids = _maybe_strip_batch_dim(encoded["input_ids"]).to(torch.long)
+
+                mask_key = None
+                if supports_mask:
+                    if "assistant_masks" in encoded:
+                        mask_key = "assistant_masks"
+                    elif "assistant_mask" in encoded:
+                        mask_key = "assistant_mask"
+                if mask_key is not None:
+                    candidate_loss_mask = _maybe_strip_batch_dim(encoded[mask_key]).to(
+                        torch.long
+                    )
+                    base_loss_mask = (
+                        candidate_loss_mask
+                        if _mask_has_positive(candidate_loss_mask)
+                        else None
+                    )
+                else:
+                    base_loss_mask = None
+
+                if base_loss_mask is None:
+                    if assistant_pattern is None:
+                        assistant_pattern = _detect_assistant_pattern(processor)
+                    base_loss_mask = _loss_mask_from_assistant_token_spans(
+                        input_ids, normalized_conv, get_tokenizer(processor)
+                    )
+                    if base_loss_mask is None:
+                        base_loss_mask = _loss_mask_from_ids_fallback(
+                            input_ids,
+                            normalized_conv,
+                            get_tokenizer(processor),
+                            assistant_pattern,
+                            placeholder_token_ids,
+                        )
+
+                loss_mask = _build_multimodal_loss_mask(
+                    input_ids, base_loss_mask, placeholder_token_ids
+                )
+                if len(input_ids) > max_length:
+                    log.warning(
+                        f"[DROP sample_idx={sample_idx}] reason=overlength_multimodal "
+                        f"len(input_ids)={len(input_ids)} max_length={max_length}"
+                    )
+                    continue
+                if multimodal_output_dir is not None:
+                    mm_file = _save_multimodal_sidecar(
+                        encoded, multimodal_output_dir, sample_idx, sidecar_prefix
+                    )
+            else:
+                input_ids, loss_mask = _get_input_ids_loss_mask(
+                    normalized_conv,
+                    processor,
+                    max_length=max_length,
+                    assistant_pattern=assistant_pattern,
+                    tools=parsed_tools,
+                    conv_idx=idx,
+                )
+                input_ids = torch.tensor(input_ids, dtype=torch.long)
+
+            assert len(input_ids) == len(loss_mask), (
+                f"Shape mismatch: input_ids={len(input_ids)}, loss_mask={len(loss_mask)}"
             )
+
+            if minimum_valid_tokens is not None:
+                num_valid_tokens = int(loss_mask.sum().item())
+                if num_valid_tokens < minimum_valid_tokens:
+                    log.warning(
+                        f"[DROP sample_idx={sample_idx}] reason=too_few_valid_tokens "
+                        f"num_valid_tokens={num_valid_tokens} "
+                        f"minimum_valid_tokens={minimum_valid_tokens} "
+                        f"len(input_ids)={len(input_ids)} is_multimodal={is_multimodal}"
+                    )
+                    continue
+
+            results["input_ids"].append(input_ids)
+            results["loss_mask"].append(loss_mask.to(torch.long))
+            results["seq_len"].append(len(input_ids))
+            if include_messages:
+                results["messages"].append(messages)
+            results["messages_json"].append(messages_json)
+            results["mm_file"].append(mm_file)
+            results["use_audio_in_video"].append(use_audio_in_video)
         except (TypeError, ValueError, KeyError, AttributeError, RuntimeError) as e:
             log.error(
-                f"Failed to process conversation {idx} "
+                f"[DROP sample_idx={sample_idx}] reason=exception "
+                f"exc_type={type(e).__name__} "
                 f"(assistant_pattern={assistant_pattern is not None}): {e}"
             )
             continue
-
-        # Assert shapes match
-        assert len(input_ids) == len(loss_mask), (
-            f"Shape mismatch: input_ids={len(input_ids)}, loss_mask={len(loss_mask)}"
-        )
-
-        # Filtering samples out with too few valid tokens
-        if minimum_valid_tokens is not None:
-            num_valid_tokens = int(loss_mask.sum().item())
-            if num_valid_tokens < minimum_valid_tokens:
-                continue
-
-        # Append to results
-        results["input_ids"].append(torch.tensor(input_ids, dtype=torch.long))
-        results["loss_mask"].append(loss_mask)
-        results["seq_len"].append(len(input_ids))
-
-        if "messages" in results:
-            results["messages"].append(_adapt_conv_for_vllm(normalized_conv))
 
     return results
 
@@ -595,6 +1002,9 @@ def build_eagle3_dataset(
     assistant_pattern: str | Pattern[str] | None = None,
     turn_dropout: bool = False,
     minimum_valid_tokens: int | None = None,
+    placeholder_token_ids: tuple[int, ...] = (),
+    multimodal_output_dir: str | Path | None = None,
+    sidecar_prefix: str = "dataset",
 ) -> HFDataset:
     """Build EAGLE3 dataset by tokenizing conversations and creating loss masks.
 
@@ -622,6 +1032,11 @@ def build_eagle3_dataset(
         assistant_pattern = _detect_assistant_pattern(processor)
         log.info(f"Detected assistant pattern: {str(assistant_pattern)[:80]}...")
 
+    if multimodal_output_dir is not None:
+        (Path(multimodal_output_dir) / MULTIMODAL_SIDECAR_DIR).mkdir(
+            parents=True, exist_ok=True
+        )
+
     original_cols = dataset.column_names
 
     # Avoid CPU contention for MM processing:
@@ -632,22 +1047,27 @@ def build_eagle3_dataset(
         else nullcontext()
     ):
         dataset = dataset.map(
-            lambda examples: _preprocess_batch(
+            lambda examples, indices: _preprocess_batch(
                 examples,
                 processor,
                 max_length,
                 assistant_pattern,
                 turn_dropout,
                 minimum_valid_tokens,
+                indices=indices,
+                placeholder_token_ids=placeholder_token_ids,
+                multimodal_output_dir=multimodal_output_dir,
+                sidecar_prefix=sidecar_prefix,
             ),
             batched=True,
+            with_indices=True,
             num_proc=num_proc,
-            batch_size=1000,
+            batch_size=400,
             remove_columns=original_cols,
             keep_in_memory=True,  # skip caching
         )
 
-    dataset.set_format(type="torch")
+    dataset.set_format(type="torch", columns=["input_ids", "loss_mask", "seq_len"])
     return dataset
 
 
@@ -797,6 +1217,7 @@ def load_and_preprocess_dataset(
     turn_dropout: bool = False,
     minimum_valid_tokens: int | None = None,
     trust_remote_code: bool = False,
+    multimodal_output_dir: Path | str | None = None,
 ) -> tuple[HFDataset, ProcessorLike]:
     """Load, tokenize, and preprocess a dataset for EAGLE3 training.
 
@@ -840,6 +1261,20 @@ def load_and_preprocess_dataset(
             "Please use a model with a pre-configured chat template."
         )
 
+    placeholder_token_ids: tuple[int, ...] = ()
+    verifier_config = AutoConfig.from_pretrained(
+        target_model_path, trust_remote_code=trust_remote_code
+    )
+    multimodal_config = getattr(verifier_config, "thinker_config", verifier_config)
+    if isinstance(processor, ProcessorMixin):
+        placeholder_token_ids = tuple(
+            int(token_id)
+            for attr in ("image_token_id", "video_token_id", "audio_token_id")
+            if (token_id := getattr(multimodal_config, attr, None)) is not None
+        )
+    if multimodal_output_dir is None:
+        multimodal_output_dir = Path(token_freq_path).parent
+
     processed_datasets = []
     for train_data_path in train_data_paths:
         log.subsection(f"Processing {train_data_path}")
@@ -872,6 +1307,9 @@ def load_and_preprocess_dataset(
             assistant_pattern=assistant_pattern,
             turn_dropout=turn_dropout,
             minimum_valid_tokens=minimum_valid_tokens,
+            placeholder_token_ids=placeholder_token_ids,
+            multimodal_output_dir=multimodal_output_dir,
+            sidecar_prefix=train_data_path,
         )
         if minimum_valid_tokens is not None:
             log.info(f"Kept {len(preprocessed_dataset)} samples after filtering")

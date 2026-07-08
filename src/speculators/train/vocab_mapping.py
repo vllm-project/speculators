@@ -111,7 +111,9 @@ def get_target_vocab_size(target_vocab_size, target_model_path):
 
     config = AutoConfig.from_pretrained(target_model_path)
 
-    # For multimodal models (Qwen3VL, etc.), extract text_config
+    # Multimodal verifiers may nest the text backbone.
+    if hasattr(config, "thinker_config"):
+        config = config.thinker_config
     if hasattr(config, "text_config"):
         config = config.text_config
 
