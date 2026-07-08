@@ -124,7 +124,7 @@ def parse_args():
         default=None,
         help=(
             "JSON object of extra kwargs forwarded to the chat template, "
-            'e.g. \'{"enable_thinking": true}\'. Only supported on the render '
+            "e.g. '{\"enable_thinking\": true}'. Only supported on the render "
             "path (requires --vllm-server-url)."
         ),
     )

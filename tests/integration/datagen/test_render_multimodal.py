@@ -73,12 +73,26 @@ def render_server(test_dir):
     port = _find_free_port()
     proc = subprocess.Popen(  # noqa: S603
         [
-            VLLM_PYTHON, "-m", "vllm.entrypoints.cli.main", "launch", "render",
-            "--model", MODEL, "--port", str(port), "--host", "127.0.0.1",
-            "--max-model-len", "4096", "--gpu-memory-utilization", "0.3",
-            "--allowed-local-media-path", str(test_dir),
+            VLLM_PYTHON,
+            "-m",
+            "vllm.entrypoints.cli.main",
+            "launch",
+            "render",
+            "--model",
+            MODEL,
+            "--port",
+            str(port),
+            "--host",
+            "127.0.0.1",
+            "--max-model-len",
+            "4096",
+            "--gpu-memory-utilization",
+            "0.3",
+            "--allowed-local-media-path",
+            str(test_dir),
         ],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
         env={**os.environ, "HF_HUB_OFFLINE": "1"},
     )
     url = f"http://127.0.0.1:{port}"
