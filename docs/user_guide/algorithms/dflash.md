@@ -21,7 +21,9 @@ The target model produces hidden states (fused target context features) and deco
 
 Pretrained DFlash speculator models are available on HuggingFace from the [RedHatAI speculator models collection](https://huggingface.co/collections/RedHatAI/speculator-models):
 
-| Verifier | Speculator | | ----------------------- | --------------------------------------------------------------------------------------------------------------- | | `google/gemma-4-31B-it` | [`RedHatAI/gemma-4-31B-it-speculator.dflash`](https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.dflash) |
+| Verifier                | Speculator                                                                                                      |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `google/gemma-4-31B-it` | [`RedHatAI/gemma-4-31B-it-speculator.dflash`](https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.dflash) |
 
 > **Note:** DFlash is under active development. Not all hardware configurations have been validated yet — refer to individual model cards for details.
 

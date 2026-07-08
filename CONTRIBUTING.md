@@ -21,7 +21,12 @@ To make the contribution process as smooth as possible, we ask that you coordina
 
 ### When should you check in?
 
-| **Let's chat first if...** | **Feel free to dive right in for...** | | :---------------------------------------------- | :-------------------------------------- | | Adding new training algorithms or model support | Fixing typos or improving documentation | | Modifying the data pipeline or CLI/API | Small bug fixes (generally < 20 lines) | | Large refactors or performance optimizations | Adding missing type annotations | | Changes affecting 3+ files | Minor dependency updates |
+| **Let's chat first if...**                      | **Feel free to dive right in for...**   |
+| :---------------------------------------------- | :-------------------------------------- |
+| Adding new training algorithms or model support | Fixing typos or improving documentation |
+| Modifying the data pipeline or CLI/API          | Small bug fixes (generally < 20 lines)  |
+| Large refactors or performance optimizations    | Adding missing type annotations         |
+| Changes affecting 3+ files                      | Minor dependency updates                |
 
 *Maintainers typically respond in 2-3 business days. If you haven’t heard from us after a week, please feel free to give the thread a nudge!*
 
