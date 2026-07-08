@@ -94,6 +94,23 @@ def parse_args():
         default=None,
         help="Only process rows where language==this (e.g., EN)",
     )
+    parser.add_argument(
+        "--shuffle",
+        action="store_true",
+        help="Shuffle the dataset before processing",
+    )
+    parser.add_argument(
+        "--shuffle-seed",
+        type=int,
+        default=42,
+        help="Random seed for shuffling (default: 42)",
+    )
+    parser.add_argument(
+        "--shuffle-buffer-size",
+        type=int,
+        default=10000,
+        help="Buffer size for streaming shuffle (default: 10000)",
+    )
     return parser.parse_args()
 
 
@@ -359,6 +376,15 @@ async def main():
 
     seen_ids = load_seen(args.outfile) if args.resume else set()
     dataset = load_dataset(dataset_id, name=subset, split=split, streaming=True)
+
+    if args.shuffle:
+        dataset = dataset.shuffle(
+            seed=args.shuffle_seed, buffer_size=args.shuffle_buffer_size
+        )
+        print(
+            f"Shuffling with seed={args.shuffle_seed},"
+            f" buffer={args.shuffle_buffer_size}"
+        )
 
     queue: asyncio.Queue = asyncio.Queue(maxsize=args.concurrency * 4)
 
