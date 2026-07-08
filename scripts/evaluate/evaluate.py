@@ -152,20 +152,23 @@ def _run_subset(
     guidellm_common: dict,
     acceptance_csv: CsvWriter | None,
     perf_csv: CsvWriter | None,
-    data_subset: str | None = None,
 ) -> tuple[CsvWriter | None, CsvWriter | None, int | None]:
     """Run benchmark for one subset.
 
-    *subset* is used as the human-readable label and for output file names.
-    *data_subset* is the value passed to guidellm ``--data-args`` to filter
-    within an HF dataset (e.g. ``"HumanEval"`` → ``{"data_files":"HumanEval.jsonl"}``).
-    Pass ``None`` when ``guidellm_common["dataset"]`` already points to a local
-    JSONL file (e.g. pre-split SPEED-Bench data) and no ``--data-args`` is needed.
+    *subset* is the human-readable label used for output file names and the
+    acceptance CSV.  When ``guidellm_common["dataset"]`` is a local file path
+    the ``--data-args`` flag is suppressed automatically; when it is an HF
+    dataset ID *subset* is also passed as the data-args filter so guidellm
+    loads just that split.
     """
 
     logger.info("[%s] Starting", subset)
     safe = subset.replace("/", "_").replace(" ", "_")
     max_tokens = 4096
+
+    # For local JSONL files (SPEED-Bench) the dataset path IS the file —
+    # no --data-args needed.  For HF datasets subset name doubles as the filter.
+    guidellm_subset = None if Path(guidellm_common["dataset"]).exists() else subset
 
     if is_sweep:
         gen_len_dir = artifacts_dir / "gen_len"
@@ -173,7 +176,7 @@ def _run_subset(
         gen_len_output = gen_len_dir / f"gen_len_{safe}.json"
         run_guidellm(
             **guidellm_common,
-            subset=data_subset,
+            subset=guidellm_subset,
             profile="throughput",
             max_requests=None,
             output_path=gen_len_output,
@@ -183,7 +186,7 @@ def _run_subset(
             [gen_len_output],
             gen_len_dir / f"max_tokens_{safe}.json",
         )
-        key = data_subset if data_subset else safe
+        key = guidellm_subset if guidellm_subset else safe
         max_tokens = mapping.get(key, max_tokens)
         logger.info("[%s] max_tokens=%d", subset, max_tokens)
 
@@ -192,7 +195,7 @@ def _run_subset(
     run_output = artifacts_dir / f"run_{safe}.json"
     run_guidellm(
         **guidellm_common,
-        subset=data_subset,
+        subset=guidellm_subset,
         profile=profile,
         max_requests=args.max_requests,
         output_path=run_output,
@@ -250,10 +253,10 @@ def run_benchmark(args: argparse.Namespace) -> None:
     perf_csv = None
     all_max_tokens: dict[str, int] = {}
 
-    # Build a flat list of (label, guidellm_common, data_subset) to run uniformly.
-    # For HF datasets data_subset matches the label; for local JSONL it is None.
+    # Build a flat list of (label, guidellm_common) to run uniformly.
+    # _run_subset auto-detects whether --data-args is needed from the dataset path.
     dataset_spec = args.dataset
-    run_items: list[tuple[str, dict, str | None]] = []
+    run_items: list[tuple[str, dict]] = []
 
     if dataset_spec.startswith("speedbench/"):
         if not getattr(args, "speedbench_data_dir", None):
@@ -265,14 +268,18 @@ def run_benchmark(args: argparse.Namespace) -> None:
             sys.exit(1)
         pairs = _resolve_speedbench(dataset_spec, Path(args.speedbench_data_dir))
         for label, local_path in pairs:
-            sb_common = {
-                "target": args.target,
-                "dataset": str(local_path),
-                "data_column_mapper": _SPEEDBENCH_COLUMN_MAPPER,
-                "rate": args.gen_len_rate,
-                "max_concurrency": args.max_concurrency,
-            }
-            run_items.append((label, sb_common, None))
+            run_items.append(
+                (
+                    label,
+                    {
+                        "target": args.target,
+                        "dataset": str(local_path),
+                        "data_column_mapper": _SPEEDBENCH_COLUMN_MAPPER,
+                        "rate": args.gen_len_rate,
+                        "max_concurrency": args.max_concurrency,
+                    },
+                )
+            )
     else:
         guidellm_common = {
             "target": args.target,
@@ -282,12 +289,12 @@ def run_benchmark(args: argparse.Namespace) -> None:
             "max_concurrency": args.max_concurrency,
         }
         for subset in [s.strip() for s in args.subsets.split(",") if s.strip()]:
-            run_items.append((subset, guidellm_common, subset))
+            run_items.append((subset, guidellm_common))
 
     logger.info(
         "Mode: %s | %d subsets | Output: %s", args.mode, len(run_items), output_dir
     )
-    for label, common, data_subset in run_items:
+    for label, common in run_items:
         acceptance_csv, perf_csv, mt = _run_subset(
             label,
             args,
@@ -298,7 +305,6 @@ def run_benchmark(args: argparse.Namespace) -> None:
             guidellm_common=common,
             acceptance_csv=acceptance_csv,
             perf_csv=perf_csv,
-            data_subset=data_subset,
         )
         if mt is not None:
             all_max_tokens[label] = mt
