@@ -22,7 +22,8 @@ cd "$(dirname "$0")/.."
 if [ "$(id -u)" -eq 0 ]; then
     id claude-runner &>/dev/null || useradd -M -d /root -g 0 claude-runner
     chmod -R g+rwX /root /workspace 2>/dev/null || true
-    exec sudo -E -u claude-runner "$0" "$@"
+    export HOME=/root
+    exec runuser -u claude-runner -- "$0" "$@"
 fi
 
 slack_notify() {
