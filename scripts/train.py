@@ -961,6 +961,20 @@ def parse_args():
         default=4.0,
         help="Decay gamma for DFlash/DSpark loss weighting (default: 4.0)",
     )
+    # D-Pace specific arguments (loss weight option + smoothing)
+    parser.add_argument(
+        "--per-position-loss-weight",
+        choices=["fixed-exp-decay", "dpace"],
+        default="fixed-exp-decay",
+        help="Per-position loss weight option for D-PACE support"
+        "default: fixed-exp-decay",
+    )
+    parser.add_argument(
+        "--dpace-alpha",
+        type=float,
+        default=0.5,
+        help="Smoothing constant for D-PACE loss (default: 0.5)",
+    )
     # DSpark-specific arguments (sequential Markov head + confidence head).
     parser.add_argument(
         "--markov-rank",
@@ -1132,6 +1146,13 @@ def parse_args():
     provided = explicitly_provided_dests(parser, DECODER_SHAPING_FLAGS)
     validate_draft_init_args(parser, args, provided)
     resolve_loss_config(args.loss_fn)
+
+    if args.per_position_loss_weight == "dpace":
+        if args.loss_fn != "ce":
+            parser.error("--per-position-loss-weight=dpace requires --loss-fn=ce")
+        if not 0.0 < args.dpace_alpha <= 1.0:
+            raise ValueError(f"alpha must be in (0, 1], got {args.dpace_alpha}")
+
     return args
 
 
