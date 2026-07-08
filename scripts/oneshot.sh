@@ -18,6 +18,7 @@ cd "$(dirname "$0")/.."
 # Claude blocks --dangerously-skip-permissions for root. The devenv entrypoint
 # creates a claude-runner user with the right groups — just re-exec as it.
 if [ "$(id -u)" -eq 0 ]; then
+    chmod -R g+rwX .claude 2>/dev/null || true
     exec runuser --preserve-environment -u claude-runner -- "$0" "$@"
 fi
 
