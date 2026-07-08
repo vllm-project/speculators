@@ -504,6 +504,7 @@ def main(args: argparse.Namespace):  # noqa: C901
     # Setup dataloaders
     preprocess_fns = {
         "eagle3": shift_batch,
+        "hydra": shift_batch,
         "peagle": shift_batch,
         "mtp": shift_batch_mtp,
     }
@@ -659,7 +660,8 @@ def parse_args():
         "--speculator-type",
         type=str,
         default="eagle3",
-        help="Type of speculator model to train (eagle3, dflash, dspark, peagle, mtp)",
+        help="Type of speculator model to train "
+        "(eagle3, dflash, dspark, hydra, peagle, mtp)",
     )
     parser.add_argument(
         "--from-pretrained",
@@ -1002,6 +1004,32 @@ def parse_args():
         help="Attention implementation for draft layers. "
         "Use 'sdpa' or 'eager' for hardware that doesn't support flex attention."
         "Not supported for MTP.",
+    )
+    # Hydra specific parameters
+    parser.add_argument(
+        "--num-hydra-heads",
+        type=int,
+        default=4,
+        help="Number of Hydra draft heads (default: 4)",
+    )
+    parser.add_argument(
+        "--num-hydra-layers",
+        type=int,
+        default=4,
+        help="Number of ResBlock layers per Hydra head (default: 4)",
+    )
+    parser.add_argument(
+        "--use-prefix-mlp",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Use prefix attention layer for Hydra++ mode (default: True). "
+        "Disable with --no-use-prefix-mlp for basic Hydra.",
+    )
+    parser.add_argument(
+        "--dropout-rate",
+        type=float,
+        default=0.0,
+        help="Dropout rate for Hydra heads (0.2 recommended for Hydra++, default: 0.0)",
     )
     # P-EAGLE specific parameters
     parser.add_argument(
