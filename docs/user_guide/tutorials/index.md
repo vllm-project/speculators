@@ -36,7 +36,7 @@ Learn how to train a P-EAGLE speculator model with COD sampling using online tra
 
 Learn how to train a P-EAGLE speculator model with COD sampling using offline training with pre-generated hidden states.
 
-**Time required:** ~55 mins
+**Time required:** ~5 hours
 
 ## [Train MTP Model Online](train_mtp_online.md)
 
