@@ -15,6 +15,9 @@
 
 set -euo pipefail
 
+# Source persistent env vars from /workspace/.env (survives pod restarts)
+[ -f /workspace/.env ] && set -a && source /workspace/.env && set +a
+
 MAX_TURNS="${MAX_TURNS:-100}"
 MAX_BUDGET="${MAX_BUDGET:-20.00}"
 

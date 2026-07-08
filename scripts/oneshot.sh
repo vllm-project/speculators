@@ -13,6 +13,9 @@
 
 set -euo pipefail
 
+# Source persistent env vars from /workspace/.env (survives pod restarts)
+[ -f /workspace/.env ] && set -a && source /workspace/.env && set +a
+
 if [ $# -lt 1 ]; then
     echo "Usage: $0 <paper_url>"
     echo "Example: $0 https://arxiv.org/abs/2407.11542"
