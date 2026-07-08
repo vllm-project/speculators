@@ -64,6 +64,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+mooncake = [
+    "hs-connectors[mooncake]",
+]
 dev = [
     # build
     "build>=1.5.0",
@@ -144,7 +147,7 @@ exclude = ["venv", "build", "dist"]
 follow_imports = 'silent'
 
 [[tool.mypy.overrides]]
-module = ["datasets.*", "transformers.*", "setuptools.*", "setuptools_git_versioning.*", "vllm.*"]
+module = ["datasets.*", "transformers.*", "setuptools.*", "setuptools_git_versioning.*", "vllm.*", "hs_connectors.*", "mooncake.*"]
 ignore_missing_imports=true
 
 [tool.ruff]

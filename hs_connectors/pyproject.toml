@@ -14,3 +14,11 @@ dependencies = [
     "safetensors",
     "torch",
 ]
+
+[project.optional-dependencies]
+mooncake = [
+    "mooncake-transfer-engine",
+]
+vllm = [
+    "vllm",
+]
