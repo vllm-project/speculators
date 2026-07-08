@@ -3,11 +3,13 @@
 # Scans arxiv, HuggingFace, GitHub, then runs oneshot on each promising find.
 #
 # Usage:
-#   ./scripts/autopilot.sh                  # headless (production)
-#   ./scripts/autopilot.sh --interactive    # live TUI (debugging)
+#   ./scripts/autopilot --days $DAYS.sh                          # headless, 60-day window
+#   ./scripts/autopilot --days $DAYS.sh --days 90                # custom window
+#   ./scripts/autopilot --days $DAYS.sh --interactive             # live TUI (debugging)
+#   ./scripts/autopilot --days $DAYS.sh --interactive --days 120  # both
 #
 # Run on a schedule (system cron):
-#   0 */8 * * * /workspace/speculators/scripts/autopilot.sh >> /workspace/speculators/autopilot.log 2>&1
+#   0 */8 * * * /workspace/speculators/scripts/autopilot --days $DAYS.sh >> /workspace/speculators/autopilot --days $DAYS.log 2>&1
 #
 # Options (via env vars):
 #   MAX_TURNS                 Max agentic turns (default: unlimited)
@@ -17,10 +19,14 @@
 set -euo pipefail
 
 INTERACTIVE=false
-if [ "${1:-}" = "--interactive" ]; then
-    INTERACTIVE=true
-    shift
-fi
+DAYS=60
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --interactive) INTERACTIVE=true; shift ;;
+        --days) DAYS="$2"; shift 2 ;;
+        *) echo "Unknown option: $1"; exit 1 ;;
+    esac
+done
 
 cd "$(dirname "$0")/.."
 
@@ -50,7 +56,7 @@ slack_notify() {
     },
     {
       "type": "context",
-      "elements": [{"type": "mrkdwn", "text": "Skill: \`/autopilot\` | Script: \`scripts/autopilot.sh\`"}]
+      "elements": [{"type": "mrkdwn", "text": "Skill: \`/autopilot --days $DAYS\` | Script: \`scripts/autopilot --days $DAYS.sh\`"}]
     },
     {
       "type": "section",
@@ -70,6 +76,7 @@ EXTRA_ARGS=()
 echo "=== Autopilot: $(date -Iseconds) ==="
 echo "Running as: $(whoami)"
 echo "Mode: $([ "$INTERACTIVE" = true ] && echo "interactive (live TUI)" || echo "headless")"
+echo "Window: $DAYS days"
 [ -n "${MAX_TURNS:-}" ] && echo "Max turns: $MAX_TURNS" || echo "Max turns: unlimited"
 if [ -n "${SLACK_WEBHOOK_URL:-}" ] || [ -n "${SLACK_WEBHOOK_URL_SUCCESS:-}" ]; then
     echo "Slack logs channel: $([ -n "${SLACK_WEBHOOK_URL:-}" ] && echo "enabled" || echo "disabled")"
@@ -88,10 +95,10 @@ REPORT_FILE="$STATE_DIR/last_run_report.md"
 rm -f "$PR_FILE" "$REPORT_FILE"
 
 if [ "$INTERACTIVE" = true ]; then
-    echo "/autopilot" | claude --dangerously-skip-permissions \
+    echo "/autopilot --days $DAYS" | claude --dangerously-skip-permissions \
         "${EXTRA_ARGS[@]}" && EXIT_CODE=0 || EXIT_CODE=$?
 else
-    claude -p "/autopilot" --dangerously-skip-permissions \
+    claude -p "/autopilot --days $DAYS" --dangerously-skip-permissions \
         "${EXTRA_ARGS[@]}" && EXIT_CODE=0 || EXIT_CODE=$?
 fi
 

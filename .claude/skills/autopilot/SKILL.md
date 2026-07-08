@@ -12,8 +12,11 @@ You are running the full autonomous pipeline: discover new speculative decoding 
 Follow `.claude/skills/discover.md` fully (search arxiv, HF, GitHub, deduplicate, classify). But instead of asking the user which to pursue, apply this filter automatically:
 
 ### Auto-pursue criteria
+
+The user may pass `--days N` to override the default 60-day recency window (e.g. `/autopilot --days 120`).
+
 Only pursue items classified as **new-method** or **variant** that meet ALL of:
-1. Published within the last 60 days
+1. Published within the last N days (default: 60)
 2. Has a clear algorithmic description (not just benchmark results)
 3. Is about speculative decoding for autoregressive LLMs (not diffusion, not vision, not audio)
 4. Is not a trivial modification (e.g., just changing hyperparameters of an existing method)
