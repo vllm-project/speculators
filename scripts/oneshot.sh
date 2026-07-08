@@ -43,8 +43,10 @@ echo "Max turns: $MAX_TURNS"
 echo "Max budget: \$$MAX_BUDGET"
 echo "========================================="
 
-claude -p "/oneshot-paper $PAPER_URL" \
+# Run as interactive session with prompt pre-filled.
+# This gives full TUI output (progress, tool calls, streaming text)
+# instead of buffered -p mode.
+echo "/oneshot-paper $PAPER_URL" | claude \
     --allowedTools "$ALLOWED_TOOLS" \
-    --verbose \
     --max-turns "$MAX_TURNS" \
     --max-budget-usd "$MAX_BUDGET"

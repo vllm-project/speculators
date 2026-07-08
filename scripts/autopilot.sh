@@ -37,8 +37,7 @@ echo "Max turns: $MAX_TURNS"
 echo "Max budget: \$$MAX_BUDGET"
 echo "======================================="
 
-claude -p "/autopilot" \
+echo "/autopilot" | claude \
     --allowedTools "$ALLOWED_TOOLS" \
-    --verbose \
     --max-turns "$MAX_TURNS" \
     --max-budget-usd "$MAX_BUDGET"
