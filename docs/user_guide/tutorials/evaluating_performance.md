@@ -41,6 +41,68 @@ Both `throughput` and `sweep` share the same options:
   --data-column-mapper JSON  Column mapping for guidellm (default: '{"text_column":"prompt"}')
 ```
 
+## SPEED-Bench
+
+[NVIDIA SPEED-Bench](https://huggingface.co/datasets/nvidia/SPEED-Bench) provides structured evaluation across qualitative categories (coding, math, reasoning, multilingual, …) and throughput splits with varying input sequence lengths (1 k–32 k tokens).
+
+### One-time data preparation
+
+SPEED-Bench prompts are fetched from external sources and cannot be redistributed directly.
+Run the preparation step once to materialise them locally:
+
+```bash
+# Fetch and materialise prompts, then split into per-category files (all in one command)
+python scripts/evaluate/prepare_speedbench.py \
+    --data-dir ./speedbench_data \
+    --download
+
+# Or run the two steps separately if you already have the flat files:
+curl -LsSf https://raw.githubusercontent.com/NVIDIA-NeMo/Skills/refs/heads/main/nemo_skills/dataset/speed-bench/prepare.py \
+    | python3 - --output_dir ./speedbench_data
+python scripts/evaluate/prepare_speedbench.py --data-dir ./speedbench_data
+```
+
+> **Note:** `prepare_speedbench.py` reads from the URL above to fetch NVIDIA's `prepare.py`.
+> Save a local copy (`--download` does this implicitly) if you anticipate running data
+> preparation again.  The materialised files contain data from third-party sources —
+> do not redistribute them.
+
+### Running evaluations
+
+Pass a `speedbench/<config>` spec to `--dataset` together with `--speedbench-data-dir`:
+
+```bash
+# All 11 qualitative categories
+python evaluate.py throughput \
+    --target http://localhost:8000/v1 \
+    --dataset speedbench/qualitative \
+    --speedbench-data-dir ./speedbench_data
+
+# Single category
+python evaluate.py throughput \
+    --target http://localhost:8000/v1 \
+    --dataset speedbench/qualitative/coding \
+    --speedbench-data-dir ./speedbench_data
+
+# All throughput_1k subcategories
+python evaluate.py throughput \
+    --target http://localhost:8000/v1 \
+    --dataset speedbench/throughput_1k \
+    --speedbench-data-dir ./speedbench_data
+
+# One entropy tier only
+python evaluate.py throughput \
+    --target http://localhost:8000/v1 \
+    --dataset speedbench/throughput_1k/high_entropy \
+    --speedbench-data-dir ./speedbench_data
+```
+
+Available configs: `qualitative`, `throughput_1k`, `throughput_2k`, `throughput_8k`, `throughput_32k`.
+
+Results are written to `acceptance.csv` in the output directory with per-category
+acceptance lengths and per-position acceptance rates, identical in format to the
+`RedHatAI/speculator_benchmarks` output.
+
 ## Visualization
 
 ```bash
