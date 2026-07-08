@@ -48,6 +48,10 @@ slack_notify() {
       "text": {"type": "plain_text", "text": ":${emoji}: Speculators Autopilot: ${status}", "emoji": true}
     },
     {
+      "type": "context",
+      "elements": [{"type": "mrkdwn", "text": "Skill: \`/autopilot\` | Script: \`scripts/autopilot.sh\`"}]
+    },
+    {
       "type": "section",
       "text": {"type": "mrkdwn", "text": "${detail}"}
     }
@@ -67,9 +71,24 @@ echo "Running as: $(whoami)"
 if [ -n "${SLACK_WEBHOOK_URL:-}" ]; then echo "Slack: enabled"; else echo "Slack: disabled (set SLACK_WEBHOOK_URL to enable)"; fi
 echo "======================================="
 
-if echo "/autopilot" | claude --dangerously-skip-permissions \
-    "${EXTRA_ARGS[@]}"; then
-    slack_notify "SUCCESS" "Autopilot scan completed. Check for draft PRs on <https://github.com/vllm-project/speculators/pulls|speculators> and <https://github.com/vllm-project/vllm/pulls|vLLM>."
+# Trap Ctrl-C — don't post to Slack on manual abort
+trap 'echo "Aborted."; exit 130' INT
+
+PR_FILE=".claude/agent_state/last_run_prs.json"
+rm -f "$PR_FILE"
+
+echo "/autopilot" | claude --dangerously-skip-permissions \
+    "${EXTRA_ARGS[@]}" && EXIT_CODE=0 || EXIT_CODE=$?
+
+if [ $EXIT_CODE -eq 0 ]; then
+    DETAIL="Autopilot scan completed."
+    if [ -f "$PR_FILE" ]; then
+        SPEC_PR=$(python3 -c "import json; d=json.load(open('$PR_FILE')); print(d.get('speculators',''))" 2>/dev/null || true)
+        VLLM_PR=$(python3 -c "import json; d=json.load(open('$PR_FILE')); print(d.get('vllm',''))" 2>/dev/null || true)
+        [ -n "$SPEC_PR" ] && DETAIL="$DETAIL\n*speculators PR:* <${SPEC_PR}>"
+        [ -n "$VLLM_PR" ] && DETAIL="$DETAIL\n*vLLM PR:* <${VLLM_PR}>"
+    fi
+    slack_notify "SUCCESS" "$DETAIL"
 else
-    slack_notify "FAIL" "Autopilot exited with code $?. Check the logs for details."
+    slack_notify "FAIL" "Autopilot exited with code $EXIT_CODE. Check the logs for details."
 fi
