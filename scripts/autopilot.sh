@@ -67,7 +67,8 @@ slack_notify() {
 EOJSON
 )
     [ -n "${SLACK_WEBHOOK_URL:-}" ] && slack_post "$SLACK_WEBHOOK_URL" "$payload"
-    [ "$status" = "SUCCESS" ] && [ -n "${SLACK_WEBHOOK_URL_SUCCESS:-}" ] && slack_post "$SLACK_WEBHOOK_URL_SUCCESS" "$payload"
+    # Only post to success channel when something was actually implemented (PRs created)
+    [ "$status" = "IMPLEMENTED" ] && [ -n "${SLACK_WEBHOOK_URL_SUCCESS:-}" ] && slack_post "$SLACK_WEBHOOK_URL_SUCCESS" "$payload"
 }
 
 EXTRA_ARGS=()
@@ -104,17 +105,21 @@ fi
 
 if [ $EXIT_CODE -eq 0 ]; then
     DETAIL="Autopilot scan completed."
+    STATUS="SUCCESS"
     if [ -f "$PR_FILE" ]; then
         SPEC_PR=$(python3 -c "import json; d=json.load(open('$PR_FILE')); print(d.get('speculators',''))" 2>/dev/null || true)
         VLLM_PR=$(python3 -c "import json; d=json.load(open('$PR_FILE')); print(d.get('vllm',''))" 2>/dev/null || true)
-        [ -n "$SPEC_PR" ] && DETAIL="$DETAIL\n*speculators PR:* <${SPEC_PR}>"
-        [ -n "$VLLM_PR" ] && DETAIL="$DETAIL\n*vLLM PR:* <${VLLM_PR}>"
+        if [ -n "$SPEC_PR" ] || [ -n "$VLLM_PR" ]; then
+            STATUS="IMPLEMENTED"
+            [ -n "$SPEC_PR" ] && DETAIL="$DETAIL\n*speculators PR:* <${SPEC_PR}>"
+            [ -n "$VLLM_PR" ] && DETAIL="$DETAIL\n*vLLM PR:* <${VLLM_PR}>"
+        fi
     fi
     if [ -f "$REPORT_FILE" ]; then
         REPORT=$(head -c 2800 "$REPORT_FILE" | sed 's/"/\\"/g; s/$/\\n/' | tr -d '\n')
         DETAIL="$DETAIL\n\n${REPORT}"
     fi
-    slack_notify "SUCCESS" "$DETAIL"
+    slack_notify "$STATUS" "$DETAIL"
 else
     slack_notify "FAIL" "Autopilot exited with code $EXIT_CODE. Check the logs for details."
 fi

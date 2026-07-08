@@ -73,8 +73,8 @@ EOJSON
 )
     # Logs channel — all notifications
     [ -n "${SLACK_WEBHOOK_URL:-}" ] && slack_post "$SLACK_WEBHOOK_URL" "$payload"
-    # Results channel — success only
-    [ "$status" = "SUCCESS" ] && [ -n "${SLACK_WEBHOOK_URL_SUCCESS:-}" ] && slack_post "$SLACK_WEBHOOK_URL_SUCCESS" "$payload"
+    # Results channel — only when something was implemented (PRs created)
+    [ "$status" = "IMPLEMENTED" ] && [ -n "${SLACK_WEBHOOK_URL_SUCCESS:-}" ] && slack_post "$SLACK_WEBHOOK_URL_SUCCESS" "$payload"
 }
 
 EXTRA_ARGS=()
@@ -113,20 +113,21 @@ fi
 
 if [ $EXIT_CODE -eq 0 ]; then
     DETAIL="Implementation pipeline completed."
-    # Read actual PR URLs written by the oneshot skill
+    STATUS="SUCCESS"
     if [ -f "$PR_FILE" ]; then
         SPEC_PR=$(python3 -c "import json; d=json.load(open('$PR_FILE')); print(d.get('speculators',''))" 2>/dev/null || true)
         VLLM_PR=$(python3 -c "import json; d=json.load(open('$PR_FILE')); print(d.get('vllm',''))" 2>/dev/null || true)
-        [ -n "$SPEC_PR" ] && DETAIL="$DETAIL\n*speculators PR:* <${SPEC_PR}>"
-        [ -n "$VLLM_PR" ] && DETAIL="$DETAIL\n*vLLM PR:* <${VLLM_PR}>"
+        if [ -n "$SPEC_PR" ] || [ -n "$VLLM_PR" ]; then
+            STATUS="IMPLEMENTED"
+            [ -n "$SPEC_PR" ] && DETAIL="$DETAIL\n*speculators PR:* <${SPEC_PR}>"
+            [ -n "$VLLM_PR" ] && DETAIL="$DETAIL\n*vLLM PR:* <${VLLM_PR}>"
+        fi
     fi
-    # Append the implementation report if the skill wrote one
     if [ -f "$REPORT_FILE" ]; then
-        # Slack section blocks have a 3000 char limit — truncate if needed
         REPORT=$(head -c 2800 "$REPORT_FILE" | sed 's/"/\\"/g; s/$/\\n/' | tr -d '\n')
         DETAIL="$DETAIL\n\n${REPORT}"
     fi
-    slack_notify "SUCCESS" "$DETAIL"
+    slack_notify "$STATUS" "$DETAIL"
 else
     slack_notify "FAIL" "Pipeline exited with code $EXIT_CODE. Check the logs for details."
 fi
