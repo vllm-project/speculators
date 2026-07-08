@@ -1,6 +1,7 @@
 import argparse
 import importlib
 import json
+import time
 import types
 from pathlib import Path
 
@@ -120,14 +121,33 @@ def extract_metrics(raw_metrics: list[Metric], total_num_output_tokens: int) -> 
     return metrics_dict
 
 
+def _count_graph_breaks() -> int:
+    """Experimental -- count graph breaks"""
+    try:
+        import torch._dynamo
+        return sum(torch._dynamo.utils.counters["graph_break"].values())
+    except Exception:
+        return -1
+
+
 def run_vllm(args: argparse.Namespace):
     sampling_params = SamplingParams(**json.loads(args.sampling_params_args))
+    try:
+        import torch._dynamo
+        torch._dynamo.reset()
+    except Exception:
+        pass
     llm = LLM(**json.loads(args.llm_args), disable_log_stats=False)
+    t0 = time.perf_counter()
     outputs = llm.chat(json.loads(args.prompts), sampling_params)
+    generation_time_s = time.perf_counter() - t0
     total_num_output_tokens = sum(
         len(output.outputs[0].token_ids) for output in outputs
     )
     metrics_dict = extract_metrics(llm.get_metrics(), total_num_output_tokens)
+    metrics_dict["generation_time_s"] = generation_time_s
+    metrics_dict["tokens_per_s"] = total_num_output_tokens / generation_time_s if generation_time_s > 0 else 0.0
+    metrics_dict["graph_breaks"] = _count_graph_breaks()
     return outputs, metrics_dict
 
 
