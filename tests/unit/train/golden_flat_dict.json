@@ -1,0 +1,196 @@
+{
+  "_baseline": {
+    "block_size": 8,
+    "checkpoint_freq": 1.0,
+    "confidence_head_alpha": 1.0,
+    "confidence_head_with_markov": true,
+    "d2t_path": null,
+    "data_path": "./output",
+    "deterministic_cuda": false,
+    "dflash_decay_gamma": 4.0,
+    "down_sample_ratio": 0.7,
+    "down_sample_ratio_min": 0.2,
+    "dpace_alpha": 0.5,
+    "draft_arch": "llama",
+    "draft_attn_impl": "simple_flex_attention",
+    "draft_config": "",
+    "draft_hidden_act": "silu",
+    "draft_vocab_size": null,
+    "dry_run": false,
+    "embed_requires_grad": false,
+    "enable_confidence_head": true,
+    "epochs": 20,
+    "fc_norm": false,
+    "from_pretrained": "",
+    "full_attention_indices": [],
+    "hidden_states_dtype": "bfloat16",
+    "hidden_states_path": null,
+    "legacy_data": false,
+    "log_dir": "./logs",
+    "log_freq": 1,
+    "logger": "",
+    "loss_fn": "kl_div",
+    "lr": 0.0001,
+    "markov_head_type": "vanilla",
+    "markov_rank": 256,
+    "mask_token_id": null,
+    "max_anchors": 3072,
+    "max_retries": 3,
+    "muon_adjust_lr_fn": "match_rms_adamw",
+    "muon_lr": 0.001,
+    "muon_momentum": 0.95,
+    "muon_ns_steps": 5,
+    "muon_weight_decay": 0.1,
+    "no_resume_from_checkpoint": false,
+    "noise_std": 0.05,
+    "norm_before_fc": true,
+    "norm_before_residual": true,
+    "norm_output": true,
+    "num_depths": 8,
+    "num_layers": 1,
+    "num_speculative_steps": 3,
+    "num_workers": 12,
+    "on_generate": "delete",
+    "on_missing": "generate",
+    "optimizer": "muon",
+    "per_position_loss_weight": "fixed-exp-decay",
+    "prefetch_factor": 4,
+    "request_timeout": 120,
+    "run_name": null,
+    "save_best": false,
+    "save_path": "./output/checkpoints",
+    "scheduler_num_cosine_cycles": 0.5,
+    "scheduler_total_steps": null,
+    "scheduler_type": "linear",
+    "scheduler_warmup_ratio": null,
+    "scheduler_warmup_steps": null,
+    "seed": 42,
+    "sliding_window": 2048,
+    "sliding_window_non_causal": false,
+    "speculator_type": "eagle3",
+    "step_weight_beta": 0.6,
+    "t2d_path": null,
+    "target_layer_ids": null,
+    "token_freq_path": null,
+    "total_seq_len": 8192,
+    "train_data_ratio": 0.9,
+    "trust_remote_code": false,
+    "ttt_step_loss_decay": 1.0,
+    "ttt_steps": 3,
+    "use_off_policy_tokens": false,
+    "verifier_name_or_path": "dummy-verifier",
+    "vllm_endpoint": "http://localhost:8000/v1",
+    "weight_decay": 0.01
+  },
+  "compound_loss": {
+    "loss_fn": "{\"ce\": 0.1, \"tv\": 0.9}"
+  },
+  "dflash_default": {
+    "draft_arch": "qwen3",
+    "norm_before_fc": false,
+    "norm_output": false,
+    "speculator_type": "dflash"
+  },
+  "dflash_full_attention_indices": {
+    "draft_arch": "qwen3",
+    "full_attention_indices": [
+      0,
+      2
+    ],
+    "norm_before_fc": false,
+    "norm_output": false,
+    "sliding_window": 1024,
+    "speculator_type": "dflash"
+  },
+  "draft_config": {
+    "draft_config": "/tmp/some/decoder"
+  },
+  "dry_run": {
+    "dry_run": true
+  },
+  "dspark_default": {
+    "draft_arch": "qwen3",
+    "norm_before_fc": false,
+    "norm_output": false,
+    "speculator_type": "dspark"
+  },
+  "dspark_heads": {
+    "confidence_head_alpha": 0.5,
+    "draft_arch": "qwen3",
+    "enable_confidence_head": false,
+    "markov_head_type": "gated",
+    "markov_rank": 128,
+    "norm_before_fc": false,
+    "norm_output": false,
+    "speculator_type": "dspark"
+  },
+  "eagle3_default": {},
+  "from_pretrained": {
+    "from_pretrained": "/tmp/some/ckpt"
+  },
+  "kitchen_sink": {
+    "confidence_head_with_markov": false,
+    "deterministic_cuda": true,
+    "draft_arch": "qwen3",
+    "embed_requires_grad": true,
+    "legacy_data": true,
+    "markov_head_type": "rnn",
+    "no_resume_from_checkpoint": true,
+    "norm_before_fc": false,
+    "norm_before_residual": false,
+    "norm_output": false,
+    "optimizer": "adamw",
+    "save_best": true,
+    "scheduler_type": "cosine",
+    "speculator_type": "dspark",
+    "target_layer_ids": [
+      2,
+      3,
+      5
+    ],
+    "trust_remote_code": true,
+    "use_off_policy_tokens": true
+  },
+  "mtp_default": {
+    "draft_arch": "qwen3",
+    "norm_before_fc": false,
+    "norm_output": false,
+    "speculator_type": "mtp"
+  },
+  "muon_optimizer": {
+    "muon_lr": 0.01
+  },
+  "norm_toggles": {
+    "fc_norm": true,
+    "norm_before_fc": false,
+    "norm_output": false
+  },
+  "numeric_overrides": {
+    "checkpoint_freq": 0.5,
+    "draft_vocab_size": 32000,
+    "epochs": 5,
+    "lr": 0.0002,
+    "muon_lr": 0.002,
+    "num_layers": 3,
+    "total_seq_len": 4096
+  },
+  "peagle_cod": {
+    "down_sample_ratio": 0.6,
+    "down_sample_ratio_min": 0.1,
+    "draft_arch": "qwen3",
+    "norm_before_fc": false,
+    "norm_output": false,
+    "num_depths": 4,
+    "speculator_type": "peagle"
+  },
+  "peagle_default": {
+    "draft_arch": "qwen3",
+    "norm_before_fc": false,
+    "norm_output": false,
+    "speculator_type": "peagle"
+  },
+  "scheduler_warmup_ratio": {
+    "scheduler_type": "cosine",
+    "scheduler_warmup_ratio": 0.1
+  }
+}
