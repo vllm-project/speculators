@@ -58,9 +58,7 @@ echo "Running as: $(whoami)"
 [ -n "${SLACK_WEBHOOK_URL:-}" ] && echo "Slack: notifications enabled"
 echo "======================================="
 
-if claude --dangerously-skip-permissions \
-    -p "/autopilot" \
-    --verbose \
+if echo "/autopilot" | claude --dangerously-skip-permissions \
     "${EXTRA_ARGS[@]}"; then
     slack_notify "SUCCESS" "Autopilot scan completed. Check for draft PRs on <https://github.com/vllm-project/speculators/pulls|speculators> and <https://github.com/vllm-project/vllm/pulls|vLLM>."
 else

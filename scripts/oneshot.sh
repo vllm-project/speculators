@@ -71,9 +71,7 @@ echo "Running as: $(whoami)"
 [ -n "${SLACK_WEBHOOK_URL:-}" ] && echo "Slack: notifications enabled"
 echo "========================================="
 
-if claude --dangerously-skip-permissions \
-    -p "/oneshot-paper $PAPER_URL" \
-    --verbose \
+if echo "/oneshot-paper $PAPER_URL" | claude --dangerously-skip-permissions \
     "${EXTRA_ARGS[@]}"; then
     slack_notify "SUCCESS" "Implementation pipeline completed. Check for draft PRs on <https://github.com/vllm-project/speculators/pulls|speculators> and <https://github.com/vllm-project/vllm/pulls|vLLM>."
 else
