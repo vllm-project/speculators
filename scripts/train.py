@@ -961,6 +961,14 @@ def parse_args():
         default=4.0,
         help="Decay gamma for DFlash/DSpark loss weighting (default: 4.0)",
     )
+    parser.add_argument(
+        "--normalize-loss-by-decay",
+        action="store_true",
+        default=False,
+        help="Normalize loss by sum of decay weights instead of token count. "
+        "Produces a proper weighted average, stabilizing loss magnitude "
+        "across different gamma values (default: False).",
+    )
     # DSpark-specific arguments (sequential Markov head + confidence head).
     parser.add_argument(
         "--markov-rank",
