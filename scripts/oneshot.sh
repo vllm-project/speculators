@@ -27,6 +27,8 @@ cd "$(dirname "$0")/.."
 # sudo -E preserves all env vars (HF_TOKEN, CUDA, AWS, etc.).
 if [ "$(id -u)" -eq 0 ]; then
     id claude-runner &>/dev/null || useradd -M -d /root claude-runner
+    chmod 755 /root
+    chmod -R a+rX /root/.claude 2>/dev/null || true
     exec sudo -E -u claude-runner "$0" "$@"
 fi
 
