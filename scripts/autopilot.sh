@@ -64,7 +64,7 @@ EXTRA_ARGS=()
 echo "=== Autopilot: $(date -Iseconds) ==="
 echo "Running as: $(whoami)"
 [ -n "${MAX_TURNS:-}" ] && echo "Max turns: $MAX_TURNS" || echo "Max turns: unlimited"
-[ -n "${SLACK_WEBHOOK_URL:-}" ] && echo "Slack: notifications enabled"
+if [ -n "${SLACK_WEBHOOK_URL:-}" ]; then echo "Slack: enabled"; else echo "Slack: disabled (set SLACK_WEBHOOK_URL to enable)"; fi
 echo "======================================="
 
 if echo "/autopilot" | claude --dangerously-skip-permissions \
