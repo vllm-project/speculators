@@ -39,7 +39,9 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import subprocess
 import sys
+import urllib.request
 from pathlib import Path
 
 logger = logging.getLogger("prepare_speedbench")
@@ -110,6 +112,28 @@ def split_config(flat_file: Path, out_dir: Path, config: str) -> int:
     return written
 
 
+_NVIDIA_PREPARE_URL = (
+    "https://raw.githubusercontent.com/NVIDIA-NeMo/Skills/"
+    "refs/heads/main/nemo_skills/dataset/speed-bench/prepare.py"
+)
+
+
+def _run_nvidia_prepare(data_dir: Path, configs: list[str]) -> None:
+    """Download and run NVIDIA's prepare.py to materialise prompts."""
+    logger.info("Downloading NVIDIA prepare.py from %s ...", _NVIDIA_PREPARE_URL)
+    with urllib.request.urlopen(_NVIDIA_PREPARE_URL) as resp:  # noqa: S310
+        script_bytes = resp.read()
+
+    for config in configs:
+        logger.info("Running prepare.py for config=%s ...", config)
+        subprocess.run(  # noqa: S603
+            [sys.executable, "-", "--config", config, "--output_dir", str(data_dir)],
+            input=script_bytes,
+            check=True,
+        )
+        logger.info("prepare.py done for config=%s", config)
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 
@@ -130,14 +154,28 @@ def main() -> None:
         default=",".join(_ALL_CONFIGS),
         help=(f"Comma-separated configs to split (default: {','.join(_ALL_CONFIGS)})"),
     )
+    parser.add_argument(
+        "--download",
+        action="store_true",
+        default=False,
+        help=(
+            "Download and run NVIDIA's prepare.py to materialise prompts before "
+            "splitting. Fetches from the NVIDIA-NeMo/Skills repository."
+        ),
+    )
     args = parser.parse_args()
 
     data_dir: Path = args.data_dir
+    data_dir.mkdir(parents=True, exist_ok=True)
+    configs = [c.strip() for c in args.configs.split(",") if c.strip()]
+
+    if args.download:
+        _run_nvidia_prepare(data_dir, configs)
+
     if not data_dir.exists():
         logger.error("--data-dir '%s' does not exist.", data_dir)
         sys.exit(1)
 
-    configs = [c.strip() for c in args.configs.split(",") if c.strip()]
     total = 0
     for config in configs:
         flat_file = data_dir / f"{config}.jsonl"

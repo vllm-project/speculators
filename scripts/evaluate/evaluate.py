@@ -152,15 +152,15 @@ def _run_subset(
     guidellm_common: dict,
     acceptance_csv: CsvWriter | None,
     perf_csv: CsvWriter | None,
-    hf_subset: str | None = None,
+    data_subset: str | None = None,
 ) -> tuple[CsvWriter | None, CsvWriter | None, int | None]:
     """Run benchmark for one subset.
 
     *subset* is used as the human-readable label and for output file names.
-    *hf_subset* is the HF subset name passed to guidellm ``--data-args``.
-    Pass the same value as *subset* for standard HF datasets.  Pass ``None``
-    when the dataset IS the file (e.g. a local JSONL from SPEED-Bench) so no
-    ``--data-args`` is added to the guidellm command.
+    *data_subset* is the value passed to guidellm ``--data-args`` to filter
+    within an HF dataset (e.g. ``"HumanEval"`` → ``{"data_files":"HumanEval.jsonl"}``).
+    Pass ``None`` when ``guidellm_common["dataset"]`` already points to a local
+    JSONL file (e.g. pre-split SPEED-Bench data) and no ``--data-args`` is needed.
     """
 
     logger.info("[%s] Starting", subset)
@@ -173,7 +173,7 @@ def _run_subset(
         gen_len_output = gen_len_dir / f"gen_len_{safe}.json"
         run_guidellm(
             **guidellm_common,
-            subset=hf_subset,
+            subset=data_subset,
             profile="throughput",
             max_requests=None,
             output_path=gen_len_output,
@@ -183,9 +183,8 @@ def _run_subset(
             [gen_len_output],
             gen_len_dir / f"max_tokens_{safe}.json",
         )
-        key = hf_subset if hf_subset else safe
+        key = data_subset if data_subset else safe
         max_tokens = mapping.get(key, max_tokens)
-        logger.info("[%s] max_tokens=%d", subset, max_tokens)
         logger.info("[%s] max_tokens=%d", subset, max_tokens)
 
     baseline = _require_metrics(metrics_url)
@@ -193,7 +192,7 @@ def _run_subset(
     run_output = artifacts_dir / f"run_{safe}.json"
     run_guidellm(
         **guidellm_common,
-        subset=hf_subset,
+        subset=data_subset,
         profile=profile,
         max_requests=args.max_requests,
         output_path=run_output,
@@ -251,10 +250,12 @@ def run_benchmark(args: argparse.Namespace) -> None:
     perf_csv = None
     all_max_tokens: dict[str, int] = {}
 
+    # Build a flat list of (label, guidellm_common, data_subset) to run uniformly.
+    # For HF datasets data_subset matches the label; for local JSONL it is None.
     dataset_spec = args.dataset
-    is_speedbench = dataset_spec.startswith("speedbench/")
+    run_items: list[tuple[str, dict, str | None]] = []
 
-    if is_speedbench:
+    if dataset_spec.startswith("speedbench/"):
         if not getattr(args, "speedbench_data_dir", None):
             logger.error(
                 "--speedbench-data-dir is required for speedbench/ datasets.\n"
@@ -262,14 +263,7 @@ def run_benchmark(args: argparse.Namespace) -> None:
                 " --speedbench-data-dir <dir>.",
             )
             sys.exit(1)
-
         pairs = _resolve_speedbench(dataset_spec, Path(args.speedbench_data_dir))
-        logger.info(
-            "Mode: %s | %d speedbench subsets | Output: %s",
-            args.mode,
-            len(pairs),
-            output_dir,
-        )
         for label, local_path in pairs:
             sb_common = {
                 "target": args.target,
@@ -278,28 +272,8 @@ def run_benchmark(args: argparse.Namespace) -> None:
                 "rate": args.gen_len_rate,
                 "max_concurrency": args.max_concurrency,
             }
-            acceptance_csv, perf_csv, mt = _run_subset(
-                label,
-                args,
-                is_sweep=is_sweep,
-                metrics_url=metrics_url,
-                artifacts_dir=artifacts_dir,
-                output_dir=output_dir,
-                guidellm_common=sb_common,
-                acceptance_csv=acceptance_csv,
-                perf_csv=perf_csv,
-                hf_subset=None,  # local JSONL is the dataset, no --data-args needed
-            )
-            if mt is not None:
-                all_max_tokens[label] = mt
+            run_items.append((label, sb_common, None))
     else:
-        subsets = [s.strip() for s in args.subsets.split(",") if s.strip()]
-        logger.info(
-            "Mode: %s | %d subsets | Output: %s",
-            args.mode,
-            len(subsets),
-            output_dir,
-        )
         guidellm_common = {
             "target": args.target,
             "dataset": dataset_spec,
@@ -307,21 +281,27 @@ def run_benchmark(args: argparse.Namespace) -> None:
             "rate": args.gen_len_rate,
             "max_concurrency": args.max_concurrency,
         }
-        for subset in subsets:
-            acceptance_csv, perf_csv, mt = _run_subset(
-                subset,
-                args,
-                is_sweep=is_sweep,
-                metrics_url=metrics_url,
-                artifacts_dir=artifacts_dir,
-                output_dir=output_dir,
-                guidellm_common=guidellm_common,
-                acceptance_csv=acceptance_csv,
-                perf_csv=perf_csv,
-                hf_subset=subset,  # HF dataset: subset name = --data-args filter
-            )
-            if mt is not None:
-                all_max_tokens[subset] = mt
+        for subset in [s.strip() for s in args.subsets.split(",") if s.strip()]:
+            run_items.append((subset, guidellm_common, subset))
+
+    logger.info(
+        "Mode: %s | %d subsets | Output: %s", args.mode, len(run_items), output_dir
+    )
+    for label, common, data_subset in run_items:
+        acceptance_csv, perf_csv, mt = _run_subset(
+            label,
+            args,
+            is_sweep=is_sweep,
+            metrics_url=metrics_url,
+            artifacts_dir=artifacts_dir,
+            output_dir=output_dir,
+            guidellm_common=common,
+            acceptance_csv=acceptance_csv,
+            perf_csv=perf_csv,
+            data_subset=data_subset,
+        )
+        if mt is not None:
+            all_max_tokens[label] = mt
 
     if acceptance_csv is None:
         logger.error("No acceptance metrics collected from any subset")
