@@ -3,8 +3,8 @@
 # Reads a paper, implements the method, runs smoke training, opens a draft PR.
 #
 # Usage:
-#   ./scripts/oneshot.sh <paper_url>
-#   ./scripts/oneshot.sh https://arxiv.org/abs/2407.11542
+#   ./scripts/oneshot.sh <paper_url>                  # headless (production)
+#   ./scripts/oneshot.sh --interactive <paper_url>    # live TUI (debugging)
 #
 # Options (via env vars):
 #   MAX_TURNS                 Max agentic turns (default: unlimited)
@@ -13,8 +13,14 @@
 
 set -euo pipefail
 
+INTERACTIVE=false
+if [ "${1:-}" = "--interactive" ]; then
+    INTERACTIVE=true
+    shift
+fi
+
 if [ $# -lt 1 ]; then
-    echo "Usage: $0 <paper_url>"
+    echo "Usage: $0 [--interactive] <paper_url>"
     echo "Example: $0 https://arxiv.org/abs/2407.11542"
     exit 1
 fi
@@ -77,6 +83,7 @@ EXTRA_ARGS=()
 echo "=== One-Shot Paper-to-Implementation ==="
 echo "Paper: $PAPER_URL"
 echo "Running as: $(whoami)"
+echo "Mode: $([ "$INTERACTIVE" = true ] && echo "interactive (live TUI)" || echo "headless")"
 [ -n "${MAX_TURNS:-}" ] && echo "Max turns: $MAX_TURNS" || echo "Max turns: unlimited"
 if [ -n "${SLACK_WEBHOOK_URL:-}" ] || [ -n "${SLACK_WEBHOOK_URL_SUCCESS:-}" ]; then
     echo "Slack logs channel: $([ -n "${SLACK_WEBHOOK_URL:-}" ] && echo "enabled" || echo "disabled")"
@@ -94,8 +101,15 @@ PR_FILE="$STATE_DIR/last_run_prs.json"
 REPORT_FILE="$STATE_DIR/last_run_report.md"
 rm -f "$PR_FILE" "$REPORT_FILE"
 
-echo "/oneshot-paper $PAPER_URL" | claude --dangerously-skip-permissions \
-    "${EXTRA_ARGS[@]}" && EXIT_CODE=0 || EXIT_CODE=$?
+if [ "$INTERACTIVE" = true ]; then
+    # Live TUI — useful for debugging. Session stays open until Ctrl-D.
+    echo "/oneshot-paper $PAPER_URL" | claude --dangerously-skip-permissions \
+        "${EXTRA_ARGS[@]}" && EXIT_CODE=0 || EXIT_CODE=$?
+else
+    # Headless — exits automatically when done.
+    claude -p "/oneshot-paper $PAPER_URL" --dangerously-skip-permissions \
+        "${EXTRA_ARGS[@]}" && EXIT_CODE=0 || EXIT_CODE=$?
+fi
 
 if [ $EXIT_CODE -eq 0 ]; then
     DETAIL="Implementation pipeline completed."

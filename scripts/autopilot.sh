@@ -3,7 +3,8 @@
 # Scans arxiv, HuggingFace, GitHub, then runs oneshot on each promising find.
 #
 # Usage:
-#   ./scripts/autopilot.sh
+#   ./scripts/autopilot.sh                  # headless (production)
+#   ./scripts/autopilot.sh --interactive    # live TUI (debugging)
 #
 # Run on a schedule (system cron):
 #   0 */8 * * * /workspace/speculators/scripts/autopilot.sh >> /workspace/speculators/autopilot.log 2>&1
@@ -14,6 +15,12 @@
 #   SLACK_WEBHOOK_URL_SUCCESS Slack webhook for successful runs only — results channel (optional)
 
 set -euo pipefail
+
+INTERACTIVE=false
+if [ "${1:-}" = "--interactive" ]; then
+    INTERACTIVE=true
+    shift
+fi
 
 cd "$(dirname "$0")/.."
 
@@ -62,6 +69,7 @@ EXTRA_ARGS=()
 
 echo "=== Autopilot: $(date -Iseconds) ==="
 echo "Running as: $(whoami)"
+echo "Mode: $([ "$INTERACTIVE" = true ] && echo "interactive (live TUI)" || echo "headless")"
 [ -n "${MAX_TURNS:-}" ] && echo "Max turns: $MAX_TURNS" || echo "Max turns: unlimited"
 if [ -n "${SLACK_WEBHOOK_URL:-}" ] || [ -n "${SLACK_WEBHOOK_URL_SUCCESS:-}" ]; then
     echo "Slack logs channel: $([ -n "${SLACK_WEBHOOK_URL:-}" ] && echo "enabled" || echo "disabled")"
@@ -79,8 +87,13 @@ PR_FILE="$STATE_DIR/last_run_prs.json"
 REPORT_FILE="$STATE_DIR/last_run_report.md"
 rm -f "$PR_FILE" "$REPORT_FILE"
 
-echo "/autopilot" | claude --dangerously-skip-permissions \
-    "${EXTRA_ARGS[@]}" && EXIT_CODE=0 || EXIT_CODE=$?
+if [ "$INTERACTIVE" = true ]; then
+    echo "/autopilot" | claude --dangerously-skip-permissions \
+        "${EXTRA_ARGS[@]}" && EXIT_CODE=0 || EXIT_CODE=$?
+else
+    claude -p "/autopilot" --dangerously-skip-permissions \
+        "${EXTRA_ARGS[@]}" && EXIT_CODE=0 || EXIT_CODE=$?
+fi
 
 if [ $EXIT_CODE -eq 0 ]; then
     DETAIL="Autopilot scan completed."
