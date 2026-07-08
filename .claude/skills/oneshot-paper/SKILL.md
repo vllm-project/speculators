@@ -163,7 +163,10 @@ After implementation and training, commit all changes and open a draft PR:
 
 ## Phase 5: Final Report
 
-Present a single comprehensive report AND write it to `.claude/agent_state/last_run_report.md` so the wrapper script can include it in Slack notifications. **Keep the report under 2500 characters** — it gets embedded in a Slack message block which has a hard 3000 char limit. Be concise: use short bullet points, skip verbose explanations.
+Write a concise report to `.claude/agent_state/last_run_report.md`. This gets embedded in a Slack message, so:
+- **Use Slack mrkdwn**: `*bold*` for headers (NOT markdown `##` or `###`), `\`code\`` for inline code
+- **Keep it under 1500 characters** — Slack blocks have a hard limit
+- **Be terse**: one line per item, no verbose explanations
 
 ```bash
 cd /workspace/speculators
@@ -172,55 +175,17 @@ cat > .claude/agent_state/last_run_report.md <<'REPORT'
 REPORT
 ```
 
-Report template:
+Report template (follow this format exactly):
 
-```markdown
-## One-Shot Implementation Report: <algo_name>
+```
+*<algo_name>* — <one-sentence method summary>
 
-### Paper
-- Title: ...
-- URL: ...
-- Method summary: <2-3 sentences>
+*Implementation*: branch `feat/<algo_name>` | lint PASS/FAIL | tests PASS/FAIL
+*Training*: <verifier> | <N> steps | loss <X.XX> → <X.XX> | PASS/FAIL
+*vLLM*: registered as `<method>`, maps to <proposer>
 
-### Classification
-- Type: new-method | variant-of-<parent>
-- Closest existing: <model>
-- Strategy: standalone | extends <parent>
-
-### Implementation
-- Branch: feat/<algo_name>
-- Files created: [list]
-- Files modified: [list]
-- Lint: PASS/FAIL
-- Unit tests: PASS/FAIL
-
-### vLLM Integration
-- Registered as: <method_name>
-- Maps to proposer: <proposer>
-- Files touched: [list]
-
-### Smoke Training
-- Verifier: <model>
-- Steps completed: N
-- Initial loss: X.XXX
-- Final loss: X.XXX
-- Verdict: PASS (loss decreased) / FAIL (reason)
-
-### Decisions Made
-- [List any non-obvious decisions and why]
-
-### Issues & Risks
-- [List anything that needs human review]
-- [List assumptions that may be wrong]
-
-### Pull Requests
-- Speculators: <PR_URL>
-- vLLM: <PR_URL> (if applicable)
-
-### What to Review
-1. The draft PR diff
-2. `.claude/agent_state/specs/<algo_name>.md` — the implementation spec
-3. Training logs at `./output/checkpoints/<algo_name>_smoke/`
+*Decisions*: <1-2 key choices, comma-separated>
+*Risks*: <1-2 key risks, comma-separated>
 ```
 
 ## Error Recovery
