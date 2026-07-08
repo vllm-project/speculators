@@ -97,15 +97,16 @@ def run_online_e2e(
         run_prepare_data(model, dataset, data_path, max_samples, seq_length)
 
     hidden_states_path = str(tmp_path / "hidden_states")
-    with launch_vllm_server_context(
-        model,
-        port,
-        hidden_states_path,
-        max_model_len=seq_length + 1,
-        **(vllm_kwargs or {}),
+    with (launch_vllm_server_context(
+            model,
+            port,
+            hidden_states_path,
+            max_model_len=seq_length + 1,
+            **(vllm_kwargs or {}),
+        ),
+        record_perf("training", perf)
     ):
         # Step 2: Train against live vLLM server
-        with record_perf("training", perf):
             run_training(
                 model,
                 data_path,

@@ -39,7 +39,9 @@ def _resolve_repo(repo_id: str, repo_type: str = "dataset") -> Path:
 
 @requires_cadence("weekly")
 @pytest.mark.regression
-def test_eagle3_qwen3_8b_sharegpt(tmp_path: Path, prompts: list[list[dict[str, str]]], log_perf: dict):
+def test_eagle3_qwen3_8b_sharegpt(
+    tmp_path: Path, prompts: list[list[dict[str, str]]], log_perf: dict
+):
     save_path = tmp_path / "checkpoints"
     with _resolve_repo(
         "inference-optimization/Qwen3-8b-sharegpt-5k"
@@ -74,7 +76,9 @@ def test_eagle3_qwen3_8b_sharegpt(tmp_path: Path, prompts: list[list[dict[str, s
 
 @requires_cadence("weekly")
 @pytest.mark.regression
-def test_dflash_qwen3_8b_sharegpt(tmp_path: Path, prompts: list[list[dict[str, str]]], log_perf: dict):
+def test_dflash_qwen3_8b_sharegpt(
+    tmp_path: Path, prompts: list[list[dict[str, str]]], log_perf: dict
+):
     save_path = tmp_path / "checkpoints"
     with _resolve_repo(
         "inference-optimization/Qwen3-8b-sharegpt-5k"
@@ -110,7 +114,9 @@ def test_dflash_qwen3_8b_sharegpt(tmp_path: Path, prompts: list[list[dict[str, s
 
 @requires_cadence("weekly")
 @pytest.mark.regression
-def test_peagle_qwen3_8b_sharegpt(tmp_path: Path, prompts: list[list[dict[str, str]]], log_perf: dict):
+def test_peagle_qwen3_8b_sharegpt(
+    tmp_path: Path, prompts: list[list[dict[str, str]]], log_perf: dict
+):
     save_path = tmp_path / "checkpoints"
     with _resolve_repo(
         "inference-optimization/Qwen3-8b-sharegpt-5k"

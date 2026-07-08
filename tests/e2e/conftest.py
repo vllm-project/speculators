@@ -37,5 +37,7 @@ def log_perf(request: pytest.FixtureRequest) -> dict:
     if not results:
         return
 
-    lines = "\n".join(f"  {label}: {elapsed:.1f}s" for label, elapsed in results.items())
+    lines = "\n".join(
+        f"  {label}: {elapsed:.1f}s" for label, elapsed in results.items()
+    )
     logger.info("Performance timings for {}:\n{}", request.node.name, lines)

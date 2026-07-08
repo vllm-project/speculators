@@ -116,33 +116,35 @@ def run_mtp_finetuning_e2e(
 
     # Step 3-4: Launch vLLM, train online
     logger.info("Starting online training")
-    with launch_vllm_server_context(
-        verifier,
-        port,
-        str(hidden_states_path),
-        max_model_len=seq_length + 1,
-        gpu_memory_utilization=gpu_memory_utilization,
-        target_layer_ids=target_layer_ids,
-        enforce_eager=enforce_eager,
+    with (
+        launch_vllm_server_context(
+            verifier,
+            port,
+            str(hidden_states_path),
+            max_model_len=seq_length + 1,
+            gpu_memory_utilization=gpu_memory_utilization,
+            target_layer_ids=target_layer_ids,
+            enforce_eager=enforce_eager,
+        ),
+        record_perf("training", perf),
     ):
-        with record_perf("training", perf):
-            run_training(
-                model=verifier,
-                data_path=data_path,
-                save_path=save_path,
-                seq_length=seq_length,
-                port=port,
-                speculator_type="mtp",
-                epochs=epochs,
-                lr=lr,
-                hidden_states_path=hidden_states_path,
-                target_layer_ids=target_layer_ids,
-                extra_train_args=[
-                    "--num-speculative-steps",
-                    str(num_speculative_tokens),
-                ],
-                timeout=train_timeout,
-            )
+        run_training(
+            model=verifier,
+            data_path=data_path,
+            save_path=save_path,
+            seq_length=seq_length,
+            port=port,
+            speculator_type="mtp",
+            epochs=epochs,
+            lr=lr,
+            hidden_states_path=hidden_states_path,
+            target_layer_ids=target_layer_ids,
+            extra_train_args=[
+                "--num-speculative-steps",
+                str(num_speculative_tokens),
+            ],
+            timeout=train_timeout,
+        )
     logger.info("Training complete")
 
     # Step 5-6: Stitch and validate via vLLM

@@ -459,6 +459,7 @@ def run_vllm_engine(
                 f"Acceptance {acci} at token {i} is less than threshold {thresholdi}"
             )
 
+
 @contextmanager
 def record_perf(label: str, results: dict | None):
     if results is None:
