@@ -74,8 +74,10 @@ echo "======================================="
 # Trap Ctrl-C — don't post to Slack on manual abort
 trap 'echo "Aborted."; exit 130' INT
 
-PR_FILE=".claude/agent_state/last_run_prs.json"
-rm -f "$PR_FILE"
+STATE_DIR=".claude/agent_state"
+PR_FILE="$STATE_DIR/last_run_prs.json"
+REPORT_FILE="$STATE_DIR/last_run_report.md"
+rm -f "$PR_FILE" "$REPORT_FILE"
 
 echo "/autopilot" | claude --dangerously-skip-permissions \
     "${EXTRA_ARGS[@]}" && EXIT_CODE=0 || EXIT_CODE=$?
@@ -87,6 +89,10 @@ if [ $EXIT_CODE -eq 0 ]; then
         VLLM_PR=$(python3 -c "import json; d=json.load(open('$PR_FILE')); print(d.get('vllm',''))" 2>/dev/null || true)
         [ -n "$SPEC_PR" ] && DETAIL="$DETAIL\n*speculators PR:* <${SPEC_PR}>"
         [ -n "$VLLM_PR" ] && DETAIL="$DETAIL\n*vLLM PR:* <${VLLM_PR}>"
+    fi
+    if [ -f "$REPORT_FILE" ]; then
+        REPORT=$(head -c 2800 "$REPORT_FILE" | sed 's/"/\\"/g; s/$/\\n/' | tr -d '\n')
+        DETAIL="$DETAIL\n\n${REPORT}"
     fi
     slack_notify "SUCCESS" "$DETAIL"
 else

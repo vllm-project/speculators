@@ -145,7 +145,16 @@ After implementation and training, commit all changes and open a draft PR:
 
 ## Phase 5: Final Report
 
-Present a single comprehensive report:
+Present a single comprehensive report AND write it to `.claude/agent_state/last_run_report.md` so the wrapper script can include it in Slack notifications:
+
+```bash
+cd /workspace/speculators
+cat > .claude/agent_state/last_run_report.md <<'REPORT'
+<paste the report content here>
+REPORT
+```
+
+Report template:
 
 ```markdown
 ## One-Shot Implementation Report: <algo_name>
