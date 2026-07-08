@@ -29,8 +29,7 @@ if [ "$(id -u)" -eq 0 ]; then
     id claude-runner &>/dev/null || useradd -M -d /root -g 0 claude-runner
     find /root -not -path '/root/.ssh*' -exec chmod g+rwX {} + 2>/dev/null || true
     chmod -R g+rwX /workspace 2>/dev/null || true
-    export HOME=/root
-    exec runuser -u claude-runner -- "$0" "$@"
+    exec runuser --preserve-environment -u claude-runner -- "$0" "$@"
 fi
 
 slack_notify() {
