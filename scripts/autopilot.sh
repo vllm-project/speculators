@@ -17,23 +17,9 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-# When running as root (containers), re-exec as a non-root user so we can
-# use --dangerously-skip-permissions (which Claude blocks for root).
+# Claude blocks --dangerously-skip-permissions for root. The devenv entrypoint
+# creates a claude-runner user with the right groups — just re-exec as it.
 if [ "$(id -u)" -eq 0 ]; then
-    WS_GID=$(stat -c '%g' /workspace/speculators)
-    NEED_RECREATE=0
-    if id claude-runner &>/dev/null; then
-        if [ "$(id -g claude-runner)" != "$WS_GID" ]; then
-            userdel claude-runner
-            NEED_RECREATE=1
-        fi
-    else
-        NEED_RECREATE=1
-    fi
-    if [ "$NEED_RECREATE" -eq 1 ]; then
-        useradd -M -d /root -g "$WS_GID" -G 0 claude-runner
-    fi
-    find /root -not -path '/root/.ssh*' -exec chmod o+rX {} + 2>/dev/null || true
     exec runuser --preserve-environment -u claude-runner -- "$0" "$@"
 fi
 
