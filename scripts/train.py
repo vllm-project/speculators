@@ -1086,7 +1086,7 @@ def parse_args():
     parser.add_argument(
         "--optimizer",
         type=str,
-        default="adamw",
+        default="muon",
         choices=["adamw", "muon"],
         help=(
             "Optimizer to use. 'muon' applies Muon to 2D weight matrices and AdamW to "
@@ -1102,8 +1102,9 @@ def parse_args():
     parser.add_argument(
         "--muon-lr",
         type=float,
-        default=0.02,
-        help="LR for the Muon (2D weights) group. Only used with --optimizer muon.",
+        default=None,
+        help="LR for the Muon (2D weights) group. Only used with --optimizer muon. "
+        "Defaults to 10*lr (and --lr defaults to 1e-4)",
     )
     parser.add_argument("--muon-momentum", type=float, default=0.95)
     parser.add_argument("--muon-weight-decay", type=float, default=0.1)
@@ -1125,6 +1126,8 @@ def parse_args():
         args.norm_before_fc = is_eagle3
     if args.norm_output is None:
         args.norm_output = is_eagle3
+    if args.muon_lr is None:
+        args.muon_lr = 10 * args.lr
 
     provided = explicitly_provided_dests(parser, DECODER_SHAPING_FLAGS)
     validate_draft_init_args(parser, args, provided)
