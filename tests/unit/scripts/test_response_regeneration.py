@@ -9,6 +9,7 @@ The script is not a package, so it is imported by path.
 
 import argparse
 import asyncio
+import copy
 import importlib.util
 import json
 from pathlib import Path
@@ -251,8 +252,8 @@ def test_pretokenized_passthrough_rejects_length_mismatch():
 # The prior resume keyed rows on ``uuid or idx`` (idx = streaming enumeration
 # index), which is unstable across --limit/--language-filter/order changes and
 # never matched the emitted output. A conversation now fans out to one row per
-# assistant turn, so the row ``id`` is turn-suffixed and cannot itself be the
-# resume key; each row carries the conversation's ``primary_id`` for that.
+# target generation, so the row ``id`` is generation-suffixed and cannot itself
+# be the resume key; each row carries the conversation's ``primary_id`` for that.
 # ---------------------------------------------------------------------------
 
 
@@ -476,7 +477,7 @@ def _run_worker(responses, tmp_path, stem):
         queue: asyncio.Queue = asyncio.Queue()
         await queue.put(_TWO_TURN_ITEM)
         await queue.put(None)
-        stats = {"ok": 0, "errors": 0}
+        stats = {"ok": 0, "errors": 0, "truncated": 0}
         await regen.worker(
             _FakeSession(responses),
             queue,
@@ -499,16 +500,16 @@ def _run_worker(responses, tmp_path, stem):
 
 def test_worker_row_identity_and_all_or_nothing_writes(tmp_path):
     # Two assistant turns -> two rows. `primary_id` is the queue item's stable id
-    # (never the streaming `idx`); `id` is that id plus a turn suffix; and resume
-    # keys on the former, so a re-run of this conversation is skipped.
+    # (never the streaming `idx`); `id` is that id plus a generation suffix; and
+    # resume keys on the former, so a re-run of this conversation is skipped.
     stats, out_path, _ = _run_worker(
         [_ok([1, 2], [3, 4], "four"), _ok([1, 2, 3, 4, 5], [6], "six")],
         tmp_path,
         "ok",
     )
-    assert stats == {"ok": 1, "errors": 0}
+    assert stats == {"ok": 1, "errors": 0, "truncated": 0}
     rows = [json.loads(line) for line in out_path.read_text().splitlines()]
-    assert [r["id"] for r in rows] == ["conv-abc_turn0", "conv-abc_turn1"]
+    assert [r["id"] for r in rows] == ["conv-abc_gen0", "conv-abc_gen1"]
     assert {r["primary_id"] for r in rows} == {"conv-abc"}
     # The boundary is the mask: prompt 0s then completion 1s.
     assert rows[0]["input_ids"] == [1, 2, 3, 4]
@@ -525,12 +526,245 @@ def test_worker_row_identity_and_all_or_nothing_writes(tmp_path):
         tmp_path,
         "fail",
     )
-    assert stats == {"ok": 0, "errors": 1}
+    assert stats == {"ok": 0, "errors": 1, "truncated": 0}
     assert out_path.read_text() == ""
     assert regen.load_seen(str(out_path)) == set()
     error = json.loads(err_path.read_text())
     assert error["id"] == "conv-abc"
+    # The failed conversation still reports the row it had completed.
     assert error["metadata"]["turns_completed"] == 1
+
+
+# ---------------------------------------------------------------------------
+# 3. Tool-call regeneration: tools/results are carried in, tool-call tokens are
+#    regenerated on-policy, and cached results are spliced back positionally.
+# ---------------------------------------------------------------------------
+
+
+def _tool_call(call_id="call_1", name="get_weather", arguments='{"city": "Tokyo"}'):
+    return {
+        "id": call_id,
+        "type": "function",
+        "function": {"name": name, "arguments": arguments},
+    }
+
+
+def _response(
+    *, prompt_token_ids, token_ids, content=None, tool_calls=None, finish="stop"
+):
+    """A vLLM chat-completion response with ``return_token_ids`` populated."""
+    return {
+        "choices": [
+            {
+                "message": {"content": content, "tool_calls": tool_calls},
+                "finish_reason": finish,
+                "token_ids": token_ids,
+            }
+        ],
+        "prompt_token_ids": prompt_token_ids,
+        "usage": {"completion_tokens": len(token_ids)},
+    }
+
+
+def _fake_post(responses):
+    """A post_fn returning canned responses in order and recording sent payloads."""
+    sent = []
+
+    async def post(payload):
+        sent.append(copy.deepcopy(payload))
+        return responses[len(sent) - 1]
+
+    return post, sent
+
+
+def _regen(
+    item, responses, *, model="m", max_tokens=64, endpoint="ep", sampling_params=None
+):
+    post, sent = _fake_post(responses)
+    samples: list = []
+    truncated = asyncio.run(
+        regen.regenerate_conversation(
+            post,
+            item,
+            model=model,
+            max_tokens=max_tokens,
+            endpoint=endpoint,
+            sampling_params=sampling_params or {},
+            samples=samples,
+        )
+    )
+    return samples, truncated, sent
+
+
+# --- ingestion: tools + tool results carried out of the raw row ---
+
+
+def test_extract_tools_list_passthrough_and_functions_wrapping():
+    tools = [{"type": "function", "function": {"name": "f"}}]
+    assert regen.extract_tools({"tools": tools}) == tools
+    # JSON-encoded tools string is decoded.
+    assert regen.extract_tools({"tools": json.dumps(tools)}) == tools
+    # Legacy bare `functions` list is wrapped into OpenAI tool shape.
+    assert regen.extract_tools({"functions": [{"name": "f"}]}) == [
+        {"type": "function", "function": {"name": "f"}}
+    ]
+    # No schema / empty / bad JSON -> None (tool-free datasets unchanged).
+    assert regen.extract_tools({"prompt": "hi"}) is None
+    assert regen.extract_tools({"tools": []}) is None
+    assert regen.extract_tools({"tools": "not json"}) is None
+
+
+def test_extract_tool_results_ordered_across_schemas():
+    # OpenAI `messages` with role=tool, in order, aliases recognised.
+    row = {
+        "messages": [
+            {"role": "user", "content": "q"},
+            {"role": "assistant", "tool_calls": [_tool_call()]},
+            {"role": "tool", "content": "r1"},
+            {"role": "assistant", "content": "a"},
+            {"role": "user", "content": "q2"},
+            {"role": "observation", "content": "r2"},
+        ]
+    }
+    assert regen.extract_tool_results(row) == ["r1", "r2"]
+    # from/value schema, non-dict elements skipped.
+    conv = {"conversations": ["x", {"from": "tool", "value": "r"}]}
+    assert regen.extract_tool_results(conv) == ["r"]
+    # Tool-free row -> [] (unchanged regeneration).
+    assert (
+        regen.extract_tool_results({"messages": [{"role": "user", "content": "q"}]})
+        == []
+    )
+
+
+# --- per-response validation guards (the empty-content-is-a-tool-call bug fix) ---
+
+
+def test_sample_from_response_rejects_empty_and_missing_token_ids():
+    # Neither content nor tool_calls -> empty generation.
+    with pytest.raises(ValueError, match="empty assistant generation"):
+        regen._sample_from_response(
+            _response(prompt_token_ids=[1], token_ids=[2], content=None),
+            prefix=[],
+            conv_id="c",
+            sample_index=0,
+            idx=0,
+            endpoint="ep",
+            sampling_params={},
+        )
+    # Content present but the endpoint returned no token ids.
+    bad = {
+        "choices": [{"message": {"content": "hi"}, "token_ids": []}],
+        "prompt_token_ids": [],
+    }
+    with pytest.raises(ValueError, match="return_token_ids"):
+        regen._sample_from_response(
+            bad,
+            prefix=[],
+            conv_id="c",
+            sample_index=0,
+            idx=0,
+            endpoint="ep",
+            sampling_params={},
+        )
+
+
+# --- the tool-call loop: splice, truncate, and the unchanged plain path ---
+
+
+def test_sampling_params_reach_the_request_and_metadata():
+    item = {"idx": 0, "primary_id": "u", "turns": [{"role": "user", "content": "hi"}]}
+    responses = [_response(prompt_token_ids=[1, 2], token_ids=[3], content="hello")]
+    # `max_tokens` is ours to own: a user-supplied value must not win.
+    params = {"temperature": 0.6, "top_p": 0.95, "max_tokens": 1}
+    samples, _, sent = _regen(item, responses, max_tokens=64, sampling_params=params)
+
+    assert sent[0]["temperature"] == 0.6
+    assert sent[0]["top_p"] == 0.95
+    assert sent[0]["max_tokens"] == 64
+    # Recorded for reproducibility of the generated row.
+    assert samples[0]["metadata"]["sampling_params"] == params
+
+
+def test_regenerate_plain_conversation_is_unchanged_and_sends_no_tools():
+    item = {"idx": 0, "primary_id": "u", "turns": [{"role": "user", "content": "hi"}]}
+    responses = [_response(prompt_token_ids=[1, 2], token_ids=[3], content="hello")]
+    samples, truncated, sent = _regen(item, responses)
+
+    assert not truncated
+    assert len(samples) == 1
+    assert samples[0]["metadata"]["is_tool_call"] is False
+    # Tool-free path must not advertise tools to the endpoint.
+    assert "tools" not in sent[0]
+
+
+def test_regenerate_splices_cached_result_after_regenerated_call():
+    item = {
+        "idx": 1,
+        "primary_id": "u1",
+        "turns": [{"role": "user", "content": "weather?"}],
+        "tools": [{"type": "function", "function": {"name": "get_weather"}}],
+        "tool_results": ["15C"],
+    }
+    responses = [
+        _response(  # target regenerates a tool call (empty content)
+            prompt_token_ids=[1, 2],
+            token_ids=[3, 4],
+            tool_calls=[_tool_call(call_id="call_1")],
+            finish="tool_calls",
+        ),
+        _response(  # target's final answer, conditioned on prompt+call+result
+            prompt_token_ids=[1, 2, 3, 4, 5, 6],
+            token_ids=[7, 8],
+            content="It is 15C.",
+        ),
+    ]
+    samples, truncated, sent = _regen(item, responses)
+
+    assert not truncated
+    assert len(samples) == 2
+    # Row 0 is the on-policy tool call: its generated tokens get loss_mask 1.
+    assert samples[0]["loss_mask"] == [0, 0, 1, 1]
+    assert samples[0]["metadata"]["is_tool_call"] is True
+    # The second request replays the regenerated call and the spliced cached result.
+    assert sent[0]["tool_choice"] == "auto"
+    assert sent[1]["messages"][-2]["tool_calls"] == [_tool_call(call_id="call_1")]
+    assert sent[1]["messages"][-1] == {
+        "role": "tool",
+        "content": "15C",
+        "tool_call_id": "call_1",
+    }
+
+
+@pytest.mark.parametrize(
+    ("tool_calls", "tool_results"),
+    [
+        ([_tool_call()], []),  # no cached result left to splice
+        ([_tool_call("a"), _tool_call("b")], ["r"]),  # parallel call: no 1:1 pairing
+    ],
+    ids=["no_cached_result", "parallel_calls"],
+)
+def test_regenerate_truncates_but_keeps_committed_call_row(tool_calls, tool_results):
+    item = {
+        "idx": 2,
+        "primary_id": "u",
+        "turns": [{"role": "user", "content": "q"}],
+        "tools": [{"type": "function", "function": {"name": "f"}}],
+        "tool_results": tool_results,
+    }
+    responses = [
+        _response(
+            prompt_token_ids=[1],
+            token_ids=[2],
+            tool_calls=tool_calls,
+            finish="tool_calls",
+        )
+    ]
+    samples, truncated, sent = _regen(item, responses)
+
+    assert truncated
+    assert len(samples) == 1  # committed tool-call row kept; continuation stopped
+    assert len(sent) == 1  # no follow-up request once we cannot continue coherently
 
 
 # ---------------------------------------------------------------------------

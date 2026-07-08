@@ -6,6 +6,7 @@ import json
 import os
 import re
 import sys
+from collections import deque
 from typing import Any
 
 import aiohttp
@@ -33,6 +34,11 @@ def _dataset_choice(name: str) -> str:
             "images yet. Use it off-policy with `prepare-data`."
         )
     return name
+
+
+# ---------------------------------------------------------------------------
+# CLI & run configuration
+# ---------------------------------------------------------------------------
 
 
 def parse_args():
@@ -136,6 +142,19 @@ def sanitize_filename(name: str) -> str:
     return name.strip("._")
 
 
+# ---------------------------------------------------------------------------
+# Row ingestion: user/system turns, tool schema, cached tool results
+# ---------------------------------------------------------------------------
+
+
+def _conversation_messages(row: dict[str, Any]) -> list:
+    """The ``messages`` or ``conversations`` list from a row, else []."""
+    convs = row.get("messages")
+    if not (isinstance(convs, list) and convs):
+        convs = row.get("conversations")
+    return convs if isinstance(convs, list) else []
+
+
 def extract_turns(
     row: dict[str, Any], prompt_field: str | None
 ) -> list[dict[str, Any]]:
@@ -147,28 +166,23 @@ def extract_turns(
     Rows without a usable conversation fall back to a single user turn taken
     from ``prompt_field``.
     """
-    convs = row.get("messages")
-    if not (isinstance(convs, list) and convs):
-        convs = row.get("conversations")
+    turns = []
+    for m in _conversation_messages(row):
+        if not isinstance(m, dict):
+            continue
+        role = m.get("role") or m.get("from")
+        content = m.get("content") or m.get("value")
+        if not content:
+            continue
+        if role == "system":
+            turns.append({"role": "system", "content": content})
+        elif role in ("user", "human"):
+            turns.append({"role": "user", "content": content})
+        # original assistant/gpt turns are dropped and regenerated
+    if any(turn["role"] == "user" for turn in turns):
+        return turns
 
-    if isinstance(convs, list) and convs:
-        turns = []
-        for m in convs:
-            if not isinstance(m, dict):
-                continue
-            role = m.get("role") or m.get("from")
-            content = m.get("content") or m.get("value")
-            if not content:
-                continue
-            if role == "system":
-                turns.append({"role": "system", "content": content})
-            elif role in ("user", "human"):
-                turns.append({"role": "user", "content": content})
-            # original assistant/gpt turns are dropped and regenerated
-        if any(turn["role"] == "user" for turn in turns):
-            return turns
-        # no usable user turn: fall through to the prompt_field fallback
-
+    # no usable user turn: fall back to the prompt_field
     prompt = row.get(prompt_field)
     if prompt:
         return [{"role": "user", "content": prompt}]
@@ -186,6 +200,69 @@ def prepare_row(row: dict[str, Any], config: DatasetConfig) -> list[dict[str, An
     if config.normalize_fn is not None:
         row = {**row, **config.normalize_fn(row)}
     return extract_turns(row, config.prompt_field)
+
+
+def _maybe_json(value: Any):
+    """Best-effort JSON decode; return None if the value is not valid JSON."""
+    try:
+        return json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        return None
+
+
+def _list_field(row, key) -> list | None:
+    """Non-empty list from ``row[key]`` (JSON-decoded if a string), else None."""
+    value = row.get(key)
+    if isinstance(value, str):
+        value = _maybe_json(value)
+    return value if isinstance(value, list) and value else None
+
+
+def extract_tools(row) -> list | None:
+    """Return the OpenAI-style ``tools`` schema for a row, or ``None``.
+
+    Accepts a ``tools`` list/JSON-string, or a legacy ``functions`` list (each
+    wrapped as ``{"type": "function", "function": ...}``), forwarded to the Chat
+    Completions API on every request. Tool-free datasets return ``None``.
+    """
+    tools = _list_field(row, "tools")
+    if tools:
+        return tools
+    functions = _list_field(row, "functions")
+    if functions:
+        return [{"type": "function", "function": fn} for fn in functions]
+    return None
+
+
+# Roles that carry a tool/function result across the conversation schemas we ingest.
+_TOOL_RESULT_ROLES = {"tool", "function", "observation", "function_response"}
+
+
+def extract_tool_results(row) -> list:
+    """Ordered tool-result payloads from a conversation, for positional reuse.
+
+    Tools are not executed during regeneration; the i-th cached result is spliced
+    back after the target's i-th regenerated tool call. Returns ``[]`` for the
+    plain (tool-free) datasets, leaving their regeneration unchanged.
+    """
+    results: list = []
+    for m in _conversation_messages(row):
+        if not isinstance(m, dict):
+            continue
+        role = m.get("role") or m.get("from")
+        if role not in _TOOL_RESULT_ROLES:
+            continue
+        content = m.get("content")
+        if content is None:
+            content = m.get("value")
+        if content is not None:
+            results.append(content)
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Resume state & vLLM server IO
+# ---------------------------------------------------------------------------
 
 
 def _is_present(value: Any) -> bool:
@@ -217,11 +294,12 @@ def _primary_identifier(row: dict[str, Any]) -> str:
 def load_seen(path: str) -> set[str]:
     """Load previously completed conversation ids from the output file.
 
-    A conversation fans out to one row per assistant turn, whose ``id`` carries a
-    ``_turn<N>`` suffix; the conversation's own :func:`_primary_identifier` is
-    kept alongside it as ``primary_id``. Resume keys on that, since the suffixed
-    ids never match a recomputed one. Rows are written only after every turn
-    succeeds, so one row is enough to mark the conversation done.
+    A conversation fans out to one row per target generation -- a tool call or a
+    final answer -- whose ``id`` carries a ``_gen<N>`` suffix; the conversation's
+    own :func:`_primary_identifier` is kept alongside it as ``primary_id``.
+    Resume keys on that, since the suffixed ids never match a recomputed one.
+    Rows are written only after the conversation finishes, so one row is enough
+    to mark it done.
 
     ``id`` is the fallback for output files written before the fan-out, where the
     top-level ``id`` *was* the primary identifier.
@@ -306,6 +384,11 @@ async def _post_chat(
         return await response.json()
 
 
+# ---------------------------------------------------------------------------
+# Regeneration: model response -> boundary training samples
+# ---------------------------------------------------------------------------
+
+
 def build_boundary_sample(
     prompt_token_ids: list[int],
     completion_token_ids: list[int],
@@ -319,6 +402,177 @@ def build_boundary_sample(
     return input_ids, loss_mask
 
 
+def _tool_result_message(tool_call: dict, content: Any) -> dict[str, Any]:
+    """Build the ``tool`` message that feeds a cached (off-policy) result back to
+    the target, paired to the id of the call the target just generated."""
+    if not isinstance(content, str):
+        content = json.dumps(content, ensure_ascii=False)
+    message: dict[str, Any] = {"role": "tool", "content": content}
+    call_id = tool_call.get("id")
+    if call_id:
+        message["tool_call_id"] = call_id
+    return message
+
+
+def _sample_from_response(
+    data: dict[str, Any],
+    *,
+    prefix: list[dict[str, Any]],
+    conv_id: str,
+    sample_index: int,
+    idx: int,
+    endpoint: str,
+    sampling_params: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], list | None]:
+    """Turn one chat-completion response into a boundary sample and the assistant
+    message to append to the running prefix.
+
+    Returns ``(sample, assistant_msg, tool_calls)``; ``tool_calls`` is truthy when
+    the target emitted a tool call (its content may be empty). Raises on a wholly
+    empty generation or a response missing the ``return_token_ids`` payload.
+    """
+    choice = data["choices"][0]
+    message = choice["message"]
+    content = message.get("content")
+    tool_calls = message.get("tool_calls")
+
+    # A tool call legitimately has empty content; only a wholly empty generation
+    # corrupts the next prefix and must fail the conversation.
+    if not content and not tool_calls:
+        raise ValueError(f"empty assistant generation (sample {sample_index})")
+
+    prompt_token_ids = data.get("prompt_token_ids")
+    completion_token_ids = choice.get("token_ids")
+    if not prompt_token_ids or not completion_token_ids:
+        raise ValueError(
+            "endpoint returned no token ids; it must support return_token_ids"
+        )
+
+    input_ids, loss_mask = build_boundary_sample(prompt_token_ids, completion_token_ids)
+    if tool_calls:
+        # History keeps the parsed call; any generated <think> is supervised in
+        # this row's completion tokens, not re-rendered.
+        assistant_msg = {
+            "role": "assistant",
+            "content": content or "",
+            "tool_calls": tool_calls,
+        }
+    else:
+        assistant_msg = {"role": "assistant", "content": content}
+
+    sample = {
+        "id": f"{conv_id}_gen{sample_index}",
+        # Conversation-level key for --resume; the row `id` is generation-suffixed
+        # and would never match a recomputed one.
+        "primary_id": conv_id,
+        "input_ids": input_ids,
+        "loss_mask": loss_mask,
+        # Review-only twin of input_ids; ignored by training.
+        "conversations": [*prefix, assistant_msg],
+        "metadata": {
+            "idx": idx,
+            "finish_reason": choice.get("finish_reason"),
+            "is_tool_call": bool(tool_calls),
+            "usage": data.get("usage") or {},
+            "endpoint": endpoint,
+            "sampling_params": sampling_params,
+        },
+    }
+    return sample, assistant_msg, tool_calls
+
+
+async def regenerate_conversation(
+    post_fn,
+    item: dict[str, Any],
+    *,
+    model: str,
+    max_tokens: int,
+    endpoint: str,
+    sampling_params: dict[str, Any],
+    samples: list[dict[str, Any]],
+) -> bool:
+    """Regenerate one conversation into per-generation boundary samples.
+
+    Each target generation -- a tool call *or* a final answer -- becomes one
+    boundary row (prompt loss_mask 0, generated tokens 1). Tool calls are not
+    executed: the target's i-th regenerated call is followed by the i-th cached
+    tool result from the source data (positional reuse).
+
+    The conversation is truncated after the last committed sample -- returning
+    ``True`` -- when the target emits more tool calls than we have cached results
+    for, or a parallel (multi) tool call we cannot pair 1:1.
+
+    Completed rows are appended to ``samples`` as they are built, so the caller
+    still holds the partial result if this raises partway through. Returns
+    whether the conversation was truncated.
+    """
+    turns = item["turns"]
+    tools = item.get("tools")
+    tool_results = deque(item.get("tool_results") or [])
+    conv_id = item["primary_id"]
+
+    prefix: list[dict[str, Any]] = []
+    truncated = False
+
+    for turn in turns:
+        if turn["role"] == "system":
+            prefix.append({"role": "system", "content": turn["content"]})
+            continue
+
+        prefix.append({"role": "user", "content": turn["content"]})
+
+        # Tool-call loop: a tool call splices a cached result and continues;
+        # a final answer ends the turn.
+        while True:
+            payload: dict[str, Any] = {
+                # Spread first: the keys below are ours to own and must not be
+                # overridden by user-supplied sampling params.
+                **sampling_params,
+                "model": model,
+                "messages": prefix,
+                "max_tokens": max_tokens,
+                "return_token_ids": True,  # prompt_token_ids + completion token_ids
+            }
+            if tools:
+                payload["tools"] = tools
+                payload["tool_choice"] = "auto"
+
+            data = await post_fn(payload)
+            sample, assistant_msg, tool_calls = _sample_from_response(
+                data,
+                prefix=prefix,
+                conv_id=conv_id,
+                sample_index=len(samples),
+                idx=item["idx"],
+                endpoint=endpoint,
+                sampling_params=sampling_params,
+            )
+            samples.append(sample)
+            prefix.append(assistant_msg)
+
+            if not tool_calls:
+                break  # final answer: this user turn is done
+
+            # To continue past a tool call we need exactly one call and a cached
+            # result to pair with it; otherwise keep this (committed) call row
+            # and truncate.
+            if len(tool_calls) != 1 or not tool_results:
+                truncated = True
+                break
+
+            prefix.append(_tool_result_message(tool_calls[0], tool_results.popleft()))
+
+        if truncated:
+            break
+
+    return truncated
+
+
+# ---------------------------------------------------------------------------
+# Worker pool & orchestration
+# ---------------------------------------------------------------------------
+
+
 async def worker(
     session: aiohttp.ClientSession,
     queue: "asyncio.Queue[dict[str, Any]]",
@@ -329,99 +583,55 @@ async def worker(
     progress,
     stats: dict[str, int],
 ):
-    """Regenerate each queued conversation into pre-tokenized training samples.
+    """Pull conversations off the queue and regenerate them into boundary rows.
 
-    One sample per assistant turn: the prompt the target conditioned on
-    (loss_mask 0) followed by the tokens it generated (1).
+    Each target generation becomes one boundary sample; tool calls reuse the
+    source data's cached results (see ``regenerate_conversation``). Truncated
+    conversations still emit the rows completed before the cut.
     """
+
+    async def post(payload: dict[str, Any]) -> dict[str, Any]:
+        return await _post_chat(
+            session, endpoint, payload, max_retries=args.max_retries
+        )
+
     while True:
         item = await queue.get()
         if item is None:
             queue.task_done()
             return
 
-        idx = item["idx"]
-        turns = item["turns"]
         conv_id = item["primary_id"]
-
-        prefix: list[dict[str, Any]] = []
+        # Held by the caller so a mid-conversation failure can still report how
+        # many rows had been completed.
         samples: list[dict[str, Any]] = []
         try:
-            for turn in turns:
-                if turn["role"] == "system":
-                    prefix.append({"role": "system", "content": turn["content"]})
-                    continue
-
-                prefix.append({"role": "user", "content": turn["content"]})
-
-                payload = {
-                    **args.sampling_params,
-                    "model": args.model,
-                    "messages": prefix,
-                    "max_tokens": args.max_tokens,
-                    "return_token_ids": True,  # prompt_token_ids + completion token_ids
-                }
-                data = await _post_chat(
-                    session,
-                    endpoint,
-                    payload,
-                    max_retries=args.max_retries,
-                )
-
-                choice = data["choices"][0]
-                generated_text = choice["message"].get("content")
-
-                # Empty content corrupts the next turn's prefix; fail the conversation.
-                if not generated_text:
-                    raise ValueError(f"empty assistant content (turn {len(samples)})")
-
-                prompt_token_ids = data.get("prompt_token_ids")
-                completion_token_ids = choice.get("token_ids")
-                if not prompt_token_ids or not completion_token_ids:
-                    raise ValueError(
-                        "endpoint returned no token ids; it must support "
-                        "return_token_ids"
-                    )
-
-                input_ids, loss_mask = build_boundary_sample(
-                    prompt_token_ids, completion_token_ids
-                )
-                # History keeps parsed content; the generated <think> is supervised
-                # in this turn's completion tokens above.
-                assistant_msg = {"role": "assistant", "content": generated_text}
-                samples.append(
-                    {
-                        "id": f"{conv_id}_turn{len(samples)}",
-                        # Conversation-level key for --resume; the row `id` is
-                        # turn-suffixed and would never match a recomputed one.
-                        "primary_id": conv_id,
-                        "input_ids": input_ids,
-                        "loss_mask": loss_mask,
-                        # Review-only twin of input_ids; ignored by training.
-                        "conversations": [*prefix, assistant_msg],
-                        "metadata": {
-                            "idx": idx,
-                            "finish_reason": choice.get("finish_reason"),
-                            "usage": data.get("usage") or {},
-                            "endpoint": endpoint,
-                            "sampling_params": args.sampling_params,
-                        },
-                    }
-                )
-                prefix.append(assistant_msg)
-
-            # Written only after every turn succeeds, so any row in the output
-            # file means the whole conversation is done (see load_seen).
+            truncated = await regenerate_conversation(
+                post,
+                item,
+                model=args.model,
+                max_tokens=args.max_tokens,
+                endpoint=endpoint,
+                sampling_params=args.sampling_params,
+                samples=samples,
+            )
+            # Written only after the conversation finishes -- a clean truncation
+            # included, since rerunning it would truncate again. An exception
+            # writes nothing, so any row in the output file means the
+            # conversation needs no rerun (see load_seen).
             for sample in samples:
                 out_fh.write(json.dumps(sample, ensure_ascii=False) + "\n")
             out_fh.flush()
-            stats["ok"] += 1
+            if samples:
+                stats["ok"] += 1
+            if truncated:
+                stats["truncated"] += 1
         except Exception as e:  # noqa: BLE001
             # Failures go to a separate error file, not the training output.
             error_output = {
                 "id": conv_id,
                 "metadata": {
-                    "idx": idx,
+                    "idx": item["idx"],
                     "error": repr(e),
                     "turns_completed": len(samples),
                     "endpoint": endpoint,
@@ -434,6 +644,7 @@ async def worker(
             progress.set_postfix(
                 ok=stats["ok"],
                 errors=stats["errors"],
+                truncated=stats["truncated"],
                 refresh=False,
             )
             progress.update(1)
@@ -506,7 +717,7 @@ async def main():
                 dynamic_ncols=True,
             ) as progress,
         ):
-            stats = {"ok": 0, "errors": 0}
+            stats = {"ok": 0, "errors": 0, "truncated": 0}
             workers = [
                 asyncio.create_task(
                     worker(
@@ -544,6 +755,8 @@ async def main():
                         "idx": index,
                         "primary_id": primary_id,
                         "turns": turns,
+                        "tools": extract_tools(row),
+                        "tool_results": extract_tool_results(row),
                     }
                 )
                 processed_count += 1
