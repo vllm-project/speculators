@@ -74,12 +74,7 @@ def compute_metrics(
     metrics["full_acc_sum"] = correct_per_pos[1:].sum()
     metrics["full_acc_total"] = total_per_pos[1:].sum()
 
-    # Also accumulate Expected Accepted Length: EAL = sum_k prod_{i<=k} acc_i over
-    # drafted positions 1..block_size-1 (a token is accepted only if all earlier
-    # drafted tokens were correct). It is nonlinear in the per-position accuracies,
-    # so it is computed from this step's correct/total ratios and logged via the
-    # generic _sum/_total pair (eal_total = 1), giving a per-step average in training
-    # and "eal_epoch" in validation.
+    # EAL = sum_k prod_{i<=k} acc_i over drafted positions
     eal = torch.zeros((), device=logits.device)
     cum = torch.ones((), device=logits.device)
     for pos in range(1, block_size):
