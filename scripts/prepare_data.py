@@ -40,6 +40,42 @@ logging.basicConfig(
 log = PipelineLogger(__name__)
 
 
+# Files prepare_data.py itself writes into --output; only these may be removed by
+# --overwrite.
+PREPARE_DATA_OVERWRITE_ALLOWED_FILES = {
+    "dataset_info.json",
+    "state.json",
+    "token_freq.pt",
+}
+
+
+def assert_safe_to_overwrite(output: Path, token_freq_path: Path) -> None:
+    """Refuse to ``--overwrite`` a directory holding non-artifact files.
+
+    Guards against pointing ``--output`` at a directory with unrelated user files
+    and wiping it: only prepare_data.py's own outputs (``.arrow`` shards, dataset
+    metadata, and the token frequency file) may be deleted.
+    """
+    unexpected_paths = []
+    resolved_token_freq_path = token_freq_path.resolve()
+    for path in output.iterdir():
+        if path.is_file() and (
+            path.suffix == ".arrow"
+            or path.name in PREPARE_DATA_OVERWRITE_ALLOWED_FILES
+            or path.resolve() == resolved_token_freq_path
+        ):
+            continue
+        unexpected_paths.append(path)
+
+    if unexpected_paths:
+        formatted_paths = ", ".join(str(path) for path in unexpected_paths)
+        raise ValueError(
+            "--overwrite would delete files that do not look like prepare_data.py "
+            f"artifacts: {formatted_paths}. Remove them manually or choose a "
+            "different --output directory."
+        )
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Prepare data for speculator training")
 
@@ -117,7 +153,7 @@ def parse_args():
         "--overwrite",
         action="store_true",
         help=(
-            "Forcibly rerun `prepare_data.py`.Deletes existing content in output dir"
+            "Forcibly rerun `prepare_data.py`. Deletes existing content in output dir"
         ),
     )
 
@@ -143,6 +179,14 @@ def parse_args():
             "trainable tokens."
         ),
     )
+    parser.add_argument(
+        "--allow-empty-output",
+        action="store_true",
+        help=(
+            "Allow writing an empty preprocessed dataset. By default prepare_data.py "
+            "raises when normalization or filtering removes every sample."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -159,6 +203,12 @@ def main():
     )
 
     output = Path(args.output)
+    token_freq_path = (
+        output / "token_freq.pt"
+        if args.token_freq_path is None
+        else Path(args.token_freq_path)
+    )
+
     if output.exists():
         if not args.overwrite and glob.glob(str(output / "*.arrow")):
             log.warning(
@@ -167,16 +217,12 @@ def main():
             )
             sys.exit(0)
         if args.overwrite:
+            assert_safe_to_overwrite(output, token_freq_path)
+            log.warning(f"Removing existing output directory: {output}")
             shutil.rmtree(output)
             output.mkdir(parents=True)
     else:
         output.mkdir(parents=True)
-
-    token_freq_path = (
-        output / "token_freq.pt"
-        if args.token_freq_path is None
-        else Path(args.token_freq_path)
-    )
 
     dataset, _ = load_and_preprocess_dataset(
         target_model_path=args.model,
@@ -189,6 +235,7 @@ def main():
         assistant_pattern=args.assistant_pattern,
         turn_dropout=args.turn_dropout,
         minimum_valid_tokens=args.minimum_valid_tokens,
+        allow_empty_output=args.allow_empty_output,
         trust_remote_code=args.trust_remote_code,
     )
 

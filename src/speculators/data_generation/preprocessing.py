@@ -570,6 +570,11 @@ def _preprocess_batch(
             f"Shape mismatch: input_ids={len(input_ids)}, loss_mask={len(loss_mask)}"
         )
 
+        # Bound both to max_length: a turn running past the window keeps only its
+        # in-window tokens, and input_ids/loss_mask stay aligned and bounded.
+        input_ids = input_ids[:max_length]
+        loss_mask = loss_mask[:max_length]
+
         # Filtering samples out with too few valid tokens
         if minimum_valid_tokens is not None:
             num_valid_tokens = int(loss_mask.sum().item())
@@ -796,6 +801,7 @@ def load_and_preprocess_dataset(
     assistant_pattern: str | None = None,
     turn_dropout: bool = False,
     minimum_valid_tokens: int | None = None,
+    allow_empty_output: bool = False,
     trust_remote_code: bool = False,
 ) -> tuple[HFDataset, ProcessorLike]:
     """Load, tokenize, and preprocess a dataset for EAGLE3 training.
@@ -818,6 +824,8 @@ def load_and_preprocess_dataset(
         turn_dropout: If True, randomly keeps first N consecutive turns per
                      conversation
         minimum_valid_tokens: Number of tokens to consider for a valid sample
+        allow_empty_output: If True, allow returning an empty dataset instead of
+                          raising when no samples survive preprocessing.
         trust_remote_code: If True, allows executing code from HF Hub.
 
     Returns:
@@ -882,14 +890,24 @@ def load_and_preprocess_dataset(
     if max_samples is not None and len(combined_dataset) > max_samples:
         combined_dataset = combined_dataset.select(range(max_samples))
 
+    if len(combined_dataset) == 0 and not allow_empty_output:
+        raise ValueError(
+            "No samples remain after preprocessing. Check the dataset schema, "
+            "assistant masking, and --minimum-valid-tokens. Pass "
+            "--allow-empty-output if an empty dataset is intentional."
+        )
+
     log.subsection("Computing token frequency distribution")
     save_token_frequency_distribution(
         dataset=combined_dataset,
         output_path=token_freq_path,
     )
 
-    log.subsection("Visualizing sample")
-    _visualize_sample(combined_dataset, processor, idx=0)
+    if len(combined_dataset) == 0:
+        log.warning("No samples remain after preprocessing; skipping visualization")
+    else:
+        log.subsection("Visualizing sample")
+        _visualize_sample(combined_dataset, processor, idx=0)
 
     log.section("Dataset preprocessing complete")
 
