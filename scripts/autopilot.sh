@@ -9,8 +9,9 @@
 #   0 */8 * * * /workspace/speculators/scripts/autopilot.sh >> /workspace/speculators/autopilot.log 2>&1
 #
 # Options (via env vars):
-#   MAX_TURNS             Max agentic turns (default: unlimited)
-#   SLACK_WEBHOOK_URL     Slack incoming webhook URL for notifications (optional)
+#   MAX_TURNS                 Max agentic turns (default: unlimited)
+#   SLACK_WEBHOOK_URL         Slack webhook for all notifications — logs channel (optional)
+#   SLACK_WEBHOOK_URL_SUCCESS Slack webhook for successful runs only — results channel (optional)
 
 set -euo pipefail
 
@@ -33,9 +34,13 @@ if [ "$(id -u)" -eq 0 ]; then
     exec runuser --preserve-environment -u claude-runner -- "$0" "$@"
 fi
 
+slack_post() {
+    local webhook_url="$1" payload="$2"
+    curl -sf -X POST -H 'Content-type: application/json' -d "$payload" "$webhook_url" >/dev/null 2>&1 || true
+}
+
 slack_notify() {
     local status="$1" detail="$2"
-    if [ -z "${SLACK_WEBHOOK_URL:-}" ]; then return; fi
     local emoji="white_check_mark"
     [ "$status" = "FAIL" ] && emoji="x"
     [ "$status" = "SCAN" ] && emoji="mag"
@@ -59,7 +64,8 @@ slack_notify() {
 }
 EOJSON
 )
-    curl -sf -X POST -H 'Content-type: application/json' -d "$payload" "$SLACK_WEBHOOK_URL" >/dev/null 2>&1 || true
+    [ -n "${SLACK_WEBHOOK_URL:-}" ] && slack_post "$SLACK_WEBHOOK_URL" "$payload"
+    [ "$status" = "SUCCESS" ] && [ -n "${SLACK_WEBHOOK_URL_SUCCESS:-}" ] && slack_post "$SLACK_WEBHOOK_URL_SUCCESS" "$payload"
 }
 
 EXTRA_ARGS=()
@@ -68,7 +74,12 @@ EXTRA_ARGS=()
 echo "=== Autopilot: $(date -Iseconds) ==="
 echo "Running as: $(whoami)"
 [ -n "${MAX_TURNS:-}" ] && echo "Max turns: $MAX_TURNS" || echo "Max turns: unlimited"
-if [ -n "${SLACK_WEBHOOK_URL:-}" ]; then echo "Slack: enabled"; else echo "Slack: disabled (set SLACK_WEBHOOK_URL to enable)"; fi
+if [ -n "${SLACK_WEBHOOK_URL:-}" ] || [ -n "${SLACK_WEBHOOK_URL_SUCCESS:-}" ]; then
+    echo "Slack logs channel: $([ -n "${SLACK_WEBHOOK_URL:-}" ] && echo "enabled" || echo "disabled")"
+    echo "Slack results channel: $([ -n "${SLACK_WEBHOOK_URL_SUCCESS:-}" ] && echo "enabled" || echo "disabled")"
+else
+    echo "Slack: disabled (set SLACK_WEBHOOK_URL and/or SLACK_WEBHOOK_URL_SUCCESS)"
+fi
 echo "======================================="
 
 # Trap Ctrl-C — don't post to Slack on manual abort
