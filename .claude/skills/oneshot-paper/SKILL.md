@@ -22,6 +22,24 @@ This pipeline is long. To avoid running out of context, **compact after each pha
    ```
 2. Then run `/compact` to free context. After compaction, re-read the spec file to recover state before continuing to the next phase.
 
+## Phase 0: Duplicate Check
+
+Before doing any work, check if this method is already implemented or has an open PR:
+
+1. **Check existing models**: `ls src/speculators/models/` — if the algorithm already has a directory, stop and report "already implemented".
+2. **Check open PRs on speculators**:
+   ```bash
+   gh pr list --repo vllm-project/speculators --state open --json title,url --limit 50
+   ```
+   If any PR title matches the method name (case-insensitive), stop and report "open PR already exists" with the PR URL.
+3. **Check open PRs on vLLM**:
+   ```bash
+   gh pr list --repo vllm-project/vllm --state open --search "<algo_name>" --json title,url --limit 20
+   ```
+   Same — stop if a matching PR exists.
+
+If a duplicate is found, write the reason to `.claude/agent_state/last_run_report.md` and exit cleanly (exit code 0). The wrapper script will still post to Slack with the report explaining why it was skipped.
+
 ## Phase 1: Analyze the Paper
 
 Follow the instructions in `.claude/skills/analyze-paper.md` but skip the "Present to User" step. Write the spec to `.claude/agent_state/specs/<algo_name>.md` and continue immediately.
