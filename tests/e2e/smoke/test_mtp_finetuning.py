@@ -175,5 +175,6 @@ def run_mtp_finetuning_e2e(
                 acceptance_thresholds=acceptance_thresholds,
                 max_tokens=max_tokens,
                 timeout=15 * 60,
+                perf=perf,
             )
     logger.info("MTP finetuning E2E test passed")

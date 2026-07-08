@@ -68,6 +68,7 @@ def test_eagle3_qwen3_8b_sharegpt(tmp_path: Path, prompts: list[list[dict[str, s
             ignore_eos=True,
             prompts=prompts,
             acceptance_thresholds=[0.40, 0.10, 0.01],
+            perf=log_perf,
         )
 
 
@@ -103,6 +104,7 @@ def test_dflash_qwen3_8b_sharegpt(tmp_path: Path, prompts: list[list[dict[str, s
             ignore_eos=True,
             prompts=prompts,
             acceptance_thresholds=[0.30, 0.05, 0.001, 0, 0, 0, 0],
+            perf=log_perf,
         )
 
 
@@ -143,4 +145,5 @@ def test_peagle_qwen3_8b_sharegpt(tmp_path: Path, prompts: list[list[dict[str, s
             ignore_eos=True,
             prompts=prompts,
             acceptance_thresholds=[0.45, 0.1, 0.01],
+            perf=log_perf,
         )

@@ -76,6 +76,7 @@ class TestEagle3vLLM:
                 prompts=prompts,
                 acceptance_thresholds=acceptance_thresholds,
                 ignore_eos=True,
+                perf=log_perf,
             )
 
     @requires_cadence("nightly")
@@ -106,4 +107,5 @@ class TestEagle3vLLM:
                 acceptance_thresholds=acceptance_thresholds,
                 enforce_eager=True,
                 ignore_eos=True,
+                perf=log_perf,
             )
