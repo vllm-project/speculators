@@ -98,6 +98,28 @@ def kl_div_loss(
     return elementwise_loss  # noqa: RET504
 
 
+def reverse_kl_div_loss(
+    logits: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
+    targets: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
+):
+    """Compute per-position reverse KL divergence from draft logits to target logits.
+
+    Args:
+        logits: Draft model logits (log-softmax applied internally).
+        targets: Target model logits (log-softmax applied internally).
+
+    Returns:
+        Per-position reverse KL divergence with shape [1, seq_len].
+    """
+    draft_logq = torch.nn.functional.log_softmax(logits, dim=-1)
+    target_logp = torch.nn.functional.log_softmax(targets, dim=-1)
+    elementwise_loss = torch.nn.functional.kl_div(
+        target_logp, draft_logq, reduction="none", log_target=True
+    ).sum(dim=-1)  # shape: [1, seq_len]
+
+    return elementwise_loss  # noqa: RET504
+
+
 def ce_loss(
     logits: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
     targets: torch.Tensor,  # shape: [1, seq_len, draft_vocab_size]
@@ -258,6 +280,7 @@ def exp_loss_decay(pos_idx: torch.Tensor, gamma: float):
 
 _LOSS_FN_MAP: dict[str, Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = {
     "kl_div": kl_div_loss,
+    "rkl": reverse_kl_div_loss,
     "ce": ce_loss,
     "tv": tv_loss,
     "nla": neg_log_acceptance_loss,
@@ -271,9 +294,10 @@ def resolve_loss_fn(
     """Resolves a loss function given its abbreviated name.
 
     Args:
-        name: ``"kl_div"`` for KL-divergence, ``"ce"`` for cross-entropy,
-            ``"tv"`` for total variation, ``"nla"`` for negative
-            log-acceptance, or ``"lk_hybrid"`` for the adaptive KL/TV blend.
+        name: ``"kl_div"`` for KL-divergence, ``"rkl"`` for reverse KL-divergence,
+            ``"ce"`` for cross-entropy, ``"tv"`` for total variation, ``"nla"``
+            for negative log-acceptance, or ``"lk_hybrid"`` for the adaptive
+            KL/TV blend.
 
     Returns:
         The corresponding loss function.

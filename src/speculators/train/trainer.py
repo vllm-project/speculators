@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 import warnings
 from pathlib import Path
 from typing import Literal, NamedTuple
@@ -37,6 +38,57 @@ from speculators.train.utils import normalize_counted_metrics
 
 root_logger = logging.getLogger("speculators")
 metric_logger = logging.getLogger("speculators.metrics")
+
+
+class _StepTimer:
+    # Each mark()/now() forces a cuda.synchronize to capture true GPU time.
+    # This serialises the CUDA pipeline, so profiled steps are slower; keep
+    # log_freq > 1 in perf-sensitive runs.
+    def __init__(self, enabled: bool = False):
+        self.enabled = enabled
+        self._marks: dict[str, float] = {}
+
+    def reset(self, enabled: bool) -> None:
+        self.enabled = enabled
+        self._marks.clear()
+
+    def mark(self, name: str) -> None:
+        if self.enabled:
+            torch.cuda.synchronize()
+            self._marks[name] = time.perf_counter()
+
+    def mark_value(self, name: str, value: float) -> None:
+        if self.enabled:
+            self._marks[name] = value
+
+    def now(self) -> float | None:
+        if not self.enabled:
+            return None
+        torch.cuda.synchronize()
+        return time.perf_counter()
+
+    def profile(self, num_tokens: int) -> dict[str, float] | None:
+        if not self.enabled:
+            return None
+        m = self._marks
+        has_start = "start" in m
+        fwd_ms = (m["fwd"] - m["fetch"]) * 1000
+        bwd_ms = (m["bwd"] - m["fwd"]) * 1000
+        opt_ms = (m["opt"] - m["bwd"]) * 1000
+        fetch_ms = (m["fetch"] - m["start"]) * 1000 if has_start else 0.0
+        step_ms = (m["opt"] - m["start"]) * 1000 if has_start else 0.0
+        tokens_per_s = num_tokens / (step_ms / 1000) if step_ms > 0 else 0.0
+        fetch_frac = fetch_ms / step_ms if step_ms > 0 else 0.0
+        return {
+            "fetch_ms": fetch_ms,
+            "fwd_ms": fwd_ms,
+            "bwd_ms": bwd_ms,
+            "opt_ms": opt_ms,
+            "step_ms": step_ms,
+            "tokens_per_s": tokens_per_s,
+            "fetch_frac": fetch_frac,
+        }
+
 
 warnings.filterwarnings("ignore", category=TqdmExperimentalWarning)
 MIN_STEP_PCT = 0.25
@@ -347,9 +399,14 @@ class Trainer:
             if self.config.checkpoint_freq < 1
             else None
         )
+        t_before_fetch = time.perf_counter()
+        timer = _StepTimer()
         for local_step_rel, batch in enumerate(train_loader, 1):
             # local_step is 1-based index into the *full* epoch (not the slice).
             local_step = local_step_rel + skip_steps
+            timer.reset(self.global_step % self.config.log_freq == 0)
+
+            timer.mark_value("start", t_before_fetch)
             gpu_batch = {
                 k: v.to(self.local_rank, non_blocking=True)
                 if isinstance(v, torch.Tensor)
@@ -360,21 +417,30 @@ class Trainer:
             with torch.autocast(
                 self.device_type, dtype=self.config.hidden_states_dtype
             ):
+                timer.mark("fetch")
                 _draft_tokens, loss, metrics = self.model(
                     **gpu_batch, **self.config.train_call_kwargs
                 )
 
+            timer.mark("fwd")
             self._optimizers_zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+
+            timer.mark("bwd")
             self._optimizers_step()
 
             current_lrs = {
                 type(opt).__name__: opt.param_groups[0]["lr"] for opt in self.optimizers
             }
             self._schedulers_step()
+            timer.mark("opt")
+            t_before_fetch = timer.now() or time.perf_counter()
 
-            if self.global_step % self.config.log_freq == 0:
+            profile = None
+            if timer.enabled:
+                num_tokens = int((gpu_batch["document_ids"] != -1).sum().item())
+                profile = timer.profile(num_tokens)
                 if self.is_distributed:
                     for v in metrics.values():
                         dist.reduce(v, dst=0, op=dist.ReduceOp.SUM)
@@ -390,6 +456,7 @@ class Trainer:
                 metric_logger.info(
                     {
                         "train": metrics,
+                        "profile": profile,
                         "epoch": epoch,
                         "lr": lr_info,
                         "global_step": self.global_step,
