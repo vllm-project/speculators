@@ -145,7 +145,7 @@ After implementation and training, commit all changes and open a draft PR:
 
 ## Phase 5: Final Report
 
-Present a single comprehensive report AND write it to `.claude/agent_state/last_run_report.md` so the wrapper script can include it in Slack notifications:
+Present a single comprehensive report AND write it to `.claude/agent_state/last_run_report.md` so the wrapper script can include it in Slack notifications. **Keep the report under 2500 characters** — it gets embedded in a Slack message block which has a hard 3000 char limit. Be concise: use short bullet points, skip verbose explanations.
 
 ```bash
 cd /workspace/speculators
