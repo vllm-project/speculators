@@ -22,7 +22,7 @@ Run these searches and collect results:
 Use `WebSearch` with these queries (use current year):
 1. `"speculative decoding" new method arxiv YYYY`
 2. `"draft model" "language model" speculation arxiv YYYY`
-3. `"eagle" OR "medusa" OR "hydra" OR "kangaroo" speculative decoding arxiv YYYY`
+3. `"parallel decoding" OR "draft head" OR "token prediction" LLM arxiv YYYY`
 4. `"multi-token prediction" draft speculation arxiv YYYY`
 
 Extract arxiv IDs (e.g., `2506.12345`) from results.
@@ -30,8 +30,7 @@ Extract arxiv IDs (e.g., `2506.12345`) from results.
 ### HuggingFace
 Use `WebFetch` on:
 - `https://huggingface.co/api/models?search=speculative+decoding&sort=lastModified&direction=-1&limit=20`
-- `https://huggingface.co/api/models?search=eagle+draft&sort=lastModified&direction=-1&limit=10`
-- `https://huggingface.co/api/models?search=medusa+draft&sort=lastModified&direction=-1&limit=10`
+- `https://huggingface.co/api/models?search=draft+model+LLM&sort=lastModified&direction=-1&limit=10`
 
 ### GitHub
 Use bash:
