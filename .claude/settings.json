@@ -1,0 +1,32 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch",
+      "Read",
+      "Edit",
+      "Write",
+      "Bash(git *)",
+      "Bash(make *)",
+      "Bash(find *)",
+      "Bash(ls *)",
+      "Bash(mkdir *)",
+      "Bash(mv *)",
+      "Bash(cat *)",
+      "Bash(head *)",
+      "Bash(tail *)",
+      "Bash(grep *)",
+      "Bash(wc *)",
+      "Bash(curl *)",
+      "Bash(gh *)",
+      "Bash(nvidia-smi*)",
+      "Bash(python *)",
+      "Bash(/workspace/speculators/.venv/bin/python *)",
+      "Bash(torchrun *)",
+      "Bash(CUDA_VISIBLE_DEVICES=* *)",
+      "Bash(ruff *)",
+      "Bash(pytest *)",
+      "Bash(uv *)"
+    ]
+  }
+}
