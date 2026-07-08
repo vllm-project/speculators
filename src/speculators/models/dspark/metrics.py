@@ -32,14 +32,15 @@ def _masked_decayed_mean(
     elementwise: torch.Tensor,  # [1, T]
     loss_mask: torch.Tensor,  # [1, T]
     pos_idx: torch.Tensor,  # [1, T]
-    decay_fn: Callable[[torch.Tensor], torch.Tensor] | None,
+    decay_fn: Callable[..., torch.Tensor] | None,
 ) -> torch.Tensor:
     """Masked, optionally position-decayed mean of a precomputed per-position term."""
     loss_mask = loss_mask.to(elementwise.dtype)
     weighted = elementwise * loss_mask
     if decay_fn is not None:
-        weighted = weighted * decay_fn(pos_idx.to(weighted.dtype),
-            elementwise_loss=elementwise)
+        weighted = weighted * decay_fn(
+            pos_idx.to(weighted.dtype), elementwise_loss=elementwise
+        )
     denominator = loss_mask.sum(dim=1) + _EPS
     return (weighted.sum(dim=1) / denominator).mean()
 

@@ -244,7 +244,7 @@ def lk_hybrid_loss(
     return elementwise_loss  # noqa: RET504
 
 
-def dflash_loss_decay(pos_idx: torch.Tensor, gamma: float, **kwargs):
+def dflash_loss_decay(pos_idx: torch.Tensor, gamma: float, **_kwargs):
     """Compute DFlash-style exponential decay weights per position.
 
     Position 0 gets weight 0, position 1 gets weight 1, and subsequent positions
@@ -265,7 +265,7 @@ def dflash_loss_decay(pos_idx: torch.Tensor, gamma: float, **kwargs):
     return decay_mult  # noqa: RET504
 
 
-def exp_loss_decay(pos_idx: torch.Tensor, gamma: float, **kwargs):
+def exp_loss_decay(pos_idx: torch.Tensor, gamma: float, **_kwargs):
     """Compute simple exponential decay weights as gamma^pos_idx.
 
     Args:
@@ -279,12 +279,12 @@ def exp_loss_decay(pos_idx: torch.Tensor, gamma: float, **kwargs):
 
 
 def dpace_loss_decay(
-    pos_idx: torch.Tensor,
+    pos_idx: torch.Tensor,  # noqa: ARG001
     loss_mask: torch.Tensor,
     block_size: int,
     dpace_alpha: float,
     elementwise_loss: torch.Tensor,
-    **kwargs,
+    **_kwargs,
 ):
     """
     Per-position block-drafting loss weight based on D-PACE
@@ -411,7 +411,7 @@ def compound_loss(
     loss_mask: torch.Tensor,
     pos_idx: torch.Tensor,
     loss_config: LossConfig,
-    decay_fn: Callable[[torch.Tensor], torch.Tensor] | None = None,
+    decay_fn: Callable[..., torch.Tensor] | None = None,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """Compute a weighted sum of loss terms.
 
@@ -447,7 +447,7 @@ def loss_function(
     loss_mask: torch.Tensor,  # shape: [1, seq_len]
     pos_idx: torch.Tensor,  # shape: [1, seq_len]
     loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = kl_div_loss,
-    decay_fn: Callable[[torch.Tensor], torch.Tensor] | None = None,
+    decay_fn: Callable[..., torch.Tensor] | None = None,
 ):
     """Compute masked, optionally position-decayed training loss.
 
