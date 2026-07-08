@@ -1,3 +1,5 @@
+from collections.abc import Generator
+
 import pytest
 from loguru import logger
 
@@ -20,7 +22,7 @@ def prompts():
 
 
 @pytest.fixture
-def log_perf(request: pytest.FixtureRequest) -> dict:
+def log_perf(request: pytest.FixtureRequest) -> Generator[dict[str, float], None, None]:
     """Collect per-stage wall-clock timings and log them after the test.
 
     Usage in a test:
