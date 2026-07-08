@@ -4,10 +4,7 @@ Regenerates assistant responses in existing datasets using a vLLM-served model. 
 
 The pipeline consists of two scripts:
 
-| Script       | Purpose                                                        |
-| ------------ | -------------------------------------------------------------- |
-| `run_all.sh` | End-to-end pipeline: starts vLLM, regenerates responses, stops |
-| `script.py`  | Standalone response regeneration against a running vLLM server |
+| Script | Purpose | | ------------ | -------------------------------------------------------------- | | `run_all.sh` | End-to-end pipeline: starts vLLM, regenerates responses, stops | | `script.py` | Standalone response regeneration against a running vLLM server |
 
 ## run_all.sh
 
@@ -110,10 +107,7 @@ python scripts/response_regeneration/script.py \
 
 ## Supported Datasets
 
-| Dataset   | HuggingFace ID                                    | Prompt Field  | Default Split |
-| --------- | ------------------------------------------------- | ------------- | ------------- |
-| Magpie    | `Magpie-Align/Magpie-Llama-3.1-Pro-300K-Filtered` | `instruction` | `train`       |
-| UltraChat | `HuggingFaceH4/ultrachat_200k`                    | `prompt`      | `train_sft`   |
+| Dataset | HuggingFace ID | Prompt Field | Default Split | | --------- | ------------------------------------------------- | ------------- | ------------- | | Magpie | `Magpie-Align/Magpie-Llama-3.1-Pro-300K-Filtered` | `instruction` | `train` | | UltraChat | `HuggingFaceH4/ultrachat_200k` | `prompt` | `train_sft` |
 
 ## Output Format
 

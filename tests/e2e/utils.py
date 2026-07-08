@@ -447,7 +447,7 @@ def run_vllm_engine(
 
     # Union of the existing metrics_dict and the perf dict
     if perf is not None:
-        perf.update(metrics_dict)
+        perf["vllm_metrics_dict"] = metrics_dict
 
     if acceptance_thresholds is not None:
         for i, thresholdi in enumerate(acceptance_thresholds):

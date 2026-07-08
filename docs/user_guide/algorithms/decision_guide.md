@@ -16,13 +16,7 @@ Eagle-3, P-EAGLE, and DFlash can be paired with any supported verifier model (in
 
 ## Current Support
 
-|                     | Eagle-3       | P-EAGLE             | DFlash              | MTP                         |
-| ------------------- | ------------- | ------------------- | ------------------- | --------------------------- |
-| **Draft layers**    | Llama-style   | Llama-style         | Qwen3-style         | Native MTP layers           |
-| **Verifier models** | Any supported | Any supported       | Any supported       | Models with native MTP only |
-| **Training mode**   | From scratch  | From scratch        | From scratch        | Finetune existing MTP head  |
-| **Speculators**     | Mature        | Newer, growing fast | Newer, growing fast | Newer, growing fast         |
-| **vLLM**            | Mature        | Newer, growing fast | Newer, growing fast | Newer, growing fast         |
+| | Eagle-3 | P-EAGLE | DFlash | MTP | | ------------------- | ------------- | ------------------- | ------------------- | --------------------------- | | **Draft layers** | Llama-style | Llama-style | Qwen3-style | Native MTP layers | | **Verifier models** | Any supported | Any supported | Any supported | Models with native MTP only | | **Training mode** | From scratch | From scratch | From scratch | Finetune existing MTP head | | **Speculators** | Mature | Newer, growing fast | Newer, growing fast | Newer, growing fast | | **vLLM** | Mature | Newer, growing fast | Newer, growing fast | Newer, growing fast |
 
 Eagle-3 has been available longer and has broader support in both Speculators and vLLM. P-EAGLE, DFlash, and MTP were added more recently and support is improving rapidly.
 

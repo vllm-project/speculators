@@ -217,19 +217,11 @@ Check vLLM logs for speculative decoding metrics.
 
 With 5K ShareGPT samples and 5 epochs on Qwen3-8B (SpecBench, 80 prompts, 256 output tokens):
 
-| Metric            | Value  |
-| ----------------- | ------ |
-| Acceptance rate   | 13.35% |
-| Acceptance length | 1.53   |
+| Metric | Value | | ----------------- | ------ | | Acceptance rate | 13.35% | | Acceptance length | 1.53 |
 
 Per-position acceptance:
 
-| Position | Acceptance |
-| -------- | ---------- |
-| 0        | 40.84%     |
-| 1        | 10.84%     |
-| 2        | 1.58%      |
-| 3        | 0.15%      |
+| Position | Acceptance | | -------- | ---------- | | 0 | 40.84% | | 1 | 10.84% | | 2 | 1.58% | | 3 | 0.15% |
 
 > **Note:** With just 5K samples, model performance will be limited. This is intended as a sanity check to verify that the pipeline is working and the model is learning. For production quality, train on significantly more data.
 

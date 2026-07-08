@@ -129,7 +129,8 @@ def run_offline_e2e(
     with record_perf("prepare_data", perf):
         run_prepare_data(model, dataset, data_path, max_samples, seq_length)
 
-    with (launch_vllm_server_context(
+    with (
+        launch_vllm_server_context(
             model,
             port,
             str(tmp_path / "vllm_hidden_states"),
@@ -137,7 +138,7 @@ def run_offline_e2e(
             target_layer_ids=target_layer_ids,
             **(vllm_kwargs or {}),
         ),
-        record_perf("data_generation", perf)
+        record_perf("data_generation", perf),
     ):
         # Step 2: Generate hidden states offline
         run_data_generation_offline(
