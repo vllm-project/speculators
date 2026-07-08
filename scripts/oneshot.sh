@@ -26,7 +26,15 @@ cd "$(dirname "$0")/.."
 # use --dangerously-skip-permissions (which Claude blocks for root).
 # sudo -E preserves all env vars (HF_TOKEN, CUDA, AWS, etc.).
 if [ "$(id -u)" -eq 0 ]; then
-    id claude-runner &>/dev/null || useradd -M -d /root -g 0 claude-runner
+    if id claude-runner &>/dev/null; then
+        # Recreate if not in root group
+        if [ "$(id -g claude-runner)" != "0" ]; then
+            userdel claude-runner
+            useradd -M -d /root -g 0 claude-runner
+        fi
+    else
+        useradd -M -d /root -g 0 claude-runner
+    fi
     find /root -not -path '/root/.ssh*' -exec chmod g+rwX {} + 2>/dev/null || true
     chmod -R g+rwX /workspace 2>/dev/null || true
     exec runuser --preserve-environment -u claude-runner -- "$0" "$@"
