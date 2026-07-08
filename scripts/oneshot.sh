@@ -25,19 +25,23 @@ cd "$(dirname "$0")/.."
 
 # When running as root (containers), re-exec as a non-root user so we can
 # use --dangerously-skip-permissions (which Claude blocks for root).
-# sudo -E preserves all env vars (HF_TOKEN, CUDA, AWS, etc.).
 if [ "$(id -u)" -eq 0 ]; then
+    # Use the workspace's group as primary (OpenShift assigns a namespace GID),
+    # and add root group (0) as supplementary for /root file access.
+    WS_GID=$(stat -c '%g' /workspace/speculators)
+    NEED_RECREATE=0
     if id claude-runner &>/dev/null; then
-        # Recreate if not in root group
-        if [ "$(id -g claude-runner)" != "0" ]; then
+        if [ "$(id -g claude-runner)" != "$WS_GID" ]; then
             userdel claude-runner
-            useradd -M -d /root -g 0 claude-runner
+            NEED_RECREATE=1
         fi
     else
-        useradd -M -d /root -g 0 claude-runner
+        NEED_RECREATE=1
     fi
-    find /root -not -path '/root/.ssh*' -exec chmod g+rwX {} + 2>/dev/null || true
-    chmod -R g+rwX /workspace 2>/dev/null || true
+    if [ "$NEED_RECREATE" -eq 1 ]; then
+        useradd -M -d /root -g "$WS_GID" -G 0 claude-runner
+    fi
+    find /root -not -path '/root/.ssh*' -exec chmod o+rX {} + 2>/dev/null || true
     exec runuser --preserve-environment -u claude-runner -- "$0" "$@"
 fi
 
