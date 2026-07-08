@@ -26,9 +26,9 @@ cd "$(dirname "$0")/.."
 # use --dangerously-skip-permissions (which Claude blocks for root).
 # sudo -E preserves all env vars (HF_TOKEN, CUDA, AWS, etc.).
 if [ "$(id -u)" -eq 0 ]; then
-    id claude-runner &>/dev/null || useradd -M -d /root claude-runner
+    id claude-runner &>/dev/null || useradd -M -d /root -g 0 claude-runner
     chmod 755 /root
-    chmod -R a+rX /root/.claude 2>/dev/null || true
+    chmod -R g+rwX /root/.claude /root/.config /root/.cache /root/.local /workspace 2>/dev/null || true
     exec sudo -E -u claude-runner "$0" "$@"
 fi
 
