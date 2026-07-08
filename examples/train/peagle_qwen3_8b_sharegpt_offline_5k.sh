@@ -57,6 +57,7 @@ DOWN_SAMPLE_RATIO_MIN=0.2
 # GPU assignments (offline reuses the same GPUs sequentially)
 GPUS="0,1"
 NUM_GPUS=2
+
 # =======================================
 
 # Step 1: Prepare data
