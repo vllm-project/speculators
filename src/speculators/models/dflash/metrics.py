@@ -10,6 +10,7 @@ from speculators.models.metrics import (
     compound_loss,
     compute_accuracy_multi_step,
     dflash_loss_decay,
+    dpace_loss_decay,
     kl_div_loss,
 )
 
@@ -23,6 +24,8 @@ def compute_metrics(
     block_size: int = 1,
     gamma: float = 4.0,
     loss_config: LossConfig | None = None,
+    per_position_loss_weight: str = "fixed-exp-decay",
+    dpace_alpha: float = 0.5,
 ) -> tuple[torch.Tensor, dict]:
     """Compute loss and accuracy metrics for draft model predictions.
 
@@ -33,12 +36,15 @@ def compute_metrics(
         block_size: Block size for per-position metrics
         gamma: Temperature for exponential decay in loss weighting
         loss_config: Mapping of ``{name: (loss_fn, weight)}``
+        per_position_loss_weight: Weighting option for per-position block-drafting loss
+        dpace_alpha: Smoothing constant for D-Pace loss weighting
 
     Returns:
         Tuple of (loss, metrics_dict) where metrics_dict contains:
             - loss: Scalar loss value
             - full_acc: Overall accuracy
             - position {i} acc: Accuracy at position i within blocks
+            - eal: Expected Accepted Length (headline speculative-decoding metric)
     """
     if loss_config is None:
         loss_config = _DEFAULT_LOSS_CONFIG
@@ -46,13 +52,23 @@ def compute_metrics(
     pos_idx = torch.arange(seq_len, device=logits.device) % block_size
     pos_idx = pos_idx.unsqueeze(0)  # shape: [1, T]
 
+    if per_position_loss_weight == "dpace":
+        decay_fn = partial(
+            dpace_loss_decay,
+            loss_mask=loss_mask,
+            block_size=block_size,
+            dpace_alpha=dpace_alpha,
+        )
+    else:
+        decay_fn = partial(dflash_loss_decay, gamma=gamma)
+
     loss, term_losses = compound_loss(
         logits,
         targets,
         loss_mask,
         pos_idx,
         loss_config=loss_config,
-        decay_fn=partial(dflash_loss_decay, gamma=gamma),
+        decay_fn=decay_fn,
     )
 
     pred_ids = torch.argmax(logits, dim=-1)
@@ -73,7 +89,15 @@ def compute_metrics(
     metrics["full_acc_sum"] = correct_per_pos[1:].sum()
     metrics["full_acc_total"] = total_per_pos[1:].sum()
 
+    # EAL = sum_k prod_{i<=k} acc_i over drafted positions
+    eal = torch.zeros((), device=logits.device)
+    cum = torch.ones((), device=logits.device)
     for pos in range(1, block_size):
         metrics[f"position_{pos}_acc_sum"] = correct_per_pos[pos]
         metrics[f"position_{pos}_acc_total"] = total_per_pos[pos]
+        acc = correct_per_pos[pos] / total_per_pos[pos].clamp(min=1.0)
+        cum = cum * acc
+        eal = eal + cum
+    metrics["eal_sum"] = eal
+    metrics["eal_total"] = ones
     return loss, metrics

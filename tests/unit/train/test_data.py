@@ -469,3 +469,26 @@ def test_arrow_dataset_default_split_ratio_does_not_crash(tmp_path: Path):
     # Should not raise AttributeError
     assert arrow_ds._map_to_file_idx(0) == 0
     assert arrow_ds._map_to_file_idx(5) == 5
+
+
+def test_arrow_dataset_on_generate_cache_creates_hidden_states_dir(tmp_path: Path):
+    """on_generate="cache" must create the cache dir up front — otherwise every
+    shutil.move into it raises FileNotFoundError, which _maybe_generate_hs
+    downgrades to a warning, so caching silently fails for every sample."""
+    ds = Dataset.from_dict(
+        {
+            "input_ids": [[1, 2, 3]],
+            "loss_mask": [[1, 1, 1]],
+            "seq_len": [3],
+        }
+    )
+    ds.save_to_disk(str(tmp_path / "data"))
+
+    arrow_ds = ArrowDataset(
+        max_len=128,
+        datapath=str(tmp_path / "data"),
+        on_missing="generate",
+        on_generate="cache",
+    )
+
+    assert arrow_ds.hidden_states_path.is_dir()
