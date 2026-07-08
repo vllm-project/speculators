@@ -39,6 +39,7 @@ def compute_metrics(
             - loss: Scalar loss value
             - full_acc: Overall accuracy
             - position {i} acc: Accuracy at position i within blocks
+            - eal: Expected Accepted Length (headline speculative-decoding metric)
     """
     if loss_config is None:
         loss_config = _DEFAULT_LOSS_CONFIG
@@ -73,7 +74,20 @@ def compute_metrics(
     metrics["full_acc_sum"] = correct_per_pos[1:].sum()
     metrics["full_acc_total"] = total_per_pos[1:].sum()
 
+    # Also accumulate Expected Accepted Length: EAL = sum_k prod_{i<=k} acc_i over
+    # drafted positions 1..block_size-1 (a token is accepted only if all earlier
+    # drafted tokens were correct). It is nonlinear in the per-position accuracies,
+    # so it is computed from this step's correct/total ratios and logged via the
+    # generic _sum/_total pair (eal_total = 1), giving a per-step average in training
+    # and "eal_epoch" in validation.
+    eal = torch.zeros((), device=logits.device)
+    cum = torch.ones((), device=logits.device)
     for pos in range(1, block_size):
         metrics[f"position_{pos}_acc_sum"] = correct_per_pos[pos]
         metrics[f"position_{pos}_acc_total"] = total_per_pos[pos]
+        acc = correct_per_pos[pos] / total_per_pos[pos].clamp(min=1.0)
+        cum = cum * acc
+        eal = eal + cum
+    metrics["eal_sum"] = eal
+    metrics["eal_total"] = ones
     return loss, metrics
