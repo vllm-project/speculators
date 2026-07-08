@@ -13,6 +13,14 @@
 
 set -euo pipefail
 
+cd "$(dirname "$0")/.."
+
+# Claude blocks --dangerously-skip-permissions for root. The devenv entrypoint
+# creates a claude-runner user with the right groups — just re-exec as it.
+if [ "$(id -u)" -eq 0 ]; then
+    exec runuser --preserve-environment -u claude-runner -- "$0" "$@"
+fi
+
 INTERACTIVE=false
 if [ "${1:-}" = "--interactive" ]; then
     INTERACTIVE=true
@@ -26,14 +34,6 @@ if [ $# -lt 1 ]; then
 fi
 
 PAPER_URL="$1"
-
-cd "$(dirname "$0")/.."
-
-# Claude blocks --dangerously-skip-permissions for root. The devenv entrypoint
-# creates a claude-runner user with the right groups — just re-exec as it.
-if [ "$(id -u)" -eq 0 ]; then
-    exec runuser --preserve-environment -u claude-runner -- "$0" "$@"
-fi
 
 slack_post() {
     local webhook_url="$1" payload="$2"
