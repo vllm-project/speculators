@@ -176,7 +176,9 @@ For multi-line comments, include both `start_line` and `line` (end). Use `side=R
 
 If there are zero inline comments beyond the summary, post just the review body.
 
-If no issues survive filtering (all < 80 confidence), **do not post a review**. Report to the user that nothing worth commenting on was found, but do not leave a noise comment on the PR.
+If no issues survive filtering (all < 80 confidence), **do not post a review**. Report to the user that nothing worth commenting on was found, but do not leave a noise comment on the PR. Suggest an approval message the user can post themselves, e.g.: "LGTM — reviewed design, correctness, and test coverage. No issues found."
+
+**Never approve a PR automatically.** Even when the review is clean, only the human reviewer should submit an approval.
 
 End every review body with:
 
