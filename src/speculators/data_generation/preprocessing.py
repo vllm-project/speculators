@@ -517,6 +517,14 @@ def _passthrough_pretokenized(
     """
     results: dict[str, list] = {"input_ids": [], "loss_mask": [], "seq_len": []}
     for ids, mask in zip(examples["input_ids"], examples["loss_mask"], strict=True):
+        # `strict=True` only pairs the columns; a per-row skew would survive it and
+        # the collator packs each key independently, silently shifting the mask
+        # against the ids for every sample packed after this one.
+        if len(ids) != len(mask):
+            raise ValueError(
+                f"Pre-tokenized row shape mismatch: "
+                f"input_ids={len(ids)}, loss_mask={len(mask)}"
+            )
         trimmed_ids = ids[:max_length]
         trimmed_mask = mask[:max_length]
         if minimum_valid_tokens and sum(trimmed_mask) < minimum_valid_tokens:

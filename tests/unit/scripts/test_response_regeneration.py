@@ -1,21 +1,8 @@
 """Real, dependency-light tests for the response-regeneration script.
 
-The seams covered, with no network and no mocked HTTP:
-
-1. ``extract_turns`` over the *actual* schemas of the supported datasets
-   (ultrachat ``messages`` role/content, magpie/open-perfectblend
-   ``conversations`` from/value, gsm8k single prompt), plus the robustness
-   fixes (empty conversation lists, non-dict elements, mixed schema).
-
-2. ``build_boundary_sample`` (the boundary *is* the loss mask) and the pre-tokenized
-   rows it produces passing untouched through the real ``_preprocess_batch``.
-
-3. Resume identity: ``_primary_identifier`` / ``load_seen`` across the one-row-per-
-   assistant-turn fan-out.
-
-4. Retry/backoff around a single request.
-
-5. ``worker`` end to end over a fake endpoint, tying 2-4 together.
+No network and no mocked HTTP: the script's seams are exercised directly against
+the real downstream ``_preprocess_batch``, and ``worker`` is driven end to end
+over a fake endpoint.
 
 The script is not a package, so it is imported by path.
 """
@@ -242,6 +229,19 @@ def test_pretokenized_passthrough_truncates_and_filters():
     assert [m.tolist() for m in out["loss_mask"]] == [[0, 0, 1, 1]]
 
 
+def test_pretokenized_passthrough_rejects_length_mismatch():
+    # The passthrough accepts rows from any dataset carrying both columns. A row
+    # whose mask is shorter than its ids must fail loudly here: the collator packs
+    # each key independently, so it would otherwise shift the mask silently.
+    with pytest.raises(ValueError, match="shape mismatch"):
+        _preprocess_batch(
+            {"input_ids": [[1, 2, 3, 4, 5]], "loss_mask": [[0, 0, 1]]},
+            processor=None,
+            max_length=2048,
+            assistant_pattern=None,
+        )
+
+
 # ---------------------------------------------------------------------------
 # 3. Stable resume identity.
 #
@@ -303,20 +303,6 @@ def test_load_seen_ignores_rows_without_id(tmp_path):
         encoding="utf-8",
     )
     assert regen.load_seen(str(out)) == set()
-
-
-def test_load_seen_prefers_primary_id_over_turn_suffixed_id(tmp_path):
-    # The turn-suffixed row `id` never equals a recomputed primary_id, so keying
-    # resume on it would reprocess every conversation and append duplicate rows.
-    out = tmp_path / "out.jsonl"
-    out.write_text(
-        json.dumps({"id": "P_turn0", "primary_id": "P"})
-        + "\n"
-        + json.dumps({"id": "P_turn1", "primary_id": "P"})
-        + "\n",
-        encoding="utf-8",
-    )
-    assert regen.load_seen(str(out)) == {"P"}
 
 
 def test_resume_roundtrip_hash_only_row(tmp_path):
@@ -440,9 +426,7 @@ def test_post_chat_fails_fast_on_permanent_status():
 
 
 # ---------------------------------------------------------------------------
-# 5. worker() end to end over a fake endpoint: the queue item's ``primary_id``
-#    reaches every emitted row, and load_seen() recovers it from the turn-
-#    suffixed row ids so a resumed run skips the conversation.
+# 5. worker() end to end over a fake endpoint.
 # ---------------------------------------------------------------------------
 
 
@@ -457,8 +441,18 @@ class _NullProgress:
     def update(self, n): ...
 
 
-def _chat_response(prompt_token_ids, completion_token_ids, text):
-    return {
+_TWO_TURN_ITEM = {
+    "idx": 41,
+    "primary_id": "conv-abc",
+    "turns": [
+        {"role": "user", "content": "2+2?"},
+        {"role": "user", "content": "3+3?"},
+    ],
+}
+
+
+def _ok(prompt_token_ids, completion_token_ids, text):
+    payload = {
         "choices": [
             {
                 "message": {"content": text},
@@ -468,16 +462,19 @@ def _chat_response(prompt_token_ids, completion_token_ids, text):
         ],
         "prompt_token_ids": prompt_token_ids,
     }
+    return _FakeResponse(ok=True, status=200, text="", payload=payload)
 
 
-def _run_worker(session, item, out_path, err_path):
+def _run_worker(responses, tmp_path, stem):
+    out_path, err_path = tmp_path / f"{stem}.jsonl", tmp_path / f"{stem}.errors.jsonl"
+
     async def scenario(out_fh, err_fh):
         queue: asyncio.Queue = asyncio.Queue()
-        await queue.put(item)
+        await queue.put(_TWO_TURN_ITEM)
         await queue.put(None)
         stats = {"ok": 0, "errors": 0}
         await regen.worker(
-            session,
+            _FakeSession(responses),
             queue,
             _Args(),
             out_fh,
@@ -492,41 +489,19 @@ def _run_worker(session, item, out_path, err_path):
         out_path.open("w", encoding="utf-8") as out_fh,
         err_path.open("w", encoding="utf-8") as err_fh,
     ):
-        return asyncio.run(scenario(out_fh, err_fh))
+        stats = asyncio.run(scenario(out_fh, err_fh))
+    return stats, out_path, err_path
 
 
-def test_worker_stamps_primary_id_and_resume_recovers_it(tmp_path):
+def test_worker_row_identity_and_all_or_nothing_writes(tmp_path):
     # Two assistant turns -> two rows. `primary_id` is the queue item's stable id
-    # (never the streaming `idx`), and `id` is that id plus a turn suffix.
-    session = _FakeSession(
-        [
-            _FakeResponse(
-                ok=True,
-                status=200,
-                text="",
-                payload=_chat_response([1, 2], [3, 4], "four"),
-            ),
-            _FakeResponse(
-                ok=True,
-                status=200,
-                text="",
-                payload=_chat_response([1, 2, 3, 4, 5], [6], "six"),
-            ),
-        ]
+    # (never the streaming `idx`); `id` is that id plus a turn suffix; and resume
+    # keys on the former, so a re-run of this conversation is skipped.
+    stats, out_path, _ = _run_worker(
+        [_ok([1, 2], [3, 4], "four"), _ok([1, 2, 3, 4, 5], [6], "six")],
+        tmp_path,
+        "ok",
     )
-    out_path = tmp_path / "out.jsonl"
-    err_path = tmp_path / "out.errors.jsonl"
-    item = {
-        "idx": 41,
-        "primary_id": "conv-abc",
-        "turns": [
-            {"role": "user", "content": "2+2?"},
-            {"role": "user", "content": "3+3?"},
-        ],
-    }
-
-    stats = _run_worker(session, item, out_path, err_path)
-
     assert stats == {"ok": 1, "errors": 0}
     rows = [json.loads(line) for line in out_path.read_text().splitlines()]
     assert [r["id"] for r in rows] == ["conv-abc_turn0", "conv-abc_turn1"]
@@ -534,38 +509,18 @@ def test_worker_stamps_primary_id_and_resume_recovers_it(tmp_path):
     # The boundary is the mask: prompt 0s then completion 1s.
     assert rows[0]["input_ids"] == [1, 2, 3, 4]
     assert rows[0]["loss_mask"] == [0, 0, 1, 1]
-
-    # The resume key a re-run recomputes is the bare primary_id, not the row id.
     assert regen.load_seen(str(out_path)) == {"conv-abc"}
 
-
-def test_worker_failure_writes_no_output_rows(tmp_path):
-    # Turn 2 fails; turn 1's sample is discarded so the conversation is retried
-    # whole on resume rather than resuming half-written.
-    session = _FakeSession(
+    # Turn 2 fails: turn 1's sample is discarded rather than half-written, which
+    # is what lets load_seen treat one row as a finished conversation.
+    stats, out_path, err_path = _run_worker(
         [
-            _FakeResponse(
-                ok=True,
-                status=200,
-                text="",
-                payload=_chat_response([1, 2], [3, 4], "four"),
-            ),
+            _ok([1, 2], [3, 4], "four"),
             _FakeResponse(ok=False, status=404, text="nope", payload={}),
-        ]
-    )
-    out_path = tmp_path / "out.jsonl"
-    err_path = tmp_path / "out.errors.jsonl"
-    item = {
-        "idx": 41,
-        "primary_id": "conv-abc",
-        "turns": [
-            {"role": "user", "content": "2+2?"},
-            {"role": "user", "content": "3+3?"},
         ],
-    }
-
-    stats = _run_worker(session, item, out_path, err_path)
-
+        tmp_path,
+        "fail",
+    )
     assert stats == {"ok": 0, "errors": 1}
     assert out_path.read_text() == ""
     assert regen.load_seen(str(out_path)) == set()
