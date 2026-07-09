@@ -18,6 +18,7 @@ You are reviewing a PR on the `speculators` repo — a library for training and 
 ### Phase 1: Gather context
 
 Run these in parallel:
+
 - `gh pr view <number> --json title,body,baseRefName,headRefName,author,labels,files`
 - `gh pr diff <number>`
 - `gh api repos/vllm-project/speculators/pulls/<number>/reviews` — existing reviews
@@ -29,6 +30,7 @@ Then read the full diff. For changed files larger than 300 lines, also read the 
 ### Phase 2: Understand existing discussion
 
 Before forming any opinions, catalog:
+
 - What has each reviewer already said?
 - What has the author responded to?
 - What is unresolved?
@@ -91,6 +93,7 @@ Rate each finding 0–100:
 **Only keep findings with confidence ≥ 80.**
 
 False positives to actively filter out:
+
 - Pre-existing issues not introduced by this PR.
 - Pedantic style nitpicks a senior engineer would skip.
 - Issues a linter, typechecker, or CI would catch — do not run these yourself.
@@ -101,6 +104,7 @@ False positives to actively filter out:
 ### Phase 6: Draft the review
 
 For each surviving finding:
+
 - State the problem in one sentence.
 - If the issue involves an external API, library behavior, or spec, **link to the source or quote the relevant documentation**. Do not make unverified claims about external behavior.
 - If you propose an alternative, show a concrete code suggestion and confirm the alternative works in context.
@@ -113,16 +117,16 @@ For each surviving finding:
 Structure:
 
 **Review body** (high-level summary):
+
 - 1–3 sentences on the overall design assessment.
 - Note any high-level concerns or open questions.
 - If everything looks good at the design level, say so briefly.
 
 **Inline comments** (line-level):
+
 - Each non-high-level comment must reference a specific file and line range from the diff.
 - Order: correctness issues → design concerns → suggestions → questions.
-- When linking to code, use full-SHA permalink format for proper rendering:
-  `https://github.com/vllm-project/speculators/blob/{full_sha}/{path}#L{start}-L{end}`
-  Get the SHA via `git rev-parse HEAD` on the PR branch, and include ≥1 line of context above and below.
+- When linking to code, use full-SHA permalink format for proper rendering: `https://github.com/vllm-project/speculators/blob/{full_sha}/{path}#L{start}-L{end}` Get the SHA via `git rev-parse HEAD` on the PR branch, and include ≥1 line of context above and below.
 
 ### Phase 7: Verify before posting
 
