@@ -40,7 +40,7 @@ def compute_accuracy_single_step(
     correct_sum = correct.float().sum()
     full_total = torch.tensor(correct.numel(), dtype=torch.float, device=correct.device)
 
-    return correct_sum, full_total, correct_sum, cond_total
+    return correct_sum, full_total, correct_sum.clone(), cond_total
 
 
 @torch.no_grad()

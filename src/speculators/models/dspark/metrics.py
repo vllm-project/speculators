@@ -110,7 +110,7 @@ def compute_metrics(
             metrics["confidence_abs_error_total"] = mask_total
             # Mean predicted vs. observed acceptance — a calibration sanity check.
             metrics["confidence_pred_mean_sum"] = (conf_prob * mask_f).sum()
-            metrics["confidence_pred_mean_total"] = mask_total
+            metrics["confidence_pred_mean_total"] = mask_total.clone()
             # Calibration of the cumulative acceptance product, which is what
             # dynamic draft-length thresholding consumes (signed pred - target).
             conf_prefix = (
