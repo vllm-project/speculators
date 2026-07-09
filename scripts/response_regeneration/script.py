@@ -342,11 +342,11 @@ async def worker(
                 prefix.append({"role": "user", "content": turn["content"]})
 
                 payload = {
+                    **args.sampling_params,
                     "model": args.model,
                     "messages": prefix,
                     "max_tokens": args.max_tokens,
                     "return_token_ids": True,  # prompt_token_ids + completion token_ids
-                    **args.sampling_params,
                 }
                 data = await _post_chat(
                     session,
