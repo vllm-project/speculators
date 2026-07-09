@@ -7,9 +7,11 @@ import warnings
 try:
     from hs_connectors import HiddenStatesBackend
 
-    _backend_registry: dict[str, type] = dict(HiddenStatesBackend.registry)
+    _backend_registry: dict[str, type[HiddenStatesBackend]] = dict(
+        HiddenStatesBackend.registry  # type: ignore[misc]
+    )
 except ImportError:
-    _backend_registry = {}
+    _backend_registry = {}  # type: ignore[assignment]
 
 
 if "file" not in _backend_registry:
