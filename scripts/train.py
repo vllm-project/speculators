@@ -625,6 +625,7 @@ def main(args: argparse.Namespace):  # noqa: C901
         muon_adjust_lr_fn=args.muon_adjust_lr_fn,
         scheduler_type=args.scheduler_type,
         scheduler_warmup_steps=args.scheduler_warmup_steps,
+        scheduler_warmup_ratio=args.scheduler_warmup_ratio,
         scheduler_total_steps=args.scheduler_total_steps,
         scheduler_num_cosine_cycles=args.scheduler_num_cosine_cycles,
         checkpoint_freq=args.checkpoint_freq,
@@ -1047,6 +1048,20 @@ def parse_args():
         default=4.0,
         help="Decay gamma for DFlash/DSpark loss weighting (default: 4.0)",
     )
+    # D-Pace specific arguments (loss weight option + smoothing)
+    parser.add_argument(
+        "--per-position-loss-weight",
+        choices=["fixed-exp-decay", "dpace"],
+        default="fixed-exp-decay",
+        help="Per-position loss weight option for D-PACE support"
+        "default: fixed-exp-decay",
+    )
+    parser.add_argument(
+        "--dpace-alpha",
+        type=float,
+        default=0.5,
+        help="Smoothing constant for D-PACE loss (default: 0.5)",
+    )
     # DSpark-specific arguments (sequential Markov head + confidence head).
     parser.add_argument(
         "--markov-rank",
@@ -1163,8 +1178,22 @@ def parse_args():
     )
 
     # lr scheduler
-    parser.add_argument("--scheduler-type", type=str, default="linear")
+    parser.add_argument(
+        "--scheduler-type",
+        type=str,
+        default="linear",
+        choices=["linear", "cosine", "none"],
+    )
     parser.add_argument("--scheduler-warmup-steps", type=int, default=None)
+    parser.add_argument(
+        "--scheduler-warmup-ratio",
+        type=float,
+        default=None,
+        help=(
+            "Warmup as a fraction of total scheduler steps, in [0, 1]. Ignored "
+            "(with a warning) when --scheduler-warmup-steps is also set."
+        ),
+    )
     parser.add_argument("--scheduler-total-steps", type=int, default=None)
     parser.add_argument("--scheduler-num-cosine-cycles", type=float, default=0.5)
 
@@ -1172,7 +1201,7 @@ def parse_args():
     parser.add_argument(
         "--optimizer",
         type=str,
-        default="adamw",
+        default="muon",
         choices=["adamw", "muon"],
         help=(
             "Optimizer to use. 'muon' applies Muon to 2D weight matrices and AdamW to "
@@ -1188,8 +1217,9 @@ def parse_args():
     parser.add_argument(
         "--muon-lr",
         type=float,
-        default=0.02,
-        help="LR for the Muon (2D weights) group. Only used with --optimizer muon.",
+        default=None,
+        help="LR for the Muon (2D weights) group. Only used with --optimizer muon. "
+        "Defaults to 10*lr (and --lr defaults to 1e-4)",
     )
     parser.add_argument("--muon-momentum", type=float, default=0.95)
     parser.add_argument("--muon-weight-decay", type=float, default=0.1)
@@ -1211,10 +1241,19 @@ def parse_args():
         args.norm_before_fc = is_eagle3
     if args.norm_output is None:
         args.norm_output = is_eagle3
+    if args.muon_lr is None:
+        args.muon_lr = 10 * args.lr
 
     provided = explicitly_provided_dests(parser, DECODER_SHAPING_FLAGS)
     validate_draft_init_args(parser, args, provided)
     resolve_loss_config(args.loss_fn)
+
+    if args.per_position_loss_weight == "dpace":
+        if args.loss_fn != "ce":
+            parser.error("--per-position-loss-weight=dpace requires --loss-fn=ce")
+        if not 0.0 < args.dpace_alpha <= 1.0:
+            raise ValueError(f"alpha must be in (0, 1], got {args.dpace_alpha}")
+
     return args
 
 
