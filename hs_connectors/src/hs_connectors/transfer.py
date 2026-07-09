@@ -60,7 +60,7 @@ class HiddenStatesTransfer(ABC):
         """Clean up a generated sample (e.g. delete a temp file)."""
 
 
-class HiddenStatesBackend:
+class HiddenStatesBackend(ABC):
     """Plugin interface for hidden-states transfer backends.
 
     Each backend registers itself via ``@HiddenStatesBackend.register(name)``
