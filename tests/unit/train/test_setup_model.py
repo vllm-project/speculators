@@ -144,6 +144,7 @@ def _make_trainer_no_init(
     trainer.rank = rank
     trainer.is_distributed = is_distributed
     trainer.resume_from_checkpoint = config.resume_from_checkpoint
+    trainer.device_type = "cuda" if torch.cuda.is_available() else "cpu"
     trainer.train_loader = MagicMock(__len__=MagicMock(return_value=1))
     trainer.val_loader = None
     return trainer

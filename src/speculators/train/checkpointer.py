@@ -275,6 +275,26 @@ def load_safetensors_state_dict(path: Path, device: str) -> dict[str, torch.Tens
     return full_state_dict
 
 
+def patch_config_dtype(config_path: Path, float_dtype: torch.dtype) -> None:
+    """Patch config.json to match the actual on-disk tensor dtype.
+
+    When models are kept in FP32 but saved as BF16, save_pretrained writes
+    the in-memory dtype to config.json. This patches it to match the saved dtype.
+    """
+    if not config_path.exists():
+        return
+
+    config = json.loads(config_path.read_text())
+    # Convert torch.bfloat16 -> "bfloat16"
+    dtype_str = str(float_dtype).split(".")[-1]
+    # Support both dtype (transformers 5.x) and torch_dtype (older versions)
+    if "dtype" in config:
+        config["dtype"] = dtype_str
+    if "torch_dtype" in config:
+        config["torch_dtype"] = dtype_str
+    config_path.write_text(json.dumps(config, indent=2) + "\n")
+
+
 class SingleGPUCheckpointer(BaseCheckpointer):
     def load_model_state_dict(
         self, model: PreTrainedModel, float_dtype: torch.dtype | None = None
@@ -324,6 +344,8 @@ class SingleGPUCheckpointer(BaseCheckpointer):
         )  # type: ignore[assignment]
         model_state_dict = convert_float_dtype(raw_model.state_dict(), float_dtype)
         raw_model.save_pretrained(self.path / str(epoch), state_dict=model_state_dict)
+        patch_config_dtype(self.path / str(epoch) / "config.json", float_dtype)
+
         optimizers = _as_list(optimizer)
         state_dicts = [
             convert_float_dtype(opt.state_dict(), float_dtype) for opt in optimizers
@@ -409,6 +431,7 @@ class DistributedCheckpointer(BaseCheckpointer):
         if get_rank() == 0:
             # Only rank 0 saves the checkpoint
             model.save_pretrained(self.path / str(epoch), state_dict=model_state_dict)
+            patch_config_dtype(self.path / str(epoch) / "config.json", float_dtype)
             torch.save(optimizer_state_dict, self.optimizer_path(epoch))
             self._copy_train_command(epoch)
 

@@ -30,6 +30,7 @@ from speculators.models.utils import (
 from speculators.train.dataloader import create_train_val_loaders
 from speculators.train.distributed import (
     get_rank,
+    is_distributed,
     maybe_destroy_distributed,
     maybe_setup_distributed,
 )
@@ -627,6 +628,12 @@ def main(args: argparse.Namespace):  # noqa: C901
         logger.info(
             "Installed partial-neox rotary patch for HF/vLLM RoPE alignment "
             "(draft_mrope_full_head_hack=False)"
+        )
+
+    if args.fsdp_shard and not is_distributed():
+        raise ValueError(
+            "--fsdp-shard requires launching with torchrun/distributed training; "
+            "otherwise parameters are not sharded."
         )
 
     if get_rank() == 0:
