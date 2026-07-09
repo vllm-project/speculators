@@ -47,8 +47,7 @@ Both `throughput` and `sweep` share the same options:
 
 ### One-time data preparation
 
-SPEED-Bench prompts are fetched from external sources and cannot be redistributed directly.
-Run the preparation step once to materialise them locally:
+SPEED-Bench prompts are fetched from external sources and cannot be redistributed directly. Run the preparation step once to materialise them locally:
 
 ```bash
 # Fetch and materialise prompts, then split into per-category files (all in one command)
@@ -62,10 +61,7 @@ curl -LsSf https://raw.githubusercontent.com/NVIDIA-NeMo/Skills/refs/heads/main/
 python scripts/evaluate/prepare_speedbench.py --data-dir ./speedbench_data
 ```
 
-> **Note:** `prepare_speedbench.py` reads from the URL above to fetch NVIDIA's `prepare.py`.
-> Save a local copy (`--download` does this implicitly) if you anticipate running data
-> preparation again.  The materialised files contain data from third-party sources —
-> do not redistribute them.
+> **Note:** `prepare_speedbench.py` reads from the URL above to fetch NVIDIA's `prepare.py`. Save a local copy (`--download` does this implicitly) if you anticipate running data preparation again. The materialised files contain data from third-party sources — do not redistribute them.
 
 ### Running evaluations
 
@@ -99,9 +95,7 @@ python evaluate.py throughput \
 
 Available configs: `qualitative`, `throughput_1k`, `throughput_2k`, `throughput_8k`, `throughput_32k`.
 
-Results are written to `acceptance.csv` in the output directory with per-category
-acceptance lengths and per-position acceptance rates, identical in format to the
-`RedHatAI/speculator_benchmarks` output.
+Results are written to `acceptance.csv` in the output directory with per-category acceptance lengths and per-position acceptance rates, identical in format to the `RedHatAI/speculator_benchmarks` output.
 
 ## Visualization
 
