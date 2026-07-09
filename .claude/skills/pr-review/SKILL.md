@@ -40,8 +40,12 @@ Before forming any opinions, catalog:
 Evaluate these first — they matter more than line-level nits:
 
 - **Purpose & scope**: Does the PR do what the description claims? Is the scope appropriate or should it be split?
-- **Architectural fit**: Does this fit the existing patterns in `speculators`? Does it introduce unnecessary abstractions or bypass existing ones?
+- **Architectural fit**: Does this fit the existing patterns in `speculators`? Does it introduce unnecessary abstractions or bypass existing ones? Read surrounding code in the same module to understand local conventions (naming, error handling, structure) and flag deviations.
 - **Correctness of approach**: For the problem being solved, is this the right approach? Have alternatives been considered? If you see a clearly better alternative, name it concretely and explain the tradeoff.
+- **Design principles**:
+  - *DRY*: Does this duplicate logic that already exists elsewhere in the codebase? If so, point to the existing code.
+  - *YAGNI*: Does this add abstractions, parameters, or code paths not justified by the PR's stated goal? Premature generalization is a flag.
+  - *KISS*: Is there a simpler way to achieve the same result? Complexity should be proportional to the problem.
 - **Backward compatibility**: Could this break existing checkpoints, configs, or CLI invocations?
 - **Distributed training correctness** (if applicable): barrier placement, device consistency, FSDP wrapping, gradient handling.
 - **Tensor/numerical correctness** (if applicable): shape mismatches, dtype promotions, masking, off-by-one in shift-based alignment.
