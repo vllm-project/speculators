@@ -176,13 +176,11 @@ For multi-line comments, include both `start_line` and `line` (end). Use `side=R
 
 If there are zero inline comments beyond the summary, post just the review body.
 
-If no issues survive filtering (all < 80 confidence), post a review comment summarizing what was checked and recommending next steps. For example:
+If no issues survive filtering (all < 80 confidence), post a short review comment. Keep it to 1–3 sentences max. Do NOT list everything you checked — that's noise. Examples:
 
-- If clean with no caveats: "LGTM — reviewed design, correctness, and test coverage. No issues found. Recommend approving."
-- If clean but agreeing with existing reviewer comments: "LGTM — no further issues found. Agree with @CodeRabbit's suggestion to add auto-detection and save happy-path tests. Recommend approving once those are addressed."
-- If clean but with minor non-blocking observations: "LGTM — one minor observation below, non-blocking. Recommend approving."
-
-Tailor the message to the actual state of the PR and existing discussion. Always include what was reviewed so the approval is substantive, not just "LGTM".
+- "LGTM. Recommend approving."
+- "LGTM. Agree with @coderabbitai's suggestion to add tests for auto-detection and `_save` happy path. Recommend approving once addressed."
+- "LGTM, one minor non-blocking note below. Recommend approving."
 
 **Never approve a PR automatically.** Always use `event="COMMENT"`, never `event="APPROVE"`. Only the human reviewer should submit an approval.
 
