@@ -52,7 +52,17 @@ Evaluate these first — they matter more than line-level nits:
 - **Distributed training correctness** (if applicable): barrier placement, device consistency, FSDP wrapping, gradient handling.
 - **Tensor/numerical correctness** (if applicable): shape mismatches, dtype promotions, masking, off-by-one in shift-based alignment.
 
-### Phase 3.5: Paper validation
+### Phase 3.5: RFC compliance
+
+If the PR description or linked issues reference an RFC (issues labeled `rfc` in this repo), fetch the RFC issue via `gh issue view` and verify:
+
+1. Does the implementation match what was agreed in the RFC discussion? Check the final consensus, not just the original proposal — decisions often evolve in comments.
+2. Are there open objections or unresolved questions in the RFC that this PR should not proceed without addressing?
+3. If the implementation deviates from the RFC, is the deviation documented and justified in the PR description?
+
+Flag any discrepancy between the RFC and the implementation, quoting the relevant part of the RFC discussion.
+
+### Phase 3.6: Paper validation
 
 If the PR description, commit messages, or code comments reference a paper (arXiv, conference proceedings, etc.):
 
