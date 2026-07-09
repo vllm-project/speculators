@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -11,6 +12,12 @@ from typing import Any
 import aiohttp
 from datasets import load_dataset
 from tqdm import tqdm
+
+from speculators.data_generation.vllm_client import (
+    DEFAULT_MAX_RETRIES,
+    InvalidResponseError,
+    with_retries,
+)
 
 DATASET_CONFIGS = {
     "magpie": {
@@ -87,14 +94,26 @@ def parse_args():
     parser.add_argument(
         "--resume",
         action="store_true",
-        help="Skip rows already in outfile (by uuid or idx)",
+        help="Skip rows already in outfile (by stable primary id)",
     )
     parser.add_argument(
         "--language-filter",
         default=None,
         help="Only process rows where language==this (e.g., EN)",
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=DEFAULT_MAX_RETRIES,
+        help=(
+            "Max retry attempts per request on transient failure "
+            f"(default: {DEFAULT_MAX_RETRIES})"
+        ),
+    )
+    args = parser.parse_args()
+    if args.max_retries < 0:
+        parser.error("--max-retries must be >= 0")
+    return args
 
 
 def sanitize_filename(name: str) -> str:
@@ -141,9 +160,40 @@ def extract_turns(row, prompt_field):
     return []
 
 
-def load_seen(path: str):
-    """Load previously processed record IDs from output file."""
-    seen = set()
+def _is_present(value: Any) -> bool:
+    """Return True for a usable identifier (not None / not empty string)."""
+    return value not in (None, "")
+
+
+def _content_hash(row: dict[str, Any]) -> str:
+    """Deterministic hash of a row, used when it has no explicit id."""
+    payload = json.dumps(row, sort_keys=True, ensure_ascii=False, default=str)
+    return "hash_" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _primary_identifier(row: dict[str, Any]) -> str:
+    """Return a stable primary id for a dataset row.
+
+    Prefers an explicit ``id``/``uuid``; otherwise a deterministic content hash.
+    Unlike a streaming enumeration index, this key does not shift when
+    ``--limit``/``--language-filter`` or the input order change, so ``--resume``
+    stays correct across runs.
+    """
+    for field in ("id", "uuid"):
+        value = row.get(field)
+        if _is_present(value):
+            return str(value)
+    return _content_hash(row)
+
+
+def load_seen(path: str) -> set[str]:
+    """Load previously written output ids from the output file.
+
+    Each record stores its stable id under the top-level ``id`` (equal to the
+    row's :func:`_primary_identifier`), so a resumed run skips a row when its
+    recomputed id is already present.
+    """
+    seen: set[str] = set()
     if not os.path.isfile(path):
         return seen
 
@@ -153,9 +203,8 @@ def load_seen(path: str):
                 obj = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            key = obj.get("uuid") or obj.get("idx")
-            if key is not None:
-                seen.add(str(key))
+            if _is_present(obj.get("id")):
+                seen.add(str(obj["id"]))
     return seen
 
 
@@ -185,6 +234,14 @@ async def detect_model(endpoint: str) -> str:
         ) from e
 
 
+# Transient statuses worth retrying: request timeout, conflict, too-early, and
+# rate limiting, plus all 5xx. Other non-2xx replies (e.g. 400/401/404) are
+# permanent config/client errors and fail fast.
+SERVER_ERROR_STATUS = 500
+RETRYABLE_HTTP_STATUSES = {408, 409, 425, 429}
+
+
+@with_retries
 async def _post_chat(
     session: aiohttp.ClientSession,
     endpoint: str,
@@ -192,14 +249,24 @@ async def _post_chat(
 ) -> dict[str, Any]:
     """POST one chat-completion request and return the parsed response.
 
-    A non-2xx reply has no ``choices`` array, so raise with the status and a
-    short body; otherwise the caller records a bare ``KeyError('choices')`` and
-    the real cause is lost.
+    Wrapped by ``with_retries`` (adds a ``max_retries`` kwarg): transient
+    failures — network errors and transient HTTP statuses (408/409/425/429/5xx)
+    — are retried with exponential backoff. Permanent non-2xx replies (e.g.
+    400/404) raise ``InvalidResponseError``, which ``with_retries`` never
+    retries, so they fail fast. A non-2xx reply is surfaced with its status and
+    a short body so the caller does not record a bare ``KeyError('choices')``.
     """
     async with session.post(endpoint, json=payload) as response:
         if not response.ok:
             body = (await response.text())[:500]
-            raise RuntimeError(f"HTTP {response.status} from {endpoint}: {body}")
+            message = f"HTTP {response.status} from {endpoint}: {body}"
+            # Retry transient statuses (408/409/425/429/5xx); fail fast otherwise.
+            if (
+                response.status >= SERVER_ERROR_STATUS
+                or response.status in RETRYABLE_HTTP_STATUSES
+            ):
+                raise RuntimeError(message)
+            raise InvalidResponseError(message)
         return await response.json()
 
 
@@ -251,7 +318,12 @@ async def worker(
                     "messages": prefix,
                     "max_tokens": args.max_tokens,
                 }
-                data = await _post_chat(session, endpoint, payload)
+                data = await _post_chat(
+                    session,
+                    endpoint,
+                    payload,
+                    max_retries=args.max_retries,
+                )
 
                 choice = data["choices"][0]
                 message = choice["message"]
@@ -285,7 +357,7 @@ async def worker(
             }
 
             output = {
-                "id": item.get("uuid") or f"sample_{idx}",
+                "id": item["primary_id"],
                 "conversations": out_convs,
                 "metadata": metadata,
             }
@@ -296,7 +368,7 @@ async def worker(
             # Failures go to a separate error file, not the training output; an
             # in-band marker would be invisible (the pipeline drops metadata).
             error_output = {
-                "id": item.get("uuid") or f"sample_{idx}",
+                "id": item["primary_id"],
                 "conversations": out_convs,
                 "metadata": {
                     "idx": idx,
@@ -414,15 +486,14 @@ async def main():
                 if not turns:
                     continue
 
-                uuid = row.get("uuid")
-                key = str(uuid or index)
-                if key in seen_ids:
+                primary_id = _primary_identifier(row)
+                if primary_id in seen_ids:
                     continue
 
                 await queue.put(
                     {
                         "idx": index,
-                        "uuid": uuid,
+                        "primary_id": primary_id,
                         "turns": turns,
                     }
                 )
