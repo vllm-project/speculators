@@ -66,7 +66,8 @@ def partial_neox_apply_rotary_pos_emb(
     return q_embed, k_embed
 
 
-_INSTALLED = False
+_PATCH_STATE = {"installed": False}
+_ORIGINAL_APPLY_ATTR = "_speculators_original_apply_rotary_pos_emb"
 
 
 def install_partial_neox_rotary() -> None:
@@ -74,8 +75,7 @@ def install_partial_neox_rotary() -> None:
 
     Idempotent. Full-rotation paths keep original behavior.
     """
-    global _INSTALLED
-    if _INSTALLED:
+    if _PATCH_STATE["installed"]:
         return
 
     # Local imports — keep transformers a soft dep at module import time.
@@ -85,25 +85,22 @@ def install_partial_neox_rotary() -> None:
     for module in (modeling_llama, modeling_qwen3):
         original = module.apply_rotary_pos_emb
         # Cache original for tests / debugging — and to allow uninstall.
-        if not hasattr(module, "_speculators_original_apply_rotary_pos_emb"):
-            module._speculators_original_apply_rotary_pos_emb = original  # type: ignore[attr-defined]
+        if not hasattr(module, _ORIGINAL_APPLY_ATTR):
+            setattr(module, _ORIGINAL_APPLY_ATTR, original)
         module.apply_rotary_pos_emb = partial_neox_apply_rotary_pos_emb
 
-    _INSTALLED = True
+    _PATCH_STATE["installed"] = True
 
 
 def uninstall_partial_neox_rotary() -> None:
     """Restore HF's original ``apply_rotary_pos_emb``. Test/debug helper."""
-    global _INSTALLED
-    if not _INSTALLED:
+    if not _PATCH_STATE["installed"]:
         return
     from transformers.models.llama import modeling_llama  # noqa: PLC0415
     from transformers.models.qwen3 import modeling_qwen3  # noqa: PLC0415
 
     for module in (modeling_llama, modeling_qwen3):
-        original = getattr(
-            module, "_speculators_original_apply_rotary_pos_emb", None
-        )
+        original = getattr(module, _ORIGINAL_APPLY_ATTR, None)
         if original is not None:
             module.apply_rotary_pos_emb = original
-    _INSTALLED = False
+    _PATCH_STATE["installed"] = False

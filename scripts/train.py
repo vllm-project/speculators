@@ -48,6 +48,7 @@ DRAFT_ARCH_CONFIGS: dict[str, type] = {
     "llama": LlamaConfig,
     "qwen3": Qwen3Config,
 }
+MROPE_INVERSE_TOLERANCE = 1e-6
 
 
 def set_seed(seed: int, deterministic: bool = False):
@@ -76,7 +77,7 @@ def _maybe_apply_mrope_full_head_hack(
     if enabled and inherited_partial < 1.0:
         old_section = list(rope_params["mrope_section"])
         inv = 1.0 / inherited_partial
-        if abs(inv - round(inv)) > 1e-6:
+        if abs(inv - round(inv)) > MROPE_INVERSE_TOLERANCE:
             raise ValueError(
                 "mrope_full_head_hack cannot rescale mrope_section because "
                 f"1/partial_rotary_factor={inv} is not an integer."
@@ -111,6 +112,7 @@ def create_transformer_layer_config(  # noqa: C901
     hidden_act: str | None,
     sliding_window: int,
     sliding_window_indices: list[int],
+    mrope_full_head_hack: bool = True,
 ) -> PretrainedConfig:
     if draft_arch not in DRAFT_ARCH_CONFIGS:
         raise ValueError(
@@ -156,6 +158,7 @@ def create_transformer_layer_config(  # noqa: C901
         num_attention_heads = verifier_config.hidden_size // head_dim
         if num_attention_heads % num_key_value_heads != 0:
             num_key_value_heads = num_attention_heads
+    resolved_head_dim = head_dim or verifier_config.hidden_size // num_attention_heads
 
     if sliding_window_indices and (
         min(sliding_window_indices) < 0 or max(sliding_window_indices) >= num_layers

@@ -16,18 +16,18 @@ from scripts.train import create_transformer_layer_config
 
 def _make_verifier_config(**overrides) -> types.SimpleNamespace:
     """Build a minimal fake verifier config for the config builder."""
-    base = dict(
-        vocab_size=1000,
-        hidden_size=512,
-        num_attention_heads=8,
-        num_key_value_heads=8,
-        intermediate_size=2048,
-        max_position_embeddings=4096,
-        initializer_range=0.02,
-        rms_norm_eps=1e-6,
-        hidden_act="silu",
-        head_dim=128,
-    )
+    base = {
+        "vocab_size": 1000,
+        "hidden_size": 512,
+        "num_attention_heads": 8,
+        "num_key_value_heads": 8,
+        "intermediate_size": 2048,
+        "max_position_embeddings": 4096,
+        "initializer_range": 0.02,
+        "rms_norm_eps": 1e-6,
+        "hidden_act": "silu",
+        "head_dim": 128,
+    }
     base.update(overrides)
     return types.SimpleNamespace(**base)
 
@@ -51,14 +51,14 @@ def patch_verifier(monkeypatch):
 
 
 def _build(**kwargs):
-    defaults = dict(
-        verifier_name_or_path="dummy",
-        num_layers=1,
-        draft_arch="llama",
-        hidden_act="silu",
-        sliding_window=0,
-        sliding_window_indices=[],
-    )
+    defaults = {
+        "verifier_name_or_path": "dummy",
+        "num_layers": 1,
+        "draft_arch": "llama",
+        "hidden_act": "silu",
+        "sliding_window": 0,
+        "sliding_window_indices": [],
+    }
     defaults.update(kwargs)
     return create_transformer_layer_config(**defaults)
 

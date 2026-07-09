@@ -24,14 +24,16 @@ We verify two properties on a hand-rolled vLLM-equivalent reference:
 
 from __future__ import annotations
 
-import math
-
+import pytest
 import torch
+from transformers.models.llama import modeling_llama
+from transformers.models.llama.modeling_llama import apply_rotary_pos_emb as hf_apply
 
-try:
-    import pytest
-except ImportError:  # pragma: no cover - environments without pytest
-    pytest = None  # type: ignore[assignment]
+from speculators.models.eagle3.rotary_partial import (
+    install_partial_neox_rotary,
+    partial_neox_apply_rotary_pos_emb,
+    uninstall_partial_neox_rotary,
+)
 
 
 def _vllm_neox_partial_reference(
@@ -64,13 +66,6 @@ def _vllm_neox_partial_reference(
 
 def test_full_rotation_is_byte_equivalent_to_hf():
     """When cos covers the full head_dim, the patched fn must match HF exactly."""
-    from speculators.models.eagle3.rotary_partial import (
-        partial_neox_apply_rotary_pos_emb,
-    )
-    from transformers.models.llama.modeling_llama import (
-        apply_rotary_pos_emb as hf_apply,
-    )
-
     torch.manual_seed(0)
     batch, heads, seq, head_dim = 2, 4, 7, 64
     q = torch.randn(batch, heads, seq, head_dim, dtype=torch.float32)
@@ -89,10 +84,6 @@ def test_full_rotation_is_byte_equivalent_to_hf():
 
 def test_partial_rotation_matches_vllm_reference():
     """rotary_dim < head_dim must match vLLM's neox-partial channel layout."""
-    from speculators.models.eagle3.rotary_partial import (
-        partial_neox_apply_rotary_pos_emb,
-    )
-
     torch.manual_seed(1)
     # Realistic Qwen3.6 shape: head_dim=256, partial_rotary_factor=0.25
     batch, heads, seq, head_dim = 2, 4, 5, 256
@@ -113,10 +104,6 @@ def test_partial_rotation_matches_vllm_reference():
 
 def test_partial_rotation_preserves_passthrough_channels():
     """Channels >= rotary_dim must be untouched (atol=0)."""
-    from speculators.models.eagle3.rotary_partial import (
-        partial_neox_apply_rotary_pos_emb,
-    )
-
     torch.manual_seed(2)
     batch, heads, seq, head_dim = 1, 2, 3, 64
     rotary_dim = 16
@@ -137,15 +124,6 @@ def test_partial_rotation_preserves_passthrough_channels():
 
 def test_install_is_idempotent_and_byte_safe_on_full_rotation():
     """Installing the patch must not perturb full-rotation HF callers."""
-    from speculators.models.eagle3.rotary_partial import (
-        install_partial_neox_rotary,
-        uninstall_partial_neox_rotary,
-    )
-    from transformers.models.llama import modeling_llama
-    from transformers.models.llama.modeling_llama import (
-        apply_rotary_pos_emb as hf_apply_pre,
-    )
-
     # Snapshot HF behaviour BEFORE installing.
     torch.manual_seed(3)
     head_dim = 32
@@ -153,7 +131,7 @@ def test_install_is_idempotent_and_byte_safe_on_full_rotation():
     k = torch.randn(1, 2, 4, head_dim)
     cos = torch.cos(torch.randn(1, 4, head_dim))
     sin = torch.sin(torch.randn(1, 4, head_dim))
-    q_pre, k_pre = hf_apply_pre(q, k, cos, sin, unsqueeze_dim=1)
+    q_pre, k_pre = hf_apply(q, k, cos, sin, unsqueeze_dim=1)
 
     install_partial_neox_rotary()
     install_partial_neox_rotary()  # idempotent
@@ -170,28 +148,17 @@ def test_install_is_idempotent_and_byte_safe_on_full_rotation():
 
     # After uninstall, the symbol must be HF's original (object identity).
     assert (
-        modeling_llama.apply_rotary_pos_emb is hf_apply_pre
-        or modeling_llama.apply_rotary_pos_emb.__wrapped__ is hf_apply_pre
+        modeling_llama.apply_rotary_pos_emb is hf_apply
+        or getattr(modeling_llama.apply_rotary_pos_emb, "__wrapped__", None) is hf_apply
     )
 
 
 def test_rejects_cos_longer_than_head_dim():
     """Defensive — cos can't be larger than q's last dim."""
-    from speculators.models.eagle3.rotary_partial import (
-        partial_neox_apply_rotary_pos_emb,
-    )
-
     q = torch.randn(1, 1, 1, 8)
     k = torch.randn(1, 1, 1, 8)
     cos = torch.randn(1, 1, 16)  # > head_dim=8
     sin = torch.randn(1, 1, 16)
-    if pytest is not None:
-        with pytest.raises(ValueError, match="exceeds q last dim"):
-            partial_neox_apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1)
-        return
-    try:
+
+    with pytest.raises(ValueError, match="exceeds q last dim"):
         partial_neox_apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1)
-    except ValueError as e:
-        assert "exceeds q last dim" in str(e)
-    else:  # pragma: no cover
-        raise AssertionError("expected ValueError on oversize cos")
