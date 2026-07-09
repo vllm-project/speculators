@@ -182,4 +182,4 @@ End every review body with:
 🤖 Generated with [Claude Code](https://claude.ai/code) using the `/pr-review` skill
 ```
 
-Report the review URL when done.
+Report the review URL when done, along with a brief summary: number of findings posted, number filtered out, and wall-clock time elapsed since Phase 0 started.
