@@ -69,12 +69,13 @@ def _build(**kwargs):
 
 
 def test_mrope_section_preserved_and_type_alias_dropped(patch_verifier):
-    """``mrope_section`` is kept; the legacy ``type`` alias is removed."""
+    """``mrope_section`` is kept; the legacy ``type`` and ``mrope_interleaved`` are removed."""
     vc = _make_verifier_config(
         rope_parameters={
             "rope_type": "default",
             "type": "mrope",
             "mrope_section": [16, 24, 24],
+            "mrope_interleaved": True,
             "rope_theta": 1000000.0,
         }
     )
@@ -85,8 +86,9 @@ def test_mrope_section_preserved_and_type_alias_dropped(patch_verifier):
     assert config.rope_parameters["mrope_section"] == [16, 24, 24]
     assert config.rope_parameters["rope_theta"] == 1000000.0
     assert config.rope_parameters["rope_type"] == "default"
-    # Legacy alias must be stripped so it doesn't break vLLM config checks.
+    # Legacy fields must be stripped so they don't break vLLM config checks.
     assert "type" not in config.rope_parameters
+    assert "mrope_interleaved" not in config.rope_parameters
 
 
 def test_full_head_hack_rescales_partial_mrope(patch_verifier):
@@ -124,6 +126,31 @@ def test_full_head_hack_disabled_keeps_partial(patch_verifier):
 
     assert config.rope_parameters["mrope_section"] == [8, 12, 12]
     assert config.rope_parameters["partial_rotary_factor"] == 0.5
+
+
+def test_partial_rotary_factor_not_leaked(patch_verifier):
+    """Regression for #613: partial_rotary_factor must not cause
+    a train/inference rotary dimension mismatch."""
+    vc = _make_verifier_config(
+        rope_parameters={
+            "rope_type": "default",
+            "mrope_section": [8, 12, 12],
+            "partial_rotary_factor": 0.25,
+            "rope_theta": 1000000.0,
+        },
+        head_dim=256,
+    )
+    patch_verifier(vc, "5.0.0")
+
+    config = _build()
+
+    partial = config.rope_parameters.get("partial_rotary_factor", 1.0)
+    inference_rotary_dim = int(config.head_dim * partial)
+
+    assert inference_rotary_dim == config.head_dim, (
+        f"Train/inference rotary dim mismatch: training uses {config.head_dim}, "
+        f"inference would use {inference_rotary_dim} (partial_rotary_factor={partial})"
+    )
 
 
 def test_full_head_hack_non_integer_inverse_raises(patch_verifier):
@@ -170,7 +197,12 @@ def test_pre_transformers_5_preserves_mrope_in_rope_scaling(patch_verifier):
     """On legacy transformers, MRoPE lives in ``rope_scaling``."""
     vc = _make_verifier_config(
         rope_theta=1000000.0,
-        rope_scaling={"rope_type": "default", "mrope_section": [16, 24, 24]},
+        rope_scaling={
+            "rope_type": "default",
+            "mrope_section": [16, 24, 24],
+            "type": "mrope",
+            "mrope_interleaved": True,
+        },
     )
     patch_verifier(vc, "4.46.0")
 
@@ -178,3 +210,6 @@ def test_pre_transformers_5_preserves_mrope_in_rope_scaling(patch_verifier):
 
     assert config.rope_scaling["mrope_section"] == [16, 24, 24]
     assert config.rope_theta == 1000000.0
+    # Legacy fields should be stripped from rope_scaling too
+    assert "type" not in config.rope_scaling
+    assert "mrope_interleaved" not in config.rope_scaling
