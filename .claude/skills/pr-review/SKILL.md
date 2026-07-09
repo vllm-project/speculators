@@ -170,9 +170,7 @@ For multi-line comments, include both `start_line` and `line` (end). Use `side=R
 
 If there are zero inline comments beyond the summary, post just the review body.
 
-If no issues survive filtering (all < 80 confidence), post:
-
-> No issues found. Checked for bugs, design concerns, and project convention compliance.
+If no issues survive filtering (all < 80 confidence), **do not post a review**. Report to the user that nothing worth commenting on was found, but do not leave a noise comment on the PR.
 
 End every review body with:
 
