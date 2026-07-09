@@ -39,6 +39,8 @@ Before forming any opinions, catalog:
 
 **Do NOT echo points already raised by other reviewers.** If you agree with an existing comment, you may reference it briefly ("I agree with @X's point on ...") but do not restate it. Drop any finding that duplicates an existing review comment.
 
+If reviewers or the author linked to sources (docs, issues, code snippets, benchmarks, papers) in their comments, fetch and read them — they often contain context that informs whether a concern is valid or already resolved.
+
 ### Phase 3: Design & big-picture review
 
 Evaluate these first — they matter more than line-level nits:
