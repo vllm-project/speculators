@@ -225,11 +225,17 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         gamma = kwargs.get("dflash_decay_gamma", 4.0)
         max_anchors = kwargs.get("max_anchors", 3072)
         normalize_by_decay = kwargs.get("normalize_loss_by_decay", False)
+        per_position_loss_weight = kwargs.get(
+            "per_position_loss_weight", "fixed-exp-decay"
+        )
+        dpace_alpha = kwargs.get("dpace_alpha", 0.5)
         shared = {
             "loss_config": loss_config,
             "gamma": gamma,
             "max_anchors": max_anchors,
             "normalize_by_decay": normalize_by_decay,
+            "per_position_loss_weight": per_position_loss_weight,
+            "dpace_alpha": dpace_alpha,
         }
         return dict(shared), dict(shared)
 
@@ -422,6 +428,8 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         normalize_by_decay: bool = False,
         global_step: int = 0,
         total_steps: int | None = None,
+        per_position_loss_weight: str = "fixed-exp-decay",
+        dpace_alpha: float = 0.5,
         **kwargs,
     ):
         hidden, logits, targets, aligned_loss_mask, anchored_block_indices = (
@@ -518,6 +526,8 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 gamma=gamma,
                 loss_config=loss_config,
                 normalize_by_decay=normalize_by_decay,
+                per_position_loss_weight=per_position_loss_weight,
+                dpace_alpha=dpace_alpha,
             )
 
         return draft_tokens, loss, metrics

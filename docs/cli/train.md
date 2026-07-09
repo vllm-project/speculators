@@ -34,11 +34,11 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--trust-remote-code`** (flag) Allow executing code from HF Hub when loading the verifier's tokenizer.
 
-- **`--speculator-type`** (str, default: `"eagle3"`) Type of speculator model to train. Options: `eagle3`, `dflash`
+- **`--speculator-type`** (str, default: `"eagle3"`) Type of speculator model to train. Options: `eagle3`, `dflash`, `dspark`, `peagle`, `mtp`
 
-- **`--from-pretrained`** (str, default: `""`) Path or HF id of an existing draft checkpoint to load weights from and train — either a previously trained draft or the initialized-but-untrained checkpoint produced by `--dry-run`. May also point to a local directory containing only a `config.json`, in which case a fresh draft is initialized from that full speculator config. Takes precedence over all other model-definition options: it is mutually exclusive with `--draft-config` and the decoder-shaping flags (`--num-layers`, `--draft-arch`, `--draft-hidden-act`, `--sliding-window`, `--sliding-window-indices`).
+- **`--from-pretrained`** (str, default: `""`) Path or HF id of an existing draft checkpoint to load weights from and train — either a previously trained draft or the initialized-but-untrained checkpoint produced by `--dry-run`. May also point to a local directory containing only a `config.json`, in which case a fresh draft is initialized from that full speculator config. Takes precedence over all other model-definition options: it is mutually exclusive with `--draft-config` and the decoder-shaping flags (`--num-layers`, `--draft-arch`, `--draft-hidden-act`, `--sliding-window`, `--full-attention-indices`).
 
-- **`--draft-config`** (str, default: `""`) HF id, directory, or JSON path of a decoder config (`LlamaConfig` for eagle3/peagle, `Qwen3Config` for dflash) used as the draft `transformer_layer_config`; the rest of the speculator is built from the other CLI args. The draft `hidden_size` must match the verifier (mismatch is not yet supported). If a full speculator config is passed, its nested `transformer_layer_config` is extracted. Mutually exclusive with `--from-pretrained` and with the decoder-shaping flags (`--num-layers`, `--draft-arch`, `--draft-hidden-act`, `--sliding-window`, `--sliding-window-indices`).
+- **`--draft-config`** (str, default: `""`) HF id, directory, or JSON path of a decoder config (`LlamaConfig` for eagle3/peagle, `Qwen3Config` for dflash) used as the draft `transformer_layer_config`; the rest of the speculator is built from the other CLI args. The draft `hidden_size` must match the verifier (mismatch is not yet supported). If a full speculator config is passed, its nested `transformer_layer_config` is extracted. Mutually exclusive with `--from-pretrained` and with the decoder-shaping flags (`--num-layers`, `--draft-arch`, `--draft-hidden-act`, `--sliding-window`, `--full-attention-indices`).
 
 - **`--dry-run`** (flag) Build the speculator, initialize weights, save a checkpoint to `--save-path`, then exit before training. Useful to validate the config/weights in vLLM before launching a full run; the saved checkpoint can be fed straight back via `--from-pretrained`.
 
@@ -116,11 +116,11 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 ### Optimizer Arguments
 
-- **`--optimizer`** (str, default: `"adamw"`) Optimizer to use. Options: `adamw`, `muon`. The `muon` option applies the Muon optimizer to 2D weight matrices and AdamW to the remaining parameters (norms, biases, embeddings, lm_head).
+- **`--optimizer`** (str, default: `"muon"`) Optimizer to use. Options: `adamw`, `muon`. The `muon` option applies the Muon optimizer to 2D weight matrices and AdamW to the remaining parameters (norms, biases, embeddings, lm_head).
 
 - **`--weight-decay`** (float, default: `0.01`) Weight decay for the AdamW optimizer (and the AdamW group in muon mode).
 
-- **`--muon-lr`** (float, default: `0.02`) Learning rate for the Muon (2D weights) group. Only used with `--optimizer muon`.
+- **`--muon-lr`** (float, default: `10*lr`) Learning rate for the Muon (2D weights) group. Only used with `--optimizer muon`. Defaults to 10× the `--lr` value.
 
 - **`--muon-momentum`** (float, default: `0.95`) Momentum for the Muon optimizer. Only used with `--optimizer muon`.
 
@@ -168,13 +168,25 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--domino-emb-dim`** (int, default: `256`) Bottleneck dimension for the Domino embed projection MLP that combines GRU output with backbone hidden states.
 
-- **`--domino-pure-draft-prefix-len`** (int, default: `1`) Number of leading block positions (after the anchor) that use pure DFlash logits without Domino correction. The suffix positions are refined by the Domino head.
+- **`--domino-pure-draft-prefix-len`** (int, default: `0`) Number of leading block positions (after the anchor) that use pure DFlash logits without Domino correction. The suffix positions are refined by the Domino head.
 
 - **`--domino-shift-label`** (flag, default: `True`) Shift labels by 1 so the first predicted position is anchor+1. Enabled by default for Domino (aligns with DFlash's implicit target shift via `torch.roll`).
 
 - **`--domino-lambda-start`** (float, default: `1.0`) Initial weight of the base loss in the Domino dual-loss schedule. The combined loss is `(1-λ) * final_loss + λ * base_loss`.
 
-- **`--domino-lambda-decay-steps`** (int, default: `30000`) Number of training steps over which lambda_base decays from `--domino-lambda-start` to 0. Set to 0 to disable decay (lambda_base stays at `--domino-lambda-start`).
+- **`--domino-lambda-decay-ratio`** (float, default: `0.5`) Fraction of total training steps over which lambda_base decays from `--domino-lambda-start` to 0.
+
+- **`--normalize-loss-by-decay`** (flag) Normalize loss by sum of decay weights instead of token count.
+
+### Sliding Window Attention Arguments
+
+These flags apply to `dflash` and `dspark`, which use sliding window attention on all draft layers by default.
+
+- **`--sliding-window`** (int, default: `2048`) Sliding window size for sliding window attention layers.
+
+- **`--full-attention-indices`** (int list, default: none) Space-separated draft layer indices that should use full attention instead of sliding window. Example: `--full-attention-indices 0 2` makes layers 0 and 2 use full attention; the rest use sliding window.
+
+- **`--sliding-window-non-causal`** (flag) Use non-causal (bidirectional) masking within draft blocks for sliding window attention layers. Full attention layers are always bidirectional. Note: vLLM currently doesn't support these models.
 
 ### Dataloader Arguments
 
@@ -192,9 +204,11 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 ### Learning Rate Scheduler Arguments
 
-- **`--scheduler-type`** (str, default: `"linear"`) Type of learning rate scheduler. Options: `linear`, `cosine`, `constant`
+- **`--scheduler-type`** (str, default: `"linear"`) Type of learning rate scheduler. Options: `linear`, `cosine`, `none`
 
 - **`--scheduler-warmup-steps`** (int, default: `None`) Number of warmup steps for the scheduler.
+
+- **`--scheduler-warmup-ratio`** (float, default: `None`) Warmup as a fraction of total scheduler steps, in `[0, 1]`. Ignored (with a warning) when `--scheduler-warmup-steps` is also set.
 
 - **`--scheduler-total-steps`** (int, default: `None`) Total number of training steps for the scheduler.
 

@@ -11,6 +11,7 @@ from speculators.models.metrics import (
     compute_accuracy_multi_step,
     dflash_loss_decay,
     domino_loss_decay,
+    dpace_loss_decay,
     kl_div_loss,
 )
 
@@ -26,6 +27,8 @@ def compute_metrics(
     loss_config: LossConfig | None = None,
     normalize_by_decay: bool = False,
     decay_mode: Literal["dflash", "domino"] = "dflash",
+    per_position_loss_weight: str = "fixed-exp-decay",
+    dpace_alpha: float = 0.5,
 ) -> tuple[torch.Tensor, dict]:
     """Compute loss and accuracy metrics for draft model predictions.
 
@@ -38,12 +41,15 @@ def compute_metrics(
         loss_config: Mapping of ``{name: (loss_fn, weight)}``
         decay_mode: ``"dflash"`` (position 0 weight 0, position 1 weight 1) or
             ``"domino"`` (position 0 weight 1, SGLang-style exp(-k/gamma))
+        per_position_loss_weight: Weighting option for per-position block-drafting loss
+        dpace_alpha: Smoothing constant for D-Pace loss weighting
 
     Returns:
         Tuple of (loss, metrics_dict) where metrics_dict contains:
             - loss: Scalar loss value
             - full_acc: Overall accuracy
             - position {i} acc: Accuracy at position i within blocks
+            - eal: Expected Accepted Length (headline speculative-decoding metric)
     """
     if loss_config is None:
         loss_config = _DEFAULT_LOSS_CONFIG
@@ -51,11 +57,17 @@ def compute_metrics(
     pos_idx = torch.arange(seq_len, device=logits.device) % block_size
     pos_idx = pos_idx.unsqueeze(0)  # shape: [1, T]
 
-    decay_fn = (
-        partial(domino_loss_decay, gamma=gamma)
-        if decay_mode == "domino"
-        else partial(dflash_loss_decay, gamma=gamma)
-    )
+    if per_position_loss_weight == "dpace":
+        decay_fn = partial(
+            dpace_loss_decay,
+            loss_mask=loss_mask,
+            block_size=block_size,
+            dpace_alpha=dpace_alpha,
+        )
+    elif decay_mode == "domino":
+        decay_fn = partial(domino_loss_decay, gamma=gamma)
+    else:
+        decay_fn = partial(dflash_loss_decay, gamma=gamma)
 
     loss, term_losses = compound_loss(
         logits,
@@ -87,7 +99,15 @@ def compute_metrics(
     metrics["full_acc_sum"] = correct_per_pos[start_pos:].sum()
     metrics["full_acc_total"] = total_per_pos[start_pos:].sum()
 
+    # EAL = sum_k prod_{i<=k} acc_i over drafted positions
+    eal = torch.zeros((), device=logits.device)
+    cum = torch.ones((), device=logits.device)
     for pos in range(start_pos, block_size):
         metrics[f"position_{pos}_acc_sum"] = correct_per_pos[pos]
         metrics[f"position_{pos}_acc_total"] = total_per_pos[pos]
+        acc = correct_per_pos[pos] / total_per_pos[pos].clamp(min=1.0)
+        cum = cum * acc
+        eal = eal + cum
+    metrics["eal_sum"] = eal
+    metrics["eal_total"] = ones
     return loss, metrics

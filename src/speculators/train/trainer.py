@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 import warnings
 from pathlib import Path
 from typing import Literal, NamedTuple
@@ -37,6 +38,57 @@ from speculators.train.utils import normalize_counted_metrics
 root_logger = logging.getLogger("speculators")
 metric_logger = logging.getLogger("speculators.metrics")
 
+
+class _StepTimer:
+    # Each mark()/now() forces a cuda.synchronize to capture true GPU time.
+    # This serialises the CUDA pipeline, so profiled steps are slower; keep
+    # log_freq > 1 in perf-sensitive runs.
+    def __init__(self, enabled: bool = False):
+        self.enabled = enabled
+        self._marks: dict[str, float] = {}
+
+    def reset(self, enabled: bool) -> None:
+        self.enabled = enabled
+        self._marks.clear()
+
+    def mark(self, name: str) -> None:
+        if self.enabled:
+            torch.cuda.synchronize()
+            self._marks[name] = time.perf_counter()
+
+    def mark_value(self, name: str, value: float) -> None:
+        if self.enabled:
+            self._marks[name] = value
+
+    def now(self) -> float | None:
+        if not self.enabled:
+            return None
+        torch.cuda.synchronize()
+        return time.perf_counter()
+
+    def profile(self, num_tokens: int) -> dict[str, float] | None:
+        if not self.enabled:
+            return None
+        m = self._marks
+        has_start = "start" in m
+        fwd_ms = (m["fwd"] - m["fetch"]) * 1000
+        bwd_ms = (m["bwd"] - m["fwd"]) * 1000
+        opt_ms = (m["opt"] - m["bwd"]) * 1000
+        fetch_ms = (m["fetch"] - m["start"]) * 1000 if has_start else 0.0
+        step_ms = (m["opt"] - m["start"]) * 1000 if has_start else 0.0
+        tokens_per_s = num_tokens / (step_ms / 1000) if step_ms > 0 else 0.0
+        fetch_frac = fetch_ms / step_ms if step_ms > 0 else 0.0
+        return {
+            "fetch_ms": fetch_ms,
+            "fwd_ms": fwd_ms,
+            "bwd_ms": bwd_ms,
+            "opt_ms": opt_ms,
+            "step_ms": step_ms,
+            "tokens_per_s": tokens_per_s,
+            "fetch_frac": fetch_frac,
+        }
+
+
 warnings.filterwarnings("ignore", category=TqdmExperimentalWarning)
 MIN_STEP_PCT = 0.25
 
@@ -46,8 +98,8 @@ class TrainerConfig(NamedTuple):
     num_epochs: int
     save_path: str
     resume_from_checkpoint: bool = False
-    train_call_kwargs: dict = {}
-    val_call_kwargs: dict = {}
+    train_call_kwargs: dict | None = None
+    val_call_kwargs: dict | None = None
     optimizer: Literal["adamw", "muon"] = "adamw"
     weight_decay: float = 0.01
     muon_lr: float = 0.02
@@ -57,12 +109,51 @@ class TrainerConfig(NamedTuple):
     muon_adjust_lr_fn: str = "match_rms_adamw"
     scheduler_type: Literal["linear", "cosine", "none"] = "linear"
     scheduler_warmup_steps: int | None = None
+    scheduler_warmup_ratio: float | None = None
     scheduler_total_steps: int | None = None
     scheduler_num_cosine_cycles: float = 0.5
     checkpoint_freq: float = 1
     save_best: bool = False
     hidden_states_dtype: torch.dtype = torch.bfloat16
     log_freq: int = 1
+
+
+def _resolve_scheduler_steps(
+    config: TrainerConfig,
+    train_loader_len: int,
+) -> tuple[int, int]:
+    """Resolve ``(warmup_steps, total_steps)`` for the LR scheduler.
+
+    Explicit ``scheduler_warmup_steps`` wins; otherwise ``scheduler_warmup_ratio``
+    (a fraction of total steps, validated to ``[0, 1]``) is used; otherwise the
+    default of 1% of the resolved total steps. ``scheduler_total_steps`` defaults
+    to ``num_epochs * train_loader_len``.
+    """
+    default_total_steps = config.num_epochs * train_loader_len
+    scheduler_total_steps = (
+        config.scheduler_total_steps
+        if config.scheduler_total_steps is not None
+        else default_total_steps
+    )
+
+    if config.scheduler_warmup_steps is not None:
+        scheduler_warmup_steps = config.scheduler_warmup_steps
+        if config.scheduler_warmup_ratio is not None:
+            warnings.warn(
+                "Both scheduler_warmup_steps and scheduler_warmup_ratio are set; "
+                "using scheduler_warmup_steps.",
+                stacklevel=2,
+            )
+    elif config.scheduler_warmup_ratio is not None:
+        if not 0 <= config.scheduler_warmup_ratio <= 1:
+            raise ValueError("scheduler_warmup_ratio must be between 0 and 1.")
+        scheduler_warmup_steps = int(
+            scheduler_total_steps * config.scheduler_warmup_ratio
+        )
+    else:
+        scheduler_warmup_steps = scheduler_total_steps // 100
+
+    return scheduler_warmup_steps, scheduler_total_steps
 
 
 class Trainer:
@@ -230,13 +321,8 @@ class Trainer:
             self.schedulers: list[torch.optim.lr_scheduler.LRScheduler] = []
             return
 
-        # Compute defaults if None
-        scheduler_warmup_steps = (
-            self.config.scheduler_warmup_steps
-            or (self.config.num_epochs * len(self.train_loader)) // 100
-        )
-        scheduler_total_steps = self.config.scheduler_total_steps or (
-            self.config.num_epochs * len(self.train_loader)
+        scheduler_warmup_steps, scheduler_total_steps = _resolve_scheduler_steps(
+            self.config, len(self.train_loader)
         )
         self.total_steps = scheduler_total_steps
 
@@ -327,9 +413,14 @@ class Trainer:
             if self.config.checkpoint_freq < 1
             else None
         )
+        t_before_fetch = time.perf_counter()
+        timer = _StepTimer()
         for local_step_rel, batch in enumerate(train_loader, 1):
             # local_step is 1-based index into the *full* epoch (not the slice).
             local_step = local_step_rel + skip_steps
+            timer.reset(self.global_step % self.config.log_freq == 0)
+
+            timer.mark_value("start", t_before_fetch)
             gpu_batch = {
                 k: v.to(self.local_rank, non_blocking=True)
                 if isinstance(v, torch.Tensor)
@@ -337,22 +428,31 @@ class Trainer:
                 for k, v in batch.items()
             }
 
-            train_kwargs = dict(self.config.train_call_kwargs)
+            train_kwargs = dict(self.config.train_call_kwargs or {})
             train_kwargs["global_step"] = self.global_step
             train_kwargs["total_steps"] = self.total_steps
+            timer.mark("fetch")
             _draft_tokens, loss, metrics = self.model(**gpu_batch, **train_kwargs)
 
+            timer.mark("fwd")
             self._optimizers_zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+
+            timer.mark("bwd")
             self._optimizers_step()
 
             current_lrs = {
                 type(opt).__name__: opt.param_groups[0]["lr"] for opt in self.optimizers
             }
             self._schedulers_step()
+            timer.mark("opt")
+            t_before_fetch = timer.now() or time.perf_counter()
 
-            if self.global_step % self.config.log_freq == 0:
+            profile = None
+            if timer.enabled:
+                num_tokens = int((gpu_batch["document_ids"] != -1).sum().item())
+                profile = timer.profile(num_tokens)
                 if self.is_distributed:
                     for v in metrics.values():
                         dist.reduce(v, dst=0, op=dist.ReduceOp.SUM)
@@ -368,6 +468,7 @@ class Trainer:
                 metric_logger.info(
                     {
                         "train": metrics,
+                        "profile": profile,
                         "epoch": epoch,
                         "lr": lr_info,
                         "global_step": self.global_step,
@@ -406,7 +507,7 @@ class Trainer:
                 for k, v in batch.items()
             }
 
-            val_kwargs = dict(self.config.val_call_kwargs)
+            val_kwargs = dict(self.config.val_call_kwargs or {})
             val_kwargs["global_step"] = self.global_step
             val_kwargs["total_steps"] = self.total_steps
             _draft_tokens, _loss, metrics = self.model(**gpu_batch, **val_kwargs)
