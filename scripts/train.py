@@ -637,9 +637,14 @@ def main(cfg: TrainConfig):  # noqa: C901
             "Installed partial-neox rotary patch for HF/vLLM RoPE alignment "
             "(draft_mrope_full_head_hack=False)"
         )
-    # Write the reproducibility artifacts (run.yaml + train_command.txt) next to
-    # the checkpoints at rank 0 only, so every checkpoint carries the resolved
-    # config that produced it.
+
+    if args.fsdp_shard and not is_distributed():
+        raise ValueError(
+            "--fsdp-shard requires launching with torchrun/distributed training; "
+            "otherwise parameters are not sharded."
+        )
+
+
     if get_rank() == 0:
         cfg.save(args.save_path)
 
