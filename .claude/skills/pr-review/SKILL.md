@@ -159,20 +159,22 @@ Drop any comment that fails any check.
 
 ### Phase 8: Post
 
-Use `gh api` to post the review with all inline comments in a single atomic review submission:
+Use `gh api` to post the review with all inline comments in a single atomic review submission. **Do not use `-f 'comments[0][...]'` flags** — `gh` serializes those as a JSON object with string keys, not an array, causing a 422 error. Instead, pipe raw JSON via `--input -`:
 
 ```bash
-gh api repos/vllm-project/speculators/pulls/{number}/reviews \
-  -X POST \
-  -f event="COMMENT" \
-  -f body="<review summary>" \
-  -f 'comments[0][path]=<file>' \
-  -f 'comments[0][line]=<line>' \
-  -f 'comments[0][body]=<comment>' \
-  --jq '.html_url'
+cat <<'REVIEW_EOF' | gh api repos/vllm-project/speculators/pulls/{number}/reviews -X POST --input - --jq '.html_url'
+{
+  "event": "COMMENT",
+  "body": "<review summary>",
+  "comments": [
+    {"path": "<file>", "line": <line>, "body": "<comment>"},
+    {"path": "<file>", "start_line": <start>, "line": <end>, "side": "RIGHT", "body": "<comment>"}
+  ]
+}
+REVIEW_EOF
 ```
 
-For multi-line comments, include both `start_line` and `line` (end). Use `side=RIGHT` for additions.
+For single-line comments, use `line` only. For multi-line, use `start_line` + `line`. Use `side: "RIGHT"` for additions.
 
 If there are zero inline comments beyond the summary, post just the review body.
 
