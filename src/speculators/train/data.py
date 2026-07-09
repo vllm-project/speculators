@@ -77,6 +77,8 @@ def create_empty_sample(
         "hidden_states": torch.empty(0, num_target_layers * hidden_size, dtype=dtype),
         "input_ids": torch.empty(0, dtype=torch.long),
         "verifier_last_hidden_states": torch.empty(0, hidden_size, dtype=dtype),
+        "verifier_kv_last_local": torch.empty(0, dtype=dtype),
+        "verifier_kv_last_global": torch.empty(0, dtype=dtype),
         "loss_mask": torch.empty(0, dtype=torch.bool),
         "lengths": torch.tensor([0], dtype=torch.long),
         "position_ids": torch.arange(0, dtype=torch.long),
@@ -96,12 +98,17 @@ def standardize_data_v1(data: dict[str, Any]) -> dict[str, Any]:
     #  ],
     # }
 
-    return {
+    res = {
         "hidden_states": torch.cat(data["hidden_states"][:-1], dim=-1),
         "input_ids": data["input_ids"],
         "verifier_last_hidden_states": data["hidden_states"][-1],
         "loss_mask": data["loss_mask"],
     }
+    if "verifier_kv_last_local" in data:
+        res["verifier_kv_last_local"] = data["verifier_kv_last_local"]
+    if "verifier_kv_last_global" in data:
+        res["verifier_kv_last_global"] = data["verifier_kv_last_global"]
+    return res
 
 
 def _has_multimodal_content(messages: list[dict]) -> bool:
@@ -174,6 +181,7 @@ class BaseDataset(Dataset):
         #  "verifier_last_hidden_states": [seq_len, hidden_size],
         #  "loss_mask": [seq_len],
         # }
+
 
         # Add lengths tensor
         seq_len = data["input_ids"].shape[0]
@@ -343,7 +351,7 @@ class ArrowDataset(BaseDataset):
             )
             return None
 
-        return {
+        res = {
             "hidden_states": loaded_hs["hidden_states"][:, :-1].flatten(
                 1
             ),  # [seq_len, 3 * hidden_size]
@@ -353,6 +361,11 @@ class ArrowDataset(BaseDataset):
             ],  # [seq_len, hidden_size]
             "loss_mask": self.data[index]["loss_mask"],  # [seq_len]
         }
+        if "verifier_kv_last_local" in loaded_hs:
+            res["verifier_kv_last_local"] = loaded_hs["verifier_kv_last_local"]
+        if "verifier_kv_last_global" in loaded_hs:
+            res["verifier_kv_last_global"] = loaded_hs["verifier_kv_last_global"]
+        return res
 
 
 class SampleFileDataset(BaseDataset):
@@ -481,7 +494,7 @@ def create_collate_fn(
                 continue
             # one copy per sample: preallocated buffer, hidden states cast during write
             first = batch[0][key]  # type: ignore[index]
-            buffer_dtype = dtype if "hidden_states" in key else first.dtype
+            buffer_dtype = dtype if ("hidden_states" in key or "verifier_kv" in key) else first.dtype
             out = torch.zeros(
                 (max_len, *first.shape[1:]), dtype=buffer_dtype, device=first.device
             )
