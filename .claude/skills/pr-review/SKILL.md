@@ -20,9 +20,9 @@ You are reviewing a PR on the `speculators` repo — a library for training and 
 Run these in parallel:
 - `gh pr view <number> --json title,body,baseRefName,headRefName,author,labels,files`
 - `gh pr diff <number>`
-- `gh api repos/{owner}/{repo}/pulls/<number>/reviews` — existing reviews
-- `gh api repos/{owner}/{repo}/pulls/<number>/comments` — inline comments
-- `gh api repos/{owner}/{repo}/issues/<number>/comments` — conversation thread
+- `gh api repos/vllm-project/speculators/pulls/<number>/reviews` — existing reviews
+- `gh api repos/vllm-project/speculators/pulls/<number>/comments` — inline comments
+- `gh api repos/vllm-project/speculators/issues/<number>/comments` — conversation thread
 
 Then read the full diff. For changed files larger than 300 lines, also read the full file for surrounding context.
 
@@ -117,7 +117,7 @@ Structure:
 - Each non-high-level comment must reference a specific file and line range from the diff.
 - Order: correctness issues → design concerns → suggestions → questions.
 - When linking to code, use full-SHA permalink format for proper rendering:
-  `https://github.com/{owner}/{repo}/blob/{full_sha}/{path}#L{start}-L{end}`
+  `https://github.com/vllm-project/speculators/blob/{full_sha}/{path}#L{start}-L{end}`
   Get the SHA via `git rev-parse HEAD` on the PR branch, and include ≥1 line of context above and below.
 
 ### Phase 7: Verify before posting
@@ -138,7 +138,7 @@ Drop any comment that fails any check.
 Use `gh api` to post the review with all inline comments in a single atomic review submission:
 
 ```bash
-gh api repos/{owner}/{repo}/pulls/{number}/reviews \
+gh api repos/vllm-project/speculators/pulls/{number}/reviews \
   -X POST \
   -f event="COMMENT" \
   -f body="<review summary>" \
