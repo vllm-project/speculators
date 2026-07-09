@@ -46,6 +46,21 @@ Evaluate these first — they matter more than line-level nits:
 - **Distributed training correctness** (if applicable): barrier placement, device consistency, FSDP wrapping, gradient handling.
 - **Tensor/numerical correctness** (if applicable): shape mismatches, dtype promotions, masking, off-by-one in shift-based alignment.
 
+### Phase 3.5: Paper validation
+
+If the PR description, commit messages, or code comments reference a paper (arXiv, conference proceedings, etc.):
+
+1. Fetch the paper (use `WebFetch` on the arXiv abstract page or PDF URL).
+2. Identify the specific equations, algorithms, or architectural details the PR claims to implement.
+3. Compare the implementation against the paper:
+   - Do the equations match? Check operator ordering, normalization, index conventions.
+   - Are any simplifications or deviations from the paper intentional and documented, or silent divergences?
+   - Are hyperparameter defaults consistent with what the paper recommends?
+4. In your review, **quote the relevant section/equation from the paper** and compare it to the code. For example: "Paper Eq. 5 defines the loss as `L = ...`, but the implementation at `file:line` computes `...` instead — is this intentional?"
+5. If no paper is referenced but the PR implements a known algorithm (Eagle, EAGLE-2, Eagle3, DFlash, MTP, Medusa, etc.), check whether the implementation aligns with the canonical paper. If you cannot fetch or verify the paper, state that explicitly rather than guessing.
+
+Only flag mismatches you can concretely demonstrate by quoting both the paper and the code. Do not flag stylistic differences in how math is expressed if the computation is equivalent.
+
 ### Phase 4: Line-level review
 
 Apply path-specific focus based on which files changed:
