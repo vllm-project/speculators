@@ -45,6 +45,7 @@ If reviewers or the author linked to sources (docs, issues, code snippets, bench
 
 Evaluate these first — they matter more than line-level nits:
 
+- **Motivation**: Is the PR description clear about *why* this change is needed? If the motivation is missing or vague, ask the author to clarify. A PR that doesn't explain the problem it solves is hard to review properly.
 - **Purpose & scope**: Does the PR do what the description claims? Is the scope appropriate or should it be split?
 - **Architectural fit**: Does this fit the existing patterns in `speculators`? Does it introduce unnecessary abstractions or bypass existing ones? Read surrounding code in the same module to understand local conventions (naming, error handling, structure) and flag deviations.
 - **Correctness of approach**: For the problem being solved, is this the right approach? Have alternatives been considered? If you see a clearly better alternative, name it concretely and explain the tradeoff.
