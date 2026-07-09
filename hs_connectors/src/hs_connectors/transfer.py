@@ -86,12 +86,16 @@ class HiddenStatesBackend(ABC):
         return decorator
 
     @staticmethod
+    @abstractmethod
     def add_train_args(parser: argparse.ArgumentParser) -> None:
         """Add backend-specific CLI arguments to ``train.py``."""
+        ...
 
     @staticmethod
+    @abstractmethod
     def add_launch_args(parser: argparse.ArgumentParser) -> None:
         """Add backend-specific CLI arguments to ``launch_vllm.py``."""
+        ...
 
     @staticmethod
     @abstractmethod
