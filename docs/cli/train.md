@@ -34,11 +34,11 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--trust-remote-code`** (flag) Allow executing code from HF Hub when loading the verifier's tokenizer.
 
-- **`--speculator-type`** (str, default: `"eagle3"`) Type of speculator model to train. Options: `eagle3`, `dflash`
+- **`--speculator-type`** (str, default: `"eagle3"`) Type of speculator model to train. Options: `eagle3`, `dflash`, `dspark`, `peagle`, `mtp`
 
-- **`--from-pretrained`** (str, default: `""`) Path or HF id of an existing draft checkpoint to load weights from and train — either a previously trained draft or the initialized-but-untrained checkpoint produced by `--dry-run`. May also point to a local directory containing only a `config.json`, in which case a fresh draft is initialized from that full speculator config. Takes precedence over all other model-definition options: it is mutually exclusive with `--draft-config` and the decoder-shaping flags (`--num-layers`, `--draft-arch`, `--draft-hidden-act`, `--sliding-window`, `--sliding-window-indices`).
+- **`--from-pretrained`** (str, default: `""`) Path or HF id of an existing draft checkpoint to load weights from and train — either a previously trained draft or the initialized-but-untrained checkpoint produced by `--dry-run`. May also point to a local directory containing only a `config.json`, in which case a fresh draft is initialized from that full speculator config. Takes precedence over all other model-definition options: it is mutually exclusive with `--draft-config` and the decoder-shaping flags (`--num-layers`, `--draft-arch`, `--draft-hidden-act`, `--sliding-window`, `--full-attention-indices`).
 
-- **`--draft-config`** (str, default: `""`) HF id, directory, or JSON path of a decoder config (`LlamaConfig` for eagle3/peagle, `Qwen3Config` for dflash) used as the draft `transformer_layer_config`; the rest of the speculator is built from the other CLI args. The draft `hidden_size` must match the verifier (mismatch is not yet supported). If a full speculator config is passed, its nested `transformer_layer_config` is extracted. Mutually exclusive with `--from-pretrained` and with the decoder-shaping flags (`--num-layers`, `--draft-arch`, `--draft-hidden-act`, `--sliding-window`, `--sliding-window-indices`).
+- **`--draft-config`** (str, default: `""`) HF id, directory, or JSON path of a decoder config (`LlamaConfig` for eagle3/peagle, `Qwen3Config` for dflash) used as the draft `transformer_layer_config`; the rest of the speculator is built from the other CLI args. The draft `hidden_size` must match the verifier (mismatch is not yet supported). If a full speculator config is passed, its nested `transformer_layer_config` is extracted. Mutually exclusive with `--from-pretrained` and with the decoder-shaping flags (`--num-layers`, `--draft-arch`, `--draft-hidden-act`, `--sliding-window`, `--full-attention-indices`).
 
 - **`--dry-run`** (flag) Build the speculator, initialize weights, save a checkpoint to `--save-path`, then exit before training. Useful to validate the config/weights in vLLM before launching a full run; the saved checkpoint can be fed straight back via `--from-pretrained`.
 
@@ -159,6 +159,16 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 - **`--max-anchors`** (int, default: `256`) Maximum anchor positions for DFlash training.
 
 - **`--dflash-decay-gamma`** (float, default: `4.0`) Decay gamma for DFlash loss weighting.
+
+### Sliding Window Attention Arguments
+
+These flags apply to `dflash` and `dspark`, which use sliding window attention on all draft layers by default.
+
+- **`--sliding-window`** (int, default: `2048`) Sliding window size for sliding window attention layers.
+
+- **`--full-attention-indices`** (int list, default: none) Space-separated draft layer indices that should use full attention instead of sliding window. Example: `--full-attention-indices 0 2` makes layers 0 and 2 use full attention; the rest use sliding window.
+
+- **`--sliding-window-non-causal`** (flag) Use non-causal (bidirectional) masking within draft blocks for sliding window attention layers. Full attention layers are always bidirectional. Note: vLLM currently doesn't support these models.
 
 ### Dataloader Arguments
 
