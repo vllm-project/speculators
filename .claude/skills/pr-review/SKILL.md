@@ -27,6 +27,8 @@ Run these in parallel:
 
 Then read the full diff. For changed files larger than 300 lines, also read the full file for surrounding context.
 
+If the PR description contains links (issues, discussions, external docs, benchmarks, etc.), fetch them and incorporate the context. Verify that the PR actually addresses what the linked resources describe — flag mismatches between linked context and the implementation.
+
 ### Phase 2: Understand existing discussion
 
 Before forming any opinions, catalog:
