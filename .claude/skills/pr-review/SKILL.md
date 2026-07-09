@@ -104,6 +104,8 @@ For each surviving finding:
 
 **Do NOT speculate.** Only flag issues you can validate from the diff, surrounding code, or linked documentation. If you're unsure whether something is a bug, phrase it as a question to the author.
 
+**Source attribution**: If a finding relies on behavior defined in a paper, library docs, or spec that is not obvious from the code itself, cite the source (link or quote). This applies to both issues you raise and suggestions you make — the reviewer reading your comment should be able to verify your reasoning without hunting for the reference.
+
 Structure:
 
 **Review body** (high-level summary):
