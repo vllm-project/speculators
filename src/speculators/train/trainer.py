@@ -98,8 +98,8 @@ class TrainerConfig(NamedTuple):
     num_epochs: int
     save_path: str
     resume_from_checkpoint: bool = False
-    train_call_kwargs: dict = {}
-    val_call_kwargs: dict = {}
+    train_call_kwargs: dict | None = None
+    val_call_kwargs: dict | None = None
     optimizer: Literal["adamw", "muon"] = "adamw"
     weight_decay: float = 0.01
     muon_lr: float = 0.02
@@ -109,12 +109,51 @@ class TrainerConfig(NamedTuple):
     muon_adjust_lr_fn: str = "match_rms_adamw"
     scheduler_type: Literal["linear", "cosine", "none"] = "linear"
     scheduler_warmup_steps: int | None = None
+    scheduler_warmup_ratio: float | None = None
     scheduler_total_steps: int | None = None
     scheduler_num_cosine_cycles: float = 0.5
     checkpoint_freq: float = 1
     save_best: bool = False
     hidden_states_dtype: torch.dtype = torch.bfloat16
     log_freq: int = 1
+
+
+def _resolve_scheduler_steps(
+    config: TrainerConfig,
+    train_loader_len: int,
+) -> tuple[int, int]:
+    """Resolve ``(warmup_steps, total_steps)`` for the LR scheduler.
+
+    Explicit ``scheduler_warmup_steps`` wins; otherwise ``scheduler_warmup_ratio``
+    (a fraction of total steps, validated to ``[0, 1]``) is used; otherwise the
+    default of 1% of the resolved total steps. ``scheduler_total_steps`` defaults
+    to ``num_epochs * train_loader_len``.
+    """
+    default_total_steps = config.num_epochs * train_loader_len
+    scheduler_total_steps = (
+        config.scheduler_total_steps
+        if config.scheduler_total_steps is not None
+        else default_total_steps
+    )
+
+    if config.scheduler_warmup_steps is not None:
+        scheduler_warmup_steps = config.scheduler_warmup_steps
+        if config.scheduler_warmup_ratio is not None:
+            warnings.warn(
+                "Both scheduler_warmup_steps and scheduler_warmup_ratio are set; "
+                "using scheduler_warmup_steps.",
+                stacklevel=2,
+            )
+    elif config.scheduler_warmup_ratio is not None:
+        if not 0 <= config.scheduler_warmup_ratio <= 1:
+            raise ValueError("scheduler_warmup_ratio must be between 0 and 1.")
+        scheduler_warmup_steps = int(
+            scheduler_total_steps * config.scheduler_warmup_ratio
+        )
+    else:
+        scheduler_warmup_steps = scheduler_total_steps // 100
+
+    return scheduler_warmup_steps, scheduler_total_steps
 
 
 class Trainer:
@@ -282,13 +321,8 @@ class Trainer:
             self.schedulers: list[torch.optim.lr_scheduler.LRScheduler] = []
             return
 
-        # Compute defaults if None
-        scheduler_warmup_steps = (
-            self.config.scheduler_warmup_steps
-            or (self.config.num_epochs * len(self.train_loader)) // 100
-        )
-        scheduler_total_steps = self.config.scheduler_total_steps or (
-            self.config.num_epochs * len(self.train_loader)
+        scheduler_warmup_steps, scheduler_total_steps = _resolve_scheduler_steps(
+            self.config, len(self.train_loader)
         )
 
         def make_scheduler(opt: torch.optim.Optimizer):
@@ -395,7 +429,7 @@ class Trainer:
 
             timer.mark("fetch")
             _draft_tokens, loss, metrics = self.model(
-                **gpu_batch, **self.config.train_call_kwargs
+                **gpu_batch, **(self.config.train_call_kwargs or {})
             )
 
             timer.mark("fwd")
@@ -472,7 +506,7 @@ class Trainer:
             }
 
             _draft_tokens, _loss, metrics = self.model(
-                **gpu_batch, **self.config.val_call_kwargs
+                **gpu_batch, **(self.config.val_call_kwargs or {})
             )
 
             if self.is_distributed:
