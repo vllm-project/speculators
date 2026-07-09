@@ -248,8 +248,6 @@ class ArrowDataset(BaseDataset):
         self.vllm_endpoint = vllm_endpoint
         self.on_missing = on_missing
         self.on_generate = on_generate
-        if self.on_generate == "cache":
-            self.hidden_states_path.mkdir(parents=True, exist_ok=True)
         self.client: openai.OpenAI | None = None
         self.model = model
         self.request_timeout = request_timeout

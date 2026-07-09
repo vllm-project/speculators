@@ -491,4 +491,5 @@ def test_arrow_dataset_on_generate_cache_creates_hidden_states_dir(tmp_path: Pat
         on_generate="cache",
     )
 
-    assert arrow_ds.hidden_states_path.is_dir()
+    assert hasattr(arrow_ds.transfer, "hidden_states_path")
+    assert arrow_ds.transfer.hidden_states_path.is_dir()

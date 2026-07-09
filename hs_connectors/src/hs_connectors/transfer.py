@@ -143,6 +143,7 @@ class FileTransfer(HiddenStatesTransfer):
         return _load_hs_file(Path(handle))
 
     def cache(self, handle: str, file_idx: int) -> None:
+        self.hidden_states_path.mkdir(parents=True, exist_ok=True)
         target = self.hidden_states_path / f"hs_{file_idx}.safetensors"
         shutil.move(handle, target)
 
