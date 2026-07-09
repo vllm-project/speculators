@@ -54,6 +54,7 @@ Evaluate these first — they matter more than line-level nits:
   - *YAGNI*: Does this add abstractions, parameters, or code paths not justified by the PR's stated goal? Premature generalization is a flag.
   - *KISS*: Is there a simpler way to achieve the same result? Complexity should be proportional to the problem.
 - **Backward compatibility**: Could this break existing checkpoints, configs, or CLI invocations?
+- **Test coverage**: Does the PR include tests proportional to the change? New logic should have unit tests. Changes to training, data generation, or model forward passes that affect end-to-end behavior should have integration tests (or the author should explain why they're impractical). If tests are missing, ask for them — specify what scenarios should be covered.
 - **Distributed training correctness** (if applicable): barrier placement, device consistency, FSDP wrapping, gradient handling.
 - **Tensor/numerical correctness** (if applicable): shape mismatches, dtype promotions, masking, off-by-one in shift-based alignment.
 
@@ -112,7 +113,7 @@ False positives to actively filter out:
 - Pre-existing issues not introduced by this PR.
 - Pedantic style nitpicks a senior engineer would skip.
 - Issues a linter, typechecker, or CI would catch — do not run these yourself.
-- General quality concerns (test coverage, documentation) unless explicitly required by project conventions.
+- General quality concerns (documentation, naming style) that are purely cosmetic and not tied to correctness.
 - Issues silenced in code (e.g., lint ignore comments).
 - Intentional functionality changes that align with the PR's stated purpose.
 
