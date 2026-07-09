@@ -154,4 +154,10 @@ If no issues survive filtering (all < 80 confidence), post:
 
 > No issues found. Checked for bugs, design concerns, and project convention compliance.
 
+End every review body with:
+
+```
+🤖 Generated with [Claude Code](https://claude.ai/code) using the `/pr-review` skill
+```
+
 Report the review URL when done.
