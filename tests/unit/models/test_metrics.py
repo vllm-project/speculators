@@ -15,9 +15,11 @@ from speculators.models.metrics import (
     lk_hybrid_loss,
     loss_function,
     neg_log_acceptance_loss,
+    nla_loss_fused_or_eager,
     resolve_loss_fn,
     reverse_kl_div_loss,
     tv_loss,
+    tv_loss_fused_or_eager,
 )
 
 
@@ -197,8 +199,25 @@ class TestTVLoss:
         assert (out <= 1).all()
 
     def test_resolve_tv(self):
-        """resolve_loss_fn maps 'tv' to tv_loss."""
-        assert resolve_loss_fn("tv") is tv_loss
+        """resolve_loss_fn maps 'tv' to the fused-or-eager dispatcher."""
+        assert resolve_loss_fn("tv") is tv_loss_fused_or_eager
+
+    @pytest.mark.skipif(
+        not torch.cuda.is_available(), reason="fused Triton loss requires CUDA"
+    )
+    def test_fused_tv_matches_eager_on_cuda(self):
+        """On CUDA the fused kernel matches eager tv_loss in value and gradient."""
+        torch.manual_seed(0)
+        base = torch.randn(1, 64, 512)
+        targets = torch.randn(1, 64, 512, device="cuda")
+        le = base.clone().to("cuda").requires_grad_(True)
+        lf = base.clone().to("cuda").requires_grad_(True)
+        out_e = tv_loss(le, targets)
+        out_f = resolve_loss_fn("tv")(lf, targets)
+        assert torch.allclose(out_f.float(), out_e.float(), atol=1e-3)
+        out_e.sum().backward()
+        out_f.sum().backward()
+        assert torch.allclose(lf.grad, le.grad, atol=1e-3)
 
 
 class TestNegLogAcceptanceLoss:
@@ -241,8 +260,8 @@ class TestNegLogAcceptanceLoss:
         assert torch.isfinite(neg_log_acceptance_loss(logits, targets)).all()
 
     def test_resolve_nla(self):
-        """resolve_loss_fn maps 'nla' to neg_log_acceptance_loss."""
-        assert resolve_loss_fn("nla") is neg_log_acceptance_loss
+        """resolve_loss_fn maps 'nla' to the fused-or-eager dispatcher."""
+        assert resolve_loss_fn("nla") is nla_loss_fused_or_eager
 
 
 class TestLKHybridLoss:

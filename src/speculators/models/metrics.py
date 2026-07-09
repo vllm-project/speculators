@@ -380,13 +380,52 @@ def dpace_loss_decay(
     return weight.reshape(1, -1)
 
 
+# ``tv`` and ``nla`` use a fused Triton kernel on CUDA (lower peak memory; see
+# models/fused_tv_loss.py) and fall back to the eager losses above on CPU or when
+# Triton is unavailable. The import is lazy so CPU-only installs never require it.
+
+_FUSED_KERNELS = None  # None = not yet tried; False = unavailable; else (tv, nla)
+
+
+def _fused_kernels():
+    """Lazily import and cache the fused TV/NLA kernels; ``None`` if unavailable."""
+    global _FUSED_KERNELS
+    if _FUSED_KERNELS is None:
+        try:
+            from speculators.models.fused_tv_loss import (  # noqa: PLC0415
+                fused_nla_loss,
+                fused_tv_loss,
+            )
+
+            _FUSED_KERNELS = (fused_tv_loss, fused_nla_loss)
+        except ImportError:
+            _FUSED_KERNELS = False
+    return _FUSED_KERNELS or None
+
+
+def tv_loss_fused_or_eager(logits: torch.Tensor, targets: torch.Tensor):
+    """TV loss via the fused Triton kernel on CUDA, eager ``tv_loss`` otherwise."""
+    kernels = _fused_kernels()
+    if kernels is not None and logits.is_cuda:
+        return kernels[0](logits, targets).to(logits.dtype)
+    return tv_loss(logits, targets)
+
+
+def nla_loss_fused_or_eager(logits: torch.Tensor, targets: torch.Tensor):
+    """NLA loss via the fused Triton kernel on CUDA, eager fallback otherwise."""
+    kernels = _fused_kernels()
+    if kernels is not None and logits.is_cuda:
+        return kernels[1](logits, targets).to(logits.dtype)
+    return neg_log_acceptance_loss(logits, targets)
+
+
 _LOSS_FN_MAP: dict[str, Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = {
     "kl_div": kl_div_loss,
     "rkl": reverse_kl_div_loss,
     "jsd": js_div_loss,
     "ce": ce_loss,
-    "tv": tv_loss,
-    "nla": neg_log_acceptance_loss,
+    "tv": tv_loss_fused_or_eager,
+    "nla": nla_loss_fused_or_eager,
     "lk_hybrid": lk_hybrid_loss,
 }
 
