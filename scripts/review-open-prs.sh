@@ -10,13 +10,27 @@
 
 set -euo pipefail
 
+export HOME=/root
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+
+# Claude authenticates via Vertex AI — cron doesn't inherit these
+export CLAUDE_CODE_USE_VERTEX="${CLAUDE_CODE_USE_VERTEX:-1}"
+export ANTHROPIC_VERTEX_PROJECT_ID="${ANTHROPIC_VERTEX_PROJECT_ID:-itpc-gcp-ai-eng-claude}"
+
 cd "$(dirname "$0")/.."
 
 # Claude blocks --dangerously-skip-permissions for root. The devenv entrypoint
 # creates a claude-runner user with the right groups — just re-exec as it.
 if [ "$(id -u)" -eq 0 ]; then
+    WS_GID=$(stat -c '%g' /workspace)
     chmod -R g+rwX .claude 2>/dev/null || true
-    exec runuser --preserve-environment -u claude-runner -- "$0" "$@"
+    chmod g+r /root/.claude/.credentials.json 2>/dev/null || true
+    chown root:"$WS_GID" /root/.claude/.credentials.json 2>/dev/null || true
+    # GCP/Vertex auth files
+    chmod g+r /root/.config/gcloud/credentials.db /root/.config/gcloud/application_default_credentials.json 2>/dev/null || true
+    chown root:"$WS_GID" /root/.config/gcloud/credentials.db /root/.config/gcloud/application_default_credentials.json 2>/dev/null || true
+    chmod -R g+rwX /root/.config/gcloud/logs 2>/dev/null || true
+    exec runuser -u claude-runner -- "$0" "$@"
 fi
 
 INTERACTIVE=false
