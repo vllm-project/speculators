@@ -22,7 +22,9 @@ def prompts():
 
 
 @pytest.fixture
-def log_perf(request: pytest.FixtureRequest) -> Generator[dict[str, float], None, None]:
+def log_perf(
+    request: pytest.FixtureRequest,
+) -> Generator[dict[str, float | dict[str, float]], None, None]:
     """Collect per-stage wall-clock timings and log them after the test.
 
     Usage in a test:
@@ -33,19 +35,26 @@ def log_perf(request: pytest.FixtureRequest) -> Generator[dict[str, float], None
             with record_perf("vllm_inference", log_perf):
                 run_vllm_engine(...)
     """
-    results: dict[str, float] = {}
+    results: dict[str, float | dict[str, float]] = {}
     yield results
 
     if not results:
         return
 
     lines = "\n".join(
-        f"  {label}: {elapsed:.1f}s" for label, elapsed in results.items() if isinstance(elapsed, (int, float))
+        f"  {label}: {elapsed:.1f}s"
+        for label, elapsed in results.items()
+        if isinstance(elapsed, (int, float))
     )
-    if "vllm_metrics_dict" in results: # stored in sub-dict
+
+    if "vllm_metrics_dict" in results and isinstance(
+        results["vllm_metrics_dict"], dict
+    ):
+        # stored in sub-dict
         lines += "\n\nVLLM metrics:\n"
         lines += "\n".join(
-            f"  {label}: {elapsed}" for label, elapsed in results["vllm_metrics_dict"].items()
+            f"  {label}: {elapsed}"
+            for label, elapsed in results["vllm_metrics_dict"].items()
         )
 
     logger.info("Performance timings for {}:\n{}", request.node.name, lines)
