@@ -1,6 +1,6 @@
 # Response Regeneration
 
-This tutorial walks you through regenerating assistant responses in an existing dataset using a target model served by vLLM. The resulting dataset pairs the original user prompts with freshly generated responses (on-policy data), and is the recommended starting point for speculator training: the drafter learns to predict what the target model actually generates, not what the dataset's original authors wrote. Training directly on the dataset's original responses (off-policy) is a cheaper fallback, since it skips a full target-model pass over the data, but costs acceptance length at inference time.
+This tutorial walks you through regenerating assistant responses in an existing dataset using a target model served by vLLM. The resulting dataset pairs the original user prompts with freshly generated responses (on-policy data), and is the recommended starting point for speculator training: the drafter learns to predict what the target model actually generates, not what the dataset's original authors wrote. For multi-turn conversations, each assistant turn is regenerated sequentially against the model's own prior responses, keeping the entire history on-policy. Training directly on the dataset's original responses (off-policy) is a cheaper fallback, since it skips a full target-model pass over the data, but costs acceptance length at inference time.
 
 ## Overview
 
@@ -26,8 +26,8 @@ The simplest way to regenerate responses is using the `run_all.sh` script, which
 This will:
 
 1. Start a vLLM server with the specified model
-2. Extract prompts from the dataset and generate new responses
-3. Save results to a JSONL file (e.g., `magpie_Llama-3.3-70B-Instruct.jsonl`)
+2. Extract conversation turns from the dataset and regenerate assistant responses turn-by-turn
+3. Save pre-tokenized results to a JSONL file (e.g., `magpie_Llama-3.3-70B-Instruct.jsonl`)
 4. Stop the server
 
 ### Multi-GPU Configurations
@@ -101,6 +101,30 @@ The output is a JSONL file with one pre-tokenized row per target generation. `lo
 ```
 
 Each assistant turn produces at least one row — and more when the target calls a tool, since every call is its own generation — so expect more lines than input conversations. `conversations` is a review-only twin of `input_ids`; training drops it.
+
+For multi-turn datasets, later turns include the regenerated history as context. For example, the second turn of the same conversation would be:
+
+```json
+{
+  "id": "conv-abc_gen1",
+  "primary_id": "conv-abc",
+  "input_ids": [151644, 872, ...],
+  "loss_mask": [0, 0, ..., 1, 1],
+  "conversations": [
+    {"role": "user", "content": "What is the capital of France?"},
+    {"role": "assistant", "content": "The capital of France is Paris."},
+    {"role": "user", "content": "What about Germany?"},
+    {"role": "assistant", "content": "The capital of Germany is Berlin."}
+  ],
+  "metadata": {
+    "idx": 0,
+    "finish_reason": "stop",
+    "is_tool_call": false,
+    "usage": {...},
+    "endpoint": "http://127.0.0.1:8000/v1/chat/completions"
+  }
+}
+```
 
 Check that the output looks correct:
 

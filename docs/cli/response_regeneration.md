@@ -1,6 +1,6 @@
 # response_regeneration
 
-Regenerates assistant responses in existing datasets using a vLLM-served model. Given a dataset containing user prompts (e.g., Magpie, UltraChat), this pipeline extracts the prompts, sends them to a vLLM server, and produces a new dataset with the original prompts paired with freshly generated responses from the target model. This is useful for creating training data where you want a specific model's outputs in place of the original assistant responses.
+Regenerates assistant responses in existing datasets using a vLLM-served model. Given a dataset containing conversations (e.g., Magpie, UltraChat, GSM8K), this pipeline extracts conversation turns, regenerates each assistant response turn-by-turn against the model's own prior outputs, and produces pre-tokenized training samples. For multi-turn conversations, each turn conditions on the regenerated history, producing on-policy training data.
 
 The pipeline consists of two scripts:
 
@@ -33,6 +33,10 @@ Orchestrates the entire pipeline: starts a vLLM server (with optional data/tenso
 
 - **`--tp-size`** (int) Tensor parallel size per replica (maps to vLLM's `--tensor-parallel-size`).
 
+- **`--max-model-len`** (int) Maximum model context length (passed to `vllm serve --max-model-len`).
+
+- **`--reasoning-parser`** (str) Reasoning parser for the vLLM server (passed to `vllm serve --reasoning-parser`).
+
 - **`--keep-server`** (flag) Don't stop the vLLM server after processing completes.
 
 - **`--tool-call-parser`** (str) vLLM tool-call parser (e.g. `hermes`, `llama3_json`). Adds `--enable-auto-tool-choice --tool-call-parser` to the server; required for tool-call regeneration, otherwise tool calls arrive as raw text and are not regenerated as tools.
@@ -53,13 +57,15 @@ All other arguments are passed through to `script.py`.
 
 ## script.py
 
-Extracts user prompts from a dataset, sends them to a vLLM chat completion endpoint, and writes out new prompt-response pairs with the target model's generated responses.
+Extracts conversation turns from a dataset, regenerates each assistant response turn-by-turn via a vLLM chat completion endpoint, and writes out pre-tokenized training samples with generation boundaries marked in the loss mask.
 
 ### Features
 
+- **Multi-turn support** — detects `messages`/`conversations` fields and regenerates each assistant turn against the model's own prior responses
 - **Auto-detects model** from vLLM server (no need to specify `--model`)
-- **Resume capability** to skip already-processed rows
+- **Resume capability** to skip already-processed conversations
 - **Async processing** with configurable concurrency
+- **Automatic retries** with exponential backoff on transient failures
 
 ### Basic Usage
 
@@ -94,6 +100,8 @@ python scripts/response_regeneration/script.py --dataset magpie
 - **`--max-tokens`** (int, default: `8192`) Max tokens for generation.
 
 - **`--sampling-params`** (str, default: `None`) JSON object merged into each chat-completion request, e.g. `'{"temperature": 0.6, "top_p": 0.95, "seed": 0}'`. Unset keys use the server defaults.
+
+- **`--max-retries`** (int, default: `3`) Max retry attempts per request on transient HTTP failures (408, 409, 425, 429, 5xx) with exponential backoff. Permanent errors (e.g., 400, 404) fail immediately.
 
 #### Output Arguments
 
