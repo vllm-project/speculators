@@ -1,7 +1,3 @@
-______________________________________________________________________
-
-## name: pr-review description: Review a GitHub PR with design-first analysis, posted as a GitHub review.
-
 # PR Review
 
 Review a GitHub pull request with design-first analysis, posted as a GitHub review.
