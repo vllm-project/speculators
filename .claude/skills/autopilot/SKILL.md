@@ -16,10 +16,11 @@ Follow `.claude/skills/discover.md` fully (search arxiv, HF, GitHub, deduplicate
 The user may pass `--days N` to override the default 60-day recency window (e.g. `/autopilot --days 120`).
 
 Only pursue items classified as **new-method** or **variant** that meet ALL of:
-1. Published within the last N days (default: 60)
-2. Has a clear algorithmic description (not just benchmark results)
-3. Is about speculative decoding for autoregressive LLMs (not diffusion, not vision, not audio)
-4. Is not a trivial modification (e.g., just changing hyperparameters of an existing method)
+1. Not in `.claude/agent_state/blacklist.txt` (check paper URL, arxiv ID, and method name against entries, case-insensitive)
+2. Published within the last N days (default: 60)
+3. Has a clear algorithmic description (not just benchmark results)
+4. Is about speculative decoding for autoregressive LLMs (not diffusion, not vision, not audio)
+5. Is not a trivial modification (e.g., just changing hyperparameters of an existing method)
 
 Skip items classified as **new-base-model** or **irrelevant**.
 

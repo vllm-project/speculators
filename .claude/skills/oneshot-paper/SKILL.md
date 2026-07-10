@@ -22,17 +22,18 @@ This pipeline is long. To avoid running out of context, **compact after each pha
    ```
 2. Then run `/compact` to free context. After compaction, re-read the spec file to recover state before continuing to the next phase.
 
-## Phase 0: Duplicate Check
+## Phase 0: Duplicate & Blacklist Check
 
-Before doing any work, check if this method is already implemented or has an open PR:
+Before doing any work, check if this method is blacklisted, already implemented, or has an open PR:
 
-1. **Check existing models**: `ls src/speculators/models/` — if the algorithm already has a directory, stop and report "already implemented".
-2. **Check open PRs on speculators**:
+1. **Check blacklist**: Read `.claude/agent_state/blacklist.txt`. If the paper URL, arxiv ID, or method name matches any entry (case-insensitive, ignoring comment lines starting with `#`), stop and report "blacklisted".
+2. **Check existing models**: `ls src/speculators/models/` — if the algorithm already has a directory, stop and report "already implemented".
+3. **Check open PRs on speculators**:
    ```bash
    gh pr list --repo vllm-project/speculators --state open --json title,url --limit 50
    ```
    If any PR title matches the method name (case-insensitive), stop and report "open PR already exists" with the PR URL.
-3. **Check open PRs on vLLM**:
+4. **Check open PRs on vLLM**:
    ```bash
    gh pr list --repo vllm-project/vllm --state open --search "<algo_name>" --json title,url --limit 20
    ```
