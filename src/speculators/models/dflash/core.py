@@ -36,7 +36,8 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         "verifier_lm_head.weight",
         "t2d",
         "d2t",
-        # Domino head is training-only; weights are not saved to checkpoints.
+        # Domino head weights are absent when loading a plain DFlash checkpoint
+        # (no Domino head trained). Suppress the spurious missing-key warning.
         "domino_head.prefix_gru.weight_ih_l0",
         "domino_head.prefix_gru.weight_hh_l0",
         "domino_head.embed_proj.0.weight",
@@ -307,13 +308,12 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
 
     def _backbone_forward(
         self,
-        hidden_states: torch.Tensor,  # shape: [1,total_seq_len,num_hidden*hidden_size]
-        input_ids: torch.Tensor,  # shape: [1, total_seq_len]
-        loss_mask: torch.Tensor,  # shape: [1, total_seq_len]
-        verifier_last_hidden_states: torch.Tensor,  # shape: [1, total_seq_len,
-        # hidden_size]
-        document_ids: torch.Tensor,  # shape: [1, total_seq_len]
-        position_ids: torch.Tensor | None = None,
+        hidden_states: torch.Tensor,  # [1, total_seq_len, num_hidden*hidden_size]
+        input_ids: torch.Tensor,  # [1, total_seq_len]
+        loss_mask: torch.Tensor,  # [1, total_seq_len]
+        verifier_last_hidden_states: torch.Tensor,  # [1, total_seq_len, hidden_size]
+        document_ids: torch.Tensor,  # [1, total_seq_len]
+        position_ids: torch.Tensor | None = None,  # [1, total_seq_len]
         shift_targets: bool = False,
         **kwargs,
     ):
@@ -415,12 +415,12 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
     @conditional_torch_compile
     def forward(
         self,
-        hidden_states: torch.Tensor,
-        input_ids: torch.Tensor,
-        loss_mask: torch.Tensor,
-        verifier_last_hidden_states: torch.Tensor,
-        document_ids: torch.Tensor,
-        position_ids: torch.Tensor | None = None,
+        hidden_states: torch.Tensor,  # shape: [1,total_seq_len,num_hidden*hidden_size]
+        input_ids: torch.Tensor,  # shape: [1, total_seq_len]
+        loss_mask: torch.Tensor,  # shape: [1, total_seq_len]
+        verifier_last_hidden_states: torch.Tensor,  # shape: [1, total_seq_len, hidden_size] # noqa: E501
+        document_ids: torch.Tensor,  # shape: [1, total_seq_len]
+        position_ids: torch.Tensor | None = None,  # shape: [1, total_seq_len]
         loss_config: LossConfig | None = None,
         gamma: float = 4.0,
         max_anchors: int = 3072,
@@ -486,20 +486,22 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             # B-AUF+D: truncate L_base at the first greedy prediction error
             # within each block. L_final retains the full domino_loss_mask so
             # the GRU receives long-range gradients for hidden-state stabilisation.
-            with torch.no_grad():
-                base_preds_4d = logits.argmax(dim=-1).reshape(
-                    1, num_anchors, self.block_size
-                )
-                targets_4d = targets.reshape(1, num_anchors, self.block_size)
-                mask_4d = domino_loss_mask.reshape(1, num_anchors, self.block_size)
-                errors = (base_preds_4d != targets_4d) & mask_4d
-                error_floats = errors.float()
-                running_errors = error_floats.cumsum(dim=-1)
-                # errors_before_current == 0 keeps the accepted prefix and the
-                # breaker token j* itself; positions strictly after j* are zeroed.
-                errors_before = running_errors - error_floats
-                auf_mask_4d = mask_4d & (errors_before == 0)
-                auf_mask = auf_mask_4d.reshape_as(domino_loss_mask)
+            # Both predictions and target tokens are detached — j* is not a gradient path.
+            # targets is [1, T, vocab] (verifier logits), take argmax to get token ids.
+            base_preds_4d = logits.detach().argmax(dim=-1).reshape(
+                1, num_anchors, self.block_size
+            )
+            target_ids_4d = targets.detach().argmax(dim=-1).reshape(
+                1, num_anchors, self.block_size
+            )
+            mask_4d = domino_loss_mask.reshape(1, num_anchors, self.block_size)
+            errors = (base_preds_4d != target_ids_4d) & mask_4d
+            error_floats = errors.float()
+            running_errors = error_floats.cumsum(dim=-1)
+            # errors_before_current == 0 keeps the accepted prefix and the
+            # breaker token j* itself; positions strictly after j* are zeroed.
+            errors_before = running_errors - error_floats
+            auf_mask = (mask_4d & (errors_before == 0)).reshape_as(domino_loss_mask)
 
             domino_decay = "domino" if self.config.shift_label else "dflash"
             base_loss, base_metrics = compute_metrics(

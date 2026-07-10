@@ -179,12 +179,7 @@ class Trainer:
         # Verify model is compatible with training infrastructure
         SpeculatorModel.verify_training_compatible(self.model)
 
-        # Keep master weights in FP32 — FSDP's MixedPrecisionPolicy handles the
-        # bfloat16 compute cast, while the optimizer retains FP32 states.  Casting
-        # the whole model to bfloat16 here caused optimizer exp_avg/exp_avg_sq to
-        # be stored in bfloat16, silently zeroing tiny gradients (e.g. Domino head
-        # under the lambda schedule, RMSNorm weights near 1.0).
-        self._autocast_dtype = self.config.hidden_states_dtype
+        self.model.to(self.config.hidden_states_dtype)  # type: ignore[arg-type]
         load_checkpoint = (
             self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1
         )
@@ -348,12 +343,10 @@ class Trainer:
             train_kwargs = dict(self.config.train_call_kwargs)
             train_kwargs["global_step"] = self.global_step
             train_kwargs["total_steps"] = self.total_steps
-            with torch.autocast("cuda", dtype=self._autocast_dtype):
-                _draft_tokens, loss, metrics = self.model(**gpu_batch, **train_kwargs)
+            _draft_tokens, loss, metrics = self.model(**gpu_batch, **train_kwargs)
 
             self._optimizers_zero_grad()
             loss.backward()
-
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
             self._optimizers_step()
 
@@ -419,8 +412,7 @@ class Trainer:
             val_kwargs = dict(self.config.val_call_kwargs)
             val_kwargs["global_step"] = self.global_step
             val_kwargs["total_steps"] = self.total_steps
-            with torch.autocast("cuda", dtype=self._autocast_dtype):
-                _draft_tokens, _loss, metrics = self.model(**gpu_batch, **val_kwargs)
+            _draft_tokens, _loss, metrics = self.model(**gpu_batch, **val_kwargs)
 
             if self.is_distributed:
                 for m in metrics.values():
