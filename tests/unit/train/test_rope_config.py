@@ -60,7 +60,7 @@ def _build(**kwargs):
         "full_attention_indices": [],
     }
     defaults.update(kwargs)
-    return create_transformer_layer_config(**defaults)
+    return create_transformer_layer_config(**defaults)  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------

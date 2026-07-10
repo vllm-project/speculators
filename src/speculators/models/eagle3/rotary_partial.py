@@ -83,11 +83,11 @@ def install_partial_neox_rotary() -> None:
     from transformers.models.qwen3 import modeling_qwen3  # noqa: PLC0415
 
     for module in (modeling_llama, modeling_qwen3):
-        original = module.apply_rotary_pos_emb
+        original = module.apply_rotary_pos_emb  # type: ignore[attr-defined]
         # Cache original for tests / debugging — and to allow uninstall.
         if not hasattr(module, _ORIGINAL_APPLY_ATTR):
             setattr(module, _ORIGINAL_APPLY_ATTR, original)
-        module.apply_rotary_pos_emb = partial_neox_apply_rotary_pos_emb
+        module.apply_rotary_pos_emb = partial_neox_apply_rotary_pos_emb  # type: ignore[attr-defined]
 
     _PATCH_STATE["installed"] = True
 
@@ -102,5 +102,5 @@ def uninstall_partial_neox_rotary() -> None:
     for module in (modeling_llama, modeling_qwen3):
         original = getattr(module, _ORIGINAL_APPLY_ATTR, None)
         if original is not None:
-            module.apply_rotary_pos_emb = original
+            module.apply_rotary_pos_emb = original  # type: ignore[attr-defined]
     _PATCH_STATE["installed"] = False
