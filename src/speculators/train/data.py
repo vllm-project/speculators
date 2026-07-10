@@ -72,6 +72,8 @@ def create_empty_sample(
     #     "hidden_states": [seq_len, num_target_layers * hidden_size],
     #     "input_ids": [seq_len],
     #     "verifier_last_hidden_states": [seq_len, hidden_size],
+    #     "verifier_kv_last_local": [seq_len, ...],
+    #     "verifier_kv_last_global": [seq_len, ...],
     #     "loss_mask": [seq_len],
     #     "lengths": [1],
     #     "position_ids": [seq_len],
@@ -187,6 +189,8 @@ class BaseDataset(Dataset):
         #  "hidden_states": [seq_len, 3 * hidden_size],
         #  "input_ids": [seq_len],
         #  "verifier_last_hidden_states": [seq_len, hidden_size],
+        #  "verifier_kv_last_local": [seq_len, ...],
+        #  "verifier_kv_last_global": [seq_len, ...],
         #  "loss_mask": [seq_len],
         # }
 
@@ -210,6 +214,8 @@ class BaseDataset(Dataset):
         #     "hidden_states": [seq_len, 3 * hidden_size],
         #     "input_ids": [seq_len],
         #     "verifier_last_hidden_states": [seq_len, hidden_size],
+        #     "verifier_kv_last_local": [seq_len, ...],
+        #     "verifier_kv_last_global": [seq_len, ...],
         #     "loss_mask": [seq_len],
         #     "lengths": [1],
         #     "position_ids": [seq_len],
