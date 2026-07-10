@@ -5,6 +5,7 @@ from pathlib import Path
 
 import torch
 from datasets import Dataset
+from safetensors.torch import save_file
 
 from speculators.models.eagle3.data import shift_batch
 from speculators.train.data import (
@@ -472,8 +473,8 @@ def test_arrow_dataset_default_split_ratio_does_not_crash(tmp_path: Path):
 
 
 def test_arrow_dataset_on_generate_cache_creates_hidden_states_dir(tmp_path: Path):
-    """on_generate="cache" must create the cache dir up front — otherwise every
-    shutil.move into it raises FileNotFoundError, which _maybe_generate_hs
+    """on_generate="cache" must create the cache dir when cache() is called —
+    otherwise shutil.move into it raises FileNotFoundError, which _maybe_generate_hs
     downgrades to a warning, so caching silently fails for every sample."""
     ds = Dataset.from_dict(
         {
@@ -492,4 +493,17 @@ def test_arrow_dataset_on_generate_cache_creates_hidden_states_dir(tmp_path: Pat
     )
 
     assert hasattr(arrow_ds.transfer, "hidden_states_path")
+    # Directory is created lazily when cache() is called
+    assert not arrow_ds.transfer.hidden_states_path.exists()
+
+    # Simulate caching a generated sample
+
+    temp_file = tmp_path / "temp_hs.safetensors"
+    save_file({"hidden_states": torch.zeros(1, 1)}, temp_file)
+
+    arrow_ds.transfer.cache(str(temp_file), file_idx=0)
+
+    # Now the directory should exist
     assert arrow_ds.transfer.hidden_states_path.is_dir()
+    # And the cached file should exist
+    assert (arrow_ds.transfer.hidden_states_path / "hs_0.safetensors").exists()
