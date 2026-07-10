@@ -57,7 +57,7 @@ def _build(**kwargs):
         "draft_arch": "llama",
         "hidden_act": "silu",
         "sliding_window": 0,
-        "sliding_window_indices": [],
+        "full_attention_indices": [],
     }
     defaults.update(kwargs)
     return create_transformer_layer_config(**defaults)
