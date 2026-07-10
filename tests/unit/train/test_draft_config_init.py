@@ -341,6 +341,36 @@ def test_build_from_config_only_preserves_existing_verifier_name(tmp_path):
     assert built.config.speculators_config.verifier.name_or_path == "real-verifier"
 
 
+def test_config_roundtrip_drops_attn_implementation(tmp_path):
+    # Precondition of the --from-pretrained bug: HF configs never serialize
+    # _attn_implementation, so the field does not survive a save/load round-trip
+    # and must be re-applied from the CLI selection.
+    config = _make_eagle3_config()
+    config.transformer_layer_config._attn_implementation = "sdpa"
+    save_dir = tmp_path / "roundtrip"
+    config.save_pretrained(str(save_dir))
+
+    reloaded = Eagle3SpeculatorConfig.from_pretrained(str(save_dir))
+
+    assert reloaded.transformer_layer_config._attn_implementation != "sdpa"
+
+
+def test_build_from_config_only_reapplies_draft_attn_impl(tmp_path):
+    model_dir = _save_config_only_dir(tmp_path)
+
+    with patch.object(Eagle3DraftModel, "load_verifier_weights"):
+        built = _build_from_config_only(
+            Eagle3DraftModel,
+            str(model_dir),
+            None,
+            None,
+            draft_attn_impl="sdpa",
+        )
+
+    assert built.config.transformer_layer_config._attn_implementation == "sdpa"
+    
+
+
 # ---------------------------------------------------------------------------
 # build_draft_model: MTP-from-scratch routing
 # ---------------------------------------------------------------------------
