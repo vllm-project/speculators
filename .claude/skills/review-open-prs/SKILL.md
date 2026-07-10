@@ -36,13 +36,18 @@ gh pr view <number> --repo vllm-project/speculators --json commits --jq '.commit
 
 ## Step 3: Review each PR
 
-For each qualifying PR, invoke the `/pr-review` skill with the PR number:
+For each qualifying PR, spawn an Agent (subagent) to run the review. Launch **all agents in a single message** so they run in parallel:
 
 ```
-/pr-review <number>
+Agent({
+  description: "Review PR #<number>",
+  prompt: "Run /pr-review <number> on the vllm-project/speculators repo. Follow the skill instructions fully — gather context, review, and post."
+})
 ```
 
-Process PRs **sequentially** to maintain review quality. If a review fails or errors out, log the error and continue to the next PR.
+Send all Agent tool calls in one response to maximize parallelism. Each agent independently fetches context, reviews, and posts — they don't share state, so parallel execution is safe.
+
+If an agent fails or errors out, note the error in the summary and continue.
 
 ## Step 4: Summary
 
