@@ -2,6 +2,7 @@
 Unit tests for the config module in the Speculators library.
 """
 
+import os
 import tempfile
 
 import pytest
@@ -19,7 +20,9 @@ def test_verifier_config_from_verifier_config():
     with tempfile.TemporaryDirectory() as tmp_dir:
         pretrained_config = AutoConfig.from_pretrained(
             pretrained_model_name_or_path="RedHatAI/Llama-3.1-8B-Instruct",
-            cache_dir=tmp_dir,
+            cache_dir=(
+                None if os.environ.get("HF_HUB_OFFLINE") == "1" else tmp_dir
+            ),
         )
 
     config = VerifierConfig.from_config(
