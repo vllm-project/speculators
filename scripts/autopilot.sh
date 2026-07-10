@@ -3,13 +3,13 @@
 # Scans arxiv, HuggingFace, GitHub, then runs oneshot on each promising find.
 #
 # Usage:
-#   ./scripts/autopilot --days $DAYS.sh                          # headless, 60-day window
-#   ./scripts/autopilot --days $DAYS.sh --days 90                # custom window
-#   ./scripts/autopilot --days $DAYS.sh --interactive             # live TUI (debugging)
-#   ./scripts/autopilot --days $DAYS.sh --interactive --days 120  # both
+#   ./scripts/autopilot.sh                          # headless, 60-day window
+#   ./scripts/autopilot.sh --days 90                # custom window
+#   ./scripts/autopilot.sh --interactive             # live TUI (debugging)
+#   ./scripts/autopilot.sh --interactive --days 120  # both
 #
 # Run on a schedule (system cron):
-#   0 */8 * * * /workspace/speculators/scripts/autopilot --days $DAYS.sh >> /workspace/speculators/autopilot --days $DAYS.log 2>&1
+#   0 */8 * * * /workspace/speculators/scripts/autopilot.sh >> /workspace/speculators/autopilot.log 2>&1
 #
 # Options (via env vars):
 #   MAX_TURNS                 Max agentic turns (default: unlimited)
@@ -57,7 +57,7 @@ slack_notify() {
     },
     {
       "type": "context",
-      "elements": [{"type": "mrkdwn", "text": "Skill: \`/autopilot --days $DAYS\` | Script: \`scripts/autopilot --days $DAYS.sh\`"}]
+      "elements": [{"type": "mrkdwn", "text": "Skill: \`/autopilot --days $DAYS\` | Script: \`scripts/autopilot.sh\`"}]
     },
     {
       "type": "section",
@@ -117,7 +117,7 @@ if [ $EXIT_CODE -eq 0 ]; then
         fi
     fi
     if [ -f "$REPORT_FILE" ]; then
-        REPORT=$(head -c 2800 "$REPORT_FILE" | sed 's/"/\\"/g; s/$/\\n/' | tr -d '\n')
+        REPORT=$(head -c 2800 "$REPORT_FILE" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read())[1:-1])')
         DETAIL="$DETAIL\n\n${REPORT}"
     fi
     slack_notify "$STATUS" "$DETAIL"

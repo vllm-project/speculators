@@ -125,7 +125,7 @@ if [ $EXIT_CODE -eq 0 ]; then
         fi
     fi
     if [ -f "$REPORT_FILE" ]; then
-        REPORT=$(head -c 2800 "$REPORT_FILE" | sed 's/"/\\"/g; s/$/\\n/' | tr -d '\n')
+        REPORT=$(head -c 2800 "$REPORT_FILE" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read())[1:-1])')
         DETAIL="$DETAIL\n\n${REPORT}"
     fi
     slack_notify "$STATUS" "$DETAIL"

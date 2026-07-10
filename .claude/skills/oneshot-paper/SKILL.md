@@ -88,7 +88,7 @@ After implementation and training, commit all changes and open a draft PR:
    ```bash
    cd /workspace/vllm
    git checkout -b feat/<algo_name>
-   git add -A
+   git add -A vllm/transformers_utils/configs/speculators/ vllm/model_executor/models/ vllm/config/ vllm/v1/worker/
    git commit -s -m "feat(<algo_name>): add <algo_name> draft model support"
    ```
 
