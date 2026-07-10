@@ -266,17 +266,35 @@ class Trainer:
                     f"Restored best_val_loss={self.best_val_loss:.6f} from checkpoint"
                 )
 
+    @property
+    def _fp32_master_mode(self) -> bool:
+        """Whether fp32 master weights are in effect for this run.
+
+        Always on for low-precision training (optimizer updates accumulate in
+        fp32 while compute stays in ``hidden_states_dtype``); a no-op when
+        training already runs in fp32.
+        """
+        return self.config.hidden_states_dtype != torch.float32
+
     def setup_model(self):
         # Verify model is compatible with training infrastructure
         SpeculatorModel.verify_training_compatible(self.model)
 
-        self.model.to(self.config.hidden_states_dtype)  # type: ignore[arg-type]
+        model_dtype = self.config.hidden_states_dtype
+        if self.is_distributed and self._fp32_master_mode:
+            # FSDP2 mixed precision: keep the sharded parameters (the
+            # optimizer's view) in fp32 master precision. Compute is unchanged:
+            # params are cast to hidden_states_dtype when all-gathered for
+            # forward/backward (see apply_fully_sharded's param_dtype).
+            model_dtype = torch.float32
+        self.model.to(model_dtype)  # type: ignore[arg-type]
         load_checkpoint = (
             self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1
         )
 
         if not self.is_distributed:
-            # Single device case
+            # Single device case. In fp32-master mode the model stays in
+            # hidden_states_dtype; the masters live in FP32MasterOptimizer.
             self.model.to(self.local_rank)  # type: ignore[arg-type]
             if load_checkpoint:
                 self.checkpointer.load_model_state_dict(self.model)
@@ -288,7 +306,7 @@ class Trainer:
         if not load_checkpoint and dist.get_rank() == 0:
             full_state_dict = self.model.state_dict()
 
-        apply_fully_sharded(self.model)
+        apply_fully_sharded(self.model, param_dtype=self.config.hidden_states_dtype)
 
         if load_checkpoint:
             self.checkpointer.load_model_state_dict(self.model)
@@ -309,7 +327,13 @@ class Trainer:
     def setup_optimizer(self):
         # Setup optimizer(s). The "muon" option returns two optimizers (Muon for the
         # 2D weight matrices, AdamW for everything else); "adamw" returns a single one.
-        self.optimizers = build_optimizers(self.model, self.config)
+        # In fp32-master mode, distributed runs already hold fp32 sharded params
+        # (see setup_model), so only single-device runs need the wrapper.
+        self.optimizers = build_optimizers(
+            self.model,
+            self.config,
+            fp32_masters=self._fp32_master_mode and not self.is_distributed,
+        )
         last_epoch = -1
         if self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1:
             self.checkpointer.load_optimizer_state_dict(self.model, self.optimizers)
