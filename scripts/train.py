@@ -965,11 +965,14 @@ def parse_args():
     parser.add_argument(
         "--dflash-decay-gamma",
         type=float,
-        default=4.0,
-        help="Decay gamma for DFlash/DSpark/Domino loss weighting (default: 4.0). "
-        "Suggested values by block size (matching SGLang SpecForge): "
-        "gamma=7 for block_size=16, gamma=5 for block_size=10, "
-        "gamma=4 for block_size=8. Higher gamma flattens the decay to give "
+        default=None,
+        help="Decay gamma for DFlash/DSpark/Domino loss weighting "
+        "(default: 4.0 for DFlash/DSpark). "
+        "For Domino (--projector-type domino), when gamma is not provided, "
+        "it is auto-selected from --block-size: "
+        "gamma=4 for block_size=8, gamma=5 for block_size=10, "
+        "gamma=7 for block_size=16. "
+        "Higher gamma flattens the decay to give "
         "more weight to later block positions.",
     )
     parser.add_argument(

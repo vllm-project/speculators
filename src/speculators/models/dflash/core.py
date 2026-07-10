@@ -23,6 +23,8 @@ from speculators.models.dflash.utils import (
 from speculators.models.metrics import LossConfig, resolve_loss_config
 from speculators.models.utils import conditional_torch_compile, resolve_target_layer_ids
 
+_BLOCK_SIZE_TO_GAMMA: dict[int, float] = {8: 4, 10: 5, 16: 7}
+
 
 @SpeculatorModel.register("dflash")
 class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
@@ -222,7 +224,13 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             Tuple of (train_call_kwargs, val_call_kwargs)
         """
         loss_config = resolve_loss_config(kwargs["loss_fn"])
-        gamma = kwargs.get("dflash_decay_gamma", 4.0)
+        gamma = kwargs.get("dflash_decay_gamma")
+        if gamma is None:
+            if kwargs.get("projector_type") == "domino":
+                block_size = kwargs.get("block_size", 8)
+                gamma = _BLOCK_SIZE_TO_GAMMA.get(block_size, 4.0)
+            else:
+                gamma = 4.0
         max_anchors = kwargs.get("max_anchors", 3072)
         normalize_by_decay = kwargs.get("normalize_loss_by_decay", False)
         per_position_loss_weight = kwargs.get(
