@@ -370,17 +370,28 @@ def build_draft_model(
                 t2d=t2d,
                 d2t=d2t,
                 verifier_name_or_path=args.verifier_name_or_path,
-                draft_attn_impl=args.draft_attn_impl,
+                draft_attn_impl=(
+                    args.draft_attn_impl if args.speculator_type != "mtp" else None
+                ),
             )
-        config = model_class.config_class.from_pretrained(args.from_pretrained)
-        # _attn_implementation is never serialized by HF configs, so re-apply the
-        # CLI selection before construction -- mirroring from_training_args.
-        config.transformer_layer_config._attn_implementation = (  # noqa: SLF001
-            args.draft_attn_impl
-        )
+        if args.speculator_type != "mtp":
+            # _attn_implementation is never serialized by HF configs, so re-apply
+            # the CLI selection before construction -- mirroring from_training_args.
+            # MTP is skipped: its from_training_args never sets the field and its
+            # __init__ resolves its own default ("eager") when it is absent.
+            config = model_class.config_class.from_pretrained(args.from_pretrained)
+            config.transformer_layer_config._attn_implementation = (  # noqa: SLF001
+                args.draft_attn_impl
+            )
+            return model_class.from_pretrained(
+                args.from_pretrained,
+                config=config,
+                t2d=t2d,
+                d2t=d2t,
+                verifier=args.verifier_name_or_path,
+            )
         return model_class.from_pretrained(
             args.from_pretrained,
-            config=config,
             t2d=t2d,
             d2t=d2t,
             verifier=args.verifier_name_or_path,
