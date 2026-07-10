@@ -16,6 +16,7 @@ class DominoHead(nn.Module):
         emb_dim: Intermediate embedding dimension for the projection head.
         draft_vocab_size: Size of the draft model's vocabulary.
     """
+
     def __init__(
         self,
         hidden_size: int,

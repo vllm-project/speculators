@@ -1045,11 +1045,11 @@ def parse_args():
         "(default: 1.0)",
     )
     parser.add_argument(
-        "--domino-lambda-decay-steps",
-        type=int,
-        default=30000,
-        help="Number of training steps to decay lambda_base from start to 0 "
-        "(default: 30000). Set to 0 to disable decay (lambda_base stays at start).",
+        "--domino-lambda-decay-ratio",
+        type=float,
+        default=0.5,
+        help="Fraction of total training steps over which lambda_base decays "
+        "from start to 0 (default: 0.5). Set to 0 to disable decay.",
     )
     parser.add_argument(
         "--draft-attn-impl",

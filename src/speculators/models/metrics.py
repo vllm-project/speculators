@@ -265,6 +265,22 @@ def dflash_loss_decay(pos_idx: torch.Tensor, gamma: float):
     return decay_mult  # noqa: RET504
 
 
+def domino_loss_decay(pos_idx: torch.Tensor, gamma: float):
+    """Compute Domino-style exponential decay weights per position.
+
+    Unlike dflash_loss_decay, position 0 gets weight 1.0 (not zero) because
+    with shift_label=True, position 0 predicts a real token (anchor+1).
+
+    Args:
+        pos_idx: Position indices within each speculative block.
+        gamma: Decay rate (higher = slower decay).
+
+    Returns:
+        Decay multiplier tensor with same shape as pos_idx.
+    """
+    return torch.exp(-pos_idx.float() / gamma)
+
+
 def exp_loss_decay(pos_idx: torch.Tensor, gamma: float):
     """Compute simple exponential decay weights as gamma^pos_idx.
 

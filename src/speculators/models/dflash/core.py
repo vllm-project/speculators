@@ -201,7 +201,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             "emb_dim": kwargs.get("domino_emb_dim", 256),
             "gru_hidden_dim": kwargs.get("domino_gru_hidden_dim", 1024),
             "lambda_base_start": kwargs.get("domino_lambda_start", 1.0),
-            "lambda_base_decay_steps": kwargs.get("domino_lambda_decay_steps", 30000),
+            "lambda_base_decay_ratio": kwargs.get("domino_lambda_decay_ratio", 0.5),
             "speculators_config": SpeculatorsConfig(
                 algorithm=algorithm,
                 proposal_methods=[
@@ -426,6 +426,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         max_anchors: int = 3072,
         normalize_by_decay: bool = False,
         global_step: int = 0,
+        total_steps: int = 0,
         **kwargs,
     ):
         hidden, logits, targets, aligned_loss_mask, anchored_block_indices = (
@@ -445,8 +446,9 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         draft_tokens = torch.argmax(logits, dim=-1)
 
         if self.projector_type == "domino":
-            decay_steps = self.config.lambda_base_decay_steps
-            if decay_steps > 0:
+            decay_ratio = self.config.lambda_base_decay_ratio
+            if decay_ratio > 0 and total_steps > 0:
+                decay_steps = int(total_steps * decay_ratio)
                 progress = min(global_step / decay_steps, 1.0)
                 lambda_base = self.config.lambda_base_start * (1.0 - progress)
                 lambda_base = max(0.0, min(1.0, lambda_base))
@@ -457,7 +459,11 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             hidden_4d = hidden.reshape(1, num_anchors, self.block_size, -1)
             base_logits_4d = logits.reshape(1, num_anchors, self.block_size, -1)
 
-            suffix_start = 1 + self.config.pure_draft_prefix_len
+            suffix_start = (
+                self.config.pure_draft_prefix_len
+                if self.config.shift_label
+                else 1 + self.config.pure_draft_prefix_len
+            )
 
             prev_token_ids = input_ids[:, anchored_block_indices]
             prev_token_ids_4d = prev_token_ids.reshape(1, num_anchors, self.block_size)
@@ -475,10 +481,9 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
 
             domino_loss_mask = aligned_loss_mask.clone()
             anchor_pos_in_mask = anchored_block_indices[:: self.block_size]
-            domino_loss_mask[:, :: self.block_size] = loss_mask[
-                :, anchor_pos_in_mask
-            ]
+            domino_loss_mask[:, :: self.block_size] = loss_mask[:, anchor_pos_in_mask]
 
+            domino_decay = "domino" if self.config.shift_label else "dflash"
             base_loss, base_metrics = compute_metrics(
                 logits,
                 targets,
@@ -487,6 +492,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 gamma=gamma,
                 loss_config=loss_config,
                 normalize_by_decay=normalize_by_decay,
+                decay_mode=domino_decay,
             )
             final_loss, final_metrics = compute_metrics(
                 refined_logits,
@@ -496,6 +502,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 gamma=gamma,
                 loss_config=loss_config,
                 normalize_by_decay=normalize_by_decay,
+                decay_mode=domino_decay,
             )
             loss = (1.0 - lambda_base) * final_loss + lambda_base * base_loss
 

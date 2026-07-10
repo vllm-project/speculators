@@ -223,7 +223,7 @@ def _make_tiny_domino_model(
     max_anchors: int = 8,
     shift_label: bool = True,
     lambda_base_start: float = 1.0,
-    lambda_base_decay_steps: int = 0,
+    lambda_base_decay_ratio: float = 0.0,
     device: str = "cuda:0",
     dtype: torch.dtype = torch.bfloat16,
 ) -> DFlashDraftModel:
@@ -238,7 +238,7 @@ def _make_tiny_domino_model(
         projector_type="domino",
         shift_label=shift_label,
         lambda_base_start=lambda_base_start,
-        lambda_base_decay_steps=lambda_base_decay_steps,
+        lambda_base_decay_ratio=lambda_base_decay_ratio,
         speculators_config=SpeculatorsConfig(
             algorithm="dflash",
             proposal_methods=[
@@ -449,19 +449,18 @@ class TestDominoLossMask:
 
 @requires_cuda
 class TestLambdaBaseDecay:
-    def test_decay_steps_zero_no_decay(self):
+    def test_decay_ratio_zero_no_decay(self):
         torch.compiler.reset()
         model = _make_tiny_domino_model(
             block_size=4,
             max_anchors=4,
             lambda_base_start=1.0,
-            lambda_base_decay_steps=0,
+            lambda_base_decay_ratio=0.0,
         )
         data = _make_synthetic_data(seq_len=32, loss_mask_all=False)
 
         loss_mask = data["loss_mask"]
 
-        # Call with a large global_step — lambda should stay at 1.0
         _, _, metrics = model(
             data["hidden_states"],
             data["input_ids"],
@@ -469,39 +468,38 @@ class TestLambdaBaseDecay:
             data["verifier_last_hidden_states"],
             data["document_ids"],
             global_step=1000,
+            total_steps=2000,
         )
 
-        # loss = (1-lambda) * final + lambda * base
-        # With lambda=1.0: loss = base_loss
         loss_sum = metrics["loss_sum"]
         base_sum = metrics["base_loss_sum"]
         assert torch.allclose(loss_sum, base_sum, rtol=1e-4), (
-            "With decay_steps=0, lambda must stay at 1.0 (loss == base_loss)"
+            "With decay_ratio=0, lambda must stay at 1.0 (loss == base_loss)"
         )
 
-    def test_decay_steps_positive_decays(self):
+    def test_decay_ratio_positive_decays(self):
         torch.compiler.reset()
-        decay_steps = 100
+        total_steps = 200
         model = _make_tiny_domino_model(
             block_size=4,
             max_anchors=4,
             lambda_base_start=1.0,
-            lambda_base_decay_steps=decay_steps,
+            lambda_base_decay_ratio=0.5,
         )
         data = _make_synthetic_data(seq_len=32, loss_mask_all=False)
         loss_mask = data["loss_mask"]
 
-        # Call with global_step = decay_steps (progress=1.0, lambda=0.0)
+        # global_step = total_steps * ratio = 100 → progress=1.0, lambda=0.0
         _, _, metrics_full_decay = model(
             data["hidden_states"],
             data["input_ids"],
             loss_mask,
             data["verifier_last_hidden_states"],
             data["document_ids"],
-            global_step=decay_steps,
+            global_step=100,
+            total_steps=total_steps,
         )
 
-        # With lambda=0: loss = final_loss
         assert torch.allclose(
             metrics_full_decay["loss_sum"],
             metrics_full_decay["final_loss_sum"],
@@ -510,24 +508,25 @@ class TestLambdaBaseDecay:
 
     def test_decay_midpoint_loss_is_blend(self):
         torch.compiler.reset()
-        decay_steps = 100
+        total_steps = 200
         model = _make_tiny_domino_model(
             block_size=4,
             max_anchors=4,
             lambda_base_start=1.0,
-            lambda_base_decay_steps=decay_steps,
+            lambda_base_decay_ratio=0.5,
         )
         data = _make_synthetic_data(seq_len=32, loss_mask_all=False)
         loss_mask = data["loss_mask"]
 
-        # Call with global_step = decay_steps // 2 (progress=0.5, lambda=0.5)
+        # decay_steps = 200 * 0.5 = 100; global_step=50 → progress=0.5, lambda=0.5
         _, _, metrics_mid = model(
             data["hidden_states"],
             data["input_ids"],
             loss_mask,
             data["verifier_last_hidden_states"],
             data["document_ids"],
-            global_step=decay_steps // 2,
+            global_step=50,
+            total_steps=total_steps,
         )
 
         ls = metrics_mid["loss_sum"]
