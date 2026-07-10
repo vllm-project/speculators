@@ -14,7 +14,7 @@ You are reviewing a PR on the `speculators` repo — a library for training and 
 
 1. Resolve the PR number from `$ARGUMENTS` (or current branch via `gh pr view --json number`).
 2. Check `gh pr view <number> --json state,isDraft`. **Do not proceed** if the PR is closed, merged, or a draft.
-3. Check if you (the current `gh` user) already posted a review on this PR. If so, compare the latest commit SHA on the PR against the commit SHA at the time of your last review. **Do not post again** if there are no new commits since your last review — report to the user that the PR hasn't changed since the last review.
+3. Check if you (the current `gh` user) already posted a review on this PR. If so, compare the latest commit SHA on the PR against the commit SHA at the time of your last review. **Do not post again** if there are no new commits since your last review — report to the user that the PR hasn't changed since the last review. Even with new commits, if your review would say substantially the same thing as your previous one (same verdict, same outstanding items), do not post — report to the user that nothing has materially changed.
 4. After gathering context (Phase 1–2), reassess: if the discussion thread shows the PR is effectively still in progress — active experiments, trial-and-error debugging, the author saying "still working on this", or unresolved back-and-forth about the approach — treat it as a draft and do not review. Report to the user that the PR appears to still be in flux.
 
 ### Phase 1: Gather context
