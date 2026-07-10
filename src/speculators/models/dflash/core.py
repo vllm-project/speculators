@@ -188,8 +188,11 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         block_size = kwargs.get("block_size", 8)
 
         default_sample_from_anchor = algorithm == "dspark"
-        sample_from_anchor = kwargs.get(
-            "sample_from_anchor", default_sample_from_anchor
+        sample_from_anchor_arg = kwargs.get("sample_from_anchor")
+        sample_from_anchor = (
+            default_sample_from_anchor
+            if sample_from_anchor_arg is None
+            else sample_from_anchor_arg
         )
 
         # Calculate speculative tokens based on sample_from_anchor
@@ -449,6 +452,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             loss_config=loss_config,
             per_position_loss_weight=per_position_loss_weight,
             dpace_alpha=dpace_alpha,
+            sample_from_anchor=self.config.sample_from_anchor,
         )
         draft_tokens = torch.argmax(logits, dim=-1)
 
