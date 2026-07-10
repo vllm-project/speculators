@@ -137,14 +137,6 @@ if [ $EXIT_CODE -eq 0 ]; then
             [ -n "$SPEC_PR" ] && DETAIL="$DETAIL\n*speculators PR:* <${SPEC_PR}>"
             [ -n "$VLLM_PR" ] && DETAIL="$DETAIL\n*vLLM PR:* <${VLLM_PR}>"
         fi
-    else
-        # Fallback: agent may not have written the state file — check for recent [autopilot] PRs
-        SPEC_PR=$(gh pr list --repo vllm-project/speculators --author "@me" --state open \
-            --search "[autopilot]" --json url --jq '.[0].url' 2>/dev/null || true)
-        if [ -n "$SPEC_PR" ]; then
-            STATUS="IMPLEMENTED"
-            DETAIL="$DETAIL\n*speculators PR:* <${SPEC_PR}> _(detected via fallback)_"
-        fi
     fi
     if [ -f "$REPORT_FILE" ]; then
         REPORT=$(head -c 2800 "$REPORT_FILE" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read())[1:-1])')
