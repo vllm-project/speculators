@@ -18,13 +18,27 @@
 
 set -euo pipefail
 
+export HOME=/root
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+
+# Claude authenticates via Vertex AI — cron doesn't inherit these
+export CLAUDE_CODE_USE_VERTEX="${CLAUDE_CODE_USE_VERTEX:-1}"
+export ANTHROPIC_VERTEX_PROJECT_ID="${ANTHROPIC_VERTEX_PROJECT_ID:-itpc-gcp-ai-eng-claude}"
+
 cd "$(dirname "$0")/.."
 
 # Claude blocks --dangerously-skip-permissions for root. The devenv entrypoint
 # creates a claude-runner user with the right groups — just re-exec as it.
 if [ "$(id -u)" -eq 0 ]; then
+    WS_GID=$(stat -c '%g' /workspace)
     chmod -R g+rwX .claude 2>/dev/null || true
-    exec runuser --preserve-environment -u claude-runner -- "$0" "$@"
+    chmod g+r /root/.claude/.credentials.json 2>/dev/null || true
+    chown root:"$WS_GID" /root/.claude/.credentials.json 2>/dev/null || true
+    # GCP/Vertex auth files
+    chmod g+r /root/.config/gcloud/credentials.db /root/.config/gcloud/application_default_credentials.json 2>/dev/null || true
+    chown root:"$WS_GID" /root/.config/gcloud/credentials.db /root/.config/gcloud/application_default_credentials.json 2>/dev/null || true
+    chmod -R g+rwX /root/.config/gcloud/logs 2>/dev/null || true
+    exec runuser -u claude-runner -- "$0" "$@"
 fi
 
 INTERACTIVE=false
@@ -97,10 +111,10 @@ REPORT_FILE="$STATE_DIR/last_run_report.md"
 rm -f "$PR_FILE" "$REPORT_FILE"
 
 if [ "$INTERACTIVE" = true ]; then
-    echo "/autopilot --days $DAYS" | claude --dangerously-skip-permissions \
+    echo "/autopilot --days $DAYS" | claude --model claude-opus-4-6 --dangerously-skip-permissions \
         "${EXTRA_ARGS[@]}" && EXIT_CODE=0 || EXIT_CODE=$?
 else
-    claude -p "/autopilot --days $DAYS" --dangerously-skip-permissions \
+    claude -p "/autopilot --days $DAYS" --model claude-opus-4-6 --dangerously-skip-permissions \
         "${EXTRA_ARGS[@]}" && EXIT_CODE=0 || EXIT_CODE=$?
 fi
 
@@ -114,6 +128,14 @@ if [ $EXIT_CODE -eq 0 ]; then
             STATUS="IMPLEMENTED"
             [ -n "$SPEC_PR" ] && DETAIL="$DETAIL\n*speculators PR:* <${SPEC_PR}>"
             [ -n "$VLLM_PR" ] && DETAIL="$DETAIL\n*vLLM PR:* <${VLLM_PR}>"
+        fi
+    else
+        # Fallback: agent may not have written the state file — check for recent [autopilot] PRs
+        SPEC_PR=$(gh pr list --repo vllm-project/speculators --author "@me" --state open \
+            --search "[autopilot]" --json url --jq '.[0].url' 2>/dev/null || true)
+        if [ -n "$SPEC_PR" ]; then
+            STATUS="IMPLEMENTED"
+            DETAIL="$DETAIL\n*speculators PR:* <${SPEC_PR}> _(detected via fallback)_"
         fi
     fi
     if [ -f "$REPORT_FILE" ]; then
