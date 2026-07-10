@@ -14,6 +14,7 @@ You are reviewing a PR on the `speculators` repo — a library for training and 
 
 1. Resolve the PR number from `$ARGUMENTS` (or current branch via `gh pr view --json number`).
 2. Check `gh pr view <number> --json state,isDraft`. **Do not proceed** if the PR is closed, merged, or a draft.
+3. After gathering context (Phase 1–2), reassess: if the discussion thread shows the PR is effectively still in progress — active experiments, trial-and-error debugging, the author saying "still working on this", or unresolved back-and-forth about the approach — treat it as a draft and do not review. Report to the user that the PR appears to still be in flux.
 
 ### Phase 1: Gather context
 
