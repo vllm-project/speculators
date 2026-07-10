@@ -37,7 +37,7 @@ Before forming any opinions, catalog:
 - What has the author responded to?
 - What is unresolved?
 
-**Do NOT echo points already raised by other reviewers.** If you agree with an existing comment, you may reference it briefly ("I agree with @X's point on ...") but do not restate it. Drop any finding that duplicates an existing review comment.
+**Do NOT echo points already raised by other reviewers.** If you agree with an existing comment, do not post your own version of it — even with additional detail or a different explanation. The only exception is if the author asked a clarifying question on the existing comment and the original reviewer hasn't answered; in that case, reply to that comment thread rather than posting a separate inline comment. Drop any finding that overlaps with an existing review comment.
 
 If reviewers or the author linked to sources (docs, issues, code snippets, benchmarks, papers) in their comments, fetch and read them — they often contain context that informs whether a concern is valid or already resolved.
 
