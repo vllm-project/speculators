@@ -76,7 +76,11 @@ Key autonomous decisions:
 
 ## Phase 4: Create Draft PR
 
-**IMPORTANT**: The feature branch MUST be based on `main`. Do NOT branch from or include changes from any other feature branch (e.g. `feat/paper-to-impl-agent`). The PR should only contain the implementation files for this algorithm.
+**IMPORTANT — hard requirements for PRs:**
+- The feature branch MUST be based on `main`. Do NOT branch from or include changes from any other feature branch (e.g. `feat/paper-to-impl-agent`). The PR should only contain the implementation files for this algorithm.
+- The PR MUST be created as a **draft** (`--draft` flag). Never create a ready-for-review PR.
+- The PR title MUST start with `[autopilot]`.
+- Do NOT include `.claude/` or `scripts/` files in the PR — only implementation code.
 
 After implementation and training, commit all changes and open a draft PR:
 
