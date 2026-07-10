@@ -40,6 +40,12 @@ def log_perf(request: pytest.FixtureRequest) -> Generator[dict[str, float], None
         return
 
     lines = "\n".join(
-        f"  {label}: {elapsed:.1f}s" for label, elapsed in results.items()
+        f"  {label}: {elapsed:.1f}s" for label, elapsed in results.items() if isinstance(elapsed, (int, float))
     )
+    if "vllm_metrics_dict" in results: # stored in sub-dict
+        lines += "\n\nVLLM metrics:\n"
+        lines += "\n".join(
+            f"  {label}: {elapsed}" for label, elapsed in results["vllm_metrics_dict"].items()
+        )
+
     logger.info("Performance timings for {}:\n{}", request.node.name, lines)
