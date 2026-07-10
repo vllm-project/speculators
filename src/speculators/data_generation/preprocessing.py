@@ -527,7 +527,10 @@ def _passthrough_pretokenized(
             )
         trimmed_ids = ids[:max_length]
         trimmed_mask = mask[:max_length]
-        if minimum_valid_tokens and sum(trimmed_mask) < minimum_valid_tokens:
+        if (
+            minimum_valid_tokens is not None
+            and sum(trimmed_mask) < minimum_valid_tokens
+        ):
             continue
         results["input_ids"].append(torch.tensor(trimmed_ids, dtype=torch.long))
         results["loss_mask"].append(torch.tensor(trimmed_mask, dtype=torch.long))
@@ -650,8 +653,21 @@ def build_eagle3_dataset(
                      conversation
         minimum_valid_tokens: Number of tokens to consider for a valid sample
     """
+    original_cols = dataset.column_names
+    # These rows carry the generation boundary as their mask, so _preprocess_batch
+    # passes them through: no chat template, no span detection, no turn dropout.
+    pretokenized = {"input_ids", "loss_mask"} <= set(original_cols)
+
+    if pretokenized:
+        log.info("Pre-tokenized rows: using their loss mask, skipping chat template")
+        if turn_dropout:
+            log.warning("turn_dropout does not apply to pre-tokenized rows; ignoring")
+        if assistant_pattern is not None:
+            log.warning(
+                "assistant_pattern does not apply to pre-tokenized rows; ignoring"
+            )
     # Detect and use provided assistant message pattern
-    if assistant_pattern is not None:
+    elif assistant_pattern is not None:
         log.info(f"Using custom assistant pattern: {str(assistant_pattern)[:80]}...")
     elif _supports_assistant_mask(processor):
         assistant_pattern = None  # Signal to use HF mask in _preprocess_batch
@@ -659,8 +675,6 @@ def build_eagle3_dataset(
     else:
         assistant_pattern = _detect_assistant_pattern(processor)
         log.info(f"Detected assistant pattern: {str(assistant_pattern)[:80]}...")
-
-    original_cols = dataset.column_names
 
     # Avoid CPU contention for MM processing:
     # https://github.com/vllm-project/vllm/pull/31879
