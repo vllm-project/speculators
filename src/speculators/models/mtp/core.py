@@ -211,6 +211,8 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
                 attention_mask=causal_mask,
                 position_ids=step_pos_ids,
                 position_embeddings=step_pos_emb,
+                verifier_kv_last_local=kwargs.get("verifier_kv_last_local"),
+                verifier_kv_last_global=kwargs.get("verifier_kv_last_global"),
             )
 
             logits = self.lm_head(mtp_output)
