@@ -1,5 +1,6 @@
 from speculators.models.attention import ALL_ATTENTION_FUNCTIONS  # noqa: F401
 
+from .dels_spec import DeLSSpecDraftModel, DeLSSpecSpeculatorConfig
 from .dflash import DFlashDraftModel, DFlashSpeculatorConfig
 from .dspark import DSparkDraftModel, DSparkSpeculatorConfig
 from .eagle3 import Eagle3DraftModel, Eagle3SpeculatorConfig
@@ -11,6 +12,8 @@ __all__ = [
     "DFlashSpeculatorConfig",
     "DSparkDraftModel",
     "DSparkSpeculatorConfig",
+    "DeLSSpecDraftModel",
+    "DeLSSpecSpeculatorConfig",
     "Eagle3DraftModel",
     "Eagle3SpeculatorConfig",
     "MTPDraftModel",

@@ -126,6 +126,7 @@ def create_train_val_loaders(
             hidden_states_dtype=hidden_states_dtype,
             request_timeout=request_timeout,
             max_retries=max_retries,
+            num_target_layers=num_target_layers,
         )
         val_dataset = ArrowDataset(
             datapath=data_path,
@@ -139,6 +140,7 @@ def create_train_val_loaders(
             hidden_states_dtype=hidden_states_dtype,
             request_timeout=request_timeout,
             max_retries=max_retries,
+            num_target_layers=num_target_layers,
         )
 
     train_loader = _setup_dataloader(

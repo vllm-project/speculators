@@ -241,6 +241,7 @@ class ArrowDataset(BaseDataset):
         model: str | None = None,
         request_timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
         max_retries: int = DEFAULT_MAX_RETRIES,
+        num_target_layers: int = 3,
     ):
         """Initialize the ArrowDataset.
         Args:
@@ -277,6 +278,7 @@ class ArrowDataset(BaseDataset):
         self.model = model
         self.request_timeout = request_timeout
         self.max_retries = max_retries
+        self.num_target_layers = num_target_layers
 
         # Delay super init so that `_compute_approx_lengths` has required data
         super().__init__(max_len, transform, hidden_states_dtype)
@@ -347,6 +349,22 @@ class ArrowDataset(BaseDataset):
         return loaded_hs
 
     def _get_raw_data(self, index):
+        # Models with no target layers (e.g. dels_spec) don't need hidden states.
+        # Return token data directly so the dataset doesn't skip all samples.
+        if self.num_target_layers == 0:
+            dataset_item = self.data[index]
+            seq_len = int(dataset_item["seq_len"])
+            hidden_size = 1  # placeholder, ignored by model
+            empty_hs = torch.empty(seq_len, 0, dtype=self.hidden_states_dtype)
+            return {
+                "hidden_states": empty_hs,
+                "input_ids": dataset_item["input_ids"],
+                "verifier_last_hidden_states": torch.empty(
+                    seq_len, hidden_size, dtype=self.hidden_states_dtype
+                ),
+                "loss_mask": dataset_item["loss_mask"],
+            }
+
         file_idx = self._map_to_file_idx(index)
         candidate_path = self.hidden_states_path / f"hs_{file_idx}.safetensors"
         loaded_hs = _maybe_load_hs_file(candidate_path)
