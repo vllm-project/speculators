@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from datasets import Dataset as HFDataset
 
-from scripts.prepare_data import assert_safe_to_overwrite, parse_args
+from scripts.prepare_data import assert_safe_to_overwrite, main, parse_args
 from speculators.data_generation import preprocessing as preprocessing_module
 from speculators.data_generation.preprocessing import load_and_preprocess_dataset
 
@@ -67,6 +67,72 @@ def test_parse_args_allow_empty_output_defaults_false(monkeypatch: pytest.Monkey
     args = parse_args()
 
     assert args.allow_empty_output is False
+
+
+def test_parse_args_accepts_multimodal_and_allow_empty_together(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The rebase must preserve both independently introduced CLI flags."""
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "prepare_data.py",
+            "--model",
+            "target",
+            "--data",
+            "sharegpt",
+            "--output",
+            "out",
+            "--multimodal",
+            "--allow-empty-output",
+        ],
+    )
+
+    args = parse_args()
+
+    assert args.multimodal is True
+    assert args.allow_empty_output is True
+
+
+def test_main_forwards_multimodal_and_allow_empty_together(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    """Both rebased flags must reach the preprocessing API in the same call."""
+    output = tmp_path / "output"
+    captured_kwargs = {}
+
+    class _FakeDataset:
+        def save_to_disk(self, path):
+            assert Path(path) == output
+
+    def fake_load_and_preprocess_dataset(**kwargs):
+        captured_kwargs.update(kwargs)
+        return _FakeDataset(), object()
+
+    monkeypatch.setattr(
+        "scripts.prepare_data.load_and_preprocess_dataset",
+        fake_load_and_preprocess_dataset,
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "prepare_data.py",
+            "--model",
+            "target",
+            "--data",
+            "sharegpt",
+            "--output",
+            str(output),
+            "--multimodal",
+            "--allow-empty-output",
+        ],
+    )
+
+    main()
+
+    assert captured_kwargs["allow_empty_output"] is True
+    assert captured_kwargs["is_multimodal"] is True
 
 
 class _FakeProcessor:

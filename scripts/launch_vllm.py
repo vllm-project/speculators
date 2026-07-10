@@ -85,9 +85,11 @@ def _is_multimodal_config(config) -> bool:
 
 
 def _ensure_hidden_state_extraction_defaults(cmd: list[str]) -> None:
-    disable_cp_arg = "--no-enable-chunked-prefill"
-    if disable_cp_arg not in cmd:
-        cmd.append(disable_cp_arg)
+    if not any(
+        arg in cmd
+        for arg in ("--enable-chunked-prefill", "--no-enable-chunked-prefill")
+    ):
+        cmd.append("--no-enable-chunked-prefill")
 
     # Prefix caching can make vLLM return full prompt IDs while the hidden-state
     # connector only writes uncached slots, so default extraction to full prompts.
@@ -97,6 +99,51 @@ def _ensure_hidden_state_extraction_defaults(cmd: list[str]) -> None:
         cmd.append("--no-enable-prefix-caching")
 
 
+def _normalize_target_layer_ids(
+    target_layer_ids: list[int],
+    *,
+    num_hidden_layers: int,
+    include_last_layer: bool,
+) -> list[int]:
+    """Return an unambiguous extraction order for custom verifier layers.
+
+    Training always consumes the last extracted tensor as
+    ``verifier_last_hidden_states``. Therefore an explicitly supplied final
+    verifier layer must be unique and last, regardless of whether the user also
+    requested automatic inclusion.
+    """
+    if len(set(target_layer_ids)) != len(target_layer_ids):
+        raise ValueError(
+            "--target-layer-ids must not contain duplicate layer IDs: "
+            f"{target_layer_ids}"
+        )
+
+    out_of_range = [
+        layer_id
+        for layer_id in target_layer_ids
+        if layer_id < 1 or layer_id > num_hidden_layers
+    ]
+    if out_of_range:
+        raise ValueError(
+            "--target-layer-ids must be in the inclusive range "
+            f"[1, {num_hidden_layers}]; got {out_of_range}"
+        )
+
+    normalized = [
+        layer_id for layer_id in target_layer_ids if layer_id != num_hidden_layers
+    ]
+    if not include_last_layer and num_hidden_layers not in target_layer_ids:
+        raise ValueError(
+            "--no-include-last-layer requires the final verifier layer "
+            f"({num_hidden_layers}) to be listed explicitly in "
+            "--target-layer-ids. Training consumes the last extracted tensor "
+            "as verifier_last_hidden_states."
+        )
+    if include_last_layer or num_hidden_layers in target_layer_ids:
+        normalized.append(num_hidden_layers)
+    return normalized
+
+
 def main():
     args, vllm_args = parse_args()
     if "--" in vllm_args:
@@ -104,9 +151,18 @@ def main():
 
     from transformers import AutoConfig  # noqa: PLC0415
 
+    from speculators.models.utils import (  # noqa: PLC0415
+        default_auxiliary_target_layer_ids,
+    )
+
     config = AutoConfig.from_pretrained(args.model)
-    text_config = config.text_config if hasattr(config, "text_config") else config
-    num_hidden_layers = text_config.num_hidden_layers
+    text_config = getattr(config, "text_config", None) or config
+    num_hidden_layers = getattr(text_config, "num_hidden_layers", None)
+    if num_hidden_layers is None:
+        raise ValueError(
+            "Model config must expose num_hidden_layers either at the top level "
+            "or through a non-null text_config."
+        )
 
     if _is_multimodal_config(config) and "--enforce-eager" not in vllm_args:
         warnings.warn(
@@ -117,9 +173,11 @@ def main():
         )
 
     if args.target_layer_ids:
-        target_layer_ids = args.target_layer_ids
-        if args.include_last_layer and num_hidden_layers not in target_layer_ids:
-            target_layer_ids.append(num_hidden_layers)
+        target_layer_ids = _normalize_target_layer_ids(
+            args.target_layer_ids,
+            num_hidden_layers=num_hidden_layers,
+            include_last_layer=args.include_last_layer,
+        )
         warnings.warn(
             f"Using custom target layer ids {target_layer_ids}. These "
             "must also be explicitly aligned in the training script. "
@@ -129,9 +187,7 @@ def main():
         )
     else:
         target_layer_ids = [
-            2,
-            num_hidden_layers // 2,
-            num_hidden_layers - 3,
+            *default_auxiliary_target_layer_ids(num_hidden_layers),
             num_hidden_layers,
         ]
 

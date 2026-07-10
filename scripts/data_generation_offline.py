@@ -15,21 +15,30 @@ Usage:
 import argparse
 import asyncio
 import logging
+import math
 import os
-import shutil
 import sys
 from pathlib import Path
 from typing import Any
 
 import openai
 from datasets import load_from_disk
-from safetensors.torch import load_file, save_file
+from safetensors.torch import load_file
 from tqdm import tqdm
 
 from speculators.data_generation.offline import (
+    InvalidHiddenStateCacheError,
     align_hidden_states_to_tokens,
+    atomic_move_safetensors,
+    atomic_save_safetensors,
+    durable_unlink_safetensors,
     get_existing_hidden_state_indices,
     get_indices_to_process,
+    hidden_states_file_sha256,
+    validate_generated_source_ownership,
+    validate_hidden_states_file_contents,
+    validate_hidden_states_path,
+    validate_hidden_states_root,
 )
 from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
@@ -39,8 +48,37 @@ from speculators.data_generation.vllm_client import (
 )
 from speculators.train.data import build_client_item
 from speculators.train.logger import setup_root_logger
+from speculators.utils.argparse_utils import nonnegative_int
 
 logger = logging.getLogger(__name__)
+
+
+def _positive_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"expected a positive integer, got {value!r}"
+        ) from None
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError(
+            f"expected a positive integer, got {value!r}"
+        )
+    return parsed
+
+
+def _positive_finite_float(value: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"expected a finite positive number, got {value!r}"
+        ) from None
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise argparse.ArgumentTypeError(
+            f"expected a finite positive number, got {value!r}"
+        )
+    return parsed
 
 
 def _align_and_write_hidden_states(
@@ -48,29 +86,99 @@ def _align_and_write_hidden_states(
     target_path: Path,
     tokens: list[int],
     *,
+    source_root: Path,
+    target_root: Path,
     allow_prefix_truncation: bool,
     validate_outputs: bool,
 ) -> None:
+    source_path = validate_hidden_states_path(source_path, source_root)
+    source_sha256 = hidden_states_file_sha256(
+        source_path,
+        allowed_root=source_root,
+    )
+    # Even the fast path must reject arbitrary/corrupt files before they become a
+    # canonical cache entry. Exact token matching is cheap because the structure
+    # gate already materializes token_ids; --validate-outputs only controls the
+    # full hidden-state value/finite scan.
+    validate_hidden_states_file_contents(
+        source_path,
+        source_root,
+        expected_tokens=None if allow_prefix_truncation else tokens,
+    )
+    source_sha256_after_validation = hidden_states_file_sha256(
+        source_path,
+        allowed_root=source_root,
+    )
+    if source_sha256_after_validation != source_sha256:
+        raise RuntimeError(
+            "Generated hidden-state source changed while it was being validated"
+        )
+    validate_generated_source_ownership(
+        source_path,
+        target_path,
+        source_root=source_root,
+        target_root=target_root,
+        allow_current_target=allow_prefix_truncation,
+    )
     if not allow_prefix_truncation and not validate_outputs:
         if source_path != target_path:
-            shutil.move(source_path, target_path)
+            atomic_move_safetensors(
+                source_path,
+                target_path,
+                source_root=source_root,
+                target_root=target_root,
+                expected_source_sha256=source_sha256,
+                expected_tokens=tokens,
+            )
         return
 
+    source_path = validate_hidden_states_path(source_path, source_root)
     loaded = load_file(source_path)
+    source_sha256_after_load = hidden_states_file_sha256(
+        source_path,
+        allowed_root=source_root,
+    )
+    if source_sha256_after_load != source_sha256:
+        raise RuntimeError(
+            "Generated hidden-state source changed while it was being loaded"
+        )
     aligned, truncated = align_hidden_states_to_tokens(
         loaded,
         tokens,
         allow_prefix_truncation=allow_prefix_truncation,
     )
+    validate_generated_source_ownership(
+        source_path,
+        target_path,
+        source_root=source_root,
+        target_root=target_root,
+        allow_current_target=truncated,
+    )
     if truncated:
-        save_file(
+        atomic_save_safetensors(
             {key: value.contiguous() for key, value in aligned.items()},
             target_path,
+            allowed_root=target_root,
+            allow_replace=source_path == target_path,
+            expected_existing_sha256=(
+                source_sha256 if source_path == target_path else None
+            ),
         )
         if source_path != target_path:
-            source_path.unlink()
+            durable_unlink_safetensors(
+                source_path,
+                allowed_root=source_root,
+                expected_sha256=source_sha256,
+            )
     elif source_path != target_path:
-        shutil.move(source_path, target_path)
+        atomic_move_safetensors(
+            source_path,
+            target_path,
+            source_root=source_root,
+            target_root=target_root,
+            expected_source_sha256=source_sha256,
+            expected_tokens=tokens,
+        )
 
 
 class _FailureTracker:
@@ -143,11 +251,21 @@ def parse_args():
             "(default args.preprocessed_data / 'hidden_states')"
         ),
     )
+    parser.add_argument(
+        "--source-hidden-states-root",
+        type=str,
+        default=None,
+        help=(
+            "Existing allowed root for hidden-state source paths returned by vLLM. "
+            "Required when vLLM writes outside --output; defaults to the resolved "
+            "output hidden-states directory."
+        ),
+    )
 
     # Hidden states generation arguments
     parser.add_argument(
         "--concurrency",
-        type=int,
+        type=_positive_int,
         default=32,
         help=(
             "Number of active vLLM requests at a time. "
@@ -164,7 +282,7 @@ def parse_args():
     )
     parser.add_argument(
         "--request-timeout",
-        type=float,
+        type=_positive_finite_float,
         default=DEFAULT_REQUEST_TIMEOUT,
         help=(
             "Timeout in seconds for each individual vLLM request "
@@ -173,7 +291,7 @@ def parse_args():
     )
     parser.add_argument(
         "--max-retries",
-        type=int,
+        type=nonnegative_int,
         default=DEFAULT_MAX_RETRIES,
         help=(
             "Maximum number of retry attempts per request on failure "
@@ -230,6 +348,7 @@ async def worker(
     vllm_semaphore: asyncio.Semaphore,
     write_semaphore: asyncio.Semaphore,
     hidden_states_output_dir: Path,
+    source_hidden_states_root: Path,
     validate_outputs: bool,
     request_timeout: float | None,
     max_retries: int,
@@ -263,18 +382,31 @@ async def worker(
                     timeout=request_timeout,
                     max_retries=max_retries,
                 )
-            lock_path = hidden_states_path + ".lock"
+            source_path = validate_hidden_states_path(
+                hidden_states_path,
+                source_hidden_states_root,
+                require_exists=False,
+            )
+            lock_path = str(source_path) + ".lock"
+            if Path(lock_path).is_symlink():  # noqa: ASYNC240
+                raise ValueError(f"Hidden-state lock path is a symlink: {lock_path}")
             if Path(lock_path).exists():  # noqa: ASYNC240
                 await wait_for_lock_async(lock_path)
+
+            source_path = validate_hidden_states_path(
+                source_path, source_hidden_states_root
+            )
 
             async with write_semaphore:  # Limit number of active disk writes
                 allow_prefix_truncation = "messages" in item
 
                 await asyncio.to_thread(
                     _align_and_write_hidden_states,
-                    Path(hidden_states_path),
+                    source_path,
                     target_hidden_states_path,
                     item["input_ids"],
+                    source_root=source_hidden_states_root,
+                    target_root=hidden_states_output_dir,
                     allow_prefix_truncation=allow_prefix_truncation,
                     validate_outputs=validate_outputs,
                 )
@@ -349,9 +481,29 @@ async def generate_and_save_hidden_states(args, dataset):
     else:
         hidden_states_dir = Path(args.output)
     hidden_states_dir.mkdir(parents=True, exist_ok=True)
+    hidden_states_dir = validate_hidden_states_root(hidden_states_dir)
+    source_hidden_states_root = validate_hidden_states_root(
+        hidden_states_dir
+        if args.source_hidden_states_root is None
+        else args.source_hidden_states_root
+    )
 
-    existing_file_indices = get_existing_hidden_state_indices(hidden_states_dir)
     num_samples = len(dataset)
+
+    def expected_tokens_for_index(file_index: int) -> list[int]:
+        if file_index < 0 or file_index >= num_samples:
+            raise InvalidHiddenStateCacheError(
+                f"cache index {file_index} is outside the current dataset"
+            )
+        input_ids = dataset[file_index]["input_ids"]
+        if hasattr(input_ids, "tolist"):
+            input_ids = input_ids.tolist()
+        return [int(token) for token in input_ids]
+
+    existing_file_indices = get_existing_hidden_state_indices(
+        hidden_states_dir,
+        expected_tokens_for_index=expected_tokens_for_index,
+    )
     if "messages" in dataset.column_names:
         logger.info("Detected multimodal preprocessed dataset")
 
@@ -402,6 +554,7 @@ async def generate_and_save_hidden_states(args, dataset):
                         vllm_semaphore,
                         write_semaphore,
                         hidden_states_dir,
+                        source_hidden_states_root,
                         args.validate_outputs,
                         args.request_timeout,
                         args.max_retries,

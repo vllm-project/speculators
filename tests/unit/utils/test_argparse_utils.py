@@ -4,7 +4,18 @@ import argparse
 
 import pytest
 
-from speculators.utils.argparse_utils import explicitly_provided_dests
+from speculators.utils.argparse_utils import explicitly_provided_dests, nonnegative_int
+
+
+@pytest.mark.parametrize(("value", "expected"), [("0", 0), ("3", 3), ("+4", 4)])
+def test_nonnegative_int_accepts_zero_and_positive(value: str, expected: int):
+    assert nonnegative_int(value) == expected
+
+
+@pytest.mark.parametrize("value", ["-1", "1.5", "not-an-int"])
+def test_nonnegative_int_rejects_invalid_values(value: str):
+    with pytest.raises(argparse.ArgumentTypeError, match="non-negative integer"):
+        nonnegative_int(value)
 
 
 def _parser() -> argparse.ArgumentParser:

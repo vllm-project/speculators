@@ -79,6 +79,8 @@ def _run_distributed_training(
 def test_resume_after_checkpoint_best(tmp_path: Path):
     data_path = tmp_path / "data"
     hidden_states_path = tmp_path / "offline_hidden_states"
+    vllm_hidden_states_path = tmp_path / "hidden_states"
+    vllm_hidden_states_path.mkdir()
     save_path = tmp_path / "checkpoints"
 
     # Step 1: Prepare data
@@ -88,10 +90,15 @@ def test_resume_after_checkpoint_best(tmp_path: Path):
     with launch_vllm_server_context(
         MODEL,
         VLLM_PORT,
-        str(tmp_path / "hidden_states"),
+        str(vllm_hidden_states_path),
         enforce_eager=True,
     ):
-        run_data_generation_offline(data_path, hidden_states_path, port=VLLM_PORT)
+        run_data_generation_offline(
+            data_path,
+            hidden_states_path,
+            port=VLLM_PORT,
+            source_hidden_states_root=vllm_hidden_states_path,
+        )
 
     # Step 3: Train 1 epoch with --save-best
     result = _run_distributed_training(

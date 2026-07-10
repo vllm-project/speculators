@@ -138,7 +138,7 @@ class DraftVocabMixin(nn.Module):
         if speculators_config is None:
             return
         verifier_config = speculators_config.verifier
-        if verifier_config.name_or_path is None:
+        if not verifier_config.name_or_path:
             return
 
         # Determine which weights to load based on model attributes
@@ -295,7 +295,9 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
         :param weights_only: Whether to only load model weights without optimizer
             states or other training artifacts.
         :param verifier: Verifier model id/path used to auto-convert an external
-            (non-speculators) checkpoint; ignored for speculators checkpoints.
+            (non-speculators) checkpoint. Concrete model loaders may also use it as
+            a fallback when a speculators checkpoint omits verifier metadata; it
+            never overrides a verifier path saved in the checkpoint.
         :param kwargs: Additional keyword arguments passed to the model constructor
             and loading process.
         :return: A SpeculatorModel instance of the appropriate subclass, loaded with

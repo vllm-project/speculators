@@ -15,8 +15,9 @@ def conditional_torch_compile(func=None, *args, **kwargs):
 
 def get_verifier_config(verifier_name_or_path: str) -> PretrainedConfig:
     verifier_config = AutoConfig.from_pretrained(verifier_name_or_path)
-    if hasattr(verifier_config, "text_config"):
-        verifier_config = verifier_config.text_config
+    text_config = getattr(verifier_config, "text_config", None)
+    if text_config is not None:
+        verifier_config = text_config
     return verifier_config
 
 
@@ -27,6 +28,27 @@ DEFAULT_TARGET_LAYER_IDS_WARNING = (
 )
 
 
+def default_auxiliary_target_layer_ids(num_layers: int) -> list[int]:
+    """Choose up to three unique, valid auxiliary verifier layers."""
+    if num_layers < 2:
+        raise ValueError(
+            "A verifier must expose at least two hidden layers so extraction can "
+            "include one auxiliary layer and the final layer."
+        )
+
+    target_count = min(3, num_layers - 1)
+    selected = {
+        layer_id
+        for layer_id in (2, num_layers // 2, num_layers - 3)
+        if 1 <= layer_id < num_layers
+    }
+    for layer_id in (1, num_layers - 1, *range(1, num_layers)):
+        if len(selected) >= target_count:
+            break
+        selected.add(layer_id)
+    return sorted(selected)
+
+
 def resolve_target_layer_ids(
     target_layer_ids: list[int] | None,
     verifier_name_or_path: str,
@@ -35,7 +57,7 @@ def resolve_target_layer_ids(
         return target_layer_ids
 
     num_layers = get_verifier_config(verifier_name_or_path).num_hidden_layers
-    target_layer_ids = [2, num_layers // 2, num_layers - 3]
+    target_layer_ids = default_auxiliary_target_layer_ids(num_layers)
     warnings.warn(
         DEFAULT_TARGET_LAYER_IDS_WARNING.format(target_layer_ids=target_layer_ids),
         stacklevel=3,
@@ -86,9 +108,29 @@ def strip_verifier_final_layer_id(
 ) -> list[int]:
     """Remove the verifier final layer from training auxiliary layer IDs."""
     num_layers = get_verifier_config(verifier_name_or_path).num_hidden_layers
+    if len(set(target_layer_ids)) != len(target_layer_ids):
+        raise ValueError(
+            "--target-layer-ids must not contain duplicate layer IDs: "
+            f"{target_layer_ids}"
+        )
+    out_of_range = [
+        layer_id
+        for layer_id in target_layer_ids
+        if layer_id < 1 or layer_id > num_layers
+    ]
+    if out_of_range:
+        raise ValueError(
+            "--target-layer-ids must be in the inclusive range "
+            f"[1, {num_layers}]; got {out_of_range}"
+        )
     aux_target_layer_ids = [
         layer_id for layer_id in target_layer_ids if layer_id != num_layers
     ]
+    if not aux_target_layer_ids:
+        raise ValueError(
+            "--target-layer-ids must include at least one auxiliary verifier layer "
+            f"other than the final layer ({num_layers})."
+        )
     if len(aux_target_layer_ids) != len(target_layer_ids):
         warnings.warn(
             "Stripping the verifier's final layer "

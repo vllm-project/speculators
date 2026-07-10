@@ -5,6 +5,7 @@ import random
 import warnings
 from copy import deepcopy
 from pathlib import Path
+from typing import Any, cast
 
 import numpy as np
 import torch
@@ -26,6 +27,7 @@ from speculators.models.mtp.data import shift_batch_mtp
 from speculators.models.utils import (
     get_verifier_config,
     resolve_draft_intermediate_size,
+    resolve_target_layer_ids,
 )
 from speculators.train.dataloader import create_train_val_loaders
 from speculators.train.distributed import (
@@ -40,7 +42,7 @@ from speculators.train.vocab_mapping import (
     build_vocab_mappings_from_distribution,
     get_target_vocab_size,
 )
-from speculators.utils.argparse_utils import explicitly_provided_dests
+from speculators.utils.argparse_utils import explicitly_provided_dests, nonnegative_int
 from speculators.utils.loading import is_config_only_dir
 
 logger = logging.getLogger(__name__)
@@ -130,11 +132,7 @@ def create_transformer_layer_config(  # noqa: C901
         )
 
     config_class = DRAFT_ARCH_CONFIGS[draft_arch]
-    verifier_config = AutoConfig.from_pretrained(verifier_name_or_path)
-
-    # For multimodal models (Qwen3VL, etc.), extract text_config
-    if hasattr(verifier_config, "text_config"):
-        verifier_config = verifier_config.text_config
+    verifier_config = get_verifier_config(verifier_name_or_path)
 
     hidden_act = (
         hidden_act
@@ -361,11 +359,9 @@ def parse_vocab_mappings(args: argparse.Namespace):
         f"token_freq_path='{token_freq_path}' doesn't exist or --draft-vocab-size is "
         "None. Using full verifier vocab"
     )
-    # When vocab mapping is not provided, use the full verifier vocab
-    verifier_config = AutoConfig.from_pretrained(args.verifier_name_or_path)
-    if hasattr(verifier_config, "text_config"):
-        verifier_config = verifier_config.text_config
-    return None, None, verifier_config.vocab_size
+    # When vocab mapping is not provided, use the full verifier vocab.
+    target_vocab_size = get_target_vocab_size(None, args.verifier_name_or_path)
+    return None, None, target_vocab_size
 
 
 def _build_from_config_only(
@@ -395,6 +391,29 @@ def _build_from_config_only(
         and not getattr(speculators_config.verifier, "name_or_path", None)
     ):
         speculators_config.verifier.name_or_path = verifier_name_or_path
+
+    # Legacy Eagle3/P-EAGLE configs use ``None`` to mean the three default
+    # verifier layers. Resolve that sentinel before constructing the module so
+    # both the FC width and the public ``target_layer_ids`` contract are
+    # concrete. The normal weight-bearing ``from_pretrained`` path performs the
+    # same resolution in Eagle3DraftModel.from_pretrained; config-only loading
+    # bypasses that classmethod and therefore has to do it here.
+    if getattr(config, "eagle_aux_hidden_state_layer_ids", object()) is None:
+        verifier_path = (
+            getattr(speculators_config.verifier, "name_or_path", None)
+            if speculators_config is not None
+            else None
+        )
+        if not verifier_path:
+            raise ValueError(
+                "A verifier name or path is required to resolve legacy Eagle "
+                "auxiliary layer IDs from a config-only checkpoint."
+            )
+        eagle_config = cast(Any, config)
+        eagle_config.eagle_aux_hidden_state_layer_ids = resolve_target_layer_ids(
+            None, verifier_path
+        )
+
     model = model_class(config=config)
     if hasattr(model, "load_vocab_mappings"):
         model.load_vocab_mappings(t2d, d2t)  # type: ignore[attr-defined]
@@ -863,7 +882,7 @@ def parse_args():
     )
     parser.add_argument(
         "--max-retries",
-        type=int,
+        type=nonnegative_int,
         default=DEFAULT_MAX_RETRIES,
         help=(
             "Maximum number of retry attempts per vLLM request on failure "
@@ -1283,6 +1302,11 @@ def parse_args():
     resolve_loss_config(args.loss_fn)
 
     if args.per_position_loss_weight == "dpace":
+        if args.speculator_type not in {"dflash", "dspark"}:
+            parser.error(
+                "--per-position-loss-weight=dpace is only supported with "
+                "--speculator-type=dflash or dspark"
+            )
         if args.loss_fn != "ce":
             parser.error("--per-position-loss-weight=dpace requires --loss-fn=ce")
         if not 0.0 < args.dpace_alpha <= 1.0:

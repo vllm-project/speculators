@@ -99,6 +99,10 @@ def _load_image_for_processor(image_ref: Any) -> Any:
     if isinstance(image_ref, str):
         parsed = urlparse(image_ref)
         if parsed.scheme == "file":
+            if parsed.netloc not in ("", "localhost"):
+                raise ValueError(f"Unsupported file URI host: {parsed.netloc}")
+            if parsed.query or parsed.fragment:
+                raise ValueError("Local file URIs must not contain query/fragment")
             image_ref = unquote(parsed.path)
     return load_image(image_ref)
 
@@ -158,6 +162,100 @@ def _get_image_token_ids(
     return image_token_ids
 
 
+def _get_vision_boundary_token_ids(
+    processor: ProcessorMixin,
+    tokenizer: PreTrainedTokenizerBase,
+) -> tuple[set[int], set[int]]:
+    """Return vision-block start/end IDs without image placeholder IDs."""
+    start_token_ids: set[int] = set()
+    end_token_ids: set[int] = set()
+    unk_token_id = getattr(tokenizer, "unk_token_id", None)
+
+    def _add_token_id(target: set[int], token_id: Any) -> None:
+        if isinstance(token_id, int) and token_id >= 0 and token_id != unk_token_id:
+            target.add(token_id)
+
+    sources = (processor, tokenizer, getattr(processor, "tokenizer", None))
+    start_id_attrs = (
+        "vision_start_token_id",
+        "vision_start_token_index",
+        "image_start_token_id",
+        "image_start_token_index",
+        "image_bos_token_id",
+        "begin_of_image_token_id",
+        "boi_token_id",
+    )
+    end_id_attrs = (
+        "vision_end_token_id",
+        "vision_end_token_index",
+        "image_end_token_id",
+        "image_end_token_index",
+        "image_eos_token_id",
+        "end_of_image_token_id",
+        "eoi_token_id",
+    )
+    for source in sources:
+        if source is None:
+            continue
+        for attr_name in start_id_attrs:
+            _add_token_id(start_token_ids, getattr(source, attr_name, None))
+        for attr_name in end_id_attrs:
+            _add_token_id(end_token_ids, getattr(source, attr_name, None))
+
+    convert_tokens_to_ids = getattr(tokenizer, "convert_tokens_to_ids", None)
+    if not callable(convert_tokens_to_ids):
+        return start_token_ids, end_token_ids
+
+    start_tokens = {
+        "<|vision_start|>",
+        "<vision_start>",
+        "<|image_start|>",
+        "<image_start>",
+        "<start_of_image>",
+        "<img>",
+    }
+    end_tokens = {
+        "<|vision_end|>",
+        "<vision_end>",
+        "<|image_end|>",
+        "<image_end>",
+        "<end_of_image>",
+        "</img>",
+        "[IMG_END]",
+    }
+    start_token_attrs = (
+        "vision_start_token",
+        "image_start_token",
+        "image_bos_token",
+        "begin_of_image_token",
+        "boi_token",
+    )
+    end_token_attrs = (
+        "vision_end_token",
+        "image_end_token",
+        "image_eos_token",
+        "end_of_image_token",
+        "eoi_token",
+    )
+    for source in sources:
+        if source is None:
+            continue
+        for attr_name in start_token_attrs:
+            token = getattr(source, attr_name, None)
+            if isinstance(token, str):
+                start_tokens.add(token)
+        for attr_name in end_token_attrs:
+            token = getattr(source, attr_name, None)
+            if isinstance(token, str):
+                end_tokens.add(token)
+
+    for token in start_tokens:
+        _add_token_id(start_token_ids, convert_tokens_to_ids(token))
+    for token in end_tokens:
+        _add_token_id(end_token_ids, convert_tokens_to_ids(token))
+    return start_token_ids, end_token_ids
+
+
 def _validate_supported_multimodal_content(conv: list[dict]) -> None:
     """Fail fast for media modalities not expanded by this preprocessing path."""
     unsupported_types = {
@@ -184,16 +282,35 @@ def _validate_multimodal_truncation_boundary(
     input_ids: list[int],
     max_length: int,
     image_token_ids: set[int],
+    vision_start_token_ids: set[int] | None = None,
+    vision_end_token_ids: set[int] | None = None,
 ) -> None:
     """Reject truncation in the middle of an expanded image-token block."""
     if max_length <= 0 or max_length >= len(input_ids):
         return
-    if not image_token_ids:
+    vision_start_token_ids = vision_start_token_ids or set()
+    vision_end_token_ids = vision_end_token_ids or set()
+    if not image_token_ids and not (
+        vision_start_token_ids or vision_end_token_ids
+    ):
         raise ValueError("Cannot validate multimodal truncation without image IDs")
 
     prev_token_id = input_ids[max_length - 1]
     next_token_id = input_ids[max_length]
-    if prev_token_id in image_token_ids and next_token_id in image_token_ids:
+    open_vision_blocks = 0
+    for token_id in input_ids[:max_length]:
+        if token_id in vision_start_token_ids:
+            open_vision_blocks += 1
+        if token_id in vision_end_token_ids and open_vision_blocks > 0:
+            open_vision_blocks -= 1
+
+    cuts_pad_run = (
+        prev_token_id in image_token_ids and next_token_id in image_token_ids
+    )
+    cuts_before_known_end = (
+        prev_token_id in image_token_ids and next_token_id in vision_end_token_ids
+    )
+    if open_vision_blocks > 0 or cuts_pad_run or cuts_before_known_end:
         raise ValueError(
             "Refusing to truncate multimodal input in the middle of an image "
             f"token block at max_length={max_length}. Increase --seq-length "
@@ -222,7 +339,10 @@ def _expand_loss_mask_for_multimodal_tokens(
     while src_idx < len(input_ids):
         token_id = input_ids[src_idx]
         if dst_idx >= len(expanded_input_ids):
-            break
+            raise ValueError(
+                "Expanded multimodal input IDs ended before all source tokens "
+                f"were aligned at source={src_idx}, expanded={dst_idx}"
+            )
 
         if token_id in image_token_ids:
             start_idx = dst_idx
@@ -282,6 +402,10 @@ def _expand_multimodal_inputs_with_images(
         field_name="Multimodal processor input_ids with images",
     )
     image_token_ids = _get_image_token_ids(processor, tokenizer)
+    vision_start_token_ids, vision_end_token_ids = _get_vision_boundary_token_ids(
+        processor,
+        tokenizer,
+    )
     expanded_loss_mask = _expand_loss_mask_for_multimodal_tokens(
         input_ids,
         loss_mask,
@@ -292,6 +416,8 @@ def _expand_multimodal_inputs_with_images(
         expanded_input_ids,
         max_length,
         image_token_ids,
+        vision_start_token_ids,
+        vision_end_token_ids,
     )
     return expanded_input_ids[:max_length], expanded_loss_mask[:max_length]
 
@@ -404,6 +530,21 @@ def _adapt_conv_for_hf(normalized_conv: list[dict], processor: ProcessorLike):
     return [_adapt_turn_for_hf(turn, processor) for turn in normalized_conv]
 
 
+def _local_media_path_to_uri(media_path: str | Path) -> str:
+    """Return a canonical, percent-encoded file URI for a local media path."""
+    media_text = str(media_path)
+    parsed = urlparse(media_text)
+    if parsed.scheme == "file":
+        if parsed.netloc not in ("", "localhost"):
+            raise ValueError(f"Unsupported file URI host: {parsed.netloc}")
+        if parsed.query or parsed.fragment:
+            raise ValueError("Local file URIs must not contain query/fragment")
+        media_text = unquote(parsed.path)
+    elif parsed.scheme:
+        raise ValueError(f"Unsupported local media URI scheme: {parsed.scheme}")
+    return Path(media_text).expanduser().resolve().as_uri()
+
+
 def _adapt_part_for_vllm(part: str | dict):
     if isinstance(part, str):
         return {"type": "text", "text": part}
@@ -416,10 +557,20 @@ def _adapt_part_for_vllm(part: str | dict):
     for modality in ("image", "video", "audio"):
         if part_type == modality:
             if local_path := part.get("path"):
-                file_url = f"file://{Path(local_path).absolute()}"
+                file_url = _local_media_path_to_uri(local_path)
                 return {"type": f"{modality}_url", f"{modality}_url": {"url": file_url}}
             if url := part.get("url"):
-                return {"type": f"{modality}_url", f"{modality}_url": {"url": url}}
+                url_text = str(url)
+                if url_text.startswith("file://"):
+                    url_text = _local_media_path_to_uri(url_text)
+                elif not url_text.startswith(("http://", "https://", "data:")):
+                    raise ValueError(
+                        f"Unsupported {modality} URL scheme: {url_text}"
+                    )
+                return {
+                    "type": f"{modality}_url",
+                    f"{modality}_url": {"url": url_text},
+                }
             if media_ref := part.get(modality):
                 if not isinstance(media_ref, str | Path):
                     expr = {"type": modality, modality: "..."}
@@ -429,12 +580,12 @@ def _adapt_part_for_vllm(part: str | dict):
                         f"please express {modality} inputs using file paths or URLs."
                     )
                 media_text = str(media_ref)
-                if media_text.startswith(("http://", "https://", "data:", "file://")):
+                if media_text.startswith(("http://", "https://", "data:")):
                     return {
                         "type": f"{modality}_url",
                         f"{modality}_url": {"url": media_text},
                     }
-                file_url = f"file://{Path(media_text).absolute()}"
+                file_url = _local_media_path_to_uri(media_text)
                 return {"type": f"{modality}_url", f"{modality}_url": {"url": file_url}}
 
             if part.get("base64"):
@@ -766,27 +917,57 @@ def _get_input_ids_loss_mask(
     return input_ids, loss_mask
 
 
-def _parse_conv_tools(conv_tools: object, idx: int) -> list | None:
+def _parse_conv_tools(conv_tools: object, idx: int) -> list[dict] | None:
     """Parse the tools JSON string for one conversation; warn and return None
     on invalid JSON or unexpected types."""
     if not conv_tools:
         return None
+    parsed_tools: object
     if isinstance(conv_tools, list):
-        return conv_tools
-    if not isinstance(conv_tools, str):
+        parsed_tools = conv_tools
+    elif not isinstance(conv_tools, str):
         log.warning(
             f"Non-string value in tools column for conversation {idx}: "
             f"{type(conv_tools).__name__}, proceeding without tools"
         )
         return None
-    try:
-        return json.loads(conv_tools)
-    except json.JSONDecodeError as e:
+    else:
+        try:
+            parsed_tools = json.loads(conv_tools)
+        except json.JSONDecodeError as e:
+            log.warning(
+                f"Invalid JSON in tools column for conversation {idx}: {e}, "
+                "proceeding without tools"
+            )
+            return None
+
+    if not isinstance(parsed_tools, list) or not all(
+        isinstance(tool, dict) for tool in parsed_tools
+    ):
         log.warning(
-            f"Invalid JSON in tools column for conversation {idx}: {e}, "
-            "proceeding without tools"
+            f"Invalid tools schema for conversation {idx}: expected a list of "
+            "objects, proceeding without tools"
         )
         return None
+
+    return cast("list[dict]", parsed_tools)
+
+
+def _canonicalize_conv_tools(
+    conv_tools: object, idx: int
+) -> tuple[list[dict] | None, str]:
+    """Return template tools plus a stable JSON representation for persistence.
+
+    The canonical structure is used for preprocessing as well as persisted for
+    later Chat Completions requests. This keeps key ordering identical when vLLM
+    applies the chat template again.
+    """
+    parsed_tools = _parse_conv_tools(conv_tools, idx)
+    canonical_json = json.dumps(
+        parsed_tools or [], ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    canonical_tools = cast("list[dict]", json.loads(canonical_json))
+    return (canonical_tools or None), canonical_json
 
 
 def _passthrough_pretokenized(
@@ -840,6 +1021,9 @@ def _preprocess_batch(
     # MM inputs must use Chat Completions API
     if isinstance(processor, ProcessorMixin):
         results["messages"] = []
+        # Persist canonical JSON for stable Arrow schemas and identical tool-aware
+        # re-tokenization by the vLLM Chat Completions endpoint.
+        results["tools"] = []
 
     if not conversations:
         log.warning(f"No conversations key found. Keys: {list(examples.keys())}")
@@ -864,14 +1048,16 @@ def _preprocess_batch(
         if not normalized_conv:
             continue
 
-        parsed_tools = _parse_conv_tools(conv_tools, idx)
-
         try:
+            parsed_tools, canonical_tools_json = _canonicalize_conv_tools(
+                conv_tools, idx
+            )
             formatted_raw = None
             if isinstance(processor, ProcessorMixin):
                 formatted_raw_any = processor.apply_chat_template(
                     _adapt_conv_for_hf(normalized_conv, processor),
                     tokenize=False,
+                    tools=parsed_tools,  # type: ignore[arg-type]
                     add_generation_prompt=False,
                 )
                 assert isinstance(formatted_raw_any, str)
@@ -931,6 +1117,7 @@ def _preprocess_batch(
 
         if "messages" in results:
             results["messages"].append(_adapt_conv_for_vllm(normalized_conv))
+            results["tools"].append(canonical_tools_json)
 
     return results
 
@@ -978,16 +1165,17 @@ def build_eagle3_dataset(
         assistant_pattern = _detect_assistant_pattern(processor)
         log.info(f"Detected assistant pattern: {str(assistant_pattern)[:80]}...")
 
-    remove_cols = original_cols
-    if isinstance(processor, ProcessorMixin):
-        remove_cols = [col for col in original_cols if col != "messages"]
+    raw_multimodal = isinstance(processor, ProcessorMixin) and not pretokenized
+    remove_cols = (
+        [col for col in original_cols if col != "messages"]
+        if raw_multimodal
+        else original_cols
+    )
 
     # Avoid CPU contention for MM processing:
     # https://github.com/vllm-project/vllm/pull/31879
     with (
-        set_default_torch_num_threads()
-        if isinstance(processor, ProcessorMixin)
-        else nullcontext()
+        set_default_torch_num_threads() if raw_multimodal else nullcontext()
     ):
         dataset = dataset.map(
             lambda examples: _preprocess_batch(
@@ -1003,12 +1191,12 @@ def build_eagle3_dataset(
             # expand image placeholders into the real visual-token length. Large
             # batches can look stuck because a worker must finish the whole batch
             # before datasets updates progress.
-            batch_size=32 if isinstance(processor, ProcessorMixin) else 1000,
+            batch_size=32 if raw_multimodal else 1000,
             remove_columns=remove_cols,
             keep_in_memory=True,  # skip caching
         )
 
-    if isinstance(processor, ProcessorMixin):
+    if raw_multimodal:
         dataset.set_format(
             type="torch", columns=["input_ids", "loss_mask"], output_all_columns=True
         )

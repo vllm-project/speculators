@@ -4,11 +4,11 @@ Generates training data for speculator models by extracting hidden states from a
 
 ## Features
 
-- **Automatic resumption** — Detects existing `.safetensors` files in the output directory and skips already-completed samples, so interrupted runs can be resumed without reprocessing.
+- **Validated resumption** — Resumes only from regular, non-symlink safetensors whose required tensors and shapes are valid and whose `token_ids` match the current dataset row.
 - **Error handling with auto-retries** — Failed requests are automatically retried up to `--max-retries` times. Samples that still fail are skipped by default, allowing the rest of the dataset to complete.
 - **Consecutive failure detection** — Aborts early after `--max-consecutive-errors` consecutive failures to avoid silently churning through the dataset when the server is unreachable.
 - **Async concurrency** — Sends multiple requests to the vLLM server in parallel, controlled by `--concurrency`, for high throughput.
-- **Output validation** — Optional `--validate-outputs` flag verifies that saved hidden states match expected token IDs and sequence lengths.
+- **Output validation** — Every generated source passes a safetensors structure gate and exact-token (or validated multimodal-prefix) check before it can become a cache entry. The optional `--validate-outputs` flag additionally performs a full hidden-state value and NaN/Inf scan.
 
 ## Basic Usage
 
@@ -37,13 +37,15 @@ python scripts/data_generation_offline.py \
 
 - **`--output`** (str, default: `None`) Directory to save generated `.safetensors` files. Defaults to `<preprocessed-data>/hidden_states`.
 
+- **`--source-hidden-states-root`** (str, default: resolved `--output`) Existing allowed root for source `.safetensors` paths returned by vLLM. Set this explicitly when the vLLM connector writes to a different shared-storage directory. Returned paths outside this root, relative paths, and paths containing symlink components are rejected.
+
 ### Hidden States Generation Arguments
 
-- **`--concurrency`** (int, default: `32`) Number of active vLLM requests at a time. The number of async workers is set to `2 * concurrency`.
+- **`--concurrency`** (positive int, default: `32`) Number of active vLLM requests at a time. Zero and negative values are rejected. The number of async workers is set to `2 * concurrency`.
 
 - **`--validate-outputs`** (flag) Load generated safetensor files and verify that output token IDs match prompt tokens and hidden states sequence length matches the number of tokens.
 
-- **`--request-timeout`** (float) Timeout in seconds for each individual vLLM request.
+- **`--request-timeout`** (finite positive float) Timeout in seconds for each individual vLLM request. Zero, negative, NaN, and infinite values are rejected before any request is made.
 
 - **`--max-retries`** (int) Maximum number of retry attempts per request on failure.
 
@@ -57,6 +59,35 @@ python scripts/data_generation_offline.py \
 
 - **`--rank`** (int, default: `0`) Zero-based index of the current node. Must be in the range `[0, world-size)`.
 
+## Resume and commit safety
+
+At startup, each canonical `hs_<index>.safetensors` file is checked before its
+index enters the resume set. Empty or corrupt files, directories, symlinks,
+missing tensors, non-floating or non-finite hidden states, invalid
+`[seq_len, num_layers, hidden_size]` shapes, out-of-range indices, and token IDs
+that do not match the current dataset are moved to `<output>/invalid/`. The
+quarantined name
+contains a reason and UTC timestamp, and a durable JSON evidence record preserves
+the original path, quarantine path, timestamp, and full validation error. The
+canonical name is then free for regeneration; invalid evidence is never silently
+deleted.
+
+Final cache commits use a persistent per-target cooperative file lock. A writer
+may create a missing target or treat a byte-identical target as an idempotent
+success. A different existing target raises an explicit conflict instead of being
+silently overwritten. The only replacement exception is an explicitly validated
+in-place multimodal prefix truncation.
+
+Connector responses may not point at another managed
+`hs_<index>.safetensors` sibling of the requested target, including when a broad
+source root contains the output root. The current target itself is accepted only
+for the explicit in-place truncation case. Use a separate
+`--source-hidden-states-root` for connector staging when possible.
+
+Source consumption is version-bound. Cross-device copies and post-validation
+deletes verify that the source bytes did not change; a replacement is preserved
+and the sample fails instead of deleting or committing the wrong version.
+
 ## Full Example
 
 ```bash
@@ -64,6 +95,7 @@ python scripts/data_generation_offline.py \
   --endpoint http://localhost:8000/v1 \
   --preprocessed-data ./preprocessed_dataset \
   --output ./hidden_states \
+  --source-hidden-states-root /shared/vllm_hidden_states \
   --concurrency 64 \
   --validate-outputs
 ```

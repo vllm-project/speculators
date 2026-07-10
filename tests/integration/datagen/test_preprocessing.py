@@ -2,8 +2,10 @@
 Unit tests for the preprocessing module in the Speculators data generation.
 """
 
+import asyncio
 import json
 import re
+from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import patch
 
@@ -22,16 +24,25 @@ from speculators.data_generation.preprocessing import (
     _adapt_conv_for_vllm,
     _create_loss_mask_from_offsets,
     _detect_assistant_pattern,
+    _expand_loss_mask_for_multimodal_tokens,
+    _get_image_token_ids,
+    _get_vision_boundary_token_ids,
     _load_hf_dataset,
     _normalize_conversation,
     _preprocess_batch,
     _supports_assistant_mask,
+    _validate_multimodal_truncation_boundary,
     build_eagle3_dataset,
     get_tokenizer,
     load_and_preprocess_dataset,
     load_processor,
     load_raw_dataset,
 )
+from speculators.data_generation.vllm_client import (
+    generate_hidden_states,
+    generate_hidden_states_async,
+)
+from speculators.train.data import build_client_item
 
 # Test model from HuggingFace with chat template
 # Using Qwen2-0.5B-Instruct: small (0.5B params), fast model with proper
@@ -128,6 +139,45 @@ class _NoProcessorTruncationMultimodalProcessor(_DummyMultimodalProcessor):
             }
 
         return super().apply_chat_template(*args, **kwargs)
+
+
+class _RejectingPretokenizedMultimodalProcessor(_DummyMultimodalProcessor):
+    """Prove that pre-tokenized rows never enter multimodal rendering."""
+
+    def __call__(self, *args, **kwargs):
+        raise AssertionError("pre-tokenized rows must not call the processor")
+
+    def apply_chat_template(self, *args, **kwargs):
+        raise AssertionError("pre-tokenized rows must not render a chat template")
+
+
+class _ToolRecordingMultimodalProcessor(_DummyMultimodalProcessor):
+    def __init__(self):
+        super().__init__()
+        self.template_tools: list[tuple[bool, object]] = []
+
+    def apply_chat_template(self, *args, **kwargs):
+        self.template_tools.append(
+            (bool(kwargs.get("tokenize")), kwargs.get("tools"))
+        )
+        return super().apply_chat_template(*args, **kwargs)
+
+
+class _BoundaryTokenTokenizer:
+    unk_token_id = -1
+    image_token_id = 999
+    vision_start_token_id = 201
+    image_end_token_id = 204
+    vision_start_token = "<custom_vision_start>"
+
+    def convert_tokens_to_ids(self, token):
+        return {
+            "<|image_pad|>": 999,
+            "<|vision_start|>": 210,
+            "<|vision_end|>": 211,
+            "<custom_vision_start>": 212,
+            "<custom_vision_end>": 213,
+        }.get(token, self.unk_token_id)
 
 
 # Tests for _normalize_conversation
@@ -352,6 +402,48 @@ def test_adapt_conv_for_vllm_all_content_formats():
             "image_url": {"url": "http://path/to/img"},
         },
     ]
+
+
+@pytest.mark.sanity
+def test_adapt_conv_for_vllm_percent_encodes_local_media_path(tmp_path):
+    image_path = tmp_path / "图 像#100%.png"
+    image_path.write_bytes(b"image")
+    conv = [
+        {
+            "role": "user",
+            "content": [{"type": "image", "path": str(image_path)}],
+        }
+    ]
+
+    result = _adapt_conv_for_vllm(conv)
+
+    image_url = result[0]["content"][0]["image_url"]["url"]
+    assert image_url == image_path.resolve().as_uri()
+    assert " " not in image_url
+    assert "#" not in image_url
+    assert "%25" in image_url
+
+
+@pytest.mark.sanity
+@pytest.mark.parametrize(
+    "media_ref",
+    [
+        "file://remote.example/tmp/image.png",
+        "file:///tmp/image.png?version=1",
+        "file:///tmp/image.png#fragment",
+        "ftp://example.com/image.png",
+    ],
+)
+def test_adapt_conv_for_vllm_rejects_ambiguous_local_media_uri(media_ref):
+    conv = [
+        {
+            "role": "user",
+            "content": [{"type": "image", "image": media_ref}],
+        }
+    ]
+
+    with pytest.raises(ValueError, match="Unsupported|query/fragment"):
+        _adapt_conv_for_vllm(conv)
 
 
 @pytest.mark.sanity
@@ -1436,6 +1528,167 @@ def test_preprocess_batch_tools_with_hf_assistant_mask():
 
 
 @pytest.mark.sanity
+def test_multimodal_preprocess_uses_same_tools_for_render_and_tokenization():
+    """Image expansion must render the exact tool-aware prompt that was tokenized."""
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "describe_image",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+    examples = {
+        "messages": [
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Describe"},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": _TINY_IMAGE_DATA_URL},
+                        },
+                    ],
+                },
+                {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "A cat."}],
+                },
+            ]
+        ],
+        "tools": [json.dumps(tools)],
+    }
+    processor = _ToolRecordingMultimodalProcessor()
+
+    results = _preprocess_batch(
+        examples,
+        cast("PreTrainedTokenizerBase", processor),
+        max_length=64,
+        assistant_pattern=None,
+    )
+
+    assert processor.template_tools == [(False, tools), (True, tools)]
+    assert results["input_ids"][0].tolist() == [101, 999, 999, 999, 103]
+    assert results["loss_mask"][0].tolist() == [0, 0, 0, 0, 1]
+    assert results["tools"] == [
+        json.dumps(tools, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    ]
+
+
+@pytest.mark.sanity
+def test_multimodal_dataset_preserves_canonical_tools_for_client():
+    """Saved MM rows retain the exact tool schema needed for chat re-tokenization."""
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "describe_image",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+    dataset = HFDataset.from_dict(
+        {
+            "messages": [
+                [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Describe"},
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": _TINY_IMAGE_DATA_URL},
+                            },
+                        ],
+                    },
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "A cat."}],
+                    },
+                ]
+            ],
+            "tools": [json.dumps(tools)],
+        }
+    )
+
+    result = build_eagle3_dataset(
+        dataset,
+        cast("PreTrainedTokenizerBase", _ToolRecordingMultimodalProcessor()),
+        max_length=64,
+        num_proc=1,
+    )
+    canonical_tools = json.dumps(
+        tools, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+
+    assert result[0]["tools"] == canonical_tools
+    client_item = build_client_item(result[0])
+    assert client_item["tools"] == json.loads(canonical_tools)
+    assert "messages" in client_item
+
+    response = {
+        "prompt_token_ids": client_item["input_ids"],
+        "kv_transfer_params": {"hidden_states_path": "/tmp/hs_tools.safetensors"},
+    }
+
+    class _SyncChatCompletions:
+        def __init__(self):
+            self.calls = []
+
+        def create(self, **kwargs):
+            self.calls.append(kwargs)
+            return response
+
+    class _AsyncChatCompletions:
+        def __init__(self):
+            self.calls = []
+
+        async def create(self, **kwargs):
+            self.calls.append(kwargs)
+            return response
+
+    sync_completions = _SyncChatCompletions()
+    sync_client = SimpleNamespace(
+        chat=SimpleNamespace(completions=sync_completions)
+    )
+    async_completions = _AsyncChatCompletions()
+    async_client = SimpleNamespace(
+        chat=SimpleNamespace(completions=async_completions)
+    )
+
+    assert (
+        generate_hidden_states(
+            cast("Any", sync_client), "dummy-model", client_item, timeout=None
+        )
+        == "/tmp/hs_tools.safetensors"
+    )
+    assert (
+        asyncio.run(
+            generate_hidden_states_async(
+                cast("Any", async_client), "dummy-model", client_item, timeout=None
+            )
+        )
+        == "/tmp/hs_tools.safetensors"
+    )
+    assert sync_completions.calls[0]["tools"] == tools
+    assert async_completions.calls[0]["tools"] == tools
+
+
+@pytest.mark.sanity
+def test_multimodal_loss_mask_rejects_expanded_ids_ending_before_source_tail():
+    """Processor shortening must not silently discard the assistant-mask tail."""
+    with pytest.raises(ValueError, match="ended before all source tokens"):
+        _expand_loss_mask_for_multimodal_tokens(
+            input_ids=[101, 999, 103],
+            loss_mask=torch.tensor([0, 0, 1], dtype=torch.long),
+            expanded_input_ids=[101, 999],
+            image_token_ids={999},
+        )
+
+
+@pytest.mark.sanity
 def test_normalize_conversation_tool_calls_with_empty_content():
     """Test that an assistant turn with tool_calls and no text content is normalized."""
     tool_calls = [
@@ -1506,6 +1759,41 @@ def test_build_eagle3_dataset_multimodal_expands_image_tokens_and_preserves_mess
 
 
 @pytest.mark.sanity
+def test_pretokenized_rows_take_priority_over_multimodal_processor():
+    """Boundary-masked rows stay text-token data even with a VL processor."""
+    dataset = HFDataset.from_dict(
+        {
+            "input_ids": [[10, 11, 12, 13], [1, 2, 3, 4, 5, 6]],
+            "loss_mask": [[0, 0, 1, 1], [0, 0, 0, 0, 1, 1]],
+            "messages": [[{"role": "user", "content": "review"}]] * 2,
+            "conversations": [[{"from": "human", "value": "review"}]] * 2,
+            "tools": ["[]", "[]"],
+        }
+    )
+
+    result = build_eagle3_dataset(
+        dataset,
+        cast(
+            "PreTrainedTokenizerBase",
+            _RejectingPretokenizedMultimodalProcessor(),
+        ),
+        max_length=4,
+        num_proc=1,
+        assistant_pattern=r"must-not-run",
+        turn_dropout=True,
+        minimum_valid_tokens=1,
+    )
+
+    assert set(result.column_names) == {"input_ids", "loss_mask", "seq_len"}
+    assert len(result) == 1
+    assert result[0]["input_ids"].tolist() == [10, 11, 12, 13]
+    assert result[0]["input_ids"].dtype == torch.long
+    assert result[0]["loss_mask"].tolist() == [0, 0, 1, 1]
+    assert result[0]["loss_mask"].dtype == torch.long
+    assert int(result[0]["seq_len"]) == 4
+
+
+@pytest.mark.sanity
 def test_multimodal_regex_path_truncates_after_image_expansion():
     """Avoid processor-side truncation that can corrupt image token counts."""
     examples = {
@@ -1568,6 +1856,86 @@ def test_multimodal_truncation_rejects_partial_image_block():
             max_length=3,
             assistant_pattern=r"(.+)",
         )
+
+
+@pytest.mark.sanity
+def test_vision_boundary_token_ids_are_separate_from_image_placeholder_ids():
+    tokenizer = _BoundaryTokenTokenizer()
+    processor = SimpleNamespace(
+        tokenizer=tokenizer,
+        image_start_token_index=202,
+        end_of_image_token_id=205,
+        vision_end_token="<custom_vision_end>",
+    )
+
+    image_token_ids = _get_image_token_ids(
+        cast("ProcessorMixin", processor),
+        cast("PreTrainedTokenizerBase", tokenizer),
+    )
+    start_token_ids, end_token_ids = _get_vision_boundary_token_ids(
+        cast("ProcessorMixin", processor),
+        cast("PreTrainedTokenizerBase", tokenizer),
+    )
+
+    assert image_token_ids == {999}
+    assert {201, 202, 210, 212}.issubset(start_token_ids)
+    assert {204, 205, 211, 213}.issubset(end_token_ids)
+    assert image_token_ids.isdisjoint(start_token_ids | end_token_ids)
+
+
+@pytest.mark.sanity
+@pytest.mark.parametrize(
+    ("max_length", "should_reject"),
+    [
+        (0, False),
+        (1, False),
+        (2, True),
+        (3, True),
+        (4, True),
+        (5, False),
+        (6, False),
+    ],
+)
+def test_multimodal_truncation_checks_every_vision_block_cut(
+    max_length,
+    should_reject,
+):
+    input_ids = [10, 20, 30, 30, 21, 11]
+    kwargs = {
+        "input_ids": input_ids,
+        "max_length": max_length,
+        "image_token_ids": {30},
+        "vision_start_token_ids": {20},
+        "vision_end_token_ids": {21},
+    }
+
+    if should_reject:
+        with pytest.raises(ValueError, match="middle of an image token block"):
+            _validate_multimodal_truncation_boundary(**kwargs)
+    else:
+        _validate_multimodal_truncation_boundary(**kwargs)
+
+
+@pytest.mark.sanity
+@pytest.mark.parametrize(
+    ("max_length", "should_reject"),
+    [(0, False), (1, False), (2, True), (3, False), (4, False)],
+)
+def test_multimodal_truncation_preserves_legacy_pad_run_check(
+    max_length,
+    should_reject,
+):
+    kwargs = {
+        "input_ids": [10, 30, 30, 11],
+        "max_length": max_length,
+        "image_token_ids": {30},
+    }
+
+    if should_reject:
+        with pytest.raises(ValueError, match="middle of an image token block"):
+            _validate_multimodal_truncation_boundary(**kwargs)
+    else:
+        _validate_multimodal_truncation_boundary(**kwargs)
 
 
 @pytest.mark.sanity

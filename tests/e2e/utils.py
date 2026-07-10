@@ -234,6 +234,7 @@ def run_data_generation_offline(
     validate_outputs: bool = True,
     timeout: float | None = None,
     fail_on_error: bool = True,
+    source_hidden_states_root: Path | None = None,
 ):
     datagen_cmd = [
         sys.executable,
@@ -254,6 +255,11 @@ def run_data_generation_offline(
 
     if hidden_states_path is not None:
         datagen_cmd += ["--output", str(hidden_states_path)]
+    if source_hidden_states_root is not None:
+        datagen_cmd += [
+            "--source-hidden-states-root",
+            str(source_hidden_states_root),
+        ]
 
     logger.info("Generating hidden states offline: {}", " ".join(datagen_cmd))
     result = subprocess.run(  # noqa: S603

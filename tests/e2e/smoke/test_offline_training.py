@@ -131,6 +131,8 @@ def run_offline_e2e(
 ):
     data_path = tmp_path / "data"
     offline_hidden_states = tmp_path / "offline_hidden_states"
+    vllm_hidden_states = tmp_path / "vllm_hidden_states"
+    vllm_hidden_states.mkdir()
     save_path = tmp_path / "checkpoints"
 
     # Step 1: Prepare data
@@ -139,7 +141,7 @@ def run_offline_e2e(
     with launch_vllm_server_context(
         model,
         port,
-        str(tmp_path / "vllm_hidden_states"),
+        str(vllm_hidden_states),
         max_model_len=seq_length + 1,
         target_layer_ids=target_layer_ids,
         **(vllm_kwargs or {}),
@@ -151,6 +153,7 @@ def run_offline_e2e(
             port,
             max_samples,
             timeout=datagen_timeout,
+            source_hidden_states_root=vllm_hidden_states,
         )
 
     # Step 3: Train using pre-generated hidden states (no live server needed)
