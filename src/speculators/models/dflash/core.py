@@ -483,11 +483,29 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             anchor_pos_in_mask = anchored_block_indices[:: self.block_size]
             domino_loss_mask[:, :: self.block_size] = loss_mask[:, anchor_pos_in_mask]
 
+            # B-AUF+D: truncate L_base at the first greedy prediction error
+            # within each block. L_final retains the full domino_loss_mask so
+            # the GRU receives long-range gradients for hidden-state stabilisation.
+            with torch.no_grad():
+                base_preds_4d = logits.argmax(dim=-1).reshape(
+                    1, num_anchors, self.block_size
+                )
+                targets_4d = targets.reshape(1, num_anchors, self.block_size)
+                mask_4d = domino_loss_mask.reshape(1, num_anchors, self.block_size)
+                errors = (base_preds_4d != targets_4d) & mask_4d
+                error_floats = errors.float()
+                running_errors = error_floats.cumsum(dim=-1)
+                # errors_before_current == 0 keeps the accepted prefix and the
+                # breaker token j* itself; positions strictly after j* are zeroed.
+                errors_before = running_errors - error_floats
+                auf_mask_4d = mask_4d & (errors_before == 0)
+                auf_mask = auf_mask_4d.reshape_as(domino_loss_mask)
+
             domino_decay = "domino" if self.config.shift_label else "dflash"
             base_loss, base_metrics = compute_metrics(
                 logits,
                 targets,
-                domino_loss_mask,
+                auf_mask,            # AUF-truncated: only prefix + breaker
                 self.block_size,
                 gamma=gamma,
                 loss_config=loss_config,
@@ -497,7 +515,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             final_loss, final_metrics = compute_metrics(
                 refined_logits,
                 targets,
-                domino_loss_mask,
+                domino_loss_mask,    # full mask: GRU sees entire block
                 self.block_size,
                 gamma=gamma,
                 loss_config=loss_config,
