@@ -69,7 +69,7 @@ def _build(**kwargs):
 
 
 def test_mrope_section_preserved_and_type_alias_dropped(patch_verifier):
-    """``mrope_section`` is kept; the legacy ``type`` and ``mrope_interleaved`` are removed."""
+    """Keep ``mrope_section``, drop legacy ``type`` and ``mrope_interleaved``."""
     vc = _make_verifier_config(
         rope_parameters={
             "rope_type": "default",
