@@ -51,8 +51,8 @@ NUM_DEPTHS=4
 DOWN_SAMPLE_RATIO=0.7
 DOWN_SAMPLE_RATIO_MIN=0.2
 # GPU assignments (online training needs separate GPUs for vLLM and training)
-VLLM_GPUS="2,3"
-TRAIN_GPUS="4,5"
+VLLM_GPUS="0,1"
+TRAIN_GPUS="2,3"
 NUM_TRAIN_GPUS=2
 # =======================================
 

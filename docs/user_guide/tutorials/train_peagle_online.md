@@ -8,7 +8,7 @@ For a ready-to-run version of this tutorial, see [`examples/train/peagle_qwen3_8
 
 ## Overview
 
-**Time required:** ~5 hours on 4x H100 GPUs (2 for vLLM, 2 for training)
+**Time required:** ~70 minutes on 4x A100 GPUs (2 for vLLM, 2 for training)
 
 **Prerequisites:**
 
