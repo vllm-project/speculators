@@ -158,7 +158,11 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--max-anchors`** (int, default: `256`) Maximum anchor positions for DFlash training.
 
-- **`--dflash-decay-gamma`** (float, default: `4.0`) Decay gamma for DFlash loss weighting.
+- **`--dflash-decay-gamma`** (float, default: `4.0` for DFlash/DSpark; auto-selected for Domino) Decay gamma for position-weighted loss. For Domino (`--projector-type domino`), when not provided, gamma is auto-selected from `--block-size`:
+  - `block_size=8` → `gamma=4`
+  - `block_size=10` → `gamma=5`
+  - `block_size=16` → `gamma=7`
+  Higher gamma flattens the decay, giving more weight to later block positions. An explicit value always overrides the default.
 
 ### Domino-Specific Arguments
 
