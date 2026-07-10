@@ -368,7 +368,6 @@ def test_build_from_config_only_reapplies_draft_attn_impl(tmp_path):
         )
 
     assert built.config.transformer_layer_config._attn_implementation == "sdpa"
-    
 
 
 # ---------------------------------------------------------------------------
