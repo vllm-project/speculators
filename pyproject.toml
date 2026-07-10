@@ -125,7 +125,7 @@ issues = "https://github.com/vllm-project/speculators/issues"
 
 [tool.mypy]
 files = ["src/speculators", "tests"]
-python_version = "3.12"
+python_version = "3.10"
 warn_redundant_casts = true
 warn_unused_ignores = false
 show_error_codes = true
