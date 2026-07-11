@@ -445,7 +445,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             # Shift right by 1 so verifier_logits[i] predicts token at position i
             verifier_logits = torch.roll(verifier_logits, 1, dims=1)
             target_indices = anchored_block_indices + (
-                1 if self.config.projector_type == "domino" else 0
+                1 if self.config.shift_label else 0
             )
             target_indices = target_indices.clamp(max=verifier_logits.shape[1] - 1)
             targets = verifier_logits[:, target_indices]
@@ -583,8 +583,11 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             "final_full_acc_total": final_metrics["full_acc_total"],
             "lambda_base_sum": torch.tensor(lambda_base, device=logits.device),
             "lambda_base_total": ones,
-            **{k: v for k, v in final_metrics.items()
-               if k.startswith("position_") or k.startswith("eal")},
+            **{
+                k: v
+                for k, v in final_metrics.items()
+                if k.startswith(("position_", "eal"))
+            },
         }
 
         # AUF observability: mean j* (first error position) - proxy for acceptance

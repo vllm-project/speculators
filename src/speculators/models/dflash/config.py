@@ -1,6 +1,6 @@
 from typing import Any, Literal
 
-from pydantic import Field, field_serializer, field_validator
+from pydantic import Field, field_serializer, field_validator, model_validator
 from transformers import AutoConfig, PretrainedConfig
 from transformers.models.qwen3.modeling_qwen3 import (
     Qwen3Config,
@@ -119,6 +119,18 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
         "truncated; the final branch always uses the full mask. "
         "(default: False)",
     )
+    shift_label: bool | None = Field(
+        default=None,
+        description="Shift training targets by +1 position. When None (default), "
+        "automatically set to True for projector_type='domino' and False otherwise. "
+        "Stored in the checkpoint config so inference can align predictions.",
+    )
+
+    @model_validator(mode="after")
+    def _derive_shift_label(self) -> "DFlashSpeculatorConfig":
+        if self.shift_label is None:
+            object.__setattr__(self, "shift_label", self.projector_type == "domino")
+        return self
 
     @field_serializer("transformer_layer_config")
     def serialize_transformer_config(self, value: PretrainedConfig) -> dict:
