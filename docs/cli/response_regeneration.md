@@ -35,6 +35,8 @@ Orchestrates the entire pipeline: starts a vLLM server (with optional data/tenso
 
 - **`--keep-server`** (flag) Don't stop the vLLM server after processing completes.
 
+- **`--tool-call-parser`** (str) vLLM tool-call parser (e.g. `hermes`, `llama3_json`). Adds `--enable-auto-tool-choice --tool-call-parser` to the server; required for tool-call regeneration, otherwise tool calls arrive as raw text and are not regenerated as tools.
+
 All other arguments are passed through to `script.py`.
 
 ### Full Example
