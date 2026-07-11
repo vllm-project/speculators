@@ -251,7 +251,8 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         base_mask: torch.Tensor,
         num_anchors: int,
         block_size: int,
-    ) -> torch.Tensor:
+        return_j_star: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """Compute the Accept-Until-Fail (AUF) loss mask for the base branch.
 
         Truncates the cross-entropy support at the first greedy prediction error
@@ -272,13 +273,23 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             base_mask: Boolean validity mask [1, T] (e.g. domino_loss_mask).
             num_anchors: Number of anchor blocks.
             block_size: Tokens per block.
+            return_j_star: If True, also return j* (first error position) per block.
 
         Returns:
-            Boolean mask [1, T] with the same shape as base_mask, zeroed out
-            for all positions strictly after the first error in each block.
+            If return_j_star is False:
+                Boolean mask [1, T] with the same shape as base_mask, zeroed out
+                for all positions strictly after the first error in each block.
+            If return_j_star is True:
+                Tuple of (mask, j_star) where j_star is [num_anchors] tensor
+                containing the first error position (0-indexed) per block.
+                j* = block_size means no error (all accepted).
         """
-        base_preds_4d = logits.detach().argmax(dim=-1).reshape(1, num_anchors, block_size)
-        target_ids_4d = targets.detach().argmax(dim=-1).reshape(1, num_anchors, block_size)
+        base_preds_4d = (
+            logits.detach().argmax(dim=-1).reshape(1, num_anchors, block_size)
+        )
+        target_ids_4d = (
+            targets.detach().argmax(dim=-1).reshape(1, num_anchors, block_size)
+        )
         mask_4d = base_mask.reshape(1, num_anchors, block_size)
         errors = (base_preds_4d != target_ids_4d) & mask_4d
         error_floats = errors.float()
@@ -286,7 +297,19 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         # errors_before == 0: keep accepted prefix + breaker token j*
         # errors_before >= 1: zero the unreachable suffix
         errors_before = running_errors - error_floats
-        return (mask_4d & (errors_before == 0)).reshape_as(base_mask)
+        auf_mask = (mask_4d & (errors_before == 0)).reshape_as(base_mask)
+
+        if not return_j_star:
+            return auf_mask
+
+        # j* = first error position per block (0-indexed within block)
+        # If no error, j* = block_size (all positions accepted)
+        first_error = errors.float().argmax(dim=-1)  # [1, num_anchors]
+        has_error = errors.any(dim=-1)  # [1, num_anchors]
+        j_star = torch.where(
+            has_error, first_error, torch.full_like(first_error, block_size)
+        )
+        return auf_mask, j_star.squeeze(0)  # [num_anchors]
 
     @property
     def mask_token_id(self) -> int:
@@ -421,7 +444,9 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             )
             # Shift right by 1 so verifier_logits[i] predicts token at position i
             verifier_logits = torch.roll(verifier_logits, 1, dims=1)
-            target_indices = anchored_block_indices + (1 if self.config.projector_type == "domino" else 0)
+            target_indices = anchored_block_indices + (
+                1 if self.config.projector_type == "domino" else 0
+            )
             target_indices = target_indices.clamp(max=verifier_logits.shape[1] - 1)
             targets = verifier_logits[:, target_indices]
             # shape: [1, num_anchors*block_size, draft_vocab_size]
@@ -471,7 +496,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         loss_mask: torch.Tensor,
         aligned_loss_mask: torch.Tensor,
         anchored_block_indices: torch.Tensor,
-        loss_config: "LossConfig",
+        loss_config: "LossConfig | None",
         gamma: float,
         normalize_by_decay: bool,
         global_step: int,
@@ -506,38 +531,67 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         anchor_pos_in_mask = anchored_block_indices[:: self.block_size]
         domino_loss_mask[:, :: self.block_size] = loss_mask[:, anchor_pos_in_mask]
 
-        # B-AUF+D (arXiv 2607.01893): L_final keeps full mask; L_base is optionally truncated.
+        # B-AUF+D (arXiv 2607.01893): L_final keeps full mask;
+        # L_base is optionally truncated.
+        j_star = None
         if self.config.domino_auf:
-            base_mask = self._auf_mask(
-                logits, targets, domino_loss_mask, num_anchors, self.block_size
+            base_mask, j_star = self._auf_mask(
+                logits,
+                targets,
+                domino_loss_mask,
+                num_anchors,
+                self.block_size,
+                return_j_star=True,
             )
         else:
             base_mask = domino_loss_mask
 
         base_loss, base_metrics = compute_metrics(
-            logits, targets, base_mask, self.block_size,
-            gamma=gamma, loss_config=loss_config,
-            normalize_by_decay=normalize_by_decay, decay_mode="domino",
+            logits,
+            targets,
+            base_mask,
+            self.block_size,
+            gamma=gamma,
+            loss_config=loss_config,
+            normalize_by_decay=normalize_by_decay,
+            decay_mode="domino",
         )
         final_loss, final_metrics = compute_metrics(
-            refined_logits, targets, domino_loss_mask, self.block_size,
-            gamma=gamma, loss_config=loss_config,
-            normalize_by_decay=normalize_by_decay, decay_mode="domino",
+            refined_logits,
+            targets,
+            domino_loss_mask,
+            self.block_size,
+            gamma=gamma,
+            loss_config=loss_config,
+            normalize_by_decay=normalize_by_decay,
+            decay_mode="domino",
         )
         loss = (1.0 - lambda_base) * final_loss + lambda_base * base_loss
+
+        ones = torch.tensor(1.0, device=logits.device)
         metrics = {
             "loss_sum": loss.detach().clone(),
-            "loss_total": torch.tensor(1.0, device=logits.device),
+            "loss_total": ones,
             "base_loss_sum": base_loss.detach().clone(),
-            "base_loss_total": torch.tensor(1.0, device=logits.device),
+            "base_loss_total": ones,
             "full_acc_sum": base_metrics["full_acc_sum"],
             "full_acc_total": base_metrics["full_acc_total"],
             "final_loss_sum": final_loss.detach().clone(),
-            "final_loss_total": torch.tensor(1.0, device=logits.device),
+            "final_loss_total": ones,
             "final_full_acc_sum": final_metrics["full_acc_sum"],
             "final_full_acc_total": final_metrics["full_acc_total"],
+            "lambda_base_sum": torch.tensor(lambda_base, device=logits.device),
+            "lambda_base_total": ones,
             **{k: v for k, v in final_metrics.items() if k.startswith("position_")},
         }
+
+        # AUF observability: mean j* (first error position) - proxy for acceptance
+        if j_star is not None:
+            metrics["j_star_sum"] = j_star.float().sum()
+            metrics["j_star_total"] = torch.tensor(
+                float(j_star.numel()), device=logits.device
+            )
+
         return loss, metrics
 
     @conditional_torch_compile

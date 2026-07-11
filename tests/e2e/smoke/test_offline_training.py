@@ -54,8 +54,8 @@ MM_MODEL = "Qwen/Qwen3-VL-2B-Instruct"
                 "3",
                 "--projector-type",
                 "domino",
-                "--domino-lambda-decay-steps",
-                "100",
+                "--domino-lambda-decay-ratio",
+                "1.0",
             ],
             [1, 13, 25],
         ),  # Domino (DFlash + Domino correction head)

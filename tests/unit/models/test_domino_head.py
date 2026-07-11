@@ -1,4 +1,5 @@
 import copy
+from typing import Literal
 
 import pytest
 import torch
@@ -8,6 +9,7 @@ from speculators import SpeculatorsConfig, VerifierConfig
 from speculators.models.dflash import DFlashSpeculatorConfig
 from speculators.models.dflash.core import DFlashDraftModel
 from speculators.models.dflash.domino import DominoHead
+from speculators.models.metrics import resolve_loss_config
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 from tests.conftest import requires_cuda
 from tests.integration.conftest import TINY_QWEN3_CONFIG, _fill_nan_weights
@@ -148,7 +150,7 @@ class TestDominoHeadForward:
         assert head.embed_proj[2].weight.grad is not None
 
 
-class TestDominoHeadShiftLabel:
+class TestDominoHeadSuffixStart:
     HIDDEN_SIZE = 64
     GRU_DIM = 128
     EMB_DIM = 32
@@ -180,25 +182,9 @@ class TestDominoHeadShiftLabel:
         )
         return hidden, logits, prev_ids, embed_tokens
 
-    # suffix_start = pure_draft_prefix_len
-    # if not shift_label: suffix_start = 1 + pure_draft_prefix_len
-    # (see core.py DFlashDraftModel._backbone_forward)
-    @pytest.mark.parametrize(
-        ("pure_draft_prefix_len", "shift_label"),
-        [
-            (2, True),
-            (2, False),
-            (0, True),
-            (0, False),
-        ],
-    )
-    def test_suffix_start_applied_via_domino_head(
-        self, head, inputs, pure_draft_prefix_len, shift_label
-    ):
+    @pytest.mark.parametrize("suffix_start", [0, 1, 2, 3])
+    def test_suffix_start_applied_via_domino_head(self, head, inputs, suffix_start):
         hidden, logits, prev_ids, embed_tokens = inputs
-        suffix_start = (
-            pure_draft_prefix_len if shift_label else 1 + pure_draft_prefix_len
-        )
         out = head(
             hidden,
             logits,
@@ -206,7 +192,8 @@ class TestDominoHeadShiftLabel:
             suffix_start=suffix_start,
             embed_tokens=embed_tokens,
         )
-        assert torch.equal(out[:, :, :suffix_start], logits[:, :, :suffix_start])
+        if suffix_start > 0:
+            assert torch.equal(out[:, :, :suffix_start], logits[:, :, :suffix_start])
         if suffix_start < self.BLOCK_SIZE:
             assert not torch.equal(
                 out[:, :, suffix_start:], logits[:, :, suffix_start:]
@@ -218,10 +205,9 @@ class TestDominoHeadShiftLabel:
 # ---------------------------------------------------------------------------
 
 
-def _make_tiny_domino_model(
+def _make_tiny_model(
     block_size: int = 4,
-    max_anchors: int = 8,
-    shift_label: bool = True,
+    projector_type: Literal["dflash", "domino"] = "domino",
     lambda_base_start: float = 1.0,
     lambda_base_decay_ratio: float = 0.0,
     device: str = "cuda:0",
@@ -232,11 +218,9 @@ def _make_tiny_domino_model(
         transformer_layer_config=transformer_config,
         draft_vocab_size=64,
         block_size=block_size,
-        max_anchors=max_anchors,
         aux_hidden_state_layer_ids=[0, 1, 2],
         mask_token_id=0,
-        projector_type="domino",
-        shift_label=shift_label,
+        projector_type=projector_type,
         lambda_base_start=lambda_base_start,
         lambda_base_decay_ratio=lambda_base_decay_ratio,
         speculators_config=SpeculatorsConfig(
@@ -287,54 +271,49 @@ def _make_synthetic_data(
 
 @requires_cuda
 class TestBackboneTargetAlignment:
-    def test_shift_targets_true_shifts_by_one(self):
+    def test_domino_shifts_targets_by_one(self):
         torch.manual_seed(42)
-        model = _make_tiny_domino_model(block_size=4, max_anchors=4)
+        model = _make_tiny_model(block_size=4, projector_type="domino")
         data = _make_synthetic_data(seq_len=32, loss_mask_all=False)
-        loss_mask = data["loss_mask"]
 
-        _, _, shifted_targets, _, shifted_anchored_idx = model._backbone_forward(
+        _, _, targets, _, anchored_idx = model._backbone_forward(
             data["hidden_states"],
             data["input_ids"],
-            loss_mask,
+            data["loss_mask"],
             data["verifier_last_hidden_states"],
             data["document_ids"],
-            shift_targets=True,
         )
 
         bs = model.block_size
-        anchor_indices = shifted_anchored_idx[::bs]
-        pos0_shifted = shifted_targets[:, ::bs, :]
+        anchor_indices = anchored_idx[::bs]
+        pos0_targets = targets[:, ::bs, :]
 
         raw_logits = model.verifier_lm_head(
             model.verifier_norm(data["verifier_last_hidden_states"])
         )
         rolled_logits = torch.roll(raw_logits, 1, dims=1)
-        expected_shifted = rolled_logits[:, anchor_indices + 1, :]
+        expected = rolled_logits[:, anchor_indices + 1, :]
 
-        assert torch.equal(pos0_shifted, expected_shifted), (
-            "With shift_targets=True, position 0 targets must equal "
-            "verifier_logits at anchor+1"
+        assert torch.equal(pos0_targets, expected), (
+            "Domino position 0 targets must equal verifier_logits at anchor+1"
         )
 
-    def test_shift_targets_false_no_shift(self):
+    def test_dflash_does_not_shift_targets(self):
         torch.manual_seed(42)
-        model = _make_tiny_domino_model(block_size=4, max_anchors=4)
+        model = _make_tiny_model(block_size=4, projector_type="dflash")
         data = _make_synthetic_data(seq_len=32, loss_mask_all=False)
-        loss_mask = data["loss_mask"]
 
-        _, _, unshifted_targets, _, unshifted_anchored_idx = model._backbone_forward(
+        _, _, targets, _, anchored_idx = model._backbone_forward(
             data["hidden_states"],
             data["input_ids"],
-            loss_mask,
+            data["loss_mask"],
             data["verifier_last_hidden_states"],
             data["document_ids"],
-            shift_targets=False,
         )
 
         bs = model.block_size
-        anchor_indices = unshifted_anchored_idx[::bs]
-        pos0_unshifted = unshifted_targets[:, ::bs, :]
+        anchor_indices = anchored_idx[::bs]
+        pos0_targets = targets[:, ::bs, :]
 
         raw_logits = model.verifier_lm_head(
             model.verifier_norm(data["verifier_last_hidden_states"])
@@ -342,18 +321,17 @@ class TestBackboneTargetAlignment:
         rolled_logits = torch.roll(raw_logits, 1, dims=1)
         expected = rolled_logits[:, anchor_indices, :]
 
-        assert torch.equal(pos0_unshifted, expected), (
-            "With shift_targets=False, position 0 targets must equal "
-            "verifier_logits at anchor positions"
+        assert torch.equal(pos0_targets, expected), (
+            "DFlash position 0 targets must equal verifier_logits at anchor"
         )
 
-    def test_shift_targets_true_oob_clamped_and_masked(self):
+    def test_domino_oob_clamped_and_masked(self):
         torch.manual_seed(42)
         block_size = 8
         seq_len = 32
-        model = _make_tiny_domino_model(block_size=block_size, max_anchors=4)
+        model = _make_tiny_model(block_size=block_size, projector_type="domino")
         loss_mask = torch.ones(1, seq_len, dtype=torch.bfloat16, device="cuda:0")
-        loss_mask[:, -(block_size - 1) :] = 0  # force anchors near the end
+        loss_mask[:, -(block_size - 1) :] = 0
         data = _make_synthetic_data(seq_len=seq_len, loss_mask_all=False)
         data["loss_mask"] = loss_mask
 
@@ -363,14 +341,9 @@ class TestBackboneTargetAlignment:
             loss_mask,
             data["verifier_last_hidden_states"],
             data["document_ids"],
-            shift_targets=True,
         )
 
-        # Positions where anchored_block_indices + 1 >= verifier_logits.shape[1]
-        # must have aligned_loss_mask == 0
-        max_idx = (
-            seq_len - 1
-        )  # verifier_logits shape is [1, seq_len, V], indexed 0..seq_len-1
+        max_idx = seq_len - 1
         shifted = anchored_idx + 1
         oob = shifted >= max_idx
         if oob.any():
@@ -386,9 +359,9 @@ class TestBackboneTargetAlignment:
 
 @requires_cuda
 class TestDominoLossMask:
-    def test_position_zero_in_shift_label_true(self):
+    def test_domino_enables_position_zero(self):
         torch.manual_seed(42)
-        model = _make_tiny_domino_model(block_size=4, max_anchors=4, shift_label=True)
+        model = _make_tiny_model(block_size=4, projector_type="domino")
         data = _make_synthetic_data(seq_len=32, loss_mask_all=False)
         loss_mask = data["loss_mask"]
 
@@ -398,47 +371,38 @@ class TestDominoLossMask:
             loss_mask,
             data["verifier_last_hidden_states"],
             data["document_ids"],
-            shift_targets=True,
         )
 
         bs = model.block_size
 
-        # aligned_loss_mask has position 0 zeroed
         assert (aligned_mask[:, ::bs] == 0).all(), (
             "aligned_loss_mask must zero position 0 of every block"
         )
 
-        # Construct domino_loss_mask the same way forward() does
         domino_mask = aligned_mask.clone()
         anchor_pos = anchored_idx[::bs]
         domino_mask[:, ::bs] = loss_mask[:, anchor_pos]
 
-        # With shift_label=True and loss_mask=1 at anchors, position 0 must be unmasked
         assert (domino_mask[:, ::bs] != 0).any(), (
-            "domino_loss_mask must include position 0 when shift_label=True"
+            "domino_loss_mask must include position 0 (targets are shifted)"
         )
 
-    def test_position_zero_excluded_when_shift_label_false(self):
+    def test_dflash_zeros_position_zero(self):
         torch.manual_seed(42)
-        model = _make_tiny_domino_model(block_size=4, max_anchors=4, shift_label=False)
+        model = _make_tiny_model(block_size=4, projector_type="dflash")
         data = _make_synthetic_data(seq_len=32, loss_mask_all=False)
-        loss_mask = data["loss_mask"]
 
-        _, _, _, aligned_mask, anchored_idx = model._backbone_forward(
+        _, _, _, aligned_mask, _ = model._backbone_forward(
             data["hidden_states"],
             data["input_ids"],
-            loss_mask,
+            data["loss_mask"],
             data["verifier_last_hidden_states"],
             data["document_ids"],
-            shift_targets=True,
         )
 
         bs = model.block_size
-
-        # When shift_label=False, domino_loss_mask = aligned_loss_mask
-        # Position 0 must still be zero
         assert (aligned_mask[:, ::bs] == 0).all(), (
-            "With shift_label=False, domino_loss_mask must still zero position 0"
+            "DFlash aligned_loss_mask must zero position 0"
         )
 
 
@@ -451,22 +415,20 @@ class TestDominoLossMask:
 class TestLambdaBaseDecay:
     def test_decay_ratio_zero_no_decay(self):
         torch.compiler.reset()
-        model = _make_tiny_domino_model(
+        model = _make_tiny_model(
             block_size=4,
-            max_anchors=4,
             lambda_base_start=1.0,
             lambda_base_decay_ratio=0.0,
         )
         data = _make_synthetic_data(seq_len=32, loss_mask_all=False)
 
-        loss_mask = data["loss_mask"]
-
         _, _, metrics = model(
             data["hidden_states"],
             data["input_ids"],
-            loss_mask,
+            data["loss_mask"],
             data["verifier_last_hidden_states"],
             data["document_ids"],
+            loss_config=resolve_loss_config("ce"),
             global_step=1000,
             total_steps=2000,
         )
@@ -480,9 +442,8 @@ class TestLambdaBaseDecay:
     def test_decay_ratio_positive_decays(self):
         torch.compiler.reset()
         total_steps = 200
-        model = _make_tiny_domino_model(
+        model = _make_tiny_model(
             block_size=4,
-            max_anchors=4,
             lambda_base_start=1.0,
             lambda_base_decay_ratio=0.5,
         )
@@ -496,6 +457,7 @@ class TestLambdaBaseDecay:
             loss_mask,
             data["verifier_last_hidden_states"],
             data["document_ids"],
+            loss_config=resolve_loss_config("ce"),
             global_step=100,
             total_steps=total_steps,
         )
@@ -509,9 +471,8 @@ class TestLambdaBaseDecay:
     def test_decay_midpoint_loss_is_blend(self):
         torch.compiler.reset()
         total_steps = 200
-        model = _make_tiny_domino_model(
+        model = _make_tiny_model(
             block_size=4,
-            max_anchors=4,
             lambda_base_start=1.0,
             lambda_base_decay_ratio=0.5,
         )
@@ -525,6 +486,7 @@ class TestLambdaBaseDecay:
             loss_mask,
             data["verifier_last_hidden_states"],
             data["document_ids"],
+            loss_config=resolve_loss_config("ce"),
             global_step=50,
             total_steps=total_steps,
         )
