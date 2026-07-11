@@ -461,6 +461,85 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
 
         return hidden, logits, targets, aligned_loss_mask, anchored_block_indices
 
+    def _compute_domino_metrics(
+        self,
+        *,
+        hidden: torch.Tensor,
+        logits: torch.Tensor,
+        targets: torch.Tensor,
+        input_ids: torch.Tensor,
+        loss_mask: torch.Tensor,
+        aligned_loss_mask: torch.Tensor,
+        anchored_block_indices: torch.Tensor,
+        loss_config: "LossConfig",
+        gamma: float,
+        normalize_by_decay: bool,
+        global_step: int,
+        total_steps: int,
+    ) -> tuple[torch.Tensor, dict]:
+        """Compute Domino dual-branch loss and metrics."""
+        decay_ratio = self.config.lambda_base_decay_ratio
+        if decay_ratio > 0 and total_steps > 0:
+            decay_steps = int(total_steps * decay_ratio)
+            progress = min(global_step / decay_steps, 1.0)
+            lambda_base = self.config.lambda_base_start * (1.0 - progress)
+            lambda_base = max(0.0, min(1.0, lambda_base))
+        else:
+            lambda_base = self.config.lambda_base_start
+
+        num_anchors = hidden.shape[1] // self.block_size
+        hidden_4d = hidden.reshape(1, num_anchors, self.block_size, -1)
+        base_logits_4d = logits.reshape(1, num_anchors, self.block_size, -1)
+
+        prev_token_ids_4d = input_ids[:, anchored_block_indices].reshape(
+            1, num_anchors, self.block_size
+        )
+        refined_logits = self.domino_head(
+            hidden_states_4d=hidden_4d,
+            base_logits_4d=base_logits_4d,
+            prev_token_ids=prev_token_ids_4d,
+            suffix_start=self.config.pure_draft_prefix_len,
+            embed_tokens=self.embed_tokens,
+        ).reshape(1, num_anchors * self.block_size, -1)
+
+        domino_loss_mask = aligned_loss_mask.clone()
+        anchor_pos_in_mask = anchored_block_indices[:: self.block_size]
+        domino_loss_mask[:, :: self.block_size] = loss_mask[:, anchor_pos_in_mask]
+
+        # B-AUF+D (arXiv 2607.01893): L_final keeps full mask; L_base is optionally truncated.
+        if self.config.domino_auf:
+            base_mask = self._auf_mask(
+                logits, targets, domino_loss_mask, num_anchors, self.block_size
+            )
+        else:
+            base_mask = domino_loss_mask
+
+        base_loss, base_metrics = compute_metrics(
+            logits, targets, base_mask, self.block_size,
+            gamma=gamma, loss_config=loss_config,
+            normalize_by_decay=normalize_by_decay, decay_mode="domino",
+        )
+        final_loss, final_metrics = compute_metrics(
+            refined_logits, targets, domino_loss_mask, self.block_size,
+            gamma=gamma, loss_config=loss_config,
+            normalize_by_decay=normalize_by_decay, decay_mode="domino",
+        )
+        loss = (1.0 - lambda_base) * final_loss + lambda_base * base_loss
+        metrics = {
+            "loss_sum": loss.detach().clone(),
+            "loss_total": torch.tensor(1.0, device=logits.device),
+            "base_loss_sum": base_loss.detach().clone(),
+            "base_loss_total": torch.tensor(1.0, device=logits.device),
+            "full_acc_sum": base_metrics["full_acc_sum"],
+            "full_acc_total": base_metrics["full_acc_total"],
+            "final_loss_sum": final_loss.detach().clone(),
+            "final_loss_total": torch.tensor(1.0, device=logits.device),
+            "final_full_acc_sum": final_metrics["full_acc_sum"],
+            "final_full_acc_total": final_metrics["full_acc_total"],
+            **{k: v for k, v in final_metrics.items() if k.startswith("position_")},
+        }
+        return loss, metrics
+
     @conditional_torch_compile
     def forward(
         self,
@@ -496,83 +575,20 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         draft_tokens = torch.argmax(logits, dim=-1)
 
         if self.projector_type == "domino":
-            decay_ratio = self.config.lambda_base_decay_ratio
-            if decay_ratio > 0 and total_steps > 0:
-                decay_steps = int(total_steps * decay_ratio)
-                progress = min(global_step / decay_steps, 1.0)
-                lambda_base = self.config.lambda_base_start * (1.0 - progress)
-                lambda_base = max(0.0, min(1.0, lambda_base))
-            else:
-                lambda_base = self.config.lambda_base_start
-
-            num_anchors = hidden.shape[1] // self.block_size
-            hidden_4d = hidden.reshape(1, num_anchors, self.block_size, -1)
-            base_logits_4d = logits.reshape(1, num_anchors, self.block_size, -1)
-
-            suffix_start = self.config.pure_draft_prefix_len
-
-            prev_token_ids = input_ids[:, anchored_block_indices]
-            prev_token_ids_4d = prev_token_ids.reshape(1, num_anchors, self.block_size)
-
-            refined_logits_4d = self.domino_head(
-                hidden_states_4d=hidden_4d,
-                base_logits_4d=base_logits_4d,
-                prev_token_ids=prev_token_ids_4d,
-                suffix_start=suffix_start,
-                embed_tokens=self.embed_tokens,
-            )
-            refined_logits = refined_logits_4d.reshape(
-                1, num_anchors * self.block_size, -1
-            )
-
-            domino_loss_mask = aligned_loss_mask.clone()
-            anchor_pos_in_mask = anchored_block_indices[:: self.block_size]
-            domino_loss_mask[:, :: self.block_size] = loss_mask[:, anchor_pos_in_mask]
-
-            # B-AUF+D (arXiv 2607.01893): L_final keeps full mask; L_base is optionally truncated.
-            if self.config.domino_auf:
-                base_mask = self._auf_mask(
-                    logits, targets, domino_loss_mask, num_anchors, self.block_size
-                )
-            else:
-                base_mask = domino_loss_mask
-
-            domino_decay = "domino"
-            base_loss, base_metrics = compute_metrics(
-                logits,
-                targets,
-                base_mask,
-                self.block_size,
-                gamma=gamma,
+            loss, metrics = self._compute_domino_metrics(
+                hidden=hidden,
+                logits=logits,
+                targets=targets,
+                input_ids=input_ids,
+                loss_mask=loss_mask,
+                aligned_loss_mask=aligned_loss_mask,
+                anchored_block_indices=anchored_block_indices,
                 loss_config=loss_config,
-                normalize_by_decay=normalize_by_decay,
-                decay_mode=domino_decay,
-            )
-            final_loss, final_metrics = compute_metrics(
-                refined_logits,
-                targets,
-                domino_loss_mask,    # full mask: GRU sees entire block
-                self.block_size,
                 gamma=gamma,
-                loss_config=loss_config,
                 normalize_by_decay=normalize_by_decay,
-                decay_mode=domino_decay,
+                global_step=global_step,
+                total_steps=total_steps,
             )
-            loss = (1.0 - lambda_base) * final_loss + lambda_base * base_loss
-
-            metrics = {
-                "loss_sum": loss.detach().clone(),
-                "loss_total": torch.tensor(1.0, device=logits.device),
-                "base_loss_sum": base_loss.detach().clone(),
-                "base_loss_total": torch.tensor(1.0, device=logits.device),
-                "full_acc_sum": base_metrics["full_acc_sum"],
-                "full_acc_total": base_metrics["full_acc_total"],
-                "final_loss_sum": final_loss.detach().clone(),
-                "final_loss_total": torch.tensor(1.0, device=logits.device),
-                "final_full_acc_sum": final_metrics["full_acc_sum"],
-                "final_full_acc_total": final_metrics["full_acc_total"],
-                **{k: v for k, v in final_metrics.items() if k.startswith("position_")},
-            }
         else:
             loss, metrics = compute_metrics(
                 logits,
