@@ -47,7 +47,6 @@ Some of the exciting new features include:
 - **Qwen3-8B DFlash Speculator**: The RedHat team published a [DFlash speculator for Qwen3-8B](https://huggingface.co/RedHatAI/Qwen3-8B-speculator.dflash), achieving average speculative token acceptance lengths of up to 3.74 on `math_reasoning`.
 - **Gemma 4 Speculators**: The RedHat team published speculators for Gemma 4 31B-it, including both [DFlash](https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.dflash) and [EAGLE-3](https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.eagle3) checkpoints, enabling production-grade speculative decoding for Gemma 4 models.
 - **DFlash Training Algorithm**: Added support for the DFlash training algorithm with anchored-block drafting, using auxiliary hidden states from multiple verifier layers. Includes CLI options for block size and max anchors, plus DFlash metrics, utilities, and draft model. DFlash models trained through Speculators can now run seamlessly in vLLM as of [vLLM PR #38300](https://github.com/vllm-project/vllm/pull/38300).
-- **Domino Correction Head for DFlash**: Added support for the Domino causal correction head (`--projector-type domino`), which refines DFlash base logits with a lightweight GRU-based recurrent path for improved per-position accuracy. Based on the [Domino paper](https://arxiv.org/abs/2605.29707).
 - **Online Training Support**: Added support for online training using the new [vLLM hidden extraction system](https://github.com/vllm-project/vllm/pull/33736), enabling real-time hidden state generation during training without requiring separate offline data generation steps.
 
 ______________________________________________________________________
@@ -59,7 +58,8 @@ ______________________________________________________________________
 - **Standardized, Extensible Format:** Provides a Hugging Face-compatible format for defining speculative models, with tools to convert from external research repositories into a standard speculators format for easy adoption.
 - **Seamless vLLM Integration:** Built for direct deployment into vLLM, enabling low-latency, production-grade inference with minimal overhead.
 
-> [!TIP] Read more about Speculators features in this [vLLM blog post](https://blog.vllm.ai/2025/12/13/speculators-v030.html).
+> [!TIP]
+> Read more about Speculators features in this [vLLM blog post](https://blog.vllm.ai/2025/12/13/speculators-v030.html).
 
 ## Supported Models
 

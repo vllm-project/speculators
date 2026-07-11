@@ -21,21 +21,11 @@ The target model produces hidden states (fused target context features) and deco
 
 Pretrained DFlash speculator models are available on HuggingFace from the [RedHatAI speculator models collection](https://huggingface.co/collections/RedHatAI/speculator-models):
 
-| Verifier | Speculator | | ----------------------- | --------------------------------------------------------------------------------------------------------------- | | `google/gemma-4-31B-it` | [`RedHatAI/gemma-4-31B-it-speculator.dflash`](https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.dflash) |
+| Verifier                | Speculator                                                                                                      |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `google/gemma-4-31B-it` | [`RedHatAI/gemma-4-31B-it-speculator.dflash`](https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.dflash) |
 
 > **Note:** DFlash is under active development. Not all hardware configurations have been validated yet — refer to individual model cards for details.
-
-## Domino Variant
-
-Domino is a lightweight causal correction head that can be added on top of the DFlash backbone. Instead of using the raw DFlash base logits at every block position, Domino refines the suffix positions with a single-layer GRU that encodes previous-token embeddings, concatenates the GRU output with the backbone hidden states, and projects through a bottleneck MLP to produce additive logit deltas.
-
-The overhead is negligible: a single GRU layer and a two-layer MLP operate only on the suffix tokens within each block, adding a tiny fraction of the backbone transformer's FLOPs and requiring no additional sequential passes.
-
-| | DFlash | DFlash + Domino | | ------------------------- | -------------------- | --------------------------------------------- | | **Draft path** | Base logits → argmax | Base logits → GRU correction → refined logits | | **Per-position accuracy** | Good | Better (GRU conditions on prior tokens) | | **Training cost** | ~1× | Negligible overhead |
-
-Select Domino via `--projector-type domino` when training (see the [Train DFlash tutorial](../tutorials/train_dflash_online.md#domino-variant)).
-
-At inference, the trained checkpoint loads as a standard DFlash speculator — vLLM uses the base LM head directly and the Domino head is not invoked.
 
 ## Research & Citation
 

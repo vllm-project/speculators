@@ -8,7 +8,7 @@ Speculators currently supports four speculative decoding algorithms: **Eagle-3**
 
 **P-EAGLE** extends Eagle-3 with parallel multi-token prediction across multiple depths, using COD sampling for memory-efficient training.
 
-**DFlash** predicts all draft tokens in a single forward pass using block-based prediction with anchor points. DFlash also supports an optional **Domino correction head** — a causal GRU that refines base logits for improved per-position accuracy at negligible training overhead.
+**DFlash** predicts all draft tokens in a single forward pass using block-based prediction with anchor points.
 
 **MTP** finetunes the model's native multi-token prediction head on domain-specific data. Unlike the other algorithms, MTP does not train from scratch -- it starts from pre-existing MTP layers and is only available for models with native MTP support.
 
@@ -16,7 +16,13 @@ Eagle-3, P-EAGLE, and DFlash can be paired with any supported verifier model (in
 
 ## Current Support
 
-| | Eagle-3 | P-EAGLE | DFlash | MTP | | ------------------- | ------------- | ------------------- | ------------------- | --------------------------- | | **Draft layers** | Llama-style | Llama-style | Qwen3-style | Native MTP layers | | **Verifier models** | Any supported | Any supported | Any supported | Models with native MTP only | | **Training mode** | From scratch | From scratch | From scratch | Finetune existing MTP head | | **Speculators** | Mature | Newer, growing fast | Newer, growing fast | Newer, growing fast | | **vLLM** | Mature | Newer, growing fast | Newer, growing fast | Newer, growing fast |
+|                     | Eagle-3       | P-EAGLE             | DFlash              | MTP                         |
+| ------------------- | ------------- | ------------------- | ------------------- | --------------------------- |
+| **Draft layers**    | Llama-style   | Llama-style         | Qwen3-style         | Native MTP layers           |
+| **Verifier models** | Any supported | Any supported       | Any supported       | Models with native MTP only |
+| **Training mode**   | From scratch  | From scratch        | From scratch        | Finetune existing MTP head  |
+| **Speculators**     | Mature        | Newer, growing fast | Newer, growing fast | Newer, growing fast         |
+| **vLLM**            | Mature        | Newer, growing fast | Newer, growing fast | Newer, growing fast         |
 
 Eagle-3 has been available longer and has broader support in both Speculators and vLLM. P-EAGLE, DFlash, and MTP were added more recently and support is improving rapidly.
 
