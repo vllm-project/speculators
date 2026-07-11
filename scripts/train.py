@@ -984,6 +984,16 @@ def parse_args():
         help="Decay gamma for DFlash/DSpark loss weighting (default: 4.0)",
     )
     parser.add_argument(
+        "--auf",
+        action="store_true",
+        default=False,
+        help="Enable Accept-Until-Fail (AUF) truncation on the loss mask "
+        "(arXiv 2607.01893). Zeros positions after the first greedy prediction "
+        "error in each block, aligning training with the verifier's "
+        "prefix-acceptance semantics. For Domino, only the base branch is "
+        "truncated; the final branch always uses the full mask. (default: False)",
+    )
+    parser.add_argument(
         "--normalize-loss-by-decay",
         action="store_true",
         default=False,
@@ -1080,15 +1090,6 @@ def parse_args():
         help="Fraction of total training steps over which lambda_base decays "
         "from start to 0 (default: 1.0, full decay over the entire run). "
         "Set to 0 to disable decay.",
-    )
-    parser.add_argument(
-        "--domino-auf",
-        action="store_true",
-        default=False,
-        help="Enable Accept-Until-Fail (AUF) truncation on the Domino base branch "
-        "loss (arXiv 2607.01893). Zeros positions after the first greedy prediction "
-        "error in each block, aligning training with the verifier's prefix-acceptance "
-        "semantics. The final branch always uses the full mask. (default: False)",
     )
     parser.add_argument(
         "--draft-attn-impl",

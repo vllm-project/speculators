@@ -110,12 +110,13 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
         "from lambda_base_start to 0. 1.0 (default, matches paper) means a full "
         "linear decay over the entire run. Set to 0 to disable decay.",
     )
-    domino_auf: bool = Field(
+    auf: bool = Field(
         default=False,
-        description="Enable Accept-Until-Fail (AUF) truncation on the base branch "
-        "loss (arXiv 2607.01893). Zeros out positions after the first greedy "
+        description="Enable Accept-Until-Fail (AUF) truncation on the loss mask "
+        "(arXiv 2607.01893). Zeros out positions after the first greedy "
         "prediction error in each block, aligning training with the verifier's "
-        "prefix-acceptance semantics. The final branch always uses the full mask. "
+        "prefix-acceptance semantics. For Domino, only the base branch is "
+        "truncated; the final branch always uses the full mask. "
         "(default: False)",
     )
 

@@ -631,10 +631,10 @@ class TestAufMask:
 
 
 @requires_cuda
-class TestDominoAuf:
-    """Integration test: forward/backward with domino_auf=True."""
+class TestAuf:
+    """Integration test: forward/backward with auf=True for both Domino and DFlash."""
 
-    def test_auf_forward_backward(self):
+    def test_auf_domino_forward_backward(self):
         torch.compiler.reset()
         model = _make_tiny_model(
             block_size=4,
@@ -642,7 +642,7 @@ class TestDominoAuf:
             lambda_base_start=0.5,
             lambda_base_decay_ratio=1.0,
         )
-        model.config.domino_auf = True
+        model.config.auf = True
         data = _make_synthetic_data(seq_len=32, loss_mask_all=False)
         _, loss, metrics = model(
             data["hidden_states"],
@@ -659,7 +659,28 @@ class TestDominoAuf:
         assert "j_star_sum" in metrics
         assert "j_star_total" in metrics
 
-    def test_auf_changes_base_loss(self):
+    def test_auf_dflash_forward_backward(self):
+        torch.compiler.reset()
+        model = _make_tiny_model(
+            block_size=4,
+            projector_type="dflash",
+        )
+        model.config.auf = True
+        data = _make_synthetic_data(seq_len=32, loss_mask_all=False)
+        _, loss, metrics = model(
+            data["hidden_states"],
+            data["input_ids"],
+            data["loss_mask"],
+            data["verifier_last_hidden_states"],
+            data["document_ids"],
+            loss_config=resolve_loss_config("ce"),
+        )
+        assert loss.isfinite()
+        loss.backward()
+        assert "j_star_sum" in metrics
+        assert "j_star_total" in metrics
+
+    def test_auf_changes_domino_base_loss(self):
         torch.compiler.reset()
         model = _make_tiny_model(
             block_size=4,
@@ -677,19 +698,46 @@ class TestDominoAuf:
             "loss_config": resolve_loss_config("ce"),
         }
 
-        model.config.domino_auf = False
+        model.config.auf = False
         _, loss_no_auf, _ = model(**fwd_args)
 
-        model.config.domino_auf = True
+        model.config.auf = True
         _, loss_auf, metrics = model(**fwd_args)
 
         assert loss_auf.isfinite()
         assert loss_no_auf.isfinite()
-        # AUF truncates some positions, so loss should differ
-        # (unless all predictions happen to be correct)
         j_star_total = metrics.get("j_star_total", torch.tensor(0.0))
         if j_star_total.item() > 0:
             j_star_mean = metrics["j_star_sum"].item() / j_star_total.item()
-            # j_star < block_size means there were errors → mask differs
+            if j_star_mean < 4.0:
+                assert not torch.allclose(loss_auf, loss_no_auf, rtol=1e-4)
+
+    def test_auf_changes_dflash_loss(self):
+        torch.compiler.reset()
+        model = _make_tiny_model(
+            block_size=4,
+            projector_type="dflash",
+        )
+        data = _make_synthetic_data(seq_len=32, loss_mask_all=True)
+        fwd_args = {
+            "hidden_states": data["hidden_states"],
+            "input_ids": data["input_ids"],
+            "loss_mask": data["loss_mask"],
+            "verifier_last_hidden_states": data["verifier_last_hidden_states"],
+            "document_ids": data["document_ids"],
+            "loss_config": resolve_loss_config("ce"),
+        }
+
+        model.config.auf = False
+        _, loss_no_auf, _ = model(**fwd_args)
+
+        model.config.auf = True
+        _, loss_auf, metrics = model(**fwd_args)
+
+        assert loss_auf.isfinite()
+        assert loss_no_auf.isfinite()
+        j_star_total = metrics.get("j_star_total", torch.tensor(0.0))
+        if j_star_total.item() > 0:
+            j_star_mean = metrics["j_star_sum"].item() / j_star_total.item()
             if j_star_mean < 4.0:
                 assert not torch.allclose(loss_auf, loss_no_auf, rtol=1e-4)

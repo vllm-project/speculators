@@ -202,7 +202,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             "gru_hidden_dim": kwargs.get("domino_gru_hidden_dim", 1024),
             "lambda_base_start": kwargs.get("domino_lambda_start", 1.0),
             "lambda_base_decay_ratio": kwargs.get("domino_lambda_decay_ratio", 1.0),
-            "domino_auf": kwargs.get("domino_auf", False),
+            "auf": kwargs.get("auf", False),
             "speculators_config": SpeculatorsConfig(
                 algorithm=algorithm,
                 proposal_methods=[
@@ -486,6 +486,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
 
         return hidden, logits, targets, aligned_loss_mask, anchored_block_indices
 
+    @torch.compiler.disable
     def _compute_domino_metrics(
         self,
         *,
@@ -534,7 +535,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         # B-AUF+D (arXiv 2607.01893): L_final keeps full mask;
         # L_base is optionally truncated.
         j_star = None
-        if self.config.domino_auf:
+        if self.config.auf:
             base_mask, j_star = self._auf_mask(
                 logits,
                 targets,
@@ -645,10 +646,24 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 total_steps=total_steps,
             )
         else:
+            j_star = None
+            if self.config.auf:
+                num_anchors = aligned_loss_mask.shape[1] // self.block_size
+                auf_loss_mask, j_star = self._auf_mask(
+                    logits,
+                    targets,
+                    aligned_loss_mask,
+                    num_anchors,
+                    self.block_size,
+                    return_j_star=True,
+                )
+            else:
+                auf_loss_mask = aligned_loss_mask
+
             loss, metrics = compute_metrics(
                 logits,
                 targets,
-                aligned_loss_mask,
+                auf_loss_mask,
                 self.block_size,
                 gamma=gamma,
                 loss_config=loss_config,
@@ -656,5 +671,11 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 per_position_loss_weight=per_position_loss_weight,
                 dpace_alpha=dpace_alpha,
             )
+
+            if j_star is not None:
+                metrics["j_star_sum"] = j_star.float().sum()
+                metrics["j_star_total"] = torch.tensor(
+                    float(j_star.numel()), device=logits.device
+                )
 
         return draft_tokens, loss, metrics
