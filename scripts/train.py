@@ -52,7 +52,7 @@ DRAFT_ARCH_CONFIGS: dict[str, type] = {
 # Speculator types that default every draft layer to sliding window attention;
 # --full-attention-indices opts specific layers back into full attention. All
 # other speculator types use full attention on every layer.
-SLIDING_WINDOW_SPECULATOR_TYPES = ("dflash", "dspark")
+SLIDING_WINDOW_SPECULATOR_TYPES = ("dflash", "dflare", "dspark")
 
 
 def set_seed(seed: int, deterministic: bool = False):
@@ -474,8 +474,9 @@ def main(args: argparse.Namespace):  # noqa: C901
             and args.speculator_type not in SLIDING_WINDOW_SPECULATOR_TYPES
         ):
             raise ValueError(
-                "--full-attention-indices is only meaningful for dflash and dspark "
-                "draft models (which use sliding window attention by default). "
+                "--full-attention-indices is only meaningful for dflash, dflare, "
+                "and dspark draft models (which use sliding window attention by "
+                "default). "
                 "Please open an issue/pr if you would like to use sliding window "
                 "attention with a different speculator type."
             )
@@ -580,6 +581,11 @@ def main(args: argparse.Namespace):  # noqa: C901
     )
     trainer = Trainer(draft_model, trainer_config, train_loader, val_loader)
 
+    # DFlare progressive gamma: tell the model how many total steps to expect
+    if hasattr(draft_model, "set_training_steps"):
+        total_steps = args.epochs * len(train_loader)
+        draft_model.set_training_steps(total_steps)
+
     # Run training
     trainer.run_training()
 
@@ -681,7 +687,8 @@ def parse_args():
         "--speculator-type",
         type=str,
         default="eagle3",
-        help="Type of speculator model to train (eagle3, dflash, dspark, peagle, mtp)",
+        help="Type of speculator model to train "
+        "(eagle3, dflash, dflare, dspark, peagle, mtp)",
     )
     parser.add_argument(
         "--from-pretrained",
@@ -974,14 +981,14 @@ def parse_args():
         "--max-anchors",
         type=int,
         default=3072,
-        help="Maximum anchor positions for DFlash, DSpark, "
+        help="Maximum anchor positions for DFlash, DFlare, DSpark, "
         "and P-EAGLE training (default: 3072).",
     )
     parser.add_argument(
         "--dflash-decay-gamma",
         type=float,
         default=4.0,
-        help="Decay gamma for DFlash/DSpark loss weighting (default: 4.0)",
+        help="Decay gamma for DFlash/DFlare/DSpark loss weighting (default: 4.0)",
     )
     # D-Pace specific arguments (loss weight option + smoothing)
     parser.add_argument(
@@ -1029,6 +1036,31 @@ def parse_args():
         type=float,
         default=1.0,
         help="DSpark: weight of the confidence-head BCE term (default: 1.0).",
+    )
+    # DFlare-specific arguments (adaptive layer fusion).
+    parser.add_argument(
+        "--use-heterogeneous-kv",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="DFlare: use separate KV projections for target context vs draft states.",
+    )
+    parser.add_argument(
+        "--progressive-gamma",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="DFlare: linearly warm up the loss decay gamma during training.",
+    )
+    parser.add_argument(
+        "--gamma-start",
+        type=float,
+        default=4.5,
+        help="DFlare: initial gamma for progressive decay (default: 4.5).",
+    )
+    parser.add_argument(
+        "--gamma-max",
+        type=float,
+        default=10.5,
+        help="DFlare: final gamma for progressive decay (default: 10.5).",
     )
     parser.add_argument(
         "--draft-attn-impl",
