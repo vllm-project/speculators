@@ -614,6 +614,25 @@ def test_extract_tools_list_passthrough_and_functions_wrapping():
     assert regen.extract_tools({"tools": "not json"}) is None
 
 
+def test_extract_tools_normalizes_stringified_and_bare_specs():
+    bare = {"name": "get_weather", "parameters": {"type": "object", "properties": {}}}
+    wrapped = {"type": "function", "function": bare}
+    # Bare spec as a JSON string (nvidia/When2Call shape) is decoded and wrapped.
+    assert regen.extract_tools({"tools": [json.dumps(bare)]}) == [wrapped]
+    # Bare spec as a dict is wrapped too.
+    assert regen.extract_tools({"tools": [bare]}) == [wrapped]
+    # Mixed list: wrapped entries pass through, bare/stringified get wrapped.
+    passthrough = {"type": "function", "function": {"name": "f"}}
+    assert regen.extract_tools({"tools": [passthrough, json.dumps(bare)]}) == [
+        passthrough,
+        wrapped,
+    ]
+    # Undecodable entries are dropped; an all-unusable list -> tool-free.
+    mixed = {"tools": [json.dumps(bare), "not json", 5]}
+    assert regen.extract_tools(mixed) == [wrapped]
+    assert regen.extract_tools({"tools": ["not json", 5]}) is None
+
+
 def test_extract_tool_results_ordered_across_schemas():
     # OpenAI `messages` with role=tool, in order, aliases recognised.
     row = {

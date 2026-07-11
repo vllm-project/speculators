@@ -218,20 +218,33 @@ def _list_field(row, key) -> list | None:
     return value if isinstance(value, list) and value else None
 
 
+def _normalize_tool(entry: Any) -> dict | None:
+    """Coerce one tool entry to OpenAI ``{"type": "function", "function": ...}`` shape.
+
+    Decodes JSON-string entries, wraps bare function specs, passes already-wrapped
+    dicts through, and returns ``None`` for anything that is not a dict.
+    """
+    if isinstance(entry, str):
+        entry = _maybe_json(entry)
+    if not isinstance(entry, dict):
+        return None
+    if isinstance(entry.get("function"), dict):
+        return entry
+    return {"type": "function", "function": entry}
+
+
 def extract_tools(row) -> list | None:
     """Return the OpenAI-style ``tools`` schema for a row, or ``None``.
 
-    Accepts a ``tools`` list/JSON-string, or a legacy ``functions`` list (each
-    wrapped as ``{"type": "function", "function": ...}``), forwarded to the Chat
-    Completions API on every request. Tool-free datasets return ``None``.
+    Reads a ``tools`` list (or JSON-string), else a legacy ``functions`` list, and
+    normalizes each entry via :func:`_normalize_tool`. Undecodable entries are
+    dropped; a row with no usable schema returns ``None``.
     """
-    tools = _list_field(row, "tools")
-    if tools:
-        return tools
-    functions = _list_field(row, "functions")
-    if functions:
-        return [{"type": "function", "function": fn} for fn in functions]
-    return None
+    raw = _list_field(row, "tools") or _list_field(row, "functions")
+    if not raw:
+        return None
+    tools = [tool for tool in (_normalize_tool(entry) for entry in raw) if tool]
+    return tools or None
 
 
 # Roles that carry a tool/function result across the conversation schemas we ingest.
