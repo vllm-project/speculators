@@ -3,6 +3,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import re
 import sys
@@ -19,6 +20,8 @@ from speculators.data_generation.vllm_client import (
     InvalidResponseError,
     with_retries,
 )
+
+logger = logging.getLogger(__name__)
 
 # On-policy regeneration has no multimodal support yet; off-policy `prepare-data`
 # does, so these presets are gated here rather than dropped from the registry.
@@ -769,12 +772,38 @@ async def main():
                 if primary_id in seen_ids:
                     continue
 
+                # Broken input tool schema: record and skip (don't crash the run).
+                try:
+                    tools = extract_tools(row)
+                except ValueError as exc:
+                    logger.warning(
+                        "Skipping row %s: input tool schema is broken (%s)",
+                        primary_id,
+                        exc,
+                    )
+                    error_output = {
+                        "id": primary_id,
+                        "metadata": {
+                            "idx": index,
+                            "error": repr(exc),
+                            "turns_completed": 0,
+                            "endpoint": endpoint,
+                        },
+                    }
+                    error_file.write(
+                        json.dumps(error_output, ensure_ascii=False) + "\n"
+                    )
+                    error_file.flush()
+                    stats["errors"] += 1
+                    progress.update(1)
+                    continue
+
                 await queue.put(
                     {
                         "idx": index,
                         "primary_id": primary_id,
                         "turns": turns,
-                        "tools": extract_tools(row),
+                        "tools": tools,
                         "tool_results": extract_tool_results(row),
                     }
                 )
