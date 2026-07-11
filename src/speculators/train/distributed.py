@@ -202,6 +202,7 @@ def apply_fully_sharded(model: torch.nn.Module):
     before calling this function.
     """
     mp_policy = MixedPrecisionPolicy(
+        param_dtype=torch.bfloat16,
         reduce_dtype=torch.float32,
     )
 
