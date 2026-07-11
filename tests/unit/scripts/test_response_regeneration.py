@@ -608,10 +608,9 @@ def test_extract_tools_list_passthrough_and_functions_wrapping():
     assert regen.extract_tools({"functions": [{"name": "f"}]}) == [
         {"type": "function", "function": {"name": "f"}}
     ]
-    # No schema / empty / bad JSON -> None (tool-free datasets unchanged).
+    # Absent / empty -> None (tool-free datasets unchanged).
     assert regen.extract_tools({"prompt": "hi"}) is None
     assert regen.extract_tools({"tools": []}) is None
-    assert regen.extract_tools({"tools": "not json"}) is None
 
 
 def test_extract_tools_normalizes_stringified_and_bare_specs():
@@ -627,10 +626,24 @@ def test_extract_tools_normalizes_stringified_and_bare_specs():
         passthrough,
         wrapped,
     ]
-    # Undecodable entries are dropped; an all-unusable list -> tool-free.
+    # A junk entry is dropped as long as at least one tool survives.
     mixed = {"tools": [json.dumps(bare), "not json", 5]}
     assert regen.extract_tools(mixed) == [wrapped]
-    assert regen.extract_tools({"tools": ["not json", 5]}) is None
+
+
+def test_extract_tools_raises_when_declared_but_unusable():
+    # A row that advertises tools we cannot parse must fail loud, not silently
+    # regenerate tool-free.
+    with pytest.raises(ValueError):
+        regen.extract_tools({"tools": ["junk", 5]})  # non-empty list, none decode
+    with pytest.raises(ValueError):
+        regen.extract_tools({"tools": {"name": "f"}})  # present but not a list
+    with pytest.raises(ValueError):
+        regen.extract_tools({"tools": "not json"})  # present but not a list
+    # Absent or explicitly empty stays tool-free.
+    assert regen.extract_tools({}) is None
+    assert regen.extract_tools({"tools": []}) is None
+    assert regen.extract_tools({"tools": ""}) is None
 
 
 def test_extract_tool_results_ordered_across_schemas():

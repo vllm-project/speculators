@@ -237,14 +237,20 @@ def extract_tools(row) -> list | None:
     """Return the OpenAI-style ``tools`` schema for a row, or ``None``.
 
     Reads a ``tools`` list (or JSON-string), else a legacy ``functions`` list, and
-    normalizes each entry via :func:`_normalize_tool`. Undecodable entries are
-    dropped; a row with no usable schema returns ``None``.
+    normalizes each entry via :func:`_normalize_tool` (individual junk entries are
+    dropped). A row that declares no tools returns ``None``; one that *declares*
+    tools we cannot turn into any function schema raises ``ValueError`` instead of
+    silently regenerating tool-free.
     """
     raw = _list_field(row, "tools") or _list_field(row, "functions")
-    if not raw:
-        return None
-    tools = [tool for tool in (_normalize_tool(entry) for entry in raw) if tool]
-    return tools or None
+    if raw:
+        tools = [tool for tool in (_normalize_tool(entry) for entry in raw) if tool]
+        if not tools:
+            raise ValueError(f"tools present but none valid: {raw!r:.100}")
+        return tools
+    if any(row.get(key) not in (None, "", [], {}) for key in ("tools", "functions")):
+        raise ValueError("a tools/functions field is present but not a usable list")
+    return None
 
 
 # Roles that carry a tool/function result across the conversation schemas we ingest.
