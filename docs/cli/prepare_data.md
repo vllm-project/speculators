@@ -42,7 +42,6 @@ python scripts/prepare_data.py \
 
 - **`--token-freq-path`** (str, default: `{output}/token_freq.pt`) Path to save token frequency distribution. Defaults to `token_freq.pt` in the output directory.
 
-- **`--assistant-pattern`** (str, default: `None`) Custom regex pattern for matching assistant responses. If not provided, auto-detected from chat template.
 
 - **`--turn-dropout`** (flag) Enable turn dropout: randomly keeps first N consecutive turns per conversation for data augmentation.
 

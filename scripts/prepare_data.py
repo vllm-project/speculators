@@ -125,15 +125,6 @@ def parse_args():
         ),
     )
     parser.add_argument(
-        "--assistant-pattern",
-        type=str,
-        default=None,
-        help=(
-            "Custom regex pattern for matching assistant responses. "
-            "If not provided, auto-detected from chat template."
-        ),
-    )
-    parser.add_argument(
         "--turn-dropout",
         action="store_true",
         help=(
@@ -232,7 +223,6 @@ def main():
         seed=args.seed,
         max_samples=args.max_samples,
         token_freq_path=token_freq_path,
-        assistant_pattern=args.assistant_pattern,
         turn_dropout=args.turn_dropout,
         minimum_valid_tokens=args.minimum_valid_tokens,
         allow_empty_output=args.allow_empty_output,

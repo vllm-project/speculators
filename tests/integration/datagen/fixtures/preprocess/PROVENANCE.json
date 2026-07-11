@@ -1,0 +1,25 @@
+{
+  "sharegpt_multiturn": {
+    "id": "Aeala/ShareGPT_Vicuna_unfiltered",
+    "split": "train",
+    "shape": "from/value multi-turn"
+  },
+  "ultrachat_messages": {
+    "id": "HuggingFaceH4/ultrachat_200k",
+    "split": "train_sft",
+    "shape": "role/content messages, multi-turn"
+  },
+  "_note_real": "sharegpt_multiturn/ultrachat_messages/hermes_toolcall/dolphin_reasoning are REAL frozen dataset rows (see per-entry source/fetched fields).",
+  "hermes_toolcall": {
+    "id": "NousResearch/hermes-function-calling-v1",
+    "config": "func_calling",
+    "split": "train",
+    "shape": "from/value + tool role + tools column"
+  },
+  "dolphin_reasoning": {
+    "id": "cognitivecomputations/dolphin-r1",
+    "config": "reasoning-deepseek",
+    "split": "train",
+    "shape": "assembled: real question+reasoning+answer -> reasoning_content turn"
+  }
+}

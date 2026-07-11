@@ -3,7 +3,6 @@ Unit tests for the preprocessing module in the Speculators data generation.
 """
 
 import json
-import re
 from typing import Any
 from unittest.mock import patch
 
@@ -20,12 +19,9 @@ from speculators.data_generation.configs import (
 from speculators.data_generation.preprocessing import (
     _adapt_conv_for_hf,
     _adapt_conv_for_vllm,
-    _create_loss_mask_from_offsets,
-    _detect_assistant_pattern,
     _load_hf_dataset,
     _normalize_conversation,
     _preprocess_batch,
-    _supports_assistant_mask,
     build_eagle3_dataset,
     get_tokenizer,
     load_and_preprocess_dataset,
@@ -296,187 +292,6 @@ def test_adapt_conv_for_vllm_invalid_content_formats():
         )
 
 
-# Tests for _detect_assistant_pattern
-@pytest.mark.sanity
-def test_detect_assistant_pattern_structure():
-    """Test that the detected pattern has the correct regex structure."""
-    processor = load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
-
-    if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
-        pytest.skip("Processor does not support chat templates")
-
-    pattern = _detect_assistant_pattern(processor)
-
-    # Pattern should be a valid regex string
-    assert isinstance(pattern, str)
-    assert len(pattern) > 0
-
-    # Pattern should compile without errors
-    compiled = re.compile(pattern, re.DOTALL)
-    assert compiled is not None
-
-    # Pattern should contain balanced parentheses
-    assert pattern.count("(") == pattern.count(")")
-    # Pattern should have at least one capture group (may use negative lookahead)
-    assert "(" in pattern, "Pattern should have a capture group for content"
-
-
-@pytest.mark.sanity
-def test_detect_assistant_pattern_correctly_identifies_assistant_vs_user():
-    """Test that pattern correctly distinguishes assistant from user content."""
-    processor = load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
-
-    if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
-        pytest.skip("Processor does not support chat templates")
-
-    # Get the pattern
-    pattern = _detect_assistant_pattern(processor)
-
-    # Format a conversation manually to test the pattern
-    test_conv = [
-        {"role": "user", "content": "USER_MSG"},
-        {"role": "assistant", "content": "ASSISTANT_MSG"},
-    ]
-    formatted: str = processor.apply_chat_template(  # type: ignore[assignment]
-        test_conv, tokenize=False, add_generation_prompt=False
-    )
-
-    # Apply the pattern
-    matches = list(re.finditer(pattern, formatted, re.DOTALL))
-
-    # Should find exactly 1 match (the assistant message)
-    assert len(matches) == 1, f"Expected 1 match, got {len(matches)}"
-
-    # The match should capture only ASSISTANT_MSG, not USER_MSG
-    captured_content = (
-        matches[0].group(1) if matches[0].lastindex else matches[0].group(0)
-    )
-    assert "ASSISTANT_MSG" in captured_content, (
-        "Pattern should capture assistant content"
-    )
-    assert "USER_MSG" not in captured_content, "Pattern should NOT capture user content"
-
-
-@pytest.mark.sanity
-def test_detect_assistant_pattern_extracts_correct_content():
-    """Test that the pattern's capture group extracts only assistant message content."""
-    processor = load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
-
-    if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
-        pytest.skip("Processor does not support chat templates")
-
-    pattern = _detect_assistant_pattern(processor)
-
-    # Test with a multi-turn conversation
-    test_conv = [
-        {"role": "user", "content": "First question"},
-        {"role": "assistant", "content": "First answer"},
-        {"role": "user", "content": "Second question"},
-        {"role": "assistant", "content": "Second answer"},
-    ]
-
-    formatted: str = processor.apply_chat_template(  # type: ignore [assignment]
-        test_conv, tokenize=False, add_generation_prompt=False
-    )
-
-    matches = list(re.finditer(pattern, formatted, re.DOTALL))
-
-    # Should match exactly 2 assistant messages
-    assert len(matches) == 2, f"Expected 2 assistant matches, got {len(matches)}"
-
-    # First match should contain "First answer" but not questions
-    first_match = matches[0].group(0)
-    assert "First answer" in first_match
-    assert "First question" not in first_match
-    assert "Second question" not in first_match
-
-    # Second match should contain "Second answer" but not questions
-    second_match = matches[1].group(0)
-    assert "Second answer" in second_match
-    assert "First question" not in second_match
-    assert "Second question" not in second_match
-
-
-# Tests for _create_loss_mask_from_offsets
-
-
-@pytest.mark.sanity
-def test_create_loss_mask_simple():
-    """Test creating loss mask for a simple case."""
-    text = "User: Hello\nAssistant: Hi there!\nUser: How are you?\nAssistant: Good!"
-    pattern = r"Assistant: (.*?)(?=\n|$)"
-
-    # Simulate token offsets (character positions)
-    offsets = [
-        (0, 4),  # "User"
-        (4, 5),  # ":"
-        (6, 11),  # "Hello"
-        (11, 12),  # "\n"
-        (12, 21),  # "Assistant"
-        (21, 22),  # ":"
-        (23, 25),  # "Hi"
-        (26, 31),  # "there"
-        (31, 32),  # "!"
-        (32, 33),  # "\n"
-        (33, 37),  # "User"
-        (37, 38),  # ":"
-        (39, 42),  # "How"
-        (43, 46),  # "are"
-        (47, 51),  # "you?"
-        (51, 52),  # "\n"
-        (52, 61),  # "Assistant"
-        (61, 62),  # ":"
-        (63, 67),  # "Good"
-        (67, 68),  # "!"
-    ]
-
-    mask = _create_loss_mask_from_offsets(text, offsets, pattern)
-
-    assert len(mask) == len(offsets)
-    assert mask.dtype == torch.bool
-
-    # Tokens in assistant responses should have mask = 1
-    # "Hi there!" is at positions 6-8 (indices in offsets)
-    # "Good!" is at positions 18-19
-    assert mask[6].item() == 1  # "Hi"
-    assert mask[7].item() == 1  # "there"
-    assert mask[8].item() == 1  # "!"
-    assert mask[18].item() == 1  # "Good"
-    assert mask[19].item() == 1  # "!"
-
-    # User messages should have mask = 0
-    assert mask[0].item() == 0  # "User"
-    assert mask[2].item() == 0  # "Hello"
-
-
-@pytest.mark.sanity
-def test_create_loss_mask_no_matches():
-    """Test creating loss mask when no assistant patterns match."""
-    text = "User: Hello\nUser: How are you?"
-    pattern = r"Assistant: (.*?)(?=\n|$)"
-
-    offsets = [(0, 4), (4, 5), (6, 11)]
-
-    mask = _create_loss_mask_from_offsets(text, offsets, pattern)
-
-    # All zeros when no matches
-    assert torch.all(mask == 0)
-
-
-@pytest.mark.sanity
-def test_create_loss_mask_empty_offsets():
-    """Test creating loss mask with empty offsets."""
-    text = "User: Hello\nAssistant: Hi!"
-    pattern = r"Assistant: (.*?)(?=\n|$)"
-
-    mask = _create_loss_mask_from_offsets(text, [], pattern)
-
-    assert len(mask) == 0
-
-
-# Tests for _preprocess_batch
-
-
 @pytest.mark.sanity
 def test_preprocess_batch_basic():
     """Test preprocessing a basic batch of conversations."""
@@ -498,10 +313,7 @@ def test_preprocess_batch_basic():
         ]
     }
 
-    assistant_pattern = _detect_assistant_pattern(processor)
-    results = _preprocess_batch(
-        examples, processor, max_length=512, assistant_pattern=assistant_pattern
-    )
+    results = _preprocess_batch(examples, processor, max_length=512)
 
     assert "input_ids" in results
     assert "loss_mask" in results
@@ -580,21 +392,24 @@ def test_preprocess_batch_multimodal(tmp_path):
         ]
     }
 
-    assistant_pattern = _detect_assistant_pattern(processor)
-    results = _preprocess_batch(
-        examples, processor, max_length=2048, assistant_pattern=assistant_pattern
-    )
+    results = _preprocess_batch(examples, processor, max_length=2048)
 
     assert "input_ids" in results
     assert "loss_mask" in results
-    assert len(results["input_ids"]) == 2
-    assert len(results["loss_mask"]) == 2
+    # One row per conversation when packed; history-rewriting templates
+    # (e.g. thinking scaffolds) fan out to one row per assistant turn.
+    n_rows = len(results["input_ids"])
+    assert 2 <= n_rows <= 4
+    assert len(results["loss_mask"]) == n_rows
+    # MM rows carry a messages twin for hidden-state generation
+    assert len(results["messages"]) == n_rows
 
-    # Check that input_ids and loss_mask have same length for each example
-    for i in range(2):
+    # Check that input_ids and loss_mask have same length for each row
+    for i in range(n_rows):
         assert len(results["input_ids"][i]) == len(results["loss_mask"][i])
         assert isinstance(results["input_ids"][i], torch.Tensor)
         assert isinstance(results["loss_mask"][i], torch.Tensor)
+        assert results["loss_mask"][i].sum() > 0
 
 
 @pytest.mark.sanity
@@ -606,10 +421,7 @@ def test_preprocess_batch_empty_conversations():
         pytest.skip("Processor does not support chat templates")
 
     examples: dict[str, list] = {"conversations": []}
-    assistant_pattern = _detect_assistant_pattern(processor)
-    results = _preprocess_batch(
-        examples, processor, max_length=512, assistant_pattern=assistant_pattern
-    )
+    results = _preprocess_batch(examples, processor, max_length=512)
 
     assert results["input_ids"] == []
     assert results["loss_mask"] == []
@@ -631,10 +443,7 @@ def test_preprocess_batch_invalid_conversation():
         ]
     }
 
-    assistant_pattern = _detect_assistant_pattern(processor)
-    results = _preprocess_batch(
-        examples, processor, max_length=512, assistant_pattern=assistant_pattern
-    )
+    results = _preprocess_batch(examples, processor, max_length=512)
 
     # Should only process the valid conversation
     assert len(results["input_ids"]) <= 1
@@ -662,105 +471,23 @@ def test_preprocess_batch_truncation():
     }
 
     max_length = 100
-    assistant_pattern = _detect_assistant_pattern(processor)
-    results = _preprocess_batch(
-        examples, processor, max_length=max_length, assistant_pattern=assistant_pattern
-    )
+    results = _preprocess_batch(examples, processor, max_length=max_length)
 
-    if len(results["input_ids"]) > 0:
-        # Should be truncated to max_length
-        assert len(results["input_ids"][0]) <= max_length
-        assert len(results["loss_mask"][0]) <= max_length
+    # The assistant response starts past max_length, so the truncated row has
+    # no supervised tokens and is dropped (zero gradient) with a warning.
+    assert results["input_ids"] == []
 
-
-@pytest.mark.sanity
-def test_preprocess_batch_uses_hf_assistant_mask():
-    """Test that HF assistant token mask is used when supported."""
-    processor = load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
-
-    if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
-        pytest.skip("Processor does not support chat templates")
-
-    # Skip test if assistant mask is not supported/functional for this processor
-    if not _supports_assistant_mask(processor):
-        pytest.skip("Processor does not support assistant token mask")
-
-    examples = {
-        "conversations": [
-            [
-                {"role": "user", "content": "Hello"},
-                {"role": "assistant", "content": "Hi there!"},
-            ]
-        ]
-    }
-
-    # Pass None to trigger masking path
-    results = _preprocess_batch(
-        examples,
-        processor,
-        max_length=128,
-        assistant_pattern=None,
-    )
-
-    assert "input_ids" in results
-    assert "loss_mask" in results
+    # With a window that reaches the response, the row is kept and bounded.
+    results = _preprocess_batch(examples, processor, max_length=1300)
     assert len(results["input_ids"]) == 1
-    assert len(results["loss_mask"]) == 1
-
-    # Ensure at least some assistant tokens are trainable
-    assert torch.any(results["loss_mask"][0] == 1)
-
-
-@pytest.mark.sanity
-def test_preprocess_batch_falls_back_to_regex():
-    """Test that preprocessing falls back to regex-based detection
-    when HF mask is unavailable.
-    """
-    processor = load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
-
-    if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
-        pytest.skip("Processor does not support chat templates")
-
-    # Monkeypatch apply_chat_template to force HF mask failure
-    original_apply_chat_template = processor.apply_chat_template
-
-    def patched_apply_chat_template(*args, **kwargs):
-        if kwargs.get("return_assistant_tokens_mask", False):
-            raise ValueError("Forcing fallback to regex path")
-        return original_apply_chat_template(*args, **kwargs)
-
-    processor.apply_chat_template = patched_apply_chat_template  # type: ignore [method-assign]
-
-    examples = {
-        "conversations": [
-            [
-                {"role": "user", "content": "Hello"},
-                {"role": "assistant", "content": "Hi!"},
-            ]
-        ]
-    }
-
-    assistant_pattern = _detect_assistant_pattern(processor)
-
-    results = _preprocess_batch(
-        examples,
-        processor,
-        max_length=128,
-        assistant_pattern=assistant_pattern,
-    )
-
-    assert "input_ids" in results
-    assert "loss_mask" in results
-    assert len(results["input_ids"]) == 1
-    assert len(results["loss_mask"]) == 1
-
-    # Regex path should still mark assistant tokens
-    assert torch.any(results["loss_mask"][0] == 1)
+    assert len(results["input_ids"][0]) <= 1300
+    assert len(results["input_ids"][0]) == len(results["loss_mask"][0])
+    assert results["loss_mask"][0].sum() > 0
 
 
 @pytest.mark.sanity
-def test_preprocess_batch_minimum_valid_tokens_filters_regex_path():
-    """Test that minimum_valid_tokens drops short samples on regex path."""
+def test_preprocess_batch_minimum_valid_tokens_filters_short_samples():
+    """Test that minimum_valid_tokens drops short samples."""
     processor = load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
 
     if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
@@ -775,13 +502,10 @@ def test_preprocess_batch_minimum_valid_tokens_filters_regex_path():
         ]
     }
 
-    assistant_pattern = _detect_assistant_pattern(processor)
-
     baseline = _preprocess_batch(
         examples,
         processor,
         max_length=128,
-        assistant_pattern=assistant_pattern,
     )
 
     assert len(baseline["loss_mask"]) == 1
@@ -792,7 +516,6 @@ def test_preprocess_batch_minimum_valid_tokens_filters_regex_path():
         examples,
         processor,
         max_length=128,
-        assistant_pattern=assistant_pattern,
         minimum_valid_tokens=valid_count + 1,
     )
 
@@ -824,13 +547,10 @@ def test_preprocess_batch_minimum_valid_tokens_keeps_boundary_case():
         ]
     }
 
-    assistant_pattern = _detect_assistant_pattern(processor)
-
     baseline = _preprocess_batch(
         examples,
         processor,
         max_length=256,
-        assistant_pattern=assistant_pattern,
     )
 
     assert len(baseline["loss_mask"]) == 1
@@ -841,7 +561,6 @@ def test_preprocess_batch_minimum_valid_tokens_keeps_boundary_case():
         examples,
         processor,
         max_length=256,
-        assistant_pattern=assistant_pattern,
         minimum_valid_tokens=valid_count,
     )
 
@@ -961,19 +680,15 @@ def test_build_eagle3_dataset_minimum_valid_tokens_filters_short_samples():
         },
     ]
 
-    assistant_pattern = _detect_assistant_pattern(processor)
-
     short_baseline = _preprocess_batch(
         {"conversations": [short_conv]},
         processor,
         max_length=256,
-        assistant_pattern=assistant_pattern,
     )
     long_baseline = _preprocess_batch(
         {"conversations": [long_conv]},
         processor,
         max_length=256,
-        assistant_pattern=assistant_pattern,
     )
 
     assert len(short_baseline["loss_mask"]) == 1
@@ -993,7 +708,6 @@ def test_build_eagle3_dataset_minimum_valid_tokens_filters_short_samples():
         processor,
         max_length=256,
         num_proc=1,
-        assistant_pattern=assistant_pattern,
         minimum_valid_tokens=threshold,
     )
 
@@ -1026,12 +740,10 @@ def test_preprocess_batch_with_turn_dropout():
         ]
     }
 
-    assistant_pattern = _detect_assistant_pattern(processor)
     results = _preprocess_batch(
         examples,
         processor,
         max_length=512,
-        assistant_pattern=assistant_pattern,
         turn_dropout=True,
     )
 
@@ -1039,155 +751,6 @@ def test_preprocess_batch_with_turn_dropout():
     assert "input_ids" in results
     assert "loss_mask" in results
     assert len(results["input_ids"]) > 0
-
-
-# Tests for custom assistant pattern feature
-
-
-@pytest.mark.sanity
-def test_detect_assistant_pattern_thinking_model():
-    """Test pattern detection with a real thinking model (Qwen3).
-
-    Thinking templates wrap assistant content in <think>...</think> tags.
-    The detection uses simple test messages that produce empty think blocks,
-    but the pattern must still match real conversations where the think block
-    contains substantial content.
-    """
-    processor = load_processor("Qwen/Qwen3-8B", trust_remote_code=True)
-    pattern = _detect_assistant_pattern(processor)
-
-    # Format a multi-turn conversation with thinking content injected
-    # directly into the formatted string (as it would appear in real data)
-    test_conv = [
-        {"role": "user", "content": "What is 2+2?"},
-        {
-            "role": "assistant",
-            "content": "The answer is 4.",
-            "reasoning_content": "We are adding 2 and 2.",
-        },
-        {"role": "user", "content": "What is 3+3?"},
-        {
-            "role": "assistant",
-            "content": "The answer is 6.",
-            "reasoning_content": "We are adding 3 and 3.",
-        },
-    ]
-    formatted: str = processor.apply_chat_template(  # type: ignore[assignment]
-        test_conv, tokenize=False, add_generation_prompt=False, enable_thinking=True
-    )
-
-    matches = list(re.finditer(pattern, formatted, re.DOTALL))
-    assert len(matches) == 2, (
-        f"Expected 2 matches, got {len(matches)}.\n"
-        f"Pattern: {pattern}\nText: {formatted}"
-    )
-
-    # Each match should capture its own assistant content, not the other's
-    assert "answer is 4" in matches[0].group(1)
-    assert "answer is 6" not in matches[0].group(1)
-    assert "answer is 6" in matches[1].group(1)
-
-    # Neither match should contain user content
-    for m in matches:
-        assert "What is" not in m.group(1)
-
-    # Reasoning content should be stripped from context turns
-    assert "2 and 2" not in matches[0].group(1)
-
-    # Reasoning content should be present in the final turn
-    assert "3 and 3" in matches[1].group(1)
-
-
-@pytest.mark.sanity
-@pytest.mark.parametrize(
-    "thinking_content",
-    [
-        "",
-        "Let me think step by step.\nThe user asked about France.",
-    ],
-    ids=["no_thinking", "with_thinking"],
-)
-def test_create_loss_mask_thinking_model(thinking_content):
-    """Test _create_loss_mask_from_offsets with Qwen3's thinking template.
-
-    Verifies correct masking both with and without thinking content in the
-    <think> block.
-    """
-    processor = load_processor("Qwen/Qwen3-8B", trust_remote_code=True)
-    pattern = _detect_assistant_pattern(processor)
-
-    # Build formatted text using the real chat template
-    conv = [
-        {"role": "user", "content": "What is the capital of France?"},
-        {"role": "assistant", "content": "Paris is the capital."},
-    ]
-    if thinking_content:
-        conv[-1]["reasoning_content"] = thinking_content
-    formatted: str = processor.apply_chat_template(  # type: ignore[assignment]
-        conv,
-        tokenize=False,
-        add_generation_prompt=False,
-        enable_thinking=bool(thinking_content),
-    )
-
-    # Tokenize with offsets
-    encoding = processor(
-        formatted,
-        return_offsets_mapping=True,
-        add_special_tokens=False,
-    )
-    offsets = encoding["offset_mapping"]
-
-    mask = _create_loss_mask_from_offsets(formatted, offsets, pattern)
-
-    assert len(mask) == len(offsets)
-    assert mask.sum() > 0, "Loss mask should not be all zeros"
-
-    # Decode masked vs unmasked regions
-    input_ids = torch.tensor(encoding["input_ids"])
-    trainable_text = processor.decode(input_ids[mask == 1])
-    masked_text = processor.decode(input_ids[mask == 0])
-
-    # Assistant response must be in the trainable region
-    assert "Paris is the capital" in trainable_text
-
-    # User message must NOT be in the trainable region
-    assert "What is the capital of France" not in trainable_text
-    assert "What is the capital of France" in masked_text
-
-    # Thinking content should be in the trainable region (part of assistant turn)
-    if thinking_content:
-        assert "step by step" in trainable_text
-
-
-@pytest.mark.sanity
-def test_build_eagle3_dataset_with_custom_pattern():
-    """Test building dataset with custom assistant pattern."""
-    processor = load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
-
-    if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
-        pytest.skip("Processor does not support chat templates")
-
-    data = {
-        "conversations": [
-            [
-                {"role": "user", "content": "Hello"},
-                {"role": "assistant", "content": "Hi!"},
-            ]
-        ]
-    }
-
-    # Use a simple custom pattern
-    custom_pattern = r"<\|im_start\|>assistant\s*(.*?)<\|im_end\|>"
-
-    dataset = HFDataset.from_dict(data)
-    result = build_eagle3_dataset(
-        dataset, processor, max_length=512, num_proc=1, assistant_pattern=custom_pattern
-    )
-
-    # Should successfully build dataset with custom pattern
-    assert isinstance(result, HFDataset)
-    assert len(result) > 0
 
 
 # Tests for tool role and tool_calls / thinking field preservation
@@ -1271,18 +834,15 @@ def test_preprocess_batch_with_tools():
         "conversations": [conv],
     }
 
-    assistant_pattern = _detect_assistant_pattern(tokenizer)
     results_with = _preprocess_batch(
         examples_with_tools,
         tokenizer,
         max_length=512,
-        assistant_pattern=assistant_pattern,
     )
     results_without = _preprocess_batch(
         examples_without_tools,
         tokenizer,
         max_length=512,
-        assistant_pattern=assistant_pattern,
     )
 
     assert "input_ids" in results_with
@@ -1323,64 +883,11 @@ def test_preprocess_batch_with_invalid_tools_json():
         "tools": ["this is not valid json"],
     }
 
-    assistant_pattern = _detect_assistant_pattern(tokenizer)
     # Must not raise; the bad JSON entry is skipped with a warning
-    results = _preprocess_batch(
-        examples, tokenizer, max_length=512, assistant_pattern=assistant_pattern
-    )
+    results = _preprocess_batch(examples, tokenizer, max_length=512)
 
     assert "input_ids" in results
     assert len(results["input_ids"]) == 1
-
-
-@pytest.mark.sanity
-def test_preprocess_batch_tools_with_hf_assistant_mask():
-    """Test that tools are forwarded when using the HF assistant token mask path."""
-    tokenizer = AutoTokenizer.from_pretrained(TEXT_MODEL_REPO, trust_remote_code=True)
-
-    if not hasattr(tokenizer, "apply_chat_template") or tokenizer.chat_template is None:
-        pytest.skip("Tokenizer does not support chat templates")
-
-    if not _supports_assistant_mask(tokenizer):
-        pytest.skip("Tokenizer does not support HF assistant token mask")
-
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    example_tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "get_weather",
-                "description": "Get the current weather",
-                "parameters": {
-                    "type": "object",
-                    "properties": {"location": {"type": "string"}},
-                    "required": ["location"],
-                },
-            },
-        }
-    ]
-
-    examples = {
-        "conversations": [
-            [
-                {"role": "user", "content": "What's the weather in Prague?"},
-                {"role": "assistant", "content": "Let me check."},
-            ]
-        ],
-        "tools": [json.dumps(example_tools)],
-    }
-
-    # assistant_pattern=None selects the HF mask path
-    results = _preprocess_batch(
-        examples, tokenizer, max_length=512, assistant_pattern=None
-    )
-
-    assert "input_ids" in results
-    assert "loss_mask" in results
-    assert len(results["input_ids"]) == 1
-    assert torch.any(results["loss_mask"][0] == 1)
 
 
 @pytest.mark.sanity
