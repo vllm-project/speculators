@@ -162,6 +162,8 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--auf`** (flag, default: off) Enable Accept-Until-Fail (AUF) truncation on the loss mask (arXiv 2607.01893). Zeros positions after the first greedy prediction error in each block, aligning training with the verifier's prefix-acceptance semantics. For Domino, only the base branch is truncated; the final branch always uses the full mask.
 
+- **`--normalize-loss-by-decay`** (flag, default: off) Normalize loss by the sum of decay weights instead of token count. Produces a proper weighted average, stabilizing loss magnitude across different gamma values.
+
 ### Domino-Specific Arguments
 
 - **`--projector-type`** (choice: `dflash`|`domino`, default: `"dflash"`) Projector type for DFlash. `"dflash"` uses standard parallel logits. `"domino"` adds a lightweight causal GRU correction head that refines base logits with a recurrent state built from previous draft tokens.
