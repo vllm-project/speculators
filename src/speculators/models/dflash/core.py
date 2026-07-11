@@ -582,7 +582,8 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             "final_full_acc_total": final_metrics["full_acc_total"],
             "lambda_base_sum": torch.tensor(lambda_base, device=logits.device),
             "lambda_base_total": ones,
-            **{k: v for k, v in final_metrics.items() if k.startswith("position_")},
+            **{k: v for k, v in final_metrics.items()
+               if k.startswith("position_") or k.startswith("eal")},
         }
 
         # AUF observability: mean j* (first error position) - proxy for acceptance
