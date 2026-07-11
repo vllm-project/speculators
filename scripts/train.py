@@ -1088,6 +1088,15 @@ def parse_args():
         "from start to 0 (default: 0.5). Set to 0 to disable decay.",
     )
     parser.add_argument(
+        "--domino-auf",
+        action="store_true",
+        default=False,
+        help="Enable Accept-Until-Fail (AUF) truncation on the Domino base branch "
+        "loss (arXiv 2607.01893). Zeros positions after the first greedy prediction "
+        "error in each block, aligning training with the verifier's prefix-acceptance "
+        "semantics. The final branch always uses the full mask. (default: False)",
+    )
+    parser.add_argument(
         "--draft-attn-impl",
         type=str,
         default="simple_flex_attention",

@@ -203,6 +203,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             "gru_hidden_dim": kwargs.get("domino_gru_hidden_dim", 1024),
             "lambda_base_start": kwargs.get("domino_lambda_start", 1.0),
             "lambda_base_decay_ratio": kwargs.get("domino_lambda_decay_ratio", 0.5),
+            "domino_auf": kwargs.get("domino_auf", False),
             "speculators_config": SpeculatorsConfig(
                 algorithm=algorithm,
                 proposal_methods=[
@@ -243,6 +244,50 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             "dpace_alpha": dpace_alpha,
         }
         return dict(shared), dict(shared)
+
+    @staticmethod
+    def _auf_mask(
+        logits: torch.Tensor,
+        targets: torch.Tensor,
+        base_mask: torch.Tensor,
+        num_anchors: int,
+        block_size: int,
+    ) -> torch.Tensor:
+        """Compute the Accept-Until-Fail (AUF) loss mask for the base branch.
+
+        Truncates the cross-entropy support at the first greedy prediction error
+        within each block. Positions up to and including the first error (the
+        "breaker" token j*) retain their gradient; positions strictly after j*
+        are zeroed. This aligns training supervision with the prefix-acceptance
+        semantics of the verifier and eliminates wasted capacity on unreachable
+        suffix positions.
+
+        Reference: Yang & Li, "Spec-AUF: Accept-Until-Fail Training under
+        Train-Inference Misalignment for Masked Block Drafters" (arXiv 2607.01893).
+
+        Args:
+            logits: Base logits [1, T, vocab]. Detached internally — j* is not
+                a gradient path.
+            targets: Verifier logit distributions [1, T, vocab]. Detached
+                internally.
+            base_mask: Boolean validity mask [1, T] (e.g. domino_loss_mask).
+            num_anchors: Number of anchor blocks.
+            block_size: Tokens per block.
+
+        Returns:
+            Boolean mask [1, T] with the same shape as base_mask, zeroed out
+            for all positions strictly after the first error in each block.
+        """
+        base_preds_4d = logits.detach().argmax(dim=-1).reshape(1, num_anchors, block_size)
+        target_ids_4d = targets.detach().argmax(dim=-1).reshape(1, num_anchors, block_size)
+        mask_4d = base_mask.reshape(1, num_anchors, block_size)
+        errors = (base_preds_4d != target_ids_4d) & mask_4d
+        error_floats = errors.float()
+        running_errors = error_floats.cumsum(dim=-1)
+        # errors_before == 0: keep accepted prefix + breaker token j*
+        # errors_before >= 1: zero the unreachable suffix
+        errors_before = running_errors - error_floats
+        return (mask_4d & (errors_before == 0)).reshape_as(base_mask)
 
     @property
     def mask_token_id(self) -> int:
@@ -491,31 +536,19 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             anchor_pos_in_mask = anchored_block_indices[:: self.block_size]
             domino_loss_mask[:, :: self.block_size] = loss_mask[:, anchor_pos_in_mask]
 
-            # B-AUF+D: truncate L_base at the first greedy prediction error
-            # within each block. L_final retains the full domino_loss_mask so
-            # the GRU receives long-range gradients for hidden-state stabilisation.
-            # Both predictions and target tokens are detached — j* is not a gradient path.
-            # targets is [1, T, vocab] (verifier logits), take argmax to get token ids.
-            base_preds_4d = logits.detach().argmax(dim=-1).reshape(
-                1, num_anchors, self.block_size
-            )
-            target_ids_4d = targets.detach().argmax(dim=-1).reshape(
-                1, num_anchors, self.block_size
-            )
-            mask_4d = domino_loss_mask.reshape(1, num_anchors, self.block_size)
-            errors = (base_preds_4d != target_ids_4d) & mask_4d
-            error_floats = errors.float()
-            running_errors = error_floats.cumsum(dim=-1)
-            # errors_before_current == 0 keeps the accepted prefix and the
-            # breaker token j* itself; positions strictly after j* are zeroed.
-            errors_before = running_errors - error_floats
-            auf_mask = (mask_4d & (errors_before == 0)).reshape_as(domino_loss_mask)
+            # B-AUF+D (arXiv 2607.01893): L_final keeps full mask; L_base is optionally truncated.
+            if self.config.domino_auf:
+                base_mask = self._auf_mask(
+                    logits, targets, domino_loss_mask, num_anchors, self.block_size
+                )
+            else:
+                base_mask = domino_loss_mask
 
             domino_decay = "domino" if self.config.shift_label else "dflash"
             base_loss, base_metrics = compute_metrics(
                 logits,
                 targets,
-                auf_mask,            # AUF-truncated: only prefix + breaker
+                base_mask,
                 self.block_size,
                 gamma=gamma,
                 loss_config=loss_config,

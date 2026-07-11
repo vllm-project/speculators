@@ -116,6 +116,14 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
         "from lambda_base_start to 0. E.g. 0.5 means decay finishes at the midpoint. "
         "Set to 0 to keep lambda_base at lambda_base_start (no decay). (default: 0.5)",
     )
+    domino_auf: bool = Field(
+        default=False,
+        description="Enable Accept-Until-Fail (AUF) truncation on the base branch "
+        "loss (arXiv 2607.01893). Zeros out positions after the first greedy "
+        "prediction error in each block, aligning training with the verifier's "
+        "prefix-acceptance semantics. The final branch always uses the full mask. "
+        "(default: False)",
+    )
 
     @field_serializer("transformer_layer_config")
     def serialize_transformer_config(self, value: PretrainedConfig) -> dict:
