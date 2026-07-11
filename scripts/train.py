@@ -1067,13 +1067,6 @@ def parse_args():
         "(default: 1)",
     )
     parser.add_argument(
-        "--domino-shift-label",
-        default=True,
-        action=argparse.BooleanOptionalAction,
-        help="Shift labels so the first predicted position is anchor+1 "
-        "(enabled by default for Domino)",
-    )
-    parser.add_argument(
         "--domino-lambda-start",
         type=float,
         default=1.0,

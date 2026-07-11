@@ -1,6 +1,6 @@
 from typing import Any, Literal
 
-from pydantic import Field, field_serializer, field_validator, model_validator
+from pydantic import Field, field_serializer, field_validator
 from transformers import AutoConfig, PretrainedConfig
 from transformers.models.qwen3.modeling_qwen3 import (
     Qwen3Config,
@@ -76,13 +76,6 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
         "correction head)",
     )
 
-    shift_label: bool = Field(
-        default=False,
-        description="Shift targets by 1 so position k predicts token at anchor+k+1 "
-        "(required for Domino; prevents GRU from seeing the token it is predicting). "
-        "Has no effect for projector_type='dflash'.",
-    )
-
     pure_draft_prefix_len: int = Field(
         default=1,
         ge=0,
@@ -125,13 +118,6 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
         "prefix-acceptance semantics. The final branch always uses the full mask. "
         "(default: False)",
     )
-
-    @model_validator(mode="after")
-    def _default_shift_label_for_domino(self) -> "DFlashSpeculatorConfig":
-        """Default shift_label=True for Domino; False is only safe for plain DFlash."""
-        if self.projector_type == "domino" and not self.shift_label:
-            self.shift_label = True
-        return self
 
     @field_serializer("transformer_layer_config")
     def serialize_transformer_config(self, value: PretrainedConfig) -> dict:

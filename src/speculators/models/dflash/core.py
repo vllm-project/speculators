@@ -197,7 +197,6 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             "mask_token_id": kwargs.get("mask_token_id"),
             "sliding_window_non_causal": kwargs.get("sliding_window_non_causal", False),
             "projector_type": kwargs.get("projector_type", "dflash"),
-            "shift_label": kwargs.get("domino_shift_label", True),
             "pure_draft_prefix_len": kwargs.get("domino_pure_draft_prefix_len", 1),
             "emb_dim": kwargs.get("domino_emb_dim", 256),
             "gru_hidden_dim": kwargs.get("domino_gru_hidden_dim", 1024),
@@ -422,7 +421,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             )
             # Shift right by 1 so verifier_logits[i] predicts token at position i
             verifier_logits = torch.roll(verifier_logits, 1, dims=1)
-            target_indices = anchored_block_indices + (1 if self.config.shift_label else 0)
+            target_indices = anchored_block_indices + (1 if self.config.projector_type == "domino" else 0)
             target_indices = target_indices.clamp(max=verifier_logits.shape[1] - 1)
             targets = verifier_logits[:, target_indices]
             # shape: [1, num_anchors*block_size, draft_vocab_size]
@@ -456,7 +455,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
 
         aligned_loss_mask[:, :: self.block_size] = 0
 
-        if self.config.shift_label:
+        if self.config.projector_type == "domino":
             oob = (anchored_block_indices + 1) >= verifier_logits.shape[1]
             aligned_loss_mask[:, oob] = 0
 
@@ -512,7 +511,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
 
             suffix_start = (
                 self.config.pure_draft_prefix_len
-                if self.config.shift_label
+                if self.config.projector_type == "domino"
                 else 1 + self.config.pure_draft_prefix_len
             )
 
@@ -542,7 +541,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             else:
                 base_mask = domino_loss_mask
 
-            domino_decay = "domino" if self.config.shift_label else "dflash"
+            domino_decay = "domino" if self.config.projector_type == "domino" else "dflash"
             base_loss, base_metrics = compute_metrics(
                 logits,
                 targets,
