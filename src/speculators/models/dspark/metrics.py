@@ -38,6 +38,7 @@ def _masked_decayed_mean(
     """Masked, optionally position-decayed mean of a precomputed per-position term."""
     loss_mask = loss_mask.to(elementwise.dtype)
     weighted = elementwise * loss_mask
+    denominator = loss_mask.sum(dim=1) + _EPS
     if decay_fn is not None:
         decay_mult = decay_fn(
             pos_idx.to(weighted.dtype), elementwise_loss=elementwise
@@ -45,10 +46,6 @@ def _masked_decayed_mean(
         weighted = weighted * decay_mult
         if normalize_by_decay:
             denominator = (loss_mask * decay_mult).sum(dim=1) + _EPS
-        else:
-            denominator = loss_mask.sum(dim=1) + _EPS
-    else:
-        denominator = loss_mask.sum(dim=1) + _EPS
     return (weighted.sum(dim=1) / denominator).mean()
 
 
