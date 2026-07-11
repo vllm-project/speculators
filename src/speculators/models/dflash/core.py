@@ -290,7 +290,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         target_ids_4d = (
             targets.detach().argmax(dim=-1).reshape(1, num_anchors, block_size)
         )
-        mask_4d = base_mask.reshape(1, num_anchors, block_size)
+        mask_4d = base_mask.bool().reshape(1, num_anchors, block_size)
         errors = (base_preds_4d != target_ids_4d) & mask_4d
         error_floats = errors.float()
         running_errors = error_floats.cumsum(dim=-1)

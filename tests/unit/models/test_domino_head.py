@@ -505,3 +505,191 @@ class TestLambdaBaseDecay:
         # Loss at midpoint must not equal either extreme
         assert ls != fls, "Loss must not equal pure final_loss at midpoint"
         assert ls != bls, "Loss must not equal pure base_loss at midpoint"
+
+
+# ---------------------------------------------------------------------------
+# AUF mask tests
+# ---------------------------------------------------------------------------
+
+
+class TestAufMask:
+    """Unit tests for DFlashDraftModel._auf_mask (static method)."""
+
+    def _make_inputs(self, num_anchors, block_size, pred_ids, target_ids, mask=None):
+        vocab = max(*pred_ids, *target_ids) + 1
+        T = num_anchors * block_size
+        logits = torch.zeros(1, T, vocab)
+        targets = torch.zeros(1, T, vocab)
+        for i, (p, t) in enumerate(zip(pred_ids, target_ids, strict=True)):
+            logits[0, i, p] = 10.0
+            targets[0, i, t] = 10.0
+        if mask is None:
+            mask = torch.ones(1, T, dtype=torch.bool)
+        return logits, targets, mask
+
+    def test_all_correct_keeps_full_mask(self):
+        logits, targets, mask = self._make_inputs(
+            num_anchors=2,
+            block_size=4,
+            pred_ids=[1, 2, 3, 4, 5, 6, 7, 8],
+            target_ids=[1, 2, 3, 4, 5, 6, 7, 8],
+        )
+        result = DFlashDraftModel._auf_mask(logits, targets, mask, 2, 4)
+        assert torch.equal(result, mask)
+
+    def test_error_at_pos2_zeros_suffix(self):
+        logits, targets, mask = self._make_inputs(
+            num_anchors=1,
+            block_size=4,
+            pred_ids=[1, 2, 9, 4],
+            target_ids=[1, 2, 3, 4],
+        )
+        result = DFlashDraftModel._auf_mask(logits, targets, mask, 1, 4)
+        expected = torch.tensor([[True, True, True, False]])
+        assert torch.equal(result, expected)
+
+    def test_error_at_pos0_keeps_only_pos0(self):
+        logits, targets, mask = self._make_inputs(
+            num_anchors=1,
+            block_size=4,
+            pred_ids=[9, 2, 3, 4],
+            target_ids=[1, 2, 3, 4],
+        )
+        result = DFlashDraftModel._auf_mask(logits, targets, mask, 1, 4)
+        expected = torch.tensor([[True, False, False, False]])
+        assert torch.equal(result, expected)
+
+    def test_multiple_errors_truncates_at_first(self):
+        logits, targets, mask = self._make_inputs(
+            num_anchors=1,
+            block_size=4,
+            pred_ids=[1, 9, 9, 9],
+            target_ids=[1, 2, 3, 4],
+        )
+        result = DFlashDraftModel._auf_mask(logits, targets, mask, 1, 4)
+        expected = torch.tensor([[True, True, False, False]])
+        assert torch.equal(result, expected)
+
+    def test_single_error_at_last_pos_keeps_all(self):
+        logits, targets, mask = self._make_inputs(
+            num_anchors=1,
+            block_size=4,
+            pred_ids=[1, 2, 3, 9],
+            target_ids=[1, 2, 3, 4],
+        )
+        result = DFlashDraftModel._auf_mask(logits, targets, mask, 1, 4)
+        expected = torch.tensor([[True, True, True, True]])
+        assert torch.equal(result, expected)
+
+    def test_multiple_blocks_independent(self):
+        logits, targets, mask = self._make_inputs(
+            num_anchors=2,
+            block_size=3,
+            pred_ids=[1, 9, 3, 4, 5, 9],
+            target_ids=[1, 2, 3, 4, 5, 6],
+        )
+        result = DFlashDraftModel._auf_mask(logits, targets, mask, 2, 3)
+        expected = torch.tensor([[True, True, False, True, True, True]])
+        assert torch.equal(result, expected)
+
+    def test_return_j_star_no_error(self):
+        logits, targets, mask = self._make_inputs(
+            num_anchors=1,
+            block_size=4,
+            pred_ids=[1, 2, 3, 4],
+            target_ids=[1, 2, 3, 4],
+        )
+        auf_mask, j_star = DFlashDraftModel._auf_mask(
+            logits, targets, mask, 1, 4, return_j_star=True
+        )
+        assert j_star.item() == 4  # block_size = no error
+
+    def test_return_j_star_with_errors(self):
+        logits, targets, mask = self._make_inputs(
+            num_anchors=2,
+            block_size=4,
+            pred_ids=[1, 9, 3, 4, 9, 2, 3, 4],
+            target_ids=[1, 2, 3, 4, 1, 2, 3, 4],
+        )
+        auf_mask, j_star = DFlashDraftModel._auf_mask(
+            logits, targets, mask, 2, 4, return_j_star=True
+        )
+        assert j_star[0].item() == 1  # first error at pos 1
+        assert j_star[1].item() == 0  # first error at pos 0
+
+    def test_masked_positions_not_counted_as_errors(self):
+        logits, targets, mask = self._make_inputs(
+            num_anchors=1,
+            block_size=4,
+            pred_ids=[1, 9, 3, 4],
+            target_ids=[1, 2, 3, 4],
+        )
+        mask[0, 1] = False  # mask out the position with wrong prediction
+        result = DFlashDraftModel._auf_mask(logits, targets, mask, 1, 4)
+        expected = torch.tensor([[True, False, True, True]])
+        assert torch.equal(result, expected)
+
+
+@requires_cuda
+class TestDominoAuf:
+    """Integration test: forward/backward with domino_auf=True."""
+
+    def test_auf_forward_backward(self):
+        torch.compiler.reset()
+        model = _make_tiny_model(
+            block_size=4,
+            projector_type="domino",
+            lambda_base_start=0.5,
+            lambda_base_decay_ratio=1.0,
+        )
+        model.config.domino_auf = True
+        data = _make_synthetic_data(seq_len=32, loss_mask_all=False)
+        _, loss, metrics = model(
+            data["hidden_states"],
+            data["input_ids"],
+            data["loss_mask"],
+            data["verifier_last_hidden_states"],
+            data["document_ids"],
+            loss_config=resolve_loss_config("ce"),
+            global_step=50,
+            total_steps=200,
+        )
+        assert loss.isfinite()
+        loss.backward()
+        assert "j_star_sum" in metrics
+        assert "j_star_total" in metrics
+
+    def test_auf_changes_base_loss(self):
+        torch.compiler.reset()
+        model = _make_tiny_model(
+            block_size=4,
+            projector_type="domino",
+            lambda_base_start=1.0,
+            lambda_base_decay_ratio=0.0,
+        )
+        data = _make_synthetic_data(seq_len=32, loss_mask_all=True)
+        fwd_args = {
+            "hidden_states": data["hidden_states"],
+            "input_ids": data["input_ids"],
+            "loss_mask": data["loss_mask"],
+            "verifier_last_hidden_states": data["verifier_last_hidden_states"],
+            "document_ids": data["document_ids"],
+            "loss_config": resolve_loss_config("ce"),
+        }
+
+        model.config.domino_auf = False
+        _, loss_no_auf, _ = model(**fwd_args)
+
+        model.config.domino_auf = True
+        _, loss_auf, metrics = model(**fwd_args)
+
+        assert loss_auf.isfinite()
+        assert loss_no_auf.isfinite()
+        # AUF truncates some positions, so loss should differ
+        # (unless all predictions happen to be correct)
+        j_star_total = metrics.get("j_star_total", torch.tensor(0.0))
+        if j_star_total.item() > 0:
+            j_star_mean = metrics["j_star_sum"].item() / j_star_total.item()
+            # j_star < block_size means there were errors → mask differs
+            if j_star_mean < 4.0:
+                assert not torch.allclose(loss_auf, loss_no_auf, rtol=1e-4)
