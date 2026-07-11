@@ -18,6 +18,7 @@ from speculators.models.metrics import (
     compound_loss,
     compute_accuracy_multi_step,
     dflash_loss_decay,
+    dpace_loss_decay,
 )
 
 __all__ = [
@@ -31,14 +32,16 @@ def _masked_decayed_mean(
     elementwise: torch.Tensor,  # [1, T]
     loss_mask: torch.Tensor,  # [1, T]
     pos_idx: torch.Tensor,  # [1, T]
-    decay_fn: Callable[[torch.Tensor], torch.Tensor] | None,
+    decay_fn: Callable[..., torch.Tensor] | None,
     normalize_by_decay: bool = False,
 ) -> torch.Tensor:
     """Masked, optionally position-decayed mean of a precomputed per-position term."""
     loss_mask = loss_mask.to(elementwise.dtype)
     weighted = elementwise * loss_mask
     if decay_fn is not None:
-        decay_mult = decay_fn(pos_idx.to(weighted.dtype))
+        decay_mult = decay_fn(
+            pos_idx.to(weighted.dtype), elementwise_loss=elementwise
+        )
         weighted = weighted * decay_mult
         if normalize_by_decay:
             denominator = (loss_mask * decay_mult).sum(dim=1) + _EPS
@@ -59,13 +62,23 @@ def compute_metrics(
     gamma: float = 4.0,
     confidence_head_alpha: float = 1.0,
     normalize_by_decay: bool = False,
+    per_position_loss_weight: str = "fixed-exp-decay",
+    dpace_alpha: float = 0.5,
 ) -> tuple[torch.Tensor, dict]:
     """Compute the DSpark loss and a metrics dict (``*_sum``/``*_total`` pairs)."""
 
     device = logits.device
     seq_len = logits.shape[1]
     pos_idx = (torch.arange(seq_len, device=device) % block_size).unsqueeze(0)
-    decay_fn = partial(dflash_loss_decay, gamma=gamma)
+    if per_position_loss_weight == "dpace":
+        decay_fn = partial(
+            dpace_loss_decay,
+            loss_mask=loss_mask,
+            block_size=block_size,
+            dpace_alpha=dpace_alpha,
+        )
+    else:
+        decay_fn = partial(dflash_loss_decay, gamma=gamma)
 
     loss, term_losses = compound_loss(
         logits,

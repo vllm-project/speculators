@@ -507,6 +507,37 @@ def _parse_conv_tools(conv_tools: object, idx: int) -> list | None:
         return None
 
 
+def _passthrough_pretokenized(
+    examples: dict, max_length: int, minimum_valid_tokens: int | None = None
+) -> dict[str, list]:
+    """Carry pre-tokenized ``(input_ids, loss_mask)`` rows through, truncated only.
+
+    On-policy regeneration already applied the boundary as the mask, so these rows
+    need no chat-template rendering or regex span detection.
+    """
+    results: dict[str, list] = {"input_ids": [], "loss_mask": [], "seq_len": []}
+    for ids, mask in zip(examples["input_ids"], examples["loss_mask"], strict=True):
+        # `strict=True` only pairs the columns; a per-row skew would survive it and
+        # the collator packs each key independently, silently shifting the mask
+        # against the ids for every sample packed after this one.
+        if len(ids) != len(mask):
+            raise ValueError(
+                f"Pre-tokenized row shape mismatch: "
+                f"input_ids={len(ids)}, loss_mask={len(mask)}"
+            )
+        trimmed_ids = ids[:max_length]
+        trimmed_mask = mask[:max_length]
+        if (
+            minimum_valid_tokens is not None
+            and sum(trimmed_mask) < minimum_valid_tokens
+        ):
+            continue
+        results["input_ids"].append(torch.tensor(trimmed_ids, dtype=torch.long))
+        results["loss_mask"].append(torch.tensor(trimmed_mask, dtype=torch.long))
+        results["seq_len"].append(len(trimmed_ids))
+    return results
+
+
 def _preprocess_batch(
     examples: dict,
     processor: ProcessorLike,
@@ -516,6 +547,11 @@ def _preprocess_batch(
     minimum_valid_tokens: int | None = None,
 ) -> dict[str, list]:
     """Process a batch of conversations into tokenized format with loss masks."""
+
+    # On-policy regeneration rows are already masked (boundary); pass them through
+    # instead of re-tokenizing and re-masking.
+    if "input_ids" in examples and "loss_mask" in examples:
+        return _passthrough_pretokenized(examples, max_length, minimum_valid_tokens)
 
     results: dict[str, list] = {"input_ids": [], "loss_mask": [], "seq_len": []}
     conversations: list[dict] = examples.get("conversations", [])
@@ -570,6 +606,11 @@ def _preprocess_batch(
             f"Shape mismatch: input_ids={len(input_ids)}, loss_mask={len(loss_mask)}"
         )
 
+        # Bound both to max_length: a turn running past the window keeps only its
+        # in-window tokens, and input_ids/loss_mask stay aligned and bounded.
+        input_ids = input_ids[:max_length]
+        loss_mask = loss_mask[:max_length]
+
         # Filtering samples out with too few valid tokens
         if minimum_valid_tokens is not None:
             num_valid_tokens = int(loss_mask.sum().item())
@@ -612,8 +653,21 @@ def build_eagle3_dataset(
                      conversation
         minimum_valid_tokens: Number of tokens to consider for a valid sample
     """
+    original_cols = dataset.column_names
+    # These rows carry the generation boundary as their mask, so _preprocess_batch
+    # passes them through: no chat template, no span detection, no turn dropout.
+    pretokenized = {"input_ids", "loss_mask"} <= set(original_cols)
+
+    if pretokenized:
+        log.info("Pre-tokenized rows: using their loss mask, skipping chat template")
+        if turn_dropout:
+            log.warning("turn_dropout does not apply to pre-tokenized rows; ignoring")
+        if assistant_pattern is not None:
+            log.warning(
+                "assistant_pattern does not apply to pre-tokenized rows; ignoring"
+            )
     # Detect and use provided assistant message pattern
-    if assistant_pattern is not None:
+    elif assistant_pattern is not None:
         log.info(f"Using custom assistant pattern: {str(assistant_pattern)[:80]}...")
     elif _supports_assistant_mask(processor):
         assistant_pattern = None  # Signal to use HF mask in _preprocess_batch
@@ -621,8 +675,6 @@ def build_eagle3_dataset(
     else:
         assistant_pattern = _detect_assistant_pattern(processor)
         log.info(f"Detected assistant pattern: {str(assistant_pattern)[:80]}...")
-
-    original_cols = dataset.column_names
 
     # Avoid CPU contention for MM processing:
     # https://github.com/vllm-project/vllm/pull/31879
@@ -796,6 +848,7 @@ def load_and_preprocess_dataset(
     assistant_pattern: str | None = None,
     turn_dropout: bool = False,
     minimum_valid_tokens: int | None = None,
+    allow_empty_output: bool = False,
     trust_remote_code: bool = False,
 ) -> tuple[HFDataset, ProcessorLike]:
     """Load, tokenize, and preprocess a dataset for EAGLE3 training.
@@ -818,6 +871,8 @@ def load_and_preprocess_dataset(
         turn_dropout: If True, randomly keeps first N consecutive turns per
                      conversation
         minimum_valid_tokens: Number of tokens to consider for a valid sample
+        allow_empty_output: If True, allow returning an empty dataset instead of
+                          raising when no samples survive preprocessing.
         trust_remote_code: If True, allows executing code from HF Hub.
 
     Returns:
@@ -882,14 +937,24 @@ def load_and_preprocess_dataset(
     if max_samples is not None and len(combined_dataset) > max_samples:
         combined_dataset = combined_dataset.select(range(max_samples))
 
+    if len(combined_dataset) == 0 and not allow_empty_output:
+        raise ValueError(
+            "No samples remain after preprocessing. Check the dataset schema, "
+            "assistant masking, and --minimum-valid-tokens. Pass "
+            "--allow-empty-output if an empty dataset is intentional."
+        )
+
     log.subsection("Computing token frequency distribution")
     save_token_frequency_distribution(
         dataset=combined_dataset,
         output_path=token_freq_path,
     )
 
-    log.subsection("Visualizing sample")
-    _visualize_sample(combined_dataset, processor, idx=0)
+    if len(combined_dataset) == 0:
+        log.warning("No samples remain after preprocessing; skipping visualization")
+    else:
+        log.subsection("Visualizing sample")
+        _visualize_sample(combined_dataset, processor, idx=0)
 
     log.section("Dataset preprocessing complete")
 

@@ -560,7 +560,9 @@ class TestPEagleParams:
 class TestMTPParams:
     @pytest.mark.parametrize("num_speculative_steps", [1, 2, 5])
     def test_varying_num_speculative_steps(self, num_speculative_steps):
-        model = make_mtp_model(num_speculative_steps=num_speculative_steps)
+        model = make_mtp_model(
+            num_speculative_steps=num_speculative_steps, torch_compile=False
+        )
         step_weights = compute_step_weights(num_steps=num_speculative_steps)
         samples = _make_samples(
             [128],

@@ -49,6 +49,11 @@ DRAFT_ARCH_CONFIGS: dict[str, type] = {
     "qwen3": Qwen3Config,
 }
 
+# Speculator types that default every draft layer to sliding window attention;
+# --full-attention-indices opts specific layers back into full attention. All
+# other speculator types use full attention on every layer.
+SLIDING_WINDOW_SPECULATOR_TYPES = ("dflash", "dspark")
+
 
 def set_seed(seed: int, deterministic: bool = False):
     """Set random seeds for reproducibility."""
@@ -69,7 +74,7 @@ def create_transformer_layer_config(  # noqa: C901
     draft_arch: str,
     hidden_act: str | None,
     sliding_window: int,
-    sliding_window_indices: list[int],
+    full_attention_indices: list[int],
 ) -> PretrainedConfig:
     if draft_arch not in DRAFT_ARCH_CONFIGS:
         raise ValueError(
@@ -116,15 +121,15 @@ def create_transformer_layer_config(  # noqa: C901
         if num_attention_heads % num_key_value_heads != 0:
             num_key_value_heads = num_attention_heads
 
-    if sliding_window_indices and (
-        min(sliding_window_indices) < 0 or max(sliding_window_indices) >= num_layers
+    if full_attention_indices and (
+        min(full_attention_indices) < 0 or max(full_attention_indices) >= num_layers
     ):
         raise ValueError(
-            "Sliding window indices must be validate draft layer ids "
+            "Full attention indices must be valid draft layer ids "
             "in range [0, num_layers)."
         )
     layer_types = [
-        "sliding_attention" if i in sliding_window_indices else "full_attention"
+        "full_attention" if i in full_attention_indices else "sliding_attention"
         for i in range(num_layers)
     ]
 
@@ -142,7 +147,7 @@ def create_transformer_layer_config(  # noqa: C901
         head_dim=head_dim,
         tie_word_embeddings=False,
         sliding_window=sliding_window,
-        use_sliding_window=bool(sliding_window_indices),
+        use_sliding_window="sliding_attention" in layer_types,
         layer_types=layer_types,
     )
 
@@ -385,13 +390,28 @@ def build_draft_model(
                 args.draft_config, args.verifier_name_or_path
             )
         else:
+            if args.speculator_type in SLIDING_WINDOW_SPECULATOR_TYPES:
+                full_attention_indices = args.full_attention_indices
+                if not full_attention_indices:
+                    logger.info(
+                        "All %d draft layers using sliding window attention "
+                        "(window=%d). To use full attention on specific layers, "
+                        "pass '--full-attention-indices <layer_ids>'.",
+                        args.num_layers,
+                        args.sliding_window,
+                    )
+            else:
+                # Other speculator types (eagle3, peagle) only support full
+                # attention: mark every layer full-attention.
+                full_attention_indices = list(range(args.num_layers))
+
             transformer_layer_config = create_transformer_layer_config(
                 verifier_name_or_path=args.verifier_name_or_path,
                 num_layers=args.num_layers,
                 draft_arch=args.draft_arch,
                 hidden_act=args.draft_hidden_act,
                 sliding_window=args.sliding_window,
-                sliding_window_indices=args.sliding_window_indices,
+                full_attention_indices=full_attention_indices,
             )
 
         args.mask_token_id = resolve_mask_token_id(
@@ -449,14 +469,15 @@ def main(args: argparse.Namespace):  # noqa: C901
     else:
         d2t, t2d, draft_vocab_size = parse_vocab_mappings(args)
 
-        if args.sliding_window_indices and args.speculator_type not in (
-            "dflash",
-            "dspark",
+        if (
+            args.full_attention_indices
+            and args.speculator_type not in SLIDING_WINDOW_SPECULATOR_TYPES
         ):
             raise ValueError(
-                "Currently sliding window attention is only supported by dflash "
-                "and dspark draft models. Please open an issue/pr if you would like "
-                "to use sliding window attention with a different speculator type"
+                "--full-attention-indices is only meaningful for dflash and dspark "
+                "draft models (which use sliding window attention by default). "
+                "Please open an issue/pr if you would like to use sliding window "
+                "attention with a different speculator type."
             )
 
     registry = SpeculatorModel.registry
@@ -549,6 +570,7 @@ def main(args: argparse.Namespace):  # noqa: C901
         muon_adjust_lr_fn=args.muon_adjust_lr_fn,
         scheduler_type=args.scheduler_type,
         scheduler_warmup_steps=args.scheduler_warmup_steps,
+        scheduler_warmup_ratio=args.scheduler_warmup_ratio,
         scheduler_total_steps=args.scheduler_total_steps,
         scheduler_num_cosine_cycles=args.scheduler_num_cosine_cycles,
         checkpoint_freq=args.checkpoint_freq,
@@ -588,7 +610,7 @@ DECODER_SHAPING_FLAGS: dict[str, str] = {
     "draft_arch": "--draft-arch",
     "draft_hidden_act": "--draft-hidden-act",
     "sliding_window": "--sliding-window",
-    "sliding_window_indices": "--sliding-window-indices",
+    "full_attention_indices": "--full-attention-indices",
 }
 
 
@@ -670,7 +692,7 @@ def parse_args():
         "fresh draft is initialized from that full speculator config. Takes precedence "
         "over and is mutually exclusive with --draft-config and the decoder-shaping "
         "flags (--num-layers, --draft-arch, --draft-hidden-act, --sliding-window, "
-        "--sliding-window-indices).",
+        "--full-attention-indices).",
     )
     parser.add_argument(
         "--draft-config",
@@ -681,7 +703,7 @@ def parse_args():
         "transformer_layer_config; the rest of the speculator is built from the other "
         "CLI args. Mutually exclusive with --from-pretrained and with the "
         "decoder-shaping flags (--num-layers, --draft-arch, --draft-hidden-act, "
-        "--sliding-window, --sliding-window-indices).",
+        "--sliding-window, --full-attention-indices).",
     )
     parser.add_argument(
         "--dry-run",
@@ -969,6 +991,20 @@ def parse_args():
         "Produces a proper weighted average, stabilizing loss magnitude "
         "across different gamma values (default: False).",
     )
+    # D-Pace specific arguments (loss weight option + smoothing)
+    parser.add_argument(
+        "--per-position-loss-weight",
+        choices=["fixed-exp-decay", "dpace"],
+        default="fixed-exp-decay",
+        help="Per-position loss weight option for D-PACE support"
+        "default: fixed-exp-decay",
+    )
+    parser.add_argument(
+        "--dpace-alpha",
+        type=float,
+        default=0.5,
+        help="Smoothing constant for D-PACE loss (default: 0.5)",
+    )
     # DSpark-specific arguments (sequential Markov head + confidence head).
     parser.add_argument(
         "--markov-rank",
@@ -1083,27 +1119,27 @@ def parse_args():
         "--sliding-window",
         type=int,
         default=2048,
-        help="Sliding window size for sliding window attention layers."
-        "Must also set --sliding-window-indices.",
+        help="Sliding window size for sliding window attention layers (default: 2048). "
+        "For dflash and dspark, all layers use sliding window by default.",
     )
     parser.add_argument(
-        "--sliding-window-indices",
+        "--full-attention-indices",
         type=int,
         nargs="+",
         default=[],
-        help="(Optional) A (space separated) list of draft layer indices of sliding "
-        " window layers. All other draft layers are assumed to be full attention "
-        "layers. (e.g. 0 2 4 will make the first, third, and fifth layers use "
-        "sliding window attention and the second and fourth will be full attention)."
-        "Defaults to all layers using full attention.",
+        help="(Optional) Space-separated draft layer indices that should use full "
+        "attention instead of sliding window. For dflash and dspark, all layers "
+        "use sliding window attention by default. "
+        "(e.g. '--full-attention-indices 0 2' makes layers 0 and 2 use full "
+        "attention; the rest use sliding window).",
     )
     parser.add_argument(
         "--sliding-window-non-causal",
         action="store_true",
         default=False,
         help="Use non-causal (bidirectional) masking within draft blocks for sliding "
-        "window attention layers. Full attention layers are always bidirectional, for"
-        "DFlash. Note: vLLM currently doesn't support these models",
+        "window attention layers. Full attention layers are always bidirectional. "
+        "Note: vLLM currently doesn't support these models.",
     )
     # Dataloader parameters
     parser.add_argument(
@@ -1134,8 +1170,22 @@ def parse_args():
     )
 
     # lr scheduler
-    parser.add_argument("--scheduler-type", type=str, default="linear")
+    parser.add_argument(
+        "--scheduler-type",
+        type=str,
+        default="linear",
+        choices=["linear", "cosine", "none"],
+    )
     parser.add_argument("--scheduler-warmup-steps", type=int, default=None)
+    parser.add_argument(
+        "--scheduler-warmup-ratio",
+        type=float,
+        default=None,
+        help=(
+            "Warmup as a fraction of total scheduler steps, in [0, 1]. Ignored "
+            "(with a warning) when --scheduler-warmup-steps is also set."
+        ),
+    )
     parser.add_argument("--scheduler-total-steps", type=int, default=None)
     parser.add_argument("--scheduler-num-cosine-cycles", type=float, default=0.5)
 
@@ -1143,7 +1193,7 @@ def parse_args():
     parser.add_argument(
         "--optimizer",
         type=str,
-        default="adamw",
+        default="muon",
         choices=["adamw", "muon"],
         help=(
             "Optimizer to use. 'muon' applies Muon to 2D weight matrices and AdamW to "
@@ -1159,8 +1209,9 @@ def parse_args():
     parser.add_argument(
         "--muon-lr",
         type=float,
-        default=0.02,
-        help="LR for the Muon (2D weights) group. Only used with --optimizer muon.",
+        default=None,
+        help="LR for the Muon (2D weights) group. Only used with --optimizer muon. "
+        "Defaults to 10*lr (and --lr defaults to 1e-4)",
     )
     parser.add_argument("--muon-momentum", type=float, default=0.95)
     parser.add_argument("--muon-weight-decay", type=float, default=0.1)
@@ -1182,10 +1233,19 @@ def parse_args():
         args.norm_before_fc = is_eagle3
     if args.norm_output is None:
         args.norm_output = is_eagle3
+    if args.muon_lr is None:
+        args.muon_lr = 10 * args.lr
 
     provided = explicitly_provided_dests(parser, DECODER_SHAPING_FLAGS)
     validate_draft_init_args(parser, args, provided)
     resolve_loss_config(args.loss_fn)
+
+    if args.per_position_loss_weight == "dpace":
+        if args.loss_fn != "ce":
+            parser.error("--per-position-loss-weight=dpace requires --loss-fn=ce")
+        if not 0.0 < args.dpace_alpha <= 1.0:
+            raise ValueError(f"alpha must be in (0, 1], got {args.dpace_alpha}")
+
     return args
 
 

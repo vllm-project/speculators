@@ -1,26 +1,30 @@
 """Real, dependency-light tests for the response-regeneration script.
 
-Two seams are covered with no network and no mocked HTTP:
-
-1. ``extract_turns`` over the *actual* schemas of the supported datasets
-   (ultrachat ``messages`` role/content, magpie/open-perfectblend
-   ``conversations`` from/value, gsm8k single prompt), plus the robustness
-   fixes (empty conversation lists, non-dict elements, mixed schema).
-
-2. The conversation format the worker emits, consumed by the *real* downstream
-   ``_normalize_conversation``. This pins the train/infer contract the PR exists
-   to protect: the system turn and per-turn reasoning survive into training, and
-   the regenerated human/gpt turns map to user/assistant targets.
+No network and no mocked HTTP: the script's seams are exercised directly against
+the real downstream ``_preprocess_batch``, and ``worker`` is driven end to end
+over a fake endpoint.
 
 The script is not a package, so it is imported by path.
 """
 
+import asyncio
 import importlib.util
+import json
 from pathlib import Path
 
 import pytest
 
-from speculators.data_generation.preprocessing import _normalize_conversation
+from speculators.data_generation import vllm_client
+from speculators.data_generation.preprocessing import _preprocess_batch
+from speculators.data_generation.vllm_client import InvalidResponseError
+
+
+@pytest.fixture(autouse=True)
+def _no_retry_backoff(monkeypatch):
+    # with_retries sleeps RETRY_BACKOFF_BASE ** attempt between retries; zero it
+    # so the retry tests don't actually sleep.
+    monkeypatch.setattr(vllm_client, "RETRY_BACKOFF_BASE", 0)
+
 
 _SCRIPT_PATH = (
     Path(__file__).resolve().parents[3]
@@ -180,57 +184,346 @@ def test_extract_turns_no_usable_input_returns_empty():
 
 
 # ---------------------------------------------------------------------------
-# 2. Emitted conversation is consumed correctly by the real downstream
-#    normaliser (the train/infer contract).
+# 2. The generation boundary is the loss mask; pre-tokenized rows pass through.
 # ---------------------------------------------------------------------------
 
-# Multi-turn conversation carrying a system prompt, used to prove the contract.
-_CONTRACT_ROW = {
-    "conversations": [
-        {"from": "system", "value": "You are a terse assistant."},
-        {"from": "human", "value": "Hi"},
-        {"from": "gpt", "value": "<original answer to drop>"},
-        {"from": "human", "value": "And goodbye"},
-        {"from": "gpt", "value": "<original answer to drop>"},
+
+def test_build_boundary_sample_is_the_mask():
+    input_ids, loss_mask = regen.build_boundary_sample([10, 11, 12, 13], [20, 21, 22])
+    assert input_ids == [10, 11, 12, 13, 20, 21, 22]
+    assert loss_mask == [0, 0, 0, 0, 1, 1, 1]
+
+
+def test_pretokenized_rows_pass_through_preprocessing():
+    # A regen row reaches training already masked: no processor, no re-masking,
+    # and the review-only `conversations` field is dropped.
+    input_ids, loss_mask = regen.build_boundary_sample([10, 11, 12], [20, 21])
+    out = _preprocess_batch(
+        {
+            "input_ids": [input_ids],
+            "loss_mask": [loss_mask],
+            "conversations": [[{"role": "user", "content": "2+2?"}]],
+        },
+        processor=None,  # type: ignore[arg-type]  # passthrough never touches it
+        max_length=2048,
+        assistant_pattern=None,
+    )
+    assert out["input_ids"][0].tolist() == input_ids
+    assert out["loss_mask"][0].tolist() == loss_mask
+    assert "conversations" not in out
+
+
+def test_pretokenized_passthrough_truncates_and_filters():
+    # Truncation can cut the completion span away (all-zero mask); such a row must
+    # be dropped by minimum_valid_tokens, like the tokenized path.
+    kept = regen.build_boundary_sample([1, 2], [3, 4])  # fits max_length=4
+    cut = regen.build_boundary_sample([1, 2, 3, 4], [5, 6])  # completion truncated off
+    out = _preprocess_batch(
+        {"input_ids": [kept[0], cut[0]], "loss_mask": [kept[1], cut[1]]},
+        processor=None,  # type: ignore[arg-type]  # passthrough never touches it
+        max_length=4,
+        assistant_pattern=None,
+        minimum_valid_tokens=1,
+    )
+    assert [t.tolist() for t in out["input_ids"]] == [[1, 2, 3, 4]]
+    assert [m.tolist() for m in out["loss_mask"]] == [[0, 0, 1, 1]]
+
+
+def test_pretokenized_passthrough_rejects_length_mismatch():
+    # The passthrough accepts rows from any dataset carrying both columns. A row
+    # whose mask is shorter than its ids must fail loudly here: the collator packs
+    # each key independently, so it would otherwise shift the mask silently.
+    with pytest.raises(ValueError, match="shape mismatch"):
+        _preprocess_batch(
+            {"input_ids": [[1, 2, 3, 4, 5]], "loss_mask": [[0, 0, 1]]},
+            processor=None,  # type: ignore[arg-type]  # passthrough never touches it
+            max_length=2048,
+            assistant_pattern=None,
+        )
+
+
+# ---------------------------------------------------------------------------
+# 3. Stable resume identity.
+#
+# The prior resume keyed rows on ``uuid or idx`` (idx = streaming enumeration
+# index), which is unstable across --limit/--language-filter/order changes and
+# never matched the emitted output. A conversation now fans out to one row per
+# assistant turn, so the row ``id`` is turn-suffixed and cannot itself be the
+# resume key; each row carries the conversation's ``primary_id`` for that.
+# ---------------------------------------------------------------------------
+
+
+def test_primary_identifier_prefers_explicit_id_over_uuid():
+    assert regen._primary_identifier({"id": "abc", "uuid": "zzz"}) == "abc"
+
+
+def test_primary_identifier_uuid_when_no_id():
+    assert regen._primary_identifier({"uuid": "u1"}) == "u1"
+
+
+def test_primary_identifier_ignores_empty_values():
+    # An empty-string id is not "present"; resolution falls through to uuid.
+    assert regen._primary_identifier({"id": "", "uuid": "u"}) == "u"
+
+
+def test_primary_identifier_falls_back_to_content_hash():
+    # No explicit id/uuid -> deterministic content hash. Nested metadata ids are
+    # intentionally not consulted (the inputs that need this have no id at all).
+    row = {"question": "What is 6*7?", "answer": "42"}
+    reordered = {"answer": "42", "question": "What is 6*7?"}
+    pid = regen._primary_identifier(row)
+
+    assert pid.startswith("hash_")
+    # Same content, different key order -> same key (JSON is sorted).
+    assert regen._primary_identifier(reordered) == pid
+    # Different content -> different key.
+    assert regen._primary_identifier({"question": "other"}) != pid
+    # A nested metadata id is not used as a source.
+    assert regen._primary_identifier({"metadata": {"sample_id": 7}}).startswith("hash_")
+
+
+def test_load_seen_missing_file_returns_empty(tmp_path):
+    assert regen.load_seen(str(tmp_path / "nope.jsonl")) == set()
+
+
+def test_load_seen_reads_id_and_skips_malformed_lines(tmp_path):
+    out = tmp_path / "out.jsonl"
+    out.write_text(
+        "not json\n" + json.dumps({"id": "P"}) + "\n",
+        encoding="utf-8",
+    )
+    assert regen.load_seen(str(out)) == {"P"}
+
+
+def test_load_seen_ignores_rows_without_id(tmp_path):
+    # A record without a top-level id contributes no resume key.
+    out = tmp_path / "out.jsonl"
+    out.write_text(
+        json.dumps({"conversations": [], "metadata": {"idx": 3}}) + "\n",
+        encoding="utf-8",
+    )
+    assert regen.load_seen(str(out)) == set()
+
+
+def test_resume_roundtrip_hash_only_row(tmp_path):
+    # A row with no explicit id resolves to a content hash; the written output
+    # stores that hash as the top-level id, and load_seen must recover it so a
+    # re-run skips the row. This is the exact case the old resume missed.
+    row = {"question": "What is 6*7?", "answer": "42"}
+    primary_id = regen._primary_identifier(row)
+
+    out = tmp_path / "out.jsonl"
+    out.write_text(
+        json.dumps(
+            {
+                "id": primary_id,
+                "conversations": [],
+                "metadata": {"idx": 0},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert primary_id in regen.load_seen(str(out))
+
+
+# ---------------------------------------------------------------------------
+# 4. Retry / backoff around a single request.
+# ---------------------------------------------------------------------------
+
+
+class _FakeResponse:
+    def __init__(self, *, ok, status, text, payload):
+        self.ok = ok
+        self.status = status
+        self._text = text
+        self._payload = payload
+
+    async def text(self):
+        return self._text
+
+    async def json(self):
+        return self._payload
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class _FakeSession:
+    """Minimal aiohttp.ClientSession stand-in: hands out queued responses."""
+
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self.calls = 0
+
+    def post(self, endpoint, json):
+        self.calls += 1
+        return self._responses.pop(0)
+
+
+def test_post_chat_retries_transient_failure_then_succeeds():
+    ok_payload = {"choices": [{"message": {"content": "hi"}}]}
+    session = _FakeSession(
+        [
+            _FakeResponse(ok=False, status=503, text="busy", payload={}),
+            _FakeResponse(ok=False, status=503, text="busy", payload={}),
+            _FakeResponse(ok=True, status=200, text="", payload=ok_payload),
+        ]
+    )
+
+    async def scenario():
+        return await regen._post_chat(
+            session,
+            "http://x/v1/chat/completions",
+            {"model": "m"},
+            max_retries=3,
+        )
+
+    assert asyncio.run(scenario()) == ok_payload
+    assert session.calls == 3
+
+
+def test_post_chat_raises_after_exhausting_retries():
+    session = _FakeSession(
+        [_FakeResponse(ok=False, status=500, text="err", payload={}) for _ in range(3)]
+    )
+
+    async def scenario():
+        with pytest.raises(RuntimeError, match="HTTP 500"):
+            await regen._post_chat(
+                session,
+                "http://x/v1/chat/completions",
+                {"model": "m"},
+                max_retries=2,
+            )
+
+    asyncio.run(scenario())
+    assert session.calls == 3
+
+
+def test_post_chat_fails_fast_on_permanent_status():
+    # A permanent (non-transient) status raises InvalidResponseError, which
+    # with_retries never retries: one attempt only.
+    session = _FakeSession(
+        [_FakeResponse(ok=False, status=404, text="nope", payload={})]
+    )
+
+    async def scenario():
+        with pytest.raises(InvalidResponseError, match="HTTP 404"):
+            await regen._post_chat(
+                session,
+                "http://x/v1/chat/completions",
+                {"model": "m"},
+                max_retries=3,
+            )
+
+    asyncio.run(scenario())
+    assert session.calls == 1
+
+
+# ---------------------------------------------------------------------------
+# 5. worker() end to end over a fake endpoint.
+# ---------------------------------------------------------------------------
+
+
+class _Args:
+    model = "m"
+    max_tokens = 16
+    max_retries = 0
+
+
+class _NullProgress:
+    def set_postfix(self, **kwargs): ...
+    def update(self, n): ...
+
+
+_TWO_TURN_ITEM = {
+    "idx": 41,
+    "primary_id": "conv-abc",
+    "turns": [
+        {"role": "user", "content": "2+2?"},
+        {"role": "user", "content": "3+3?"},
     ],
 }
 
 
-def _to_worker_output(turns) -> list[dict]:
-    """Mirror worker(): map system->system and user->human, and append a
-    regenerated assistant turn (with per-turn reasoning) after each user turn,
-    exactly as the script writes the ``conversations`` field."""
-    out_convs: list[dict] = []
-    for turn in turns:
-        if turn["role"] == "system":
-            out_convs.append({"from": "system", "value": turn["content"]})
-            continue
-        out_convs.append({"from": "human", "value": turn["content"]})
-        out_convs.append(
+def _ok(prompt_token_ids, completion_token_ids, text):
+    payload = {
+        "choices": [
             {
-                "from": "gpt",
-                "value": f"answer:{turn['content']}",
-                "reasoning_content": f"reason:{turn['content']}",
+                "message": {"content": text},
+                "token_ids": completion_token_ids,
+                "finish_reason": "stop",
             }
+        ],
+        "prompt_token_ids": prompt_token_ids,
+    }
+    return _FakeResponse(ok=True, status=200, text="", payload=payload)
+
+
+def _run_worker(responses, tmp_path, stem):
+    out_path, err_path = tmp_path / f"{stem}.jsonl", tmp_path / f"{stem}.errors.jsonl"
+
+    async def scenario(out_fh, err_fh):
+        queue: asyncio.Queue = asyncio.Queue()
+        await queue.put(_TWO_TURN_ITEM)
+        await queue.put(None)
+        stats = {"ok": 0, "errors": 0}
+        await regen.worker(
+            _FakeSession(responses),
+            queue,
+            _Args(),
+            out_fh,
+            err_fh,
+            "http://x/v1/chat/completions",
+            _NullProgress(),
+            stats,
         )
-    return out_convs
+        return stats
+
+    with (
+        out_path.open("w", encoding="utf-8") as out_fh,
+        err_path.open("w", encoding="utf-8") as err_fh,
+    ):
+        stats = asyncio.run(scenario(out_fh, err_fh))
+    return stats, out_path, err_path
 
 
-def test_emitted_conversation_survives_downstream_normalization():
-    turns = regen.extract_turns(_CONTRACT_ROW, "prompt")
-    out_convs = _to_worker_output(turns)
+def test_worker_row_identity_and_all_or_nothing_writes(tmp_path):
+    # Two assistant turns -> two rows. `primary_id` is the queue item's stable id
+    # (never the streaming `idx`); `id` is that id plus a turn suffix; and resume
+    # keys on the former, so a re-run of this conversation is skipped.
+    stats, out_path, _ = _run_worker(
+        [_ok([1, 2], [3, 4], "four"), _ok([1, 2, 3, 4, 5], [6], "six")],
+        tmp_path,
+        "ok",
+    )
+    assert stats == {"ok": 1, "errors": 0}
+    rows = [json.loads(line) for line in out_path.read_text().splitlines()]
+    assert [r["id"] for r in rows] == ["conv-abc_turn0", "conv-abc_turn1"]
+    assert {r["primary_id"] for r in rows} == {"conv-abc"}
+    # The boundary is the mask: prompt 0s then completion 1s.
+    assert rows[0]["input_ids"] == [1, 2, 3, 4]
+    assert rows[0]["loss_mask"] == [0, 0, 1, 1]
+    assert regen.load_seen(str(out_path)) == {"conv-abc"}
 
-    normalized = _normalize_conversation(out_convs)
-    roles = [m["role"] for m in normalized]
-
-    # System preserved; human/gpt mapped to user/assistant; order intact.
-    assert roles == ["system", "user", "assistant", "user", "assistant"]
-    assert normalized[0]["content"] == "You are a terse assistant."
-
-    # Per-turn reasoning survives into training (top-level metadata would not).
-    assistants = [m for m in normalized if m["role"] == "assistant"]
-    assert [m["content"] for m in assistants] == ["answer:Hi", "answer:And goodbye"]
-    assert [m["reasoning_content"] for m in assistants] == [
-        "reason:Hi",
-        "reason:And goodbye",
-    ]
+    # Turn 2 fails: turn 1's sample is discarded rather than half-written, which
+    # is what lets load_seen treat one row as a finished conversation.
+    stats, out_path, err_path = _run_worker(
+        [
+            _ok([1, 2], [3, 4], "four"),
+            _FakeResponse(ok=False, status=404, text="nope", payload={}),
+        ],
+        tmp_path,
+        "fail",
+    )
+    assert stats == {"ok": 0, "errors": 1}
+    assert out_path.read_text() == ""
+    assert regen.load_seen(str(out_path)) == set()
+    error = json.loads(err_path.read_text())
+    assert error["id"] == "conv-abc"
+    assert error["metadata"]["turns_completed"] == 1
