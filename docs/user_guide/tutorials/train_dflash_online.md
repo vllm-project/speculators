@@ -198,7 +198,7 @@ python scripts/train.py \
 - `--projector-type domino` — Enable the Domino correction head (default: `dflash`)
 - `--domino-gru-hidden-dim 1024` — Hidden dimension for the GRU
 - `--domino-emb-dim 256` — Bottleneck dimension for the projection MLP
-- `--domino-pure-draft-prefix-len 1` — Number of suffix positions left uncorrected
+- `--domino-pure-draft-prefix-len 1` — Number of leading block positions using pure DFlash logits without correction
 - `--domino-lambda-start 1.0` — Base loss starts at 100% weight
 - `--domino-lambda-decay-ratio 1.0` — Linearly transitions to 100% final loss over the full training run
 

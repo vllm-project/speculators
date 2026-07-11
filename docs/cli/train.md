@@ -174,6 +174,8 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--domino-lambda-decay-ratio`** (float, default: `1.0`) Fraction of total training steps over which λ decays from `--domino-lambda-start` to 0. E.g. `1.0` means a full linear decay over the entire run. Set to `0` to disable decay.
 
+- **`--domino-auf`** (flag, default: off) Enable Accept-Until-Fail (B-AUF+D) truncation on the Domino base branch loss (arXiv 2607.01893). Zeros positions after the first greedy prediction error in each block, aligning training with the verifier's prefix-acceptance semantics. The final branch always uses the full mask.
+
 ### Sliding Window Attention Arguments
 
 These flags apply to `dflash` and `dspark`, which use sliding window attention on all draft layers by default.
