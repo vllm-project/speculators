@@ -365,7 +365,6 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         verifier_last_hidden_states: torch.Tensor,  # [1, total_seq_len, hidden_size]
         document_ids: torch.Tensor,  # [1, total_seq_len]
         position_ids: torch.Tensor | None = None,  # [1, total_seq_len]
-        shift_targets: bool = False,
         **kwargs,
     ):
         """Run the anchored-block draft transformer up to the draft logits.
@@ -423,7 +422,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             )
             # Shift right by 1 so verifier_logits[i] predicts token at position i
             verifier_logits = torch.roll(verifier_logits, 1, dims=1)
-            target_indices = anchored_block_indices + (1 if shift_targets else 0)
+            target_indices = anchored_block_indices + (1 if self.config.shift_label else 0)
             target_indices = target_indices.clamp(max=verifier_logits.shape[1] - 1)
             targets = verifier_logits[:, target_indices]
             # shape: [1, num_anchors*block_size, draft_vocab_size]
@@ -457,7 +456,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
 
         aligned_loss_mask[:, :: self.block_size] = 0
 
-        if shift_targets:
+        if self.config.shift_label:
             oob = (anchored_block_indices + 1) >= verifier_logits.shape[1]
             aligned_loss_mask[:, oob] = 0
 
@@ -490,7 +489,6 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 verifier_last_hidden_states,
                 document_ids,
                 position_ids,
-                shift_targets=self.config.shift_label,
                 max_anchors=max_anchors,
                 **kwargs,
             )
