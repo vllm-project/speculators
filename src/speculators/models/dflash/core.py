@@ -201,7 +201,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             "emb_dim": kwargs.get("domino_emb_dim", 256),
             "gru_hidden_dim": kwargs.get("domino_gru_hidden_dim", 1024),
             "lambda_base_start": kwargs.get("domino_lambda_start", 1.0),
-            "lambda_base_decay_ratio": kwargs.get("domino_lambda_decay_ratio", 0.5),
+            "lambda_base_decay_ratio": kwargs.get("domino_lambda_decay_ratio", 1.0),
             "domino_auf": kwargs.get("domino_auf", False),
             "speculators_config": SpeculatorsConfig(
                 algorithm=algorithm,

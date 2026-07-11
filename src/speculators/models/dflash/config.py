@@ -103,12 +103,12 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
     )
 
     lambda_base_decay_ratio: float = Field(
-        default=0.5,
+        default=1.0,
         ge=0.0,
         le=1.0,
         description="Fraction of total training steps over which lambda_base decays "
-        "from lambda_base_start to 0. E.g. 0.5 means decay finishes at the midpoint. "
-        "Set to 0 to keep lambda_base at lambda_base_start (no decay). (default: 0.5)",
+        "from lambda_base_start to 0. 1.0 (default, matches paper) means a full "
+        "linear decay over the entire run. Set to 0 to disable decay.",
     )
     domino_auf: bool = Field(
         default=False,

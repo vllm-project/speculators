@@ -170,11 +170,9 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--domino-pure-draft-prefix-len`** (int, default: `1`) Number of leading block positions (after the anchor) that use pure DFlash logits without Domino correction. The suffix positions are refined by the Domino head.
 
-- **`--domino-shift-label`** (flag, default: `True`) Shift labels by 1 so the first predicted position is anchor+1. Enabled by default for Domino (aligns with DFlash's implicit target shift via `torch.roll`).
-
 - **`--domino-lambda-start`** (float, default: `1.0`) Initial weight of the base loss in the Domino dual-loss schedule. The combined loss is `(1-λ) * final_loss + λ * base_loss`.
 
-- **`--domino-lambda-decay-steps`** (int, default: `30000`) Number of training steps over which lambda_base decays from `--domino-lambda-start` to 0. Set to 0 to disable decay (lambda_base stays at `--domino-lambda-start`).
+- **`--domino-lambda-decay-ratio`** (float, default: `1.0`) Fraction of total training steps over which λ decays from `--domino-lambda-start` to 0. E.g. `1.0` means a full linear decay over the entire run. Set to `0` to disable decay.
 
 ### Sliding Window Attention Arguments
 

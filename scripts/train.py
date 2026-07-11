@@ -1076,9 +1076,10 @@ def parse_args():
     parser.add_argument(
         "--domino-lambda-decay-ratio",
         type=float,
-        default=0.5,
+        default=1.0,
         help="Fraction of total training steps over which lambda_base decays "
-        "from start to 0 (default: 0.5). Set to 0 to disable decay.",
+        "from start to 0 (default: 1.0, full decay over the entire run). "
+        "Set to 0 to disable decay.",
     )
     parser.add_argument(
         "--domino-auf",
