@@ -198,15 +198,12 @@ def maybe_destroy_distributed() -> None:
 
 @contextlib.contextmanager
 def build_on_meta():
-    """Build module PARAMETERS on the meta device (buffers stay real).
+    """Build module parameters on the meta device (buffers stay real).
 
-    Overrides ``register_parameter`` so a large model is constructed with ~zero
-    resident memory. Used on non-rank0 ranks; their real weights arrive via
-    ``set_model_state_dict(broadcast_from_rank0=True)`` in the FSDP setup. Explicit
-    ``.to("meta")`` is robust to device-remapping layers (e.g. transfer_to_npu).
-
-    Contract: a model built under this must no-op data-init on meta params
-    (guard with ``param.is_meta``).
+    Overrides ``register_parameter`` so a large model constructs with ~zero resident
+    memory. Used on non-rank0 ranks; real weights then arrive via
+    ``set_model_state_dict(broadcast_from_rank0=True)`` in FSDP setup. Contract: the
+    model must no-op data-init on meta params (guard with ``param.is_meta``).
     """
     orig = nn.Module.register_parameter
 

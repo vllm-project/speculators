@@ -44,16 +44,10 @@ def test_build_on_meta_restores_register_parameter():
 
 
 def test_from_training_args_under_build_on_meta(tmp_path):
-    """A real speculator builds fully under build_on_meta: all params land on meta
-    and buffers stay real. Exercises the base-class ``is_meta`` guard -- with meta
-    params, ``load_verifier_weights`` must early-return instead of calling
-    ``isnan()`` on a meta param (that raises "Tensor.item() cannot be called on
-    meta tensors").
-
-    ``from_training_args`` resolves the verifier's config.json up front (for
-    architectures via ``VerifierConfig.from_pretrained``), so point it at a local
-    dir to keep the build offline. The verifier *weights* are never read: the meta
-    guard returns first.
+    """A real speculator builds under build_on_meta: params land on meta, buffers stay
+    real, and the base-class is_meta guard makes load_verifier_weights early-return
+    (instead of calling isnan() on a meta param). A local verifier dir keeps config
+    resolution offline; the verifier weights themselves are never read.
     """
     copy.deepcopy(_TINY).save_pretrained(tmp_path)  # writes config.json only
 

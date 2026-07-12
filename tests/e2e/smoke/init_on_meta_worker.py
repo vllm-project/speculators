@@ -1,26 +1,14 @@
-"""torchrun worker for the ``--init-on-meta`` e2e test (``test_init_on_meta.py``).
+"""torchrun worker for the --init-on-meta e2e test (test_init_on_meta.py).
 
-Not a pytest module (not ``test_*``); launched via ``torch.distributed.run`` by the
-test. Mirrors the trainer's REAL build+materialize path and asserts the meta-init
-memory optimization does not change the result:
-
-  * build           -- rank0 builds the draft with real weights; non-rank0 builds
-                       under ``build_on_meta`` (== scripts/train.py's --init-on-meta
-                       branch: ``build_on_meta() if init_on_meta and rank != 0``);
-  * shard+broadcast -- ``apply_fully_sharded`` then ``set_model_state_dict(
-                       broadcast_from_rank0=True)`` (== trainer.py distributed setup).
-
-Assertions:
-  1. before broadcast: non-rank0 params are on ``meta`` (proof the allocation was
-     skipped -> the memory win), rank0 params are real;
-  2. after broadcast:  every rank's local shard is real (not meta) and finite (no NaN);
-  3. after broadcast:  the full state gathered from every rank's shard equals rank0's
-     original weights (so non-rank0 materialized exactly rank0's values).
-
-Prints ``PASS`` and exits 0 on success; raises (nonzero exit) on any failure.
-
-Usage (the test does this):
-    torchrun --nproc_per_node 2 init_on_meta_worker.py [shared_tmp_dir]
+Not a pytest module (not test_*); launched via torch.distributed.run. Mirrors the
+trainer's real path (rank0 builds real, non-rank0 under build_on_meta, then
+apply_fully_sharded + set_model_state_dict(broadcast_from_rank0=True)) and checks that
+--init-on-meta changes nothing:
+  1. non-rank0 params are on meta before broadcast (the memory win);
+  2. every rank's shard is real + finite after broadcast;
+  3. requires_grad matches across ranks (else FSDP2 grad-reduce hangs);
+  4. gathered full weights equal rank0's originals.
+Prints PASS / exits 0 on success. Usage: torchrun --nproc_per_node 2 <this> [tmp_dir].
 """
 
 import contextlib
@@ -128,11 +116,9 @@ def main() -> None:
     else:
         assert embed_is_meta, "non-rank0 must build on meta (--init-on-meta)"
 
-    # Snapshot rank0's weights TWICE. `bcast_src` is the broadcast source handed to
-    # set_model_state_dict below, which MUTATES its input dict into DTensors in place.
-    # `ref_np` is a SEPARATE, frozen numpy copy used only for the comparison in (3) --
-    # numpy so nothing torch/DTensor can retroactively touch it (reusing one dict for
-    # both makes the compare call a rank0-only collective on the now-DTensor ref).
+    # Two snapshots: `bcast_src` is the broadcast source (set_model_state_dict mutates
+    # its input dict into DTensors in place); `ref_np` is a frozen numpy copy for the
+    # (3) compare, immune to that mutation.
     ref_np = (
         {
             k: v.detach().cpu().float().numpy().copy()
@@ -163,10 +149,32 @@ def main() -> None:
         assert not local.is_meta, f"[rank{rank}] {name} still on meta after broadcast"
         assert not torch.isnan(local.float()).any(), f"[rank{rank}] {name} has NaN"
 
-    # (3) each param, gathered from every rank's shard, equals rank0's original
-    #     weights. full_tensor() is a COLLECTIVE, so ALL ranks gather (same order)
-    #     FIRST; only rank0 then compares, against the frozen numpy reference, so there
-    #     is NO distributed op inside `if rank == 0` (that would hang the other ranks).
+    # (2b) requires_grad must match across ranks, or FSDP2 post_backward collects a
+    #      different trainable-param set per rank and the first backward hangs.
+    #      named_parameters() is identically ordered on every rank -> flags line up.
+    flags = torch.tensor(
+        [1 if p.requires_grad else 0 for _, p in model.named_parameters()],
+        dtype=torch.int32,
+        device="cuda",
+    )
+    gathered_flags = [torch.zeros_like(flags) for _ in range(world)]
+    dist.all_gather(gathered_flags, flags)
+    for other, gf in enumerate(gathered_flags):
+        if not torch.equal(gf, flags):
+            mism = [
+                name
+                for i, (name, _) in enumerate(model.named_parameters())
+                if gf[i] != flags[i]
+            ]
+            raise AssertionError(
+                f"[rank{rank}] requires_grad differs from rank{other} on {mism} "
+                "-> FSDP2 gradient-reduction mismatch (training would hang)"
+            )
+    tick("requires_grad is consistent across ranks")
+
+    # (3) full weights gathered from every rank's shard == rank0's originals.
+    #     full_tensor() is a collective -> ALL ranks gather first, then rank0-only
+    #     compares numpy (no distributed op inside `if rank == 0`, which would hang).
     def _gather_np(t: torch.Tensor):
         if isinstance(t, DTensor):  # sharded -> all-gather to a plain tensor
             t = t.full_tensor()
