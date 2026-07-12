@@ -43,11 +43,20 @@ def test_build_on_meta_restores_register_parameter():
     assert not nn.Linear(2, 2).weight.is_meta  # params are real again after exit
 
 
-def test_from_training_args_under_build_on_meta():
-    """A real speculator builds under build_on_meta: all params land on meta and
-    buffers stay real. Also exercises the base-class ``is_meta`` guard: with meta
-    params, ``load_verifier_weights`` must early-return -- it neither touches the
-    (nonexistent) verifier path nor calls ``isnan()`` on a meta tensor."""
+def test_from_training_args_under_build_on_meta(tmp_path):
+    """A real speculator builds fully under build_on_meta: all params land on meta
+    and buffers stay real. Exercises the base-class ``is_meta`` guard -- with meta
+    params, ``load_verifier_weights`` must early-return instead of calling
+    ``isnan()`` on a meta param (that raises "Tensor.item() cannot be called on
+    meta tensors").
+
+    ``from_training_args`` resolves the verifier's config.json up front (for
+    architectures via ``VerifierConfig.from_pretrained``), so point it at a local
+    dir to keep the build offline. The verifier *weights* are never read: the meta
+    guard returns first.
+    """
+    copy.deepcopy(_TINY).save_pretrained(tmp_path)  # writes config.json only
+
     with build_on_meta():
         model = Eagle3DraftModel.from_training_args(
             verifier_config=copy.deepcopy(_TINY),
@@ -56,8 +65,9 @@ def test_from_training_args_under_build_on_meta():
             draft_vocab_size=64,
             norm_before_residual=False,
             ttt_steps=1,
-            # never fetched: the meta guard returns before the verifier load
-            verifier_name_or_path="does-not-exist/verifier",
+            draft_attn_impl="eager",
+            target_layer_ids=[0, 1],  # explicit -> resolve skips the config fetch
+            verifier_name_or_path=str(tmp_path),
         )
     assert all(p.is_meta for p in model.parameters())
     assert all(not b.is_meta for b in model.buffers())
