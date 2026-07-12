@@ -69,9 +69,9 @@ python scripts/response_regeneration/script.py --dataset magpie
 
 #### Data Arguments
 
-- **`--dataset`** (str, default: `ultrachat`, choices: `magpie`, `ultrachat`) Dataset to process.
+- **`--dataset`** (str, default: `ultrachat`) Dataset preset to process (see [Supported Datasets](#supported-datasets)).
 
-- **`--split`** (str, default: dataset-specific) Dataset split. Defaults to `train` for magpie and `train_sft` for ultrachat.
+- **`--split`** (str, default: preset-specific) Dataset split. Defaults to the preset's split.
 
 - **`--limit`** (int, default: `None`) Stop after N rows.
 
@@ -112,10 +112,19 @@ python scripts/response_regeneration/script.py \
 
 ## Supported Datasets
 
-| Dataset   | HuggingFace ID                                    | Prompt Field  | Default Split |
-| --------- | ------------------------------------------------- | ------------- | ------------- |
-| Magpie    | `Magpie-Align/Magpie-Llama-3.1-Pro-300K-Filtered` | `instruction` | `train`       |
-| UltraChat | `HuggingFaceH4/ultrachat_200k`                    | `prompt`      | `train_sft`   |
+All presets from the shared dataset registry (`DATASET_CONFIGS` in `speculators/data_generation/configs.py`) — the same ones `prepare-data` accepts:
+
+| Dataset             | HuggingFace ID                                    | Default Split |
+| ------------------- | ------------------------------------------------- | ------------- |
+| `sharegpt`          | `Aeala/ShareGPT_Vicuna_unfiltered`                | `train`       |
+| `ultrachat`         | `HuggingFaceH4/ultrachat_200k`                    | `train_sft`   |
+| `gsm8k`             | `openai/gsm8k`                                    | `train`       |
+| `magpie`            | `Magpie-Align/Magpie-Llama-3.1-Pro-300K-Filtered` | `train`       |
+| `nemotron`          | `nvidia/Llama-Nemotron-Post-Training-Dataset`     | `chat`        |
+| `sharegpt4v_coco`   | `Lin-Chen/ShareGPT4V`                             | `train`       |
+| `open-perfectblend` | `mlabonne/open-perfectblend`                      | `train`       |
+
+`sharegpt4v_coco` additionally needs an image-capable endpoint and local COCO files.
 
 ## Output Format
 
