@@ -128,6 +128,13 @@ class DraftVocabMixin(nn.Module):
         is True. Subclasses can override to load additional weights (e.g. norms,
         tokenizer) by calling super().load_verifier_weights() first.
         """
+        # Meta-device init (--init-on-meta): params carry no data, so skip the
+        # verifier load; real weights arrive via set_model_state_dict(
+        # broadcast_from_rank0=True) in the trainer's FSDP setup. (isnan() below
+        # would raise on a meta tensor.)
+        if self.embed_tokens.weight.is_meta:
+            return
+
         import warnings  # noqa: PLC0415
 
         from speculators.utils.loading import load_model_layers  # noqa: PLC0415
