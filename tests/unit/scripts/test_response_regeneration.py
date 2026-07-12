@@ -16,6 +16,7 @@ from typing import Any
 import pytest
 
 from speculators.data_generation import vllm_client
+from speculators.data_generation.configs import DATASET_CONFIGS
 from speculators.data_generation.preprocessing import _preprocess_batch
 from speculators.data_generation.vllm_client import InvalidResponseError
 
@@ -529,3 +530,20 @@ def test_worker_row_identity_and_all_or_nothing_writes(tmp_path):
     error = json.loads(err_path.read_text())
     assert error["id"] == "conv-abc"
     assert error["metadata"]["turns_completed"] == 1
+
+
+# ---------------------------------------------------------------------------
+# 6. Dataset presets come from the shared registry.
+# ---------------------------------------------------------------------------
+
+
+def test_regen_presets_come_from_shared_registry():
+    # Identity, not equality: a re-declared copy in the script would drift.
+    assert regen.DATASET_CONFIGS is DATASET_CONFIGS
+    # The original CLI presets stay regen-eligible, with their fallback columns.
+    eligible = {
+        name: DATASET_CONFIGS[name].prompt_field for name in regen.REGEN_DATASETS
+    }
+    assert eligible["magpie"] == "instruction"
+    assert eligible["ultrachat"] == "prompt"
+    assert eligible["gsm8k"] == "question"

@@ -20,6 +20,8 @@ class DatasetConfig:
     split: str
     filter_fn: Callable[[dict], bool] | None = None
     normalize_fn: Callable[[dict], dict] | None = None
+    # Bare user-prompt column; presets defining it are regen --dataset choices.
+    prompt_field: str | None = None
 
 
 def _normalize_ultrachat(example: dict) -> dict:
@@ -112,6 +114,7 @@ DATASET_CONFIGS: dict[str, DatasetConfig] = {
         hf_path="HuggingFaceH4/ultrachat_200k",
         split="train_sft",
         normalize_fn=_normalize_ultrachat,
+        prompt_field="prompt",
     ),
     "gsm8k": DatasetConfig(
         name="gsm8k",
@@ -119,11 +122,13 @@ DATASET_CONFIGS: dict[str, DatasetConfig] = {
         subset="main",
         split="train",
         normalize_fn=_normalize_gsm8k,
+        prompt_field="question",
     ),
     "magpie": DatasetConfig(
         name="magpie",
         hf_path="Magpie-Align/Magpie-Llama-3.1-Pro-300K-Filtered",
         split="train",
+        prompt_field="instruction",
     ),
     "nemotron": DatasetConfig(
         name="nemotron",

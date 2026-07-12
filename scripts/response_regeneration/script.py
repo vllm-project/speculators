@@ -12,30 +12,17 @@ import aiohttp
 from datasets import load_dataset
 from tqdm import tqdm
 
+from speculators.data_generation.configs import DATASET_CONFIGS
 from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     InvalidResponseError,
     with_retries,
 )
 
-DATASET_CONFIGS = {
-    "magpie": {
-        "id": "Magpie-Align/Magpie-Llama-3.1-Pro-300K-Filtered",
-        "prompt_field": "instruction",
-        "default_split": "train",
-    },
-    "ultrachat": {
-        "id": "HuggingFaceH4/ultrachat_200k",
-        "prompt_field": "prompt",
-        "default_split": "train_sft",
-    },
-    "gsm8k": {
-        "id": "openai/gsm8k",
-        "prompt_field": "question",
-        "default_split": "train",
-        "subset": "main",
-    },
-}
+# Presets usable for regeneration: those defining a bare-prompt fallback column.
+REGEN_DATASETS = [
+    name for name, config in DATASET_CONFIGS.items() if config.prompt_field
+]
 
 
 def parse_args():
@@ -56,7 +43,7 @@ def parse_args():
     parser.add_argument(
         "--dataset",
         default="ultrachat",
-        choices=list(DATASET_CONFIGS.keys()),
+        choices=REGEN_DATASETS,
         help="Dataset to process",
     )
     parser.add_argument(
@@ -442,12 +429,12 @@ async def main():
 
     # Get dataset configuration
     dataset_config = DATASET_CONFIGS[args.dataset]
-    dataset_id = dataset_config["id"]
-    prompt_field = dataset_config["prompt_field"]
+    dataset_id = dataset_config.hf_path
+    prompt_field = dataset_config.prompt_field
 
     # Use dataset-specific defaults if not provided
-    split = args.split if args.split is not None else dataset_config["default_split"]
-    subset = args.subset if args.subset is not None else dataset_config.get("subset")
+    split = args.split if args.split is not None else dataset_config.split
+    subset = args.subset if args.subset is not None else dataset_config.subset
 
     # Generate output filename if not specified
     if args.outfile is None:
