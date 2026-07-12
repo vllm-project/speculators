@@ -20,7 +20,7 @@ class DatasetConfig:
     split: str
     filter_fn: Callable[[dict], bool] | None = None
     normalize_fn: Callable[[dict], dict] | None = None
-    # Bare user-prompt fallback column for the response-regeneration script.
+    # Bare user-prompt column, used when a row has no conversation.
     prompt_field: str | None = None
 
 

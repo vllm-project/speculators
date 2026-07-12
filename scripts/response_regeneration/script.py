@@ -19,14 +19,13 @@ from speculators.data_generation.vllm_client import (
     with_retries,
 )
 
-# Their turns carry image content parts, which the Chat API rejects, and the
-# output row has nowhere to put pixel data. Off-policy `prepare-data` takes them.
+# Image parts: the Chat API rejects them, and output rows keep no pixel data.
 MULTIMODAL_DATASETS = {"sharegpt4v_coco"}
 REGEN_DATASETS = [name for name in DATASET_CONFIGS if name not in MULTIMODAL_DATASETS]
 
 
 def _dataset_choice(name: str) -> str:
-    """Reject multimodal presets with a reason rather than a bare invalid choice."""
+    """Reject multimodal presets with a reason, not a bare invalid choice."""
     if name in MULTIMODAL_DATASETS:
         raise argparse.ArgumentTypeError(
             f"{name!r} is multimodal; on-policy regeneration does not support "
@@ -532,7 +531,6 @@ async def main():
                     continue
 
                 turns = prepare_row(row, dataset_config)
-                # prepare_row returns [] for filtered rows and unusable turns.
                 if not turns:
                     continue
 
