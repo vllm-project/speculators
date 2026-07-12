@@ -1,5 +1,6 @@
 import argparse
 import gc
+import importlib.util
 import logging
 import random
 import warnings
@@ -8,6 +9,19 @@ from pathlib import Path
 
 import numpy as np
 import torch
+
+# Ascend NPU: torch.cuda.is_available() is False on Ascend, so import
+# transfer_to_npu to monkeypatch torch.cuda.* -> torch.npu.* (dist backend ->
+# hccl) and let the trainer's CUDA-assuming code run unchanged. Gated on torch_npu
+# actually being installed, so a CUDA-misconfigured or CPU-only host does NOT enter
+# the NPU path (no spurious NPU message) -- it falls through to normal accelerator
+# resolution. CUDA hosts skip this via the outer check.
+if not torch.cuda.is_available() and importlib.util.find_spec("torch_npu"):
+    try:
+        from torch_npu.contrib import transfer_to_npu  # noqa: F401
+    except ImportError as e:
+        logging.getLogger(__name__).warning("torch_npu present but failed to import: %s", e)
+
 import transformers
 from packaging import version
 from transformers import LlamaConfig, PretrainedConfig

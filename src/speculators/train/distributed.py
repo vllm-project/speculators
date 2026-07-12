@@ -153,7 +153,9 @@ def maybe_setup_distributed(sp_size: int = 1) -> None:
     if acc is None:
         raise ValueError("No accelerator found")
     backend = torch.distributed.get_default_backend_for_device(acc)
-    dist.init_process_group(backend, device_id=local_rank)
+    # Explicit torch.device, not a bare int: torch>=2.x reads device_id.type, and
+    # some backends (Ascend transfer_to_npu) rewrite the int.
+    dist.init_process_group(backend, device_id=torch.device(acc.type, local_rank))
 
     _rank = dist.get_rank()
     _world_size = dist.get_world_size()
