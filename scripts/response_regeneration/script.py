@@ -19,16 +19,11 @@ from speculators.data_generation.vllm_client import (
     with_retries,
 )
 
-# Presets usable for regeneration: those defining a bare-prompt fallback column.
-REGEN_DATASETS = [
-    name for name, config in DATASET_CONFIGS.items() if config.prompt_field
-]
-
 
 def parse_args():
     """Parse command-line arguments for the script."""
     parser = argparse.ArgumentParser(
-        description="Regenerate responses from Magpie instructions via vLLM Chat API."
+        description="Regenerate dataset responses via a vLLM Chat API endpoint."
     )
     parser.add_argument(
         "--endpoint",
@@ -43,7 +38,7 @@ def parse_args():
     parser.add_argument(
         "--dataset",
         default="ultrachat",
-        choices=REGEN_DATASETS,
+        choices=list(DATASET_CONFIGS),
         help="Dataset to process",
     )
     parser.add_argument(
@@ -160,6 +155,19 @@ def extract_turns(row, prompt_field):
     if prompt:
         return [{"role": "user", "content": prompt}]
     return []
+
+
+def prepare_row(row, config):
+    """Extract regeneration turns from a raw dataset row, ``[]`` to skip it.
+
+    Mirrors off-policy ingestion: ``filter_fn`` sees the raw row, and
+    ``normalize_fn`` is merged over it (HF ``map`` semantics keep raw columns).
+    """
+    if config.filter_fn is not None and not config.filter_fn(row):
+        return []
+    if config.normalize_fn is not None:
+        row = {**row, **config.normalize_fn(row)}
+    return extract_turns(row, config.prompt_field)
 
 
 def _is_present(value: Any) -> bool:
@@ -430,7 +438,6 @@ async def main():
     # Get dataset configuration
     dataset_config = DATASET_CONFIGS[args.dataset]
     dataset_id = dataset_config.hf_path
-    prompt_field = dataset_config.prompt_field
 
     # Use dataset-specific defaults if not provided
     split = args.split if args.split is not None else dataset_config.split
@@ -449,7 +456,7 @@ async def main():
 
     print(f"Using dataset: {dataset_id}")
     print(f"Split: {split}")
-    print(f"Prompt field: {prompt_field}")
+    print(f"Prompt field: {dataset_config.prompt_field}")
     print(f"Output file: {args.outfile}")
     print(f"Error file: {error_outfile}")
     print()
@@ -506,8 +513,8 @@ async def main():
                 if args.language_filter and row.get("language") != args.language_filter:
                     continue
 
-                turns = extract_turns(row, prompt_field)
-                # extract_turns returns [] when there is no usable user turn.
+                turns = prepare_row(row, dataset_config)
+                # prepare_row returns [] for filtered rows and unusable turns.
                 if not turns:
                     continue
 

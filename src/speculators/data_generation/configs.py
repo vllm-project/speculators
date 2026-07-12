@@ -20,7 +20,7 @@ class DatasetConfig:
     split: str
     filter_fn: Callable[[dict], bool] | None = None
     normalize_fn: Callable[[dict], dict] | None = None
-    # Bare user-prompt column; presets defining it are regen --dataset choices.
+    # Bare user-prompt fallback column for the response-regeneration script.
     prompt_field: str | None = None
 
 
