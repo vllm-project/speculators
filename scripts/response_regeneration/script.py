@@ -12,12 +12,27 @@ import aiohttp
 from datasets import load_dataset
 from tqdm import tqdm
 
-from speculators.data_generation.configs import DATASET_CONFIGS
+from speculators.data_generation.configs import DATASET_CONFIGS, DatasetConfig
 from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     InvalidResponseError,
     with_retries,
 )
+
+# Their turns carry image content parts, which the Chat API rejects, and the
+# output row has nowhere to put pixel data. Off-policy `prepare-data` takes them.
+MULTIMODAL_DATASETS = {"sharegpt4v_coco"}
+REGEN_DATASETS = [name for name in DATASET_CONFIGS if name not in MULTIMODAL_DATASETS]
+
+
+def _dataset_choice(name: str) -> str:
+    """Reject multimodal presets with a reason rather than a bare invalid choice."""
+    if name in MULTIMODAL_DATASETS:
+        raise argparse.ArgumentTypeError(
+            f"{name!r} is multimodal; on-policy regeneration does not support "
+            "images yet. Use it off-policy with `prepare-data`."
+        )
+    return name
 
 
 def parse_args():
@@ -38,7 +53,8 @@ def parse_args():
     parser.add_argument(
         "--dataset",
         default="ultrachat",
-        choices=list(DATASET_CONFIGS),
+        type=_dataset_choice,
+        choices=REGEN_DATASETS,
         help="Dataset to process",
     )
     parser.add_argument(
@@ -120,7 +136,9 @@ def sanitize_filename(name: str) -> str:
     return name.strip("._")
 
 
-def extract_turns(row, prompt_field):
+def extract_turns(
+    row: dict[str, Any], prompt_field: str | None
+) -> list[dict[str, Any]]:
     """Extract ordered system/user turns from a dataset row.
 
     Multi-turn conversations are read from a ``messages`` or ``conversations``
@@ -157,7 +175,7 @@ def extract_turns(row, prompt_field):
     return []
 
 
-def prepare_row(row, config):
+def prepare_row(row: dict[str, Any], config: DatasetConfig) -> list[dict[str, Any]]:
     """Extract regeneration turns from a raw dataset row, ``[]`` to skip it.
 
     Mirrors off-policy ingestion: ``filter_fn`` sees the raw row, and

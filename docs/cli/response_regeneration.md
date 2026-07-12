@@ -73,6 +73,8 @@ python scripts/response_regeneration/script.py --dataset magpie
 
 - **`--split`** (str, default: preset-specific) Dataset split. Defaults to the preset's split.
 
+- **`--subset`** (str, default: preset-specific) Dataset subset/config name. Defaults to the preset's subset.
+
 - **`--limit`** (int, default: `None`) Stop after N rows.
 
 - **`--language-filter`** (str, default: `None`) Only process rows where language matches this value (e.g., `EN`).
@@ -112,7 +114,7 @@ python scripts/response_regeneration/script.py \
 
 ## Supported Datasets
 
-All presets from the shared dataset registry (`DATASET_CONFIGS` in `speculators/data_generation/configs.py`) — the same ones `prepare-data` accepts:
+The text presets from the shared dataset registry (`DATASET_CONFIGS` in `speculators/data_generation/configs.py`) — the same ones `prepare-data` accepts:
 
 | Dataset             | HuggingFace ID                                    | Default Split |
 | ------------------- | ------------------------------------------------- | ------------- |
@@ -121,10 +123,9 @@ All presets from the shared dataset registry (`DATASET_CONFIGS` in `speculators/
 | `gsm8k`             | `openai/gsm8k`                                    | `train`       |
 | `magpie`            | `Magpie-Align/Magpie-Llama-3.1-Pro-300K-Filtered` | `train`       |
 | `nemotron`          | `nvidia/Llama-Nemotron-Post-Training-Dataset`     | `chat`        |
-| `sharegpt4v_coco`   | `Lin-Chen/ShareGPT4V`                             | `train`       |
 | `open-perfectblend` | `mlabonne/open-perfectblend`                      | `train`       |
 
-`sharegpt4v_coco` additionally needs an image-capable endpoint and local COCO files.
+The registry's multimodal preset, `sharegpt4v_coco`, is **off-policy only** and `--dataset` rejects it. Its turns carry image content parts, which the Chat Completions API rejects, and the pre-tokenized output row has nowhere to keep pixel data. Use it with `prepare-data`.
 
 ## Output Format
 
