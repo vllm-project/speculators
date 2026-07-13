@@ -19,7 +19,8 @@ from speculators.data_generation.vllm_client import (
     with_retries,
 )
 
-# Image parts: the Chat API rejects them, and output rows keep no pixel data.
+# On-policy regeneration has no multimodal support yet; off-policy `prepare-data`
+# does, so these presets are gated here rather than dropped from the registry.
 MULTIMODAL_DATASETS = {"sharegpt4v_coco"}
 REGEN_DATASETS = [name for name in DATASET_CONFIGS if name not in MULTIMODAL_DATASETS]
 

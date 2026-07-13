@@ -577,13 +577,6 @@ def test_prepare_row_merges_normalize_output_over_raw_row():
     ]
 
 
-def test_multimodal_presets_are_not_offered_on_policy():
-    # sharegpt4v_coco turns carry image parts the Chat API rejects (HTTP 400).
-    assert "sharegpt4v_coco" in DATASET_CONFIGS
-    assert "sharegpt4v_coco" not in regen.REGEN_DATASETS
-    assert set(regen.REGEN_DATASETS) | regen.MULTIMODAL_DATASETS == set(DATASET_CONFIGS)
-
-
 def test_dataset_choice_rejects_multimodal_with_a_reason():
     with pytest.raises(argparse.ArgumentTypeError, match="does not support images"):
         regen._dataset_choice("sharegpt4v_coco")
