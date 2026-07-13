@@ -528,15 +528,16 @@ def _capture_full_attention_indices(
         ("dflash", [], []),
         ("dspark", [], []),
         ("dflash", [1], [1]),
-        ("eagle3", [], [0, 1, 2]),
+        ("eagle3", [], []),
+        ("peagle", [], []),
+        ("eagle3", [0, 2], [0, 2]),
     ],
 )
 def test_build_draft_model_routing(
     monkeypatch, speculator_type, requested_indices, expected_indices
 ):
-    """dflash/dspark default every layer to sliding window (empty opt-out list) and
-    forward an explicit non-empty list unchanged; other speculator types put every
-    layer on full attention (the num_layers-derived [0, 1, 2])."""
+    """All speculator types (except mtp) default every layer to sliding window
+    (empty opt-out list) and forward an explicit non-empty list unchanged."""
     assert (
         _capture_full_attention_indices(monkeypatch, speculator_type, requested_indices)
         == expected_indices

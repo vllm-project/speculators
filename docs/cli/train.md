@@ -164,7 +164,7 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 ### Sliding Window Attention Arguments
 
-These flags apply to `dflash` and `dspark`, which use sliding window attention on all draft layers by default.
+All speculator types (except `mtp`) use sliding window attention on all draft layers by default.
 
 - **`--sliding-window`** (int, default: `2048`) Sliding window size for sliding window attention layers.
 
