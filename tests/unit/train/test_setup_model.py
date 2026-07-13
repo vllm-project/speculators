@@ -539,6 +539,82 @@ def test_distributed_fresh_init(tmp_path):
         assert not is_nan, f"Weight {key} is NaN after distributed setup"
 
 
+def _worker_ddp_fresh_init(rank, world_size, results_dir):
+    """Worker for test_ddp_fresh_init."""
+    _dist_setup(rank, world_size)
+    try:
+        model = _make_tiny_model()
+
+        # Capture rank 0's pre-DDP state dict for comparison
+        pre_ddp_checksums = _param_checksums(model.state_dict()) if rank == 0 else {}
+
+        trainer = _make_trainer_no_init(
+            model, is_distributed=True, local_rank=rank, fsdp_shard=False
+        )
+        trainer.checkpointer = MagicMock()
+        trainer.checkpointer.previous_epoch = -1
+
+        trainer.setup_model()
+
+        # For DDP, we can get the state dict directly from the wrapped model
+        raw_model = trainer.model.module if hasattr(trainer.model, "module") else trainer.model
+        full_sd = raw_model.state_dict()
+
+        if rank == 0:
+            checksums = _param_checksums(full_sd)
+            has_nan = {
+                k: v.isnan().any().item()
+                for k, v in full_sd.items()
+                if isinstance(v, torch.Tensor) and v.is_floating_point()
+            }
+
+            torch.save(
+                {
+                    "pre_ddp_checksums": pre_ddp_checksums,
+                    "post_ddp_checksums": checksums,
+                    "has_nan": has_nan,
+                },
+                results_dir / "results.pt",
+            )
+    finally:
+        _dist_teardown()
+
+
+@requires_multi_gpu
+def test_ddp_fresh_init(tmp_path):
+    """DDP fresh init: after setup_model, all ranks have the same weights
+    matching rank 0's original pre-DDP state.
+
+    This verifies that the manual broadcast loop in _setup_model_ddp
+    correctly distributes rank 0's random initialization to all ranks."""
+    world_size = 2
+    results_dir = tmp_path / "results"
+    results_dir.mkdir()
+
+    mp.spawn(
+        _worker_ddp_fresh_init,
+        args=(world_size, results_dir),
+        nprocs=world_size,
+        join=True,
+    )
+
+    results = torch.load(results_dir / "results.pt", weights_only=False)
+
+    # Post-DDP state dict should match pre-DDP state dict from rank 0
+    pre = results["pre_ddp_checksums"]
+    post = results["post_ddp_checksums"]
+    for key in pre:
+        assert key in post, f"Key {key} missing after DDP round-trip"
+        assert pre[key] == pytest.approx(post[key], abs=1e-2), (
+            f"Weight {key} changed during DDP broadcast: "
+            f"pre={pre[key]}, post={post[key]}"
+        )
+
+    # No NaN values in any float parameter
+    for key, is_nan in results["has_nan"].items():
+        assert not is_nan, f"Weight {key} is NaN after distributed setup"
+
+
 # ===================================================================
 # Distributed — Resume from Checkpoint
 # ===================================================================
