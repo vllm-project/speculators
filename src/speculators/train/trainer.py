@@ -297,7 +297,7 @@ class Trainer:
         if not load_checkpoint and dist.get_rank() == 0:
             full_state_dict = self.model.state_dict()
 
-        apply_fully_sharded(self.model)
+        apply_fully_sharded(self.model, param_dtype=self.config.hidden_states_dtype)
 
         if load_checkpoint:
             self.checkpointer.load_model_state_dict(self.model)

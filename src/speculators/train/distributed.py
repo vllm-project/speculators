@@ -194,7 +194,9 @@ def maybe_destroy_distributed() -> None:
     _dp_group = None
 
 
-def apply_fully_sharded(model: torch.nn.Module):
+def apply_fully_sharded(
+    model: torch.nn.Module, param_dtype: torch.dtype = torch.bfloat16
+):
     """Applies torch FSDP fully_shard to the model, wrapping layers in FSDPModule.
 
     Assumes the model has a `layers` attribute containing the decoder layers.
@@ -202,7 +204,7 @@ def apply_fully_sharded(model: torch.nn.Module):
     before calling this function.
     """
     mp_policy = MixedPrecisionPolicy(
-        param_dtype=torch.bfloat16,
+        param_dtype=param_dtype,
         reduce_dtype=torch.float32,
     )
 
