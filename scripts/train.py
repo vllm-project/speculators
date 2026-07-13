@@ -650,6 +650,15 @@ def main(cfg: TrainConfig):  # noqa: C901
 
     hidden_states_dtype = getattr(torch, args.hidden_states_dtype)
 
+    if hidden_states_dtype == torch.float16:
+        raise ValueError(
+            "--hidden-states-dtype=float16 is not supported. "
+            "float16 with torch.autocast requires gradient scaling (GradScaler) to "
+            "prevent gradient underflow, which is not implemented. "
+            "Use bfloat16 instead, which provides the same memory savings with "
+            "better numerical stability and no gradient scaling required."
+        )
+
     if args.speculator_type == "mtp":
         if args.draft_attn_impl != "simple_flex_attention":
             raise ValueError(
