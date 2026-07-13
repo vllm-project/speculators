@@ -1,3 +1,8 @@
+---
+name: pr-review
+description: Review a GitHub PR with design-first analysis, posted as a GitHub review.
+---
+
 # PR Review
 
 Review a GitHub pull request with design-first analysis, posted as a GitHub review.
@@ -12,8 +17,8 @@ You are reviewing a PR on the `speculators` repo — a library for training and 
 
 ### Phase 0: Eligibility check
 
-1. Resolve the PR number from `$ARGUMENTS` (or current branch via `gh pr view --json number`).
-2. Check `gh pr view <number> --json state,isDraft`. **Do not proceed** if the PR is closed, merged, or a draft.
+1. Resolve the PR number from `$ARGUMENTS` (or current branch via `gh pr view -R vllm-project/speculators --json number`).
+2. Check `gh pr view -R vllm-project/speculators <number> --json state,isDraft`. **Do not proceed** if the PR is closed, merged, or a draft.
 3. Check if you (the current `gh` user) already posted a review on this PR. If so, compare the latest commit SHA on the PR against the commit SHA at the time of your last review. **Do not post again** if there are no new commits since your last review — report to the user that the PR hasn't changed since the last review. Even with new commits, if your review would say substantially the same thing as your previous one (same verdict, same outstanding items), do not post — report to the user that nothing has materially changed.
 4. After gathering context (Phase 1–2), reassess: if the discussion thread shows the PR is effectively still in progress — active experiments, trial-and-error debugging, the author saying "still working on this", or unresolved back-and-forth about the approach — treat it as a draft and do not review. Report to the user that the PR appears to still be in flux.
 
@@ -21,8 +26,8 @@ You are reviewing a PR on the `speculators` repo — a library for training and 
 
 Run these in parallel:
 
-- `gh pr view <number> --json title,body,baseRefName,headRefName,author,labels,files`
-- `gh pr diff <number>`
+- `gh pr view -R vllm-project/speculators <number> --json title,body,baseRefName,headRefName,author,labels,files`
+- `gh pr diff -R vllm-project/speculators <number>`
 - `gh api repos/vllm-project/speculators/pulls/<number>/reviews` — existing reviews
 - `gh api repos/vllm-project/speculators/pulls/<number>/comments` — inline comments
 - `gh api repos/vllm-project/speculators/issues/<number>/comments` — conversation thread
