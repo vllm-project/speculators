@@ -218,7 +218,8 @@ def create_transformer_layer_config(  # noqa: C901
                 )
                 rope_params.pop("type", None)
                 rope_params.pop("mrope_interleaved", None)
-                rope_params.pop("partial_rotary_factor", None)
+                if "mrope_section" not in rope_params:
+                    rope_params.pop("partial_rotary_factor", None)
             config.rope_parameters = rope_params
     else:
         if hasattr(verifier_config, "rope_scaling"):
@@ -229,7 +230,8 @@ def create_transformer_layer_config(  # noqa: C901
                 )
                 rope_scaling.pop("type", None)
                 rope_scaling.pop("mrope_interleaved", None)
-                rope_scaling.pop("partial_rotary_factor", None)
+                if "mrope_section" not in rope_scaling:
+                    rope_scaling.pop("partial_rotary_factor", None)
             config.rope_scaling = rope_scaling
         config.rope_theta = getattr(verifier_config, "rope_theta", 10000.0)
 
