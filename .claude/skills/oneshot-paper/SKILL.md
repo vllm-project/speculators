@@ -39,7 +39,7 @@ Before doing any work, check if this method is blacklisted, already implemented,
    ```
    Same — stop if a matching PR exists.
 
-If a duplicate is found, write the reason to `.claude/agent_state/last_run_report.md` and exit cleanly (exit code 0). The wrapper script will still post to Slack with the report explaining why it was skipped.
+If a duplicate is found, log the reason to stdout and exit cleanly (exit code 0).
 
 ## Phase 1: Analyze the Paper
 
