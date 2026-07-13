@@ -1,3 +1,4 @@
+import logging
 from typing import ClassVar
 
 import torch
@@ -21,6 +22,8 @@ from speculators.models.dflash.utils import (
 )
 from speculators.models.metrics import LossConfig, resolve_loss_config
 from speculators.models.utils import conditional_torch_compile, resolve_target_layer_ids
+
+logger = logging.getLogger(__name__)
 
 
 @SpeculatorModel.register("dflash")
@@ -105,6 +108,15 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         )
         self.verifier_norm.weight.requires_grad = False
         self.block_size = config.block_size
+
+        # Warn if using DFlash with sample_from_anchor=True (may not be supported)
+        if type(self).__name__ == "DFlashDraftModel" and config.sample_from_anchor:
+            logger.warning(
+                "DFlash with sample_from_anchor=True may not be supported in "
+                "all inference engines (e.g., vLLM). Verify compatibility with your "
+                "deployment target."
+            )
+
         self.post_init()
 
     @property
@@ -174,6 +186,20 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             "draft_attn_impl", "simple_flex_attention"
         )
         block_size = kwargs.get("block_size", 8)
+
+        default_sample_from_anchor = algorithm == "dspark"
+        sample_from_anchor_arg = kwargs.get("sample_from_anchor")
+        sample_from_anchor = (
+            default_sample_from_anchor
+            if sample_from_anchor_arg is None
+            else sample_from_anchor_arg
+        )
+
+        # Calculate speculative tokens based on sample_from_anchor
+        # False: anchor is bonus token (block_size - 1 tokens)
+        # True: sample from anchor too (block_size tokens)
+        speculative_tokens = block_size if sample_from_anchor else block_size - 1
+
         return {
             "transformer_layer_config": verifier_config,
             "draft_vocab_size": kwargs["draft_vocab_size"],
@@ -181,11 +207,11 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             "aux_hidden_state_layer_ids": target_layer_ids,
             "mask_token_id": kwargs.get("mask_token_id"),
             "sliding_window_non_causal": kwargs.get("sliding_window_non_causal", False),
+            "sample_from_anchor": sample_from_anchor,
             "speculators_config": SpeculatorsConfig(
                 algorithm=algorithm,
                 proposal_methods=[
-                    # First block position is the anchor, not emitted during gen.
-                    GreedyTokenProposalConfig(speculative_tokens=block_size - 1)
+                    GreedyTokenProposalConfig(speculative_tokens=speculative_tokens)
                 ],
                 default_proposal_method="greedy",
                 verifier=VerifierConfig.from_pretrained(
@@ -351,8 +377,10 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             verifier_logits = self.verifier_lm_head(
                 self.verifier_norm(verifier_last_hidden_states)
             )
-            # Shift right by 1 so verifier_logits[i] predicts token at position i
-            verifier_logits = torch.roll(verifier_logits, 1, dims=1)
+            if not self.config.sample_from_anchor:
+                # False: shift right by 1 so slot j predicts token at position j
+                verifier_logits = torch.roll(verifier_logits, 1, dims=1)
+            # else: True, slot k predicts token at position k+1 (next), no shift
             targets = verifier_logits[:, anchored_block_indices]
             # shape: [1, num_anchors*block_size, draft_vocab_size]
 
@@ -383,7 +411,9 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             .to(aligned_loss_mask.dtype)
         )  # shape: [1, num_anchors*block_size]
 
-        aligned_loss_mask[:, :: self.block_size] = 0
+        # For sample_from_anchor=False, mask slot 0 (anchor) since it's not trained
+        if not self.config.sample_from_anchor:
+            aligned_loss_mask[:, :: self.block_size] = 0
 
         return hidden, logits, targets, aligned_loss_mask, anchored_block_indices
 
@@ -422,5 +452,6 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             loss_config=loss_config,
             per_position_loss_weight=per_position_loss_weight,
             dpace_alpha=dpace_alpha,
+            sample_from_anchor=self.config.sample_from_anchor,
         )
         return None, loss, metrics
