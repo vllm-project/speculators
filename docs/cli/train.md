@@ -126,7 +126,7 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--seed`** (int, default: `42`) Random seed for reproducibility.
 
-- **`--hidden-states-dtype`** (str, default: `"bfloat16"`) Data type for dataloader hidden states and autocast compute. Model master weights are always kept in fp32. Options: `float32`, `float16`, `bfloat16`
+- **`--hidden-states-dtype`** (str, default: `"bfloat16"`) Data type for dataloader hidden states and autocast compute. Model master weights are always kept in fp32. Options: `float32` (full precision, for debugging), `bfloat16` (recommended for mixed precision training). Note: `float16` is not supported as it requires gradient scaling to prevent underflow.
 
 - **`--deterministic-cuda`** (flag) Enable deterministic CUDA operations. May impact performance.
 
