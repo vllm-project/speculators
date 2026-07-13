@@ -557,7 +557,9 @@ def _worker_ddp_fresh_init(rank, world_size, results_dir):
         trainer.setup_model()
 
         # For DDP, we can get the state dict directly from the wrapped model
-        raw_model = trainer.model.module if hasattr(trainer.model, "module") else trainer.model
+        raw_model = (
+            trainer.model.module if hasattr(trainer.model, "module") else trainer.model
+        )
         full_sd = raw_model.state_dict()
 
         if rank == 0:
