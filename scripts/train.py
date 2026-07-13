@@ -51,11 +51,6 @@ DRAFT_ARCH_CONFIGS: dict[str, type] = {
 }
 MROPE_INVERSE_TOLERANCE = 1e-6
 
-# Speculator types that default every draft layer to sliding window attention;
-# --full-attention-indices opts specific layers back into full attention. All
-# other speculator types use full attention on every layer.
-SLIDING_WINDOW_SPECULATOR_TYPES = ("dflash", "dspark")
-
 
 def set_seed(seed: int, deterministic: bool = False):
     """Set random seeds for reproducibility."""
@@ -451,20 +446,15 @@ def build_draft_model(
                 args.draft_config, args.verifier_name_or_path
             )
         else:
-            if args.speculator_type in SLIDING_WINDOW_SPECULATOR_TYPES:
-                full_attention_indices = args.full_attention_indices
-                if not full_attention_indices:
-                    logger.info(
-                        "All %d draft layers using sliding window attention "
-                        "(window=%d). To use full attention on specific layers, "
-                        "pass '--full-attention-indices <layer_ids>'.",
-                        args.num_layers,
-                        args.sliding_window,
-                    )
-            else:
-                # Other speculator types (eagle3, peagle) only support full
-                # attention: mark every layer full-attention.
-                full_attention_indices = list(range(args.num_layers))
+            full_attention_indices = args.full_attention_indices
+            if not full_attention_indices:
+                logger.info(
+                    "All %d draft layers using sliding window attention "
+                    "(window=%d). To use full attention on specific layers, "
+                    "pass '--full-attention-indices <layer_ids>'.",
+                    args.num_layers,
+                    args.sliding_window,
+                )
 
             transformer_layer_config = create_transformer_layer_config(
                 verifier_name_or_path=args.verifier_name_or_path,
@@ -539,15 +529,9 @@ def main(args: argparse.Namespace):  # noqa: C901
     else:
         d2t, t2d, draft_vocab_size = parse_vocab_mappings(args)
 
-        if (
-            args.full_attention_indices
-            and args.speculator_type not in SLIDING_WINDOW_SPECULATOR_TYPES
-        ):
+        if args.full_attention_indices and args.speculator_type == "mtp":
             raise ValueError(
-                "--full-attention-indices is only meaningful for dflash and dspark "
-                "draft models (which use sliding window attention by default). "
-                "Please open an issue/pr if you would like to use sliding window "
-                "attention with a different speculator type."
+                "--full-attention-indices is not supported for mtp draft models."
             )
 
     registry = SpeculatorModel.registry
@@ -1150,7 +1134,7 @@ def parse_args():
         type=int,
         default=2048,
         help="Sliding window size for sliding window attention layers (default: 2048). "
-        "For dflash and dspark, all layers use sliding window by default.",
+        "All draft layers use sliding window by default (except mtp).",
     )
     parser.add_argument(
         "--full-attention-indices",
@@ -1158,8 +1142,8 @@ def parse_args():
         nargs="+",
         default=[],
         help="(Optional) Space-separated draft layer indices that should use full "
-        "attention instead of sliding window. For dflash and dspark, all layers "
-        "use sliding window attention by default. "
+        "attention instead of sliding window. All draft layers use sliding window "
+        "by default (except mtp). "
         "(e.g. '--full-attention-indices 0 2' makes layers 0 and 2 use full "
         "attention; the rest use sliding window).",
     )
