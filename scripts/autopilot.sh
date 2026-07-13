@@ -124,8 +124,10 @@ if [ $EXIT_CODE -eq 0 ]; then
     if [ -f "$PR_FILE" ]; then
         SPEC_PR=$(python3 -c "import json; d=json.load(open('$PR_FILE')); print(d.get('speculators',''))" 2>/dev/null || true)
         VLLM_PR=$(python3 -c "import json; d=json.load(open('$PR_FILE')); print(d.get('vllm',''))" 2>/dev/null || true)
-        if [ -n "$SPEC_PR" ] || [ -n "$VLLM_PR" ]; then
+        RFC_URL=$(python3 -c "import json; d=json.load(open('$PR_FILE')); print(d.get('rfc',''))" 2>/dev/null || true)
+        if [ -n "$SPEC_PR" ] || [ -n "$VLLM_PR" ] || [ -n "$RFC_URL" ]; then
             STATUS="IMPLEMENTED"
+            [ -n "$RFC_URL" ] && DETAIL="$DETAIL\n*RFC:* <${RFC_URL}>"
             [ -n "$SPEC_PR" ] && DETAIL="$DETAIL\n*speculators PR:* <${SPEC_PR}>"
             [ -n "$VLLM_PR" ] && DETAIL="$DETAIL\n*vLLM PR:* <${VLLM_PR}>"
         fi

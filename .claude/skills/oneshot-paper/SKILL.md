@@ -74,14 +74,59 @@ Key autonomous decisions:
 - **Max steps**: 100 steps. Enough to see if loss decreases.
 - **On failure**: If training crashes, read the traceback, attempt a fix, and retry once. If it fails again, include the traceback in the final report.
 
-## Phase 4: Create Draft PR
+## Phase 4: Create RFC + Draft PR
+
+### Step 1: Create RFC Issue
+
+Create a GitHub issue following the repo's RFC template. The RFC captures the paper analysis and proposed implementation approach — it's the lasting artifact even if the draft PR gets discarded.
+
+```bash
+cd /workspace/speculators
+RFC_URL=$(gh issue create --repo vllm-project/speculators \
+  --title "[RFC]: Add <algo_name> support" \
+  --label "RFC" \
+  --body "$(cat <<'RFCEOF'
+### Motivation.
+
+<2-4 sentences explaining WHY this method is worth implementing. What problem does it solve? What improvement does it claim over existing methods (e.g. Eagle3, DFlash)? Reference specific numbers from the paper (e.g. "claims 1.5x speedup over Eagle3 on Llama-70B"). What is the key insight/innovation?>
+
+**Paper:** [<paper_title>](<paper_url>)
+
+### Proposed Change.
+
+**Architecture:**
+<Describe the model architecture — layers, attention pattern, hidden state fusion, auxiliary heads. How does it differ from the closest existing model in speculators?>
+
+**Training:**
+<Describe the training approach — loss function, data pipeline (online/offline), number of speculative steps.>
+
+**vLLM integration:**
+<How does inference work? Which existing proposer does it map to (EagleProposer, DFlashProposer), or does it need a new one?>
+
+**Closest existing implementation:** `src/speculators/models/<closest>/`
+
+### Any Other Things.
+
+**Smoke training results** (automated, small-scale):
+- Verifier: <model>
+- Steps: <N>
+- Initial loss: X.XXX → Final loss: X.XXX
+- Verdict: PASS/FAIL
+
+**Draft implementation:** <will be linked after PR creation>
+
+🤖 Generated with [Claude Code](https://claude.ai/code) via the `/autopilot` skill
+RFCEOF
+)")
+echo "RFC created: $RFC_URL"
+```
+
+### Step 2: Create Draft PR
 
 **IMPORTANT — hard requirements for PRs:**
 - The feature branch MUST be based on `main`. Do NOT branch from or include changes from any other feature branch (e.g. `feat/paper-to-impl-agent`). The PR should only contain the implementation files for this algorithm.
 - The PR MUST be created as a **draft** (`--draft` flag). Never create a ready-for-review PR.
 - The PR title MUST start with `[autopilot]`.
-
-After implementation and training, commit all changes and open a draft PR:
 
 1. **Stage and commit** all new and modified files in `/workspace/speculators`:
    ```bash
@@ -98,7 +143,7 @@ After implementation and training, commit all changes and open a draft PR:
    git commit -s -m "feat(<algo_name>): add <algo_name> draft model support"
    ```
 
-3. **Push and create draft PR** on the speculators repo. **The title MUST start with `[autopilot]`** — this identifies auto-generated PRs. **Capture the PR URL** from `gh pr create` output:
+3. **Push and create draft PR** on the speculators repo. **The title MUST start with `[autopilot]`**. Link the RFC issue. **Capture the PR URL**:
    ```bash
    cd /workspace/speculators
    git push -u my-fork feat/<algo_name>
@@ -110,13 +155,13 @@ After implementation and training, commit all changes and open a draft PR:
    ## Motivation
    <2-3 sentences explaining WHY this method is worth implementing: what problem does it solve, what improvement does it claim over existing methods (e.g. Eagle3, DFlash), and what is the key insight/innovation. Reference specific numbers from the paper if available (e.g. "claims 1.5x speedup over Eagle3 on Llama-70B").>
 
+   ## RFC
+   <RFC_URL>
+
    ## Summary
    - Implements the <algo_name> speculative decoding method from [paper title](paper_url)
    - Adds config, model, and training support in speculators
    - Adds vLLM integration (config translation + model registry)
-
-   ## Paper
-   <paper_url>
 
    ## Smoke Training Results
    - Verifier: <model>
@@ -136,7 +181,13 @@ After implementation and training, commit all changes and open a draft PR:
    )")
    ```
 
-4. **If vLLM changes exist**, push and create a draft PR there too. **Capture the PR URL**:
+4. **Update the RFC** with the draft PR link:
+   ```bash
+   gh issue comment "$RFC_URL" --repo vllm-project/speculators \
+     --body "Draft implementation: $SPEC_PR_URL"
+   ```
+
+5. **If vLLM changes exist**, push and create a draft PR there too. **Capture the PR URL**:
    ```bash
    cd /workspace/vllm
    git push -u my-fork feat/<algo_name>
@@ -151,6 +202,7 @@ After implementation and training, commit all changes and open a draft PR:
    ## Summary
    - Adds <algo_name> draft model for speculative decoding
    - Companion to speculators PR: <speculators_pr_url>
+   - RFC: <RFC_URL>
 
    ## Test plan
    - [ ] Model loads and runs inference
@@ -161,7 +213,7 @@ After implementation and training, commit all changes and open a draft PR:
    )")
    ```
 
-5. **MANDATORY — Write PR URLs to state file.** The wrapper script reads this file to send Slack notifications. If you skip this step, the success notification will NOT fire. You MUST run this immediately after creating PRs:
+6. **MANDATORY — Write state files.** The wrapper script reads these for Slack notifications. If you skip this step, the success notification will NOT fire. You MUST run this immediately after creating PRs:
    ```bash
    cd /workspace/speculators
    mkdir -p .claude/agent_state
@@ -170,8 +222,10 @@ After implementation and training, commit all changes and open a draft PR:
    urls = {}
    speculators_pr = '${SPEC_PR_URL:-}'
    vllm_pr = '${VLLM_PR_URL:-}'
+   rfc = '${RFC_URL:-}'
    if speculators_pr: urls['speculators'] = speculators_pr
    if vllm_pr: urls['vllm'] = vllm_pr
+   if rfc: urls['rfc'] = rfc
    with open('.claude/agent_state/last_run_prs.json', 'w') as f:
        json.dump(urls, f, indent=2)
    "
