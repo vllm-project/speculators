@@ -467,6 +467,7 @@ def test_build_draft_model_mtp_from_scratch_uses_verifier_decoder(monkeypatch):
         verifier_name_or_path="some-verifier",
         mask_token_id=None,
         num_speculative_steps=3,
+        draft_mrope_full_head_hack=True,
     )
 
     built = build_draft_model(args, _FakeMTP, None, None, None)  # type: ignore[arg-type]
@@ -515,6 +516,7 @@ def _capture_full_attention_indices(
         full_attention_indices=requested_indices,
         mask_token_id=None,
         trust_remote_code=False,
+        draft_mrope_full_head_hack=True,
     )
     build_draft_model(args, _FakeModel, None, None, 128)  # type: ignore[arg-type]
     return captured["full_attention_indices"]

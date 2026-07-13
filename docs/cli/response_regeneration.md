@@ -93,7 +93,7 @@ python scripts/response_regeneration/script.py --dataset magpie
 
 - **`--outfile`** (str, default: auto-generated) Output JSONL path. If not specified, auto-generated as `{dataset}_{model}.jsonl`.
 
-- **`--resume`** (flag) Skip rows already present in the output file (matched by uuid or index).
+- **`--resume`** (flag) Skip conversations already present in the output file (matched by `primary_id`: the row's `id`/`uuid` if it has one, otherwise a content hash).
 
 ### Full Example
 
@@ -117,40 +117,41 @@ python scripts/response_regeneration/script.py \
 
 ## Output Format
 
-Each line of the output JSONL file pairs the original user prompt with the newly generated response, in a conversations format compatible with fine-tuning:
+Rows are pre-tokenized and ready for training: one row per assistant turn, holding the prompt the target conditioned on followed by the tokens it generated. The endpoint must support `return_token_ids`, which the script uses to read the generation boundary directly instead of re-tokenizing the text and recovering the boundary with a regex.
 
 ```json
 {
-  "id": "sample_0",
+  "id": "conv-abc_turn0",
+  "primary_id": "conv-abc",
+  "input_ids": [151644, 872, ...],
+  "loss_mask": [0, 0, ..., 1, 1],
   "conversations": [
-    {"from": "human", "value": "What is the capital of France?"},
-    {"from": "gpt", "value": "The capital of France is Paris."}
+    {"role": "user", "content": "What is the capital of France?"},
+    {"role": "assistant", "content": "The capital of France is Paris."}
   ],
   "metadata": {
     "idx": 0,
     "finish_reason": "stop",
-    "latency_s": 1.234,
     "usage": {...},
-    "endpoint": "http://127.0.0.1:8000/v1/chat/completions",
-    "reasoning_content": "..."
+    "endpoint": "http://127.0.0.1:8000/v1/chat/completions"
   }
 }
 ```
 
-- The `id` field uses the dataset's UUID if available, otherwise falls back to `sample_{idx}`.
-- The `reasoning_content` field in metadata is only included when the model provides reasoning content (e.g., with reasoning models).
+- `loss_mask` is `0` over the prompt and `1` over the generated tokens. This *is* the generation boundary, so training applies no further masking.
+- A conversation with N assistant turns yields N rows, each carrying the history before it. Turn `k`'s row is `{primary_id}_turn{k}`.
+- `primary_id` is the conversation's stable id, used by `--resume`. The row `id` is turn-suffixed and never matches it.
+- `conversations` is a human-readable twin of `input_ids` for review only. Training drops it.
 
-On error, the response conversation turn is omitted and an `error` field is included in metadata:
+Rows are written only after every turn of a conversation succeeds. A conversation that fails partway writes nothing to the output file and one row to a sibling error file instead (`--outfile out.jsonl` gives `out.errors.jsonl`), so `--resume` retries it whole:
 
 ```json
 {
-  "id": "sample_0",
-  "conversations": [
-    {"from": "human", "value": "What is the capital of France?"}
-  ],
+  "id": "conv-abc",
   "metadata": {
     "idx": 0,
     "error": "ConnectionError(...)",
+    "turns_completed": 1,
     "endpoint": "http://127.0.0.1:8000/v1/chat/completions"
   }
 }
