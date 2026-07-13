@@ -319,12 +319,15 @@ class Trainer:
         self.model.to(self.local_rank)  # type: ignore[arg-type]
 
         if load_checkpoint:
-            self.checkpointer.load_model_state_dict(self.model)
+            if dist.get_rank() == 0:
+                self.checkpointer.load_model_state_dict(self.model)
         else:
+            # Fresh init: broadcast rank 0's random initialization to all ranks
             for param in self.model.parameters():
                 dist.broadcast(param.data, src=0)
             dist.barrier()
 
+        # DDP constructor broadcasts rank 0's params to all ranks
         self.model = DistributedDataParallel(self.model)  # type: ignore[assignment]
 
     def setup_optimizer(self):
