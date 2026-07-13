@@ -25,6 +25,10 @@ from speculators.models.utils import conditional_torch_compile, resolve_target_l
 
 logger = logging.getLogger(__name__)
 
+# Compile so the mask builds block-sparse instead of materializing DFlash's huge
+# dense [Q, KV] grid every step. (No benefit for EAGLE3's small autoregressive mask.)
+_compiled_create_block_mask = torch.compile(create_block_mask)
+
 
 @SpeculatorModel.register("dflash")
 class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
@@ -58,7 +62,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             )
         self._attn_impl = config.transformer_layer_config._attn_implementation  # noqa: SLF001
         self._create_mask_fn = (
-            create_block_mask
+            _compiled_create_block_mask
             if self._attn_impl == "simple_flex_attention"
             else create_float_mask
             if self._attn_impl == "eager"
