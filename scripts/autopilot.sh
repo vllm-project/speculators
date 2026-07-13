@@ -105,11 +105,6 @@ echo "======================================="
 # Trap Ctrl-C — don't post to Slack on manual abort
 trap 'echo "Aborted."; exit 130' INT
 
-STATE_DIR=".claude/agent_state"
-PR_FILE="$STATE_DIR/last_run_prs.json"
-REPORT_FILE="$STATE_DIR/last_run_report.md"
-rm -f "$PR_FILE" "$REPORT_FILE"
-
 if [ "$INTERACTIVE" = true ]; then
     echo "/autopilot --days $DAYS" | claude --model claude-opus-4-6 --dangerously-skip-permissions \
         "${EXTRA_ARGS[@]}" && EXIT_CODE=0 || EXIT_CODE=$?
@@ -118,38 +113,8 @@ else
         "${EXTRA_ARGS[@]}" && EXIT_CODE=0 || EXIT_CODE=$?
 fi
 
-if [ $EXIT_CODE -eq 0 ]; then
-    DETAIL="Autopilot scan completed."
-    STATUS="SUCCESS"
-    if [ -f "$PR_FILE" ]; then
-        eval "$(python3 -c "
-import json, sys
-d = json.load(open('$PR_FILE'))
-# Handle both dict and list formats the agent might write
-if isinstance(d, list):
-    for item in d:
-        if isinstance(item, dict):
-            for k, v in item.items():
-                if 'pr_url' in k or k == 'speculators': print(f'SPEC_PR={v}')
-                elif 'vllm' in k: print(f'VLLM_PR={v}')
-                elif 'rfc' in k: print(f'RFC_URL={v}')
-elif isinstance(d, dict):
-    if d.get('speculators'): print(f'SPEC_PR={d[\"speculators\"]}')
-    if d.get('vllm'): print(f'VLLM_PR={d[\"vllm\"]}')
-    if d.get('rfc'): print(f'RFC_URL={d[\"rfc\"]}')
-" 2>/dev/null || true)"
-        if [ -n "${SPEC_PR:-}" ] || [ -n "${VLLM_PR:-}" ] || [ -n "${RFC_URL:-}" ]; then
-            STATUS="IMPLEMENTED"
-            [ -n "${RFC_URL:-}" ] && DETAIL="$DETAIL\n*RFC:* <${RFC_URL}>"
-            [ -n "${SPEC_PR:-}" ] && DETAIL="$DETAIL\n*speculators PR:* <${SPEC_PR}>"
-            [ -n "${VLLM_PR:-}" ] && DETAIL="$DETAIL\n*vLLM PR:* <${VLLM_PR}>"
-        fi
-    fi
-    if [ -f "$REPORT_FILE" ]; then
-        REPORT=$(head -c 2800 "$REPORT_FILE" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read())[1:-1])')
-        DETAIL="$DETAIL\n\n${REPORT}"
-    fi
-    slack_notify "$STATUS" "$DETAIL"
-else
+# The agent posts success/implemented notifications to Slack directly.
+# The script only handles failure (agent crash / non-zero exit).
+if [ $EXIT_CODE -ne 0 ]; then
     slack_notify "FAIL" "Autopilot exited with code $EXIT_CODE. Check the logs for details."
 fi

@@ -213,55 +213,44 @@ echo "RFC created: $RFC_URL"
    )")
    ```
 
-6. **MANDATORY — Write state files.** The wrapper script reads these for Slack notifications. If you skip this step, the success notification will NOT fire. You MUST run this immediately after creating PRs:
-   ```bash
-   cd /workspace/speculators
-   mkdir -p .claude/agent_state
-   python3 -c "
-   import json
-   urls = {}
-   speculators_pr = '${SPEC_PR_URL:-}'
-   vllm_pr = '${VLLM_PR_URL:-}'
-   rfc = '${RFC_URL:-}'
-   if speculators_pr: urls['speculators'] = speculators_pr
-   if vllm_pr: urls['vllm'] = vllm_pr
-   if rfc: urls['rfc'] = rfc
-   with open('.claude/agent_state/last_run_prs.json', 'w') as f:
-       json.dump(urls, f, indent=2)
-   "
-   ```
-   **Verify** the file was written: `cat .claude/agent_state/last_run_prs.json`
+## Phase 5: Post to Slack
 
-## Phase 5: Final Report
+**MANDATORY — Post results to Slack directly.** The wrapper script only handles failure notifications (agent crash). You are responsible for posting success notifications. If `SLACK_WEBHOOK_URL` or `SLACK_WEBHOOK_URL_SUCCESS` are set in the environment, post to them.
 
-**MANDATORY — Write the report file.** The wrapper script reads this file for Slack notifications. You MUST write this file before exiting.
-
-Write a concise report to `.claude/agent_state/last_run_report.md`:
-- **Use Slack mrkdwn**: `*bold*` for headers (NOT markdown `##` or `###`), `\`code\`` for inline code
-- **Keep it under 1500 characters** — Slack blocks have a hard limit
-- **Be terse**: one line per item, no verbose explanations
+Build and send the Slack message via `curl`. Use Slack mrkdwn formatting (`*bold*`, `\`code\``). Keep the report section under 1500 characters.
 
 ```bash
-cd /workspace/speculators
-cat > .claude/agent_state/last_run_report.md <<'REPORT'
-<paste the report content here>
-REPORT
-```
+# Build the report
+REPORT="*<algo_name>* — <one-sentence method summary>
 
-**Verify** the file was written: `cat .claude/agent_state/last_run_report.md`
+*RFC:* <${RFC_URL}>
+*speculators PR:* <${SPEC_PR_URL}>
+$([ -n "${VLLM_PR_URL:-}" ] && echo "*vLLM PR:* <${VLLM_PR_URL}>")
 
-Report template (follow this format exactly):
-
-```
-*<algo_name>* — <one-sentence method summary>
-
-*Implementation*: branch `feat/<algo_name>` | lint PASS/FAIL | tests PASS/FAIL
+*Implementation*: branch \`feat/<algo_name>\` | lint PASS/FAIL | tests PASS/FAIL
 *Training*: <verifier> | <N> steps | loss <X.XX> → <X.XX> | PASS/FAIL
-*vLLM*: registered as `<method>`, maps to <proposer>
+*vLLM*: registered as \`<method>\`, maps to <proposer>"
 
-*Decisions*: <1-2 key choices, comma-separated>
-*Risks*: <1-2 key risks, comma-separated>
+# Build JSON payload
+PAYLOAD=$(python3 -c "
+import json, os
+report = '''$REPORT'''
+payload = {
+    'blocks': [
+        {'type': 'header', 'text': {'type': 'plain_text', 'text': ':white_check_mark: Speculators Autopilot: IMPLEMENTED', 'emoji': True}},
+        {'type': 'context', 'elements': [{'type': 'mrkdwn', 'text': 'Skill: \`/autopilot\` | Script: \`scripts/autopilot.sh\`'}]},
+        {'type': 'section', 'text': {'type': 'mrkdwn', 'text': report}}
+    ]
+}
+print(json.dumps(payload))
+")
+
+# Post to both channels
+[ -n "${SLACK_WEBHOOK_URL:-}" ] && curl -sf -X POST -H 'Content-type: application/json' -d "$PAYLOAD" "$SLACK_WEBHOOK_URL" >/dev/null 2>&1 || true
+[ -n "${SLACK_WEBHOOK_URL_SUCCESS:-}" ] && curl -sf -X POST -H 'Content-type: application/json' -d "$PAYLOAD" "$SLACK_WEBHOOK_URL_SUCCESS" >/dev/null 2>&1 || true
 ```
+
+Adapt the report content to match the actual results. The template above is a guide — fill in real values.
 
 ## Error Recovery
 
