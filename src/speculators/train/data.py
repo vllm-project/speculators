@@ -190,7 +190,6 @@ class BaseDataset(Dataset):
         #  "loss_mask": [seq_len],
         # }
 
-
         # Add lengths tensor
         seq_len = data["input_ids"].shape[0]
         data["lengths"] = torch.tensor([seq_len], dtype=torch.long)

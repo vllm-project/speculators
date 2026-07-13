@@ -2,6 +2,7 @@
 
 from typing import Any, Literal
 
+import pydantic
 from pydantic import Field, field_serializer, field_validator
 from transformers import AutoConfig, PretrainedConfig
 from transformers.models.qwen2.configuration_qwen2 import Qwen2Config
@@ -52,6 +53,29 @@ class MTPSpeculatorConfig(SpeculatorModelConfig):
         ),
     )
 
+    num_centroids: int | None = Field(
+        default=None,
+        description=(
+            "Number of centroids for a centroid-masked multi-level LM head. "
+            "If None, standard flat LM head is used."
+        ),
+    )
+
+    centroid_intermediate_top_k: int = Field(
+        default=32,
+        description="Number of top centroids to select during multi-level LM head decoding.",
+    )
+
+    @pydantic.model_validator(mode="after")
+    def validate_centroids(self) -> "MTPSpeculatorConfig":
+        if self.num_centroids is not None:
+            if self.num_centroids < 1:
+                raise ValueError(f"num_centroids must be >= 1, got {self.num_centroids}")
+            if self.vocab_size % self.num_centroids != 0:
+                raise ValueError(f"vocab_size ({self.vocab_size}) must be divisible by num_centroids ({self.num_centroids})")
+            if self.centroid_intermediate_top_k > self.num_centroids:
+                raise ValueError(f"centroid_intermediate_top_k ({self.centroid_intermediate_top_k}) cannot exceed num_centroids ({self.num_centroids})")
+        return self
     @property
     def hidden_size(self) -> int:
         return self.transformer_layer_config.hidden_size  # type: ignore[return-value]
