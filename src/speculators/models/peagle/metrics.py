@@ -69,7 +69,7 @@ def compute_metrics(
     }
     for term_name, term_val in term_losses.items():
         metrics[f"{term_name}_sum"] = term_val
-        metrics[f"{term_name}_total"] = ones
+        metrics[f"{term_name}_total"] = ones.clone()
     for d in range(num_depths):
         metrics[f"position_{d}_acc_sum"] = correct_per_pos[d]
         metrics[f"position_{d}_acc_total"] = total_per_pos[d]

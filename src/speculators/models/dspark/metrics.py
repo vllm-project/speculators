@@ -126,7 +126,7 @@ def compute_metrics(
     metrics["loss_total"] = ones
     for term_name, term_val in term_losses.items():
         metrics[f"{term_name}_sum"] = term_val
-        metrics[f"{term_name}_total"] = ones
+        metrics[f"{term_name}_total"] = ones.clone()
 
     # Mean acceptance rate of the (Markov-corrected) drafter.
     with torch.no_grad():
