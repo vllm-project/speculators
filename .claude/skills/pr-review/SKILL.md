@@ -90,6 +90,14 @@ If the PR description, commit messages, or code comments reference a paper (arXi
 
 Only flag mismatches you can concretely demonstrate by quoting both the paper and the code. Do not flag stylistic differences in how math is expressed if the computation is equivalent.
 
+### Phase 3.7: CONTRIBUTING.md compliance
+
+Check the PR against the project's contribution guidelines (`CONTRIBUTING.md`):
+
+1. **Issue linkage for significant changes**: If the PR adds new training algorithms/model support, modifies the data pipeline or CLI/API, is a large refactor, or touches 3+ files — verify it references an assigned issue. Small fixes (typos, docs, bug fixes < 20 lines, type annotations, minor deps) are exempt.
+2. **DCO sign-off**: All commits must have a `Signed-off-by` line. Check with `gh pr view -R vllm-project/speculators <number> --json commits --jq '.commits[].messageBody'` — if any commit lacks the sign-off, flag it (CI will also catch this, but noting it saves a round-trip).
+3. **Documentation updates**: If the PR changes user-facing behavior (CLI flags, config options, APIs), check whether docs were updated. Missing doc updates for behavior changes should be flagged.
+
 ### Phase 4: Line-level review
 
 Apply path-specific focus based on which files changed:
