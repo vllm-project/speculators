@@ -122,14 +122,27 @@ if [ $EXIT_CODE -eq 0 ]; then
     DETAIL="Autopilot scan completed."
     STATUS="SUCCESS"
     if [ -f "$PR_FILE" ]; then
-        SPEC_PR=$(python3 -c "import json; d=json.load(open('$PR_FILE')); print(d.get('speculators',''))" 2>/dev/null || true)
-        VLLM_PR=$(python3 -c "import json; d=json.load(open('$PR_FILE')); print(d.get('vllm',''))" 2>/dev/null || true)
-        RFC_URL=$(python3 -c "import json; d=json.load(open('$PR_FILE')); print(d.get('rfc',''))" 2>/dev/null || true)
-        if [ -n "$SPEC_PR" ] || [ -n "$VLLM_PR" ] || [ -n "$RFC_URL" ]; then
+        eval "$(python3 -c "
+import json, sys
+d = json.load(open('$PR_FILE'))
+# Handle both dict and list formats the agent might write
+if isinstance(d, list):
+    for item in d:
+        if isinstance(item, dict):
+            for k, v in item.items():
+                if 'pr_url' in k or k == 'speculators': print(f'SPEC_PR={v}')
+                elif 'vllm' in k: print(f'VLLM_PR={v}')
+                elif 'rfc' in k: print(f'RFC_URL={v}')
+elif isinstance(d, dict):
+    if d.get('speculators'): print(f'SPEC_PR={d[\"speculators\"]}')
+    if d.get('vllm'): print(f'VLLM_PR={d[\"vllm\"]}')
+    if d.get('rfc'): print(f'RFC_URL={d[\"rfc\"]}')
+" 2>/dev/null || true)"
+        if [ -n "${SPEC_PR:-}" ] || [ -n "${VLLM_PR:-}" ] || [ -n "${RFC_URL:-}" ]; then
             STATUS="IMPLEMENTED"
-            [ -n "$RFC_URL" ] && DETAIL="$DETAIL\n*RFC:* <${RFC_URL}>"
-            [ -n "$SPEC_PR" ] && DETAIL="$DETAIL\n*speculators PR:* <${SPEC_PR}>"
-            [ -n "$VLLM_PR" ] && DETAIL="$DETAIL\n*vLLM PR:* <${VLLM_PR}>"
+            [ -n "${RFC_URL:-}" ] && DETAIL="$DETAIL\n*RFC:* <${RFC_URL}>"
+            [ -n "${SPEC_PR:-}" ] && DETAIL="$DETAIL\n*speculators PR:* <${SPEC_PR}>"
+            [ -n "${VLLM_PR:-}" ] && DETAIL="$DETAIL\n*vLLM PR:* <${VLLM_PR}>"
         fi
     fi
     if [ -f "$REPORT_FILE" ]; then
