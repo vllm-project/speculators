@@ -25,14 +25,12 @@ behavioural change on purpose.
 
 import argparse
 import json
-import sys
 from pathlib import Path
-from unittest import mock
 
 import pytest
 
-from scripts.train import parse_args
 from speculators.train.config import CONFIG_DESTS, add_config_cli_arguments
+from speculators.train.config.schema import TrainConfig
 from tests.unit.train.golden_cli_matrix import INVOCATIONS, full_argv
 
 GOLDEN = json.loads((Path(__file__).parent / "golden_flat_dict.json").read_text())
@@ -48,12 +46,13 @@ def test_baseline_covers_every_config_dest():
     assert set(BASELINE) == set(CONFIG_DESTS)
 
 
-def test_generated_flag_strings_match_pre_refactor():
-    # Value-equivalence (below) compares dests + values, never the option strings
-    # users actually type. This guards the "no flag renamed/removed" constraint
-    # directly: the generated CLI's option-string set must equal the pre-refactor
-    # parser's frozen snapshot. A schema field rename (which keeps the dest stable
-    # in some cases, or which the golden values wouldn't flag) turns this red.
+def test_flag_surface_freeze():
+    # Tier-4 backward-compat guard (durable, unlike the golden values below):
+    # every one of the ~80 generated option strings must equal the pre-refactor
+    # parser's frozen snapshot, so a schema field rename/drop/retype that keeps
+    # the dest stable (which the golden values wouldn't catch) still turns red.
+    # This is the mechanical proof that every examples/train/*.sh recipe keeps
+    # running byte-for-byte.
     parser = argparse.ArgumentParser()
     add_config_cli_arguments(parser)
     ours = {opt for action in parser._actions for opt in action.option_strings}
@@ -64,6 +63,10 @@ def test_generated_flag_strings_match_pre_refactor():
     ("name", "tail"), INVOCATIONS, ids=[name for name, _ in INVOCATIONS]
 )
 def test_flat_dict_matches_pre_refactor(name, tail):
+    # Golden CLI-equivalence at the cfg.flatten() seam (ADR 0002/0003): the
+    # resolved flat working-dict must equal the vars(args) dict origin/main's flat
+    # argparse produced. Migration scaffolding with a defined end-of-life -- delete
+    # once main no longer carries the old parser.
     delta = GOLDEN[name]
     # Guard the fixture itself: every delta key is a real dest and genuinely
     # differs from the baseline (a stray "delta" equal to the default would be
@@ -74,9 +77,9 @@ def test_flat_dict_matches_pre_refactor(name, tail):
 
     expected = {**BASELINE, **delta}
 
-    with mock.patch.object(sys, "argv", full_argv(tail)):
-        args = parse_args()
-    flat = vars(args)
+    # Drive the seam directly: resolve(argv) -> flatten(). full_argv() prepends the
+    # program name, which parse_args()/resolve() consume as argv[0].
+    flat = TrainConfig.resolve(full_argv(tail)[1:]).flatten()
 
     # A dropped dest must fail loudly rather than slip through as ``None == None``
     # (which ``flat.get`` would allow for a None-valued default like
@@ -91,6 +94,6 @@ def test_flat_dict_matches_pre_refactor(name, tail):
     }
     assert not mismatches, f"{name}: flat working-dict drifted: {mismatches}"
 
-    # Only the two new run-mode keys may be added; nothing else.
+    # flatten() is exactly the config surface -- no run-mode keys leak in.
     extra = set(flat) - set(expected)
-    assert extra <= {"config", "dump_config"}, f"{name}: unexpected extra keys {extra}"
+    assert not extra, f"{name}: unexpected extra keys {extra}"

@@ -22,7 +22,6 @@ from transformers.models.llama.configuration_llama import LlamaConfig
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
 from scripts.train import (
-    DECODER_SHAPING_FLAGS,
     _build_from_config_only,
     build_draft_model,
     create_transformer_layer_config,
@@ -32,6 +31,7 @@ from scripts.train import (
 from speculators import SpeculatorsConfig, VerifierConfig
 from speculators.models.eagle3 import Eagle3DraftModel, Eagle3SpeculatorConfig
 from speculators.proposals.greedy import GreedyTokenProposalConfig
+from speculators.train.config import DECODER_SHAPING_FLAGS
 from speculators.utils.loading import is_config_only_dir
 
 # ---------------------------------------------------------------------------

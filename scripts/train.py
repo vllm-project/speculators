@@ -2,7 +2,6 @@ import argparse
 import gc
 import logging
 import random
-import sys
 import warnings
 from copy import deepcopy
 from pathlib import Path
@@ -10,9 +9,7 @@ from pathlib import Path
 import numpy as np
 import torch
 import transformers
-import yaml
 from packaging import version
-from pydantic import ValidationError
 from transformers import LlamaConfig, PretrainedConfig
 from transformers.models.auto.configuration_auto import AutoConfig
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
@@ -24,17 +21,7 @@ from speculators.models.utils import (
     get_verifier_config,
     resolve_draft_intermediate_size,
 )
-from speculators.train.config import (
-    CONFIG_DESTS,
-    add_config_cli_arguments,
-    build_train_config,
-    config_from_flat,
-    decoder_shaping_flags,
-    dump_config_yaml,
-    flatten_config,
-    required_flags,
-    save_resolved_config,
-)
+from speculators.train.config import TrainConfig
 from speculators.train.dataloader import create_train_val_loaders
 from speculators.train.distributed import (
     get_rank,
@@ -43,7 +30,7 @@ from speculators.train.distributed import (
 )
 from speculators.train.logger import setup_metric_logger, setup_root_logger
 from speculators.train.trainer import Trainer, TrainerConfig
-from speculators.train.utils import resolve_mask_token_id, save_train_command
+from speculators.train.utils import resolve_mask_token_id
 from speculators.train.vocab_mapping import (
     build_vocab_mappings_from_distribution,
     get_target_vocab_size,
@@ -438,7 +425,14 @@ def build_draft_model(
     )
 
 
-def main(args: argparse.Namespace):
+def main(cfg: TrainConfig):
+    # The model layer consumes a flat ``vars(args)``-shaped dict via ``**kwargs``
+    # (the phase-1 anti-corruption seam, ADR 0002). Flatten the resolved typed
+    # config into a mutable working namespace: the typed ``cfg`` stays the source
+    # of truth, while derived values (mask_token_id, draft_vocab_size, ...) are
+    # written onto this namespace later, exactly as the old parser did.
+    args = argparse.Namespace(**cfg.flatten())
+
     # Set random seed for reproducibility
     set_seed(args.seed, args.deterministic_cuda)
 
@@ -452,8 +446,9 @@ def main(args: argparse.Namespace):
     maybe_setup_distributed()
 
     if get_rank() == 0:
-        save_train_command(args.save_path)
-        save_resolved_config(vars(args), args.save_path)
+        # run.yaml (re-runnable) + train_command.txt (env manifest) +
+        # run.provenance.yaml (audit-only sidecar), next to the checkpoints.
+        cfg.save(args.save_path)
 
     # --hidden-states-dtype is validated at the CLI layer (DataArgs field
     # validator), so it is guaranteed to be a real torch dtype attribute here.
@@ -563,11 +558,9 @@ def main(args: argparse.Namespace):
 
     # The Trainer is configured from the typed groups rather than the flat
     # namespace (see the RFC's "Option 2": one visible typed consumer of the
-    # schema). We recover that typed view from the resolved working-dict;
-    # validators are idempotent on already-resolved values, so this is a cheap,
-    # faithful no-op that reads only optimizer/scheduler/trainer fields -- none of
-    # which main() mutates.
-    cfg = config_from_flat(vars(args))
+    # schema). We read the resolved ``cfg`` directly here: it reads only
+    # optimizer/scheduler/trainer fields, none of which main() mutates on the
+    # working namespace.
     trainer_config = TrainerConfig(
         num_epochs=cfg.trainer.epochs,
         save_path=cfg.trainer.save_path,
@@ -605,157 +598,20 @@ def main(args: argparse.Namespace):
     maybe_destroy_distributed()
 
 
-# CLI flags that synthesize the draft decoder shape. They conflict with both
-# --from-pretrained and --draft-config, each of which fully defines the draft.
-# Derived from the schema (fields tagged _DECODER_SHAPING) so the set stays in one
-# place; adding a shaping knob is still a single edit in speculators.train.config.
-DECODER_SHAPING_FLAGS: dict[str, str] = decoder_shaping_flags()
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Resolve the CLI into the flat ``vars(args)``-shaped working namespace.
 
-
-def validate_draft_init_args(
-    parser: argparse.ArgumentParser,
-    args: argparse.Namespace,
-    provided: set[str],
-) -> None:
-    """Enforce the draft-init contract.
-
-    The draft model may be defined in exactly one way:
-
-    * ``--from-pretrained`` -- load a complete speculator checkpoint (or a
-      config-only directory); or
-    * ``--draft-config`` -- load just the decoder config and build the rest of
-      the speculator from the other CLI args; or
-    * the decoder-shaping flags (``--num-layers`` etc.) -- synthesize everything.
-
-    ``--from-pretrained`` takes precedence over all other model-definition
-    options: it is mutually exclusive with ``--draft-config`` and with the
-    decoder-shaping flags, since those values come from the checkpoint.
-    ``--draft-config`` is likewise incompatible with the decoder-shaping flags.
-    MTP from scratch (``--speculator-type mtp`` without ``--from-pretrained``)
-    reuses the verifier's own decoder config, so ``--draft-config`` and the
-    decoder-shaping flags do not apply and are rejected.
-
-    ``provided`` is the set of config dests supplied on the CLI or present in the
-    ``--config`` YAML (as computed by
-    :func:`speculators.train.config.build_train_config`). A flag passed at its
-    default value still counts, so it is treated as a conflict; only the
-    :data:`DECODER_SHAPING_FLAGS` subset is checked here.
+    A thin adapter over :meth:`TrainConfig.resolve` (the real parsing, layering,
+    validation, and ``--dump-config``/error handling live in
+    :mod:`speculators.train.config`). Kept so callers that want the flat namespace
+    -- and the model-init tests that feed it to :func:`build_draft_model` -- have a
+    stable entry point; the ``__main__`` path below uses the typed config directly.
     """
-    shaping = [flag for dest, flag in DECODER_SHAPING_FLAGS.items() if dest in provided]
-    if args.from_pretrained:
-        conflicting = shaping + (["--draft-config"] if args.draft_config else [])
-        if conflicting:
-            parser.error(
-                "--from-pretrained loads a complete draft model and takes precedence "
-                "over all other model-definition options, so these conflict with it "
-                f"(remove them): {', '.join(conflicting)}"
-            )
-        return
-    if args.speculator_type == "mtp":
-        # MTP-from-scratch reuses the verifier's own decoder config and extracts the
-        # native MTP head weights; --draft-config and the decoder-shaping flags do not
-        # apply, so reject them rather than silently ignoring them.
-        conflicting = shaping + (["--draft-config"] if args.draft_config else [])
-        if conflicting:
-            parser.error(
-                "--speculator-type mtp reuses the verifier's decoder config, so these "
-                f"options do not apply (remove them): {', '.join(conflicting)}"
-            )
-        return
-    if args.draft_config and shaping:
-        parser.error(
-            "--draft-config defines the draft decoder, so these flags conflict with "
-            f"it (remove them): {', '.join(shaping)}"
-        )
-
-
-def parse_args(argv: list[str] | None = None):
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--config",
-        type=str,
-        default=None,
-        help="Path to a YAML config file supplying any of the arguments below. "
-        "CLI flags override values in the file, which override the defaults. "
-        "Optional: with no --config the behaviour is identical to a pure-CLI run.",
-    )
-    parser.add_argument(
-        "--dump-config",
-        action="store_true",
-        default=False,
-        help="Print the fully-resolved config as YAML to stdout and exit. The "
-        "output is a valid --config file; use it to scaffold a run.yaml.",
-    )
-    # Every tunable flag is generated from the pydantic config schema
-    # (speculators.train.config): one typed field there == one CLI flag here,
-    # with the right type, choices, bool style, and help text.
-    add_config_cli_arguments(parser)
-
-    args = parser.parse_args(argv)
-
-    # Every generated flag defaults to argparse.SUPPRESS, so the namespace holds
-    # only the flags the user actually passed -- that set IS the CLI provenance.
-    # Only these become overrides; everything else resolves from --config YAML
-    # then the coded defaults.
-    cli_values = {
-        dest: value for dest, value in vars(args).items() if dest in CONFIG_DESTS
-    }
-
-    # Build + validate the typed config. Field/model validators (dtype, loss,
-    # checkpoint_freq, per-type defaults) run here; surface any failure as a
-    # clean CLI error rather than a pydantic traceback. A broken --config file
-    # (missing, unreadable, malformed YAML, or not a top-level mapping) raises
-    # OSError/yaml.YAMLError/ValueError from the YAML load -- route those through
-    # parser.error too, so a --config typo (the most likely mistake) exits 2 with
-    # a clean message instead of a traceback.
-    try:
-        config, provided = build_train_config(cli_values, args.config)
-    except ValidationError as exc:
-        parser.error(_format_config_error(exc))
-    except (OSError, yaml.YAMLError, ValueError) as exc:
-        parser.error(f"--config '{args.config}': {exc}")
-
-    # Flatten back to the vars(args)-shaped dict the rest of the script (and the
-    # model layer's **kwargs contract) consumes. The typed config is the source
-    # of truth; this namespace is the mutable working copy (derived values such
-    # as mask_token_id are written onto it later, as before).
-    resolved = argparse.Namespace(**flatten_config(config))
-    resolved.config = args.config
-    resolved.dump_config = args.dump_config
-
-    # Draft-init conflict contract: reads the CLI-or-YAML provenance set so a
-    # conflict expressed entirely in the YAML file is still caught. Run it BEFORE
-    # --dump-config so the scaffold we emit is guaranteed to be a loadable config,
-    # never one that would fail its own draft-init contract on re-read.
-    validate_draft_init_args(parser, resolved, provided)
-
-    if args.dump_config:
-        sys.stdout.write(dump_config_yaml(config))
-        parser.exit()
-
-    return resolved
-
-
-def _format_config_error(exc: ValidationError) -> str:
-    """Render a pydantic ValidationError as a concise CLI message."""
-    lines = []
-    for err in exc.errors():
-        loc = err["loc"]
-        label = ".".join(str(p) for p in loc) or "<config>"
-        # Drop pydantic's "Value error, " prefix for a cleaner CLI message.
-        msg = err["msg"].removeprefix("Value error, ")
-        # For a genuinely-missing field, point at the flag to set rather than an
-        # opaque group path (e.g. "verifier: Field required" -> name
-        # --verifier-name-or-path).
-        flags = required_flags(loc) if err.get("type") == "missing" else []
-        hint = f" (set {' or '.join(flags)})" if flags else ""
-        lines.append(f"{label}: {msg}{hint}")
-    return "invalid configuration:\n  " + "\n  ".join(lines)
+    return argparse.Namespace(**TrainConfig.resolve(argv).flatten())
 
 
 if __name__ == "__main__":
-    args = parse_args()
-    main(args)
+    main(TrainConfig.resolve())
 
 
 # RUN WITH:

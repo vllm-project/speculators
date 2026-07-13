@@ -1,30 +1,36 @@
-"""Typed, grouped configuration for ``scripts/train.py``.
+"""The trainer's tunable surface -- the "what", separated from the mechanism.
 
-This module is the **single source of truth** for the trainer's tunable surface.
-Every tunable is one typed field on a cohesive ``pydantic`` group; the argparse
-CLI, the YAML schema, validation, help text, and ``--dump-config`` output are all
-*derived* from these fields (see :func:`add_config_cli_arguments`). Adding a new
-argument usually means adding one field here (see "Adding an argument" below).
+This module is the **single source of truth** for every knob ``scripts/train.py``
+exposes. Each tunable is one typed field on a cohesive ``pydantic`` group; the
+argparse CLI, the YAML schema, ``--help`` text, ``--dump-config`` output, and
+``--set`` support are all *derived* from these fields. Adding a tunable is one
+typed field here (see "Adding an argument" below) -- no ``add_argument`` call.
 
-Resolution model (see the RFC for the full rationale):
+The *mechanism* that acts on this schema lives in sibling modules, so no single
+module is a god-object (see ADR 0004):
 
-* **Precedence** -- CLI overrides > ``--config`` YAML > coded field defaults.
-  pydantic-settings deep-merges the ``init`` (CLI) source over the YAML source
-  over the defaults, so a CLI ``--lr`` wins while an untouched sibling field in
-  the same group still picks up its YAML value.
+* :mod:`.cli` -- schema -> argparse generation, ``--set`` parsing, required-flag
+  mapping, the draft-init conflict check.
+* :mod:`.sources` -- source layering, YAML load + ``train:`` unwrap, warnings.
+* :mod:`.provenance` -- the typed :class:`~.provenance.Provenance` value + walk.
+* :mod:`.adapter` -- the phase-1 flat <-> nested seam (:meth:`TrainConfig.flatten`).
+* :mod:`.artifacts` -- the reproducibility writers (``run.yaml`` + sidecar).
+
+:class:`TrainConfig` is the one public type (ADR 0004): it parses itself
+(:meth:`resolve` / :meth:`from_sources`), reports its own
+:attr:`~TrainConfig.provenance`, flattens to the model layer (:meth:`flatten`),
+and serializes itself (:meth:`dump_yaml` / :meth:`save`). Each method delegates to
+one of the sibling modules; the class is broad but every module is small.
+
+Resolution model:
+
+* **Precedence** -- ``flag > --set > YAML > default``. The four layers are fed to
+  pydantic-settings in that priority order (see :mod:`.sources`); a higher layer
+  wins per key while untouched siblings fall through to lower layers.
 * **Lists replace, they do not merge.** partial-update applies only to nested
-  group models, so a ``list`` leaf is overridden wholesale: a CLI
-  ``--full-attention-indices 0 2`` fully replaces a YAML list (argparse
-  semantics), it does not append to it.
-* **``--config`` is optional.** With no YAML file the behaviour is identical to
-  the previous pure-argparse script.
-* **Provenance** -- "explicitly provided" means *set on the CLI or present in
-  the YAML file*. We track this as an explicit set of dest names rather than
-  relying on ``model_fields_set``, which the nested partial-update machinery
-  pollutes with defaulted fields.
-* **Flat-dict adapter** -- the resolved config is flattened back to exactly the
-  ``vars(args)``-shaped dict the model layer consumes via ``**kwargs`` today, so
-  the five ``SpeculatorModel`` subclasses are untouched by this refactor.
+  group models, so a ``list`` leaf is overridden wholesale.
+* **Every source is optional.** With no ``--config``, no ``--set``, and the same
+  flags, behaviour is byte-identical to the previous pure-argparse script.
 
 Every field name here is byte-identical to the corresponding argparse ``dest``;
 the grouping is purely organisational. That invariant is what lets a single flat
@@ -33,39 +39,33 @@ CLI flag map onto exactly one nested field.
 Adding an argument
 ------------------
 Add one typed field to the relevant group (or a root scalar on ``TrainConfig``).
-The CLI flag, YAML key, ``--help`` text, ``--dump-config`` output, and the flat
-working-dict are all derived from it -- no ``add_argument`` call is needed. Two
-follow-ups are required and are enforced by tests, not by this module:
+The CLI flag, YAML key, ``--help`` text, ``--dump-config`` output, ``--set``
+support, and the flat working-dict are all derived from it. Two follow-ups are
+enforced by tests, not by this module:
 
 * update ``tests/unit/train/golden_flat_dict.json`` ``_baseline`` with the new
   dest and its default (``test_baseline_covers_every_config_dest`` guards this);
-* if the field is a *decoder-shaping* knob, add it to ``DECODER_SHAPING_FLAGS`` in
-  ``scripts/train.py`` so the draft-init conflict check covers it.
+* if the field is a *decoder-shaping* knob, tag it ``_DECODER_SHAPING`` so the
+  draft-init conflict check covers it.
 """
 
-import argparse
-import types
-import warnings
-from pathlib import Path
-from typing import Any, Literal, Union, cast, get_args, get_origin
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import torch
-import yaml
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
     JsonValue,
+    PrivateAttr,
     field_validator,
     model_validator,
 )
-from pydantic.fields import FieldInfo
 from pydantic_settings import (
     BaseSettings,
     InitSettingsSource,
     PydanticBaseSettingsSource,
     SettingsConfigDict,
-    YamlConfigSettingsSource,
 )
 
 from speculators.data_generation.vllm_client import (
@@ -73,6 +73,9 @@ from speculators.data_generation.vllm_client import (
     DEFAULT_REQUEST_TIMEOUT,
 )
 from speculators.models.metrics import resolve_loss_config
+
+if TYPE_CHECKING:
+    from .provenance import Provenance
 
 # Marker for a boolean field that should get an argparse ``--x/--no-x``
 # (BooleanOptionalAction) flag even though it defaults to False. Bools that
@@ -87,7 +90,7 @@ _CLI_BOOL_OPTIONAL: dict[str, JsonValue] = {"cli_bool": "optional"}
 # so they conflict with --from-pretrained / --draft-config (which fully define the
 # draft). Tagging them in the schema keeps the "which flags shape the decoder" set
 # here -- the single source of truth -- instead of a hand-listed dict in train.py.
-# See :func:`decoder_shaping_flags` and ``validate_draft_init_args``.
+# See :func:`speculators.train.config.cli.decoder_shaping_flags`.
 _DECODER_SHAPING: dict[str, JsonValue] = {"decoder_shaping": True}
 
 
@@ -542,11 +545,17 @@ _GROUPS: dict[str, type[_Group]] = {
 
 
 class TrainConfig(BaseSettings):
-    """Top-level trainer configuration composed from cohesive groups.
+    """Top-level trainer configuration -- the config subsystem's one public type.
 
-    Populated from three layered sources (highest precedence first): CLI
-    overrides passed as constructor kwargs, the ``--config`` YAML file, then
-    coded field defaults.
+    Composed from cohesive typed groups and populated from four layered sources,
+    highest precedence first: CLI flags, ``--set`` overrides, the ``--config``
+    YAML file, then coded field defaults. Callers use the two entry points:
+
+    * :meth:`resolve` -- the impure CLI boundary ``train.py`` calls (parses argv,
+      handles ``--dump-config``, turns a config error into ``SystemExit(2)``).
+    * :meth:`from_sources` -- the pure, argv-free, exception-raising core (the
+      primary unit-test seam): layers the sources, validates, attaches
+      :attr:`provenance`.
     """
 
     model_config = SettingsConfigDict(
@@ -554,6 +563,15 @@ class TrainConfig(BaseSettings):
         nested_model_default_partial_update=True,
         validate_default=False,
     )
+
+    # Which layer supplied each dest (flag | set | yaml | default) + the
+    # contributor trail. Attached by ``from_sources`` in the same precedence walk
+    # that resolves values, so precedence and provenance cannot drift. A private
+    # attribute (not a field) so it never leaks into ``model_dump``/``dump_yaml``.
+    _provenance: "Provenance | None" = PrivateAttr(default=None)
+    # The raw argv this config was resolved from, recorded for the reproducibility
+    # manifest. ``None`` when built off-argv (e.g. via ``from_flat``).
+    _argv: "list[str] | None" = PrivateAttr(default=None)
 
     # root-level scalars
     speculator_type: str = Field(
@@ -600,22 +618,19 @@ class TrainConfig(BaseSettings):
         # pydantic-settings calls this hook BY KEYWORD, so all five parameter
         # names are part of the contract: renaming or dropping any (even the
         # unused env/dotenv/secret ones) raises TypeError. Keep the signature.
-        # CLI (init kwargs) beats the YAML file beats field defaults. Env and
-        # secret sources are intentionally excluded -- the trainer is configured
-        # only via CLI + YAML.
         #
-        # The YAML path is supplied per-call via a private ``_yaml_file`` init
-        # kwarg (popped here so it never becomes model data). This keeps the
-        # source construction reentrant -- no global ``model_config`` mutation.
-        # init_settings is always an InitSettingsSource here (it wraps the
-        # constructor kwargs); cast so the type checker sees .init_kwargs. The
-        # cast target stays quoted to satisfy ruff TC006.
-        yaml_file = cast("InitSettingsSource", init_settings).init_kwargs.pop(
-            "_yaml_file", None
-        )
-        return (
-            init_settings,
-            YamlConfigSettingsSource(settings_cls, yaml_file=yaml_file),
+        # The three explicit layers ride in via a single private ``_layers`` init
+        # kwarg (popped here so it never becomes model data), each fed as its own
+        # InitSettingsSource in precedence order: flag > --set > YAML. Field
+        # defaults are pydantic's implicit lowest layer. Env/secret sources are
+        # intentionally excluded -- the trainer is configured only via CLI + YAML.
+        # This keeps source construction reentrant: no global model_config mutation.
+        layers: dict[str, dict[str, Any]] = cast(
+            "InitSettingsSource", init_settings
+        ).init_kwargs.pop("_layers", {})
+        return tuple(
+            InitSettingsSource(settings_cls, init_kwargs=layers.get(name, {}))
+            for name in ("flag", "set", "yaml")
         )
 
     @model_validator(mode="after")
@@ -654,9 +669,103 @@ class TrainConfig(BaseSettings):
                 )
         return self
 
+    # ------------------------------------------------------------------ #
+    # Public interface (ADR 0004). Each method delegates to one mechanism
+    # module so the class is broad but no single module is a god-object.
+    # ------------------------------------------------------------------ #
+
+    @classmethod
+    def resolve(cls, argv: list[str] | None = None) -> "TrainConfig":
+        """Impure CLI boundary: parse ``argv``, layer sources, validate.
+
+        Handles ``--dump-config`` (print the resolved config as a valid config
+        file, then exit) and turns any configuration error into a clean
+        ``SystemExit(2)`` with a message that names the flag to fix -- never a
+        traceback. This is what ``scripts/train.py`` calls.
+        """
+        from .cli import resolve as _resolve  # noqa: PLC0415
+
+        return _resolve(cls, argv)
+
+    @classmethod
+    def from_sources(
+        cls,
+        *,
+        cli: dict[str, Any] | None = None,
+        overrides: list[str] | None = None,
+        config_path: str | None = None,
+        argv: list[str] | None = None,
+    ) -> "TrainConfig":
+        """Pure, argv-free, exception-raising core -- the primary test seam.
+
+        Layers the four sources (``flag > --set > YAML > default``), runs the
+        field/model validators and the draft-init conflict check, and attaches
+        typed :attr:`provenance`. Raises :class:`~.errors.ConfigError` (or a
+        pydantic ``ValidationError``) on bad input; never touches ``sys.argv`` and
+        never calls ``sys.exit``.
+
+        :param cli: flat ``{dest: value}`` for flags explicitly passed on the CLI.
+        :param overrides: raw ``dotted.key=value`` strings from ``--set``.
+        :param config_path: path to a ``--config`` YAML file, or ``None``.
+        :param argv: the raw argv, recorded for the reproducibility manifest.
+        """
+        from .sources import build_from_sources  # noqa: PLC0415
+
+        return build_from_sources(
+            cls,
+            cli=cli or {},
+            overrides=overrides or [],
+            config_path=config_path,
+            argv=argv,
+        )
+
+    @property
+    def provenance(self) -> "Provenance":
+        """Which layer supplied each dest (``flag | set | yaml | default``).
+
+        Attached by :meth:`from_sources`. A config built off-argv (e.g. via
+        :meth:`from_flat`) reports every dest as ``default``.
+        """
+        from .provenance import Provenance  # noqa: PLC0415
+
+        if self._provenance is None:
+            return Provenance.all_default()
+        return self._provenance
+
+    def flatten(self) -> dict[str, Any]:
+        """The phase-1 anti-corruption seam (ADR 0002): the ``vars(args)``-shaped
+        flat dict the five ``SpeculatorModel`` classes consume via ``**kwargs``,
+        with byte-identical ordering to the pre-refactor parser."""
+        from .adapter import flatten  # noqa: PLC0415
+
+        return flatten(self)
+
+    @classmethod
+    def from_flat(cls, flat: dict[str, Any]) -> "TrainConfig":
+        """Inverse of :meth:`flatten`: recover the typed config from a flat
+        working-dict (non-config keys dropped; validators are idempotent)."""
+        from .adapter import from_flat  # noqa: PLC0415
+
+        return from_flat(cls, flat)
+
+    def dump_yaml(self) -> str:
+        """Serialize to the stage-shaped, round-trippable YAML (nested under a
+        top-level ``train:`` key); feed straight back via ``--config``."""
+        from .artifacts import dump_yaml  # noqa: PLC0415
+
+        return dump_yaml(self)
+
+    def save(self, save_dir: str) -> None:
+        """Write the reproducibility artifacts next to the checkpoints: the
+        resolved ``run.yaml``, the ``train_command.txt`` manifest, and the
+        audit-only ``run.provenance.yaml`` sidecar."""
+        from .artifacts import save  # noqa: PLC0415
+
+        save(self, save_dir)
+
 
 # --------------------------------------------------------------------------- #
-# Flat <-> nested plumbing
+# Schema-derived metadata (single source of truth for dest <-> group mapping)
 # --------------------------------------------------------------------------- #
 
 # Root-level scalar fields (not inside any group), auto-discovered from the
@@ -708,24 +817,15 @@ _DEST_TO_GROUP: dict[str, str | None] = _build_dest_to_group()
 CONFIG_DESTS: frozenset[str] = frozenset(_DEST_TO_GROUP)
 
 
-def decoder_shaping_flags() -> dict[str, str]:
-    """Ordered ``{dest: flag}`` for the draft decoder-shaping fields.
+def nest_flat(flat: dict[str, Any]) -> dict[str, Any]:
+    """Turn a flat ``{dest: value}`` dict into the nested group structure.
 
-    Sourced from the schema (fields tagged ``_DECODER_SHAPING``) in declaration
-    order, so adding or renaming a shaping knob needs no second edit here. Consumed
-    by ``scripts/train.py:validate_draft_init_args`` to enforce that these flags do
-    not co-occur with --from-pretrained / --draft-config.
+    Lives here (next to :data:`_DEST_TO_GROUP`, the mapping it walks) rather than
+    in :mod:`.adapter` because it is core layering plumbing -- :mod:`.sources` uses
+    it to shape the flag/``--set`` layers -- and :mod:`.adapter` is the phase-2
+    deletion target (ADR 0002). Keeping it here means deleting the adapter never
+    strands the core path.
     """
-    flags: dict[str, str] = {}
-    for name, field in DraftArgs.model_fields.items():
-        extra = field.json_schema_extra
-        if isinstance(extra, dict) and extra.get("decoder_shaping"):
-            flags[name] = _dest_to_flag(name)
-    return flags
-
-
-def _nest_flat(flat: dict[str, Any]) -> dict[str, Any]:
-    """Turn a flat ``{dest: value}`` dict into the nested group structure."""
     nested: dict[str, Any] = {}
     for dest, value in flat.items():
         group = _DEST_TO_GROUP.get(dest)
@@ -734,279 +834,3 @@ def _nest_flat(flat: dict[str, Any]) -> dict[str, Any]:
         else:
             nested.setdefault(group, {})[dest] = value
     return nested
-
-
-def flatten_config(cfg: TrainConfig) -> dict[str, Any]:
-    """Flatten a resolved config back into the ``vars(args)``-shaped dict."""
-    flat: dict[str, Any] = {}
-    for field in _ROOT_FIELDS:
-        flat[field] = getattr(cfg, field)
-    for gname in _GROUPS:
-        group = getattr(cfg, gname)
-        for fname in type(group).model_fields:
-            flat[fname] = getattr(group, fname)
-    return flat
-
-
-# --------------------------------------------------------------------------- #
-# Schema-driven argparse CLI generation
-# --------------------------------------------------------------------------- #
-
-
-def _dest_to_flag(dest: str) -> str:
-    """The argparse flag string for a config dest (``muon_lr`` -> ``--muon-lr``)."""
-    return "--" + dest.replace("_", "-")
-
-
-def _annotation_spec(annotation: Any) -> tuple[Any, bool, list[Any] | None]:
-    """Reduce a field annotation to ``(base_type, is_list, choices)``.
-
-    Strips an optional ``| None``; recognises ``list[T]`` (-> nargs) and
-    ``Literal[...]`` (-> choices). ``base_type`` is the argparse ``type=`` callable;
-    for a ``Literal`` it is the element type (so ``choices`` and parsed values are
-    compared like-for-like -- a string ``type`` against integer ``choices`` would
-    reject every value).
-
-    Raises ``TypeError`` on annotations the generator cannot represent faithfully
-    (a genuine multi-type union such as ``int | str``), rather than silently
-    keeping only the first arm -- this keeps "add a typed field -> get a correct
-    flag" honest for future field kinds.
-    """
-    origin = get_origin(annotation)
-    if origin in (Union, types.UnionType):
-        non_none = [a for a in get_args(annotation) if a is not type(None)]
-        if len(non_none) != 1:
-            raise TypeError(
-                f"CLI generation supports only single-type optionals; got "
-                f"{annotation!r} with {len(non_none)} non-None arms."
-            )
-        annotation = non_none[0]
-        origin = get_origin(annotation)
-    if origin is list:
-        (inner,) = get_args(annotation)
-        return inner, True, None
-    if origin is Literal:
-        choices = list(get_args(annotation))
-        elem_types = {type(c) for c in choices}
-        base = elem_types.pop() if len(elem_types) == 1 else str
-        return base, False, choices
-    return annotation, False, None
-
-
-def _add_field_argument(
-    parser: argparse._ActionsContainer, name: str, field: FieldInfo
-) -> None:
-    """Add one argparse flag derived from a pydantic field.
-
-    Defaults are ``SUPPRESS``ed so the parsed namespace contains only the flags
-    the user actually passed -- that set is the CLI provenance.
-    """
-    base, is_list, choices = _annotation_spec(field.annotation)
-    flag = _dest_to_flag(name)
-    kwargs: dict[str, Any] = {"dest": name, "default": argparse.SUPPRESS}
-    if field.description:
-        kwargs["help"] = field.description
-
-    if base is bool and not is_list:
-        extra = (
-            field.json_schema_extra if isinstance(field.json_schema_extra, dict) else {}
-        )
-        # True/None-default bools, or those explicitly tagged, get --x/--no-x;
-        # a plain False-default bool becomes a simple store_true flag.
-        optional = (
-            extra.get("cli_bool") == "optional"
-            or field.default is None
-            or field.default is True
-        )
-        action = argparse.BooleanOptionalAction if optional else "store_true"
-        parser.add_argument(flag, action=action, **kwargs)
-        return
-
-    if is_list:
-        kwargs["nargs"] = "+"
-    kwargs["type"] = base
-    if choices:
-        kwargs["choices"] = choices
-    parser.add_argument(flag, **kwargs)
-
-
-def add_config_cli_arguments(parser: argparse.ArgumentParser) -> None:
-    """Register every config field as an argparse flag, grouped for ``--help``.
-
-    This is the whole CLI surface: it is generated from the pydantic schema, so
-    a new field automatically becomes a new flag with the right type, choices,
-    bool style, and help text.
-    """
-    general = parser.add_argument_group("general")
-    for name in _ROOT_FIELDS:
-        _add_field_argument(general, name, TrainConfig.model_fields[name])
-    for gname, gmodel in _GROUPS.items():
-        group = parser.add_argument_group(gname)
-        for name, field in gmodel.model_fields.items():
-            _add_field_argument(group, name, field)
-
-
-def required_flags(loc: tuple[Any, ...]) -> list[str]:
-    """CLI flag(s) that satisfy a failed-validation ``loc`` from a ValidationError.
-
-    Maps a pydantic error location back to actionable flags so a config error can
-    name the flag to set rather than an opaque field/group path: a leaf dest maps
-    to its own flag; a bare group name (the whole required group is absent) maps
-    to that group's required flags. Returns ``[]`` when nothing maps.
-    """
-    if not loc:
-        return []
-    tail = str(loc[-1])
-    if tail in CONFIG_DESTS:
-        return [_dest_to_flag(tail)]
-    if tail in _GROUPS:
-        return [
-            _dest_to_flag(name)
-            for name, field in _GROUPS[tail].model_fields.items()
-            if field.is_required()
-        ]
-    return []
-
-
-# --------------------------------------------------------------------------- #
-# Build + validate
-# --------------------------------------------------------------------------- #
-
-
-def _yaml_leaf_dests(yaml_dict: dict[str, Any]) -> tuple[set[str], set[str]]:
-    """Return ``(known, unknown)`` flat dests present in a parsed YAML mapping.
-
-    Group blocks contribute their leaf keys; root scalars contribute themselves.
-    Anything not recognised is reported as ``unknown`` for a non-fatal warning.
-    """
-    known: set[str] = set()
-    unknown: set[str] = set()
-    for key, value in yaml_dict.items():
-        if key in _GROUPS and isinstance(value, dict):
-            # Validate each leaf against ITS group's fields, not the global dest
-            # set: a real field placed under the wrong block is a mistake, so it
-            # should surface as unrecognised (and stay out of the provenance set)
-            # rather than being silently accepted because the name exists in some
-            # other group.
-            group_fields = _GROUPS[key].model_fields
-            for leaf in value:
-                (known if leaf in group_fields else unknown).add(leaf)
-        elif key in _ROOT_FIELDS:
-            known.add(key)
-        else:
-            unknown.add(key)
-    return known, unknown
-
-
-def _load_yaml(path: str) -> dict[str, Any]:
-    with Path(path).open() as fh:
-        data = yaml.safe_load(fh)
-    if data is None:
-        return {}
-    if not isinstance(data, dict):
-        raise ValueError(f"--config file '{path}' must contain a top-level mapping.")
-    return data
-
-
-def build_train_config(
-    cli_values: dict[str, Any],
-    config_path: str | None,
-) -> tuple[TrainConfig, set[str]]:
-    """Construct and validate the config from CLI values + optional YAML.
-
-    :param cli_values: only the flat dests the user explicitly passed on the CLI.
-    :param config_path: path to a ``--config`` YAML file, or ``None``.
-    :return: ``(config, provided)`` where ``provided`` is the set of flat dests
-        set on the CLI *or* present in the YAML file (the provenance set used by
-        the draft-init conflict check).
-    """
-    provided: set[str] = set(cli_values)
-    if config_path:
-        yaml_dict = _load_yaml(config_path)
-        known, unknown = _yaml_leaf_dests(yaml_dict)
-        provided |= known
-        if unknown:
-            warnings.warn(
-                f"--config '{config_path}' has unrecognised keys (ignored): "
-                f"{', '.join(sorted(unknown))}",
-                stacklevel=2,
-            )
-
-    nested_cli = _nest_flat(cli_values)
-    # The runtime YAML path rides in via a private init kwarg consumed by
-    # settings_customise_sources -- reentrant, no global state.
-    # _yaml_file is not a model field: it is a private routing kwarg consumed
-    # (and popped) in settings_customise_sources, so mypy can't see it.
-    cfg = TrainConfig(**nested_cli, _yaml_file=config_path)  # type: ignore[call-arg]
-
-    _warn_on_mismatched_algo_blocks(cfg)
-    return cfg, provided
-
-
-# Algorithm block -> the speculator_type(s) for which it applies.
-_ALGO_BLOCK_TYPES: dict[str, set[str]] = {
-    "dflash": {"dflash", "dspark"},
-    "dspark": {"dspark"},
-    "peagle": {"peagle"},
-    "mtp": {"mtp"},
-}
-
-
-def _warn_on_mismatched_algo_blocks(cfg: TrainConfig) -> None:
-    """Non-fatal heads-up when an inapplicable algo block holds a non-default value.
-
-    Preserves the previous lenient behaviour (mismatched knobs are ignored, not
-    rejected) while nudging the user about a likely mistake. We key off
-    "differs from the coded default" rather than "present in the sources" so that
-    a full ``--dump-config`` (which emits every block at its defaults) round-trips
-    cleanly without spurious warnings.
-    """
-    for block, types_ in _ALGO_BLOCK_TYPES.items():
-        if cfg.speculator_type in types_:
-            continue
-        group = getattr(cfg, block)
-        defaults = _GROUPS[block]()  # algo blocks are fully defaulted
-        touched = sorted(
-            fname
-            for fname in type(group).model_fields
-            if getattr(group, fname) != getattr(defaults, fname)
-        )
-        if touched:
-            warnings.warn(
-                f"speculator_type='{cfg.speculator_type}' does not use the "
-                f"'{block}' block; these non-default settings are ignored: "
-                f"{', '.join(touched)}",
-                stacklevel=3,
-            )
-
-
-def dump_config_yaml(cfg: TrainConfig) -> str:
-    """Serialize a resolved config to grouped YAML (round-trips via --config)."""
-    return yaml.safe_dump(
-        cfg.model_dump(mode="json"),
-        sort_keys=False,
-        default_flow_style=False,
-    )
-
-
-def config_from_flat(flat: dict[str, Any]) -> TrainConfig:
-    """Rebuild a resolved :class:`TrainConfig` from a flat working-dict.
-
-    Used to recover the grouped config from the flattened namespace the training
-    script threads around. Non-config keys (e.g. ``config``, ``dump_config``) are
-    dropped; the resolution validators are idempotent on already-resolved values.
-    """
-    known = {k: v for k, v in flat.items() if k in CONFIG_DESTS}
-    return TrainConfig(**_nest_flat(known))
-
-
-def save_resolved_config(flat: dict[str, Any], save_path: str) -> None:
-    """Persist the fully-resolved config as ``<save_path>/run.yaml``.
-
-    Ships every checkpoint with the exact, reproducible configuration that
-    produced it -- feed it straight back via ``--config`` to rerun. Complements
-    :func:`speculators.train.utils.save_train_command`.
-    """
-    out_dir = Path(save_path)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "run.yaml").write_text(dump_config_yaml(config_from_flat(flat)))

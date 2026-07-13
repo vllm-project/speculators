@@ -100,8 +100,14 @@ def normalize_counted_metrics(
     return metrics
 
 
-def save_train_command(save_path: str) -> None:
-    """Write the launch command and provenance header to save_path/train_command.txt."""
+def save_train_command(save_path: str, command: list[str] | None = None) -> None:
+    """Write the launch command and provenance header to save_path/train_command.txt.
+
+    ``command`` is the exact argv to record; it defaults to the live process
+    ``sys.argv``. The config layer passes the argv it resolved from (see
+    ``TrainConfig.save``) so a run configured off an explicit argv still records
+    the real invocation.
+    """
     try:
         sha = subprocess.run(
             ["git", "rev-parse", "HEAD"],  # noqa: S607
@@ -129,8 +135,8 @@ def save_train_command(save_path: str) -> None:
         ]
     )
 
-    command = shlex.join(sys.argv)
-    content = f"{header}\n{command}\n"
+    command_str = shlex.join(command if command is not None else sys.argv)
+    content = f"{header}\n{command_str}\n"
 
     path = Path(save_path)
     path.mkdir(parents=True, exist_ok=True)
