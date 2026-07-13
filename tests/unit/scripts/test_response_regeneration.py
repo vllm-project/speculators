@@ -11,6 +11,7 @@ import asyncio
 import importlib.util
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -434,6 +435,7 @@ class _Args:
     model = "m"
     max_tokens = 16
     max_retries = 0
+    sampling_params: dict[str, Any] = {}
 
 
 class _NullProgress:
