@@ -58,7 +58,7 @@ StandardizeFnSig = Callable[[dict[str, Any]], dict[str, Any]]
 
 
 def create_empty_sample(
-    hidden_size: int, num_target_layers: int = 3, dtype: torch.dtype = torch.bfloat16
+    hidden_size: int, num_target_layers: int = 3, dtype: torch.dtype = torch.bfloat16, kv_feature_dim: int = 0
 ):
     # data structure: {
     #     "hidden_states": [seq_len, num_target_layers * hidden_size],
@@ -79,8 +79,8 @@ def create_empty_sample(
         "hidden_states": torch.empty(0, num_target_layers * hidden_size, dtype=dtype),
         "input_ids": torch.empty(0, dtype=torch.long),
         "verifier_last_hidden_states": torch.empty(0, hidden_size, dtype=dtype),
-        "verifier_kv_last_local": torch.empty(0, dtype=dtype),
-        "verifier_kv_last_global": torch.empty(0, dtype=dtype),
+        "verifier_kv_last_local": torch.empty(0, kv_feature_dim, dtype=dtype) if kv_feature_dim > 0 else torch.empty(0, dtype=dtype),
+        "verifier_kv_last_global": torch.empty(0, kv_feature_dim, dtype=dtype) if kv_feature_dim > 0 else torch.empty(0, dtype=dtype),
         "loss_mask": torch.empty(0, dtype=torch.bool),
         "lengths": torch.tensor([0], dtype=torch.long),
         "position_ids": torch.arange(0, dtype=torch.long),
@@ -484,6 +484,7 @@ def create_collate_fn(
     num_target_layers: int = 3,
     dtype: torch.dtype = torch.bfloat16,
     preprocess: Callable[[BatchType], BatchType] | None = None,
+    kv_feature_dim: int = 0,
 ):
     def collate_fn(batch: list[BatchType | None]) -> BatchType:
         # Apply per-sample preprocessing and filter failed samples
@@ -495,7 +496,7 @@ def create_collate_fn(
             # Match the configured `dtype` so the placeholder doesn't crash
             # downstream layers loaded at a different precision (e.g. bf16
             # weights vs fp32 default placeholders).
-            empty = create_empty_sample(hidden_size, num_target_layers, dtype=dtype)
+            empty = create_empty_sample(hidden_size, num_target_layers, dtype=dtype, kv_feature_dim=kv_feature_dim)
             if preprocess:
                 empty = preprocess(empty)
             batch = [empty]

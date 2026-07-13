@@ -264,6 +264,14 @@ if "gemma2" in base_components.model_classes:
             if getattr(self.config, "_attn_implementation", "eager") != "eager":
                 attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
 
+            # In eager mode, sliding_window is often dropped by the interface.
+            # We enforce it directly onto the causal mask here if configured.
+            if self.sliding_window is not None and self.sliding_window > 0 and attention_mask is not None:
+                seq_len = attention_mask.shape[-1]
+                window_mask = torch.tril(torch.ones(seq_len, seq_len, dtype=torch.bool, device=attention_mask.device))
+                window_mask = torch.triu(window_mask, diagonal=-self.sliding_window + 1)
+                attention_mask = attention_mask.masked_fill(~window_mask.view(1, 1, seq_len, seq_len), torch.finfo(query_states.dtype).min)
+
             attn_output, attn_weights = attention_interface(
                 self,
                 query_states,
@@ -272,7 +280,6 @@ if "gemma2" in base_components.model_classes:
                 attention_mask,
                 dropout=self.attention_dropout if self.training else 0.0,
                 scaling=self.scaling,
-                sliding_window=self.sliding_window,
                 softcap=self.attn_logit_softcapping,
                 **kwargs,
             )
