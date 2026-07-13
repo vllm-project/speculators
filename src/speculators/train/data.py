@@ -509,10 +509,27 @@ def create_collate_fn(
                 empty = preprocess(empty)
             batch = [empty]
 
+        all_keys = set()
+        for b in batch:
+            all_keys.update(b.keys())
+
         collated_data = {}
-        for key in batch[0]:  # type: ignore[union-attr]
+        for key in all_keys:
+            template = next(b[key] for b in batch if key in b)
+            
+            tensors_to_cat = []
+            for b in batch:
+                if key in b:
+                    tensors_to_cat.append(b[key])
+                else:
+                    seq_len = b["input_ids"].shape[0] if "input_ids" in b else 0
+                    dummy_shape = (seq_len,) + template.shape[1:]
+                    tensors_to_cat.append(
+                        torch.zeros(dummy_shape, dtype=template.dtype, device=template.device)
+                    )
+                    
             # Concatenate the tensors along the seq (0th) dimension
-            collated_data[key] = torch.cat([b[key] for b in batch], dim=0)  # type: ignore[index]
+            collated_data[key] = torch.cat(tensors_to_cat, dim=0)
             # shape: [total_seq_len, ...]
 
             if key != "lengths":

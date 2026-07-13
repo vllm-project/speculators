@@ -531,12 +531,20 @@ def test_verifier_kvs_mixed_batch():
     without_kv = {k: v for k, v in with_kv.items() if not k.startswith("verifier_kv")}
     collate_fn = create_collate_fn(max_len=5, hidden_size=1, num_target_layers=1)
     
-    # Depending on which element is first, it either raises KeyError or drops the field.
-    # We verify the invariant holds.
-    try:
-        collated = collate_fn([with_kv, without_kv])
-    except KeyError:
-        pass
+    # Test both orderings
+    for batch in [[with_kv, without_kv], [without_kv, with_kv]]:
+        collated = collate_fn(batch)
+        
+        assert "verifier_kv_last_local" in collated
+        local_kv = collated["verifier_kv_last_local"]
+        assert local_kv.shape == (1, 5, 1)
+        
+        if batch[0] == with_kv:
+            expected = torch.tensor([[[100.0], [0.0], [0.0], [0.0], [0.0]]])
+        else:
+            expected = torch.tensor([[[0.0], [100.0], [0.0], [0.0], [0.0]]])
+            
+        assert torch.equal(local_kv, expected)
 
 
 def test_verifier_kvs_dtype_cast():
@@ -546,6 +554,9 @@ def test_verifier_kvs_dtype_cast():
     class DummyDataset(BaseDataset):
         def __len__(self):
             return 1
+            
+        def _compute_approx_lengths(self):
+            return [1]
             
         def _get_raw_data(self, idx):
             return {
