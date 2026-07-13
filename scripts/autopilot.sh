@@ -42,7 +42,7 @@ if [ "$(id -u)" -eq 0 ]; then
 fi
 
 INTERACTIVE=false
-DAYS=60
+DAYS=90
 while [ $# -gt 0 ]; do
     case "$1" in
         --interactive) INTERACTIVE=true; shift ;;
