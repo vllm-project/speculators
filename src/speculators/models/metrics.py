@@ -239,7 +239,7 @@ def lk_hybrid_loss(
     tv = 1.0 - overlap
     #kl = kl_div_loss(logits, targets)  # reuse existing KL, shape: [1, seq_len]
     kl = torch.nn.functional.kl_div(
-        torch.nn.functional.log_softmax(logits, dim=-1),
+        draft_p,
         target_p,
         reduction="none",
         log_target=False,
