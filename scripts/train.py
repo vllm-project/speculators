@@ -52,7 +52,7 @@ DRAFT_ARCH_CONFIGS: dict[str, type] = {
 # Speculator types that default every draft layer to sliding window attention;
 # --full-attention-indices opts specific layers back into full attention. All
 # other speculator types use full attention on every layer.
-SLIDING_WINDOW_SPECULATOR_TYPES = ("dflash", "dspark")
+SLIDING_WINDOW_SPECULATOR_TYPES = ("dflash", "dspark", "pard2")
 
 
 def set_seed(seed: int, deterministic: bool = False):
@@ -681,7 +681,8 @@ def parse_args():
         "--speculator-type",
         type=str,
         default="eagle3",
-        help="Type of speculator model to train (eagle3, dflash, dspark, peagle, mtp)",
+        help="Type of speculator model to train "
+        "(eagle3, dflash, dspark, pard2, peagle, mtp)",
     )
     parser.add_argument(
         "--from-pretrained",
@@ -1038,6 +1039,32 @@ def parse_args():
         help="Attention implementation for draft layers. "
         "Use 'sdpa' or 'eager' for hardware that doesn't support flex attention."
         "Not supported for MTP.",
+    )
+    # PARD-2 specific arguments (CAT optimization + dual-mode).
+    parser.add_argument(
+        "--ce-alpha",
+        type=float,
+        default=0.1,
+        help="PARD-2: weight of the CE loss term (default: 0.1).",
+    )
+    parser.add_argument(
+        "--kd-alpha",
+        type=float,
+        default=1.0,
+        help="PARD-2: weight of the KD loss term (default: 1.0).",
+    )
+    parser.add_argument(
+        "--kd-temperature",
+        type=float,
+        default=1.0,
+        help="PARD-2: temperature for KD softmax (default: 1.0).",
+    )
+    parser.add_argument(
+        "--target-feat-dropout",
+        type=float,
+        default=0.1,
+        help="PARD-2: Bernoulli drop probability for target features "
+        "(dual-mode support, default: 0.1).",
     )
     # P-EAGLE specific parameters
     parser.add_argument(
