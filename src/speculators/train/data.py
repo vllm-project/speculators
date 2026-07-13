@@ -500,20 +500,35 @@ def create_collate_fn(
                 empty = preprocess(empty)
             batch = [empty]
 
+        all_keys = set()
+        for b in batch:
+            all_keys.update(b.keys())
+
         collated_data = {}
-        for key in batch[0]:  # type: ignore[union-attr]
+        for key in all_keys:
             if key == "lengths":
-                collated_data[key] = torch.cat([b[key] for b in batch], dim=0)  # type: ignore[index]
+                collated_data[key] = torch.cat([b[key] for b in batch if key in b], dim=0)
                 continue
+            
+            # Find the first sample that actually has this key to use as a template
+            template = next(b[key] for b in batch if key in b)
+            # Apply dtype casting for hidden states and KV caches
+            buffer_dtype = dtype if ("hidden_states" in key or "verifier_kv" in key) else template.dtype
+            
             # one copy per sample: preallocated buffer, hidden states cast during write
-            first = batch[0][key]  # type: ignore[index]
-            buffer_dtype = dtype if ("hidden_states" in key or "verifier_kv" in key) else first.dtype
             out = torch.zeros(
-                (max_len, *first.shape[1:]), dtype=buffer_dtype, device=first.device
+                (max_len, *template.shape[1:]), dtype=buffer_dtype, device=template.device
             )
             offset = 0
             for b in batch:
-                tensor = b[key]  # type: ignore[index]
+                if key in b:
+                    tensor = b[key]
+                else:
+                    # If this sample is missing the key, pad with zeros matching its sequence length
+                    seq_len = b["input_ids"].shape[0] if "input_ids" in b else 0
+                    dummy_shape = (seq_len,) + template.shape[1:]
+                    tensor = torch.zeros(dummy_shape, dtype=buffer_dtype, device=template.device)
+
                 num_rows = min(tensor.shape[0], max_len - offset)
                 out[offset : offset + num_rows] = tensor[:num_rows]
                 offset += num_rows
