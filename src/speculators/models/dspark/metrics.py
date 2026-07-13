@@ -110,7 +110,7 @@ def compute_metrics(
             metrics["confidence_abs_error_total"] = mask_total
             # Mean predicted vs. observed acceptance — a calibration sanity check.
             metrics["confidence_pred_mean_sum"] = (conf_prob * mask_f).sum()
-            metrics["confidence_pred_mean_total"] = mask_total
+            metrics["confidence_pred_mean_total"] = mask_total.clone()
             # Calibration of the cumulative acceptance product, which is what
             # dynamic draft-length thresholding consumes (signed pred - target).
             conf_prefix = (
@@ -126,7 +126,7 @@ def compute_metrics(
     metrics["loss_total"] = ones
     for term_name, term_val in term_losses.items():
         metrics[f"{term_name}_sum"] = term_val
-        metrics[f"{term_name}_total"] = ones
+        metrics[f"{term_name}_total"] = ones.clone()
 
     # Mean acceptance rate of the (Markov-corrected) drafter.
     with torch.no_grad():

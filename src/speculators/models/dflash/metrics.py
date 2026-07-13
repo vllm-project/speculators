@@ -85,7 +85,7 @@ def compute_metrics(
     metrics["loss_total"] = ones
     for term_name, term_val in term_losses.items():
         metrics[f"{term_name}_sum"] = term_val
-        metrics[f"{term_name}_total"] = ones
+        metrics[f"{term_name}_total"] = ones.clone()
 
     # Start position: 0 if sample_from_anchor else 1 (skip anchor)
     start_pos = 0 if sample_from_anchor else 1
@@ -102,5 +102,5 @@ def compute_metrics(
         cum = cum * acc
         eal = eal + cum
     metrics["eal_sum"] = eal
-    metrics["eal_total"] = ones
+    metrics["eal_total"] = ones.clone()
     return loss, metrics
