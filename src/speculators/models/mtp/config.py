@@ -52,18 +52,6 @@ class MTPSpeculatorConfig(SpeculatorModelConfig):
         ),
     )
 
-    num_centroids: int | None = Field(
-        default=None,
-        description=(
-            "Number of centroids for a centroid-masked multi-level LM head. "
-            "If None, standard flat LM head is used."
-        ),
-    )
-
-    top_k_centroids: int = Field(
-        default=32,
-        description="Number of top centroids to select during multi-level LM head decoding.",
-    )
 
     @property
     def hidden_size(self) -> int:
