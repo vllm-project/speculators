@@ -20,6 +20,7 @@ from speculators.data_generation.vllm_client import (
 )
 from speculators.model import SpeculatorModel
 from speculators.models.eagle3.data import shift_batch
+from speculators.models.eagle3.rotary_partial import install_partial_neox_rotary
 from speculators.models.metrics import resolve_loss_config
 from speculators.models.mtp.data import shift_batch_mtp
 from speculators.models.utils import (
@@ -48,6 +49,7 @@ DRAFT_ARCH_CONFIGS: dict[str, type] = {
     "llama": LlamaConfig,
     "qwen3": Qwen3Config,
 }
+MROPE_INVERSE_TOLERANCE = 1e-6
 
 # Speculator types that default every draft layer to sliding window attention;
 # --full-attention-indices opts specific layers back into full attention. All
@@ -68,6 +70,47 @@ def set_seed(seed: int, deterministic: bool = False):
         torch.backends.cudnn.benchmark = False
 
 
+def _maybe_apply_mrope_full_head_hack(
+    rope_params: dict,
+    resolved_head_dim: int,
+    enabled: bool,
+) -> None:
+    """Optionally rescale partial MRoPE settings to full-head semantics."""
+    if "mrope_section" not in rope_params:
+        return
+
+    inherited_partial = float(rope_params.get("partial_rotary_factor", 1.0))
+    if enabled and inherited_partial < 1.0:
+        old_section = list(rope_params["mrope_section"])
+        inv = 1.0 / inherited_partial
+        if abs(inv - round(inv)) > MROPE_INVERSE_TOLERANCE:
+            raise ValueError(
+                "mrope_full_head_hack cannot rescale mrope_section because "
+                f"1/partial_rotary_factor={inv} is not an integer."
+            )
+        scale = int(round(inv))
+        new_section = [int(x) * scale for x in old_section]
+        if 2 * sum(new_section) != resolved_head_dim:
+            raise ValueError(
+                "mrope_full_head_hack rescaling produced inconsistent "
+                f"mrope_section {new_section}: 2*sum={2 * sum(new_section)} "
+                f"but head_dim={resolved_head_dim}."
+            )
+        rope_params["mrope_section"] = new_section
+        rope_params["partial_rotary_factor"] = 1.0
+        logger.warning(
+            "MRoPE full-head hack applied: partial_rotary_factor "
+            f"{inherited_partial} -> 1.0, mrope_section {old_section} -> "
+            f"{new_section}."
+        )
+    elif not enabled and inherited_partial < 1.0:
+        logger.warning(
+            "mrope_full_head_hack=False with partial_rotary_factor="
+            f"{inherited_partial} < 1.0 can cause HF trainer / vLLM "
+            "partial-rotation mismatch."
+        )
+
+
 def create_transformer_layer_config(  # noqa: C901
     verifier_name_or_path: str,
     num_layers: int,
@@ -75,6 +118,7 @@ def create_transformer_layer_config(  # noqa: C901
     hidden_act: str | None,
     sliding_window: int,
     full_attention_indices: list[int],
+    mrope_full_head_hack: bool = True,
 ) -> PretrainedConfig:
     if draft_arch not in DRAFT_ARCH_CONFIGS:
         raise ValueError(
@@ -120,6 +164,7 @@ def create_transformer_layer_config(  # noqa: C901
         num_attention_heads = verifier_config.hidden_size // head_dim
         if num_attention_heads % num_key_value_heads != 0:
             num_key_value_heads = num_attention_heads
+    resolved_head_dim = head_dim or verifier_config.hidden_size // num_attention_heads
 
     if full_attention_indices and (
         min(full_attention_indices) < 0 or max(full_attention_indices) >= num_layers
@@ -165,18 +210,34 @@ def create_transformer_layer_config(  # noqa: C901
                     or rope_params.get("full_attention")
                     or {}
                 )
-                rope_params = {
-                    "rope_type": "default",
-                    "rope_theta": sub.get("rope_theta", 10000.0),
-                }
-            config.rope_parameters = rope_params
+                if isinstance(sub, dict):
+                    rope_params = dict(sub)
+                    rope_params.setdefault("rope_type", "default")
+                    rope_params.setdefault("rope_theta", 10000.0)
+                else:
+                    rope_params = {"rope_type": "default", "rope_theta": 10000.0}
 
-            _MROPE_KEYS = ("mrope_section", "mrope_interleaved", "type")  # noqa: N806
-            for key in _MROPE_KEYS:
-                config.rope_parameters.pop(key, None)
+            if isinstance(rope_params, dict):
+                _maybe_apply_mrope_full_head_hack(
+                    rope_params, resolved_head_dim, mrope_full_head_hack
+                )
+                # ``type`` is a legacy alias (only "mrope" on VL models) that
+                # transformers strips during validation and that breaks vLLM's
+                # config checks; drop it while keeping the real MRoPE fields.
+                rope_params.pop("type", None)
+                rope_params.pop("mrope_interleaved", None)
+            config.rope_parameters = rope_params
     else:
         if hasattr(verifier_config, "rope_scaling"):
-            config.rope_scaling = deepcopy(verifier_config.rope_scaling)
+            rope_scaling = deepcopy(verifier_config.rope_scaling)
+            if isinstance(rope_scaling, dict):
+                _maybe_apply_mrope_full_head_hack(
+                    rope_scaling, resolved_head_dim, mrope_full_head_hack
+                )
+                # Strip legacy fields for consistency with rope_parameters path
+                rope_scaling.pop("type", None)
+                rope_scaling.pop("mrope_interleaved", None)
+            config.rope_scaling = rope_scaling
         config.rope_theta = getattr(verifier_config, "rope_theta", 10000.0)
 
     return config
@@ -412,6 +473,7 @@ def build_draft_model(
                 hidden_act=args.draft_hidden_act,
                 sliding_window=args.sliding_window,
                 full_attention_indices=full_attention_indices,
+                mrope_full_head_hack=args.draft_mrope_full_head_hack,
             )
 
         args.mask_token_id = resolve_mask_token_id(
@@ -442,6 +504,14 @@ def main(args: argparse.Namespace):  # noqa: C901
 
     # Setup distributed training
     maybe_setup_distributed()
+
+    # Install partial-neox rotary patch if not using full-head hack
+    if not args.draft_mrope_full_head_hack:
+        install_partial_neox_rotary()
+        logger.info(
+            "Installed partial-neox rotary patch for HF/vLLM RoPE alignment "
+            "(draft_mrope_full_head_hack=False)"
+        )
 
     if get_rank() == 0:
         save_train_command(args.save_path)
@@ -838,6 +908,16 @@ def parse_args():
         "sigmoid linear unit. Qwen3 layers of dflash expect 'silu' activation for "
         "vLLM deployment. If another function is desired, set as a string or leave "
         "as None to automatically fall back to the verifier's activation function.",
+    )
+    parser.add_argument(
+        "--draft-mrope-full-head-hack",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "For MRoPE configs with partial_rotary_factor < 1, rescale "
+            "mrope_section and set partial_rotary_factor=1.0 so HF training "
+            "and vLLM inference use equivalent full-head rotary semantics."
+        ),
     )
     parser.add_argument(
         "--target-layer-ids",
