@@ -1051,6 +1051,13 @@ def parse_args():
         help="Block size for DFlash model (default: 8)",
     )
     parser.add_argument(
+        "--sample-from-anchor",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Sample from the anchor position (all positions predict). "
+        "Default: False for dflash, True for dspark. ",
+    )
+    parser.add_argument(
         "--max-anchors",
         type=int,
         default=3072,
