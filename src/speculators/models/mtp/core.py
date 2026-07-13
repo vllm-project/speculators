@@ -69,6 +69,7 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
 
     t2d: torch.Tensor | None
     d2t: torch.Tensor | None
+    masked_embedding: nn.Module | None
 
     def __init__(self, config: MTPSpeculatorConfig) -> None:
         if config.transformer_layer_config._attn_implementation is None:  # noqa: SLF001
@@ -230,7 +231,7 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
             )
 
             if getattr(self, "masked_embedding", None) is not None:
-                unreduced += self.masked_embedding.compute_centroid_loss(
+                unreduced = unreduced + self.masked_embedding.compute_centroid_loss(
                     hidden_states=mtp_output,
                     targets=step_targets,
                     ignore_index=_IGNORE_INDEX,

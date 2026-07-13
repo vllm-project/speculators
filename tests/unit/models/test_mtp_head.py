@@ -118,6 +118,7 @@ def test_compute_centroid_loss_with_custom_ordering(head_setup):
     
     # Reverse the token ordering
     head.token_ordering.copy_(torch.arange(255, -1, -1))
+    head._rebuild_inverse()
     
     hidden_states = torch.randn(1, 1, 16)
     
@@ -136,3 +137,56 @@ def test_compute_centroid_loss_with_custom_ordering(head_setup):
     ).view(1, 1)
     
     assert torch.allclose(loss, expected_loss)
+
+
+def test_initialization_validation():
+    """Test constructor argument validation."""
+    with pytest.raises(ValueError, match="num_centroids must be positive"):
+        MultiLevelLMHead(16, 256, 0)
+        
+    with pytest.raises(ValueError, match="must be divisible by num_centroids"):
+        MultiLevelLMHead(16, 256, 3)
+
+
+def test_mtp_draft_model_integration_centroid_loss():
+    """Test that MTPDraftModel includes centroid loss when num_centroids is configured."""
+    from speculators.models.mtp.core import MTPDraftModel
+    from speculators.models.mtp.config import MTPSpeculatorConfig
+    from speculators.config import SpeculatorsConfig
+    from speculators.proposals.greedy import GreedyTokenProposalConfig
+    from transformers.models.qwen2.configuration_qwen2 import Qwen2Config
+    
+    tc = Qwen2Config(hidden_size=16, vocab_size=256, num_hidden_layers=1, num_attention_heads=2)
+    config = MTPSpeculatorConfig(
+        transformer_layer_config=tc,
+        num_centroids=4,
+        speculators_config=SpeculatorsConfig(
+            algorithm="mtp",
+            proposal_methods=[GreedyTokenProposalConfig(speculative_tokens=1)],
+            default_proposal_method="greedy"
+        )
+    )
+    
+    model = MTPDraftModel(config)
+    assert model.masked_embedding is not None
+    
+    batch_sz, seq_len = 1, 3
+    input_ids = torch.randint(0, 256, (batch_sz, seq_len))
+    hidden_states = torch.randn(batch_sz, seq_len, 16)
+    
+    _, loss, metrics = model(input_ids, hidden_states)
+    
+    # The total loss should include the masked_embedding centroid loss.
+    # We can verify the masked_embedding was called by replacing its compute_centroid_loss with a mock.
+    original_compute = model.masked_embedding.compute_centroid_loss
+    called = False
+    
+    def mock_compute(*args, **kwargs):
+        nonlocal called
+        called = True
+        return original_compute(*args, **kwargs)
+        
+    model.masked_embedding.compute_centroid_loss = mock_compute
+    model(input_ids, hidden_states)
+    
+    assert called, "centroid loss was not computed during forward pass"

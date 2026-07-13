@@ -10,10 +10,22 @@ class MultiLevelLMHead(nn.Module):
 
     def __init__(self, hidden_size: int, vocab_size: int, num_centroids: int):
         super().__init__()
+        if num_centroids <= 0:
+            raise ValueError(f"num_centroids must be positive, got {num_centroids}.")
+        if vocab_size % num_centroids != 0:
+            raise ValueError(f"vocab_size ({vocab_size}) must be divisible by num_centroids ({num_centroids}).")
+        
         self.tokens_per_centroid = vocab_size // num_centroids
         self.centroids = nn.Linear(hidden_size, num_centroids, bias=False)
         # Token ordering mapping (centroid subsets -> token IDs)
         self.register_buffer("token_ordering", torch.arange(vocab_size, dtype=torch.long))
+        self.register_buffer("token_ordering_inv", torch.empty_like(self.token_ordering))
+        self._rebuild_inverse()
+
+    def _rebuild_inverse(self) -> None:
+        """Rebuild the cached inverse mapping from token IDs to centroid IDs."""
+        positions = torch.arange(self.token_ordering.shape[0], device=self.token_ordering.device)
+        self.token_ordering_inv[self.token_ordering] = positions // self.tokens_per_centroid
 
     def compute_centroid_loss(
         self, hidden_states: torch.Tensor, targets: torch.Tensor, ignore_index: int = -100
@@ -27,13 +39,9 @@ class MultiLevelLMHead(nn.Module):
         if valid_hidden.shape[0] == 0:
             return loss
 
-        # Inverse mapping: token_id -> centroid_id
-        inverse = torch.empty_like(self.token_ordering)
-        positions = torch.arange(self.token_ordering.shape[0], device=self.token_ordering.device)
-        inverse[self.token_ordering] = positions // self.tokens_per_centroid
-        
         centroid_logits = self.centroids(valid_hidden)
-        target_centroids = inverse[valid_targets]
-        loss[valid_mask] = F.cross_entropy(centroid_logits, target_centroids, reduction="none")
+        target_centroids = self.token_ordering_inv[valid_targets]
+        valid_loss = F.cross_entropy(centroid_logits, target_centroids, reduction="none")
         
+        loss = loss.masked_scatter(valid_mask, valid_loss.to(loss.dtype))
         return loss

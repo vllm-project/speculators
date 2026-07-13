@@ -197,7 +197,7 @@ class BaseDataset(Dataset):
         # Convert hidden states and KV caches to the correct dtype
         data = {
             k: v.to(self.hidden_states_dtype)
-            if ("hidden_states" in k or "verifier_kv" in k)
+            if (k in ("hidden_states", "verifier_last_hidden_states") or k.startswith("verifier_kv_last_"))
             else v
             for k, v in data.items()
         }
