@@ -19,6 +19,13 @@ export ANTHROPIC_VERTEX_PROJECT_ID="${ANTHROPIC_VERTEX_PROJECT_ID:-itpc-gcp-ai-e
 
 cd "$(dirname "$0")/.."
 
+# Re-exec from /tmp so git-reset doesn't delete the running script.
+if [ "$(realpath "$0")" != "/tmp/review-open-prs-running.sh" ]; then
+    cp "$(realpath "$0")" /tmp/review-open-prs-running.sh
+    exec /tmp/review-open-prs-running.sh "$@"
+fi
+git fetch origin main && git reset --hard origin/main
+
 # Claude blocks --dangerously-skip-permissions for root. The devenv entrypoint
 # creates a claude-runner user with the right groups — just re-exec as it.
 if [ "$(id -u)" -eq 0 ]; then
@@ -51,7 +58,7 @@ echo "Mode: $([ "$INTERACTIVE" = true ] && echo "interactive (live TUI)" || echo
 echo "======================================="
 
 if [ "$INTERACTIVE" = true ]; then
-    echo "/review-open-prs" | claude --dangerously-skip-permissions "${EXTRA_ARGS[@]}"
+    echo "/review-open-prs" | claude --model opus --dangerously-skip-permissions "${EXTRA_ARGS[@]}"
 else
-    claude -p "/review-open-prs" --dangerously-skip-permissions "${EXTRA_ARGS[@]}"
+    claude -p "/review-open-prs" --model opus --dangerously-skip-permissions "${EXTRA_ARGS[@]}"
 fi
