@@ -454,6 +454,4 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             dpace_alpha=dpace_alpha,
             sample_from_anchor=self.config.sample_from_anchor,
         )
-        draft_tokens = torch.argmax(logits, dim=-1)
-
-        return draft_tokens, loss, metrics
+        return None, loss, metrics
