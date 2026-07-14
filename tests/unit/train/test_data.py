@@ -494,6 +494,7 @@ def test_verifier_kvs_survive_pipeline():
     assert "verifier_kv_last_local" in standardized
     assert "verifier_kv_last_global" in standardized
 
+
     expected_local_stack = torch.stack(
         [v1_data["kv_last_local_k"], v1_data["kv_last_local_v"]], dim=1  # type: ignore[arg-type]
     )
