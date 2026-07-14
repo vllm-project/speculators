@@ -367,14 +367,15 @@ class TestDecayFunctions:
 
 
 class TestBf16GradientPrecision:
-    """The divergence losses must stay accurate under bf16 training.
+    """Guards the float32 softmax in the divergence losses.
 
-    Their gradient reduces to ``p_draft - p_target``. A well-trained draft has
-    ``p ~= q``, so taking that subtraction in bf16 is a catastrophic
-    cancellation whose error grows as training converges: before the float32
-    upcast these losses carried 8-23% relative gradient error at high
-    acceptance. ``ce_loss`` is deliberately not upcast -- its gradient is
-    ``p - onehot``, which never cancels.
+    These tests FAIL if the losses take their softmax in the logits' dtype
+    (bf16 under training): the gradients come out 8-23% wrong. They PASS with
+    the float32 upcast, which brings the error under 0.2%. Removing
+    ``dtype=torch.float32`` from any divergence loss turns them red.
+
+    ``ce_loss`` is excluded on purpose -- it is accurate in bf16 either way, so
+    a test over it would guard nothing.
     """
 
     @staticmethod
@@ -395,9 +396,12 @@ class TestBf16GradientPrecision:
         ],
     )
     def test_divergence_loss_gradient_accurate_in_bf16(self, loss_fn):
-        """bf16 gradients stay within 2% of an exact float64 reference.
+        """The bf16 gradient must stay within 2% of an exact float64 reference.
 
-        Fails on the bf16 softmax (8-23% error) for every loss listed.
+        Same bf16 logits into both paths, so the only variable is the dtype the
+        loss computes in. With a bf16 softmax this asserts at 8-23% error
+        (kl_div 8.1, rkl 9.3, tv 23.2, nla 23.1, lk_hybrid 23.0); with the
+        float32 softmax every loss lands under 0.2%.
         """
         torch.manual_seed(0)
         vocab_size, seq_len = 4096, 8

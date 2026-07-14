@@ -1,13 +1,3 @@
-"""Metrics and loss functions shared across draft-model architectures.
-
-The divergence losses take their softmax in float32 (``dtype=torch.float32``)
-even under bf16 training. Their gradient w.r.t. the draft logits reduces to
-``p_draft - p_target``; once the draft is well trained the two are nearly equal,
-so in bf16 (8-bit mantissa) that subtraction is a catastrophic cancellation and
-the gradient error grows as training succeeds. ``ce_loss`` needs no upcast --
-its gradient is ``p - onehot``, which never cancels.
-"""
-
 import json
 import math
 from collections.abc import Callable
