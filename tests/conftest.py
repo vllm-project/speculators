@@ -7,7 +7,7 @@ import pytest
 import torch
 from packaging.version import Version
 
-from tests.e2e.utils import VLLM_PYTHON
+from scripts.pipeline_runners import VLLM_PYTHON
 
 
 @pytest.fixture

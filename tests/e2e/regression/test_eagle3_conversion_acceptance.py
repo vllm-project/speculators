@@ -1,7 +1,7 @@
 import pytest
 
 from speculators.convert.eagle.eagle3_converter import Eagle3Converter
-from tests.e2e.utils import run_vllm_engine
+from tests.e2e.conftest import run_vllm_engine_and_assert
 from tests.utils import requires_cadence
 
 
@@ -66,7 +66,7 @@ class TestEagle3vLLM:
             ]
 
         converter.convert(**convert_kwargs)
-        run_vllm_engine(
+        run_vllm_engine_and_assert(
             model_path=str(converted_path),
             tmp_path=tmp_path,
             enforce_eager=False,
@@ -96,7 +96,7 @@ class TestEagle3vLLM:
     def test_vllm_engine_eagle3(
         self, model_path, acceptance_thresholds, prompts, tmp_path
     ):
-        run_vllm_engine(
+        run_vllm_engine_and_assert(
             model_path=model_path,
             tmp_path=tmp_path,
             prompts=prompts,

@@ -91,16 +91,16 @@ def extract_metrics(raw_metrics: list[Metric], total_num_output_tokens: int) -> 
     acceptance_counts: list[float] = []
     for metric in raw_metrics:
         if metric.name == "vllm:spec_decode_num_drafts":
-            assert isinstance(metric, Counter)
+            assert isinstance(metric, Counter)  # noqa: S101  # narrow the Metric union
             num_drafts += metric.value
         elif metric.name == "vllm:spec_decode_num_draft_tokens":
-            assert isinstance(metric, Counter)
+            assert isinstance(metric, Counter)  # noqa: S101
             num_draft_tokens += metric.value
         elif metric.name == "vllm:spec_decode_num_accepted_tokens":
-            assert isinstance(metric, Counter)
+            assert isinstance(metric, Counter)  # noqa: S101
             num_accepted_tokens += metric.value
         elif metric.name == "vllm:spec_decode_num_accepted_tokens_per_pos":
-            assert isinstance(metric, Vector)
+            assert isinstance(metric, Vector)  # noqa: S101
             if len(acceptance_counts) < len(metric.values):
                 acceptance_counts = acceptance_counts + [0.0] * (
                     len(metric.values) - len(acceptance_counts)

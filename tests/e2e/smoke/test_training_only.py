@@ -10,7 +10,7 @@ from loguru import logger
 from speculators.train.vocab_mapping import (
     build_vocab_mappings_from_distribution,
 )
-from tests.e2e.utils import run_vllm_engine
+from tests.e2e.conftest import run_vllm_engine_and_assert
 
 
 class TestTrainvLLM:
@@ -102,4 +102,6 @@ class TestTrainvLLM:
 
         # 4. Run trained speculator in vLLM
         # TODO: is there a way to get the checkpoint folder directly?
-        run_vllm_engine(model_path=SAVE_PATH + "/0", tmp_path=tmp_path, prompts=prompts)
+        run_vllm_engine_and_assert(
+            model_path=SAVE_PATH + "/0", tmp_path=tmp_path, prompts=prompts
+        )

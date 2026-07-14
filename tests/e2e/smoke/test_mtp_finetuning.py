@@ -16,18 +16,18 @@ from pathlib import Path
 import pytest
 from huggingface_hub import hf_hub_download
 
+from scripts.pipeline_runners import (
+    launch_vllm_server_context,
+    run_prepare_data,
+    run_stitch_mtp,
+    run_training,
+)
 from tests.conftest import (
     requires_cuda,
     requires_transformers_version,
     requires_vllm_version,
 )
-from tests.e2e.utils import (
-    launch_vllm_server_context,
-    run_prepare_data,
-    run_stitch_mtp,
-    run_training,
-    run_vllm_engine,
-)
+from tests.e2e.conftest import run_vllm_engine_and_assert
 
 logger = logging.getLogger(__name__)
 
@@ -157,7 +157,7 @@ def run_mtp_finetuning_e2e(
         logger.info("Stitch complete: %s", stitched_path)
 
         logger.info("Running vLLM MTP inference on stitched checkpoint")
-        run_vllm_engine(
+        run_vllm_engine_and_assert(
             model_path=str(stitched_path),
             tmp_path=tmp_path,
             prompts=prompts,

@@ -22,7 +22,7 @@ from safetensors.torch import load_file
 from speculators import SpeculatorModel
 from speculators.convert.mtp import MTPConverter
 from tests.conftest import requires_cuda, requires_transformers_version
-from tests.e2e.utils import run_vllm_engine
+from tests.e2e.conftest import run_vllm_engine_and_assert
 
 logger = logging.getLogger(__name__)
 
@@ -194,7 +194,7 @@ def test_mtp_roundtrip(tmp_path: Path, seed):
     prompts = [
         [{"role": "user", "content": "Write a binary search function in python"}],
     ]
-    run_vllm_engine(
+    run_vllm_engine_and_assert(
         model_path=str(stitched_path),
         tmp_path=tmp_path,
         prompts=prompts,

@@ -17,13 +17,13 @@ from pathlib import Path
 import pytest
 from loguru import logger
 
-from tests.conftest import requires_multi_gpu
-from tests.e2e.utils import (
+from scripts.pipeline_runners import (
     SCRIPTS_DIR,
     launch_vllm_server_context,
     run_data_generation_offline,
     run_prepare_data,
 )
+from tests.conftest import requires_multi_gpu
 
 MODEL = "Qwen/Qwen3-0.6B"
 VLLM_PORT = 8323

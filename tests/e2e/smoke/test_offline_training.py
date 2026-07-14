@@ -6,7 +6,7 @@ Exercises the full offline pipeline:
   3. Generate hidden states offline (scripts/data_generation_offline.py)
   4. Stop the vLLM server
   5. Train a draft model using pre-generated hidden states (scripts/train.py)
-  6. Validate the trained checkpoint via vLLM inference (run_vllm_engine)
+  6. Validate the trained checkpoint via vLLM inference (run_vllm_engine_and_assert)
 """
 
 from pathlib import Path
@@ -14,14 +14,13 @@ from typing import Any
 
 import pytest
 
-from tests.e2e.utils import (
+from scripts.pipeline_runners import (
     launch_vllm_server_context,
     run_data_generation_offline,
     run_prepare_data,
     run_training,
-    run_vllm_engine,
-    setup_dummy_sharegpt4v_coco,
 )
+from tests.e2e.conftest import run_vllm_engine_and_assert, setup_dummy_sharegpt4v_coco
 
 TEXT_MODEL = "Qwen/Qwen3-0.6B"
 MM_MODEL = "Qwen/Qwen3-VL-2B-Instruct"
@@ -166,7 +165,7 @@ def run_offline_e2e(
     if prompts is not None:
         checkpoint_path = str(save_path / "checkpoint_best")
         inference_kwargs = {**(vllm_kwargs or {}), "gpu_memory_utilization": 0.8}
-        run_vllm_engine(
+        run_vllm_engine_and_assert(
             model_path=checkpoint_path,
             tmp_path=tmp_path,
             prompts=prompts,

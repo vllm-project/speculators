@@ -5,7 +5,7 @@ docs/user_guide/tutorials/train_eagle3_online.md:
   1. Prepare data (scripts/prepare_data.py)
   2. Launch a vLLM server for hidden-state extraction (scripts/launch_vllm.py)
   3. Train a draft model against the live server (scripts/train.py)
-  4. Validate the trained checkpoint via vLLM inference (run_vllm_engine)
+  4. Validate the trained checkpoint via vLLM inference (run_vllm_engine_and_assert)
 """
 
 from pathlib import Path
@@ -13,13 +13,12 @@ from typing import Any
 
 import pytest
 
-from tests.e2e.utils import (
+from scripts.pipeline_runners import (
     launch_vllm_server_context,
     run_prepare_data,
     run_training,
-    run_vllm_engine,
-    setup_dummy_sharegpt4v_coco,
 )
+from tests.e2e.conftest import run_vllm_engine_and_assert, setup_dummy_sharegpt4v_coco
 
 TEXT_MODEL = "Qwen/Qwen3-0.6B"
 MM_MODEL = "Qwen/Qwen3-VL-2B-Instruct"
@@ -118,7 +117,7 @@ def run_online_e2e(
     # Step 3: Validate trained checkpoint with vLLM inference
     if prompts is not None:
         checkpoint_path = str(save_path / "checkpoint_best")
-        run_vllm_engine(
+        run_vllm_engine_and_assert(
             model_path=checkpoint_path,
             tmp_path=tmp_path,
             prompts=prompts,

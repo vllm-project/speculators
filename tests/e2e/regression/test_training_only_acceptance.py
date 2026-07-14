@@ -4,7 +4,8 @@ import pytest
 from huggingface_hub import snapshot_download
 from huggingface_hub.utils import LocalEntryNotFoundError
 
-from tests.e2e.utils import purge_newfiles, run_training, run_vllm_engine
+from scripts.pipeline_runners import run_training
+from tests.e2e.conftest import purge_newfiles, run_vllm_engine_and_assert
 from tests.utils import requires_cadence
 
 
@@ -59,7 +60,7 @@ def test_eagle3_qwen3_8b_sharegpt(tmp_path: Path, prompts: list[list[dict[str, s
             timeout=30 * 60,  # 30 mins
         )
     final_checkpoint = str(save_path / str(epochs - 1))
-    run_vllm_engine(
+    run_vllm_engine_and_assert(
         model_path=final_checkpoint,
         tmp_path=tmp_path,
         max_tokens=512,
@@ -92,7 +93,7 @@ def test_dflash_qwen3_8b_sharegpt(tmp_path: Path, prompts: list[list[dict[str, s
             timeout=30 * 60,  # 30 mins
         )
     final_checkpoint = str(save_path / str(epochs - 1))
-    run_vllm_engine(
+    run_vllm_engine_and_assert(
         model_path=final_checkpoint,
         tmp_path=tmp_path,
         max_tokens=512,
@@ -130,7 +131,7 @@ def test_peagle_qwen3_8b_sharegpt(tmp_path: Path, prompts: list[list[dict[str, s
             ],
         )
     final_checkpoint = str(save_path / str(epochs - 1))
-    run_vllm_engine(
+    run_vllm_engine_and_assert(
         model_path=final_checkpoint,
         tmp_path=tmp_path,
         max_tokens=512,

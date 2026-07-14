@@ -1,3 +1,11 @@
+"""Subprocess runners for the sibling pipeline scripts.
+
+Each runner wraps one stage — data preparation, vLLM server launch, offline
+hidden-state generation, training, MTP stitching, and vLLM inference — building
+the argv and raising on a non-zero exit. Shared by the e2e tests and by sibling
+scripts, so the invocations are kept correct in one place.
+"""
+
 import json
 import os
 import subprocess
@@ -5,23 +13,18 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Callable, Iterable
 from contextlib import contextmanager
-from functools import wraps
+from http import HTTPStatus
 from pathlib import Path
 from textwrap import indent
 
 from loguru import logger
-from PIL import Image
-
-from speculators.data_generation.preprocessing import load_raw_dataset
 
 __all__ = [
     "SCRIPTS_DIR",
     "VLLM_PYTHON",
     "launch_vllm_server",
     "launch_vllm_server_context",
-    "purge_newfiles",
     "run_data_generation_offline",
     "run_prepare_data",
     "run_stitch_mtp",
@@ -31,36 +34,8 @@ __all__ = [
     "wait_for_server",
 ]
 
-
-def purge_newfiles(fn: Callable[..., Path]):
-    """Decorator that turns a Path-returning function into a context manager.
-
-    On exit, deletes top-level files in the resolved directory whose mtime is
-    newer than when the wrapped function returned.  Does not recurse into
-    subdirectories.  This prevents generated artifacts (e.g. ``d2t.npy``,
-    ``t2d.npy`` potentially cached by ``train.py``) from persisting in
-    shared directories (such as the HF snapshot cache) between test runs.
-    """
-
-    @wraps(fn)
-    @contextmanager
-    def wrapper(*args, **kwargs):
-        path = fn(*args, **kwargs)
-        cutoff = time.time()
-        try:
-            yield path
-        finally:
-            if path.is_dir():
-                for f in path.iterdir():
-                    if f.is_file() and f.stat().st_mtime > cutoff:
-                        f.unlink()
-                        logger.info("Purged generated artifact: {}", f.name)
-
-    return wrapper
-
-
 VLLM_PYTHON = os.environ.get("VLLM_PYTHON", sys.executable)
-SCRIPTS_DIR = Path(__file__).resolve().parent.parent.parent / "scripts"
+SCRIPTS_DIR = Path(__file__).resolve().parent
 
 
 def wait_for_server(
@@ -87,7 +62,7 @@ def wait_for_server(
             )
         try:
             with urllib.request.urlopen(url, timeout=5) as resp:  # noqa: S310
-                if resp.status == 200:
+                if resp.status == HTTPStatus.OK:
                     return
         except (urllib.error.URLError, ConnectionError, OSError):
             pass
@@ -142,12 +117,7 @@ def launch_vllm_server(
         wait_for_server(port, process=process)
         logger.info("vLLM server ready on port {}", port)
     except Exception:
-        process.terminate()
-        try:
-            process.wait(timeout=30)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
+        stop_vllm_server(process)
         raise
 
     return process
@@ -174,25 +144,6 @@ def launch_vllm_server_context(*args, **kwargs):
         yield
     finally:
         stop_vllm_server(process)
-
-
-def setup_dummy_sharegpt4v_coco(coco_dir: Path):
-    """Enable ShareGPT4V to be used without downloading the actual COCO dataset."""
-    coco_dir.mkdir(parents=True, exist_ok=True)
-
-    dummy_image = Image.new("RGB", (256, 256))
-    dummy_image_path = coco_dir / "dummy.png"
-    dummy_image.save(dummy_image_path)
-
-    raw_dataset, normalize_fn = load_raw_dataset("sharegpt4v_coco")
-
-    # Use symlinks to avoid copying the image
-    for raw_path in raw_dataset["image"]:
-        image_path = coco_dir / raw_path.removeprefix("coco/")
-
-        if not image_path.exists():
-            image_path.parent.mkdir(parents=True, exist_ok=True)
-            image_path.symlink_to(dummy_image_path)
 
 
 def run_prepare_data(
@@ -222,7 +173,8 @@ def run_prepare_data(
     result = subprocess.run(  # noqa: S603
         cmd, check=False, timeout=timeout
     )
-    assert result.returncode == 0, "prepare_data.py failed"
+    if result.returncode != 0:
+        raise RuntimeError("prepare_data.py failed")
 
 
 def run_data_generation_offline(
@@ -259,9 +211,8 @@ def run_data_generation_offline(
     result = subprocess.run(  # noqa: S603
         datagen_cmd, stderr=subprocess.PIPE, text=True, check=False, timeout=timeout
     )
-    assert result.returncode == 0, (
-        f"data_generation_offline.py failed:\n{result.stderr}"
-    )
+    if result.returncode != 0:
+        raise RuntimeError(f"data_generation_offline.py failed:\n{result.stderr}")
 
 
 def run_training(
@@ -331,7 +282,8 @@ def run_training(
     result = subprocess.run(  # noqa: S603
         train_cmd, stderr=subprocess.PIPE, text=True, check=False, timeout=timeout
     )
-    assert result.returncode == 0, f"train.py failed:\n{result.stderr}"
+    if result.returncode != 0:
+        raise RuntimeError(f"train.py failed:\n{result.stderr}")
 
 
 def run_stitch_mtp(
@@ -352,12 +304,13 @@ def run_stitch_mtp(
     result = subprocess.run(  # noqa: S603
         cmd, capture_output=True, text=True, check=False, timeout=timeout
     )
-    assert result.returncode == 0, f"stitch_mtp.py failed:\n{result.stderr}"
+    if result.returncode != 0:
+        raise RuntimeError(f"stitch_mtp.py failed:\n{result.stderr}")
 
 
 def run_vllm_engine(
     model_path: str,
-    tmp_path: Path,
+    output_dir: Path,
     prompts: list[list[dict[str, str]]],
     max_model_len: int = 1024,
     gpu_memory_utilization: float = 0.8,
@@ -367,14 +320,16 @@ def run_vllm_engine(
     disable_compile_cache: bool = False,
     max_tokens: int = 50,
     ignore_eos: bool = True,
-    acceptance_thresholds: Iterable[float] | None = None,
     timeout: float | None = None,
-):
-    VLLM_PYTHON = os.environ.get("VLLM_PYTHON", sys.executable)
-    logger.info("vLLM Python executable: {}", VLLM_PYTHON)
+) -> dict:
+    """Serve a checkpoint in vLLM and return its outputs and metrics.
 
-    run_vllm_file = str(Path(__file__).with_name("run_vllm.py"))
-    results_file = str(tmp_path / "results.json")
+    Returns the parsed results of ``scripts/run_vllm.py``: ``outputs`` holds the
+    generated token IDs per prompt, and ``metrics`` holds the speculative-decoding
+    counters, including ``acceptance_length`` and ``acceptance_at_token_{i}``.
+    """
+    run_vllm_file = str(SCRIPTS_DIR / "run_vllm.py")
+    results_file = str(output_dir / "results.json")
 
     sampling_params_dict = {
         "temperature": 0,
@@ -406,13 +361,13 @@ def run_vllm_engine(
         "--results-file",
         results_file,
     ]
+    logger.info("vLLM Python executable: {}", VLLM_PYTHON)
     logger.info("run_vllm.py command:\n    {}", command)
 
-    # Set environment variables for subprocess
     env = os.environ.copy()
     if disable_compile_cache:
         env["VLLM_DISABLE_COMPILE_CACHE"] = "1"
-        logger.info("Disabling vLLM compile cache for this test")
+        logger.info("Disabling vLLM compile cache for this run")
 
     result = subprocess.run(  # noqa: S603
         command,
@@ -425,30 +380,15 @@ def run_vllm_engine(
     )
     logger.info("run_vllm.py output:\n{}", indent(result.stdout, "    "))
 
-    returncode = result.returncode
-    assert returncode == 0, (
-        f"run_vllm.py command exited with non-zero return code: {returncode}"
-    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"run_vllm.py command exited with non-zero return code: {result.returncode}"
+        )
 
     with Path(results_file).open(encoding="utf-8") as f:
         results_dict = json.load(f)
 
-    outputs_token_ids = results_dict["outputs"]
-    metrics_dict = results_dict["metrics"]
-    logger.info("outputs_token_ids: {}", outputs_token_ids)
-    logger.info("metrics_dict: {}", metrics_dict)
+    logger.info("outputs_token_ids: {}", results_dict["outputs"])
+    logger.info("metrics_dict: {}", results_dict["metrics"])
 
-    for output_token_ids in outputs_token_ids:
-        # If max_tokens is 100 or less, make sure the output length is max_tokens
-        assert max_tokens > 100 or len(output_token_ids) == max_tokens
-        assert all(isinstance(token, int) for token in output_token_ids)
-
-    if acceptance_thresholds is not None:
-        for i, thresholdi in enumerate(acceptance_thresholds):
-            assert f"acceptance_at_token_{i}" in metrics_dict, (
-                f"Acceptance at token {i} is not in metrics_dict"
-            )
-            acci = metrics_dict[f"acceptance_at_token_{i}"]
-            assert acci >= thresholdi, (
-                f"Acceptance {acci} at token {i} is less than threshold {thresholdi}"
-            )
+    return results_dict

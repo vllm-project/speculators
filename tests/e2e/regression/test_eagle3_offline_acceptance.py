@@ -6,7 +6,7 @@ Exercises the full offline pipeline:
   3. Generate hidden states offline (scripts/data_generation_offline.py)
   4. Stop the vLLM server
   5. Train a draft model using pre-generated hidden states (scripts/train.py)
-  6. Validate the trained checkpoint via vLLM inference (run_vllm_engine)
+  6. Validate the trained checkpoint via vLLM inference (run_vllm_engine_and_assert)
 """
 
 from pathlib import Path
