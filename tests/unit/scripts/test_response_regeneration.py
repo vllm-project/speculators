@@ -7,6 +7,7 @@ over a fake endpoint.
 The script is not a package, so it is imported by path.
 """
 
+import argparse
 import asyncio
 import importlib.util
 import json
@@ -16,6 +17,7 @@ from typing import Any
 import pytest
 
 from speculators.data_generation import vllm_client
+from speculators.data_generation.configs import DATASET_CONFIGS, DatasetConfig
 from speculators.data_generation.preprocessing import _preprocess_batch
 from speculators.data_generation.vllm_client import InvalidResponseError
 
@@ -529,3 +531,53 @@ def test_worker_row_identity_and_all_or_nothing_writes(tmp_path):
     error = json.loads(err_path.read_text())
     assert error["id"] == "conv-abc"
     assert error["metadata"]["turns_completed"] == 1
+
+
+# ---------------------------------------------------------------------------
+# 6. Every shared-registry preset works on-policy (off-policy parity).
+# ---------------------------------------------------------------------------
+
+
+def test_prepare_row_normalizes_like_off_policy():
+    # nemotron rows only become extractable through the preset's normalize_fn.
+    row = {
+        "input": [{"role": "user", "content": "Hi"}],
+        "output": "<original answer to drop>",
+    }
+    assert regen.prepare_row(row, DATASET_CONFIGS["nemotron"]) == [
+        {"role": "user", "content": "Hi"}
+    ]
+
+
+def test_prepare_row_applies_filter_fn():
+    config = DatasetConfig(
+        name="t",
+        hf_path="t",
+        split="train",
+        filter_fn=lambda row: row["keep"],
+    )
+    row = {"keep": False, "conversations": [{"role": "user", "content": "Hi"}]}
+    assert regen.prepare_row(row, config) == []
+    assert regen.prepare_row(row | {"keep": True}, config) == [
+        {"role": "user", "content": "Hi"}
+    ]
+
+
+def test_prepare_row_merges_normalize_output_over_raw_row():
+    # HF map merges columns: normalize output must not clobber the raw fallback.
+    config = DatasetConfig(
+        name="t",
+        hf_path="t",
+        split="train",
+        normalize_fn=lambda row: {"conversations": []},
+        prompt_field="prompt",
+    )
+    assert regen.prepare_row({"prompt": "Hi"}, config) == [
+        {"role": "user", "content": "Hi"}
+    ]
+
+
+def test_dataset_choice_rejects_multimodal_with_a_reason():
+    with pytest.raises(argparse.ArgumentTypeError, match="does not support images"):
+        regen._dataset_choice("sharegpt4v_coco")
+    assert regen._dataset_choice("ultrachat") == "ultrachat"
