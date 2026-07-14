@@ -151,4 +151,11 @@ DATASET_CONFIGS: dict[str, DatasetConfig] = {
         hf_path="mlabonne/open-perfectblend",
         split="train",
     ),
+    # Multi-turn function-calling SFT
+    "hermes-fc": DatasetConfig(
+        name="hermes-fc",
+        hf_path="NousResearch/hermes-function-calling-v1",
+        subset="func_calling",
+        split="train",
+    ),
 }
