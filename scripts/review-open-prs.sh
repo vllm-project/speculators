@@ -29,8 +29,8 @@ cd "$REPO_DIR"
 git fetch origin
 git reset --hard origin/main
 # Pre-merge fallback: restore skill from feature branch if not yet on main
-if [ ! -f .claude/skills/review-open-prs/SKILL.md ]; then
-    git checkout origin/feat/pr-review-cron-v2 -- .claude/skills/review-open-prs/ 2>/dev/null || true
+if [ ! -f .claude/skills/review-open-prs/SKILL.md ] || [ ! -f scripts/review-open-prs.sh ]; then
+    git checkout origin/feat/pr-review-cron-v2 -- .claude/skills/review-open-prs/ scripts/review-open-prs.sh 2>/dev/null || true
 fi
 
 # Claude blocks --dangerously-skip-permissions for root. The devenv entrypoint
