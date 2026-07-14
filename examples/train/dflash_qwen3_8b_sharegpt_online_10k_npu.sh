@@ -70,11 +70,11 @@ cleanup() {
 trap cleanup EXIT
 
 echo "Waiting for vLLM server to be ready..."
-MAX_RETRY=60          # 最大重试次数，每次间隔2s，总超时120s
+MAX_RETRY=60           # Max retry attempts for health check, 2s interval, total timeout 120s
 WAIT_SEC=2
 retry_cnt=0
 until curl -sf "http://localhost:${VLLM_PORT}/health" > /dev/null 2>&1; do
-    # 先判断vLLM进程是否已崩溃退出
+    # Check if the background vLLM process has crashed and exited
     if ! ps -p "$VLLM_PID" > /dev/null; then
         echo "ERROR: vLLM background process PID $VLLM_PID exited unexpectedly, abort script"
         exit 1
