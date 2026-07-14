@@ -65,6 +65,7 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
         "d2t",
         "masked_embedding.centroids.weight",
         "masked_embedding.token_ordering",
+        "masked_embedding.token_ordering_inv",
     ]
 
     t2d: torch.Tensor | None
