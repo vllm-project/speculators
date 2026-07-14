@@ -315,9 +315,7 @@ def _build_from_config_only(
     """
     config = model_class.config_class.from_pretrained(path)
     if draft_attn_impl is not None:
-        config.transformer_layer_config._attn_implementation = (  # noqa: SLF001
-            draft_attn_impl
-        )
+        config.transformer_layer_config._attn_implementation = draft_attn_impl
     speculators_config = getattr(config, "speculators_config", None)
     # Fall back to the CLI --verifier-name-or-path only when the saved config has
     # no verifier path -- either null or blanked to "". A real path in the config
@@ -380,9 +378,7 @@ def build_draft_model(
             # MTP is skipped: its from_training_args never sets the field and its
             # __init__ resolves its own default ("eager") when it is absent.
             config = model_class.config_class.from_pretrained(args.from_pretrained)
-            config.transformer_layer_config._attn_implementation = (  # noqa: SLF001
-                args.draft_attn_impl
-            )
+            config.transformer_layer_config._attn_implementation = args.draft_attn_impl
             return model_class.from_pretrained(
                 args.from_pretrained,
                 config=config,
