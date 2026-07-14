@@ -39,10 +39,10 @@ NUM_LAYERS=5
 DRAFT_VOCAB_SIZE=32000
 TARGET_LAYER_IDS="2 18 33"  # Must match vLLM's eagle_aux_hidden_state_layer_ids
 
-# GPU assignments (online training needs separate GPUs for vLLM and training)
+# NPU assignments (online training needs separate NPUs for vLLM and training)
 VLLM_NPUS="0,1"
-TRAIN_GPUS="2,3,4,5"
-NUM_TRAIN_GPUS=8
+TRAIN_NPUS="2,3,4,5"
+NUM_TRAIN_NPUS=4
 # =======================================
 
 # Step 1: Prepare data
@@ -78,7 +78,7 @@ echo "vLLM server ready."
 # Step 3: Train against the live vLLM server
 echo "=== Step 3: Training ==="
 ASCEND_RT_VISIBLE_DEVICES="$TRAIN_NPUS" torchrun \
-    --nnodes 1 --nproc_per_node "$NUM_TRAIN_GPUS" \
+    --nnodes 1 --nproc_per_node "$NUM_TRAIN_NPUS" \
     scripts/train.py \
     --verifier-name-or-path "$MODEL" \
     --data-path "$OUTPUT_DIR" \
