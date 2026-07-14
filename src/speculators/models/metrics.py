@@ -1,3 +1,13 @@
+"""Metrics and loss functions shared across draft-model architectures.
+
+The divergence losses take their softmax in float32 (``dtype=torch.float32``)
+even under bf16 training. Their gradient w.r.t. the draft logits reduces to
+``p_draft - p_target``; once the draft is well trained the two are nearly equal,
+so in bf16 (8-bit mantissa) that subtraction is a catastrophic cancellation and
+the gradient error grows as training succeeds. ``ce_loss`` needs no upcast --
+its gradient is ``p - onehot``, which never cancels.
+"""
+
 import json
 import math
 from collections.abc import Callable
@@ -90,8 +100,8 @@ def kl_div_loss(
     Returns:
         Per-position KL divergence with shape [1, seq_len].
     """
-    logits = torch.nn.functional.log_softmax(logits, dim=-1)
-    target_p = torch.nn.functional.softmax(targets, dim=-1)
+    logits = torch.nn.functional.log_softmax(logits, dim=-1, dtype=torch.float32)
+    target_p = torch.nn.functional.softmax(targets, dim=-1, dtype=torch.float32)
     elementwise_loss = torch.nn.functional.kl_div(
         logits, target_p, reduction="none", log_target=False
     ).sum(dim=-1)  # shape: [1, seq_len]
@@ -112,8 +122,8 @@ def reverse_kl_div_loss(
     Returns:
         Per-position reverse KL divergence with shape [1, seq_len].
     """
-    draft_logq = torch.nn.functional.log_softmax(logits, dim=-1)
-    target_logp = torch.nn.functional.log_softmax(targets, dim=-1)
+    draft_logq = torch.nn.functional.log_softmax(logits, dim=-1, dtype=torch.float32)
+    target_logp = torch.nn.functional.log_softmax(targets, dim=-1, dtype=torch.float32)
     elementwise_loss = torch.nn.functional.kl_div(
         target_logp, draft_logq, reduction="none", log_target=True
     ).sum(dim=-1)  # shape: [1, seq_len]
@@ -203,8 +213,8 @@ def tv_loss(
     Returns:
         Per-position TV distance with shape [1, seq_len].
     """
-    draft_p = torch.nn.functional.softmax(logits, dim=-1)
-    target_p = torch.nn.functional.softmax(targets, dim=-1)
+    draft_p = torch.nn.functional.softmax(logits, dim=-1, dtype=torch.float32)
+    target_p = torch.nn.functional.softmax(targets, dim=-1, dtype=torch.float32)
     overlap = torch.minimum(draft_p, target_p).sum(dim=-1)  # shape: [1, seq_len]
     elementwise_loss = 1.0 - overlap
 
@@ -232,8 +242,8 @@ def neg_log_acceptance_loss(
     Returns:
         Per-position negative log-acceptance with shape [1, seq_len].
     """
-    draft_p = torch.nn.functional.softmax(logits, dim=-1)
-    target_p = torch.nn.functional.softmax(targets, dim=-1)
+    draft_p = torch.nn.functional.softmax(logits, dim=-1, dtype=torch.float32)
+    target_p = torch.nn.functional.softmax(targets, dim=-1, dtype=torch.float32)
     overlap = torch.minimum(draft_p, target_p).sum(dim=-1)  # alpha, shape: [1, seq_len]
     elementwise_loss = -torch.log(overlap.clamp_min(_EPS))
 
@@ -271,8 +281,8 @@ def lk_hybrid_loss(
     Returns:
         Per-position hybrid loss with shape [1, seq_len].
     """
-    draft_p = torch.nn.functional.softmax(logits, dim=-1)
-    target_p = torch.nn.functional.softmax(targets, dim=-1)
+    draft_p = torch.nn.functional.softmax(logits, dim=-1, dtype=torch.float32)
+    target_p = torch.nn.functional.softmax(targets, dim=-1, dtype=torch.float32)
     overlap = torch.minimum(draft_p, target_p).sum(dim=-1)  # alpha, shape: [1, seq_len]
     tv = 1.0 - overlap
     kl = kl_div_loss(logits, targets)  # reuse existing KL, shape: [1, seq_len]
@@ -462,7 +472,7 @@ def compound_loss(
     keyed as ``"{name}_loss"``.  When the config contains a single term the
     dict is empty (the overall loss already captures it).
     """
-    total = torch.tensor(0.0, device=logits.device, dtype=logits.dtype)
+    total = torch.tensor(0.0, device=logits.device, dtype=torch.float32)
     term_losses: dict[str, torch.Tensor] = {}
     multi = len(loss_config) > 1
     for name, (fn, weight) in loss_config.items():
