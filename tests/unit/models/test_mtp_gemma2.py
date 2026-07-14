@@ -124,3 +124,49 @@ def test_query_only_gemma2_attention_global_kv(gemma2_config):
         verifier_kv_last_global=global_kv_changed,
     )
     assert not torch.equal(output1, output3)
+
+
+def test_query_only_gemma2_attention_sliding_window_mask(gemma2_config):
+    """Test that sliding window masking actually restricts attention when a mask is provided."""
+    gemma2_config.sliding_window = 2
+    attn = QueryOnlyGemma2Attention(gemma2_config, layer_idx=0)
+    
+    batch_sz, seq_len = 1, 5
+    hidden_states = torch.randn(batch_sz, seq_len, 64)
+    
+    local_kv = torch.randn(batch_sz, seq_len, 2, 2, 16)
+    global_kv = torch.randn(batch_sz, seq_len, 2, 2, 16)
+    
+    cos = torch.randn(batch_sz, seq_len, 16)
+    sin = torch.randn(batch_sz, seq_len, 16)
+    
+    # Base causal mask (lower triangular) - 0 for allowed, min_val for masked
+    attention_mask = torch.zeros(batch_sz, 1, seq_len, seq_len)
+    causal_mask = torch.tril(torch.ones(seq_len, seq_len, dtype=torch.bool))
+    attention_mask = attention_mask.masked_fill(~causal_mask.view(1, 1, seq_len, seq_len), torch.finfo(hidden_states.dtype).min)
+    
+    output1, _ = attn(
+        hidden_states=hidden_states,
+        position_embeddings=(cos, sin),
+        attention_mask=attention_mask,
+        verifier_kv_last_local=local_kv,
+        verifier_kv_last_global=global_kv,
+    )
+    
+    # Perturb local_kv at index 0 (which should be masked out for queries at index >= 2)
+    local_kv_changed = local_kv.clone()
+    local_kv_changed[:, 0, ...] = torch.randn_like(local_kv[:, 0, ...])
+    
+    output2, _ = attn(
+        hidden_states=hidden_states,
+        position_embeddings=(cos, sin),
+        attention_mask=attention_mask,
+        verifier_kv_last_local=local_kv_changed,
+        verifier_kv_last_global=global_kv,
+    )
+    
+    # Output at index 4 should be identical because index 0 is outside the sliding window (window size 2)
+    assert torch.equal(output1[:, 4], output2[:, 4])
+    
+    # Output at index 0 should change since it attends to index 0
+    assert not torch.equal(output1[:, 0], output2[:, 0])

@@ -19,7 +19,7 @@ class MultiLevelLMHead(nn.Module):
         self.centroids = nn.Linear(hidden_size, num_centroids, bias=False)
         # Token ordering mapping (centroid subsets -> token IDs)
         self.register_buffer("token_ordering", torch.arange(vocab_size, dtype=torch.long))
-        self.register_buffer("token_ordering_inv", torch.empty_like(self.token_ordering))
+        self.register_buffer("token_ordering_inv", torch.empty_like(self.token_ordering), persistent=False)
         self._rebuild_inverse()
 
     def _rebuild_inverse(self) -> None:
