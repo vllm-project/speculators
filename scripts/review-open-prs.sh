@@ -17,13 +17,15 @@ export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 export CLAUDE_CODE_USE_VERTEX="${CLAUDE_CODE_USE_VERTEX:-1}"
 export ANTHROPIC_VERTEX_PROJECT_ID="${ANTHROPIC_VERTEX_PROJECT_ID:-itpc-gcp-ai-eng-claude}"
 
-cd "$(dirname "$0")/.."
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$REPO_DIR"
 
 # Re-exec from /tmp so git-reset doesn't delete the running script.
 if [ "$(realpath "$0")" != "/tmp/review-open-prs-running.sh" ]; then
     cp "$(realpath "$0")" /tmp/review-open-prs-running.sh
     exec /tmp/review-open-prs-running.sh "$@"
 fi
+cd "$REPO_DIR"
 git fetch origin main && git reset --hard origin/main
 
 # Claude blocks --dangerously-skip-permissions for root. The devenv entrypoint
