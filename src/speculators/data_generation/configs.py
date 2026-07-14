@@ -49,6 +49,12 @@ def _normalize_nemotron(example: dict) -> dict:
     }
 
 
+def _normalize_when2call(example: dict) -> dict:
+    # When2Call already stores the dialogue as role/content ``messages``;
+    # the parallel ``tools`` column is preserved by the map for tool-aware runs.
+    return {"conversations": example["messages"]}
+
+
 def get_coco_dir():
     return os.getenv("COCO_DIR") or "coco/"
 
@@ -150,5 +156,12 @@ DATASET_CONFIGS: dict[str, DatasetConfig] = {
         name="open-perfectblend",
         hf_path="mlabonne/open-perfectblend",
         split="train",
+    ),
+    "when2call": DatasetConfig(
+        name="when2call",
+        hf_path="nvidia/When2Call",
+        subset="train_sft",
+        split="train",
+        normalize_fn=_normalize_when2call,
     ),
 }

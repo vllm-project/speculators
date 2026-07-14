@@ -124,6 +124,7 @@ The text presets from the shared dataset registry (`DATASET_CONFIGS` in `specula
 | `magpie`            | `Magpie-Align/Magpie-Llama-3.1-Pro-300K-Filtered` | `train`       |
 | `nemotron`          | `nvidia/Llama-Nemotron-Post-Training-Dataset`     | `chat`        |
 | `open-perfectblend` | `mlabonne/open-perfectblend`                      | `train`       |
+| `when2call`         | `nvidia/When2Call`                                | `train`       |
 
 The registry's multimodal preset, `sharegpt4v_coco`, is **off-policy only** and `--dataset` rejects it. Its turns carry image content parts, which the Chat Completions API rejects, and the pre-tokenized output row has nowhere to keep pixel data. Use it with `prepare-data`.
 
