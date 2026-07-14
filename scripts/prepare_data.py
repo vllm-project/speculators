@@ -133,14 +133,6 @@ def parse_args():
             "If not provided, auto-detected from chat template."
         ),
     )
-    parser.add_argument(
-        "--turn-dropout",
-        action="store_true",
-        help=(
-            "Enable turn dropout: randomly keeps first N consecutive turns "
-            "per conversation for data augmentation."
-        ),
-    )
 
     # Output arguments
     parser.add_argument(
@@ -233,7 +225,6 @@ def main():
         max_samples=args.max_samples,
         token_freq_path=token_freq_path,
         assistant_pattern=args.assistant_pattern,
-        turn_dropout=args.turn_dropout,
         minimum_valid_tokens=args.minimum_valid_tokens,
         allow_empty_output=args.allow_empty_output,
         trust_remote_code=args.trust_remote_code,
