@@ -368,6 +368,90 @@ def parse_vocab_mappings(args: argparse.Namespace):
     return None, None, verifier_config.vocab_size
 
 
+def _warm_start_from_checkpoint(
+    model_class: type[SpeculatorModel],
+    args: argparse.Namespace,
+    t2d: torch.Tensor | None,
+    d2t: torch.Tensor | None,
+    draft_vocab_size: int | None,
+) -> SpeculatorModel:
+    """Build a *target* model from training args, then transfer backbone
+    weights from a pretrained checkpoint of a different speculator type.
+
+    For example, warm-start a DSpark model from a DFlash checkpoint: the
+    shared backbone (layers, fc, norms, embeddings, lm_head) is copied
+    while new heads (MarkovHead, ConfidenceHead) stay randomly initialized.
+
+    The source checkpoint's config is used as a base: all shared fields
+    (``transformer_layer_config``, ``block_size``, ``aux_hidden_state_layer_ids``,
+    etc.) are inherited, and the target-specific fields (e.g. ``markov_rank``)
+    are taken from CLI args.
+    """
+    # 1. Load source checkpoint as its native type.
+    source_model = SpeculatorModel.from_pretrained(
+        args.from_pretrained,
+        t2d=t2d,
+        d2t=d2t,
+        verifier=args.verifier_name_or_path,
+    )
+    source_type = source_model.config.speculators_model_type
+
+    # 2. Build the target model from training args, reusing the source's
+    #    transformer_layer_config so the draft architecture matches exactly.
+    source_config = source_model.config
+
+    # Extract vocab mappings from the source model when the caller has none.
+    if t2d is None and d2t is None:
+        src_t2d = getattr(source_model, "t2d", None)
+        src_d2t = getattr(source_model, "d2t", None)
+        if src_t2d is not None and src_d2t is not None:
+            t2d = src_t2d.clone()
+            d2t = src_d2t.clone()
+
+    kwargs = vars(args)
+    # Prefer source draft_vocab_size when no explicit vocab mappings were
+    # provided (the fallback full-verifier vocab from parse_vocab_mappings
+    # is truthy but wrong).
+    if t2d is not None:
+        kwargs["draft_vocab_size"] = source_config.draft_vocab_size
+    else:
+        kwargs["draft_vocab_size"] = draft_vocab_size or source_config.draft_vocab_size
+    kwargs["block_size"] = source_config.block_size
+    kwargs["mask_token_id"] = source_config.mask_token_id
+
+    # Inherit target layer IDs from the source when not explicitly set.
+    if kwargs.get("target_layer_ids") is None:
+        source_layer_ids = getattr(source_config, "aux_hidden_state_layer_ids", None)
+        if source_layer_ids is not None:
+            kwargs["target_layer_ids"] = source_layer_ids
+
+    target_model = model_class.from_training_args(
+        verifier_config=source_config.transformer_layer_config,
+        t2d=t2d,
+        d2t=d2t,
+        **kwargs,
+    )
+
+    # 3. Transfer matching weights (strict=False tolerates new/missing keys).
+    source_sd = source_model.state_dict()
+    missing, unexpected = target_model.load_state_dict(source_sd, strict=False)
+    ignore_set = set(
+        getattr(target_model, "_keys_to_ignore_on_load_missing", [])
+    )
+    new_params = [k for k in missing if k not in ignore_set]
+    n_transferred = len(source_sd) - len(unexpected)
+    logger.info(
+        "Warm start from %s checkpoint: transferred %d/%d keys. "
+        "New parameters (randomly initialized): %s",
+        source_type,
+        n_transferred,
+        len(source_sd),
+        new_params or "(none)",
+    )
+    del source_model
+    return target_model
+
+
 def _build_from_config_only(
     model_class: type[SpeculatorModel],
     path: str,
@@ -455,6 +539,20 @@ def build_draft_model(
                 d2t=d2t,
                 verifier=args.verifier_name_or_path,
             )
+        # Detect cross-type warm start (e.g. DFlash -> DSpark).
+        config_dict, _ = PretrainedConfig.get_config_dict(args.from_pretrained)
+        checkpoint_type = config_dict.get("speculators_model_type")
+        if checkpoint_type and checkpoint_type != args.speculator_type:
+            logger.info(
+                "Cross-type warm start: loading %s backbone weights into "
+                "%s model.",
+                checkpoint_type,
+                args.speculator_type,
+            )
+            return _warm_start_from_checkpoint(
+                model_class, args, t2d, d2t, draft_vocab_size
+            )
+
         return model_class.from_pretrained(
             args.from_pretrained,
             t2d=t2d,

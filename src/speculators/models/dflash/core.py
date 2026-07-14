@@ -81,10 +81,11 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 for layer_idx in range(num_draft_layers)
             ]
         )
-        self.sliding_window = tl_config.sliding_window
+        self.sliding_window = getattr(tl_config, "sliding_window", None)
+        layer_types = getattr(tl_config, "layer_types", None) or []
         self.sliding_window_indices = [
             i
-            for i, layer_type in enumerate(tl_config.layer_types)
+            for i, layer_type in enumerate(layer_types)
             if layer_type == "sliding_attention"
         ]
         self.uses_sliding_window_attn = bool(self.sliding_window_indices)

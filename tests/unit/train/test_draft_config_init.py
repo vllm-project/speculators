@@ -9,27 +9,35 @@ Covers the three mutually exclusive init paths and their guard rails:
 - CLI validation: ``--from-pretrained`` takes precedence over and is mutually
   exclusive with ``--draft-config`` and the decoder-shaping flags; and
   ``--draft-config`` is mutually exclusive with the decoder-shaping flags.
+- Cross-type warm start: ``--from-pretrained`` with a different
+  ``--speculator-type`` transfers backbone weights.
 """
 
+import copy
 import json
+from argparse import Namespace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
 import pytest
+import torch
 from transformers.models.llama.configuration_llama import LlamaConfig
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
 from scripts.train import (
     DECODER_SHAPING_FLAGS,
     _build_from_config_only,
+    _warm_start_from_checkpoint,
     build_draft_model,
     create_transformer_layer_config,
     load_draft_transformer_layer_config,
     parse_args,
 )
 from speculators import SpeculatorsConfig, VerifierConfig
+from speculators.models.dflash import DFlashDraftModel, DFlashSpeculatorConfig
+from speculators.models.dspark import DSparkDraftModel, DSparkSpeculatorConfig
 from speculators.models.eagle3 import Eagle3DraftModel, Eagle3SpeculatorConfig
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 from speculators.utils.loading import is_config_only_dir
@@ -612,3 +620,189 @@ def test_create_layer_config_infers_moe_intermediate_size():
         config = _create_layer_config_for(verifier)
 
     assert config.intermediate_size == 3 * 32
+
+
+# ---------------------------------------------------------------------------
+# _warm_start_from_checkpoint (cross-type warm start)
+# ---------------------------------------------------------------------------
+
+TINY_QWEN3_CONFIG = Qwen3Config(
+    vocab_size=128,
+    hidden_size=64,
+    intermediate_size=256,
+    num_hidden_layers=2,
+    num_attention_heads=4,
+    num_key_value_heads=4,
+    head_dim=16,
+    max_position_embeddings=256,
+    rms_norm_eps=1e-6,
+    tie_word_embeddings=False,
+)
+
+
+def _make_dflash_model() -> DFlashDraftModel:
+    """Create a tiny DFlash model with real initialized weights."""
+    transformer_config = copy.deepcopy(TINY_QWEN3_CONFIG)
+    transformer_config._attn_implementation = "eager"
+    config = DFlashSpeculatorConfig(
+        transformer_layer_config=transformer_config,
+        draft_vocab_size=64,
+        block_size=4,
+        aux_hidden_state_layer_ids=[0, 1],
+        mask_token_id=0,
+        speculators_config=SpeculatorsConfig(
+            algorithm="dflash",
+            proposal_methods=[GreedyTokenProposalConfig(speculative_tokens=3)],
+            default_proposal_method="greedy",
+            verifier=VerifierConfig(
+                name_or_path=None,
+                architectures=["Qwen3ForCausalLM"],
+            ),
+        ),
+    )
+    model = DFlashDraftModel(config)
+    with torch.no_grad():
+        for param in model.parameters():
+            if param.isnan().any():
+                torch.nn.init.normal_(param, mean=0.0, std=0.02)
+        for buf in model.buffers():
+            if buf.is_floating_point() and buf.isnan().any():
+                buf.zero_()
+    return model
+
+
+def _save_dflash_checkpoint(tmp_path: Path) -> Path:
+    """Save a DFlash checkpoint with known trainable weights and return the
+    directory path."""
+    model = _make_dflash_model()
+    with torch.no_grad():
+        model.fc.weight.fill_(42.0)
+        for layer in model.layers:
+            for p in layer.parameters():
+                p.fill_(7.0)
+    model_dir = tmp_path / "dflash_ckpt"
+    model.save_pretrained(str(model_dir))
+    return model_dir
+
+
+def _make_warm_start_args(checkpoint_dir: str) -> Namespace:
+    """Minimal args namespace for _warm_start_from_checkpoint."""
+    return Namespace(
+        from_pretrained=checkpoint_dir,
+        speculator_type="dspark",
+        verifier_name_or_path="dummy-verifier",
+        target_layer_ids=[0, 1],
+        block_size=4,
+        mask_token_id=0,
+        sample_from_anchor=None,
+        sliding_window_non_causal=False,
+        draft_attn_impl="eager",
+        markov_rank=256,
+        markov_head_type="vanilla",
+        enable_confidence_head=True,
+        confidence_head_with_markov=True,
+    )
+
+
+def _patch_verifier_config():
+    """Patch VerifierConfig.from_pretrained to avoid network calls."""
+    return patch.object(
+        VerifierConfig,
+        "from_pretrained",
+        return_value=VerifierConfig(
+            name_or_path="dummy-verifier",
+            architectures=["Qwen3ForCausalLM"],
+        ),
+    )
+
+
+def test_warm_start_produces_dspark_model(tmp_path):
+    """Cross-type warm start from DFlash checkpoint creates a DSpark model."""
+    ckpt_dir = _save_dflash_checkpoint(tmp_path)
+    args = _make_warm_start_args(str(ckpt_dir))
+
+    with (
+        patch.object(DSparkDraftModel, "load_verifier_weights"),
+        _patch_verifier_config(),
+    ):
+        model = _warm_start_from_checkpoint(
+            DSparkDraftModel, args, None, None, 64
+        )
+
+    assert isinstance(model, DSparkDraftModel)
+    assert isinstance(model.config, DSparkSpeculatorConfig)
+
+
+def test_warm_start_transfers_backbone_weights(tmp_path):
+    """Backbone weights (fc, layers) are transferred from the DFlash checkpoint."""
+    ckpt_dir = _save_dflash_checkpoint(tmp_path)
+    args = _make_warm_start_args(str(ckpt_dir))
+
+    with (
+        patch.object(DSparkDraftModel, "load_verifier_weights"),
+        _patch_verifier_config(),
+    ):
+        model = _warm_start_from_checkpoint(
+            DSparkDraftModel, args, None, None, 64
+        )
+
+    assert torch.allclose(model.fc.weight, torch.tensor(42.0))
+    for layer in model.layers:
+        for p in layer.parameters():
+            assert torch.allclose(p, torch.tensor(7.0), atol=1e-4)
+
+
+def test_warm_start_dspark_heads_are_new(tmp_path):
+    """DSpark-only heads (MarkovHead, ConfidenceHead) are NOT 42.0 or 7.0
+    — they should have their own random initialization, not DFlash weights."""
+    ckpt_dir = _save_dflash_checkpoint(tmp_path)
+    args = _make_warm_start_args(str(ckpt_dir))
+
+    with (
+        patch.object(DSparkDraftModel, "load_verifier_weights"),
+        _patch_verifier_config(),
+    ):
+        model = _warm_start_from_checkpoint(
+            DSparkDraftModel, args, None, None, 64
+        )
+
+    assert model.markov_head is not None
+    assert model.confidence_head is not None
+    markov_w1 = model.markov_head.markov_w1.weight
+    assert not torch.allclose(markov_w1, torch.tensor(42.0))
+    assert not torch.allclose(markov_w1, torch.tensor(7.0))
+
+
+def test_warm_start_preserves_config_fields(tmp_path):
+    """Source architecture (block_size, aux layers) is inherited;
+    target-specific fields (markov_rank) come from CLI args."""
+    ckpt_dir = _save_dflash_checkpoint(tmp_path)
+    args = _make_warm_start_args(str(ckpt_dir))
+    args.markov_rank = 128
+
+    with (
+        patch.object(DSparkDraftModel, "load_verifier_weights"),
+        _patch_verifier_config(),
+    ):
+        model = _warm_start_from_checkpoint(
+            DSparkDraftModel, args, None, None, 64
+        )
+
+    assert model.config.block_size == 4
+    assert model.config.aux_hidden_state_layer_ids == [0, 1]
+    assert model.config.markov_rank == 128
+
+
+def test_build_draft_model_routes_cross_type(tmp_path):
+    """build_draft_model detects cross-type and routes to warm start."""
+    ckpt_dir = _save_dflash_checkpoint(tmp_path)
+    args = _make_warm_start_args(str(ckpt_dir))
+
+    with (
+        patch.object(DSparkDraftModel, "load_verifier_weights"),
+        _patch_verifier_config(),
+    ):
+        model = build_draft_model(args, DSparkDraftModel, None, None, 64)
+
+    assert isinstance(model, DSparkDraftModel)
+    assert torch.allclose(model.fc.weight, torch.tensor(42.0))
