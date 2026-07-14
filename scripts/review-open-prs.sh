@@ -13,11 +13,11 @@ set -euo pipefail
 export HOME=/root
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 
-# Claude authenticates via Vertex AI — cron doesn't inherit these
+# Claude authenticates via Vertex AI -- cron doesn't inherit these
 export CLAUDE_CODE_USE_VERTEX="${CLAUDE_CODE_USE_VERTEX:-1}"
 export ANTHROPIC_VERTEX_PROJECT_ID="${ANTHROPIC_VERTEX_PROJECT_ID:-itpc-gcp-ai-eng-claude}"
 
-REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+export REPO_DIR="${REPO_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 cd "$REPO_DIR"
 
 # Re-exec from /tmp so git-reset doesn't delete the running script.
@@ -25,22 +25,21 @@ if [ "$(realpath "$0")" != "/tmp/review-open-prs-running.sh" ]; then
     cp "$(realpath "$0")" /tmp/review-open-prs-running.sh
     exec /tmp/review-open-prs-running.sh "$@"
 fi
-cd "$REPO_DIR"
-git fetch origin
-git reset --hard origin/main
-# Pre-merge fallback: restore skill from feature branch if not yet on main
-if [ ! -f .claude/skills/review-open-prs/SKILL.md ] || [ ! -f scripts/review-open-prs.sh ]; then
-    git checkout origin/feat/pr-review-cron-v2 -- .claude/skills/review-open-prs/ scripts/review-open-prs.sh 2>/dev/null || true
-fi
 
-# Claude blocks --dangerously-skip-permissions for root. The devenv entrypoint
-# creates a claude-runner user with the right groups — just re-exec as it.
+# Git sync and user switch -- only as root (claude-runner re-enters below).
 if [ "$(id -u)" -eq 0 ]; then
+    git fetch origin
+    git reset --hard origin/main
+    # Pre-merge fallback: restore skill from feature branch if not yet on main
+    if [ ! -f .claude/skills/review-open-prs/SKILL.md ] || [ ! -f scripts/review-open-prs.sh ]; then
+        git checkout origin/feat/pr-review-cron-v2 -- .claude/skills/review-open-prs/ scripts/review-open-prs.sh 2>/dev/null || true
+    fi
+
+    # Claude blocks --dangerously-skip-permissions for root -- re-exec as claude-runner.
     WS_GID=$(stat -c '%g' /workspace)
     chmod -R g+rwX .claude 2>/dev/null || true
     chmod g+r /root/.claude/.credentials.json 2>/dev/null || true
     chown root:"$WS_GID" /root/.claude/.credentials.json 2>/dev/null || true
-    # GCP/Vertex auth files
     chmod g+r /root/.config/gcloud/credentials.db /root/.config/gcloud/application_default_credentials.json 2>/dev/null || true
     chown root:"$WS_GID" /root/.config/gcloud/credentials.db /root/.config/gcloud/application_default_credentials.json 2>/dev/null || true
     chmod -R g+rwX /root/.config/gcloud/logs 2>/dev/null || true
