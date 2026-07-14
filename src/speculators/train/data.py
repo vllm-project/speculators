@@ -114,10 +114,14 @@ def standardize_data_v1(data: dict[str, Any]) -> dict[str, Any]:
         "verifier_last_hidden_states": data["hidden_states"][-1],
         "loss_mask": data["loss_mask"],
     }
-    if "verifier_kv_last_local" in data:
-        res["verifier_kv_last_local"] = data["verifier_kv_last_local"]
-    if "verifier_kv_last_global" in data:
-        res["verifier_kv_last_global"] = data["verifier_kv_last_global"]
+    if "kv_last_local_k" in data and "kv_last_local_v" in data:
+        res["verifier_kv_last_local"] = torch.stack(
+            [data["kv_last_local_k"], data["kv_last_local_v"]], dim=1
+        )
+    if "kv_last_global_k" in data and "kv_last_global_v" in data:
+        res["verifier_kv_last_global"] = torch.stack(
+            [data["kv_last_global_k"], data["kv_last_global_v"]], dim=1
+        )
     return res
 
 
