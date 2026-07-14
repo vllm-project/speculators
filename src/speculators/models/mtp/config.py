@@ -52,7 +52,6 @@ class MTPSpeculatorConfig(SpeculatorModelConfig):
         ),
     )
 
-
     @property
     def hidden_size(self) -> int:
         return self.transformer_layer_config.hidden_size  # type: ignore[return-value]
