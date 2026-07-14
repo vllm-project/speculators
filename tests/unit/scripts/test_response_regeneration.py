@@ -810,9 +810,8 @@ def test_prepare_row_normalizes_like_off_policy():
         "input": [{"role": "user", "content": "Hi"}],
         "output": "<original answer to drop>",
     }
-    assert regen.prepare_row(row, DATASET_CONFIGS["nemotron"]) == [
-        {"role": "user", "content": "Hi"}
-    ]
+    _, turns = regen.prepare_row(row, DATASET_CONFIGS["nemotron"])
+    assert turns == [{"role": "user", "content": "Hi"}]
 
 
 def test_prepare_row_applies_filter_fn():
@@ -823,10 +822,9 @@ def test_prepare_row_applies_filter_fn():
         filter_fn=lambda row: row["keep"],
     )
     row = {"keep": False, "conversations": [{"role": "user", "content": "Hi"}]}
-    assert regen.prepare_row(row, config) == []
-    assert regen.prepare_row(row | {"keep": True}, config) == [
-        {"role": "user", "content": "Hi"}
-    ]
+    assert regen.prepare_row(row, config) is None
+    _, turns = regen.prepare_row(row | {"keep": True}, config)
+    assert turns == [{"role": "user", "content": "Hi"}]
 
 
 def test_prepare_row_merges_normalize_output_over_raw_row():
@@ -838,12 +836,45 @@ def test_prepare_row_merges_normalize_output_over_raw_row():
         normalize_fn=lambda row: {"conversations": []},
         prompt_field="prompt",
     )
-    assert regen.prepare_row({"prompt": "Hi"}, config) == [
-        {"role": "user", "content": "Hi"}
-    ]
+    _, turns = regen.prepare_row({"prompt": "Hi"}, config)
+    assert turns == [{"role": "user", "content": "Hi"}]
 
 
 def test_dataset_choice_rejects_multimodal_with_a_reason():
     with pytest.raises(argparse.ArgumentTypeError, match="does not support images"):
         regen._dataset_choice("sharegpt4v_coco")
     assert regen._dataset_choice("ultrachat") == "ultrachat"
+
+
+def test_tools_and_results_are_read_from_the_normalized_row():
+    # Under a normalize_fn preset the conversation only appears in `messages`
+    # after normalization; reading tools off the raw row regenerates tool-free.
+    config = DatasetConfig(
+        name="toolcalls",
+        hf_path="t",
+        split="train",
+        normalize_fn=lambda row: {"messages": row["input"]},
+    )
+    row = {
+        "input": [
+            {"role": "user", "content": "weather in Tokyo?"},
+            {"role": "tool", "content": "sunny"},
+        ],
+        "tools": [{"type": "function", "function": {"name": "get_weather"}}],
+    }
+
+    normalized = regen.normalize_row(row, config)
+
+    assert regen.extract_tools(normalized) == [
+        {"type": "function", "function": {"name": "get_weather"}}
+    ]
+    assert regen.extract_tool_results(normalized) == ["sunny"]
+    # the raw row hides the conversation behind `input`: results would be lost
+    assert regen.extract_tool_results(row) == []
+
+
+def test_normalize_row_returns_none_for_a_filtered_row():
+    config = DatasetConfig(
+        name="t", hf_path="t", split="train", filter_fn=lambda row: row["keep"]
+    )
+    assert regen.normalize_row({"keep": False}, config) is None

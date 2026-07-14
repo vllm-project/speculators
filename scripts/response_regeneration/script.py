@@ -192,17 +192,39 @@ def extract_turns(
     return []
 
 
-def prepare_row(row: dict[str, Any], config: DatasetConfig) -> list[dict[str, Any]]:
-    """Extract regeneration turns from a raw dataset row, ``[]`` to skip it.
+def normalize_row(row: dict[str, Any], config: DatasetConfig) -> dict[str, Any] | None:
+    """Apply the preset's ingestion rules to a raw row, ``None`` to skip it.
 
     Mirrors off-policy ingestion: ``filter_fn`` sees the raw row, and
     ``normalize_fn`` is merged over it (HF ``map`` semantics keep raw columns).
+
+    Turns, tools and cached tool results must all be read from this one
+    normalized row: under presets that carry a ``normalize_fn`` the conversation
+    only appears in ``messages`` once it has run, so extracting tools from the
+    raw row would silently find none.
     """
     if config.filter_fn is not None and not config.filter_fn(row):
-        return []
+        return None
     if config.normalize_fn is not None:
-        row = {**row, **config.normalize_fn(row)}
-    return extract_turns(row, config.prompt_field)
+        return {**row, **config.normalize_fn(row)}
+    return row
+
+
+def prepare_row(
+    row: dict[str, Any], config: DatasetConfig
+) -> tuple[dict[str, Any], list[dict[str, Any]]] | None:
+    """The normalized row and its regeneration turns, or ``None`` to skip it.
+
+    Returns the normalized row alongside the turns so that callers extract tools
+    and cached tool results from the same row the turns came from.
+    """
+    normalized = normalize_row(row, config)
+    if normalized is None:
+        return None
+    turns = extract_turns(normalized, config.prompt_field)
+    if not turns:
+        return None
+    return normalized, turns
 
 
 def _maybe_json(value: Any):
@@ -764,9 +786,10 @@ async def main():
                 if args.language_filter and row.get("language") != args.language_filter:
                     continue
 
-                turns = prepare_row(row, dataset_config)
-                if not turns:
+                prepared = prepare_row(row, dataset_config)
+                if prepared is None:
                     continue
+                normalized, turns = prepared
 
                 primary_id = _primary_identifier(row)
                 if primary_id in seen_ids:
@@ -774,7 +797,7 @@ async def main():
 
                 # Broken input tool schema: record and skip (don't crash the run).
                 try:
-                    tools = extract_tools(row)
+                    tools = extract_tools(normalized)
                 except ValueError as exc:
                     logger.warning(
                         "Skipping row %s: input tool schema is broken (%s)",
@@ -804,7 +827,7 @@ async def main():
                         "primary_id": primary_id,
                         "turns": turns,
                         "tools": tools,
-                        "tool_results": extract_tool_results(row),
+                        "tool_results": extract_tool_results(normalized),
                     }
                 )
                 processed_count += 1
