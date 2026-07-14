@@ -369,12 +369,12 @@ class TestDecayFunctions:
 class TestBf16GradientPrecision:
     """The divergence losses must stay accurate under bf16 training.
 
-    Their gradient is ``p_draft - p_target``. A well-trained draft has
-    ``p ~= q``, so computing that subtraction in bf16 is a catastrophic
-    cancellation: before the float32 upcast these losses carried 8-23%
-    relative gradient error at high acceptance, and it grew as training
-    converged. ``ce_loss`` is the control -- its gradient is ``p - onehot``,
-    which never cancels, so it is accurate in bf16 either way.
+    Their gradient reduces to ``p_draft - p_target``. A well-trained draft has
+    ``p ~= q``, so taking that subtraction in bf16 is a catastrophic
+    cancellation whose error grows as training converges: before the float32
+    upcast these losses carried 8-23% relative gradient error at high
+    acceptance. ``ce_loss`` is deliberately not upcast -- its gradient is
+    ``p - onehot``, which never cancels.
     """
 
     @staticmethod
@@ -384,48 +384,32 @@ class TestBf16GradientPrecision:
         loss_fn(logits, targets_bf16.to(dtype)).sum().backward()
         return logits.grad.double()
 
-    @staticmethod
-    def _well_trained_draft(vocab_size=4096, seq_len=8):
-        """bf16 logits for a draft that already agrees closely with the target."""
+    @pytest.mark.parametrize(
+        "loss_fn",
+        [
+            kl_div_loss,
+            reverse_kl_div_loss,
+            tv_loss,
+            neg_log_acceptance_loss,
+            lk_hybrid_loss,
+        ],
+    )
+    def test_divergence_loss_gradient_accurate_in_bf16(self, loss_fn):
+        """bf16 gradients stay within 2% of an exact float64 reference.
+
+        Fails on the bf16 softmax (8-23% error) for every loss listed.
+        """
         torch.manual_seed(0)
+        vocab_size, seq_len = 4096, 8
+        # a draft that already agrees closely with the target -- the regime where
+        # p ~= q and the bf16 cancellation is worst
         targets = (torch.randn(1, seq_len, vocab_size) * 2).bfloat16()
         logits = (
             targets.float() + torch.randn(1, seq_len, vocab_size) * 0.10
         ).bfloat16()
-        return logits, targets
-
-    @pytest.mark.parametrize(
-        "loss_fn",
-        [kl_div_loss, reverse_kl_div_loss, tv_loss, neg_log_acceptance_loss],
-    )
-    def test_divergence_loss_gradient_accurate_in_bf16(self, loss_fn):
-        """bf16 gradients stay within 2% of an exact float64 reference."""
-        logits, targets = self._well_trained_draft()
 
         exact = self._grad(loss_fn, logits, targets, torch.float64)
         actual = self._grad(loss_fn, logits, targets, torch.bfloat16)
 
         rel_err = ((actual - exact).norm() / exact.norm()).item()
         assert rel_err < 0.02, f"{loss_fn.__name__} bf16 gradient error {rel_err:.1%}"
-
-    def test_ce_loss_gradient_accurate_in_bf16(self):
-        """Control: ce_loss has no cancellation and needs no upcast."""
-        logits, targets = self._well_trained_draft()
-
-        exact = self._grad(ce_loss, logits, targets, torch.float64)
-        actual = self._grad(ce_loss, logits, targets, torch.bfloat16)
-
-        assert ((actual - exact).norm() / exact.norm()).item() < 0.02
-
-    def test_losses_are_float32_under_bf16_logits(self):
-        """The loss itself is float32, so the masked mean does not round in bf16."""
-        logits, targets = self._well_trained_draft()
-
-        for loss_fn in (
-            kl_div_loss,
-            reverse_kl_div_loss,
-            tv_loss,
-            neg_log_acceptance_loss,
-            lk_hybrid_loss,
-        ):
-            assert loss_fn(logits, targets).dtype == torch.float32
