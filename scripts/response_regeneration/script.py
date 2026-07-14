@@ -12,36 +12,33 @@ import aiohttp
 from datasets import load_dataset
 from tqdm import tqdm
 
+from speculators.data_generation.configs import DATASET_CONFIGS, DatasetConfig
 from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     InvalidResponseError,
     with_retries,
 )
 
-DATASET_CONFIGS = {
-    "magpie": {
-        "id": "Magpie-Align/Magpie-Llama-3.1-Pro-300K-Filtered",
-        "prompt_field": "instruction",
-        "default_split": "train",
-    },
-    "ultrachat": {
-        "id": "HuggingFaceH4/ultrachat_200k",
-        "prompt_field": "prompt",
-        "default_split": "train_sft",
-    },
-    "gsm8k": {
-        "id": "openai/gsm8k",
-        "prompt_field": "question",
-        "default_split": "train",
-        "subset": "main",
-    },
-}
+# On-policy regeneration has no multimodal support yet; off-policy `prepare-data`
+# does, so these presets are gated here rather than dropped from the registry.
+MULTIMODAL_DATASETS = {"sharegpt4v_coco"}
+REGEN_DATASETS = [name for name in DATASET_CONFIGS if name not in MULTIMODAL_DATASETS]
+
+
+def _dataset_choice(name: str) -> str:
+    """Reject multimodal presets with a reason, not a bare invalid choice."""
+    if name in MULTIMODAL_DATASETS:
+        raise argparse.ArgumentTypeError(
+            f"{name!r} is multimodal; on-policy regeneration does not support "
+            "images yet. Use it off-policy with `prepare-data`."
+        )
+    return name
 
 
 def parse_args():
     """Parse command-line arguments for the script."""
     parser = argparse.ArgumentParser(
-        description="Regenerate responses from Magpie instructions via vLLM Chat API."
+        description="Regenerate dataset responses via a vLLM Chat API endpoint."
     )
     parser.add_argument(
         "--endpoint",
@@ -56,7 +53,8 @@ def parse_args():
     parser.add_argument(
         "--dataset",
         default="ultrachat",
-        choices=list(DATASET_CONFIGS.keys()),
+        type=_dataset_choice,
+        choices=REGEN_DATASETS,
         help="Dataset to process",
     )
     parser.add_argument(
@@ -138,7 +136,9 @@ def sanitize_filename(name: str) -> str:
     return name.strip("._")
 
 
-def extract_turns(row, prompt_field):
+def extract_turns(
+    row: dict[str, Any], prompt_field: str | None
+) -> list[dict[str, Any]]:
     """Extract ordered system/user turns from a dataset row.
 
     Multi-turn conversations are read from a ``messages`` or ``conversations``
@@ -173,6 +173,19 @@ def extract_turns(row, prompt_field):
     if prompt:
         return [{"role": "user", "content": prompt}]
     return []
+
+
+def prepare_row(row: dict[str, Any], config: DatasetConfig) -> list[dict[str, Any]]:
+    """Extract regeneration turns from a raw dataset row, ``[]`` to skip it.
+
+    Mirrors off-policy ingestion: ``filter_fn`` sees the raw row, and
+    ``normalize_fn`` is merged over it (HF ``map`` semantics keep raw columns).
+    """
+    if config.filter_fn is not None and not config.filter_fn(row):
+        return []
+    if config.normalize_fn is not None:
+        row = {**row, **config.normalize_fn(row)}
+    return extract_turns(row, config.prompt_field)
 
 
 def _is_present(value: Any) -> bool:
@@ -442,12 +455,11 @@ async def main():
 
     # Get dataset configuration
     dataset_config = DATASET_CONFIGS[args.dataset]
-    dataset_id = dataset_config["id"]
-    prompt_field = dataset_config["prompt_field"]
+    dataset_id = dataset_config.hf_path
 
     # Use dataset-specific defaults if not provided
-    split = args.split if args.split is not None else dataset_config["default_split"]
-    subset = args.subset if args.subset is not None else dataset_config.get("subset")
+    split = args.split if args.split is not None else dataset_config.split
+    subset = args.subset if args.subset is not None else dataset_config.subset
 
     # Generate output filename if not specified
     if args.outfile is None:
@@ -462,7 +474,7 @@ async def main():
 
     print(f"Using dataset: {dataset_id}")
     print(f"Split: {split}")
-    print(f"Prompt field: {prompt_field}")
+    print(f"Prompt field: {dataset_config.prompt_field}")
     print(f"Output file: {args.outfile}")
     print(f"Error file: {error_outfile}")
     print()
@@ -519,8 +531,7 @@ async def main():
                 if args.language_filter and row.get("language") != args.language_filter:
                     continue
 
-                turns = extract_turns(row, prompt_field)
-                # extract_turns returns [] when there is no usable user turn.
+                turns = prepare_row(row, dataset_config)
                 if not turns:
                     continue
 
