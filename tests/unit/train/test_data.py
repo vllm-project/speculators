@@ -540,8 +540,10 @@ def test_verifier_kvs_survive_pipeline():
                 [[10.0, 10.1], [11.0, 11.1], [12.0, 12.1]]
             ),  # Verifier last hs
         ],
-        "verifier_kv_last_local": torch.tensor([[100.0], [101.0], [102.0]]),
-        "verifier_kv_last_global": torch.tensor([[200.0], [201.0], [202.0]]),
+        "kv_last_local_k": torch.tensor([[100.0], [101.0], [102.0]]),
+        "kv_last_local_v": torch.tensor([[110.0], [111.0], [112.0]]),
+        "kv_last_global_k": torch.tensor([[200.0], [201.0], [202.0]]),
+        "kv_last_global_v": torch.tensor([[210.0], [211.0], [212.0]]),
     }
 
     # 2. Pass through standardize_data_v1
@@ -549,10 +551,11 @@ def test_verifier_kvs_survive_pipeline():
 
     assert "verifier_kv_last_local" in standardized
     assert "verifier_kv_last_global" in standardized
-    assert torch.equal(
-        standardized["verifier_kv_last_local"],
-        v1_data["verifier_kv_last_local"],  # type: ignore[arg-type]
+    
+    expected_local_stack = torch.stack(
+        [v1_data["kv_last_local_k"], v1_data["kv_last_local_v"]], dim=1  # type: ignore[arg-type]
     )
+    assert torch.equal(standardized["verifier_kv_last_local"], expected_local_stack)
 
     # 3. Add lengths and position_ids (simulate BaseDataset.__getitem__)
     standardized["lengths"] = torch.tensor([3], dtype=torch.long)
@@ -569,8 +572,18 @@ def test_verifier_kvs_survive_pipeline():
     assert "verifier_kv_last_global" in collated
 
     local_kv = collated["verifier_kv_last_local"]
-    assert local_kv.shape == (1, 5, 1)  # [batch=1, max_len=5, ...]
+    assert local_kv.shape == (1, 5, 2, 1)  # [batch=1, max_len=5, ...]
 
     # First 3 positions should match original, last 2 should be padded with 0
-    expected_local = torch.tensor([[[100.0], [101.0], [102.0], [0.0], [0.0]]])
+    expected_local = torch.tensor(
+        [
+            [
+                [[100.0], [110.0]],
+                [[101.0], [111.0]],
+                [[102.0], [112.0]],
+                [[0.0], [0.0]],
+                [[0.0], [0.0]],
+            ]
+        ]
+    )
     assert torch.equal(local_kv, expected_local)
