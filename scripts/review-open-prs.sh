@@ -26,7 +26,12 @@ if [ "$(realpath "$0")" != "/tmp/review-open-prs-running.sh" ]; then
     exec /tmp/review-open-prs-running.sh "$@"
 fi
 cd "$REPO_DIR"
-git fetch origin main && git reset --hard origin/main
+git fetch origin
+git reset --hard origin/main
+# Pre-merge fallback: restore skill from feature branch if not yet on main
+if [ ! -f .claude/skills/review-open-prs/SKILL.md ]; then
+    git checkout origin/feat/pr-review-cron-v2 -- .claude/skills/review-open-prs/ 2>/dev/null || true
+fi
 
 # Claude blocks --dangerously-skip-permissions for root. The devenv entrypoint
 # creates a claude-runner user with the right groups — just re-exec as it.
