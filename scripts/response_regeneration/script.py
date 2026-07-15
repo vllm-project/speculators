@@ -211,13 +211,11 @@ def extract_conversation(
 def normalize_row(row: dict[str, Any], config: DatasetConfig) -> dict[str, Any] | None:
     """Apply the preset's ingestion rules to a raw row, ``None`` to skip it.
 
-    Mirrors off-policy ingestion: ``filter_fn`` sees the raw row, and
-    ``normalize_fn`` is merged over it (HF ``map`` semantics keep raw columns).
-
-    Turns, tools and cached tool results must all be read from this one
-    normalized row: under presets that carry a ``normalize_fn`` the conversation
-    only appears in ``messages`` once it has run, so extracting tools from the
-    raw row would silently find none.
+    ``filter_fn`` sees the raw row; ``normalize_fn`` is merged over it (HF
+    ``map`` semantics keep raw columns). Turns, tools and results are all read
+    from this one normalized row -- under a ``normalize_fn`` preset the
+    conversation only appears in ``messages`` after it runs, so reading the raw
+    row would find none.
     """
     if config.filter_fn is not None and not config.filter_fn(row):
         return None
@@ -293,11 +291,6 @@ def _tool_result_names(content: Any) -> list[str]:
         if isinstance(obj, dict) and isinstance(obj.get("name"), str):
             names.append(obj["name"])
     return names
-
-
-def _norm_tool(name: str | None) -> str:
-    """Normalize a tool name for matching (some sources prefix ``functions.``)."""
-    return (name or "").removeprefix("functions.")
 
 
 # ---------------------------------------------------------------------------
@@ -442,11 +435,9 @@ def build_boundary_sample(
     return input_ids, loss_mask
 
 
-def _tool_result_message(tool_call: dict, content: Any) -> dict[str, Any]:
+def _tool_result_message(tool_call: dict, content: str) -> dict[str, Any]:
     """Build the ``tool`` message that feeds a cached (off-policy) result back to
     the target, paired to the id of the call the target just generated."""
-    if not isinstance(content, str):
-        content = json.dumps(content, ensure_ascii=False)
     message: dict[str, Any] = {"role": "tool", "content": content}
     call_id = tool_call.get("id")
     if call_id:
@@ -533,19 +524,16 @@ async def regenerate_conversation(
 ) -> bool:
     """Regenerate one conversation into per-generation boundary samples.
 
-    Each target generation -- a tool call *or* a final answer -- becomes one
-    boundary row (prompt loss_mask 0, generated tokens 1). Tool calls are not
-    executed: the target's i-th regenerated call is followed by the i-th cached
-    tool result from the source data (positional reuse).
+    Each target generation -- a tool call *or* a final answer -- is one boundary
+    row (loss_mask 0 over the prompt, 1 over the generated tokens). Tool calls
+    are not executed: the target's i-th regenerated call is paired with the i-th
+    cached result from the source row.
 
-    The conversation is truncated after the last committed sample -- returning
-    ``True`` -- when the target emits more tool calls than we have cached results
-    for, a parallel (multi) tool call we cannot pair 1:1, or a call for a
-    different tool than the next cached result answers (name mismatch).
-
-    Completed rows are appended to ``samples`` as they are built, so the caller
-    still holds the partial result if this raises partway through. Returns
-    whether the conversation was truncated.
+    Returns whether the conversation was truncated -- which happens when a call
+    cannot be paired 1:1 with a cached result (results exhausted, a parallel
+    call, or a different tool than the result answers). Completed rows are
+    appended to ``samples`` as they go, so the caller keeps partial progress if
+    this raises.
     """
     turns = item["turns"]
     tools = item.get("tools")
@@ -606,9 +594,7 @@ async def regenerate_conversation(
             # Splice only if the regenerated call is for the tool this cached
             # result answers; a different tool cannot be paired coherently, so
             # keep the committed call row and truncate.
-            if result_names and _norm_tool(call_name) not in {
-                _norm_tool(n) for n in result_names
-            }:
+            if result_names and call_name not in result_names:
                 truncated = True
                 break
 

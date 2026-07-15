@@ -177,10 +177,10 @@ Rows are written only once a conversation finishes. A conversation that fails pa
 
 ### Tool calls
 
-If a source row carries a `tools` schema (or a legacy `functions` list), it is forwarded to the endpoint on every request and the target regenerates its own tool calls, which are supervised like any other generation.
+If a source row carries a `tools` schema, it is forwarded to the endpoint on every request and the target regenerates its own tool calls, which are supervised like any other generation.
 
 Tools are **not executed**. The target's *k*-th regenerated call is paired with the *k*-th cached tool result already present in the source row, spliced back as a `tool` message so the conversation can continue. This keeps the call tokens on-policy while the results stay off-policy.
 
-A conversation stops early — keeping the rows completed so far — when the target emits a call that cannot be paired 1:1 with a cached result: either it has exhausted the cached results, or it emitted parallel calls in a single generation. Such conversations are counted under `truncated` in the progress bar.
+A conversation stops early — keeping the rows completed so far — when the target emits a call that cannot be paired 1:1 with a cached result: it has exhausted the cached results, emitted parallel calls in a single generation, or called a different tool than the next cached result answers. Such conversations are counted under `truncated` in the progress bar.
 
 If `--outfile` is not specified, the filename is auto-generated based on dataset and model (e.g., `magpie_Llama-3.3-70B-Instruct.jsonl`).
