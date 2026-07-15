@@ -216,8 +216,7 @@ def _validate_embedded_storage_path(
         field=f"row {row_idx} image.path",
     )
     is_basename_hint = (
-        storage_path.parent == Path(".")
-        and storage_path.name == conversation_path.name
+        storage_path.parent == Path(".") and storage_path.name == conversation_path.name
     )
     if storage_path != conversation_path and not is_basename_hint:
         raise MaterializationError(

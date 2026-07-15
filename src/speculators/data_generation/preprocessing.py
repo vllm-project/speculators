@@ -290,9 +290,7 @@ def _validate_multimodal_truncation_boundary(
         return
     vision_start_token_ids = vision_start_token_ids or set()
     vision_end_token_ids = vision_end_token_ids or set()
-    if not image_token_ids and not (
-        vision_start_token_ids or vision_end_token_ids
-    ):
+    if not image_token_ids and not (vision_start_token_ids or vision_end_token_ids):
         raise ValueError("Cannot validate multimodal truncation without image IDs")
 
     prev_token_id = input_ids[max_length - 1]
@@ -304,9 +302,7 @@ def _validate_multimodal_truncation_boundary(
         if token_id in vision_end_token_ids and open_vision_blocks > 0:
             open_vision_blocks -= 1
 
-    cuts_pad_run = (
-        prev_token_id in image_token_ids and next_token_id in image_token_ids
-    )
+    cuts_pad_run = prev_token_id in image_token_ids and next_token_id in image_token_ids
     cuts_before_known_end = (
         prev_token_id in image_token_ids and next_token_id in vision_end_token_ids
     )
@@ -564,9 +560,7 @@ def _adapt_part_for_vllm(part: str | dict):
                 if url_text.startswith("file://"):
                     url_text = _local_media_path_to_uri(url_text)
                 elif not url_text.startswith(("http://", "https://", "data:")):
-                    raise ValueError(
-                        f"Unsupported {modality} URL scheme: {url_text}"
-                    )
+                    raise ValueError(f"Unsupported {modality} URL scheme: {url_text}")
                 return {
                     "type": f"{modality}_url",
                     f"{modality}_url": {"url": url_text},
@@ -1174,9 +1168,7 @@ def build_eagle3_dataset(
 
     # Avoid CPU contention for MM processing:
     # https://github.com/vllm-project/vllm/pull/31879
-    with (
-        set_default_torch_num_threads() if raw_multimodal else nullcontext()
-    ):
+    with set_default_torch_num_threads() if raw_multimodal else nullcontext():
         dataset = dataset.map(
             lambda examples: _preprocess_batch(
                 examples,

@@ -164,9 +164,9 @@ def test_accepts_hf_embedded_storage_basename(tmp_path: Path):
     )
 
     assert count == 1
-    image_reference = _read_jsonl(destination)[0]["conversations"][0]["content"][
-        0
-    ]["image"]
+    image_reference = _read_jsonl(destination)[0]["conversations"][0]["content"][0][
+        "image"
+    ]
     assert image_reference.startswith(str(dataset_dir / "materialized_images"))
 
 
@@ -217,10 +217,7 @@ def test_jsonl_is_not_replaced_when_a_later_row_fails(tmp_path: Path):
 
 def test_max_samples_controls_output_row_count(tmp_path: Path):
     dataset_dir = _make_dataset_dir(tmp_path)
-    rows = [
-        _row(f"images/{idx}.jpg", f"image-{idx}".encode())
-        for idx in range(3)
-    ]
+    rows = [_row(f"images/{idx}.jpg", f"image-{idx}".encode()) for idx in range(3)]
 
     destination, count = materializer.materialize_rows(
         rows,

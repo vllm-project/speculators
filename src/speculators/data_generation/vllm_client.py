@@ -46,9 +46,7 @@ def _image_ref_to_chat_url(image_ref: Any) -> str:
     ref = str(image_ref)
     parsed = urlparse(ref)
     if not parsed.scheme and parsed.netloc:
-        raise ValueError(
-            f"Unsupported schemeless image URI authority: {parsed.netloc}"
-        )
+        raise ValueError(f"Unsupported schemeless image URI authority: {parsed.netloc}")
     if parsed.scheme in {"http", "https", "data"}:
         return ref
 

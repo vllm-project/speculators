@@ -185,9 +185,7 @@ class _ToolRecordingMultimodalProcessor(_DummyMultimodalProcessor):
         self.template_tools: list[tuple[bool, object]] = []
 
     def apply_chat_template(self, *args, **kwargs):
-        self.template_tools.append(
-            (bool(kwargs.get("tokenize")), kwargs.get("tools"))
-        )
+        self.template_tools.append((bool(kwargs.get("tokenize")), kwargs.get("tools")))
         return super().apply_chat_template(*args, **kwargs)
 
 
@@ -443,9 +441,7 @@ def test_adapt_conv_for_vllm_percent_encodes_local_media_path(tmp_path):
 )
 def test_adapt_conv_for_vllm_rejects_ambiguous_local_media_uri(media_ref):
     with pytest.raises(ValueError, match="Unsupported|query/fragment"):
-        _adapt_conv_for_vllm(
-            _single_image_conversation(media_ref, field="image")
-        )
+        _adapt_conv_for_vllm(_single_image_conversation(media_ref, field="image"))
 
 
 @pytest.mark.sanity
@@ -1619,9 +1615,7 @@ def test_normalize_conversation_tool_calls_with_empty_content():
 @pytest.mark.sanity
 def test_build_eagle3_dataset_multimodal_expands_image_tokens_and_preserves_messages():
     """Test multimodal preprocessing expands image tokens and preserves messages."""
-    dataset = HFDataset.from_dict(
-        _multimodal_examples(prompt="Describe <image>")
-    )
+    dataset = HFDataset.from_dict(_multimodal_examples(prompt="Describe <image>"))
 
     processor = _DummyMultimodalProcessor()
     result = build_eagle3_dataset(
