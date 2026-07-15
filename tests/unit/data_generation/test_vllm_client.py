@@ -144,7 +144,7 @@ def test_routes_text_and_multimodal_payloads(mode):
 
 def test_canonicalizes_local_paths_and_percent_encoded_file_uris(tmp_path):
     client, _, chat_state = _make_client("sync", chat_response_ids=[1])
-    image_path = tmp_path / "图 像#100%.png"
+    image_path = tmp_path / "test image#100%.png"
     image_path.write_bytes(b"image")
     messages = [
         {

@@ -415,7 +415,7 @@ def test_adapt_conv_for_vllm_all_content_formats():
 
 @pytest.mark.sanity
 def test_adapt_conv_for_vllm_percent_encodes_local_media_path(tmp_path):
-    image_path = tmp_path / "图 像#100%.png"
+    image_path = tmp_path / "test image#100%.png"
     image_path.write_bytes(b"image")
 
     result = _adapt_conv_for_vllm(
