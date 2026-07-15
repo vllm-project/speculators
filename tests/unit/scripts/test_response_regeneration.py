@@ -51,7 +51,7 @@ regen = _load_regen_module()
 
 
 # ---------------------------------------------------------------------------
-# 1. extract_turns over the real dataset shapes
+# 1. extract_conversation over the real dataset shapes
 # ---------------------------------------------------------------------------
 
 # HuggingFaceH4/ultrachat_200k: full conversation in `messages` (role/content).
@@ -178,13 +178,13 @@ _EXTRACT_CASES = [
 
 
 @pytest.mark.parametrize(("row", "prompt_field", "expected"), _EXTRACT_CASES)
-def test_extract_turns(row, prompt_field, expected):
-    assert regen.extract_turns(row, prompt_field) == expected
+def test_extract_conversation_turns(row, prompt_field, expected):
+    assert regen.extract_conversation(row, prompt_field)[0] == expected
 
 
-def test_extract_turns_no_usable_input_returns_empty():
+def test_extract_conversation_no_usable_input_returns_empty():
     # No conversation field and no prompt_field value -> nothing to regenerate.
-    assert regen.extract_turns({"answer": "orphan"}, "question") == []
+    assert regen.extract_conversation({"answer": "orphan"}, "question")[0] == []
 
 
 # ---------------------------------------------------------------------------
@@ -622,27 +622,57 @@ def test_extract_tools_raises_when_declared_but_unusable():
     assert regen.extract_tools({"tools": ""}) is None
 
 
-def test_extract_tool_results_ordered_across_schemas():
-    # `messages` with role=tool, in order.
+def test_extract_conversation_collects_ordered_results():
+    # role=tool results without a <tool_response> wrapper -> content, no names.
     row = {
         "messages": [
             {"role": "user", "content": "q"},
             {"role": "assistant", "tool_calls": [_tool_call()]},
             {"role": "tool", "content": "r1"},
-            {"role": "assistant", "content": "a"},
             {"role": "user", "content": "q2"},
             {"role": "tool", "content": "r2"},
         ]
     }
-    assert regen.extract_tool_results(row) == ["r1", "r2"]
+    assert regen.extract_conversation(row, None)[1] == [("r1", []), ("r2", [])]
     # from/value schema (the Hermes shape), non-dict elements skipped.
-    conv = {"conversations": ["x", {"from": "tool", "value": "r"}]}
-    assert regen.extract_tool_results(conv) == ["r"]
-    # Tool-free row -> [] (unchanged regeneration).
-    assert (
-        regen.extract_tool_results({"messages": [{"role": "user", "content": "q"}]})
-        == []
-    )
+    conv = {
+        "conversations": [
+            {"from": "human", "value": "q"},
+            "x",
+            {"from": "tool", "value": "r"},
+        ]
+    }
+    assert regen.extract_conversation(conv, None)[1] == [("r", [])]
+    # Tool-free row -> no results.
+    only_user = {"messages": [{"role": "user", "content": "q"}]}
+    assert regen.extract_conversation(only_user, None)[1] == []
+
+
+def test_extract_conversation_pairs_hermes_results_with_tool_names():
+    # Hermes shape: the tool turn's <tool_response> embeds the answering tool's
+    # name, which the result carries for the splice name-match guard.
+    row = {
+        "conversations": [
+            {"from": "system", "value": "sys"},
+            {"from": "human", "value": "weather?"},
+            {"from": "gpt", "value": '<tool_call>{"name": "get_weather"}</tool_call>'},
+            {
+                "from": "tool",
+                "value": '<tool_response>\n{"name": "get_weather", "content": "15C"}\n'
+                "</tool_response>",
+            },
+            {"from": "gpt", "value": "It is 15C."},
+        ]
+    }
+    turns, results = regen.extract_conversation(row, None)
+    assert turns == [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "weather?"},
+    ]
+    assert len(results) == 1
+    content, names = results[0]
+    assert names == ["get_weather"]
+    assert "<tool_response>" in content
 
 
 # --- per-response validation guards (the empty-content-is-a-tool-call bug fix) ---
@@ -712,7 +742,7 @@ def test_regenerate_splices_cached_result_after_regenerated_call():
         "primary_id": "u1",
         "turns": [{"role": "user", "content": "weather?"}],
         "tools": [{"type": "function", "function": {"name": "get_weather"}}],
-        "tool_results": ["15C"],
+        "tool_results": [("15C", ["get_weather"])],
     }
     responses = [
         _response(  # target regenerates a tool call (empty content)
@@ -748,7 +778,8 @@ def test_regenerate_splices_cached_result_after_regenerated_call():
     ("tool_calls", "tool_results"),
     [
         ([_tool_call()], []),  # no cached result left to splice
-        ([_tool_call("a"), _tool_call("b")], ["r"]),  # parallel call: no 1:1 pairing
+        # parallel call: no 1:1 pairing (result shape is (content, names))
+        ([_tool_call("a"), _tool_call("b")], [("r", [])]),
     ],
     ids=["no_cached_result", "parallel_calls"],
 )
@@ -775,6 +806,31 @@ def test_regenerate_truncates_but_keeps_committed_call_row(tool_calls, tool_resu
     assert len(sent) == 1  # no follow-up request once we cannot continue coherently
 
 
+def test_regenerate_truncates_on_tool_name_mismatch():
+    # The cached result answers `get_weather`; the target regenerates a call for
+    # a different tool, so it cannot be spliced coherently -> truncate.
+    item = {
+        "idx": 3,
+        "primary_id": "u",
+        "turns": [{"role": "user", "content": "q"}],
+        "tools": [{"type": "function", "function": {"name": "get_time"}}],
+        "tool_results": [("<tool_response>15C</tool_response>", ["get_weather"])],
+    }
+    responses = [
+        _response(
+            prompt_token_ids=[1],
+            token_ids=[2],
+            tool_calls=[_tool_call(call_id="c", name="get_time")],
+            finish="tool_calls",
+        )
+    ]
+    samples, truncated, sent = _regen(item, responses)
+
+    assert truncated
+    assert len(samples) == 1  # the committed call row is kept
+    assert len(sent) == 1  # no splice, no follow-up request
+
+
 # ---------------------------------------------------------------------------
 # 6. Every shared-registry preset works on-policy (off-policy parity).
 # ---------------------------------------------------------------------------
@@ -786,7 +842,7 @@ def test_prepare_row_normalizes_like_off_policy():
         "input": [{"role": "user", "content": "Hi"}],
         "output": "<original answer to drop>",
     }
-    _, turns = regen.prepare_row(row, DATASET_CONFIGS["nemotron"])
+    _, turns, _ = regen.prepare_row(row, DATASET_CONFIGS["nemotron"])
     assert turns == [{"role": "user", "content": "Hi"}]
 
 
@@ -799,7 +855,7 @@ def test_prepare_row_applies_filter_fn():
     )
     row = {"keep": False, "conversations": [{"role": "user", "content": "Hi"}]}
     assert regen.prepare_row(row, config) is None
-    _, turns = regen.prepare_row(row | {"keep": True}, config)
+    _, turns, _ = regen.prepare_row(row | {"keep": True}, config)
     assert turns == [{"role": "user", "content": "Hi"}]
 
 
@@ -812,7 +868,7 @@ def test_prepare_row_merges_normalize_output_over_raw_row():
         normalize_fn=lambda row: {"conversations": []},
         prompt_field="prompt",
     )
-    _, turns = regen.prepare_row({"prompt": "Hi"}, config)
+    _, turns, _ = regen.prepare_row({"prompt": "Hi"}, config)
     assert turns == [{"role": "user", "content": "Hi"}]
 
 
@@ -844,9 +900,9 @@ def test_tools_and_results_are_read_from_the_normalized_row():
     assert regen.extract_tools(normalized) == [
         {"type": "function", "function": {"name": "get_weather"}}
     ]
-    assert regen.extract_tool_results(normalized) == ["sunny"]
+    assert regen.extract_conversation(normalized, None)[1] == [("sunny", [])]
     # the raw row hides the conversation behind `input`: results would be lost
-    assert regen.extract_tool_results(row) == []
+    assert regen.extract_conversation(row, None)[1] == []
 
 
 def test_normalize_row_returns_none_for_a_filtered_row():

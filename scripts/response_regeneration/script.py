@@ -158,38 +158,54 @@ def _conversation_messages(row: dict[str, Any]) -> list:
     return convs if isinstance(convs, list) else []
 
 
-def extract_turns(
-    row: dict[str, Any], prompt_field: str | None
-) -> list[dict[str, Any]]:
-    """Extract ordered system/user turns from a dataset row.
+def _message_role_content(m: dict) -> tuple[str | None, Any]:
+    """Canonical ``(role, content)`` for a message across the role/content and
+    from/value schemas. ``role`` collapses ``human`` to ``user``; ``system`` and
+    ``tool`` pass through; anything else (assistant/gpt) returns ``None``."""
+    role = m.get("role") or m.get("from")
+    content = m.get("content")
+    if content is None:
+        content = m.get("value")
+    if role in ("user", "human"):
+        return "user", content
+    if role in ("system", "tool"):
+        return role, content
+    return None, content
 
-    Multi-turn conversations are read from a ``messages`` or ``conversations``
-    field (either the role/content or from/value schema), preserving any system
-    prompt and dropping the original assistant turns so they can be regenerated.
-    Rows without a usable conversation fall back to a single user turn taken
-    from ``prompt_field``.
+
+def extract_conversation(
+    row: dict[str, Any], prompt_field: str | None
+) -> tuple[list[dict[str, Any]], list[tuple[Any, list[str]]]]:
+    """Read the regeneration turns and the cached tool results in one pass.
+
+    Walks a ``messages``/``conversations`` field (role/content or from/value
+    schema). System and user turns drive regeneration; the original assistant
+    turns are dropped and regenerated. Each tool-result turn is captured as a
+    ``(content, tool_names)`` pair, where ``tool_names`` are the tools that
+    result answers (read from its ``<tool_response>`` payload) -- used to guard
+    the positional splice against a call for a different tool. Rows without a
+    usable conversation fall back to a single ``prompt_field`` user turn and
+    carry no results.
     """
-    turns = []
+    turns: list[dict[str, Any]] = []
+    results: list[tuple[Any, list[str]]] = []
     for m in _conversation_messages(row):
         if not isinstance(m, dict):
             continue
-        role = m.get("role") or m.get("from")
-        content = m.get("content") or m.get("value")
-        if not content:
-            continue
-        if role == "system":
-            turns.append({"role": "system", "content": content})
-        elif role in ("user", "human"):
-            turns.append({"role": "user", "content": content})
+        role, content = _message_role_content(m)
+        if role in ("system", "user") and content:
+            turns.append({"role": role, "content": content})
+        elif role == "tool" and content is not None:
+            results.append((content, _tool_result_names(content)))
         # original assistant/gpt turns are dropped and regenerated
     if any(turn["role"] == "user" for turn in turns):
-        return turns
+        return turns, results
 
     # no usable user turn: fall back to the prompt_field
-    prompt = row.get(prompt_field)
+    prompt = row.get(prompt_field) if prompt_field else None
     if prompt:
-        return [{"role": "user", "content": prompt}]
-    return []
+        return [{"role": "user", "content": prompt}], []
+    return [], []
 
 
 def normalize_row(row: dict[str, Any], config: DatasetConfig) -> dict[str, Any] | None:
@@ -212,19 +228,19 @@ def normalize_row(row: dict[str, Any], config: DatasetConfig) -> dict[str, Any] 
 
 def prepare_row(
     row: dict[str, Any], config: DatasetConfig
-) -> tuple[dict[str, Any], list[dict[str, Any]]] | None:
-    """The normalized row and its regeneration turns, or ``None`` to skip it.
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[tuple[Any, list[str]]]] | None:
+    """The normalized row, its regeneration turns, and cached tool results.
 
-    Returns the normalized row alongside the turns so that callers extract tools
-    and cached tool results from the same row the turns came from.
+    Reads turns and results from one normalized row (see
+    :func:`extract_conversation`) so they stay paired; ``None`` to skip the row.
     """
     normalized = normalize_row(row, config)
     if normalized is None:
         return None
-    turns = extract_turns(normalized, config.prompt_field)
+    turns, tool_results = extract_conversation(normalized, config.prompt_field)
     if not turns:
         return None
-    return normalized, turns
+    return normalized, turns, tool_results
 
 
 def _maybe_json(value: Any):
@@ -259,26 +275,29 @@ def extract_tools(row) -> list | None:
     return None
 
 
-def extract_tool_results(row) -> list:
-    """Ordered tool-result payloads from a conversation, for positional reuse.
+_TOOL_RESPONSE_RE = re.compile(r"<tool_response>\s*(.*?)\s*</tool_response>", re.DOTALL)
 
-    Tools are not executed during regeneration; the i-th cached result is spliced
-    back after the target's i-th regenerated tool call. Returns ``[]`` for the
-    plain (tool-free) datasets, leaving their regeneration unchanged.
+
+def _tool_result_names(content: Any) -> list[str]:
+    """Tool names a cached result answers, for the splice name-match guard.
+
+    Hermes embeds the answering tool's name in each ``<tool_response>`` payload.
+    Returns ``[]`` when no name can be read, which disables the guard for that
+    result rather than blocking the splice on our own parse miss.
     """
-    results: list = []
-    for m in _conversation_messages(row):
-        if not isinstance(m, dict):
-            continue
-        role = m.get("role") or m.get("from")
-        if role != "tool":
-            continue
-        content = m.get("content")
-        if content is None:
-            content = m.get("value")
-        if content is not None:
-            results.append(content)
-    return results
+    if not isinstance(content, str):
+        return []
+    names = []
+    for block in _TOOL_RESPONSE_RE.findall(content):
+        obj = _maybe_json(block)
+        if isinstance(obj, dict) and isinstance(obj.get("name"), str):
+            names.append(obj["name"])
+    return names
+
+
+def _norm_tool(name: str | None) -> str:
+    """Normalize a tool name for matching (some sources prefix ``functions.``)."""
+    return (name or "").removeprefix("functions.")
 
 
 # ---------------------------------------------------------------------------
@@ -521,7 +540,8 @@ async def regenerate_conversation(
 
     The conversation is truncated after the last committed sample -- returning
     ``True`` -- when the target emits more tool calls than we have cached results
-    for, or a parallel (multi) tool call we cannot pair 1:1.
+    for, a parallel (multi) tool call we cannot pair 1:1, or a call for a
+    different tool than the next cached result answers (name mismatch).
 
     Completed rows are appended to ``samples`` as they are built, so the caller
     still holds the partial result if this raises partway through. Returns
@@ -581,7 +601,18 @@ async def regenerate_conversation(
                 truncated = True
                 break
 
-            prefix.append(_tool_result_message(tool_calls[0], tool_results.popleft()))
+            content, result_names = tool_results.popleft()
+            call_name = (tool_calls[0].get("function") or {}).get("name")
+            # Splice only if the regenerated call is for the tool this cached
+            # result answers; a different tool cannot be paired coherently, so
+            # keep the committed call row and truncate.
+            if result_names and _norm_tool(call_name) not in {
+                _norm_tool(n) for n in result_names
+            }:
+                truncated = True
+                break
+
+            prefix.append(_tool_result_message(tool_calls[0], content))
 
         if truncated:
             break
@@ -766,7 +797,7 @@ async def main():
                 prepared = prepare_row(row, dataset_config)
                 if prepared is None:
                     continue
-                normalized, turns = prepared
+                normalized, turns, tool_results = prepared
 
                 primary_id = _primary_identifier(row)
                 if primary_id in seen_ids:
@@ -804,7 +835,7 @@ async def main():
                         "primary_id": primary_id,
                         "turns": turns,
                         "tools": tools,
-                        "tool_results": extract_tool_results(normalized),
+                        "tool_results": tool_results,
                     }
                 )
                 processed_count += 1
