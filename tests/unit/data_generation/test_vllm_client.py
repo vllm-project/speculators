@@ -186,6 +186,7 @@ def test_routes_text_and_multimodal_payloads(mode):
     assert chat_call["tools"] == tools
     assert chat_call["extra_body"] == {
         "add_generation_prompt": False,
+        "continue_final_message": True,
         "return_token_ids": True,
     }
 
