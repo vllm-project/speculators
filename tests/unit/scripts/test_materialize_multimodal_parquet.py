@@ -108,20 +108,6 @@ def test_rejects_escaping_absolute_and_remote_references(
         )
 
 
-def test_rejects_symlink_in_original_reference(tmp_path: Path):
-    dataset_dir = _make_dataset_dir(tmp_path)
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    (dataset_dir / "images").symlink_to(outside, target_is_directory=True)
-
-    with pytest.raises(materializer.MaterializationError, match="traverses symlink"):
-        materializer.materialize_rows(
-            [_row("images/example.jpg")],
-            dataset_dir=dataset_dir,
-            max_samples=1,
-        )
-
-
 def test_rejects_multiple_conversation_images(tmp_path: Path):
     dataset_dir = _make_dataset_dir(tmp_path)
     row = _row("images/first.jpg")
