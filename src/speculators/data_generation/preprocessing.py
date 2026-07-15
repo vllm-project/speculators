@@ -1,6 +1,5 @@
 import bisect
 import json
-import random
 import re
 from collections.abc import Callable
 from contextlib import nullcontext
@@ -76,22 +75,17 @@ def _visualize_sample(preprocessed: HFDataset, processor: ProcessorLike, idx: in
 
 def _normalize_conversation(
     conv: list[dict],
-    turn_dropout: bool = False,
 ) -> list[dict]:
     """Normalize conversation to standard format with role/content keys.
 
     Args:
         conv: Raw conversation turns
-        turn_dropout: If True, randomly keeps first N consecutive turns (1 to len(conv))
 
     Returns:
-        Normalized conversation with optional turn dropout applied
+        Normalized conversation
     """
-    # Randomly pick how many consecutive turns to keep from the start
-    num_turns_to_keep = random.randint(1, len(conv)) if turn_dropout else len(conv)
-
     normalized = []
-    for i, turn in enumerate(conv):
+    for turn in conv:
         role = turn.get("from", turn.get("role", ""))
         content = turn.get("value") or turn.get("content") or ""
 
@@ -123,11 +117,6 @@ def _normalize_conversation(
             normalized_turn["reasoning_content"] = thinking
 
         normalized.append(normalized_turn)
-
-        # Stop if we've reached the truncation point
-        if i + 1 >= num_turns_to_keep and role == "assistant":
-            # Only break after an assistant turn
-            break
 
     return normalized
 
@@ -543,7 +532,6 @@ def _preprocess_batch(
     processor: ProcessorLike,
     max_length: int,
     assistant_pattern: str | Pattern[str] | None,
-    turn_dropout: bool = False,
     minimum_valid_tokens: int | None = None,
 ) -> dict[str, list]:
     """Process a batch of conversations into tokenized format with loss masks."""
@@ -578,8 +566,8 @@ def _preprocess_batch(
         if not conv or not isinstance(conv, list):
             continue
 
-        # Normalize to standard format with optional turn dropout
-        normalized_conv = _normalize_conversation(conv, turn_dropout)
+        # Normalize to standard format
+        normalized_conv = _normalize_conversation(conv)
         if not normalized_conv:
             continue
 
@@ -634,7 +622,6 @@ def build_eagle3_dataset(
     max_length: int = 2048,
     num_proc: int = 8,
     assistant_pattern: str | Pattern[str] | None = None,
-    turn_dropout: bool = False,
     minimum_valid_tokens: int | None = None,
 ) -> HFDataset:
     """Build EAGLE3 dataset by tokenizing conversations and creating loss masks.
@@ -649,19 +636,15 @@ def build_eagle3_dataset(
         assistant_pattern: Optional custom regex pattern for matching assistant
                           responses. If None, pattern will be auto-detected from
                           chat template.
-        turn_dropout: If True, randomly keeps first N consecutive turns per
-                     conversation
         minimum_valid_tokens: Number of tokens to consider for a valid sample
     """
     original_cols = dataset.column_names
     # These rows carry the generation boundary as their mask, so _preprocess_batch
-    # passes them through: no chat template, no span detection, no turn dropout.
+    # passes them through: no chat template, no span detection.
     pretokenized = {"input_ids", "loss_mask"} <= set(original_cols)
 
     if pretokenized:
         log.info("Pre-tokenized rows: using their loss mask, skipping chat template")
-        if turn_dropout:
-            log.warning("turn_dropout does not apply to pre-tokenized rows; ignoring")
         if assistant_pattern is not None:
             log.warning(
                 "assistant_pattern does not apply to pre-tokenized rows; ignoring"
@@ -689,7 +672,6 @@ def build_eagle3_dataset(
                 processor,
                 max_length,
                 assistant_pattern,
-                turn_dropout,
                 minimum_valid_tokens,
             ),
             batched=True,
@@ -846,7 +828,6 @@ def load_and_preprocess_dataset(
     max_samples: int | None = None,
     token_freq_path: Path | str = "./token_freq.pt",  # noqa: S107
     assistant_pattern: str | None = None,
-    turn_dropout: bool = False,
     minimum_valid_tokens: int | None = None,
     allow_empty_output: bool = False,
     trust_remote_code: bool = False,
@@ -868,8 +849,6 @@ def load_and_preprocess_dataset(
         assistant_pattern: Optional custom regex pattern for matching assistant
                           responses. If None, pattern will be auto-detected from
                           chat template.
-        turn_dropout: If True, randomly keeps first N consecutive turns per
-                     conversation
         minimum_valid_tokens: Number of tokens to consider for a valid sample
         allow_empty_output: If True, allow returning an empty dataset instead of
                           raising when no samples survive preprocessing.
@@ -916,16 +895,12 @@ def load_and_preprocess_dataset(
 
         log.info(f"Loaded {len(raw_dataset)} samples")
 
-        if turn_dropout:
-            log.info("Turn dropout enabled: randomly keeping N consecutive turns")
-
         preprocessed_dataset = build_eagle3_dataset(
             dataset=raw_dataset,
             processor=processor,
             max_length=seq_length,
             num_proc=build_dataset_num_proc,
             assistant_pattern=assistant_pattern,
-            turn_dropout=turn_dropout,
             minimum_valid_tokens=minimum_valid_tokens,
         )
         if minimum_valid_tokens is not None:
