@@ -79,6 +79,7 @@ def run_online_e2e(
     max_tokens: int = 50,
     ignore_eos: bool = True,
     acceptance_thresholds: list[float] | None = None,
+    min_acceptance_length: float | None = None,
     log_freq: int = 1,
     train_timeout: int = 30 * 60,  # 30 mins
 ):
@@ -126,5 +127,6 @@ def run_online_e2e(
             max_tokens=max_tokens,
             ignore_eos=ignore_eos,
             acceptance_thresholds=acceptance_thresholds,
+            min_acceptance_length=min_acceptance_length,
             **(vllm_kwargs or {}),
         )

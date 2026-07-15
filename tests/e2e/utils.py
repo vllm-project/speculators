@@ -368,6 +368,7 @@ def run_vllm_engine(
     max_tokens: int = 50,
     ignore_eos: bool = True,
     acceptance_thresholds: Iterable[float] | None = None,
+    min_acceptance_length: float | None = None,
     timeout: float | None = None,
 ):
     VLLM_PYTHON = os.environ.get("VLLM_PYTHON", sys.executable)
@@ -443,6 +444,10 @@ def run_vllm_engine(
         assert max_tokens > 100 or len(output_token_ids) == max_tokens
         assert all(isinstance(token, int) for token in output_token_ids)
 
+    # Per-position acceptance rates are high-variance at these small eval sizes
+    # (num_drafts is only ~50-100), so they serve as loose sanity floors. The
+    # primary regression gate is `min_acceptance_length` below, a lower-variance
+    # aggregate. See tests/e2e/regression for the thresholds and rationale.
     if acceptance_thresholds is not None:
         for i, thresholdi in enumerate(acceptance_thresholds):
             assert f"acceptance_at_token_{i}" in metrics_dict, (
@@ -452,3 +457,13 @@ def run_vllm_engine(
             assert acci >= thresholdi, (
                 f"Acceptance {acci} at token {i} is less than threshold {thresholdi}"
             )
+
+    if min_acceptance_length is not None:
+        assert "acceptance_length" in metrics_dict, (
+            "acceptance_length is not in metrics_dict"
+        )
+        acceptance_length = metrics_dict["acceptance_length"]
+        assert acceptance_length >= min_acceptance_length, (
+            f"Acceptance length {acceptance_length} is less than "
+            f"threshold {min_acceptance_length}"
+        )

@@ -25,10 +25,15 @@ from tests.utils import requires_cadence
 
 @requires_cadence("nightly")
 @pytest.mark.parametrize(
-    ("model", "dataset", "acceptance_thresholds"),
+    ("model", "dataset", "acceptance_thresholds", "min_acceptance_length"),
     [
-        ("Qwen/Qwen3-8B", "sharegpt", [0.4, 0.1, 0.01]),
-        ("Qwen/Qwen3-VL-2B-Instruct", "sharegpt4v_coco", [0.4, 0.2, 0.04]),
+        # Per-position acceptance rates are high-variance at this eval size, so
+        # they are loose sanity floors set well below the observed run-to-run
+        # range (Qwen3-8B measured pos1 in 0.073-0.118 across identical-dep
+        # legs). `min_acceptance_length` is the primary, lower-variance gate
+        # (Qwen3-8B measured 1.54-1.65; 1.3 leaves ~0.24 headroom).
+        ("Qwen/Qwen3-8B", "sharegpt", [0.3, 0.04, 0.0], 1.3),
+        ("Qwen/Qwen3-VL-2B-Instruct", "sharegpt4v_coco", [0.4, 0.2, 0.04], None),
     ],
 )
 def test_offline_regression(
@@ -36,6 +41,7 @@ def test_offline_regression(
     model: str,
     dataset: str,
     acceptance_thresholds: list[float],
+    min_acceptance_length: float | None,
     prompts: list[list[dict[str, str]]],
 ):
     if dataset == "sharegpt4v_coco":
@@ -70,5 +76,6 @@ def test_offline_regression(
         epochs=3,
         prompts=prompts,
         acceptance_thresholds=acceptance_thresholds,
+        min_acceptance_length=min_acceptance_length,
         log_freq=50,
     )
