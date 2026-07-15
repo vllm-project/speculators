@@ -677,7 +677,7 @@ async def worker(
                 "metadata": {
                     "idx": item["idx"],
                     "error": repr(e),
-                    "turns_completed": len(samples),
+                    "generations_completed": len(samples),
                     "endpoint": endpoint,
                 },
             }
@@ -809,7 +809,7 @@ async def main():
                         "metadata": {
                             "idx": index,
                             "error": repr(exc),
-                            "turns_completed": 0,
+                            "generations_completed": 0,
                             "endpoint": endpoint,
                         },
                     }

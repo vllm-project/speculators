@@ -532,7 +532,7 @@ def test_worker_row_identity_and_all_or_nothing_writes(tmp_path):
     error = json.loads(err_path.read_text())
     assert error["id"] == "conv-abc"
     # The failed conversation still reports the row it had completed.
-    assert error["metadata"]["turns_completed"] == 1
+    assert error["metadata"]["generations_completed"] == 1
 
 
 # ---------------------------------------------------------------------------
