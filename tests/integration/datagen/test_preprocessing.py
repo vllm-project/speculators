@@ -34,6 +34,7 @@ from speculators.data_generation.preprocessing import (
     load_processor,
     load_raw_dataset,
 )
+
 # Test model from HuggingFace with chat template
 # Using Qwen2-0.5B-Instruct: small (0.5B params), fast model with proper
 # chat template support
@@ -1682,12 +1683,12 @@ def test_multimodal_truncation_checks_every_block_cut(
     accepted_lengths,
 ):
     vision_start_token_ids, vision_end_token_ids = boundary_tokens
-    kwargs = dict(
-        input_ids=input_ids,
-        image_token_ids={30},
-        vision_start_token_ids=vision_start_token_ids,
-        vision_end_token_ids=vision_end_token_ids,
-    )
+    kwargs = {
+        "input_ids": input_ids,
+        "image_token_ids": {30},
+        "vision_start_token_ids": vision_start_token_ids,
+        "vision_end_token_ids": vision_end_token_ids,
+    }
 
     for max_length in rejected_lengths:
         with pytest.raises(ValueError, match="middle of an image token block"):

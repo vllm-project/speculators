@@ -18,12 +18,13 @@ import hashlib
 import json
 import os
 import tempfile
-from collections.abc import Iterable, Mapping
 from itertools import islice
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
+if TYPE_CHECKING:
+    from collections.abc import Iterable, Mapping
 
 MATERIALIZED_IMAGES_DIRNAME = "materialized_images"
 OUTPUT_JSONL_FILENAME = "train.absolute_paths.jsonl"
