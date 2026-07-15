@@ -207,7 +207,7 @@ def test_token_alignment_policy(mode, multimodal, response_ids, accepted):
         text_response_ids=response_ids,
         chat_response_ids=response_ids,
     )
-    item = {"input_ids": [1, 2, 3]}
+    item: dict[str, object] = {"input_ids": [1, 2, 3]}
     if multimodal:
         item["messages"] = [{"role": "user", "content": "describe"}]
 
