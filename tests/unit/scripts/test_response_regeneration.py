@@ -623,7 +623,7 @@ def test_extract_tools_raises_when_declared_but_unusable():
 
 
 def test_extract_tool_results_ordered_across_schemas():
-    # OpenAI `messages` with role=tool, in order, aliases recognised.
+    # `messages` with role=tool, in order.
     row = {
         "messages": [
             {"role": "user", "content": "q"},
@@ -631,11 +631,11 @@ def test_extract_tool_results_ordered_across_schemas():
             {"role": "tool", "content": "r1"},
             {"role": "assistant", "content": "a"},
             {"role": "user", "content": "q2"},
-            {"role": "observation", "content": "r2"},
+            {"role": "tool", "content": "r2"},
         ]
     }
     assert regen.extract_tool_results(row) == ["r1", "r2"]
-    # from/value schema, non-dict elements skipped.
+    # from/value schema (the Hermes shape), non-dict elements skipped.
     conv = {"conversations": ["x", {"from": "tool", "value": "r"}]}
     assert regen.extract_tool_results(conv) == ["r"]
     # Tool-free row -> [] (unchanged regeneration).

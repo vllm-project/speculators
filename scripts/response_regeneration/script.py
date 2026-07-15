@@ -259,10 +259,6 @@ def extract_tools(row) -> list | None:
     return None
 
 
-# Roles that carry a tool/function result across the conversation schemas we ingest.
-_TOOL_RESULT_ROLES = {"tool", "function", "observation", "function_response"}
-
-
 def extract_tool_results(row) -> list:
     """Ordered tool-result payloads from a conversation, for positional reuse.
 
@@ -275,7 +271,7 @@ def extract_tool_results(row) -> list:
         if not isinstance(m, dict):
             continue
         role = m.get("role") or m.get("from")
-        if role not in _TOOL_RESULT_ROLES:
+        if role != "tool":
             continue
         content = m.get("content")
         if content is None:
