@@ -221,6 +221,11 @@ def create_transformer_layer_config(  # noqa: C901
                 # config checks; drop it while keeping the real MRoPE fields.
                 rope_params.pop("type", None)
                 rope_params.pop("mrope_interleaved", None)
+                # The verifier (e.g. Mistral) may use partial rotary embeddings,
+                # but the draft model doesn't support partial_rotary_factor.
+                # Only keep it for MRoPE configs that need it.
+                if "mrope_section" not in rope_params:
+                    rope_params.pop("partial_rotary_factor", None)
             config.rope_parameters = rope_params
     else:
         if hasattr(verifier_config, "rope_scaling"):
@@ -232,6 +237,9 @@ def create_transformer_layer_config(  # noqa: C901
                 # Strip legacy fields for consistency with rope_parameters path
                 rope_scaling.pop("type", None)
                 rope_scaling.pop("mrope_interleaved", None)
+                # Same partial_rotary_factor guard as the rope_parameters path.
+                if "mrope_section" not in rope_scaling:
+                    rope_scaling.pop("partial_rotary_factor", None)
             config.rope_scaling = rope_scaling
         config.rope_theta = getattr(verifier_config, "rope_theta", 10000.0)
 
@@ -973,7 +981,7 @@ def parse_args():
         default="kl_div",
         help=(
             "Loss function specification. Pass a name for a single loss "
-            "(kl_div, rkl, ce, tv, nla, lk_hybrid) or a JSON dict for a weighted "
+            "(kl_div, rkl, jsd, ce, tv, nla, lk_hybrid) or a JSON dict for a weighted "
             'combination, e.g. \'{"ce": 0.1, "tv": 0.9}\'.'
         ),
     )

@@ -10,6 +10,7 @@ from speculators.models.metrics import (
     compute_accuracy_single_step,
     dflash_loss_decay,
     exp_loss_decay,
+    js_div_loss,
     kl_div_loss,
     lk_hybrid_loss,
     loss_function,
@@ -119,6 +120,57 @@ class TestReverseKLDivLoss:
     def test_resolve_rkl(self):
         """resolve_loss_fn maps 'rkl' to reverse_kl_div_loss."""
         assert resolve_loss_fn("rkl") is reverse_kl_div_loss
+
+
+class TestJSDivLoss:
+    def test_identical_zero_and_random_nonnegative(self):
+        """JSD of identical distributions is ~0; random inputs are >= 0."""
+        x = torch.randn(1, 4, 8)
+        loss_identical = js_div_loss(x, x)
+        assert loss_identical.sum().item() == pytest.approx(0.0, abs=1e-4)
+
+        torch.manual_seed(0)
+        loss_random = js_div_loss(torch.randn(1, 4, 8), torch.randn(1, 4, 8))
+        assert (loss_random >= -1e-6).all()
+
+    def test_symmetric_and_bounded_by_log2(self):
+        """JSD(p, q) == JSD(q, p) and is bounded by log 2."""
+        torch.manual_seed(0)
+        logits = torch.randn(1, 4, 8)
+        targets = torch.randn(1, 4, 8)
+        assert torch.allclose(
+            js_div_loss(logits, targets),
+            js_div_loss(targets, logits),
+            atol=1e-6,
+        )
+        # near-disjoint point masses approach the log 2 bound
+        disjoint_p = torch.full((1, 1, 4), -100.0)
+        disjoint_p[0, 0, 0] = 100.0
+        disjoint_q = torch.full((1, 1, 4), -100.0)
+        disjoint_q[0, 0, 1] = 100.0
+        loss = js_div_loss(disjoint_p, disjoint_q)
+        assert loss.max().item() == pytest.approx(0.6931, abs=1e-3)
+
+    def test_matches_manual_formula(self):
+        """js_div_loss matches an independent JSD reference implementation."""
+        torch.manual_seed(0)
+        logits = torch.randn(1, 4, 50)
+        targets = torch.randn(1, 4, 50)
+        out = js_div_loss(logits, targets)
+
+        p = torch.softmax(targets, dim=-1)
+        q = torch.softmax(logits, dim=-1)
+        m = 0.5 * (p + q)
+        kl_pm = (p * (p / m).log()).sum(dim=-1)
+        kl_qm = (q * (q / m).log()).sum(dim=-1)
+        expected = 0.5 * (kl_pm + kl_qm)
+
+        assert out.shape == (1, 4)
+        assert torch.allclose(out, expected, atol=1e-5)
+
+    def test_resolve_jsd(self):
+        """resolve_loss_fn maps 'jsd' to js_div_loss."""
+        assert resolve_loss_fn("jsd") is js_div_loss
 
 
 class TestTVLoss:
