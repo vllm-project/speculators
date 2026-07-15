@@ -549,21 +549,82 @@ def test_arrow_dataset_default_split_ratio_does_not_crash(tmp_path: Path):
     assert arrow_ds._map_to_file_idx(5) == 5
 
 
+_TOKENS = (1, 2, 3)
+
+
+def _arrow_data(tmp_path: Path, input_ids=_TOKENS) -> Path:
+    data_path = tmp_path / "data"
+    Dataset.from_dict(
+        {
+            "input_ids": [list(input_ids)],
+            "loss_mask": [[1] * len(input_ids)],
+            "seq_len": [len(input_ids)],
+        }
+    ).save_to_disk(str(data_path))
+    return data_path
+
+
+def _hidden_state_file(
+    path: Path,
+    *,
+    token_ids=_TOKENS,
+    token_dtype=torch.long,
+    hidden_states=None,
+) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    save_file(
+        {
+            "hidden_states": hidden_states
+            if hidden_states is not None
+            else torch.randn(len(token_ids), 4, 2),
+            "token_ids": torch.tensor(token_ids, dtype=token_dtype),
+        },
+        path,
+    )
+    return path
+
+
+def _arrow_dataset(
+    tmp_path: Path,
+    *,
+    input_ids=_TOKENS,
+    on_missing="raise",
+    on_generate="delete",
+    create_hidden_root=True,
+):
+    data_path = _arrow_data(tmp_path, input_ids)
+    hidden_root = tmp_path / "hidden_states"
+    if create_hidden_root:
+        hidden_root.mkdir()
+    dataset = ArrowDataset(
+        max_len=128,
+        datapath=str(data_path),
+        hidden_states_path=hidden_root,
+        on_missing=on_missing,
+        on_generate=on_generate,
+    )
+    return dataset, hidden_root
+
+
+def _mock_generation(dataset, monkeypatch, generated):
+    def generate(*args, **kwargs):
+        del args, kwargs
+        if isinstance(generated, Exception):
+            raise generated
+        return str(generated)
+
+    monkeypatch.setattr("speculators.train.data.generate_hidden_states", generate)
+    dataset.client = cast("Any", object())
+    dataset.model = "dummy-model"
+
+
 @pytest.mark.parametrize("on_missing", ["skip", "warn", "raise"])
 def test_arrow_dataset_missing_hidden_states_dir_preserves_on_missing_semantics(
     tmp_path: Path,
     on_missing,
 ):
-    ds = Dataset.from_dict(
-        {
-            "input_ids": [[1, 2, 3]],
-            "loss_mask": [[1, 1, 1]],
-            "seq_len": [3],
-        }
-    )
-    data_path = tmp_path / "data"
-    ds.save_to_disk(str(data_path))
     missing_root = tmp_path / "missing-hidden-states"
+    data_path = _arrow_data(tmp_path)
     arrow_ds = ArrowDataset(
         max_len=128,
         datapath=str(data_path),
@@ -585,18 +646,10 @@ def test_arrow_dataset_missing_hidden_states_dir_preserves_on_missing_semantics(
 
 def test_arrow_dataset_on_generate_cache_creates_hidden_states_dir(tmp_path: Path):
     """on_generate="cache" creates its destination before the first write."""
-    ds = Dataset.from_dict(
-        {
-            "input_ids": [[1, 2, 3]],
-            "loss_mask": [[1, 1, 1]],
-            "seq_len": [3],
-        }
-    )
-    ds.save_to_disk(str(tmp_path / "data"))
-
+    data_path = _arrow_data(tmp_path)
     arrow_ds = ArrowDataset(
         max_len=128,
-        datapath=str(tmp_path / "data"),
+        datapath=str(data_path),
         on_missing="generate",
         on_generate="cache",
     )
@@ -616,13 +669,7 @@ def test_maybe_load_hs_file_allows_lock_before_output_leaf(
 
     def finish_write(observed_lock_path):
         assert Path(observed_lock_path) == lock_path
-        save_file(
-            {
-                "hidden_states": torch.randn(3, 4, 2),
-                "token_ids": torch.tensor([1, 2, 3], dtype=torch.long),
-            },
-            pending_path,
-        )
+        _hidden_state_file(pending_path)
         lock_path.unlink()
 
     monkeypatch.setattr("speculators.train.data.wait_for_lock", finish_write)
@@ -640,13 +687,7 @@ def test_maybe_load_hs_file_revalidates_after_wait(tmp_path: Path, monkeypatch):
     lock_path = Path(str(pending_path) + ".lock")
     lock_path.write_bytes(b"")
     outside_path = tmp_path / "outside.safetensors"
-    save_file(
-        {
-            "hidden_states": torch.randn(3, 4, 2),
-            "token_ids": torch.tensor([1, 2, 3], dtype=torch.long),
-        },
-        outside_path,
-    )
+    _hidden_state_file(outside_path)
 
     def replace_with_symlink(observed_lock_path):
         assert Path(observed_lock_path) == lock_path
@@ -665,34 +706,8 @@ def test_maybe_load_hs_file_revalidates_after_wait(tmp_path: Path, monkeypatch):
 
 def test_arrow_dataset_generate_failure_raises(tmp_path: Path, monkeypatch):
     """on_missing=generate should fail fast when vLLM generation fails."""
-    ds = Dataset.from_dict(
-        {
-            "input_ids": [[1, 2, 3]],
-            "loss_mask": [[1, 1, 1]],
-            "seq_len": [3],
-        }
-    )
-    ds.save_to_disk(str(tmp_path / "data"))
-    hidden_states_path = tmp_path / "hidden_states"
-    hidden_states_path.mkdir()
-
-    def raise_generation_error(*args, **kwargs):
-        del args, kwargs
-        raise RuntimeError("vLLM request failed")
-
-    monkeypatch.setattr(
-        "speculators.train.data.generate_hidden_states",
-        raise_generation_error,
-    )
-
-    arrow_ds = ArrowDataset(
-        max_len=128,
-        datapath=str(tmp_path / "data"),
-        hidden_states_path=hidden_states_path,
-        on_missing="generate",
-    )
-    arrow_ds.client = cast("Any", object())
-    arrow_ds.model = "dummy-model"
+    arrow_ds, _ = _arrow_dataset(tmp_path, on_missing="generate")
+    _mock_generation(arrow_ds, monkeypatch, RuntimeError("vLLM request failed"))
 
     with pytest.raises(RuntimeError, match="vLLM request failed"):
         arrow_ds[0]
@@ -702,40 +717,13 @@ def test_arrow_dataset_generate_accepts_list_backed_input_ids(
     tmp_path: Path, monkeypatch
 ):
     """Generated hidden states align when HF returns input_ids as a Python list."""
-    ds = Dataset.from_dict(
-        {
-            "input_ids": [[1, 2, 3]],
-            "loss_mask": [[1, 1, 1]],
-            "seq_len": [3],
-        }
+    arrow_ds, hidden_states_path = _arrow_dataset(
+        tmp_path, on_missing="generate"
     )
-    data_path = tmp_path / "data"
-    ds.save_to_disk(str(data_path))
-    hidden_states_path = tmp_path / "hidden_states"
-    hidden_states_path.mkdir()
-    generated_path = hidden_states_path / "generated.safetensors"
-    save_file(
-        {
-            "hidden_states": torch.randn(3, 4, 2),
-            "token_ids": torch.tensor([1, 2, 3], dtype=torch.long),
-        },
-        generated_path,
+    generated_path = _hidden_state_file(
+        hidden_states_path / "generated.safetensors"
     )
-
-    monkeypatch.setattr(
-        "speculators.train.data.generate_hidden_states",
-        lambda *args, **kwargs: str(generated_path),
-    )
-
-    arrow_ds = ArrowDataset(
-        max_len=128,
-        datapath=str(data_path),
-        hidden_states_path=hidden_states_path,
-        on_missing="generate",
-        on_generate="delete",
-    )
-    arrow_ds.client = cast("Any", object())
-    arrow_ds.model = "dummy-model"
+    _mock_generation(arrow_ds, monkeypatch, generated_path)
     assert isinstance(arrow_ds.data[0]["input_ids"], list)
 
     item = arrow_ds[0]
@@ -749,38 +737,13 @@ def test_arrow_dataset_generate_cache_moves_valid_source_within_root(
     tmp_path: Path,
     monkeypatch,
 ):
-    ds = Dataset.from_dict(
-        {
-            "input_ids": [[1, 2, 3]],
-            "loss_mask": [[1, 1, 1]],
-            "seq_len": [3],
-        }
+    arrow_ds, hidden_states_path = _arrow_dataset(
+        tmp_path, on_missing="generate", on_generate="cache"
     )
-    data_path = tmp_path / "data"
-    ds.save_to_disk(str(data_path))
-    hidden_states_path = tmp_path / "hidden_states"
-    hidden_states_path.mkdir()
-    generated_path = hidden_states_path / "response.safetensors"
-    save_file(
-        {
-            "hidden_states": torch.randn(3, 4, 2),
-            "token_ids": torch.tensor([1, 2, 3], dtype=torch.long),
-        },
-        generated_path,
+    generated_path = _hidden_state_file(
+        hidden_states_path / "response.safetensors"
     )
-    monkeypatch.setattr(
-        "speculators.train.data.generate_hidden_states",
-        lambda *args, **kwargs: str(generated_path),
-    )
-    arrow_ds = ArrowDataset(
-        max_len=128,
-        datapath=str(data_path),
-        hidden_states_path=hidden_states_path,
-        on_missing="generate",
-        on_generate="cache",
-    )
-    arrow_ds.client = cast("Any", object())
-    arrow_ds.model = "dummy-model"
+    _mock_generation(arrow_ds, monkeypatch, generated_path)
 
     item = arrow_ds[0]
 
@@ -795,38 +758,11 @@ def test_arrow_dataset_rejects_other_managed_cache_as_generated_source(
     monkeypatch,
     on_generate,
 ):
-    ds = Dataset.from_dict(
-        {
-            "input_ids": [[1, 2, 3]],
-            "loss_mask": [[1, 1, 1]],
-            "seq_len": [3],
-        }
+    arrow_ds, hidden_states_path = _arrow_dataset(
+        tmp_path, on_missing="generate", on_generate=on_generate
     )
-    data_path = tmp_path / "data"
-    ds.save_to_disk(str(data_path))
-    hidden_states_path = tmp_path / "hidden_states"
-    hidden_states_path.mkdir()
-    other_target = hidden_states_path / "hs_1.safetensors"
-    save_file(
-        {
-            "hidden_states": torch.randn(3, 4, 2),
-            "token_ids": torch.tensor([1, 2, 3], dtype=torch.long),
-        },
-        other_target,
-    )
-    monkeypatch.setattr(
-        "speculators.train.data.generate_hidden_states",
-        lambda *args, **kwargs: str(other_target),
-    )
-    arrow_ds = ArrowDataset(
-        max_len=128,
-        datapath=str(data_path),
-        hidden_states_path=hidden_states_path,
-        on_missing="generate",
-        on_generate=on_generate,
-    )
-    arrow_ds.client = cast("Any", object())
-    arrow_ds.model = "dummy-model"
+    other_target = _hidden_state_file(hidden_states_path / "hs_1.safetensors")
+    _mock_generation(arrow_ds, monkeypatch, other_target)
 
     with pytest.raises(ValueError, match="another managed cache entry"):
         arrow_ds[0]
@@ -841,38 +777,11 @@ def test_arrow_dataset_current_target_requires_actual_prefix_truncation(
     monkeypatch,
     on_generate,
 ):
-    ds = Dataset.from_dict(
-        {
-            "input_ids": [[1, 2, 3]],
-            "loss_mask": [[1, 1, 1]],
-            "seq_len": [3],
-        }
+    arrow_ds, hidden_states_path = _arrow_dataset(
+        tmp_path, on_missing="generate", on_generate=on_generate
     )
-    data_path = tmp_path / "data"
-    ds.save_to_disk(str(data_path))
-    hidden_states_path = tmp_path / "hidden_states"
-    hidden_states_path.mkdir()
-    current_target = hidden_states_path / "hs_0.safetensors"
-    save_file(
-        {
-            "hidden_states": torch.randn(3, 4, 2),
-            "token_ids": torch.tensor([1, 2, 3], dtype=torch.long),
-        },
-        current_target,
-    )
-    monkeypatch.setattr(
-        "speculators.train.data.generate_hidden_states",
-        lambda *args, **kwargs: str(current_target),
-    )
-    arrow_ds = ArrowDataset(
-        max_len=128,
-        datapath=str(data_path),
-        hidden_states_path=hidden_states_path,
-        on_missing="generate",
-        on_generate=on_generate,
-    )
-    arrow_ds.client = cast("Any", object())
-    arrow_ds.model = "dummy-model"
+    current_target = _hidden_state_file(hidden_states_path / "hs_0.safetensors")
+    _mock_generation(arrow_ds, monkeypatch, current_target)
 
     with pytest.raises(ValueError, match="only for an explicit in-place"):
         arrow_ds._maybe_generate_hs(0)
@@ -885,29 +794,13 @@ def test_arrow_dataset_truncated_cache_atomically_rewrites_same_source_target(
     tmp_path: Path,
     monkeypatch,
 ):
-    ds = Dataset.from_dict(
-        {
-            "input_ids": [[1, 2, 3]],
-            "loss_mask": [[1, 1, 1]],
-            "seq_len": [3],
-        }
+    arrow_ds, hidden_states_path = _arrow_dataset(
+        tmp_path, on_missing="generate", on_generate="cache"
     )
-    data_path = tmp_path / "data"
-    ds.save_to_disk(str(data_path))
-    hidden_states_path = tmp_path / "hidden_states"
-    hidden_states_path.mkdir()
-    target_path = hidden_states_path / "hs_0.safetensors"
-    save_file(
-        {
-            "hidden_states": torch.randn(4, 4, 2),
-            "token_ids": torch.tensor([1, 2, 3, 4], dtype=torch.long),
-        },
-        target_path,
+    target_path = _hidden_state_file(
+        hidden_states_path / "hs_0.safetensors", token_ids=(1, 2, 3, 4)
     )
-    monkeypatch.setattr(
-        "speculators.train.data.generate_hidden_states",
-        lambda *args, **kwargs: str(target_path),
-    )
+    _mock_generation(arrow_ds, monkeypatch, target_path)
     monkeypatch.setattr(
         "speculators.train.data.build_client_item",
         lambda dataset_item: {
@@ -915,16 +808,6 @@ def test_arrow_dataset_truncated_cache_atomically_rewrites_same_source_target(
             "messages": [{"role": "user", "content": "multimodal"}],
         },
     )
-    arrow_ds = ArrowDataset(
-        max_len=128,
-        datapath=str(data_path),
-        hidden_states_path=hidden_states_path,
-        on_missing="generate",
-        on_generate="cache",
-    )
-    arrow_ds.client = cast("Any", object())
-    arrow_ds.model = "dummy-model"
-
     generated = arrow_ds._maybe_generate_hs(0)
 
     assert generated["token_ids"].tolist() == [1, 2, 3]
@@ -938,38 +821,11 @@ def test_arrow_dataset_rejects_generated_source_outside_allowed_root(
     monkeypatch,
     on_generate,
 ):
-    ds = Dataset.from_dict(
-        {
-            "input_ids": [[1, 2, 3]],
-            "loss_mask": [[1, 1, 1]],
-            "seq_len": [3],
-        }
+    arrow_ds, hidden_states_path = _arrow_dataset(
+        tmp_path, on_missing="generate", on_generate=on_generate
     )
-    data_path = tmp_path / "data"
-    ds.save_to_disk(str(data_path))
-    hidden_states_path = tmp_path / "hidden_states"
-    hidden_states_path.mkdir()
-    outside_path = tmp_path / "outside.safetensors"
-    save_file(
-        {
-            "hidden_states": torch.randn(3, 4, 2),
-            "token_ids": torch.tensor([1, 2, 3], dtype=torch.long),
-        },
-        outside_path,
-    )
-    monkeypatch.setattr(
-        "speculators.train.data.generate_hidden_states",
-        lambda *args, **kwargs: str(outside_path),
-    )
-    arrow_ds = ArrowDataset(
-        max_len=128,
-        datapath=str(data_path),
-        hidden_states_path=hidden_states_path,
-        on_missing="generate",
-        on_generate=on_generate,
-    )
-    arrow_ds.client = cast("Any", object())
-    arrow_ds.model = "dummy-model"
+    outside_path = _hidden_state_file(tmp_path / "outside.safetensors")
+    _mock_generation(arrow_ds, monkeypatch, outside_path)
 
     with pytest.raises(ValueError, match="outside the allowed root"):
         arrow_ds[0]
@@ -984,29 +840,14 @@ def test_arrow_dataset_revalidates_source_before_move_or_delete(
     monkeypatch,
     on_generate,
 ):
-    ds = Dataset.from_dict(
-        {
-            "input_ids": [[1, 2, 3]],
-            "loss_mask": [[1, 1, 1]],
-            "seq_len": [3],
-        }
+    arrow_ds, hidden_states_path = _arrow_dataset(
+        tmp_path, on_missing="generate", on_generate=on_generate
     )
-    data_path = tmp_path / "data"
-    ds.save_to_disk(str(data_path))
-    hidden_states_path = tmp_path / "hidden_states"
-    hidden_states_path.mkdir()
-    generated_path = hidden_states_path / "response.safetensors"
-    outside_path = tmp_path / "outside.safetensors"
-    tensors = {
-        "hidden_states": torch.randn(3, 4, 2),
-        "token_ids": torch.tensor([1, 2, 3], dtype=torch.long),
-    }
-    save_file(tensors, generated_path)
-    save_file(tensors, outside_path)
-    monkeypatch.setattr(
-        "speculators.train.data.generate_hidden_states",
-        lambda *args, **kwargs: str(generated_path),
+    generated_path = _hidden_state_file(
+        hidden_states_path / "response.safetensors"
     )
+    outside_path = _hidden_state_file(tmp_path / "outside.safetensors")
+    _mock_generation(arrow_ds, monkeypatch, generated_path)
 
     def swap_source_after_load(data, tokens, *, allow_prefix_truncation):
         del tokens, allow_prefix_truncation
@@ -1018,16 +859,6 @@ def test_arrow_dataset_revalidates_source_before_move_or_delete(
         "speculators.train.data.align_hidden_states_to_tokens",
         swap_source_after_load,
     )
-    arrow_ds = ArrowDataset(
-        max_len=128,
-        datapath=str(data_path),
-        hidden_states_path=hidden_states_path,
-        on_missing="generate",
-        on_generate=on_generate,
-    )
-    arrow_ds.client = cast("Any", object())
-    arrow_ds.model = "dummy-model"
-
     with pytest.raises(ValueError, match="symlink component"):
         arrow_ds[0]
 
@@ -1038,30 +869,9 @@ def test_arrow_dataset_revalidates_source_before_move_or_delete(
 
 def test_arrow_dataset_token_id_mismatch_raises(tmp_path: Path):
     """Loaded/generated hidden states must match the preprocessed token IDs."""
-    ds = Dataset.from_dict(
-        {
-            "input_ids": [[1, 2, 3]],
-            "loss_mask": [[1, 1, 1]],
-            "seq_len": [3],
-        }
-    )
-    ds.save_to_disk(str(tmp_path / "data"))
-    hidden_states_path = tmp_path / "hidden_states"
-    hidden_states_path.mkdir()
-
-    save_file(
-        {
-            "hidden_states": torch.randn(3, 4, 2),
-            "token_ids": torch.tensor([1, 2, 4], dtype=torch.long),
-        },
-        hidden_states_path / "hs_0.safetensors",
-    )
-
-    arrow_ds = ArrowDataset(
-        max_len=128,
-        datapath=str(tmp_path / "data"),
-        hidden_states_path=hidden_states_path,
-        on_missing="raise",
+    arrow_ds, hidden_states_path = _arrow_dataset(tmp_path)
+    _hidden_state_file(
+        hidden_states_path / "hs_0.safetensors", token_ids=(1, 2, 4)
     )
 
     with pytest.raises(RuntimeError, match="don't match input ids"):
@@ -1069,31 +879,11 @@ def test_arrow_dataset_token_id_mismatch_raises(tmp_path: Path):
 
 
 def test_arrow_dataset_rejects_nonfinite_cached_hidden_states(tmp_path: Path):
-    ds = Dataset.from_dict(
-        {
-            "input_ids": [[1, 2, 3]],
-            "loss_mask": [[1, 1, 1]],
-            "seq_len": [3],
-        }
-    )
-    ds.save_to_disk(str(tmp_path / "data"))
-    hidden_states_path = tmp_path / "hidden_states"
-    hidden_states_path.mkdir()
+    arrow_ds, hidden_states_path = _arrow_dataset(tmp_path)
     hidden_states = torch.randn(3, 4, 2)
     hidden_states[1, 2, 0] = float("inf")
-    save_file(
-        {
-            "hidden_states": hidden_states,
-            "token_ids": torch.tensor([1, 2, 3], dtype=torch.long),
-        },
-        hidden_states_path / "hs_0.safetensors",
-    )
-
-    arrow_ds = ArrowDataset(
-        max_len=128,
-        datapath=str(tmp_path / "data"),
-        hidden_states_path=hidden_states_path,
-        on_missing="raise",
+    _hidden_state_file(
+        hidden_states_path / "hs_0.safetensors", hidden_states=hidden_states
     )
 
     with pytest.raises(RuntimeError, match="NaN or Inf"):
@@ -1103,31 +893,12 @@ def test_arrow_dataset_rejects_nonfinite_cached_hidden_states(tmp_path: Path):
 def test_arrow_dataset_rejects_narrow_unsigned_token_ids_before_wraparound(
     tmp_path: Path,
 ):
-    ds = Dataset.from_dict(
-        {
-            "input_ids": [[257]],
-            "loss_mask": [[1]],
-            "seq_len": [1],
-        }
-    )
-    ds.save_to_disk(str(tmp_path / "data"))
-    hidden_states_path = tmp_path / "hidden_states"
-    hidden_states_path.mkdir()
-    save_file(
-        {
-            # A cast of dataset token 257 to uint8 can alias this cached value 1.
-            # The cache schema must reject the dtype before any narrowing cast.
-            "token_ids": torch.tensor([1], dtype=torch.uint8),
-            "hidden_states": torch.randn(1, 2, 3),
-        },
+    arrow_ds, hidden_states_path = _arrow_dataset(tmp_path, input_ids=(257,))
+    # Dataset token 257 aliases cached uint8 value 1 after a narrowing cast.
+    _hidden_state_file(
         hidden_states_path / "hs_0.safetensors",
-    )
-
-    arrow_ds = ArrowDataset(
-        max_len=128,
-        datapath=str(tmp_path / "data"),
-        hidden_states_path=hidden_states_path,
-        on_missing="raise",
+        token_ids=(1,),
+        token_dtype=torch.uint8,
     )
 
     with pytest.raises(RuntimeError, match="torch.int32 or torch.int64"):
