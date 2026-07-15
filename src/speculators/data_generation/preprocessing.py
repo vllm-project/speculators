@@ -1,27 +1,21 @@
-import bisect
 import json
-import re
 from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
-from re import Pattern
-from typing import cast
+from typing import Literal, NamedTuple
 
 import torch
 from datasets import Dataset as HFDataset
 from datasets import concatenate_datasets, load_dataset
-from packaging.version import Version
 from transformers import (
     AutoProcessor,
-    BatchEncoding,
-    BatchFeature,
     PreTrainedTokenizerBase,
     ProcessorMixin,
 )
-from transformers import __version__ as TRANSFORMERS_VERSION  # noqa: N812
 
 from speculators.data_generation.configs import DATASET_CONFIGS
 from speculators.data_generation.logging_utils import PipelineLogger
+from speculators.data_generation.render_client import render_conversation
 from speculators.data_generation.torch_utils import set_default_torch_num_threads
 from speculators.train.vocab_mapping import save_token_frequency_distribution
 
@@ -121,29 +115,6 @@ def _normalize_conversation(
     return normalized
 
 
-def _adapt_part_for_hf(part: str | dict, processor: ProcessorLike):
-    if isinstance(part, str) and isinstance(processor, ProcessorMixin):
-        return {"type": "text", "text": part}
-
-    return part
-
-
-def _adapt_turn_for_hf(turn: dict, processor: ProcessorLike):
-    if isinstance(turn["content"], str):
-        if isinstance(processor, ProcessorMixin):
-            return turn | {"content": [_adapt_part_for_hf(turn["content"], processor)]}
-
-        return turn
-
-    return turn | {
-        "content": [_adapt_part_for_hf(part, processor) for part in turn["content"]]
-    }
-
-
-def _adapt_conv_for_hf(normalized_conv: list[dict], processor: ProcessorLike):
-    return [_adapt_turn_for_hf(turn, processor) for turn in normalized_conv]
-
-
 def _adapt_part_for_vllm(part: str | dict):
     if isinstance(part, str):
         return {"type": "text", "text": part}
@@ -194,283 +165,170 @@ def _adapt_conv_for_vllm(normalized_conv: list[dict]):
     return [_adapt_turn_for_vllm(turn) for turn in normalized_conv]
 
 
-def _supports_assistant_mask(processor: ProcessorLike) -> bool:
-    """Check if processor truly supports HF assistant token mask.
-
-    Must return a non-zero mask for a conversation containing an assistant message.
-    """
-    # NOTE: Some models (e.g. Qwen3.5) require a user message in the conversation,
-    # even though this check only looks at the assistant turn
-    test_conv = _adapt_conv_for_hf(
-        [
-            {"role": "user", "content": "test"},
-            {"role": "assistant", "content": "test"},
-        ],
-        processor,
-    )
-
-    try:
-        res_any = processor.apply_chat_template(
-            test_conv,
-            tokenize=True,
-            return_assistant_tokens_mask=True,
-            return_dict=True,
-        )
-        res = cast("BatchEncoding | BatchFeature", res_any)
-
-        # Check both singular and plural key names
-        mask = res.get("assistant_masks", res.get("assistant_mask"))
-        if mask is None:
-            return False
-
-        # Verify the mask is not all zeros
-        return any(m == 1 for m in mask)
-    except (TypeError, ValueError, KeyError, AttributeError) as e:
-        log.warning(f"An error occurred when trying to return assistant mask: {e}")
-        return False
+class BoundaryUnstableError(ValueError):
+    """The chat template is not prefix-stable at an assistant turn boundary."""
 
 
-def _detect_assistant_pattern(processor: ProcessorLike) -> str:
-    """Auto-detect the assistant message pattern from the processor's chat template.
-
-    Uses multi-turn conversation but extracts pattern from the LAST assistant
-    message only.
-    """
-    test_conv = _adapt_conv_for_hf(
-        [
-            {"role": "user", "content": "USER_MSG_1"},
-            {"role": "assistant", "content": "ASSISTANT_MSG_1"},
-            {"role": "user", "content": "USER_MSG_2"},
-            {"role": "assistant", "content": "ASSISTANT_MSG_2"},
-        ],
-        processor,
-    )
-
-    formatted = processor.apply_chat_template(
-        test_conv, tokenize=False, add_generation_prompt=False
-    )
-    assert isinstance(formatted, str), "Expected string from apply_chat_template"
-
-    # Find the START and END of both assistant messages
-    first_start = formatted.find("ASSISTANT_MSG_1")
-    first_end = first_start + len("ASSISTANT_MSG_1")
-    second_start = formatted.find("ASSISTANT_MSG_2")
-    second_end = second_start + len("ASSISTANT_MSG_2")
-
-    if first_start == -1 or second_start == -1:
-        raise ValueError("Could not detect assistant messages in chat template")
-
-    # Extract role marker from before the second assistant message
-    second_user_end = formatted.find("USER_MSG_2") + len("USER_MSG_2")
-    prefix = formatted[second_user_end:second_start]
-
-    # Find where the assistant role marker starts
-    assistant_pos = prefix.rfind("assistant")
-    if assistant_pos != -1:
-        # Search for a tag start ('<' or '[') before 'assistant'
-        role_start = -1
-        for char in ["<", "["]:
-            pos = prefix.rfind(char, 0, assistant_pos)
-            role_start = max(role_start, pos)
-        if role_start != -1:
-            role_marker = prefix[role_start:]
-        else:
-            role_marker = prefix[assistant_pos:]
-    else:
-        role_marker = prefix
-
-    # Strip <think>...</think> blocks from the role marker. Thinking model
-    # templates wrap assistant content in these tags, but the test messages
-    # can produce empty blocks (e.g. "<think>\n\n</think>\n") with reasoning models,
-    # which then get baked into the regex as literals. Removing them ensures
-    # that reasoning stays within the assistant content group.
-    role_marker = re.sub(r"<think>.*?</think>\s*", "", role_marker, flags=re.DOTALL)
-
-    # Determine the stable TURN-LEVEL suffix
-    suffix1 = formatted[first_end : formatted.find("USER_MSG_2")]
-    suffix2 = formatted[second_end:]
-
-    # The stable suffix is the common prefix of these two tails
-    common_len = 0
-    for c1, c2 in zip(suffix1, suffix2, strict=False):
-        if c1 == c2:
-            common_len += 1
-        else:
-            break
-    suffix = suffix1[:common_len]
-
-    if not suffix:
-        suffix = suffix1 if suffix1 else "\n"
-
-    # Extract dynamic boundary marker from role_marker
-    boundary_match = re.search(
-        r"((<\|?[a-zA-Z0-9_]+[\|>]?)|(\[[a-zA-Z0-9_]+\]))", role_marker
-    )
-    if boundary_match:
-        boundary = re.escape(boundary_match.group(1))
-        lookahead_pattern = f"(?!{boundary})"
-    else:
-        # Fallback to hardcoded if no clear tag found
-        lookahead_pattern = r"(?!<\|start\|)"
-
-    return (
-        re.escape(role_marker)
-        + r"((?:"
-        + lookahead_pattern
-        + r".)*?)"
-        + re.escape(suffix)
-    )
-
-
-def _create_loss_mask_from_offsets(
-    text: str,
-    offsets: list[tuple[int, int]],
-    assistant_pattern: str | Pattern[str],
+def _encode_render(
+    conv_prefix: list[dict],
+    render_endpoint: str,
     *,
-    # For logging
-    conv_idx: int | None = None,
-    max_length: int | None = None,
-) -> torch.Tensor:
-    """Create loss mask by finding assistant response spans in formatted text."""
-    loss_mask = torch.zeros(len(offsets), dtype=torch.bool)
+    add_generation_prompt: bool,
+    tools: list[dict] | None = None,
+) -> list[int]:
+    """Render a conversation prefix via the vLLM ``/render`` endpoint.
 
-    matches_found = 0
-    token_starts = [offset[0] for offset in offsets]
-
-    for match in re.finditer(assistant_pattern, text, re.DOTALL):
-        matches_found += 1
-
-        # Use group(1) to get only the assistant message content,
-        # excluding prefix/suffix markers
-        span_start_char = match.start(1)
-        span_end_char = match.end(1)
-
-        start_idx = bisect.bisect_left(token_starts, span_start_char)
-
-        for idx in range(max(0, start_idx - 1), len(offsets)):
-            token_start, token_end = offsets[idx]
-            if token_start >= span_end_char:
-                break
-            # Mark token as trainable if it overlaps with assistant span
-            if token_end > span_start_char and token_start < span_end_char:
-                loss_mask[idx] = 1
-
-    if matches_found == 0:
-        warning_msg = "No assistant response spans found in conversation"
-        if conv_idx is not None:
-            warning_msg += f" {conv_idx}"
-
-        suggestion_msg = ""
-        if max_length is not None and len(offsets) == max_length:
-            suggestion_msg += (
-                "Consider increasing --seq-length to avoid truncating "
-                "the assistant response."
-            )
-
-        log.warning(f"{warning_msg}. {suggestion_msg}")
-
-    return loss_mask
+    Returns the token ids only; the loss mask is derived from the boundary
+    between two renders, not from the server's tag-gated assistant mask.
+    """
+    messages = _adapt_conv_for_vllm(conv_prefix)
+    return render_conversation(
+        render_endpoint,
+        messages,
+        add_generation_prompt=add_generation_prompt,
+        tools=tools,
+    )
 
 
-def _get_input_ids_loss_mask(
+class _Turn(NamedTuple):
+    """One assistant turn's renders: context ends at ``boundary`` in ``full_ids``."""
+
+    prompt_ids: list[int]
+    boundary: int
+    full_ids: list[int]
+    idx: int
+
+
+def _common_prefix_len(a: list[int], b: list[int]) -> int:
+    length = 0
+    for x, y in zip(a, b, strict=False):
+        if x != y:
+            break
+        length += 1
+    return length
+
+
+def _render_boundary_rows(
     normalized_conv: list[dict],
-    processor: ProcessorLike,
+    render_endpoint: str,
     max_length: int,
-    assistant_pattern: str | Pattern[str] | None,
     *,
     tools: list[dict] | None = None,
-    # For logging
-    conv_idx: int | None = None,
-):
-    hf_conv = _adapt_conv_for_hf(normalized_conv, processor)
+) -> list[dict]:
+    """Build training rows whose loss mask is the render boundary of each
+    assistant turn.
 
-    if assistant_pattern is None:
-        # HF assistant token mask
-        encoded_any = processor.apply_chat_template(
-            hf_conv,
-            tokenize=True,
-            tools=tools,  # type: ignore[arg-type]
+    For assistant turn ``j``, the boundary is the longest common token prefix
+    of the ``conv[:j]`` generation-prompt render and the ``conv[:j+1]`` full
+    render: everything before it is context (mask 0), the tokens past it are
+    supervised (mask 1) -- the same prompt/completion boundary the serving
+    engine reports for on-policy data, reconstructed from the model's own
+    chat template. No markers, no regex. Usually the whole prompt render is
+    that prefix; when the generation prompt itself diverges (e.g. a
+    pre-filled empty ``<think>`` scaffold while the data records real
+    reasoning), the boundary sits where the renders part ways -- which is
+    where generation starts on auto-opened thinking templates -- guarded by
+    the history render staying a token-prefix of the full render.
+
+    Emission is packed into a single row when the template renders append-only
+    (each turn's full render is a token-prefix of the next turn's prompt
+    render). Templates that rewrite history -- e.g. reasoning templates that
+    strip past ``<think>`` blocks -- break that chain and fan out to one row
+    per assistant turn, which supervises each turn's completion against the
+    same context inference would see.
+
+    Turns whose context alone reaches ``max_length`` are not rendered: their
+    supervised span would start past the window, so they could only produce
+    dropped rows.
+
+    Raises:
+        BoundaryUnstableError: The renders diverge inside history, so no
+            boundary mask can be derived.
+    """
+    # An assistant turn with no preceding context (i == 0) has no prompt to
+    # render a boundary against; keep it as context for later turns only.
+    assistant_indices = [
+        i
+        for i, turn in enumerate(normalized_conv)
+        if turn["role"] == "assistant" and i > 0
+    ]
+    if not assistant_indices:
+        return []
+
+    turns: list[_Turn] = []
+    for j in assistant_indices:
+        prompt_ids = _encode_render(
+            normalized_conv[:j],
+            render_endpoint,
+            add_generation_prompt=True,
+            tools=tools,
+        )
+        if len(prompt_ids) >= max_length:
+            # Context already fills the window; this and every later turn
+            # could only yield rows with no supervised tokens in-window.
+            break
+        full_ids = _encode_render(
+            normalized_conv[: j + 1],
+            render_endpoint,
             add_generation_prompt=False,
-            return_assistant_tokens_mask=True,
-            return_dict=True,
+            tools=tools,
         )
-        encoded = cast("BatchEncoding | BatchFeature", encoded_any)
-
-        # input IDs and loss mask
-        input_ids = encoded["input_ids"]
-        # HF uses 'assistant_masks' in recent versions
-        mask_key = (
-            "assistant_masks" if "assistant_masks" in encoded else "assistant_mask"
-        )
-        loss_mask = torch.tensor(encoded[mask_key], dtype=torch.long)
-
-        return input_ids, loss_mask
-
-    # Fallback: regex-based detection
-    assert assistant_pattern is not None, "Assistant pattern required for fallback"
-
-    processor_kwargs: dict = {
-        "return_offsets_mapping": True,
-        "max_length": max_length,
-        "truncation": True,
-        "add_special_tokens": False,
-    }
-
-    if isinstance(processor, ProcessorMixin):
-        if Version(TRANSFORMERS_VERSION) >= Version("5.4.0"):
-            encoded_any = processor.apply_chat_template(
-                hf_conv,
-                tokenize=True,
-                tools=tools,
-                add_generation_prompt=False,
-                return_dict=True,
-                processor_kwargs=processor_kwargs,
-            )
+        if full_ids[: len(prompt_ids)] == prompt_ids:
+            boundary = len(prompt_ids)
         else:
-            encoded_any = processor.apply_chat_template(
-                hf_conv,
-                tokenize=True,
-                tools=tools,
+            # The generation prompt diverges from the completed turn (e.g.
+            # Qwen3.5's no-think scaffold vs recorded reasoning). The boundary
+            # is the common prefix, valid only if the divergence is confined
+            # to the generation-prompt tail: history itself must agree.
+            boundary = _common_prefix_len(prompt_ids, full_ids)
+            hist_ids = _encode_render(
+                normalized_conv[:j],
+                render_endpoint,
                 add_generation_prompt=False,
-                return_dict=True,
-                **processor_kwargs,
+                tools=tools,
             )
+            if full_ids[: len(hist_ids)] != hist_ids or boundary < len(hist_ids):
+                raise BoundaryUnstableError(
+                    f"prompt and full renders diverge inside history at "
+                    f"assistant turn {j}; cannot derive a boundary loss mask"
+                )
+        turns.append(_Turn(prompt_ids, boundary, full_ids, j))
 
-        encoded = cast("BatchFeature", encoded_any)
+    if not turns:
+        return []
 
-        # Remove batch dimension
-        (input_ids,) = encoded["input_ids"]
-        (offsets,) = encoded["offset_mapping"]
-
-        # MM placeholder tokens are inserted separate from chat template
-        formatted_text = processor.decode(input_ids)
-        assert isinstance(formatted_text, str)
-    else:
-        # More optimized flow for text-only processors (i.e. tokenizers)
-        formatted_text = processor.apply_chat_template(
-            hf_conv,
-            tokenize=False,
-            tools=tools,  # type: ignore[arg-type]
-            add_generation_prompt=False,
-        )
-        assert isinstance(formatted_text, str)
-
-        # Tokenize and get offsets
-        encoded_any = processor(formatted_text, **processor_kwargs)
-        encoded = cast("BatchEncoding", encoded_any)
-
-        input_ids = encoded["input_ids"]
-        offsets = encoded["offset_mapping"]
-
-    loss_mask = _create_loss_mask_from_offsets(
-        formatted_text,
-        offsets,
-        assistant_pattern,
-        conv_idx=conv_idx,
-        max_length=max_length,
+    # Packed: append-only chain holds, all spans valid in the final render.
+    append_only = all(
+        nxt.prompt_ids[: len(cur.full_ids)] == cur.full_ids
+        for cur, nxt in zip(turns, turns[1:], strict=False)
     )
+    if append_only:
+        input_ids = turns[-1].full_ids
+        loss_mask = [0] * len(input_ids)
+        for turn in turns:
+            loss_mask[turn.boundary : len(turn.full_ids)] = [1] * (
+                len(turn.full_ids) - turn.boundary
+            )
+        # Trailing non-assistant messages are dropped: nothing after the last
+        # assistant turn is supervised or conditioned on.
+        return [
+            {
+                "input_ids": input_ids,
+                "loss_mask": loss_mask,
+                "conv": normalized_conv[: turns[-1].idx + 1],
+            }
+        ]
 
-    return input_ids, loss_mask
+    # Fan-out: history is rewritten between turns (e.g. stripped thinking).
+    return [
+        {
+            "input_ids": turn.full_ids,
+            "loss_mask": [0] * turn.boundary
+            + [1] * (len(turn.full_ids) - turn.boundary),
+            "conv": normalized_conv[: turn.idx + 1],
+        }
+        for turn in turns
+    ]
 
 
 def _parse_conv_tools(conv_tools: object, idx: int) -> list | None:
@@ -496,15 +354,51 @@ def _parse_conv_tools(conv_tools: object, idx: int) -> list | None:
         return None
 
 
+def _append_row(
+    results: dict[str, list],
+    input_ids: list[int],
+    loss_mask: list[int],
+    max_length: int,
+    minimum_valid_tokens: int | None,
+) -> Literal["kept", "unsupervised", "filtered"]:
+    """Clip a row to the window, filter it, and tensorize it into ``results``.
+
+    Rows with no supervised tokens in-window contribute zero gradient and are
+    dropped ("unsupervised"); rows below ``minimum_valid_tokens`` are
+    "filtered".
+    """
+    input_ids = input_ids[:max_length]
+    loss_mask = loss_mask[:max_length]
+    num_valid_tokens = sum(loss_mask)
+    if num_valid_tokens == 0:
+        return "unsupervised"
+    if minimum_valid_tokens is not None and num_valid_tokens < minimum_valid_tokens:
+        return "filtered"
+    results["input_ids"].append(torch.tensor(input_ids, dtype=torch.long))
+    results["loss_mask"].append(torch.tensor(loss_mask, dtype=torch.long))
+    results["seq_len"].append(len(input_ids))
+    return "kept"
+
+
+def _warn_unsupervised(num_dropped: int) -> None:
+    if num_dropped:
+        log.warning(
+            f"Dropped {num_dropped} rows with no supervised tokens. "
+            f"If unexpected, consider increasing --seq-length to avoid "
+            f"truncating assistant responses."
+        )
+
+
 def _passthrough_pretokenized(
     examples: dict, max_length: int, minimum_valid_tokens: int | None = None
 ) -> dict[str, list]:
     """Carry pre-tokenized ``(input_ids, loss_mask)`` rows through, truncated only.
 
     On-policy regeneration already applied the boundary as the mask, so these rows
-    need no chat-template rendering or regex span detection.
+    need no rendering.
     """
     results: dict[str, list] = {"input_ids": [], "loss_mask": [], "seq_len": []}
+    num_unsupervised = 0
     for ids, mask in zip(examples["input_ids"], examples["loss_mask"], strict=True):
         # `strict=True` only pairs the columns; a per-row skew would survive it and
         # the collator packs each key independently, silently shifting the mask
@@ -514,37 +408,37 @@ def _passthrough_pretokenized(
                 f"Pre-tokenized row shape mismatch: "
                 f"input_ids={len(ids)}, loss_mask={len(mask)}"
             )
-        trimmed_ids = ids[:max_length]
-        trimmed_mask = mask[:max_length]
-        if (
-            minimum_valid_tokens is not None
-            and sum(trimmed_mask) < minimum_valid_tokens
-        ):
-            continue
-        results["input_ids"].append(torch.tensor(trimmed_ids, dtype=torch.long))
-        results["loss_mask"].append(torch.tensor(trimmed_mask, dtype=torch.long))
-        results["seq_len"].append(len(trimmed_ids))
+        status = _append_row(results, ids, mask, max_length, minimum_valid_tokens)
+        num_unsupervised += status == "unsupervised"
+    _warn_unsupervised(num_unsupervised)
     return results
 
 
 def _preprocess_batch(
     examples: dict,
     processor: ProcessorLike,
+    render_endpoint: str | None,
     max_length: int,
-    assistant_pattern: str | Pattern[str] | None,
     minimum_valid_tokens: int | None = None,
 ) -> dict[str, list]:
-    """Process a batch of conversations into tokenized format with loss masks."""
+    """Process a batch of conversations into tokenized rows with boundary masks."""
 
     # On-policy regeneration rows are already masked (boundary); pass them through
-    # instead of re-tokenizing and re-masking.
+    # instead of re-rendering.
     if "input_ids" in examples and "loss_mask" in examples:
         return _passthrough_pretokenized(examples, max_length, minimum_valid_tokens)
+
+    if render_endpoint is None:
+        raise ValueError(
+            "render_endpoint is required to derive loss masks for off-policy "
+            "conversations"
+        )
 
     results: dict[str, list] = {"input_ids": [], "loss_mask": [], "seq_len": []}
     conversations: list[dict] = examples.get("conversations", [])
 
-    # MM inputs must use Chat Completions API
+    # MM inputs are extracted via the Chat Completions API, which needs the
+    # original messages -- token ids alone cannot carry the images.
     if isinstance(processor, ProcessorMixin):
         results["messages"] = []
 
@@ -560,62 +454,64 @@ def _preprocess_batch(
         )
         tools_col = None
 
+    num_unsupervised = 0
+    num_convs_in = 0
+    num_convs_empty = 0
+
     for idx, conv in enumerate(conversations):
         conv_tools = tools_col[idx] if tools_col is not None else None
 
         if not conv or not isinstance(conv, list):
             continue
 
-        # Normalize to standard format
         normalized_conv = _normalize_conversation(conv)
         if not normalized_conv:
             continue
 
         parsed_tools = _parse_conv_tools(conv_tools, idx)
+        num_convs_in += 1
 
         try:
-            input_ids, loss_mask = _get_input_ids_loss_mask(
+            rows = _render_boundary_rows(
                 normalized_conv,
-                processor,
-                max_length=max_length,
-                assistant_pattern=assistant_pattern,
+                render_endpoint,
+                max_length,
                 tools=parsed_tools,
-                conv_idx=idx,
             )
-        # Templates reject rows they cannot render with arbitrary types -- Mistral
-        # and Gemma raise jinja2's TemplateError, which subclasses Exception
-        # directly. One unrenderable row must not kill the run.
+        # One row the render endpoint or boundary derivation can't handle must
+        # not kill the run. The failure modes can't be enumerated -- templates
+        # are swappable and raise arbitrary types -- so catch broadly and skip.
         except Exception as e:
-            log.error(
-                f"Failed to process conversation {idx} "
-                f"(assistant_pattern={assistant_pattern is not None}): "
-                f"{type(e).__name__}: {e}"
-            )
+            log.error(f"Failed to process conversation {idx}: {type(e).__name__}: {e}")
+            num_convs_empty += 1
             continue
 
-        # Assert shapes match
-        assert len(input_ids) == len(loss_mask), (
-            f"Shape mismatch: input_ids={len(input_ids)}, loss_mask={len(loss_mask)}"
+        num_kept = 0
+        for row in rows:
+            status = _append_row(
+                results,
+                row["input_ids"],
+                row["loss_mask"],
+                max_length,
+                minimum_valid_tokens,
+            )
+            num_unsupervised += status == "unsupervised"
+            if status == "kept":
+                num_kept += 1
+                if "messages" in results:
+                    results["messages"].append(_adapt_conv_for_vllm(row["conv"]))
+        num_convs_empty += num_kept == 0
+
+    _warn_unsupervised(num_unsupervised)
+    if num_convs_empty:
+        log.warning(
+            f"{num_convs_empty}/{num_convs_in} conversations produced no training "
+            f"rows (no assistant turn with context, unstable template, or fully "
+            f"truncated)"
         )
-
-        # Bound both to max_length: a turn running past the window keeps only its
-        # in-window tokens, and input_ids/loss_mask stay aligned and bounded.
-        input_ids = input_ids[:max_length]
-        loss_mask = loss_mask[:max_length]
-
-        # Filtering samples out with too few valid tokens
-        if minimum_valid_tokens is not None:
-            num_valid_tokens = int(loss_mask.sum().item())
-            if num_valid_tokens < minimum_valid_tokens:
-                continue
-
-        # Append to results
-        results["input_ids"].append(torch.tensor(input_ids, dtype=torch.long))
-        results["loss_mask"].append(loss_mask)
-        results["seq_len"].append(len(input_ids))
-
-        if "messages" in results:
-            results["messages"].append(_adapt_conv_for_vllm(normalized_conv))
+    num_rows = len(results["input_ids"])
+    if num_rows > num_convs_in:
+        log.info(f"Per-turn fan-out: {num_convs_in} conversations -> {num_rows} rows")
 
     return results
 
@@ -625,43 +521,42 @@ def build_eagle3_dataset(
     processor: ProcessorLike,
     max_length: int = 2048,
     num_proc: int = 8,
-    assistant_pattern: str | Pattern[str] | None = None,
+    *,
+    render_endpoint: str | None = None,
     minimum_valid_tokens: int | None = None,
 ) -> HFDataset:
-    """Build EAGLE3 dataset by tokenizing conversations and creating loss masks.
+    """Build an EAGLE3 dataset with render-boundary loss masks.
 
-    Uses the processor's built-in chat template via apply_chat_template.
+    Off-policy conversations are tokenized by the vLLM ``/render`` endpoint and
+    masked at the render boundary of each assistant turn (see
+    ``_render_boundary_rows``); append-only templates keep one row per
+    conversation, history-rewriting templates (e.g. reasoning models) fan out
+    to one row per assistant turn. Pre-tokenized rows (on-policy regeneration)
+    carry their own boundary mask and pass straight through.
 
     Args:
-        dataset: Raw dataset with conversations
-        processor: Processor with chat template support
-        max_length: Maximum sequence length
-        num_proc: Number of processes for parallel processing
-        assistant_pattern: Optional custom regex pattern for matching assistant
-                          responses. If None, pattern will be auto-detected from
-                          chat template.
-        minimum_valid_tokens: Number of tokens to consider for a valid sample
+        dataset: Raw dataset with conversations, or pre-tokenized rows.
+        processor: Processor, used to detect multimodal inputs and to decode.
+        max_length: Maximum sequence length.
+        num_proc: Number of worker processes; each renders concurrently.
+        render_endpoint: Base URL of a vLLM server. Required unless the dataset
+            is already pre-tokenized.
+        minimum_valid_tokens: Minimum supervised tokens for a row to be kept.
     """
     original_cols = dataset.column_names
     # These rows carry the generation boundary as their mask, so _preprocess_batch
-    # passes them through: no chat template, no span detection.
+    # passes them through: no rendering, no boundary derivation.
     pretokenized = {"input_ids", "loss_mask"} <= set(original_cols)
 
     if pretokenized:
-        log.info("Pre-tokenized rows: using their loss mask, skipping chat template")
-        if assistant_pattern is not None:
-            log.warning(
-                "assistant_pattern does not apply to pre-tokenized rows; ignoring"
-            )
-    # Detect and use provided assistant message pattern
-    elif assistant_pattern is not None:
-        log.info(f"Using custom assistant pattern: {str(assistant_pattern)[:80]}...")
-    elif _supports_assistant_mask(processor):
-        assistant_pattern = None  # Signal to use HF mask in _preprocess_batch
-        log.info("Using HF assistant token mask for loss masking")
+        log.info("Pre-tokenized rows: using their loss mask, skipping render")
+    elif render_endpoint is None:
+        raise ValueError(
+            "render_endpoint is required to derive loss masks for off-policy "
+            "conversations. Pass --render-endpoint pointing at a vLLM server."
+        )
     else:
-        assistant_pattern = _detect_assistant_pattern(processor)
-        log.info(f"Detected assistant pattern: {str(assistant_pattern)[:80]}...")
+        log.info("Deriving loss masks from vLLM render boundaries")
 
     # Avoid CPU contention for MM processing:
     # https://github.com/vllm-project/vllm/pull/31879
@@ -674,8 +569,8 @@ def build_eagle3_dataset(
             lambda examples: _preprocess_batch(
                 examples,
                 processor,
+                render_endpoint,
                 max_length,
-                assistant_pattern,
                 minimum_valid_tokens,
             ),
             batched=True,
@@ -831,14 +726,15 @@ def load_and_preprocess_dataset(
     seed: int = 0,
     max_samples: int | None = None,
     token_freq_path: Path | str = "./token_freq.pt",  # noqa: S107
-    assistant_pattern: str | None = None,
+    render_endpoint: str | None = None,
     minimum_valid_tokens: int | None = None,
     allow_empty_output: bool = False,
     trust_remote_code: bool = False,
 ) -> tuple[HFDataset, ProcessorLike]:
     """Load, tokenize, and preprocess a dataset for EAGLE3 training.
 
-    Uses the processor's built-in chat template via apply_chat_template.
+    Off-policy conversations are tokenized by a vLLM ``/render`` endpoint and
+    masked at the render boundary; pre-tokenized rows pass straight through.
     Caching is handled automatically by HuggingFace datasets.
 
     Args:
@@ -850,9 +746,9 @@ def load_and_preprocess_dataset(
         max_samples: Optional limit on number of samples
         token_freq_path: Path to save token frequency distribution
         cache_dir: Directory to cache HuggingFace datasets (optional)
-        assistant_pattern: Optional custom regex pattern for matching assistant
-                          responses. If None, pattern will be auto-detected from
-                          chat template.
+        render_endpoint: Base URL of a running vLLM server (e.g.
+            ``http://localhost:8000``) used to render conversations. Required
+            unless every dataset is already pre-tokenized.
         minimum_valid_tokens: Number of tokens to consider for a valid sample
         allow_empty_output: If True, allow returning an empty dataset instead of
                           raising when no samples survive preprocessing.
@@ -872,11 +768,8 @@ def load_and_preprocess_dataset(
     log.subsection("Loading processor")
     processor = load_processor(target_model_path, trust_remote_code=trust_remote_code)
 
-    if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
-        raise ValueError(
-            f"Processor for {target_model_path} does not support chat templates. "
-            "Please use a model with a pre-configured chat template."
-        )
+    if render_endpoint is not None:
+        log.info(f"Rendering conversations via vLLM endpoint: {render_endpoint}")
 
     processed_datasets = []
     for train_data_path in train_data_paths:
@@ -904,14 +797,11 @@ def load_and_preprocess_dataset(
             processor=processor,
             max_length=seq_length,
             num_proc=build_dataset_num_proc,
-            assistant_pattern=assistant_pattern,
+            render_endpoint=render_endpoint,
             minimum_valid_tokens=minimum_valid_tokens,
         )
-        dropped = len(raw_dataset) - len(preprocessed_dataset)
-        if dropped:
-            log.warning(
-                f"Dropped {dropped}/{len(raw_dataset)} samples during preprocessing"
-            )
+        if minimum_valid_tokens is not None:
+            log.info(f"Kept {len(preprocessed_dataset)} samples after filtering")
         processed_datasets.append(preprocessed_dataset)
 
     combined_dataset = concatenate_datasets(processed_datasets)

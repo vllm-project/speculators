@@ -125,12 +125,15 @@ def parse_args():
         ),
     )
     parser.add_argument(
-        "--assistant-pattern",
+        "--render-endpoint",
         type=str,
         default=None,
         help=(
-            "Custom regex pattern for matching assistant responses. "
-            "If not provided, auto-detected from chat template."
+            "Base URL of a running vLLM server (e.g. http://localhost:8000), "
+            "typically the same instance used for hidden-state extraction. "
+            "Conversations are tokenized by its /v1/chat/completions/render "
+            "endpoint and the loss mask is derived from the render boundary. "
+            "Required unless the input is already pre-tokenized."
         ),
     )
 
@@ -224,7 +227,7 @@ def main():
         seed=args.seed,
         max_samples=args.max_samples,
         token_freq_path=token_freq_path,
-        assistant_pattern=args.assistant_pattern,
+        render_endpoint=args.render_endpoint,
         minimum_valid_tokens=args.minimum_valid_tokens,
         allow_empty_output=args.allow_empty_output,
         trust_remote_code=args.trust_remote_code,

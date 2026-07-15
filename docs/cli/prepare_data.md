@@ -42,7 +42,7 @@ python scripts/prepare_data.py \
 
 - **`--token-freq-path`** (str, default: `{output}/token_freq.pt`) Path to save token frequency distribution. Defaults to `token_freq.pt` in the output directory.
 
-- **`--assistant-pattern`** (str, default: `None`) Custom regex pattern for matching assistant responses. If not provided, auto-detected from chat template.
+- **`--render-endpoint`** (str, default: `None`) Base URL of a running vLLM server (e.g. `http://localhost:8000`), typically the same instance used for hidden-state extraction. Conversations are tokenized by its `/v1/chat/completions/render` endpoint and the loss mask is derived from the render boundary. Required unless the input is already pre-tokenized.
 
 - **`--minimum-valid-tokens`** (int, default: `None`) Drop samples whose loss mask contains fewer than this many trainable tokens.
 
