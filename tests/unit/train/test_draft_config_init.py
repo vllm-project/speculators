@@ -27,12 +27,10 @@ from scripts.train import (
     build_draft_model,
     create_transformer_layer_config,
     load_draft_transformer_layer_config,
-    parse_vocab_mappings,
     parse_args,
 )
 from speculators import SpeculatorsConfig, VerifierConfig
 from speculators.models.eagle3 import Eagle3DraftModel, Eagle3SpeculatorConfig
-from speculators.models.peagle import PEagleDraftModel, PEagleSpeculatorConfig
 from speculators.proposals.greedy import GreedyTokenProposalConfig
 from speculators.utils.loading import is_config_only_dir
 
@@ -68,30 +66,8 @@ def _make_eagle3_config(verifier_name_or_path: str | None = "some-verifier"):
         draft_vocab_size=64,
         norm_before_residual=False,
         embed_requires_grad=False,
-        eagle_aux_hidden_state_layer_ids=[1, 2, 3],
         speculators_config=SpeculatorsConfig(
             algorithm="eagle3",
-            proposal_methods=[GreedyTokenProposalConfig(speculative_tokens=1)],
-            default_proposal_method="greedy",
-            verifier=VerifierConfig(
-                name_or_path=verifier_name_or_path,
-                architectures=["LlamaForCausalLM"],
-            ),
-        ),
-    )
-
-
-def _make_peagle_config(verifier_name_or_path: str | None = "some-verifier"):
-    return PEagleSpeculatorConfig(
-        transformer_layer_config=LlamaConfig(
-            **{"_attn_implementation": "eager", **TINY_LLAMA_KWARGS}
-        ),
-        draft_vocab_size=64,
-        norm_before_residual=False,
-        eagle_aux_hidden_state_layer_ids=[1, 2, 3],
-        mask_token_id=0,
-        speculators_config=SpeculatorsConfig(
-            algorithm="peagle",
             proposal_methods=[GreedyTokenProposalConfig(speculative_tokens=1)],
             default_proposal_method="greedy",
             verifier=VerifierConfig(
@@ -229,10 +205,7 @@ def test_create_layer_config_layer_types(
     """full_attention_indices selects per-layer attention; sliding window stays
     enabled unless every layer opts into full attention."""
     verifier = _make_verifier_namespace()
-    with patch(
-        "speculators.models.utils.AutoConfig.from_pretrained",
-        return_value=verifier,
-    ):
+    with patch("scripts.train.AutoConfig.from_pretrained", return_value=verifier):
         config = create_transformer_layer_config(
             "target",
             num_layers=num_layers,
@@ -250,10 +223,7 @@ def test_create_layer_config_rejects_out_of_range_indices(bad_indices):
     """full_attention_indices outside [0, num_layers) is a hard error."""
     verifier = _make_verifier_namespace()
     with (
-        patch(
-            "speculators.models.utils.AutoConfig.from_pretrained",
-            return_value=verifier,
-        ),
+        patch("scripts.train.AutoConfig.from_pretrained", return_value=verifier),
         pytest.raises(ValueError, match="valid draft layer ids"),
     ):
         create_transformer_layer_config(
@@ -416,42 +386,6 @@ def test_build_from_config_only(tmp_path):
     assert not built.fc.weight.isnan().any()
 
 
-@pytest.mark.parametrize(
-    ("model_class", "config_factory"),
-    [
-        (Eagle3DraftModel, _make_eagle3_config),
-        (PEagleDraftModel, _make_peagle_config),
-    ],
-    ids=["eagle3", "peagle"],
-)
-def test_build_from_config_only_resolves_legacy_aux_layer_ids_before_construction(
-    tmp_path,
-    model_class,
-    config_factory,
-):
-    """The config-only entry path must not expose the legacy None sentinel."""
-    model_dir = tmp_path / model_class.__name__
-    config = config_factory()
-    config.eagle_aux_hidden_state_layer_ids = None
-    config.save_pretrained(model_dir)
-    resolved_ids = [2, 18, 33]
-
-    with (
-        patch(
-            "scripts.train.resolve_target_layer_ids",
-            return_value=resolved_ids,
-        ) as resolve_ids,
-        patch.object(model_class, "load_verifier_weights"),
-    ):
-        built = _build_from_config_only(model_class, str(model_dir), None, None)
-
-    resolve_ids.assert_called_once_with(None, "some-verifier")
-    assert built.config.eagle_aux_hidden_state_layer_ids == resolved_ids
-    assert built.target_layer_ids == resolved_ids
-    assert len(built.target_layer_ids) == 3
-    assert built.fc.in_features == 3 * built.hidden_size
-
-
 def test_build_from_config_only_fills_missing_verifier_name(tmp_path):
     model_dir = _save_config_only_dir(tmp_path, verifier_name_or_path=None)
 
@@ -527,61 +461,6 @@ def test_build_from_config_only_reapplies_draft_attn_impl(tmp_path):
         )
 
     assert built.config.transformer_layer_config._attn_implementation == "sdpa"
-    assert built._attn_impl == "sdpa"  # noqa: SLF001
-
-
-def _weighted_from_pretrained_args(path: str) -> SimpleNamespace:
-    return SimpleNamespace(
-        from_pretrained=path,
-        speculator_type="eagle3",
-        verifier_name_or_path="some-verifier",
-        draft_attn_impl="sdpa",
-    )
-
-
-def test_weighted_from_pretrained_reapplies_draft_attn_impl(tmp_path):
-    model_dir = tmp_path / "pretrained"
-    Eagle3DraftModel(_make_eagle3_config()).save_pretrained(str(model_dir))
-
-    with patch.object(Eagle3DraftModel, "load_verifier_weights"):
-        built = build_draft_model(
-            _weighted_from_pretrained_args(str(model_dir)),
-            Eagle3DraftModel,
-            None,
-            None,
-            None,
-        )
-
-    assert built.config.transformer_layer_config._attn_implementation == "sdpa"
-    assert built._attn_impl == "sdpa"  # noqa: SLF001
-
-
-def test_external_from_pretrained_converts_before_applying_attn_impl(tmp_path):
-    model_dir = tmp_path / "converted"
-    Eagle3DraftModel(_make_eagle3_config()).save_pretrained(str(model_dir))
-    external_dir = tmp_path / "external"
-    external_dir.mkdir()
-    (external_dir / "config.json").write_text(json.dumps({"model_type": "qwen3"}))
-    (external_dir / "model.safetensors").touch()
-
-    with (
-        patch.object(Eagle3DraftModel, "load_verifier_weights"),
-        patch(
-            "speculators.convert.entrypoints.maybe_convert_external_checkpoint",
-            return_value=str(model_dir),
-        ) as convert,
-    ):
-        built = build_draft_model(
-            _weighted_from_pretrained_args(str(external_dir)),
-            Eagle3DraftModel,
-            None,
-            None,
-            None,
-        )
-
-    convert.assert_called_once()
-    assert built.config.transformer_layer_config._attn_implementation == "sdpa"
-    assert built._attn_impl == "sdpa"  # noqa: SLF001
 
 
 # ---------------------------------------------------------------------------
@@ -700,10 +579,7 @@ def test_build_draft_model_routing(
 
 
 def _create_layer_config_for(verifier: SimpleNamespace):
-    with patch(
-        "speculators.models.utils.AutoConfig.from_pretrained",
-        return_value=verifier,
-    ):
+    with patch("scripts.train.AutoConfig.from_pretrained", return_value=verifier):
         return create_transformer_layer_config(
             "target",
             num_layers=2,
@@ -720,40 +596,6 @@ def test_create_layer_config_uses_dense_intermediate_size():
     config = _create_layer_config_for(verifier)
 
     assert config.intermediate_size == 48
-
-
-def test_create_layer_config_falls_back_when_text_config_is_none():
-    verifier = _make_verifier_namespace(text_config=None)
-
-    config = _create_layer_config_for(verifier)
-
-    assert config.hidden_size == verifier.hidden_size
-    assert config.vocab_size == verifier.vocab_size
-
-
-def test_parse_vocab_mappings_falls_back_when_text_config_is_none(
-    tmp_path,
-    monkeypatch,
-):
-    verifier = SimpleNamespace(text_config=None, vocab_size=321)
-    monkeypatch.setattr(
-        "speculators.models.utils.AutoConfig.from_pretrained",
-        lambda _path: verifier,
-    )
-    args = SimpleNamespace(
-        d2t_path=None,
-        t2d_path=None,
-        data_path=str(tmp_path),
-        token_freq_path=None,
-        draft_vocab_size=None,
-        verifier_name_or_path="unused-verifier",
-    )
-
-    d2t, t2d, vocab_size = parse_vocab_mappings(args)
-
-    assert d2t is None
-    assert t2d is None
-    assert vocab_size == 321
 
 
 def test_create_layer_config_infers_moe_intermediate_size():

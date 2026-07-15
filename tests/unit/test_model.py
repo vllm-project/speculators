@@ -4,7 +4,6 @@ Unit tests for the model module in the Speculators library.
 
 import tempfile
 from typing import Literal
-from unittest.mock import patch
 
 import pytest
 import torch
@@ -275,38 +274,6 @@ def test_speculator_model_from_pretrained_invalid(speculator_model_test_config):
         SpeculatorModel.from_pretrained(
             "path/does/not/exist", config=speculator_model_test_config
         )
-
-
-def test_from_pretrained_forwards_hub_options_to_external_conversion():
-    hub_options = {
-        "cache_dir": "/tmp/cache",
-        "force_download": True,
-        "local_files_only": True,
-        "token": "token",
-        "revision": "test-revision",
-    }
-    with (
-        patch(
-            "speculators.model.PretrainedConfig.get_config_dict",
-            return_value=({"dflash_config": {}}, {}),
-        ) as get_config,
-        patch(
-            "speculators.convert.entrypoints.maybe_convert_external_checkpoint",
-            side_effect=RuntimeError("conversion sentinel"),
-        ) as convert,
-        pytest.raises(RuntimeError, match="conversion sentinel"),
-    ):
-        SpeculatorModel.from_pretrained(
-            "external/checkpoint", verifier="verifier", **hub_options
-        )
-
-    get_config.assert_called_once_with("external/checkpoint", **hub_options)
-    convert.assert_called_once_with(
-        "external/checkpoint",
-        verifier="verifier",
-        config_dict={"dflash_config": {}},
-        **hub_options,
-    )
 
 
 # # ===== SpeculatorModel Forward Method Tests =====

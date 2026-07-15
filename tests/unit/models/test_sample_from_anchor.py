@@ -1,20 +1,10 @@
 """Tests for sample_from_anchor behavior in DFlash and DSpark models."""
 
-import pytest
 from transformers import AutoConfig
 
 from speculators.models.dflash import DFlashSpeculatorConfig
 from speculators.models.dflash.core import DFlashDraftModel
 from speculators.models.dspark import DSparkSpeculatorConfig
-
-
-@pytest.fixture
-def local_verifier(tmp_path):
-    """Create a minimal local verifier config without a Hub dependency."""
-    verifier_path = tmp_path / "verifier"
-    verifier_config = AutoConfig.for_model("qwen2", num_hidden_layers=24)
-    verifier_config.save_pretrained(verifier_path)
-    return verifier_config, str(verifier_path)
 
 
 class TestSampleFromAnchorDFlash:
@@ -52,44 +42,41 @@ class TestSampleFromAnchorDSpark:
 class TestSpeculativeTokensCalculation:
     """Test that speculative_tokens is calculated correctly."""
 
-    def test_false_produces_block_size_minus_one(self, local_verifier):
+    def test_false_produces_block_size_minus_one(self):
         """sample_from_anchor=False should produce block_size - 1 tokens."""
-        verifier_config, verifier_path = local_verifier
         kwargs = DFlashDraftModel._build_base_config_kwargs(
             algorithm="dflash",
-            verifier_config=verifier_config,
-            verifier_name_or_path=verifier_path,
+            verifier_config=AutoConfig.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct"),
+            verifier_name_or_path="Qwen/Qwen2.5-0.5B-Instruct",
             draft_vocab_size=128,
             block_size=8,
             sample_from_anchor=False,
-            target_layer_ids=[1],
+            target_layer_ids=[0],
         )
         assert kwargs["speculators_config"].proposal_methods[0].speculative_tokens == 7
 
-    def test_true_produces_block_size(self, local_verifier):
+    def test_true_produces_block_size(self):
         """sample_from_anchor=True should produce block_size tokens."""
-        verifier_config, verifier_path = local_verifier
         kwargs = DFlashDraftModel._build_base_config_kwargs(
             algorithm="dflash",
-            verifier_config=verifier_config,
-            verifier_name_or_path=verifier_path,
+            verifier_config=AutoConfig.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct"),
+            verifier_name_or_path="Qwen/Qwen2.5-0.5B-Instruct",
             draft_vocab_size=128,
             block_size=8,
             sample_from_anchor=True,
-            target_layer_ids=[1],
+            target_layer_ids=[0],
         )
         assert kwargs["speculators_config"].proposal_methods[0].speculative_tokens == 8
 
-    def test_dspark_defaults_to_true(self, local_verifier):
+    def test_dspark_defaults_to_true(self):
         """DSpark algorithm should default to sample_from_anchor=True."""
-        verifier_config, verifier_path = local_verifier
         kwargs = DFlashDraftModel._build_base_config_kwargs(
             algorithm="dspark",
-            verifier_config=verifier_config,
-            verifier_name_or_path=verifier_path,
+            verifier_config=AutoConfig.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct"),
+            verifier_name_or_path="Qwen/Qwen2.5-0.5B-Instruct",
             draft_vocab_size=128,
             block_size=8,
-            target_layer_ids=[1],
+            target_layer_ids=[0],
         )
         assert kwargs["sample_from_anchor"]
         assert kwargs["speculators_config"].proposal_methods[0].speculative_tokens == 8

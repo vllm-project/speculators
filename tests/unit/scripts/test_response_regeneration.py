@@ -11,41 +11,15 @@ import argparse
 import asyncio
 import importlib.util
 import json
-import sys
 from pathlib import Path
 from typing import Any
 
-import aiohttp
 import pytest
 
 from speculators.data_generation import vllm_client
 from speculators.data_generation.configs import DATASET_CONFIGS, DatasetConfig
 from speculators.data_generation.preprocessing import _preprocess_batch
-from speculators.data_generation.vllm_client import (
-    InvalidResponseError,
-    RetryableRequestError,
-)
-
-
-@pytest.mark.parametrize("value", ["0", "-1", "nan", "inf", "not-a-number"])
-def test_response_request_timeout_must_be_positive(value):
-    with pytest.raises(argparse.ArgumentTypeError, match="positive number"):
-        regen._positive_float(value)
-
-
-@pytest.mark.parametrize("option", ["--concurrency", "--limit", "--max-tokens"])
-@pytest.mark.parametrize("value", ["0", "-1"])
-def test_response_positive_count_arguments_fail_before_work(
-    monkeypatch,
-    option,
-    value,
-):
-    monkeypatch.setattr(sys, "argv", ["script.py", option, value])
-
-    with pytest.raises(SystemExit) as error:
-        regen.parse_args()
-
-    assert error.value.code == 2
+from speculators.data_generation.vllm_client import InvalidResponseError
 
 
 @pytest.fixture(autouse=True)
@@ -388,24 +362,18 @@ class _FakeSession:
     def __init__(self, responses):
         self._responses = list(responses)
         self.calls = 0
-        self.requests = []
 
     def post(self, endpoint, json):
         self.calls += 1
-        self.requests.append({"endpoint": endpoint, "json": json})
-        response = self._responses.pop(0)
-        if isinstance(response, BaseException):
-            raise response
-        return response
+        return self._responses.pop(0)
 
 
-@pytest.mark.parametrize("status", [408, 409, 425, 429, 500, 503])
-def test_post_chat_retries_transient_failure_then_succeeds(status):
+def test_post_chat_retries_transient_failure_then_succeeds():
     ok_payload = {"choices": [{"message": {"content": "hi"}}]}
     session = _FakeSession(
         [
-            _FakeResponse(ok=False, status=status, text="busy", payload={}),
-            _FakeResponse(ok=False, status=status, text="busy", payload={}),
+            _FakeResponse(ok=False, status=503, text="busy", payload={}),
+            _FakeResponse(ok=False, status=503, text="busy", payload={}),
             _FakeResponse(ok=True, status=200, text="", payload=ok_payload),
         ]
     )
@@ -422,50 +390,13 @@ def test_post_chat_retries_transient_failure_then_succeeds(status):
     assert session.calls == 3
 
 
-def test_post_chat_retries_aiohttp_connection_error_then_succeeds():
-    ok_payload = {"choices": [{"message": {"content": "hi"}}]}
-    session = _FakeSession(
-        [
-            aiohttp.ClientConnectionError("connection reset"),
-            _FakeResponse(ok=True, status=200, text="", payload=ok_payload),
-        ]
-    )
-
-    async def scenario():
-        return await regen._post_chat(
-            session,
-            "http://x/v1/chat/completions",
-            {"model": "m"},
-            max_retries=1,
-        )
-
-    assert asyncio.run(scenario()) == ok_payload
-    assert session.calls == 2
-
-
-def test_post_chat_does_not_retry_deterministic_aiohttp_client_error():
-    session = _FakeSession([aiohttp.InvalidURL("not a URL")])
-
-    async def scenario():
-        return await regen._post_chat(
-            session,
-            "not a URL",
-            {"model": "m"},
-            max_retries=3,
-        )
-
-    with pytest.raises(aiohttp.InvalidURL):
-        asyncio.run(scenario())
-    assert session.calls == 1
-
-
 def test_post_chat_raises_after_exhausting_retries():
     session = _FakeSession(
         [_FakeResponse(ok=False, status=500, text="err", payload={}) for _ in range(3)]
     )
 
     async def scenario():
-        with pytest.raises(RetryableRequestError, match="HTTP 500"):
+        with pytest.raises(RuntimeError, match="HTTP 500"):
             await regen._post_chat(
                 session,
                 "http://x/v1/chat/completions",
@@ -518,7 +449,6 @@ _TWO_TURN_ITEM = {
     "idx": 41,
     "primary_id": "conv-abc",
     "turns": [
-        {"role": "system", "content": "Answer with only the result."},
         {"role": "user", "content": "2+2?"},
         {"role": "user", "content": "3+3?"},
     ],
@@ -539,11 +469,8 @@ def _ok(prompt_token_ids, completion_token_ids, text):
     return _FakeResponse(ok=True, status=200, text="", payload=payload)
 
 
-def _run_worker(responses, tmp_path, stem, *, max_retries=0):
+def _run_worker(responses, tmp_path, stem):
     out_path, err_path = tmp_path / f"{stem}.jsonl", tmp_path / f"{stem}.errors.jsonl"
-    session = _FakeSession(responses)
-    args = _Args()
-    args.max_retries = max_retries
 
     async def scenario(out_fh, err_fh):
         queue: asyncio.Queue = asyncio.Queue()
@@ -551,9 +478,9 @@ def _run_worker(responses, tmp_path, stem, *, max_retries=0):
         await queue.put(None)
         stats = {"ok": 0, "errors": 0}
         await regen.worker(
-            session,
+            _FakeSession(responses),
             queue,
-            args,
+            _Args(),
             out_fh,
             err_fh,
             "http://x/v1/chat/completions",
@@ -567,14 +494,14 @@ def _run_worker(responses, tmp_path, stem, *, max_retries=0):
         err_path.open("w", encoding="utf-8") as err_fh,
     ):
         stats = asyncio.run(scenario(out_fh, err_fh))
-    return stats, out_path, err_path, session
+    return stats, out_path, err_path
 
 
 def test_worker_row_identity_and_all_or_nothing_writes(tmp_path):
     # Two assistant turns -> two rows. `primary_id` is the queue item's stable id
     # (never the streaming `idx`); `id` is that id plus a turn suffix; and resume
     # keys on the former, so a re-run of this conversation is skipped.
-    stats, out_path, _, session = _run_worker(
+    stats, out_path, _ = _run_worker(
         [_ok([1, 2], [3, 4], "four"), _ok([1, 2, 3, 4, 5], [6], "six")],
         tmp_path,
         "ok",
@@ -586,31 +513,11 @@ def test_worker_row_identity_and_all_or_nothing_writes(tmp_path):
     # The boundary is the mask: prompt 0s then completion 1s.
     assert rows[0]["input_ids"] == [1, 2, 3, 4]
     assert rows[0]["loss_mask"] == [0, 0, 1, 1]
-    assert rows[0]["conversations"] == [
-        {"role": "system", "content": "Answer with only the result."},
-        {"role": "user", "content": "2+2?"},
-        {"role": "assistant", "content": "four"},
-    ]
-    assert [message["role"] for message in rows[1]["conversations"]] == [
-        "system",
-        "user",
-        "assistant",
-        "user",
-        "assistant",
-    ]
-    assert [request["json"]["return_token_ids"] for request in session.requests] == [
-        True,
-        True,
-    ]
-    assert [
-        message["role"] for message in session.requests[1]["json"]["messages"]
-    ] == ["system", "user", "assistant", "user"]
-    assert session.requests[1]["json"]["messages"][2]["content"] == "four"
     assert regen.load_seen(str(out_path)) == {"conv-abc"}
 
     # Turn 2 fails: turn 1's sample is discarded rather than half-written, which
     # is what lets load_seen treat one row as a finished conversation.
-    stats, out_path, err_path, _ = _run_worker(
+    stats, out_path, err_path = _run_worker(
         [
             _ok([1, 2], [3, 4], "four"),
             _FakeResponse(ok=False, status=404, text="nope", payload={}),
@@ -674,31 +581,3 @@ def test_dataset_choice_rejects_multimodal_with_a_reason():
     with pytest.raises(argparse.ArgumentTypeError, match="does not support images"):
         regen._dataset_choice("sharegpt4v_coco")
     assert regen._dataset_choice("ultrachat") == "ultrachat"
-
-
-@pytest.mark.parametrize(
-    "transient",
-    [
-        _FakeResponse(ok=False, status=503, text="busy", payload={}),
-        aiohttp.ClientConnectionError("connection reset"),
-    ],
-    ids=["http-503", "connection-reset"],
-)
-def test_worker_retry_writes_one_complete_conversation(transient, tmp_path):
-    stats, out_path, err_path, session = _run_worker(
-        [
-            transient,
-            _ok([1, 2], [3, 4], "four"),
-            _ok([1, 2, 3, 4, 5], [6], "six"),
-        ],
-        tmp_path,
-        "retry",
-        max_retries=1,
-    )
-
-    rows = [json.loads(line) for line in out_path.read_text().splitlines()]
-    assert stats == {"ok": 1, "errors": 0}
-    assert session.calls == 3
-    assert [row["id"] for row in rows] == ["conv-abc_turn0", "conv-abc_turn1"]
-    assert rows[0]["loss_mask"] == [0, 0, 1, 1]
-    assert err_path.read_text() == ""

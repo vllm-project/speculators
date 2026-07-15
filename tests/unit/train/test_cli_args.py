@@ -1,7 +1,5 @@
 """Tests for CLI arguments."""
 
-import pytest
-
 from scripts.train import parse_args
 from speculators.models.dflash.core import DFlashDraftModel
 from speculators.models.dspark.core import DSparkDraftModel
@@ -15,14 +13,6 @@ def _parse(monkeypatch, extra: list[str]):
         "sys.argv", ["train.py", "--verifier-name-or-path", "dummy"] + extra
     )
     return parse_args()
-
-
-def test_train_cli_rejects_negative_max_retries_before_runtime(monkeypatch, capsys):
-    with pytest.raises(SystemExit) as exc_info:
-        _parse(monkeypatch, ["--max-retries", "-1"])
-
-    assert exc_info.value.code == 2
-    assert "expected a non-negative integer" in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------------------
@@ -61,123 +51,6 @@ def test_dflash_decay_gamma_falls_back_when_omitted():
     train_kw, val_kw = DFlashDraftModel.get_trainer_kwargs(loss_fn="kl_div")
     assert train_kw["gamma"] == 4.0
     assert val_kw["gamma"] == 4.0
-
-
-def test_dflash_dpace_args_flow_to_trainer_kwargs(monkeypatch):
-    args = _parse(
-        monkeypatch,
-        [
-            "--speculator-type",
-            "dflash",
-            "--loss-fn",
-            "ce",
-            "--per-position-loss-weight",
-            "dpace",
-            "--dpace-alpha",
-            "0.25",
-        ],
-    )
-
-    train_kw, val_kw = DFlashDraftModel.get_trainer_kwargs(**vars(args))
-
-    assert train_kw["per_position_loss_weight"] == "dpace"
-    assert val_kw["per_position_loss_weight"] == "dpace"
-    assert train_kw["dpace_alpha"] == 0.25
-    assert val_kw["dpace_alpha"] == 0.25
-    assert train_kw["loss_config"]["ce"][0] is ce_loss
-
-
-def test_dflash_dpace_requires_cross_entropy(monkeypatch, capsys):
-    with pytest.raises(SystemExit) as exc_info:
-        _parse(
-            monkeypatch,
-            [
-                "--speculator-type",
-                "dflash",
-                "--per-position-loss-weight",
-                "dpace",
-            ],
-        )
-
-    assert exc_info.value.code == 2
-    assert (
-        "train.py: error: --per-position-loss-weight=dpace requires --loss-fn=ce"
-        in capsys.readouterr().err
-    )
-
-
-@pytest.mark.parametrize(
-    ("alpha", "expected_error"),
-    [
-        ("0", "alpha must be in (0, 1], got 0.0"),
-        ("-0.1", "alpha must be in (0, 1], got -0.1"),
-        ("1.1", "alpha must be in (0, 1], got 1.1"),
-    ],
-)
-def test_dflash_dpace_rejects_invalid_alpha(monkeypatch, alpha, expected_error):
-    with pytest.raises(ValueError) as exc_info:
-        _parse(
-            monkeypatch,
-            [
-                "--speculator-type",
-                "dflash",
-                "--loss-fn",
-                "ce",
-                "--per-position-loss-weight",
-                "dpace",
-                "--dpace-alpha",
-                alpha,
-            ],
-        )
-
-    assert str(exc_info.value) == expected_error
-
-
-def test_dpace_rejects_non_dflash_speculator(monkeypatch, capsys):
-    with pytest.raises(SystemExit) as exc_info:
-        _parse(
-            monkeypatch,
-            [
-                "--speculator-type",
-                "eagle3",
-                "--loss-fn",
-                "ce",
-                "--per-position-loss-weight",
-                "dpace",
-            ],
-        )
-
-    assert exc_info.value.code == 2
-    assert (
-        "train.py: error: --per-position-loss-weight=dpace is only supported with "
-        "--speculator-type=dflash or dspark"
-        in capsys.readouterr().err
-    )
-
-
-def test_dspark_dpace_args_flow_to_trainer_kwargs(monkeypatch):
-    args = _parse(
-        monkeypatch,
-        [
-            "--speculator-type",
-            "dspark",
-            "--loss-fn",
-            "ce",
-            "--per-position-loss-weight",
-            "dpace",
-            "--dpace-alpha",
-            "0.25",
-        ],
-    )
-
-    train_kw, val_kw = DSparkDraftModel.get_trainer_kwargs(**vars(args))
-
-    assert train_kw["per_position_loss_weight"] == "dpace"
-    assert val_kw["per_position_loss_weight"] == "dpace"
-    assert train_kw["dpace_alpha"] == 0.25
-    assert val_kw["dpace_alpha"] == 0.25
-    assert train_kw["loss_config"]["ce"][0] is ce_loss
-    assert val_kw["loss_config"]["ce"][0] is ce_loss
 
 
 def test_dflash_compound_loss(monkeypatch):

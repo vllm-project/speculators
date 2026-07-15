@@ -78,7 +78,7 @@ def test_dflash_qwen3_8b_sharegpt(tmp_path: Path, prompts: list[list[dict[str, s
     ) as hidden_states_dir:
         epochs = 5
         run_training(
-            model="Qwen/Qwen3-8B",
+            model="Qwen/Qwen3-8b",
             speculator_type="dflash",
             data_path=hidden_states_dir,
             save_path=save_path,

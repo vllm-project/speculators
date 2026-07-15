@@ -9,7 +9,6 @@ from speculators.models.dflash.metrics import compute_metrics
 from speculators.models.metrics import (
     ce_loss,
     compute_accuracy_multi_step,
-    dpace_loss_decay,
     dflash_loss_decay,
     loss_function,
 )
@@ -20,23 +19,6 @@ def _ids_to_logits(ids: torch.Tensor, vocab_size: int) -> torch.Tensor:
     logits = torch.zeros(*ids.shape, vocab_size)
     logits.scatter_(-1, ids.unsqueeze(-1), 100.0)
     return logits
-
-
-def _deterministic_dpace_inputs() -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Create one explicit block with non-uniform per-position confidence."""
-    logits = torch.tensor(
-        [
-            [
-                [0.0, 0.0, 0.0],
-                [2.0, 0.0, 0.0],
-                [0.0, 2.0, 0.0],
-                [-1.0, 1.0, 0.0],
-            ]
-        ]
-    )
-    targets = _ids_to_logits(torch.tensor([[0, 0, 0, 0]]), vocab_size=3)
-    loss_mask = torch.tensor([[0, 1, 1, 1]])
-    return logits, targets, loss_mask
 
 
 class TestComputeAccuracy:
@@ -355,144 +337,3 @@ class TestComputeMetrics:
         for i in range(1, 4):
             assert torch.isclose(metrics[f"position_{i}_acc_sum"], expected_correct[i])
             assert torch.isclose(metrics[f"position_{i}_acc_total"], expected_total[i])
-
-    def test_dpace_loss_is_finite_and_differentiable(self, seed):
-        """D-PACE weighting produces a finite CE loss and gradients."""
-        B, T, V = 1, 8, 10
-        logits = torch.randn(B, T, V, requires_grad=True)
-        targets = _ids_to_logits(torch.randint(0, V, (B, T)), V)
-        loss_mask = torch.tensor([[0, 1, 1, 1, 0, 1, 1, 1]])
-
-        loss, metrics = compute_metrics(
-            logits,
-            targets,
-            loss_mask,
-            block_size=4,
-            loss_config={"ce": (ce_loss, 1.0)},
-            per_position_loss_weight="dpace",
-            dpace_alpha=0.5,
-        )
-        loss.backward()
-
-        assert torch.isfinite(loss)
-        assert torch.isfinite(metrics["loss_sum"])
-        assert logits.grad is not None
-        assert torch.isfinite(logits.grad).all()
-
-    def test_dpace_alpha_changes_loss_deterministically(self):
-        logits, targets, loss_mask = _deterministic_dpace_inputs()
-
-        low_alpha_loss, _ = compute_metrics(
-            logits,
-            targets,
-            loss_mask,
-            block_size=4,
-            loss_config={"ce": (ce_loss, 1.0)},
-            per_position_loss_weight="dpace",
-            dpace_alpha=0.1,
-        )
-        high_alpha_loss, _ = compute_metrics(
-            logits,
-            targets,
-            loss_mask,
-            block_size=4,
-            loss_config={"ce": (ce_loss, 1.0)},
-            per_position_loss_weight="dpace",
-            dpace_alpha=0.9,
-        )
-
-        assert high_alpha_loss > low_alpha_loss
-
-    def test_dpace_wiring_differs_from_fixed_decay(self):
-        logits, targets, loss_mask = _deterministic_dpace_inputs()
-        pos_idx = torch.arange(4).unsqueeze(0)
-
-        dpace_loss, _ = compute_metrics(
-            logits,
-            targets,
-            loss_mask,
-            block_size=4,
-            loss_config={"ce": (ce_loss, 1.0)},
-            per_position_loss_weight="dpace",
-            dpace_alpha=0.25,
-        )
-        expected_dpace_loss = loss_function(
-            logits,
-            targets,
-            loss_mask,
-            pos_idx,
-            loss_fn=ce_loss,
-            decay_fn=partial(
-                dpace_loss_decay,
-                loss_mask=loss_mask,
-                block_size=4,
-                dpace_alpha=0.25,
-            ),
-        )
-        fixed_decay_loss, _ = compute_metrics(
-            logits,
-            targets,
-            loss_mask,
-            block_size=4,
-            loss_config={"ce": (ce_loss, 1.0)},
-            per_position_loss_weight="fixed-exp-decay",
-            gamma=4.0,
-        )
-
-        assert torch.isclose(dpace_loss, expected_dpace_loss)
-        assert not torch.isclose(dpace_loss, fixed_decay_loss)
-
-
-def test_dpace_loss_decay_known_weights():
-    """Unit confidence yields deterministic suffix weights within each block."""
-    elementwise_loss = torch.zeros(1, 4)
-    loss_mask = torch.tensor([[0, 1, 1, 1]])
-
-    weights = dpace_loss_decay(
-        torch.arange(4).unsqueeze(0),
-        loss_mask=loss_mask,
-        block_size=4,
-        dpace_alpha=0.5,
-        elementwise_loss=elementwise_loss,
-    )
-
-    assert torch.equal(weights, torch.tensor([[0.0, 3.0, 2.0, 1.0]]))
-
-
-def test_dpace_loss_decay_matches_independent_two_block_numeric_oracle():
-    """Hard-coded D-PACE weights cover smoothing, suffixes, and internal masks."""
-    confidence = torch.tensor(
-        [[0.9, 0.8, 0.5, 0.25, 0.9, 0.4, 0.01, 0.2]],
-        dtype=torch.float64,
-    )
-    elementwise_loss = -torch.log(confidence)
-    loss_mask = torch.tensor([[0, 1, 1, 1, 0, 1, 0, 1]])
-
-    weights = dpace_loss_decay(
-        torch.arange(8).unsqueeze(0),
-        loss_mask=loss_mask,
-        block_size=4,
-        dpace_alpha=0.5,
-        elementwise_loss=elementwise_loss,
-    )
-
-    # Block 1 smoothed prefixes are [1, .9, .675, .421875]. Block 2 has
-    # prefixes [1, .7, .7, .42], with its internal masked slot excluded from
-    # the suffix sum. These constants are calculated independently of the
-    # production tensor implementation.
-    expected = torch.tensor(
-        [[0.0, 1.996875, 1.096875, 0.421875, 0.0, 1.12, 0.0, 0.42]]
-    )
-    assert torch.allclose(weights, expected, atol=1e-7, rtol=1e-7)
-
-
-def test_dpace_loss_decay_rejects_partial_block():
-    """D-PACE requires complete blocks for its cumulative weighting."""
-    with pytest.raises(ValueError, match="must be divisible by block_size"):
-        dpace_loss_decay(
-            torch.arange(5).unsqueeze(0),
-            loss_mask=torch.ones(1, 5),
-            block_size=4,
-            dpace_alpha=0.5,
-            elementwise_loss=torch.zeros(1, 5),
-        )

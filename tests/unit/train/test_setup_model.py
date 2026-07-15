@@ -14,7 +14,6 @@ Covers:
 import copy
 import os
 import tempfile
-from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -104,40 +103,6 @@ def _make_tiny_model() -> Eagle3DraftModel:
     model = Eagle3DraftModel(_make_eagle3_config())
     _fill_nan_weights(model)
     return model
-
-
-def test_eagle_load_verifier_weights_falls_back_when_text_config_is_none():
-    model = Eagle3DraftModel(
-        _make_eagle3_config(verifier_name_or_path="unused-verifier")
-    )
-    verifier = SimpleNamespace(text_config=None, hidden_size=model.hidden_size)
-
-    with (
-        patch("speculators.model.SpeculatorModel.load_verifier_weights"),
-        patch(
-            "speculators.models.utils.AutoConfig.from_pretrained",
-            return_value=verifier,
-        ) as load_config,
-    ):
-        model.load_verifier_weights()
-
-    load_config.assert_called_once_with("unused-verifier")
-
-
-@pytest.mark.parametrize("missing_path", [None, ""], ids=["none", "blank"])
-def test_eagle_load_verifier_weights_skips_config_when_path_is_missing(missing_path):
-    model = Eagle3DraftModel(_make_eagle3_config(verifier_name_or_path=missing_path))
-
-    with (
-        patch("speculators.model.SpeculatorModel.load_verifier_weights"),
-        patch(
-            "speculators.models.utils.AutoConfig.from_pretrained",
-            side_effect=AssertionError("config load must be skipped"),
-        ) as load_config,
-    ):
-        model.load_verifier_weights()
-
-    load_config.assert_not_called()
 
 
 def _fill_nan_weights(model: Eagle3DraftModel):

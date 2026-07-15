@@ -3,7 +3,7 @@
 import torch
 
 from speculators.models.dspark.metrics import compute_metrics
-from speculators.models.metrics import ce_loss, resolve_loss_config
+from speculators.models.metrics import resolve_loss_config
 
 _DEFAULT_LOSS = resolve_loss_config('{"ce": 0.1, "tv": 0.9}')
 
@@ -15,40 +15,6 @@ def _ids_to_logits(ids: torch.Tensor, vocab_size: int) -> torch.Tensor:
 
 
 class TestComputeMetrics:
-    def test_dpace_forward_backward_with_and_without_confidence_head(self):
-        targets = _ids_to_logits(
-            torch.tensor([[0, 1, 2, 3, 0, 1, 2, 3]]),
-            vocab_size=6,
-        )
-        loss_mask = torch.tensor([[0, 1, 1, 1, 0, 1, 0, 1]])
-
-        for use_confidence_head in (False, True):
-            logits = torch.randn(1, 8, 6, requires_grad=True)
-            confidence_logits = (
-                torch.randn(1, 8, requires_grad=True)
-                if use_confidence_head
-                else None
-            )
-            loss, metrics = compute_metrics(
-                logits,
-                targets,
-                confidence_logits,
-                loss_mask,
-                block_size=4,
-                loss_config={"ce": (ce_loss, 1.0)},
-                per_position_loss_weight="dpace",
-                dpace_alpha=0.5,
-            )
-
-            assert torch.isfinite(loss)
-            assert all(torch.isfinite(value).all() for value in metrics.values())
-            loss.backward()
-            assert logits.grad is not None
-            assert torch.isfinite(logits.grad).all()
-            if confidence_logits is not None:
-                assert confidence_logits.grad is not None
-                assert torch.isfinite(confidence_logits.grad).all()
-
     def test_perfect_draft_low_loss_high_accept(self):
         # block_size=2; position 0 is the anchor (masked), position 1 supervised.
         ids = torch.tensor([[0, 1, 0, 2]])

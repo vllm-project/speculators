@@ -496,7 +496,6 @@ class TestPEagleParams:
 
 
 @requires_cuda
-@pytest.mark.usefixtures("seed")
 @requires_transformers_version("5.2.0")
 class TestMTPParams:
     @pytest.mark.parametrize("num_speculative_steps", [1, 2, 5])

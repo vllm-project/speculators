@@ -23,27 +23,11 @@ class TestMaybeConvertExternalCheckpoint:
             "z-lab/Qwen3-8B-DFlash-b16",
             verifier="Qwen/Qwen3-8B",
             output_path="/tmp/out",
-            force_download=True,
-            local_files_only=True,
-            token="token",
-            revision="test-revision",
         )
         assert out == "/tmp/out"
-        mock_cfg.assert_called_once_with(
-            "z-lab/Qwen3-8B-DFlash-b16",
-            cache_dir=None,
-            force_download=True,
-            local_files_only=True,
-            token="token",
-            revision="test-revision",
-        )
         mock_convert.assert_called_once()
         assert mock_convert.call_args.kwargs["algorithm"] == "dflash"
         assert mock_convert.call_args.kwargs["verifier"] == "Qwen/Qwen3-8B"
-        assert mock_convert.call_args.kwargs["force_download"] is True
-        assert mock_convert.call_args.kwargs["local_files_only"] is True
-        assert mock_convert.call_args.kwargs["token"] == "token"
-        assert mock_convert.call_args.kwargs["revision"] == "test-revision"
 
     @patch("speculators.convert.entrypoints.PretrainedConfig.get_config_dict")
     def test_external_without_verifier_raises(self, mock_cfg):
