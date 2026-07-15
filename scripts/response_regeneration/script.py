@@ -243,38 +243,19 @@ def _list_field(row, key) -> list | None:
     return value if isinstance(value, list) and value else None
 
 
-def _normalize_tool(entry: Any) -> dict | None:
-    """Coerce one tool entry to OpenAI ``{"type": "function", "function": ...}`` shape.
-
-    Decodes JSON-string entries, wraps bare function specs, passes already-wrapped
-    dicts through, and returns ``None`` for anything that is not a dict.
-    """
-    if isinstance(entry, str):
-        entry = _maybe_json(entry)
-    if not isinstance(entry, dict):
-        return None
-    if isinstance(entry.get("function"), dict):
-        return entry
-    return {"type": "function", "function": entry}
-
-
 def extract_tools(row) -> list | None:
     """Return the OpenAI-style ``tools`` schema for a row, or ``None``.
 
-    Reads a ``tools`` list (or JSON-string), else a legacy ``functions`` list, and
-    normalizes each entry via :func:`_normalize_tool` (individual junk entries are
-    dropped). A row that declares no tools returns ``None``; one that *declares*
-    tools we cannot turn into any function schema raises ``ValueError`` instead of
-    silently regenerating tool-free.
+    Reads the ``tools`` column -- a list, or a JSON-string encoding one, as the
+    Hermes function-calling dataset stores it. A row that declares a ``tools``
+    field we cannot read as a list raises ``ValueError`` rather than silently
+    regenerating tool-free; a tool-free row returns ``None``.
     """
-    raw = _list_field(row, "tools") or _list_field(row, "functions")
-    if raw:
-        tools = [tool for tool in (_normalize_tool(entry) for entry in raw) if tool]
-        if not tools:
-            raise ValueError(f"tools present but none valid: {raw!r:.100}")
+    tools = _list_field(row, "tools")
+    if tools:
         return tools
-    if any(row.get(key) not in (None, "", [], {}) for key in ("tools", "functions")):
-        raise ValueError("a tools/functions field is present but not a usable list")
+    if row.get("tools") not in (None, "", [], {}):
+        raise ValueError("a tools field is present but not a usable list")
     return None
 
 

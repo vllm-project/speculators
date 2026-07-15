@@ -599,43 +599,19 @@ def _regen(
 # --- ingestion: tools + tool results carried out of the raw row ---
 
 
-def test_extract_tools_list_passthrough_and_functions_wrapping():
+def test_extract_tools_passthrough_and_json_string():
     tools = [{"type": "function", "function": {"name": "f"}}]
+    # A list passes through; a JSON-string column (the Hermes shape) is decoded.
     assert regen.extract_tools({"tools": tools}) == tools
-    # JSON-encoded tools string is decoded.
     assert regen.extract_tools({"tools": json.dumps(tools)}) == tools
-    # Legacy bare `functions` list is wrapped into OpenAI tool shape.
-    assert regen.extract_tools({"functions": [{"name": "f"}]}) == [
-        {"type": "function", "function": {"name": "f"}}
-    ]
     # Absent / empty -> None (tool-free datasets unchanged).
     assert regen.extract_tools({"prompt": "hi"}) is None
     assert regen.extract_tools({"tools": []}) is None
 
 
-def test_extract_tools_normalizes_stringified_and_bare_specs():
-    bare = {"name": "get_weather", "parameters": {"type": "object", "properties": {}}}
-    wrapped = {"type": "function", "function": bare}
-    # Bare spec as a JSON string (nvidia/When2Call shape) is decoded and wrapped.
-    assert regen.extract_tools({"tools": [json.dumps(bare)]}) == [wrapped]
-    # Bare spec as a dict is wrapped too.
-    assert regen.extract_tools({"tools": [bare]}) == [wrapped]
-    # Mixed list: wrapped entries pass through, bare/stringified get wrapped.
-    passthrough = {"type": "function", "function": {"name": "f"}}
-    assert regen.extract_tools({"tools": [passthrough, json.dumps(bare)]}) == [
-        passthrough,
-        wrapped,
-    ]
-    # A junk entry is dropped as long as at least one tool survives.
-    mixed = {"tools": [json.dumps(bare), "not json", 5]}
-    assert regen.extract_tools(mixed) == [wrapped]
-
-
 def test_extract_tools_raises_when_declared_but_unusable():
-    # A row that advertises tools we cannot parse must fail loud, not silently
-    # regenerate tool-free.
-    with pytest.raises(ValueError):
-        regen.extract_tools({"tools": ["junk", 5]})  # non-empty list, none decode
+    # A row that advertises a tools field we cannot read as a list must fail
+    # loud, not silently regenerate tool-free.
     with pytest.raises(ValueError):
         regen.extract_tools({"tools": {"name": "f"}})  # present but not a list
     with pytest.raises(ValueError):
