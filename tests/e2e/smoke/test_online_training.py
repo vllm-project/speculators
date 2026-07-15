@@ -15,6 +15,7 @@ import pytest
 
 from tests.e2e.utils import (
     launch_vllm_server_context,
+    record_perf,
     run_prepare_data,
     run_training,
     run_vllm_engine,
@@ -81,6 +82,7 @@ def run_online_e2e(
     acceptance_thresholds: list[float] | None = None,
     log_freq: int = 1,
     train_timeout: int = 30 * 60,  # 30 mins
+    perf: dict | None = None,
 ):
     """
     Run online training e2e testing pipeline.
@@ -91,15 +93,19 @@ def run_online_e2e(
     save_path = tmp_path / "checkpoints"
 
     # Step 1: Prepare data
-    run_prepare_data(model, dataset, data_path, max_samples, seq_length)
+    with record_perf("prepare_data", perf):
+        run_prepare_data(model, dataset, data_path, max_samples, seq_length)
 
     hidden_states_path = str(tmp_path / "hidden_states")
-    with launch_vllm_server_context(
-        model,
-        port,
-        hidden_states_path,
-        max_model_len=seq_length + 1,
-        **(vllm_kwargs or {}),
+    with (
+        launch_vllm_server_context(
+            model,
+            port,
+            hidden_states_path,
+            max_model_len=seq_length + 1,
+            **(vllm_kwargs or {}),
+        ),
+        record_perf("training", perf),
     ):
         # Step 2: Train against live vLLM server
         run_training(
@@ -118,13 +124,15 @@ def run_online_e2e(
     # Step 3: Validate trained checkpoint with vLLM inference
     if prompts is not None:
         checkpoint_path = str(save_path / "checkpoint_best")
-        run_vllm_engine(
-            model_path=checkpoint_path,
-            tmp_path=tmp_path,
-            prompts=prompts,
-            disable_compile_cache=disable_compile_cache,
-            max_tokens=max_tokens,
-            ignore_eos=ignore_eos,
-            acceptance_thresholds=acceptance_thresholds,
-            **(vllm_kwargs or {}),
-        )
+        with record_perf("vllm_inference", perf):
+            run_vllm_engine(
+                model_path=checkpoint_path,
+                tmp_path=tmp_path,
+                prompts=prompts,
+                disable_compile_cache=disable_compile_cache,
+                max_tokens=max_tokens,
+                ignore_eos=ignore_eos,
+                acceptance_thresholds=acceptance_thresholds,
+                perf=perf,
+                **(vllm_kwargs or {}),
+            )

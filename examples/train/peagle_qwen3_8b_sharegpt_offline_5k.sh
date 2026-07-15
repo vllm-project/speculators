@@ -1,16 +1,16 @@
 #!/bin/bash
-# Online P-EAGLE Training Script
+# Offline P-EAGLE Training Script
 #
-# Runs the full online P-EAGLE training pipeline: data preparation, vLLM server launch,
-# and training (with hidden states generated on-the-fly from the live server).
+# Runs the full offline P-EAGLE training pipeline: data preparation, vLLM server
+# launch, hidden states generation, and training (with pre-generated hidden states).
 #
 # Usage: Copy this script, modify the configuration variables below, then run:
-#   bash examples/train/peagle_qwen3_8b_sharegpt_online_5k.sh
+#   bash examples/train/peagle_qwen3_8b_sharegpt_offline_5k.sh
+#
+# For a detailed walkthrough, see
+# https://docs.vllm.ai/projects/speculators/en/latest/user_guide/tutorials/train_peagle_offline/
 
 ### Example E2E run for P-EAGLE Qwen3-8B on 5k samples from ShareGPT ###
-
-# P-EAGLE (Parallel EAGLE) extends EAGLE-3 with parallel multi-token prediction using
-# Conditional-On-Distribution (COD) sampling for memory-efficient training.
 
 # Note: With just 5k samples, the model performance will not be very good, however there
 # are enough samples to verify that the pipeline is working correctly and that the model
@@ -20,8 +20,9 @@
 # Timing (on 4x NVIDIA H100 80GB GPUs, DP=2)
 # Data Preprocessing: 26 seconds
 # vLLM Server Startup: 82 seconds (1 min 22 secs)
-# Training (5 epochs): 2793 seconds (46 mins 33 secs)
-# Total: 2901 seconds (48 mins 21 secs)
+# Hidden States Generation: ~4 mins
+# Training (5 epochs): ~47 mins
+# Total: ~53 mins
 
 # Results on SpecBench (80 prompts, 256 output tokens):
 # acceptance rate: 13.35%
@@ -38,11 +39,13 @@ set -euo pipefail
 MODEL="Qwen/Qwen3-8B"
 DATASET="sharegpt"                # sharegpt, ultrachat, or path to custom data
 OUTPUT_DIR="./output/peagle_qwen3_8b_sharegpt"
-VLLM_PORT=8108
+HIDDEN_STATES_DIR="$OUTPUT_DIR/hidden_states"
+VLLM_PORT=8000
 MAX_SAMPLES=5000
 SEQ_LENGTH=4096
 EPOCHS=5
 LR=6e-4
+CONCURRENCY=32                    # Parallel requests to vLLM during data generation
 
 # P-EAGLE-specific parameters
 SPECULATOR_TYPE="peagle"
@@ -50,10 +53,11 @@ NUM_LAYERS=4
 NUM_DEPTHS=4
 DOWN_SAMPLE_RATIO=0.7
 DOWN_SAMPLE_RATIO_MIN=0.2
-# GPU assignments (online training needs separate GPUs for vLLM and training)
-VLLM_GPUS="0,1"
-TRAIN_GPUS="2,3"
-NUM_TRAIN_GPUS=2
+
+# GPU assignments (offline reuses the same GPUs sequentially)
+GPUS="0,1"
+NUM_GPUS=2
+
 # =======================================
 
 # Step 1: Prepare data
@@ -61,24 +65,16 @@ echo "=== Step 1: Preparing data ==="
 python scripts/prepare_data.py \
     --model "$MODEL" \
     --data "$DATASET" \
-    --output "$OUTPUT_DIR" \
     --max-samples "$MAX_SAMPLES" \
+    --output "$OUTPUT_DIR" \
     --seq-length "$SEQ_LENGTH"
 
 # Step 2: Launch vLLM server in the background
 echo "=== Step 2: Launching vLLM server ==="
-CUDA_VISIBLE_DEVICES="$VLLM_GPUS" python scripts/launch_vllm.py "$MODEL" \
-    --hidden-states-path "$OUTPUT_DIR/hidden_states" \
-    -- --data-parallel-size 2 --port "$VLLM_PORT" --gpu-memory-utilization 0.85 &
+CUDA_VISIBLE_DEVICES="$GPUS" python scripts/launch_vllm.py "$MODEL" \
+    --hidden-states-path "$HIDDEN_STATES_DIR" \
+    -- --data-parallel-size 2 --port "$VLLM_PORT" &
 VLLM_PID=$!
-
-# Ensure vLLM is cleaned up on exit
-cleanup() {
-    echo "Stopping vLLM server..."
-    kill "$VLLM_PID" 2>/dev/null || true
-    wait "$VLLM_PID" 2>/dev/null || true
-}
-trap cleanup EXIT
 
 echo "Waiting for vLLM server to be ready..."
 until curl -sf "http://localhost:${VLLM_PORT}/health" > /dev/null 2>&1; do
@@ -86,19 +82,31 @@ until curl -sf "http://localhost:${VLLM_PORT}/health" > /dev/null 2>&1; do
 done
 echo "vLLM server ready."
 
-# Step 3: Train against the live vLLM server
-echo "=== Step 3: Training ==="
-CUDA_VISIBLE_DEVICES="$TRAIN_GPUS" torchrun \
-    --standalone --nproc_per_node "$NUM_TRAIN_GPUS" \
+# Step 3: Generate hidden states
+echo "=== Step 3: Generating hidden states ==="
+python scripts/data_generation_offline.py \
+    --preprocessed-data "$OUTPUT_DIR" \
+    --endpoint "http://localhost:${VLLM_PORT}/v1" \
+    --output "$HIDDEN_STATES_DIR" \
+    --max-samples "$MAX_SAMPLES" \
+    --concurrency "$CONCURRENCY" \
+    --validate-outputs
+
+# Step 4: Stop vLLM server to free GPU memory for training
+echo "=== Step 4: Stopping vLLM server ==="
+kill "$VLLM_PID" 2>/dev/null || true
+wait "$VLLM_PID" 2>/dev/null || true
+echo "vLLM server stopped. GPUs freed for training."
+
+# Step 5: Train using pre-generated hidden states
+echo "=== Step 5: Training ==="
+CUDA_VISIBLE_DEVICES="$GPUS" torchrun \
+    --standalone --nproc_per_node "$NUM_GPUS" \
     scripts/train.py \
     --verifier-name-or-path "$MODEL" \
     --data-path "$OUTPUT_DIR" \
-    --vllm-endpoint "http://localhost:${VLLM_PORT}/v1" \
-    --hidden-states-path "$OUTPUT_DIR/hidden_states" \
+    --hidden-states-path "$HIDDEN_STATES_DIR" \
     --save-path "$OUTPUT_DIR/checkpoints" \
-    --epochs "$EPOCHS" \
-    --lr "$LR" \
-    --total-seq-len "$SEQ_LENGTH" \
     --speculator-type "$SPECULATOR_TYPE" \
     --num-layers "$NUM_LAYERS" \
     --num-depths "$NUM_DEPTHS" \
@@ -106,7 +114,9 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPUS" torchrun \
     --down-sample-ratio-min "$DOWN_SAMPLE_RATIO_MIN" \
     --no-norm-before-residual \
     --scheduler-type cosine \
-    --on-missing generate \
-    --on-generate delete
+    --epochs "$EPOCHS" \
+    --lr "$LR" \
+    --total-seq-len "$SEQ_LENGTH" \
+    --on-missing raise
 
 echo "Done. Checkpoints saved to $OUTPUT_DIR/checkpoints/"

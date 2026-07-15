@@ -16,6 +16,7 @@ import pytest
 
 from tests.e2e.utils import (
     launch_vllm_server_context,
+    record_perf,
     run_data_generation_offline,
     run_prepare_data,
     run_training,
@@ -118,21 +119,26 @@ def run_offline_e2e(
     log_freq: int = 1,
     train_timeout: int = 30 * 60,  # 30 mins
     datagen_timeout: int = 25 * 60,  # 25 mins
+    perf: dict | None = None,
 ):
     data_path = tmp_path / "data"
     offline_hidden_states = tmp_path / "offline_hidden_states"
     save_path = tmp_path / "checkpoints"
 
     # Step 1: Prepare data
-    run_prepare_data(model, dataset, data_path, max_samples, seq_length)
+    with record_perf("prepare_data", perf):
+        run_prepare_data(model, dataset, data_path, max_samples, seq_length)
 
-    with launch_vllm_server_context(
-        model,
-        port,
-        str(tmp_path / "vllm_hidden_states"),
-        max_model_len=seq_length + 1,
-        target_layer_ids=target_layer_ids,
-        **(vllm_kwargs or {}),
+    with (
+        launch_vllm_server_context(
+            model,
+            port,
+            str(tmp_path / "vllm_hidden_states"),
+            max_model_len=seq_length + 1,
+            target_layer_ids=target_layer_ids,
+            **(vllm_kwargs or {}),
+        ),
+        record_perf("data_generation", perf),
     ):
         # Step 2: Generate hidden states offline
         run_data_generation_offline(
@@ -144,35 +150,38 @@ def run_offline_e2e(
         )
 
     # Step 3: Train using pre-generated hidden states (no live server needed)
-    run_training(
-        model,
-        data_path,
-        save_path,
-        seq_length,
-        port,
-        draft_vocab_size,
-        epochs,
-        lr,
-        online=False,
-        hidden_states_path=offline_hidden_states,
-        speculator_type=speculator_type,
-        extra_train_args=extra_train_args,
-        target_layer_ids=target_layer_ids,
-        log_freq=log_freq,
-        timeout=train_timeout,
-    )
+    with record_perf("training", perf):
+        run_training(
+            model,
+            data_path,
+            save_path,
+            seq_length,
+            port,
+            draft_vocab_size,
+            epochs,
+            lr,
+            online=False,
+            hidden_states_path=offline_hidden_states,
+            speculator_type=speculator_type,
+            extra_train_args=extra_train_args,
+            target_layer_ids=target_layer_ids,
+            log_freq=log_freq,
+            timeout=train_timeout,
+        )
 
     # Step 4: Validate trained checkpoint with vLLM inference
     if prompts is not None:
         checkpoint_path = str(save_path / "checkpoint_best")
         inference_kwargs = {**(vllm_kwargs or {}), "gpu_memory_utilization": 0.8}
-        run_vllm_engine(
-            model_path=checkpoint_path,
-            tmp_path=tmp_path,
-            prompts=prompts,
-            disable_compile_cache=disable_compile_cache,
-            max_tokens=max_tokens,
-            ignore_eos=ignore_eos,
-            acceptance_thresholds=acceptance_thresholds,
-            **inference_kwargs,
-        )
+        with record_perf("vllm_inference", perf):
+            run_vllm_engine(
+                model_path=checkpoint_path,
+                tmp_path=tmp_path,
+                prompts=prompts,
+                disable_compile_cache=disable_compile_cache,
+                max_tokens=max_tokens,
+                ignore_eos=ignore_eos,
+                acceptance_thresholds=acceptance_thresholds,
+                perf=perf,
+                **inference_kwargs,
+            )

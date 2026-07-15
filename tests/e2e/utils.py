@@ -22,6 +22,7 @@ __all__ = [
     "launch_vllm_server",
     "launch_vllm_server_context",
     "purge_newfiles",
+    "record_perf",
     "run_data_generation_offline",
     "run_prepare_data",
     "run_stitch_mtp",
@@ -369,6 +370,7 @@ def run_vllm_engine(
     ignore_eos: bool = True,
     acceptance_thresholds: Iterable[float] | None = None,
     timeout: float | None = None,
+    perf: dict | None = None,
 ):
     VLLM_PYTHON = os.environ.get("VLLM_PYTHON", sys.executable)
     logger.info("vLLM Python executable: {}", VLLM_PYTHON)
@@ -443,6 +445,10 @@ def run_vllm_engine(
         assert max_tokens > 100 or len(output_token_ids) == max_tokens
         assert all(isinstance(token, int) for token in output_token_ids)
 
+    # Union of the existing metrics_dict and the perf dict
+    if perf is not None:
+        perf["vllm_metrics_dict"] = metrics_dict
+
     if acceptance_thresholds is not None:
         for i, thresholdi in enumerate(acceptance_thresholds):
             assert f"acceptance_at_token_{i}" in metrics_dict, (
@@ -452,3 +458,13 @@ def run_vllm_engine(
             assert acci >= thresholdi, (
                 f"Acceptance {acci} at token {i} is less than threshold {thresholdi}"
             )
+
+
+@contextmanager
+def record_perf(label: str, results: dict | None):
+    if results is None:
+        yield
+        return
+    t0 = time.perf_counter()
+    yield
+    results[label] = time.perf_counter() - t0

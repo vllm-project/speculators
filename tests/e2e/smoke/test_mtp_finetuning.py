@@ -23,6 +23,7 @@ from tests.conftest import (
 )
 from tests.e2e.utils import (
     launch_vllm_server_context,
+    record_perf,
     run_prepare_data,
     run_stitch_mtp,
     run_training,
@@ -72,6 +73,7 @@ def run_mtp_finetuning_e2e(
     train_timeout: int = 30 * 60,
     gpu_memory_utilization: float = 0.5,
     enforce_eager: bool = False,
+    perf: dict | None = None,
 ):
     """Run MTP online finetuning E2E pipeline.
 
@@ -102,25 +104,29 @@ def run_mtp_finetuning_e2e(
 
     # Step 2: Prepare data
     logger.info("Preparing tokenized data")
-    run_prepare_data(
-        model=verifier,
-        data=training_data_path,
-        data_path=data_path,
-        max_samples=max_samples,
-        seq_length=seq_length,
-    )
+    with record_perf("prepare_data", perf):
+        run_prepare_data(
+            model=verifier,
+            data=training_data_path,
+            data_path=data_path,
+            max_samples=max_samples,
+            seq_length=seq_length,
+        )
     logger.info("Data prepared: %s", data_path)
 
     # Step 3-4: Launch vLLM, train online
     logger.info("Starting online training")
-    with launch_vllm_server_context(
-        verifier,
-        port,
-        str(hidden_states_path),
-        max_model_len=seq_length + 1,
-        gpu_memory_utilization=gpu_memory_utilization,
-        target_layer_ids=target_layer_ids,
-        enforce_eager=enforce_eager,
+    with (
+        launch_vllm_server_context(
+            verifier,
+            port,
+            str(hidden_states_path),
+            max_model_len=seq_length + 1,
+            gpu_memory_utilization=gpu_memory_utilization,
+            target_layer_ids=target_layer_ids,
+            enforce_eager=enforce_eager,
+        ),
+        record_perf("training", perf),
     ):
         run_training(
             model=verifier,
@@ -147,27 +153,30 @@ def run_mtp_finetuning_e2e(
         assert checkpoint_path.exists(), f"No checkpoint at {checkpoint_path}"
 
         logger.info("Stitching finetuned weights into verifier")
-        run_stitch_mtp(
-            finetuned_checkpoint=checkpoint_path,
-            verifier_path=verifier,
-            output_path=stitched_path,
-            timeout=10 * 60,
-        )
+        with record_perf("stitch", perf):
+            run_stitch_mtp(
+                finetuned_checkpoint=checkpoint_path,
+                verifier_path=verifier,
+                output_path=stitched_path,
+                timeout=10 * 60,
+            )
         assert stitched_path.exists()
         logger.info("Stitch complete: %s", stitched_path)
 
         logger.info("Running vLLM MTP inference on stitched checkpoint")
-        run_vllm_engine(
-            model_path=str(stitched_path),
-            tmp_path=tmp_path,
-            prompts=prompts,
-            speculative_config={
-                "method": "mtp",
-                "num_speculative_tokens": num_speculative_tokens,
-            },
-            enforce_eager=enforce_eager,
-            acceptance_thresholds=acceptance_thresholds,
-            max_tokens=max_tokens,
-            timeout=15 * 60,
-        )
+        with record_perf("vllm_inference", perf):
+            run_vllm_engine(
+                model_path=str(stitched_path),
+                tmp_path=tmp_path,
+                prompts=prompts,
+                speculative_config={
+                    "method": "mtp",
+                    "num_speculative_tokens": num_speculative_tokens,
+                },
+                enforce_eager=enforce_eager,
+                acceptance_thresholds=acceptance_thresholds,
+                max_tokens=max_tokens,
+                timeout=15 * 60,
+                perf=perf,
+            )
     logger.info("MTP finetuning E2E test passed")

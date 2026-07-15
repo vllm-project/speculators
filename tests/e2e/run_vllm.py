@@ -1,8 +1,12 @@
 import argparse
+import contextlib
 import importlib
 import json
+import time
 import types
 from pathlib import Path
+
+import torch._dynamo
 
 
 def _workaround_vllm_torch210() -> None:
@@ -52,6 +56,7 @@ def _workaround_vllm_torch210() -> None:
 # Apply the workaround before importing vLLM: the fix must be in place before
 # vLLM's compilation backend resolves torch._inductor.standalone_compile.
 _workaround_vllm_torch210()
+
 
 from vllm import LLM, SamplingParams  # type: ignore[import-not-found]  # noqa: E402
 from vllm.v1.metrics.reader import Counter, Metric, Vector  # noqa: E402
@@ -120,14 +125,31 @@ def extract_metrics(raw_metrics: list[Metric], total_num_output_tokens: int) -> 
     return metrics_dict
 
 
+def _count_graph_breaks() -> int:
+    """Experimental -- count graph breaks"""
+    try:
+        return sum(torch._dynamo.utils.counters["graph_break"].values())
+    except AttributeError:
+        return -1
+
+
 def run_vllm(args: argparse.Namespace):
     sampling_params = SamplingParams(**json.loads(args.sampling_params_args))
+    with contextlib.suppress(AttributeError):
+        torch._dynamo.reset()
     llm = LLM(**json.loads(args.llm_args), disable_log_stats=False)
+    t0 = time.perf_counter()
     outputs = llm.chat(json.loads(args.prompts), sampling_params)
+    generation_time_s = time.perf_counter() - t0
     total_num_output_tokens = sum(
         len(output.outputs[0].token_ids) for output in outputs
     )
     metrics_dict = extract_metrics(llm.get_metrics(), total_num_output_tokens)
+    metrics_dict["generation_time_s"] = generation_time_s
+    metrics_dict["tokens_per_s"] = (
+        total_num_output_tokens / generation_time_s if generation_time_s > 0 else 0.0
+    )
+    metrics_dict["graph_breaks"] = _count_graph_breaks()
     return outputs, metrics_dict
 
 

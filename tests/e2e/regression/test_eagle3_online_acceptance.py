@@ -36,6 +36,7 @@ def test_online_regression(
     dataset: str,
     acceptance_thresholds: list[float],
     prompts: list[list[dict[str, str]]],
+    log_perf: dict,
 ):
     if dataset == "sharegpt4v_coco":
         coco_dir = get_coco_dir()
@@ -71,4 +72,5 @@ def test_online_regression(
         acceptance_thresholds=acceptance_thresholds,
         log_freq=50,
         train_timeout=45 * 60,  # 45 mins
+        perf=log_perf,
     )
