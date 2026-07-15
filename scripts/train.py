@@ -216,8 +216,14 @@ def create_transformer_layer_config(  # noqa: C901
                 _maybe_apply_mrope_full_head_hack(
                     rope_params, resolved_head_dim, mrope_full_head_hack
                 )
+                # ``type`` is a legacy alias (only "mrope" on VL models) that
+                # transformers strips during validation and that breaks vLLM's
+                # config checks; drop it while keeping the real MRoPE fields.
                 rope_params.pop("type", None)
                 rope_params.pop("mrope_interleaved", None)
+                # The verifier (e.g. Mistral) may use partial rotary embeddings,
+                # but the draft model doesn't support partial_rotary_factor.
+                # Only keep it for MRoPE configs that need it.
                 if "mrope_section" not in rope_params:
                     rope_params.pop("partial_rotary_factor", None)
             config.rope_parameters = rope_params
@@ -228,8 +234,10 @@ def create_transformer_layer_config(  # noqa: C901
                 _maybe_apply_mrope_full_head_hack(
                     rope_scaling, resolved_head_dim, mrope_full_head_hack
                 )
+                # Strip legacy fields for consistency with rope_parameters path
                 rope_scaling.pop("type", None)
                 rope_scaling.pop("mrope_interleaved", None)
+                # Same partial_rotary_factor guard as the rope_parameters path.
                 if "mrope_section" not in rope_scaling:
                     rope_scaling.pop("partial_rotary_factor", None)
             config.rope_scaling = rope_scaling
