@@ -252,8 +252,6 @@ def _render_boundary_rows(
         for i, turn in enumerate(normalized_conv)
         if turn["role"] == "assistant" and i > 0
     ]
-    if not assistant_indices:
-        return []
 
     turns: list[_Turn] = []
     for j in assistant_indices:
@@ -416,7 +414,7 @@ def _passthrough_pretokenized(
 
 def _preprocess_batch(
     examples: dict,
-    processor: ProcessorLike,
+    is_multimodal: bool,
     render_endpoint: str | None,
     max_length: int,
     minimum_valid_tokens: int | None = None,
@@ -439,7 +437,7 @@ def _preprocess_batch(
 
     # MM inputs are extracted via the Chat Completions API, which needs the
     # original messages -- token ids alone cannot carry the images.
-    if isinstance(processor, ProcessorMixin):
+    if is_multimodal:
         results["messages"] = []
 
     if not conversations:
@@ -547,6 +545,10 @@ def build_eagle3_dataset(
     # These rows carry the generation boundary as their mask, so _preprocess_batch
     # passes them through: no rendering, no boundary derivation.
     pretokenized = {"input_ids", "loss_mask"} <= set(original_cols)
+    # Multimodal rows keep their `messages` so the images survive to hidden-state
+    # extraction. Compute once here rather than pickling the heavyweight processor
+    # into every map worker just to recheck it.
+    is_multimodal = isinstance(processor, ProcessorMixin)
 
     if pretokenized:
         log.info("Pre-tokenized rows: using their loss mask, skipping render")
@@ -560,15 +562,11 @@ def build_eagle3_dataset(
 
     # Avoid CPU contention for MM processing:
     # https://github.com/vllm-project/vllm/pull/31879
-    with (
-        set_default_torch_num_threads()
-        if isinstance(processor, ProcessorMixin)
-        else nullcontext()
-    ):
+    with set_default_torch_num_threads() if is_multimodal else nullcontext():
         dataset = dataset.map(
             lambda examples: _preprocess_batch(
                 examples,
-                processor,
+                is_multimodal,
                 render_endpoint,
                 max_length,
                 minimum_valid_tokens,
