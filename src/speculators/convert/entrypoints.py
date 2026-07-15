@@ -122,6 +122,10 @@ def maybe_convert_external_checkpoint(
     cache_dir: str | os.PathLike | None = None,
     output_path: str | None = None,
     config_dict: dict | None = None,
+    force_download: bool = False,
+    local_files_only: bool = False,
+    token: str | bool | None = None,
+    revision: str = "main",
 ) -> str:
     """Convert an external (non-speculators) checkpoint to speculators format.
 
@@ -132,7 +136,14 @@ def maybe_convert_external_checkpoint(
     reuse an already-loaded config and skip re-reading it.
     """
     if config_dict is None:
-        config_dict, _ = PretrainedConfig.get_config_dict(model, cache_dir=cache_dir)
+        config_dict, _ = PretrainedConfig.get_config_dict(
+            model,
+            cache_dir=cache_dir,
+            force_download=force_download,
+            local_files_only=local_files_only,
+            token=token,
+            revision=revision,
+        )
     if "speculators_model_type" in config_dict:
         return str(model)
 
@@ -160,5 +171,9 @@ def maybe_convert_external_checkpoint(
         algorithm=algorithm,
         output_path=output_path,
         cache_dir=cache_dir,
+        force_download=force_download,
+        local_files_only=local_files_only,
+        token=token,
+        revision=revision,
     )
     return output_path

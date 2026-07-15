@@ -35,6 +35,10 @@ class TestDownloadCheckpointFromHub:
             repo_id="test-model/checkpoint",
             allow_patterns=["*.json", "*.safetensors", "*.bin", "*.index.json"],
             cache_dir=None,
+            force_download=False,
+            local_files_only=False,
+            token=None,
+            revision="main",
         )
 
     @patch("speculators.convert.utils.snapshot_download")
@@ -43,12 +47,23 @@ class TestDownloadCheckpointFromHub:
         cache_dir = tmp_path / "cache"
         mock_snapshot_download.return_value = str(tmp_path / "checkpoint")
 
-        download_checkpoint_from_hub("test-model/checkpoint", cache_dir=str(cache_dir))
+        download_checkpoint_from_hub(
+            "test-model/checkpoint",
+            cache_dir=str(cache_dir),
+            force_download=True,
+            local_files_only=True,
+            token="token",
+            revision="test-revision",
+        )
 
         mock_snapshot_download.assert_called_once_with(
             repo_id="test-model/checkpoint",
             allow_patterns=["*.json", "*.safetensors", "*.bin", "*.index.json"],
             cache_dir=str(cache_dir),
+            force_download=True,
+            local_files_only=True,
+            token="token",
+            revision="test-revision",
         )
 
     @patch("speculators.convert.utils.snapshot_download")
@@ -81,7 +96,12 @@ class TestEnsureCheckpointIsLocal:
 
         assert result == tmp_path / "downloaded"
         mock_download.assert_called_once_with(
-            model_id="test-model/checkpoint", cache_dir=None
+            model_id="test-model/checkpoint",
+            cache_dir=None,
+            force_download=False,
+            local_files_only=False,
+            token=None,
+            revision="main",
         )
 
     @patch("speculators.convert.utils.download_checkpoint_from_hub")
@@ -93,7 +113,12 @@ class TestEnsureCheckpointIsLocal:
         ensure_checkpoint_is_local("test-model/checkpoint", cache_dir=str(cache_dir))
 
         mock_download.assert_called_once_with(
-            model_id="test-model/checkpoint", cache_dir=str(cache_dir)
+            model_id="test-model/checkpoint",
+            cache_dir=str(cache_dir),
+            force_download=False,
+            local_files_only=False,
+            token=None,
+            revision="main",
         )
 
 

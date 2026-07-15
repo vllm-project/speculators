@@ -34,15 +34,14 @@ def _make_verifier_config(**overrides) -> types.SimpleNamespace:
 
 @pytest.fixture
 def patch_verifier(monkeypatch):
-    """Patch ``AutoConfig.from_pretrained`` and the transformers version."""
+    """Patch verifier config resolution and the transformers version."""
 
     def _apply(verifier_config, transformers_version: str = "5.0.0"):
-        class _FakeAutoConfig:
-            @staticmethod
-            def from_pretrained(*_args, **_kwargs):
-                return verifier_config
-
-        monkeypatch.setattr(train_module, "AutoConfig", _FakeAutoConfig)
+        monkeypatch.setattr(
+            train_module,
+            "get_verifier_config",
+            lambda _verifier_name_or_path: verifier_config,
+        )
         monkeypatch.setattr(
             train_module.transformers, "__version__", transformers_version
         )

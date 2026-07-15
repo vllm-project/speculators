@@ -215,10 +215,11 @@ def main():
         "num_speculative_tokens": 1,
         "draft_model_config": {"hf_config": draft_hf_config},
     }
+    hidden_states_path = os.path.abspath(os.path.expanduser(args.hidden_states_path))
     kv_transfer_config = {
         "kv_connector": "ExampleHiddenStatesConnector",
         "kv_role": "kv_producer",
-        "kv_connector_extra_config": {"shared_storage_path": args.hidden_states_path},
+        "kv_connector_extra_config": {"shared_storage_path": hidden_states_path},
     }
 
     cmd = [

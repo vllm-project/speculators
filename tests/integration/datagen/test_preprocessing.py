@@ -1697,7 +1697,6 @@ def test_pretokenized_rows_take_priority_over_multimodal_processor():
         max_length=4,
         num_proc=1,
         assistant_pattern=r"must-not-run",
-        turn_dropout=True,
         minimum_valid_tokens=1,
     )
 

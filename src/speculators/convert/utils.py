@@ -11,7 +11,15 @@ from loguru import logger
 from safetensors import safe_open
 
 
-def download_checkpoint_from_hub(model_id: str, cache_dir: str | None = None) -> Path:
+def download_checkpoint_from_hub(
+    model_id: str,
+    cache_dir: str | None = None,
+    *,
+    force_download: bool = False,
+    local_files_only: bool = False,
+    token: str | bool | None = None,
+    revision: str = "main",
+) -> Path:
     """
     Download a checkpoint from HuggingFace Hub.
 
@@ -32,6 +40,10 @@ def download_checkpoint_from_hub(model_id: str, cache_dir: str | None = None) ->
             repo_id=model_id,
             allow_patterns=["*.json", "*.safetensors", "*.bin", "*.index.json"],
             cache_dir=cache_dir,
+            force_download=force_download,
+            local_files_only=local_files_only,
+            token=token,
+            revision=revision,
         )
         logger.debug(f"Downloaded to: {local_path}")
         return Path(local_path)
@@ -41,7 +53,13 @@ def download_checkpoint_from_hub(model_id: str, cache_dir: str | None = None) ->
 
 
 def ensure_checkpoint_is_local(
-    checkpoint_path: str | Path, cache_dir: str | Path | None = None
+    checkpoint_path: str | Path,
+    cache_dir: str | Path | None = None,
+    *,
+    force_download: bool = False,
+    local_files_only: bool = False,
+    token: str | bool | None = None,
+    revision: str = "main",
 ) -> Path:
     """
     Ensure we have a local copy of the checkpoint.
@@ -70,7 +88,12 @@ def ensure_checkpoint_is_local(
         return checkpoint_path
 
     return download_checkpoint_from_hub(
-        model_id=str(checkpoint_path), cache_dir=str(cache_dir) if cache_dir else None
+        model_id=str(checkpoint_path),
+        cache_dir=str(cache_dir) if cache_dir else None,
+        force_download=force_download,
+        local_files_only=local_files_only,
+        token=token,
+        revision=revision,
     )
 
 

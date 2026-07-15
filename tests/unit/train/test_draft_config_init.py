@@ -527,6 +527,61 @@ def test_build_from_config_only_reapplies_draft_attn_impl(tmp_path):
         )
 
     assert built.config.transformer_layer_config._attn_implementation == "sdpa"
+    assert built._attn_impl == "sdpa"  # noqa: SLF001
+
+
+def _weighted_from_pretrained_args(path: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        from_pretrained=path,
+        speculator_type="eagle3",
+        verifier_name_or_path="some-verifier",
+        draft_attn_impl="sdpa",
+    )
+
+
+def test_weighted_from_pretrained_reapplies_draft_attn_impl(tmp_path):
+    model_dir = tmp_path / "pretrained"
+    Eagle3DraftModel(_make_eagle3_config()).save_pretrained(str(model_dir))
+
+    with patch.object(Eagle3DraftModel, "load_verifier_weights"):
+        built = build_draft_model(
+            _weighted_from_pretrained_args(str(model_dir)),
+            Eagle3DraftModel,
+            None,
+            None,
+            None,
+        )
+
+    assert built.config.transformer_layer_config._attn_implementation == "sdpa"
+    assert built._attn_impl == "sdpa"  # noqa: SLF001
+
+
+def test_external_from_pretrained_converts_before_applying_attn_impl(tmp_path):
+    model_dir = tmp_path / "converted"
+    Eagle3DraftModel(_make_eagle3_config()).save_pretrained(str(model_dir))
+    external_dir = tmp_path / "external"
+    external_dir.mkdir()
+    (external_dir / "config.json").write_text(json.dumps({"model_type": "qwen3"}))
+    (external_dir / "model.safetensors").touch()
+
+    with (
+        patch.object(Eagle3DraftModel, "load_verifier_weights"),
+        patch(
+            "speculators.convert.entrypoints.maybe_convert_external_checkpoint",
+            return_value=str(model_dir),
+        ) as convert,
+    ):
+        built = build_draft_model(
+            _weighted_from_pretrained_args(str(external_dir)),
+            Eagle3DraftModel,
+            None,
+            None,
+            None,
+        )
+
+    convert.assert_called_once()
+    assert built.config.transformer_layer_config._attn_implementation == "sdpa"
+    assert built._attn_impl == "sdpa"  # noqa: SLF001
 
 
 # ---------------------------------------------------------------------------

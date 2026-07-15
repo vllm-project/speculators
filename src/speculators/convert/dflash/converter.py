@@ -61,10 +61,21 @@ class DFlashConverter:
         validate: bool = True,
         aux_hidden_state_layer_ids: list[int] | None = None,
         cache_dir: str | Path | None = None,
+        force_download: bool = False,
+        local_files_only: bool = False,
+        token: str | bool | None = None,
+        revision: str = "main",
     ) -> None:
         logger.info(f"Converting DFlash checkpoint: {input_path}")
 
-        local_checkpoint_path = ensure_checkpoint_is_local(input_path, cache_dir)
+        local_checkpoint_path = ensure_checkpoint_is_local(
+            input_path,
+            cache_dir,
+            force_download=force_download,
+            local_files_only=local_files_only,
+            token=token,
+            revision=revision,
+        )
         source_config = load_checkpoint_config(local_checkpoint_path)
         weights = load_checkpoint_weights(local_checkpoint_path)
         logger.info(f"Loaded {len(weights)} weights")

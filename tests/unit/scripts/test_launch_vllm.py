@@ -34,11 +34,32 @@ def _extract_speculative_config(output: str) -> dict:
     return json.loads(raw_config)
 
 
+def _extract_kv_transfer_config(output: str) -> dict:
+    command = output.split("Running command:\n", 1)[1].strip()
+    payload = command.split(" --kv_transfer_config ", 1)[1]
+    return json.loads(payload.split(" --", 1)[0])
+
+
 def test_launch_vllm_disables_prefix_cache_by_default(monkeypatch, capsys):
     """Hidden-state extraction needs full-prompt slots by default."""
     output = _run_launch_vllm_dry_run(monkeypatch, capsys, ["dummy", "--dry-run"])
 
     assert "--no-enable-prefix-caching" in output
+
+
+def test_launch_vllm_makes_hidden_states_path_absolute(
+    monkeypatch, capsys, tmp_path
+):
+    monkeypatch.chdir(tmp_path)
+    output = _run_launch_vllm_dry_run(
+        monkeypatch,
+        capsys,
+        ["dummy", "--dry-run", "--hidden-states-path", "runtime/hidden_states"],
+    )
+
+    kv_config = _extract_kv_transfer_config(output)
+    shared_path = kv_config["kv_connector_extra_config"]["shared_storage_path"]
+    assert shared_path == str(tmp_path / "runtime/hidden_states")
 
 
 def test_launch_vllm_small_verifier_uses_unique_valid_default_layers(
