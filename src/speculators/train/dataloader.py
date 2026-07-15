@@ -17,7 +17,7 @@ from speculators.train.data import (
     create_collate_fn,
     split_files,
 )
-from speculators.train.distributed import get_dp_rank, get_dp_size, is_distributed
+from speculators.train.distributed import get_dp_rank, get_dp_size
 from speculators.train.distributed_batch_sampler import (
     MultipackDistributedBatchSamplerV2,
 )
@@ -57,9 +57,7 @@ def _setup_dataloader(
             dtype=dataset.hidden_states_dtype,
             preprocess=preprocess,
         ),
-        # Persistent worker processes can keep torchrun ranks alive after
-        # distributed cleanup, which makes subprocess-based tests hang.
-        persistent_workers=use_workers and not is_distributed(),
+        persistent_workers=use_workers,
     )
 
 

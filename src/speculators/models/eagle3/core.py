@@ -3,7 +3,7 @@ from typing import ClassVar
 
 import torch
 from torch.nn.attention.flex_attention import create_block_mask, create_mask
-from transformers import DynamicCache, PretrainedConfig
+from transformers import AutoConfig, DynamicCache, PretrainedConfig
 
 from speculators.config import SpeculatorsConfig, VerifierConfig
 from speculators.model import DraftVocabMixin, SpeculatorModel
@@ -19,7 +19,6 @@ from speculators.models.eagle3.model_definitions import model_classes
 from speculators.models.metrics import LossConfig, resolve_loss_config
 from speculators.models.utils import (
     conditional_torch_compile,
-    get_verifier_config,
     resolve_target_layer_ids,
     strip_verifier_final_layer_id,
 )
@@ -46,26 +45,6 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
     d2t: torch.Tensor | None
 
     def __init__(self, config: Eagle3SpeculatorConfig):
-        aux_layer_ids = config.eagle_aux_hidden_state_layer_ids
-        if aux_layer_ids is not None and not aux_layer_ids:
-            raise ValueError(
-                "eagle_aux_hidden_state_layer_ids must be None to use the legacy "
-                "three-layer default, or contain at least one auxiliary layer ID."
-            )
-        if aux_layer_ids is not None and any(
-            layer_id < 1 for layer_id in aux_layer_ids
-        ):
-            raise ValueError(
-                "eagle_aux_hidden_state_layer_ids must contain positive layer IDs"
-            )
-        if (
-            aux_layer_ids is not None
-            and len(set(aux_layer_ids)) != len(aux_layer_ids)
-        ):
-            raise ValueError(
-                "eagle_aux_hidden_state_layer_ids must not contain duplicates"
-            )
-
         # Forcibly override config settings
         if config.transformer_layer_config._attn_implementation is None:  # noqa: SLF001
             config.transformer_layer_config._attn_implementation = (  # noqa: SLF001
@@ -89,7 +68,11 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
         self.embed_tokens.weight.requires_grad = self.config.embed_requires_grad
 
         # FC LAYER
-        num_aux = 3 if aux_layer_ids is None else len(aux_layer_ids)
+        num_aux = (
+            len(config.eagle_aux_hidden_state_layer_ids)
+            if config.eagle_aux_hidden_state_layer_ids
+            else 3
+        )
         self.fc = torch.nn.Linear(
             num_aux * self.hidden_size, self.hidden_size, bias=False
         )
@@ -179,39 +162,12 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
 
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path, *args, **kwargs):
-        verifier_fallback = kwargs.get("verifier")
         model = super().from_pretrained(pretrained_model_name_or_path, *args, **kwargs)
         verifier_path = model.config.speculators_config.verifier.name_or_path
-        used_verifier_fallback = False
-        if not verifier_path and verifier_fallback:
-            # A saved verifier path always wins. The caller-provided verifier is
-            # trusted only as a fallback for portable/legacy checkpoints whose
-            # metadata omitted it (the training CLI passes this explicitly).
-            model.config.speculators_config.verifier.name_or_path = verifier_fallback
-            verifier_path = verifier_fallback
-            used_verifier_fallback = True
-        if verifier_path:
-            legacy_layer_ids = model.config.eagle_aux_hidden_state_layer_ids
-            resolved_layer_ids = resolve_target_layer_ids(
-                legacy_layer_ids, verifier_path
+        if verifier_path is not None:
+            model.config.eagle_aux_hidden_state_layer_ids = resolve_target_layer_ids(
+                model.config.eagle_aux_hidden_state_layer_ids, verifier_path
             )
-            if legacy_layer_ids is None:
-                constructed_num_aux = model.fc.in_features // model.hidden_size
-                if len(resolved_layer_ids) != constructed_num_aux:
-                    raise ValueError(
-                        "Cannot safely load a legacy Eagle-family checkpoint whose "
-                        "eagle_aux_hidden_state_layer_ids is None: the saved model "
-                        f"was constructed for {constructed_num_aux} auxiliary layers, "
-                        f"but verifier {verifier_path!r} resolves to "
-                        f"{len(resolved_layer_ids)} ({resolved_layer_ids}). Use a "
-                        "checkpoint with explicit auxiliary layer IDs."
-                    )
-            model.config.eagle_aux_hidden_state_layer_ids = resolved_layer_ids
-        if used_verifier_fallback:
-            # SpeculatorModel.from_pretrained attempted this before the missing
-            # verifier metadata was repaired, so load the frozen verifier-owned
-            # weights now that their trusted source is known.
-            model.load_verifier_weights()
         return model
 
     def load_verifier_weights(self):
@@ -220,10 +176,11 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
         self.embed_tokens.weight.requires_grad_(self.config.embed_requires_grad)
 
         verifier_config = self.config.speculators_config.verifier
-        verifier_path = verifier_config.name_or_path
-        if not verifier_path:
-            return
-        verifier_model_config = get_verifier_config(verifier_path)
+        verifier_model_config = AutoConfig.from_pretrained(verifier_config.name_or_path)  # type: ignore[arg-type]
+
+        # For multimodal models (Qwen3VL, etc.), extract text_config
+        if hasattr(verifier_model_config, "text_config"):
+            verifier_model_config = verifier_model_config.text_config
 
         if verifier_model_config.hidden_size != self.hidden_size:
             raise ValueError(

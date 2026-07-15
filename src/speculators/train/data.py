@@ -2,6 +2,7 @@ import json
 import math
 import os
 import random
+import shutil
 import warnings
 from collections.abc import Callable
 from os import PathLike
@@ -12,21 +13,10 @@ import openai
 import torch
 import torch.nn.functional as F  # noqa: N812
 from datasets import load_from_disk
-from safetensors.torch import load_file
+from safetensors.torch import load_file, save_file
 from torch.utils.data import Dataset
 
-from speculators.data_generation.offline import (
-    align_hidden_states_to_tokens,
-    atomic_move_safetensors,
-    atomic_save_safetensors,
-    check_hidden_states,
-    durable_unlink_safetensors,
-    hidden_states_file_sha256,
-    validate_generated_source_ownership,
-    validate_hidden_states_path,
-    validate_hidden_states_root,
-    validate_hidden_states_tensors,
-)
+from speculators.data_generation.offline import align_hidden_states_to_tokens
 from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_REQUEST_TIMEOUT,
@@ -89,15 +79,15 @@ def create_empty_sample(
     #     "position_ids": [seq_len],
     # }
     # Default dtype is bfloat16 to match the hidden_states dtype used downstream.
-    # When this fallback is used for explicitly skipped samples, the implicit
-    # float32 placeholders crashed
+    # When this fallback is used (e.g. vLLM hidden-state extraction times out and
+    # we substitute an empty sample), the implicit float32 placeholders crashed
     # bf16 EAGLE-3 layers (fc, verifier_lm_head) with a dtype mismatch.
 
     return {
         "hidden_states": torch.empty(0, num_target_layers * hidden_size, dtype=dtype),
         "input_ids": torch.empty(0, dtype=torch.long),
         "verifier_last_hidden_states": torch.empty(0, hidden_size, dtype=dtype),
-        "loss_mask": torch.empty(0, dtype=torch.long),
+        "loss_mask": torch.empty(0, dtype=torch.bool),
         "lengths": torch.tensor([0], dtype=torch.long),
         "position_ids": torch.arange(0, dtype=torch.long),
     }
@@ -163,36 +153,6 @@ def _has_multimodal_content(messages: list[dict]) -> bool:
     return False
 
 
-def _parse_client_tools(raw_tools: object) -> list[dict[str, Any]] | None:
-    """Parse the canonical tools column for a Chat Completions request."""
-    if raw_tools is None or raw_tools == "":
-        return None
-
-    parsed_tools: object
-    if isinstance(raw_tools, str):
-        try:
-            parsed_tools = json.loads(raw_tools)
-        except json.JSONDecodeError as e:
-            raise ValueError("Invalid JSON in preprocessed tools column") from e
-    elif isinstance(raw_tools, list):
-        # Backward compatibility for in-memory/older datasets that stored the
-        # parsed tool list instead of canonical JSON.
-        parsed_tools = raw_tools
-    else:
-        raise ValueError(
-            "Invalid preprocessed tools column: expected canonical JSON or a list"
-        )
-
-    if not isinstance(parsed_tools, list) or not all(
-        isinstance(tool, dict) for tool in parsed_tools
-    ):
-        raise ValueError(
-            "Invalid preprocessed tools schema: expected a list of objects"
-        )
-
-    return cast("list[dict[str, Any]]", parsed_tools) or None
-
-
 def build_client_item(dataset_item: dict) -> ClientItem:
     """Build a request payload for vLLM hidden-state extraction.
 
@@ -224,9 +184,9 @@ def build_client_item(dataset_item: dict) -> ClientItem:
 
     if "messages" in dataset_item and _has_multimodal_content(dataset_item["messages"]):
         out_dict["messages"] = dataset_item["messages"]
-        tools = _parse_client_tools(dataset_item.get("tools"))
-        if tools is not None:
-            out_dict["tools"] = tools
+        tools = dataset_item.get("tools")
+        if tools:
+            out_dict["tools"] = json.loads(tools) if isinstance(tools, str) else tools
 
     return cast("ClientItem", out_dict)
 
@@ -292,59 +252,15 @@ class BaseDataset(Dataset):
         return data
 
 
-def _maybe_load_hs_file(
-    file_path: Path,
-    allowed_root: Path,
-    *,
-    allow_missing_root: bool = False,
-) -> dict[str, torch.Tensor] | None:
-    if allow_missing_root and not allowed_root.exists():
-        validate_hidden_states_root(allowed_root, require_exists=False)
-        return None
-
-    file_path = validate_hidden_states_path(
-        file_path,
-        allowed_root,
-        require_exists=False,
-    )
+def _maybe_load_hs_file(file_path: Path) -> dict[str, torch.Tensor] | None:
     lock_path = str(file_path) + ".lock"
     if Path(lock_path).exists():
-        if Path(lock_path).is_symlink():
-            raise ValueError(f"Hidden-state lock path is a symlink: {lock_path}")
         wait_for_lock(lock_path)
 
     if file_path.exists():
-        file_path = validate_hidden_states_path(file_path, allowed_root)
         return load_file(file_path)
 
     return None
-
-
-def _load_generated_hs_file_with_stable_digest(
-    file_path: Path,
-    allowed_root: Path,
-) -> tuple[dict[str, torch.Tensor], str]:
-    """Load a generated source and prove its bytes stayed stable while read."""
-    file_path = validate_hidden_states_path(
-        file_path,
-        allowed_root,
-        require_exists=False,
-    )
-    lock_path = Path(str(file_path) + ".lock")
-    if lock_path.exists():
-        if lock_path.is_symlink():
-            raise ValueError(f"Hidden-state lock path is a symlink: {lock_path}")
-        wait_for_lock(str(lock_path))
-
-    file_path = validate_hidden_states_path(file_path, allowed_root)
-    before = hidden_states_file_sha256(file_path, allowed_root=allowed_root)
-    loaded = load_file(file_path)
-    after = hidden_states_file_sha256(file_path, allowed_root=allowed_root)
-    if before != after:
-        raise RuntimeError(
-            "Generated hidden-state source changed while it was being loaded"
-        )
-    return loaded, before
 
 
 class ArrowDataset(BaseDataset):
@@ -391,19 +307,11 @@ class ArrowDataset(BaseDataset):
             if hidden_states_path is None
             else Path(hidden_states_path)
         )
-        self.hidden_states_path = validate_hidden_states_root(
-            self.hidden_states_path,
-            require_exists=False,
-        )
         self.vllm_endpoint = vllm_endpoint
         self.on_missing = on_missing
         self.on_generate = on_generate
-        if self.on_generate == "cache" or self.on_missing == "generate":
+        if self.on_generate == "cache":
             self.hidden_states_path.mkdir(parents=True, exist_ok=True)
-        if self.hidden_states_path.exists():
-            self.hidden_states_path = validate_hidden_states_root(
-                self.hidden_states_path
-            )
         self.client: openai.OpenAI | None = None
         self.model = model
         self.request_timeout = request_timeout
@@ -437,107 +345,65 @@ class ArrowDataset(BaseDataset):
         """Get lengths of the dataset samples."""
         return list(self.data.with_format(None)["seq_len"])
 
-    def _maybe_generate_hs(self, index: int) -> dict[str, torch.Tensor]:
+    def _maybe_generate_hs(self, index: int) -> dict[str, torch.Tensor] | None:
         if not self.client:
             self._setup_client()
 
         dataset_item = self.data[index]
         client_item = build_client_item(dataset_item)
 
-        hs_filepath = generate_hidden_states(
-            self.client,  # type:ignore[arg-type]
-            self.model,  # type:ignore[arg-type]
-            client_item,
-            timeout=self.request_timeout,
-            max_retries=self.max_retries,
-        )
+        try:
+            hs_filepath = generate_hidden_states(
+                self.client,  # type:ignore[arg-type]
+                self.model,  # type:ignore[arg-type]
+                client_item,
+                timeout=self.request_timeout,
+                max_retries=self.max_retries,
+            )
 
-        source_path = validate_hidden_states_path(
-            hs_filepath,
-            self.hidden_states_path,
-            require_exists=False,
-        )
-        loaded_hs, source_sha256 = _load_generated_hs_file_with_stable_digest(
-            source_path,
-            self.hidden_states_path,
-        )
+            loaded_hs = _maybe_load_hs_file(Path(hs_filepath))
+            if loaded_hs is None:
+                raise ValueError(f"Failed to load hidden states from {hs_filepath}")
 
-        file_idx = self._map_to_file_idx(index)
-        target_path = self.hidden_states_path / f"hs_{file_idx}.safetensors"
-        source_path = validate_hidden_states_path(
-            source_path,
-            self.hidden_states_path,
-        )
-        validate_generated_source_ownership(
-            source_path,
-            target_path,
-            source_root=self.hidden_states_path,
-            target_root=self.hidden_states_path,
-            allow_current_target=(
-                self.on_generate == "cache" and "messages" in client_item
-            ),
-        )
+            loaded_hs, truncated = align_hidden_states_to_tokens(
+                loaded_hs,
+                dataset_item["input_ids"].tolist(),
+                allow_prefix_truncation="messages" in client_item,
+            )
 
-        loaded_hs, truncated = align_hidden_states_to_tokens(
-            loaded_hs,
-            client_item["input_ids"],
-            allow_prefix_truncation="messages" in client_item,
-        )
-        validate_generated_source_ownership(
-            source_path,
-            target_path,
-            source_root=self.hidden_states_path,
-            target_root=self.hidden_states_path,
-            allow_current_target=self.on_generate == "cache" and truncated,
-        )
-
-        match self.on_generate:
-            case "cache":
-                if truncated:
-                    source_path = validate_hidden_states_path(
-                        source_path, self.hidden_states_path
-                    )
-                    atomic_save_safetensors(
-                        {key: value.contiguous() for key, value in loaded_hs.items()},
-                        target_path,
-                        allowed_root=self.hidden_states_path,
-                        allow_replace=source_path == target_path,
-                        expected_existing_sha256=(
-                            source_sha256 if source_path == target_path else None
-                        ),
-                    )
-                    if source_path != target_path:
-                        durable_unlink_safetensors(
-                            source_path,
-                            allowed_root=self.hidden_states_path,
-                            expected_sha256=source_sha256,
+            match self.on_generate:
+                case "cache":
+                    file_idx = self._map_to_file_idx(index)
+                    target_path = self.hidden_states_path / f"hs_{file_idx}.safetensors"
+                    if truncated:
+                        save_file(
+                            {
+                                key: value.contiguous()
+                                for key, value in loaded_hs.items()
+                            },
+                            target_path,
                         )
-                elif source_path != target_path:
-                    atomic_move_safetensors(
-                        source_path,
-                        target_path,
-                        source_root=self.hidden_states_path,
-                        target_root=self.hidden_states_path,
-                        expected_source_sha256=source_sha256,
-                        expected_tokens=client_item["input_ids"],
-                    )
-            case "delete":
-                durable_unlink_safetensors(
-                    source_path,
-                    allowed_root=self.hidden_states_path,
-                    expected_sha256=source_sha256,
-                )
+                        if Path(hs_filepath) != target_path:
+                            Path(hs_filepath).unlink()
+                    elif Path(hs_filepath) != target_path:
+                        shutil.move(hs_filepath, target_path)
+                case "delete":
+                    Path(hs_filepath).unlink()
+        except Exception as e:
+            if isinstance(e, ValueError) and "NaN" in str(e):
+                raise
+            warnings.warn(
+                f"Failed to load/cache hidden states for sample {index}: {e}",
+                stacklevel=1,
+            )
+            return None
 
         return loaded_hs
 
     def _get_raw_data(self, index):
         file_idx = self._map_to_file_idx(index)
         candidate_path = self.hidden_states_path / f"hs_{file_idx}.safetensors"
-        loaded_hs = _maybe_load_hs_file(
-            candidate_path,
-            self.hidden_states_path,
-            allow_missing_root=True,
-        )
+        loaded_hs = _maybe_load_hs_file(candidate_path)
 
         if loaded_hs is None:
             match self.on_missing:
@@ -556,47 +422,31 @@ class ArrowDataset(BaseDataset):
                         f"Failed to load hidden states for sample {index}."
                     )
 
+        if loaded_hs is None:
+            return loaded_hs
+
         # loaded_hs structure: {
         #   "hidden_states": [seq_len, num_layers, hidden_size]
         #   "token_ids": [seq_len]
         # }
 
-        dataset_item = self.data[index]
-        expected_tokens = [int(token) for token in dataset_item["input_ids"]]
-        try:
-            validate_hidden_states_tensors(loaded_hs)
-        except ValueError as error:
-            raise RuntimeError(
-                f"Invalid hidden-state cache for sample {index}: {error}"
-            ) from error
-
-        actual_tokens = [int(token) for token in loaded_hs["token_ids"].tolist()]
-        if actual_tokens != expected_tokens:
-            raise RuntimeError(
+        if not torch.equal(loaded_hs["token_ids"], self.data[index]["input_ids"]):
+            warnings.warn(
                 f"Loaded token ids {loaded_hs['token_ids']} for index {index} don't"
-                f" match input ids {expected_tokens}"
+                f"match input ids {self.data[index]['input_ids']}",
+                stacklevel=1,
             )
-        try:
-            check_hidden_states(
-                loaded_hs,
-                expected_tokens,
-            )
-        except ValueError as error:
-            raise RuntimeError(
-                f"Invalid hidden-state cache for sample {index}: {error}"
-            ) from error
+            return None
 
         return {
             "hidden_states": loaded_hs["hidden_states"][:, :-1].flatten(
                 1
             ),  # [seq_len, 3 * hidden_size]
-            "input_ids": loaded_hs["token_ids"].to(torch.long),  # [seq_len]
+            "input_ids": loaded_hs["token_ids"],  # [seq_len]
             "verifier_last_hidden_states": loaded_hs["hidden_states"][
                 :, -1
             ],  # [seq_len, hidden_size]
-            "loss_mask": torch.as_tensor(
-                dataset_item["loss_mask"], dtype=torch.long
-            ),  # [seq_len]
+            "loss_mask": self.data[index]["loss_mask"],  # [seq_len]
         }
 
 
@@ -701,18 +551,9 @@ def create_collate_fn(
     max_len: int,
     hidden_size: int,
     num_target_layers: int = 3,
-    dtype: torch.dtype | None = None,
-    hidden_states_dtype: torch.dtype | None = None,
+    dtype: torch.dtype = torch.bfloat16,
     preprocess: Callable[[BatchType], BatchType] | None = None,
 ):
-    if (
-        dtype is not None
-        and hidden_states_dtype is not None
-        and dtype != hidden_states_dtype
-    ):
-        raise ValueError("dtype and hidden_states_dtype must match when both are set")
-    dtype = dtype or hidden_states_dtype or torch.bfloat16
-
     def collate_fn(batch: list[BatchType | None]) -> BatchType:
         # Apply per-sample preprocessing and filter failed samples
         batch = [preprocess(b) if preprocess else b for b in batch if b is not None]

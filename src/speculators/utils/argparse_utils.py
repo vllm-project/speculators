@@ -4,21 +4,6 @@ import argparse
 from collections.abc import Iterable
 
 
-def nonnegative_int(value: str) -> int:
-    """Parse an integer CLI value and reject negatives during argument parsing."""
-    try:
-        parsed = int(value)
-    except ValueError:
-        raise argparse.ArgumentTypeError(
-            f"expected a non-negative integer, got {value!r}"
-        ) from None
-    if parsed < 0:
-        raise argparse.ArgumentTypeError(
-            f"expected a non-negative integer, got {value!r}"
-        )
-    return parsed
-
-
 def explicitly_provided_dests(
     parser: argparse.ArgumentParser,
     dests: Iterable[str],

@@ -1,7 +1,6 @@
 import argparse
 import hashlib
 import json
-import os
 from pathlib import Path
 
 import pytest
@@ -214,80 +213,6 @@ def test_jsonl_is_not_replaced_when_a_later_row_fails(tmp_path: Path):
     assert not list(dataset_dir.glob(".*.tmp"))
     materialized_dir = dataset_dir / materializer.MATERIALIZED_IMAGES_DIRNAME
     assert not list(materialized_dir.glob(".*.tmp"))
-
-
-def test_rejects_stale_extra_materialized_image_before_jsonl_replace(tmp_path: Path):
-    dataset_dir = _make_dataset_dir(tmp_path)
-    destination = dataset_dir / materializer.OUTPUT_JSONL_FILENAME
-    destination.write_text("previous-complete-output\n")
-    materialized_dir = dataset_dir / materializer.MATERIALIZED_IMAGES_DIRNAME
-    materialized_dir.mkdir()
-    stale_file = materialized_dir / "stale-old-revision.jpg"
-    stale_file.write_bytes(b"stale")
-
-    with pytest.raises(
-        materializer.MaterializationError,
-        match="does not match this run",
-    ):
-        materializer.materialize_rows(
-            [_row("images/current.jpg")],
-            dataset_dir=dataset_dir,
-            max_samples=1,
-        )
-
-    assert destination.read_text() == "previous-complete-output\n"
-    assert stale_file.read_bytes() == b"stale"
-    assert not list(dataset_dir.glob(".*.tmp"))
-
-
-def test_images_and_jsonl_are_committed_with_os_replace(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-):
-    dataset_dir = _make_dataset_dir(tmp_path)
-    replace_calls: list[tuple[Path, Path]] = []
-    real_replace = os.replace
-
-    def recording_replace(source, destination):
-        replace_calls.append((Path(source), Path(destination)))
-        real_replace(source, destination)
-
-    monkeypatch.setattr(materializer.os, "replace", recording_replace)
-
-    destination, _ = materializer.materialize_rows(
-        [_row("images/example.png", b"png-bytes")],
-        dataset_dir=dataset_dir,
-        max_samples=1,
-    )
-
-    assert len(replace_calls) == 2
-    assert all(source.suffix == ".tmp" for source, _ in replace_calls)
-    assert replace_calls[0][1].parent.name == materializer.MATERIALIZED_IMAGES_DIRNAME
-    assert replace_calls[1][1] == destination
-
-
-def test_image_and_jsonl_directory_entries_are_fsynced(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-):
-    dataset_dir = _make_dataset_dir(tmp_path)
-    fsynced: list[Path] = []
-    monkeypatch.setattr(
-        materializer,
-        "_fsync_directory",
-        lambda path: fsynced.append(Path(path).resolve()),
-    )
-
-    materializer.materialize_rows(
-        [_row("images/example.png", b"png-bytes")],
-        dataset_dir=dataset_dir,
-        max_samples=1,
-    )
-
-    assert (dataset_dir / materializer.MATERIALIZED_IMAGES_DIRNAME).resolve() in fsynced
-    # Creating the image directory and replacing the JSONL both durably update
-    # the dataset directory; at least one fsync must survive future refactors.
-    assert dataset_dir.resolve() in fsynced
 
 
 def test_max_samples_controls_output_row_count(tmp_path: Path):

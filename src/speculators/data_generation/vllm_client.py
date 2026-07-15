@@ -23,36 +23,10 @@ logger = logging.getLogger(__name__)
 DEFAULT_REQUEST_TIMEOUT = 120  # seconds
 DEFAULT_MAX_RETRIES = 3
 RETRY_BACKOFF_BASE = 2  # seconds
-RETRYABLE_HTTP_STATUS_CODES = {408, 409, 425, 429}
 
 
 class InvalidResponseError(Exception):
     pass
-
-
-class RetryableRequestError(RuntimeError):
-    """Explicitly mark a non-SDK request failure as safe to retry."""
-
-
-def _is_retryable_error(error: Exception) -> bool:
-    """Return whether a failed request may succeed when retried."""
-    if isinstance(error, InvalidResponseError):
-        return False
-    if isinstance(error, RetryableRequestError):
-        return True
-    if isinstance(error, openai.APIConnectionError):
-        return True
-    if isinstance(error, openai.APIStatusError):
-        status_code = error.status_code
-        return (
-            status_code in RETRYABLE_HTTP_STATUS_CODES
-            or 500 <= status_code < 600
-        )
-    if isinstance(error, (TimeoutError, ConnectionError)):
-        return True
-    # Unknown exceptions are deterministic by default. Callers that know a
-    # non-SDK failure is transient must wrap it in RetryableRequestError.
-    return False
 
 
 def _get_field(obj: Any, key: str) -> Any:
@@ -94,8 +68,7 @@ def _image_ref_to_chat_url(image_ref: Any) -> str:
     if parsed.scheme:
         raise ValueError(f"Unsupported image URL scheme: {parsed.scheme}")
 
-    path = Path(ref).expanduser()
-    return path.resolve().as_uri()
+    return Path(ref).expanduser().resolve().as_uri()
 
 
 def _prepare_chat_message_content(content: Any) -> Any:
@@ -149,13 +122,12 @@ def _prepare_chat_messages(
 def _handle_retry_error(
     error: Exception, attempt: int, total_attempts: int
 ) -> float | None:
-    """Classify and handle a failed request.
+    """Handle a retry-eligible error.
 
     Returns backoff seconds if the caller should retry, or ``None`` on the
-    final attempt. Raises deterministic failures immediately.
+    final attempt.  Raises ``InvalidResponseError`` immediately.
     """
-    if not _is_retryable_error(error):
-        logger.error("Request failed with a non-retryable error: %s", error)
+    if isinstance(error, InvalidResponseError):
         raise error
     if attempt < total_attempts:
         backoff = RETRY_BACKOFF_BASE**attempt
@@ -167,33 +139,21 @@ def _handle_retry_error(
             backoff,
         )
         return backoff
-    logger.error("Request failed after %d attempts: %s", total_attempts, error)
+    logger.error("Request timed out after %d attempts: %s", total_attempts, error)
     return None
-
-
-def _validate_max_retries(max_retries: Any) -> int:
-    if (
-        isinstance(max_retries, bool)
-        or not isinstance(max_retries, int)
-        or max_retries < 0
-    ):
-        raise ValueError("max_retries must be a non-negative integer")
-    return max_retries
 
 
 def with_retries(fn):
     """Decorator that adds retry logic with exponential backoff.
 
     The decorated function gains a ``max_retries`` keyword argument
-    (default ``DEFAULT_MAX_RETRIES``). Only explicitly recognized transient
-    transport/status failures and ``RetryableRequestError`` are retried; all
-    other exceptions fail fast. Works for both sync and async functions.
+    (default ``DEFAULT_MAX_RETRIES``). ``InvalidResponseError`` is never
+    retried. Works for both sync and async functions.
     """
     if asyncio.iscoroutinefunction(fn):
 
         @functools.wraps(fn)
         async def async_wrapper(*args, max_retries=DEFAULT_MAX_RETRIES, **kwargs):
-            max_retries = _validate_max_retries(max_retries)
             total_attempts = max_retries + 1
             last_error: Exception | None = None
             for attempt in range(1, total_attempts + 1):
@@ -210,7 +170,6 @@ def with_retries(fn):
 
     @functools.wraps(fn)
     def sync_wrapper(*args, max_retries=DEFAULT_MAX_RETRIES, **kwargs):
-        max_retries = _validate_max_retries(max_retries)
         total_attempts = max_retries + 1
         last_error: Exception | None = None
         for attempt in range(1, total_attempts + 1):

@@ -95,25 +95,6 @@ class Eagle3SpeculatorConfig(SpeculatorModelConfig):
             )
         return self
 
-    @model_validator(mode="after")
-    def _check_aux_layer_ids(self) -> "Eagle3SpeculatorConfig":
-        """Reject an explicit zero-width auxiliary hidden-state projection."""
-        layer_ids = self.eagle_aux_hidden_state_layer_ids
-        if layer_ids is not None and not layer_ids:
-            raise ValueError(
-                "eagle_aux_hidden_state_layer_ids must be None to use the legacy "
-                "three-layer default, or contain at least one auxiliary layer ID."
-            )
-        if layer_ids is not None and any(layer_id < 1 for layer_id in layer_ids):
-            raise ValueError(
-                "eagle_aux_hidden_state_layer_ids must contain positive layer IDs"
-            )
-        if layer_ids is not None and len(set(layer_ids)) != len(layer_ids):
-            raise ValueError(
-                "eagle_aux_hidden_state_layer_ids must not contain duplicates"
-            )
-        return self
-
     @field_serializer("transformer_layer_config")
     def serialize_transformer_config(self, value: PretrainedConfig) -> dict:
         """Serialize transformer config to dict."""

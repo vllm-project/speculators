@@ -6,8 +6,7 @@ from pathlib import Path
 import torch
 from datasets import Dataset as HFDataset
 from tqdm import tqdm  # type: ignore[import-untyped]
-
-from speculators.models.utils import get_verifier_config
+from transformers import AutoConfig
 
 __all__ = [
     "build_vocab_mappings_from_distribution",
@@ -110,6 +109,10 @@ def get_target_vocab_size(target_vocab_size, target_model_path):
     if has_vocab:
         return target_vocab_size
 
-    config = get_verifier_config(target_model_path)
+    config = AutoConfig.from_pretrained(target_model_path)
+
+    # For multimodal models (Qwen3VL, etc.), extract text_config
+    if hasattr(config, "text_config"):
+        config = config.text_config
 
     return config.vocab_size

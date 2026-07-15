@@ -10,6 +10,7 @@ from speculators.models.eagle3.data import shift_batch
 from speculators.train.data import (
     ArrowDataset,
     SampleFileDataset,
+    build_client_item,
     create_collate_fn,
     standardize_data_v1,
 )
@@ -125,6 +126,41 @@ def test_standardize_data_v1():
 
     for key, value in standardized.items():
         assert torch.allclose(value, expected_output[key])
+
+
+def test_build_client_item_forwards_tools_only_for_multimodal_messages():
+    tools = [
+        {
+            "type": "function",
+            "function": {"name": "describe_image", "parameters": {"type": "object"}},
+        }
+    ]
+    multimodal_item = {
+        "input_ids": torch.tensor([1, 2, 3]),
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "describe"},
+                    {"type": "image_url", "image_url": {"url": "file:///tmp/cat.png"}},
+                ],
+            }
+        ],
+        "tools": json.dumps(tools),
+    }
+
+    assert build_client_item(multimodal_item) == {
+        "input_ids": [1, 2, 3],
+        "messages": multimodal_item["messages"],
+        "tools": tools,
+    }
+
+    text_only_item = {
+        "input_ids": torch.tensor([1, 2, 3]),
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+        "tools": json.dumps(tools),
+    }
+    assert build_client_item(text_only_item) == {"input_ids": [1, 2, 3]}
 
 
 def test_collate_fn_basic():

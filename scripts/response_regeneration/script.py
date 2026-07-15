@@ -3,7 +3,6 @@ import argparse
 import asyncio
 import hashlib
 import json
-import math
 import os
 import re
 import sys
@@ -17,7 +16,6 @@ from speculators.data_generation.configs import DATASET_CONFIGS, DatasetConfig
 from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     InvalidResponseError,
-    RetryableRequestError,
     with_retries,
 )
 
@@ -35,28 +33,6 @@ def _dataset_choice(name: str) -> str:
             "images yet. Use it off-policy with `prepare-data`."
         )
     return name
-
-DEFAULT_RESPONSE_REQUEST_TIMEOUT = 1800.0
-
-
-def _positive_float(value: str) -> float:
-    try:
-        parsed = float(value)
-    except ValueError:
-        raise argparse.ArgumentTypeError("expected a positive number") from None
-    if not math.isfinite(parsed) or parsed <= 0:
-        raise argparse.ArgumentTypeError("expected a positive number")
-    return parsed
-
-
-def _positive_int(value: str) -> int:
-    try:
-        parsed = int(value)
-    except ValueError:
-        raise argparse.ArgumentTypeError("expected a positive integer") from None
-    if parsed <= 0:
-        raise argparse.ArgumentTypeError("expected a positive integer")
-    return parsed
 
 
 def parse_args():
@@ -94,21 +70,16 @@ def parse_args():
             "(auto-detected from dataset config if not specified)"
         ),
     )
-    parser.add_argument(
-        "--limit",
-        type=_positive_int,
-        default=None,
-        help="Stop after N rows",
-    )
+    parser.add_argument("--limit", type=int, default=None, help="Stop after N rows")
     parser.add_argument(
         "--concurrency",
-        type=_positive_int,
+        type=int,
         default=64,
         help="Max concurrent requests",
     )
     parser.add_argument(
         "--max-tokens",
-        type=_positive_int,
+        type=int,
         default=8192,
         help="max_tokens for generation",
     )
@@ -142,15 +113,6 @@ def parse_args():
         help=(
             "Max retry attempts per request on transient failure "
             f"(default: {DEFAULT_MAX_RETRIES})"
-        ),
-    )
-    parser.add_argument(
-        "--request-timeout",
-        type=_positive_float,
-        default=DEFAULT_RESPONSE_REQUEST_TIMEOUT,
-        help=(
-            "Per-attempt Chat Completions timeout in seconds "
-            f"(default: {DEFAULT_RESPONSE_REQUEST_TIMEOUT:g})"
         ),
     )
     args = parser.parse_args()
@@ -323,35 +285,25 @@ async def _post_chat(
 ) -> dict[str, Any]:
     """POST one chat-completion request and return the parsed response.
 
-    Wrapped by ``with_retries`` (adds a ``max_retries`` kwarg): aiohttp network
-    failures and transient HTTP statuses (408/409/425/429/5xx) raise
-    ``RetryableRequestError`` and are retried with exponential backoff.
-    Permanent non-2xx replies (e.g. 400/404) raise ``InvalidResponseError`` and
-    fail fast. A non-2xx reply is surfaced with its status and a short body so
-    the caller does not record a bare ``KeyError('choices')``.
+    Wrapped by ``with_retries`` (adds a ``max_retries`` kwarg): transient
+    failures — network errors and transient HTTP statuses (408/409/425/429/5xx)
+    — are retried with exponential backoff. Permanent non-2xx replies (e.g.
+    400/404) raise ``InvalidResponseError``, which ``with_retries`` never
+    retries, so they fail fast. A non-2xx reply is surfaced with its status and
+    a short body so the caller does not record a bare ``KeyError('choices')``.
     """
-    try:
-        async with session.post(endpoint, json=payload) as response:
-            if not response.ok:
-                body = (await response.text())[:500]
-                message = f"HTTP {response.status} from {endpoint}: {body}"
-                # Retry transient statuses; fail fast on permanent client errors.
-                if (
-                    response.status >= SERVER_ERROR_STATUS
-                    or response.status in RETRYABLE_HTTP_STATUSES
-                ):
-                    raise RetryableRequestError(message)
-                raise InvalidResponseError(message)
-            return await response.json()
-    except (
-        aiohttp.ClientConnectionError,
-        aiohttp.ClientPayloadError,
-        aiohttp.ServerTimeoutError,
-        asyncio.TimeoutError,
-    ) as exc:
-        raise RetryableRequestError(
-            f"Transient request failure for {endpoint}: {exc}",
-        ) from exc
+    async with session.post(endpoint, json=payload) as response:
+        if not response.ok:
+            body = (await response.text())[:500]
+            message = f"HTTP {response.status} from {endpoint}: {body}"
+            # Retry transient statuses (408/409/425/429/5xx); fail fast otherwise.
+            if (
+                response.status >= SERVER_ERROR_STATUS
+                or response.status in RETRYABLE_HTTP_STATUSES
+            ):
+                raise RuntimeError(message)
+            raise InvalidResponseError(message)
+        return await response.json()
 
 
 def build_boundary_sample(
@@ -532,11 +484,7 @@ async def main():
 
     queue: asyncio.Queue = asyncio.Queue(maxsize=args.concurrency * 4)
 
-    timeout = aiohttp.ClientTimeout(
-        total=args.request_timeout,
-        sock_connect=min(90.0, args.request_timeout),
-        sock_read=args.request_timeout,
-    )
+    timeout = aiohttp.ClientTimeout(total=None, sock_connect=90, sock_read=None)
     connector = aiohttp.TCPConnector(
         limit=None, force_close=False, enable_cleanup_closed=True
     )

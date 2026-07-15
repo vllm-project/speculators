@@ -138,7 +138,7 @@ class DraftVocabMixin(nn.Module):
         if speculators_config is None:
             return
         verifier_config = speculators_config.verifier
-        if not verifier_config.name_or_path:
+        if verifier_config.name_or_path is None:
             return
 
         # Determine which weights to load based on model attributes
@@ -245,7 +245,6 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
         t2d: torch.Tensor | None = None,
         d2t: torch.Tensor | None = None,
         verifier: str | None = None,
-        draft_attn_impl: str | None = None,
         **kwargs,
     ) -> "SpeculatorModel":
         """
@@ -296,12 +295,7 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
         :param weights_only: Whether to only load model weights without optimizer
             states or other training artifacts.
         :param verifier: Verifier model id/path used to auto-convert an external
-            (non-speculators) checkpoint. Concrete model loaders may also use it as
-            a fallback when a speculators checkpoint omits verifier metadata; it
-            never overrides a verifier path saved in the checkpoint.
-        :param draft_attn_impl: Optional attention implementation to apply to the
-            draft transformer config before model construction. This is kept out of
-            ``kwargs`` so it is not forwarded to the model constructor.
+            (non-speculators) checkpoint; ignored for speculators checkpoints.
         :param kwargs: Additional keyword arguments passed to the model constructor
             and loading process.
         :return: A SpeculatorModel instance of the appropriate subclass, loaded with
@@ -317,12 +311,7 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
             # `from_pretrained` pathway finetunes both formats. Detect format
             # once here and only invoke the converter when needed.
             config_dict, _ = PretrainedConfig.get_config_dict(
-                pretrained_model_name_or_path,
-                cache_dir=cache_dir,
-                force_download=force_download,
-                local_files_only=local_files_only,
-                token=token,
-                revision=revision,
+                pretrained_model_name_or_path, cache_dir=cache_dir
             )
             if "speculators_model_type" not in config_dict:
                 from speculators.convert.entrypoints import (  # noqa: PLC0415
@@ -334,10 +323,6 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
                     verifier=verifier,
                     cache_dir=cache_dir,
                     config_dict=config_dict,
-                    force_download=force_download,
-                    local_files_only=local_files_only,
-                    token=token,
-                    revision=revision,
                 )
             config = cls.config_class.from_pretrained(
                 pretrained_model_name_or_path,
@@ -352,17 +337,6 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
             raise TypeError(
                 f"Expected config to be an instance of SpeculatorModelConfig, "
                 f"got {type(config)}."
-            )
-
-        if draft_attn_impl is not None:
-            transformer_layer_config = getattr(config, "transformer_layer_config", None)
-            if transformer_layer_config is None:
-                raise ValueError(
-                    "`draft_attn_impl` requires a config with "
-                    "`transformer_layer_config`."
-                )
-            transformer_layer_config._attn_implementation = (  # noqa: SLF001
-                draft_attn_impl
             )
 
         if not pretrained_model_name_or_path and not kwargs.get("state_dict"):
@@ -390,7 +364,6 @@ class SpeculatorModel(ClassRegistryMixin, PreTrainedModel):  # type: ignore[misc
                 t2d=t2d,
                 d2t=d2t,
                 verifier=verifier,
-                draft_attn_impl=draft_attn_impl,
                 **kwargs,
             )
 

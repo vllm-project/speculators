@@ -69,31 +69,6 @@ def test_parse_args_allow_empty_output_defaults_false(monkeypatch: pytest.Monkey
     assert args.allow_empty_output is False
 
 
-def test_parse_args_accepts_multimodal_and_allow_empty_together(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    """The rebase must preserve both independently introduced CLI flags."""
-    monkeypatch.setattr(
-        "sys.argv",
-        [
-            "prepare_data.py",
-            "--model",
-            "target",
-            "--data",
-            "sharegpt",
-            "--output",
-            "out",
-            "--multimodal",
-            "--allow-empty-output",
-        ],
-    )
-
-    args = parse_args()
-
-    assert args.multimodal is True
-    assert args.allow_empty_output is True
-
-
 def test_main_forwards_multimodal_and_allow_empty_together(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

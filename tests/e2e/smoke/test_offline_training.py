@@ -6,7 +6,7 @@ Exercises the full offline pipeline:
   3. Generate hidden states offline (scripts/data_generation_offline.py)
   4. Stop the vLLM server
   5. Train a draft model using pre-generated hidden states (scripts/train.py)
-  6. Validate supported trained checkpoints via vLLM inference (run_vllm_engine)
+  6. Validate the trained checkpoint via vLLM inference (run_vllm_engine)
 """
 
 from pathlib import Path
@@ -30,24 +30,16 @@ MM_MODEL = "Qwen/Qwen3-VL-2B-Instruct"
 @pytest.mark.e2e
 @pytest.mark.slow
 @pytest.mark.parametrize(
-    (
-        "model",
-        "dataset",
-        "speculator_type",
-        "extra_train_args",
-        "target_layer_ids",
-        "validate_vllm_inference",
-    ),
+    ("model", "dataset", "speculator_type", "extra_train_args", "target_layer_ids"),
     [
-        (TEXT_MODEL, "sharegpt", "eagle3", [], None, True),  # Use default EAGLE layers
-        (MM_MODEL, "sharegpt4v_coco", "eagle3", [], None, True),  # Multimodal
+        (TEXT_MODEL, "sharegpt", "eagle3", [], None),  # Use default EAGLE layers
+        (MM_MODEL, "sharegpt4v_coco", "eagle3", [], None),  # Multimodal
         (
             TEXT_MODEL,
             "sharegpt",
             "dflash",
             ["--block-size", "8", "--max-anchors", "256", "--num-layers", "3"],
             [1, 13, 25],
-            True,
         ),  # DFlash with 3 layers + verifier last layer
         (
             TEXT_MODEL,
@@ -65,8 +57,7 @@ MM_MODEL = "Qwen/Qwen3-VL-2B-Instruct"
                 "--no-norm-before-residual",
             ],
             None,
-            False,
-        ),  # P-EAGLE trains here; vLLM 0.20 does not accept method="peagle".
+        ),  # P-EAGLE with parallel multi-token prediction
     ],
 )
 def test_offline_smoke(
@@ -78,7 +69,6 @@ def test_offline_smoke(
     speculator_type: str,
     extra_train_args: list[str],
     target_layer_ids: list[int] | None,
-    validate_vllm_inference: bool,
 ):
     if dataset == "sharegpt4v_coco":
         coco_dir = tmp_path / "coco"
@@ -94,7 +84,7 @@ def test_offline_smoke(
         tmp_path,
         model,
         dataset=dataset,
-        prompts=prompts if validate_vllm_inference else None,
+        prompts=prompts,
         vllm_kwargs={
             "enforce_eager": True,
             "gpu_memory_utilization": 0.9,
@@ -131,8 +121,6 @@ def run_offline_e2e(
 ):
     data_path = tmp_path / "data"
     offline_hidden_states = tmp_path / "offline_hidden_states"
-    vllm_hidden_states = tmp_path / "vllm_hidden_states"
-    vllm_hidden_states.mkdir()
     save_path = tmp_path / "checkpoints"
 
     # Step 1: Prepare data
@@ -141,7 +129,7 @@ def run_offline_e2e(
     with launch_vllm_server_context(
         model,
         port,
-        str(vllm_hidden_states),
+        str(tmp_path / "vllm_hidden_states"),
         max_model_len=seq_length + 1,
         target_layer_ids=target_layer_ids,
         **(vllm_kwargs or {}),
@@ -153,7 +141,6 @@ def run_offline_e2e(
             port,
             max_samples,
             timeout=datagen_timeout,
-            source_hidden_states_root=vllm_hidden_states,
         )
 
     # Step 3: Train using pre-generated hidden states (no live server needed)

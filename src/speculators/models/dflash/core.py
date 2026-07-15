@@ -21,11 +21,7 @@ from speculators.models.dflash.utils import (
     select_anchors,
 )
 from speculators.models.metrics import LossConfig, resolve_loss_config
-from speculators.models.utils import (
-    conditional_torch_compile,
-    resolve_target_layer_ids,
-    strip_verifier_final_layer_id,
-)
+from speculators.models.utils import conditional_torch_compile, resolve_target_layer_ids
 
 logger = logging.getLogger(__name__)
 
@@ -190,10 +186,6 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         target_layer_ids = resolve_target_layer_ids(
             kwargs.get("target_layer_ids"), kwargs["verifier_name_or_path"]
         )
-        if kwargs.get("target_layer_ids") is not None:
-            target_layer_ids = strip_verifier_final_layer_id(
-                target_layer_ids, kwargs["verifier_name_or_path"]
-            )
         verifier_config._attn_implementation = kwargs.get(  # noqa: SLF001
             "draft_attn_impl", "simple_flex_attention"
         )

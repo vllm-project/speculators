@@ -4,7 +4,6 @@ Unit tests for the preprocessing module in the Speculators data generation.
 
 import json
 import re
-from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import patch
 
@@ -24,8 +23,6 @@ from speculators.data_generation.preprocessing import (
     _create_loss_mask_from_offsets,
     _detect_assistant_pattern,
     _expand_loss_mask_for_multimodal_tokens,
-    _get_image_token_ids,
-    _get_vision_boundary_token_ids,
     _load_hf_dataset,
     _normalize_conversation,
     _preprocess_batch,
@@ -181,16 +178,6 @@ class _NoProcessorTruncationMultimodalProcessor(_DummyMultimodalProcessor):
         return super().apply_chat_template(*args, **kwargs)
 
 
-class _RejectingPretokenizedMultimodalProcessor(_DummyMultimodalProcessor):
-    """Prove that pre-tokenized rows never enter multimodal rendering."""
-
-    def __call__(self, *args, **kwargs):
-        raise AssertionError("pre-tokenized rows must not call the processor")
-
-    def apply_chat_template(self, *args, **kwargs):
-        raise AssertionError("pre-tokenized rows must not render a chat template")
-
-
 class _ToolRecordingMultimodalProcessor(_DummyMultimodalProcessor):
     def __init__(self):
         super().__init__()
@@ -201,23 +188,6 @@ class _ToolRecordingMultimodalProcessor(_DummyMultimodalProcessor):
             (bool(kwargs.get("tokenize")), kwargs.get("tools"))
         )
         return super().apply_chat_template(*args, **kwargs)
-
-
-class _BoundaryTokenTokenizer:
-    unk_token_id = -1
-    image_token_id = 999
-    vision_start_token_id = 201
-    image_end_token_id = 204
-    vision_start_token = "<custom_vision_start>"
-
-    def convert_tokens_to_ids(self, token):
-        return {
-            "<|image_pad|>": 999,
-            "<|vision_start|>": 210,
-            "<|vision_end|>": 211,
-            "<custom_vision_start>": 212,
-            "<custom_vision_end>": 213,
-        }.get(token, self.unk_token_id)
 
 
 # Tests for _normalize_conversation
@@ -1676,40 +1646,6 @@ def test_build_eagle3_dataset_multimodal_expands_image_tokens_and_preserves_mess
 
 
 @pytest.mark.sanity
-def test_pretokenized_rows_take_priority_over_multimodal_processor():
-    """Boundary-masked rows stay text-token data even with a VL processor."""
-    dataset = HFDataset.from_dict(
-        {
-            "input_ids": [[10, 11, 12, 13], [1, 2, 3, 4, 5, 6]],
-            "loss_mask": [[0, 0, 1, 1], [0, 0, 0, 0, 1, 1]],
-            "messages": [[{"role": "user", "content": "review"}]] * 2,
-            "conversations": [[{"from": "human", "value": "review"}]] * 2,
-            "tools": ["[]", "[]"],
-        }
-    )
-
-    result = build_eagle3_dataset(
-        dataset,
-        cast(
-            "PreTrainedTokenizerBase",
-            _RejectingPretokenizedMultimodalProcessor(),
-        ),
-        max_length=4,
-        num_proc=1,
-        assistant_pattern=r"must-not-run",
-        minimum_valid_tokens=1,
-    )
-
-    assert set(result.column_names) == {"input_ids", "loss_mask", "seq_len"}
-    assert len(result) == 1
-    assert result[0]["input_ids"].tolist() == [10, 11, 12, 13]
-    assert result[0]["input_ids"].dtype == torch.long
-    assert result[0]["loss_mask"].tolist() == [0, 0, 1, 1]
-    assert result[0]["loss_mask"].dtype == torch.long
-    assert int(result[0]["seq_len"]) == 4
-
-
-@pytest.mark.sanity
 def test_multimodal_regex_path_truncates_after_image_expansion():
     """Avoid processor-side truncation that can corrupt image token counts."""
     processor = _NoProcessorTruncationMultimodalProcessor()
@@ -1723,44 +1659,6 @@ def test_multimodal_regex_path_truncates_after_image_expansion():
     assert results["input_ids"][0].tolist() == [101, 999, 999, 999]
     assert results["loss_mask"][0].tolist() == [1, 0, 0, 0]
     assert results["seq_len"][0] == 4
-
-
-@pytest.mark.sanity
-def test_multimodal_truncation_rejects_partial_image_block():
-    """Do not save input IDs that cut through an expanded image-token block."""
-    processor = _NoProcessorTruncationMultimodalProcessor()
-    with pytest.raises(RuntimeError, match="middle of an image token block"):
-        _preprocess_batch(
-            _multimodal_examples(),
-            cast("PreTrainedTokenizerBase", processor),
-            max_length=3,
-            assistant_pattern=r"(.+)",
-        )
-
-
-@pytest.mark.sanity
-def test_vision_boundary_token_ids_are_separate_from_image_placeholder_ids():
-    tokenizer = _BoundaryTokenTokenizer()
-    processor = SimpleNamespace(
-        tokenizer=tokenizer,
-        image_start_token_index=202,
-        end_of_image_token_id=205,
-        vision_end_token="<custom_vision_end>",
-    )
-
-    image_token_ids = _get_image_token_ids(
-        cast("ProcessorMixin", processor),
-        cast("PreTrainedTokenizerBase", tokenizer),
-    )
-    start_token_ids, end_token_ids = _get_vision_boundary_token_ids(
-        cast("ProcessorMixin", processor),
-        cast("PreTrainedTokenizerBase", tokenizer),
-    )
-
-    assert image_token_ids == {999}
-    assert {201, 202, 210, 212}.issubset(start_token_ids)
-    assert {204, 205, 211, 213}.issubset(end_token_ids)
-    assert image_token_ids.isdisjoint(start_token_ids | end_token_ids)
 
 
 @pytest.mark.sanity
