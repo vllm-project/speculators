@@ -1,88 +1,61 @@
 #!/bin/bash
-# Online Eagle3 Training Script for Qwen3-VL-4B on hao05/llava-cot-48k-reannotated
+# Online Eagle3 training for Qwen3-VL-4B on the full 48k LLaVA-CoT dataset.
 #
-# Runs the full online training pipeline:
-#   1. Download the multimodal Parquet dataset snapshot from Hugging Face
-#   2. Materialize local image files and an absolute-path JSONL
-#   3. Prepare arrow data with multimodal preprocessing
-#   4. Launch a hidden-state extraction vLLM server
-#   5. Train Eagle3 with on-the-fly hidden-state generation
-#
-# Usage:
-#   bash examples/train/eagle3_qwen3_vl_4b_llava_cot_48k_online_full.sh
-#
-# Notes:
-# - This mirrors the 5k online example, but defaults to the full 47,905-row
-#   `hao05/llava-cot-48k-reannotated` Parquet dataset.
-# - `prepare_data.py` currently accepts local json/jsonl files or built-in dataset
-#   aliases. This example snapshots the public HF Parquet dataset locally first.
-# - The uploaded dataset stores image bytes in Parquet and preserves original
-#   relative paths in `image_path`. This script materializes image files and a
-#   JSONL with absolute image paths so vLLM can load images reliably during
-#   online training.
-#
-# The 48k dataset is much larger than the 5k sanity-check dataset. Expect the
-# download, image materialization, and training stages to take substantially
-# longer and use more local disk.
+# This follows the same five-step pipeline as the 5k validation example, but
+# processes all 47,905 rows and therefore needs substantially more time/disk.
 
 set -euo pipefail
 
-# ============ Configuration ============
+# Override these values through the environment when needed.
 MODEL="${MODEL:-Qwen/Qwen3-VL-4B-Instruct}"
-DATASET_REPO="${DATASET_REPO:-hao05/llava-cot-48k-reannotated}"
-# `main` is a convenience default. Reproducible test runs must override this
-# with the dataset's immutable full commit SHA.
 DATASET_REVISION="${DATASET_REVISION:-main}"
 DATASET_DIR="${DATASET_DIR:-./data/llava-cot-48k-reannotated}"
-DATASET_JSONL="$DATASET_DIR/train.absolute_paths.jsonl"
 OUTPUT_DIR="${OUTPUT_DIR:-./output_qwen3_vl_4b_llava_cot_48k_online_full}"
-HIDDEN_STATES_DIR="$OUTPUT_DIR/hidden_states_online"
-CHECKPOINT_DIR="$OUTPUT_DIR/checkpoints"
-VLLM_PORT="${VLLM_PORT:-8000}"
 MAX_SAMPLES="${MAX_SAMPLES:-47905}"
 SEQ_LENGTH="${SEQ_LENGTH:-8192}"
-VLLM_MAX_MODEL_LEN="${VLLM_MAX_MODEL_LEN:-9216}"
-VLLM_TP="${VLLM_TP:-2}"
+NUM_PREPROCESSING_WORKERS="${NUM_PREPROCESSING_WORKERS:-12}"
 EPOCHS="${EPOCHS:-5}"
 LR="${LR:-1e-4}"
-NUM_PREPROCESSING_WORKERS="${NUM_PREPROCESSING_WORKERS:-12}"
-VLLM_LOG_FILE="${VLLM_LOG_FILE:-./vllm_server_48k_full.log}"
+
+VLLM_GPUS="${VLLM_GPUS:-0,1}"
+TRAIN_GPUS="${TRAIN_GPUS:-2}"
+VLLM_PORT="${VLLM_PORT:-8000}"
+VLLM_TP="${VLLM_TP:-2}"
 VLLM_STARTUP_TIMEOUT="${VLLM_STARTUP_TIMEOUT:-600}"
 if [[ -z "${VLLM_EXTRA_ARGS+x}" ]]; then
     VLLM_EXTRA_ARGS="--enforce-eager"
 fi
 
-# GPU assignments
-VLLM_GPUS="${VLLM_GPUS:-0,1}"
-TRAIN_GPUS="${TRAIN_GPUS:-2}"
-if [[ -z "${NUM_TRAIN_GPUS:-}" ]]; then
-    IFS=',' read -r -a TRAIN_GPU_ARR <<< "$TRAIN_GPUS"
-    NUM_TRAIN_GPUS="${#TRAIN_GPU_ARR[@]}"
-fi
-# =======================================
+DATASET_JSONL="$DATASET_DIR/train.absolute_paths.jsonl"
+HIDDEN_STATES_DIR="$OUTPUT_DIR/hidden_states_online"
+CHECKPOINT_DIR="$OUTPUT_DIR/checkpoints"
+VLLM_LOG_FILE="$OUTPUT_DIR/vllm_server.log"
+VLLM_MAX_MODEL_LEN="$((SEQ_LENGTH + 1024))"
 
-# Optional mirror for environments without direct access to huggingface.co
-# export HF_ENDPOINT=https://hf-mirror.com
-
-mkdir -p "$DATASET_DIR" "$OUTPUT_DIR"
-if [[ -z "${VLLM_ALLOWED_LOCAL_MEDIA_PATH:-}" ]]; then
-    VLLM_ALLOWED_LOCAL_MEDIA_PATH="$(cd "$DATASET_DIR" && pwd)"
-fi
+IFS=',' read -r -a TRAIN_GPU_ARR <<< "$TRAIN_GPUS"
+NUM_TRAIN_GPUS="${#TRAIN_GPU_ARR[@]}"
 read -r -a VLLM_EXTRA_ARR <<< "$VLLM_EXTRA_ARGS"
 
+mkdir -p "$DATASET_DIR" "$OUTPUT_DIR"
+VLLM_ALLOWED_LOCAL_MEDIA_PATH="$(cd "$DATASET_DIR" && pwd)"
+
 echo "=== Step 1: Downloading dataset snapshot ==="
-echo "Dataset snapshot: ${DATASET_REPO}@${DATASET_REVISION}"
-hf download "$DATASET_REPO" \
+hf download hao05/llava-cot-48k-reannotated \
     --repo-type dataset \
     --revision "$DATASET_REVISION" \
     --local-dir "$DATASET_DIR" \
     --include "README.md" \
     --include "data/*.parquet"
 
-echo "=== Step 2: Materializing Parquet dataset to absolute-path JSONL ==="
+echo "=== Step 2: Materializing Parquet dataset ==="
 python scripts/materialize_multimodal_parquet.py \
     --dataset-dir "$DATASET_DIR" \
     --max-samples "$MAX_SAMPLES"
+
+if [[ ! -s "$DATASET_JSONL" ]]; then
+    echo "Materializer did not produce $DATASET_JSONL" >&2
+    exit 1
+fi
 
 echo "=== Step 3: Preparing multimodal data ==="
 python scripts/prepare_data.py \
@@ -94,9 +67,12 @@ python scripts/prepare_data.py \
     --num-preprocessing-workers "$NUM_PREPROCESSING_WORKERS" \
     --multimodal
 
-echo "=== Step 4: Launching vLLM server ==="
-echo "vLLM logs will be written to: $VLLM_LOG_FILE"
+if curl -sf "http://localhost:${VLLM_PORT}/health" >/dev/null 2>&1; then
+    echo "Port $VLLM_PORT already has a healthy server." >&2
+    exit 1
+fi
 
+echo "=== Step 4: Launching vLLM server ==="
 CUDA_VISIBLE_DEVICES="$VLLM_GPUS" python scripts/launch_vllm.py "$MODEL" \
     --hidden-states-path "$HIDDEN_STATES_DIR" \
     -- \
@@ -106,7 +82,7 @@ CUDA_VISIBLE_DEVICES="$VLLM_GPUS" python scripts/launch_vllm.py "$MODEL" \
     --limit-mm-per-prompt '{"image":1}' \
     --allowed-local-media-path "$VLLM_ALLOWED_LOCAL_MEDIA_PATH" \
     "${VLLM_EXTRA_ARR[@]}" \
-    > "$VLLM_LOG_FILE" 2>&1 &
+    >"$VLLM_LOG_FILE" 2>&1 &
 VLLM_PID=$!
 
 cleanup() {
@@ -118,23 +94,19 @@ trap cleanup EXIT
 
 echo "Waiting for vLLM server to be ready..."
 VLLM_START_TIME="$(date +%s)"
-until curl -sf "http://localhost:${VLLM_PORT}/health" > /dev/null 2>&1; do
+until curl -sf "http://localhost:${VLLM_PORT}/health" >/dev/null 2>&1; do
     if ! kill -0 "$VLLM_PID" 2>/dev/null; then
-        echo "vLLM server exited before becoming healthy. See $VLLM_LOG_FILE" >&2
+        echo "vLLM exited before becoming healthy. See $VLLM_LOG_FILE" >&2
         wait "$VLLM_PID" 2>/dev/null || true
         exit 1
     fi
 
-    VLLM_ELAPSED="$(( $(date +%s) - VLLM_START_TIME ))"
-    if (( VLLM_ELAPSED >= VLLM_STARTUP_TIMEOUT )); then
-        echo "Timed out after ${VLLM_STARTUP_TIMEOUT}s waiting for vLLM health." >&2
-        echo "See $VLLM_LOG_FILE for startup logs." >&2
+    if (( $(date +%s) - VLLM_START_TIME >= VLLM_STARTUP_TIMEOUT )); then
+        echo "Timed out waiting for vLLM. See $VLLM_LOG_FILE" >&2
         exit 1
     fi
-
     sleep 2
 done
-echo "vLLM server ready."
 
 echo "=== Step 5: Online training ==="
 CUDA_VISIBLE_DEVICES="$TRAIN_GPUS" torchrun \
@@ -148,9 +120,6 @@ CUDA_VISIBLE_DEVICES="$TRAIN_GPUS" torchrun \
     --epochs "$EPOCHS" \
     --lr "$LR" \
     --total-seq-len "$SEQ_LENGTH" \
-    --num-layers 1 \
-    --ttt-steps 3 \
-    --ttt-step-loss-decay 1.0 \
     --on-missing generate \
     --on-generate cache \
     --run-name eagle3_qwen3_vl_4b_llava_cot_48k_online_full
