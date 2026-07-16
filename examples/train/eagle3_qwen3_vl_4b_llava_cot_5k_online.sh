@@ -12,7 +12,7 @@ DATASET_REVISION="${DATASET_REVISION:-main}"
 DATASET_DIR="${DATASET_DIR:-./data/llava-cot-5k-reannotated}"
 OUTPUT_DIR="${OUTPUT_DIR:-./output_qwen3_vl_4b_llava_cot_5k_online}"
 MAX_SAMPLES="${MAX_SAMPLES:-5000}"
-SEQ_LENGTH="${SEQ_LENGTH:-4096}"
+SEQ_LENGTH="${SEQ_LENGTH:-5120}"
 EPOCHS="${EPOCHS:-5}"
 LR="${LR:-1e-4}"
 
