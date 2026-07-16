@@ -895,18 +895,11 @@ def test_tools_and_results_are_read_from_the_normalized_row():
         "tools": [{"type": "function", "function": {"name": "get_weather"}}],
     }
 
-    normalized = regen.normalize_row(row, config)
+    normalized, _, tool_results = regen.prepare_row(row, config)
 
     assert regen.extract_tools(normalized) == [
         {"type": "function", "function": {"name": "get_weather"}}
     ]
-    assert regen.extract_conversation(normalized, None)[1] == [("sunny", [])]
+    assert tool_results == [("sunny", [])]
     # the raw row hides the conversation behind `input`: results would be lost
     assert regen.extract_conversation(row, None)[1] == []
-
-
-def test_normalize_row_returns_none_for_a_filtered_row():
-    config = DatasetConfig(
-        name="t", hf_path="t", split="train", filter_fn=lambda row: row["keep"]
-    )
-    assert regen.normalize_row({"keep": False}, config) is None

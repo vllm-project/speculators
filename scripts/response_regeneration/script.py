@@ -208,33 +208,18 @@ def extract_conversation(
     return [], []
 
 
-def normalize_row(row: dict[str, Any], config: DatasetConfig) -> dict[str, Any] | None:
-    """Apply the preset's ingestion rules to a raw row, ``None`` to skip it.
-
-    ``filter_fn`` sees the raw row; ``normalize_fn`` is merged over it (HF
-    ``map`` semantics keep raw columns). Turns, tools and results are all read
-    from this one normalized row -- under a ``normalize_fn`` preset the
-    conversation only appears in ``messages`` after it runs, so reading the raw
-    row would find none.
-    """
-    if config.filter_fn is not None and not config.filter_fn(row):
-        return None
-    if config.normalize_fn is not None:
-        return {**row, **config.normalize_fn(row)}
-    return row
-
-
 def prepare_row(
     row: dict[str, Any], config: DatasetConfig
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[tuple[Any, list[str]]]] | None:
     """The normalized row, its regeneration turns, and cached tool results.
 
-    Reads turns and results from one normalized row (see
-    :func:`extract_conversation`) so they stay paired; ``None`` to skip the row.
+    ``filter_fn`` sees the raw row; ``normalize_fn`` is merged over it (HF
+    ``map`` keeps raw columns). Turns and results are read from that one
+    normalized row so they stay paired; ``None`` to skip the row.
     """
-    normalized = normalize_row(row, config)
-    if normalized is None:
+    if config.filter_fn is not None and not config.filter_fn(row):
         return None
+    normalized = {**row, **config.normalize_fn(row)} if config.normalize_fn else row
     turns, tool_results = extract_conversation(normalized, config.prompt_field)
     if not turns:
         return None
