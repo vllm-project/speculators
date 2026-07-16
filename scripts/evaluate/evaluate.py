@@ -392,7 +392,7 @@ def main() -> None:
         "--sweep-rate",
         type=int,
         default=DEFAULT_SWEEP_RATE,
-        help=f"Number of rate points in the sweep profile (default: {DEFAULT_SWEEP_RATE})",
+        help=f"Number of sweep rate points (default: {DEFAULT_SWEEP_RATE})",
     )
     parser.add_argument(
         "--gen-kwargs",
