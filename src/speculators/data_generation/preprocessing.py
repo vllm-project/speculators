@@ -176,11 +176,7 @@ def _encode_render(
     add_generation_prompt: bool,
     tools: list[dict] | None = None,
 ) -> list[int]:
-    """Render a conversation prefix via the vLLM ``/render`` endpoint.
-
-    Returns the token ids only; the loss mask is derived from the boundary
-    between two renders, not from the server's tag-gated assistant mask.
-    """
+    """Render a conversation prefix via the vLLM ``/render`` endpoint; return ids."""
     messages = _adapt_conv_for_vllm(conv_prefix)
     return render_conversation(
         render_endpoint,
@@ -215,38 +211,22 @@ def _render_boundary_rows(
     *,
     tools: list[dict] | None = None,
 ) -> list[dict]:
-    """Build training rows whose loss mask is the render boundary of each
-    assistant turn.
+    """Build training rows whose loss mask is each assistant turn's render boundary.
 
-    For assistant turn ``j``, the boundary is the longest common token prefix
-    of the ``conv[:j]`` generation-prompt render and the ``conv[:j+1]`` full
-    render: everything before it is context (mask 0), the tokens past it are
-    supervised (mask 1) -- the same prompt/completion boundary the serving
-    engine reports for on-policy data, reconstructed from the model's own
-    chat template. No markers, no regex. Usually the whole prompt render is
-    that prefix; when the generation prompt itself diverges (e.g. a
-    pre-filled empty ``<think>`` scaffold while the data records real
-    reasoning), the boundary sits where the renders part ways -- which is
-    where generation starts on auto-opened thinking templates -- guarded by
-    the history render staying a token-prefix of the full render.
+    For assistant turn ``j``, the boundary is where the ``conv[:j+1]`` full render
+    extends the ``conv[:j]`` generation-prompt render: earlier tokens are context
+    (mask 0), later ones supervised (mask 1). If the generation prompt itself
+    diverges (e.g. a pre-filled ``<think>`` scaffold vs recorded reasoning), the
+    boundary falls back to the common prefix -- valid only if history agrees.
 
-    Emission is packed into a single row when the template renders append-only
-    (each turn's full render is a token-prefix of the next turn's prompt
-    render). Templates that rewrite history -- e.g. reasoning templates that
-    strip past ``<think>`` blocks -- break that chain and fan out to one row
-    per assistant turn, which supervises each turn's completion against the
-    same context inference would see.
-
-    Turns whose context alone reaches ``max_length`` are not rendered: their
-    supervised span would start past the window, so they could only produce
-    dropped rows.
+    Append-only templates pack every turn into one row; templates that rewrite
+    history (reasoning models stripping past ``<think>``) fan out to one row per
+    turn. Turns whose context alone fills ``max_length`` are skipped.
 
     Raises:
-        BoundaryUnstableError: The renders diverge inside history, so no
-            boundary mask can be derived.
+        BoundaryUnstableError: the renders diverge inside history.
     """
-    # An assistant turn with no preceding context (i == 0) has no prompt to
-    # render a boundary against; keep it as context for later turns only.
+    # i == 0 has no preceding context to bound against; keep it as context only.
     assistant_indices = [
         i
         for i, turn in enumerate(normalized_conv)
@@ -262,8 +242,8 @@ def _render_boundary_rows(
             tools=tools,
         )
         if len(prompt_ids) >= max_length:
-            # Context already fills the window; this and every later turn
-            # could only yield rows with no supervised tokens in-window.
+            # Context fills the window; this and later turns yield only
+            # unsupervised rows.
             break
         full_ids = _encode_render(
             normalized_conv[: j + 1],
@@ -274,10 +254,8 @@ def _render_boundary_rows(
         if full_ids[: len(prompt_ids)] == prompt_ids:
             boundary = len(prompt_ids)
         else:
-            # The generation prompt diverges from the completed turn (e.g.
-            # Qwen3.5's no-think scaffold vs recorded reasoning). The boundary
-            # is the common prefix, valid only if the divergence is confined
-            # to the generation-prompt tail: history itself must agree.
+            # Generation prompt diverges (scaffold vs recorded reasoning): use
+            # the common prefix, valid only if history itself agrees (below).
             boundary = _common_prefix_len(prompt_ids, full_ids)
             hist_ids = _encode_render(
                 normalized_conv[:j],
@@ -307,8 +285,7 @@ def _render_boundary_rows(
             loss_mask[turn.boundary : len(turn.full_ids)] = [1] * (
                 len(turn.full_ids) - turn.boundary
             )
-        # Trailing non-assistant messages are dropped: nothing after the last
-        # assistant turn is supervised or conditioned on.
+        # Trailing non-assistant messages are dropped.
         return [
             {
                 "input_ids": input_ids,
@@ -359,11 +336,10 @@ def _append_row(
     max_length: int,
     minimum_valid_tokens: int | None,
 ) -> Literal["kept", "unsupervised", "filtered"]:
-    """Clip a row to the window, filter it, and tensorize it into ``results``.
+    """Clip to the window, filter, and tensorize a row into ``results``.
 
-    Rows with no supervised tokens in-window contribute zero gradient and are
-    dropped ("unsupervised"); rows below ``minimum_valid_tokens`` are
-    "filtered".
+    Returns "unsupervised" (no supervised tokens in-window), "filtered" (below
+    ``minimum_valid_tokens``), or "kept".
     """
     input_ids = input_ids[:max_length]
     loss_mask = loss_mask[:max_length]
@@ -398,9 +374,8 @@ def _passthrough_pretokenized(
     results: dict[str, list] = {"input_ids": [], "loss_mask": [], "seq_len": []}
     num_unsupervised = 0
     for ids, mask in zip(examples["input_ids"], examples["loss_mask"], strict=True):
-        # `strict=True` only pairs the columns; a per-row skew would survive it and
-        # the collator packs each key independently, silently shifting the mask
-        # against the ids for every sample packed after this one.
+        # A per-row length skew survives strict= column pairing; the collator
+        # packs each key independently and would shift the mask silently.
         if len(ids) != len(mask):
             raise ValueError(
                 f"Pre-tokenized row shape mismatch: "
