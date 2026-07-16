@@ -5,6 +5,7 @@ from functools import partial
 import pytest
 import torch
 
+from speculators.models.fused_tv_loss import fused_nla_loss, fused_tv_loss
 from speculators.models.metrics import (
     ce_loss,
     compute_accuracy_single_step,
@@ -15,11 +16,9 @@ from speculators.models.metrics import (
     lk_hybrid_loss,
     loss_function,
     neg_log_acceptance_loss,
-    nla_loss_fused_or_eager,
     resolve_loss_fn,
     reverse_kl_div_loss,
     tv_loss,
-    tv_loss_fused_or_eager,
 )
 
 
@@ -199,8 +198,8 @@ class TestTVLoss:
         assert (out <= 1).all()
 
     def test_resolve_tv(self):
-        """resolve_loss_fn maps 'tv' to the fused-or-eager dispatcher."""
-        assert resolve_loss_fn("tv") is tv_loss_fused_or_eager
+        """resolve_loss_fn maps 'tv' to the fused Triton kernel."""
+        assert resolve_loss_fn("tv") is fused_tv_loss
 
     @pytest.mark.skipif(
         not torch.cuda.is_available(), reason="fused Triton loss requires CUDA"
@@ -217,7 +216,7 @@ class TestTVLoss:
         le = base.clone().to("cuda", torch.bfloat16).requires_grad_(True)
         lf = base.clone().to("cuda", torch.bfloat16).requires_grad_(True)
         out_e = tv_loss(le, targets)
-        out_f = resolve_loss_fn("tv")(lf, targets)
+        out_f = fused_tv_loss(lf, targets)  # direct: never silently falls back to eager
         # both paths return fp32 (fp32 softmax since #788); fused must not downcast
         assert out_e.dtype == torch.float32
         assert out_f.dtype == torch.float32
@@ -267,8 +266,8 @@ class TestNegLogAcceptanceLoss:
         assert torch.isfinite(neg_log_acceptance_loss(logits, targets)).all()
 
     def test_resolve_nla(self):
-        """resolve_loss_fn maps 'nla' to the fused-or-eager dispatcher."""
-        assert resolve_loss_fn("nla") is nla_loss_fused_or_eager
+        """resolve_loss_fn maps 'nla' to the fused Triton kernel."""
+        assert resolve_loss_fn("nla") is fused_nla_loss
 
 
 class TestLKHybridLoss:
