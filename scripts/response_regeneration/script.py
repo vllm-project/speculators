@@ -570,6 +570,8 @@ async def regenerate_conversation(
             # To continue past a tool call we need exactly one call and a cached
             # result to pair with it; otherwise keep this (committed) call row
             # and truncate.
+            # TODO(regen): support parallel/multi tool calls -- a turn with >1
+            # call truncates here (dropped ~16/50 rows in a Hermes validation run).
             if len(tool_calls) != 1 or not tool_results:
                 truncated = True
                 break
