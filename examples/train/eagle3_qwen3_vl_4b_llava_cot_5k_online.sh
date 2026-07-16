@@ -3,6 +3,17 @@
 #
 # This is a small end-to-end validation run: download and materialize the
 # multimodal dataset, prepare Arrow data, start vLLM, and train Eagle3.
+#
+# Latest server validation (2026-07-17, RTX 5090 x4, 5k VL run):
+# MAX_SAMPLES=5000, EPOCHS=10, SEQ_LENGTH=7680, VLLM_MAX_MODEL_LEN=8704.
+# Runtime: 31m05s (2026-07-17T01:20:16+08:00 to 01:51:21+08:00).
+# Result: rc=0, hidden_states=5000/5000, vLLM POST 500=0,
+# hidden-state cache failures=0, prompt token mismatches=0.
+# Final epoch: val/loss_epoch=6.038,
+# val/full_acc_0_epoch=0.738, val/cond_acc_0_epoch=0.738,
+# val/full_acc_1_epoch=0.512, val/cond_acc_1_epoch=0.693,
+# val/full_acc_2_epoch=0.361, val/cond_acc_2_epoch=0.705.
+# Best loss: val/loss_epoch=5.686 at epoch 6/10.
 
 set -euo pipefail
 
@@ -12,8 +23,8 @@ DATASET_REVISION="${DATASET_REVISION:-main}"
 DATASET_DIR="${DATASET_DIR:-./data/llava-cot-5k-reannotated}"
 OUTPUT_DIR="${OUTPUT_DIR:-./output_qwen3_vl_4b_llava_cot_5k_online}"
 MAX_SAMPLES="${MAX_SAMPLES:-5000}"
-SEQ_LENGTH="${SEQ_LENGTH:-5120}"
-EPOCHS="${EPOCHS:-5}"
+SEQ_LENGTH="${SEQ_LENGTH:-7680}"
+EPOCHS="${EPOCHS:-10}"
 LR="${LR:-1e-4}"
 
 VLLM_GPUS="${VLLM_GPUS:-0,1}"
