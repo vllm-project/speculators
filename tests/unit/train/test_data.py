@@ -3,6 +3,7 @@
 import json
 from pathlib import Path
 
+import pytest
 import torch
 from datasets import Dataset
 
@@ -189,12 +190,8 @@ def test_align_loss_mask_to_vllm_multimodal_token_ids_rejects_trainable_drop():
     source_mask = [0, 1, 1, 0]
     target_ids = [10, 40]
 
-    try:
+    with pytest.raises(ValueError, match="trainable"):
         _align_loss_mask_to_token_ids(source_ids, source_mask, target_ids)
-    except ValueError as exc:
-        assert "trainable" in str(exc)
-    else:
-        raise AssertionError("Expected trainable-token alignment failure")
 
 
 def test_align_loss_mask_to_vllm_multimodal_token_ids_rejects_trainable_insert():
@@ -202,12 +199,8 @@ def test_align_loss_mask_to_vllm_multimodal_token_ids_rejects_trainable_insert()
     source_mask = [0, 1, 1]
     target_ids = [10, 99, 20, 30]
 
-    try:
+    with pytest.raises(ValueError, match="trainable"):
         _align_loss_mask_to_token_ids(source_ids, source_mask, target_ids)
-    except ValueError as exc:
-        assert "trainable" in str(exc)
-    else:
-        raise AssertionError("Expected trainable-token alignment failure")
 
 
 def test_collate_fn_basic():

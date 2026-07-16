@@ -287,6 +287,75 @@ def _as_list(value: Any) -> list[int]:
     return list(value)
 
 
+def _loss_mask_span_is_masked(
+    source_loss_mask: list[int],
+    start: int,
+    end: int,
+) -> bool:
+    return all(int(value) == 0 for value in source_loss_mask[start:end])
+
+
+def _following_tokens_match(
+    source_token_ids: list[int],
+    target_token_ids: list[int],
+    src_pos: int,
+    tgt_pos: int,
+    min_match_run: int,
+) -> bool:
+    remaining = min(
+        min_match_run,
+        len(source_token_ids) - src_pos,
+        len(target_token_ids) - tgt_pos,
+    )
+    if remaining <= 0:
+        return True
+    return (
+        source_token_ids[src_pos : src_pos + remaining]
+        == target_token_ids[tgt_pos : tgt_pos + remaining]
+    )
+
+
+def _find_loss_mask_resync(
+    source_token_ids: list[int],
+    source_loss_mask: list[int],
+    target_token_ids: list[int],
+    src_pos: int,
+    tgt_pos: int,
+    min_match_run: int,
+    max_resync_scan: int,
+) -> tuple[int, int] | None:
+    best: tuple[int, int] | None = None
+    best_cost: int | None = None
+    max_src = min(len(source_token_ids), src_pos + max_resync_scan)
+    max_tgt = min(len(target_token_ids), tgt_pos + max_resync_scan)
+
+    for next_src in range(src_pos, max_src):
+        if not _loss_mask_span_is_masked(source_loss_mask, src_pos, next_src):
+            break
+        for next_tgt in range(tgt_pos, max_tgt):
+            if next_tgt > tgt_pos and int(source_loss_mask[src_pos]) != 0:
+                continue
+            if source_token_ids[next_src] != target_token_ids[next_tgt]:
+                continue
+            if not _following_tokens_match(
+                source_token_ids,
+                target_token_ids,
+                next_src,
+                next_tgt,
+                min_match_run,
+            ):
+                continue
+            cost = (next_src - src_pos) + (next_tgt - tgt_pos)
+            if best_cost is None or cost < best_cost:
+                best = (next_src, next_tgt)
+                best_cost = cost
+                break
+        if best is not None and best_cost == next_src - src_pos:
+            break
+
+    return best
+
+
 def _align_loss_mask_to_token_ids(
     source_token_ids: list[int],
     source_loss_mask: list[int],
@@ -313,46 +382,6 @@ def _align_loss_mask_to_token_ids(
             f"input_ids={len(source_token_ids)}, loss_mask={len(source_loss_mask)}"
         )
 
-    def source_span_is_masked(start: int, end: int) -> bool:
-        return all(int(value) == 0 for value in source_loss_mask[start:end])
-
-    def following_run_matches(src_pos: int, tgt_pos: int) -> bool:
-        remaining = min(
-            min_match_run,
-            len(source_token_ids) - src_pos,
-            len(target_token_ids) - tgt_pos,
-        )
-        if remaining <= 0:
-            return True
-        return (
-            source_token_ids[src_pos : src_pos + remaining]
-            == target_token_ids[tgt_pos : tgt_pos + remaining]
-        )
-
-    def find_resync(src_pos: int, tgt_pos: int) -> tuple[int, int] | None:
-        best: tuple[int, int] | None = None
-        best_cost: int | None = None
-        max_src = min(len(source_token_ids), src_pos + max_resync_scan)
-        max_tgt = min(len(target_token_ids), tgt_pos + max_resync_scan)
-        for next_src in range(src_pos, max_src):
-            if not source_span_is_masked(src_pos, next_src):
-                break
-            for next_tgt in range(tgt_pos, max_tgt):
-                if next_tgt > tgt_pos and int(source_loss_mask[src_pos]) != 0:
-                    continue
-                if source_token_ids[next_src] != target_token_ids[next_tgt]:
-                    continue
-                if not following_run_matches(next_src, next_tgt):
-                    continue
-                cost = (next_src - src_pos) + (next_tgt - tgt_pos)
-                if best_cost is None or cost < best_cost:
-                    best = (next_src, next_tgt)
-                    best_cost = cost
-                    break
-            if best is not None and best_cost == next_src - src_pos:
-                break
-        return best
-
     aligned: list[int] = []
     src_idx = 0
     tgt_idx = 0
@@ -364,7 +393,15 @@ def _align_loss_mask_to_token_ids(
             tgt_idx += 1
             continue
 
-        resync = find_resync(src_idx, tgt_idx)
+        resync = _find_loss_mask_resync(
+            source_token_ids,
+            source_loss_mask,
+            target_token_ids,
+            src_idx,
+            tgt_idx,
+            min_match_run,
+            max_resync_scan,
+        )
         if resync is None:
             break
         next_src, next_tgt = resync
@@ -373,7 +410,11 @@ def _align_loss_mask_to_token_ids(
         tgt_idx = next_tgt
 
     if tgt_idx < len(target_token_ids):
-        if not source_span_is_masked(src_idx, len(source_token_ids)):
+        if not _loss_mask_span_is_masked(
+            source_loss_mask,
+            src_idx,
+            len(source_token_ids),
+        ):
             raise ValueError(
                 "Unable to align vLLM multimodal token IDs without dropping "
                 f"trainable source tokens at source={src_idx}, target={tgt_idx}"
@@ -381,8 +422,10 @@ def _align_loss_mask_to_token_ids(
         aligned.extend([0] * (len(target_token_ids) - tgt_idx))
         tgt_idx = len(target_token_ids)
 
-    if src_idx < len(source_token_ids) and not source_span_is_masked(
-        src_idx, len(source_token_ids)
+    if src_idx < len(source_token_ids) and not _loss_mask_span_is_masked(
+        source_loss_mask,
+        src_idx,
+        len(source_token_ids),
     ):
         raise ValueError(
             "Unable to align vLLM multimodal token IDs; remaining source suffix "
@@ -479,6 +522,52 @@ class ArrowDataset(BaseDataset):
         """Get lengths of the dataset samples."""
         return list(self.data.with_format(None)["seq_len"])
 
+    def _load_generated_hs(
+        self,
+        hs_filepath: str,
+        client_item: ClientItem,
+        dataset_item: dict[str, Any],
+    ) -> tuple[dict[str, torch.Tensor], bool]:
+        loaded_hs = _maybe_load_hs_file(Path(hs_filepath))
+        if loaded_hs is None:
+            raise ValueError(f"Failed to load hidden states from {hs_filepath}")
+
+        if "messages" in client_item:
+            _check_hidden_states_self_consistent(loaded_hs)
+            return loaded_hs, False
+
+        loaded_hs, truncated = align_hidden_states_to_tokens(
+            loaded_hs,
+            dataset_item["input_ids"].tolist(),
+            allow_prefix_truncation=False,
+        )
+        return loaded_hs, truncated
+
+    def _handle_generated_hs_file(
+        self,
+        index: int,
+        hs_filepath: str,
+        loaded_hs: dict[str, torch.Tensor],
+        truncated: bool,
+    ) -> None:
+        source_path = Path(hs_filepath)
+
+        match self.on_generate:
+            case "cache":
+                file_idx = self._map_to_file_idx(index)
+                target_path = self.hidden_states_path / f"hs_{file_idx}.safetensors"
+                if truncated:
+                    save_file(
+                        {key: value.contiguous() for key, value in loaded_hs.items()},
+                        target_path,
+                    )
+                    if source_path != target_path:
+                        source_path.unlink()
+                elif source_path != target_path:
+                    shutil.move(hs_filepath, target_path)
+            case "delete":
+                source_path.unlink()
+
     def _maybe_generate_hs(self, index: int) -> dict[str, torch.Tensor] | None:
         if not self.client:
             self._setup_client()
@@ -495,38 +584,12 @@ class ArrowDataset(BaseDataset):
                 max_retries=self.max_retries,
             )
 
-            loaded_hs = _maybe_load_hs_file(Path(hs_filepath))
-            if loaded_hs is None:
-                raise ValueError(f"Failed to load hidden states from {hs_filepath}")
-
-            if "messages" in client_item:
-                _check_hidden_states_self_consistent(loaded_hs)
-                truncated = False
-            else:
-                loaded_hs, truncated = align_hidden_states_to_tokens(
-                    loaded_hs,
-                    dataset_item["input_ids"].tolist(),
-                    allow_prefix_truncation=False,
-                )
-
-            match self.on_generate:
-                case "cache":
-                    file_idx = self._map_to_file_idx(index)
-                    target_path = self.hidden_states_path / f"hs_{file_idx}.safetensors"
-                    if truncated:
-                        save_file(
-                            {
-                                key: value.contiguous()
-                                for key, value in loaded_hs.items()
-                            },
-                            target_path,
-                        )
-                        if Path(hs_filepath) != target_path:
-                            Path(hs_filepath).unlink()
-                    elif Path(hs_filepath) != target_path:
-                        shutil.move(hs_filepath, target_path)
-                case "delete":
-                    Path(hs_filepath).unlink()
+            loaded_hs, truncated = self._load_generated_hs(
+                hs_filepath,
+                client_item,
+                dataset_item,
+            )
+            self._handle_generated_hs_file(index, hs_filepath, loaded_hs, truncated)
         except Exception as e:
             if isinstance(e, ValueError) and "NaN" in str(e):
                 raise
