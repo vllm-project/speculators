@@ -582,7 +582,10 @@ def _preprocess_batch(
                 tools=parsed_tools,
                 conv_idx=idx,
             )
-        except (TypeError, ValueError, KeyError, AttributeError, RuntimeError) as e:
+        # Templates reject rows they cannot render with arbitrary types -- Mistral
+        # and Gemma raise jinja2's TemplateError, which subclasses Exception
+        # directly. One unrenderable row must not kill the run.
+        except Exception as e:
             log.error(
                 f"Failed to process conversation {idx} "
                 f"(assistant_pattern={assistant_pattern is not None}): {e}"
@@ -903,8 +906,11 @@ def load_and_preprocess_dataset(
             assistant_pattern=assistant_pattern,
             minimum_valid_tokens=minimum_valid_tokens,
         )
-        if minimum_valid_tokens is not None:
-            log.info(f"Kept {len(preprocessed_dataset)} samples after filtering")
+        dropped = len(raw_dataset) - len(preprocessed_dataset)
+        if dropped:
+            log.warning(
+                f"Dropped {dropped}/{len(raw_dataset)} samples during preprocessing"
+            )
         processed_datasets.append(preprocessed_dataset)
 
     combined_dataset = concatenate_datasets(processed_datasets)
