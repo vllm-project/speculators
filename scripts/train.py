@@ -1,4 +1,5 @@
 import argparse
+import contextlib
 import gc
 import logging
 import random
@@ -29,6 +30,7 @@ from speculators.models.utils import (
 )
 from speculators.train.dataloader import create_train_val_loaders
 from speculators.train.distributed import (
+    build_on_meta,
     get_rank,
     maybe_destroy_distributed,
     maybe_setup_distributed,
@@ -502,12 +504,20 @@ def build_draft_model(
         )
 
     args.draft_vocab_size = draft_vocab_size
-    return model_class.from_training_args(
-        verifier_config=transformer_layer_config,
-        t2d=t2d,
-        d2t=d2t,
-        **vars(args),
+    # --init-on-meta: non-rank0 build params on meta (no N-way host-RAM copy); real
+    # weights arrive via broadcast_from_rank0 in FSDP setup. Only rank 0 builds real.
+    meta_ctx = (
+        build_on_meta()
+        if args.init_on_meta and get_rank() != 0
+        else contextlib.nullcontext()
     )
+    with meta_ctx:
+        return model_class.from_training_args(
+            verifier_config=transformer_layer_config,
+            t2d=t2d,
+            d2t=d2t,
+            **vars(args),
+        )
 
 
 def main(args: argparse.Namespace):  # noqa: C901
@@ -904,6 +914,15 @@ def parse_args():
     parser.add_argument("--log-dir", type=str, default="./logs")
     parser.add_argument("--run-name", type=str, default=None)
     parser.add_argument("--num-layers", type=int, default=1)
+    parser.add_argument(
+        "--init-on-meta",
+        action="store_true",
+        help=(
+            "Build the draft on meta on all ranks except rank 0 (no N-way host-RAM "
+            "copy); real weights broadcast from rank 0 in FSDP setup. Requires the "
+            "model to no-op data-init on meta params (guard param.is_meta)."
+        ),
+    )
     parser.add_argument(
         "--draft-arch",
         type=str,

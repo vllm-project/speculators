@@ -7,11 +7,13 @@ maintaining their own distributed state.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 
 import torch
 import torch.distributed as dist
+from torch import nn
 from torch.distributed import ProcessGroup
 from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
 
@@ -192,6 +194,29 @@ def maybe_destroy_distributed() -> None:
     _dp_rank = 0
     _sp_group = None
     _dp_group = None
+
+
+@contextlib.contextmanager
+def build_on_meta():
+    """Build module parameters on the meta device (buffers stay real).
+
+    Overrides ``register_parameter`` so a large model constructs with ~zero resident
+    memory. Used on non-rank0 ranks; real weights then arrive via
+    ``set_model_state_dict(broadcast_from_rank0=True)`` in FSDP setup. Contract: the
+    model must no-op data-init on meta params (guard with ``param.is_meta``).
+    """
+    orig = nn.Module.register_parameter
+
+    def _register_on_meta(self, name, param):
+        if param is not None and not param.is_meta:
+            param = nn.Parameter(param.data.to("meta"), requires_grad=param.requires_grad)
+        orig(self, name, param)
+
+    nn.Module.register_parameter = _register_on_meta
+    try:
+        yield
+    finally:
+        nn.Module.register_parameter = orig
 
 
 def apply_fully_sharded(model: torch.nn.Module):
