@@ -2,7 +2,7 @@ import json
 from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Literal, NamedTuple
+from typing import Literal
 
 import torch
 from datasets import Dataset as HFDataset
@@ -186,15 +186,6 @@ def _encode_render(
     )
 
 
-class _Turn(NamedTuple):
-    """One assistant turn's renders: context ends at ``boundary`` in ``full_ids``."""
-
-    prompt_ids: list[int]
-    boundary: int
-    full_ids: list[int]
-    idx: int
-
-
 def _common_prefix_len(a: list[int], b: list[int]) -> int:
     length = 0
     for x, y in zip(a, b, strict=False):
@@ -211,30 +202,29 @@ def _render_boundary_rows(
     *,
     tools: list[dict] | None = None,
 ) -> list[dict]:
-    """Build training rows whose loss mask is each assistant turn's render boundary.
+    """Build one training row per assistant turn, masked at its render boundary.
 
     For assistant turn ``j``, the boundary is where the ``conv[:j+1]`` full render
     extends the ``conv[:j]`` generation-prompt render: earlier tokens are context
     (mask 0), later ones supervised (mask 1). If the generation prompt itself
-    diverges (e.g. a pre-filled ``<think>`` scaffold vs recorded reasoning), the
-    boundary falls back to the common prefix -- valid only if history agrees.
+    diverges -- a pre-filled ``<think>`` scaffold vs recorded reasoning, as in
+    DeepSeek-R1 distills and Qwen3.5 with reasoning content -- the boundary falls
+    back to the common prefix, valid only if history agrees.
 
-    Append-only templates pack every turn into one row; templates that rewrite
-    history (reasoning models stripping past ``<think>``) fan out to one row per
-    turn. Turns whose context alone fills ``max_length`` are skipped.
+    Every turn gets its own row, carrying the history re-rendered the way
+    inference would see it. Trailing non-assistant messages are dropped, and
+    turns whose context alone fills ``max_length`` are skipped.
 
     Raises:
         BoundaryUnstableError: the renders diverge inside history.
     """
-    # i == 0 has no preceding context to bound against; keep it as context only.
-    assistant_indices = [
-        i
-        for i, turn in enumerate(normalized_conv)
-        if turn["role"] == "assistant" and i > 0
-    ]
+    rows: list[dict] = []
 
-    turns: list[_Turn] = []
-    for j in assistant_indices:
+    for j, turn in enumerate(normalized_conv):
+        # j == 0 has no preceding context to bound against; keep it as context only.
+        if turn["role"] != "assistant" or j == 0:
+            continue
+
         prompt_ids = _encode_render(
             normalized_conv[:j],
             render_endpoint,
@@ -245,6 +235,7 @@ def _render_boundary_rows(
             # Context fills the window; this and later turns yield only
             # unsupervised rows.
             break
+
         full_ids = _encode_render(
             normalized_conv[: j + 1],
             render_endpoint,
@@ -268,42 +259,16 @@ def _render_boundary_rows(
                     f"prompt and full renders diverge inside history at "
                     f"assistant turn {j}; cannot derive a boundary loss mask"
                 )
-        turns.append(_Turn(prompt_ids, boundary, full_ids, j))
 
-    if not turns:
-        return []
-
-    # Packed: append-only chain holds, all spans valid in the final render.
-    append_only = all(
-        nxt.prompt_ids[: len(cur.full_ids)] == cur.full_ids
-        for cur, nxt in zip(turns, turns[1:], strict=False)
-    )
-    if append_only:
-        input_ids = turns[-1].full_ids
-        loss_mask = [0] * len(input_ids)
-        for turn in turns:
-            loss_mask[turn.boundary : len(turn.full_ids)] = [1] * (
-                len(turn.full_ids) - turn.boundary
-            )
-        # Trailing non-assistant messages are dropped.
-        return [
+        rows.append(
             {
-                "input_ids": input_ids,
-                "loss_mask": loss_mask,
-                "conv": normalized_conv[: turns[-1].idx + 1],
+                "input_ids": full_ids,
+                "loss_mask": [0] * boundary + [1] * (len(full_ids) - boundary),
+                "conv": normalized_conv[: j + 1],
             }
-        ]
+        )
 
-    # Fan-out: history is rewritten between turns (e.g. stripped thinking).
-    return [
-        {
-            "input_ids": turn.full_ids,
-            "loss_mask": [0] * turn.boundary
-            + [1] * (len(turn.full_ids) - turn.boundary),
-            "conv": normalized_conv[: turn.idx + 1],
-        }
-        for turn in turns
-    ]
+    return rows
 
 
 def _parse_conv_tools(conv_tools: object, idx: int) -> list | None:
@@ -354,12 +319,21 @@ def _append_row(
     return "kept"
 
 
-def _warn_unsupervised(num_dropped: int) -> None:
-    if num_dropped:
+def _warn_seq_length(num_unsupervised: int, num_clipped: int) -> None:
+    """Warn when ``--seq-length`` cost supervision: all of it, or just the tail."""
+    if num_unsupervised:
         log.warning(
-            f"Dropped {num_dropped} rows with no supervised tokens. "
+            f"Dropped {num_unsupervised} rows with no supervised tokens. "
             f"If unexpected, consider increasing --seq-length to avoid "
             f"truncating assistant responses."
+        )
+    if num_clipped:
+        log.warning(
+            f"Clipped {num_clipped} rows at --seq-length: the assistant turn is "
+            f"cut mid-response, so its tail and closing tokens are never "
+            f"supervised. These rows are kept and look healthy. Raise "
+            f"--seq-length to supervise responses whole -- reasoning traces "
+            f"routinely exceed 2048 tokens."
         )
 
 
@@ -372,7 +346,7 @@ def _passthrough_pretokenized(
     need no rendering.
     """
     results: dict[str, list] = {"input_ids": [], "loss_mask": [], "seq_len": []}
-    num_unsupervised = 0
+    num_unsupervised = num_clipped = 0
     for ids, mask in zip(examples["input_ids"], examples["loss_mask"], strict=True):
         # A per-row length skew survives strict= column pairing; the collator
         # packs each key independently and would shift the mask silently.
@@ -383,7 +357,10 @@ def _passthrough_pretokenized(
             )
         status = _append_row(results, ids, mask, max_length, minimum_valid_tokens)
         num_unsupervised += status == "unsupervised"
-    _warn_unsupervised(num_unsupervised)
+        # Kept-but-truncated only: a row clipped past its boundary reports as
+        # unsupervised above, and would otherwise be counted twice.
+        num_clipped += status == "kept" and len(ids) > max_length
+    _warn_seq_length(num_unsupervised, num_clipped)
     return results
 
 
@@ -427,7 +404,7 @@ def _preprocess_batch(
         )
         tools_col = None
 
-    num_unsupervised = 0
+    num_unsupervised = num_clipped = 0
     num_convs_in = 0
     num_convs_empty = 0
 
@@ -469,13 +446,16 @@ def _preprocess_batch(
                 minimum_valid_tokens,
             )
             num_unsupervised += status == "unsupervised"
+            # Kept-but-truncated only: a row clipped past its boundary reports
+            # as unsupervised above, and would otherwise be counted twice.
+            num_clipped += status == "kept" and len(row["input_ids"]) > max_length
             if status == "kept":
                 num_kept += 1
                 if "messages" in results:
                     results["messages"].append(_adapt_conv_for_vllm(row["conv"]))
         num_convs_empty += num_kept == 0
 
-    _warn_unsupervised(num_unsupervised)
+    _warn_seq_length(num_unsupervised, num_clipped)
     if num_convs_empty:
         log.warning(
             f"{num_convs_empty}/{num_convs_in} conversations produced no training "
@@ -502,10 +482,9 @@ def build_eagle3_dataset(
 
     Off-policy conversations are tokenized by the vLLM ``/render`` endpoint and
     masked at the render boundary of each assistant turn (see
-    ``_render_boundary_rows``); append-only templates keep one row per
-    conversation, history-rewriting templates (e.g. reasoning models) fan out
-    to one row per assistant turn. Pre-tokenized rows (on-policy regeneration)
-    carry their own boundary mask and pass straight through.
+    ``_render_boundary_rows``), fanning out to one row per assistant turn.
+    Pre-tokenized rows (on-policy regeneration) carry their own boundary mask
+    and pass straight through.
 
     Args:
         dataset: Raw dataset with conversations, or pre-tokenized rows.
