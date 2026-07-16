@@ -73,6 +73,56 @@ def _visualize_sample(preprocessed: HFDataset, processor: ProcessorLike, idx: in
     log.info(highlighted)
 
 
+# Declarative map of source role names to the canonical role. Easier to extend
+# than an if/elif chain. `observation` is a tool result (function output), so it
+# maps to the tool role rather than user.
+ROLE_ALIASES = {
+    "human": "user",
+    "user": "user",
+    "gpt": "assistant",
+    "assistant": "assistant",
+    "system": "system",
+    "tool": "tool",
+    "observation": "tool",
+}
+
+
+def _normalize_turn(turn: dict) -> dict | None:
+    """Normalize a single conversation turn to canonical role/content keys.
+
+    Returns ``None`` (signalling the caller to skip the turn) when the role is
+    not recognized.
+    """
+    raw_role = turn.get("from", turn.get("role", ""))
+    role = ROLE_ALIASES.get(raw_role)
+    if role is None:
+        log.warning(f"Unknown role '{raw_role}', skipping turn")
+        return None
+
+    normalized_turn: dict = {
+        "role": role,
+        # Prefer an explicit "value" (ShareGPT) even when empty, so an empty
+        # assistant turn isn't silently replaced by a stray "content" field;
+        # fall back to "content" (OpenAI) otherwise.
+        "content": turn["value"] if "value" in turn else (turn.get("content") or ""),
+    }
+
+    # Preserve tool_calls and tool_call_id if present
+    if turn.get("tool_calls"):
+        normalized_turn["tool_calls"] = turn["tool_calls"]
+    if turn.get("tool_call_id"):
+        normalized_turn["tool_call_id"] = turn["tool_call_id"]
+
+    # Mirror thinking/reasoning_content: chat templates (e.g. Qwen3) read
+    # reasoning_content, so populate both from whichever field is present.
+    thinking = turn.get("thinking") or turn.get("reasoning_content")
+    if thinking:
+        normalized_turn["thinking"] = thinking
+        normalized_turn["reasoning_content"] = thinking
+
+    return normalized_turn
+
+
 def _normalize_conversation(
     conv: list[dict],
 ) -> list[dict]:
@@ -86,38 +136,10 @@ def _normalize_conversation(
     """
     normalized = []
     for turn in conv:
-        role = turn.get("from", turn.get("role", ""))
-        content = turn.get("value") or turn.get("content") or ""
-
-        # Map various role names to standard user/assistant
-        if role in ("human", "user"):
-            role = "user"
-        elif role in ("gpt", "assistant"):
-            role = "assistant"
-        elif role == "system":
-            role = "system"
-        elif role == "tool":
-            role = "tool"
-        else:
-            log.warning(f"Unknown role '{role}', skipping turn")
+        normalized_turn = _normalize_turn(turn)
+        if normalized_turn is None:
             continue
-
-        # Build normalized turn with role and content
-        normalized_turn = {"role": role, "content": content}
-
-        # Preserve tool_calls and tool_call_id if present
-        if turn.get("tool_calls"):
-            normalized_turn["tool_calls"] = turn["tool_calls"]
-        if turn.get("tool_call_id"):
-            normalized_turn["tool_call_id"] = turn["tool_call_id"]
-
-        thinking = turn.get("thinking") or turn.get("reasoning_content")
-        if thinking:
-            normalized_turn["thinking"] = thinking
-            normalized_turn["reasoning_content"] = thinking
-
         normalized.append(normalized_turn)
-
     return normalized
 
 
@@ -685,7 +707,7 @@ def build_eagle3_dataset(
     return dataset
 
 
-def _load_hf_dataset(spec: str) -> tuple[HFDataset, None]:
+def _load_hf_dataset(spec: str) -> HFDataset:
     """Load an arbitrary HuggingFace dataset from an ``hf:`` spec.
 
     Args:
@@ -694,12 +716,11 @@ def _load_hf_dataset(spec: str) -> tuple[HFDataset, None]:
             without a subset; both can be given as ``hf:<id>:<subset>:<split>``.
 
     Returns:
-        Tuple of (raw_dataset, None). No normalize_fn is applied: the dataset
-        must already be in conversations format.
+        The loaded dataset. The caller canonicalizes the conversation column and
+        validates that a ``conversations`` column is present.
 
     Raises:
-        ValueError: If the spec is malformed or the loaded dataset has no
-            ``conversations`` column.
+        ValueError: If the spec is malformed.
     """
     subset: str | None
     match spec.removeprefix("hf:").split(":"):
@@ -722,17 +743,24 @@ def _load_hf_dataset(spec: str) -> tuple[HFDataset, None]:
     if not split:
         raise ValueError(f"Invalid hf: spec '{spec}': empty split.")
 
-    raw_dataset = load_dataset(hf_id, name=subset, split=split)
+    return load_dataset(hf_id, name=subset, split=split)
 
-    if "conversations" not in raw_dataset.column_names:
-        raise ValueError(
-            f"HuggingFace dataset '{hf_id}' (split '{split}') is not in "
-            f"conversations format: expected a 'conversations' column but found "
-            f"{raw_dataset.column_names}. Pass a dataset already in conversations "
-            f"format, or add a preset to DATASET_CONFIGS with a normalize_fn."
-        )
 
-    return raw_dataset, None
+def _rename_messages_to_conversations(dataset: HFDataset) -> HFDataset:
+    """Canonicalize the conversation column to ``conversations``.
+
+    Renames a ``messages`` column to ``conversations`` automatically during
+    ingestion, so datasets using the OpenAI-style ``messages`` key need no
+    per-dataset normalizer. If both columns exist, the redundant ``messages``
+    column is dropped.
+    """
+    columns = dataset.column_names
+    if "messages" not in columns:
+        return dataset
+    if "conversations" in columns:
+        return dataset.remove_columns("messages")
+    log.info("Renaming 'messages' column to 'conversations'")
+    return dataset.rename_column("messages", "conversations")
 
 
 def load_raw_dataset(
@@ -752,19 +780,24 @@ def load_raw_dataset(
 
     Returns:
         Tuple of (raw_dataset, normalize_fn). normalize_fn is None for sources
-        already in conversations format.
+        already in conversations format. A ``messages`` column is renamed to
+        ``conversations`` here for every source, so OpenAI-style datasets need no
+        per-dataset normalizer.
 
     Raises:
-        ValueError: If the source cannot be resolved or a local directory
-            contains no ``.json``/``.jsonl`` files.
+        ValueError: If the source cannot be resolved, a local directory contains
+            no ``.json``/``.jsonl`` files, or an ``hf:`` dataset is not in
+            conversations format.
     """
+    normalize_fn: Callable[[dict], dict] | None = None
+    require_conversations = False
+    path = Path(train_data_path)
+
     # 1. Local file
     if train_data_path.endswith((".jsonl", ".json")):
-        return load_dataset("json", data_files=train_data_path, split="train"), None
-
+        raw_dataset = load_dataset("json", data_files=train_data_path, split="train")
     # 2. Local directory
-    path = Path(train_data_path)
-    if path.is_dir():
+    elif path.is_dir():
         data_files = sorted(
             str(p) for p in (*path.rglob("*.json"), *path.rglob("*.jsonl"))
         )
@@ -772,27 +805,38 @@ def load_raw_dataset(
             raise ValueError(
                 f"No .json/.jsonl files found in directory: {train_data_path}"
             )
-        return load_dataset("json", data_files=data_files, split="train"), None
-
+        raw_dataset = load_dataset("json", data_files=data_files, split="train")
     # 3. Named preset
-    if train_data_path in DATASET_CONFIGS:
+    elif train_data_path in DATASET_CONFIGS:
         config = DATASET_CONFIGS[train_data_path]
         raw_dataset = load_dataset(
             config.hf_path, name=config.subset, split=config.split
         )
         if config.filter_fn is not None:
             raw_dataset = raw_dataset.filter(config.filter_fn)
-        return raw_dataset, config.normalize_fn
-
+        normalize_fn = config.normalize_fn
     # 4. Arbitrary HuggingFace dataset
-    if train_data_path.startswith("hf:"):
-        return _load_hf_dataset(train_data_path)
+    elif train_data_path.startswith("hf:"):
+        raw_dataset = _load_hf_dataset(train_data_path)
+        require_conversations = True
+    else:
+        raise ValueError(
+            f"Unsupported dataset: {train_data_path}. Supported: local "
+            f".json/.jsonl file, local directory of .json/.jsonl files, "
+            f"hf:<id>[:<subset>:<split>], or a preset {list(DATASET_CONFIGS.keys())}."
+        )
 
-    raise ValueError(
-        f"Unsupported dataset: {train_data_path}. Supported: local .json/.jsonl "
-        f"file, local directory of .json/.jsonl files, hf:<id>[:<subset>:<split>], "
-        f"or a preset {list(DATASET_CONFIGS.keys())}."
-    )
+    raw_dataset = _rename_messages_to_conversations(raw_dataset)
+
+    if require_conversations and "conversations" not in raw_dataset.column_names:
+        raise ValueError(
+            f"HuggingFace dataset '{train_data_path}' is not in conversations "
+            f"format: expected a 'conversations' column but found "
+            f"{raw_dataset.column_names}. Pass a dataset already in conversations "
+            f"format, or add a preset to DATASET_CONFIGS with a normalize_fn."
+        )
+
+    return raw_dataset, normalize_fn
 
 
 def get_tokenizer(processor: ProcessorLike):
