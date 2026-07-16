@@ -35,6 +35,8 @@ Orchestrates the entire pipeline: starts a vLLM server (with optional data/tenso
 
 - **`--keep-server`** (flag) Don't stop the vLLM server after processing completes.
 
+- **`--tool-call-parser`** (str) vLLM tool-call parser (e.g. `hermes`, `llama3_json`). Adds `--enable-auto-tool-choice --tool-call-parser` to the server; required for tool-call regeneration, otherwise tool calls arrive as raw text and are not regenerated as tools.
+
 All other arguments are passed through to `script.py`.
 
 ### Full Example
@@ -130,11 +132,11 @@ The registry's multimodal preset, `sharegpt4v_coco`, is **off-policy only** and 
 
 ## Output Format
 
-Rows are pre-tokenized and ready for training: one row per assistant turn, holding the prompt the target conditioned on followed by the tokens it generated. The endpoint must support `return_token_ids`, which the script uses to read the generation boundary directly instead of re-tokenizing the text and recovering the boundary with a regex.
+Rows are pre-tokenized and ready for training: one row per target generation, holding the prompt the target conditioned on followed by the tokens it generated. The endpoint must support `return_token_ids`, which the script uses to read the generation boundary directly instead of re-tokenizing the text and recovering the boundary with a regex.
 
 ```json
 {
-  "id": "conv-abc_turn0",
+  "id": "conv-abc_gen0",
   "primary_id": "conv-abc",
   "input_ids": [151644, 872, ...],
   "loss_mask": [0, 0, ..., 1, 1],
@@ -145,6 +147,7 @@ Rows are pre-tokenized and ready for training: one row per assistant turn, holdi
   "metadata": {
     "idx": 0,
     "finish_reason": "stop",
+    "is_tool_call": false,
     "usage": {...},
     "endpoint": "http://127.0.0.1:8000/v1/chat/completions",
     "sampling_params": {...}
@@ -153,11 +156,12 @@ Rows are pre-tokenized and ready for training: one row per assistant turn, holdi
 ```
 
 - `loss_mask` is `0` over the prompt and `1` over the generated tokens. This *is* the generation boundary, so training applies no further masking.
-- A conversation with N assistant turns yields N rows, each carrying the history before it. Turn `k`'s row is `{primary_id}_turn{k}`.
-- `primary_id` is the conversation's stable id, used by `--resume`. The row `id` is turn-suffixed and never matches it.
+- A conversation yields one row per target generation, each carrying the history before it. Generation `k`'s row is `{primary_id}_gen{k}`. A plain assistant turn is one generation; a turn that calls a tool is two or more (see [Tool calls](#tool-calls)).
+- `primary_id` is the conversation's stable id, used by `--resume`. The row `id` is generation-suffixed and never matches it.
+- `is_tool_call` marks a row whose generated tokens are a tool call rather than a final answer.
 - `conversations` is a human-readable twin of `input_ids` for review only. Training drops it.
 
-Rows are written only after every turn of a conversation succeeds. A conversation that fails partway writes nothing to the output file and one row to a sibling error file instead (`--outfile out.jsonl` gives `out.errors.jsonl`), so `--resume` retries it whole:
+Rows are written only once a conversation finishes. A conversation that fails partway writes nothing to the output file and one row to a sibling error file instead (`--outfile out.jsonl` gives `out.errors.jsonl`), so `--resume` retries it whole:
 
 ```json
 {
@@ -165,10 +169,18 @@ Rows are written only after every turn of a conversation succeeds. A conversatio
   "metadata": {
     "idx": 0,
     "error": "ConnectionError(...)",
-    "turns_completed": 1,
+    "generations_completed": 1,
     "endpoint": "http://127.0.0.1:8000/v1/chat/completions"
   }
 }
 ```
+
+### Tool calls
+
+If a source row carries a `tools` schema, it is forwarded to the endpoint on every request and the target regenerates its own tool calls, which are supervised like any other generation.
+
+Tools are **not executed**. The target's *k*-th regenerated call is paired with the *k*-th cached tool result already present in the source row, spliced back as a `tool` message so the conversation can continue. This keeps the call tokens on-policy while the results stay off-policy.
+
+A conversation stops early — keeping the rows completed so far — when the target emits a call that cannot be paired 1:1 with a cached result: it has exhausted the cached results, emitted parallel calls in a single generation, or called a different tool than the next cached result answers. Such conversations are counted under `truncated` in the progress bar.
 
 If `--outfile` is not specified, the filename is auto-generated based on dataset and model (e.g., `magpie_Llama-3.3-70B-Instruct.jsonl`).
