@@ -1,12 +1,9 @@
 """Client for vLLM's ``/v1/chat/completions/render`` endpoint.
 
-Preprocessing derives every off-policy loss mask from render boundaries, and the
-renders come from the same vLLM instance the pipeline already runs for
-hidden-state extraction and serving -- one tokenizer for the mask, the hidden
-states, and inference. Only ``token_ids`` are requested here: the mask is
-computed from the boundary between two renders, not from the server's
-``assistant_tokens_mask`` (which is only populated when the chat template
-carries ``{% generation %}`` tags).
+Only ``token_ids`` are requested: the loss mask is derived from the boundary
+between two renders, not the server's ``assistant_tokens_mask`` (which needs
+``{% generation %}`` tags). Renders come from the vLLM instance the pipeline
+already runs, so one tokenizer feeds the mask, hidden states, and serving.
 """
 
 from http import HTTPStatus
@@ -34,8 +31,8 @@ def render_conversation(
 ) -> list[int]:
     """POST to ``/v1/chat/completions/render`` and return the token ids.
 
-    No truncation is requested: boundary detection needs the full lengths, and
-    over-length rows are clipped downstream once the boundary is known.
+    No truncation: boundary detection needs full lengths; over-length rows are
+    clipped downstream.
     """
     url = f"{endpoint.rstrip('/')}/v1/chat/completions/render"
 

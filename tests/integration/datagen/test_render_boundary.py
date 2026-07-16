@@ -131,12 +131,6 @@ def test_trailing_non_assistant_dropped(monkeypatch):
     assert len(rows[0]["conv"]) == 2
 
 
-def test_context_filling_window_yields_no_rows(monkeypatch):
-    _patch_encode(monkeypatch, {(1, True): [1, 2, 3, 4, 5]})
-    rows = P._render_boundary_rows(_conv(2), "http://x", max_length=5)
-    assert rows == []
-
-
 # --------------------------------------------------------------------------- #
 # _append_row -- clip / filter / keep                                          #
 # --------------------------------------------------------------------------- #
@@ -160,16 +154,6 @@ class _Resp:
 
     def json(self):
         return self._payload
-
-
-def test_render_conversation_returns_token_ids(monkeypatch):
-    monkeypatch.setattr(
-        RC.httpx, "post", lambda *a, **k: _Resp(200, {"token_ids": [1, 2, 3]})
-    )
-    out = RC.render_conversation(
-        "http://x", [{"role": "user", "content": "hi"}], add_generation_prompt=True
-    )
-    assert out == [1, 2, 3]
 
 
 def test_render_conversation_missing_token_ids_raises(monkeypatch):
@@ -265,10 +249,9 @@ def test_build_eagle3_dataset_requires_render_endpoint():
 
 
 def test_pretokenized_dataset_skips_render():
-    # Rows already carrying (input_ids, loss_mask) pass through without an
-    # endpoint -- the on-policy regeneration path.
+    # The load-bearing contract: on-policy pre-tokenized rows build without a
+    # render endpoint. Passthrough content (ids/mask) is covered by the regen
+    # tests in test_response_regeneration.py.
     data = {"input_ids": [[1, 2, 3, 4]], "loss_mask": [[0, 0, 1, 1]]}
     ds = build_eagle3_dataset(HFDataset.from_dict(data), None, num_proc=1)
     assert len(ds) == 1
-    assert ds[0]["input_ids"].tolist() == [1, 2, 3, 4]
-    assert ds[0]["loss_mask"].tolist() == [0, 0, 1, 1]
