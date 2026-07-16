@@ -55,7 +55,8 @@ DEFAULT_SUBSETS = (
 )
 DEFAULT_MAX_CONCURRENCY = 128
 DEFAULT_MAX_REQUESTS = 20
-DEFAULT_GEN_LEN_RATE = 24
+DEFAULT_GEN_LEN_RATE = 128
+DEFAULT_SWEEP_RATE = 24
 DEFAULT_DATA_COLUMN_MAPPER = '{"text_column":"prompt"}'
 
 # ---------------------------------------------------------------------------
@@ -193,8 +194,10 @@ def _run_subset(
     baseline = _require_metrics(metrics_url)
     profile = "sweep" if is_sweep else "throughput"
     run_output = artifacts_dir / f"run_{safe}.json"
+    sweep_overrides = {"rate": args.sweep_rate} if is_sweep else {}
     run_guidellm(
         **guidellm_common,
+        **sweep_overrides,
         subset=guidellm_subset,
         profile=profile,
         max_requests=args.max_requests,
@@ -384,6 +387,12 @@ def main() -> None:
         type=int,
         default=DEFAULT_GEN_LEN_RATE,
         help=f"Request rate for gen-len estimation (default: {DEFAULT_GEN_LEN_RATE})",
+    )
+    parser.add_argument(
+        "--sweep-rate",
+        type=int,
+        default=DEFAULT_SWEEP_RATE,
+        help=f"Number of rate points in the sweep profile (default: {DEFAULT_SWEEP_RATE})",
     )
     parser.add_argument(
         "--gen-kwargs",
