@@ -156,13 +156,15 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--block-size`** (int, default: `8`) Block size for DFlash model.
 
+- **`--sample-from-anchor`** / **`--no-sample-from-anchor`** (bool, default: algorithm-specific) Whether to sample from the anchor position. `True`: sample from anchor and all mask positions (default for dspark, produces block_size tokens). `False`: anchor is bonus token (default for dflash, produces block_size-1 tokens).
+
 - **`--max-anchors`** (int, default: `256`) Maximum anchor positions for DFlash training.
 
 - **`--dflash-decay-gamma`** (float, default: `4.0`) Decay gamma for DFlash loss weighting.
 
 ### Sliding Window Attention Arguments
 
-These flags apply to `dflash` and `dspark`, which use sliding window attention on all draft layers by default.
+All speculator types (except `mtp`) use sliding window attention on all draft layers by default.
 
 - **`--sliding-window`** (int, default: `2048`) Sliding window size for sliding window attention layers.
 

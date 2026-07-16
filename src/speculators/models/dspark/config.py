@@ -25,6 +25,18 @@ class DSparkSpeculatorConfig(DFlashSpeculatorConfig):
         description="Model architectures that can load these weights",
     )
 
+    sample_from_anchor: bool = Field(
+        default=True,
+        description=(
+            "Whether to sample from the anchor position. "
+            "False: anchor is the bonus token, only mask tokens predict "
+            "(block_size-1 speculative tokens). "
+            "True: sample from anchor and all mask positions "
+            "(block_size speculative tokens). "
+            "Default True matches DeepSeek/DeepSpec convention."
+        ),
+    )
+
     # Sequential (Markov) head.
     markov_rank: int = Field(
         default=256,

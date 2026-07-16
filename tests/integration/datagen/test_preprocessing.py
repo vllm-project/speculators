@@ -1004,43 +1004,6 @@ def test_build_eagle3_dataset_minimum_valid_tokens_filters_short_samples():
     assert remaining_valid_count >= threshold
 
 
-# Tests for turn dropout feature
-
-
-@pytest.mark.sanity
-def test_preprocess_batch_with_turn_dropout():
-    """Test preprocessing batch with turn dropout enabled."""
-    processor = load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
-
-    if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
-        pytest.skip("Processor does not support chat templates")
-
-    examples = {
-        "conversations": [
-            [
-                {"role": "user", "content": "Hello"},
-                {"role": "assistant", "content": "Hi there!"},
-                {"role": "user", "content": "How are you?"},
-                {"role": "assistant", "content": "I'm good!"},
-            ]
-        ]
-    }
-
-    assistant_pattern = _detect_assistant_pattern(processor)
-    results = _preprocess_batch(
-        examples,
-        processor,
-        max_length=512,
-        assistant_pattern=assistant_pattern,
-        turn_dropout=True,
-    )
-
-    # Should still produce valid results
-    assert "input_ids" in results
-    assert "loss_mask" in results
-    assert len(results["input_ids"]) > 0
-
-
 # Tests for custom assistant pattern feature
 
 

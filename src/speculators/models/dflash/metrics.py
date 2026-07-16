@@ -26,6 +26,7 @@ def compute_metrics(
     loss_config: LossConfig | None = None,
     per_position_loss_weight: str = "fixed-exp-decay",
     dpace_alpha: float = 0.5,
+    sample_from_anchor: bool = False,
 ) -> tuple[torch.Tensor, dict]:
     """Compute loss and accuracy metrics for draft model predictions.
 
@@ -84,20 +85,22 @@ def compute_metrics(
     metrics["loss_total"] = ones
     for term_name, term_val in term_losses.items():
         metrics[f"{term_name}_sum"] = term_val
-        metrics[f"{term_name}_total"] = ones
-    # Position 0 is the anchor — intentionally excluded from accuracy
-    metrics["full_acc_sum"] = correct_per_pos[1:].sum()
-    metrics["full_acc_total"] = total_per_pos[1:].sum()
+        metrics[f"{term_name}_total"] = ones.clone()
+
+    # Start position: 0 if sample_from_anchor else 1 (skip anchor)
+    start_pos = 0 if sample_from_anchor else 1
+    metrics["full_acc_sum"] = correct_per_pos[start_pos:].sum()
+    metrics["full_acc_total"] = total_per_pos[start_pos:].sum()
 
     # EAL = sum_k prod_{i<=k} acc_i over drafted positions
     eal = torch.zeros((), device=logits.device)
     cum = torch.ones((), device=logits.device)
-    for pos in range(1, block_size):
+    for pos in range(start_pos, block_size):
         metrics[f"position_{pos}_acc_sum"] = correct_per_pos[pos]
         metrics[f"position_{pos}_acc_total"] = total_per_pos[pos]
         acc = correct_per_pos[pos] / total_per_pos[pos].clamp(min=1.0)
         cum = cum * acc
         eal = eal + cum
     metrics["eal_sum"] = eal
-    metrics["eal_total"] = ones
+    metrics["eal_total"] = ones.clone()
     return loss, metrics
