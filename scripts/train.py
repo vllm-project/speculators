@@ -529,7 +529,7 @@ def main(args: argparse.Namespace):  # noqa: C901
     hidden_states_dtype = getattr(torch, args.hidden_states_dtype)
 
     if hidden_states_dtype == torch.float16:
-        raise ValueError(
+        raise NotImplementedError(
             "--hidden-states-dtype=float16 is not supported. "
             "float16 with torch.autocast requires gradient scaling (GradScaler) to "
             "prevent gradient underflow, which is not implemented. "

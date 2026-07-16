@@ -288,7 +288,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun \
   --scheduler-warmup-steps 100 \
   --checkpoint-freq 2 \
   --save-best \
-  --fsdp-shard  # optional: shard parameters when model doesn't fit in one GPU
+  --fsdp-shard
 ```
 
 ### Fine-tuning a Pretrained Model
