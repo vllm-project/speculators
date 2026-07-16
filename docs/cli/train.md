@@ -130,6 +130,9 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--muon-adjust-lr-fn`** (str, default: `"match_rms_adamw"`) Muon LR adjustment strategy. Options: `original`, `match_rms_adamw`. Only used with `--optimizer muon`.
 
+!!! note "fp32 master weights"
+    Optimizer updates always accumulate in fp32 master weights; forward/backward compute stays in `--hidden-states-dtype` (bf16 by default). Under FSDP2 (torchrun) the sharded parameters and optimizer state are held in fp32 and cast to the compute dtype at all-gather; on a single GPU the optimizer keeps an fp32 master copy of the trainable weights. Without this, updates smaller than a bf16 ulp would round away every step.
+
 ### Eagle3-Specific Arguments
 
 - **`--use-off-policy-tokens`** (flag) Use off-policy tokens during training (required for [regenerated data](response_regeneration.md)).

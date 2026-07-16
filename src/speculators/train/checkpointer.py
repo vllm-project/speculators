@@ -270,21 +270,30 @@ class SingleGPUCheckpointer(BaseCheckpointer):
 
     def load_optimizer_state_dict(
         self,
-        model: PreTrainedModel,
+        model: PreTrainedModel,  # noqa: ARG002 (kept for the base-class interface)
         optimizer: OptimizerOrList,
-        float_dtype: torch.dtype | None = None,
+        float_dtype: torch.dtype | None = None,  # noqa: ARG002
     ):
+        optimizer_path = self.optimizer_path(self.previous_epoch)
+        if not optimizer_path.exists():
+            logger.warning(
+                f"No optimizer state found at {optimizer_path}; "
+                "resuming with a fresh optimizer state."
+            )
+            return
         device = get_current_device()
         loaded = torch.load(
-            self.optimizer_path(self.previous_epoch),
+            optimizer_path,
             weights_only=True,
             map_location=device,
         )
         optimizers = _as_list(optimizer)
         loaded_list = loaded if isinstance(loaded, list) else [loaded]
-        dtype = float_dtype or model.dtype
+        # Optimizer state is loaded in its saved dtypes: fp32 master weights and
+        # moments (FP32MasterOptimizer) must not be downcast. Bare optimizers
+        # cast float state to their params' dtype in load_state_dict anyway.
         for opt, state_dict in zip(optimizers, loaded_list, strict=True):
-            opt.load_state_dict(convert_float_dtype(state_dict, dtype))
+            opt.load_state_dict(state_dict)
 
     def save_checkpoint(
         self,
@@ -296,9 +305,10 @@ class SingleGPUCheckpointer(BaseCheckpointer):
         model_state_dict = convert_float_dtype(model.state_dict(), float_dtype)
         model.save_pretrained(self.path / str(epoch), state_dict=model_state_dict)
         optimizers = _as_list(optimizer)
-        state_dicts = [
-            convert_float_dtype(opt.state_dict(), float_dtype) for opt in optimizers
-        ]
+        # Save optimizer state in its native dtypes: downcasting would destroy
+        # fp32 master weights / moments across a resume. (Without fp32 masters
+        # the state is already in the model's dtype, so nothing changes.)
+        state_dicts = [opt.state_dict() for opt in optimizers]
         # Preserve the legacy single-optimizer format when there is only one.
         payload = state_dicts[0] if len(state_dicts) == 1 else state_dicts
         torch.save(payload, self.optimizer_path(epoch))
@@ -326,19 +336,44 @@ class DistributedCheckpointer(BaseCheckpointer):
         )
         dist.barrier()
 
+    # Key marking the optimizer payload as the fp32-master format: the payload
+    # additionally carries the fp32 trainable params so resume is lossless while
+    # model.safetensors stays in the deployable (bf16) dtype.
+    FP32_PARAMS_KEY = "fp32_params"
+    OPTIMIZERS_KEY = "optimizers"
+
     def load_optimizer_state_dict(
         self,
         model,
         optimizer: OptimizerOrList,
         float_dtype: torch.dtype | None = None,
     ):
+        optimizer_path = self.optimizer_path(self.previous_epoch)
+        if not optimizer_path.exists():
+            # All ranks see the same shared filesystem, so every rank takes
+            # this branch consistently (no barrier divergence).
+            logger.warning(
+                f"No optimizer state found at {optimizer_path}; "
+                "resuming with a fresh optimizer state."
+            )
+            return
         optimizers = _as_list(optimizer)
         full_state_dict = torch.load(
-            self.optimizer_path(self.previous_epoch),
+            optimizer_path,
             mmap=True,
             weights_only=True,
             map_location="cpu",
         )
+        fp32_params = None
+        if (
+            isinstance(full_state_dict, dict)
+            and self.FP32_PARAMS_KEY in full_state_dict
+        ):
+            fp32_params = full_state_dict[self.FP32_PARAMS_KEY]
+            full_state_dict = full_state_dict[self.OPTIMIZERS_KEY]
+        # With fp32 master weights the model params are fp32, so this converts
+        # legacy bf16 optimizer state up to fp32 and is a no-op for new
+        # checkpoints (saved in native fp32).
         full_state_dict = convert_float_dtype(
             full_state_dict, float_dtype or model.dtype
         )
@@ -356,6 +391,17 @@ class DistributedCheckpointer(BaseCheckpointer):
                 if "step" in state and isinstance(state["step"], torch.Tensor):
                     state["step"] = state["step"].float()
 
+        if fp32_params is not None:
+            # Restore the exact fp32 master weights over the bf16-rounded values
+            # loaded from model.safetensors.
+            set_model_state_dict(
+                model,
+                fp32_params,
+                options=StateDictOptions(
+                    full_state_dict=True, broadcast_from_rank0=True, strict=False
+                ),
+            )
+
         dist.barrier()
 
     def save_checkpoint(
@@ -365,22 +411,41 @@ class DistributedCheckpointer(BaseCheckpointer):
         epoch: int | str,
         float_dtype: torch.dtype = torch.bfloat16,
     ):
-        model_state_dict = get_model_state_dict(
+        full_model_state_dict = get_model_state_dict(
             model, options=StateDictOptions(full_state_dict=True, cpu_offload=True)
         )
-        model_state_dict = convert_float_dtype(model_state_dict, float_dtype)
+        model_state_dict = convert_float_dtype(full_model_state_dict, float_dtype)
 
         optimizer_state_dict = get_optimizer_state_dict(
             model,
             _as_list(optimizer),
             options=StateDictOptions(full_state_dict=True, cpu_offload=True),
         )
-        optimizer_state_dict = convert_float_dtype(optimizer_state_dict, float_dtype)
+        # Optimizer state is saved in its native dtypes: with fp32 master
+        # weights (fp32 sharded params) the moments are fp32 and downcasting
+        # them would defeat the master-weight precision across a resume.
+
+        # In fp32-master mode, also persist the fp32 trainable params in the
+        # optimizer payload: model.safetensors stays bf16 (deployable), but
+        # resume restores the exact fp32 masters.
+        fp32_param_names = [
+            name
+            for name, param in model.named_parameters()
+            if param.requires_grad and param.dtype == torch.float32
+        ]
+        payload = optimizer_state_dict
+        if fp32_param_names and float_dtype != torch.float32:
+            payload = {
+                self.OPTIMIZERS_KEY: optimizer_state_dict,
+                self.FP32_PARAMS_KEY: {
+                    name: full_model_state_dict[name] for name in fp32_param_names
+                },
+            }
 
         if dist.get_rank() == 0:
             # Only rank 0 saves the checkpoint
             model.save_pretrained(self.path / str(epoch), state_dict=model_state_dict)
-            torch.save(optimizer_state_dict, self.optimizer_path(epoch))
+            torch.save(payload, self.optimizer_path(epoch))
             self._copy_train_command(epoch)
 
         dist.barrier()

@@ -194,15 +194,23 @@ def maybe_destroy_distributed() -> None:
     _dp_group = None
 
 
-def apply_fully_sharded(model: torch.nn.Module):
+def apply_fully_sharded(
+    model: torch.nn.Module, param_dtype: torch.dtype = torch.bfloat16
+):
     """Applies torch FSDP fully_shard to the model, wrapping layers in FSDPModule.
 
     Assumes the model has a `layers` attribute containing the decoder layers.
     Model should be validated with SpeculatorModel.verify_training_compatible()
     before calling this function.
+
+    ``param_dtype`` is the compute dtype: parameters are cast to it when
+    all-gathered for forward/backward. Keeping the model's own (sharded)
+    parameters in fp32 while passing ``param_dtype=torch.bfloat16`` yields
+    fp32 master weights with unchanged bf16 compute — the optimizer then steps
+    directly on the fp32 shards. Gradients are always reduced in fp32.
     """
     mp_policy = MixedPrecisionPolicy(
-        param_dtype=torch.bfloat16,
+        param_dtype=param_dtype,
         reduce_dtype=torch.float32,
     )
 
