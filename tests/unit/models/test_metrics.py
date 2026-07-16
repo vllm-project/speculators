@@ -206,15 +206,22 @@ class TestTVLoss:
         not torch.cuda.is_available(), reason="fused Triton loss requires CUDA"
     )
     def test_fused_tv_matches_eager_on_cuda(self):
-        """On CUDA the fused kernel matches eager tv_loss in value and gradient."""
+        """On CUDA the fused kernel matches eager tv_loss in value, dtype, gradient.
+
+        Uses bf16 inputs (the real training regime): the loss must be returned in
+        fp32 like the eager path, not downcast to the bf16 input dtype.
+        """
         torch.manual_seed(0)
         base = torch.randn(1, 64, 512)
-        targets = torch.randn(1, 64, 512, device="cuda")
-        le = base.clone().to("cuda").requires_grad_(True)
-        lf = base.clone().to("cuda").requires_grad_(True)
+        targets = torch.randn(1, 64, 512, device="cuda", dtype=torch.bfloat16)
+        le = base.clone().to("cuda", torch.bfloat16).requires_grad_(True)
+        lf = base.clone().to("cuda", torch.bfloat16).requires_grad_(True)
         out_e = tv_loss(le, targets)
         out_f = resolve_loss_fn("tv")(lf, targets)
-        assert torch.allclose(out_f.float(), out_e.float(), atol=1e-3)
+        # both paths return fp32 (fp32 softmax since #788); fused must not downcast
+        assert out_e.dtype == torch.float32
+        assert out_f.dtype == torch.float32
+        assert torch.allclose(out_f, out_e, atol=1e-3)
         out_e.sum().backward()
         out_f.sum().backward()
         assert torch.allclose(lf.grad, le.grad, atol=1e-3)

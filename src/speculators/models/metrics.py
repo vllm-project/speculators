@@ -389,7 +389,7 @@ _FUSED_KERNELS = None  # None = not yet tried; False = unavailable; else (tv, nl
 
 def _fused_kernels():
     """Lazily import and cache the fused TV/NLA kernels; ``None`` if unavailable."""
-    global _FUSED_KERNELS
+    global _FUSED_KERNELS  # noqa: PLW0603
     if _FUSED_KERNELS is None:
         try:
             from speculators.models.fused_tv_loss import (  # noqa: PLC0415
@@ -404,18 +404,18 @@ def _fused_kernels():
 
 
 def tv_loss_fused_or_eager(logits: torch.Tensor, targets: torch.Tensor):
-    """TV loss via the fused Triton kernel on CUDA, eager ``tv_loss`` otherwise."""
+    """Fused Triton TV loss on CUDA (fp32, like eager ``tv_loss``); eager fallback."""
     kernels = _fused_kernels()
     if kernels is not None and logits.is_cuda:
-        return kernels[0](logits, targets).to(logits.dtype)
+        return kernels[0](logits, targets)
     return tv_loss(logits, targets)
 
 
 def nla_loss_fused_or_eager(logits: torch.Tensor, targets: torch.Tensor):
-    """NLA loss via the fused Triton kernel on CUDA, eager fallback otherwise."""
+    """Fused Triton NLA loss on CUDA (fp32, like the eager loss); eager fallback."""
     kernels = _fused_kernels()
     if kernels is not None and logits.is_cuda:
-        return kernels[1](logits, targets).to(logits.dtype)
+        return kernels[1](logits, targets)
     return neg_log_acceptance_loss(logits, targets)
 
 
