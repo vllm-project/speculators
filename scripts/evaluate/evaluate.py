@@ -54,8 +54,8 @@ DEFAULT_SUBSETS = (
     "summarization,tool_call,translation,writing"
 )
 DEFAULT_MAX_CONCURRENCY = 128
-DEFAULT_MAX_REQUESTS = 80
-DEFAULT_GEN_LEN_RATE = 128
+DEFAULT_MAX_REQUESTS = 20
+DEFAULT_GEN_LEN_RATE = 24
 DEFAULT_DATA_COLUMN_MAPPER = '{"text_column":"prompt"}'
 
 # ---------------------------------------------------------------------------
