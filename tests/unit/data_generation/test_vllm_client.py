@@ -197,7 +197,7 @@ def test_rejects_ambiguous_or_unsupported_image_uri(image_ref):
     [
         ("sync", True, [1, 2, 3, 4], True),
         ("async", True, [1, 2, 3, 4], True),
-        ("sync", True, [1, 9, 3, 4], False),
+        ("sync", True, [1, 9, 3, 4], True),
         ("sync", False, [1, 2, 3, 4], False),
     ],
 )

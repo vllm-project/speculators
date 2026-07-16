@@ -220,6 +220,17 @@ def extract_output(
         )
         return hidden_states_path
 
+    if allow_prefix_truncation:
+        logger.debug(
+            "vLLM returned prompt token IDs that differ from the preprocessed "
+            "multimodal token IDs; hidden states will be validated and aligned "
+            "against vLLM token IDs after the output lock is released. "
+            "preprocessed_len=%d, vllm_len=%d",
+            len(token_ids),
+            len(prompt_token_ids),
+        )
+        return hidden_states_path
+
     raise InvalidResponseError(
         f"Prompt token IDs mismatch: expected {token_ids}, got {prompt_token_ids}"
     )

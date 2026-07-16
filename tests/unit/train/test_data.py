@@ -10,6 +10,7 @@ from speculators.models.eagle3.data import shift_batch
 from speculators.train.data import (
     ArrowDataset,
     SampleFileDataset,
+    _align_loss_mask_to_token_ids,
     build_client_item,
     create_collate_fn,
     standardize_data_v1,
@@ -161,6 +162,52 @@ def test_build_client_item_forwards_tools_only_for_multimodal_messages():
         "tools": json.dumps(tools),
     }
     assert build_client_item(text_only_item) == {"input_ids": [1, 2, 3]}
+
+
+def test_align_loss_mask_to_vllm_multimodal_token_ids_with_image_block_delta():
+    source_ids = [10, 20, 30, 30, 30, 30, 30, 40, 50, 60, 70, 80]
+    source_mask = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0]
+    target_ids = [10, 20, 30, 30, 40, 50, 60, 70, 80]
+
+    aligned = _align_loss_mask_to_token_ids(source_ids, source_mask, target_ids)
+
+    assert aligned.tolist() == [0, 0, 0, 0, 0, 1, 1, 1, 0]
+
+
+def test_align_loss_mask_to_vllm_multimodal_token_ids_with_target_extra_and_suffix():
+    source_ids = [10, 20, 30, 40, 50, 60, 70, 80]
+    source_mask = [0, 0, 0, 0, 1, 1, 0, 0]
+    target_ids = [10, 20, 20, 20, 30, 40, 50, 60]
+
+    aligned = _align_loss_mask_to_token_ids(source_ids, source_mask, target_ids)
+
+    assert aligned.tolist() == [0, 0, 0, 0, 0, 0, 1, 1]
+
+
+def test_align_loss_mask_to_vllm_multimodal_token_ids_rejects_trainable_drop():
+    source_ids = [10, 20, 30, 40]
+    source_mask = [0, 1, 1, 0]
+    target_ids = [10, 40]
+
+    try:
+        _align_loss_mask_to_token_ids(source_ids, source_mask, target_ids)
+    except ValueError as exc:
+        assert "trainable" in str(exc)
+    else:
+        raise AssertionError("Expected trainable-token alignment failure")
+
+
+def test_align_loss_mask_to_vllm_multimodal_token_ids_rejects_trainable_insert():
+    source_ids = [10, 20, 30]
+    source_mask = [0, 1, 1]
+    target_ids = [10, 99, 20, 30]
+
+    try:
+        _align_loss_mask_to_token_ids(source_ids, source_mask, target_ids)
+    except ValueError as exc:
+        assert "trainable" in str(exc)
+    else:
+        raise AssertionError("Expected trainable-token alignment failure")
 
 
 def test_collate_fn_basic():
