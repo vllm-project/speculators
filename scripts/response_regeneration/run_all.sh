@@ -9,6 +9,7 @@
 #   ./run_all.sh --model "Qwen/Qwen2.5-72B-Instruct" --dp-size 4 --tp-size 2 --dataset magpie
 #   ./run_all.sh --model "Qwen/Qwen2.5-72B-Instruct" --gpus 0,1,2,4 --tp-size 4 --dataset magpie
 #   ./run_all.sh --model "Qwen/Qwen2.5-72B-Instruct" --dataset magpie --keep-server
+#   ./run_all.sh --model "Qwen/Qwen3-8B" --tool-call-parser hermes --dataset hermes-fc
 #
 
 set -e  # Exit on error
@@ -22,6 +23,7 @@ DP_SIZE=""
 TP_SIZE=""
 MAX_MODEL_LEN=""
 REASONING_PARSER=""
+TOOL_CALL_PARSER=""
 GPUS=""
 KEEP_SERVER=false
 
@@ -47,6 +49,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --reasoning-parser)
             REASONING_PARSER="$2"
+            shift 2
+            ;;
+        --tool-call-parser)
+            TOOL_CALL_PARSER="$2"
             shift 2
             ;;
         --model)
@@ -77,7 +83,7 @@ done
 # Validate required arguments
 if [ -z "$MODEL" ]; then
     echo "Error: --model is required."
-    echo "Usage: $0 --model MODEL [--gpus GPUS] [--dp-size N] [--tp-size N] [--max-model-len N] [--reasoning-parser PARSER] [--dataset DATASET] [...]"
+    echo "Usage: $0 --model MODEL [--gpus GPUS] [--dp-size N] [--tp-size N] [--max-model-len N] [--reasoning-parser PARSER] [--tool-call-parser PARSER] [--dataset DATASET] [...]"
     exit 1
 fi
 
@@ -87,6 +93,10 @@ VLLM_CMD=(vllm serve "$MODEL" --host 127.0.0.1 --port "$PORT" --api-key "")
 [ -n "$TP_SIZE" ] && VLLM_CMD+=(--tensor-parallel-size "$TP_SIZE")
 [ -n "$MAX_MODEL_LEN" ] && VLLM_CMD+=(--max-model-len "$MAX_MODEL_LEN")
 [ -n "$REASONING_PARSER" ] && VLLM_CMD+=(--reasoning-parser "$REASONING_PARSER")
+# Structured tool calls need both flags; otherwise vLLM emits them as text in
+# `content` and regen sees no tools.
+[ -n "$TOOL_CALL_PARSER" ] &&
+    VLLM_CMD+=(--enable-auto-tool-choice --tool-call-parser "$TOOL_CALL_PARSER")
 
 # Cleanup function
 cleanup() {
@@ -114,6 +124,7 @@ echo "  Model: $MODEL"
 [ -n "$TP_SIZE" ] && echo "  Tensor parallel size: $TP_SIZE"
 [ -n "$MAX_MODEL_LEN" ] && echo "  Max model len: $MAX_MODEL_LEN"
 [ -n "$REASONING_PARSER" ] && echo "  Reasoning parser: $REASONING_PARSER"
+[ -n "$TOOL_CALL_PARSER" ] && echo "  Tool-call parser: $TOOL_CALL_PARSER (auto tool choice)"
 echo "  Command: ${VLLM_CMD[*]}"
 echo ""
 

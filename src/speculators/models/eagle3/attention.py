@@ -8,9 +8,16 @@ from torch.nn.attention.flex_attention import (
 from speculators.models.attention import ALL_ATTENTION_FUNCTIONS  # noqa: F401
 
 
-def create_combined_mask_mod(document_ids: torch.Tensor, total_seq_len: int):
+def create_combined_mask_mod(
+    document_ids: torch.Tensor,
+    total_seq_len: int,
+    sliding_window: int | None = None,
+):
     def causal_mask_mod(_b, _h, q_idx, kv_idx):
-        return q_idx >= kv_idx
+        causal = q_idx >= kv_idx
+        if sliding_window is not None:
+            causal = causal & (kv_idx > q_idx - sliding_window)
+        return causal
 
     def document_mask_mod(_b, _h, q_idx, kv_idx):
         # Exclude padding tokens in attention mask

@@ -92,6 +92,24 @@ def _save_config_only_dir(
     return model_dir
 
 
+def _make_verifier_namespace(**overrides) -> SimpleNamespace:
+    """A minimal stand-in for a verifier PretrainedConfig as consumed by
+    create_transformer_layer_config (no text_config / rope fields)."""
+    base = {
+        "vocab_size": 128,
+        "hidden_size": 32,
+        "num_attention_heads": 4,
+        "num_key_value_heads": 2,
+        "hidden_act": "silu",
+        "max_position_embeddings": 128,
+        "initializer_range": 0.02,
+        "rms_norm_eps": 1e-6,
+        "head_dim": 8,
+    }
+    base.update(overrides)
+    return SimpleNamespace(**base)
+
+
 # ---------------------------------------------------------------------------
 # CLI validation: --draft-config exclusivity
 # ---------------------------------------------------------------------------
@@ -120,7 +138,7 @@ def test_draft_config_with_from_pretrained_errors(monkeypatch):
         ["--draft-arch", "qwen3"],
         ["--draft-hidden-act", "gelu"],
         ["--sliding-window", "1024"],
-        ["--sliding-window-indices", "0", "1"],
+        ["--full-attention-indices", "0", "1"],
     ],
 )
 def test_draft_config_with_decoder_flag_errors(monkeypatch, extra):
@@ -144,6 +162,81 @@ def test_decoder_shaping_flags_dests_exist(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# --full-attention-indices: CLI parsing and layer-type synthesis
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("cli_args", "expected"),
+    [
+        ([], []),
+        (["--full-attention-indices", "0", "2"], [0, 2]),
+    ],
+)
+def test_full_attention_indices_parsing(monkeypatch, cli_args, expected):
+    """Defaults to empty (all layers sliding window) and parses explicit values."""
+    assert _parse(monkeypatch, cli_args).full_attention_indices == expected
+
+
+@pytest.mark.parametrize(
+    (
+        "num_layers",
+        "full_attention_indices",
+        "expected_layer_types",
+        "expected_use_sliding_window",
+    ),
+    [
+        (3, [], ["sliding_attention"] * 3, True),
+        (
+            3,
+            [1],
+            ["sliding_attention", "full_attention", "sliding_attention"],
+            True,
+        ),
+        (2, [0, 1], ["full_attention", "full_attention"], False),
+    ],
+)
+def test_create_layer_config_layer_types(
+    num_layers,
+    full_attention_indices,
+    expected_layer_types,
+    expected_use_sliding_window,
+):
+    """full_attention_indices selects per-layer attention; sliding window stays
+    enabled unless every layer opts into full attention."""
+    verifier = _make_verifier_namespace()
+    with patch("scripts.train.AutoConfig.from_pretrained", return_value=verifier):
+        config = create_transformer_layer_config(
+            "target",
+            num_layers=num_layers,
+            draft_arch="llama",
+            hidden_act=None,
+            sliding_window=2048,
+            full_attention_indices=full_attention_indices,
+        )
+    assert config.layer_types == expected_layer_types
+    assert config.use_sliding_window is expected_use_sliding_window
+
+
+@pytest.mark.parametrize("bad_indices", [[-1], [3], [0, 3]])
+def test_create_layer_config_rejects_out_of_range_indices(bad_indices):
+    """full_attention_indices outside [0, num_layers) is a hard error."""
+    verifier = _make_verifier_namespace()
+    with (
+        patch("scripts.train.AutoConfig.from_pretrained", return_value=verifier),
+        pytest.raises(ValueError, match="valid draft layer ids"),
+    ):
+        create_transformer_layer_config(
+            "target",
+            num_layers=3,
+            draft_arch="llama",
+            hidden_act=None,
+            sliding_window=2048,
+            full_attention_indices=bad_indices,
+        )
+
+
+# ---------------------------------------------------------------------------
 # CLI validation: --from-pretrained precedence
 # ---------------------------------------------------------------------------
 
@@ -161,7 +254,7 @@ def test_from_pretrained_alone_parses(monkeypatch):
         ["--draft-arch", "qwen3"],
         ["--draft-hidden-act", "gelu"],
         ["--sliding-window", "1024"],
-        ["--sliding-window-indices", "0", "1"],
+        ["--full-attention-indices", "0", "1"],
         ["--draft-config", "c"],
     ],
 )
@@ -341,6 +434,35 @@ def test_build_from_config_only_preserves_existing_verifier_name(tmp_path):
     assert built.config.speculators_config.verifier.name_or_path == "real-verifier"
 
 
+def test_config_roundtrip_drops_attn_implementation(tmp_path):
+    # Precondition of the --from-pretrained bug: HF configs never serialize
+    # _attn_implementation, so the field does not survive a save/load round-trip
+    # and must be re-applied from the CLI selection.
+    config = _make_eagle3_config()
+    config.transformer_layer_config._attn_implementation = "sdpa"
+    save_dir = tmp_path / "roundtrip"
+    config.save_pretrained(str(save_dir))
+
+    reloaded = Eagle3SpeculatorConfig.from_pretrained(str(save_dir))
+
+    assert reloaded.transformer_layer_config._attn_implementation != "sdpa"
+
+
+def test_build_from_config_only_reapplies_draft_attn_impl(tmp_path):
+    model_dir = _save_config_only_dir(tmp_path)
+
+    with patch.object(Eagle3DraftModel, "load_verifier_weights"):
+        built = _build_from_config_only(
+            Eagle3DraftModel,
+            str(model_dir),
+            None,
+            None,
+            draft_attn_impl="sdpa",
+        )
+
+    assert built.config.transformer_layer_config._attn_implementation == "sdpa"
+
+
 # ---------------------------------------------------------------------------
 # build_draft_model: MTP-from-scratch routing
 # ---------------------------------------------------------------------------
@@ -374,6 +496,7 @@ def test_build_draft_model_mtp_from_scratch_uses_verifier_decoder(monkeypatch):
         verifier_name_or_path="some-verifier",
         mask_token_id=None,
         num_speculative_steps=3,
+        draft_mrope_full_head_hack=True,
     )
 
     built = build_draft_model(args, _FakeMTP, None, None, None)  # type: ignore[arg-type]
@@ -386,26 +509,73 @@ def test_build_draft_model_mtp_from_scratch_uses_verifier_decoder(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# intermediate_size resolution (dense + MoE verifiers)
+# build_draft_model: sliding-window default routing by speculator type
 # ---------------------------------------------------------------------------
 
 
-def _make_verifier_namespace(**overrides) -> SimpleNamespace:
-    """A minimal stand-in for a verifier PretrainedConfig as consumed by
-    create_transformer_layer_config (no text_config / rope fields)."""
-    base = {
-        "vocab_size": 128,
-        "hidden_size": 32,
-        "num_attention_heads": 4,
-        "num_key_value_heads": 2,
-        "hidden_act": "silu",
-        "max_position_embeddings": 128,
-        "initializer_range": 0.02,
-        "rms_norm_eps": 1e-6,
-        "head_dim": 8,
-    }
-    base.update(overrides)
-    return SimpleNamespace(**base)
+def _capture_full_attention_indices(
+    monkeypatch, speculator_type: str, requested_indices: list[int]
+):
+    """Run build_draft_model for a synthesized draft (no --from-pretrained /
+    --draft-config) and return the full_attention_indices it forwards to
+    create_transformer_layer_config."""
+    captured = {}
+
+    def _fake_create(*, full_attention_indices, **_kwargs):
+        captured["full_attention_indices"] = full_attention_indices
+        return SimpleNamespace(vocab_size=128)
+
+    monkeypatch.setattr("scripts.train.create_transformer_layer_config", _fake_create)
+    monkeypatch.setattr("scripts.train.resolve_mask_token_id", lambda *_a, **_k: 0)
+
+    class _FakeModel:
+        @classmethod
+        def from_training_args(cls, **_kwargs):
+            return "MODEL"
+
+    args = SimpleNamespace(
+        speculator_type=speculator_type,
+        from_pretrained="",
+        draft_config="",
+        verifier_name_or_path="some-verifier",
+        num_layers=3,
+        draft_arch="qwen3",
+        draft_hidden_act=None,
+        sliding_window=2048,
+        full_attention_indices=requested_indices,
+        mask_token_id=None,
+        trust_remote_code=False,
+        draft_mrope_full_head_hack=True,
+    )
+    build_draft_model(args, _FakeModel, None, None, 128)  # type: ignore[arg-type]
+    return captured["full_attention_indices"]
+
+
+@pytest.mark.parametrize(
+    ("speculator_type", "requested_indices", "expected_indices"),
+    [
+        ("dflash", [], []),
+        ("dspark", [], []),
+        ("dflash", [1], [1]),
+        ("eagle3", [], []),
+        ("peagle", [], []),
+        ("eagle3", [0, 2], [0, 2]),
+    ],
+)
+def test_build_draft_model_routing(
+    monkeypatch, speculator_type, requested_indices, expected_indices
+):
+    """All speculator types (except mtp) default every layer to sliding window
+    (empty opt-out list) and forward an explicit non-empty list unchanged."""
+    assert (
+        _capture_full_attention_indices(monkeypatch, speculator_type, requested_indices)
+        == expected_indices
+    )
+
+
+# ---------------------------------------------------------------------------
+# intermediate_size resolution (dense + MoE verifiers)
+# ---------------------------------------------------------------------------
 
 
 def _create_layer_config_for(verifier: SimpleNamespace):
@@ -413,10 +583,10 @@ def _create_layer_config_for(verifier: SimpleNamespace):
         return create_transformer_layer_config(
             "target",
             num_layers=2,
-            draft_arch="qwen3",
+            draft_arch="llama",
             hidden_act=None,
             sliding_window=2048,
-            sliding_window_indices=[],
+            full_attention_indices=[],
         )
 
 

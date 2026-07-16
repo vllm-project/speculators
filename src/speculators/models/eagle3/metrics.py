@@ -1,15 +1,15 @@
 """Metrics and loss functions for Eagle3 draft model."""
 
-from collections.abc import Callable
 from functools import partial
 
 import torch
 
 from speculators.models.metrics import (
+    LossConfig,
+    compound_loss,
     compute_accuracy_single_step,
     exp_loss_decay,
     kl_div_loss,
-    loss_function,
 )
 
 
@@ -55,7 +55,7 @@ def compute_metrics(
     prev_correct: torch.Tensor | None,
     ttt_step: int,
     ttt_step_loss_decay: float,
-    loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = kl_div_loss,
+    loss_config: LossConfig | None = None,
 ) -> tuple[torch.Tensor, dict]:
     """Compute metrics for a given ttt_step.
 
@@ -66,7 +66,7 @@ def compute_metrics(
         prev_correct: The previous correct predictions for the current ttt_step.
         ttt_step: The current ttt_step.
         ttt_step_loss_decay: The loss decay for the current ttt_step.
-        loss_fn: Loss function.
+        loss_config: Mapping of ``{name: (loss_fn, weight)}``.
 
     Effects:
         Modifies prev_correct in place.
@@ -74,8 +74,8 @@ def compute_metrics(
     Returns:
         Loss value and metrics dictionary.
     """
-    if loss_fn is None:
-        loss_fn = kl_div_loss
+    if loss_config is None:
+        loss_config = {"kl_div": (kl_div_loss, 1.0)}
     s_logits, s_targets, s_loss_mask, s_prev_correct = align_for_step(
         logits, targets, loss_mask, prev_correct, ttt_step
     )
@@ -88,12 +88,12 @@ def compute_metrics(
         (1, seq_len), ttt_step, device=s_logits.device, dtype=torch.long
     )
 
-    s_loss = loss_function(
+    s_loss, term_losses = compound_loss(
         s_logits,
         s_targets,
         s_loss_mask,
         pos_idx,
-        loss_fn=loss_fn,
+        loss_config=loss_config,
         decay_fn=partial(exp_loss_decay, gamma=ttt_step_loss_decay),
     )
 
@@ -104,9 +104,13 @@ def compute_metrics(
         pred_ids, target_ids, s_loss_mask, s_prev_correct
     )
 
+    ones = torch.tensor(1.0, device=s_loss.device)
     s_metrics = {}
     s_metrics[f"loss_{ttt_step}_sum"] = s_loss.detach().clone()
-    s_metrics[f"loss_{ttt_step}_total"] = torch.tensor(1.0, device=s_loss.device)
+    s_metrics[f"loss_{ttt_step}_total"] = ones
+    for term_name, term_val in term_losses.items():
+        s_metrics[f"{term_name}_{ttt_step}_sum"] = term_val
+        s_metrics[f"{term_name}_{ttt_step}_total"] = ones.clone()
     s_metrics[f"full_acc_{ttt_step}_sum"] = full_correct
     s_metrics[f"full_acc_{ttt_step}_total"] = full_total
     s_metrics[f"cond_acc_{ttt_step}_sum"] = cond_correct

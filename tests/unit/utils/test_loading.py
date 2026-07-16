@@ -8,6 +8,7 @@ from transformers import AutoModelForCausalLM
 
 from speculators.utils.loading import (
     _resolve_file,
+    _resolve_key,
     is_config_only_dir,
     load_model_layers,
 )
@@ -54,6 +55,67 @@ def test_is_config_only_dir_detects_sharded_index(tmp_path, index_file):
     (tmp_path / index_file).write_text("{}")
 
     assert is_config_only_dir(tmp_path) is False
+
+
+# _resolve_key Tests
+
+
+FAKE_WEIGHT_MAP = {
+    "model.embed_tokens.weight": "shard-0.safetensors",
+    "model.layers.0.self_attn.q_proj.weight": "shard-0.safetensors",
+    "tok_embeddings.weight": "shard-1.safetensors",
+    "output.weight": "shard-1.safetensors",
+    "norm.weight": "shard-1.safetensors",
+}
+
+
+@pytest.mark.smoke
+def test_resolve_key_exact_match():
+    assert _resolve_key("model.embed_tokens.weight", FAKE_WEIGHT_MAP) == (
+        "model.embed_tokens.weight"
+    )
+
+
+@pytest.mark.smoke
+def test_resolve_key_suffix_match():
+    assert _resolve_key("self_attn.q_proj.weight", FAKE_WEIGHT_MAP) == (
+        "model.layers.0.self_attn.q_proj.weight"
+    )
+
+
+@pytest.mark.smoke
+def test_resolve_key_alias_exact():
+    wm = {"tok_embeddings.weight": "shard.safetensors"}
+    assert _resolve_key("embed_tokens.weight", wm) == "tok_embeddings.weight"
+
+
+@pytest.mark.smoke
+def test_resolve_key_alias_suffix():
+    wm = {"model.tok_embeddings.weight": "shard.safetensors"}
+    assert _resolve_key("embed_tokens.weight", wm) == "model.tok_embeddings.weight"
+
+
+@pytest.mark.smoke
+def test_resolve_key_all_aliases():
+    wm_lm = {"output.weight": "s.safetensors"}
+    assert _resolve_key("lm_head.weight", wm_lm) == "output.weight"
+
+    wm_norm = {"norm.weight": "s.safetensors"}
+    assert _resolve_key("model.norm.weight", wm_norm) == "norm.weight"
+
+
+@pytest.mark.smoke
+def test_resolve_key_miss():
+    assert _resolve_key("nonexistent.weight", FAKE_WEIGHT_MAP) is None
+
+
+@pytest.mark.smoke
+def test_resolve_key_prefers_exact_over_alias():
+    wm = {
+        "embed_tokens.weight": "shard-0.safetensors",
+        "tok_embeddings.weight": "shard-1.safetensors",
+    }
+    assert _resolve_key("embed_tokens.weight", wm) == "embed_tokens.weight"
 
 
 # _resolve_file Tests
