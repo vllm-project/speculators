@@ -588,7 +588,8 @@ def _preprocess_batch(
         except Exception as e:
             log.error(
                 f"Failed to process conversation {idx} "
-                f"(assistant_pattern={assistant_pattern is not None}): {e}"
+                f"(assistant_pattern={assistant_pattern is not None}): "
+                f"{type(e).__name__}: {e}"
             )
             continue
 
