@@ -11,6 +11,11 @@ Derived from SpecForge specforge/core/loss.py (Apache-2.0, Unsloth/Liger lineage
 TV gradient sign convention matches Liger ops/tvd.py.
 """
 
+# Triton kernels idiomatically use uppercase constexpr/dim names (B, T, V,
+# BLOCK_SIZE) and inline block-size tuning thresholds; exempt this file from the
+# pep8-naming and magic-value lints rather than fight those conventions.
+# ruff: noqa: N803, N806, PLR2004
+
 import torch
 import triton
 import triton.language as tl
