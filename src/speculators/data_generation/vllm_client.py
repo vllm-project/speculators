@@ -4,12 +4,16 @@ import functools
 import logging
 import os
 import time
-from typing import TYPE_CHECKING, Any, TypedDict
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, TypedDict, cast
+from urllib.parse import unquote, urlparse
 
 import openai
 from openai.types.chat import ChatCompletion, ChatCompletionMessageParam
 from openai.types.completion import Completion
 from typing_extensions import NotRequired
+
+from speculators.data_generation.media import get_image_ref
 
 if TYPE_CHECKING:
     from collections.abc import Coroutine
@@ -23,6 +27,94 @@ RETRY_BACKOFF_BASE = 2  # seconds
 
 class InvalidResponseError(Exception):
     pass
+
+
+def _get_field(obj: Any, key: str) -> Any:
+    if isinstance(obj, dict):
+        return obj.get(key)
+    return getattr(obj, key, None)
+
+
+def _to_token_id_list(token_ids: Any) -> list[int]:
+    if hasattr(token_ids, "tolist"):
+        token_ids = token_ids.tolist()
+    return list(token_ids)
+
+
+def _image_ref_to_chat_url(image_ref: Any) -> str:
+    """Convert a dataset image reference to an OpenAI-compatible image URL."""
+    ref = str(image_ref)
+    parsed = urlparse(ref)
+    if not parsed.scheme and parsed.netloc:
+        raise ValueError(f"Unsupported schemeless image URI authority: {parsed.netloc}")
+    if parsed.scheme in {"http", "https", "data"}:
+        return ref
+
+    if parsed.scheme == "file":
+        if parsed.netloc not in {"", "localhost"}:
+            raise ValueError(f"Unsupported file URI host: {parsed.netloc}")
+        if parsed.query or parsed.fragment:
+            raise ValueError("Local file URIs must not contain query/fragment")
+        decoded_path = unquote(parsed.path)
+        if not decoded_path or "\x00" in decoded_path:
+            raise ValueError("Local file URI contains an invalid path")
+        path = Path(decoded_path)
+        if not path.is_absolute():
+            raise ValueError("Local file URI path must be absolute")
+        return path.resolve().as_uri()
+
+    if parsed.scheme:
+        raise ValueError(f"Unsupported image URL scheme: {parsed.scheme}")
+
+    return Path(ref).expanduser().resolve().as_uri()
+
+
+def _prepare_chat_message_content(content: Any) -> Any:
+    if not isinstance(content, list):
+        return content
+
+    prepared: list[Any] = []
+    for part in content:
+        if isinstance(part, str):
+            prepared.append({"type": "text", "text": part})
+            continue
+
+        if not isinstance(part, dict):
+            prepared.append(part)
+            continue
+
+        image_ref = get_image_ref(part)
+        if image_ref is not None:
+            prepared.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": _image_ref_to_chat_url(image_ref)},
+                }
+            )
+            continue
+
+        text = part.get("text")
+        if text is not None:
+            prepared.append({"type": "text", "text": str(text)})
+            continue
+
+        prepared.append(part)
+
+    return prepared
+
+
+def _prepare_chat_messages(
+    messages: list[ChatCompletionMessageParam],
+) -> list[dict[str, Any]]:
+    """Convert processor-style multimodal messages to vLLM chat messages."""
+    prepared = []
+    for message in messages:
+        prepared_message = dict(cast("dict[str, Any]", message))
+        prepared_message["content"] = _prepare_chat_message_content(
+            prepared_message.get("content", "")
+        )
+        prepared.append(prepared_message)
+    return prepared
 
 
 def _handle_retry_error(
@@ -94,25 +186,54 @@ def with_retries(fn):
 def extract_output(
     response: Completion | ChatCompletion,
     token_ids: list[int],
+    *,
+    allow_prefix_truncation: bool = False,
 ) -> str:
-    if isinstance(response, Completion):
-        prompt_token_ids = getattr(response.choices[0], "prompt_token_ids", None)
-    else:
-        prompt_token_ids = getattr(response, "prompt_token_ids", None)
+    token_ids = _to_token_id_list(token_ids)
+    prompt_token_ids = _get_field(response, "prompt_token_ids")
+    if prompt_token_ids is None:
+        choices = _get_field(response, "choices")
+        if choices:
+            prompt_token_ids = _get_field(choices[0], "prompt_token_ids")
 
     if prompt_token_ids is None:
         raise InvalidResponseError("Response missing prompt_token_ids")
 
-    if prompt_token_ids != token_ids:
-        raise InvalidResponseError(
-            f"Prompt token IDs mismatch: expected {token_ids}, got {prompt_token_ids}"
-        )
-
-    kv_transfer_params = getattr(response, "kv_transfer_params", None)
+    kv_transfer_params = _get_field(response, "kv_transfer_params")
     if kv_transfer_params is None:
         raise InvalidResponseError("Response missing kv_transfer_params")
 
-    return kv_transfer_params.get("hidden_states_path")
+    hidden_states_path = _get_field(kv_transfer_params, "hidden_states_path")
+    if hidden_states_path is None:
+        raise InvalidResponseError("Response missing hidden_states_path")
+
+    prompt_token_ids = _to_token_id_list(prompt_token_ids)
+    if prompt_token_ids == token_ids:
+        return hidden_states_path
+
+    if allow_prefix_truncation and prompt_token_ids[: len(token_ids)] == token_ids:
+        logger.debug(
+            "vLLM returned %d prompt tokens for a %d-token preprocessed prompt; "
+            "hidden states will be aligned after the output lock is released.",
+            len(prompt_token_ids),
+            len(token_ids),
+        )
+        return hidden_states_path
+
+    if allow_prefix_truncation:
+        logger.debug(
+            "vLLM returned prompt token IDs that differ from the preprocessed "
+            "multimodal token IDs; hidden states will be validated and aligned "
+            "against vLLM token IDs after the output lock is released. "
+            "preprocessed_len=%d, vllm_len=%d",
+            len(token_ids),
+            len(prompt_token_ids),
+        )
+        return hidden_states_path
+
+    raise InvalidResponseError(
+        f"Prompt token IDs mismatch: expected {token_ids}, got {prompt_token_ids}"
+    )
 
 
 class ClientItem(TypedDict):
@@ -122,6 +243,9 @@ class ClientItem(TypedDict):
     messages: NotRequired[list[ChatCompletionMessageParam]]
     """If provided, pass `messages` to Chat Completions API
     instead of passing `token_ids` to Completions API."""
+
+    tools: NotRequired[list[dict[str, Any]]]
+    """Tool schemas used to render a multimodal Chat Completions prompt."""
 
 
 async def _poll_lock_async(fd, poll_interval):
@@ -185,6 +309,7 @@ async def generate_hidden_states_async(
     """
     token_ids = client_item["input_ids"]
     messages = client_item.get("messages")
+    tools = client_item.get("tools")
 
     coro: Coroutine[Any, Any, Completion | ChatCompletion]
     if messages is None:
@@ -196,17 +321,21 @@ async def generate_hidden_states_async(
             timeout=timeout,
         )
     else:
-        coro = client.chat.completions.create(
-            model=model,
-            messages=messages,
-            max_tokens=1,
-            extra_body={
+        chat_messages = _prepare_chat_messages(messages)
+        chat_kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": chat_messages,
+            "max_tokens": 1,
+            "extra_body": {
                 "add_generation_prompt": False,
                 "continue_final_message": True,
                 "return_token_ids": True,
             },
-            timeout=timeout,
-        )
+            "timeout": timeout,
+        }
+        if tools:
+            chat_kwargs["tools"] = tools
+        coro = client.chat.completions.create(**cast("Any", chat_kwargs))
 
     res: Completion | ChatCompletion
     if timeout is not None:
@@ -214,7 +343,11 @@ async def generate_hidden_states_async(
     else:
         res = await coro
 
-    return extract_output(res, token_ids)
+    return extract_output(
+        res,
+        token_ids,
+        allow_prefix_truncation=messages is not None,
+    )
 
 
 @with_retries
@@ -231,6 +364,7 @@ def generate_hidden_states(
     """
     token_ids = client_item["input_ids"]
     messages = client_item.get("messages")
+    tools = client_item.get("tools")
 
     res: Completion | ChatCompletion
     if messages is None:
@@ -242,16 +376,24 @@ def generate_hidden_states(
             timeout=timeout,
         )
     else:
-        res = client.chat.completions.create(
-            model=model,
-            messages=messages,
-            max_tokens=1,
-            extra_body={
+        chat_messages = _prepare_chat_messages(messages)
+        chat_kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": chat_messages,
+            "max_tokens": 1,
+            "extra_body": {
                 "add_generation_prompt": False,
                 "continue_final_message": True,
                 "return_token_ids": True,
             },
-            timeout=timeout,
-        )
+            "timeout": timeout,
+        }
+        if tools:
+            chat_kwargs["tools"] = tools
+        res = client.chat.completions.create(**cast("Any", chat_kwargs))
 
-    return extract_output(res, token_ids)
+    return extract_output(
+        res,
+        token_ids,
+        allow_prefix_truncation=messages is not None,
+    )

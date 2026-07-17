@@ -179,6 +179,14 @@ def parse_args():
             "raises when normalization or filtering removes every sample."
         ),
     )
+    parser.add_argument(
+        "--multimodal",
+        action="store_true",
+        help=(
+            "Enable multimodal preprocessing with AutoProcessor and preserve "
+            "messages needed for vLLM chat hidden-state generation."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -228,6 +236,7 @@ def main():
         minimum_valid_tokens=args.minimum_valid_tokens,
         allow_empty_output=args.allow_empty_output,
         trust_remote_code=args.trust_remote_code,
+        is_multimodal=True if args.multimodal else None,
     )
 
     log.info("Done preparing data")

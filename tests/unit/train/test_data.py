@@ -3,6 +3,7 @@
 import json
 from pathlib import Path
 
+import pytest
 import torch
 from datasets import Dataset
 
@@ -10,6 +11,8 @@ from speculators.models.eagle3.data import shift_batch
 from speculators.train.data import (
     ArrowDataset,
     SampleFileDataset,
+    _align_loss_mask_to_token_ids,
+    build_client_item,
     create_collate_fn,
     standardize_data_v1,
 )
@@ -125,6 +128,79 @@ def test_standardize_data_v1():
 
     for key, value in standardized.items():
         assert torch.allclose(value, expected_output[key])
+
+
+def test_build_client_item_forwards_tools_only_for_multimodal_messages():
+    tools = [
+        {
+            "type": "function",
+            "function": {"name": "describe_image", "parameters": {"type": "object"}},
+        }
+    ]
+    multimodal_item = {
+        "input_ids": torch.tensor([1, 2, 3]),
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "describe"},
+                    {"type": "image_url", "image_url": {"url": "file:///tmp/cat.png"}},
+                ],
+            }
+        ],
+        "tools": json.dumps(tools),
+    }
+
+    assert build_client_item(multimodal_item) == {
+        "input_ids": [1, 2, 3],
+        "messages": multimodal_item["messages"],
+        "tools": tools,
+    }
+
+    text_only_item = {
+        "input_ids": torch.tensor([1, 2, 3]),
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+        "tools": json.dumps(tools),
+    }
+    assert build_client_item(text_only_item) == {"input_ids": [1, 2, 3]}
+
+
+def test_align_loss_mask_to_vllm_multimodal_token_ids_with_image_block_delta():
+    source_ids = [10, 20, 30, 30, 30, 30, 30, 40, 50, 60, 70, 80]
+    source_mask = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0]
+    target_ids = [10, 20, 30, 30, 40, 50, 60, 70, 80]
+
+    aligned = _align_loss_mask_to_token_ids(source_ids, source_mask, target_ids)
+
+    assert aligned.tolist() == [0, 0, 0, 0, 0, 1, 1, 1, 0]
+
+
+def test_align_loss_mask_to_vllm_multimodal_token_ids_with_target_extra_and_suffix():
+    source_ids = [10, 20, 30, 40, 50, 60, 70, 80]
+    source_mask = [0, 0, 0, 0, 1, 1, 0, 0]
+    target_ids = [10, 20, 20, 20, 30, 40, 50, 60]
+
+    aligned = _align_loss_mask_to_token_ids(source_ids, source_mask, target_ids)
+
+    assert aligned.tolist() == [0, 0, 0, 0, 0, 0, 1, 1]
+
+
+def test_align_loss_mask_to_vllm_multimodal_token_ids_rejects_trainable_drop():
+    source_ids = [10, 20, 30, 40]
+    source_mask = [0, 1, 1, 0]
+    target_ids = [10, 40]
+
+    with pytest.raises(ValueError, match="trainable"):
+        _align_loss_mask_to_token_ids(source_ids, source_mask, target_ids)
+
+
+def test_align_loss_mask_to_vllm_multimodal_token_ids_rejects_trainable_insert():
+    source_ids = [10, 20, 30]
+    source_mask = [0, 1, 1]
+    target_ids = [10, 99, 20, 30]
+
+    with pytest.raises(ValueError, match="trainable"):
+        _align_loss_mask_to_token_ids(source_ids, source_mask, target_ids)
 
 
 def test_collate_fn_basic():

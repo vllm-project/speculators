@@ -23,11 +23,11 @@ from typing import Any
 
 import openai
 from datasets import load_from_disk
-from safetensors.torch import load_file
+from safetensors.torch import load_file, save_file
 from tqdm import tqdm
 
 from speculators.data_generation.offline import (
-    check_hidden_states,
+    align_hidden_states_to_tokens,
     get_existing_hidden_state_indices,
     get_indices_to_process,
 )
@@ -41,6 +41,36 @@ from speculators.train.data import build_client_item
 from speculators.train.logger import setup_root_logger
 
 logger = logging.getLogger(__name__)
+
+
+def _align_and_write_hidden_states(
+    source_path: Path,
+    target_path: Path,
+    tokens: list[int],
+    *,
+    allow_prefix_truncation: bool,
+    validate_outputs: bool,
+) -> None:
+    if not allow_prefix_truncation and not validate_outputs:
+        if source_path != target_path:
+            shutil.move(source_path, target_path)
+        return
+
+    loaded = load_file(source_path)
+    aligned, truncated = align_hidden_states_to_tokens(
+        loaded,
+        tokens,
+        allow_prefix_truncation=allow_prefix_truncation,
+    )
+    if truncated:
+        save_file(
+            {key: value.contiguous() for key, value in aligned.items()},
+            target_path,
+        )
+        if source_path != target_path:
+            source_path.unlink()
+    elif source_path != target_path:
+        shutil.move(source_path, target_path)
 
 
 class _FailureTracker:
@@ -192,7 +222,7 @@ def parse_args():
     return parser.parse_args()
 
 
-async def worker(  # noqa: C901
+async def worker(
     client,
     model: str,
     queue: "asyncio.Queue[dict[str, Any]]",
@@ -238,19 +268,16 @@ async def worker(  # noqa: C901
                 await wait_for_lock_async(lock_path)
 
             async with write_semaphore:  # Limit number of active disk writes
+                allow_prefix_truncation = "messages" in item
+
                 await asyncio.to_thread(
-                    shutil.move, hidden_states_path, target_hidden_states_path
+                    _align_and_write_hidden_states,
+                    Path(hidden_states_path),
+                    target_hidden_states_path,
+                    item["input_ids"],
+                    allow_prefix_truncation=allow_prefix_truncation,
+                    validate_outputs=validate_outputs,
                 )
-                if validate_outputs:
-
-                    def _load_and_check(
-                        path=target_hidden_states_path,
-                        tokens=item["input_ids"],
-                    ):
-                        loaded = load_file(path)
-                        check_hidden_states(loaded, tokens)
-
-                    await asyncio.to_thread(_load_and_check)
         except Exception as e:
             if fail_on_error:
                 logger.exception(
@@ -325,6 +352,8 @@ async def generate_and_save_hidden_states(args, dataset):
 
     existing_file_indices = get_existing_hidden_state_indices(hidden_states_dir)
     num_samples = len(dataset)
+    if "messages" in dataset.column_names:
+        logger.info("Detected multimodal preprocessed dataset")
 
     to_process = get_indices_to_process(
         num_samples,
@@ -389,7 +418,7 @@ async def generate_and_save_hidden_states(args, dataset):
             await _shutdown_workers(workers, queue, cancel_event)
 
     num_saved = len(to_process) - len(skipped_indices)
-    logger.info(f"Saved {num_saved} new data points to {args.output}")
+    logger.info(f"Saved {num_saved} new data points to {hidden_states_dir}")
     if skipped_indices:
         logger.warning(
             f"Skipped {len(skipped_indices)} samples due to errors: {skipped_indices}"

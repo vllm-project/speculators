@@ -4,14 +4,14 @@ Unit tests for the preprocessing module in the Speculators data generation.
 
 import json
 import re
-from typing import Any
+from typing import Any, cast
 from unittest.mock import patch
 
 import pytest
 import torch
 from datasets import Dataset as HFDataset
 from PIL import Image
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, PreTrainedTokenizerBase, ProcessorMixin
 
 from speculators.data_generation.configs import (
     DATASET_CONFIGS,
@@ -22,10 +22,12 @@ from speculators.data_generation.preprocessing import (
     _adapt_conv_for_vllm,
     _create_loss_mask_from_offsets,
     _detect_assistant_pattern,
+    _expand_loss_mask_for_multimodal_tokens,
     _load_hf_dataset,
     _normalize_conversation,
     _preprocess_batch,
     _supports_assistant_mask,
+    _validate_multimodal_truncation_boundary,
     build_eagle3_dataset,
     get_tokenizer,
     load_and_preprocess_dataset,
@@ -39,6 +41,152 @@ from speculators.data_generation.preprocessing import (
 TEXT_MODEL_REPO = "Qwen/Qwen2-0.5B-Instruct"
 # For testing multi-modal support
 MM_MODEL_REPO = "Qwen/Qwen3.5-0.8B"
+
+_TINY_IMAGE_DATA_URL = (
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/"
+    "x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+)
+
+_DESCRIBE_IMAGE_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "describe_image",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+]
+
+
+def _multimodal_messages(
+    *,
+    media_part: dict[str, Any] | None = None,
+    prompt: str = "Describe",
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                media_part
+                or {
+                    "type": "image_url",
+                    "image_url": {"url": _TINY_IMAGE_DATA_URL},
+                },
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "A cat."}],
+        },
+    ]
+
+
+def _multimodal_examples(**message_kwargs) -> dict[str, list]:
+    return {"messages": [_multimodal_messages(**message_kwargs)]}
+
+
+def _single_image_conversation(media_ref: str, *, field: str) -> list[dict]:
+    return [
+        {
+            "role": "user",
+            "content": [{"type": "image", field: media_ref}],
+        }
+    ]
+
+
+class _DummyMultimodalTokenizer:
+    pad_token = "<pad>"
+    eos_token = "<eos>"
+    unk_token_id = -1
+
+    def convert_tokens_to_ids(self, token):
+        if token == "<|image_pad|>":
+            return 999
+        return self.unk_token_id
+
+    def __call__(
+        self,
+        text,
+        return_offsets_mapping=False,
+        max_length=None,
+        truncation=False,
+        add_special_tokens=False,
+    ):
+        del text, max_length, truncation, add_special_tokens
+        if return_offsets_mapping:
+            return {
+                "input_ids": [101, 102, 103],
+                "offset_mapping": [(0, 1), (1, 2), (2, 3)],
+            }
+        return {"input_ids": [101, 102, 103]}
+
+    def decode(self, input_ids):
+        del input_ids
+        return "formatted multimodal prompt"
+
+
+class _DummyMultimodalProcessor(ProcessorMixin):
+    def __init__(self):
+        self.tokenizer = _DummyMultimodalTokenizer()
+        self.chat_template = "dummy-template"
+
+    def __call__(self, *args, **kwargs):
+        del args
+        images = kwargs["images"]
+        assert len(images) == 1
+        assert getattr(images[0], "mode", None) == "RGB"
+        return {"input_ids": [[101, 999, 999, 999, 103]]}
+
+    def apply_chat_template(self, *args, **kwargs):
+        if kwargs.get("tokenize"):
+            return {"input_ids": [[101, 999, 103]], "assistant_mask": [[0, 0, 1]]}
+
+        messages = args[0]
+        rendered = []
+        for message in messages:
+            content = message["content"]
+            if isinstance(content, list):
+                content = "".join(
+                    part.get("text", "")
+                    for part in content
+                    if part.get("type") == "text"
+                )
+            rendered.append(f"<|{message['role']}|>{content}")
+        return "\n".join(rendered)
+
+    def decode(self, input_ids):
+        return self.tokenizer.decode(input_ids)
+
+
+class _NoProcessorTruncationMultimodalProcessor(_DummyMultimodalProcessor):
+    def __call__(self, *args, **kwargs):
+        if kwargs.get("truncation"):
+            raise ValueError("processor-side image truncation is invalid")
+        return super().__call__(*args, **kwargs)
+
+    def apply_chat_template(self, *args, **kwargs):
+        if kwargs.get("tokenize"):
+            processor_kwargs = kwargs.get("processor_kwargs", kwargs)
+            if processor_kwargs.get("truncation"):
+                raise ValueError("processor-side image truncation is invalid")
+            return {
+                "input_ids": [[101, 999, 103]],
+                "offset_mapping": [[(0, 1), (1, 2), (2, 3)]],
+            }
+
+        return super().apply_chat_template(*args, **kwargs)
+
+
+class _ToolRecordingMultimodalProcessor(_DummyMultimodalProcessor):
+    def __init__(self):
+        super().__init__()
+        self.template_tools: list[tuple[bool, object]] = []
+
+    def apply_chat_template(self, *args, **kwargs):
+        self.template_tools.append((bool(kwargs.get("tokenize")), kwargs.get("tools")))
+        return super().apply_chat_template(*args, **kwargs)
 
 
 # Tests for _normalize_conversation
@@ -263,6 +411,37 @@ def test_adapt_conv_for_vllm_all_content_formats():
             "image_url": {"url": "http://path/to/img"},
         },
     ]
+
+
+@pytest.mark.sanity
+def test_adapt_conv_for_vllm_percent_encodes_local_media_path(tmp_path):
+    image_path = tmp_path / "test image#100%.png"
+    image_path.write_bytes(b"image")
+
+    result = _adapt_conv_for_vllm(
+        _single_image_conversation(str(image_path), field="path")
+    )
+
+    image_url = result[0]["content"][0]["image_url"]["url"]
+    assert image_url == image_path.resolve().as_uri()
+    assert " " not in image_url
+    assert "#" not in image_url
+    assert "%25" in image_url
+
+
+@pytest.mark.sanity
+@pytest.mark.parametrize(
+    "media_ref",
+    [
+        "file://remote.example/tmp/image.png",
+        "file:///tmp/image.png?version=1",
+        "file:///tmp/image.png#fragment",
+        "ftp://example.com/image.png",
+    ],
+)
+def test_adapt_conv_for_vllm_rejects_ambiguous_local_media_uri(media_ref):
+    with pytest.raises(ValueError, match="Unsupported|query/fragment"):
+        _adapt_conv_for_vllm(_single_image_conversation(media_ref, field="image"))
 
 
 @pytest.mark.sanity
@@ -729,7 +908,9 @@ def test_preprocess_batch_falls_back_to_regex():
             raise ValueError("Forcing fallback to regex path")
         return original_apply_chat_template(*args, **kwargs)
 
-    processor.apply_chat_template = patched_apply_chat_template  # type: ignore [method-assign]
+    processor.apply_chat_template = (  # type: ignore[method-assign]
+        patched_apply_chat_template
+    )
 
     examples = {
         "conversations": [
@@ -1347,6 +1528,70 @@ def test_preprocess_batch_tools_with_hf_assistant_mask():
 
 
 @pytest.mark.sanity
+def test_multimodal_preprocess_uses_same_tools_for_render_and_tokenization():
+    """Image expansion must render the exact tool-aware prompt that was tokenized."""
+    examples = _multimodal_examples()
+    examples["tools"] = [json.dumps(_DESCRIBE_IMAGE_TOOLS)]
+    processor = _ToolRecordingMultimodalProcessor()
+
+    results = _preprocess_batch(
+        examples,
+        cast("PreTrainedTokenizerBase", processor),
+        max_length=64,
+        assistant_pattern=None,
+    )
+
+    assert processor.template_tools == [
+        (False, _DESCRIBE_IMAGE_TOOLS),
+        (True, _DESCRIBE_IMAGE_TOOLS),
+    ]
+    assert results["input_ids"][0].tolist() == [101, 999, 999, 999, 103]
+    assert results["loss_mask"][0].tolist() == [0, 0, 0, 0, 1]
+    assert results["tools"] == [
+        json.dumps(
+            _DESCRIBE_IMAGE_TOOLS,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    ]
+
+
+@pytest.mark.sanity
+def test_multimodal_dataset_preserves_canonical_tools():
+    """Dataset.map must retain the canonical tools rebuilt by preprocessing."""
+    examples = _multimodal_examples()
+    examples["tools"] = [json.dumps(_DESCRIBE_IMAGE_TOOLS)]
+
+    result = build_eagle3_dataset(
+        HFDataset.from_dict(examples),
+        cast("PreTrainedTokenizerBase", _ToolRecordingMultimodalProcessor()),
+        max_length=64,
+        num_proc=1,
+    )
+
+    assert "messages" in result.column_names
+    assert result[0]["tools"] == json.dumps(
+        _DESCRIBE_IMAGE_TOOLS,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+@pytest.mark.sanity
+def test_multimodal_loss_mask_rejects_expanded_ids_ending_before_source_tail():
+    """Processor shortening must not silently discard the assistant-mask tail."""
+    with pytest.raises(ValueError, match="ended before all source tokens"):
+        _expand_loss_mask_for_multimodal_tokens(
+            input_ids=[101, 999, 103],
+            loss_mask=torch.tensor([0, 0, 1], dtype=torch.long),
+            expanded_input_ids=[101, 999],
+            image_token_ids={999},
+        )
+
+
+@pytest.mark.sanity
 def test_normalize_conversation_tool_calls_with_empty_content():
     """Test that an assistant turn with tool_calls and no text content is normalized."""
     tool_calls = [
@@ -1365,6 +1610,106 @@ def test_normalize_conversation_tool_calls_with_empty_content():
     assert assistant_tool_call_turn["role"] == "assistant"
     assert assistant_tool_call_turn["content"] == ""
     assert assistant_tool_call_turn["tool_calls"] == tool_calls
+
+
+@pytest.mark.sanity
+def test_build_eagle3_dataset_multimodal_expands_image_tokens_and_preserves_messages():
+    """Test multimodal preprocessing expands image tokens and preserves messages."""
+    dataset = HFDataset.from_dict(_multimodal_examples(prompt="Describe <image>"))
+
+    processor = _DummyMultimodalProcessor()
+    result = build_eagle3_dataset(
+        dataset,
+        cast("PreTrainedTokenizerBase", processor),
+        max_length=64,
+        num_proc=1,
+    )
+
+    assert "messages" in result.column_names
+    assert result[0]["input_ids"].tolist() == [101, 999, 999, 999, 103]
+    assert result[0]["loss_mask"].tolist() == [0, 0, 0, 0, 1]
+    assert result[0]["seq_len"] == 5
+
+    messages = result[0]["messages"]
+    assert messages[0]["role"] == "user"
+    assert messages[0]["content"][0]["type"] == "text"
+    assert messages[0]["content"][0]["text"] == "Describe"
+    assert messages[0]["content"][1]["type"] == "image_url"
+    assert messages[0]["content"][1]["image_url"]["url"] == _TINY_IMAGE_DATA_URL
+    assert messages[1]["role"] == "assistant"
+    assert messages[1]["content"][0]["text"] == "A cat."
+
+
+@pytest.mark.sanity
+def test_multimodal_regex_path_truncates_after_image_expansion():
+    """Avoid processor-side truncation that can corrupt image token counts."""
+    processor = _NoProcessorTruncationMultimodalProcessor()
+    results = _preprocess_batch(
+        _multimodal_examples(),
+        cast("PreTrainedTokenizerBase", processor),
+        max_length=4,
+        assistant_pattern=r"(.+)",
+    )
+
+    assert results["input_ids"][0].tolist() == [101, 999, 999, 999]
+    assert results["loss_mask"][0].tolist() == [1, 0, 0, 0]
+    assert results["seq_len"][0] == 4
+
+
+@pytest.mark.sanity
+@pytest.mark.parametrize(
+    ("input_ids", "boundary_tokens", "rejected_lengths", "accepted_lengths"),
+    [
+        (
+            [10, 20, 30, 30, 21, 11],
+            ({20}, {21}),
+            (2, 3, 4),
+            (0, 1, 5, 6),
+        ),
+        ([10, 30, 30, 11], (set(), set()), (2,), (0, 1, 3, 4)),
+    ],
+    ids=["explicit-vision-boundaries", "legacy-image-pad-run"],
+)
+def test_multimodal_truncation_checks_every_block_cut(
+    input_ids,
+    boundary_tokens,
+    rejected_lengths,
+    accepted_lengths,
+):
+    vision_start_token_ids, vision_end_token_ids = boundary_tokens
+    kwargs = {
+        "input_ids": input_ids,
+        "image_token_ids": {30},
+        "vision_start_token_ids": vision_start_token_ids,
+        "vision_end_token_ids": vision_end_token_ids,
+    }
+
+    for max_length in rejected_lengths:
+        with pytest.raises(ValueError, match="middle of an image token block"):
+            _validate_multimodal_truncation_boundary(
+                max_length=max_length,
+                **kwargs,
+            )
+    for max_length in accepted_lengths:
+        _validate_multimodal_truncation_boundary(
+            max_length=max_length,
+            **kwargs,
+        )
+
+
+@pytest.mark.sanity
+def test_multimodal_preprocessing_rejects_unsupported_media_modality():
+    """Video/audio parts are not silently treated like image inputs."""
+    processor = _NoProcessorTruncationMultimodalProcessor()
+    with pytest.raises(RuntimeError, match="Only image inputs are supported"):
+        _preprocess_batch(
+            _multimodal_examples(
+                media_part={"type": "video", "video": "file:///tmp/clip.mp4"}
+            ),
+            cast("PreTrainedTokenizerBase", processor),
+            max_length=64,
+            assistant_pattern=r"(.+)",
+        )
 
 
 # Tests for load_raw_dataset resolution chain (issue #661)

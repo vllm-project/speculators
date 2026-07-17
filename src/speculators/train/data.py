@@ -13,10 +13,10 @@ import openai
 import torch
 import torch.nn.functional as F  # noqa: N812
 from datasets import load_from_disk
-from safetensors.torch import load_file
+from safetensors.torch import load_file, save_file
 from torch.utils.data import Dataset
 
-from speculators.data_generation.offline import check_hidden_states
+from speculators.data_generation.offline import align_hidden_states_to_tokens
 from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_REQUEST_TIMEOUT,
@@ -121,7 +121,36 @@ def _has_multimodal_content(messages: list[dict]) -> bool:
     (produced by ``_adapt_conv_for_vllm``) store it as a list of typed parts,
     e.g. ``[{"type": "text", ...}, {"type": "image_url", ...}]``.
     """
-    return any(isinstance(m.get("content"), list) for m in messages)
+    multimodal_types = {
+        "audio",
+        "audio_url",
+        "image",
+        "image_url",
+        "input_audio",
+        "input_image",
+        "input_video",
+        "video",
+        "video_url",
+    }
+    text_types = {None, "input_text", "text"}
+
+    for message in messages:
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+
+        for part in content:
+            if isinstance(part, str):
+                continue
+            if not isinstance(part, dict):
+                return True
+            part_type = part.get("type")
+            if part_type in multimodal_types:
+                return True
+            if part_type not in text_types:
+                return True
+
+    return False
 
 
 def build_client_item(dataset_item: dict) -> ClientItem:
@@ -146,10 +175,18 @@ def build_client_item(dataset_item: dict) -> ClientItem:
     Text-only EAGLE-3 models (e.g. Llama) use a plain tokenizer, so
     ``messages`` is never created and this guard is a no-op.
     """
-    out_dict: dict = {"input_ids": dataset_item["input_ids"].tolist()}
+    input_ids = dataset_item["input_ids"]
+    out_dict: dict = {
+        "input_ids": input_ids.tolist()
+        if hasattr(input_ids, "tolist")
+        else list(input_ids)
+    }
 
     if "messages" in dataset_item and _has_multimodal_content(dataset_item["messages"]):
         out_dict["messages"] = dataset_item["messages"]
+        tools = dataset_item.get("tools")
+        if tools:
+            out_dict["tools"] = json.loads(tools) if isinstance(tools, str) else tools
 
     return cast("ClientItem", out_dict)
 
@@ -224,6 +261,140 @@ def _maybe_load_hs_file(file_path: Path) -> dict[str, torch.Tensor] | None:
         return load_file(file_path)
 
     return None
+
+
+def _check_hidden_states_self_consistent(data: dict[str, torch.Tensor]) -> None:
+    token_ids = data["token_ids"]
+    hidden_states = data["hidden_states"]
+    if hidden_states.isnan().any():
+        raise ValueError("Hidden states contain NaN values")
+    if token_ids.shape[0] != hidden_states.shape[0]:
+        raise ValueError(
+            f"Sequence length of hidden states {hidden_states.shape[0]}"
+            f" doesn't match num tokens {token_ids.shape[0]}"
+        )
+
+
+def _is_multimodal_dataset_item(dataset_item: dict[str, Any]) -> bool:
+    return "messages" in dataset_item and _has_multimodal_content(
+        dataset_item["messages"]
+    )
+
+
+def _as_list(value: Any) -> list[int]:
+    if hasattr(value, "tolist"):
+        value = value.tolist()
+    return list(value)
+
+
+def _align_loss_mask_to_token_ids(  # noqa: C901
+    source_token_ids: list[int],
+    source_loss_mask: list[int],
+    target_token_ids: list[int],
+    *,
+    min_match_run: int = 4,
+    max_resync_scan: int = 2048,
+) -> torch.Tensor:
+    """Map a preprocessed loss mask onto vLLM's actual multimodal token IDs.
+
+    vLLM Chat Completions re-tokenizes multimodal messages and can expand image
+    placeholders to a different number of image tokens than the HF preprocessing
+    path.  Hidden states are valid for vLLM's token IDs, so training must use the
+    same token IDs and a loss mask projected from the preprocessed sample.
+
+    The projection only permits skipping source spans whose loss mask is all 0;
+    target-only spans are assigned 0.  This keeps assistant text supervision
+    intact while tolerating differences in user-side vision-token blocks and
+    Chat Completions continuation suffixes.
+    """
+    if len(source_token_ids) != len(source_loss_mask):
+        raise ValueError(
+            "Cannot align loss mask with mismatched source lengths: "
+            f"input_ids={len(source_token_ids)}, loss_mask={len(source_loss_mask)}"
+        )
+
+    def source_span_is_masked(start: int, end: int) -> bool:
+        return all(int(value) == 0 for value in source_loss_mask[start:end])
+
+    def following_run_matches(src_pos: int, tgt_pos: int) -> bool:
+        remaining = min(
+            min_match_run,
+            len(source_token_ids) - src_pos,
+            len(target_token_ids) - tgt_pos,
+        )
+        if remaining <= 0:
+            return True
+        return (
+            source_token_ids[src_pos : src_pos + remaining]
+            == target_token_ids[tgt_pos : tgt_pos + remaining]
+        )
+
+    def find_resync(src_pos: int, tgt_pos: int) -> tuple[int, int] | None:
+        best: tuple[int, int] | None = None
+        best_cost: int | None = None
+        max_src = min(len(source_token_ids), src_pos + max_resync_scan)
+        max_tgt = min(len(target_token_ids), tgt_pos + max_resync_scan)
+        for next_src in range(src_pos, max_src):
+            if not source_span_is_masked(src_pos, next_src):
+                break
+            for next_tgt in range(tgt_pos, max_tgt):
+                if next_tgt > tgt_pos and int(source_loss_mask[src_pos]) != 0:
+                    continue
+                if source_token_ids[next_src] != target_token_ids[next_tgt]:
+                    continue
+                if not following_run_matches(next_src, next_tgt):
+                    continue
+                cost = (next_src - src_pos) + (next_tgt - tgt_pos)
+                if best_cost is None or cost < best_cost:
+                    best = (next_src, next_tgt)
+                    best_cost = cost
+                    break
+            if best is not None and best_cost == next_src - src_pos:
+                break
+        return best
+
+    aligned: list[int] = []
+    src_idx = 0
+    tgt_idx = 0
+
+    while src_idx < len(source_token_ids) and tgt_idx < len(target_token_ids):
+        if source_token_ids[src_idx] == target_token_ids[tgt_idx]:
+            aligned.append(int(source_loss_mask[src_idx]))
+            src_idx += 1
+            tgt_idx += 1
+            continue
+
+        resync = find_resync(src_idx, tgt_idx)
+        if resync is None:
+            break
+        next_src, next_tgt = resync
+        aligned.extend([0] * (next_tgt - tgt_idx))
+        src_idx = next_src
+        tgt_idx = next_tgt
+
+    if tgt_idx < len(target_token_ids):
+        if not source_span_is_masked(src_idx, len(source_token_ids)):
+            raise ValueError(
+                "Unable to align vLLM multimodal token IDs without dropping "
+                f"trainable source tokens at source={src_idx}, target={tgt_idx}"
+            )
+        aligned.extend([0] * (len(target_token_ids) - tgt_idx))
+        tgt_idx = len(target_token_ids)
+
+    if src_idx < len(source_token_ids) and not source_span_is_masked(
+        src_idx, len(source_token_ids)
+    ):
+        raise ValueError(
+            "Unable to align vLLM multimodal token IDs; remaining source suffix "
+            f"contains trainable tokens at source={src_idx}"
+        )
+
+    if len(aligned) != len(target_token_ids):
+        raise ValueError(
+            "Aligned loss mask length mismatch: "
+            f"mask={len(aligned)}, target_ids={len(target_token_ids)}"
+        )
+    return torch.tensor(aligned, dtype=torch.long)
 
 
 class ArrowDataset(BaseDataset):
@@ -308,7 +479,7 @@ class ArrowDataset(BaseDataset):
         """Get lengths of the dataset samples."""
         return list(self.data.with_format(None)["seq_len"])
 
-    def _maybe_generate_hs(self, index: int) -> dict[str, torch.Tensor] | None:
+    def _maybe_generate_hs(self, index: int) -> dict[str, torch.Tensor] | None:  # noqa: C901
         if not self.client:
             self._setup_client()
 
@@ -328,13 +499,32 @@ class ArrowDataset(BaseDataset):
             if loaded_hs is None:
                 raise ValueError(f"Failed to load hidden states from {hs_filepath}")
 
-            check_hidden_states(loaded_hs, dataset_item["input_ids"].tolist())
+            if "messages" in client_item:
+                _check_hidden_states_self_consistent(loaded_hs)
+                truncated = False
+            else:
+                loaded_hs, truncated = align_hidden_states_to_tokens(
+                    loaded_hs,
+                    dataset_item["input_ids"].tolist(),
+                    allow_prefix_truncation=False,
+                )
 
             match self.on_generate:
                 case "cache":
                     file_idx = self._map_to_file_idx(index)
                     target_path = self.hidden_states_path / f"hs_{file_idx}.safetensors"
-                    shutil.move(hs_filepath, target_path)
+                    if truncated:
+                        save_file(
+                            {
+                                key: value.contiguous()
+                                for key, value in loaded_hs.items()
+                            },
+                            target_path,
+                        )
+                        if Path(hs_filepath) != target_path:
+                            Path(hs_filepath).unlink()
+                    elif Path(hs_filepath) != target_path:
+                        shutil.move(hs_filepath, target_path)
                 case "delete":
                     Path(hs_filepath).unlink()
         except Exception as e:
@@ -378,10 +568,27 @@ class ArrowDataset(BaseDataset):
         #   "token_ids": [seq_len]
         # }
 
-        if not torch.equal(loaded_hs["token_ids"], self.data[index]["input_ids"]):
+        input_ids = self.data[index]["input_ids"]
+        loss_mask = self.data[index]["loss_mask"]
+        if torch.equal(loaded_hs["token_ids"], input_ids):
+            aligned_loss_mask = loss_mask
+        elif _is_multimodal_dataset_item(self.data[index]):
+            try:
+                aligned_loss_mask = _align_loss_mask_to_token_ids(
+                    _as_list(input_ids),
+                    _as_list(loss_mask),
+                    _as_list(loaded_hs["token_ids"]),
+                )
+            except ValueError as e:
+                warnings.warn(
+                    f"Failed to align multimodal token ids for index {index}: {e}",
+                    stacklevel=1,
+                )
+                return None
+        else:
             warnings.warn(
                 f"Loaded token ids {loaded_hs['token_ids']} for index {index} don't"
-                f"match input ids {self.data[index]['input_ids']}",
+                f"match input ids {input_ids}",
                 stacklevel=1,
             )
             return None
@@ -394,7 +601,7 @@ class ArrowDataset(BaseDataset):
             "verifier_last_hidden_states": loaded_hs["hidden_states"][
                 :, -1
             ],  # [seq_len, hidden_size]
-            "loss_mask": self.data[index]["loss_mask"],  # [seq_len]
+            "loss_mask": aligned_loss_mask,  # [seq_len]
         }
 
 
