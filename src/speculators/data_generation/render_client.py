@@ -14,6 +14,11 @@ from speculators.data_generation.vllm_client import InvalidResponseError, with_r
 
 DEFAULT_RENDER_TIMEOUT = 30
 
+# 4xx that mean "retry", not "your request is wrong".
+TRANSIENT_STATUSES = frozenset(
+    {HTTPStatus.REQUEST_TIMEOUT, HTTPStatus.TOO_MANY_REQUESTS}
+)
+
 
 class RenderError(Exception):
     """Non-200, retry-eligible response from the render endpoint."""
@@ -47,7 +52,10 @@ def render_conversation(
 
     resp = httpx.post(url, json=body, timeout=timeout)
 
-    if HTTPStatus.BAD_REQUEST <= resp.status_code < HTTPStatus.INTERNAL_SERVER_ERROR:
+    if (
+        HTTPStatus.BAD_REQUEST <= resp.status_code < HTTPStatus.INTERNAL_SERVER_ERROR
+        and resp.status_code not in TRANSIENT_STATUSES
+    ):
         # Deterministic client error (bad request, wrong URL) -- retrying wastes
         # requests without changing the outcome. InvalidResponseError short-
         # circuits @with_retries (see vllm_client._handle_retry_error).
