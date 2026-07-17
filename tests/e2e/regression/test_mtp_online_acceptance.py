@@ -47,5 +47,5 @@ def test_mtp_online_regression(
         acceptance_thresholds=[0.82, 0.65, 0.48],
         max_tokens=512,
         train_timeout=60 * 60,
-        gpu_memory_utilization=0.3,
+        gpu_memory_utilization=0.25,
     )
