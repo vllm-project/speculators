@@ -124,6 +124,7 @@ def _make_trainer_no_init(
     rank=None,
     save_path="/tmp/test_ckpt",
     hidden_states_dtype=torch.bfloat16,
+    fsdp_shard=False,
 ):
     """Create a Trainer instance bypassing __init__ to control setup order."""
     if rank is None:
@@ -134,6 +135,7 @@ def _make_trainer_no_init(
         save_path=save_path,
         resume_from_checkpoint=resume_from_checkpoint,
         hidden_states_dtype=hidden_states_dtype,
+        fsdp_shard=fsdp_shard,
     )
     trainer = Trainer.__new__(Trainer)
     trainer.model = model
@@ -142,6 +144,7 @@ def _make_trainer_no_init(
     trainer.rank = rank
     trainer.is_distributed = is_distributed
     trainer.resume_from_checkpoint = config.resume_from_checkpoint
+    trainer.device_type = "cuda" if torch.cuda.is_available() else "cpu"
     trainer.train_loader = MagicMock(__len__=MagicMock(return_value=1))
     trainer.val_loader = None
     return trainer
@@ -467,7 +470,9 @@ def _worker_distributed_fresh_init(rank, world_size, results_dir):
         # Capture rank 0's pre-FSDP state dict for comparison
         pre_fsdp_checksums = _param_checksums(model.state_dict()) if rank == 0 else {}
 
-        trainer = _make_trainer_no_init(model, is_distributed=True, local_rank=rank)
+        trainer = _make_trainer_no_init(
+            model, is_distributed=True, local_rank=rank, fsdp_shard=True
+        )
         trainer.checkpointer = MagicMock()
         trainer.checkpointer.previous_epoch = -1
 
@@ -534,17 +539,94 @@ def test_distributed_fresh_init(tmp_path):
         assert not is_nan, f"Weight {key} is NaN after distributed setup"
 
 
+def _worker_ddp_fresh_init(rank, world_size, results_dir):
+    """Worker for test_ddp_fresh_init."""
+    _dist_setup(rank, world_size)
+    try:
+        model = _make_tiny_model()
+
+        # Capture rank 0's pre-DDP state dict for comparison
+        pre_ddp_checksums = _param_checksums(model.state_dict()) if rank == 0 else {}
+
+        trainer = _make_trainer_no_init(
+            model, is_distributed=True, local_rank=rank, fsdp_shard=False
+        )
+        trainer.checkpointer = MagicMock()
+        trainer.checkpointer.previous_epoch = -1
+
+        trainer.setup_model()
+
+        # For DDP, we can get the state dict directly from the wrapped model
+        raw_model = (
+            trainer.model.module if hasattr(trainer.model, "module") else trainer.model
+        )
+        full_sd = raw_model.state_dict()
+
+        if rank == 0:
+            checksums = _param_checksums(full_sd)
+            has_nan = {
+                k: v.isnan().any().item()
+                for k, v in full_sd.items()
+                if isinstance(v, torch.Tensor) and v.is_floating_point()
+            }
+
+            torch.save(
+                {
+                    "pre_ddp_checksums": pre_ddp_checksums,
+                    "post_ddp_checksums": checksums,
+                    "has_nan": has_nan,
+                },
+                results_dir / "results.pt",
+            )
+    finally:
+        _dist_teardown()
+
+
+@requires_multi_gpu
+def test_ddp_fresh_init(tmp_path):
+    """DDP fresh init: after setup_model, all ranks have the same weights
+    matching rank 0's original pre-DDP state.
+
+    This verifies that the manual broadcast loop in _setup_model_ddp
+    correctly distributes rank 0's random initialization to all ranks."""
+    world_size = 2
+    results_dir = tmp_path / "results"
+    results_dir.mkdir()
+
+    mp.spawn(
+        _worker_ddp_fresh_init,
+        args=(world_size, results_dir),
+        nprocs=world_size,
+        join=True,
+    )
+
+    results = torch.load(results_dir / "results.pt", weights_only=False)
+
+    # Post-DDP state dict should match pre-DDP state dict from rank 0
+    pre = results["pre_ddp_checksums"]
+    post = results["post_ddp_checksums"]
+    for key in pre:
+        assert key in post, f"Key {key} missing after DDP round-trip"
+        assert pre[key] == pytest.approx(post[key], abs=1e-2), (
+            f"Weight {key} changed during DDP broadcast: "
+            f"pre={pre[key]}, post={post[key]}"
+        )
+
+    # No NaN values in any float parameter
+    for key, is_nan in results["has_nan"].items():
+        assert not is_nan, f"Weight {key} is NaN after distributed setup"
+
+
 # ===================================================================
 # Distributed — Resume from Checkpoint
 # ===================================================================
 
 
-def _worker_distributed_resume(rank, world_size, ckpt_dir, results_dir):
+def _worker_distributed_resume(rank, world_size, ckpt_dir, results_dir, fsdp_shard):
     """Worker for test_distributed_resume."""
     _dist_setup(rank, world_size)
     try:
         model = _make_tiny_model()
-        # Set verifier weights to known value before FSDP
         with torch.no_grad():
             model.verifier_norm.weight.fill_(77.0)
             model.verifier_lm_head.weight.fill_(88.0)
@@ -555,12 +637,25 @@ def _worker_distributed_resume(rank, world_size, ckpt_dir, results_dir):
             resume_from_checkpoint=True,
             local_rank=rank,
             save_path=ckpt_dir,
+            fsdp_shard=fsdp_shard,
         )
-        trainer.checkpointer = DistributedCheckpointer(ckpt_dir)
-        trainer.setup_model()
+        if fsdp_shard:
+            trainer.checkpointer = DistributedCheckpointer(ckpt_dir)
+        else:
+            trainer.checkpointer = SingleGPUCheckpointer(ckpt_dir)
 
-        # All ranks must call (collective op), only rank 0 gets data
-        full_sd = _get_full_state_dict_rank0(model)
+        trainer.setup_model()
+        trainer.setup_optimizer()
+
+        if fsdp_shard:
+            full_sd = _get_full_state_dict_rank0(model)
+        else:
+            raw_model = (
+                trainer.model.module
+                if hasattr(trainer.model, "module")
+                else trainer.model
+            )
+            full_sd = raw_model.state_dict()
 
         if rank == 0:
             checksums = _param_checksums(full_sd)
@@ -568,12 +663,14 @@ def _worker_distributed_resume(rank, world_size, ckpt_dir, results_dir):
             verifier_lm_head_val = (
                 full_sd["verifier_lm_head.weight"].float().mean().item()
             )
+            has_opt_state = len(trainer.optimizers[0].state) > 0
 
             torch.save(
                 {
                     "checksums": checksums,
                     "verifier_norm_val": verifier_norm_val,
                     "verifier_lm_head_val": verifier_lm_head_val,
+                    "has_opt_state": has_opt_state,
                 },
                 results_dir / "results.pt",
             )
@@ -582,16 +679,18 @@ def _worker_distributed_resume(rank, world_size, ckpt_dir, results_dir):
 
 
 @requires_multi_gpu
-def test_distributed_resume(checkpoint_dir, tmp_path):
+@pytest.mark.parametrize("fsdp_shard", [False, True], ids=["ddp", "fsdp"])
+def test_distributed_resume(checkpoint_dir, tmp_path, fsdp_shard):
     """Distributed resume: checkpoint weights loaded correctly, verifier
-    weights preserved (not overwritten by checkpoint)."""
+    weights preserved (not overwritten by checkpoint), optimizer state
+    restored through DDP/FSDP-wrapped model."""
     world_size = min(torch.cuda.device_count(), 2)
     results_dir = tmp_path / "results"
     results_dir.mkdir()
 
     mp.spawn(
         _worker_distributed_resume,
-        args=(world_size, str(checkpoint_dir), results_dir),
+        args=(world_size, str(checkpoint_dir), results_dir, fsdp_shard),
         nprocs=world_size,
         join=True,
     )
@@ -605,6 +704,7 @@ def test_distributed_resume(checkpoint_dir, tmp_path):
     assert results["verifier_lm_head_val"] == pytest.approx(88.0, abs=0.1), (
         "verifier_lm_head overwritten by checkpoint"
     )
+    assert results["has_opt_state"], "optimizer state not restored from checkpoint"
 
 
 # ===================================================================
@@ -621,7 +721,9 @@ def _worker_distributed_from_pretrained(rank, world_size, model_dir, results_dir
             model = Eagle3DraftModel.from_pretrained(model_dir)
         _fill_nan_weights(model)  # type: ignore[arg-type]  # fill verifier weights post-load
 
-        trainer = _make_trainer_no_init(model, is_distributed=True, local_rank=rank)
+        trainer = _make_trainer_no_init(
+            model, is_distributed=True, local_rank=rank, fsdp_shard=True
+        )
         trainer.checkpointer = MagicMock()
         trainer.checkpointer.previous_epoch = -1
 
