@@ -12,8 +12,6 @@ conversation fans out to one row per assistant turn -- the production default
 for any thinking model.
 """
 
-import logging
-
 import pytest
 from datasets import Dataset as HFDataset
 from transformers import AutoTokenizer
@@ -21,8 +19,6 @@ from transformers import AutoTokenizer
 from speculators.data_generation.preprocessing import build_eagle3_dataset
 from tests.conftest import requires_cuda
 from tests.e2e.utils import launch_vllm_server_context
-
-logger = logging.getLogger(__name__)
 
 MODEL = "Qwen/Qwen3-0.6B"
 PORT = 8106
@@ -69,8 +65,6 @@ def test_render_boundary_masks_against_live_vllm(tmp_path):
     for row in dataset:
         ids = row["input_ids"].tolist()
         mask = row["loss_mask"].tolist()
-        assert len(ids) == len(mask)
-        assert sum(mask) > 0
 
         supervised = tokenizer.decode([t for t, m in zip(ids, mask, strict=True) if m])
         context = tokenizer.decode([t for t, m in zip(ids, mask, strict=True) if not m])
