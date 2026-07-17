@@ -63,7 +63,6 @@ def compute_metrics(
     device = logits.device
     seq_len = logits.shape[1]
     pos_idx = (torch.arange(seq_len, device=device) % block_size).unsqueeze(0)
-    # Start position: 0 if sample_from_anchor (DSpark) else 1 (DFlash anchor).
     start_pos = 0 if sample_from_anchor else 1
     if per_position_loss_weight == "dpace":
         decay_fn = partial(
@@ -90,10 +89,9 @@ def compute_metrics(
         # is the anchor), shared by the accept-length and calibration metrics.
         num_blocks = seq_len // block_size
         accept_blocks = accept_rate.view(num_blocks, block_size)
-        draft_mask = (
-            loss_mask.to(accept_rate.dtype)
-            .view(num_blocks, block_size)[:, start_pos:]
-        )
+        draft_mask = loss_mask.to(accept_rate.dtype).view(num_blocks, block_size)[
+            :, start_pos:
+        ]
         accept_prefix = (accept_blocks[:, start_pos:] * draft_mask).cumprod(dim=-1)
 
     metrics: dict[str, Any] = {}
