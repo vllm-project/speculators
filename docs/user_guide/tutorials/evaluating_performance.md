@@ -37,6 +37,7 @@ Both `throughput` and `sweep` share the same options:
   --max-concurrency N        Max concurrent requests (default: 128)
   --max-requests N           Max requests per sweep point (default: 200)
   --gen-len-rate N           Request rate for gen-len estimation (default: 128)
+  --sweep-rate N             Number of sweep rate points (default: 10)
   --gen-kwargs JSON          Generation kwargs, e.g. '{"temperature":0.6}'
   --data-column-mapper JSON  Column mapping for guidellm (default: '{"text_column":"prompt"}')
 ```
