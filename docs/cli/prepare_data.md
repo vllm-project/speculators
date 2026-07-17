@@ -10,10 +10,13 @@ The output is a processed dataset ready for online training or offline hidden st
 
 ## Basic Usage
 
+Off-policy conversations are tokenized by a running vLLM server, so `--render-endpoint` is required unless the input is already pre-tokenized:
+
 ```bash
 python scripts/prepare_data.py \
   --model meta-llama/Llama-3.1-8B-Instruct \
   --data sharegpt \
+  --render-endpoint http://localhost:8000 \
   --output ./training_data \
   --max-samples 5000
 ```
@@ -65,6 +68,7 @@ python scripts/prepare_data.py \
   --model meta-llama/Llama-3.1-8B-Instruct \
   --data sharegpt \
   --data ./custom_conversations.jsonl \
+  --render-endpoint http://localhost:8000 \
   --output ./prepared_data \
   --seq-length 4096 \
   --max-samples 10000 \
