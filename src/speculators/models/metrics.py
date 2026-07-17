@@ -427,31 +427,6 @@ _LOSS_FN_MAP: dict[str, Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = 
 }
 
 
-def resolve_loss_fn(
-    name: str,
-) -> "Callable[[torch.Tensor, torch.Tensor], torch.Tensor]":
-    """Resolves a loss function given its abbreviated name.
-
-    Args:
-        name: ``"kl_div"`` for KL-divergence, ``"rkl"`` for reverse KL-divergence,
-            ``"jsd"`` for Jensen-Shannon divergence, ``"ce"`` for cross-entropy,
-            ``"tv"`` for total variation, ``"nla"`` for negative log-acceptance,
-            or ``"lk_hybrid"`` for the adaptive KL/TV blend.
-
-    Returns:
-        The corresponding loss function.
-
-    Raises:
-        ValueError: If *name* is not a recognised loss function.
-    """
-    if name not in _LOSS_FN_MAP:
-        raise ValueError(
-            f"Unknown loss function '{name}'. "
-            f"Choose from: {sorted(_LOSS_FN_MAP.keys())}"
-        )
-    return _LOSS_FN_MAP[name]
-
-
 def resolve_loss_config(spec: str) -> LossConfig:
     """Parse a loss spec into ``{name: (loss_fn, weight)}``.
 
