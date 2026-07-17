@@ -6,18 +6,18 @@
 #   ./scripts/review-open-prs.sh --interactive     # live TUI (debugging)
 #
 # Run on a schedule (system cron):
-#   7 * * * * /workspace/speculators/scripts/review-open-prs.sh >> /workspace/speculators/pr-review.log 2>&1
+#   0 * * * * /workspace/speculators/scripts/review-open-prs.sh >> /workspace/speculators/pr-review.log 2>&1
 
 set -euo pipefail
 
 export HOME=/root
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 
-# Claude authenticates via Vertex AI — cron doesn't inherit these
+# Claude authenticates via Vertex AI -- cron doesn't inherit these
 export CLAUDE_CODE_USE_VERTEX="${CLAUDE_CODE_USE_VERTEX:-1}"
 export ANTHROPIC_VERTEX_PROJECT_ID="${ANTHROPIC_VERTEX_PROJECT_ID:-itpc-gcp-ai-eng-claude}"
 
-REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+export REPO_DIR="${REPO_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 cd "$REPO_DIR"
 
 # Re-exec from /tmp so git-reset doesn't delete the running script.
@@ -25,26 +25,43 @@ if [ "$(realpath "$0")" != "/tmp/review-open-prs-running.sh" ]; then
     cp "$(realpath "$0")" /tmp/review-open-prs-running.sh
     exec /tmp/review-open-prs-running.sh "$@"
 fi
-cd "$REPO_DIR"
-git fetch origin
-git reset --hard origin/main
-# Pre-merge fallback: restore skill from feature branch if not yet on main
-if [ ! -f .claude/skills/review-open-prs/SKILL.md ] || [ ! -f scripts/review-open-prs.sh ]; then
-    git checkout origin/feat/pr-review-cron-v2 -- .claude/skills/review-open-prs/ scripts/review-open-prs.sh 2>/dev/null || true
-fi
 
-# Claude blocks --dangerously-skip-permissions for root. The devenv entrypoint
-# creates a claude-runner user with the right groups — just re-exec as it.
+# Git sync and user switch -- only as root (claude-runner re-enters below).
 if [ "$(id -u)" -eq 0 ]; then
+    git fetch origin
+    git reset --hard origin/main
+    # Pre-merge fallback: restore skill from feature branch if not yet on main
+    if [ ! -f .claude/skills/review-open-prs/SKILL.md ] || [ ! -f scripts/review-open-prs.sh ]; then
+        git checkout origin/feat/pr-review-cron-v2 -- .claude/skills/review-open-prs/ scripts/review-open-prs.sh 2>/dev/null || true
+    fi
+
+    # Claude blocks --dangerously-skip-permissions for root -- re-exec as claude-runner.
     WS_GID=$(stat -c '%g' /workspace)
     chmod -R g+rwX .claude 2>/dev/null || true
     chmod g+r /root/.claude/.credentials.json 2>/dev/null || true
     chown root:"$WS_GID" /root/.claude/.credentials.json 2>/dev/null || true
-    # GCP/Vertex auth files
     chmod g+r /root/.config/gcloud/credentials.db /root/.config/gcloud/application_default_credentials.json 2>/dev/null || true
     chown root:"$WS_GID" /root/.config/gcloud/credentials.db /root/.config/gcloud/application_default_credentials.json 2>/dev/null || true
     chmod -R g+rwX /root/.config/gcloud/logs 2>/dev/null || true
+    # Bot token + session-env dir need to be accessible by claude-runner
+    chmod g+rx /root/.secrets 2>/dev/null || true
+    chmod g+r /root/.secrets/gh-bot-token 2>/dev/null || true
+    chown root:"$WS_GID" /root/.secrets/gh-bot-token 2>/dev/null || true
+    mkdir -p /root/.claude/session-env
+    chmod -R g+rwX /root/.claude/session-env 2>/dev/null || true
+    chmod -R g+rwX .git 2>/dev/null || true
     exec runuser -u claude-runner -- "$0" "$@"
+fi
+
+# Post reviews as a bot account instead of the user's personal GitHub identity
+if [ -f /root/.secrets/gh-bot-token ]; then
+    export GH_TOKEN
+    GH_TOKEN="$(cat /root/.secrets/gh-bot-token)"
+    GH_USER="$(gh api user --jq .login 2>/dev/null || echo 'unknown')"
+    echo "GitHub auth: bot token (posting as $GH_USER)"
+else
+    GH_USER="$(gh api user --jq .login 2>/dev/null || echo 'unknown')"
+    echo "GitHub auth: default gh auth (posting as $GH_USER)"
 fi
 
 INTERACTIVE=false
