@@ -180,7 +180,6 @@ class FileBackend(HiddenStatesBackend):
     def from_train_args(
         args: argparse.Namespace,
         data_path: str,
-        **_kwargs: Any,
     ) -> FileTransfer:
         hs_path = (
             Path(args.hidden_states_path)

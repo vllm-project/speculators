@@ -267,9 +267,6 @@ select = [
 
 "hs_connectors/**/*.py" = [
     "INP001", # separate package
-    "S101", # asserts acceptable
-    "BLE001", # catching Exception acceptable
-    "SIM105", # contextlib.suppress not needed
     "PTH", # os.path acceptable
 ]
 

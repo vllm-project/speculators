@@ -626,7 +626,7 @@ def main(args: argparse.Namespace):  # noqa: C901
     }
     preprocess = preprocess_fns.get(args.speculator_type)
 
-    backend_registry = HiddenStatesBackend.registry or {}
+    backend_registry = HiddenStatesBackend.registry
     backend_cls = backend_registry[args.hidden_states_backend]
     transfer = backend_cls.from_train_args(args, args.data_path)
 
@@ -825,7 +825,7 @@ def parse_args():
             "(token_freq.pt), and hidden states (default: ./output)"
         ),
     )
-    backend_registry = HiddenStatesBackend.registry or {}
+    backend_registry = HiddenStatesBackend.registry
     parser.add_argument(
         "--hidden-states-backend",
         choices=list(backend_registry.keys()),
