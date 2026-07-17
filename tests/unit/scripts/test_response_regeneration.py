@@ -496,6 +496,7 @@ def _run_worker(responses, tmp_path, stem):
             "http://x/v1/chat/completions",
             _NullProgress(),
             stats,
+            _detok,
         )
         return stats
 
@@ -581,6 +582,11 @@ def _response(
     }
 
 
+def _detok(token_ids):
+    """Test stand-in for ``tokenizer.decode`` -- deterministic and readable."""
+    return " ".join(str(t) for t in token_ids)
+
+
 def _fake_post(responses):
     """A post_fn returning canned responses in order and recording sent payloads."""
     sent = []
@@ -606,6 +612,7 @@ def _regen(
             endpoint=endpoint,
             sampling_params=sampling_params or {},
             samples=samples,
+            detokenize=_detok,
         )
     )
     return samples, truncated, sent
@@ -698,7 +705,7 @@ def test_sample_from_response_rejects_empty_and_missing_token_ids():
     with pytest.raises(ValueError, match="empty assistant generation"):
         regen._sample_from_response(
             _response(prompt_token_ids=[1], token_ids=[2], content=None),
-            prefix=[],
+            detokenize=_detok,
             conv_id="c",
             sample_index=0,
             idx=0,
@@ -713,7 +720,7 @@ def test_sample_from_response_rejects_empty_and_missing_token_ids():
     with pytest.raises(ValueError, match="return_token_ids"):
         regen._sample_from_response(
             bad,
-            prefix=[],
+            detokenize=_detok,
             conv_id="c",
             sample_index=0,
             idx=0,
