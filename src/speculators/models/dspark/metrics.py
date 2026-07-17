@@ -63,6 +63,8 @@ def compute_metrics(
     device = logits.device
     seq_len = logits.shape[1]
     pos_idx = (torch.arange(seq_len, device=device) % block_size).unsqueeze(0)
+    # Start position: 0 if sample_from_anchor (DSpark) else 1 (DFlash anchor).
+    start_pos = 0 if sample_from_anchor else 1
     if per_position_loss_weight == "dpace":
         decay_fn = partial(
             dpace_loss_decay,
@@ -86,8 +88,11 @@ def compute_metrics(
         # is the anchor), shared by the accept-length and calibration metrics.
         num_blocks = seq_len // block_size
         accept_blocks = accept_rate.view(num_blocks, block_size)
-        draft_mask = loss_mask.to(accept_rate.dtype).view(num_blocks, block_size)[:, 1:]
-        accept_prefix = (accept_blocks[:, 1:] * draft_mask).cumprod(dim=-1)
+        draft_mask = (
+            loss_mask.to(accept_rate.dtype)
+            .view(num_blocks, block_size)[:, start_pos:]
+        )
+        accept_prefix = (accept_blocks[:, start_pos:] * draft_mask).cumprod(dim=-1)
 
     metrics: dict[str, Any] = {}
     if confidence_logits is not None:
@@ -114,7 +119,7 @@ def compute_metrics(
             # Calibration of the cumulative acceptance product, which is what
             # dynamic draft-length thresholding consumes (signed pred - target).
             conf_prefix = (
-                conf_prob.view(num_blocks, block_size)[:, 1:] * draft_mask
+                conf_prob.view(num_blocks, block_size)[:, start_pos:] * draft_mask
             ).cumprod(dim=-1)
             metrics["confidence_cumprod_bias_sum"] = (
                 (conf_prefix - accept_prefix) * draft_mask
@@ -143,8 +148,6 @@ def compute_metrics(
         metrics["accept_len_total"] = block_valid.sum().clamp_min(1.0)
 
     # Per-position greedy accuracy
-    # Start position: 0 if sample_from_anchor else 1 (skip anchor)
-    start_pos = 0 if sample_from_anchor else 1
     pred_ids = torch.argmax(logits, dim=-1)
     target_ids = torch.argmax(targets, dim=-1)
     correct_per_pos, total_per_pos = compute_accuracy_multi_step(
