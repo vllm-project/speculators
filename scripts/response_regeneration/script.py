@@ -630,7 +630,7 @@ async def worker(
     err_fh,
     endpoint: str,
     progress,
-    stats: dict[str, int],
+    stats: dict[str, Any],
 ):
     """Pull conversations off the queue and regenerate them into boundary rows.
 

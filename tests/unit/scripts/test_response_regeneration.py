@@ -476,7 +476,8 @@ def _run_worker(responses, tmp_path, stem):
 
     async def scenario(out_fh, err_fh):
         queue: asyncio.Queue = asyncio.Queue()
-        await queue.put(_TWO_TURN_ITEM)
+        item = {**_TWO_TURN_ITEM, "enqueued_at": time.perf_counter()}
+        await queue.put(item)
         await queue.put(None)
         stats = {
             "ok": 0,
@@ -521,6 +522,9 @@ def test_worker_row_identity_and_all_or_nothing_writes(tmp_path):
     assert stats["ok"] == 1
     assert stats["errors"] == 0
     assert stats["truncated"] == 0
+    assert stats["requests"] > 0
+    assert stats["total_request_s"] > 0.0
+    assert stats["total_queue_wait_s"] >= 0.0
     rows = [json.loads(line) for line in out_path.read_text().splitlines()]
     assert [r["id"] for r in rows] == ["conv-abc_gen0", "conv-abc_gen1"]
     assert {r["primary_id"] for r in rows} == {"conv-abc"}
