@@ -17,13 +17,23 @@ from contextlib import suppress
 from dataclasses import asdict, dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urlsplit
 
-import psutil
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from speculators.benchmarks.gpu_monitor import (
+    GpuMonitor as NvmlGpuMonitor,
+)
+from speculators.benchmarks.gpu_monitor import (
+    GpuRoleAssignment,
+    iter_gpu_samples,
+    summarize_gpu_window,
+)
 from speculators.data_generation.artifact_cache import HiddenStateArtifactCache
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 class EvidenceError(RuntimeError):
@@ -161,6 +171,7 @@ class ScenarioSpec(_StrictModel):
     minimum_steady_completions_per_consumer: int = Field(default=5, ge=1)
     warmup_steps_per_consumer: int = Field(default=10, ge=0)
     minimum_steady_steps_per_consumer: int = Field(default=10, ge=1)
+    measurement_steps_per_consumer: int | None = Field(default=None, ge=1)
     minimum_shared_samples: int = Field(default=5, ge=1)
     expected_service_completions_per_shared_sample: int = Field(ge=1)
 
@@ -194,7 +205,7 @@ class BenchmarkConfig(_StrictModel):
     scenarios: list[ScenarioSpec] = Field(min_length=2, max_length=2)
     allowed_gpus: list[int] = Field(min_length=2)
     proxy_timeout_seconds: float = Field(default=180.0, gt=0)
-    memory_sample_interval_seconds: float = Field(default=0.25, gt=0)
+    memory_sample_interval_seconds: float = Field(default=0.5, gt=0)
 
     @field_validator("allowed_gpus")
     @classmethod
@@ -731,13 +742,24 @@ _STEP_TIME_PATTERN = re.compile(
 )
 
 
+@dataclass(frozen=True)
+class ConsumerStepEvent:
+    completed_at_monotonic_ns: int
+    step_ms: float
+
+
 def _percentile(values: list[float], percentile: float) -> float:
     index = max(0, min(len(values) - 1, int(len(values) * percentile + 0.999999) - 1))
     return sorted(values)[index]
 
 
 def analyze_consumer_steps(
-    log_path: Path, warmup_steps: int, minimum_steady_steps: int
+    log_path: Path,
+    warmup_steps: int,
+    minimum_steady_steps: int,
+    *,
+    events: list[ConsumerStepEvent] | None = None,
+    measurement_steps: int | None = None,
 ) -> dict[str, Any]:
     """Extract native trainer step timings and separate warmup from steady state."""
     if not log_path.is_file():
@@ -750,20 +772,58 @@ def analyze_consumer_steps(
             "step_ms_mean": None,
             "step_ms_p50": None,
             "step_ms_p95": None,
+            "steady_started_at_monotonic_ns": None,
+            "steady_finished_at_monotonic_ns": None,
+            "steady_duration_seconds": None,
+            "steady_steps_per_second": None,
         }
-    values = []
-    with log_path.open(errors="replace") as log_file:
-        for line in log_file:
-            values.extend(
-                float(match.group("value"))
-                for match in _STEP_TIME_PATTERN.finditer(line)
-            )
-    steady = values[warmup_steps:]
-    reasons = []
-    if len(steady) < minimum_steady_steps:
-        reasons.append(
-            f"only {len(steady)} steady step timing(s); need {minimum_steady_steps}"
+    if events is None:
+        values = []
+        with log_path.open(errors="replace") as log_file:
+            for line in log_file:
+                values.extend(
+                    float(match.group("value"))
+                    for match in _STEP_TIME_PATTERN.finditer(line)
+                )
+        ordered_events: list[ConsumerStepEvent] = []
+    else:
+        ordered_events = sorted(
+            events, key=lambda value: value.completed_at_monotonic_ns
         )
+        values = [value.step_ms for value in ordered_events]
+    available_steady = values[warmup_steps:]
+    steady = (
+        available_steady[:measurement_steps]
+        if measurement_steps is not None
+        else available_steady
+    )
+    reasons = []
+    if len(available_steady) < minimum_steady_steps:
+        reasons.append(
+            f"only {len(available_steady)} steady step timing(s); "
+            f"need {minimum_steady_steps}"
+        )
+    if measurement_steps is not None and len(steady) < measurement_steps:
+        reasons.append(
+            f"only {len(steady)} measured step timing(s); need {measurement_steps}"
+        )
+    started_at = None
+    finished_at = None
+    duration = None
+    if ordered_events and steady:
+        measured_end_index = warmup_steps + len(steady) - 1
+        finished_at = ordered_events[measured_end_index].completed_at_monotonic_ns
+        if warmup_steps:
+            started_at = ordered_events[warmup_steps - 1].completed_at_monotonic_ns
+        else:
+            started_at = max(
+                0,
+                ordered_events[0].completed_at_monotonic_ns
+                - int(ordered_events[0].step_ms * 1_000_000),
+            )
+        duration = (finished_at - started_at) / 1e9
+        if duration <= 0:
+            reasons.append("consumer steady-state duration is not positive")
     return {
         "valid": not reasons,
         "invalid_reasons": reasons,
@@ -773,6 +833,12 @@ def analyze_consumer_steps(
         "step_ms_mean": sum(steady) / len(steady) if steady else None,
         "step_ms_p50": _percentile(steady, 0.50) if steady else None,
         "step_ms_p95": _percentile(steady, 0.95) if steady else None,
+        "steady_started_at_monotonic_ns": started_at,
+        "steady_finished_at_monotonic_ns": finished_at,
+        "steady_duration_seconds": duration,
+        "steady_steps_per_second": (
+            len(steady) / duration if duration is not None and duration > 0 else None
+        ),
     }
 
 
@@ -835,119 +901,6 @@ def _gpu_snapshot(target_gpus: set[int]) -> _GpuSample:
     )
 
 
-class GpuMonitor:
-    def __init__(self, target_gpus: set[int], interval_seconds: float) -> None:
-        self._target_gpus = target_gpus
-        self._interval = interval_seconds
-        self._roots: dict[int, int] = {}
-        self._known_pids: dict[int, set[int]] = defaultdict(set)
-        self._samples: list[_GpuSample] = []
-        self._errors: list[str] = []
-        self._lock = threading.Lock()
-        self._stop = threading.Event()
-        self._started = False
-        self._thread = threading.Thread(
-            target=self._run, name="benchmark-gpu-monitor", daemon=True
-        )
-
-    def require_idle(self) -> dict[int, int]:
-        sample = _gpu_snapshot(self._target_gpus)
-        occupied = {gpu: pids for gpu, pids in sample.compute_pids.items() if pids}
-        if occupied:
-            raise EvidenceError(
-                f"Target GPUs already have compute processes: {occupied}"
-            )
-        return sample.total_memory_mib
-
-    def set_role_process(self, gpu: int, pid: int) -> None:
-        with self._lock:
-            self._roots[gpu] = pid
-            self._known_pids[gpu].add(pid)
-
-    def start(self) -> None:
-        self._started = True
-        self._thread.start()
-
-    def stop(self) -> None:
-        if not self._started:
-            return
-        self._stop.set()
-        self._thread.join(timeout=max(5.0, self._interval * 4))
-
-    def _allowed_pids(self, gpu: int) -> set[int]:
-        with self._lock:
-            root = self._roots.get(gpu)
-            known = set(self._known_pids[gpu])
-        if root is None:
-            return known
-        try:
-            descendants = {child.pid for child in psutil.Process(root).children(True)}
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            descendants = set()
-        allowed = known | {root} | descendants
-        with self._lock:
-            self._known_pids[gpu].update(allowed)
-        return allowed
-
-    def _run(self) -> None:
-        while not self._stop.wait(self._interval):
-            try:
-                sample = _gpu_snapshot(self._target_gpus)
-                for gpu, pids in sample.compute_pids.items():
-                    if len(pids) > 1:
-                        self._errors.append(
-                            f"GPU {gpu} has {len(pids)} CUDA compute processes"
-                        )
-                    foreign = set(pids) - self._allowed_pids(gpu)
-                    if foreign:
-                        self._errors.append(
-                            f"GPU {gpu} has foreign compute PIDs {sorted(foreign)}"
-                        )
-                self._samples.append(sample)
-            except Exception as error:  # noqa: BLE001
-                self._errors.append(f"{type(error).__name__}: {error}")
-
-    def summarize(
-        self, started_at: float, finished_at: float, baseline: dict[int, int]
-    ) -> dict[str, Any]:
-        samples = [
-            sample
-            for sample in self._samples
-            if started_at <= sample.captured_at <= finished_at
-        ]
-        per_gpu: dict[str, Any] = {}
-        for gpu in sorted(self._target_gpus):
-            role_values = [sample.role_memory_mib[gpu] for sample in samples]
-            total_values = [sample.total_memory_mib[gpu] for sample in samples]
-            observed = any(sample.compute_pids.get(gpu) for sample in samples)
-            per_gpu[str(gpu)] = {
-                "baseline_memory_mib": baseline.get(gpu),
-                "peak_role_memory_mib": max(role_values) if role_values else None,
-                "peak_total_memory_mib": max(total_values) if total_values else None,
-                "max_compute_processes": max(
-                    (len(sample.compute_pids.get(gpu, [])) for sample in samples),
-                    default=0,
-                ),
-                "compute_process_observed": observed,
-            }
-        errors = list(dict.fromkeys(self._errors))
-        if not samples:
-            errors.append("No memory samples fall inside the steady-state window")
-        missing = [
-            gpu
-            for gpu, value in per_gpu.items()
-            if not value["compute_process_observed"]
-        ]
-        if missing:
-            errors.append(f"No compute process observed on GPU(s) {missing}")
-        return {
-            "reliable": not errors,
-            "invalid_reasons": errors,
-            "sample_count": len(samples),
-            "per_gpu": per_gpu,
-        }
-
-
 def _render(values: list[str], replacements: dict[str, str]) -> list[str]:
     rendered: list[str] = []
     for original in values:
@@ -965,6 +918,7 @@ class _ManagedProcess:
         env: dict[str, str],
         gpu: int,
         log_path: Path,
+        line_callback: Callable[[int, str], None] | None = None,
     ) -> None:
         process_env = os.environ.copy()
         for name in _DISTRIBUTED_ENV:
@@ -972,19 +926,56 @@ class _ManagedProcess:
         process_env.update(env)
         process_env[_GPU_ENV] = str(gpu)
         self._log = log_path.open("w", encoding="utf-8")
+        self._line_callback = line_callback
+        self._closed = False
+        self._reader_error: str | None = None
         self.started_at = time.monotonic()
         self.finished_at: float | None = None
         self.process = subprocess.Popen(  # noqa: S603
             command,
             env=process_env,
-            stdout=self._log,
+            stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             start_new_session=True,
             text=True,
+            bufsize=1,
         )
+        self._reader = threading.Thread(
+            target=self._pump_output,
+            name=f"benchmark-log-{self.process.pid}",
+            daemon=True,
+        )
+        self._reader.start()
+
+    def _pump_output(self) -> None:
+        stdout = self.process.stdout
+        if stdout is None:
+            self._reader_error = "subprocess stdout pipe is unavailable"
+            return
+        try:
+            for line in stdout:
+                self._log.write(line)
+                self._log.flush()
+                if self._line_callback is not None:
+                    self._line_callback(time.monotonic_ns(), line)
+        except Exception as error:  # noqa: BLE001
+            self._reader_error = f"{type(error).__name__}: {error}"
+        finally:
+            stdout.close()
+
+    @property
+    def reader_error(self) -> str | None:
+        return self._reader_error
 
     def close_log(self) -> None:
+        if self._closed:
+            return
+        self._reader.join(timeout=5)
+        if self._reader.is_alive():
+            self._reader_error = self._reader_error or "log reader did not stop"
+        self._log.flush()
         self._log.close()
+        self._closed = True
 
     def terminate(self, grace_seconds: float = 20.0) -> None:
         if self.process.poll() is not None:
@@ -1031,9 +1022,33 @@ def _run_scenario(  # noqa: C901
         config.producer.gpu,
         *(consumer.gpu for consumer in scenario.consumers),
     }
-    monitor = GpuMonitor(target_gpus, config.memory_sample_interval_seconds)
+    assignments = [
+        GpuRoleAssignment(config.producer.gpu, "producer", "producer"),
+        *(
+            GpuRoleAssignment(
+                consumer.gpu,
+                f"consumer:{consumer.consumer_id}",
+                f"consumer:{consumer.consumer_id}",
+            )
+            for consumer in scenario.consumers
+        ),
+    ]
+    monitor = NvmlGpuMonitor(
+        assignments,
+        scenario_dir / "gpu_samples.jsonl",
+        scenario_dir / "gpu_summary.json",
+        poll_seconds=config.memory_sample_interval_seconds,
+    )
+    monitor_started = False
+    monitor_summary: dict[str, Any] = {
+        "status": "not-started",
+        "errors": [],
+        "ownership_violations": [],
+    }
     baseline: dict[int, int] = {}
     ledger = AccountingLedger()
+    step_events: dict[str, list[ConsumerStepEvent]] = defaultdict(list)
+    step_events_lock = threading.Lock()
     producer: _ManagedProcess | None = None
     consumers: list[_ManagedProcess] = []
     proxies: list[AccountingProxy] = []
@@ -1053,7 +1068,13 @@ def _run_scenario(  # noqa: C901
     }
     Path(producer_replacements["output_dir"]).mkdir()
     try:
-        baseline = monitor.require_idle()
+        preflight = _gpu_snapshot(target_gpus)
+        occupied = {gpu: pids for gpu, pids in preflight.compute_pids.items() if pids}
+        if occupied:
+            raise EvidenceError(
+                f"Target GPUs already have compute processes: {occupied}"
+            )
+        baseline = preflight.total_memory_mib
         producer = _ManagedProcess(
             _render(config.producer.command, producer_replacements),
             {
@@ -1063,7 +1084,6 @@ def _run_scenario(  # noqa: C901
             config.producer.gpu,
             scenario_dir / "producer.log",
         )
-        monitor.set_role_process(config.producer.gpu, producer.process.pid)
         _wait_for_producer(
             config.producer.endpoint,
             producer.process,
@@ -1081,6 +1101,7 @@ def _run_scenario(  # noqa: C901
             proxies.append(proxy)
 
         monitor.start()
+        monitor_started = True
         started_at = time.monotonic()
         for consumer, proxy in zip(scenario.consumers, proxies, strict=True):
             consumer_dir = scenario_dir / consumer.consumer_id
@@ -1092,6 +1113,21 @@ def _run_scenario(  # noqa: C901
                 "scenario": scenario.kind,
                 "shared_artifacts_dir": str(shared_artifacts_dir),
             }
+
+            def capture_step(
+                timestamp_ns: int,
+                line: str,
+                consumer_id: str = consumer.consumer_id,
+            ) -> None:
+                matches = list(_STEP_TIME_PATTERN.finditer(line))
+                if not matches:
+                    return
+                with step_events_lock:
+                    step_events[consumer_id].extend(
+                        ConsumerStepEvent(timestamp_ns, float(match.group("value")))
+                        for match in matches
+                    )
+
             process = _ManagedProcess(
                 _render(consumer.command, replacements),
                 {
@@ -1103,9 +1139,9 @@ def _run_scenario(  # noqa: C901
                 },
                 consumer.gpu,
                 scenario_dir / f"{consumer.consumer_id}.log",
+                capture_step,
             )
             consumers.append(process)
-            monitor.set_role_process(consumer.gpu, process.process.pid)
 
         deadline = started_at + scenario.timeout_seconds
         for consumer, process in zip(scenario.consumers, consumers, strict=True):
@@ -1133,13 +1169,27 @@ def _run_scenario(  # noqa: C901
         runtime_errors.append(f"{type(error).__name__}: {error}")
         finished_at = time.monotonic()
     finally:
-        monitor.stop()
+        if monitor_started:
+            try:
+                monitor_summary = monitor.stop()
+            except Exception as error:  # noqa: BLE001
+                runtime_errors.append(
+                    f"GPU monitor shutdown failed: {type(error).__name__}: {error}"
+                )
         for process in consumers:
             process.terminate()
+            if process.reader_error is not None:
+                runtime_errors.append(
+                    f"consumer log reader failed: {process.reader_error}"
+                )
         for proxy in proxies:
             proxy.close()
         if producer is not None:
             producer.terminate()
+            if producer.reader_error is not None:
+                runtime_errors.append(
+                    f"producer log reader failed: {producer.reader_error}"
+                )
 
     analysis = analyze_scenario(scenario, ledger.snapshot(), started_at, finished_at)
     cache_stats = None
@@ -1163,23 +1213,70 @@ def _run_scenario(  # noqa: C901
             scenario_dir / f"{consumer.consumer_id}.log",
             scenario.warmup_steps_per_consumer,
             scenario.minimum_steady_steps_per_consumer,
+            events=step_events[consumer.consumer_id],
+            measurement_steps=scenario.measurement_steps_per_consumer,
         )
         consumer_steps[consumer.consumer_id] = step_result
         runtime_errors.extend(
             f"{consumer.consumer_id}: {reason}"
             for reason in step_result["invalid_reasons"]
         )
-    steady = analysis["steady_state"]
-    memory = monitor.summarize(
-        steady["started_at_monotonic"],
-        steady["finished_at_monotonic"],
-        baseline,
-    )
+    consumer_starts = [
+        value["steady_started_at_monotonic_ns"]
+        for value in consumer_steps.values()
+        if value["steady_started_at_monotonic_ns"] is not None
+    ]
+    consumer_ends = [
+        value["steady_finished_at_monotonic_ns"]
+        for value in consumer_steps.values()
+        if value["steady_finished_at_monotonic_ns"] is not None
+    ]
+    gpu_window: dict[str, Any] = {
+        "valid": False,
+        "invalid_reasons": ["common consumer steady-state window is unavailable"],
+        "per_gpu": {},
+    }
+    if len(consumer_starts) == len(scenario.consumers) and len(consumer_ends) == len(
+        scenario.consumers
+    ):
+        overlap_start = max(consumer_starts)
+        overlap_end = min(consumer_ends)
+        try:
+            gpu_window = summarize_gpu_window(
+                iter_gpu_samples(monitor.sample_path),
+                assignments,
+                start_monotonic_ns=overlap_start,
+                end_monotonic_ns=overlap_end,
+            )
+        except Exception as error:  # noqa: BLE001
+            gpu_window = {
+                "valid": False,
+                "invalid_reasons": [
+                    f"GPU steady-window summary failed: {type(error).__name__}: {error}"
+                ],
+                "per_gpu": {},
+            }
+    memory = {
+        "reliable": gpu_window["valid"],
+        "invalid_reasons": list(gpu_window["invalid_reasons"]),
+        "per_gpu": {
+            gpu: {
+                "baseline_memory_mib": baseline.get(int(gpu)),
+                "peak_total_memory_mib": value["max_memory_used_mib"],
+                "peak_role_memory_mib": value["max_memory_used_mib"],
+                "max_compute_processes": value["max_compute_processes"],
+                "compute_process_observed": value["max_compute_processes"] > 0,
+            }
+            for gpu, value in gpu_window["per_gpu"].items()
+        },
+    }
     invalid_reasons = [
         *runtime_errors,
         *analysis["invalid_reasons"],
         *cache_accounting["invalid_reasons"],
         *memory["invalid_reasons"],
+        *monitor_summary.get("errors", []),
+        *monitor_summary.get("ownership_violations", []),
     ]
     return {
         "kind": scenario.kind,
@@ -1200,10 +1297,12 @@ def _run_scenario(  # noqa: C901
         ],
         "request_accounting": analysis["request_accounting"],
         "shared_artifact_cache": cache_accounting,
-        "steady_state": steady,
+        "steady_state": analysis["steady_state"],
         "consumer_step_times": consumer_steps,
         "makespan_seconds": max(finished_at - started_at, 0.0),
         "memory": memory,
+        "gpu_monitor": monitor_summary,
+        "gpu_steady_window": gpu_window,
     }
 
 
@@ -1216,12 +1315,21 @@ def _redacted_config(config: BenchmarkConfig) -> dict[str, Any]:
     return value
 
 
-def run_benchmark(config: BenchmarkConfig, output_dir: Path) -> dict[str, Any]:
-    """Run fresh-producer 1P1C and 1P3C scenarios and return one JSON report."""
+def run_benchmark(
+    config: BenchmarkConfig,
+    output_dir: Path,
+    scenario_kind: Literal["1p1c", "1p3c"] | None = None,
+) -> dict[str, Any]:
+    """Run selected fresh-producer scenarios and return one JSON report."""
     output_dir.mkdir(parents=True, exist_ok=False)
-    scenarios = [
-        _run_scenario(config, scenario, output_dir) for scenario in config.scenarios
+    selected = [
+        scenario
+        for scenario in config.scenarios
+        if scenario_kind is None or scenario.kind == scenario_kind
     ]
+    if not selected:
+        raise ValueError(f"Configured scenarios do not include {scenario_kind!r}")
+    scenarios = [_run_scenario(config, scenario, output_dir) for scenario in selected]
     versions = {}
     for package in ("speculators", "torch", "vllm"):
         try:
@@ -1232,6 +1340,7 @@ def run_benchmark(config: BenchmarkConfig, output_dir: Path) -> dict[str, Any]:
         "schema_version": 1,
         "valid": all(scenario["valid"] for scenario in scenarios),
         "config": _redacted_config(config),
+        "selected_scenarios": [scenario.kind for scenario in selected],
         "versions": versions,
         "scenarios": scenarios,
     }

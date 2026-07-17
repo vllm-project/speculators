@@ -15,6 +15,7 @@ import speculators.data_generation.artifact_cache as artifact_cache_module
 from speculators.data_generation.artifact_cache import (
     ArtifactLockTimeoutError,
     HiddenStateArtifactCache,
+    canonical_hidden_state_extraction_namespace,
     canonical_hidden_state_request_id,
 )
 from speculators.data_generation.offline import check_hidden_states
@@ -84,6 +85,21 @@ def test_canonical_request_id_is_stable_and_covers_semantics():
     )
     assert first != canonical_hidden_state_request_id(
         "other-model", {"input_ids": [1, 2, 3]}, namespace="layers:2,18,33"
+    )
+
+
+def test_extraction_namespace_fingerprints_layers_and_user_namespace():
+    first = canonical_hidden_state_extraction_namespace(
+        (2, 18, 33), user_namespace="revision-a"
+    )
+    assert first == canonical_hidden_state_extraction_namespace(
+        (2, 18, 33), user_namespace="revision-a"
+    )
+    assert first != canonical_hidden_state_extraction_namespace(
+        (2, 18, 36), user_namespace="revision-a"
+    )
+    assert first != canonical_hidden_state_extraction_namespace(
+        (2, 18, 33), user_namespace="revision-b"
     )
 
 

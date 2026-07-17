@@ -274,6 +274,11 @@ class ArrowDataset(BaseDataset):
         self.request_timeout = request_timeout
         self.max_retries = max_retries
         self.shared_artifacts_namespace = shared_artifacts_namespace
+        if shared_artifacts_path is not None and not shared_artifacts_namespace:
+            raise ValueError(
+                "shared_artifacts_namespace is required when shared artifacts "
+                "are enabled"
+            )
         self.artifact_cache = (
             HiddenStateArtifactCache(
                 shared_artifacts_path,

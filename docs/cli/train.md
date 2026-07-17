@@ -86,11 +86,15 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--shared-hidden-states-path`** (str, default: `None`) Optional filesystem cache that coalesces identical online hidden-state requests across independent trainers. All participating trainers must use the same path. This does not change `--hidden-states-path`, which remains the per-dataset indexed cache used by `--on-generate cache`.
 
-- **`--shared-hidden-states-namespace`** (str, default: `None`) Optional request-identity namespace for the producer's extraction configuration. Use the same value for trainers sharing artifacts and a different value when target layer IDs or other extraction semantics differ.
+- **`--shared-hidden-states-namespace`** (str, default: `None`) Optional additional request-identity namespace for producer extraction settings not represented by the model or target layer IDs. Target layer IDs are fingerprinted automatically. Use the same value for trainers sharing artifacts and a different value for any other extraction semantic that changes the resulting tensors.
 
 - **`--shared-hidden-states-ttl`** (float, default: `3600.0`) Seconds to retain shared artifacts before regenerating them. Set to `0` to disable expiration.
 
 - **`--shared-hidden-states-lock-timeout`** (float, default: `300.0`) Maximum seconds to wait while another trainer generates and atomically publishes the same artifact.
+
+  The shared cache is a filesystem data plane, not Mooncake or GPU-direct transport. Its directory must provide reliable POSIX `flock`, same-filesystem atomic rename, and directory `fsync` semantics to every trainer. Do not assume an arbitrary NFS mount is safe unless those guarantees have been verified.
+
+  This cache is not a consumer-centered bounded sliding window. Setting `--shared-hidden-states-ttl=0` retains one artifact per unique request. With a finite TTL, expired entries are reclaimed when a dataset opens the cache or when the same key is requested again, so a single pass over new samples can still grow on-disk usage. Provision the filesystem and set the TTL according to the maximum expected lag between consumers.
 
 - **`--legacy-data`** (flag) **DEPRECATED.** Use the old data format which stores hidden states alongside token_ids.
 

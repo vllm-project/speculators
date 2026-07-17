@@ -64,6 +64,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+nvml = ["nvidia-ml-py>=12.0.0"]
 dev = [
     # build
     "build>=1.5.0",

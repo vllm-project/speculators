@@ -1,5 +1,7 @@
 """Tests for CLI arguments."""
 
+import pytest
+
 from scripts.train import parse_args
 from speculators.models.dflash.core import DFlashDraftModel
 from speculators.models.dspark.core import DSparkDraftModel
@@ -43,6 +45,27 @@ def test_shared_hidden_state_cache_arguments(monkeypatch):
     assert args.shared_hidden_states_namespace == "layers:2,18,33"
     assert args.shared_hidden_states_ttl == 0
     assert args.shared_hidden_states_lock_timeout == 45
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        ["--shared-hidden-states-path", ""],
+        ["--shared-hidden-states-namespace", "namespace-only"],
+        ["--shared-hidden-states-path", "cache", "--legacy-data"],
+        [
+            "--shared-hidden-states-path",
+            "cache",
+            "--shared-hidden-states-namespace",
+            "",
+        ],
+        ["--shared-hidden-states-ttl", "-1"],
+        ["--shared-hidden-states-lock-timeout", "0"],
+    ],
+)
+def test_shared_hidden_state_cache_rejects_invalid_combinations(monkeypatch, extra):
+    with pytest.raises(SystemExit, match="2"):
+        _parse(monkeypatch, extra)
 
 
 # ---------------------------------------------------------------------------

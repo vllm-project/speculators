@@ -38,6 +38,35 @@ _COUNTERS = (
 )
 
 
+def canonical_hidden_state_extraction_namespace(
+    target_layer_ids: list[int] | tuple[int, ...],
+    *,
+    user_namespace: str | None = None,
+) -> str:
+    """Fingerprint the producer configuration that changes artifact semantics."""
+
+    if (
+        not target_layer_ids
+        or not all(
+            isinstance(layer_id, int) and not isinstance(layer_id, bool)
+            for layer_id in target_layer_ids
+        )
+        or len(set(target_layer_ids)) != len(target_layer_ids)
+    ):
+        raise ValueError("target_layer_ids must be non-empty unique integers")
+    if user_namespace is not None and not user_namespace:
+        raise ValueError("user_namespace must be non-empty when provided")
+    identity = {
+        "schema_version": 1,
+        "target_layer_ids": list(target_layer_ids),
+    }
+    if user_namespace is not None:
+        identity["user_namespace"] = user_namespace
+    return json.dumps(
+        identity, ensure_ascii=True, separators=(",", ":"), sort_keys=True
+    )
+
+
 class ArtifactCacheError(RuntimeError):
     """Base error raised by shared hidden-state artifact caching."""
 

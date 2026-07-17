@@ -8,11 +8,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 from pydantic import ValidationError
 
+import speculators.benchmarks.independent_consumers as benchmark_module
 from speculators.benchmarks.independent_consumers import (
     AccountingLedger,
     AccountingProxy,
     BenchmarkConfig,
     ConsumerSpec,
+    ConsumerStepEvent,
     ProducerSpec,
     RequestEvent,
     ScenarioSpec,
@@ -107,6 +109,24 @@ def test_config_requires_serial_one_then_three_consumers():
             scenarios=list(reversed(config.scenarios)),
             allowed_gpus=config.allowed_gpus,
         )
+
+
+def test_run_benchmark_can_select_only_1p3c(tmp_path, monkeypatch):
+    observed = []
+
+    def fake_run_scenario(_config, scenario, _output_dir):
+        observed.append(scenario.kind)
+        return {"valid": True, "kind": scenario.kind}
+
+    monkeypatch.setattr(benchmark_module, "_run_scenario", fake_run_scenario)
+
+    report = benchmark_module.run_benchmark(
+        _config(), tmp_path / "run", scenario_kind="1p3c"
+    )
+
+    assert observed == ["1p3c"]
+    assert report["selected_scenarios"] == ["1p3c"]
+    assert [scenario["kind"] for scenario in report["scenarios"]] == ["1p3c"]
 
 
 @pytest.mark.parametrize(
@@ -389,6 +409,32 @@ def test_consumer_step_analysis_excludes_warmup_and_reports_percentiles(tmp_path
     assert result["step_ms_mean"] == 25.0
     assert result["step_ms_p50"] == 20.0
     assert result["step_ms_p95"] == 40.0
+
+
+def test_consumer_step_analysis_reports_exact_monotonic_measurement_window(tmp_path):
+    log_path = tmp_path / "consumer.log"
+    log_path.write_text("captured by callback\n")
+    events = [
+        ConsumerStepEvent(1_000_000_000, 100.0),
+        ConsumerStepEvent(2_000_000_000, 20.0),
+        ConsumerStepEvent(3_000_000_000, 30.0),
+        ConsumerStepEvent(4_000_000_000, 40.0),
+    ]
+
+    result = analyze_consumer_steps(
+        log_path,
+        warmup_steps=1,
+        minimum_steady_steps=2,
+        events=events,
+        measurement_steps=2,
+    )
+
+    assert result["valid"]
+    assert result["steady_steps"] == 2
+    assert result["steady_started_at_monotonic_ns"] == 1_000_000_000
+    assert result["steady_finished_at_monotonic_ns"] == 3_000_000_000
+    assert result["steady_duration_seconds"] == 2.0
+    assert result["steady_steps_per_second"] == 1.0
 
 
 def test_consumer_step_analysis_fails_closed_on_missing_log(tmp_path):

@@ -24,6 +24,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--validate-only", action="store_true", help="Validate config without launching"
     )
+    parser.add_argument(
+        "--scenario",
+        choices=("1p1c", "1p3c"),
+        help="Run only this scenario; by default both run serially",
+    )
     return parser.parse_args()
 
 
@@ -32,7 +37,7 @@ def main() -> int:
     config = load_config(args.config)
     if args.validate_only:
         return 0
-    report = run_benchmark(config, args.run_directory)
+    report = run_benchmark(config, args.run_directory, scenario_kind=args.scenario)
     write_report(report, args.report)
     return 0 if report["valid"] else 1
 

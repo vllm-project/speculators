@@ -48,10 +48,24 @@ def _arrow_dataset(
         on_missing="generate",
         on_generate=on_generate,
         shared_artifacts_path=shared_path,
+        shared_artifacts_namespace=("layers:2,18,33" if shared_path else None),
         shared_artifacts_ttl_seconds=None,
     )
     dataset.client = object()
     return dataset
+
+
+def test_shared_dataset_requires_identity_namespace(tmp_path):
+    data_path = tmp_path / "data"
+    _write_dataset(data_path)
+
+    with pytest.raises(ValueError, match="shared_artifacts_namespace is required"):
+        ArrowDataset(
+            max_len=128,
+            datapath=data_path,
+            model="model",
+            shared_artifacts_path=tmp_path / "shared",
+        )
 
 
 def _successful_generator(service_path: Path, calls: list[Path]):
