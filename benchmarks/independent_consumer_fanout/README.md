@@ -56,3 +56,6 @@ completion map identify which consumer owned each service miss. They do not repr
 logical trainer progress: cache logical-request totals and each independent consumer's
 `consumer_step_times` provide that evidence. The report labels both maps with
 `service_request_owner` to make this distinction explicit.
+Despite their names, `warmup_completions_per_consumer` and
+`minimum_steady_completions_per_consumer` are service-wide publication thresholds in
+this mode; the corresponding step fields apply separately to every consumer.

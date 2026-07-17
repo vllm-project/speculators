@@ -58,6 +58,7 @@ def _successful_generator(service_path: Path, calls: list[Path]):
     def generate(*_args, **_kwargs):
         path = service_path / f"request-{len(calls)}.safetensors"
         save_file(_hidden_states(), path)
+        (path.parent / f"{path.name}.lock").touch()
         calls.append(path)
         return str(path)
 
@@ -97,6 +98,7 @@ def test_shared_dataset_requests_publish_once_and_delete_service_temporary(
     assert torch.equal(first_data["hidden_states"], second_data["hidden_states"])
     assert len(calls) == 1
     assert not calls[0].exists()
+    assert not (calls[0].parent / f"{calls[0].name}.lock").exists()
     assert first.artifact_cache is not None
     stats = first.artifact_cache.snapshot_stats()
     assert stats["logical_requests"] == 2
@@ -177,6 +179,52 @@ def test_shared_dataset_does_not_publish_partial_service_artifact(
     stats = dataset.artifact_cache.snapshot_stats()
     assert stats["generation_failures"] == 1
     assert stats["publishes"] == 1
+
+
+def test_shared_dataset_preserves_service_artifact_after_lock_timeout(
+    tmp_path, monkeypatch
+):
+    data_path = tmp_path / "data"
+    service_path = tmp_path / "service"
+    shared_path = tmp_path / "shared"
+    service_path.mkdir()
+    _write_dataset(data_path)
+    artifact_path = service_path / "request.safetensors"
+    artifact_path.write_bytes(b"partial")
+    lock_path = artifact_path.parent / f"{artifact_path.name}.lock"
+    lock_path.touch()
+
+    def time_out_waiting_for_lock(*_args, **_kwargs):
+        raise TimeoutError("active")
+
+    monkeypatch.setattr(
+        data_module,
+        "generate_hidden_states",
+        lambda *_args, **_kwargs: str(artifact_path),
+    )
+    monkeypatch.setattr(
+        data_module,
+        "wait_for_lock",
+        time_out_waiting_for_lock,
+    )
+    dataset = _arrow_dataset(
+        data_path,
+        shared_path=shared_path,
+        hidden_states_path=tmp_path / "index",
+    )
+
+    with pytest.warns(UserWarning, match="Failed to load/cache"):
+        assert dataset._maybe_generate_hs(0) is None
+
+    assert artifact_path.exists()
+    assert lock_path.exists()
+    assert list((shared_path / "artifacts").glob("*/*.safetensors")) == []
+    assert dataset.artifact_cache is not None
+    stats = dataset.artifact_cache.snapshot_stats()
+    assert stats["logical_requests"] == 1
+    assert stats["misses"] == 1
+    assert stats["generation_failures"] == 1
+    assert stats["publishes"] == 0
 
 
 def test_shared_dataset_preserves_on_generate_index_cache(tmp_path, monkeypatch):

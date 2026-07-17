@@ -383,6 +383,7 @@ class ArrowDataset(BaseDataset):
         self, dataset_item: dict, client_item: ClientItem
     ) -> dict[str, torch.Tensor]:
         handle: str | None = None
+        retrieved = False
         try:
             handle = generate_hidden_states(
                 self.client,  # type:ignore[arg-type]
@@ -392,12 +393,14 @@ class ArrowDataset(BaseDataset):
                 max_retries=self.max_retries,
             )
             loaded_hs = self.transfer.get_generated(handle)
+            retrieved = True
             if loaded_hs is None:
                 raise ValueError(f"Failed to load hidden states for handle {handle}")
             check_hidden_states(loaded_hs, dataset_item["input_ids"].tolist())
             return loaded_hs
         finally:
-            if handle is not None:
+            # A failed retrieval may still have an in-flight backend writer.
+            if handle is not None and retrieved:
                 self.transfer.delete(handle)
 
     def _get_raw_data(self, index):

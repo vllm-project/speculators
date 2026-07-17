@@ -294,21 +294,25 @@ def test_cleanup_removes_expired_artifact_and_stale_temp(tmp_path):
     result = cache.get_or_create(_request_id(), _tensors, _validate)
     stale_temp = result.path.parent / f".{_request_id()}.dead.tmp"
     stale_temp.write_bytes(b"partial")
+    stale_stats_temp = tmp_path / ".stats.123.dead.tmp"
+    stale_stats_temp.write_bytes(b"partial")
     old = time.time() - 10
     os.utime(result.path, (old, old))
     os.utime(stale_temp, (old, old))
+    os.utime(stale_stats_temp, (old, old))
 
     cleanup = cache.cleanup_stale(now=time.time())
 
     assert cleanup == {
         "expired_artifacts_removed": 1,
-        "stale_temps_removed": 1,
+        "stale_temps_removed": 2,
     }
     assert not result.path.exists()
     assert not stale_temp.exists()
+    assert not stale_stats_temp.exists()
     stats = cache.snapshot_stats()
     assert stats["expired_artifacts_removed"] == 1
-    assert stats["stale_temps_removed"] == 1
+    assert stats["stale_temps_removed"] == 2
 
 
 def test_lock_timeout_is_counted(tmp_path):

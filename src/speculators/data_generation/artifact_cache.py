@@ -373,7 +373,7 @@ class HiddenStateArtifactCache:
             raise
 
     def cleanup_stale(self, *, now: float | None = None) -> dict[str, int]:
-        """Remove expired artifacts and abandoned temporary publications."""
+        """Remove expired artifacts and abandoned temporary cache writes."""
         current_time = time.time() if now is None else now
         expired = 0
         stale_temps = 0
@@ -406,6 +406,19 @@ class HiddenStateArtifactCache:
                         stale_temps += 1
             except ArtifactLockTimeoutError:
                 continue
+
+        with self._stats_lock(fcntl.LOCK_EX):
+            for path in self.root.glob(".stats.*.tmp"):
+                try:
+                    if (
+                        path.exists()
+                        and current_time - path.stat().st_mtime
+                        >= self.stale_temp_seconds
+                    ):
+                        path.unlink(missing_ok=True)
+                        stale_temps += 1
+                except FileNotFoundError:
+                    pass
 
         if expired or stale_temps:
             self._record(
