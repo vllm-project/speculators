@@ -1,6 +1,7 @@
 import json
 import math
 from collections.abc import Callable
+from functools import cache
 
 import torch
 
@@ -386,38 +387,32 @@ def dpace_loss_decay(
 # Ascend NPU where mainline Triton has no backend. ``logits.is_cuda`` gates
 # CUDA/ROCm; the import is lazy so this module imports without Triton installed.
 
-_FUSED_KERNELS = None  # None = not yet tried; False = unavailable; else (tv, nla)
 
-
-def _fused_kernels():
-    """Lazily import and cache the fused TV/NLA kernels; ``None`` if unavailable."""
-    global _FUSED_KERNELS  # noqa: PLW0603
-    if _FUSED_KERNELS is None:
-        try:
-            from speculators.models.fused_tv_loss import (  # noqa: PLC0415
-                fused_nla_loss,
-                fused_tv_loss,
-            )
-
-            _FUSED_KERNELS = (fused_tv_loss, fused_nla_loss)
-        except ImportError:
-            _FUSED_KERNELS = False
-    return _FUSED_KERNELS or None
+@cache
+def _fused_kernel(name: str):
+    """Import and cache a fused kernel by name; ``None`` if Triton is unavailable."""
+    try:
+        from speculators.models import fused_tv_loss as mod  # noqa: PLC0415
+    except ImportError:
+        return None
+    return getattr(mod, name)
 
 
 def tv_loss_fused_or_eager(logits: torch.Tensor, targets: torch.Tensor):
     """TV loss: fused Triton on CUDA/ROCm (fp32), eager ``tv_loss`` on CPU/NPU."""
-    kernels = _fused_kernels()
-    if kernels is not None and logits.is_cuda:
-        return kernels[0](logits, targets)
+    if logits.is_cuda:
+        kernel = _fused_kernel("fused_tv_loss")
+        if kernel is not None:
+            return kernel(logits, targets)
     return tv_loss(logits, targets)
 
 
 def nla_loss_fused_or_eager(logits: torch.Tensor, targets: torch.Tensor):
     """NLA loss: fused Triton on CUDA/ROCm (fp32), eager on CPU/NPU."""
-    kernels = _fused_kernels()
-    if kernels is not None and logits.is_cuda:
-        return kernels[1](logits, targets)
+    if logits.is_cuda:
+        kernel = _fused_kernel("fused_nla_loss")
+        if kernel is not None:
+            return kernel(logits, targets)
     return neg_log_acceptance_loss(logits, targets)
 
 
