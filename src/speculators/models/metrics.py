@@ -282,19 +282,32 @@ def lk_hybrid_loss(
     return elementwise_loss  # noqa: RET504
 
 
-def dflash_loss_decay(pos_idx: torch.Tensor, gamma: float, **_kwargs):
+def dflash_loss_decay(
+    pos_idx: torch.Tensor, gamma: float, sample_from_anchor: bool = False, **_kwargs
+):
     """Compute DFlash-style exponential decay weights per position.
 
-    Position 0 gets weight 0, position 1 gets weight 1, and subsequent positions
-    decay as exp(-(pos - 1) / gamma).
+    When ``sample_from_anchor`` is False (DFlash), position 0 is the anchor and
+    gets weight 0; position 1 gets weight 1, and subsequent positions decay as
+    ``exp(-(pos - 1) / gamma)``.
+
+    When ``sample_from_anchor`` is True (DSpark), position 0 is the first real
+    prediction and gets weight 1; subsequent positions decay as
+    ``exp(-pos / gamma)``.
 
     Args:
         pos_idx: Position indices within each speculative block.
         gamma: Decay rate (higher = slower decay).
+        sample_from_anchor: Whether position 0 is a prediction (DSpark) or the
+            anchor input (DFlash).
 
     Returns:
         Decay multiplier tensor with same shape as pos_idx.
     """
+    if sample_from_anchor:
+        # DSpark: slot 0 predicts the token after the anchor, so decay from 0.
+        return torch.exp(-pos_idx / gamma)
+    # DFlash: slot 0 is the anchor (no prediction); decay from slot 1.
     # pos_idx = 0 1 2 3 0 1 2 3, block_size = 4
     decay_mult = torch.exp(-((pos_idx - 1).clamp(min=0)) / gamma)
     # decay_mult = e^-(0 0 1 2 0 0 1 2) / gamma
