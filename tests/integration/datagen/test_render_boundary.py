@@ -7,6 +7,8 @@ scaffold fallback (needs a template that pre-fills ``<think>``), the unstable
 guard (needs a template that rewrites history), and the client's error paths.
 """
 
+import time
+
 import pytest
 from datasets import Dataset as HFDataset
 
@@ -112,6 +114,23 @@ def test_render_conversation_client_error_not_retried(monkeypatch):
     with pytest.raises(InvalidResponseError):
         RC.render_conversation("http://x", [], add_generation_prompt=False)
     assert len(calls) == 1  # 4xx is deterministic: no retry
+
+
+@pytest.mark.parametrize("status", [408, 429])
+def test_render_conversation_transient_status_is_retried(monkeypatch, status):
+    calls = []
+
+    def post(*a, **k):
+        calls.append(1)
+        return _Resp(status, {}, "slow down")
+
+    monkeypatch.setattr(RC.httpx, "post", post)
+    monkeypatch.setattr(time, "sleep", lambda _: None)  # skip the backoff
+    with pytest.raises(RC.RenderError):
+        RC.render_conversation(
+            "http://x", [], add_generation_prompt=False, max_retries=2
+        )
+    assert len(calls) == 3  # initial attempt + 2 retries
 
 
 # --------------------------------------------------------------------------- #
