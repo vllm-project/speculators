@@ -386,10 +386,14 @@ class ArrowDataset(BaseDataset):
             ],  # [seq_len, hidden_size]
             "loss_mask": self.data[index]["loss_mask"],  # [seq_len]
         }
-        if "verifier_kv_last_local" in loaded_hs:
-            res["verifier_kv_last_local"] = loaded_hs["verifier_kv_last_local"]
-        if "verifier_kv_last_global" in loaded_hs:
-            res["verifier_kv_last_global"] = loaded_hs["verifier_kv_last_global"]
+        if "kv_last_local_k" in loaded_hs and "kv_last_local_v" in loaded_hs:
+            res["verifier_kv_last_local"] = torch.stack(
+                [loaded_hs["kv_last_local_k"], loaded_hs["kv_last_local_v"]], dim=1
+            )
+        if "kv_last_global_k" in loaded_hs and "kv_last_global_v" in loaded_hs:
+            res["verifier_kv_last_global"] = torch.stack(
+                [loaded_hs["kv_last_global_k"], loaded_hs["kv_last_global_v"]], dim=1
+            )
         return res
 
 
