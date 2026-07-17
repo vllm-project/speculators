@@ -275,7 +275,6 @@ async def worker(  # noqa: C901
                 ) from e
         else:
             stats["ok"] += 1
-            stats["requests"] += 1
             stats["total_vllm_s"] += vllm_s
             stats["total_write_s"] += write_s
             logger.debug(
@@ -289,7 +288,7 @@ async def worker(  # noqa: C901
         finally:
             elapsed = time.perf_counter() - stats["start_time"]
             postfix = {"ok": stats["ok"], "err": stats["errors"]}
-            if elapsed > 0 and stats["requests"] > 0:
+            if elapsed > 0 and stats["ok"] > 0:
                 postfix["rps"] = f"{stats['requests'] / elapsed:.1f}"
                 postfix["vllm"] = (
                     f"{stats['total_vllm_s'] / stats['requests'] * 1000:.0f}ms"
@@ -375,7 +374,6 @@ async def generate_and_save_hidden_states(args, dataset):
     stats: dict[str, Any] = {
         "ok": 0,
         "errors": 0,
-        "requests": 0,
         "total_vllm_s": 0.0,
         "total_write_s": 0.0,
         "start_time": time.perf_counter(),
@@ -426,14 +424,14 @@ async def generate_and_save_hidden_states(args, dataset):
             await _shutdown_workers(workers, queue, cancel_event)
 
     elapsed = time.perf_counter() - stats["start_time"]
-    if stats["requests"] > 0:
+    if stats["ok"] > 0:
         logger.info(
             "Timing: %.1fs elapsed, %.1f samples/s, "
             "avg vLLM request %.0f ms, avg file write %.0f ms",
             elapsed,
-            stats["requests"] / elapsed if elapsed > 0 else 0,
-            stats["total_vllm_s"] / stats["requests"] * 1000,
-            stats["total_write_s"] / stats["requests"] * 1000,
+            stats["ok"] / elapsed if elapsed > 0 else 0,
+            stats["total_vllm_s"] / stats["ok"] * 1000,
+            stats["total_write_s"] / stats["ok"] * 1000,
         )
 
     num_saved = len(to_process) - len(skipped_indices)
