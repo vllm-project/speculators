@@ -18,6 +18,7 @@ import logging
 import os
 import shutil
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -207,6 +208,7 @@ async def worker(  # noqa: C901
     skipped_indices: list[int],
     cancel_event: asyncio.Event,
     failure_tracker: _FailureTracker | None,
+    stats: dict[str, Any],
 ):
     """Worker that pulls items from queue and sends them to the vLLM endpoint."""
     while True:
@@ -226,6 +228,7 @@ async def worker(  # noqa: C901
 
         try:
             async with vllm_semaphore:  # Limit number of active generate calls
+                t_vllm = time.perf_counter()
                 hidden_states_path = await generate_hidden_states_async(
                     client,
                     model,
@@ -233,14 +236,17 @@ async def worker(  # noqa: C901
                     timeout=request_timeout,
                     max_retries=max_retries,
                 )
+                vllm_s = time.perf_counter() - t_vllm
             lock_path = hidden_states_path + ".lock"
             if Path(lock_path).exists():  # noqa: ASYNC240
                 await wait_for_lock_async(lock_path)
 
             async with write_semaphore:  # Limit number of active disk writes
+                t_write = time.perf_counter()
                 await asyncio.to_thread(
                     shutil.move, hidden_states_path, target_hidden_states_path
                 )
+                write_s = time.perf_counter() - t_write
                 if validate_outputs:
 
                     def _load_and_check(
@@ -260,6 +266,7 @@ async def worker(  # noqa: C901
                 os._exit(1)
             logger.warning("Skipping sample %d due to error: %s", idx, e)
             skipped_indices.append(idx)
+            stats["errors"] += 1
             if failure_tracker is not None and failure_tracker.record_failure():
                 cancel_event.set()
                 raise RuntimeError(
@@ -267,9 +274,30 @@ async def worker(  # noqa: C901
                     "errored out. The vLLM server may be unreachable."
                 ) from e
         else:
+            stats["ok"] += 1
+            stats["requests"] += 1
+            stats["total_vllm_s"] += vllm_s
+            stats["total_write_s"] += write_s
+            logger.debug(
+                "Sample %d: vLLM %.0f ms, write %.0f ms",
+                idx,
+                vllm_s * 1000,
+                write_s * 1000,
+            )
             if failure_tracker is not None:
                 failure_tracker.record_success()
         finally:
+            elapsed = time.perf_counter() - stats["start_time"]
+            postfix = {"ok": stats["ok"], "err": stats["errors"]}
+            if elapsed > 0 and stats["requests"] > 0:
+                postfix["rps"] = f"{stats['requests'] / elapsed:.1f}"
+                postfix["vllm"] = (
+                    f"{stats['total_vllm_s'] / stats['requests'] * 1000:.0f}ms"
+                )
+                postfix["write"] = (
+                    f"{stats['total_write_s'] / stats['requests'] * 1000:.0f}ms"
+                )
+            pbar.set_postfix(postfix, refresh=False)
             pbar.update(1)
             queue.task_done()
 
@@ -344,6 +372,14 @@ async def generate_and_save_hidden_states(args, dataset):
 
     skipped_indices: list[int] = []
     cancel_event = asyncio.Event()
+    stats: dict[str, Any] = {
+        "ok": 0,
+        "errors": 0,
+        "requests": 0,
+        "total_vllm_s": 0.0,
+        "total_write_s": 0.0,
+        "start_time": time.perf_counter(),
+    }
 
     max_consec = args.max_consecutive_errors
     if max_consec is None:
@@ -380,6 +416,7 @@ async def generate_and_save_hidden_states(args, dataset):
                         skipped_indices,
                         cancel_event,
                         failure_tracker,
+                        stats,
                     )
                 )
                 for _ in range(args.concurrency * 2)
@@ -387,6 +424,17 @@ async def generate_and_save_hidden_states(args, dataset):
 
             await _feed_queue(to_process, dataset, queue, cancel_event)
             await _shutdown_workers(workers, queue, cancel_event)
+
+    elapsed = time.perf_counter() - stats["start_time"]
+    if stats["requests"] > 0:
+        logger.info(
+            "Timing: %.1fs elapsed, %.1f samples/s, "
+            "avg vLLM request %.0f ms, avg file write %.0f ms",
+            elapsed,
+            stats["requests"] / elapsed if elapsed > 0 else 0,
+            stats["total_vllm_s"] / stats["requests"] * 1000,
+            stats["total_write_s"] / stats["requests"] * 1000,
+        )
 
     num_saved = len(to_process) - len(skipped_indices)
     logger.info(f"Saved {num_saved} new data points to {args.output}")
