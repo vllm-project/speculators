@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import sys
+import time
 from collections import deque
 from typing import Any
 
@@ -593,6 +594,29 @@ async def regenerate_conversation(
     return truncated
 
 
+def _log_summary(stats: dict[str, Any]) -> None:
+    elapsed = time.perf_counter() - stats["start_time"]
+    n_convs = stats["ok"] + stats["errors"]
+    logger.info(
+        "Pipeline complete in %.1fs: %d conversations (%d ok, %d errors, %d truncated)",
+        elapsed,
+        n_convs,
+        stats["ok"],
+        stats["errors"],
+        stats["truncated"],
+    )
+    if stats["requests"] > 0:
+        logger.info(
+            "Throughput: %.1f req/s, %d tok/s | "
+            "Avg request latency: %.0f ms | "
+            "Avg queue wait: %.0f ms",
+            stats["requests"] / elapsed if elapsed > 0 else 0,
+            int(stats["completion_tokens"] / elapsed) if elapsed > 0 else 0,
+            stats["total_request_s"] / stats["requests"] * 1000,
+            stats["total_queue_wait_s"] / n_convs * 1000 if n_convs > 0 else 0,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Worker pool & orchestration
 # ---------------------------------------------------------------------------
@@ -616,15 +640,25 @@ async def worker(
     """
 
     async def post(payload: dict[str, Any]) -> dict[str, Any]:
-        return await _post_chat(
+        t0 = time.perf_counter()
+        result = await _post_chat(
             session, endpoint, payload, max_retries=args.max_retries
         )
+        latency = time.perf_counter() - t0
+        stats["total_request_s"] += latency
+        stats["requests"] += 1
+        logger.debug("vLLM request completed in %.0f ms", latency * 1000)
+        return result
 
     while True:
         item = await queue.get()
         if item is None:
             queue.task_done()
             return
+
+        enqueued_at = item.pop("enqueued_at", None)
+        if enqueued_at is not None:
+            stats["total_queue_wait_s"] += time.perf_counter() - enqueued_at
 
         conv_id = item["primary_id"]
         # Held by the caller so a mid-conversation failure can still report how
@@ -646,6 +680,9 @@ async def worker(
             # conversation needs no rerun (see load_seen).
             for sample in samples:
                 out_fh.write(json.dumps(sample, ensure_ascii=False) + "\n")
+                usage = sample.get("metadata", {}).get("usage", {})
+                stats["prompt_tokens"] += usage.get("prompt_tokens", 0)
+                stats["completion_tokens"] += usage.get("completion_tokens", 0)
             out_fh.flush()
             if samples:
                 stats["ok"] += 1
@@ -666,12 +703,16 @@ async def worker(
             err_fh.flush()
             stats["errors"] += 1
         finally:
-            progress.set_postfix(
-                ok=stats["ok"],
-                errors=stats["errors"],
-                truncated=stats["truncated"],
-                refresh=False,
-            )
+            elapsed = time.perf_counter() - stats["start_time"]
+            postfix = {
+                "ok": stats["ok"],
+                "err": stats["errors"],
+                "trunc": stats["truncated"],
+            }
+            if elapsed > 0 and stats["requests"] > 0:
+                postfix["rps"] = f"{stats['requests'] / elapsed:.1f}"
+                postfix["tps"] = f"{stats['completion_tokens'] / elapsed:.0f}"
+            progress.set_postfix(postfix, refresh=False)
             progress.update(1)
             queue.task_done()
 
@@ -742,7 +783,17 @@ async def main():
                 dynamic_ncols=True,
             ) as progress,
         ):
-            stats = {"ok": 0, "errors": 0, "truncated": 0}
+            stats = {
+                "ok": 0,
+                "errors": 0,
+                "truncated": 0,
+                "requests": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_request_s": 0.0,
+                "total_queue_wait_s": 0.0,
+                "start_time": time.perf_counter(),
+            }
             workers = [
                 asyncio.create_task(
                     worker(
@@ -809,6 +860,7 @@ async def main():
                         "turns": turns,
                         "tools": tools,
                         "tool_results": tool_results,
+                        "enqueued_at": time.perf_counter(),
                     }
                 )
                 processed_count += 1
@@ -817,6 +869,8 @@ async def main():
             for _ in range(len(workers)):
                 await queue.put(None)
             await asyncio.gather(*workers)
+
+            _log_summary(stats)
 
 
 if __name__ == "__main__":

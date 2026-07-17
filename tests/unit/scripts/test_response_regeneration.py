@@ -12,6 +12,7 @@ import asyncio
 import copy
 import importlib.util
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -442,7 +443,7 @@ class _Args:
 
 
 class _NullProgress:
-    def set_postfix(self, **kwargs): ...
+    def set_postfix(self, ordered_dict=None, **kwargs): ...
     def update(self, n): ...
 
 
@@ -477,7 +478,17 @@ def _run_worker(responses, tmp_path, stem):
         queue: asyncio.Queue = asyncio.Queue()
         await queue.put(_TWO_TURN_ITEM)
         await queue.put(None)
-        stats = {"ok": 0, "errors": 0, "truncated": 0}
+        stats = {
+            "ok": 0,
+            "errors": 0,
+            "truncated": 0,
+            "requests": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_request_s": 0.0,
+            "total_queue_wait_s": 0.0,
+            "start_time": time.perf_counter(),
+        }
         await regen.worker(
             _FakeSession(responses),
             queue,
@@ -507,7 +518,9 @@ def test_worker_row_identity_and_all_or_nothing_writes(tmp_path):
         tmp_path,
         "ok",
     )
-    assert stats == {"ok": 1, "errors": 0, "truncated": 0}
+    assert stats["ok"] == 1
+    assert stats["errors"] == 0
+    assert stats["truncated"] == 0
     rows = [json.loads(line) for line in out_path.read_text().splitlines()]
     assert [r["id"] for r in rows] == ["conv-abc_gen0", "conv-abc_gen1"]
     assert {r["primary_id"] for r in rows} == {"conv-abc"}
@@ -526,7 +539,9 @@ def test_worker_row_identity_and_all_or_nothing_writes(tmp_path):
         tmp_path,
         "fail",
     )
-    assert stats == {"ok": 0, "errors": 1, "truncated": 0}
+    assert stats["ok"] == 0
+    assert stats["errors"] == 1
+    assert stats["truncated"] == 0
     assert out_path.read_text() == ""
     assert regen.load_seen(str(out_path)) == set()
     error = json.loads(err_path.read_text())
