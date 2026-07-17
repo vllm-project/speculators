@@ -1083,10 +1083,14 @@ def _preprocess_batch(
             RuntimeError,
             OSError,
         ) as e:
-            raise RuntimeError(
+            message = (
                 f"Failed to process conversation {idx} "
                 f"(assistant_pattern={assistant_pattern is not None}): {e}"
-            ) from e
+            )
+            if isinstance(processor, ProcessorMixin):
+                raise RuntimeError(message) from e
+            log.error(message)
+            continue
 
         # Assert shapes match
         assert len(input_ids) == len(loss_mask), (
