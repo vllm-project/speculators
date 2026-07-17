@@ -1,7 +1,9 @@
 import argparse
 import gc
 import logging
+import os
 import random
+import socket
 import warnings
 from copy import deepcopy
 from pathlib import Path
@@ -14,6 +16,11 @@ from transformers import LlamaConfig, PretrainedConfig
 from transformers.models.auto.configuration_auto import AutoConfig
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
+from speculators.data_generation.transfer import (
+    FileTransfer,
+    HiddenStatesTransfer,
+    MooncakeTransfer,
+)
 from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_REQUEST_TIMEOUT,
@@ -625,6 +632,39 @@ def main(args: argparse.Namespace):  # noqa: C901
     }
     preprocess = preprocess_fns.get(args.speculator_type)
 
+    if args.hidden_states_backend == "mooncake":
+        # Imported lazily: hs_connectors is an optional dependency only needed
+        # for the mooncake backend, so importing train.py must not require it.
+        from hs_connectors.mooncake_store import (  # noqa: PLC0415
+            MooncakeHiddenStatesStore,
+            MooncakeStoreConfig,
+        )
+
+        # For multinode training the store client must advertise an address the
+        # producer/peers can route to (not loopback). Resolve the node's own IP,
+        # overridable via MOONCAKE_LOCAL_HOSTNAME when auto-detection picks the
+        # wrong interface.
+        local_hostname = os.environ.get(
+            "MOONCAKE_LOCAL_HOSTNAME"
+        ) or socket.gethostbyname(socket.gethostname())
+        transfer: HiddenStatesTransfer = MooncakeTransfer(
+            MooncakeHiddenStatesStore(
+                MooncakeStoreConfig(
+                    local_hostname=local_hostname,
+                    metadata_server=args.mooncake_metadata_server,
+                    master_server_address=args.mooncake_master,
+                    protocol=args.mooncake_protocol,
+                )
+            )
+        )
+    else:
+        hs_path = (
+            Path(args.hidden_states_path)
+            if args.hidden_states_path
+            else Path(args.data_path) / "hidden_states"
+        )
+        transfer = FileTransfer(hs_path)
+
     train_loader, val_loader = create_train_val_loaders(
         data_path=args.data_path,
         train_data_ratio=args.train_data_ratio,
@@ -632,7 +672,7 @@ def main(args: argparse.Namespace):  # noqa: C901
         hidden_states_dtype=hidden_states_dtype,
         noise_std=args.noise_std,
         legacy_data=args.legacy_data,
-        hidden_states_path=args.hidden_states_path,
+        transfer=transfer,
         vllm_endpoint=args.vllm_endpoint,
         on_missing=args.on_missing,
         on_generate=args.on_generate,
@@ -884,6 +924,36 @@ def parse_args():
             f"(default: {DEFAULT_MAX_RETRIES}). "
             "Only applies if --on-missing=generate."
         ),
+    )
+    parser.add_argument(
+        "--hidden-states-backend",
+        choices=["file", "mooncake"],
+        default="file",
+        help=(
+            "Where on-demand generated hidden states are read from. 'file' (default) "
+            "reads safetensors from --hidden-states-path (shared filesystem). "
+            "'mooncake' reads from a Mooncake store by the key vLLM returns, removing "
+            "the shared-FS requirement (target and trainer can be on different nodes). "
+            "Requires the vLLM server launched with --hidden-states-backend mooncake."
+        ),
+    )
+    parser.add_argument(
+        "--mooncake-master",
+        type=str,
+        default="127.0.0.1:50051",
+        help="Mooncake master server address. Used with backend=mooncake.",
+    )
+    parser.add_argument(
+        "--mooncake-metadata-server",
+        type=str,
+        default="P2PHANDSHAKE",
+        help="Mooncake metadata server (or P2PHANDSHAKE). Used with backend=mooncake.",
+    )
+    parser.add_argument(
+        "--mooncake-protocol",
+        choices=["tcp", "rdma"],
+        default="tcp",
+        help="Mooncake transport protocol. Used with backend=mooncake.",
     )
     parser.add_argument(
         "--legacy-data",

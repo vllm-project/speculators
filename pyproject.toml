@@ -57,6 +57,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+mooncake = [
+    "hs-connectors",
+]
 dev = [
     # build
     "build>=1.5.0",
@@ -137,7 +140,7 @@ exclude = ["venv", "build", "dist"]
 follow_imports = 'silent'
 
 [[tool.mypy.overrides]]
-module = ["datasets.*", "transformers.*", "setuptools.*", "setuptools_git_versioning.*", "vllm.*"]
+module = ["datasets.*", "transformers.*", "setuptools.*", "setuptools_git_versioning.*", "vllm.*", "hs_connectors.*"]
 ignore_missing_imports=true
 
 [tool.ruff]
@@ -256,6 +259,11 @@ select = [
 
 "examples/**/*.py" = [
     "INP001", # allow implicit namespace packages in examples
+]
+
+"hs_connectors/**/*.py" = [
+    "INP001", # allow implicit namespace packages (setup.py)
+    "S101", # assert for internal invariants is acceptable
 ]
 
 [tool.ruff.lint.isort]

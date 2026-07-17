@@ -112,7 +112,16 @@ def extract_output(
     if kv_transfer_params is None:
         raise InvalidResponseError("Response missing kv_transfer_params")
 
-    return kv_transfer_params.get("hidden_states_path")
+    # A filesystem path (file backend) or a Mooncake store key (mooncake backend).
+    handle = kv_transfer_params.get("hidden_states_path") or kv_transfer_params.get(
+        "mooncake_key"
+    )
+    if handle is None:
+        raise InvalidResponseError(
+            "Response kv_transfer_params missing both 'hidden_states_path' and "
+            "'mooncake_key'"
+        )
+    return handle
 
 
 class ClientItem(TypedDict):
