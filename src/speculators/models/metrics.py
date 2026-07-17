@@ -4,8 +4,6 @@ from collections.abc import Callable
 
 import torch
 
-from speculators.models.fused_tv_loss import fused_nla_loss, fused_tv_loss
-
 _EPS = 1e-5
 
 LossConfig = dict[
@@ -382,17 +380,54 @@ def dpace_loss_decay(
     return weight.reshape(1, -1)
 
 
-# ``tv`` and ``nla`` train through the fused Triton kernels (much lower peak memory
-# at long context; see models/fused_tv_loss.py). The eager ``tv_loss`` /
-# ``neg_log_acceptance_loss`` above are kept only as the numeric reference the
-# kernels are tested against, so importing this module requires Triton.
+# ``tv`` and ``nla`` run the fused Triton kernels on CUDA/ROCm (much lower peak
+# memory at long context; see models/fused_tv_loss.py) and fall back to the eager
+# losses above on every other backend -- CPU, or non-CUDA accelerators such as
+# Ascend NPU where mainline Triton has no backend. ``logits.is_cuda`` gates
+# CUDA/ROCm; the import is lazy so this module imports without Triton installed.
+
+_FUSED_KERNELS = None  # None = not yet tried; False = unavailable; else (tv, nla)
+
+
+def _fused_kernels():
+    """Lazily import and cache the fused TV/NLA kernels; ``None`` if unavailable."""
+    global _FUSED_KERNELS  # noqa: PLW0603
+    if _FUSED_KERNELS is None:
+        try:
+            from speculators.models.fused_tv_loss import (  # noqa: PLC0415
+                fused_nla_loss,
+                fused_tv_loss,
+            )
+
+            _FUSED_KERNELS = (fused_tv_loss, fused_nla_loss)
+        except ImportError:
+            _FUSED_KERNELS = False
+    return _FUSED_KERNELS or None
+
+
+def tv_loss_fused_or_eager(logits: torch.Tensor, targets: torch.Tensor):
+    """TV loss: fused Triton on CUDA/ROCm (fp32), eager ``tv_loss`` on CPU/NPU."""
+    kernels = _fused_kernels()
+    if kernels is not None and logits.is_cuda:
+        return kernels[0](logits, targets)
+    return tv_loss(logits, targets)
+
+
+def nla_loss_fused_or_eager(logits: torch.Tensor, targets: torch.Tensor):
+    """NLA loss: fused Triton on CUDA/ROCm (fp32), eager on CPU/NPU."""
+    kernels = _fused_kernels()
+    if kernels is not None and logits.is_cuda:
+        return kernels[1](logits, targets)
+    return neg_log_acceptance_loss(logits, targets)
+
+
 _LOSS_FN_MAP: dict[str, Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = {
     "kl_div": kl_div_loss,
     "rkl": reverse_kl_div_loss,
     "jsd": js_div_loss,
     "ce": ce_loss,
-    "tv": fused_tv_loss,
-    "nla": fused_nla_loss,
+    "tv": tv_loss_fused_or_eager,
+    "nla": nla_loss_fused_or_eager,
     "lk_hybrid": lk_hybrid_loss,
 }
 
