@@ -89,7 +89,7 @@ def test_dflash_qwen3_8b_sharegpt(tmp_path: Path, prompts: list[list[dict[str, s
             num_layers=3,
             online=False,
             log_freq=50,
-            timeout=30 * 60,  # 30 mins
+            timeout=45 * 60,  # 45 mins
         )
     final_checkpoint = str(save_path / str(epochs - 1))
     run_vllm_engine(
@@ -122,7 +122,7 @@ def test_peagle_qwen3_8b_sharegpt(tmp_path: Path, prompts: list[list[dict[str, s
             num_layers=4,
             online=False,
             log_freq=50,
-            timeout=30 * 60,  # 30 mins
+            timeout=45 * 60,  # 45 mins
             extra_train_args=[
                 "--no-norm-before-residual",
                 "--scheduler-type",

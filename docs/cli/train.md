@@ -1,6 +1,6 @@
 # train.py
 
-Trains speculator models using either online or offline hidden states. Supports single-GPU and multi-GPU distributed training with PyTorch FSDP.
+Trains speculator models using either online or offline hidden states. Supports single-GPU and multi-GPU distributed training.
 
 ## Basic Usage
 
@@ -15,7 +15,7 @@ python scripts/train.py \
   --epochs 10
 ```
 
-**Multi-GPU (FSDP):**
+**Multi-GPU (DDP):**
 
 ```bash
 torchrun --standalone --nproc_per_node=4 scripts/train.py \
@@ -24,6 +24,18 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
   --save-path ./checkpoints \
   --draft-vocab-size 32000 \
   --epochs 10
+```
+
+**Multi-GPU (FSDP sharded):**
+
+```bash
+torchrun --standalone --nproc_per_node=4 scripts/train.py \
+  --verifier-name-or-path meta-llama/Llama-3.1-8B-Instruct \
+  --data-path ./training_data \
+  --save-path ./checkpoints \
+  --draft-vocab-size 32000 \
+  --epochs 10 \
+  --fsdp-shard
 ```
 
 ## Arguments
@@ -90,6 +102,10 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--target-layer-ids`** (int list, default: auto-select) Space-separated list of layer IDs used for hidden states. Default: `[2, num_layers//2, num_layers-3]` **Must match the values used when launching vLLM if custom layers were specified.**
 
+### Distributed Training Arguments
+
+- **`--fsdp-shard`** (flag) Shard model parameters across GPUs with FSDP. By default, parameters are fully replicated (DDP-like). Enable this when the model does not fit in a single GPU's memory.
+
 ### Training Arguments
 
 - **`--save-path`** (str, default: `"./checkpoints"`) Directory to save model checkpoints.
@@ -110,7 +126,7 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--seed`** (int, default: `42`) Random seed for reproducibility.
 
-- **`--hidden-states-dtype`** (str, default: `"bfloat16"`) Data type for model weights and hidden states. Options: `float32`, `float16`, `bfloat16`
+- **`--hidden-states-dtype`** (str, default: `"bfloat16"`) Data type for dataloader hidden states and autocast compute. Model master weights are always kept in fp32. Options: `float32` (full precision, for debugging), `bfloat16` (recommended for mixed precision training). Note: `float16` is not supported as it requires gradient scaling to prevent underflow.
 
 - **`--deterministic-cuda`** (flag) Enable deterministic CUDA operations. May impact performance.
 
@@ -271,7 +287,8 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun \
   --scheduler-type cosine \
   --scheduler-warmup-steps 100 \
   --checkpoint-freq 2 \
-  --save-best
+  --save-best \
+  --fsdp-shard
 ```
 
 ### Fine-tuning a Pretrained Model

@@ -54,8 +54,9 @@ DEFAULT_SUBSETS = (
     "summarization,tool_call,translation,writing"
 )
 DEFAULT_MAX_CONCURRENCY = 128
-DEFAULT_MAX_REQUESTS = 80
+DEFAULT_MAX_REQUESTS = 200
 DEFAULT_GEN_LEN_RATE = 128
+DEFAULT_SWEEP_RATE = 10
 DEFAULT_DATA_COLUMN_MAPPER = '{"text_column":"prompt"}'
 
 # ---------------------------------------------------------------------------
@@ -178,6 +179,7 @@ def _run_subset(
             **guidellm_common,
             subset=guidellm_subset,
             profile="throughput",
+            rate=args.gen_len_rate,
             max_requests=None,
             output_path=gen_len_output,
             backend_args=build_backend_args(args.gen_kwargs, 4096),
@@ -196,6 +198,7 @@ def _run_subset(
     run_guidellm(
         **guidellm_common,
         subset=guidellm_subset,
+        rate=args.sweep_rate if is_sweep else args.gen_len_rate,
         profile=profile,
         max_requests=args.max_requests,
         output_path=run_output,
@@ -275,7 +278,6 @@ def run_benchmark(args: argparse.Namespace) -> None:
                         "target": args.target,
                         "dataset": str(local_path),
                         "data_column_mapper": _SPEEDBENCH_COLUMN_MAPPER,
-                        "rate": args.gen_len_rate,
                         "max_concurrency": args.max_concurrency,
                     },
                 )
@@ -285,7 +287,6 @@ def run_benchmark(args: argparse.Namespace) -> None:
             "target": args.target,
             "dataset": dataset_spec,
             "data_column_mapper": args.data_column_mapper,
-            "rate": args.gen_len_rate,
             "max_concurrency": args.max_concurrency,
         }
         for subset in [s.strip() for s in args.subsets.split(",") if s.strip()]:
@@ -384,6 +385,12 @@ def main() -> None:
         type=int,
         default=DEFAULT_GEN_LEN_RATE,
         help=f"Request rate for gen-len estimation (default: {DEFAULT_GEN_LEN_RATE})",
+    )
+    parser.add_argument(
+        "--sweep-rate",
+        type=int,
+        default=DEFAULT_SWEEP_RATE,
+        help=f"Number of sweep rate points (default: {DEFAULT_SWEEP_RATE})",
     )
     parser.add_argument(
         "--gen-kwargs",

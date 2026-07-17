@@ -30,6 +30,7 @@ from speculators.models.utils import (
 from speculators.train.dataloader import create_train_val_loaders
 from speculators.train.distributed import (
     get_rank,
+    is_distributed,
     maybe_destroy_distributed,
     maybe_setup_distributed,
 )
@@ -221,6 +222,11 @@ def create_transformer_layer_config(  # noqa: C901
                 # config checks; drop it while keeping the real MRoPE fields.
                 rope_params.pop("type", None)
                 rope_params.pop("mrope_interleaved", None)
+                # The verifier (e.g. Mistral) may use partial rotary embeddings,
+                # but the draft model doesn't support partial_rotary_factor.
+                # Only keep it for MRoPE configs that need it.
+                if "mrope_section" not in rope_params:
+                    rope_params.pop("partial_rotary_factor", None)
             config.rope_parameters = rope_params
     else:
         if hasattr(verifier_config, "rope_scaling"):
@@ -232,6 +238,9 @@ def create_transformer_layer_config(  # noqa: C901
                 # Strip legacy fields for consistency with rope_parameters path
                 rope_scaling.pop("type", None)
                 rope_scaling.pop("mrope_interleaved", None)
+                # Same partial_rotary_factor guard as the rope_parameters path.
+                if "mrope_section" not in rope_scaling:
+                    rope_scaling.pop("partial_rotary_factor", None)
             config.rope_scaling = rope_scaling
         config.rope_theta = getattr(verifier_config, "rope_theta", 10000.0)
 
@@ -366,6 +375,7 @@ def _build_from_config_only(
     t2d: torch.Tensor | None,
     d2t: torch.Tensor | None,
     verifier_name_or_path: str | None = None,
+    draft_attn_impl: str | None = None,
 ) -> SpeculatorModel:
     """Initialize a fresh draft from a saved speculator *config* (no weights).
 
@@ -374,6 +384,8 @@ def _build_from_config_only(
     no trained draft weights to restore (decoder weights are randomly initialized).
     """
     config = model_class.config_class.from_pretrained(path)
+    if draft_attn_impl is not None:
+        config.transformer_layer_config._attn_implementation = draft_attn_impl
     speculators_config = getattr(config, "speculators_config", None)
     # Fall back to the CLI --verifier-name-or-path only when the saved config has
     # no verifier path -- either null or blanked to "". A real path in the config
@@ -426,6 +438,23 @@ def build_draft_model(
                 t2d=t2d,
                 d2t=d2t,
                 verifier_name_or_path=args.verifier_name_or_path,
+                draft_attn_impl=(
+                    args.draft_attn_impl if args.speculator_type != "mtp" else None
+                ),
+            )
+        if args.speculator_type != "mtp":
+            # _attn_implementation is never serialized by HF configs, so re-apply
+            # the CLI selection before construction -- mirroring from_training_args.
+            # MTP is skipped: its from_training_args never sets the field and its
+            # __init__ resolves its own default ("eager") when it is absent.
+            config = model_class.config_class.from_pretrained(args.from_pretrained)
+            config.transformer_layer_config._attn_implementation = args.draft_attn_impl
+            return model_class.from_pretrained(
+                args.from_pretrained,
+                config=config,
+                t2d=t2d,
+                d2t=d2t,
+                verifier=args.verifier_name_or_path,
             )
         return model_class.from_pretrained(
             args.from_pretrained,
@@ -495,6 +524,12 @@ def main(args: argparse.Namespace):  # noqa: C901
     # Setup distributed training
     maybe_setup_distributed()
 
+    if args.fsdp_shard and not is_distributed():
+        raise ValueError(
+            "--fsdp-shard requires launching with torchrun/distributed training; "
+            "otherwise parameters are not sharded."
+        )
+
     # Install partial-neox rotary patch if not using full-head hack
     if not args.draft_mrope_full_head_hack:
         install_partial_neox_rotary()
@@ -502,7 +537,6 @@ def main(args: argparse.Namespace):  # noqa: C901
             "Installed partial-neox rotary patch for HF/vLLM RoPE alignment "
             "(draft_mrope_full_head_hack=False)"
         )
-
     if get_rank() == 0:
         save_train_command(args.save_path)
 
@@ -511,6 +545,15 @@ def main(args: argparse.Namespace):  # noqa: C901
             "--hidden-states-dtype must be a dtype attribute of torch. e.g. `bfloat16`"
         )
     hidden_states_dtype = getattr(torch, args.hidden_states_dtype)
+
+    if hidden_states_dtype == torch.float16:
+        raise NotImplementedError(
+            "--hidden-states-dtype=float16 is not supported. "
+            "float16 with torch.autocast requires gradient scaling (GradScaler) to "
+            "prevent gradient underflow, which is not implemented. "
+            "Use bfloat16 instead, which provides the same memory savings with "
+            "better numerical stability and no gradient scaling required."
+        )
 
     if args.speculator_type == "mtp":
         if args.draft_attn_impl != "simple_flex_attention":
@@ -555,9 +598,7 @@ def main(args: argparse.Namespace):  # noqa: C901
     # config/weights can be validated (e.g. in vLLM). The saved checkpoint can be
     # fed straight back via --from-pretrained to start training.
     if args.dry_run:
-        # Match Trainer.setup_model: weights are (re)initialized in
-        # hidden_states_dtype, so save the dry-run checkpoint in that dtype too
-        # rather than the float32 the model is built in.
+        # Save in hidden_states_dtype (bf16) for compact checkpoints.
         draft_model.to(hidden_states_dtype)
         if get_rank() == 0:
             logger.info(
@@ -631,6 +672,7 @@ def main(args: argparse.Namespace):  # noqa: C901
         save_best=args.save_best,
         hidden_states_dtype=hidden_states_dtype,
         log_freq=args.log_freq,
+        fsdp_shard=args.fsdp_shard,
     )
     trainer = Trainer(draft_model, trainer_config, train_loader, val_loader)
 
@@ -953,7 +995,7 @@ def parse_args():
         default="kl_div",
         help=(
             "Loss function specification. Pass a name for a single loss "
-            "(kl_div, rkl, ce, tv, nla, lk_hybrid) or a JSON dict for a weighted "
+            "(kl_div, rkl, jsd, ce, tv, nla, lk_hybrid) or a JSON dict for a weighted "
             'combination, e.g. \'{"ce": 0.1, "tv": 0.9}\'.'
         ),
     )
@@ -974,7 +1016,10 @@ def parse_args():
         "--hidden-states-dtype",
         type=str,
         default="bfloat16",
-        help="The dtype to initialize model weights and dataloader hidden states to",
+        help="Data type for dataloader hidden states and autocast compute. "
+        "Model master weights are always kept in fp32. "
+        "Options: float32 (full precision), bfloat16 (recommended). "
+        "Note: float16 is not supported (requires gradient scaling).",
     )
     parser.add_argument(
         "--deterministic-cuda",
@@ -1183,6 +1228,16 @@ def parse_args():
         help="Pointing to checkpoint with lowest validation loss.",
     )
 
+    # distributed strategy
+    parser.add_argument(
+        "--fsdp-shard",
+        action="store_true",
+        default=False,
+        help="Shard model parameters across GPUs with FSDP. By default, "
+        "parameters are fully replicated (DDP-like). Enable this when the "
+        "model does not fit in a single GPU's memory.",
+    )
+
     # lr scheduler
     parser.add_argument(
         "--scheduler-type",
@@ -1270,7 +1325,10 @@ if __name__ == "__main__":
 
 # RUN WITH:
 # torchrun --standalone --nproc_per_node=<num_gpus>  scripts/train.py
-# for FSDP training
+# for multi-GPU training (DDP by default)
+# OR
+# torchrun --standalone --nproc_per_node=<num_gpus>  scripts/train.py --fsdp-shard
+# for FSDP sharded training (when model doesn't fit in a single GPU)
 # OR
 # python scripts/train.py
 # for single GPU training

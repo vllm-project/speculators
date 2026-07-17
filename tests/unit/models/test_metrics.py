@@ -10,6 +10,7 @@ from speculators.models.metrics import (
     compute_accuracy_single_step,
     dflash_loss_decay,
     exp_loss_decay,
+    js_div_loss,
     kl_div_loss,
     lk_hybrid_loss,
     loss_function,
@@ -119,6 +120,57 @@ class TestReverseKLDivLoss:
     def test_resolve_rkl(self):
         """resolve_loss_fn maps 'rkl' to reverse_kl_div_loss."""
         assert resolve_loss_fn("rkl") is reverse_kl_div_loss
+
+
+class TestJSDivLoss:
+    def test_identical_zero_and_random_nonnegative(self):
+        """JSD of identical distributions is ~0; random inputs are >= 0."""
+        x = torch.randn(1, 4, 8)
+        loss_identical = js_div_loss(x, x)
+        assert loss_identical.sum().item() == pytest.approx(0.0, abs=1e-4)
+
+        torch.manual_seed(0)
+        loss_random = js_div_loss(torch.randn(1, 4, 8), torch.randn(1, 4, 8))
+        assert (loss_random >= -1e-6).all()
+
+    def test_symmetric_and_bounded_by_log2(self):
+        """JSD(p, q) == JSD(q, p) and is bounded by log 2."""
+        torch.manual_seed(0)
+        logits = torch.randn(1, 4, 8)
+        targets = torch.randn(1, 4, 8)
+        assert torch.allclose(
+            js_div_loss(logits, targets),
+            js_div_loss(targets, logits),
+            atol=1e-6,
+        )
+        # near-disjoint point masses approach the log 2 bound
+        disjoint_p = torch.full((1, 1, 4), -100.0)
+        disjoint_p[0, 0, 0] = 100.0
+        disjoint_q = torch.full((1, 1, 4), -100.0)
+        disjoint_q[0, 0, 1] = 100.0
+        loss = js_div_loss(disjoint_p, disjoint_q)
+        assert loss.max().item() == pytest.approx(0.6931, abs=1e-3)
+
+    def test_matches_manual_formula(self):
+        """js_div_loss matches an independent JSD reference implementation."""
+        torch.manual_seed(0)
+        logits = torch.randn(1, 4, 50)
+        targets = torch.randn(1, 4, 50)
+        out = js_div_loss(logits, targets)
+
+        p = torch.softmax(targets, dim=-1)
+        q = torch.softmax(logits, dim=-1)
+        m = 0.5 * (p + q)
+        kl_pm = (p * (p / m).log()).sum(dim=-1)
+        kl_qm = (q * (q / m).log()).sum(dim=-1)
+        expected = 0.5 * (kl_pm + kl_qm)
+
+        assert out.shape == (1, 4)
+        assert torch.allclose(out, expected, atol=1e-5)
+
+    def test_resolve_jsd(self):
+        """resolve_loss_fn maps 'jsd' to js_div_loss."""
+        assert resolve_loss_fn("jsd") is js_div_loss
 
 
 class TestTVLoss:
@@ -312,3 +364,56 @@ class TestDecayFunctions:
             0.25
         )
         assert exp_loss_decay(torch.tensor(0.0), gamma=0.5).item() == pytest.approx(1.0)
+
+
+class TestBf16GradientPrecision:
+    """Guards the float32 softmax in the divergence losses.
+
+    These tests FAIL if the losses take their softmax in the logits' dtype
+    (bf16 under training): the gradients come out 8-23% wrong. They PASS with
+    the float32 upcast, which brings the error under 0.2%. Removing
+    ``dtype=torch.float32`` from any divergence loss turns them red.
+
+    ``ce_loss`` is excluded on purpose -- it is accurate in bf16 either way, so
+    a test over it would guard nothing.
+    """
+
+    @staticmethod
+    def _grad(loss_fn, logits_bf16, targets_bf16, dtype):
+        """Gradient from identical bf16 inputs, differing only in compute dtype."""
+        logits = logits_bf16.to(dtype).detach().clone().requires_grad_(True)
+        loss_fn(logits, targets_bf16.to(dtype)).sum().backward()
+        return logits.grad.double()
+
+    @pytest.mark.parametrize(
+        "loss_fn",
+        [
+            kl_div_loss,
+            reverse_kl_div_loss,
+            tv_loss,
+            neg_log_acceptance_loss,
+            lk_hybrid_loss,
+        ],
+    )
+    def test_divergence_loss_gradient_accurate_in_bf16(self, loss_fn):
+        """The bf16 gradient must stay within 2% of an exact float64 reference.
+
+        Same bf16 logits into both paths, so the only variable is the dtype the
+        loss computes in. With a bf16 softmax this asserts at 8-23% error
+        (kl_div 8.1, rkl 9.3, tv 23.2, nla 23.1, lk_hybrid 23.0); with the
+        float32 softmax every loss lands under 0.2%.
+        """
+        torch.manual_seed(0)
+        vocab_size, seq_len = 4096, 8
+        # a draft that already agrees closely with the target -- the regime where
+        # p ~= q and the bf16 cancellation is worst
+        targets = (torch.randn(1, seq_len, vocab_size) * 2).bfloat16()
+        logits = (
+            targets.float() + torch.randn(1, seq_len, vocab_size) * 0.10
+        ).bfloat16()
+
+        exact = self._grad(loss_fn, logits, targets, torch.float64)
+        actual = self._grad(loss_fn, logits, targets, torch.bfloat16)
+
+        rel_err = ((actual - exact).norm() / exact.norm()).item()
+        assert rel_err < 0.02, f"{loss_fn.__name__} bf16 gradient error {rel_err:.1%}"
