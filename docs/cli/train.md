@@ -84,6 +84,14 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--max-retries`** (int, default: `3`) Maximum number of retry attempts per vLLM request on failure.
 
+- **`--shared-hidden-states-path`** (str, default: `None`) Optional filesystem cache that coalesces identical online hidden-state requests across independent trainers. All participating trainers must use the same path. This does not change `--hidden-states-path`, which remains the per-dataset indexed cache used by `--on-generate cache`.
+
+- **`--shared-hidden-states-namespace`** (str, default: `None`) Optional request-identity namespace for the producer's extraction configuration. Use the same value for trainers sharing artifacts and a different value when target layer IDs or other extraction semantics differ.
+
+- **`--shared-hidden-states-ttl`** (float, default: `3600.0`) Seconds to retain shared artifacts before regenerating them. Set to `0` to disable expiration.
+
+- **`--shared-hidden-states-lock-timeout`** (float, default: `300.0`) Maximum seconds to wait while another trainer generates and atomically publishes the same artifact.
+
 - **`--legacy-data`** (flag) **DEPRECATED.** Use the old data format which stores hidden states alongside token_ids.
 
 - **`--total-seq-len`** (int, default: `8192`) Maximum total sequence length for training batches. Note: samples will be packed into batches with total combined sequence length `{total-seq-len}`.

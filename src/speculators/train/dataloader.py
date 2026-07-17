@@ -81,6 +81,10 @@ def create_train_val_loaders(
     num_workers: int,
     prefetch_factor: int,
     preprocess: Callable[[BatchType], BatchType] | None,
+    shared_artifacts_path: str | None = None,
+    shared_artifacts_namespace: str | None = None,
+    shared_artifacts_ttl_seconds: float | None = 3600.0,
+    shared_artifacts_lock_timeout_seconds: float = 300.0,
     train_data_ratio: float = 0.9,
 ) -> tuple[DataLoader, DataLoader]:
     """Create training and validation DataLoaders.
@@ -127,6 +131,12 @@ def create_train_val_loaders(
             hidden_states_dtype=hidden_states_dtype,
             request_timeout=request_timeout,
             max_retries=max_retries,
+            shared_artifacts_path=shared_artifacts_path,
+            shared_artifacts_namespace=shared_artifacts_namespace,
+            shared_artifacts_ttl_seconds=shared_artifacts_ttl_seconds,
+            shared_artifacts_lock_timeout_seconds=(
+                shared_artifacts_lock_timeout_seconds
+            ),
         )
         val_dataset = ArrowDataset(
             datapath=data_path,
@@ -140,6 +150,12 @@ def create_train_val_loaders(
             hidden_states_dtype=hidden_states_dtype,
             request_timeout=request_timeout,
             max_retries=max_retries,
+            shared_artifacts_path=shared_artifacts_path,
+            shared_artifacts_namespace=shared_artifacts_namespace,
+            shared_artifacts_ttl_seconds=shared_artifacts_ttl_seconds,
+            shared_artifacts_lock_timeout_seconds=(
+                shared_artifacts_lock_timeout_seconds
+            ),
         )
 
     train_loader = _setup_dataloader(

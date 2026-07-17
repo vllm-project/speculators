@@ -643,6 +643,14 @@ def main(args: argparse.Namespace):  # noqa: C901
         verifier_name_or_path=args.verifier_name_or_path,
         request_timeout=args.request_timeout,
         max_retries=args.max_retries,
+        shared_artifacts_path=args.shared_hidden_states_path,
+        shared_artifacts_namespace=args.shared_hidden_states_namespace,
+        shared_artifacts_ttl_seconds=(
+            None
+            if args.shared_hidden_states_ttl == 0
+            else args.shared_hidden_states_ttl
+        ),
+        shared_artifacts_lock_timeout_seconds=(args.shared_hidden_states_lock_timeout),
         hidden_size=hidden_size,
         num_target_layers=num_target_layers,
         num_workers=args.num_workers,
@@ -892,6 +900,42 @@ def parse_args():
             "Maximum number of retry attempts per vLLM request on failure "
             f"(default: {DEFAULT_MAX_RETRIES}). "
             "Only applies if --on-missing=generate."
+        ),
+    )
+    parser.add_argument(
+        "--shared-hidden-states-path",
+        type=str,
+        default=None,
+        help=(
+            "Optional shared artifact cache used to coalesce identical hidden-state "
+            "requests across independent trainers. Disabled by default."
+        ),
+    )
+    parser.add_argument(
+        "--shared-hidden-states-namespace",
+        type=str,
+        default=None,
+        help=(
+            "Optional identity namespace for the producer's extraction configuration. "
+            "Trainers sharing artifacts must use the same value."
+        ),
+    )
+    parser.add_argument(
+        "--shared-hidden-states-ttl",
+        type=float,
+        default=3600.0,
+        help=(
+            "Seconds to retain shared artifacts before regeneration; 0 disables "
+            "expiration. Only applies when --shared-hidden-states-path is set."
+        ),
+    )
+    parser.add_argument(
+        "--shared-hidden-states-lock-timeout",
+        type=float,
+        default=300.0,
+        help=(
+            "Maximum seconds to wait for another trainer publishing the same shared "
+            "artifact. Only applies when --shared-hidden-states-path is set."
         ),
     )
     parser.add_argument(

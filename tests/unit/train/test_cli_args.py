@@ -15,6 +15,36 @@ def _parse(monkeypatch, extra: list[str]):
     return parse_args()
 
 
+def test_shared_hidden_state_cache_is_opt_in(monkeypatch):
+    args = _parse(monkeypatch, [])
+
+    assert args.shared_hidden_states_path is None
+    assert args.shared_hidden_states_namespace is None
+    assert args.shared_hidden_states_ttl == 3600.0
+    assert args.shared_hidden_states_lock_timeout == 300.0
+
+
+def test_shared_hidden_state_cache_arguments(monkeypatch):
+    args = _parse(
+        monkeypatch,
+        [
+            "--shared-hidden-states-path",
+            "shared-cache",
+            "--shared-hidden-states-namespace",
+            "layers:2,18,33",
+            "--shared-hidden-states-ttl",
+            "0",
+            "--shared-hidden-states-lock-timeout",
+            "45",
+        ],
+    )
+
+    assert args.shared_hidden_states_path == "shared-cache"
+    assert args.shared_hidden_states_namespace == "layers:2,18,33"
+    assert args.shared_hidden_states_ttl == 0
+    assert args.shared_hidden_states_lock_timeout == 45
+
+
 # ---------------------------------------------------------------------------
 # Ensure CLI args flow correctly through vars(args) into get_trainer_kwargs
 # ---------------------------------------------------------------------------

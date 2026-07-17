@@ -23,6 +23,8 @@ from urllib.parse import urlsplit
 import psutil
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from speculators.data_generation.artifact_cache import HiddenStateArtifactCache
+
 
 class EvidenceError(RuntimeError):
     """Raised when a benchmark cannot produce trustworthy evidence."""
@@ -493,35 +495,61 @@ def analyze_scenario(  # noqa: C901
     if invalid_completions:
         reasons.append(f"{invalid_completions} request(s) lacked a valid completion")
 
+    multiplicity = scenario.expected_service_completions_per_shared_sample
+    publish_once = multiplicity == 1 and len(expected_ids) > 1
     measured: list[RequestEvent] = []
     steady_start = started_at
     steady_end = finished_at
-    per_consumer_total: dict[str, int] = {}
-    for consumer_id in expected_ids:
+    per_consumer_total = {
+        consumer_id: sum(
+            event.valid_completion for event in by_consumer.get(consumer_id, [])
+        )
+        for consumer_id in expected_ids
+    }
+    if publish_once:
         completed = sorted(
-            (
-                event
-                for event in by_consumer.get(consumer_id, [])
-                if event.valid_completion
-            ),
+            (event for event in events if event.valid_completion),
             key=lambda event: event.completed_at,
         )
-        per_consumer_total[consumer_id] = len(completed)
         needed = (
             scenario.warmup_completions_per_consumer
             + scenario.minimum_steady_completions_per_consumer
         )
         if len(completed) < needed:
             reasons.append(
-                f"{consumer_id} completed {len(completed)} request(s), "
-                f"fewer than {needed}"
+                f"service completed {len(completed)} request(s), fewer than {needed}"
             )
-            continue
-        warmup = scenario.warmup_completions_per_consumer
-        if warmup:
-            steady_start = max(steady_start, completed[warmup - 1].completed_at)
-        steady_end = min(steady_end, completed[-1].completed_at)
-        measured.extend(completed[warmup:])
+        elif completed:
+            warmup = scenario.warmup_completions_per_consumer
+            if warmup:
+                steady_start = max(steady_start, completed[warmup - 1].completed_at)
+            steady_end = min(steady_end, completed[-1].completed_at)
+            measured.extend(completed[warmup:])
+    else:
+        for consumer_id in expected_ids:
+            completed = sorted(
+                (
+                    event
+                    for event in by_consumer.get(consumer_id, [])
+                    if event.valid_completion
+                ),
+                key=lambda event: event.completed_at,
+            )
+            needed = (
+                scenario.warmup_completions_per_consumer
+                + scenario.minimum_steady_completions_per_consumer
+            )
+            if len(completed) < needed:
+                reasons.append(
+                    f"{consumer_id} completed {len(completed)} request(s), "
+                    f"fewer than {needed}"
+                )
+                continue
+            warmup = scenario.warmup_completions_per_consumer
+            if warmup:
+                steady_start = max(steady_start, completed[warmup - 1].completed_at)
+            steady_end = min(steady_end, completed[-1].completed_at)
+            measured.extend(completed[warmup:])
 
     duration = steady_end - steady_start
     steady_events = [
@@ -530,13 +558,20 @@ def analyze_scenario(  # noqa: C901
     per_consumer_steady = Counter(event.consumer_id for event in steady_events)
     if duration <= 0:
         reasons.append("common steady-state window is empty")
-    for consumer_id in expected_ids:
-        count = per_consumer_steady[consumer_id]
-        if count < scenario.minimum_steady_completions_per_consumer:
+    if publish_once:
+        if len(steady_events) < scenario.minimum_steady_completions_per_consumer:
             reasons.append(
-                f"{consumer_id} has only {count} completion(s) in the common "
+                f"service has only {len(steady_events)} completion(s) in the "
                 "steady window"
             )
+    else:
+        for consumer_id in expected_ids:
+            count = per_consumer_steady[consumer_id]
+            if count < scenario.minimum_steady_completions_per_consumer:
+                reasons.append(
+                    f"{consumer_id} has only {count} completion(s) in the common "
+                    "steady window"
+                )
 
     key_counts = Counter(
         event.request_key for event in measured if event.request_key is not None
@@ -546,7 +581,6 @@ def analyze_scenario(  # noqa: C901
         if event.request_key is not None:
             key_consumers[event.request_key].add(event.consumer_id)
 
-    multiplicity = scenario.expected_service_completions_per_shared_sample
     if multiplicity == len(expected_ids):
         qualifying = [
             key
@@ -583,11 +617,15 @@ def analyze_scenario(  # noqa: C901
             "invalid_requests": invalid_requests,
             "invalid_completions": invalid_completions,
             "per_consumer_completions": per_consumer_total,
+            "per_consumer_completions_semantics": (
+                "service_request_owner" if publish_once else "logical_consumer"
+            ),
             "expected_service_completions_per_shared_sample": multiplicity,
             "qualifying_shared_samples": len(qualifying),
             "sample_completion_counts": safe_key_counts,
         },
         "steady_state": {
+            "mode": "publish_once_service" if publish_once else "per_consumer_service",
             "warmup_completions_per_consumer": (
                 scenario.warmup_completions_per_consumer
             ),
@@ -596,11 +634,95 @@ def analyze_scenario(  # noqa: C901
             "duration_seconds": max(duration, 0.0),
             "completions": len(steady_events),
             "completions_per_consumer": dict(per_consumer_steady),
+            "completions_per_consumer_semantics": (
+                "service_request_owner" if publish_once else "logical_consumer"
+            ),
             "completions_per_second": (
                 len(steady_events) / duration if duration > 0 else None
             ),
         },
     }
+
+
+def analyze_cache_accounting(
+    scenario: ScenarioSpec,
+    stats: dict[str, Any] | None,
+    service_completions: int,
+) -> dict[str, Any]:
+    """Validate cache counters against service-level request accounting."""
+    consumer_count = len(scenario.consumers)
+    publish_once = (
+        scenario.expected_service_completions_per_shared_sample == 1
+        and consumer_count > 1
+    )
+    if stats is None:
+        reasons = (
+            ["publish-once scenario is missing cache accounting"]
+            if publish_once
+            else []
+        )
+        return {"valid": not reasons, "invalid_reasons": reasons, "stats": None}
+
+    required = {
+        "schema_version",
+        "logical_requests",
+        "hits",
+        "misses",
+        "coalesced_waiters",
+        "retry_generations",
+        "publishes",
+        "generation_failures",
+        "publish_failures",
+        "invalid_artifacts_removed",
+        "expired_artifacts_removed",
+        "stale_temps_removed",
+        "lock_timeouts",
+    }
+    reasons = []
+    if required - stats.keys():
+        reasons.append(f"cache accounting is missing {sorted(required - stats.keys())}")
+        return {"valid": False, "invalid_reasons": reasons, "stats": stats}
+    if any(
+        not isinstance(stats[name], int)
+        or isinstance(stats[name], bool)
+        or stats[name] < 0
+        for name in required
+    ):
+        reasons.append("cache accounting contains invalid counters")
+        return {"valid": False, "invalid_reasons": reasons, "stats": stats}
+    if stats["schema_version"] != 1:
+        reasons.append(
+            f"cache accounting schema_version={stats['schema_version']}, expected 1"
+        )
+
+    expected_logical_requests = service_completions * consumer_count
+    expected_hits = service_completions * (consumer_count - 1)
+    expected = {
+        "logical_requests": expected_logical_requests,
+        "hits": expected_hits,
+        "misses": service_completions,
+        "publishes": service_completions,
+    }
+    for name, value in expected.items():
+        if stats[name] != value:
+            reasons.append(f"cache {name}={stats[name]}, expected {value}")
+    for name in (
+        "retry_generations",
+        "generation_failures",
+        "publish_failures",
+        "invalid_artifacts_removed",
+        "expired_artifacts_removed",
+        "stale_temps_removed",
+        "lock_timeouts",
+    ):
+        if stats[name]:
+            reasons.append(f"cache {name} must be zero, got {stats[name]}")
+    if stats["coalesced_waiters"] > stats["hits"]:
+        reasons.append(
+            "cache coalesced_waiters cannot exceed cache hits, got "
+            f"{stats['coalesced_waiters']} > {stats['hits']}"
+        )
+    return {"valid": not reasons, "invalid_reasons": reasons, "stats": stats}
 
 
 _STEP_TIME_PATTERN = re.compile(
@@ -916,6 +1038,12 @@ def _run_scenario(  # noqa: C901
     consumers: list[_ManagedProcess] = []
     proxies: list[AccountingProxy] = []
     runtime_errors: list[str] = []
+    shared_artifacts_dir = scenario_dir / "shared-artifacts"
+    cache_accounting_enabled = any(
+        "{shared_artifacts_dir}" in value
+        for consumer in scenario.consumers
+        for value in (*consumer.command, *consumer.env.values())
+    )
     started_at = time.monotonic()
     finished_at = started_at
 
@@ -962,6 +1090,7 @@ def _run_scenario(  # noqa: C901
                 "endpoint": proxy.endpoint,
                 "output_dir": str(consumer_dir),
                 "scenario": scenario.kind,
+                "shared_artifacts_dir": str(shared_artifacts_dir),
             }
             process = _ManagedProcess(
                 _render(consumer.command, replacements),
@@ -1013,6 +1142,21 @@ def _run_scenario(  # noqa: C901
             producer.terminate()
 
     analysis = analyze_scenario(scenario, ledger.snapshot(), started_at, finished_at)
+    cache_stats = None
+    if cache_accounting_enabled:
+        try:
+            cache_stats = HiddenStateArtifactCache(
+                shared_artifacts_dir, artifact_ttl_seconds=None
+            ).snapshot_stats()
+        except Exception as error:  # noqa: BLE001
+            runtime_errors.append(
+                f"cache accounting unavailable: {type(error).__name__}: {error}"
+            )
+    cache_accounting = analyze_cache_accounting(
+        scenario,
+        cache_stats,
+        analysis["request_accounting"]["valid_completions"],
+    )
     consumer_steps = {}
     for consumer in scenario.consumers:
         step_result = analyze_consumer_steps(
@@ -1034,6 +1178,7 @@ def _run_scenario(  # noqa: C901
     invalid_reasons = [
         *runtime_errors,
         *analysis["invalid_reasons"],
+        *cache_accounting["invalid_reasons"],
         *memory["invalid_reasons"],
     ]
     return {
@@ -1054,6 +1199,7 @@ def _run_scenario(  # noqa: C901
             for consumer, process in zip(scenario.consumers, consumers, strict=False)
         ],
         "request_accounting": analysis["request_accounting"],
+        "shared_artifact_cache": cache_accounting,
         "steady_state": steady,
         "consumer_step_times": consumer_steps,
         "makespan_seconds": max(finished_at - started_at, 0.0),

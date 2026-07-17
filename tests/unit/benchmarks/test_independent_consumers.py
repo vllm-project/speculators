@@ -16,6 +16,7 @@ from speculators.benchmarks.independent_consumers import (
     ProducerSpec,
     RequestEvent,
     ScenarioSpec,
+    analyze_cache_accounting,
     analyze_consumer_steps,
     analyze_scenario,
     canonical_request_key,
@@ -237,6 +238,10 @@ def test_analysis_separates_warmup_and_requires_exact_multiplicity():
     assert result["valid"]
     assert result["request_accounting"]["requests"] == 12
     assert result["request_accounting"]["qualifying_shared_samples"] == 3
+    assert (
+        result["request_accounting"]["per_consumer_completions_semantics"]
+        == "logical_consumer"
+    )
     assert result["steady_state"]["duration_seconds"] == pytest.approx(0.22)
     assert result["steady_state"]["completions"] == 7
 
@@ -265,6 +270,101 @@ def test_analysis_fails_closed_on_failed_or_duplicate_completion():
     assert any(
         "ambiguous multiplicity" in reason for reason in result["invalid_reasons"]
     )
+
+
+def test_publish_once_analysis_accepts_one_service_call_per_shared_sample():
+    events = [
+        _event("c0", "warmup", 0.1),
+        _event("c1", "sample-a", 0.2),
+        _event("c2", "sample-b", 0.3),
+        _event("c0", "sample-c", 0.4),
+    ]
+
+    result = analyze_scenario(
+        _scenario(multiplicity=1), events, started_at=0.0, finished_at=1.0
+    )
+
+    assert result["valid"]
+    assert result["request_accounting"]["requests"] == 4
+    assert result["request_accounting"]["qualifying_shared_samples"] == 3
+    assert (
+        result["request_accounting"]["per_consumer_completions_semantics"]
+        == "service_request_owner"
+    )
+    assert result["steady_state"]["mode"] == "publish_once_service"
+    assert (
+        result["steady_state"]["completions_per_consumer_semantics"]
+        == "service_request_owner"
+    )
+    assert result["steady_state"]["completions"] == 3
+
+
+def _cache_stats(**updates: int) -> dict[str, int]:
+    stats = {
+        "schema_version": 1,
+        "logical_requests": 12,
+        "hits": 8,
+        "misses": 4,
+        "coalesced_waiters": 2,
+        "retry_generations": 0,
+        "publishes": 4,
+        "generation_failures": 0,
+        "publish_failures": 0,
+        "invalid_artifacts_removed": 0,
+        "expired_artifacts_removed": 0,
+        "stale_temps_removed": 0,
+        "lock_timeouts": 0,
+    }
+    stats.update(updates)
+    return stats
+
+
+def test_cache_accounting_proves_publish_once_fanout():
+    result = analyze_cache_accounting(
+        _scenario(multiplicity=1), _cache_stats(), service_completions=4
+    )
+
+    assert result["valid"]
+    assert result["stats"]["logical_requests"] == 12
+    assert result["stats"]["misses"] == result["stats"]["publishes"] == 4
+    assert result["stats"]["hits"] == 8
+
+
+@pytest.mark.parametrize(
+    ("updates", "reason"),
+    [
+        ({"schema_version": 2}, "schema_version"),
+        ({"logical_requests": 11}, "logical_requests"),
+        ({"hits": 7}, "cache hits"),
+        ({"misses": 3}, "cache misses"),
+        ({"publishes": 3}, "cache publishes"),
+        ({"retry_generations": 1}, "retry_generations"),
+        ({"generation_failures": 1}, "generation_failures"),
+        ({"coalesced_waiters": 9}, "coalesced_waiters"),
+    ],
+)
+def test_cache_accounting_fails_closed_on_invalid_counters(updates, reason):
+    result = analyze_cache_accounting(
+        _scenario(multiplicity=1),
+        _cache_stats(**updates),
+        service_completions=4,
+    )
+
+    assert not result["valid"]
+    assert any(reason in message for message in result["invalid_reasons"])
+
+
+def test_publish_once_requires_cache_accounting():
+    publish_once = analyze_cache_accounting(
+        _scenario(multiplicity=1), None, service_completions=4
+    )
+    unshared = analyze_cache_accounting(
+        _scenario(multiplicity=3), None, service_completions=12
+    )
+
+    assert not publish_once["valid"]
+    assert publish_once["invalid_reasons"]
+    assert unshared["valid"]
 
 
 def test_consumer_step_analysis_excludes_warmup_and_reports_percentiles(tmp_path):

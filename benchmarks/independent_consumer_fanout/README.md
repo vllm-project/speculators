@@ -12,7 +12,8 @@ that overlaps in time. `CUDA_VISIBLE_DEVICES` and distributed rank variables are
 by the launcher and cannot be supplied by a role config.
 
 Each trainer receives its own accounting endpoint through the `{endpoint}` command
-placeholder. Other placeholders are `{consumer_id}`, `{output_dir}`, and `{scenario}`.
+placeholder. Other placeholders are `{consumer_id}`, `{output_dir}`, `{scenario}`, and
+the scenario-local `{shared_artifacts_dir}`.
 The proxy forwards non-streaming OpenAI requests to vLLM and records a completion only
 when the response is successful and contains a hidden-state artifact path. It stores
 only a digest of the request identity, never the returned artifact path.
@@ -40,3 +41,18 @@ For the unshared baseline,
 `expected_service_completions_per_shared_sample` is one for `1p1c` and three for
 `1p3c`. A publish-once implementation changes the latter to one; the logical consumer
 commands and all other workload settings must remain equivalent.
+
+To measure publish-once fan-out, pass the same cache to every consumer with
+`--shared-hidden-states-path {shared_artifacts_dir}` and set the `1p3c` expected service
+multiplicity to one. The report then includes aggregate logical request, hit, miss,
+coalesced-waiter, retry, publish, failure, cleanup, and timeout counters under
+`shared_artifact_cache`. The run fails closed unless three logical requests correspond
+to every service completion, exactly one miss is published, the other two requests hit,
+and all failure, retry, cleanup, and timeout counters are zero. Baseline scenarios that
+do not use the shared-cache placeholder remain valid without cache accounting.
+
+In publish-once mode, `per_consumer_completions` and the steady-state per-consumer
+completion map identify which consumer owned each service miss. They do not represent
+logical trainer progress: cache logical-request totals and each independent consumer's
+`consumer_step_times` provide that evidence. The report labels both maps with
+`service_request_owner` to make this distinction explicit.
