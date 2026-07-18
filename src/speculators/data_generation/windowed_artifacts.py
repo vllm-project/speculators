@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     import os
     from collections.abc import Callable, Iterator, Mapping, Sequence
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 DIGEST_LENGTH = 64
 MAX_CONSUMER_ID_LENGTH = 128
 
@@ -252,6 +252,7 @@ class WindowedArtifactCoordinator:
             cursor INTEGER NOT NULL,
             lookbehind INTEGER NOT NULL,
             lookahead INTEGER NOT NULL,
+            max_prefetch INTEGER NOT NULL,
             max_inflight INTEGER NOT NULL,
             state TEXT NOT NULL,
             heartbeat_at REAL NOT NULL,
@@ -485,6 +486,7 @@ class WindowedArtifactCoordinator:
         stream_id: str,
         lookbehind: int,
         lookahead: int,
+        max_prefetch: int,
         max_inflight: int,
         cursor: int = 0,
         reset: bool = False,
@@ -494,6 +496,7 @@ class WindowedArtifactCoordinator:
         for name, value in (
             ("lookbehind", lookbehind),
             ("lookahead", lookahead),
+            ("max_prefetch", max_prefetch),
             ("cursor", cursor),
         ):
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
@@ -502,6 +505,8 @@ class WindowedArtifactCoordinator:
             raise TypeError("max_inflight must be an integer")
         if max_inflight < 1:
             raise ValueError("max_inflight must be at least one")
+        if max_prefetch > lookahead + 1:
+            raise ValueError("max_prefetch must not exceed lookahead + 1")
 
         with self._transaction() as conn:
             if (
@@ -514,17 +519,24 @@ class WindowedArtifactCoordinator:
             row = conn.execute(
                 "SELECT * FROM consumers WHERE consumer_id=?", (consumer_id,)
             ).fetchone()
-            config = (stream_id, lookbehind, lookahead, max_inflight)
+            config = (
+                stream_id,
+                lookbehind,
+                lookahead,
+                max_prefetch,
+                max_inflight,
+            )
             now = self._clock()
             if row is None:
                 conn.execute(
-                    "INSERT INTO consumers VALUES(?,?,?,?,?,?,?,?,?)",
+                    "INSERT INTO consumers VALUES(?,?,?,?,?,?,?,?,?,?)",
                     (
                         consumer_id,
                         stream_id,
                         cursor,
                         lookbehind,
                         lookahead,
+                        max_prefetch,
                         max_inflight,
                         "active",
                         now,
@@ -538,6 +550,7 @@ class WindowedArtifactCoordinator:
                         "stream_id",
                         "lookbehind",
                         "lookahead",
+                        "max_prefetch",
                         "max_inflight",
                     )
                 )
@@ -674,9 +687,6 @@ class WindowedArtifactCoordinator:
                     now,
                 ),
             )
-            self._queue_artifact_locked(
-                conn, row["request_id"], ArtifactPriority.PREFETCH
-            )
         existing = conn.execute(
             "SELECT sequence FROM interests WHERE consumer_id=? AND kind='window'",
             (consumer_id,),
@@ -689,6 +699,58 @@ class WindowedArtifactCoordinator:
                     (consumer_id, int(row["sequence"])),
                 )
         self._prune_orphaned_locked(conn)
+        self._top_up_prefetch_locked(conn, consumer_id)
+
+    def _top_up_prefetch_locked(
+        self, conn: sqlite3.Connection, consumer_id: str
+    ) -> None:
+        consumer = conn.execute(
+            "SELECT * FROM consumers WHERE consumer_id=?", (consumer_id,)
+        ).fetchone()
+        if consumer is None or consumer["state"] != "active":
+            return
+        cap = int(consumer["max_prefetch"])
+        if cap == 0:
+            return
+        outstanding = int(
+            conn.execute(
+                "SELECT COUNT(DISTINCT a.request_id) FROM interests i "
+                "JOIN artifacts a ON a.request_id=i.request_id "
+                "WHERE i.consumer_id=? AND i.kind='window' AND a.priority=? "
+                "AND a.state IN (?,?)",
+                (
+                    consumer_id,
+                    int(ArtifactPriority.PREFETCH),
+                    ArtifactState.QUEUED.value,
+                    ArtifactState.GENERATING.value,
+                ),
+            ).fetchone()[0]
+        )
+        remaining = max(0, cap - outstanding)
+        if not remaining:
+            return
+        cursor = int(consumer["cursor"])
+        high = cursor + int(consumer["lookahead"]) + 1
+        candidates = conn.execute(
+            "SELECT a.request_id,MIN(i.sequence) AS first_sequence "
+            "FROM interests i JOIN artifacts a ON a.request_id=i.request_id "
+            "WHERE i.consumer_id=? AND i.kind='window' AND i.sequence>=? "
+            "AND i.sequence<? AND a.state IN (?,?) AND a.failures<? "
+            "GROUP BY a.request_id ORDER BY first_sequence,a.request_id LIMIT ?",
+            (
+                consumer_id,
+                cursor,
+                high,
+                ArtifactState.ABSENT.value,
+                ArtifactState.FAILED.value,
+                self.max_generation_attempts,
+                remaining,
+            ),
+        ).fetchall()
+        for row in candidates:
+            self._queue_artifact_locked(
+                conn, row["request_id"], ArtifactPriority.PREFETCH
+            )
 
     def _prune_orphaned_locked(self, conn: sqlite3.Connection) -> None:
         conn.execute(
@@ -780,6 +842,10 @@ class WindowedArtifactCoordinator:
                 )
                 expired_claims += 1
             self._prune_orphaned_locked(conn)
+            for row in conn.execute(
+                "SELECT consumer_id FROM consumers WHERE state='active'"
+            ).fetchall():
+                self._top_up_prefetch_locked(conn, row["consumer_id"])
         return {
             "expired_consumers": expired_consumers,
             "expired_claims": expired_claims,
@@ -1101,14 +1167,31 @@ class WindowedArtifactCoordinator:
                 self._refresh_window_locked(conn, owner)
 
     def claim_generation(
-        self, owner: str, *, stream_id: str, max_claims: int = 1
+        self,
+        owner: str,
+        *,
+        stream_id: str,
+        max_claims: int = 1,
+        max_active_claims: int | None = None,
     ) -> tuple[GenerationClaim, ...]:
         if not owner:
             raise ValueError("generation owner must be non-empty")
         if max_claims < 1:
             raise ValueError("max_claims must be at least one")
+        if max_active_claims is not None and max_active_claims < 1:
+            raise ValueError("max_active_claims must be at least one")
         with self._transaction() as conn:
             self._recover_claims_locked(conn)
+            if max_active_claims is not None:
+                active = int(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM artifacts WHERE state=?",
+                        (ArtifactState.GENERATING.value,),
+                    ).fetchone()[0]
+                )
+                max_claims = min(max_claims, max_active_claims - active)
+                if max_claims <= 0:
+                    return ()
             rows = conn.execute(
                 "SELECT DISTINCT a.* FROM artifacts a "
                 "JOIN interests i ON i.request_id=a.request_id "
@@ -1219,6 +1302,10 @@ class WindowedArtifactCoordinator:
             (ArtifactState.GENERATING.value, now),
         ).fetchall()
         for row in rows:
+            affected = conn.execute(
+                "SELECT DISTINCT consumer_id FROM interests WHERE request_id=?",
+                (row["request_id"],),
+            ).fetchall()
             interested = conn.execute(
                 "SELECT 1 FROM interests WHERE request_id=? LIMIT 1",
                 (row["request_id"],),
@@ -1242,6 +1329,8 @@ class WindowedArtifactCoordinator:
                     row["request_id"],
                 ),
             )
+            for consumer in affected:
+                self._top_up_prefetch_locked(conn, consumer["consumer_id"])
 
     def complete_generation(
         self,
@@ -1280,6 +1369,12 @@ class WindowedArtifactCoordinator:
                 ),
             )
             self._update_high_water_locked(conn)
+            interested = conn.execute(
+                "SELECT DISTINCT consumer_id FROM interests WHERE request_id=?",
+                (claim.request_id,),
+            ).fetchall()
+            for consumer in interested:
+                self._top_up_prefetch_locked(conn, consumer["consumer_id"])
 
     def fail_generation(
         self, owner: str, claim: GenerationClaim, error: BaseException | str
@@ -1298,6 +1393,10 @@ class WindowedArtifactCoordinator:
                     f"stale generation failure for {claim.request_id}"
                 )
             failures = int(row["failures"]) + 1
+            affected = conn.execute(
+                "SELECT DISTINCT consumer_id FROM interests WHERE request_id=?",
+                (claim.request_id,),
+            ).fetchall()
             interested = conn.execute(
                 "SELECT 1 FROM interests WHERE request_id=? LIMIT 1",
                 (claim.request_id,),
@@ -1320,6 +1419,8 @@ class WindowedArtifactCoordinator:
                     claim.request_id,
                 ),
             )
+            for consumer in affected:
+                self._top_up_prefetch_locked(conn, consumer["consumer_id"])
 
     def begin_evictions(self, *, limit: int = 64) -> tuple[EvictionClaim, ...]:
         if limit < 1:
@@ -1371,27 +1472,22 @@ class WindowedArtifactCoordinator:
                     f"stale eviction completion for {claim.request_id}"
                 )
             interested = conn.execute(
-                "SELECT 1 FROM interests WHERE request_id=? LIMIT 1",
+                "SELECT DISTINCT consumer_id,kind FROM interests WHERE request_id=?",
                 (claim.request_id,),
-            ).fetchone()
+            ).fetchall()
             if removed:
+                demand = any(item["kind"] == "demand" for item in interested)
                 state = (
-                    ArtifactState.QUEUED.value
-                    if interested
-                    else ArtifactState.ABSENT.value
+                    ArtifactState.QUEUED.value if demand else ArtifactState.ABSENT.value
                 )
-                priority = (
-                    self._retry_priority_locked(conn, claim.request_id)
-                    if interested
-                    else None
-                )
+                priority = ArtifactPriority.DEMAND if demand else None
                 conn.execute(
                     "UPDATE artifacts SET state=?,path=NULL,size_bytes=0,priority=?,"
                     "queued_at=?,updated_at=? WHERE request_id=?",
                     (
                         state,
                         int(priority) if priority is not None else None,
-                        self._clock() if interested else None,
+                        self._clock() if demand else None,
                         self._clock(),
                         claim.request_id,
                     ),
@@ -1401,6 +1497,8 @@ class WindowedArtifactCoordinator:
                     "UPDATE artifacts SET state=?,updated_at=? WHERE request_id=?",
                     (ArtifactState.READY.value, self._clock(), claim.request_id),
                 )
+            for consumer_id in {item["consumer_id"] for item in interested}:
+                self._top_up_prefetch_locked(conn, consumer_id)
 
     def complete_consumer(self, consumer_id: str) -> None:
         with self._transaction() as conn:

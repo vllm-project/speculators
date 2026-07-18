@@ -196,7 +196,10 @@ def create_train_val_loaders(
     shared_artifacts_lock_timeout_seconds: float = 300.0,
     shared_artifacts_consumer_id: str | None = None,
     shared_artifacts_lookbehind: int = 2,
-    shared_artifacts_lookahead: int = 16,
+    shared_artifacts_lookahead: int = 40,
+    shared_artifacts_max_prefetch_per_consumer: int = 8,
+    shared_artifacts_capture_batch_size: int = 8,
+    shared_artifacts_capture_batch_wait_seconds: float = 0.002,
     shared_artifacts_max_inflight: int = 32,
     shared_artifacts_consumer_timeout_seconds: float = 120.0,
     shared_artifacts_claim_timeout_seconds: float = 300.0,
@@ -260,6 +263,13 @@ def create_train_val_loaders(
             ),
             shared_artifacts_lookbehind=shared_artifacts_lookbehind,
             shared_artifacts_lookahead=shared_artifacts_lookahead,
+            shared_artifacts_max_prefetch_per_consumer=(
+                shared_artifacts_max_prefetch_per_consumer
+            ),
+            shared_artifacts_capture_batch_size=shared_artifacts_capture_batch_size,
+            shared_artifacts_capture_batch_wait_seconds=(
+                shared_artifacts_capture_batch_wait_seconds
+            ),
             shared_artifacts_max_inflight=shared_artifacts_max_inflight,
             shared_artifacts_consumer_timeout_seconds=(
                 shared_artifacts_consumer_timeout_seconds
@@ -294,6 +304,13 @@ def create_train_val_loaders(
             ),
             shared_artifacts_lookbehind=shared_artifacts_lookbehind,
             shared_artifacts_lookahead=shared_artifacts_lookahead,
+            shared_artifacts_max_prefetch_per_consumer=(
+                shared_artifacts_max_prefetch_per_consumer
+            ),
+            shared_artifacts_capture_batch_size=shared_artifacts_capture_batch_size,
+            shared_artifacts_capture_batch_wait_seconds=(
+                shared_artifacts_capture_batch_wait_seconds
+            ),
             shared_artifacts_max_inflight=shared_artifacts_max_inflight,
             shared_artifacts_consumer_timeout_seconds=(
                 shared_artifacts_consumer_timeout_seconds

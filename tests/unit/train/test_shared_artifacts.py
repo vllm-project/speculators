@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+import time
 from typing import TYPE_CHECKING
 
 import hs_connectors.transfer as transfer_module
@@ -81,6 +83,23 @@ class _SingleBatchSampler:
     @staticmethod
     def _generate_batches(_epoch: int) -> list[list[int]]:
         return [[0]]
+
+    def set_epoch(self, epoch: int) -> None:
+        self.epoch = epoch
+
+
+class _SequentialSampler:
+    epoch = 0
+    seed = 0
+    rank = 0
+    num_replicas = 1
+    batch_max_length = 128
+
+    def __init__(self, count: int) -> None:
+        self.lengths = [3] * count
+
+    def _generate_batches(self, _epoch: int) -> list[list[int]]:
+        return [[index] for index in range(len(self.lengths))]
 
     def set_epoch(self, epoch: int) -> None:
         self.epoch = epoch
@@ -186,6 +205,7 @@ def test_windowed_dataset_dispatches_reads_acks_and_cleans_final_window(
         shared_artifacts_consumer_id="consumer",
         request_timeout=2,
     )
+    dataset.client = object()
     monkeypatch.setattr(
         dataset,
         "_materialize_shared_hs",
@@ -237,6 +257,7 @@ def test_windowed_scheduling_is_independent_of_dataloader_workers(
         shared_artifacts_consumer_id="consumer",
         request_timeout=5,
     )
+    dataset.client = object()
 
     def materialize(_index, dataset_item, _client_item):
         tokens = dataset_item["input_ids"]
@@ -273,6 +294,130 @@ def test_windowed_scheduling_is_independent_of_dataloader_workers(
         snapshot = coordinator.snapshot()
     assert snapshot["retained_artifacts"] == 0
     assert snapshot["consumers"][0]["cursor"] == len(samples)
+
+
+def test_windowed_producer_runs_bounded_concurrent_capture_batches(
+    tmp_path, monkeypatch
+):
+    data_path = tmp_path / "data"
+    shared_path = tmp_path / "shared"
+    _write_multi_dataset(data_path, count=8)
+    dataset = ArrowDataset(
+        max_len=128,
+        datapath=data_path,
+        transfer=FileTransfer(tmp_path / "index"),
+        model="model",
+        on_missing="generate",
+        on_generate="delete",
+        shared_artifacts_path=shared_path,
+        shared_artifacts_namespace="layers:2,18,33",
+        shared_artifacts_consumer_id="consumer",
+        shared_artifacts_lookahead=7,
+        shared_artifacts_max_prefetch_per_consumer=8,
+        shared_artifacts_capture_batch_size=4,
+        shared_artifacts_capture_batch_wait_seconds=0,
+        request_timeout=5,
+    )
+    dataset.client = object()
+    lock = threading.Lock()
+    active = 0
+    peak = 0
+
+    def materialize(_index, dataset_item, _client_item):
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        try:
+            time.sleep(0.05)
+            return {
+                "token_ids": dataset_item["input_ids"],
+                "hidden_states": torch.arange(12, dtype=torch.float32).reshape(3, 4),
+            }
+        finally:
+            with lock:
+                active -= 1
+
+    monkeypatch.setattr(dataset, "_materialize_shared_hs", materialize)
+    base_sampler = _SequentialSampler(8)
+    stream_id = dataset.configure_windowed_stream(base_sampler)
+    sampler = WindowedBatchSampler(
+        base_sampler,
+        stream_id=stream_id,
+        request_id_for_index=dataset.windowed_request_id,
+    )
+    dataset.prepare_windowed_epoch(sampler.full_epoch_samples(0), cursor=0, reset=True)
+
+    dataset.start_windowed_producer()
+    try:
+        deadline = time.monotonic() + 5
+        with WindowedArtifactCoordinator(shared_path) as coordinator:
+            while coordinator.snapshot()["artifact_states"].get("ready", 0) != 8:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("concurrent capture batch did not complete")
+                time.sleep(0.01)
+    finally:
+        dataset.stop_windowed_producer()
+
+    assert peak == 4
+
+
+def test_windowed_capture_batch_isolates_one_failed_claim(tmp_path, monkeypatch):
+    data_path = tmp_path / "data"
+    shared_path = tmp_path / "shared"
+    _write_multi_dataset(data_path, count=4)
+    dataset = ArrowDataset(
+        max_len=128,
+        datapath=data_path,
+        transfer=FileTransfer(tmp_path / "index"),
+        model="model",
+        on_missing="generate",
+        on_generate="delete",
+        shared_artifacts_path=shared_path,
+        shared_artifacts_namespace="layers:2,18,33",
+        shared_artifacts_consumer_id="consumer",
+        shared_artifacts_lookahead=3,
+        shared_artifacts_max_prefetch_per_consumer=4,
+        shared_artifacts_capture_batch_size=4,
+        shared_artifacts_capture_batch_wait_seconds=0,
+        shared_artifacts_generation_attempts=1,
+        request_timeout=5,
+    )
+    dataset.client = object()
+
+    def materialize(index, dataset_item, _client_item):
+        if index == 1:
+            raise RuntimeError("isolated capture failure")
+        return {
+            "token_ids": dataset_item["input_ids"],
+            "hidden_states": torch.arange(12, dtype=torch.float32).reshape(3, 4),
+        }
+
+    monkeypatch.setattr(dataset, "_materialize_shared_hs", materialize)
+    base_sampler = _SequentialSampler(4)
+    stream_id = dataset.configure_windowed_stream(base_sampler)
+    sampler = WindowedBatchSampler(
+        base_sampler,
+        stream_id=stream_id,
+        request_id_for_index=dataset.windowed_request_id,
+    )
+    dataset.prepare_windowed_epoch(sampler.full_epoch_samples(0), cursor=0, reset=True)
+
+    dataset.start_windowed_producer()
+    try:
+        deadline = time.monotonic() + 5
+        with WindowedArtifactCoordinator(shared_path) as coordinator:
+            while True:
+                states = coordinator.snapshot()["artifact_states"]
+                if states.get("ready", 0) == 3 and states.get("failed", 0) == 1:
+                    break
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        "mixed capture batch did not reach terminal state"
+                    )
+                time.sleep(0.01)
+    finally:
+        dataset.stop_windowed_producer()
 
 
 def test_unconfigured_dataset_keeps_existing_per_request_delete_behavior(
@@ -463,6 +608,9 @@ def test_train_and_validation_loaders_share_artifact_configuration(monkeypatch):
         shared_artifacts_consumer_id="consumer-a",
         shared_artifacts_lookbehind=3,
         shared_artifacts_lookahead=20,
+        shared_artifacts_max_prefetch_per_consumer=7,
+        shared_artifacts_capture_batch_size=6,
+        shared_artifacts_capture_batch_wait_seconds=0.01,
         shared_artifacts_max_inflight=40,
     )
 
@@ -474,6 +622,9 @@ def test_train_and_validation_loaders_share_artifact_configuration(monkeypatch):
         assert kwargs["shared_artifacts_lock_timeout_seconds"] == 45
         assert kwargs["shared_artifacts_lookbehind"] == 3
         assert kwargs["shared_artifacts_lookahead"] == 20
+        assert kwargs["shared_artifacts_max_prefetch_per_consumer"] == 7
+        assert kwargs["shared_artifacts_capture_batch_size"] == 6
+        assert kwargs["shared_artifacts_capture_batch_wait_seconds"] == 0.01
         assert kwargs["shared_artifacts_max_inflight"] == 40
     assert dataset_kwargs[0]["shared_artifacts_consumer_id"] == "consumer-a:train"
     assert dataset_kwargs[1]["shared_artifacts_consumer_id"] == "consumer-a:val"

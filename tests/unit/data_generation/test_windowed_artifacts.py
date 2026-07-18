@@ -94,17 +94,21 @@ def _register(
     contract: dict | None = None,
     lookbehind: int = 0,
     lookahead: int = 2,
+    max_prefetch: int | None = None,
     max_inflight: int = 4,
 ) -> None:
     contract = contract or {"dataset_fingerprint": "dataset-a", "sampler_seed": 0}
     assert coordinator.register_stream(contract) == samples[0].stream_id
     coordinator.register_positions(samples)
+    if max_prefetch is None:
+        max_prefetch = min(8, lookahead + 1)
     for consumer_id in consumer_ids:
         coordinator.register_consumer(
             consumer_id,
             stream_id=samples[0].stream_id,
             lookbehind=lookbehind,
             lookahead=lookahead,
+            max_prefetch=max_prefetch,
             max_inflight=max_inflight,
         )
 
@@ -121,6 +125,19 @@ def _publish(
         "producer", claim, path=artifact, size_bytes=artifact.stat().st_size
     )
     return claim.request_id
+
+
+def _complete_claim(
+    coordinator: WindowedArtifactCoordinator,
+    owner: str,
+    claim,
+    path: Path,
+) -> None:
+    artifact = path / f"{claim.request_id}.safetensors"
+    artifact.write_bytes(b"payload")
+    coordinator.complete_generation(
+        owner, claim, path=artifact, size_bytes=artifact.stat().st_size
+    )
 
 
 def _wait_until(predicate, timeout: float = 2.0) -> None:
@@ -199,11 +216,47 @@ def test_completed_consumer_reactivates_at_its_committed_cursor(tmp_path):
         stream_id=stream_id,
         lookbehind=0,
         lookahead=2,
+        max_prefetch=3,
         max_inflight=4,
         cursor=0,
     )
 
     assert coordinator.snapshot()["consumers"][0]["state"] == "active"
+
+
+def test_max_prefetch_is_part_of_the_persisted_resume_contract(tmp_path):
+    contract = {"dataset_fingerprint": "dataset-a", "sampler_seed": 0}
+    stream_id = canonical_stream_id(contract)
+    samples = _samples(stream_id, 4)
+    coordinator = _coordinator(tmp_path)
+    _register(
+        coordinator,
+        samples,
+        "consumer",
+        lookahead=3,
+        max_prefetch=2,
+    )
+    coordinator.close()
+
+    with _coordinator(tmp_path) as resumed:
+        resumed.register_consumer(
+            "consumer",
+            stream_id=stream_id,
+            lookbehind=0,
+            lookahead=3,
+            max_prefetch=2,
+            max_inflight=4,
+        )
+        assert resumed.snapshot()["consumers"][0]["max_prefetch"] == 2
+        with pytest.raises(WindowedArtifactError, match="configuration changed"):
+            resumed.register_consumer(
+                "consumer",
+                stream_id=stream_id,
+                lookbehind=0,
+                lookahead=3,
+                max_prefetch=3,
+                max_inflight=4,
+            )
 
 
 def test_two_consumers_share_publication_but_commit_independently(tmp_path):
@@ -233,6 +286,88 @@ def test_two_consumers_share_publication_but_commit_independently(tmp_path):
     assert coordinator.ack("consumer-b", [second.as_batch_metadata()]) == 1
     evictions = coordinator.begin_evictions()
     assert [claim.request_id for claim in evictions] == [samples[0].request_id]
+
+
+def test_prefetch_cap_limits_active_work_and_tops_up_after_completion(tmp_path):
+    contract = {"dataset_fingerprint": "dataset-a", "sampler_seed": 0}
+    stream_id = canonical_stream_id(contract)
+    samples = _samples(stream_id, 50)
+    coordinator = _coordinator(tmp_path)
+    _register(
+        coordinator,
+        samples,
+        "consumer",
+        lookahead=40,
+        max_prefetch=8,
+    )
+
+    snapshot = coordinator.snapshot()
+    assert snapshot["artifact_states"] == {"absent": 42, "queued": 8}
+    first = coordinator.claim_generation(
+        "producer-a",
+        stream_id=stream_id,
+        max_claims=8,
+        max_active_claims=8,
+    )
+    assert len(first) == 8
+    assert all(claim.priority is ArtifactPriority.PREFETCH for claim in first)
+    assert (
+        coordinator.claim_generation(
+            "producer-b",
+            stream_id=stream_id,
+            max_claims=8,
+            max_active_claims=8,
+        )
+        == ()
+    )
+
+    _complete_claim(coordinator, "producer-a", first[0], tmp_path)
+    assert coordinator.snapshot()["artifact_states"] == {
+        "absent": 41,
+        "generating": 7,
+        "queued": 1,
+        "ready": 1,
+    }
+    second = coordinator.claim_generation(
+        "producer-b",
+        stream_id=stream_id,
+        max_claims=8,
+        max_active_claims=8,
+    )
+    assert len(second) == 1
+    assert coordinator.snapshot()["artifact_states"]["generating"] == 8
+
+
+def test_demand_bypasses_full_prefetch_cap(tmp_path):
+    contract = {"dataset_fingerprint": "dataset-a", "sampler_seed": 0}
+    stream_id = canonical_stream_id(contract)
+    samples = _samples(stream_id, 50)
+    coordinator = _coordinator(tmp_path)
+    _register(
+        coordinator,
+        samples,
+        "consumer",
+        lookahead=40,
+        max_prefetch=8,
+    )
+    acquired: list = []
+    thread = threading.Thread(
+        target=lambda: acquired.append(
+            coordinator.acquire("consumer", samples[20], timeout_seconds=2)
+        )
+    )
+    thread.start()
+    _wait_until(lambda: coordinator.snapshot()["inflight_acquisitions"] == 1)
+
+    claims = coordinator.claim_generation("producer", stream_id=stream_id, max_claims=9)
+    assert len(claims) == 9
+    assert claims[0].request_id == samples[20].request_id
+    assert claims[0].priority is ArtifactPriority.DEMAND
+    for claim in claims:
+        _complete_claim(coordinator, "producer", claim, tmp_path)
+    thread.join(2)
+    assert len(acquired) == 1
+    coordinator.ack("consumer", [acquired[0].as_batch_metadata()])
 
 
 def test_max_inflight_is_independent_of_dataloader_prefetch(tmp_path):
@@ -282,9 +417,24 @@ def test_authorized_batch_finishes_when_larger_than_window_limits(tmp_path):
     while coordinator.snapshot()["artifact_states"].get("queued", 0):
         _publish(coordinator, stream_id, tmp_path)
 
-    leases = [
-        coordinator.acquire("consumer", sample, timeout_seconds=1) for sample in samples
-    ]
+    def acquire_one(current, results) -> None:
+        results.append(coordinator.acquire("consumer", current, timeout_seconds=1))
+
+    leases = [coordinator.acquire("consumer", samples[0], timeout_seconds=1)]
+    for sample in samples[1:]:
+        acquired: list = []
+        thread = threading.Thread(
+            target=acquire_one,
+            args=(sample, acquired),
+        )
+        thread.start()
+        _wait_until(
+            lambda: coordinator.snapshot()["inflight_acquisitions"] == len(leases) + 1
+        )
+        _publish(coordinator, stream_id, tmp_path)
+        thread.join(2)
+        assert len(acquired) == 1
+        leases.extend(acquired)
     assert coordinator.snapshot()["inflight_acquisitions"] == 3
     assert (
         coordinator.ack("consumer", [lease.as_batch_metadata() for lease in leases])
@@ -366,6 +516,30 @@ def test_generation_failure_retries_then_wakes_waiter(tmp_path):
     assert "terminal failure" in str(result[0])
 
 
+def test_terminal_prefetch_failure_releases_capacity_for_next_position(tmp_path):
+    contract = {"dataset_fingerprint": "dataset-a", "sampler_seed": 0}
+    stream_id = canonical_stream_id(contract)
+    samples = _samples(stream_id, 5)
+    coordinator = _coordinator(tmp_path, max_generation_attempts=1)
+    _register(
+        coordinator,
+        samples,
+        "consumer",
+        lookahead=4,
+        max_prefetch=2,
+    )
+
+    claims = coordinator.claim_generation("producer", stream_id=stream_id, max_claims=2)
+    coordinator.fail_generation("producer", claims[0], "terminal failure")
+
+    assert coordinator.snapshot()["artifact_states"] == {
+        "absent": 2,
+        "failed": 1,
+        "generating": 1,
+        "queued": 1,
+    }
+
+
 def test_expired_consumer_releases_window_and_read_lease(tmp_path):
     now = [100.0]
     contract = {"dataset_fingerprint": "dataset-a", "sampler_seed": 0}
@@ -409,6 +583,7 @@ def test_resume_reset_rewinds_cursor_and_clears_uncommitted_leases(tmp_path):
         stream_id=stream_id,
         lookbehind=0,
         lookahead=1,
+        max_prefetch=2,
         max_inflight=2,
         cursor=0,
         reset=True,
@@ -475,6 +650,7 @@ def _assert_long_stream_retention_bound(tmp_path: Path, count: int) -> None:
             stream_id=stream_id,
             lookbehind=2,
             lookahead=16,
+            max_prefetch=8,
             max_inflight=32,
             cursor=cursor,
             reset=True,

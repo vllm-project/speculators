@@ -663,6 +663,15 @@ def main(args: argparse.Namespace):  # noqa: C901
         shared_artifacts_consumer_id=args.shared_hidden_states_consumer_id,
         shared_artifacts_lookbehind=args.shared_hidden_states_lookbehind,
         shared_artifacts_lookahead=args.shared_hidden_states_lookahead,
+        shared_artifacts_max_prefetch_per_consumer=(
+            args.shared_hidden_states_max_prefetch_per_consumer
+        ),
+        shared_artifacts_capture_batch_size=(
+            args.shared_hidden_states_capture_batch_size
+        ),
+        shared_artifacts_capture_batch_wait_seconds=(
+            args.shared_hidden_states_capture_batch_wait
+        ),
         shared_artifacts_max_inflight=args.shared_hidden_states_max_inflight,
         shared_artifacts_consumer_timeout_seconds=(
             args.shared_hidden_states_consumer_timeout
@@ -818,6 +827,27 @@ def _validate_windowed_consumer_args(
         )
 
 
+def _validate_windowed_prefetch_args(
+    parser: argparse.ArgumentParser, args: argparse.Namespace
+) -> None:
+    if args.shared_hidden_states_max_prefetch_per_consumer < 0:
+        parser.error(
+            "--shared-hidden-states-max-prefetch-per-consumer must be non-negative"
+        )
+    if (
+        args.shared_hidden_states_max_prefetch_per_consumer
+        > args.shared_hidden_states_lookahead + 1
+    ):
+        parser.error(
+            "--shared-hidden-states-max-prefetch-per-consumer must not exceed "
+            "--shared-hidden-states-lookahead + 1"
+        )
+    if args.shared_hidden_states_capture_batch_size < 1:
+        parser.error("--shared-hidden-states-capture-batch-size must be at least one")
+    if args.shared_hidden_states_capture_batch_wait < 0:
+        parser.error("--shared-hidden-states-capture-batch-wait must be non-negative")
+
+
 def _validate_windowed_shared_hidden_state_args(
     parser: argparse.ArgumentParser, args: argparse.Namespace
 ) -> None:
@@ -830,6 +860,7 @@ def _validate_windowed_shared_hidden_state_args(
             parser.error(f"--{name.replace('_', '-')} must be non-negative")
     if args.shared_hidden_states_max_inflight < 1:
         parser.error("--shared-hidden-states-max-inflight must be at least one")
+    _validate_windowed_prefetch_args(parser, args)
     if args.shared_hidden_states_consumer_timeout <= 0:
         parser.error("--shared-hidden-states-consumer-timeout must be positive")
     if args.shared_hidden_states_claim_timeout <= 0:
@@ -1043,8 +1074,31 @@ def parse_args():
     parser.add_argument(
         "--shared-hidden-states-lookahead",
         type=int,
-        default=16,
+        default=40,
         help="Positions asynchronously prepared ahead of each consumer cursor.",
+    )
+    parser.add_argument(
+        "--shared-hidden-states-max-prefetch-per-consumer",
+        type=int,
+        default=8,
+        help=(
+            "Maximum queued or generating prefetches for one logical consumer. "
+            "Demand requests bypass this limit."
+        ),
+    )
+    parser.add_argument(
+        "--shared-hidden-states-capture-batch-size",
+        type=int,
+        default=8,
+        help="Maximum concurrent hidden-state captures across all consumers.",
+    )
+    parser.add_argument(
+        "--shared-hidden-states-capture-batch-wait",
+        type=float,
+        default=0.002,
+        help=(
+            "Seconds to wait for producer requests to coalesce before claiming a batch."
+        ),
     )
     parser.add_argument(
         "--shared-hidden-states-max-inflight",

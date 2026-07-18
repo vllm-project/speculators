@@ -26,7 +26,10 @@ def test_shared_hidden_state_cache_is_opt_in(monkeypatch):
     assert args.shared_hidden_states_lock_timeout == 300.0
     assert args.shared_hidden_states_consumer_id is None
     assert args.shared_hidden_states_lookbehind == 2
-    assert args.shared_hidden_states_lookahead == 16
+    assert args.shared_hidden_states_lookahead == 40
+    assert args.shared_hidden_states_max_prefetch_per_consumer == 8
+    assert args.shared_hidden_states_capture_batch_size == 8
+    assert args.shared_hidden_states_capture_batch_wait == 0.002
     assert args.shared_hidden_states_max_inflight == 32
 
 
@@ -63,6 +66,12 @@ def test_windowed_shared_hidden_state_arguments(monkeypatch):
             "3",
             "--shared-hidden-states-lookahead",
             "20",
+            "--shared-hidden-states-max-prefetch-per-consumer",
+            "7",
+            "--shared-hidden-states-capture-batch-size",
+            "6",
+            "--shared-hidden-states-capture-batch-wait",
+            "0.01",
             "--shared-hidden-states-max-inflight",
             "40",
             "--shared-hidden-states-consumer-timeout",
@@ -77,6 +86,9 @@ def test_windowed_shared_hidden_state_arguments(monkeypatch):
     assert args.shared_hidden_states_consumer_id == "consumer-a"
     assert args.shared_hidden_states_lookbehind == 3
     assert args.shared_hidden_states_lookahead == 20
+    assert args.shared_hidden_states_max_prefetch_per_consumer == 7
+    assert args.shared_hidden_states_capture_batch_size == 6
+    assert args.shared_hidden_states_capture_batch_wait == 0.01
     assert args.shared_hidden_states_max_inflight == 40
     assert args.shared_hidden_states_consumer_timeout == 60
     assert args.shared_hidden_states_claim_timeout == 90
@@ -114,6 +126,15 @@ def test_windowed_shared_hidden_state_arguments(monkeypatch):
         ],
         ["--shared-hidden-states-lookbehind", "-1"],
         ["--shared-hidden-states-lookahead", "-1"],
+        ["--shared-hidden-states-max-prefetch-per-consumer", "-1"],
+        [
+            "--shared-hidden-states-lookahead",
+            "0",
+            "--shared-hidden-states-max-prefetch-per-consumer",
+            "2",
+        ],
+        ["--shared-hidden-states-capture-batch-size", "0"],
+        ["--shared-hidden-states-capture-batch-wait", "-0.001"],
         ["--shared-hidden-states-max-inflight", "0"],
         ["--shared-hidden-states-consumer-timeout", "0"],
         ["--shared-hidden-states-claim-timeout", "0"],

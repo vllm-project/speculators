@@ -96,7 +96,13 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--shared-hidden-states-lookbehind`** (int, default: `2`) Committed stream positions retained behind this consumer's cursor.
 
-- **`--shared-hidden-states-lookahead`** (int, default: `16`) Stream positions asynchronously prepared ahead of this consumer's committed cursor.
+- **`--shared-hidden-states-lookahead`** (int, default: `40`) Stream positions retained ahead of this consumer's committed cursor.
+
+- **`--shared-hidden-states-max-prefetch-per-consumer`** (int, default: `8`) Maximum PREFETCH artifacts for one consumer that may be queued or generating at once. Demand requests bypass this bound. This value cannot exceed `lookahead + 1`.
+
+- **`--shared-hidden-states-capture-batch-size`** (int, default: `8`) Global maximum number of hidden-state captures in flight across all trainer dispatchers sharing the coordinator.
+
+- **`--shared-hidden-states-capture-batch-wait`** (float, default: `0.002`) Seconds each dispatcher waits before claiming work so newly queued requests can coalesce into a producer batch.
 
 - **`--shared-hidden-states-max-inflight`** (int, default: `32`) Maximum waiting or leased positions per consumer. Once the first sample of a packed batch is admitted, the rest of that batch may complete atomically so a batch larger than this value cannot deadlock before trainer ACK.
 
@@ -110,7 +116,7 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
   Without `--shared-hidden-states-consumer-id`, this remains the legacy TTL cache: setting the TTL to zero retains one artifact per unique request, and a finite TTL does not by itself bound a pass over unseen samples.
 
-  With a consumer ID, SQLite tracks deterministic sampler positions, independent consumer cursors, generation claims, read leases, and the union of live windows. DataLoader workers only acquire and materialize authorized artifacts. The trainer main process advances the cursor after a successful training optimizer boundary or validation forward. Artifacts outside every live window are removed only after all read leases are released. In this mode TTL expiration is disabled; retention is controlled by windows and explicit leases.
+  With a consumer ID, SQLite tracks deterministic sampler positions, independent consumer cursors, generation claims, read leases, and the union of live windows. Window retention and active prefetch are separate bounds: the full lookahead remains reusable while only the nearest configured prefetches consume producer capacity. DataLoader workers only acquire and materialize authorized artifacts. The trainer main process advances the cursor after a successful training optimizer boundary or validation forward. Artifacts outside every live window are removed only after all read leases are released. In this mode TTL expiration is disabled; retention is controlled by windows and explicit leases.
 
 - **`--legacy-data`** (flag) **DEPRECATED.** Use the old data format which stores hidden states alongside token_ids.
 

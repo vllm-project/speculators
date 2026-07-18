@@ -7,6 +7,7 @@ import threading
 import uuid
 import warnings
 from collections.abc import Callable
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from os import PathLike
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -43,6 +44,17 @@ from speculators.train.noise_transforms import TransformTensors
 BatchType = dict[str, Any]
 WINDOWED_LEASE_KEY = "_windowed_artifact_lease"
 WINDOWED_BATCH_LEASES_KEY = "_windowed_artifact_leases"
+
+
+def _validate_integer_config(name: str, value: object, *, minimum: int) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        qualifier = "non-negative" if minimum == 0 else "positive"
+        raise ValueError(f"{name} must be a {qualifier} integer")
+
+
+def _validate_non_negative_number(name: str, value: object) -> None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        raise ValueError(f"{name} must be non-negative")
 
 
 def list_files(path):
@@ -263,7 +275,10 @@ class ArrowDataset(BaseDataset):
         shared_artifacts_lock_timeout_seconds: float = 300.0,
         shared_artifacts_consumer_id: str | None = None,
         shared_artifacts_lookbehind: int = 2,
-        shared_artifacts_lookahead: int = 16,
+        shared_artifacts_lookahead: int = 40,
+        shared_artifacts_max_prefetch_per_consumer: int = 8,
+        shared_artifacts_capture_batch_size: int = 8,
+        shared_artifacts_capture_batch_wait_seconds: float = 0.002,
         shared_artifacts_max_inflight: int = 32,
         shared_artifacts_consumer_timeout_seconds: float = 120.0,
         shared_artifacts_claim_timeout_seconds: float = 300.0,
@@ -322,6 +337,32 @@ class ArrowDataset(BaseDataset):
         )
         self.shared_artifacts_lookbehind = shared_artifacts_lookbehind
         self.shared_artifacts_lookahead = shared_artifacts_lookahead
+        _validate_integer_config(
+            "shared_artifacts_max_prefetch_per_consumer",
+            shared_artifacts_max_prefetch_per_consumer,
+            minimum=0,
+        )
+        if shared_artifacts_max_prefetch_per_consumer > shared_artifacts_lookahead + 1:
+            raise ValueError(
+                "shared_artifacts_max_prefetch_per_consumer must not exceed "
+                "shared_artifacts_lookahead + 1"
+            )
+        _validate_integer_config(
+            "shared_artifacts_capture_batch_size",
+            shared_artifacts_capture_batch_size,
+            minimum=1,
+        )
+        _validate_non_negative_number(
+            "shared_artifacts_capture_batch_wait_seconds",
+            shared_artifacts_capture_batch_wait_seconds,
+        )
+        self.shared_artifacts_max_prefetch_per_consumer = (
+            shared_artifacts_max_prefetch_per_consumer
+        )
+        self.shared_artifacts_capture_batch_size = shared_artifacts_capture_batch_size
+        self.shared_artifacts_capture_batch_wait_seconds = float(
+            shared_artifacts_capture_batch_wait_seconds
+        )
         self.shared_artifacts_max_inflight = shared_artifacts_max_inflight
         self.shared_artifacts_consumer_timeout_seconds = (
             shared_artifacts_consumer_timeout_seconds
@@ -456,6 +497,7 @@ class ArrowDataset(BaseDataset):
                 stream_id=self._windowed_stream_id,
                 lookbehind=self.shared_artifacts_lookbehind,
                 lookahead=self.shared_artifacts_lookahead,
+                max_prefetch=self.shared_artifacts_max_prefetch_per_consumer,
                 max_inflight=self.shared_artifacts_max_inflight,
                 cursor=cursor,
                 reset=reset,
@@ -545,22 +587,54 @@ class ArrowDataset(BaseDataset):
             lock_timeout_seconds=self.shared_artifacts_lock_timeout_seconds,
         )
         try:
-            with self._new_windowed_coordinator() as coordinator:
+            if self.client is None:
+                self._setup_client()
+            with (
+                self._new_windowed_coordinator() as coordinator,
+                ThreadPoolExecutor(
+                    max_workers=self.shared_artifacts_capture_batch_size,
+                    thread_name_prefix="artifact-capture",
+                ) as executor,
+            ):
                 while not self._windowed_producer_stop.is_set():
                     coordinator.heartbeat(self.shared_artifacts_consumer_id)
                     coordinator.recover_expired()
                     self._evict_windowed_artifacts(coordinator, cache)
+                    if self._windowed_producer_stop.wait(
+                        self.shared_artifacts_capture_batch_wait_seconds
+                    ):
+                        break
                     claims = coordinator.claim_generation(
-                        owner, stream_id=self._windowed_stream_id, max_claims=1
+                        owner,
+                        stream_id=self._windowed_stream_id,
+                        max_claims=self.shared_artifacts_capture_batch_size,
+                        max_active_claims=self.shared_artifacts_capture_batch_size,
                     )
                     if claims:
-                        for claim in claims:
-                            try:
-                                self._produce_windowed_claim(
-                                    coordinator, cache, owner, claim
-                                )
-                            except Exception as error:  # noqa: BLE001
-                                coordinator.fail_generation(owner, claim, error)
+                        futures = {
+                            executor.submit(
+                                self._produce_windowed_claim,
+                                coordinator,
+                                cache,
+                                owner,
+                                claim,
+                            ): claim
+                            for claim in claims
+                        }
+                        pending = set(futures)
+                        while pending:
+                            done, pending = wait(
+                                pending,
+                                timeout=1.0,
+                                return_when=FIRST_COMPLETED,
+                            )
+                            coordinator.heartbeat(self.shared_artifacts_consumer_id)
+                            for future in done:
+                                claim = futures[future]
+                                try:
+                                    future.result()
+                                except Exception as error:  # noqa: BLE001
+                                    coordinator.fail_generation(owner, claim, error)
                         continue
                     self._windowed_producer_stop.wait(0.02)
         except Exception as error:  # noqa: BLE001 - background thread boundary
