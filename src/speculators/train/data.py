@@ -175,12 +175,6 @@ class BaseDataset(Dataset):
         #  "loss_mask": [seq_len],
         # }
 
-        # Convert hidden states to the correct dtype
-        data = {
-            k: v.to(self.hidden_states_dtype) if "hidden_states" in k else v
-            for k, v in data.items()
-        }
-
         # Add lengths tensor
         seq_len = data["input_ids"].shape[0]
         data["lengths"] = torch.tensor([seq_len], dtype=torch.long)
@@ -485,11 +479,11 @@ def create_collate_fn(
             if key == "lengths":
                 collated_data[key] = torch.cat([b[key] for b in batch], dim=0)  # type: ignore[index]
                 continue
-            # Copy samples into a preallocated [max_len, ...] buffer, avoiding
-            # the two full-size intermediate copies of cat + pad
+            # one copy per sample: preallocated buffer, hidden states cast during write
             first = batch[0][key]  # type: ignore[index]
+            buffer_dtype = dtype if "hidden_states" in key else first.dtype
             out = torch.zeros(
-                (max_len, *first.shape[1:]), dtype=first.dtype, device=first.device
+                (max_len, *first.shape[1:]), dtype=buffer_dtype, device=first.device
             )
             offset = 0
             for b in batch:
