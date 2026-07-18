@@ -4,6 +4,7 @@ import json
 import threading
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -128,6 +129,26 @@ def test_run_benchmark_can_select_only_1p3c(tmp_path, monkeypatch):
     assert observed == ["1p3c"]
     assert report["selected_scenarios"] == ["1p3c"]
     assert [scenario["kind"] for scenario in report["scenarios"]] == ["1p3c"]
+
+
+def test_example_config_uses_train_only_workloads():
+    config_path = (
+        Path(__file__).parents[3]
+        / "benchmarks"
+        / "independent_consumer_fanout"
+        / "config.example.json"
+    )
+    config = json.loads(config_path.read_text())
+
+    commands = [
+        consumer["command"]
+        for scenario in config["scenarios"]
+        for consumer in scenario["consumers"]
+    ]
+    assert len(commands) == 4
+    for command in commands:
+        ratio_index = command.index("--train-data-ratio")
+        assert command[ratio_index + 1] == "1.0"
 
 
 @pytest.mark.parametrize(

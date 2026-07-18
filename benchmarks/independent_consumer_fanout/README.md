@@ -53,11 +53,15 @@ values are omitted from the report. The command exits nonzero
 if a role fails, a GPU is shared or already occupied, a completion is malformed, sample
 multiplicity is ambiguous, or the common steady-state window is too small.
 
+The example commands set `--train-data-ratio 1.0`, so every input belongs to the
+training stream and no validation pass changes window positions or producer request
+accounting. Keep this setting fixed when comparing against a train-only baseline.
+
 `producer_common_steady` uses that same consumer overlap to report producer requests,
 first publications, recaptures, request throughput, and effective unique-sample
 throughput. The older `steady_state` field remains the service-wide interval after its
-own completion warmup; do not compare its longer train-plus-validation duration with a
-producer metric measured only over the common consumer overlap.
+own completion warmup; do not compare that full-run interval with a producer metric
+measured only over the common consumer overlap.
 
 For the unshared baseline,
 `expected_service_completions_per_shared_sample` is one for `1p1c` and three for

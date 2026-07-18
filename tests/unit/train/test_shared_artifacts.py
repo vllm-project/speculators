@@ -628,3 +628,49 @@ def test_train_and_validation_loaders_share_artifact_configuration(monkeypatch):
         assert kwargs["shared_artifacts_max_inflight"] == 40
     assert dataset_kwargs[0]["shared_artifacts_consumer_id"] == "consumer-a:train"
     assert dataset_kwargs[1]["shared_artifacts_consumer_id"] == "consumer-a:val"
+
+
+def test_train_only_loader_uses_full_dataset_without_validation(monkeypatch):
+    dataset_kwargs = []
+    dataset = object()
+
+    def fake_arrow_dataset(**kwargs):
+        dataset_kwargs.append(kwargs)
+        return dataset
+
+    monkeypatch.setattr(dataloader_module, "ArrowDataset", fake_arrow_dataset)
+    monkeypatch.setattr(
+        dataloader_module,
+        "_setup_dataloader",
+        lambda dataset, *_args, **_kwargs: dataset,
+    )
+
+    train_loader, val_loader = dataloader_module.create_train_val_loaders(
+        data_path="data",
+        train_data_ratio=1.0,
+        total_seq_len=128,
+        hidden_states_dtype=torch.bfloat16,
+        noise_std=0.0,
+        legacy_data=False,
+        transfer=None,
+        vllm_endpoint="http://producer/v1",
+        on_missing="generate",
+        on_generate="delete",
+        verifier_name_or_path="model",
+        request_timeout=10,
+        max_retries=2,
+        hidden_size=4,
+        num_target_layers=3,
+        num_workers=0,
+        prefetch_factor=1,
+        preprocess=None,
+        shared_artifacts_path="shared",
+        shared_artifacts_namespace="layers:2,18,33",
+        shared_artifacts_consumer_id="consumer-a",
+    )
+
+    assert train_loader is dataset
+    assert val_loader is None
+    assert len(dataset_kwargs) == 1
+    assert dataset_kwargs[0]["split_ratio"] == 1.0
+    assert dataset_kwargs[0]["shared_artifacts_consumer_id"] == "consumer-a:train"

@@ -1136,7 +1136,15 @@ def parse_args():
     parser.add_argument("--save-path", type=str, default="./output/checkpoints")
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--train-data-ratio", type=float, default=0.9)
+    parser.add_argument(
+        "--train-data-ratio",
+        type=float,
+        default=0.9,
+        help=(
+            "Fraction of data used for training in (0, 1]. "
+            "Set to 1.0 to disable validation."
+        ),
+    )
     parser.add_argument("--no-resume-from-checkpoint", action="store_true")
     parser.add_argument(
         "--logger",

@@ -205,18 +205,22 @@ def create_train_val_loaders(
     shared_artifacts_claim_timeout_seconds: float = 300.0,
     shared_artifacts_generation_attempts: int = 3,
     train_data_ratio: float = 0.9,
-) -> tuple[DataLoader, DataLoader]:
-    """Create training and validation DataLoaders.
+) -> tuple[DataLoader, DataLoader | None]:
+    """Create training and optional validation DataLoaders.
 
     Handles dataset construction (legacy vs Arrow) and dataloader wiring.
+    A ``train_data_ratio`` of 1.0 uses the full dataset for training and returns
+    no validation loader.
     Non-data SP ranks get lightweight loaders with no workers (they receive
     batches via scatter).  Reads DP/SP topology from
     :mod:`speculators.train.distributed`.
     """
     noise_transform = AddUniformNoise(std=noise_std)
 
-    if not (0.0 < train_data_ratio < 1.0):
-        raise ValueError(f"train_data_ratio must be in (0, 1), got {train_data_ratio}")
+    if not (0.0 < train_data_ratio <= 1.0):
+        raise ValueError(f"train_data_ratio must be in (0, 1], got {train_data_ratio}")
+
+    val_dataset: BaseDataset | None = None
 
     if legacy_data:
         warnings.warn(
@@ -231,11 +235,12 @@ def create_train_val_loaders(
             transform=noise_transform,
             hidden_states_dtype=hidden_states_dtype,
         )
-        val_dataset: BaseDataset = SampleFileDataset(
-            file_list=val_files,
-            max_len=total_seq_len,
-            hidden_states_dtype=hidden_states_dtype,
-        )
+        if val_files:
+            val_dataset = SampleFileDataset(
+                file_list=val_files,
+                max_len=total_seq_len,
+                hidden_states_dtype=hidden_states_dtype,
+            )
     else:
         train_dataset = ArrowDataset(
             datapath=data_path,
@@ -279,47 +284,52 @@ def create_train_val_loaders(
             ),
             shared_artifacts_generation_attempts=(shared_artifacts_generation_attempts),
         )
-        val_dataset = ArrowDataset(
-            datapath=data_path,
-            max_len=total_seq_len,
-            transfer=transfer,
-            vllm_endpoint=vllm_endpoint,
-            on_missing=on_missing,
-            on_generate=on_generate,
-            split_ratio=train_data_ratio - 1.0,
-            model=verifier_name_or_path,
-            hidden_states_dtype=hidden_states_dtype,
-            request_timeout=request_timeout,
-            max_retries=max_retries,
-            shared_artifacts_path=shared_artifacts_path,
-            shared_artifacts_namespace=shared_artifacts_namespace,
-            shared_artifacts_ttl_seconds=shared_artifacts_ttl_seconds,
-            shared_artifacts_lock_timeout_seconds=(
-                shared_artifacts_lock_timeout_seconds
-            ),
-            shared_artifacts_consumer_id=(
-                f"{shared_artifacts_consumer_id}:val"
-                if shared_artifacts_consumer_id is not None
-                else None
-            ),
-            shared_artifacts_lookbehind=shared_artifacts_lookbehind,
-            shared_artifacts_lookahead=shared_artifacts_lookahead,
-            shared_artifacts_max_prefetch_per_consumer=(
-                shared_artifacts_max_prefetch_per_consumer
-            ),
-            shared_artifacts_capture_batch_size=shared_artifacts_capture_batch_size,
-            shared_artifacts_capture_batch_wait_seconds=(
-                shared_artifacts_capture_batch_wait_seconds
-            ),
-            shared_artifacts_max_inflight=shared_artifacts_max_inflight,
-            shared_artifacts_consumer_timeout_seconds=(
-                shared_artifacts_consumer_timeout_seconds
-            ),
-            shared_artifacts_claim_timeout_seconds=(
-                shared_artifacts_claim_timeout_seconds
-            ),
-            shared_artifacts_generation_attempts=(shared_artifacts_generation_attempts),
-        )
+        if train_data_ratio < 1.0:
+            val_dataset = ArrowDataset(
+                datapath=data_path,
+                max_len=total_seq_len,
+                transfer=transfer,
+                vllm_endpoint=vllm_endpoint,
+                on_missing=on_missing,
+                on_generate=on_generate,
+                split_ratio=train_data_ratio - 1.0,
+                model=verifier_name_or_path,
+                hidden_states_dtype=hidden_states_dtype,
+                request_timeout=request_timeout,
+                max_retries=max_retries,
+                shared_artifacts_path=shared_artifacts_path,
+                shared_artifacts_namespace=shared_artifacts_namespace,
+                shared_artifacts_ttl_seconds=shared_artifacts_ttl_seconds,
+                shared_artifacts_lock_timeout_seconds=(
+                    shared_artifacts_lock_timeout_seconds
+                ),
+                shared_artifacts_consumer_id=(
+                    f"{shared_artifacts_consumer_id}:val"
+                    if shared_artifacts_consumer_id is not None
+                    else None
+                ),
+                shared_artifacts_lookbehind=shared_artifacts_lookbehind,
+                shared_artifacts_lookahead=shared_artifacts_lookahead,
+                shared_artifacts_max_prefetch_per_consumer=(
+                    shared_artifacts_max_prefetch_per_consumer
+                ),
+                shared_artifacts_capture_batch_size=(
+                    shared_artifacts_capture_batch_size
+                ),
+                shared_artifacts_capture_batch_wait_seconds=(
+                    shared_artifacts_capture_batch_wait_seconds
+                ),
+                shared_artifacts_max_inflight=shared_artifacts_max_inflight,
+                shared_artifacts_consumer_timeout_seconds=(
+                    shared_artifacts_consumer_timeout_seconds
+                ),
+                shared_artifacts_claim_timeout_seconds=(
+                    shared_artifacts_claim_timeout_seconds
+                ),
+                shared_artifacts_generation_attempts=(
+                    shared_artifacts_generation_attempts
+                ),
+            )
 
     train_loader = _setup_dataloader(
         train_dataset,
@@ -330,14 +340,16 @@ def create_train_val_loaders(
         prefetch_factor=prefetch_factor,
         preprocess=preprocess,
     )
-    val_loader = _setup_dataloader(
-        val_dataset,
-        total_seq_len,
-        hidden_size,
-        num_target_layers=num_target_layers,
-        num_workers=num_workers,
-        prefetch_factor=prefetch_factor,
-        preprocess=preprocess,
-    )
+    val_loader = None
+    if val_dataset is not None:
+        val_loader = _setup_dataloader(
+            val_dataset,
+            total_seq_len,
+            hidden_size,
+            num_target_layers=num_target_layers,
+            num_workers=num_workers,
+            prefetch_factor=prefetch_factor,
+            preprocess=preprocess,
+        )
 
     return train_loader, val_loader

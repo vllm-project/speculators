@@ -148,7 +148,7 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--lr`** (float, default: `1e-4`) Learning rate.
 
-- **`--train-data-ratio`** (float, default: `0.9`) Ratio of data to use for training, the rest of the provided data will be used for validation.
+- **`--train-data-ratio`** (float, default: `0.9`) Ratio of data to use for training. The rest is used for validation; set this to `1.0` for a train-only run with no validation loader.
 
 - **`--no-resume-from-checkpoint`** (flag) Disable automatic checkpoint resumption. Without this flag, this script will automatically load the latest checkpoint in `{save-path}` if one exists.
 
