@@ -422,8 +422,22 @@ def _warm_start_from_checkpoint(
         if source_layer_ids is not None:
             kwargs["target_layer_ids"] = source_layer_ids
 
+    # Overlay sliding window config from CLI args onto the inherited
+    # transformer_layer_config.  The source checkpoint may predate the
+    # default-sliding-window change (#749) and carry sliding_window=None.
+    tl_config = deepcopy(source_config.transformer_layer_config)
+    full_attn_idx = set(kwargs.get("full_attention_indices") or [])
+    num_draft_layers = tl_config.num_hidden_layers
+    layer_types = [
+        "full_attention" if i in full_attn_idx else "sliding_attention"
+        for i in range(num_draft_layers)
+    ]
+    tl_config.sliding_window = kwargs.get("sliding_window", 2048)
+    tl_config.use_sliding_window = "sliding_attention" in layer_types
+    tl_config.layer_types = layer_types
+
     target_model = model_class.from_training_args(
-        verifier_config=source_config.transformer_layer_config,
+        verifier_config=tl_config,
         t2d=t2d,
         d2t=d2t,
         **kwargs,
@@ -522,21 +536,9 @@ def build_draft_model(
                     args.draft_attn_impl if args.speculator_type != "mtp" else None
                 ),
             )
-        if args.speculator_type != "mtp":
-            # _attn_implementation is never serialized by HF configs, so re-apply
-            # the CLI selection before construction -- mirroring from_training_args.
-            # MTP is skipped: its from_training_args never sets the field and its
-            # __init__ resolves its own default ("eager") when it is absent.
-            config = model_class.config_class.from_pretrained(args.from_pretrained)
-            config.transformer_layer_config._attn_implementation = args.draft_attn_impl
-            return model_class.from_pretrained(
-                args.from_pretrained,
-                config=config,
-                t2d=t2d,
-                d2t=d2t,
-                verifier=args.verifier_name_or_path,
-            )
-        # Detect cross-type warm start (e.g. DFlash -> DSpark).
+        # Detect cross-type warm start (e.g. DFlash -> DSpark) before
+        # attempting to load with the target config class, which would reject
+        # the checkpoint's speculators_model_type.
         config_dict, _ = PretrainedConfig.get_config_dict(args.from_pretrained)
         checkpoint_type = config_dict.get("speculators_model_type")
         if checkpoint_type and checkpoint_type != args.speculator_type:
@@ -548,6 +550,34 @@ def build_draft_model(
             )
             return _warm_start_from_checkpoint(
                 model_class, args, t2d, d2t, draft_vocab_size
+            )
+
+        if args.speculator_type != "mtp":
+            # _attn_implementation is never serialized by HF configs, so re-apply
+            # the CLI selection before construction -- mirroring from_training_args.
+            # MTP is skipped: its from_training_args never sets the field and its
+            # __init__ resolves its own default ("eager") when it is absent.
+            config = model_class.config_class.from_pretrained(args.from_pretrained)
+            config.transformer_layer_config._attn_implementation = args.draft_attn_impl
+
+            # Overlay sliding window config from CLI args — the checkpoint may
+            # predate the default-sliding-window change (#749).
+            tl = config.transformer_layer_config
+            full_attn_idx = set(args.full_attention_indices or [])
+            layer_types = [
+                "full_attention" if i in full_attn_idx else "sliding_attention"
+                for i in range(tl.num_hidden_layers)
+            ]
+            tl.sliding_window = args.sliding_window
+            tl.use_sliding_window = "sliding_attention" in layer_types
+            tl.layer_types = layer_types
+
+            return model_class.from_pretrained(
+                args.from_pretrained,
+                config=config,
+                t2d=t2d,
+                d2t=d2t,
+                verifier=args.verifier_name_or_path,
             )
 
         return model_class.from_pretrained(
