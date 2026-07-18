@@ -488,7 +488,9 @@ def create_collate_fn(
             # Copy samples into a preallocated [max_len, ...] buffer, avoiding
             # the two full-size intermediate copies of cat + pad
             first = batch[0][key]  # type: ignore[index]
-            out = torch.zeros((max_len, *first.shape[1:]), dtype=first.dtype)
+            out = torch.zeros(
+                (max_len, *first.shape[1:]), dtype=first.dtype, device=first.device
+            )
             offset = 0
             for b in batch:
                 tensor = b[key]  # type: ignore[index]
