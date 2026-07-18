@@ -130,10 +130,23 @@ def test_fused_clip_sets_scale_and_cleans_it_after_step():
     norm = trainer._clip_gradients()
     expected_scale = ((norm + 1e-6) / trainer.config.max_grad_norm).clamp(min=1)
     torch.testing.assert_close(optimizer.grad_scale, expected_scale)
+    assert optimizer.grad_scale.dtype == torch.float32
     trainer._optimizers_step()
 
     assert optimizer.saw_grad_scale
     assert not hasattr(optimizer, "grad_scale")
+
+
+def test_fused_clip_uses_fp32_scale_for_bfloat16_gradients():
+    optimizer = _RecordingFusedOptimizer()
+    trainer = _fused_clip_trainer(optimizer)
+    trainer.model.to(dtype=torch.bfloat16)
+    for parameter in trainer.model.parameters():
+        parameter.grad = torch.full_like(parameter, 2.0)
+
+    trainer._clip_gradients()
+
+    assert optimizer.grad_scale.dtype == torch.float32
 
 
 def test_fused_clip_cleans_scale_when_optimizer_step_fails():
@@ -162,7 +175,9 @@ def test_fused_adamw_clip_matches_explicit_clipping_on_cuda():
     reference_optimizer.step()
     grad_norm = torch.nn.utils.get_total_norm([fused.grad], foreach=True)
     fused_optimizer_with_scale = cast("Any", fused_optimizer)
-    fused_optimizer_with_scale.grad_scale = ((grad_norm + 1e-6) / 0.7).clamp(min=1)
+    fused_optimizer_with_scale.grad_scale = (
+        ((grad_norm + 1e-6) / 0.7).clamp(min=1).float()
+    )
     try:
         fused_optimizer.step()
     finally:

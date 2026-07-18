@@ -105,6 +105,7 @@ def test_collate_keeps_artifact_leases_out_of_model_tensors():
 @dataclass
 class _RecordingDataset:
     events: list[str]
+    stop_error: Exception | None = None
 
     def ack_windowed_batch(self, _leases: list[dict[str, Any]]) -> None:
         self.events.append("ack")
@@ -114,6 +115,8 @@ class _RecordingDataset:
 
     def stop_windowed_producer(self, *, completed: bool = False) -> None:
         self.events.append(f"stop:{completed}")
+        if self.stop_error is not None:
+            raise self.stop_error
 
 
 class _Loader:
@@ -229,3 +232,27 @@ def test_windowed_phase_stops_without_completion_after_failure():
     with pytest.raises(RuntimeError, match="phase failed"):
         Trainer._run_windowed_phase(cast("Any", loader), operation, 0)
     assert events == ["run", "stop:False"]
+
+
+def test_windowed_cleanup_error_does_not_replace_phase_failure(caplog):
+    events: list[str] = []
+    dataset = _RecordingDataset(events, stop_error=RuntimeError("producer failed"))
+    loader = _Loader(dataset, {})
+
+    def operation(_epoch: int) -> None:
+        raise ValueError("training failed")
+
+    with pytest.raises(ValueError, match="training failed"):
+        Trainer._run_windowed_phase(cast("Any", loader), operation, 0)
+    assert events == ["stop:False"]
+    assert "cleanup failed" in caplog.text
+
+
+def test_windowed_cleanup_error_propagates_after_success():
+    events: list[str] = []
+    dataset = _RecordingDataset(events, stop_error=RuntimeError("producer failed"))
+    loader = _Loader(dataset, {})
+
+    with pytest.raises(RuntimeError, match="producer failed"):
+        Trainer._run_windowed_phase(cast("Any", loader), lambda _epoch: None, 0)
+    assert events == ["stop:True"]

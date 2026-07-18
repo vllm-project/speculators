@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 import hs_connectors.transfer as transfer_module
@@ -13,7 +14,12 @@ from safetensors.torch import load_file, save_file
 import speculators.train.data as data_module
 import speculators.train.dataloader as dataloader_module
 from hs_connectors import FileTransfer
-from speculators.data_generation.windowed_artifacts import WindowedArtifactCoordinator
+from speculators.data_generation.windowed_artifacts import (
+    ArtifactPriority,
+    GenerationClaim,
+    WindowedArtifactCoordinator,
+    WindowedArtifactError,
+)
 from speculators.train.data import WINDOWED_LEASE_KEY, ArrowDataset
 from speculators.train.dataloader import WindowedBatchSampler
 
@@ -134,6 +140,35 @@ def test_windowed_dataset_requires_online_generation(tmp_path):
         )
 
 
+def test_windowed_dataset_derives_and_overrides_artifact_timeouts(tmp_path):
+    data_path = tmp_path / "data"
+    _write_dataset(data_path)
+
+    defaults = ArrowDataset(max_len=128, datapath=data_path, model="model")
+    derived = ArrowDataset(
+        max_len=128,
+        datapath=data_path,
+        model="model",
+        request_timeout=10,
+        max_retries=2,
+    )
+    explicit = ArrowDataset(
+        max_len=128,
+        datapath=data_path,
+        model="model",
+        request_timeout=10,
+        max_retries=2,
+        shared_artifacts_acquire_timeout_seconds=73,
+        shared_artifacts_lease_timeout_seconds=91,
+    )
+
+    assert defaults.shared_artifacts_acquire_timeout_seconds == 499
+    assert derived.shared_artifacts_acquire_timeout_seconds == 41
+    assert derived.shared_artifacts_lease_timeout_seconds == 3600
+    assert explicit.shared_artifacts_acquire_timeout_seconds == 73
+    assert explicit.shared_artifacts_lease_timeout_seconds == 91
+
+
 def _successful_generator(service_path: Path, calls: list[Path]):
     def generate(*_args, **_kwargs):
         path = service_path / f"request-{len(calls)}.safetensors"
@@ -236,6 +271,127 @@ def test_windowed_dataset_dispatches_reads_acks_and_cleans_final_window(
     stats = dataset.artifact_cache.snapshot_stats()
     assert stats["logical_requests"] == 1
     assert stats["publishes"] == 1
+
+
+def test_windowed_dataset_invalidates_and_regenerates_corrupt_ready_artifact(
+    tmp_path, monkeypatch
+):
+    data_path = tmp_path / "data"
+    shared_path = tmp_path / "shared"
+    _write_dataset(data_path)
+    dataset = ArrowDataset(
+        max_len=128,
+        datapath=data_path,
+        transfer=FileTransfer(tmp_path / "index"),
+        model="model",
+        on_missing="generate",
+        on_generate="delete",
+        shared_artifacts_path=shared_path,
+        shared_artifacts_namespace="layers:2,18,33",
+        shared_artifacts_consumer_id="consumer",
+        request_timeout=2,
+    )
+    dataset.client = cast("Any", object())
+    monkeypatch.setattr(
+        dataset,
+        "_materialize_shared_hs",
+        lambda _index, _dataset_item, _client_item: _hidden_states(),
+    )
+    base_sampler = _SingleBatchSampler()
+    stream_id = dataset.configure_windowed_stream(base_sampler)
+    sampler = WindowedBatchSampler(
+        base_sampler,
+        stream_id=stream_id,
+        request_id_for_index=dataset.windowed_request_id,
+    )
+    samples = sampler.full_epoch_samples(0)
+    dataset.prepare_windowed_epoch(samples, cursor=0, reset=True)
+    assert dataset.artifact_cache is not None
+    corrupt_path = dataset.artifact_cache.artifact_path(samples[0].request_id)
+    corrupt_path.parent.mkdir(parents=True)
+    save_file(
+        {
+            "token_ids": torch.tensor([4, 5, 6]),
+            "hidden_states": torch.zeros(3, 4),
+        },
+        corrupt_path,
+    )
+    with WindowedArtifactCoordinator(shared_path) as coordinator:
+        claim = coordinator.claim_generation("initial", stream_id=stream_id)[0]
+        coordinator.complete_generation(
+            "initial",
+            claim,
+            path=corrupt_path,
+            size_bytes=corrupt_path.stat().st_size,
+        )
+
+    dataset.start_windowed_producer()
+    try:
+        item = dataset[samples[0]]
+        assert item is not None
+        assert item["input_ids"].tolist() == [1, 2, 3]
+        lease = item.pop(WINDOWED_LEASE_KEY)
+        assert dataset.ack_windowed_batch([lease]) == 1
+    finally:
+        dataset.stop_windowed_producer(completed=True)
+
+    stats = dataset.artifact_cache.snapshot_stats()
+    assert stats["invalid_artifacts_removed"] == 1
+    assert stats["publishes"] == 1
+
+
+def test_windowed_producer_cleans_abandoned_cache_temporary(tmp_path, monkeypatch):
+    data_path = tmp_path / "data"
+    shared_path = tmp_path / "shared"
+    _write_dataset(data_path)
+    dataset = ArrowDataset(
+        max_len=128,
+        datapath=data_path,
+        transfer=FileTransfer(tmp_path / "index"),
+        model="model",
+        on_missing="generate",
+        on_generate="delete",
+        shared_artifacts_path=shared_path,
+        shared_artifacts_namespace="layers:2,18,33",
+        shared_artifacts_consumer_id="consumer",
+        request_timeout=2,
+    )
+    dataset.client = cast("Any", object())
+    monkeypatch.setattr(
+        dataset,
+        "_materialize_shared_hs",
+        lambda _index, _dataset_item, _client_item: _hidden_states(),
+    )
+    base_sampler = _SingleBatchSampler()
+    stream_id = dataset.configure_windowed_stream(base_sampler)
+    sampler = WindowedBatchSampler(
+        base_sampler,
+        stream_id=stream_id,
+        request_id_for_index=dataset.windowed_request_id,
+    )
+    dataset.prepare_windowed_epoch(sampler.full_epoch_samples(0), cursor=0, reset=True)
+    assert dataset.artifact_cache is not None
+    temporary = (
+        dataset.artifact_cache.artifact_path("a" * 64).parent
+        / f".{('a' * 64)}.dead.tmp"
+    )
+    temporary.parent.mkdir(parents=True, exist_ok=True)
+    temporary.write_bytes(b"partial")
+    old = time.time() - dataset.artifact_cache.stale_temp_seconds - 1
+    temporary.touch()
+    data_module.os.utime(temporary, (old, old))
+
+    dataset.start_windowed_producer()
+    try:
+        deadline = time.monotonic() + 2
+        while temporary.exists():
+            if time.monotonic() >= deadline:
+                raise TimeoutError("stale cache temporary was not cleaned")
+            time.sleep(0.01)
+    finally:
+        dataset.stop_windowed_producer()
+
+    assert dataset.artifact_cache.snapshot_stats()["stale_temps_removed"] == 1
 
 
 @pytest.mark.parametrize("num_workers", [0, 1, 4])
@@ -481,6 +637,118 @@ def test_windowed_capture_batch_isolates_one_failed_claim(tmp_path, monkeypatch)
         dataset.stop_windowed_producer()
 
 
+@pytest.mark.parametrize("stale_operation", ["complete", "fail"])
+def test_windowed_capture_batch_isolates_stale_terminal_result(
+    tmp_path, monkeypatch, stale_operation
+):
+    dataset = cast("Any", ArrowDataset.__new__(ArrowDataset))
+    dataset._windowed_producer_stop = threading.Event()
+    dataset.shared_artifacts_consumer_id = "consumer"
+    dataset.shared_artifacts_claim_timeout_seconds = 0.03
+    claims = (
+        GenerationClaim(
+            request_id="a" * 64,
+            stream_id="1" * 64,
+            dataset_index=0,
+            generation=1,
+            priority=ArtifactPriority.DEMAND,
+        ),
+        GenerationClaim(
+            request_id="b" * 64,
+            stream_id="1" * 64,
+            dataset_index=1,
+            generation=1,
+            priority=ArtifactPriority.DEMAND,
+        ),
+    )
+    completed = []
+
+    def produce(_cache, claim):
+        if stale_operation == "fail" and claim is claims[0]:
+            raise RuntimeError("capture failed")
+        return tmp_path / f"{claim.request_id}.safetensors", 1
+
+    class _Coordinator:
+        @staticmethod
+        def heartbeat(_consumer_id):
+            return None
+
+        @staticmethod
+        def complete_generation(_owner, claim, **_kwargs):
+            if stale_operation == "complete" and claim is claims[0]:
+                raise WindowedArtifactError("stale completion")
+            completed.append(claim)
+
+        @staticmethod
+        def fail_generation(_owner, claim, _error):
+            if stale_operation == "fail" and claim is claims[0]:
+                raise WindowedArtifactError("stale failure")
+
+        @staticmethod
+        def renew_generation_claims(_owner, _claims):
+            return None
+
+        @staticmethod
+        def release_generation_claims(_owner, _claims):
+            return None
+
+    monkeypatch.setattr(dataset, "_produce_windowed_claim", produce)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        dataset._run_windowed_claim_batch(
+            _Coordinator(), cast("Any", object()), executor, "owner", claims
+        )
+
+    assert claims[1] in completed
+
+
+def test_windowed_capture_batch_drops_only_stale_renewal(monkeypatch):
+    dataset = cast("Any", ArrowDataset.__new__(ArrowDataset))
+    dataset._windowed_producer_stop = threading.Event()
+    dataset.shared_artifacts_consumer_id = "consumer"
+    dataset.shared_artifacts_claim_timeout_seconds = 0.03
+    release = threading.Event()
+    claims = (
+        GenerationClaim("a" * 64, "1" * 64, 0, 1, ArtifactPriority.DEMAND),
+        GenerationClaim("b" * 64, "1" * 64, 1, 1, ArtifactPriority.DEMAND),
+    )
+    completed = []
+
+    def produce(_cache, claim):
+        assert release.wait(2)
+        return cast("Any", object()), claim.dataset_index
+
+    class _Coordinator:
+        @staticmethod
+        def heartbeat(_consumer_id):
+            return None
+
+        @staticmethod
+        def complete_generation(_owner, claim, **_kwargs):
+            completed.append(claim)
+
+        @staticmethod
+        def fail_generation(_owner, _claim, _error):
+            raise AssertionError("generation should not fail")
+
+        @staticmethod
+        def renew_generation_claims(_owner, renewed):
+            if renewed[0] is claims[0]:
+                raise WindowedArtifactError("stale renewal")
+            release.set()
+
+        @staticmethod
+        def release_generation_claims(_owner, _claims):
+            return None
+
+    monkeypatch.setattr(dataset, "_produce_windowed_claim", produce)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        dataset._run_windowed_claim_batch(
+            _Coordinator(), cast("Any", object()), executor, "owner", claims
+        )
+
+    assert completed == [claims[1]]
+
+
 def test_unconfigured_dataset_keeps_existing_per_request_delete_behavior(
     tmp_path, monkeypatch
 ):
@@ -674,6 +942,8 @@ def test_train_and_validation_loaders_share_artifact_configuration(monkeypatch):
         shared_artifacts_capture_batch_size=6,
         shared_artifacts_capture_batch_wait_seconds=0.01,
         shared_artifacts_max_inflight=40,
+        shared_artifacts_acquire_timeout_seconds=75,
+        shared_artifacts_lease_timeout_seconds=600,
     )
 
     assert len(dataset_kwargs) == 2
@@ -688,6 +958,8 @@ def test_train_and_validation_loaders_share_artifact_configuration(monkeypatch):
         assert kwargs["shared_artifacts_capture_batch_size"] == 6
         assert kwargs["shared_artifacts_capture_batch_wait_seconds"] == 0.01
         assert kwargs["shared_artifacts_max_inflight"] == 40
+        assert kwargs["shared_artifacts_acquire_timeout_seconds"] == 75
+        assert kwargs["shared_artifacts_lease_timeout_seconds"] == 600
     assert dataset_kwargs[0]["shared_artifacts_consumer_id"] == "consumer-a:dp2:train"
     assert dataset_kwargs[1]["shared_artifacts_consumer_id"] == "consumer-a:dp2:val"
 

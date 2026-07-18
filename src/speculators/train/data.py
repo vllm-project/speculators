@@ -1,13 +1,15 @@
 import hashlib
 import json
+import logging
 import math
 import os
 import random
 import threading
+import time
 import uuid
 import warnings
 from collections.abc import Callable
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from os import PathLike
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -29,6 +31,7 @@ from speculators.data_generation.offline import check_hidden_states
 from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_REQUEST_TIMEOUT,
+    RETRY_BACKOFF_BASE,
     ClientItem,
     generate_hidden_states,
 )
@@ -37,6 +40,7 @@ from speculators.data_generation.windowed_artifacts import (
     GenerationClaim,
     StreamSampleIndex,
     WindowedArtifactCoordinator,
+    WindowedArtifactError,
     canonical_stream_id,
 )
 from speculators.train.noise_transforms import TransformTensors
@@ -44,6 +48,7 @@ from speculators.train.noise_transforms import TransformTensors
 BatchType = dict[str, Any]
 WINDOWED_LEASE_KEY = "_windowed_artifact_lease"
 WINDOWED_BATCH_LEASES_KEY = "_windowed_artifact_leases"
+logger = logging.getLogger(__name__)
 
 
 def _validate_integer_config(name: str, value: object, *, minimum: int) -> None:
@@ -55,6 +60,25 @@ def _validate_integer_config(name: str, value: object, *, minimum: int) -> None:
 def _validate_non_negative_number(name: str, value: object) -> None:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
         raise ValueError(f"{name} must be non-negative")
+
+
+def _resolve_artifact_acquire_timeout(
+    configured_timeout: float | None,
+    request_timeout: float | None,
+    max_retries: int,
+) -> float | None:
+    if configured_timeout is not None:
+        if configured_timeout <= 0:
+            raise ValueError(
+                "shared_artifacts_acquire_timeout_seconds must be positive or None"
+            )
+        return float(configured_timeout)
+    if request_timeout is None:
+        return None
+    retry_backoff = sum(
+        RETRY_BACKOFF_BASE**attempt for attempt in range(1, max_retries + 1)
+    )
+    return float(request_timeout) * (max_retries + 1) + retry_backoff + 5.0
 
 
 def list_files(path):
@@ -282,6 +306,8 @@ class ArrowDataset(BaseDataset):
         shared_artifacts_max_inflight: int = 32,
         shared_artifacts_consumer_timeout_seconds: float = 120.0,
         shared_artifacts_claim_timeout_seconds: float = 300.0,
+        shared_artifacts_acquire_timeout_seconds: float | None = None,
+        shared_artifacts_lease_timeout_seconds: float = 3600.0,
         shared_artifacts_generation_attempts: int = 3,
     ):
         self.data = load_from_disk(datapath)
@@ -307,6 +333,7 @@ class ArrowDataset(BaseDataset):
         self.model = model
         self.request_timeout = request_timeout
         self.max_retries = max_retries
+        _validate_integer_config("max_retries", max_retries, minimum=0)
         self.shared_artifacts_namespace = shared_artifacts_namespace
         if shared_artifacts_path is not None and not shared_artifacts_namespace:
             raise ValueError(
@@ -370,6 +397,18 @@ class ArrowDataset(BaseDataset):
         self.shared_artifacts_claim_timeout_seconds = (
             shared_artifacts_claim_timeout_seconds
         )
+        self.shared_artifacts_acquire_timeout_seconds = (
+            _resolve_artifact_acquire_timeout(
+                shared_artifacts_acquire_timeout_seconds,
+                request_timeout,
+                max_retries,
+            )
+        )
+        if shared_artifacts_lease_timeout_seconds <= 0:
+            raise ValueError("shared_artifacts_lease_timeout_seconds must be positive")
+        self.shared_artifacts_lease_timeout_seconds = float(
+            shared_artifacts_lease_timeout_seconds
+        )
         self.shared_artifacts_generation_attempts = shared_artifacts_generation_attempts
         self.windowed_artifacts_enabled = shared_artifacts_consumer_id is not None
         if self.windowed_artifacts_enabled and self.artifact_cache is None:
@@ -418,6 +457,7 @@ class ArrowDataset(BaseDataset):
             self.shared_artifacts_path,
             consumer_timeout_seconds=self.shared_artifacts_consumer_timeout_seconds,
             claim_timeout_seconds=self.shared_artifacts_claim_timeout_seconds,
+            lease_timeout_seconds=self.shared_artifacts_lease_timeout_seconds,
             max_generation_attempts=self.shared_artifacts_generation_attempts,
         )
 
@@ -509,27 +549,58 @@ class ArrowDataset(BaseDataset):
         if self.shared_artifacts_consumer_id is None or self.artifact_cache is None:
             raise RuntimeError("windowed artifacts are not configured")
         coordinator = self._coordinator_for_process()
-        lease = coordinator.acquire(
-            self.shared_artifacts_consumer_id,
-            sample,
-            timeout_seconds=self.request_timeout,
-        )
         dataset_item = self.data[sample.dataset_index]
-        try:
-            loaded = self.artifact_cache.load(
-                sample.request_id,
-                lambda data: check_hidden_states(
-                    data, dataset_item["input_ids"].tolist()
-                ),
+        timeout = self.shared_artifacts_acquire_timeout_seconds
+        deadline = time.monotonic() + timeout if timeout is not None else None
+        while True:
+            remaining = (
+                max(0.0, deadline - time.monotonic()) if deadline is not None else None
             )
-            if lease.cache_hit:
-                self.artifact_cache.record_reuse()
-            return loaded, lease
-        except BaseException:
-            coordinator.abandon(
-                self.shared_artifacts_consumer_id, [lease.as_batch_metadata()]
+            if remaining is not None and remaining <= 0:
+                raise TimeoutError(
+                    f"stream position {sample.sequence} was not ready within "
+                    f"{timeout:.1f}s"
+                )
+            lease = coordinator.acquire(
+                self.shared_artifacts_consumer_id,
+                sample,
+                timeout_seconds=remaining,
             )
-            raise
+            try:
+                loaded = self.artifact_cache.load(
+                    sample.request_id,
+                    lambda data: check_hidden_states(
+                        data, dataset_item["input_ids"].tolist()
+                    ),
+                )
+            except Exception as error:  # noqa: BLE001 - invalid publication boundary
+                try:
+                    coordinator.invalidate_artifact(lease, error)
+                finally:
+                    coordinator.abandon(
+                        self.shared_artifacts_consumer_id,
+                        [lease.as_batch_metadata()],
+                    )
+                logger.warning(
+                    "Invalidated shared artifact %s after load failure; retrying",
+                    sample.request_id,
+                    exc_info=True,
+                )
+                continue
+            except BaseException:
+                coordinator.abandon(
+                    self.shared_artifacts_consumer_id, [lease.as_batch_metadata()]
+                )
+                raise
+            try:
+                if lease.cache_hit:
+                    self.artifact_cache.record_reuse()
+                return loaded, lease
+            except BaseException:
+                coordinator.abandon(
+                    self.shared_artifacts_consumer_id, [lease.as_batch_metadata()]
+                )
+                raise
 
     def ack_windowed_batch(self, leases: list[dict[str, Any]]) -> int | None:
         if not self.windowed_artifacts_enabled or not leases:
@@ -586,6 +657,7 @@ class ArrowDataset(BaseDataset):
             artifact_ttl_seconds=None,
             lock_timeout_seconds=self.shared_artifacts_lock_timeout_seconds,
         )
+        next_cache_maintenance = 0.0
         try:
             if self.client is None:
                 self._setup_client()
@@ -596,6 +668,16 @@ class ArrowDataset(BaseDataset):
             try:
                 with self._new_windowed_coordinator() as coordinator:
                     while not self._windowed_producer_stop.is_set():
+                        now = time.monotonic()
+                        if now >= next_cache_maintenance:
+                            try:
+                                cache.cleanup_stale()
+                            except (ArtifactCacheError, OSError):
+                                logger.warning(
+                                    "Windowed artifact cache maintenance failed",
+                                    exc_info=True,
+                                )
+                            next_cache_maintenance = now + cache.stale_temp_seconds
                         coordinator.heartbeat(self.shared_artifacts_consumer_id)
                         coordinator.recover_expired()
                         self._evict_windowed_artifacts(coordinator, cache)
@@ -648,23 +730,49 @@ class ArrowDataset(BaseDataset):
                 for future in done:
                     claim = pending.pop(future)
                     try:
-                        path, size_bytes = future.result()
-                    except Exception as error:  # noqa: BLE001
-                        coordinator.fail_generation(owner, claim, error)
-                    else:
-                        coordinator.complete_generation(
-                            owner,
-                            claim,
-                            path=path,
-                            size_bytes=size_bytes,
+                        self._finish_windowed_claim(coordinator, owner, claim, future)
+                    except WindowedArtifactError:
+                        logger.warning(
+                            "Discarding stale generation result for %s",
+                            claim.request_id,
+                            exc_info=True,
                         )
                 if pending:
-                    coordinator.renew_generation_claims(owner, tuple(pending.values()))
+                    for future, claim in tuple(pending.items()):
+                        try:
+                            coordinator.renew_generation_claims(owner, (claim,))
+                        except WindowedArtifactError:
+                            pending.pop(future)
+                            future.cancel()
+                            logger.warning(
+                                "Stopped tracking stale generation claim for %s",
+                                claim.request_id,
+                                exc_info=True,
+                            )
         finally:
             if pending:
                 for future in pending:
                     future.cancel()
                 coordinator.release_generation_claims(owner, tuple(pending.values()))
+
+    @staticmethod
+    def _finish_windowed_claim(
+        coordinator: WindowedArtifactCoordinator,
+        owner: str,
+        claim: GenerationClaim,
+        future: Future[tuple[Path, int]],
+    ) -> None:
+        try:
+            path, size_bytes = future.result()
+        except Exception as error:  # noqa: BLE001 - isolate one capture
+            coordinator.fail_generation(owner, claim, error)
+            return
+        coordinator.complete_generation(
+            owner,
+            claim,
+            path=path,
+            size_bytes=size_bytes,
+        )
 
     def _produce_windowed_claim(
         self,
@@ -696,10 +804,16 @@ class ArrowDataset(BaseDataset):
             try:
                 removed = cache.remove(eviction.request_id, expected_path=eviction.path)
             except (ArtifactCacheError, OSError):
-                coordinator.finish_eviction(eviction, removed=False)
-            else:
+                removed = False
+            try:
                 coordinator.finish_eviction(
                     eviction, removed=removed or not eviction.path.exists()
+                )
+            except WindowedArtifactError:
+                logger.warning(
+                    "Discarding stale eviction result for %s",
+                    eviction.request_id,
+                    exc_info=True,
                 )
 
     def _materialize_shared_hs(

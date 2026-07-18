@@ -258,7 +258,15 @@ class Trainer:
         finally:
             dataset = loader.dataset
             if hasattr(dataset, "stop_windowed_producer"):
-                dataset.stop_windowed_producer(completed=completed)
+                try:
+                    dataset.stop_windowed_producer(completed=completed)
+                except Exception:
+                    if completed:
+                        raise
+                    root_logger.exception(
+                        "Windowed producer cleanup failed while the training phase "
+                        "was already unwinding"
+                    )
 
     @staticmethod
     def _ack_windowed_batch(dataset, leases: list[dict]) -> None:
@@ -502,8 +510,8 @@ class Trainer:
         grad_norm = torch.nn.utils.get_total_norm(gradients, foreach=True)
         fused_optimizer = cast("_FusedOptimizer", optimizer)
         fused_optimizer.grad_scale = (
-            (grad_norm + 1e-6) / self.config.max_grad_norm
-        ).clamp(min=1.0)
+            ((grad_norm + 1e-6) / self.config.max_grad_norm).clamp(min=1.0).float()
+        )
         return grad_norm
 
     def _optimizers_step(self):

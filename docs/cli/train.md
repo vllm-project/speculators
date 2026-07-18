@@ -80,7 +80,7 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--vllm-endpoint`** (str, default: `"http://localhost:8000/v1"`) vLLM endpoint address for generating hidden states on-demand (online training). Ignored if `--on-missing` is not set to `generate`.
 
-- **`--request-timeout`** (float, default: `180.0`) Timeout in seconds for each individual vLLM request.
+- **`--request-timeout`** (float, default: `120.0`) Timeout in seconds for each individual vLLM request.
 
 - **`--max-retries`** (int, default: `3`) Maximum number of retry attempts per vLLM request on failure.
 
@@ -109,6 +109,10 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 - **`--shared-hidden-states-consumer-timeout`** (float, default: `120.0`) Heartbeat timeout before a dead consumer's window and leases are released.
 
 - **`--shared-hidden-states-claim-timeout`** (float, default: `300.0`) Timeout before an interrupted producer claim can be reassigned.
+
+- **`--shared-hidden-states-acquire-timeout`** (float, default: derived) Maximum total seconds a consumer waits for one windowed artifact. By default this covers every configured request attempt, all exponential retry backoff, and a five-second scheduling margin. Set an explicit value to override that derived deadline.
+
+- **`--shared-hidden-states-lease-timeout`** (float, default: `3600.0`) Timeout before an unacknowledged artifact read lease is released. Increase this only when one legitimate training step can exceed the default.
 
 - **`--shared-hidden-states-generation-attempts`** (int, default: `3`) Maximum coordinated generation attempts, including expired producer claims.
 

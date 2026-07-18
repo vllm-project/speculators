@@ -3,6 +3,7 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
+import logging
 import os
 import re
 import time
@@ -19,6 +20,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Mapping
 
 _REQUEST_ID_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+_LOCK_STRIPE_HEX_LENGTH = 3
+logger = logging.getLogger(__name__)
 _STATS_VERSION = 1
 _COUNTERS = (
     "logical_requests",
@@ -176,7 +179,9 @@ class HiddenStateArtifactCache:
         return self._artifacts / request_id[:2] / f"{request_id}.safetensors"
 
     def _lock_path(self, request_id: str) -> Path:
-        return self._locks / request_id[:2] / f"{request_id}.lock"
+        # A fixed set of stripes keeps lock metadata bounded for long streams.
+        stripe = request_id[:_LOCK_STRIPE_HEX_LENGTH]
+        return self._locks / stripe[:2] / f"{stripe}.lock"
 
     @contextmanager
     def _request_lock(
@@ -281,8 +286,20 @@ class HiddenStateArtifactCache:
             path = self.artifact_path(request_id)
             if not path.exists():
                 raise ArtifactCacheError(f"Artifact {request_id} is not published")
-            data = load_file(path)
-            validate(data)
+            try:
+                data = load_file(path)
+                validate(data)
+            except Exception:
+                removed = False
+                try:
+                    path.unlink(missing_ok=True)
+                    removed = True
+                except OSError:
+                    logger.exception("Failed to remove invalid artifact %s", request_id)
+                if removed:
+                    self._fsync_after_commit(path.parent, operation="artifact removal")
+                    self._record(invalid_artifacts_removed=1)
+                raise
             return data
 
     def remove(self, request_id: str, *, expected_path: Path | None = None) -> bool:
@@ -297,8 +314,21 @@ class HiddenStateArtifactCache:
             if not path.exists():
                 return False
             path.unlink()
-            _fsync_directory(path.parent)
+            self._fsync_after_commit(path.parent, operation="artifact removal")
             return True
+
+    @staticmethod
+    def _fsync_after_commit(directory: Path, *, operation: str) -> None:
+        try:
+            _fsync_directory(directory)
+        except OSError:
+            logger.warning(
+                "Directory fsync failed after committed %s in %s; the current "
+                "namespace is consistent but crash durability is not guaranteed",
+                operation,
+                directory,
+                exc_info=True,
+            )
 
     def _is_expired(self, path: Path, now: float) -> bool:
         return bool(
@@ -337,7 +367,7 @@ class HiddenStateArtifactCache:
             with temporary.open("rb") as published:
                 os.fsync(published.fileno())
             temporary.replace(target)
-            _fsync_directory(target.parent)
+            self._fsync_after_commit(target.parent, operation="artifact publication")
         finally:
             temporary.unlink(missing_ok=True)
 
@@ -357,9 +387,11 @@ class HiddenStateArtifactCache:
                 artifact_path = self.artifact_path(request_id)
                 expired = 0
                 invalid = 0
+                removed_publication = False
                 if artifact_path.exists() and self._is_expired(artifact_path, now):
                     artifact_path.unlink(missing_ok=True)
                     expired = 1
+                    removed_publication = True
 
                 if artifact_path.exists():
                     try:
@@ -368,6 +400,7 @@ class HiddenStateArtifactCache:
                     except Exception:
                         artifact_path.unlink(missing_ok=True)
                         invalid = 1
+                        removed_publication = True
                     else:
                         self._record(
                             logical_requests=1,
@@ -383,6 +416,11 @@ class HiddenStateArtifactCache:
                             cache_hit=True,
                             coalesced=waited,
                         )
+
+                if removed_publication:
+                    self._fsync_after_commit(
+                        artifact_path.parent, operation="artifact removal"
+                    )
 
                 try:
                     data = create()
@@ -438,6 +476,7 @@ class HiddenStateArtifactCache:
         current_time = time.time() if now is None else now
         expired = 0
         stale_temps = 0
+        changed_artifact_dirs: set[Path] = set()
 
         for path in self._artifacts.glob("*/*.safetensors"):
             request_id = path.stem
@@ -447,9 +486,13 @@ class HiddenStateArtifactCache:
                 with self._request_lock(request_id, timeout_seconds=0):
                     if path.exists() and self._is_expired(path, current_time):
                         path.unlink(missing_ok=True)
+                        changed_artifact_dirs.add(path.parent)
                         expired += 1
             except ArtifactLockTimeoutError:
                 continue
+
+        for directory in changed_artifact_dirs:
+            self._fsync_after_commit(directory, operation="expired artifact cleanup")
 
         for path in self._artifacts.glob("*/.*.tmp"):
             name = path.name

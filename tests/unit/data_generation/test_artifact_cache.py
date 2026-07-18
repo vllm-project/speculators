@@ -143,6 +143,16 @@ def test_sequential_request_publishes_once_then_hits(tmp_path):
     }
 
 
+def test_request_locks_use_a_bounded_stripe_set(tmp_path):
+    cache = HiddenStateArtifactCache(tmp_path, artifact_ttl_seconds=None)
+    request_ids = [f"{index % 4096:03x}{index:061x}" for index in range(5000)]
+
+    lock_paths = {cache._lock_path(request_id) for request_id in request_ids}
+
+    assert len(lock_paths) == 4096
+    assert all(path.parent.parent == tmp_path / "locks" for path in lock_paths)
+
+
 def test_independent_processes_coalesce_one_generation(tmp_path):
     context = multiprocessing.get_context("spawn")
     ready = context.Queue()
@@ -301,6 +311,80 @@ def test_corrupt_artifact_is_removed_before_regeneration(tmp_path):
     assert not result.cache_hit
     assert load_file(target)["token_ids"].tolist() == [1, 2, 3]
     assert cache.snapshot_stats()["invalid_artifacts_removed"] == 1
+
+
+def test_load_removes_invalid_publication(tmp_path):
+    cache = HiddenStateArtifactCache(tmp_path, artifact_ttl_seconds=None)
+    target = cache.artifact_path(_request_id())
+    target.parent.mkdir(parents=True)
+    save_file(_tensors((4, 5, 6)), target)
+
+    with pytest.raises(ValueError, match="token"):
+        cache.load(_request_id(), _validate)
+
+    assert not target.exists()
+    assert cache.snapshot_stats()["invalid_artifacts_removed"] == 1
+
+
+def test_invalid_load_fsyncs_removal_even_when_accounting_fails(tmp_path, monkeypatch):
+    cache = HiddenStateArtifactCache(tmp_path, artifact_ttl_seconds=None)
+    target = cache.artifact_path(_request_id())
+    target.parent.mkdir(parents=True)
+    save_file(_tensors((4, 5, 6)), target)
+    fsyncs = []
+    monkeypatch.setattr(
+        cache,
+        "_fsync_after_commit",
+        lambda directory, **_kwargs: fsyncs.append(directory),
+    )
+    monkeypatch.setattr(
+        cache, "_record", lambda **_kwargs: (_ for _ in ()).throw(OSError("stats"))
+    )
+
+    with pytest.raises(OSError, match="stats"):
+        cache.load(_request_id(), _validate)
+
+    assert not target.exists()
+    assert fsyncs == [target.parent]
+
+
+def test_post_publish_directory_fsync_failure_keeps_visible_success(
+    tmp_path, monkeypatch, caplog
+):
+    cache = HiddenStateArtifactCache(tmp_path, artifact_ttl_seconds=None)
+    original_fsync = artifact_cache_module._fsync_directory
+
+    def fail_artifact_fsync(path):
+        if Path(path) != tmp_path:
+            raise OSError("directory fsync failed")
+        original_fsync(path)
+
+    monkeypatch.setattr(artifact_cache_module, "_fsync_directory", fail_artifact_fsync)
+    result = cache.get_or_create(_request_id(), _tensors, _validate)
+
+    assert result.path.is_file()
+    assert cache.snapshot_stats()["publishes"] == 1
+    assert cache.snapshot_stats()["publish_failures"] == 0
+    assert "crash durability is not guaranteed" in caplog.text
+
+
+def test_post_remove_directory_fsync_failure_keeps_removed_result(
+    tmp_path, monkeypatch, caplog
+):
+    cache = HiddenStateArtifactCache(tmp_path, artifact_ttl_seconds=None)
+    result = cache.get_or_create(_request_id(), _tensors, _validate)
+    original_fsync = artifact_cache_module._fsync_directory
+
+    def fail_artifact_fsync(path):
+        if Path(path) != tmp_path:
+            raise OSError("directory fsync failed")
+        original_fsync(path)
+
+    monkeypatch.setattr(artifact_cache_module, "_fsync_directory", fail_artifact_fsync)
+
+    assert cache.remove(_request_id(), expected_path=result.path)
+    assert not result.path.exists()
+    assert "crash durability is not guaranteed" in caplog.text
 
 
 def test_cleanup_removes_expired_artifact_and_stale_temp(tmp_path):

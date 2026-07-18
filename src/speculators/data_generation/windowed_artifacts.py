@@ -3,6 +3,9 @@
 The coordinator is a single-host control plane. Tensor payloads remain in an
 artifact store; SQLite contains only deterministic stream positions, consumer
 progress, generation claims, and read leases.
+
+Portions are adapted from the SpecForge asynchronous fan-out work referenced
+in the repository's third-party notices.
 """
 
 from __future__ import annotations
@@ -168,6 +171,7 @@ class WindowedArtifactCoordinator:
         poll_seconds: float = 0.02,
         consumer_timeout_seconds: float = 120.0,
         claim_timeout_seconds: float = 300.0,
+        lease_timeout_seconds: float = 3600.0,
         max_generation_attempts: int = 3,
         clock: Callable[[], float] = time.time,
     ) -> None:
@@ -177,6 +181,8 @@ class WindowedArtifactCoordinator:
             raise ValueError("consumer_timeout_seconds must be positive")
         if claim_timeout_seconds <= 0:
             raise ValueError("claim_timeout_seconds must be positive")
+        if lease_timeout_seconds <= 0:
+            raise ValueError("lease_timeout_seconds must be positive")
         if max_generation_attempts < 1:
             raise ValueError("max_generation_attempts must be at least one")
         self.root = Path(root).expanduser().resolve()
@@ -185,6 +191,7 @@ class WindowedArtifactCoordinator:
         self.poll_seconds = poll_seconds
         self.consumer_timeout_seconds = consumer_timeout_seconds
         self.claim_timeout_seconds = claim_timeout_seconds
+        self.lease_timeout_seconds = lease_timeout_seconds
         self.max_generation_attempts = max_generation_attempts
         self._clock = clock
         self._lock = threading.RLock()
@@ -198,6 +205,10 @@ class WindowedArtifactCoordinator:
         if not self._schema_is_current():
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._create_schema()
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS acquisitions_position "
+            "ON acquisitions(stream_id,sequence)"
+        )
 
     def _schema_is_current(self) -> bool:
         table = self._conn.execute(
@@ -659,6 +670,38 @@ class WindowedArtifactCoordinator:
             ArtifactPriority.DEMAND if demand is not None else ArtifactPriority.PREFETCH
         )
 
+    def _transition_missing_artifact_locked(
+        self,
+        conn: sqlite3.Connection,
+        request_id: str,
+        *,
+        error: str,
+        now: float,
+    ) -> None:
+        interested = conn.execute(
+            "SELECT DISTINCT consumer_id FROM interests WHERE request_id=?",
+            (request_id,),
+        ).fetchall()
+        priority = self._retry_priority_locked(conn, request_id) if interested else None
+        conn.execute(
+            "UPDATE artifacts SET state=?,generation=generation+1,path=NULL,"
+            "size_bytes=0,priority=?,queued_at=?,claim_owner=NULL,claim_until=NULL,"
+            "failures=0,last_error=?,first_reader_accounted=0,updated_at=? "
+            "WHERE request_id=?",
+            (
+                ArtifactState.QUEUED.value
+                if interested
+                else ArtifactState.ABSENT.value,
+                int(priority) if priority is not None else None,
+                now if interested else None,
+                error[:2000],
+                now,
+                request_id,
+            ),
+        )
+        for row in interested:
+            self._top_up_prefetch_locked(conn, row["consumer_id"])
+
     def _refresh_window_locked(
         self, conn: sqlite3.Connection, consumer_id: str
     ) -> None:
@@ -832,6 +875,8 @@ class WindowedArtifactCoordinator:
     def recover_expired(self) -> dict[str, int]:
         expired_consumers = 0
         expired_claims = 0
+        expired_leases = 0
+        expired_evictions = 0
         with self._transaction() as conn:
             now = self._clock()
             consumers = conn.execute(
@@ -857,6 +902,22 @@ class WindowedArtifactCoordinator:
                     (consumer_id,),
                 )
                 expired_consumers += 1
+            affected_consumers: set[str] = set()
+            leases = conn.execute(
+                "SELECT * FROM acquisitions WHERE state='leased' AND updated_at<?",
+                (now - self.lease_timeout_seconds,),
+            ).fetchall()
+            for row in leases:
+                conn.execute("DELETE FROM acquisitions WHERE token=?", (row["token"],))
+                conn.execute(
+                    "DELETE FROM interests WHERE consumer_id=? AND stream_id=? "
+                    "AND sequence=? AND kind='demand'",
+                    (row["consumer_id"], row["stream_id"], int(row["sequence"])),
+                )
+                affected_consumers.add(row["consumer_id"])
+                expired_leases += 1
+            for consumer_id in affected_consumers:
+                self._refresh_window_locked(conn, consumer_id)
             claims = conn.execute(
                 "SELECT request_id,failures FROM artifacts "
                 "WHERE state=? AND claim_until<?",
@@ -893,6 +954,25 @@ class WindowedArtifactCoordinator:
                     ),
                 )
                 expired_claims += 1
+            evictions = conn.execute(
+                "SELECT request_id,path FROM artifacts WHERE state=? AND updated_at<?",
+                (ArtifactState.EVICTING.value, now - self.claim_timeout_seconds),
+            ).fetchall()
+            for row in evictions:
+                path = Path(row["path"]) if row["path"] else None
+                if path is not None and path.exists():
+                    conn.execute(
+                        "UPDATE artifacts SET state=?,updated_at=? WHERE request_id=?",
+                        (ArtifactState.READY.value, now, row["request_id"]),
+                    )
+                else:
+                    self._transition_missing_artifact_locked(
+                        conn,
+                        row["request_id"],
+                        error="eviction claim expired after artifact removal",
+                        now=now,
+                    )
+                expired_evictions += 1
             self._prune_orphaned_locked(conn)
             for row in conn.execute(
                 "SELECT consumer_id FROM consumers WHERE state='active'"
@@ -901,6 +981,8 @@ class WindowedArtifactCoordinator:
         return {
             "expired_consumers": expired_consumers,
             "expired_claims": expired_claims,
+            "expired_leases": expired_leases,
+            "expired_evictions": expired_evictions,
         }
 
     def acquire(
@@ -1107,6 +1189,61 @@ class WindowedArtifactCoordinator:
             sleep_seconds = min(sleep_seconds, max(0.0, deadline - time.monotonic()))
         if time.monotonic() >= started:
             time.sleep(sleep_seconds)
+
+    def invalidate_artifact(
+        self, lease: ArtifactReadLease, error: BaseException | str
+    ) -> bool:
+        """Invalidate a corrupt READY publication and wake all readers to retry."""
+
+        message = str(error)[:2000] or type(error).__name__
+        with self._transaction() as conn:
+            acquisition = conn.execute(
+                "SELECT * FROM acquisitions WHERE token=?", (lease.token,)
+            ).fetchone()
+            expected_acquisition = (
+                lease.consumer_id,
+                lease.stream_id,
+                lease.sequence,
+                lease.request_id,
+                "leased",
+            )
+            observed_acquisition = (
+                (
+                    acquisition["consumer_id"],
+                    acquisition["stream_id"],
+                    int(acquisition["sequence"]),
+                    acquisition["request_id"],
+                    acquisition["state"],
+                )
+                if acquisition is not None
+                else None
+            )
+            if observed_acquisition != expected_acquisition:
+                return False
+
+            artifact = conn.execute(
+                "SELECT * FROM artifacts WHERE request_id=?", (lease.request_id,)
+            ).fetchone()
+            if artifact is None or (
+                artifact["state"],
+                int(artifact["generation"]),
+                Path(artifact["path"]) if artifact["path"] else None,
+            ) != (ArtifactState.READY.value, lease.generation, lease.path):
+                return False
+
+            now = self._clock()
+            conn.execute(
+                "UPDATE acquisitions SET state='waiting',updated_at=? "
+                "WHERE request_id=?",
+                (now, lease.request_id),
+            )
+            self._transition_missing_artifact_locked(
+                conn,
+                lease.request_id,
+                error=f"invalid artifact: {message}",
+                now=now,
+            )
+            return True
 
     def ack(self, consumer_id: str, leases: Sequence[Mapping[str, Any]]) -> int:
         """Commit successful trainer consumption and advance a contiguous cursor."""

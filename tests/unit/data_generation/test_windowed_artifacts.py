@@ -560,9 +560,96 @@ def test_expired_consumer_releases_window_and_read_lease(tmp_path):
     assert coordinator.recover_expired() == {
         "expired_consumers": 1,
         "expired_claims": 0,
+        "expired_leases": 0,
+        "expired_evictions": 0,
     }
     assert coordinator.snapshot()["inflight_acquisitions"] == 0
     assert len(coordinator.begin_evictions()) == 1
+
+
+def test_invalid_ready_artifact_requeues_all_readers(tmp_path):
+    contract = {"dataset_fingerprint": "dataset-a", "sampler_seed": 0}
+    stream_id = canonical_stream_id(contract)
+    samples = _samples(stream_id, 1)
+    coordinator = _coordinator(tmp_path)
+    _register(coordinator, samples, "consumer-a", "consumer-b", lookahead=0)
+    _publish(coordinator, stream_id, tmp_path)
+    first = coordinator.acquire("consumer-a", samples[0], timeout_seconds=1)
+    second = coordinator.acquire("consumer-b", samples[0], timeout_seconds=1)
+
+    assert coordinator.invalidate_artifact(first, "corrupt payload")
+    assert not coordinator.invalidate_artifact(second, "same stale payload")
+    assert coordinator.snapshot()["artifact_states"] == {"queued": 1}
+    assert coordinator.snapshot()["inflight_acquisitions"] == 2
+    with pytest.raises(WindowedArtifactError, match="unknown, stale, or mismatched"):
+        coordinator.ack("consumer-a", [first.as_batch_metadata()])
+
+    coordinator.abandon("consumer-a", [first.as_batch_metadata()])
+    coordinator.abandon("consumer-b", [second.as_batch_metadata()])
+    claim = coordinator.claim_generation("producer", stream_id=stream_id)[0]
+    assert claim.generation == first.generation + 1
+    _complete_claim(coordinator, "producer", claim, tmp_path)
+    replay = coordinator.acquire("consumer-a", samples[0], timeout_seconds=1)
+    assert coordinator.ack("consumer-a", [replay.as_batch_metadata()]) == 1
+
+
+def test_expired_read_lease_is_reaped_while_consumer_remains_active(tmp_path):
+    now = [100.0]
+    contract = {"dataset_fingerprint": "dataset-a", "sampler_seed": 0}
+    stream_id = canonical_stream_id(contract)
+    samples = _samples(stream_id, 1)
+    coordinator = WindowedArtifactCoordinator(
+        tmp_path,
+        poll_seconds=0.005,
+        consumer_timeout_seconds=30,
+        claim_timeout_seconds=10,
+        lease_timeout_seconds=5,
+        clock=lambda: now[0],
+    )
+    _register(coordinator, samples, "consumer", lookahead=0)
+    _publish(coordinator, stream_id, tmp_path)
+    stale = coordinator.acquire("consumer", samples[0], timeout_seconds=1)
+
+    now[0] += 6
+    coordinator.heartbeat("consumer")
+    assert coordinator.recover_expired() == {
+        "expired_consumers": 0,
+        "expired_claims": 0,
+        "expired_leases": 1,
+        "expired_evictions": 0,
+    }
+    with pytest.raises(WindowedArtifactError, match="unknown, stale, or mismatched"):
+        coordinator.ack("consumer", [stale.as_batch_metadata()])
+    replay = coordinator.acquire("consumer", samples[0], timeout_seconds=1)
+    assert coordinator.ack("consumer", [replay.as_batch_metadata()]) == 1
+
+
+def test_expired_eviction_reconciles_visible_and_removed_paths(tmp_path):
+    now = [100.0]
+    contract = {"dataset_fingerprint": "dataset-a", "sampler_seed": 0}
+    stream_id = canonical_stream_id(contract)
+    samples = _samples(stream_id, 1)
+    coordinator = WindowedArtifactCoordinator(
+        tmp_path,
+        poll_seconds=0.005,
+        consumer_timeout_seconds=30,
+        claim_timeout_seconds=5,
+        clock=lambda: now[0],
+    )
+    _register(coordinator, samples, "consumer", lookahead=0)
+    _publish(coordinator, stream_id, tmp_path)
+    coordinator.complete_consumer("consumer")
+
+    coordinator.begin_evictions()[0]
+    now[0] += 6
+    assert coordinator.recover_expired()["expired_evictions"] == 1
+    assert coordinator.snapshot()["artifact_states"] == {"ready": 1}
+
+    second = coordinator.begin_evictions()[0]
+    second.path.unlink()
+    now[0] += 6
+    assert coordinator.recover_expired()["expired_evictions"] == 1
+    assert coordinator.snapshot()["artifact_states"] == {"absent": 1}
 
 
 def test_resume_reset_rewinds_cursor_and_clears_uncommitted_leases(tmp_path):

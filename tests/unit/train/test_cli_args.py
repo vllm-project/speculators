@@ -31,6 +31,8 @@ def test_shared_hidden_state_cache_is_opt_in(monkeypatch):
     assert args.shared_hidden_states_capture_batch_size == 8
     assert args.shared_hidden_states_capture_batch_wait == 0.002
     assert args.shared_hidden_states_max_inflight == 32
+    assert args.shared_hidden_states_acquire_timeout is None
+    assert args.shared_hidden_states_lease_timeout == 3600.0
 
 
 def test_shared_hidden_state_cache_arguments(monkeypatch):
@@ -78,6 +80,10 @@ def test_windowed_shared_hidden_state_arguments(monkeypatch):
             "60",
             "--shared-hidden-states-claim-timeout",
             "90",
+            "--shared-hidden-states-acquire-timeout",
+            "180",
+            "--shared-hidden-states-lease-timeout",
+            "600",
             "--shared-hidden-states-generation-attempts",
             "4",
         ],
@@ -92,6 +98,8 @@ def test_windowed_shared_hidden_state_arguments(monkeypatch):
     assert args.shared_hidden_states_max_inflight == 40
     assert args.shared_hidden_states_consumer_timeout == 60
     assert args.shared_hidden_states_claim_timeout == 90
+    assert args.shared_hidden_states_acquire_timeout == 180
+    assert args.shared_hidden_states_lease_timeout == 600
     assert args.shared_hidden_states_generation_attempts == 4
 
 
@@ -138,6 +146,8 @@ def test_windowed_shared_hidden_state_arguments(monkeypatch):
         ["--shared-hidden-states-max-inflight", "0"],
         ["--shared-hidden-states-consumer-timeout", "0"],
         ["--shared-hidden-states-claim-timeout", "0"],
+        ["--shared-hidden-states-acquire-timeout", "0"],
+        ["--shared-hidden-states-lease-timeout", "0"],
         ["--shared-hidden-states-generation-attempts", "0"],
     ],
 )

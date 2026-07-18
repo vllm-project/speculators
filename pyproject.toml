@@ -23,7 +23,7 @@ description = "A unified library for creating, representing, and storing specula
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.10"
 license = "Apache-2.0"
-license-files = ["LICENSE"]
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES"]
 authors = [ { name = "Red Hat"} ]
 keywords = [
     "speculative decoding",

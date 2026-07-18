@@ -211,6 +211,8 @@ def create_train_val_loaders(
     shared_artifacts_max_inflight: int = 32,
     shared_artifacts_consumer_timeout_seconds: float = 120.0,
     shared_artifacts_claim_timeout_seconds: float = 300.0,
+    shared_artifacts_acquire_timeout_seconds: float | None = None,
+    shared_artifacts_lease_timeout_seconds: float = 3600.0,
     shared_artifacts_generation_attempts: int = 3,
     train_data_ratio: float = 0.9,
 ) -> tuple[DataLoader, DataLoader | None]:
@@ -291,6 +293,12 @@ def create_train_val_loaders(
             shared_artifacts_claim_timeout_seconds=(
                 shared_artifacts_claim_timeout_seconds
             ),
+            shared_artifacts_acquire_timeout_seconds=(
+                shared_artifacts_acquire_timeout_seconds
+            ),
+            shared_artifacts_lease_timeout_seconds=(
+                shared_artifacts_lease_timeout_seconds
+            ),
             shared_artifacts_generation_attempts=(shared_artifacts_generation_attempts),
         )
         if train_data_ratio < 1.0:
@@ -334,6 +342,12 @@ def create_train_val_loaders(
                 ),
                 shared_artifacts_claim_timeout_seconds=(
                     shared_artifacts_claim_timeout_seconds
+                ),
+                shared_artifacts_acquire_timeout_seconds=(
+                    shared_artifacts_acquire_timeout_seconds
+                ),
+                shared_artifacts_lease_timeout_seconds=(
+                    shared_artifacts_lease_timeout_seconds
                 ),
                 shared_artifacts_generation_attempts=(
                     shared_artifacts_generation_attempts

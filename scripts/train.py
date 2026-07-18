@@ -679,6 +679,12 @@ def main(args: argparse.Namespace):  # noqa: C901
         shared_artifacts_claim_timeout_seconds=(
             args.shared_hidden_states_claim_timeout
         ),
+        shared_artifacts_acquire_timeout_seconds=(
+            args.shared_hidden_states_acquire_timeout
+        ),
+        shared_artifacts_lease_timeout_seconds=(
+            args.shared_hidden_states_lease_timeout
+        ),
         shared_artifacts_generation_attempts=(
             args.shared_hidden_states_generation_attempts
         ),
@@ -868,6 +874,13 @@ def _validate_windowed_shared_hidden_state_args(
         parser.error("--shared-hidden-states-consumer-timeout must be positive")
     if args.shared_hidden_states_claim_timeout <= 0:
         parser.error("--shared-hidden-states-claim-timeout must be positive")
+    if (
+        args.shared_hidden_states_acquire_timeout is not None
+        and args.shared_hidden_states_acquire_timeout <= 0
+    ):
+        parser.error("--shared-hidden-states-acquire-timeout must be positive")
+    if args.shared_hidden_states_lease_timeout <= 0:
+        parser.error("--shared-hidden-states-lease-timeout must be positive")
     if args.shared_hidden_states_generation_attempts < 1:
         parser.error("--shared-hidden-states-generation-attempts must be at least one")
 
@@ -1120,6 +1133,21 @@ def parse_args():  # noqa: C901
         type=float,
         default=300.0,
         help="Seconds before an interrupted producer claim can be reassigned.",
+    )
+    parser.add_argument(
+        "--shared-hidden-states-acquire-timeout",
+        type=float,
+        default=None,
+        help=(
+            "Maximum seconds a consumer waits for one artifact. By default this "
+            "covers all request attempts, retry backoff, and a small margin."
+        ),
+    )
+    parser.add_argument(
+        "--shared-hidden-states-lease-timeout",
+        type=float,
+        default=3600.0,
+        help="Seconds before an unacknowledged read lease is released.",
     )
     parser.add_argument(
         "--shared-hidden-states-generation-attempts",
