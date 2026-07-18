@@ -256,8 +256,8 @@ class Trainer:
             completed = True
             return result
         finally:
-            dataset = loader.dataset
-            if hasattr(dataset, "stop_windowed_producer"):
+            dataset = getattr(loader, "dataset", None)
+            if dataset is not None and hasattr(dataset, "stop_windowed_producer"):
                 try:
                     dataset.stop_windowed_producer(completed=completed)
                 except Exception:
@@ -829,7 +829,6 @@ class Trainer:
                 dist.barrier()
 
         for loader in (self.train_loader, self.val_loader):
-            if loader is not None and hasattr(loader.dataset, "stop_windowed_producer"):
-                loader.dataset.stop_windowed_producer(  # type: ignore[union-attr]
-                    completed=True
-                )
+            dataset = getattr(loader, "dataset", None)
+            if dataset is not None and hasattr(dataset, "stop_windowed_producer"):
+                dataset.stop_windowed_producer(completed=True)

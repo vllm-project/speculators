@@ -221,6 +221,10 @@ def test_windowed_phase_completes_consumer_after_success():
     assert events == ["run:3", "stop:True"]
 
 
+def test_windowed_phase_supports_loader_without_dataset():
+    assert Trainer._run_windowed_phase(cast("Any", []), lambda epoch: epoch, 3) == 3
+
+
 def test_windowed_phase_stops_without_completion_after_failure():
     events: list[str] = []
     loader = _Loader(_RecordingDataset(events), {})
