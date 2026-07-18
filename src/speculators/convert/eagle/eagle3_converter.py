@@ -9,7 +9,6 @@ from loguru import logger
 from transformers import LlamaConfig, PretrainedConfig
 
 from speculators.config import SpeculatorsConfig, VerifierConfig
-from speculators.convert.eagle.eagle3_legacy_model import Eagle3Speculator
 from speculators.convert.eagle.utils import (
     build_llama_config_dtype_kwarg,
     build_llama_config_rope_kwargs,
@@ -20,8 +19,20 @@ from speculators.convert.utils import (
     load_checkpoint_config,
     load_checkpoint_weights,
 )
-from speculators.models.eagle3 import Eagle3SpeculatorConfig
+from speculators.models.eagle3 import Eagle3DraftModel, Eagle3SpeculatorConfig
 from speculators.proposals.greedy import GreedyTokenProposalConfig
+
+# keys filled from the verifier at load time, so absent from source weights is fine
+_VERIFIER_FILLED_KEYS = frozenset(
+    {
+        "embed_tokens.weight",
+        "verifier_lm_head.weight",
+        "verifier_norm.weight",
+        "input_norm.weight",
+        "t2d",
+        "d2t",
+    }
+)
 
 
 class Eagle3Converter:
@@ -53,7 +64,6 @@ class Eagle3Converter:
         weights = load_checkpoint_weights(local_checkpoint_path)
         logger.info(f"Loaded {len(weights)} weights")
 
-        reduce_vocab_size = False
         # Get target_vocab_size from t2d tensor shape if available
         if "t2d" in weights:
             eagle_config["target_vocab_size"] = weights["t2d"].shape[0]
@@ -61,7 +71,6 @@ class Eagle3Converter:
                 f"Using target_vocab_size from t2d tensor: "
                 f"{eagle_config['target_vocab_size']}"
             )
-            reduce_vocab_size = True
         else:
             # fall back to target model config - search for vocab_size at any level
             target_config_dict, _ = PretrainedConfig.get_config_dict(base_model)
@@ -86,19 +95,11 @@ class Eagle3Converter:
             eagle_aux_hidden_state_layer_ids,
         )
 
-        has_drafter_embedding = "embed_tokens.weight" in weights
-
-        saved_path = self._save_converted_checkpoint(
-            config,
-            weights,
-            output_path,
-            reduce_vocab_size,
-            has_drafter_embedding,
-        )
+        saved_path = self._save_converted_checkpoint(config, weights, output_path)
         logger.success(f"Saved to: {saved_path}")
 
         if validate:
-            self._validate_converted_checkpoint(saved_path, base_model)
+            self._validate_converted_checkpoint(saved_path)
 
     def _create_verifier_config(self, base_model: str) -> VerifierConfig:
         config_dict, _ = PretrainedConfig.get_config_dict(base_model)
@@ -189,16 +190,8 @@ class Eagle3Converter:
         config: Eagle3SpeculatorConfig,
         weights: dict[str, torch.Tensor],
         output_dir: str | Path,
-        reduce_vocab_size: bool,
-        has_drafter_embedding: bool,
     ) -> Path:
-        model = Eagle3Speculator(  # type: ignore[abstract]
-            config=config,
-            verifier=None,
-            verifier_attachment_mode="detached",
-            reduce_vocab_size=reduce_vocab_size,
-            has_drafter_embedding=has_drafter_embedding,
-        )
+        model = Eagle3DraftModel(config=config)
 
         # Remap midlayer.* to layers.0.*
         remapped_weights = {}
@@ -212,8 +205,8 @@ class Eagle3Converter:
 
         missing_keys, unexpected_keys = model.load_state_dict(
             remapped_weights, strict=False
-        )  # type: ignore[attr-defined]
-
+        )
+        missing_keys = [key for key in missing_keys if key not in _VERIFIER_FILLED_KEYS]
         if missing_keys:
             logger.warning(f"Missing keys in checkpoint: {missing_keys}")
 
@@ -223,20 +216,23 @@ class Eagle3Converter:
         weights_dtype = getattr(config.transformer_layer_config, "torch_dtype", None)
         # .to() wont convert d2t/t2d buffers as they are not fp tensors
         model.to(dtype=weights_dtype)  # type: ignore[call-arg]
-        model.save_pretrained(str(output_dir))  # type: ignore[attr-defined]
+        # only save source-checkpoint keys, not the NaN-initialized absent ones
+        state_dict = {
+            key: value
+            for key, value in model.state_dict().items()
+            if key in remapped_weights
+        }
+        model.save_pretrained(str(output_dir), state_dict=state_dict)
         return Path(output_dir)
 
-    def _validate_converted_checkpoint(
-        self, checkpoint_path: Path, base_model: str
-    ) -> None:
+    def _validate_converted_checkpoint(self, checkpoint_path: Path) -> None:
         logger.info("Validating converted Eagle-3 checkpoint...")
         try:
-            Eagle3Speculator.from_pretrained(
-                checkpoint_path,
-                verifier=base_model,
-                verifier_attachment_mode="detached",
-            )
-            logger.success("Validation succeeded")
+            model = Eagle3DraftModel.from_pretrained(checkpoint_path)
         except (OSError, ValueError, RuntimeError) as e:
             logger.error(f"Validation failed: {e}")
             raise
+        for name in ("fc.weight", "lm_head.weight", "embed_tokens.weight"):
+            if torch.isnan(model.state_dict()[name]).any():
+                raise ValueError(f"Converted checkpoint has NaN in {name}")
+        logger.success("Validation succeeded")
