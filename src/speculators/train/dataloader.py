@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import warnings
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -11,6 +11,10 @@ import torch
 from torch.utils.data import DataLoader
 
 from hs_connectors import HiddenStatesTransfer
+from speculators.data_generation.windowed_artifacts import (
+    StreamSampleIndex,
+    canonical_position_id,
+)
 from speculators.train.data import (
     ArrowDataset,
     BaseDataset,
@@ -29,6 +33,103 @@ logger = logging.getLogger(__name__)
 BatchType = dict[str, Any]
 
 
+class _WindowedDataset(Protocol):
+    windowed_artifacts_enabled: bool
+
+    def configure_windowed_stream(self, sampler: Any) -> str: ...
+
+    def windowed_request_id(self, dataset_index: int) -> str: ...
+
+
+class WindowedBatchSampler:
+    """Annotate sampler indices with stable positions in the consumed order."""
+
+    def __init__(
+        self,
+        sampler: MultipackDistributedBatchSamplerV2,
+        *,
+        stream_id: str,
+        request_id_for_index: Callable[[int], str],
+    ) -> None:
+        self.sampler = sampler
+        self.stream_id = stream_id
+        self.request_id_for_index = request_id_for_index
+        self.epoch = sampler.epoch
+        self._epoch_counts: dict[int, int] = {}
+        self._cached_generated_batches: tuple[int, list[list[StreamSampleIndex]]] = (
+            -1,
+            [],
+        )
+
+    def _raw_batches(self, epoch: int) -> list[Any]:
+        return self.sampler._generate_batches(epoch)  # noqa: SLF001
+
+    def _epoch_count(self, epoch: int) -> int:
+        if epoch not in self._epoch_counts:
+            self._epoch_counts[epoch] = sum(
+                len(batch) for batch in self._raw_batches(epoch)
+            )
+        return self._epoch_counts[epoch]
+
+    def _sequence_offset(self, epoch: int) -> int:
+        return sum(self._epoch_count(previous) for previous in range(epoch))
+
+    def _generate_batches(self, epoch: int) -> list[list[StreamSampleIndex]]:
+        if self._cached_generated_batches[0] == epoch:
+            return self._cached_generated_batches[1]
+        offset = self._sequence_offset(epoch)
+        ordinal = 0
+        batches: list[list[StreamSampleIndex]] = []
+        for batch_ordinal, raw_batch in enumerate(self._raw_batches(epoch)):
+            batch: list[StreamSampleIndex] = []
+            batch_start_sequence = offset + ordinal
+            batch_end_sequence = batch_start_sequence + len(raw_batch)
+            for raw_index in raw_batch:
+                dataset_index = int(raw_index)
+                batch.append(
+                    StreamSampleIndex(
+                        stream_id=self.stream_id,
+                        sequence=offset + ordinal,
+                        epoch=epoch,
+                        ordinal=ordinal,
+                        dataset_index=dataset_index,
+                        batch_ordinal=batch_ordinal,
+                        batch_start_sequence=batch_start_sequence,
+                        batch_end_sequence=batch_end_sequence,
+                        request_id=self.request_id_for_index(dataset_index),
+                        position_id=canonical_position_id(
+                            self.stream_id,
+                            epoch=epoch,
+                            ordinal=ordinal,
+                            dataset_index=dataset_index,
+                            batch_ordinal=batch_ordinal,
+                            batch_start_sequence=batch_start_sequence,
+                            batch_end_sequence=batch_end_sequence,
+                        ),
+                    )
+                )
+                ordinal += 1
+            batches.append(batch)
+        self._epoch_counts[epoch] = ordinal
+        self._cached_generated_batches = (epoch, batches)
+        return batches
+
+    def full_epoch_samples(self, epoch: int) -> tuple[StreamSampleIndex, ...]:
+        return tuple(
+            sample for batch in self._generate_batches(epoch) for sample in batch
+        )
+
+    def __iter__(self):
+        return iter(self._generate_batches(self.epoch))
+
+    def __len__(self) -> int:
+        return len(self._generate_batches(self.epoch))
+
+    def set_epoch(self, epoch: int) -> None:
+        self.epoch = epoch
+        self.sampler.set_epoch(epoch)
+
+
 def _setup_dataloader(
     dataset: BaseDataset,
     total_seq_len: int,
@@ -38,12 +139,20 @@ def _setup_dataloader(
     prefetch_factor: int | None = 4,
     preprocess: Callable[[BatchType], BatchType] | None = None,
 ) -> DataLoader:
-    batch_sampler = MultipackDistributedBatchSamplerV2(
+    batch_sampler: Any = MultipackDistributedBatchSamplerV2(
         batch_max_length=total_seq_len,
         lengths=dataset.approx_lengths,
         num_replicas=get_dp_size(),
         rank=get_dp_rank(),
     )
+    if getattr(dataset, "windowed_artifacts_enabled", False):
+        windowed_dataset: _WindowedDataset = dataset  # type: ignore[assignment]
+        stream_id = windowed_dataset.configure_windowed_stream(batch_sampler)
+        batch_sampler = WindowedBatchSampler(
+            batch_sampler,
+            stream_id=stream_id,
+            request_id_for_index=windowed_dataset.windowed_request_id,
+        )
     use_workers = num_workers > 0
     return DataLoader(
         dataset,
@@ -85,6 +194,13 @@ def create_train_val_loaders(
     shared_artifacts_namespace: str | None = None,
     shared_artifacts_ttl_seconds: float | None = 3600.0,
     shared_artifacts_lock_timeout_seconds: float = 300.0,
+    shared_artifacts_consumer_id: str | None = None,
+    shared_artifacts_lookbehind: int = 2,
+    shared_artifacts_lookahead: int = 16,
+    shared_artifacts_max_inflight: int = 32,
+    shared_artifacts_consumer_timeout_seconds: float = 120.0,
+    shared_artifacts_claim_timeout_seconds: float = 300.0,
+    shared_artifacts_generation_attempts: int = 3,
     train_data_ratio: float = 0.9,
 ) -> tuple[DataLoader, DataLoader]:
     """Create training and validation DataLoaders.
@@ -137,6 +253,21 @@ def create_train_val_loaders(
             shared_artifacts_lock_timeout_seconds=(
                 shared_artifacts_lock_timeout_seconds
             ),
+            shared_artifacts_consumer_id=(
+                f"{shared_artifacts_consumer_id}:train"
+                if shared_artifacts_consumer_id is not None
+                else None
+            ),
+            shared_artifacts_lookbehind=shared_artifacts_lookbehind,
+            shared_artifacts_lookahead=shared_artifacts_lookahead,
+            shared_artifacts_max_inflight=shared_artifacts_max_inflight,
+            shared_artifacts_consumer_timeout_seconds=(
+                shared_artifacts_consumer_timeout_seconds
+            ),
+            shared_artifacts_claim_timeout_seconds=(
+                shared_artifacts_claim_timeout_seconds
+            ),
+            shared_artifacts_generation_attempts=(shared_artifacts_generation_attempts),
         )
         val_dataset = ArrowDataset(
             datapath=data_path,
@@ -156,6 +287,21 @@ def create_train_val_loaders(
             shared_artifacts_lock_timeout_seconds=(
                 shared_artifacts_lock_timeout_seconds
             ),
+            shared_artifacts_consumer_id=(
+                f"{shared_artifacts_consumer_id}:val"
+                if shared_artifacts_consumer_id is not None
+                else None
+            ),
+            shared_artifacts_lookbehind=shared_artifacts_lookbehind,
+            shared_artifacts_lookahead=shared_artifacts_lookahead,
+            shared_artifacts_max_inflight=shared_artifacts_max_inflight,
+            shared_artifacts_consumer_timeout_seconds=(
+                shared_artifacts_consumer_timeout_seconds
+            ),
+            shared_artifacts_claim_timeout_seconds=(
+                shared_artifacts_claim_timeout_seconds
+            ),
+            shared_artifacts_generation_attempts=(shared_artifacts_generation_attempts),
         )
 
     train_loader = _setup_dataloader(

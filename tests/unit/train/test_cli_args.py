@@ -24,6 +24,10 @@ def test_shared_hidden_state_cache_is_opt_in(monkeypatch):
     assert args.shared_hidden_states_namespace is None
     assert args.shared_hidden_states_ttl == 3600.0
     assert args.shared_hidden_states_lock_timeout == 300.0
+    assert args.shared_hidden_states_consumer_id is None
+    assert args.shared_hidden_states_lookbehind == 2
+    assert args.shared_hidden_states_lookahead == 16
+    assert args.shared_hidden_states_max_inflight == 32
 
 
 def test_shared_hidden_state_cache_arguments(monkeypatch):
@@ -47,6 +51,38 @@ def test_shared_hidden_state_cache_arguments(monkeypatch):
     assert args.shared_hidden_states_lock_timeout == 45
 
 
+def test_windowed_shared_hidden_state_arguments(monkeypatch):
+    args = _parse(
+        monkeypatch,
+        [
+            "--shared-hidden-states-path",
+            "shared-cache",
+            "--shared-hidden-states-consumer-id",
+            "consumer-a",
+            "--shared-hidden-states-lookbehind",
+            "3",
+            "--shared-hidden-states-lookahead",
+            "20",
+            "--shared-hidden-states-max-inflight",
+            "40",
+            "--shared-hidden-states-consumer-timeout",
+            "60",
+            "--shared-hidden-states-claim-timeout",
+            "90",
+            "--shared-hidden-states-generation-attempts",
+            "4",
+        ],
+    )
+
+    assert args.shared_hidden_states_consumer_id == "consumer-a"
+    assert args.shared_hidden_states_lookbehind == 3
+    assert args.shared_hidden_states_lookahead == 20
+    assert args.shared_hidden_states_max_inflight == 40
+    assert args.shared_hidden_states_consumer_timeout == 60
+    assert args.shared_hidden_states_claim_timeout == 90
+    assert args.shared_hidden_states_generation_attempts == 4
+
+
 @pytest.mark.parametrize(
     "extra",
     [
@@ -61,6 +97,27 @@ def test_shared_hidden_state_cache_arguments(monkeypatch):
         ],
         ["--shared-hidden-states-ttl", "-1"],
         ["--shared-hidden-states-lock-timeout", "0"],
+        ["--shared-hidden-states-consumer-id", "consumer"],
+        [
+            "--shared-hidden-states-path",
+            "cache",
+            "--shared-hidden-states-consumer-id",
+            "consumer",
+            "--on-missing",
+            "raise",
+        ],
+        [
+            "--shared-hidden-states-path",
+            "cache",
+            "--shared-hidden-states-consumer-id",
+            "",
+        ],
+        ["--shared-hidden-states-lookbehind", "-1"],
+        ["--shared-hidden-states-lookahead", "-1"],
+        ["--shared-hidden-states-max-inflight", "0"],
+        ["--shared-hidden-states-consumer-timeout", "0"],
+        ["--shared-hidden-states-claim-timeout", "0"],
+        ["--shared-hidden-states-generation-attempts", "0"],
     ],
 )
 def test_shared_hidden_state_cache_rejects_invalid_combinations(monkeypatch, extra):

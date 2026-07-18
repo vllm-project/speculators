@@ -92,9 +92,25 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--shared-hidden-states-lock-timeout`** (float, default: `300.0`) Maximum seconds to wait while another trainer generates and atomically publishes the same artifact.
 
+- **`--shared-hidden-states-consumer-id`** (str, default: `None`) Stable logical trainer identity. Setting this option enables bounded asynchronous windows and requires `--on-missing generate`. Training and validation append separate stream suffixes automatically.
+
+- **`--shared-hidden-states-lookbehind`** (int, default: `2`) Committed stream positions retained behind this consumer's cursor.
+
+- **`--shared-hidden-states-lookahead`** (int, default: `16`) Stream positions asynchronously prepared ahead of this consumer's committed cursor.
+
+- **`--shared-hidden-states-max-inflight`** (int, default: `32`) Maximum waiting or leased positions per consumer. Once the first sample of a packed batch is admitted, the rest of that batch may complete atomically so a batch larger than this value cannot deadlock before trainer ACK.
+
+- **`--shared-hidden-states-consumer-timeout`** (float, default: `120.0`) Heartbeat timeout before a dead consumer's window and leases are released.
+
+- **`--shared-hidden-states-claim-timeout`** (float, default: `300.0`) Timeout before an interrupted producer claim can be reassigned.
+
+- **`--shared-hidden-states-generation-attempts`** (int, default: `3`) Maximum coordinated generation attempts, including expired producer claims.
+
   The shared cache is a filesystem data plane, not Mooncake or GPU-direct transport. Its directory must provide reliable POSIX `flock`, same-filesystem atomic rename, and directory `fsync` semantics to every trainer. Do not assume an arbitrary NFS mount is safe unless those guarantees have been verified.
 
-  This cache is not a consumer-centered bounded sliding window. Setting `--shared-hidden-states-ttl=0` retains one artifact per unique request. With a finite TTL, expired entries are reclaimed when a dataset opens the cache or when the same key is requested again, so a single pass over new samples can still grow on-disk usage. Provision the filesystem and set the TTL according to the maximum expected lag between consumers.
+  Without `--shared-hidden-states-consumer-id`, this remains the legacy TTL cache: setting the TTL to zero retains one artifact per unique request, and a finite TTL does not by itself bound a pass over unseen samples.
+
+  With a consumer ID, SQLite tracks deterministic sampler positions, independent consumer cursors, generation claims, read leases, and the union of live windows. DataLoader workers only acquire and materialize authorized artifacts. The trainer main process advances the cursor after a successful training optimizer boundary or validation forward. Artifacts outside every live window are removed only after all read leases are released. In this mode TTL expiration is disabled; retention is controlled by windows and explicit leases.
 
 - **`--legacy-data`** (flag) **DEPRECATED.** Use the old data format which stores hidden states alongside token_ids.
 

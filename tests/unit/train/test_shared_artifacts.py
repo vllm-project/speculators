@@ -9,7 +9,9 @@ from safetensors.torch import load_file, save_file
 
 import speculators.train.data as data_module
 import speculators.train.dataloader as dataloader_module
-from speculators.train.data import ArrowDataset
+from speculators.data_generation.windowed_artifacts import WindowedArtifactCoordinator
+from speculators.train.data import WINDOWED_LEASE_KEY, ArrowDataset
+from speculators.train.dataloader import WindowedBatchSampler
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -21,6 +23,17 @@ def _write_dataset(path: Path) -> None:
             "input_ids": [[1, 2, 3]],
             "loss_mask": [[0, 1, 1]],
             "seq_len": [3],
+        }
+    ).with_format("torch")
+    dataset.save_to_disk(path)
+
+
+def _write_multi_dataset(path: Path, count: int = 6) -> None:
+    dataset = Dataset.from_dict(
+        {
+            "input_ids": [[index + 1, index + 2, index + 3] for index in range(count)],
+            "loss_mask": [[0, 1, 1] for _ in range(count)],
+            "seq_len": [3 for _ in range(count)],
         }
     ).with_format("torch")
     dataset.save_to_disk(path)
@@ -55,6 +68,22 @@ def _arrow_dataset(
     return dataset
 
 
+class _SingleBatchSampler:
+    epoch = 0
+    seed = 0
+    rank = 0
+    num_replicas = 1
+    batch_max_length = 128
+    lengths = [3]
+
+    @staticmethod
+    def _generate_batches(_epoch: int) -> list[list[int]]:
+        return [[0]]
+
+    def set_epoch(self, epoch: int) -> None:
+        self.epoch = epoch
+
+
 def test_shared_dataset_requires_identity_namespace(tmp_path):
     data_path = tmp_path / "data"
     _write_dataset(data_path)
@@ -65,6 +94,22 @@ def test_shared_dataset_requires_identity_namespace(tmp_path):
             datapath=data_path,
             model="model",
             shared_artifacts_path=tmp_path / "shared",
+        )
+
+
+def test_windowed_dataset_requires_online_generation(tmp_path):
+    data_path = tmp_path / "data"
+    _write_dataset(data_path)
+
+    with pytest.raises(ValueError, match="require on_missing='generate'"):
+        ArrowDataset(
+            max_len=128,
+            datapath=data_path,
+            model="model",
+            on_missing="raise",
+            shared_artifacts_path=tmp_path / "shared",
+            shared_artifacts_namespace="layers:2,18,33",
+            shared_artifacts_consumer_id="consumer",
         )
 
 
@@ -119,6 +164,113 @@ def test_shared_dataset_requests_publish_once_and_delete_service_temporary(
     assert stats["misses"] == 1
     assert stats["hits"] == 1
     assert stats["publishes"] == 1
+
+
+def test_windowed_dataset_dispatches_reads_acks_and_cleans_final_window(
+    tmp_path, monkeypatch
+):
+    data_path = tmp_path / "data"
+    shared_path = tmp_path / "shared"
+    _write_dataset(data_path)
+    dataset = ArrowDataset(
+        max_len=128,
+        datapath=data_path,
+        hidden_states_path=tmp_path / "index",
+        model="model",
+        on_missing="generate",
+        on_generate="delete",
+        shared_artifacts_path=shared_path,
+        shared_artifacts_namespace="layers:2,18,33",
+        shared_artifacts_consumer_id="consumer",
+        request_timeout=2,
+    )
+    monkeypatch.setattr(
+        dataset,
+        "_materialize_shared_hs",
+        lambda _index, _dataset_item, _client_item: _hidden_states(),
+    )
+    base_sampler = _SingleBatchSampler()
+    stream_id = dataset.configure_windowed_stream(base_sampler)
+    sampler = WindowedBatchSampler(
+        base_sampler,
+        stream_id=stream_id,
+        request_id_for_index=dataset.windowed_request_id,
+    )
+    samples = sampler.full_epoch_samples(0)
+    dataset.prepare_windowed_epoch(samples, cursor=0, reset=True)
+    dataset.start_windowed_producer()
+
+    item = dataset[samples[0]]
+    assert item is not None
+    lease = item.pop(WINDOWED_LEASE_KEY)
+    assert dataset.ack_windowed_batch([lease]) == 1
+    dataset.stop_windowed_producer(completed=True)
+
+    with WindowedArtifactCoordinator(shared_path) as coordinator:
+        snapshot = coordinator.snapshot()
+    assert snapshot["retained_artifacts"] == 0
+    assert snapshot["consumers"][0]["state"] == "completed"
+    assert dataset.artifact_cache is not None
+    stats = dataset.artifact_cache.snapshot_stats()
+    assert stats["logical_requests"] == 1
+    assert stats["publishes"] == 1
+
+
+@pytest.mark.parametrize("num_workers", [0, 1, 4])
+def test_windowed_scheduling_is_independent_of_dataloader_workers(
+    tmp_path, monkeypatch, num_workers
+):
+    data_path = tmp_path / "data"
+    shared_path = tmp_path / "shared"
+    _write_multi_dataset(data_path)
+    dataset = ArrowDataset(
+        max_len=128,
+        datapath=data_path,
+        hidden_states_path=tmp_path / "index",
+        model="model",
+        on_missing="generate",
+        on_generate="delete",
+        shared_artifacts_path=shared_path,
+        shared_artifacts_namespace="layers:2,18,33",
+        shared_artifacts_consumer_id="consumer",
+        request_timeout=5,
+    )
+
+    def materialize(_index, dataset_item, _client_item):
+        tokens = dataset_item["input_ids"]
+        return {
+            "token_ids": tokens,
+            "hidden_states": torch.arange(12, dtype=torch.float32).reshape(3, 4),
+        }
+
+    monkeypatch.setattr(dataset, "_materialize_shared_hs", materialize)
+    loader = dataloader_module._setup_dataloader(
+        dataset,
+        total_seq_len=6,
+        hidden_size=1,
+        num_workers=num_workers,
+        num_target_layers=3,
+        prefetch_factor=2,
+    )
+    sampler = loader.batch_sampler
+    sampler.set_epoch(0)
+    samples = sampler.full_epoch_samples(0)
+    dataset.prepare_windowed_epoch(samples, cursor=0, reset=True)
+    iterator = iter(loader)
+    dataset.start_windowed_producer()
+
+    seen_sequences = []
+    for batch in iterator:
+        leases = batch.pop(data_module.WINDOWED_BATCH_LEASES_KEY)
+        seen_sequences.extend(lease["sequence"] for lease in leases)
+        dataset.ack_windowed_batch(leases)
+    dataset.stop_windowed_producer(completed=True)
+
+    assert seen_sequences == list(range(len(samples)))
+    with WindowedArtifactCoordinator(shared_path) as coordinator:
+        snapshot = coordinator.snapshot()
+    assert snapshot["retained_artifacts"] == 0
+    assert snapshot["consumers"][0]["cursor"] == len(samples)
 
 
 def test_unconfigured_dataset_keeps_existing_per_request_delete_behavior(
@@ -306,6 +458,10 @@ def test_train_and_validation_loaders_share_artifact_configuration(monkeypatch):
         shared_artifacts_namespace="layers:2,18,33",
         shared_artifacts_ttl_seconds=None,
         shared_artifacts_lock_timeout_seconds=45,
+        shared_artifacts_consumer_id="consumer-a",
+        shared_artifacts_lookbehind=3,
+        shared_artifacts_lookahead=20,
+        shared_artifacts_max_inflight=40,
     )
 
     assert len(dataset_kwargs) == 2
@@ -314,3 +470,8 @@ def test_train_and_validation_loaders_share_artifact_configuration(monkeypatch):
         assert kwargs["shared_artifacts_namespace"] == "layers:2,18,33"
         assert kwargs["shared_artifacts_ttl_seconds"] is None
         assert kwargs["shared_artifacts_lock_timeout_seconds"] == 45
+        assert kwargs["shared_artifacts_lookbehind"] == 3
+        assert kwargs["shared_artifacts_lookahead"] == 20
+        assert kwargs["shared_artifacts_max_inflight"] == 40
+    assert dataset_kwargs[0]["shared_artifacts_consumer_id"] == "consumer-a:train"
+    assert dataset_kwargs[1]["shared_artifacts_consumer_id"] == "consumer-a:val"

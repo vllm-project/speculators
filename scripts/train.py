@@ -660,6 +660,19 @@ def main(args: argparse.Namespace):  # noqa: C901
             else args.shared_hidden_states_ttl
         ),
         shared_artifacts_lock_timeout_seconds=(args.shared_hidden_states_lock_timeout),
+        shared_artifacts_consumer_id=args.shared_hidden_states_consumer_id,
+        shared_artifacts_lookbehind=args.shared_hidden_states_lookbehind,
+        shared_artifacts_lookahead=args.shared_hidden_states_lookahead,
+        shared_artifacts_max_inflight=args.shared_hidden_states_max_inflight,
+        shared_artifacts_consumer_timeout_seconds=(
+            args.shared_hidden_states_consumer_timeout
+        ),
+        shared_artifacts_claim_timeout_seconds=(
+            args.shared_hidden_states_claim_timeout
+        ),
+        shared_artifacts_generation_attempts=(
+            args.shared_hidden_states_generation_attempts
+        ),
         hidden_size=hidden_size,
         num_target_layers=num_target_layers,
         num_workers=args.num_workers,
@@ -787,6 +800,44 @@ def validate_draft_init_args(
         )
 
 
+def _validate_windowed_consumer_args(
+    parser: argparse.ArgumentParser, args: argparse.Namespace
+) -> None:
+    consumer_id = args.shared_hidden_states_consumer_id
+    if consumer_id is None:
+        return
+    if args.shared_hidden_states_path is None:
+        parser.error(
+            "--shared-hidden-states-consumer-id requires --shared-hidden-states-path"
+        )
+    if not consumer_id.strip():
+        parser.error("--shared-hidden-states-consumer-id must be non-empty")
+    if args.on_missing != "generate":
+        parser.error(
+            "--shared-hidden-states-consumer-id requires --on-missing generate"
+        )
+
+
+def _validate_windowed_shared_hidden_state_args(
+    parser: argparse.ArgumentParser, args: argparse.Namespace
+) -> None:
+    _validate_windowed_consumer_args(parser, args)
+    for name in (
+        "shared_hidden_states_lookbehind",
+        "shared_hidden_states_lookahead",
+    ):
+        if getattr(args, name) < 0:
+            parser.error(f"--{name.replace('_', '-')} must be non-negative")
+    if args.shared_hidden_states_max_inflight < 1:
+        parser.error("--shared-hidden-states-max-inflight must be at least one")
+    if args.shared_hidden_states_consumer_timeout <= 0:
+        parser.error("--shared-hidden-states-consumer-timeout must be positive")
+    if args.shared_hidden_states_claim_timeout <= 0:
+        parser.error("--shared-hidden-states-claim-timeout must be positive")
+    if args.shared_hidden_states_generation_attempts < 1:
+        parser.error("--shared-hidden-states-generation-attempts must be at least one")
+
+
 def _validate_shared_hidden_state_args(
     parser: argparse.ArgumentParser, args: argparse.Namespace
 ) -> None:
@@ -810,6 +861,7 @@ def _validate_shared_hidden_state_args(
         parser.error("--shared-hidden-states-ttl must be non-negative")
     if args.shared_hidden_states_lock_timeout <= 0:
         parser.error("--shared-hidden-states-lock-timeout must be positive")
+    _validate_windowed_shared_hidden_state_args(parser, args)
 
 
 def parse_args():
@@ -972,6 +1024,51 @@ def parse_args():
             "Maximum seconds to wait for another trainer publishing the same shared "
             "artifact. Only applies when --shared-hidden-states-path is set."
         ),
+    )
+    parser.add_argument(
+        "--shared-hidden-states-consumer-id",
+        type=str,
+        default=None,
+        help=(
+            "Stable logical trainer identity. Setting this enables bounded "
+            "asynchronous windows and trainer-owned artifact acknowledgements."
+        ),
+    )
+    parser.add_argument(
+        "--shared-hidden-states-lookbehind",
+        type=int,
+        default=2,
+        help="Committed positions retained behind each consumer cursor.",
+    )
+    parser.add_argument(
+        "--shared-hidden-states-lookahead",
+        type=int,
+        default=16,
+        help="Positions asynchronously prepared ahead of each consumer cursor.",
+    )
+    parser.add_argument(
+        "--shared-hidden-states-max-inflight",
+        type=int,
+        default=32,
+        help="Maximum waiting or leased positions for one logical consumer.",
+    )
+    parser.add_argument(
+        "--shared-hidden-states-consumer-timeout",
+        type=float,
+        default=120.0,
+        help="Seconds without a heartbeat before releasing a consumer's interests.",
+    )
+    parser.add_argument(
+        "--shared-hidden-states-claim-timeout",
+        type=float,
+        default=300.0,
+        help="Seconds before an interrupted producer claim can be reassigned.",
+    )
+    parser.add_argument(
+        "--shared-hidden-states-generation-attempts",
+        type=int,
+        default=3,
+        help="Maximum coordinated generation attempts per artifact.",
     )
     parser.add_argument(
         "--legacy-data",

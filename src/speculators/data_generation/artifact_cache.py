@@ -268,6 +268,40 @@ class HiddenStateArtifactCache:
         with self._stats_lock(fcntl.LOCK_SH):
             return self._read_stats_unlocked()
 
+    def record_reuse(self) -> None:
+        """Account for a logical reader served by an existing publication."""
+        self._record(logical_requests=1, hits=1)
+
+    def load(
+        self,
+        request_id: str,
+        validate: Callable[[dict[str, torch.Tensor]], None],
+    ) -> dict[str, torch.Tensor]:
+        """Load a publication while holding its cross-process file lock."""
+        self._validate_request_id(request_id)
+        with self._request_lock(request_id):
+            path = self.artifact_path(request_id)
+            if not path.exists():
+                raise ArtifactCacheError(f"Artifact {request_id} is not published")
+            data = load_file(path)
+            validate(data)
+            return data
+
+    def remove(self, request_id: str, *, expected_path: Path | None = None) -> bool:
+        """Remove one publication under the same lock used by readers/writers."""
+        self._validate_request_id(request_id)
+        with self._request_lock(request_id):
+            path = self.artifact_path(request_id)
+            if expected_path is not None and path.resolve() != expected_path.resolve():
+                raise ArtifactCacheError(
+                    f"Artifact path mismatch for request {request_id}"
+                )
+            if not path.exists():
+                return False
+            path.unlink()
+            _fsync_directory(path.parent)
+            return True
+
     def _is_expired(self, path: Path, now: float) -> bool:
         return bool(
             self.artifact_ttl_seconds is not None

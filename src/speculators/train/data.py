@@ -1,7 +1,9 @@
+import hashlib
 import json
 import math
 import os
 import random
+import threading
 import uuid
 import warnings
 from collections.abc import Callable
@@ -18,6 +20,7 @@ from torch.utils.data import Dataset
 
 from hs_connectors import FileTransfer, HiddenStatesTransfer
 from speculators.data_generation.artifact_cache import (
+    ArtifactCacheError,
     HiddenStateArtifactCache,
     canonical_hidden_state_request_id,
 )
@@ -28,9 +31,18 @@ from speculators.data_generation.vllm_client import (
     ClientItem,
     generate_hidden_states,
 )
+from speculators.data_generation.windowed_artifacts import (
+    ArtifactReadLease,
+    GenerationClaim,
+    StreamSampleIndex,
+    WindowedArtifactCoordinator,
+    canonical_stream_id,
+)
 from speculators.train.noise_transforms import TransformTensors
 
 BatchType = dict[str, Any]
+WINDOWED_LEASE_KEY = "_windowed_artifact_lease"
+WINDOWED_BATCH_LEASES_KEY = "_windowed_artifact_leases"
 
 
 def list_files(path):
@@ -249,6 +261,13 @@ class ArrowDataset(BaseDataset):
         shared_artifacts_namespace: str | None = None,
         shared_artifacts_ttl_seconds: float | None = 3600.0,
         shared_artifacts_lock_timeout_seconds: float = 300.0,
+        shared_artifacts_consumer_id: str | None = None,
+        shared_artifacts_lookbehind: int = 2,
+        shared_artifacts_lookahead: int = 16,
+        shared_artifacts_max_inflight: int = 32,
+        shared_artifacts_consumer_timeout_seconds: float = 120.0,
+        shared_artifacts_claim_timeout_seconds: float = 300.0,
+        shared_artifacts_generation_attempts: int = 3,
     ):
         self.data = load_from_disk(datapath)
         self.start_file_idx = 0
@@ -282,13 +301,49 @@ class ArrowDataset(BaseDataset):
         self.artifact_cache = (
             HiddenStateArtifactCache(
                 shared_artifacts_path,
-                artifact_ttl_seconds=shared_artifacts_ttl_seconds,
+                artifact_ttl_seconds=(
+                    None
+                    if shared_artifacts_consumer_id is not None
+                    else shared_artifacts_ttl_seconds
+                ),
                 lock_timeout_seconds=shared_artifacts_lock_timeout_seconds,
             )
             if shared_artifacts_path is not None
             else None
         )
-        if self.artifact_cache is not None:
+        self.shared_artifacts_path = (
+            Path(shared_artifacts_path).expanduser().resolve()
+            if shared_artifacts_path is not None
+            else None
+        )
+        self.shared_artifacts_consumer_id = shared_artifacts_consumer_id
+        self.shared_artifacts_lock_timeout_seconds = (
+            shared_artifacts_lock_timeout_seconds
+        )
+        self.shared_artifacts_lookbehind = shared_artifacts_lookbehind
+        self.shared_artifacts_lookahead = shared_artifacts_lookahead
+        self.shared_artifacts_max_inflight = shared_artifacts_max_inflight
+        self.shared_artifacts_consumer_timeout_seconds = (
+            shared_artifacts_consumer_timeout_seconds
+        )
+        self.shared_artifacts_claim_timeout_seconds = (
+            shared_artifacts_claim_timeout_seconds
+        )
+        self.shared_artifacts_generation_attempts = shared_artifacts_generation_attempts
+        self.windowed_artifacts_enabled = shared_artifacts_consumer_id is not None
+        if self.windowed_artifacts_enabled and self.artifact_cache is None:
+            raise ValueError(
+                "shared_artifacts_consumer_id requires shared_artifacts_path"
+            )
+        if self.windowed_artifacts_enabled and self.on_missing != "generate":
+            raise ValueError("windowed artifacts require on_missing='generate'")
+        self._windowed_stream_id: str | None = None
+        self._windowed_coordinator: WindowedArtifactCoordinator | None = None
+        self._windowed_coordinator_pid: int | None = None
+        self._windowed_producer_thread: threading.Thread | None = None
+        self._windowed_producer_stop: threading.Event | None = None
+        self._windowed_producer_error: Exception | None = None
+        if self.artifact_cache is not None and not self.windowed_artifacts_enabled:
             self.artifact_cache.cleanup_stale()
 
         # Delay super init so that `_compute_approx_lengths` has required data
@@ -314,6 +369,281 @@ class ArrowDataset(BaseDataset):
 
     def __len__(self):
         return len(self.data)
+
+    def _new_windowed_coordinator(self) -> WindowedArtifactCoordinator:
+        if self.shared_artifacts_path is None:
+            raise RuntimeError("windowed artifacts are not configured")
+        return WindowedArtifactCoordinator(
+            self.shared_artifacts_path,
+            consumer_timeout_seconds=self.shared_artifacts_consumer_timeout_seconds,
+            claim_timeout_seconds=self.shared_artifacts_claim_timeout_seconds,
+            max_generation_attempts=self.shared_artifacts_generation_attempts,
+        )
+
+    def _coordinator_for_process(self) -> WindowedArtifactCoordinator:
+        pid = os.getpid()
+        if self._windowed_coordinator_pid != pid:
+            if self._windowed_coordinator is not None:
+                self._windowed_coordinator.close()
+            self._windowed_coordinator = self._new_windowed_coordinator()
+            self._windowed_coordinator_pid = pid
+        if self._windowed_coordinator is None:
+            raise RuntimeError("windowed artifact coordinator is unavailable")
+        return self._windowed_coordinator
+
+    def configure_windowed_stream(self, sampler: Any) -> str:
+        """Bind this dataset split to a deterministic sampler-order contract."""
+        if not self.windowed_artifacts_enabled:
+            raise RuntimeError("windowed artifacts are not enabled")
+        lengths_digest = hashlib.sha256()
+        for length in sampler.lengths:
+            lengths_digest.update(f"{int(length)}\n".encode())
+        contract = {
+            "batch_max_length": int(sampler.batch_max_length),
+            "dataset_fingerprint": str(
+                getattr(self.data, "_fingerprint", "unavailable")
+            ),
+            "dataset_length": len(self.data),
+            "dp_rank": int(sampler.rank),
+            "dp_size": int(sampler.num_replicas),
+            "lengths_digest": lengths_digest.hexdigest(),
+            "namespace": self.shared_artifacts_namespace,
+            "order": "MultipackDistributedBatchSamplerV2",
+            "sampler_seed": int(sampler.seed),
+            "schema_version": 1,
+            "verifier_model": self.model,
+        }
+        stream_id = canonical_stream_id(contract)
+        with self._new_windowed_coordinator() as coordinator:
+            observed = coordinator.register_stream(contract)
+        if observed != stream_id:
+            raise RuntimeError("coordinator returned an inconsistent stream identity")
+        self._windowed_stream_id = stream_id
+        return stream_id
+
+    def windowed_request_id(self, dataset_index: int) -> str:
+        if not self.model:
+            raise RuntimeError("windowed artifacts require an explicit verifier model")
+        dataset_item = self.data[dataset_index]
+        return canonical_hidden_state_request_id(
+            self.model,
+            build_client_item(dataset_item),
+            namespace=self.shared_artifacts_namespace,
+        )
+
+    def prepare_windowed_epoch(
+        self,
+        samples: tuple[StreamSampleIndex, ...],
+        *,
+        cursor: int,
+        reset: bool,
+    ) -> None:
+        if not self.windowed_artifacts_enabled:
+            return
+        if (
+            self._windowed_stream_id is None
+            or self.shared_artifacts_consumer_id is None
+        ):
+            raise RuntimeError("windowed stream was not configured by the DataLoader")
+        if samples and any(
+            sample.stream_id != self._windowed_stream_id for sample in samples
+        ):
+            raise RuntimeError("sampler positions belong to another stream")
+        with self._new_windowed_coordinator() as coordinator:
+            coordinator.register_positions(samples)
+            coordinator.register_consumer(
+                self.shared_artifacts_consumer_id,
+                stream_id=self._windowed_stream_id,
+                lookbehind=self.shared_artifacts_lookbehind,
+                lookahead=self.shared_artifacts_lookahead,
+                max_inflight=self.shared_artifacts_max_inflight,
+                cursor=cursor,
+                reset=reset,
+            )
+
+    def _acquire_windowed_hs(
+        self, sample: StreamSampleIndex
+    ) -> tuple[dict[str, torch.Tensor], ArtifactReadLease]:
+        if self.shared_artifacts_consumer_id is None or self.artifact_cache is None:
+            raise RuntimeError("windowed artifacts are not configured")
+        coordinator = self._coordinator_for_process()
+        lease = coordinator.acquire(
+            self.shared_artifacts_consumer_id,
+            sample,
+            timeout_seconds=self.request_timeout,
+        )
+        dataset_item = self.data[sample.dataset_index]
+        try:
+            loaded = self.artifact_cache.load(
+                sample.request_id,
+                lambda data: check_hidden_states(
+                    data, dataset_item["input_ids"].tolist()
+                ),
+            )
+            if lease.cache_hit:
+                self.artifact_cache.record_reuse()
+            return loaded, lease
+        except BaseException:
+            coordinator.abandon(
+                self.shared_artifacts_consumer_id, [lease.as_batch_metadata()]
+            )
+            raise
+
+    def ack_windowed_batch(self, leases: list[dict[str, Any]]) -> int | None:
+        if not self.windowed_artifacts_enabled or not leases:
+            return None
+        if self.shared_artifacts_consumer_id is None:
+            raise RuntimeError("windowed consumer identity is missing")
+        return self._coordinator_for_process().ack(
+            self.shared_artifacts_consumer_id, leases
+        )
+
+    def abandon_windowed_batch(self, leases: list[dict[str, Any]]) -> None:
+        if not self.windowed_artifacts_enabled or not leases:
+            return
+        if self.shared_artifacts_consumer_id is None:
+            raise RuntimeError("windowed consumer identity is missing")
+        self._coordinator_for_process().abandon(
+            self.shared_artifacts_consumer_id, leases
+        )
+
+    def start_windowed_producer(self) -> None:
+        """Start a trainer-main-process dispatcher after DataLoader workers fork."""
+        if not self.windowed_artifacts_enabled:
+            return
+        if self._windowed_producer_thread is not None:
+            if not self._windowed_producer_thread.is_alive():
+                error = self._windowed_producer_error
+                raise RuntimeError("windowed artifact producer stopped") from error
+            return
+        if self._windowed_stream_id is None:
+            raise RuntimeError("windowed stream is not prepared")
+        self._windowed_producer_stop = threading.Event()
+        self._windowed_producer_error = None
+        self._windowed_producer_thread = threading.Thread(
+            target=self._run_windowed_producer,
+            name=f"artifact-producer-{self.shared_artifacts_consumer_id}",
+            daemon=True,
+        )
+        self._windowed_producer_thread.start()
+
+    def _run_windowed_producer(self) -> None:
+        if (
+            self.shared_artifacts_path is None
+            or self.shared_artifacts_consumer_id is None
+            or self._windowed_stream_id is None
+            or self._windowed_producer_stop is None
+        ):
+            self._windowed_producer_error = RuntimeError(
+                "windowed producer started without a complete configuration"
+            )
+            return
+        owner = f"{self.shared_artifacts_consumer_id}:{os.getpid()}:{uuid.uuid4().hex}"
+        cache = HiddenStateArtifactCache(
+            self.shared_artifacts_path,
+            artifact_ttl_seconds=None,
+            lock_timeout_seconds=self.shared_artifacts_lock_timeout_seconds,
+        )
+        try:
+            with self._new_windowed_coordinator() as coordinator:
+                while not self._windowed_producer_stop.is_set():
+                    coordinator.heartbeat(self.shared_artifacts_consumer_id)
+                    coordinator.recover_expired()
+                    self._evict_windowed_artifacts(coordinator, cache)
+                    claims = coordinator.claim_generation(
+                        owner, stream_id=self._windowed_stream_id, max_claims=1
+                    )
+                    if claims:
+                        for claim in claims:
+                            try:
+                                self._produce_windowed_claim(
+                                    coordinator, cache, owner, claim
+                                )
+                            except Exception as error:  # noqa: BLE001
+                                coordinator.fail_generation(owner, claim, error)
+                        continue
+                    self._windowed_producer_stop.wait(0.02)
+        except Exception as error:  # noqa: BLE001 - background thread boundary
+            self._windowed_producer_error = error
+
+    def _produce_windowed_claim(
+        self,
+        coordinator: WindowedArtifactCoordinator,
+        cache: HiddenStateArtifactCache,
+        owner: str,
+        claim: GenerationClaim,
+    ) -> None:
+        expected_request_id = self.windowed_request_id(claim.dataset_index)
+        if expected_request_id != claim.request_id:
+            raise RuntimeError("generation claim no longer matches dataset")
+        dataset_item = self.data[claim.dataset_index]
+        client_item = build_client_item(dataset_item)
+        result = cache.get_or_create(
+            claim.request_id,
+            lambda: self._materialize_shared_hs(
+                claim.dataset_index,
+                dataset_item,
+                client_item,
+            ),
+            lambda data: check_hidden_states(data, dataset_item["input_ids"].tolist()),
+        )
+        coordinator.complete_generation(
+            owner,
+            claim,
+            path=result.path,
+            size_bytes=result.path.stat().st_size,
+        )
+
+    @staticmethod
+    def _evict_windowed_artifacts(
+        coordinator: WindowedArtifactCoordinator,
+        cache: HiddenStateArtifactCache,
+    ) -> None:
+        for eviction in coordinator.begin_evictions(limit=16):
+            try:
+                removed = cache.remove(eviction.request_id, expected_path=eviction.path)
+            except (ArtifactCacheError, OSError):
+                coordinator.finish_eviction(eviction, removed=False)
+            else:
+                coordinator.finish_eviction(
+                    eviction, removed=removed or not eviction.path.exists()
+                )
+
+    def _materialize_shared_hs(
+        self,
+        index: int,
+        dataset_item: dict,
+        client_item: ClientItem,
+    ) -> dict[str, torch.Tensor]:
+        file_idx = self._map_to_file_idx(index)
+        cached = self.transfer.get_cached(file_idx)
+        if cached is not None:
+            check_hidden_states(cached, dataset_item["input_ids"].tolist())
+            return cached
+        if not self.client:
+            self._setup_client()
+        return self._generate_shared_hs(dataset_item, client_item)
+
+    def stop_windowed_producer(self, *, completed: bool = False) -> None:
+        stop = self._windowed_producer_stop
+        thread = self._windowed_producer_thread
+        if stop is not None:
+            stop.set()
+        if thread is not None:
+            thread.join(timeout=30.0)
+            if thread.is_alive():
+                raise RuntimeError("windowed artifact producer did not stop")
+        self._windowed_producer_thread = None
+        self._windowed_producer_stop = None
+        if completed and self.shared_artifacts_consumer_id is not None:
+            coordinator = self._coordinator_for_process()
+            coordinator.complete_consumer(self.shared_artifacts_consumer_id)
+            if self.artifact_cache is not None:
+                self._evict_windowed_artifacts(coordinator, self.artifact_cache)
+        if self._windowed_producer_error is not None:
+            error = self._windowed_producer_error
+            self._windowed_producer_error = None
+            raise RuntimeError("windowed artifact producer failed") from error
 
     def _compute_approx_lengths(self) -> list[int]:
         """Get lengths of the dataset samples."""
@@ -408,44 +738,71 @@ class ArrowDataset(BaseDataset):
             if handle is not None and retrieved:
                 self.transfer.delete(handle)
 
-    def _get_raw_data(self, index):
-        file_idx = self._map_to_file_idx(index)
-        loaded_hs = self.transfer.get_cached(file_idx)
+    def _load_requested_hidden_states(
+        self,
+        dataset_index: int,
+        windowed_sample: StreamSampleIndex | None,
+    ) -> tuple[dict[str, torch.Tensor] | None, ArtifactReadLease | None]:
+        lease: ArtifactReadLease | None = None
+        file_idx = self._map_to_file_idx(dataset_index)
+        if windowed_sample is not None:
+            loaded_hs, lease = self._acquire_windowed_hs(windowed_sample)
+        else:
+            loaded_hs = self.transfer.get_cached(file_idx)
 
         if loaded_hs is None:
             match self.on_missing:
                 case "generate":
-                    loaded_hs = self._maybe_generate_hs(index)
+                    loaded_hs = self._maybe_generate_hs(dataset_index)
                 case "skip":
-                    return None
+                    return None, None
                 case "warn":
                     warnings.warn(
-                        f"Failed to load hidden states for sample {index}. Skipping...",
+                        "Failed to load hidden states for sample "
+                        f"{dataset_index}. Skipping...",
                         stacklevel=1,
                     )
-                    return None
+                    return None, None
                 case "raise":
                     raise RuntimeError(
-                        f"Failed to load hidden states for sample {index}."
+                        f"Failed to load hidden states for sample {dataset_index}."
                     )
+        return loaded_hs, lease
+
+    def _get_raw_data(self, index):
+        windowed_sample = index if isinstance(index, StreamSampleIndex) else None
+        dataset_index = (
+            windowed_sample.dataset_index if windowed_sample is not None else int(index)
+        )
+        loaded_hs, lease = self._load_requested_hidden_states(
+            dataset_index, windowed_sample
+        )
 
         if loaded_hs is None:
-            return loaded_hs
+            return None
 
         # loaded_hs structure: {
         #   "hidden_states": [seq_len, num_layers, hidden_size]
         #   "token_ids": [seq_len]
         # }
 
-        if not torch.equal(loaded_hs["token_ids"], self.data[index]["input_ids"]):
+        if not torch.equal(
+            loaded_hs["token_ids"], self.data[dataset_index]["input_ids"]
+        ):
             warnings.warn(
-                f"Loaded token ids {loaded_hs['token_ids']} for index {index} don't"
-                f"match input ids {self.data[index]['input_ids']}",
+                f"Loaded token ids {loaded_hs['token_ids']} for index "
+                f"{dataset_index} don't match input ids "
+                f"{self.data[dataset_index]['input_ids']}",
                 stacklevel=1,
             )
+            if lease is not None and self.shared_artifacts_consumer_id is not None:
+                self._coordinator_for_process().abandon(
+                    self.shared_artifacts_consumer_id,
+                    [lease.as_batch_metadata()],
+                )
             return None
 
-        return {
+        result = {
             "hidden_states": loaded_hs["hidden_states"][:, :-1].flatten(
                 1
             ),  # [seq_len, 3 * hidden_size]
@@ -453,8 +810,11 @@ class ArrowDataset(BaseDataset):
             "verifier_last_hidden_states": loaded_hs["hidden_states"][
                 :, -1
             ],  # [seq_len, hidden_size]
-            "loss_mask": self.data[index]["loss_mask"],  # [seq_len]
+            "loss_mask": self.data[dataset_index]["loss_mask"],  # [seq_len]
         }
+        if lease is not None:
+            result[WINDOWED_LEASE_KEY] = lease.as_batch_metadata()
+        return result
 
 
 class SampleFileDataset(BaseDataset):
@@ -562,8 +922,15 @@ def create_collate_fn(
     preprocess: Callable[[BatchType], BatchType] | None = None,
 ):
     def collate_fn(batch: list[BatchType | None]) -> BatchType:
+        # Lease metadata stays on CPU and is never passed through model preprocessing.
+        valid_batch = [sample for sample in batch if sample is not None]
+        leases = [
+            sample.pop(WINDOWED_LEASE_KEY)
+            for sample in valid_batch
+            if WINDOWED_LEASE_KEY in sample
+        ]
         # Apply per-sample preprocessing and filter failed samples
-        batch = [preprocess(b) if preprocess else b for b in batch if b is not None]
+        batch = [preprocess(b) if preprocess else b for b in valid_batch]
 
         if not batch:
             # Create empty sample which then gets padded to full
@@ -615,6 +982,8 @@ def create_collate_fn(
         ).unsqueeze(0)
         # shape: [1, max_len]
         collated_data["document_ids"] = document_ids
+        if leases:
+            collated_data[WINDOWED_BATCH_LEASES_KEY] = leases
 
         return collated_data
 
