@@ -676,8 +676,7 @@ class ArrowDataset(BaseDataset):
                 ):
                     file_idx = self._map_to_file_idx(index)
                     target_path = (
-                        self.transfer.hidden_states_path
-                        / f"hs_{file_idx}.safetensors"
+                        self.transfer.hidden_states_path / f"hs_{file_idx}.safetensors"
                     )
                     target_path.parent.mkdir(parents=True, exist_ok=True)
                     _atomic_save_hs_file(loaded_hs, target_path)
@@ -718,7 +717,7 @@ class ArrowDataset(BaseDataset):
         self, dataset_item: dict, client_item: ClientItem
     ) -> dict[str, torch.Tensor]:
         handle: str | None = None
-        retrieved = False
+        cleanup_generated = False
         try:
             handle = generate_hidden_states(
                 self.client,  # type:ignore[arg-type]
@@ -727,15 +726,19 @@ class ArrowDataset(BaseDataset):
                 timeout=self.request_timeout,
                 max_retries=self.max_retries,
             )
-            loaded_hs = self.transfer.get_generated(handle)
-            retrieved = True
+            cleanup_generated = True
+            try:
+                loaded_hs = self.transfer.get_generated(handle)
+            except TimeoutError:
+                cleanup_generated = False
+                raise
             if loaded_hs is None:
                 raise ValueError(f"Failed to load hidden states for handle {handle}")
             check_hidden_states(loaded_hs, dataset_item["input_ids"].tolist())
             return loaded_hs
         finally:
             # A failed retrieval may still have an in-flight backend writer.
-            if handle is not None and retrieved:
+            if handle is not None and cleanup_generated:
                 self.transfer.delete(handle)
 
     def _load_requested_hidden_states(

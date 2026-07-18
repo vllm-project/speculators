@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import hs_connectors.transfer as transfer_module
 import pytest
 import torch
 from datasets import Dataset
@@ -9,6 +10,7 @@ from safetensors.torch import load_file, save_file
 
 import speculators.train.data as data_module
 import speculators.train.dataloader as dataloader_module
+from hs_connectors import FileTransfer
 from speculators.data_generation.windowed_artifacts import WindowedArtifactCoordinator
 from speculators.train.data import WINDOWED_LEASE_KEY, ArrowDataset
 from speculators.train.dataloader import WindowedBatchSampler
@@ -56,7 +58,7 @@ def _arrow_dataset(
     dataset = ArrowDataset(
         max_len=128,
         datapath=data_path,
-        hidden_states_path=hidden_states_path,
+        transfer=FileTransfer(hidden_states_path),
         model="model",
         on_missing="generate",
         on_generate=on_generate,
@@ -175,7 +177,7 @@ def test_windowed_dataset_dispatches_reads_acks_and_cleans_final_window(
     dataset = ArrowDataset(
         max_len=128,
         datapath=data_path,
-        hidden_states_path=tmp_path / "index",
+        transfer=FileTransfer(tmp_path / "index"),
         model="model",
         on_missing="generate",
         on_generate="delete",
@@ -226,7 +228,7 @@ def test_windowed_scheduling_is_independent_of_dataloader_workers(
     dataset = ArrowDataset(
         max_len=128,
         datapath=data_path,
-        hidden_states_path=tmp_path / "index",
+        transfer=FileTransfer(tmp_path / "index"),
         model="model",
         on_missing="generate",
         on_generate="delete",
@@ -369,7 +371,7 @@ def test_shared_dataset_preserves_service_artifact_after_lock_timeout(
         lambda *_args, **_kwargs: str(artifact_path),
     )
     monkeypatch.setattr(
-        data_module,
+        transfer_module,
         "wait_for_lock",
         time_out_waiting_for_lock,
     )
@@ -442,7 +444,7 @@ def test_train_and_validation_loaders_share_artifact_configuration(monkeypatch):
         hidden_states_dtype=torch.bfloat16,
         noise_std=0.0,
         legacy_data=False,
-        hidden_states_path=None,
+        transfer=None,
         vllm_endpoint="http://producer/v1",
         on_missing="generate",
         on_generate="delete",
