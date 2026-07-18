@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import socket
 import threading
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -177,6 +178,7 @@ def test_benchmark_cli_output_paths_are_conditional(monkeypatch, tmp_path):
         ["python", "-m", "torch.distributed.run", "trainer.py"],
         ["python", "-m", "torch.distributed.launch", "trainer.py"],
         ["python", "-u", "-m", "accelerate.commands.launch", "trainer.py"],
+        ["python", "-m", "deepspeed", "trainer.py"],
         ["python", "trainer.py", "--tensor-parallel-size=3"],
         ["python", "trainer.py", "-tp", "3"],
         ["python", "trainer.py", "--data-parallel-size", "3"],
@@ -219,8 +221,8 @@ def test_windowed_1p3c_requires_publish_once_multiplicity():
     assert scenario.expected_service_completions_per_shared_sample == 1
 
 
-@pytest.mark.parametrize("times_out", [False, True])
-def test_managed_process_termination_tolerates_exit_races(monkeypatch, times_out):
+@pytest.mark.parametrize("timeout_count", [0, 1, 2])
+def test_managed_process_termination_tolerates_exit_races(monkeypatch, timeout_count):
     class _Process:
         pid = 123
 
@@ -232,13 +234,14 @@ def test_managed_process_termination_tolerates_exit_races(monkeypatch, times_out
 
         def wait(self, timeout):
             self.wait_calls += 1
-            if times_out and self.wait_calls == 1:
+            if self.wait_calls <= timeout_count:
                 raise benchmark_module.subprocess.TimeoutExpired("consumer", timeout)
             return 0
 
     managed = object.__new__(benchmark_module._ManagedProcess)
     managed.process = _Process()
     managed.finished_at = None
+    managed._reader_error = None
     closed = []
     managed.close_log = lambda: closed.append(True)
 
@@ -248,9 +251,13 @@ def test_managed_process_termination_tolerates_exit_races(monkeypatch, times_out
     monkeypatch.setattr(benchmark_module.os, "killpg", process_exited)
     managed.terminate(grace_seconds=0.01)
 
-    assert managed.process.wait_calls == (2 if times_out else 1)
+    assert managed.process.wait_calls == min(timeout_count + 1, 2)
     assert managed.finished_at is not None
     assert closed == [True]
+    if timeout_count == 2:
+        assert "after SIGKILL" in managed.reader_error
+    else:
+        assert managed.reader_error is None
 
 
 def test_config_rejects_gpu_sharing_and_owned_environment():
@@ -356,18 +363,91 @@ def test_accounting_proxy_counts_validated_hidden_state_completion():
         upstream_thread.join(timeout=2)
 
 
+def test_accounting_proxy_closes_upstream_connection_after_failure(
+    monkeypatch,
+):
+    connections = []
+    connection_base = benchmark_module.http.client.HTTPConnection
+
+    class _FailingConnection(connection_base):
+        def __init__(self, *_args, **_kwargs):
+            self.closed = False
+            connections.append(self)
+
+        def request(self, *_args, **_kwargs):
+            raise OSError("upstream disconnected")
+
+        def close(self):
+            self.closed = True
+
+    monkeypatch.setattr(
+        benchmark_module.http.client, "HTTPConnection", _FailingConnection
+    )
+    proxy = AccountingProxy(
+        "http://127.0.0.1:1/v1", "c0", AccountingLedger(), timeout_seconds=1
+    )
+    proxy.start()
+    try:
+        body = json.dumps(
+            {"model": "model", "prompt": [1, 2, 3], "max_tokens": 1}
+        ).encode()
+        host, port = proxy._server.server_address
+        with socket.create_connection((host, port), timeout=2) as client:
+            client.sendall(
+                b"POST /v1/completions HTTP/1.1\r\n"
+                b"Host: localhost\r\n"
+                b"Content-Type: application/json\r\n"
+                + f"Content-Length: {len(body)}\r\n".encode()
+                + b"Connection: close\r\n\r\n"
+                + body
+            )
+            response = client.recv(4096)
+        assert b" 502 " in response.split(b"\r\n", 1)[0]
+    finally:
+        proxy.close()
+
+    assert len(connections) == 1
+    assert connections[0].closed
+
+
 def test_analysis_separates_warmup_and_requires_exact_multiplicity():
     result = analyze_scenario(_scenario(), _valid_events(), 0.0, 1.0)
 
     assert result["valid"]
     assert result["request_accounting"]["requests"] == 12
-    assert result["request_accounting"]["qualifying_shared_samples"] == 3
+    assert result["request_accounting"]["qualifying_shared_samples"] == 2
+    assert result["request_accounting"]["boundary_sample_keys_excluded"] == 1
     assert (
         result["request_accounting"]["per_consumer_completions_semantics"]
         == "logical_consumer"
     )
     assert result["steady_state"]["duration_seconds"] == pytest.approx(0.22)
     assert result["steady_state"]["completions"] == 7
+
+
+def test_analysis_ignores_multiplicity_outside_common_steady_window():
+    events = [
+        _event("c0", "warmup-0", 0.10),
+        _event("c1", "warmup-1", 0.15),
+        _event("c2", "warmup-2", 0.18),
+        _event("c0", "sample-a", 0.20),
+        _event("c1", "sample-a", 0.25),
+        _event("c2", "sample-a", 0.30),
+        _event("c0", "sample-b", 0.50),
+        _event("c1", "sample-b", 0.50),
+        _event("c2", "sample-b", 0.50),
+        _event("c0", "sample-a", 0.90),
+    ]
+
+    result = analyze_scenario(
+        _scenario(warmup=1, minimum_steady=1, minimum_shared=2),
+        events,
+        started_at=0.0,
+        finished_at=1.0,
+    )
+
+    assert result["valid"]
+    assert result["request_accounting"]["observed_multiplicity_histogram"] == {"3": 2}
 
 
 def test_analysis_fails_closed_on_missing_consumer_evidence():
@@ -391,7 +471,7 @@ def test_analysis_fails_closed_on_failed_or_duplicate_completion():
 
     assert not result["valid"]
     assert result["request_accounting"]["invalid_completions"] == 1
-    assert any(
+    assert not any(
         "ambiguous multiplicity" in reason for reason in result["invalid_reasons"]
     )
 
@@ -653,3 +733,94 @@ def test_consumer_step_analysis_fails_closed_on_missing_log(tmp_path):
 
     assert not result["valid"]
     assert result["invalid_reasons"] == ["consumer log is missing"]
+
+
+def test_partial_startup_reports_every_role_and_isolates_cleanup_failures(  # noqa: C901
+    tmp_path, monkeypatch
+):
+    terminated = []
+    closed_proxies = []
+
+    class _Process:
+        returncode = None
+
+        @staticmethod
+        def poll():
+            return None
+
+    class _FakeManagedProcess:
+        def __init__(self, _command, _env, _gpu, log_path, _line_callback=None):
+            self.role = log_path.stem
+            if self.role == "c1":
+                raise RuntimeError("c1 failed to start")
+            self.process = _Process()
+            self.started_at = 1.0
+            self.finished_at = None
+            self.reader_error = None
+
+        def terminate(self):
+            terminated.append(self.role)
+            if self.role == "c0":
+                raise RuntimeError("c0 cleanup failed")
+            self.finished_at = 2.0
+
+    class _FakeProxy:
+        def __init__(self, _target, consumer_id, _ledger, _timeout):
+            self.consumer_id = consumer_id
+            self.endpoint = f"http://proxy/{consumer_id}"
+
+        def start(self):
+            return None
+
+        def close(self):
+            closed_proxies.append(self.consumer_id)
+            if self.consumer_id == "c0":
+                raise RuntimeError("c0 proxy cleanup failed")
+
+    class _FakeMonitor:
+        def __init__(self, _assignments, sample_path, _summary_path, **_kwargs):
+            self.sample_path = sample_path
+
+        def start(self):
+            return None
+
+        def stop(self):
+            return {"status": "ok", "errors": [], "ownership_violations": []}
+
+    monkeypatch.setattr(benchmark_module, "_ManagedProcess", _FakeManagedProcess)
+    monkeypatch.setattr(benchmark_module, "AccountingProxy", _FakeProxy)
+    monkeypatch.setattr(benchmark_module, "NvmlGpuMonitor", _FakeMonitor)
+    monkeypatch.setattr(benchmark_module, "_wait_for_producer", lambda *_args: None)
+    monkeypatch.setattr(
+        benchmark_module,
+        "_gpu_snapshot",
+        lambda gpus: benchmark_module._GpuSample(
+            captured_at=0.0,
+            total_memory_mib=dict.fromkeys(gpus, 0),
+            role_memory_mib=dict.fromkeys(gpus, 0),
+            compute_pids={gpu: [] for gpu in gpus},
+        ),
+    )
+
+    config = _config()
+    report = benchmark_module._run_scenario(
+        config, config.scenarios[1], tmp_path / "run"
+    )
+
+    assert [role["started"] for role in report["consumer_processes"]] == [
+        True,
+        False,
+        False,
+    ]
+    assert [role["consumer_id"] for role in report["consumer_processes"]] == [
+        "c0",
+        "c1",
+        "c2",
+    ]
+    assert terminated == ["c0", "producer"]
+    assert closed_proxies == ["c0", "c1", "c2"]
+    assert any("c1 failed to start" in reason for reason in report["invalid_reasons"])
+    assert any(
+        "consumer cleanup failed" in reason for reason in report["invalid_reasons"]
+    )
+    assert any("proxy cleanup failed" in reason for reason in report["invalid_reasons"])

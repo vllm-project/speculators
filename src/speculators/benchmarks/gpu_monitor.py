@@ -356,13 +356,24 @@ class GpuMonitor:
                 self._errors.append("GPU monitor thread did not stop")
             self._ended_at_ns = time.monotonic_ns()
             if self._output is not None:
-                self._write(
-                    {
-                        "record_type": "session_end",
-                        "timestamp_monotonic_ns": self._ended_at_ns,
-                    }
-                )
-                self._close_output()
+                try:
+                    self._write(
+                        {
+                            "record_type": "session_end",
+                            "timestamp_monotonic_ns": self._ended_at_ns,
+                        }
+                    )
+                except Exception as error:  # noqa: BLE001 - preserve shutdown
+                    self._errors.append(
+                        f"session_end write failed: {_error_text(error)}"
+                    )
+                finally:
+                    try:
+                        self._close_output()
+                    except Exception as error:  # noqa: BLE001 - preserve summary
+                        self._errors.append(
+                            f"GPU sample output close failed: {_error_text(error)}"
+                        )
             summary = {
                 "status": (
                     "ok" if not self._errors and not self._violations else "degraded"

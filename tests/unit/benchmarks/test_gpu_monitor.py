@@ -137,6 +137,37 @@ def test_stop_timeout_does_not_race_a_blocked_sample(tmp_path, monkeypatch):
     assert backend.closed
 
 
+def test_stop_write_failure_still_closes_and_writes_degraded_summary(
+    tmp_path, monkeypatch
+):
+    backend = _FakeBackend()
+    summary_path = tmp_path / "summary.json"
+    monitor = GpuMonitor(
+        [GpuRoleAssignment(0, "producer", "producer")],
+        tmp_path / "samples.jsonl",
+        summary_path,
+        poll_seconds=0.01,
+        backend=backend,
+    )
+    monitor.start()
+    assert backend.sampled.wait(1)
+    original_write = monitor._write
+
+    def fail_session_end(value):
+        if value.get("record_type") == "session_end":
+            raise OSError("disk full")
+        original_write(value)
+
+    monkeypatch.setattr(monitor, "_write", fail_session_end)
+    summary = monitor.stop()
+
+    assert summary["status"] == "degraded"
+    assert any("session_end write failed" in error for error in summary["errors"])
+    assert monitor._output is None
+    assert backend.closed
+    assert json.loads(summary_path.read_text())["status"] == "degraded"
+
+
 def test_window_summary_excludes_startup_and_reports_active_time():
     assignment = GpuRoleAssignment(2, "consumer:b4", "consumer:b4")
     samples = [

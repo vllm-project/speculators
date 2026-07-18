@@ -62,6 +62,7 @@ _DISTRIBUTED_LAUNCHERS = {
 }
 _DISTRIBUTED_LAUNCHER_MODULES = {
     "accelerate.commands.launch",
+    "deepspeed",
     "torch.distributed.launch",
     "torch.distributed.run",
 }
@@ -442,6 +443,7 @@ class AccountingProxy:
                 ]
                 response_body = b'{"error":"accounting proxy upstream failure"}'
                 valid_completion = False
+                connection: http.client.HTTPConnection | None = None
                 try:
                     connection_type = (
                         http.client.HTTPSConnection
@@ -474,8 +476,6 @@ class AccountingProxy:
                     response_reason = response.reason
                     response_body = response.read()
                     response_headers = response.getheaders()
-                    connection.close()
-
                     valid_completion = bool(
                         is_completion
                         and request_key
@@ -484,6 +484,12 @@ class AccountingProxy:
                     )
                 except Exception as error:  # noqa: BLE001
                     request_error = request_error or type(error).__name__
+                finally:
+                    if connection is not None:
+                        try:
+                            connection.close()
+                        except Exception as error:  # noqa: BLE001 - preserve response
+                            request_error = request_error or type(error).__name__
 
                 if is_completion:
                     proxy._ledger.add(
@@ -627,12 +633,33 @@ def analyze_scenario(  # noqa: C901
                 )
 
     key_counts = Counter(
-        event.request_key for event in measured if event.request_key is not None
+        event.request_key for event in steady_events if event.request_key is not None
     )
     key_consumers: dict[str, set[str]] = defaultdict(set)
-    for event in measured:
+    for event in steady_events:
         if event.request_key is not None:
             key_consumers[event.request_key].add(event.consumer_id)
+
+    boundary_keys: set[str] = set()
+    if multiplicity == len(expected_ids):
+        measured_key_counts = Counter(
+            event.request_key for event in measured if event.request_key is not None
+        )
+        measured_key_consumers: dict[str, set[str]] = defaultdict(set)
+        for event in measured:
+            if event.request_key is not None:
+                measured_key_consumers[event.request_key].add(event.consumer_id)
+        expected_consumers = set(expected_ids)
+        boundary_keys = {
+            key
+            for key, count in key_counts.items()
+            if count < multiplicity
+            and measured_key_counts[key] == multiplicity
+            and measured_key_consumers[key] == expected_consumers
+        }
+        for key in boundary_keys:
+            del key_counts[key]
+            key_consumers.pop(key, None)
 
     if multiplicity == len(expected_ids):
         qualifying = [
@@ -691,6 +718,7 @@ def analyze_scenario(  # noqa: C901
                 "bounded_window_regeneration" if bounded_regeneration else "exact"
             ),
             "qualifying_shared_samples": len(qualifying),
+            "boundary_sample_keys_excluded": len(boundary_keys),
             "observed_multiplicity_histogram": {
                 str(count): samples
                 for count, samples in sorted(multiplicity_histogram.items())
@@ -1128,7 +1156,12 @@ class _ManagedProcess:
         except subprocess.TimeoutExpired:
             with suppress(ProcessLookupError):
                 os.killpg(self.process.pid, signal.SIGKILL)
-            self.process.wait(timeout=10)
+            try:
+                self.process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                self._reader_error = self._reader_error or (
+                    "subprocess did not exit within 10s after SIGKILL"
+                )
         self.finished_at = time.monotonic()
         self.close_log()
 
@@ -1322,15 +1355,30 @@ def _run_scenario(  # noqa: C901
                     f"GPU monitor shutdown failed: {type(error).__name__}: {error}"
                 )
         for process in consumers:
-            process.terminate()
+            try:
+                process.terminate()
+            except Exception as error:  # noqa: BLE001 - continue role cleanup
+                runtime_errors.append(
+                    f"consumer cleanup failed: {type(error).__name__}: {error}"
+                )
             if process.reader_error is not None:
                 runtime_errors.append(
                     f"consumer log reader failed: {process.reader_error}"
                 )
         for proxy in proxies:
-            proxy.close()
+            try:
+                proxy.close()
+            except Exception as error:  # noqa: BLE001 - continue role cleanup
+                runtime_errors.append(
+                    f"proxy cleanup failed: {type(error).__name__}: {error}"
+                )
         if producer is not None:
-            producer.terminate()
+            try:
+                producer.terminate()
+            except Exception as error:  # noqa: BLE001 - report incomplete cleanup
+                runtime_errors.append(
+                    f"producer cleanup failed: {type(error).__name__}: {error}"
+                )
             if producer.reader_error is not None:
                 runtime_errors.append(
                     f"producer log reader failed: {producer.reader_error}"
@@ -1462,23 +1510,27 @@ def _run_scenario(  # noqa: C901
         *monitor_summary.get("errors", []),
         *monitor_summary.get("ownership_violations", []),
     ]
+    consumer_processes = []
+    for index, consumer in enumerate(scenario.consumers):
+        process = consumers[index] if index < len(consumers) else None
+        consumer_processes.append(
+            {
+                "consumer_id": consumer.consumer_id,
+                "gpu": consumer.gpu,
+                "started": process is not None,
+                "return_code": process.process.returncode if process else None,
+                "runtime_seconds": (
+                    process.finished_at - process.started_at
+                    if process is not None and process.finished_at is not None
+                    else None
+                ),
+            }
+        )
     return {
         "kind": scenario.kind,
         "valid": not invalid_reasons,
         "invalid_reasons": invalid_reasons,
-        "consumer_processes": [
-            {
-                "consumer_id": consumer.consumer_id,
-                "gpu": consumer.gpu,
-                "return_code": process.process.returncode,
-                "runtime_seconds": (
-                    process.finished_at - process.started_at
-                    if process.finished_at is not None
-                    else None
-                ),
-            }
-            for consumer, process in zip(scenario.consumers, consumers, strict=False)
-        ],
+        "consumer_processes": consumer_processes,
         "request_accounting": analysis["request_accounting"],
         "shared_artifact_cache": cache_accounting,
         "windowed_artifacts": windowed_snapshot,
