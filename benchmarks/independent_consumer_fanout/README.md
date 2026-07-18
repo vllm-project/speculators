@@ -11,6 +11,8 @@ Each trainer receives its own accounting endpoint through the `{endpoint}` comma
 
 Start from `config.example.json`, replace the model and preprocessed-data placeholders, and keep each consumer command as a direct, single-process `scripts/train.py` launch. Pin training semantics such as `--optimizer` explicitly so an upstream default change cannot silently alter a comparison. The example also pins fused AdamW and its integrated gradient clipping, which preserve the AdamW update while avoiding a separate gradient-rescaling pass on CUDA. Keep multiple DataLoader workers and explicit prefetching for generated data. A single worker can hold only one unique first-miss request in flight, which serializes producer prefill and can make otherwise independent consumers wait in lockstep. The example uses four CPU workers with a prefetch factor of two; these workers do not create additional GPU compute roles, and the benchmark still rejects more than one compute process on any assigned GPU. Run the fixture from the repository root:
 
+Install the benchmark telemetry dependency with `pip install -e '.[nvml]'`.
+
 ```bash
 python scripts/benchmark_independent_consumers.py \
   benchmarks/independent_consumer_fanout/config.example.json \
