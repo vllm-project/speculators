@@ -4,8 +4,9 @@ from functools import partial
 
 import pytest
 import torch
+from torch.nn.functional import cross_entropy
 
-from speculators.models.dflash.metrics import compute_metrics
+from speculators.models.dflash.metrics import compute_fused_ce_metrics, compute_metrics
 from speculators.models.metrics import (
     ce_loss,
     compute_accuracy_multi_step,
@@ -337,3 +338,46 @@ class TestComputeMetrics:
         for i in range(1, 4):
             assert torch.isclose(metrics[f"position_{i}_acc_sum"], expected_correct[i])
             assert torch.isclose(metrics[f"position_{i}_acc_total"], expected_total[i])
+
+
+@pytest.mark.parametrize("weighting", ["fixed-exp-decay", "dpace"])
+def test_fused_ce_reduction_matches_standard_metrics(weighting):
+    torch.manual_seed(17)
+    logits = torch.randn(1, 12, 19, dtype=torch.double, requires_grad=True)
+    target_ids = torch.randint(0, logits.shape[-1], (1, logits.shape[1]))
+    targets = _ids_to_logits(target_ids, logits.shape[-1]).to(logits.dtype)
+    loss_mask = torch.tensor(
+        [[0, 1, 1, 1, 0, 1, 0, 1, 0, 1, 1, 0]], dtype=torch.float64
+    )
+    loss_weight = 0.37
+    loss_config = {"ce": (ce_loss, loss_weight)}
+
+    standard_loss, standard_metrics = compute_metrics(
+        logits,
+        targets,
+        loss_mask,
+        block_size=4,
+        gamma=3.0,
+        loss_config=loss_config,
+        per_position_loss_weight=weighting,
+        dpace_alpha=0.6,
+    )
+    loss_per_token = cross_entropy(
+        logits.flatten(0, 1), target_ids.flatten(), reduction="none"
+    )
+    token_accuracy = (logits.argmax(dim=-1) == target_ids).float().flatten()
+    fused_loss, fused_metrics = compute_fused_ce_metrics(
+        loss_per_token,
+        token_accuracy,
+        loss_mask,
+        block_size=4,
+        loss_weight=loss_weight,
+        gamma=3.0,
+        per_position_loss_weight=weighting,
+        dpace_alpha=0.6,
+    )
+
+    torch.testing.assert_close(fused_loss, standard_loss)
+    assert fused_metrics.keys() == standard_metrics.keys()
+    for name in standard_metrics:
+        torch.testing.assert_close(fused_metrics[name], standard_metrics[name])

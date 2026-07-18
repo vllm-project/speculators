@@ -35,7 +35,7 @@ from speculators.train.distributed import (
     is_distributed,
 )
 from speculators.train.graceful_shutdown import with_graceful_shutdown
-from speculators.train.optimizers import build_optimizers
+from speculators.train.optimizers import build_optimizers, restore_adamw_backend
 from speculators.train.utils import normalize_counted_metrics
 
 root_logger = logging.getLogger("speculators")
@@ -105,6 +105,9 @@ class TrainerConfig(NamedTuple):
     train_call_kwargs: dict | None = None
     val_call_kwargs: dict | None = None
     optimizer: Literal["adamw", "muon"] = "adamw"
+    adamw_backend: Literal["auto", "foreach", "fused"] = "auto"
+    gradient_clip_backend: Literal["torch", "fused_adamw"] = "torch"
+    max_grad_norm: float = 1.0
     weight_decay: float = 0.01
     muon_lr: float = 0.02
     muon_momentum: float = 0.95
@@ -188,6 +191,7 @@ class Trainer:
 
         self.setup_trainer()
         self.setup_model()
+        self._prepare_model_execution_backends()
         self.setup_optimizer()
         self._prepared_windowed_datasets: set[int] = set()
 
@@ -402,6 +406,7 @@ class Trainer:
         last_epoch = -1
         if self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1:
             self.checkpointer.load_optimizer_state_dict(self.model, self.optimizers)
+            restore_adamw_backend(self.optimizers, self.config.adamw_backend)
             last_epoch = self.checkpointer.previous_epoch
 
         # Setup scheduler(s) — one per optimizer so each optimizer's base LR (e.g.
@@ -435,13 +440,65 @@ class Trainer:
         if self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1:
             self.checkpointer.load_scheduler_state_dict(self.schedulers)
 
+    def _prepare_model_execution_backends(self) -> None:
+        train_kwargs = self.config.train_call_kwargs or {}
+        if train_kwargs.get("linear_cross_entropy_backend") != "liger":
+            return
+        model = (
+            self.model.module
+            if isinstance(self.model, DistributedDataParallel)
+            else self.model
+        )
+        prepare = getattr(model, "prepare_fused_linear_cross_entropy", None)
+        if prepare is None:
+            raise ValueError(
+                "linear_cross_entropy_backend='liger' is unsupported by this model"
+            )
+        prepare(self.config.hidden_states_dtype)
+
     def _optimizers_zero_grad(self):
         for opt in self.optimizers:
             opt.zero_grad()
 
+    def _clip_gradients(self):
+        if self.config.gradient_clip_backend == "torch":
+            return torch.nn.utils.clip_grad_norm_(
+                self.model.parameters(), self.config.max_grad_norm
+            )
+        if self.config.gradient_clip_backend != "fused_adamw":
+            raise ValueError("gradient_clip_backend must be 'torch' or 'fused_adamw'")
+        if len(self.optimizers) != 1:
+            raise RuntimeError("fused AdamW gradient clipping requires one optimizer")
+        optimizer = self.optimizers[0]
+        group_backends = {
+            (group.get("foreach"), group.get("fused"))
+            for group in optimizer.param_groups
+        }
+        if group_backends != {(False, True)}:
+            raise RuntimeError(
+                "gradient_clip_backend='fused_adamw' requires fused AdamW"
+            )
+        gradients = [
+            parameter.grad
+            for parameter in self.model.parameters()
+            if parameter.grad is not None
+        ]
+        if not gradients:
+            return torch.tensor(0.0)
+        grad_norm = torch.nn.utils.get_total_norm(gradients, foreach=True)
+        optimizer.grad_scale = ((grad_norm + 1e-6) / self.config.max_grad_norm).clamp(
+            min=1.0
+        )
+        return grad_norm
+
     def _optimizers_step(self):
-        for opt in self.optimizers:
-            opt.step()
+        try:
+            for opt in self.optimizers:
+                opt.step()
+        finally:
+            for opt in self.optimizers:
+                if hasattr(opt, "grad_scale"):
+                    del opt.grad_scale
 
     def _schedulers_step(self):
         for scheduler in self.schedulers:
@@ -540,7 +597,7 @@ class Trainer:
                 timer.mark("fwd")
                 self._optimizers_zero_grad()
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+                self._clip_gradients()
 
                 timer.mark("bwd")
                 self._optimizers_step()

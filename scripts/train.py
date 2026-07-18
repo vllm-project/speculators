@@ -701,6 +701,9 @@ def main(args: argparse.Namespace):  # noqa: C901
         train_call_kwargs=train_call_kwargs,
         val_call_kwargs=val_call_kwargs,
         optimizer=args.optimizer,
+        adamw_backend=args.adamw_backend,
+        gradient_clip_backend=args.gradient_clip_backend,
+        max_grad_norm=args.max_grad_norm,
         weight_decay=args.weight_decay,
         muon_lr=args.muon_lr,
         muon_momentum=args.muon_momentum,
@@ -895,7 +898,7 @@ def _validate_shared_hidden_state_args(
     _validate_windowed_shared_hidden_state_args(parser, args)
 
 
-def parse_args():
+def parse_args():  # noqa: C901
     parser = argparse.ArgumentParser()
     parser.add_argument("--verifier-name-or-path", type=str, required=True)
     parser.add_argument(
@@ -1346,6 +1349,30 @@ def parse_args():
         default=4.0,
         help="Decay gamma for DFlash/DSpark loss weighting (default: 4.0)",
     )
+    parser.add_argument(
+        "--dflash-linear-cross-entropy-backend",
+        choices=["torch", "liger"],
+        default="torch",
+        help="DFlash CE backend. Liger is available only for an exactly-CE loss.",
+    )
+    parser.add_argument(
+        "--dflash-compact-zero-weight-ce-rows",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Exclude zero-weight DFlash rows before the fused Liger CE kernel.",
+    )
+    parser.add_argument(
+        "--dflash-label-source",
+        choices=["verifier_argmax", "input_ids"],
+        default="verifier_argmax",
+        help="Hard-label source for the opt-in fused DFlash CE path.",
+    )
+    parser.add_argument(
+        "--dflash-verifier-argmax-chunk-size",
+        type=int,
+        default=0,
+        help="Verifier LM-head rows per argmax chunk; 0 materializes all rows.",
+    )
     # D-Pace specific arguments (loss weight option + smoothing)
     parser.add_argument(
         "--per-position-loss-weight",
@@ -1517,6 +1544,24 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--adamw-backend",
+        choices=["auto", "foreach", "fused"],
+        default="auto",
+        help="AdamW execution backend (also applies to AdamW parameters in Muon mode).",
+    )
+    parser.add_argument(
+        "--gradient-clip-backend",
+        choices=["torch", "fused_adamw"],
+        default="torch",
+        help="Apply clipping explicitly or through the fused AdamW grad scale.",
+    )
+    parser.add_argument(
+        "--max-grad-norm",
+        type=float,
+        default=1.0,
+        help="Maximum gradient norm (default: 1.0).",
+    )
+    parser.add_argument(
         "--weight-decay",
         type=float,
         default=0.01,
@@ -1555,7 +1600,47 @@ def parse_args():
 
     provided = explicitly_provided_dests(parser, DECODER_SHAPING_FLAGS)
     validate_draft_init_args(parser, args, provided)
-    resolve_loss_config(args.loss_fn)
+    loss_config = resolve_loss_config(args.loss_fn)
+
+    if args.dflash_linear_cross_entropy_backend == "liger":
+        if args.speculator_type != "dflash":
+            parser.error(
+                "--dflash-linear-cross-entropy-backend=liger requires "
+                "--speculator-type=dflash"
+            )
+        if set(loss_config) != {"ce"}:
+            parser.error(
+                "--dflash-linear-cross-entropy-backend=liger requires an "
+                "exactly-CE --loss-fn"
+            )
+    if (
+        args.dflash_compact_zero_weight_ce_rows
+        and args.dflash_linear_cross_entropy_backend != "liger"
+    ):
+        parser.error(
+            "--dflash-compact-zero-weight-ce-rows requires the Liger CE backend"
+        )
+    if args.dflash_label_source != "verifier_argmax" and (
+        args.dflash_linear_cross_entropy_backend != "liger"
+    ):
+        parser.error("--dflash-label-source=input_ids requires the Liger CE backend")
+    if args.dflash_verifier_argmax_chunk_size < 0:
+        parser.error("--dflash-verifier-argmax-chunk-size must be non-negative")
+    if args.dflash_verifier_argmax_chunk_size and (
+        args.dflash_linear_cross_entropy_backend != "liger"
+    ):
+        parser.error(
+            "--dflash-verifier-argmax-chunk-size requires the Liger CE backend"
+        )
+    if args.max_grad_norm <= 0:
+        parser.error("--max-grad-norm must be positive")
+    if args.gradient_clip_backend == "fused_adamw" and (
+        args.optimizer != "adamw" or args.adamw_backend != "fused"
+    ):
+        parser.error(
+            "--gradient-clip-backend=fused_adamw requires "
+            "--optimizer=adamw --adamw-backend=fused"
+        )
 
     if args.per_position_loss_weight == "dpace":
         if args.loss_fn != "ce":

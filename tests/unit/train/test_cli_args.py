@@ -300,3 +300,70 @@ def test_no_norm_before_fc_flag(monkeypatch):
 def test_no_norm_output_flag(monkeypatch):
     args = _parse(monkeypatch, ["--no-norm-output"])
     assert args.norm_output is False
+
+
+def test_consumer_optimization_defaults_preserve_existing_backends(monkeypatch):
+    args = _parse(monkeypatch, ["--speculator-type", "dflash"])
+
+    assert args.dflash_linear_cross_entropy_backend == "torch"
+    assert not args.dflash_compact_zero_weight_ce_rows
+    assert args.dflash_label_source == "verifier_argmax"
+    assert args.dflash_verifier_argmax_chunk_size == 0
+    assert args.adamw_backend == "auto"
+    assert args.gradient_clip_backend == "torch"
+    assert args.max_grad_norm == 1.0
+
+
+def test_consumer_optimization_arguments_flow_to_dflash(monkeypatch):
+    args = _parse(
+        monkeypatch,
+        [
+            "--speculator-type",
+            "dflash",
+            "--loss-fn",
+            "ce",
+            "--dflash-linear-cross-entropy-backend",
+            "liger",
+            "--dflash-compact-zero-weight-ce-rows",
+            "--dflash-label-source",
+            "input_ids",
+            "--dflash-verifier-argmax-chunk-size",
+            "512",
+            "--optimizer",
+            "adamw",
+            "--adamw-backend",
+            "fused",
+            "--gradient-clip-backend",
+            "fused_adamw",
+            "--max-grad-norm",
+            "0.75",
+        ],
+    )
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(
+            "speculators.models.dflash.core.validate_liger_installation", lambda: None
+        )
+        train_kw, val_kw = DFlashDraftModel.get_trainer_kwargs(**vars(args))
+
+    assert train_kw["linear_cross_entropy_backend"] == "liger"
+    assert train_kw["compact_zero_weight_ce_rows"] is True
+    assert train_kw["label_source"] == "input_ids"
+    assert train_kw["verifier_argmax_chunk_size"] == 512
+    assert val_kw == train_kw
+    assert args.adamw_backend == "fused"
+    assert args.gradient_clip_backend == "fused_adamw"
+    assert args.max_grad_norm == 0.75
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        ["--speculator-type", "dflash", "--dflash-compact-zero-weight-ce-rows"],
+        ["--speculator-type", "dflash", "--dflash-label-source", "input_ids"],
+        ["--speculator-type", "dflash", "--dflash-verifier-argmax-chunk-size", "-1"],
+        ["--gradient-clip-backend", "fused_adamw"],
+    ],
+)
+def test_consumer_optimization_rejects_invalid_combinations(monkeypatch, extra):
+    with pytest.raises(SystemExit, match="2"):
+        _parse(monkeypatch, extra)

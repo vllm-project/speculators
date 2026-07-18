@@ -14,7 +14,7 @@ from speculators.model import DraftVocabMixin, SpeculatorModel
 from speculators.models.attention import create_float_mask
 from speculators.models.dflash import DFlashSpeculatorConfig
 from speculators.models.dflash.attention import create_anchor_block_mask_mod
-from speculators.models.dflash.metrics import compute_metrics
+from speculators.models.dflash.metrics import compute_fused_ce_metrics, compute_metrics
 from speculators.models.dflash.model_definitions import Qwen3DFlashDecoderLayer
 from speculators.models.dflash.utils import (
     get_base_indices_for_anchored_blocks,
@@ -22,6 +22,10 @@ from speculators.models.dflash.utils import (
 )
 from speculators.models.metrics import LossConfig, resolve_loss_config
 from speculators.models.utils import conditional_torch_compile, resolve_target_layer_ids
+from speculators.ops.fused_linear_cross_entropy import (
+    frozen_linear_cross_entropy,
+    validate_liger_installation,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -241,14 +245,65 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             "per_position_loss_weight", "fixed-exp-decay"
         )
         dpace_alpha = kwargs.get("dpace_alpha", 0.5)
+        linear_ce_backend = kwargs.get("dflash_linear_cross_entropy_backend", "torch")
+        compact_ce_rows = kwargs.get("dflash_compact_zero_weight_ce_rows", False)
+        label_source = kwargs.get("dflash_label_source", "verifier_argmax")
+        verifier_argmax_chunk_size = kwargs.get("dflash_verifier_argmax_chunk_size", 0)
+        if linear_ce_backend not in {"liger", "torch"}:
+            raise ValueError(
+                "dflash_linear_cross_entropy_backend must be 'torch' or 'liger'"
+            )
+        if label_source not in {"input_ids", "verifier_argmax"}:
+            raise ValueError(
+                "dflash_label_source must be 'verifier_argmax' or 'input_ids'"
+            )
+        if verifier_argmax_chunk_size < 0:
+            raise ValueError("dflash_verifier_argmax_chunk_size must be non-negative")
+        if compact_ce_rows and linear_ce_backend != "liger":
+            raise ValueError(
+                "dflash_compact_zero_weight_ce_rows requires "
+                "dflash_linear_cross_entropy_backend='liger'"
+            )
+        if (
+            label_source != "verifier_argmax" or verifier_argmax_chunk_size
+        ) and linear_ce_backend != "liger":
+            raise ValueError(
+                "DFlash label-source and verifier-argmax chunking options require "
+                "dflash_linear_cross_entropy_backend='liger'"
+            )
+        if linear_ce_backend == "liger":
+            if set(loss_config) != {"ce"}:
+                raise ValueError(
+                    "dflash_linear_cross_entropy_backend='liger' requires an "
+                    "exactly-CE --loss-fn configuration"
+                )
+            validate_liger_installation()
         shared = {
             "loss_config": loss_config,
             "gamma": gamma,
             "max_anchors": max_anchors,
             "per_position_loss_weight": per_position_loss_weight,
             "dpace_alpha": dpace_alpha,
+            "linear_cross_entropy_backend": linear_ce_backend,
+            "compact_zero_weight_ce_rows": compact_ce_rows,
+            "label_source": label_source,
+            "verifier_argmax_chunk_size": verifier_argmax_chunk_size,
         }
         return dict(shared), dict(shared)
+
+    def prepare_fused_linear_cross_entropy(self, compute_dtype: torch.dtype) -> None:
+        """Prepare the ignored verifier head as the fused CE compute weight."""
+
+        if not torch.equal(
+            self.lm_head.weight.detach(), self.verifier_lm_head.weight.detach()
+        ):
+            raise RuntimeError(
+                "Liger CE requires identical frozen draft and verifier LM heads; "
+                "the loaded checkpoint and verifier weights differ"
+            )
+        # This head is excluded from checkpoints. Casting it once avoids a persistent
+        # extra weight copy while matching autocast's compute precision.
+        self.verifier_lm_head.to(dtype=compute_dtype)
 
     @property
     def mask_token_id(self) -> int:
@@ -326,6 +381,10 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         verifier_last_hidden_states: torch.Tensor,  # [1, total_seq_len, hidden_size]
         document_ids: torch.Tensor,  # [1, total_seq_len]
         position_ids: torch.Tensor | None = None,  # [1, total_seq_len]
+        target_ids_only: bool = False,
+        materialize_draft_logits: bool = True,
+        label_source: str = "verifier_argmax",
+        verifier_argmax_chunk_size: int = 0,
         **kwargs,
     ):
         """Run the anchored-block draft transformer up to the draft logits.
@@ -377,16 +436,23 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             anchor_positions, self.block_size
         )  # shape: [num_anchors*block_size]
 
-        with torch.no_grad():
-            verifier_logits = self.verifier_lm_head(
-                self.verifier_norm(verifier_last_hidden_states)
+        if target_ids_only:
+            targets = self._ce_target_ids(
+                input_ids,
+                verifier_last_hidden_states,
+                anchored_block_indices,
+                label_source=label_source,
+                verifier_argmax_chunk_size=verifier_argmax_chunk_size,
             )
-            if not self.config.sample_from_anchor:
-                # False: shift right by 1 so slot j predicts token at position j
-                verifier_logits = torch.roll(verifier_logits, 1, dims=1)
-            # else: True, slot k predicts token at position k+1 (next), no shift
-            targets = verifier_logits[:, anchored_block_indices]
-            # shape: [1, num_anchors*block_size, draft_vocab_size]
+        else:
+            with torch.no_grad():
+                verifier_logits = self.verifier_lm_head(
+                    self.verifier_norm(verifier_last_hidden_states)
+                )
+                if not self.config.sample_from_anchor:
+                    # False: shift right so slot j predicts token at position j.
+                    verifier_logits = torch.roll(verifier_logits, 1, dims=1)
+                targets = verifier_logits[:, anchored_block_indices]
 
         for layer_idx, layer in enumerate(self.layers):
             noise_embedding = layer(
@@ -402,8 +468,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             )
 
         hidden = self.norm(noise_embedding)
-        logits = self.lm_head(hidden)
-        # shape: [1, num_anchors*block_size, vocab_size]
+        logits = self.lm_head(hidden) if materialize_draft_logits else None
 
         aligned_loss_mask = loss_mask.clone()[:, anchored_block_indices]
         # shape: [1, num_anchors*block_size]
@@ -421,6 +486,50 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
 
         return hidden, logits, targets, aligned_loss_mask, anchored_block_indices
 
+    @torch.no_grad()
+    def _ce_target_ids(
+        self,
+        input_ids: torch.Tensor,
+        verifier_last_hidden_states: torch.Tensor,
+        anchored_block_indices: torch.Tensor,
+        *,
+        label_source: str,
+        verifier_argmax_chunk_size: int,
+    ) -> torch.Tensor:
+        if label_source == "input_ids":
+            if self.use_draft_vocab:
+                raise ValueError(
+                    "dflash_label_source='input_ids' requires the full verifier "
+                    "vocabulary"
+                )
+            label_indices = anchored_block_indices
+            if self.config.sample_from_anchor:
+                label_indices = label_indices + 1
+            return input_ids[:, label_indices]
+        if label_source != "verifier_argmax":
+            raise ValueError(f"unsupported DFlash label source: {label_source!r}")
+
+        normalized = self.verifier_norm(verifier_last_hidden_states)
+        sequence_length = normalized.shape[1]
+        if (
+            verifier_argmax_chunk_size == 0
+            or verifier_argmax_chunk_size >= sequence_length
+        ):
+            verifier_ids = self.verifier_lm_head(normalized).argmax(dim=-1)
+        else:
+            verifier_ids = torch.cat(
+                [
+                    self.verifier_lm_head(
+                        normalized[:, start : start + verifier_argmax_chunk_size]
+                    ).argmax(dim=-1)
+                    for start in range(0, sequence_length, verifier_argmax_chunk_size)
+                ],
+                dim=1,
+            )
+        if not self.config.sample_from_anchor:
+            verifier_ids = torch.roll(verifier_ids, 1, dims=1)
+        return verifier_ids[:, anchored_block_indices]
+
     @conditional_torch_compile
     def forward(
         self,
@@ -435,9 +544,14 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         max_anchors: int = 3072,
         per_position_loss_weight: str = "fixed-exp-decay",
         dpace_alpha: float = 0.5,
+        linear_cross_entropy_backend: str = "torch",
+        compact_zero_weight_ce_rows: bool = False,
+        label_source: str = "verifier_argmax",
+        verifier_argmax_chunk_size: int = 0,
         **kwargs,
     ):
-        _, logits, targets, aligned_loss_mask, _ = self._backbone_forward(
+        use_fused_ce = linear_cross_entropy_backend == "liger"
+        hidden, logits, targets, aligned_loss_mask, _ = self._backbone_forward(
             hidden_states,
             input_ids,
             loss_mask,
@@ -445,8 +559,62 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             document_ids,
             position_ids,
             max_anchors=max_anchors,
+            target_ids_only=use_fused_ce,
+            materialize_draft_logits=not use_fused_ce,
+            label_source=label_source,
+            verifier_argmax_chunk_size=verifier_argmax_chunk_size,
             **kwargs,
         )
+        if use_fused_ce:
+            if loss_config is None or set(loss_config) != {"ce"}:
+                raise ValueError("Liger DFlash CE requires an exactly-CE loss config")
+            flat_hidden = hidden.reshape(-1, hidden.shape[-1])
+            flat_targets = targets.reshape(-1)
+            flat_mask = aligned_loss_mask.reshape(-1)
+            active_indices = None
+            if compact_zero_weight_ce_rows:
+                active_indices = torch.nonzero(flat_mask > 0, as_tuple=False).flatten()
+                if active_indices.numel() > 0:
+                    flat_hidden = flat_hidden.index_select(0, active_indices)
+                    flat_targets = flat_targets.index_select(0, active_indices)
+
+            if active_indices is not None and active_indices.numel() == 0:
+                loss_per_token = hidden.reshape(-1, hidden.shape[-1]).sum(dim=-1) * 0
+                token_accuracy = torch.zeros_like(loss_per_token)
+            else:
+                compute_weight = self.verifier_lm_head.weight.detach()
+                flat_hidden = flat_hidden.to(compute_weight.dtype)
+                loss_per_token, token_accuracy = frozen_linear_cross_entropy(
+                    flat_hidden,
+                    compute_weight,
+                    flat_targets,
+                )
+                if active_indices is not None:
+                    loss_per_token = loss_per_token.new_zeros(
+                        flat_mask.shape
+                    ).index_copy(0, active_indices, loss_per_token)
+                    token_accuracy = token_accuracy.new_zeros(
+                        flat_mask.shape
+                    ).index_copy(0, active_indices, token_accuracy)
+            return (
+                None,
+                *compute_fused_ce_metrics(
+                    loss_per_token,
+                    token_accuracy,
+                    aligned_loss_mask,
+                    self.block_size,
+                    loss_weight=loss_config["ce"][1],
+                    gamma=gamma,
+                    per_position_loss_weight=per_position_loss_weight,
+                    dpace_alpha=dpace_alpha,
+                    sample_from_anchor=self.config.sample_from_anchor,
+                ),
+            )
+
+        if linear_cross_entropy_backend != "torch":
+            raise ValueError(
+                "linear_cross_entropy_backend must be either 'torch' or 'liger'"
+            )
         loss, metrics = compute_metrics(
             logits,
             targets,
