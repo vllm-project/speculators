@@ -319,6 +319,58 @@ def test_publish_once_analysis_accepts_one_service_call_per_shared_sample():
     assert result["steady_state"]["completions"] == 3
 
 
+def test_windowed_analysis_reports_bounded_regeneration():
+    events = [
+        _event("c0", "warmup", 0.1),
+        _event("c0", "sample-a", 0.2),
+        _event("c2", "sample-a", 0.25),
+        _event("c1", "sample-b", 0.3),
+        _event("c0", "sample-c", 0.4),
+    ]
+
+    result = analyze_scenario(
+        _scenario(multiplicity=1),
+        events,
+        started_at=0.0,
+        finished_at=1.0,
+        windowed=True,
+    )
+
+    assert result["valid"]
+    accounting = result["request_accounting"]
+    assert accounting["multiplicity_semantics"] == "bounded_window_regeneration"
+    assert accounting["observed_multiplicity_histogram"] == {"1": 2, "2": 1}
+    assert accounting["regenerated_sample_keys"] == 1
+    assert accounting["extra_service_completions"] == 1
+    assert result["steady_state"]["mode"] == "bounded_window_service"
+
+
+def test_windowed_analysis_rejects_more_generations_than_consumers():
+    events = [
+        _event("c0", "warmup", 0.1),
+        _event("c0", "sample-a", 0.2),
+        _event("c1", "sample-a", 0.25),
+        _event("c2", "sample-a", 0.3),
+        _event("c0", "sample-a", 0.35),
+        _event("c1", "sample-b", 0.4),
+        _event("c2", "sample-c", 0.45),
+    ]
+
+    result = analyze_scenario(
+        _scenario(multiplicity=1),
+        events,
+        started_at=0.0,
+        finished_at=1.0,
+        windowed=True,
+    )
+
+    assert not result["valid"]
+    assert any(
+        "exceed the maximum bounded window multiplicity" in reason
+        for reason in result["invalid_reasons"]
+    )
+
+
 def _cache_stats(**updates: int) -> dict[str, int]:
     stats = {
         "schema_version": 1,
@@ -348,6 +400,23 @@ def test_cache_accounting_proves_publish_once_fanout():
     assert result["stats"]["logical_requests"] == 12
     assert result["stats"]["misses"] == result["stats"]["publishes"] == 4
     assert result["stats"]["hits"] == 8
+
+
+def test_windowed_cache_allows_prefetch_ahead_of_consumer_reads():
+    stats = _cache_stats(logical_requests=9, hits=5)
+
+    windowed = analyze_cache_accounting(
+        _scenario(multiplicity=1),
+        stats,
+        service_completions=4,
+        windowed=True,
+    )
+    synchronous = analyze_cache_accounting(
+        _scenario(multiplicity=1), stats, service_completions=4
+    )
+
+    assert windowed["valid"]
+    assert not synchronous["valid"]
 
 
 @pytest.mark.parametrize(

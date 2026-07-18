@@ -67,16 +67,27 @@ to every service completion, exactly one miss is published, the other two reques
 and all failure, retry, cleanup, and timeout counters are zero. Baseline scenarios that
 do not use the shared-cache placeholder remain valid without cache accounting.
 
+For bounded asynchronous fan-out, also pass
+`--shared-hidden-states-consumer-id {consumer_id}` and configure lookbehind,
+lookahead, and max-inflight limits. The example config enables this mode. DataLoader
+workers can prefetch authorized positions, but only the trainer commits cursor progress.
+When consumer windows separate, a publication that leaves every live window is evicted;
+a lagging consumer may therefore regenerate that request later. The report accepts one
+to `consumer_count` service completions per measured key, records the observed
+multiplicity histogram and regeneration overhead, and still requires every successful
+service completion to match exactly one cache miss and publication. It also adds
+`windowed_artifacts`, including each consumer cursor, current artifact states, retained
+bytes, in-flight acquisitions, and retained/in-flight high-water marks.
+
 The shared cache is a filesystem data plane, not Mooncake or GPU-direct transport. Its
 directory must provide reliable POSIX `flock`, same-filesystem atomic rename, and
 directory `fsync` semantics to all consumers. Do not use an arbitrary NFS mount unless
 those guarantees have been verified.
-It is also not a consumer-centered bounded sliding window. Disabling expiration retains
-one artifact for every unique request. With a finite TTL, expired entries are reclaimed
-when a dataset opens the cache or when the same key is requested again; a single pass
-over previously unseen samples can therefore continue growing on-disk usage. Size the
-filesystem and choose the TTL for the maximum expected consumer lag. A throughput run
-with a finite dataset is not evidence that long-running cache storage is bounded.
+Without a consumer ID, the legacy cache is not bounded by consumer progress: disabling
+expiration retains one artifact per unique request, and a finite TTL can still grow over
+a pass of unseen samples. With a consumer ID, retention is instead bounded by the union
+of live windows, atomic packed batches, and in-flight leases. The focused 10k/100k CPU
+state-machine tests validate that this bound is independent of total stream length.
 
 In publish-once mode, `per_consumer_completions` and the steady-state per-consumer
 completion map identify which consumer owned each service miss. They do not represent
