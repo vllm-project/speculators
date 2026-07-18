@@ -698,6 +698,60 @@ def analyze_scenario(  # noqa: C901
     }
 
 
+def analyze_producer_common_window(
+    events: list[RequestEvent],
+    *,
+    start_monotonic_ns: int,
+    end_monotonic_ns: int,
+) -> dict[str, Any]:
+    """Classify first publications and recaptures in the consumer overlap."""
+    duration_ns = end_monotonic_ns - start_monotonic_ns
+    reasons: list[str] = []
+    if duration_ns <= 0:
+        reasons.append("common consumer steady-state window is empty")
+
+    seen: set[str] = set()
+    first_publications = 0
+    recaptures = 0
+    owners: Counter[str] = Counter()
+    for event in sorted(events, key=lambda item: item.completed_at):
+        if not event.valid_completion or event.request_key is None:
+            continue
+        completed_ns = int(event.completed_at * 1_000_000_000)
+        recapture = event.request_key in seen
+        seen.add(event.request_key)
+        if not start_monotonic_ns <= completed_ns <= end_monotonic_ns:
+            continue
+        owners[event.consumer_id] += 1
+        if recapture:
+            recaptures += 1
+        else:
+            first_publications += 1
+
+    requests = first_publications + recaptures
+    if not requests:
+        reasons.append("producer has no completions in the common steady-state window")
+    duration_seconds = max(duration_ns, 0) / 1_000_000_000
+    return {
+        "valid": not reasons,
+        "invalid_reasons": reasons,
+        "interval": "common_consumer_steady_overlap",
+        "start_monotonic_ns": start_monotonic_ns,
+        "end_monotonic_ns": end_monotonic_ns,
+        "duration_seconds": duration_seconds,
+        "requests": requests,
+        "first_publications": first_publications,
+        "recaptures": recaptures,
+        "requests_per_second": (
+            requests / duration_seconds if duration_seconds > 0 else None
+        ),
+        "effective_unique_samples_per_second": (
+            first_publications / duration_seconds if duration_seconds > 0 else None
+        ),
+        "service_request_owners": dict(owners),
+    }
+
+
 def analyze_cache_accounting(  # noqa: C901
     scenario: ScenarioSpec,
     stats: dict[str, Any] | None,
@@ -1245,9 +1299,10 @@ def _run_scenario(  # noqa: C901
                     f"producer log reader failed: {producer.reader_error}"
                 )
 
+    request_events = ledger.snapshot()
     analysis = analyze_scenario(
         scenario,
-        ledger.snapshot(),
+        request_events,
         started_at,
         finished_at,
         windowed=windowed_artifacts_enabled,
@@ -1309,11 +1364,23 @@ def _run_scenario(  # noqa: C901
         "invalid_reasons": ["common consumer steady-state window is unavailable"],
         "per_gpu": {},
     }
+    producer_window: dict[str, Any] = {
+        "valid": False,
+        "invalid_reasons": [
+            "common consumer steady-state producer window is unavailable"
+        ],
+        "interval": "common_consumer_steady_overlap",
+    }
     if len(consumer_starts) == len(scenario.consumers) and len(consumer_ends) == len(
         scenario.consumers
     ):
         overlap_start = max(consumer_starts)
         overlap_end = min(consumer_ends)
+        producer_window = analyze_producer_common_window(
+            request_events,
+            start_monotonic_ns=overlap_start,
+            end_monotonic_ns=overlap_end,
+        )
         try:
             gpu_window = summarize_gpu_window(
                 iter_gpu_samples(monitor.sample_path),
@@ -1347,6 +1414,7 @@ def _run_scenario(  # noqa: C901
         *runtime_errors,
         *analysis["invalid_reasons"],
         *cache_accounting["invalid_reasons"],
+        *producer_window["invalid_reasons"],
         *memory["invalid_reasons"],
         *monitor_summary.get("errors", []),
         *monitor_summary.get("ownership_violations", []),
@@ -1372,6 +1440,7 @@ def _run_scenario(  # noqa: C901
         "shared_artifact_cache": cache_accounting,
         "windowed_artifacts": windowed_snapshot,
         "steady_state": analysis["steady_state"],
+        "producer_common_steady": producer_window,
         "consumer_step_times": consumer_steps,
         "makespan_seconds": max(finished_at - started_at, 0.0),
         "memory": memory,

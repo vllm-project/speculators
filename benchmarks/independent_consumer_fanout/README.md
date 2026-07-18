@@ -53,6 +53,12 @@ values are omitted from the report. The command exits nonzero
 if a role fails, a GPU is shared or already occupied, a completion is malformed, sample
 multiplicity is ambiguous, or the common steady-state window is too small.
 
+`producer_common_steady` uses that same consumer overlap to report producer requests,
+first publications, recaptures, request throughput, and effective unique-sample
+throughput. The older `steady_state` field remains the service-wide interval after its
+own completion warmup; do not compare its longer train-plus-validation duration with a
+producer metric measured only over the common consumer overlap.
+
 For the unshared baseline,
 `expected_service_completions_per_shared_sample` is one for `1p1c` and three for
 `1p3c`. A publish-once implementation changes the latter to one; the logical consumer
@@ -69,8 +75,11 @@ do not use the shared-cache placeholder remain valid without cache accounting.
 
 For bounded asynchronous fan-out, also pass
 `--shared-hidden-states-consumer-id {consumer_id}` and configure lookbehind,
-lookahead, and max-inflight limits. The example config enables this mode. DataLoader
-workers can prefetch authorized positions, but only the trainer commits cursor progress.
+lookahead, max-prefetch, capture-batch, and max-inflight limits. The example config
+uses the aligned `2/40/8/8` window and producer-batch settings. The full lookahead is
+retained for reuse while only eight PREFETCH requests per consumer can be queued or
+generating; demand bypasses that cap. DataLoader workers can prefetch authorized
+positions, but only the trainer commits cursor progress.
 When consumer windows separate, a publication that leaves every live window is evicted;
 a lagging consumer may therefore regenerate that request later. The report accepts one
 to `consumer_count` service completions per measured key, records the observed

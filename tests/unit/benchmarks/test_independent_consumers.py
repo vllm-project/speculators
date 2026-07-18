@@ -20,6 +20,7 @@ from speculators.benchmarks.independent_consumers import (
     ScenarioSpec,
     analyze_cache_accounting,
     analyze_consumer_steps,
+    analyze_producer_common_window,
     analyze_scenario,
     canonical_request_key,
 )
@@ -369,6 +370,42 @@ def test_windowed_analysis_rejects_more_generations_than_consumers():
         "exceed the maximum bounded window multiplicity" in reason
         for reason in result["invalid_reasons"]
     )
+
+
+def test_producer_common_window_separates_first_publications_and_recaptures():
+    events = [
+        _event("c0", "sample-a", 0.2),
+        _event("c1", "sample-b", 0.35),
+        _event("c2", "sample-a", 0.4),
+        _event("c0", "sample-c", 0.6),
+    ]
+
+    result = analyze_producer_common_window(
+        events,
+        start_monotonic_ns=300_000_000,
+        end_monotonic_ns=500_000_000,
+    )
+
+    assert result["valid"]
+    assert result["duration_seconds"] == pytest.approx(0.2)
+    assert result["requests"] == 2
+    assert result["first_publications"] == 1
+    assert result["recaptures"] == 1
+    assert result["requests_per_second"] == pytest.approx(10.0)
+    assert result["effective_unique_samples_per_second"] == pytest.approx(5.0)
+    assert result["service_request_owners"] == {"c1": 1, "c2": 1}
+
+
+def test_producer_common_window_rejects_empty_interval():
+    result = analyze_producer_common_window(
+        [],
+        start_monotonic_ns=500_000_000,
+        end_monotonic_ns=500_000_000,
+    )
+
+    assert not result["valid"]
+    assert result["requests"] == 0
+    assert result["requests_per_second"] is None
 
 
 def _cache_stats(**updates: int) -> dict[str, int]:
