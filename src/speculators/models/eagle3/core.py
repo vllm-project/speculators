@@ -196,7 +196,6 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
         | None = None,  # shape: [1, total_seq_len, hidden_size]
         ttt_steps: int = 3,
         ttt_step_loss_decay: float = 1.0,
-        use_off_policy_tokens: bool = False,
         loss_config: LossConfig | None = None,
         **kwargs,
     ):
@@ -318,26 +317,21 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
             input_ids = torch.argmax(logits, dim=-1)
             draft_tokens.append(input_ids.detach().clone())
             # shape: [1, total_seq_len]
-            # Use d2t to map draft tokens to verifier tokens.
-            # Must be in verifier vocabulary space because we use the full verifier
-            # vocabulary in the embedding.
-            if self.d2t is not None:
-                input_ids = input_ids + self.d2t[input_ids]  # type: ignore[index]
 
-            if use_off_policy_tokens:
-                # Overwrite input_ids with ground truth tokens
-                # shift input_ids by 1 to the left and pad with 0
-                # note: inputs_ids no longer line up with verifier_last_hidden_states
-                # the draft logits generated from the padded tokens are ignored
-                # and sliced out for loss calculation
-                input_ids = torch.cat(
-                    [
-                        original_input_ids[:, 1 + ttt_step :],
-                        original_input_ids.new_zeros(1, 1 + ttt_step),
-                    ],
-                    dim=-1,
-                )
-                # shape: [1, total_seq_len]
+            # Teacher forcing: feed the ground-truth tokens (already in the verifier
+            # vocabulary) into the next TTT step instead of the draft's own
+            # predictions. Shift left by 1 + ttt_step and right-pad with 0; the padded
+            # positions produce logits that no longer line up with
+            # verifier_last_hidden_states and are sliced out of the loss (see
+            # align_for_step).
+            input_ids = torch.cat(
+                [
+                    original_input_ids[:, 1 + ttt_step :],
+                    original_input_ids.new_zeros(1, 1 + ttt_step),
+                ],
+                dim=-1,
+            )
+            # shape: [1, total_seq_len]
 
             if self._attn_impl == "simple_flex_attention":
                 if full_attn_mask is not None:
@@ -436,13 +430,11 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
         """
         loss_config = resolve_loss_config(kwargs["loss_fn"])
         train_kwargs = {
-            "use_off_policy_tokens": kwargs["use_off_policy_tokens"],
             "ttt_steps": kwargs["ttt_steps"],
             "ttt_step_loss_decay": kwargs["ttt_step_loss_decay"],
             "loss_config": loss_config,
         }
         val_kwargs = {
-            "use_off_policy_tokens": False,
             "ttt_steps": kwargs["ttt_steps"],
             "ttt_step_loss_decay": kwargs["ttt_step_loss_decay"],
             "loss_config": loss_config,

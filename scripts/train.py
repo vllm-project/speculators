@@ -1036,12 +1036,6 @@ def parse_args():
         default=False,
         help="Sets cuda to deterministic mode. This may impact performance.",
     )
-    parser.add_argument(
-        "--use-off-policy-tokens",
-        action="store_true",
-        default=False,
-        help="Use off-policy tokens during training (required for regenerated data)",
-    )
     # Model hyperparameters
     parser.add_argument(
         "--norm-before-residual",
