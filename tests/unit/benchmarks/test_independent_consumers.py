@@ -5,6 +5,7 @@ import threading
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Literal
 
 import pytest
 from pydantic import ValidationError
@@ -36,7 +37,7 @@ def _consumer(consumer_id: str, gpu: int, command: list[str] | None = None):
 
 
 def _scenario(
-    kind: str = "1p3c",
+    kind: Literal["1p1c", "1p3c"] = "1p3c",
     *,
     multiplicity: int | None = None,
     warmup: int = 1,

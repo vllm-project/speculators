@@ -8,6 +8,7 @@ from torch.nn.functional import cross_entropy
 
 from speculators.models.dflash.metrics import compute_fused_ce_metrics, compute_metrics
 from speculators.models.metrics import (
+    LossConfig,
     ce_loss,
     compute_accuracy_multi_step,
     dflash_loss_decay,
@@ -350,7 +351,7 @@ def test_fused_ce_reduction_matches_standard_metrics(weighting):
         [[0, 1, 1, 1, 0, 1, 0, 1, 0, 1, 1, 0]], dtype=torch.float64
     )
     loss_weight = 0.37
-    loss_config = {"ce": (ce_loss, loss_weight)}
+    loss_config: LossConfig = {"ce": (ce_loss, loss_weight)}
 
     standard_loss, standard_metrics = compute_metrics(
         logits,

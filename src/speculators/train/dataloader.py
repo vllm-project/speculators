@@ -41,12 +41,20 @@ class _WindowedDataset(Protocol):
     def windowed_request_id(self, dataset_index: int) -> str: ...
 
 
+class _BatchSampler(Protocol):
+    epoch: int
+
+    def _generate_batches(self, epoch: int) -> list[Any]: ...
+
+    def set_epoch(self, epoch: int) -> None: ...
+
+
 class WindowedBatchSampler:
     """Annotate sampler indices with stable positions in the consumed order."""
 
     def __init__(
         self,
-        sampler: MultipackDistributedBatchSamplerV2,
+        sampler: _BatchSampler,
         *,
         stream_id: str,
         request_id_for_index: Callable[[int], str],

@@ -730,6 +730,7 @@ class ArrowDataset(BaseDataset):
         dataset_item = self.data[index]
         client_item = build_client_item(dataset_item)
 
+        loaded_hs: dict[str, torch.Tensor] | None
         try:
             if self.artifact_cache is not None:
                 request_id = canonical_hidden_state_request_id(
@@ -821,6 +822,7 @@ class ArrowDataset(BaseDataset):
         windowed_sample: StreamSampleIndex | None,
     ) -> tuple[dict[str, torch.Tensor] | None, ArtifactReadLease | None]:
         lease: ArtifactReadLease | None = None
+        loaded_hs: dict[str, torch.Tensor] | None
         file_idx = self._map_to_file_idx(dataset_index)
         if windowed_sample is not None:
             loaded_hs, lease = self._acquire_windowed_hs(windowed_sample)
@@ -1020,7 +1022,7 @@ def create_collate_fn(
                 empty = preprocess(empty)
             batch = [empty]
 
-        collated_data = {}
+        collated_data: BatchType = {}
         for key in batch[0]:  # type: ignore[union-attr]
             # Concatenate the tensors along the seq (0th) dimension
             collated_data[key] = torch.cat([b[key] for b in batch], dim=0)  # type: ignore[index]

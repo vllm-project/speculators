@@ -31,12 +31,14 @@ def test_bf16_loss_accuracy_and_weighted_hidden_gradient():
 
     loss, accuracy = frozen_linear_cross_entropy(hidden, weight, target)
     (loss * token_weights).sum().backward()
+    assert hidden.grad is not None
     fused_grad = hidden.grad.float().clone()
 
     reference_hidden = hidden.detach().clone().requires_grad_(True)
     reference_logits = reference_hidden @ weight.t()
     reference_loss = cross_entropy(reference_logits, target, reduction="none")
     (reference_loss * token_weights).sum().backward()
+    assert reference_hidden.grad is not None
     reference_grad = reference_hidden.grad.float()
 
     assert (loss - reference_loss.float()).abs().mean().item() < 0.1

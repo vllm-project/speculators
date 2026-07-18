@@ -1,6 +1,7 @@
 """Focused optimizer execution-backend and fused clipping tests."""
 
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 import torch
@@ -70,7 +71,7 @@ def test_trainer_restores_requested_backend_after_checkpoint_load():
             optimizers[0].param_groups[0]["foreach"] = None
             optimizers[0].param_groups[0]["fused"] = None
 
-    trainer = Trainer.__new__(Trainer)
+    trainer = cast("Any", Trainer.__new__(Trainer))
     trainer.model = torch.nn.Linear(4, 3)
     trainer.config = TrainerConfig(
         lr=1e-3,
@@ -90,6 +91,8 @@ def test_trainer_restores_requested_backend_after_checkpoint_load():
 
 
 class _RecordingFusedOptimizer:
+    grad_scale: torch.Tensor
+
     def __init__(self, fail: bool = False):
         self.param_groups = [{"foreach": False, "fused": True}]
         self.fail = fail
@@ -102,7 +105,7 @@ class _RecordingFusedOptimizer:
 
 
 def _fused_clip_trainer(optimizer) -> Trainer:
-    trainer = Trainer.__new__(Trainer)
+    trainer = cast("Any", Trainer.__new__(Trainer))
     trainer.model = torch.nn.Linear(3, 2, bias=False)
     for parameter in trainer.model.parameters():
         parameter.grad = torch.full_like(parameter, 2.0)
@@ -158,11 +161,12 @@ def test_fused_adamw_clip_matches_explicit_clipping_on_cuda():
     torch.nn.utils.clip_grad_norm_([reference], 0.7)
     reference_optimizer.step()
     grad_norm = torch.nn.utils.get_total_norm([fused.grad], foreach=True)
-    fused_optimizer.grad_scale = ((grad_norm + 1e-6) / 0.7).clamp(min=1)
+    fused_optimizer_with_scale = cast("Any", fused_optimizer)
+    fused_optimizer_with_scale.grad_scale = ((grad_norm + 1e-6) / 0.7).clamp(min=1)
     try:
         fused_optimizer.step()
     finally:
-        del fused_optimizer.grad_scale
+        del fused_optimizer_with_scale.grad_scale
 
     torch.testing.assert_close(fused, reference, rtol=1e-6, atol=1e-7)
     torch.testing.assert_close(

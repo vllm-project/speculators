@@ -419,8 +419,11 @@ class AccountingProxy:
                     port = proxy._target.port or (
                         443 if proxy._target.scheme == "https" else 80
                     )
+                    hostname = proxy._target.hostname
+                    if hostname is None:
+                        raise ValueError("accounting proxy target must include a host")
                     connection = connection_type(
-                        proxy._target.hostname,
+                        hostname,
                         port,
                         timeout=proxy._timeout,
                     )
@@ -882,7 +885,7 @@ def analyze_consumer_steps(
             "steady_steps_per_second": None,
         }
     if events is None:
-        values = []
+        values: list[float] = []
         with log_path.open(errors="replace") as log_file:
             for line in log_file:
                 values.extend(
@@ -987,16 +990,16 @@ def _gpu_snapshot(target_gpus: set[int]) -> _GpuSample:
     compute_pids: dict[int, list[int]] = defaultdict(list)
     for row in _run_nvidia_smi("compute-apps=gpu_uuid,pid,used_gpu_memory"):
         uuid, raw_pid, raw_memory = (part.strip() for part in row.split(",", 2))
-        index = uuid_to_index.get(uuid)
-        if index is None:
+        gpu_index = uuid_to_index.get(uuid)
+        if gpu_index is None:
             continue
         try:
             pid = int(raw_pid)
             memory = int(raw_memory)
         except ValueError as error:
             raise EvidenceError(f"Unparseable nvidia-smi compute row: {row}") from error
-        compute_pids[index].append(pid)
-        role_memory[index] += memory
+        compute_pids[gpu_index].append(pid)
+        role_memory[gpu_index] += memory
     return _GpuSample(
         captured_at=time.monotonic(),
         total_memory_mib=total_memory,
@@ -1473,7 +1476,7 @@ def run_benchmark(
     if not selected:
         raise ValueError(f"Configured scenarios do not include {scenario_kind!r}")
     scenarios = [_run_scenario(config, scenario, output_dir) for scenario in selected]
-    versions = {}
+    versions: dict[str, str | None] = {}
     for package in ("speculators", "torch", "vllm"):
         try:
             versions[package] = importlib.metadata.version(package)

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import pytest
 import torch
@@ -153,7 +153,7 @@ def _trainer(events: list[str]) -> Trainer:
         "document_ids": torch.tensor([[0]]),
         WINDOWED_BATCH_LEASES_KEY: [lease],
     }
-    trainer = Trainer.__new__(Trainer)
+    trainer = cast("Any", Trainer.__new__(Trainer))
     trainer.model = _Model()
     trainer.config = TrainerConfig(
         lr=0.1,
@@ -214,7 +214,7 @@ def test_windowed_phase_completes_consumer_after_success():
         events.append(f"run:{epoch}")
         return "result"
 
-    assert Trainer._run_windowed_phase(loader, operation, 3) == "result"
+    assert Trainer._run_windowed_phase(cast("Any", loader), operation, 3) == "result"
     assert events == ["run:3", "stop:True"]
 
 
@@ -227,5 +227,5 @@ def test_windowed_phase_stops_without_completion_after_failure():
         raise RuntimeError("phase failed")
 
     with pytest.raises(RuntimeError, match="phase failed"):
-        Trainer._run_windowed_phase(loader, operation, 0)
+        Trainer._run_windowed_phase(cast("Any", loader), operation, 0)
     assert events == ["run", "stop:False"]

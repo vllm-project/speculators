@@ -4,7 +4,7 @@ import time
 import warnings
 from collections.abc import Callable
 from pathlib import Path
-from typing import Literal, NamedTuple, TypeVar
+from typing import Any, Literal, NamedTuple, Protocol, TypeVar, cast
 
 import torch
 import torch.distributed as dist
@@ -41,6 +41,18 @@ from speculators.train.utils import normalize_counted_metrics
 root_logger = logging.getLogger("speculators")
 metric_logger = logging.getLogger("speculators.metrics")
 _T = TypeVar("_T")
+
+
+class _WindowedDataset(Protocol):
+    def prepare_windowed_epoch(
+        self, samples: tuple[Any, ...], *, cursor: int, reset: bool
+    ) -> None: ...
+
+    def start_windowed_producer(self) -> None: ...
+
+
+class _FusedOptimizer(Protocol):
+    grad_scale: torch.Tensor
 
 
 class _StepTimer:
@@ -205,10 +217,12 @@ class Trainer:
     ):
         sampler = loader.batch_sampler
         dataset = loader.dataset
-        if not hasattr(sampler, "full_epoch_samples") or not hasattr(
-            dataset, "prepare_windowed_epoch"
+        if not hasattr(sampler, "full_epoch_samples") or not all(
+            hasattr(dataset, method)
+            for method in ("prepare_windowed_epoch", "start_windowed_producer")
         ):
             return iter(loader)
+        windowed_dataset = cast("_WindowedDataset", dataset)
         batches = (
             sampler._generate_batches(epoch)  # type: ignore[union-attr]  # noqa: SLF001
             if full_batches is None
@@ -222,14 +236,14 @@ class Trainer:
         else:
             cursor = 0
         dataset_id = id(dataset)
-        dataset.prepare_windowed_epoch(  # type: ignore[union-attr]
+        windowed_dataset.prepare_windowed_epoch(
             samples,
             cursor=cursor,
             reset=dataset_id not in self._prepared_windowed_datasets,
         )
         self._prepared_windowed_datasets.add(dataset_id)
         iterator = iter(loader)
-        dataset.start_windowed_producer()  # type: ignore[union-attr]
+        windowed_dataset.start_windowed_producer()
         return iterator
 
     @staticmethod
@@ -486,9 +500,10 @@ class Trainer:
         if not gradients:
             return torch.tensor(0.0)
         grad_norm = torch.nn.utils.get_total_norm(gradients, foreach=True)
-        optimizer.grad_scale = ((grad_norm + 1e-6) / self.config.max_grad_norm).clamp(
-            min=1.0
-        )
+        fused_optimizer = cast("_FusedOptimizer", optimizer)
+        fused_optimizer.grad_scale = (
+            (grad_norm + 1e-6) / self.config.max_grad_norm
+        ).clamp(min=1.0)
         return grad_norm
 
     def _optimizers_step(self):

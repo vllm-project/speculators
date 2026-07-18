@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import hs_connectors.transfer as transfer_module
 import pytest
@@ -55,7 +55,7 @@ def _arrow_dataset(
     *,
     shared_path: Path | None,
     hidden_states_path: Path,
-    on_generate: str = "delete",
+    on_generate: Literal["cache", "delete"] = "delete",
 ) -> ArrowDataset:
     dataset = ArrowDataset(
         max_len=128,
@@ -68,7 +68,7 @@ def _arrow_dataset(
         shared_artifacts_namespace=("layers:2,18,33" if shared_path else None),
         shared_artifacts_ttl_seconds=None,
     )
-    dataset.client = object()
+    dataset.client = cast("Any", object())
     return dataset
 
 
@@ -205,7 +205,7 @@ def test_windowed_dataset_dispatches_reads_acks_and_cleans_final_window(
         shared_artifacts_consumer_id="consumer",
         request_timeout=2,
     )
-    dataset.client = object()
+    dataset.client = cast("Any", object())
     monkeypatch.setattr(
         dataset,
         "_materialize_shared_hs",
@@ -257,7 +257,7 @@ def test_windowed_scheduling_is_independent_of_dataloader_workers(
         shared_artifacts_consumer_id="consumer",
         request_timeout=5,
     )
-    dataset.client = object()
+    dataset.client = cast("Any", object())
 
     def materialize(_index, dataset_item, _client_item):
         tokens = dataset_item["input_ids"]
@@ -276,13 +276,14 @@ def test_windowed_scheduling_is_independent_of_dataloader_workers(
         prefetch_factor=2,
     )
     sampler = loader.batch_sampler
+    assert isinstance(sampler, WindowedBatchSampler)
     sampler.set_epoch(0)
     samples = sampler.full_epoch_samples(0)
     dataset.prepare_windowed_epoch(samples, cursor=0, reset=True)
     iterator = iter(loader)
     dataset.start_windowed_producer()
 
-    seen_sequences = []
+    seen_sequences: list[int] = []
     for batch in iterator:
         leases = batch.pop(data_module.WINDOWED_BATCH_LEASES_KEY)
         seen_sequences.extend(lease["sequence"] for lease in leases)
@@ -318,7 +319,7 @@ def test_windowed_producer_runs_bounded_concurrent_capture_batches(
         shared_artifacts_capture_batch_wait_seconds=0,
         request_timeout=5,
     )
-    dataset.client = object()
+    dataset.client = cast("Any", object())
     lock = threading.Lock()
     active = 0
     peak = 0
@@ -383,7 +384,7 @@ def test_windowed_capture_batch_isolates_one_failed_claim(tmp_path, monkeypatch)
         shared_artifacts_generation_attempts=1,
         request_timeout=5,
     )
-    dataset.client = object()
+    dataset.client = cast("Any", object())
 
     def materialize(index, dataset_item, _client_item):
         if index == 1:

@@ -168,6 +168,12 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--optimizer`** (str, default: `"muon"`) Optimizer to use. Options: `adamw`, `muon`. The `muon` option applies the Muon optimizer to 2D weight matrices and AdamW to the remaining parameters (norms, biases, embeddings, lm_head).
 
+- **`--adamw-backend`** (str, default: `"auto"`) AdamW execution backend. Options: `auto`, `foreach`, `fused`. This also applies to the AdamW parameter group in Muon mode. The fused backend requires CUDA parameters.
+
+- **`--gradient-clip-backend`** (str, default: `"torch"`) Gradient clipping implementation. Options: `torch`, `fused_adamw`. The fused option avoids a separate gradient-scaling kernel and requires both `--optimizer adamw` and `--adamw-backend fused`.
+
+- **`--max-grad-norm`** (float, default: `1.0`) Maximum gradient norm used by either clipping backend.
+
 - **`--weight-decay`** (float, default: `0.01`) Weight decay for the AdamW optimizer (and the AdamW group in muon mode).
 
 - **`--muon-lr`** (float, default: `10*lr`) Learning rate for the Muon (2D weights) group. Only used with `--optimizer muon`. Defaults to 10× the `--lr` value.
@@ -208,9 +214,17 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--sample-from-anchor`** / **`--no-sample-from-anchor`** (bool, default: algorithm-specific) Whether to sample from the anchor position. `True`: sample from anchor and all mask positions (default for dspark, produces block_size tokens). `False`: anchor is bonus token (default for dflash, produces block_size-1 tokens).
 
-- **`--max-anchors`** (int, default: `256`) Maximum anchor positions for DFlash training.
+- **`--max-anchors`** (int, default: `3072`) Maximum anchor positions for DFlash training.
 
 - **`--dflash-decay-gamma`** (float, default: `4.0`) Decay gamma for DFlash loss weighting.
+
+- **`--dflash-linear-cross-entropy-backend`** (str, default: `"torch"`) DFlash cross-entropy backend. Options: `torch`, `liger`. Liger avoids materializing draft logits and requires an exactly-CE loss configuration plus the optional `speculators[liger]` dependency.
+
+- **`--dflash-compact-zero-weight-ce-rows`** / **`--no-dflash-compact-zero-weight-ce-rows`** (bool, default: `False`) Exclude masked, zero-weight rows before the fused Liger CE kernel. Requires `--dflash-linear-cross-entropy-backend liger`.
+
+- **`--dflash-label-source`** (str, default: `"verifier_argmax"`) Hard-label source for the opt-in Liger CE path. Options: `verifier_argmax`, `input_ids`. The default preserves DFlash verifier-target semantics; `input_ids` is an explicitly different training target and requires the full verifier vocabulary.
+
+- **`--dflash-verifier-argmax-chunk-size`** (int, default: `0`) Number of verifier LM-head rows processed per argmax chunk in the Liger CE path. `0` materializes the complete verifier logits; a positive value reduces their peak memory. Requires the Liger CE backend.
 
 ### Sliding Window Attention Arguments
 

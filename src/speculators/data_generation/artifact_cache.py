@@ -15,8 +15,6 @@ from typing import TYPE_CHECKING, Any
 import torch
 from safetensors.torch import load_file, save_file
 
-from speculators.data_generation.vllm_client import ClientItem
-
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Mapping
 
@@ -86,7 +84,7 @@ class ArtifactResult:
 
 def canonical_hidden_state_request_id(
     model: str,
-    client_item: ClientItem,
+    client_item: Mapping[str, Any],
     *,
     namespace: str | None = None,
 ) -> str:
