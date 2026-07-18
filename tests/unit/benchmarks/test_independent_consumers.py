@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import http.client
 import json
 import socket
 import threading
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import pytest
 from pydantic import ValidationError
@@ -238,7 +239,7 @@ def test_managed_process_termination_tolerates_exit_races(monkeypatch, timeout_c
                 raise benchmark_module.subprocess.TimeoutExpired("consumer", timeout)
             return 0
 
-    managed = object.__new__(benchmark_module._ManagedProcess)
+    managed: Any = object.__new__(benchmark_module._ManagedProcess)
     managed.process = _Process()
     managed.finished_at = None
     managed._reader_error = None
@@ -367,9 +368,8 @@ def test_accounting_proxy_closes_upstream_connection_after_failure(
     monkeypatch,
 ):
     connections = []
-    connection_base = benchmark_module.http.client.HTTPConnection
 
-    class _FailingConnection(connection_base):
+    class _FailingConnection(http.client.HTTPConnection):
         def __init__(self, *_args, **_kwargs):
             self.closed = False
             connections.append(self)
@@ -391,7 +391,9 @@ def test_accounting_proxy_closes_upstream_connection_after_failure(
         body = json.dumps(
             {"model": "model", "prompt": [1, 2, 3], "max_tokens": 1}
         ).encode()
-        host, port = proxy._server.server_address
+        address = proxy._server.server_address
+        host = str(address[0])
+        port = int(address[1])
         with socket.create_connection((host, port), timeout=2) as client:
             client.sendall(
                 b"POST /v1/completions HTTP/1.1\r\n"

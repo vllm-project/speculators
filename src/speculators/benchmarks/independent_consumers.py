@@ -1512,16 +1512,19 @@ def _run_scenario(  # noqa: C901
     ]
     consumer_processes = []
     for index, consumer in enumerate(scenario.consumers):
-        process = consumers[index] if index < len(consumers) else None
+        managed_process = consumers[index] if index < len(consumers) else None
         consumer_processes.append(
             {
                 "consumer_id": consumer.consumer_id,
                 "gpu": consumer.gpu,
-                "started": process is not None,
-                "return_code": process.process.returncode if process else None,
+                "started": managed_process is not None,
+                "return_code": (
+                    managed_process.process.returncode if managed_process else None
+                ),
                 "runtime_seconds": (
-                    process.finished_at - process.started_at
-                    if process is not None and process.finished_at is not None
+                    managed_process.finished_at - managed_process.started_at
+                    if managed_process is not None
+                    and managed_process.finished_at is not None
                     else None
                 ),
             }

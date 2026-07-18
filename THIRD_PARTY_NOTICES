@@ -1,16 +1,27 @@
 Third-Party Notices
 ===================
 
-Bounded asynchronous producer-consumer fan-out
------------------------------------------------
+SpecForge bounded asynchronous window coordinator
+--------------------------------------------------
 
-Portions of the bounded asynchronous hidden-state fan-out implementation are
-adapted from work published in the sgl-project/SpecForge pull request #707:
+Portions of the bounded asynchronous window coordinator are adapted from
+``specforge/runtime/data_plane/windowed_capture.py`` and
+``specforge/runtime/data_plane/windowed_capture_runtime.py`` published in the
+sgl-project/SpecForge pull request #707:
 
 https://github.com/sgl-project/SpecForge/pull/707
 
-SpecForge is Copyright (c) 2025 sgl-project and is distributed under the MIT
-License:
+Copyright 2024 The SpecForge team. These portions are licensed under the Apache
+License, Version 2.0. The complete Apache-2.0 terms are included in the
+repository ``LICENSE`` file.
+
+SpecForge fused linear cross entropy
+------------------------------------
+
+Portions of the fused linear cross-entropy adapter are adapted from
+``specforge/ops/fused_linear_cross_entropy.py`` in the same SpecForge pull
+request. SpecForge is Copyright (c) 2025 sgl-project and is distributed under
+the MIT License:
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

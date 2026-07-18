@@ -140,7 +140,7 @@ def test_fused_clip_sets_scale_and_cleans_it_after_step():
 def test_fused_clip_uses_fp32_scale_for_bfloat16_gradients():
     optimizer = _RecordingFusedOptimizer()
     trainer = _fused_clip_trainer(optimizer)
-    trainer.model.to(dtype=torch.bfloat16)
+    cast("Any", trainer.model).to(dtype=torch.bfloat16)
     for parameter in trainer.model.parameters():
         parameter.grad = torch.full_like(parameter, 2.0)
 

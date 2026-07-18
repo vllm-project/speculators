@@ -1,5 +1,7 @@
 """Focused tests for DFlash hard-label CE preparation and target selection."""
 
+from typing import Any, cast
+
 import pytest
 import torch
 from transformers import Qwen3Config
@@ -122,7 +124,7 @@ def test_reduced_draft_vocab_rejects_input_id_labels():
 
 def test_reduced_vocab_verifier_argmax_returns_direct_draft_boundary_ids():
     model = _model(sample_from_anchor=True, draft_vocab_size=5)
-    model.verifier_norm = torch.nn.Identity()
+    model.verifier_norm = cast("Any", torch.nn.Identity())
     with torch.no_grad():
         model.verifier_lm_head.weight.zero_()
         model.verifier_lm_head.weight[0, 0] = 1
