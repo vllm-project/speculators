@@ -7,6 +7,11 @@ from pathlib import Path
 from re import Pattern
 from typing import cast
 
+try:
+    from jinja2.exceptions import TemplateError as _TemplateError
+except ImportError:  # jinja2 is always present via transformers
+    _TemplateError = Exception  # type: ignore[assignment,misc]
+
 import torch
 from datasets import Dataset as HFDataset
 from datasets import concatenate_datasets, load_dataset
@@ -582,7 +587,14 @@ def _preprocess_batch(
                 tools=parsed_tools,
                 conv_idx=idx,
             )
-        except (TypeError, ValueError, KeyError, AttributeError, RuntimeError) as e:
+        except (
+            TypeError,
+            ValueError,
+            KeyError,
+            AttributeError,
+            RuntimeError,
+            _TemplateError,
+        ) as e:
             log.error(
                 f"Failed to process conversation {idx} "
                 f"(assistant_pattern={assistant_pattern is not None}): {e}"
