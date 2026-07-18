@@ -315,7 +315,7 @@
       "minimum_steady_steps_per_consumer": 50,
       "measurement_steps_per_consumer": 50,
       "minimum_shared_samples": 50,
-      "expected_service_completions_per_shared_sample": 3
+      "expected_service_completions_per_shared_sample": 1
     }
   ],
   "allowed_gpus": [0, 1, 2, 3],

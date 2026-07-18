@@ -60,6 +60,11 @@ _DISTRIBUTED_LAUNCHERS = {
     "srun",
     "torchrun",
 }
+_DISTRIBUTED_LAUNCHER_MODULES = {
+    "accelerate.commands.launch",
+    "torch.distributed.launch",
+    "torch.distributed.run",
+}
 _PARALLEL_SIZE_OPTIONS = {
     "-dp",
     "-pp",
@@ -88,16 +93,30 @@ def _option_value(command: list[str], index: int) -> tuple[str, int]:
     return command[index + 1], index + 1
 
 
+def _command_has_option(command: list[str], option: str) -> bool:
+    return any(token.split("=", 1)[0] == option for token in command)
+
+
+def _python_module(command: list[str]) -> str | None:
+    for index, argument in enumerate(command[1:-1], start=1):
+        if argument == "-m":
+            return command[index + 1]
+        if argument == "--" or not argument.startswith("-"):
+            return None
+    return None
+
+
 def _validate_single_process_command(command: list[str]) -> list[str]:
     executable = Path(command[0]).name
     if executable in _DISTRIBUTED_LAUNCHERS:
         raise ValueError(
             f"Distributed launcher {executable!r} is not an independent consumer"
         )
-    if command[1:3] == ["-m", "torch.distributed.run"]:
-        raise ValueError("torch.distributed.run is not an independent consumer")
     if not executable.startswith("python"):
         raise ValueError("Benchmark roles must be direct Python commands")
+    module = _python_module(command)
+    if module in _DISTRIBUTED_LAUNCHER_MODULES:
+        raise ValueError(f"{module} is not an independent consumer")
     if "--fsdp-shard" in command:
         raise ValueError("--fsdp-shard requires one distributed trainer")
 
@@ -197,6 +216,19 @@ class ScenarioSpec(_StrictModel):
             raise ValueError(
                 "Expected service multiplicity must be either publish-once (1) or "
                 f"one completion per consumer ({expected_consumers})"
+            )
+        windowed = any(
+            _command_has_option(consumer.command, "--shared-hidden-states-consumer-id")
+            for consumer in self.consumers
+        )
+        if (
+            windowed
+            and expected_consumers > 1
+            and self.expected_service_completions_per_shared_sample != 1
+        ):
+            raise ValueError(
+                "Windowed multi-consumer scenarios require publish-once service "
+                "multiplicity (1)"
             )
         return self
 
@@ -1089,11 +1121,13 @@ class _ManagedProcess:
             self.finished_at = self.finished_at or time.monotonic()
             self.close_log()
             return
-        os.killpg(self.process.pid, signal.SIGTERM)
+        with suppress(ProcessLookupError):
+            os.killpg(self.process.pid, signal.SIGTERM)
         try:
             self.process.wait(timeout=grace_seconds)
         except subprocess.TimeoutExpired:
-            os.killpg(self.process.pid, signal.SIGKILL)
+            with suppress(ProcessLookupError):
+                os.killpg(self.process.pid, signal.SIGKILL)
             self.process.wait(timeout=10)
         self.finished_at = time.monotonic()
         self.close_log()
@@ -1167,7 +1201,7 @@ def _run_scenario(  # noqa: C901
         for value in (*consumer.command, *consumer.env.values())
     )
     windowed_artifacts_enabled = any(
-        "--shared-hidden-states-consumer-id" in consumer.command
+        _command_has_option(consumer.command, "--shared-hidden-states-consumer-id")
         for consumer in scenario.consumers
     )
     started_at = time.monotonic()
@@ -1405,8 +1439,14 @@ def _run_scenario(  # noqa: C901
         "per_gpu": {
             gpu: {
                 "baseline_memory_mib": baseline.get(int(gpu)),
-                "peak_total_memory_mib": value["max_memory_used_mib"],
-                "peak_role_memory_mib": value["max_memory_used_mib"],
+                "peak_total_memory_mib": value["max_device_memory_used_mib"],
+                "peak_role_memory_mib": value["max_compute_process_memory_used_mib"],
+                "process_memory_sample_count": value[
+                    "compute_process_memory_sample_count"
+                ],
+                "process_memory_unavailable_samples": value[
+                    "compute_process_memory_unavailable_samples"
+                ],
                 "max_compute_processes": value["max_compute_processes"],
                 "compute_process_observed": value["max_compute_processes"] > 0,
             }

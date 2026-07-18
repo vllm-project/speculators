@@ -11,6 +11,7 @@ import pytest
 from pydantic import ValidationError
 
 import speculators.benchmarks.independent_consumers as benchmark_module
+from scripts import benchmark_independent_consumers as benchmark_cli
 from speculators.benchmarks.independent_consumers import (
     AccountingLedger,
     AccountingProxy,
@@ -140,6 +141,7 @@ def test_example_config_uses_train_only_workloads():
         / "config.example.json"
     )
     config = json.loads(config_path.read_text())
+    validated = benchmark_module.load_config(config_path)
 
     commands = [
         consumer["command"]
@@ -150,6 +152,22 @@ def test_example_config_uses_train_only_workloads():
     for command in commands:
         ratio_index = command.index("--train-data-ratio")
         assert command[ratio_index + 1] == "1.0"
+    assert validated.scenarios[1].expected_service_completions_per_shared_sample == 1
+
+
+def test_benchmark_cli_output_paths_are_conditional(monkeypatch, tmp_path):
+    config = tmp_path / "config.json"
+    monkeypatch.setattr(
+        "sys.argv",
+        ["benchmark_independent_consumers.py", str(config), "--validate-only"],
+    )
+    args = benchmark_cli.parse_args()
+    assert args.run_directory is None
+    assert args.report is None
+
+    monkeypatch.setattr("sys.argv", ["benchmark_independent_consumers.py", str(config)])
+    with pytest.raises(SystemExit, match="2"):
+        benchmark_cli.parse_args()
 
 
 @pytest.mark.parametrize(
@@ -157,6 +175,8 @@ def test_example_config_uses_train_only_workloads():
     [
         ["torchrun", "--nproc-per-node", "3", "trainer.py"],
         ["python", "-m", "torch.distributed.run", "trainer.py"],
+        ["python", "-m", "torch.distributed.launch", "trainer.py"],
+        ["python", "-u", "-m", "accelerate.commands.launch", "trainer.py"],
         ["python", "trainer.py", "--tensor-parallel-size=3"],
         ["python", "trainer.py", "-tp", "3"],
         ["python", "trainer.py", "--data-parallel-size", "3"],
@@ -170,6 +190,67 @@ def test_config_rejects_distributed_consumer_commands(command):
         match="not an independent|creates one|direct Python|distributed trainer",
     ):
         _consumer("c0", 1, command)
+
+
+def test_windowed_1p3c_requires_publish_once_multiplicity():
+    consumers = [
+        _consumer(
+            f"c{index}",
+            index + 1,
+            [
+                "python",
+                "trainer.py",
+                f"--shared-hidden-states-consumer-id=c{index}",
+            ],
+        )
+        for index in range(3)
+    ]
+    with pytest.raises(ValidationError, match="publish-once"):
+        ScenarioSpec(
+            kind="1p3c",
+            consumers=consumers,
+            expected_service_completions_per_shared_sample=3,
+        )
+    scenario = ScenarioSpec(
+        kind="1p3c",
+        consumers=consumers,
+        expected_service_completions_per_shared_sample=1,
+    )
+    assert scenario.expected_service_completions_per_shared_sample == 1
+
+
+@pytest.mark.parametrize("times_out", [False, True])
+def test_managed_process_termination_tolerates_exit_races(monkeypatch, times_out):
+    class _Process:
+        pid = 123
+
+        def __init__(self):
+            self.wait_calls = 0
+
+        def poll(self):
+            return None
+
+        def wait(self, timeout):
+            self.wait_calls += 1
+            if times_out and self.wait_calls == 1:
+                raise benchmark_module.subprocess.TimeoutExpired("consumer", timeout)
+            return 0
+
+    managed = object.__new__(benchmark_module._ManagedProcess)
+    managed.process = _Process()
+    managed.finished_at = None
+    closed = []
+    managed.close_log = lambda: closed.append(True)
+
+    def process_exited(*_args):
+        raise ProcessLookupError
+
+    monkeypatch.setattr(benchmark_module.os, "killpg", process_exited)
+    managed.terminate(grace_seconds=0.01)
+
+    assert managed.process.wait_calls == (2 if times_out else 1)
+    assert managed.finished_at is not None
+    assert closed == [True]
 
 
 def test_config_rejects_gpu_sharing_and_owned_environment():

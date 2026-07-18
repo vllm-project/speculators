@@ -63,6 +63,19 @@ def _error_text(error: BaseException) -> str:
     return f"{type(error).__name__}: {message}"[:512]
 
 
+def _compute_process_memory_used_bytes(row: Mapping[str, Any]) -> int | None:
+    processes = row.get("compute_processes")
+    if processes is None:
+        return None
+    total = 0
+    for process in processes:
+        value = process.get("used_memory_bytes")
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            return None
+        total += value
+    return total
+
+
 class NvmlBackend:
     """Lazy wrapper that never initializes CUDA or Torch."""
 
@@ -217,6 +230,17 @@ class GpuMonitor:
         finally:
             self._backend_open = False
 
+    def _close_output(self) -> None:
+        if self._output is None:
+            return
+        try:
+            self._output.close()
+        except OSError as error:
+            with self._collection_lock:
+                self._errors.append(_error_text(error))
+        finally:
+            self._output = None
+
     def _write(self, value: Mapping[str, Any]) -> None:
         output = self._output
         if output is None:
@@ -232,28 +256,34 @@ class GpuMonitor:
         self.sample_path.parent.mkdir(parents=True, exist_ok=True)
         self._output = self.sample_path.open("x", encoding="utf-8", buffering=1)
         try:
+            # Treat open as attempted before invoking the backend so partial NVML
+            # initialization is also closed when a custom backend raises.
+            self._backend_open = True
             self._devices = dict(
                 self.backend.open([value.gpu for value in self.assignments])
             )
-            self._backend_open = True
             missing = {value.gpu for value in self.assignments} - set(self._devices)
             if missing:
                 raise GpuMonitorError(f"NVML backend omitted GPUs {sorted(missing)}")
+            self._started_at_ns = time.monotonic_ns()
+            self._write(
+                {
+                    "record_type": "session_start",
+                    "timestamp_monotonic_ns": self._started_at_ns,
+                    "poll_seconds": self.poll_seconds,
+                    "assignments": [asdict(value) for value in self.assignments],
+                    "devices": [asdict(value) for value in self._devices.values()],
+                }
+            )
+            self._thread.start()
         except Exception:
-            self._output.close()
-            self._output = None
+            self._stop.set()
+            if self._thread.is_alive():
+                self._thread.join(timeout=max(10.0, self.poll_seconds * 4))
+            if not self._thread.is_alive():
+                self._close_backend()
+            self._close_output()
             raise
-        self._started_at_ns = time.monotonic_ns()
-        self._write(
-            {
-                "record_type": "session_start",
-                "timestamp_monotonic_ns": self._started_at_ns,
-                "poll_seconds": self.poll_seconds,
-                "assignments": [asdict(value) for value in self.assignments],
-                "devices": [asdict(value) for value in self._devices.values()],
-            }
-        )
-        self._thread.start()
 
     def _run(self) -> None:  # noqa: C901
         try:
@@ -332,8 +362,7 @@ class GpuMonitor:
                         "timestamp_monotonic_ns": self._ended_at_ns,
                     }
                 )
-                self._output.close()
-                self._output = None
+                self._close_output()
             summary = {
                 "status": (
                     "ok" if not self._errors and not self._violations else "degraded"
@@ -429,17 +458,38 @@ def summarize_gpu_window(
         ]
         timestamps = [int(value["timestamp_monotonic_ns"]) for value in gpu_rows]
         process_counts = [len(value.get("compute_pids", ())) for value in gpu_rows]
-        memory = [
+        device_memory = [
             int(value["memory_used_bytes"])
             for value in gpu_rows
             if value.get("memory_used_bytes") is not None
         ]
+        process_memory = [
+            value
+            for row in gpu_rows
+            if (value := _compute_process_memory_used_bytes(row)) is not None
+        ]
+        unavailable_process_memory = len(gpu_rows) - len(process_memory)
         if not gpu_rows:
             invalid_reasons.append(f"GPU {gpu} has no samples in the steady window")
+        elif len(gpu_rows) < _MIN_COVERAGE_SAMPLES:
+            invalid_reasons.append(
+                f"GPU {gpu} has {len(gpu_rows)} sample(s); at least "
+                f"{_MIN_COVERAGE_SAMPLES} are required"
+            )
+        elif max(timestamps) <= min(timestamps):
+            invalid_reasons.append(f"GPU {gpu} has zero sample coverage")
         if gpu_rows and not any(process_counts):
             invalid_reasons.append(
                 f"GPU {gpu} has no compute process in the steady window"
             )
+        if unavailable_process_memory:
+            invalid_reasons.append(
+                f"GPU {gpu} lacks compute-process memory for "
+                f"{unavailable_process_memory}/{len(gpu_rows)} sample(s)"
+            )
+        max_device_memory_mib = (
+            max(device_memory) / (1 << 20) if device_memory else None
+        )
         per_gpu[str(gpu)] = {
             **asdict(by_gpu[gpu]),
             "sample_count": len(gpu_rows),
@@ -459,7 +509,14 @@ def summarize_gpu_window(
                     else None
                 ),
             },
-            "max_memory_used_mib": max(memory) / (1 << 20) if memory else None,
+            # Preserve this legacy field as device-wide memory.
+            "max_memory_used_mib": max_device_memory_mib,
+            "max_device_memory_used_mib": max_device_memory_mib,
+            "max_compute_process_memory_used_mib": (
+                max(process_memory) / (1 << 20) if process_memory else None
+            ),
+            "compute_process_memory_sample_count": len(process_memory),
+            "compute_process_memory_unavailable_samples": (unavailable_process_memory),
             "max_compute_processes": max(process_counts, default=0),
         }
     return {

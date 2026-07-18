@@ -86,7 +86,7 @@ def test_rejects_trainable_head_and_wrong_target_dtype():
     target = torch.tensor([1, 2])
     with pytest.raises(ValueError, match="frozen LM head"):
         fused_ce.frozen_linear_cross_entropy(hidden, weight, target)
-    with pytest.raises(ValueError, match="torch.long"):
+    with pytest.raises(ValueError, match=r"torch\.long"):
         fused_ce.frozen_linear_cross_entropy(hidden, weight.detach(), target.float())
 
 
@@ -102,7 +102,7 @@ def test_missing_dependency_and_wrong_version_fail_early():
 
     with (
         mock.patch.object(fused_ce, "version", return_value="0.7.0"),
-        pytest.raises(RuntimeError, match="requires liger-kernel==0.8.0"),
+        pytest.raises(RuntimeError, match=r"requires liger-kernel==0\.8\.0"),
     ):
         fused_ce._load_liger_forward()
     fused_ce._load_liger_forward.cache_clear()

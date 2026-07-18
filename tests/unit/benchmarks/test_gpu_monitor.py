@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 import threading
+from unittest import mock
+
+import pytest
 
 from speculators.benchmarks.gpu_monitor import (
     GpuDevice,
@@ -72,6 +75,44 @@ def test_monitor_streams_nvml_samples_and_finalizes_summary(tmp_path):
     assert json.loads(summary_path.read_text())["status"] == "ok"
 
 
+def test_start_write_failure_closes_backend_and_output(tmp_path, monkeypatch):
+    backend = _FakeBackend()
+    monitor = GpuMonitor(
+        [GpuRoleAssignment(0, "producer", "producer")],
+        tmp_path / "samples.jsonl",
+        tmp_path / "summary.json",
+        backend=backend,
+    )
+    monkeypatch.setattr(monitor, "_write", mock.Mock(side_effect=OSError("disk full")))
+
+    with pytest.raises(OSError, match="disk full"):
+        monitor.start()
+
+    assert backend.closed
+    assert monitor._output is None
+    assert not monitor._thread.is_alive()
+
+
+def test_start_thread_failure_closes_backend_and_output(tmp_path, monkeypatch):
+    backend = _FakeBackend()
+    monitor = GpuMonitor(
+        [GpuRoleAssignment(0, "producer", "producer")],
+        tmp_path / "samples.jsonl",
+        tmp_path / "summary.json",
+        backend=backend,
+    )
+    monkeypatch.setattr(
+        monitor._thread, "start", mock.Mock(side_effect=RuntimeError("no thread"))
+    )
+
+    with pytest.raises(RuntimeError, match="no thread"):
+        monitor.start()
+
+    assert backend.closed
+    assert monitor._output is None
+    assert not monitor._thread.is_alive()
+
+
 def test_stop_timeout_does_not_race_a_blocked_sample(tmp_path, monkeypatch):
     backend = _BlockingBackend()
     monitor = GpuMonitor(
@@ -105,6 +146,7 @@ def test_window_summary_excludes_startup_and_reports_active_time():
             "utilization_gpu_pct": utilization,
             "memory_used_bytes": 10 << 30,
             "compute_pids": [123],
+            "compute_processes": [{"pid": 123, "used_memory_bytes": 8 << 30}],
         }
         for timestamp, utilization in (
             (1_000_000_000, 0),
@@ -127,3 +169,51 @@ def test_window_summary_excludes_startup_and_reports_active_time():
     assert gpu["gpu_utilization_pct"]["p50"] == 80.0
     assert gpu["gpu_utilization_pct"]["p95"] == 100.0
     assert gpu["max_compute_processes"] == 1
+    assert gpu["max_memory_used_mib"] == 10 << 10
+    assert gpu["max_device_memory_used_mib"] == 10 << 10
+    assert gpu["max_compute_process_memory_used_mib"] == 8 << 10
+    assert gpu["compute_process_memory_sample_count"] == 2
+    assert gpu["compute_process_memory_unavailable_samples"] == 0
+
+
+def test_window_summary_rejects_one_sample_zero_coverage_and_missing_memory():
+    assignment = GpuRoleAssignment(2, "consumer:b4", "consumer:b4")
+    sample = {
+        "timestamp_monotonic_ns": 2_000_000_000,
+        "gpu": 2,
+        "utilization_gpu_pct": 80,
+        "memory_used_bytes": 10 << 30,
+        "compute_pids": [123],
+        "compute_processes": [{"pid": 123, "used_memory_bytes": 8 << 30}],
+    }
+    one = summarize_gpu_window(
+        [sample],
+        [assignment],
+        start_monotonic_ns=1_000_000_000,
+        end_monotonic_ns=3_000_000_000,
+    )
+    assert not one["valid"]
+    assert "at least 2" in one["invalid_reasons"][0]
+
+    zero = summarize_gpu_window(
+        [sample, dict(sample)],
+        [assignment],
+        start_monotonic_ns=1_000_000_000,
+        end_monotonic_ns=3_000_000_000,
+    )
+    assert not zero["valid"]
+    assert any("zero sample coverage" in reason for reason in zero["invalid_reasons"])
+
+    missing = dict(sample, timestamp_monotonic_ns=3_000_000_000)
+    missing["compute_processes"] = [{"pid": 123, "used_memory_bytes": None}]
+    incomplete = summarize_gpu_window(
+        [sample, missing],
+        [assignment],
+        start_monotonic_ns=1_000_000_000,
+        end_monotonic_ns=3_000_000_000,
+    )
+    assert not incomplete["valid"]
+    assert any(
+        "lacks compute-process memory" in reason
+        for reason in incomplete["invalid_reasons"]
+    )

@@ -250,6 +250,7 @@ def create_train_val_loaders(
                 hidden_states_dtype=hidden_states_dtype,
             )
     else:
+        dp_rank = get_dp_rank()
         train_dataset = ArrowDataset(
             datapath=data_path,
             max_len=total_seq_len,
@@ -270,7 +271,7 @@ def create_train_val_loaders(
                 shared_artifacts_lock_timeout_seconds
             ),
             shared_artifacts_consumer_id=(
-                f"{shared_artifacts_consumer_id}:train"
+                f"{shared_artifacts_consumer_id}:dp{dp_rank}:train"
                 if shared_artifacts_consumer_id is not None
                 else None
             ),
@@ -312,7 +313,7 @@ def create_train_val_loaders(
                     shared_artifacts_lock_timeout_seconds
                 ),
                 shared_artifacts_consumer_id=(
-                    f"{shared_artifacts_consumer_id}:val"
+                    f"{shared_artifacts_consumer_id}:dp{dp_rank}:val"
                     if shared_artifacts_consumer_id is not None
                     else None
                 ),

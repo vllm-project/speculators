@@ -478,6 +478,11 @@ class WindowedArtifactCoordinator:
             ).fetchall()
             for row in consumers:
                 self._refresh_window_locked(conn, row["consumer_id"])
+            self._prune_positions_locked(
+                conn,
+                stream_id,
+                incoming_start=min(sample.sequence for sample in samples),
+            )
 
     def register_consumer(
         self,
@@ -766,6 +771,53 @@ class WindowedArtifactCoordinator:
                 ArtifactState.FAILED.value,
             ),
         )
+
+    def _prune_positions_locked(
+        self,
+        conn: sqlite3.Connection,
+        stream_id: str,
+        *,
+        incoming_start: int | None = None,
+    ) -> int:
+        active = conn.execute(
+            "SELECT cursor,lookbehind FROM consumers WHERE stream_id=? "
+            "AND state='active'",
+            (stream_id,),
+        ).fetchall()
+        if active:
+            boundary = min(
+                max(0, int(row["cursor"]) - int(row["lookbehind"])) for row in active
+            )
+            if incoming_start is not None:
+                boundary = min(boundary, incoming_start)
+        elif incoming_start is not None:
+            # A new epoch is registered before its first consumer is reactivated.
+            boundary = incoming_start
+        else:
+            inactive = conn.execute(
+                "SELECT cursor FROM consumers WHERE stream_id=?",
+                (stream_id,),
+            ).fetchall()
+            if not inactive:
+                return 0
+            boundary = min(int(row["cursor"]) for row in inactive)
+        if boundary <= 0:
+            return 0
+        result = conn.execute(
+            "DELETE FROM positions WHERE stream_id=? AND batch_end_sequence<=? "
+            "AND NOT EXISTS (SELECT 1 FROM interests i "
+            "WHERE i.stream_id=positions.stream_id "
+            "AND i.sequence=positions.sequence) "
+            "AND NOT EXISTS (SELECT 1 FROM acquisitions a "
+            "WHERE a.stream_id=positions.stream_id "
+            "AND a.sequence=positions.sequence) "
+            "AND NOT EXISTS (SELECT 1 FROM completed_positions cp "
+            "JOIN consumers c ON c.consumer_id=cp.consumer_id "
+            "WHERE c.stream_id=positions.stream_id "
+            "AND cp.sequence=positions.sequence)",
+            (stream_id, boundary),
+        )
+        return result.rowcount
 
     def heartbeat(self, consumer_id: str) -> None:
         with self._transaction() as conn:
@@ -1295,6 +1347,86 @@ class WindowedArtifactCoordinator:
                 )
             return tuple(claims)
 
+    def renew_generation_claims(
+        self, owner: str, claims: Sequence[GenerationClaim]
+    ) -> int:
+        """Extend live generation leases without changing their generation."""
+        if not owner:
+            raise ValueError("generation owner must be non-empty")
+        if not claims:
+            return 0
+        with self._transaction() as conn:
+            now = self._clock()
+            for claim in claims:
+                result = conn.execute(
+                    "UPDATE artifacts SET claim_until=?,updated_at=? "
+                    "WHERE request_id=? AND state=? AND claim_owner=? "
+                    "AND generation=?",
+                    (
+                        now + self.claim_timeout_seconds,
+                        now,
+                        claim.request_id,
+                        ArtifactState.GENERATING.value,
+                        owner,
+                        claim.generation,
+                    ),
+                )
+                if result.rowcount != 1:
+                    raise WindowedArtifactError(
+                        f"stale generation renewal for {claim.request_id}"
+                    )
+        return len(claims)
+
+    def release_generation_claims(
+        self, owner: str, claims: Sequence[GenerationClaim]
+    ) -> int:
+        """Release unfinished work during cooperative producer shutdown."""
+        if not owner:
+            raise ValueError("generation owner must be non-empty")
+        if not claims:
+            return 0
+        released = 0
+        with self._transaction() as conn:
+            now = self._clock()
+            for claim in claims:
+                row = conn.execute(
+                    "SELECT state,claim_owner,generation FROM artifacts "
+                    "WHERE request_id=?",
+                    (claim.request_id,),
+                ).fetchone()
+                if row is None or (
+                    row["state"],
+                    row["claim_owner"],
+                    int(row["generation"]),
+                ) != (ArtifactState.GENERATING.value, owner, claim.generation):
+                    continue
+                interested = conn.execute(
+                    "SELECT 1 FROM interests WHERE request_id=? LIMIT 1",
+                    (claim.request_id,),
+                ).fetchone()
+                priority = (
+                    self._retry_priority_locked(conn, claim.request_id)
+                    if interested is not None
+                    else None
+                )
+                conn.execute(
+                    "UPDATE artifacts SET state=?,generation=generation+1,"
+                    "priority=?,queued_at=?,claim_owner=NULL,claim_until=NULL,"
+                    "last_error=NULL,updated_at=? WHERE request_id=?",
+                    (
+                        ArtifactState.QUEUED.value
+                        if interested is not None
+                        else ArtifactState.ABSENT.value,
+                        int(priority) if priority is not None else None,
+                        now if interested is not None else None,
+                        now,
+                        claim.request_id,
+                    ),
+                )
+                released += 1
+            self._prune_orphaned_locked(conn)
+        return released
+
     def _recover_claims_locked(self, conn: sqlite3.Connection) -> None:
         now = self._clock()
         rows = conn.execute(
@@ -1503,7 +1635,7 @@ class WindowedArtifactCoordinator:
     def complete_consumer(self, consumer_id: str) -> None:
         with self._transaction() as conn:
             row = conn.execute(
-                "SELECT 1 FROM consumers WHERE consumer_id=?", (consumer_id,)
+                "SELECT stream_id FROM consumers WHERE consumer_id=?", (consumer_id,)
             ).fetchone()
             if row is None:
                 raise KeyError(f"unknown consumer {consumer_id!r}")
@@ -1518,6 +1650,7 @@ class WindowedArtifactCoordinator:
                 (self._clock(), consumer_id),
             )
             self._prune_orphaned_locked(conn)
+            self._prune_positions_locked(conn, row["stream_id"])
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:

@@ -625,6 +625,117 @@ def test_expired_producer_claim_is_reassigned_with_bounded_attempts(tmp_path):
     assert coordinator.snapshot()["artifact_states"] == {"failed": 1}
 
 
+def test_generation_claim_renewal_prevents_live_work_reassignment(tmp_path):
+    now = [100.0]
+    stream_id = canonical_stream_id(
+        {"dataset_fingerprint": "dataset-a", "sampler_seed": 0}
+    )
+    samples = _samples(stream_id, 1)
+    coordinator = WindowedArtifactCoordinator(
+        tmp_path,
+        claim_timeout_seconds=5,
+        clock=lambda: now[0],
+    )
+    _register(coordinator, samples, "consumer", lookahead=0)
+    claim = coordinator.claim_generation("producer", stream_id=stream_id)[0]
+
+    now[0] += 4
+    assert coordinator.renew_generation_claims("producer", [claim]) == 1
+    now[0] += 2
+    assert coordinator.recover_expired()["expired_claims"] == 0
+    assert coordinator.snapshot()["artifact_states"] == {"generating": 1}
+
+    assert coordinator.release_generation_claims("producer", [claim]) == 1
+    replacement = coordinator.claim_generation("replacement", stream_id=stream_id)[0]
+    assert replacement.generation == claim.generation + 1
+
+
+def test_position_metadata_is_bounded_across_epochs(tmp_path):
+    contract = {"dataset_fingerprint": "dataset-a", "sampler_seed": 0}
+    stream_id = canonical_stream_id(contract)
+    coordinator = _coordinator(tmp_path)
+    assert coordinator.register_stream(contract) == stream_id
+    cursor = 0
+
+    for epoch in range(3):
+        samples = tuple(
+            StreamSampleIndex(
+                stream_id=stream_id,
+                sequence=cursor + ordinal,
+                epoch=epoch,
+                ordinal=ordinal,
+                dataset_index=ordinal,
+                batch_ordinal=ordinal,
+                batch_start_sequence=cursor + ordinal,
+                batch_end_sequence=cursor + ordinal + 1,
+                request_id=_digest(f"request-{ordinal}"),
+                position_id=canonical_position_id(
+                    stream_id,
+                    epoch=epoch,
+                    ordinal=ordinal,
+                    dataset_index=ordinal,
+                    batch_ordinal=ordinal,
+                    batch_start_sequence=cursor + ordinal,
+                    batch_end_sequence=cursor + ordinal + 1,
+                ),
+            )
+            for ordinal in range(4)
+        )
+        coordinator.register_positions(samples)
+        coordinator.register_consumer(
+            "consumer",
+            stream_id=stream_id,
+            lookbehind=1,
+            lookahead=3,
+            max_prefetch=4,
+            max_inflight=4,
+            cursor=cursor,
+            reset=epoch == 0,
+        )
+        while coordinator.snapshot()["artifact_states"].get("queued", 0):
+            _publish(coordinator, stream_id, tmp_path)
+        for sample in samples:
+            lease = coordinator.acquire("consumer", sample, timeout_seconds=1)
+            cursor = coordinator.ack("consumer", [lease.as_batch_metadata()])
+        coordinator.complete_consumer("consumer")
+        assert coordinator.snapshot()["positions"] == 0
+
+
+def test_late_consumer_registration_preserves_incoming_epoch_positions(tmp_path):
+    contract = {"dataset_fingerprint": "dataset-a", "sampler_seed": 0}
+    stream_id = canonical_stream_id(contract)
+    samples = _samples(stream_id, 4)
+    coordinator = _coordinator(tmp_path)
+    _register(
+        coordinator,
+        samples,
+        "fast",
+        contract=contract,
+        lookahead=3,
+        max_prefetch=4,
+    )
+    while coordinator.snapshot()["artifact_states"].get("queued", 0):
+        _publish(coordinator, stream_id, tmp_path)
+    for sample in samples[:2]:
+        lease = coordinator.acquire("fast", sample, timeout_seconds=1)
+        coordinator.ack("fast", [lease.as_batch_metadata()])
+
+    # Another process registers the same epoch before registering its cursor.
+    coordinator.register_positions(samples)
+    assert coordinator.snapshot()["positions"] == len(samples)
+    coordinator.register_consumer(
+        "late",
+        stream_id=stream_id,
+        lookbehind=0,
+        lookahead=3,
+        max_prefetch=4,
+        max_inflight=4,
+        cursor=0,
+    )
+    lease = coordinator.acquire("late", samples[0], timeout_seconds=1)
+    assert lease.sequence == 0
+
+
 def _assert_long_stream_retention_bound(tmp_path: Path, count: int) -> None:
     contract = {
         "dataset_fingerprint": f"dataset-{count}",

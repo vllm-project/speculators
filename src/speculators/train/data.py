@@ -589,64 +589,88 @@ class ArrowDataset(BaseDataset):
         try:
             if self.client is None:
                 self._setup_client()
-            with (
-                self._new_windowed_coordinator() as coordinator,
-                ThreadPoolExecutor(
-                    max_workers=self.shared_artifacts_capture_batch_size,
-                    thread_name_prefix="artifact-capture",
-                ) as executor,
-            ):
-                while not self._windowed_producer_stop.is_set():
-                    coordinator.heartbeat(self.shared_artifacts_consumer_id)
-                    coordinator.recover_expired()
-                    self._evict_windowed_artifacts(coordinator, cache)
-                    if self._windowed_producer_stop.wait(
-                        self.shared_artifacts_capture_batch_wait_seconds
-                    ):
-                        break
-                    claims = coordinator.claim_generation(
-                        owner,
-                        stream_id=self._windowed_stream_id,
-                        max_claims=self.shared_artifacts_capture_batch_size,
-                        max_active_claims=self.shared_artifacts_capture_batch_size,
-                    )
-                    if claims:
-                        futures = {
-                            executor.submit(
-                                self._produce_windowed_claim,
-                                coordinator,
-                                cache,
-                                owner,
-                                claim,
-                            ): claim
-                            for claim in claims
-                        }
-                        pending = set(futures)
-                        while pending:
-                            done, pending = wait(
-                                pending,
-                                timeout=1.0,
-                                return_when=FIRST_COMPLETED,
+            executor = ThreadPoolExecutor(
+                max_workers=self.shared_artifacts_capture_batch_size,
+                thread_name_prefix="artifact-capture",
+            )
+            try:
+                with self._new_windowed_coordinator() as coordinator:
+                    while not self._windowed_producer_stop.is_set():
+                        coordinator.heartbeat(self.shared_artifacts_consumer_id)
+                        coordinator.recover_expired()
+                        self._evict_windowed_artifacts(coordinator, cache)
+                        if self._windowed_producer_stop.wait(
+                            self.shared_artifacts_capture_batch_wait_seconds
+                        ):
+                            break
+                        claims = coordinator.claim_generation(
+                            owner,
+                            stream_id=self._windowed_stream_id,
+                            max_claims=self.shared_artifacts_capture_batch_size,
+                            max_active_claims=self.shared_artifacts_capture_batch_size,
+                        )
+                        if claims:
+                            self._run_windowed_claim_batch(
+                                coordinator, cache, executor, owner, claims
                             )
-                            coordinator.heartbeat(self.shared_artifacts_consumer_id)
-                            for future in done:
-                                claim = futures[future]
-                                try:
-                                    future.result()
-                                except Exception as error:  # noqa: BLE001
-                                    coordinator.fail_generation(owner, claim, error)
-                        continue
-                    self._windowed_producer_stop.wait(0.02)
+                            continue
+                        self._windowed_producer_stop.wait(0.02)
+            finally:
+                executor.shutdown(wait=False, cancel_futures=True)
         except Exception as error:  # noqa: BLE001 - background thread boundary
             self._windowed_producer_error = error
 
-    def _produce_windowed_claim(
+    def _run_windowed_claim_batch(
         self,
         coordinator: WindowedArtifactCoordinator,
         cache: HiddenStateArtifactCache,
+        executor: ThreadPoolExecutor,
         owner: str,
-        claim: GenerationClaim,
+        claims: tuple[GenerationClaim, ...],
     ) -> None:
+        stop = self._windowed_producer_stop
+        consumer_id = self.shared_artifacts_consumer_id
+        if stop is None or consumer_id is None:
+            raise RuntimeError("windowed producer lifecycle is unavailable")
+        pending = {
+            executor.submit(self._produce_windowed_claim, cache, claim): claim
+            for claim in claims
+        }
+        renewal_wait = min(1.0, self.shared_artifacts_claim_timeout_seconds / 3.0)
+        try:
+            while pending and not stop.is_set():
+                done, _ = wait(
+                    set(pending),
+                    timeout=renewal_wait,
+                    return_when=FIRST_COMPLETED,
+                )
+                coordinator.heartbeat(consumer_id)
+                for future in done:
+                    claim = pending.pop(future)
+                    try:
+                        path, size_bytes = future.result()
+                    except Exception as error:  # noqa: BLE001
+                        coordinator.fail_generation(owner, claim, error)
+                    else:
+                        coordinator.complete_generation(
+                            owner,
+                            claim,
+                            path=path,
+                            size_bytes=size_bytes,
+                        )
+                if pending:
+                    coordinator.renew_generation_claims(owner, tuple(pending.values()))
+        finally:
+            if pending:
+                for future in pending:
+                    future.cancel()
+                coordinator.release_generation_claims(owner, tuple(pending.values()))
+
+    def _produce_windowed_claim(
+        self,
+        cache: HiddenStateArtifactCache,
+        claim: GenerationClaim,
+    ) -> tuple[Path, int]:
         expected_request_id = self.windowed_request_id(claim.dataset_index)
         if expected_request_id != claim.request_id:
             raise RuntimeError("generation claim no longer matches dataset")
@@ -661,12 +685,7 @@ class ArrowDataset(BaseDataset):
             ),
             lambda data: check_hidden_states(data, dataset_item["input_ids"].tolist()),
         )
-        coordinator.complete_generation(
-            owner,
-            claim,
-            path=result.path,
-            size_bytes=result.path.stat().st_size,
-        )
+        return result.path, result.path.stat().st_size
 
     @staticmethod
     def _evict_windowed_artifacts(
