@@ -54,7 +54,10 @@ class _StepTimer:
 
     def mark(self, name: str) -> None:
         if self.enabled:
-            torch.cuda.synchronize()
+            if hasattr(torch, "accelerator"):
+                torch.accelerator.synchronize()
+            else:
+                torch.cuda.synchronize()
             self._marks[name] = time.perf_counter()
 
     def mark_value(self, name: str, value: float) -> None:
@@ -64,7 +67,10 @@ class _StepTimer:
     def now(self) -> float | None:
         if not self.enabled:
             return None
-        torch.cuda.synchronize()
+        if hasattr(torch, "accelerator"):
+            torch.accelerator.synchronize()
+        else:
+            torch.cuda.synchronize()
         return time.perf_counter()
 
     def profile(self, num_tokens: int) -> dict[str, float] | None:
