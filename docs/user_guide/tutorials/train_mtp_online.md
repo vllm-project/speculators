@@ -84,7 +84,7 @@ Start vLLM to serve the verifier for hidden state extraction. The server stays r
 
 ```bash
 # in vLLM venv
-CUDA_VISIBLE_DEVICES=0 python scripts/launch_vllm.py \
+CUDA_VISIBLE_DEVICES=0 python scripts/launch_vllm_hidden_states.py \
   Qwen/Qwen3.5-9B \
   --target-layer-ids 32 \
   -- --port 8000
@@ -105,7 +105,7 @@ INFO:     Waiting for application startup.
 INFO:     Application startup complete
 ```
 
-**Note:** For more information on usage, please see the [launch_vllm.py cli reference](/cli/launch_vllm.md).
+**Note:** For more information on usage, please see the [launch_vllm_hidden_states.py cli reference](/cli/launch_vllm_hidden_states.md).
 
 ## Step 3: Train Against the Live vLLM Server
 

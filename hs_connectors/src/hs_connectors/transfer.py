@@ -65,7 +65,7 @@ class HiddenStatesBackend(ABC):
 
     Each backend registers itself via ``@HiddenStatesBackend.register(name)``
     and implements these four static hooks so that scripts (``train.py``,
-    ``launch_vllm.py``) can discover and configure backends without hardcoding.
+    ``launch_vllm_hidden_states.py``) can discover and configure backends without hardcoding.
     """
 
     registry: ClassVar[dict[str, type[HiddenStatesBackend]]] = {}
@@ -94,7 +94,7 @@ class HiddenStatesBackend(ABC):
     @staticmethod
     @abstractmethod
     def add_launch_args(parser: argparse.ArgumentParser) -> None:
-        """Add backend-specific CLI arguments to ``launch_vllm.py``."""
+        """Add backend-specific CLI arguments to ``launch_vllm_hidden_states.py``."""
         ...
 
     @staticmethod

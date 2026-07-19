@@ -218,7 +218,7 @@ All speculator types (except `mtp`) use sliding window attention on all draft la
 
 ```bash
 # First, start vLLM server
-python scripts/launch_vllm.py \
+python scripts/launch_vllm_hidden_states.py \
   meta-llama/Llama-3.1-8B-Instruct \
   -- --port 8000
 

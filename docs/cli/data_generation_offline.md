@@ -23,7 +23,7 @@ python scripts/data_generation_offline.py \
 
 ### Model Arguments
 
-- **`--endpoint`** (str, default: `http://localhost:8000/v1`) The address of the vLLM instance to use for hidden states generation. The vLLM instance must be configured for hidden states extraction (see [launch_vllm.py](launch_vllm.md)).
+- **`--endpoint`** (str, default: `http://localhost:8000/v1`) The address of the vLLM instance to use for hidden states generation. The vLLM instance must be configured for hidden states extraction (see [launch_vllm_hidden_states.py](launch_vllm_hidden_states.md)).
 
 - **`--model`** (str, default: `None`) HuggingFace model ID or local path for the target model. Used for verification only - the model is auto-detected from the vLLM endpoint.
 

@@ -1,11 +1,13 @@
-# launch_vllm.py
+# launch_vllm_hidden_states.py
 
 Launches a vLLM server configured for hidden states extraction, used for online training or offline hidden states generation.
+
+Every request writes hidden-state tensors to `--hidden-states-path`; for a plain server (e.g. response regeneration) use `vllm serve`.
 
 ## Basic Usage
 
 ```bash
-python scripts/launch_vllm.py meta-llama/Llama-3.1-8B-Instruct 
+python scripts/launch_vllm_hidden_states.py meta-llama/Llama-3.1-8B-Instruct 
 ```
 
 ## Arguments
@@ -42,7 +44,7 @@ See [vLLM CLI documentation](https://docs.vllm.ai/en/latest/cli/) for full list 
 ## Full Example
 
 ```bash
-python scripts/launch_vllm.py \
+python scripts/launch_vllm_hidden_states.py \
   meta-llama/Llama-3.1-70B-Instruct \
   --hidden-states-path /data/hidden_states \
   --target-layer-ids 5 20 40 80 \

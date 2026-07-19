@@ -1,3 +1,5 @@
+"""Launch vLLM as a hidden-states producer for speculator training-data generation."""
+
 import argparse
 import json
 import os
@@ -46,7 +48,7 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Launch vLLM for hidden states extraction",
         usage=(
-            "launch_vllm.py [-h] MODEL [--hidden-states-backend BACKEND] "
+            "launch_vllm_hidden_states.py [-h] MODEL [--hidden-states-backend BACKEND] "
             "[--target-layer-ids TARGET_LAYER_IDS [TARGET_LAYER_IDS ...]] -- *VLLM_ARGS"
         ),
     )

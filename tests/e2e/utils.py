@@ -113,7 +113,7 @@ def launch_vllm_server(
     """
     cmd = [
         VLLM_PYTHON,
-        str(SCRIPTS_DIR / "launch_vllm.py"),
+        str(SCRIPTS_DIR / "launch_vllm_hidden_states.py"),
         model,
         "--hidden-states-path",
         str(hidden_states_path),

@@ -3,7 +3,7 @@
 Exercises the full pipeline documented in
 docs/user_guide/tutorials/train_eagle3_online.md:
   1. Prepare data (scripts/prepare_data.py)
-  2. Launch a vLLM server for hidden-state extraction (scripts/launch_vllm.py)
+  2. Launch a vLLM server for hidden-state extraction (scripts/launch_vllm_hidden_states.py)
   3. Train a draft model against the live server (scripts/train.py)
   4. Validate the trained checkpoint via vLLM inference (run_vllm_engine)
 """
