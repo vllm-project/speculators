@@ -2,7 +2,6 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -137,12 +136,7 @@ def launch_vllm_server(
     ]
     logger.info("Starting vLLM server: {}", " ".join(cmd))
 
-    log_file = tempfile.NamedTemporaryFile(
-        prefix="vllm_server_", suffix=".log", delete=False, mode="w"
-    )
-    process = subprocess.Popen(  # noqa: S603
-        cmd, stdout=log_file, stderr=subprocess.STDOUT
-    )
+    process = subprocess.Popen(cmd)  # noqa: S603
 
     try:
         wait_for_server(port, process=process)
@@ -154,9 +148,6 @@ def launch_vllm_server(
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait()
-        log_file.close()
-        server_output = Path(log_file.name).read_text()
-        logger.error("vLLM server output:\n{}", indent(server_output, "    "))
         raise
 
     return process

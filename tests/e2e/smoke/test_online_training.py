@@ -28,34 +28,10 @@ MM_MODEL = "Qwen/Qwen3-VL-2B-Instruct"
 @pytest.mark.e2e
 @pytest.mark.slow
 @pytest.mark.parametrize(
-    ("model", "dataset", "speculator_type", "extra_train_args", "target_layer_ids"),
+    ("model", "dataset"),
     [
-        (TEXT_MODEL, "sharegpt", "eagle3", [], None),
-        (MM_MODEL, "sharegpt4v_coco", "eagle3", [], None),
-        (
-            TEXT_MODEL,
-            "sharegpt",
-            "dspark",
-            [
-                "--block-size",
-                "8",
-                "--max-anchors",
-                "256",
-                "--num-layers",
-                "3",
-                "--markov-rank",
-                "256",
-                "--markov-head-type",
-                "vanilla",
-                "--enable-confidence-head",
-                "--confidence-head-with-markov",
-                "--confidence-head-alpha",
-                "1.0",
-                "--loss-fn",
-                '{"ce": 0.1, "tv": 0.9}',
-            ],
-            [2, 14, 25],
-        ),  # DSpark with Markov + confidence heads
+        (TEXT_MODEL, "sharegpt"),
+        (MM_MODEL, "sharegpt4v_coco"),
     ],
 )
 def test_online_smoke(
@@ -64,9 +40,6 @@ def test_online_smoke(
     model: str,
     dataset: str,
     prompts: list[list[dict[str, str]]],
-    speculator_type: str,
-    extra_train_args: list[str],
-    target_layer_ids: list[int] | None,
 ):
     if dataset == "sharegpt4v_coco":
         coco_dir = tmp_path / "coco"
@@ -78,19 +51,15 @@ def test_online_smoke(
     else:
         vllm_media_path = None
 
-    vllm_supported_types = {"eagle3", "dflash"}
     run_online_e2e(
         tmp_path,
         model,
         dataset=dataset,
-        prompts=prompts if speculator_type in vllm_supported_types else None,
+        prompts=prompts,
         vllm_kwargs={
             "enforce_eager": True,
             "allowed_local_media_path": vllm_media_path,
         },
-        speculator_type=speculator_type,
-        extra_train_args=extra_train_args,
-        target_layer_ids=target_layer_ids,
     )
 
 
@@ -110,9 +79,6 @@ def run_online_e2e(
     max_tokens: int = 50,
     ignore_eos: bool = True,
     acceptance_thresholds: list[float] | None = None,
-    speculator_type: str = "eagle3",
-    extra_train_args: list[str] | None = None,
-    target_layer_ids: list[int] | None = None,
     log_freq: int = 1,
     train_timeout: int = 30 * 60,  # 30 mins
 ):
@@ -133,7 +99,6 @@ def run_online_e2e(
         port,
         hidden_states_path,
         max_model_len=seq_length + 1,
-        target_layer_ids=target_layer_ids,
         **(vllm_kwargs or {}),
     ):
         # Step 2: Train against live vLLM server
@@ -146,9 +111,6 @@ def run_online_e2e(
             draft_vocab_size,
             epochs,
             lr,
-            speculator_type=speculator_type,
-            extra_train_args=extra_train_args,
-            target_layer_ids=target_layer_ids,
             log_freq=log_freq,
             timeout=train_timeout,
         )
