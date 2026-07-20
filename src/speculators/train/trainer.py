@@ -587,6 +587,8 @@ class Trainer:
                     if old.is_symlink():
                         old.unlink()
                 link_name.symlink_to(target)
+        if not self.is_distributed or dist.get_rank() == 0:
+            self.checkpointer.mark_checkpoint_complete(epoch)
         root_logger.info(f"Checkpoint saved to {self.checkpointer.path / str(epoch)}")
 
     def maybe_update_best(self, epoch: int, val_metrics: dict | None):
@@ -606,6 +608,8 @@ class Trainer:
 
         self.best_val_loss = val_metrics["loss_epoch"]
         self.checkpointer.save_val_metrics(epoch, val_metrics)
+        if not self.is_distributed or dist.get_rank() == 0:
+            self.checkpointer.mark_checkpoint_complete(epoch)
         self.checkpointer.update_best_symlink(epoch)
         root_logger.info(
             f"Updated checkpoint_best -> {epoch} (loss_epoch={self.best_val_loss:.6f})"

@@ -1,6 +1,7 @@
 import functools
 import json
 import logging
+import os
 import shutil
 from abc import abstractmethod
 from pathlib import Path
@@ -135,9 +136,19 @@ class BaseCheckpointer:
                     )
                     continue
                 try:
-                    last_checkpoint_num = max(last_checkpoint_num, int(d.name))
+                    epoch_num = int(d.name)
                 except ValueError:
                     continue
+                if not (d / self.COMPLETE_MARKER_FILENAME).exists():
+                    logger.warning(
+                        f"Skipping checkpoint at {d}: missing "
+                        f"'{self.COMPLETE_MARKER_FILENAME}' marker (save was "
+                        "interrupted, or the checkpoint predates this version). "
+                        "To resume from it anyway, create the marker: "
+                        f"'touch {d / self.COMPLETE_MARKER_FILENAME}'."
+                    )
+                    continue
+                last_checkpoint_num = max(last_checkpoint_num, epoch_num)
         return last_checkpoint_num
 
     def model_path(self, epoch: int | str):
@@ -159,6 +170,37 @@ class BaseCheckpointer:
         return self.path / str(epoch) / "val_metrics.json"
 
     TRAIN_COMMAND_FILENAME = "train_command.txt"
+    COMPLETE_MARKER_FILENAME = "checkpoint_complete"
+
+    def complete_marker_path(self, epoch: int | str) -> Path:
+        return self.path / str(epoch) / self.COMPLETE_MARKER_FILENAME
+
+    @staticmethod
+    def _fsync_directory(path: Path) -> None:
+        dir_fd = os.open(path, os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+
+    def mark_checkpoint_complete(self, epoch: int | str) -> None:
+        """Sync checkpoint files, then atomically publish the marker."""
+        epoch_dir = self.path / str(epoch)
+        for f in epoch_dir.rglob("*"):
+            if f.is_file() and not f.is_symlink():
+                with f.open("rb") as fh:
+                    os.fsync(fh.fileno())
+
+        marker = self.complete_marker_path(epoch)
+        temporary_marker = marker.with_name(f".{marker.name}.tmp")
+        try:
+            with temporary_marker.open("wb") as fh:
+                os.fsync(fh.fileno())
+            os.replace(temporary_marker, marker)
+            self._fsync_directory(epoch_dir)
+        except Exception:
+            temporary_marker.unlink(missing_ok=True)
+            raise
 
     def _copy_train_command(self, epoch: int | str) -> None:
         src = self.path / self.TRAIN_COMMAND_FILENAME
