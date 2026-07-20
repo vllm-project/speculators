@@ -17,6 +17,6 @@ def shift_batch_mtp(batch: BatchType) -> BatchType:
         "position_ids": batch["position_ids"],
     }
     for k in ("verifier_kv_last_local", "verifier_kv_last_global"):
-        if k in batch:
+        if k in batch and batch[k].dim() >= 2:
             result[k] = batch[k]
     return result

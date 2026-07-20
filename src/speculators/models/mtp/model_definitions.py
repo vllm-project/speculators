@@ -241,8 +241,7 @@ if "gemma2" in base_components.model_classes:
             is_local = (self.sliding_window is not None and self.sliding_window > 0)
             kv_tensor = verifier_kv_last_local if is_local else verifier_kv_last_global
 
-            if kv_tensor is None:
-                # Fallback to zeros if not provided (e.g. dummy forward passes)
+            if kv_tensor is None or kv_tensor.dim() < 3:
                 batch_sz, seq_len = input_shape
                 kv_tensor = torch.zeros(
                     (batch_sz, seq_len, 2, self.num_key_value_heads, self.head_dim),
@@ -360,7 +359,7 @@ if "gemma4_text" in base_components.model_classes:
 
             kv_tensor = verifier_kv_last_local if self.is_sliding else verifier_kv_last_global
 
-            if kv_tensor is None:
+            if kv_tensor is None or kv_tensor.dim() < 3:
                 batch_sz, seq_len = input_shape
                 kv_tensor = torch.zeros(
                     (batch_sz, seq_len, 2, self._num_kv_heads, self.head_dim),

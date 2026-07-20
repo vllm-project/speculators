@@ -3,7 +3,7 @@
 
  python scripts/prepare_data.py   --model google/gemma-4-31B-it   --data ./output/dataset/magpie_gemma-4-31B-it.jsonl   --output ./output/mtp_gemma-4-31B-it   --max-samples 5000   --seq-length 8192
 
-CUDA_VISIBLE_DEVICES=0,1 python scripts/launch_vllm.py   google/gemma-4-31B-it  -- --port 8000 --tensor-parallel-size 2 --max-model-len 8192
+CUDA_VISIBLE_DEVICES=0,1 python scripts/launch_vllm.py   google/gemma-4-31B-it --hidden-states-path /tmp/hidden_states_$(whoami )-- --port 8000  --tensor-parallel-size 2 --max-model-len 8192
 
 CUDA_VISIBLE_DEVICES=2,3 python scripts/train.py \
   --verifier-name-or-path google/gemma-4-31B-it \
