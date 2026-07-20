@@ -16,7 +16,6 @@ from typing import Any, Literal, cast
 
 import openai
 import torch
-import torch.nn.functional as F  # noqa: N812
 from datasets import load_from_disk
 from safetensors.torch import save_file
 from torch.utils.data import Dataset
@@ -91,13 +90,6 @@ def list_files(path):
             datapath.append(file_path)
 
     return datapath
-
-
-def slice_and_pad_to_length(tensor, length):
-    sliced_tensor = tensor[:length]
-    padding = [0, 0] * sliced_tensor.dim()
-    padding[-1] = length - sliced_tensor.shape[0]
-    return F.pad(sliced_tensor, padding)
 
 
 def split_files(datapath: str, ratio: float = 0.9, seed: int = 0):
@@ -236,12 +228,6 @@ class BaseDataset(Dataset):
         #  "verifier_last_hidden_states": [seq_len, hidden_size],
         #  "loss_mask": [seq_len],
         # }
-
-        # Convert hidden states to the correct dtype
-        data = {
-            k: v.to(self.hidden_states_dtype) if "hidden_states" in k else v
-            for k, v in data.items()
-        }
 
         # Add lengths tensor
         seq_len = data["input_ids"].shape[0]
@@ -1157,16 +1143,25 @@ def create_collate_fn(
 
         collated_data: BatchType = {}
         for key in batch[0]:  # type: ignore[union-attr]
-            # Concatenate the tensors along the seq (0th) dimension
-            collated_data[key] = torch.cat([b[key] for b in batch], dim=0)  # type: ignore[index]
-            # shape: [total_seq_len, ...]
-
-            if key != "lengths":
-                # Slice and pad on seq (0th) dimension to max_len
-                collated_data[key] = slice_and_pad_to_length(
-                    collated_data[key], max_len
-                ).unsqueeze(0)
-                # shape: [1, max_len, ...]
+            if key == "lengths":
+                collated_data[key] = torch.cat([b[key] for b in batch], dim=0)  # type: ignore[index]
+                continue
+            # one copy per sample: preallocated buffer, hidden states cast during write
+            first = batch[0][key]  # type: ignore[index]
+            buffer_dtype = dtype if "hidden_states" in key else first.dtype
+            out = torch.zeros(
+                (max_len, *first.shape[1:]), dtype=buffer_dtype, device=first.device
+            )
+            offset = 0
+            for b in batch:
+                tensor = b[key]  # type: ignore[index]
+                num_rows = min(tensor.shape[0], max_len - offset)
+                out[offset : offset + num_rows] = tensor[:num_rows]
+                offset += num_rows
+                if offset == max_len:
+                    break
+            collated_data[key] = out.unsqueeze(0)
+            # shape: [1, max_len, ...]
 
         # Include lengths until while they fit in max_len
         # The last included length is (if necessary) truncated

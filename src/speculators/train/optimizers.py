@@ -88,8 +88,10 @@ def split_named_params_for_muon(
 ) -> tuple[list[tuple[str, Tensor]], list[tuple[str, Tensor]]]:
     """Split a model's trainable parameters into Muon and AdamW groups.
 
-    A parameter goes to the Muon group iff it requires gradients, is 2D, and is not an
-    embedding or LM-head weight. All other trainable parameters go to the AdamW group.
+    A parameter goes to Muon iff it requires gradients, is a 2D matrix with both
+    dimensions > 1, and is not an embedding or LM-head weight; everything else goes to
+    AdamW. Degenerate 2D weights (``[1, N]`` / ``[N, 1]`` vectors) route to AdamW --
+    Muon orthogonalizes matrices, not vectors, and crashes on them under FSDP2.
 
     :param model: The model whose parameters should be partitioned.
     :return: A ``(muon_params, adamw_params)`` tuple of named parameter lists.
@@ -99,8 +101,10 @@ def split_named_params_for_muon(
     for name, param in model.named_parameters():
         if not param.requires_grad:
             continue
-        if param.ndim == _MATRIX_NDIM and not any(
-            hint in name for hint in _ADAMW_NAME_HINTS
+        if (
+            param.ndim == _MATRIX_NDIM
+            and min(param.shape) > 1  # exclude degenerate [1, N] / [N, 1] vectors
+            and not any(hint in name for hint in _ADAMW_NAME_HINTS)
         ):
             muon_params.append((name, param))
         else:
