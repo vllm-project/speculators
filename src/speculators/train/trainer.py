@@ -522,8 +522,6 @@ class Trainer:
         if self.rank == 0:
             val_loader = tqdm(val_loader, desc=f"Epoch {epoch}")  # type: ignore[assignment]
 
-        # Accumulate metrics on device and reduce/sync once per epoch to avoid
-        # per-batch, per-metric all_reduce and .item() GPU syncs.
         accumulated: dict[str, torch.Tensor] = {}
         num_batches = len(val_loader)
         for batch in val_loader:
