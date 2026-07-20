@@ -11,6 +11,7 @@ from torch.distributed.checkpoint.state_dict import (
     StateDictOptions,
     set_model_state_dict,
 )
+from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 from tqdm import TqdmExperimentalWarning
 from tqdm.rich import tqdm
@@ -98,8 +99,8 @@ class TrainerConfig(NamedTuple):
     num_epochs: int
     save_path: str
     resume_from_checkpoint: bool = False
-    train_call_kwargs: dict = {}
-    val_call_kwargs: dict = {}
+    train_call_kwargs: dict | None = None
+    val_call_kwargs: dict | None = None
     optimizer: Literal["adamw", "muon"] = "adamw"
     weight_decay: float = 0.01
     muon_lr: float = 0.02
@@ -109,12 +110,52 @@ class TrainerConfig(NamedTuple):
     muon_adjust_lr_fn: str = "match_rms_adamw"
     scheduler_type: Literal["linear", "cosine", "none"] = "linear"
     scheduler_warmup_steps: int | None = None
+    scheduler_warmup_ratio: float | None = None
     scheduler_total_steps: int | None = None
     scheduler_num_cosine_cycles: float = 0.5
     checkpoint_freq: float = 1
     save_best: bool = False
     hidden_states_dtype: torch.dtype = torch.bfloat16
     log_freq: int = 1
+    fsdp_shard: bool = False
+
+
+def _resolve_scheduler_steps(
+    config: TrainerConfig,
+    train_loader_len: int,
+) -> tuple[int, int]:
+    """Resolve ``(warmup_steps, total_steps)`` for the LR scheduler.
+
+    Explicit ``scheduler_warmup_steps`` wins; otherwise ``scheduler_warmup_ratio``
+    (a fraction of total steps, validated to ``[0, 1]``) is used; otherwise the
+    default of 1% of the resolved total steps. ``scheduler_total_steps`` defaults
+    to ``num_epochs * train_loader_len``.
+    """
+    default_total_steps = config.num_epochs * train_loader_len
+    scheduler_total_steps = (
+        config.scheduler_total_steps
+        if config.scheduler_total_steps is not None
+        else default_total_steps
+    )
+
+    if config.scheduler_warmup_steps is not None:
+        scheduler_warmup_steps = config.scheduler_warmup_steps
+        if config.scheduler_warmup_ratio is not None:
+            warnings.warn(
+                "Both scheduler_warmup_steps and scheduler_warmup_ratio are set; "
+                "using scheduler_warmup_steps.",
+                stacklevel=2,
+            )
+    elif config.scheduler_warmup_ratio is not None:
+        if not 0 <= config.scheduler_warmup_ratio <= 1:
+            raise ValueError("scheduler_warmup_ratio must be between 0 and 1.")
+        scheduler_warmup_steps = int(
+            scheduler_total_steps * config.scheduler_warmup_ratio
+        )
+    else:
+        scheduler_warmup_steps = scheduler_total_steps // 100
+
+    return scheduler_warmup_steps, scheduler_total_steps
 
 
 class Trainer:
@@ -133,8 +174,12 @@ class Trainer:
         self.val_loader = val_loader
         self.is_distributed = is_distributed()
         self.resume_from_checkpoint = config.resume_from_checkpoint
-        checkpointer_class = (
-            DistributedCheckpointer if self.is_distributed else SingleGPUCheckpointer
+        acc = torch.accelerator.current_accelerator()
+        self.device_type = acc.type if acc is not None else "cuda"
+        checkpointer_class: type[BaseCheckpointer] = (
+            DistributedCheckpointer
+            if self.is_distributed and config.fsdp_shard
+            else SingleGPUCheckpointer
         )
         self.checkpointer: BaseCheckpointer = checkpointer_class(self.config.save_path)
 
@@ -231,25 +276,28 @@ class Trainer:
         # Verify model is compatible with training infrastructure
         SpeculatorModel.verify_training_compatible(self.model)
 
-        self.model.to(self.config.hidden_states_dtype)  # type: ignore[arg-type]
         load_checkpoint = (
             self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1
         )
 
         if not self.is_distributed:
-            # Single device case
             self.model.to(self.local_rank)  # type: ignore[arg-type]
             if load_checkpoint:
                 self.checkpointer.load_model_state_dict(self.model)
             return
 
-        # Distributed case
+        if self.config.fsdp_shard:
+            self._setup_model_fsdp(load_checkpoint)
+        else:
+            self._setup_model_ddp(load_checkpoint)
+
+    def _setup_model_fsdp(self, load_checkpoint: bool):
         # Capture full state dict on rank 0 before FSDP sharding
         full_state_dict = {}
         if not load_checkpoint and dist.get_rank() == 0:
             full_state_dict = self.model.state_dict()
 
-        apply_fully_sharded(self.model)
+        apply_fully_sharded(self.model, param_dtype=self.config.hidden_states_dtype)
 
         if load_checkpoint:
             self.checkpointer.load_model_state_dict(self.model)
@@ -267,6 +315,21 @@ class Trainer:
             del full_state_dict
             dist.barrier()
 
+    def _setup_model_ddp(self, load_checkpoint: bool):
+        self.model.to(self.local_rank)  # type: ignore[arg-type]
+
+        if load_checkpoint:
+            if dist.get_rank() == 0:
+                self.checkpointer.load_model_state_dict(self.model)
+        else:
+            # Fresh init: broadcast rank 0's random initialization to all ranks
+            for param in self.model.parameters():
+                dist.broadcast(param.data, src=0)
+            dist.barrier()
+
+        # DDP constructor broadcasts rank 0's params to all ranks
+        self.model = DistributedDataParallel(self.model)  # type: ignore[assignment]
+
     def setup_optimizer(self):
         # Setup optimizer(s). The "muon" option returns two optimizers (Muon for the
         # 2D weight matrices, AdamW for everything else); "adamw" returns a single one.
@@ -282,13 +345,8 @@ class Trainer:
             self.schedulers: list[torch.optim.lr_scheduler.LRScheduler] = []
             return
 
-        # Compute defaults if None
-        scheduler_warmup_steps = (
-            self.config.scheduler_warmup_steps
-            or (self.config.num_epochs * len(self.train_loader)) // 100
-        )
-        scheduler_total_steps = self.config.scheduler_total_steps or (
-            self.config.num_epochs * len(self.train_loader)
+        scheduler_warmup_steps, scheduler_total_steps = _resolve_scheduler_steps(
+            self.config, len(self.train_loader)
         )
 
         def make_scheduler(opt: torch.optim.Optimizer):
@@ -393,10 +451,13 @@ class Trainer:
                 for k, v in batch.items()
             }
 
-            timer.mark("fetch")
-            _draft_tokens, loss, metrics = self.model(
-                **gpu_batch, **self.config.train_call_kwargs
-            )
+            with torch.autocast(
+                self.device_type, dtype=self.config.hidden_states_dtype
+            ):
+                timer.mark("fetch")
+                _draft_tokens, loss, metrics = self.model(
+                    **gpu_batch, **(self.config.train_call_kwargs or {})
+                )
 
             timer.mark("fwd")
             self._optimizers_zero_grad()
@@ -471,9 +532,12 @@ class Trainer:
                 for k, v in batch.items()
             }
 
-            _draft_tokens, _loss, metrics = self.model(
-                **gpu_batch, **self.config.val_call_kwargs
-            )
+            with torch.autocast(
+                self.device_type, dtype=self.config.hidden_states_dtype
+            ):
+                _draft_tokens, _loss, metrics = self.model(
+                    **gpu_batch, **(self.config.val_call_kwargs or {})
+                )
 
             if self.is_distributed:
                 for m in metrics.values():

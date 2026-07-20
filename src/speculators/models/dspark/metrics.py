@@ -18,6 +18,7 @@ from speculators.models.metrics import (
     compound_loss,
     compute_accuracy_multi_step,
     dflash_loss_decay,
+    dpace_loss_decay,
 )
 
 __all__ = [
@@ -31,13 +32,15 @@ def _masked_decayed_mean(
     elementwise: torch.Tensor,  # [1, T]
     loss_mask: torch.Tensor,  # [1, T]
     pos_idx: torch.Tensor,  # [1, T]
-    decay_fn: Callable[[torch.Tensor], torch.Tensor] | None,
+    decay_fn: Callable[..., torch.Tensor] | None,
 ) -> torch.Tensor:
     """Masked, optionally position-decayed mean of a precomputed per-position term."""
     loss_mask = loss_mask.to(elementwise.dtype)
     weighted = elementwise * loss_mask
     if decay_fn is not None:
-        weighted = weighted * decay_fn(pos_idx.to(weighted.dtype))
+        weighted = weighted * decay_fn(
+            pos_idx.to(weighted.dtype), elementwise_loss=elementwise
+        )
     denominator = loss_mask.sum(dim=1) + _EPS
     return (weighted.sum(dim=1) / denominator).mean()
 
@@ -51,13 +54,27 @@ def compute_metrics(
     loss_config: LossConfig,
     gamma: float = 4.0,
     confidence_head_alpha: float = 1.0,
+    per_position_loss_weight: str = "fixed-exp-decay",
+    dpace_alpha: float = 0.5,
+    sample_from_anchor: bool = True,
 ) -> tuple[torch.Tensor, dict]:
     """Compute the DSpark loss and a metrics dict (``*_sum``/``*_total`` pairs)."""
 
     device = logits.device
     seq_len = logits.shape[1]
     pos_idx = (torch.arange(seq_len, device=device) % block_size).unsqueeze(0)
-    decay_fn = partial(dflash_loss_decay, gamma=gamma)
+    start_pos = 0 if sample_from_anchor else 1
+    if per_position_loss_weight == "dpace":
+        decay_fn = partial(
+            dpace_loss_decay,
+            loss_mask=loss_mask,
+            block_size=block_size,
+            dpace_alpha=dpace_alpha,
+        )
+    else:
+        decay_fn = partial(
+            dflash_loss_decay, gamma=gamma, sample_from_anchor=sample_from_anchor
+        )
 
     loss, term_losses = compound_loss(
         logits, targets, loss_mask, pos_idx, loss_config=loss_config, decay_fn=decay_fn
@@ -72,8 +89,10 @@ def compute_metrics(
         # is the anchor), shared by the accept-length and calibration metrics.
         num_blocks = seq_len // block_size
         accept_blocks = accept_rate.view(num_blocks, block_size)
-        draft_mask = loss_mask.to(accept_rate.dtype).view(num_blocks, block_size)[:, 1:]
-        accept_prefix = (accept_blocks[:, 1:] * draft_mask).cumprod(dim=-1)
+        draft_mask = loss_mask.to(accept_rate.dtype).view(num_blocks, block_size)[
+            :, start_pos:
+        ]
+        accept_prefix = (accept_blocks[:, start_pos:] * draft_mask).cumprod(dim=-1)
 
     metrics: dict[str, Any] = {}
     if confidence_logits is not None:
@@ -96,11 +115,11 @@ def compute_metrics(
             metrics["confidence_abs_error_total"] = mask_total
             # Mean predicted vs. observed acceptance — a calibration sanity check.
             metrics["confidence_pred_mean_sum"] = (conf_prob * mask_f).sum()
-            metrics["confidence_pred_mean_total"] = mask_total
+            metrics["confidence_pred_mean_total"] = mask_total.clone()
             # Calibration of the cumulative acceptance product, which is what
             # dynamic draft-length thresholding consumes (signed pred - target).
             conf_prefix = (
-                conf_prob.view(num_blocks, block_size)[:, 1:] * draft_mask
+                conf_prob.view(num_blocks, block_size)[:, start_pos:] * draft_mask
             ).cumprod(dim=-1)
             metrics["confidence_cumprod_bias_sum"] = (
                 (conf_prefix - accept_prefix) * draft_mask
@@ -112,7 +131,7 @@ def compute_metrics(
     metrics["loss_total"] = ones
     for term_name, term_val in term_losses.items():
         metrics[f"{term_name}_sum"] = term_val
-        metrics[f"{term_name}_total"] = ones
+        metrics[f"{term_name}_total"] = ones.clone()
 
     # Mean acceptance rate of the (Markov-corrected) drafter.
     with torch.no_grad():
@@ -128,15 +147,15 @@ def compute_metrics(
         metrics["accept_len_sum"] = (per_block_len * block_valid).sum()
         metrics["accept_len_total"] = block_valid.sum().clamp_min(1.0)
 
-    # Per-position greedy accuracy (position 0 is the anchor — excluded).
+    # Per-position greedy accuracy
     pred_ids = torch.argmax(logits, dim=-1)
     target_ids = torch.argmax(targets, dim=-1)
     correct_per_pos, total_per_pos = compute_accuracy_multi_step(
         pred_ids, target_ids, loss_mask, pos_idx, block_size
     )
-    metrics["full_acc_sum"] = correct_per_pos[1:].sum()
-    metrics["full_acc_total"] = total_per_pos[1:].sum()
-    for pos in range(1, block_size):
+    metrics["full_acc_sum"] = correct_per_pos[start_pos:].sum()
+    metrics["full_acc_total"] = total_per_pos[start_pos:].sum()
+    for pos in range(start_pos, block_size):
         metrics[f"position_{pos}_acc_sum"] = correct_per_pos[pos]
         metrics[f"position_{pos}_acc_total"] = total_per_pos[pos]
 

@@ -70,6 +70,17 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
         "bidirectional.",
     )
 
+    sample_from_anchor: bool = Field(
+        default=False,
+        description=(
+            "Whether to sample from the anchor position. "
+            "False: anchor is the bonus token, only mask tokens predict "
+            "(block_size-1 speculative tokens). "
+            "True: sample from anchor and all mask positions "
+            "(block_size speculative tokens). "
+        ),
+    )
+
     @field_serializer("transformer_layer_config")
     def serialize_transformer_config(self, value: PretrainedConfig) -> dict:
         """Serialize transformer config to dict."""

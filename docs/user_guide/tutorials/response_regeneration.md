@@ -50,24 +50,29 @@ For larger models, use data parallelism and/or tensor parallelism:
 
 ## Step 2: Verify the Output
 
-The output is a JSONL file where each line contains the original prompt and the generated response in a conversations format compatible with fine-tuning:
+The output is a JSONL file with one pre-tokenized row per target generation. `loss_mask` is `0` over the prompt the target conditioned on and `1` over the tokens it generated, so training needs no further masking:
 
 ```json
 {
-  "id": "sample_0",
+  "id": "conv-abc_gen0",
+  "primary_id": "conv-abc",
+  "input_ids": [151644, 872, ...],
+  "loss_mask": [0, 0, ..., 1, 1],
   "conversations": [
-    {"from": "human", "value": "What is the capital of France?"},
-    {"from": "gpt", "value": "The capital of France is Paris."}
+    {"role": "user", "content": "What is the capital of France?"},
+    {"role": "assistant", "content": "The capital of France is Paris."}
   ],
   "metadata": {
     "idx": 0,
     "finish_reason": "stop",
-    "latency_s": 1.234,
+    "is_tool_call": false,
     "usage": {...},
     "endpoint": "http://127.0.0.1:8000/v1/chat/completions"
   }
 }
 ```
+
+Each assistant turn produces at least one row — and more when the target calls a tool, since every call is its own generation — so expect more lines than input conversations. `conversations` is a review-only twin of `input_ids`; training drops it.
 
 Check that the output looks correct:
 

@@ -44,8 +44,6 @@ python scripts/prepare_data.py \
 
 - **`--assistant-pattern`** (str, default: `None`) Custom regex pattern for matching assistant responses. If not provided, auto-detected from chat template.
 
-- **`--turn-dropout`** (flag) Enable turn dropout: randomly keeps first N consecutive turns per conversation for data augmentation.
-
 - **`--minimum-valid-tokens`** (int, default: `None`) Drop samples whose loss mask contains fewer than this many trainable tokens.
 
 ### Output Arguments
@@ -70,6 +68,5 @@ python scripts/prepare_data.py \
   --output ./prepared_data \
   --seq-length 4096 \
   --max-samples 10000 \
-  --turn-dropout \
   --num-preprocessing-workers 16
 ```
