@@ -70,6 +70,22 @@ if HAS_GEMMA2:
     )
 
 try:
+    from transformers.models.gemma4.modeling_gemma4 import (
+        Gemma4RMSNorm,
+        Gemma4TextDecoderLayer,
+        Gemma4TextRotaryEmbedding,
+    )
+
+    model_classes["gemma4_text"] = ModelComponents(
+        Gemma4TextDecoderLayer,
+        Gemma4TextDecoderLayer,
+        Gemma4RMSNorm,
+        Gemma4TextRotaryEmbedding,
+    )
+except ImportError:
+    pass
+
+try:
     from transformers.models.qwen3_next.modeling_qwen3_next import (
         Qwen3NextDecoderLayer,
         Qwen3NextRMSNorm,

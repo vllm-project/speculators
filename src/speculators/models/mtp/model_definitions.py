@@ -298,3 +298,117 @@ if "gemma2" in base_components.model_classes:
     mtp_model_classes["gemma2"] = base_components.override_components(
         "gemma2", first_layer_class=Gemma2MTPLayer
     )
+
+if "gemma4_text" in base_components.model_classes:
+    from typing import Optional, Tuple, Any
+    from transformers.models.gemma4.modeling_gemma4 import (
+        Gemma4TextDecoderLayer,
+        Gemma4RMSNorm,
+        Gemma4TextAttention,
+        Gemma4TextRotaryEmbedding,
+        apply_rotary_pos_emb as gemma4_apply_rotary_pos_emb,
+        eager_attention_forward as gemma4_eager_attention_forward,
+    )
+
+    class Gemma4MTPRotaryEmbedding(Gemma4TextRotaryEmbedding):
+        """Wraps Gemma4TextRotaryEmbedding with a fixed layer_type for MTP.
+
+        Gemma4TextRotaryEmbedding.forward requires a layer_type arg
+        (per-type RoPE params), but MTPDraftModel.forward calls
+        rotary_emb(x, position_ids) without one. This wrapper fixes
+        the layer_type to the MTP layer's type (layer_types[0]).
+        """
+
+        def __init__(self, config: PretrainedConfig, device=None) -> None:
+            super().__init__(config, device)
+            self._mtp_layer_type = config.layer_types[0]
+
+        def forward(
+            self, x: torch.Tensor, position_ids: torch.Tensor, layer_type: str | None = None
+        ) -> tuple[torch.Tensor, torch.Tensor]:
+            return super().forward(x, position_ids, layer_type=self._mtp_layer_type)
+
+    class QueryOnlyGemma4TextAttention(Gemma4TextAttention):
+        def __init__(self, config: PretrainedConfig, layer_idx: int = 0) -> None:
+            super().__init__(config, layer_idx)
+            self.k_proj = None
+            self.v_proj = None
+            if hasattr(self, "k_norm"):
+                self.k_norm = None
+            if hasattr(self, "v_norm"):
+                self.v_norm = None
+            self._num_kv_heads = config.num_attention_heads // self.num_key_value_groups
+
+        def forward(
+            self,
+            hidden_states: torch.Tensor,
+            position_embeddings: Tuple[torch.Tensor, torch.Tensor],
+            attention_mask: Optional[torch.Tensor],
+            verifier_kv_last_local: Optional[torch.Tensor] = None,
+            verifier_kv_last_global: Optional[torch.Tensor] = None,
+            **kwargs: Any,
+        ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+            input_shape = hidden_states.shape[:-1]
+            hidden_shape = (*input_shape, -1, self.head_dim)
+
+            query_states = self.q_proj(hidden_states).view(hidden_shape)
+            query_states = self.q_norm(query_states)
+
+            cos, sin = position_embeddings
+            query_states = gemma4_apply_rotary_pos_emb(query_states, cos, sin, unsqueeze_dim=2)
+            query_states = query_states.transpose(1, 2)
+
+            kv_tensor = verifier_kv_last_local if self.is_sliding else verifier_kv_last_global
+
+            if kv_tensor is None:
+                batch_sz, seq_len = input_shape
+                kv_tensor = torch.zeros(
+                    (batch_sz, seq_len, 2, self._num_kv_heads, self.head_dim),
+                    dtype=query_states.dtype,
+                    device=query_states.device,
+                )
+            elif kv_tensor.dim() == 3:
+                batch_sz, seq_len, _ = kv_tensor.shape
+                kv_tensor = kv_tensor.view(
+                    batch_sz, seq_len, 2, self._num_kv_heads, self.head_dim
+                )
+
+            key_states = kv_tensor[..., 0, :, :].transpose(1, 2)
+            value_states = kv_tensor[..., 1, :, :].transpose(1, 2)
+
+            if self.is_sliding and attention_mask is not None:
+                seq_len = attention_mask.shape[-1]
+                window_mask = torch.tril(
+                    torch.ones(seq_len, seq_len, dtype=torch.bool, device=attention_mask.device)
+                )
+                window_mask = torch.triu(window_mask, diagonal=-self.sliding_window + 1)
+                attention_mask = attention_mask.masked_fill(
+                    ~window_mask.view(1, 1, seq_len, seq_len),
+                    torch.finfo(query_states.dtype).min,
+                )
+
+            attn_output, attn_weights = gemma4_eager_attention_forward(
+                self,
+                query_states,
+                key_states,
+                value_states,
+                attention_mask,
+                dropout=self.attention_dropout if self.training else 0.0,
+                scaling=self.scaling,
+            )
+
+            attn_output = attn_output.reshape(*input_shape, -1).contiguous()
+            attn_output = self.o_proj(attn_output)
+            return attn_output, attn_weights
+
+    class Gemma4TextMTPLayer(MTPLayerMixin, Gemma4TextDecoderLayer):
+        def __init__(self, config: PretrainedConfig, layer_idx: int = 0) -> None:
+            super().__init__(config, layer_idx)
+            self._setup_mtp_modules(config, Gemma4RMSNorm)
+            self.self_attn = QueryOnlyGemma4TextAttention(config, layer_idx)
+
+    mtp_model_classes["gemma4_text"] = base_components.override_components(
+        "gemma4_text",
+        first_layer_class=Gemma4TextMTPLayer,
+        rotary_emb_class=Gemma4MTPRotaryEmbedding,
+    )

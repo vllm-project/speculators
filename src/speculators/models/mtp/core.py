@@ -263,8 +263,8 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
         if verifier_name_or_path is None:
             raise ValueError(
                 "verifier_name_or_path is required for MTP training. "
-                "The verifier model must contain native MTP weights "
-                "(mtp.* keys) to extract."
+                "It is used to load shared weights (embed_tokens, lm_head) "
+                "and, when available, native MTP layer weights."
             )
 
         config = MTPSpeculatorConfig(
@@ -290,10 +290,20 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
 
         from speculators.convert.mtp.converter import MTPConverter  # noqa: PLC0415
 
-        state_dict = MTPConverter().convert_to_state_dict(
-            verifier_name_or_path  # type: ignore[arg-type]
-        )
-        model.load_state_dict(state_dict, strict=False)
+        try:
+            state_dict = MTPConverter().convert_to_state_dict(
+                verifier_name_or_path  # type: ignore[arg-type]
+            )
+            model.load_state_dict(state_dict, strict=False)
+        except ValueError as exc:
+            if "No keys with prefix" not in str(exc):
+                raise
+            logger.warning(
+                "Verifier at '%s' has no native MTP weights (mtp.* keys). "
+                "MTP layer will be randomly initialized for training from "
+                "scratch.",
+                verifier_name_or_path,
+            )
 
         model.load_verifier_weights()
         return model
