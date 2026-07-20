@@ -167,14 +167,13 @@ def wait_for_lock(lock_path, timeout=10.0, poll_interval=0.1):
 
 # Models whose chat template appends a trailing EOS on a *closed* final turn that
 # ``input_ids`` omits; open the turn for them to keep prompt_token_ids == input_ids.
-# Interim name heuristic — see ADR 0005 for the model-independent fix.
 _OPEN_FINAL_TURN_MODEL_MARKERS = ("mistral",)
 
 
 def _continue_final_message_for(model: str) -> bool:
     """Whether to leave the final assistant turn open when re-rendering the MM
     chat prompt. Default False (closed, reproducing ``input_ids``); True for
-    Mistral, whose template adds a spurious EOS on close. See ADR 0005."""
+    Mistral, whose template adds a spurious EOS on close."""
     # Basename match so the ``mistralai/`` org prefix doesn't sweep in siblings.
     name = model.rsplit("/", 1)[-1].lower()
     return any(marker in name for marker in _OPEN_FINAL_TURN_MODEL_MARKERS)
