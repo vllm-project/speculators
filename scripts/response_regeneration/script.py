@@ -597,23 +597,18 @@ async def regenerate_conversation(
 def _log_summary(stats: dict[str, Any]) -> None:
     elapsed = time.perf_counter() - stats["start_time"]
     n_convs = stats["ok"] + stats["errors"]
-    logger.info(
-        "Pipeline complete in %.1fs: %d conversations (%d ok, %d errors, %d truncated)",
-        elapsed,
-        n_convs,
-        stats["ok"],
-        stats["errors"],
-        stats["truncated"],
+    print(
+        f"\nPipeline complete in {elapsed:.1f}s: {n_convs} conversations "
+        f"({stats['ok']} ok, {stats['errors']} errors, "
+        f"{stats['truncated']} truncated)"
     )
     if stats["requests"] > 0:
-        logger.info(
-            "Throughput: %.1f req/s, %d tok/s | "
-            "Avg request latency: %.0f ms | "
-            "Avg queue wait: %.0f ms",
-            stats["requests"] / elapsed if elapsed > 0 else 0,
-            int(stats["completion_tokens"] / elapsed) if elapsed > 0 else 0,
-            stats["total_request_s"] / stats["requests"] * 1000,
-            stats["total_queue_wait_s"] / n_convs * 1000 if n_convs > 0 else 0,
+        rps = stats["requests"] / elapsed if elapsed > 0 else 0
+        tps = int(stats["completion_tokens"] / elapsed) if elapsed > 0 else 0
+        avg_latency = stats["total_request_s"] / stats["requests"] * 1000
+        print(
+            f"Throughput: {rps:.1f} req/s, {tps} tok/s | "
+            f"Avg request latency: {avg_latency:.0f} ms"
         )
 
 
@@ -656,10 +651,6 @@ async def worker(
             queue.task_done()
             return
 
-        enqueued_at = item.pop("enqueued_at", None)
-        if enqueued_at is not None:
-            stats["total_queue_wait_s"] += time.perf_counter() - enqueued_at
-
         conv_id = item["primary_id"]
         # Held by the caller so a mid-conversation failure can still report how
         # many rows had been completed.
@@ -681,7 +672,6 @@ async def worker(
             for sample in samples:
                 out_fh.write(json.dumps(sample, ensure_ascii=False) + "\n")
                 usage = sample.get("metadata", {}).get("usage", {})
-                stats["prompt_tokens"] += usage.get("prompt_tokens", 0)
                 stats["completion_tokens"] += usage.get("completion_tokens", 0)
             out_fh.flush()
             if samples:
@@ -788,10 +778,8 @@ async def main():
                 "errors": 0,
                 "truncated": 0,
                 "requests": 0,
-                "prompt_tokens": 0,
                 "completion_tokens": 0,
                 "total_request_s": 0.0,
-                "total_queue_wait_s": 0.0,
                 "start_time": time.perf_counter(),
             }
             workers = [
@@ -860,7 +848,6 @@ async def main():
                         "turns": turns,
                         "tools": tools,
                         "tool_results": tool_results,
-                        "enqueued_at": time.perf_counter(),
                     }
                 )
                 processed_count += 1
