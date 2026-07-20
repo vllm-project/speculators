@@ -87,12 +87,28 @@ class MooncakeHiddenStatesStore:
             names.append(name)
         self._store.put(f"{key}:meta", json.dumps(names).encode("utf-8"))
 
+    def delete_sample(self, key: str) -> None:
+        """Remove all keys for a sample from the store."""
+        assert self._store is not None, "call setup() first"
+        raw = self._store.get(f"{key}:meta")
+        if not raw:
+            return
+        names = json.loads(raw)
+        keys_to_remove = [f"{key}:{name}" for name in names] + [f"{key}:meta"]
+        self._store.batch_remove(keys_to_remove, force=True)
+
     def get_sample(
         self, key: str, timeout: float = 120.0, poll_interval: float = 0.05
     ) -> dict[str, torch.Tensor]:
         assert self._store is not None, "call setup() first"
         names = json.loads(self._wait_for(f"{key}:meta", timeout, poll_interval))
-        return {name: self._store.get_tensor(f"{key}:{name}") for name in names}
+        result = {}
+        for name in names:
+            tensor = self._store.get_tensor(f"{key}:{name}")
+            if tensor is None:
+                raise RuntimeError(f"Mooncake tensor evicted for key={key}:{name}")
+            result[name] = tensor
+        return result
 
     def _wait_for(self, key: str, timeout: float, poll_interval: float) -> bytes:
         assert self._store is not None, "call setup() first"

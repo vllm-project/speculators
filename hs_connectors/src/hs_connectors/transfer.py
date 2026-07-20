@@ -222,6 +222,9 @@ class MooncakeTransfer(HiddenStatesTransfer):
     def get_generated(self, handle: str) -> dict[str, torch.Tensor] | None:
         return self.store.get_sample(handle)
 
+    def delete(self, handle: str) -> None:
+        self.store.delete_sample(handle)
+
 
 @HiddenStatesBackend.register("mooncake")
 class MooncakeBackend(HiddenStatesBackend):
