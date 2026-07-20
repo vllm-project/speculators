@@ -16,6 +16,7 @@ from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
 from hs_connectors import HiddenStatesBackend
 from speculators.model import SpeculatorModel
+from speculators.models.dflash.kernels import DFlashKernels, load_liger_dflash_kernels
 from speculators.models.eagle3.data import shift_batch
 from speculators.models.eagle3.rotary_partial import install_partial_neox_rotary
 from speculators.models.mtp.data import shift_batch_mtp
@@ -365,6 +366,12 @@ def parse_vocab_mappings(args: argparse.Namespace):
     return None, None, verifier_config.vocab_size
 
 
+def _resolve_dflash_kernels(args: argparse.Namespace) -> DFlashKernels | None:
+    if not getattr(args, "use_liger_kernel", False):
+        return None
+    return load_liger_dflash_kernels()
+
+
 def _build_from_config_only(
     model_class: type[SpeculatorModel],
     path: str,
@@ -372,6 +379,7 @@ def _build_from_config_only(
     d2t: torch.Tensor | None,
     verifier_name_or_path: str | None = None,
     draft_attn_impl: str | None = None,
+    dflash_kernels: DFlashKernels | None = None,
 ) -> SpeculatorModel:
     """Initialize a fresh draft from a saved speculator *config* (no weights).
 
@@ -392,7 +400,10 @@ def _build_from_config_only(
         and not getattr(speculators_config.verifier, "name_or_path", None)
     ):
         speculators_config.verifier.name_or_path = verifier_name_or_path
-    model = model_class(config=config)
+    model_kwargs = {"config": config}
+    if dflash_kernels is not None:
+        model_kwargs["dflash_kernels"] = dflash_kernels
+    model = model_class(**model_kwargs)
     if hasattr(model, "load_vocab_mappings"):
         model.load_vocab_mappings(t2d, d2t)  # type: ignore[attr-defined, operator]
     if hasattr(model, "load_verifier_weights"):
@@ -421,6 +432,8 @@ def build_draft_model(
     extracts the native MTP head weights from the verifier, so the decoder-shaping
     flags and ``--draft-config`` do not apply.
     """
+    dflash_kernels = _resolve_dflash_kernels(args)
+
     if args.from_pretrained:
         if is_config_only_dir(args.from_pretrained):
             logger.info(
@@ -437,6 +450,7 @@ def build_draft_model(
                 draft_attn_impl=(
                     args.draft_attn_impl if args.speculator_type != "mtp" else None
                 ),
+                dflash_kernels=dflash_kernels,
             )
         if args.speculator_type != "mtp":
             # _attn_implementation is never serialized by HF configs, so re-apply
@@ -445,12 +459,17 @@ def build_draft_model(
             # __init__ resolves its own default ("sdpa") when it is absent.
             config = model_class.config_class.from_pretrained(args.from_pretrained)
             config.transformer_layer_config._attn_implementation = args.draft_attn_impl
+            pretrained_kwargs = {
+                "config": config,
+                "t2d": t2d,
+                "d2t": d2t,
+                "verifier": args.verifier_name_or_path,
+            }
+            if dflash_kernels is not None:
+                pretrained_kwargs["dflash_kernels"] = dflash_kernels
             return model_class.from_pretrained(
                 args.from_pretrained,
-                config=config,
-                t2d=t2d,
-                d2t=d2t,
-                verifier=args.verifier_name_or_path,
+                **pretrained_kwargs,
             )
         return model_class.from_pretrained(
             args.from_pretrained,
@@ -499,11 +518,14 @@ def build_draft_model(
         )
 
     args.draft_vocab_size = draft_vocab_size
+    training_args = vars(args).copy()
+    if dflash_kernels is not None:
+        training_args["dflash_kernels"] = dflash_kernels
     return model_class.from_training_args(
         verifier_config=transformer_layer_config,
         t2d=t2d,
         d2t=d2t,
-        **vars(args),
+        **training_args,
     )
 
 

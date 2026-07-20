@@ -64,6 +64,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+liger = ["liger-kernel"]
 dev = [
     # build
     "build>=1.5.0",
@@ -145,7 +146,17 @@ exclude = ["venv", "build", "dist"]
 follow_imports = 'silent'
 
 [[tool.mypy.overrides]]
-module = ["datasets.*", "transformers.*", "setuptools.*", "setuptools_git_versioning.*", "vllm.*", "triton.*", "hs_connectors.*", "mooncake.*"]
+module = [
+    "datasets.*",
+    "hs_connectors.*",
+    "liger_kernel.*",
+    "mooncake.*",
+    "transformers.*",
+    "setuptools.*",
+    "setuptools_git_versioning.*",
+    "vllm.*",
+    "triton.*",
+]
 ignore_missing_imports=true
 
 [tool.ruff]

@@ -436,6 +436,11 @@ class DFlashArgs(_Group):
     block_size: int = Field(
         default=8, description="Block size for DFlash model (default: 8)."
     )
+    use_liger_kernel: bool = Field(
+        default=False,
+        description="Use Liger Qwen3 RMSNorm/SwiGLU kernels for DFlash. Requires the "
+        "optional `speculators[liger]` extra.",
+    )
     sample_from_anchor: bool | None = Field(
         default=None,
         description="Sample from the anchor position (all positions predict). "
@@ -650,6 +655,17 @@ class TrainConfig(BaseSettings):
             self.draft.norm_output = is_eagle3
         if self.optimizer.muon_lr is None:
             self.optimizer.muon_lr = 10 * self.optimizer.lr
+        return self
+
+    @model_validator(mode="after")
+    def _validate_liger_kernel(self) -> "TrainConfig":
+        """The Liger kernels are wired into the DFlash backbone only, so the flag is
+        rejected outright on any other speculator rather than silently ignored."""
+        if self.dflash.use_liger_kernel and self.speculator_type != "dflash":
+            raise ValueError(
+                "--use-liger-kernel is currently supported only with "
+                "--speculator-type dflash"
+            )
         return self
 
     @model_validator(mode="after")
