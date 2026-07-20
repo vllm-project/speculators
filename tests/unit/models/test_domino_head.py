@@ -200,6 +200,35 @@ class TestDominoHeadSuffixStart:
             )
 
 
+class TestDominoVocabValidation:
+    def test_domino_rejects_pruned_vocab(self):
+        transformer_config = copy.deepcopy(TINY_QWEN3_CONFIG)
+        with pytest.raises(ValueError, match="Domino requires draft_vocab_size"):
+            DFlashSpeculatorConfig(
+                transformer_layer_config=transformer_config,
+                draft_vocab_size=64,
+                projector_type="domino",
+            )
+
+    def test_dflash_allows_pruned_vocab(self):
+        transformer_config = copy.deepcopy(TINY_QWEN3_CONFIG)
+        config = DFlashSpeculatorConfig(
+            transformer_layer_config=transformer_config,
+            draft_vocab_size=64,
+            projector_type="dflash",
+        )
+        assert config.draft_vocab_size == 64
+
+    def test_domino_accepts_full_vocab(self):
+        transformer_config = copy.deepcopy(TINY_QWEN3_CONFIG)
+        config = DFlashSpeculatorConfig(
+            transformer_layer_config=transformer_config,
+            draft_vocab_size=TINY_QWEN3_CONFIG.vocab_size,
+            projector_type="domino",
+        )
+        assert config.draft_vocab_size == config.target_vocab_size
+
+
 # ---------------------------------------------------------------------------
 # Helpers for core.py integration tests
 # ---------------------------------------------------------------------------
@@ -214,9 +243,10 @@ def _make_tiny_model(
     dtype: torch.dtype = torch.bfloat16,
 ) -> DFlashDraftModel:
     transformer_config = copy.deepcopy(TINY_QWEN3_CONFIG)
+    vocab_size = TINY_QWEN3_CONFIG.vocab_size if projector_type == "domino" else 64
     config = DFlashSpeculatorConfig(
         transformer_layer_config=transformer_config,
-        draft_vocab_size=64,
+        draft_vocab_size=vocab_size,
         block_size=block_size,
         aux_hidden_state_layer_ids=[0, 1, 2],
         mask_token_id=0,
@@ -255,7 +285,9 @@ def _make_synthetic_data(
         "hidden_states": torch.randn(
             1, seq_len, num_target_layers * hidden_size, dtype=dtype, device=device
         ),
-        "input_ids": torch.randint(0, 64, (1, seq_len), device=device),
+        "input_ids": torch.randint(
+            0, TINY_QWEN3_CONFIG.vocab_size, (1, seq_len), device=device
+        ),
         "loss_mask": loss_mask,
         "verifier_last_hidden_states": torch.randn(
             1, seq_len, hidden_size, dtype=dtype, device=device

@@ -132,6 +132,22 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
             object.__setattr__(self, "shift_label", self.projector_type == "domino")
         return self
 
+    @model_validator(mode="after")
+    def _validate_domino_vocab(self) -> "DFlashSpeculatorConfig":
+        if (
+            self.projector_type == "domino"
+            and self.draft_vocab_size != self.target_vocab_size
+        ):
+            raise ValueError(
+                f"Domino requires draft_vocab_size ({self.draft_vocab_size}) to equal "
+                f"the verifier vocab_size ({self.target_vocab_size}). The Domino "
+                "correction head outputs logits in the target model's vocabulary "
+                "space (paper: arXiv 2605.29707, Section 4.1.2); pruned draft "
+                "vocabularies are not supported. Remove --draft-vocab-size and "
+                "vocab mapping files (d2t/t2d) to use the full verifier vocabulary."
+            )
+        return self
+
     @field_serializer("transformer_layer_config")
     def serialize_transformer_config(self, value: PretrainedConfig) -> dict:
         """Serialize transformer config to dict."""

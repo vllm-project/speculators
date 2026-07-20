@@ -133,7 +133,7 @@ def make_eagle3_model(
 
 def make_dflash_model(
     *,
-    draft_vocab_size: int = 64,
+    draft_vocab_size: int | None = None,
     block_size: int = 4,
     projector_type: Literal["dflash", "domino"] = "dflash",
     draft_attn_impl: str | None = None,
@@ -145,6 +145,10 @@ def make_dflash_model(
     transformer_config = copy.deepcopy(TINY_QWEN3_CONFIG)
     if draft_attn_impl is not None:
         transformer_config._attn_implementation = draft_attn_impl
+    if draft_vocab_size is None:
+        draft_vocab_size = (
+            TINY_QWEN3_CONFIG.vocab_size if projector_type == "domino" else 64
+        )
     config = DFlashSpeculatorConfig(
         transformer_layer_config=transformer_config,
         draft_vocab_size=draft_vocab_size,
