@@ -23,7 +23,8 @@ If no PRs match, report "No reviewable PRs found." and stop.
 For each candidate PR, check whether you have already reviewed it since its last push:
 
 ```bash
-gh api repos/vllm-project/speculators/pulls/<number>/reviews --jq '[.[] | select(.user.login == "orestis-z")] | last | .submitted_at'
+GH_USER=$(gh api user --jq .login)
+gh api repos/vllm-project/speculators/pulls/<number>/reviews --jq "[.[] | select(.user.login == \"$GH_USER\")] | last | .submitted_at"
 ```
 
 Also get the last push timestamp:
