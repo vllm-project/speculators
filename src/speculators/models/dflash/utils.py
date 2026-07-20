@@ -59,7 +59,9 @@ def select_anchors(
     torch._check(k >= 0)  # noqa: SLF001
 
     perm = torch.randperm(valid_indices.numel(), device=loss_mask.device)
-    anchors[:k] = torch.gather(valid_indices, 0, perm[:k])
+    # Contiguous anchors let flex attention use dense (fast) blocks instead of
+    # scattered all-partial (slow) ones; the order never affects the loss.
+    anchors[:k] = torch.sort(torch.gather(valid_indices, 0, perm[:k])).values
     anchor_valid[:k] = True
 
     return anchors, anchor_valid
