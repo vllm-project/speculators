@@ -226,6 +226,8 @@ class TestTVLoss:
         assert torch.allclose(out_f, out_e, atol=1e-3)
         out_e.sum().backward()
         out_f.sum().backward()
+        assert lf.grad is not None
+        assert le.grad is not None
         assert torch.allclose(lf.grad, le.grad, atol=1e-3)
 
 
