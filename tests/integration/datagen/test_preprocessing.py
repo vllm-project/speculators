@@ -616,6 +616,49 @@ def test_preprocess_batch_empty_conversations():
 
 
 @pytest.mark.sanity
+def test_preprocess_batch_skips_rows_a_strict_template_rejects():
+    """A template that rejects a role sequence must skip the row, not kill the run.
+
+    Mistral and Gemma templates validate role order and call ``raise_exception``,
+    which surfaces as ``jinja2.TemplateError``. Reproduced here with a minimal
+    strict template so the test needs no gated download.
+    """
+    processor = load_processor(TEXT_MODEL_REPO, trust_remote_code=True)
+    processor.chat_template = (
+        "{% for m in messages %}"
+        "{% if (m['role'] == 'user') != (loop.index0 % 2 == 0) %}"
+        "{{ raise_exception('roles must alternate user/assistant/...') }}"
+        "{% endif %}"
+        "{{ m['role'] }}: {{ m['content'] }}\n"
+        "{% endfor %}"
+    )
+
+    examples = {
+        "conversations": [
+            # Opens on an assistant turn, the shape sharegpt rows carry.
+            [
+                {"role": "assistant", "content": "Sure"},
+                {"role": "user", "content": "Hello"},
+                {"role": "assistant", "content": "Hi there!"},
+            ],
+            [
+                {"role": "user", "content": "Hello"},
+                {"role": "assistant", "content": "Hi there!"},
+            ],
+        ]
+    }
+
+    results = _preprocess_batch(
+        examples, processor, max_length=512, assistant_pattern=r"assistant: (.*?)\n"
+    )
+
+    # The clean row survives, and survives usable -- proving the skip is selective
+    # rather than the batch collapsing.
+    assert len(results["input_ids"]) == 1
+    assert results["loss_mask"][0].sum() > 0
+
+
+@pytest.mark.sanity
 def test_preprocess_batch_invalid_conversation():
     """Test preprocessing batch with invalid conversations."""
     processor = load_processor(TEXT_MODEL_REPO, trust_remote_code=True)

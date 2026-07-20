@@ -2,6 +2,12 @@
 requires = ["setuptools >= 82.0.1", "setuptools-git-versioning>=2.0,<3"]
 build-backend = "setuptools.build_meta"
 
+[tool.uv.workspace]
+members = ["hs_connectors"]
+
+[tool.uv.sources]
+hs-connectors = { workspace = true }
+
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["*"]
@@ -38,6 +44,7 @@ keywords = [
 dependencies = [
     "click",
     "datasets>=4.0.0,<=5.0.0",
+    "hs-connectors",
     "huggingface-hub",
     "loguru>=0.7.2,<=0.7.3",
     "numpy>=2.0.0,<=2.4.6",
@@ -256,6 +263,11 @@ select = [
 
 "examples/**/*.py" = [
     "INP001", # allow implicit namespace packages in examples
+]
+
+"hs_connectors/**/*.py" = [
+    "INP001", # separate package
+    "PTH", # os.path acceptable
 ]
 
 [tool.ruff.lint.isort]
