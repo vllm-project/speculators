@@ -5,6 +5,7 @@ from pathlib import Path
 
 import torch
 from datasets import Dataset
+from safetensors.torch import save_file
 
 from speculators.models.eagle3.data import shift_batch
 from speculators.train.data import (
@@ -133,7 +134,7 @@ def test_collate_fn_basic():
     hidden_size = 1
     num_target_layers = 3
     collate_fn = create_collate_fn(
-        max_len, hidden_size, num_target_layers=num_target_layers
+        max_len, hidden_size, num_target_layers=num_target_layers, dtype=torch.float32
     )
 
     batch = [
@@ -207,13 +208,34 @@ def test_collate_fn_basic():
         )
 
 
+def test_collate_fn_casts_hidden_states_dtype():
+    """Test that hidden-states keys are cast to the target dtype during collation."""
+    collate_fn = create_collate_fn(4, 1, dtype=torch.bfloat16)
+    batch = [
+        {
+            "input_ids": torch.tensor([0], dtype=torch.long),
+            "hidden_states": torch.ones(1, 3, dtype=torch.float32),
+            "verifier_last_hidden_states": torch.ones(1, 1, dtype=torch.float32),
+            "loss_mask": torch.ones(1, dtype=torch.long),
+            "lengths": torch.tensor([1], dtype=torch.long),
+            "position_ids": torch.tensor([0], dtype=torch.long),
+        }
+    ]
+
+    collated = collate_fn(batch)
+
+    assert collated["hidden_states"].dtype == torch.bfloat16
+    assert collated["verifier_last_hidden_states"].dtype == torch.bfloat16
+    assert collated["input_ids"].dtype == torch.long
+
+
 def test_collate_fn_length_truncation():
     """Test that lengths are truncated when they exceed max_len."""
     max_len = 11
     hidden_size = 8
     num_target_layers = 3
     collate_fn = create_collate_fn(
-        max_len, hidden_size, num_target_layers=num_target_layers
+        max_len, hidden_size, num_target_layers=num_target_layers, dtype=torch.float32
     )
 
     batch = [
@@ -256,9 +278,8 @@ def test_collate_fn_length_truncation():
 
 
 def test_dataset_getitem_v1_format(tmp_path: Path):
-    """Test dataset __getitem__ with v1 data format and dtype conversion."""
+    """Test dataset __getitem__ with v1 data format."""
 
-    output_dtype = torch.float64
     file_dtype = torch.float32
 
     # Create v1 format data
@@ -342,7 +363,7 @@ def test_dataset_getitem_v1_format(tmp_path: Path):
                 [7.0, 7.1, 17.0, 17.1, 27.0, 27.1],
                 [8.0, 8.1, 18.0, 18.1, 28.0, 28.1],
             ],
-            dtype=output_dtype,
+            dtype=file_dtype,
         ),
         "verifier_last_hidden_states": torch.tensor(
             [
@@ -356,7 +377,7 @@ def test_dataset_getitem_v1_format(tmp_path: Path):
                 [38.0, 38.1],
                 [39.0, 39.1],
             ],
-            dtype=output_dtype,
+            dtype=file_dtype,
         ),
         "loss_mask": torch.tensor([0, 1, 1, 1, 1, 1, 1, 1, 1], dtype=torch.long),
         "lengths": torch.tensor([9], dtype=torch.long),
@@ -367,7 +388,7 @@ def test_dataset_getitem_v1_format(tmp_path: Path):
     torch.save(data, file_path)
 
     dataset = SampleFileDataset(
-        max_len=12, file_list=[str(file_path)], hidden_states_dtype=output_dtype
+        max_len=12, file_list=[str(file_path)], hidden_states_dtype=file_dtype
     )
 
     raw_item = dataset[0]
@@ -472,8 +493,8 @@ def test_arrow_dataset_default_split_ratio_does_not_crash(tmp_path: Path):
 
 
 def test_arrow_dataset_on_generate_cache_creates_hidden_states_dir(tmp_path: Path):
-    """on_generate="cache" must create the cache dir up front — otherwise every
-    shutil.move into it raises FileNotFoundError, which _maybe_generate_hs
+    """on_generate="cache" must create the cache dir when cache() is called —
+    otherwise shutil.move into it raises FileNotFoundError, which _maybe_generate_hs
     downgrades to a warning, so caching silently fails for every sample."""
     ds = Dataset.from_dict(
         {
@@ -491,4 +512,18 @@ def test_arrow_dataset_on_generate_cache_creates_hidden_states_dir(tmp_path: Pat
         on_generate="cache",
     )
 
-    assert arrow_ds.hidden_states_path.is_dir()
+    assert hasattr(arrow_ds.transfer, "hidden_states_path")
+    # Directory is created lazily when cache() is called
+    assert not arrow_ds.transfer.hidden_states_path.exists()
+
+    # Simulate caching a generated sample
+
+    temp_file = tmp_path / "temp_hs.safetensors"
+    save_file({"hidden_states": torch.zeros(1, 1)}, temp_file)
+
+    arrow_ds.transfer.cache(str(temp_file), file_idx=0)
+
+    # Now the directory should exist
+    assert arrow_ds.transfer.hidden_states_path.is_dir()
+    # And the cached file should exist
+    assert (arrow_ds.transfer.hidden_states_path / "hs_0.safetensors").exists()
