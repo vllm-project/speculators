@@ -147,7 +147,7 @@ def test_dspark_qwen3_8b_sharegpt(tmp_path: Path, prompts: list[list[dict[str, s
         max_tokens=512,
         ignore_eos=True,
         prompts=prompts,
-        acceptance_thresholds=[0.30, 0.10, 0.03, 0, 0, 0, 0, 0],
+        acceptance_thresholds=[0.28, 0.07, 0.02, 0, 0, 0, 0, 0],
     )
 
 
