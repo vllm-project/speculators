@@ -40,6 +40,14 @@ root_logger = logging.getLogger("speculators")
 metric_logger = logging.getLogger("speculators.metrics")
 
 
+def _synchronize_device() -> None:
+    """Device-agnostic synchronize: CUDA when available, otherwise NPU."""
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    elif hasattr(torch, "npu") and torch.npu.is_available():
+        torch.npu.synchronize()
+
+
 class _StepTimer:
     # Each mark()/now() forces a cuda.synchronize to capture true GPU time.
     # This serialises the CUDA pipeline, so profiled steps are slower; keep
@@ -54,7 +62,7 @@ class _StepTimer:
 
     def mark(self, name: str) -> None:
         if self.enabled:
-            torch.cuda.synchronize()
+            _synchronize_device()
             self._marks[name] = time.perf_counter()
 
     def mark_value(self, name: str, value: float) -> None:
@@ -64,7 +72,7 @@ class _StepTimer:
     def now(self) -> float | None:
         if not self.enabled:
             return None
-        torch.cuda.synchronize()
+        _synchronize_device()
         return time.perf_counter()
 
     def profile(self, num_tokens: int) -> dict[str, float] | None:

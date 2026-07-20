@@ -1,8 +1,8 @@
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from speculators.train.trainer import _StepTimer
+from speculators.train.trainer import _StepTimer, _synchronize_device
 
 
 def test_disabled_timer_returns_none():
@@ -16,7 +16,7 @@ def test_disabled_timer_returns_none():
     assert timer.profile(num_tokens=1024) is None
 
 
-@patch("speculators.train.trainer.torch.cuda.synchronize")
+@patch("speculators.train.trainer._synchronize_device")
 def test_enabled_timer_returns_profile(mock_sync):
     timer = _StepTimer(enabled=True)
 
@@ -79,7 +79,7 @@ def test_disabled_to_enabled_transition():
     timer.mark_value("start", t_before_fetch)
 
     with (
-        patch("speculators.train.trainer.torch.cuda.synchronize"),
+        patch("speculators.train.trainer._synchronize_device"),
         patch(
             "speculators.train.trainer.time.perf_counter",
             side_effect=[2.1, 2.4, 2.5, 2.6, 2.6],
@@ -106,7 +106,7 @@ def test_zero_step_ms_returns_zero_throughput():
     timer = _StepTimer(enabled=True)
     timer.mark_value("start", 1.0)
     with (
-        patch("speculators.train.trainer.torch.cuda.synchronize"),
+        patch("speculators.train.trainer._synchronize_device"),
         patch("speculators.train.trainer.time.perf_counter", return_value=1.0),
     ):
         timer.mark("fetch")
@@ -117,3 +117,36 @@ def test_zero_step_ms_returns_zero_throughput():
     assert profile is not None
     assert profile["tokens_per_s"] == 0.0
     assert profile["fetch_frac"] == 0.0
+
+
+def test_synchronize_device_uses_cuda_when_available():
+    """When CUDA is available, torch.cuda.synchronize is called."""
+    with (
+        patch("torch.cuda.is_available", return_value=True),
+        patch("torch.cuda.synchronize") as mock_cuda_sync,
+    ):
+        _synchronize_device()
+    mock_cuda_sync.assert_called_once()
+
+
+def test_synchronize_device_falls_back_to_npu():
+    """When CUDA is unavailable but NPU is, torch.npu.synchronize is called."""
+    mock_npu = MagicMock()
+    mock_npu.is_available.return_value = True
+    with (
+        patch("torch.cuda.is_available", return_value=False),
+        patch("torch.npu", mock_npu),
+    ):
+        _synchronize_device()
+    mock_npu.synchronize.assert_called_once()
+
+
+def test_synchronize_device_no_backend_available():
+    """When neither CUDA nor NPU is available, no synchronize is called."""
+    mock_npu = MagicMock()
+    mock_npu.is_available.return_value = False
+    with (
+        patch("torch.cuda.is_available", return_value=False),
+        patch("torch.npu", mock_npu),
+    ):
+        _synchronize_device()
