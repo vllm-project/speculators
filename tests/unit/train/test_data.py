@@ -134,7 +134,7 @@ def test_collate_fn_basic():
     hidden_size = 1
     num_target_layers = 3
     collate_fn = create_collate_fn(
-        max_len, hidden_size, num_target_layers=num_target_layers
+        max_len, hidden_size, num_target_layers=num_target_layers, dtype=torch.float32
     )
 
     batch = [
@@ -208,13 +208,34 @@ def test_collate_fn_basic():
         )
 
 
+def test_collate_fn_casts_hidden_states_dtype():
+    """Test that hidden-states keys are cast to the target dtype during collation."""
+    collate_fn = create_collate_fn(4, 1, dtype=torch.bfloat16)
+    batch = [
+        {
+            "input_ids": torch.tensor([0], dtype=torch.long),
+            "hidden_states": torch.ones(1, 3, dtype=torch.float32),
+            "verifier_last_hidden_states": torch.ones(1, 1, dtype=torch.float32),
+            "loss_mask": torch.ones(1, dtype=torch.long),
+            "lengths": torch.tensor([1], dtype=torch.long),
+            "position_ids": torch.tensor([0], dtype=torch.long),
+        }
+    ]
+
+    collated = collate_fn(batch)
+
+    assert collated["hidden_states"].dtype == torch.bfloat16
+    assert collated["verifier_last_hidden_states"].dtype == torch.bfloat16
+    assert collated["input_ids"].dtype == torch.long
+
+
 def test_collate_fn_length_truncation():
     """Test that lengths are truncated when they exceed max_len."""
     max_len = 11
     hidden_size = 8
     num_target_layers = 3
     collate_fn = create_collate_fn(
-        max_len, hidden_size, num_target_layers=num_target_layers
+        max_len, hidden_size, num_target_layers=num_target_layers, dtype=torch.float32
     )
 
     batch = [
@@ -257,9 +278,8 @@ def test_collate_fn_length_truncation():
 
 
 def test_dataset_getitem_v1_format(tmp_path: Path):
-    """Test dataset __getitem__ with v1 data format and dtype conversion."""
+    """Test dataset __getitem__ with v1 data format."""
 
-    output_dtype = torch.float64
     file_dtype = torch.float32
 
     # Create v1 format data
@@ -343,7 +363,7 @@ def test_dataset_getitem_v1_format(tmp_path: Path):
                 [7.0, 7.1, 17.0, 17.1, 27.0, 27.1],
                 [8.0, 8.1, 18.0, 18.1, 28.0, 28.1],
             ],
-            dtype=output_dtype,
+            dtype=file_dtype,
         ),
         "verifier_last_hidden_states": torch.tensor(
             [
@@ -357,7 +377,7 @@ def test_dataset_getitem_v1_format(tmp_path: Path):
                 [38.0, 38.1],
                 [39.0, 39.1],
             ],
-            dtype=output_dtype,
+            dtype=file_dtype,
         ),
         "loss_mask": torch.tensor([0, 1, 1, 1, 1, 1, 1, 1, 1], dtype=torch.long),
         "lengths": torch.tensor([9], dtype=torch.long),
@@ -368,7 +388,7 @@ def test_dataset_getitem_v1_format(tmp_path: Path):
     torch.save(data, file_path)
 
     dataset = SampleFileDataset(
-        max_len=12, file_list=[str(file_path)], hidden_states_dtype=output_dtype
+        max_len=12, file_list=[str(file_path)], hidden_states_dtype=file_dtype
     )
 
     raw_item = dataset[0]
