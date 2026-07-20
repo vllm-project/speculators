@@ -11,6 +11,8 @@ import time
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
+from speculators.benchmarks._statistics import percentile
+
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator, Mapping, Sequence
     from pathlib import Path
@@ -426,14 +428,6 @@ def iter_gpu_samples(path: Path) -> Iterator[dict[str, Any]]:
                 yield value
 
 
-def _percentile(values: Sequence[float], fraction: float) -> float | None:
-    if not values:
-        return None
-    ordered = sorted(values)
-    index = min(len(ordered) - 1, max(0, int(len(ordered) * fraction + 0.999999) - 1))
-    return float(ordered[index])
-
-
 def summarize_gpu_window(
     samples: Iterable[Mapping[str, Any]],
     assignments: Sequence[GpuRoleAssignment],
@@ -511,8 +505,8 @@ def summarize_gpu_window(
             ),
             "gpu_utilization_pct": {
                 "mean": statistics.fmean(utilization) if utilization else None,
-                "p50": _percentile(utilization, 0.50),
-                "p95": _percentile(utilization, 0.95),
+                "p50": percentile(utilization, 0.50),
+                "p95": percentile(utilization, 0.95),
                 "low_fraction": (
                     sum(value < low_utilization_pct for value in utilization)
                     / len(utilization)

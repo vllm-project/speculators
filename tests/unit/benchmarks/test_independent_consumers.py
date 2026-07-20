@@ -157,6 +157,23 @@ def test_example_config_uses_train_only_workloads():
     assert validated.scenarios[1].expected_service_completions_per_shared_sample == 1
 
 
+def test_write_report_syncs_complete_json_before_replace(tmp_path, monkeypatch):
+    report_path = tmp_path / "report.json"
+    temporary = report_path.with_suffix(report_path.suffix + ".tmp")
+    synced_payloads = []
+
+    def record_fsync(_file_descriptor):
+        synced_payloads.append(temporary.read_text(encoding="utf-8"))
+
+    monkeypatch.setattr(benchmark_module.os, "fsync", record_fsync)
+
+    benchmark_module.write_report({"valid": True}, report_path)
+
+    assert synced_payloads == ['{\n  "valid": true\n}\n']
+    assert json.loads(report_path.read_text(encoding="utf-8")) == {"valid": True}
+    assert not temporary.exists()
+
+
 def test_benchmark_cli_output_paths_are_conditional(monkeypatch, tmp_path):
     config = tmp_path / "config.json"
     monkeypatch.setattr(

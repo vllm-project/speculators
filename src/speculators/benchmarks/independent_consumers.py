@@ -22,6 +22,7 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from speculators.benchmarks._statistics import percentile
 from speculators.benchmarks.gpu_monitor import (
     GpuMonitor as NvmlGpuMonitor,
 )
@@ -915,11 +916,6 @@ class ConsumerStepEvent:
     step_ms: float
 
 
-def _percentile(values: list[float], percentile: float) -> float:
-    index = max(0, min(len(values) - 1, int(len(values) * percentile + 0.999999) - 1))
-    return sorted(values)[index]
-
-
 def analyze_consumer_steps(
     log_path: Path,
     warmup_steps: int,
@@ -998,8 +994,8 @@ def analyze_consumer_steps(
         "warmup_steps": min(warmup_steps, len(values)),
         "steady_steps": len(steady),
         "step_ms_mean": sum(steady) / len(steady) if steady else None,
-        "step_ms_p50": _percentile(steady, 0.50) if steady else None,
-        "step_ms_p95": _percentile(steady, 0.95) if steady else None,
+        "step_ms_p50": percentile(steady, 0.50),
+        "step_ms_p95": percentile(steady, 0.95),
         "steady_started_at_monotonic_ns": started_at,
         "steady_finished_at_monotonic_ns": finished_at,
         "steady_duration_seconds": duration,
@@ -1594,8 +1590,15 @@ def load_config(path: Path) -> BenchmarkConfig:
 def write_report(report: dict[str, Any], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
-    temporary.replace(path)
+    try:
+        with temporary.open("w", encoding="utf-8") as output:
+            json.dump(report, output, indent=2, sort_keys=True)
+            output.write("\n")
+            output.flush()
+            os.fsync(output.fileno())
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def event_as_dict(event: RequestEvent) -> dict[str, Any]:
