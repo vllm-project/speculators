@@ -29,6 +29,7 @@ def compute_metrics(
     decay_mode: str = "dflash",
     per_position_loss_weight: str = "fixed-exp-decay",
     dpace_alpha: float = 0.5,
+    sample_from_anchor: bool = False,
 ) -> tuple[torch.Tensor, dict]:
     """Compute loss and accuracy metrics for draft model predictions.
 
@@ -67,7 +68,9 @@ def compute_metrics(
     elif decay_mode == "domino":
         decay_fn = partial(domino_loss_decay, gamma=gamma)
     else:
-        decay_fn = partial(dflash_loss_decay, gamma=gamma)
+        decay_fn = partial(
+            dflash_loss_decay, gamma=gamma, sample_from_anchor=sample_from_anchor
+        )
 
     loss, term_losses = compound_loss(
         logits,
@@ -92,9 +95,10 @@ def compute_metrics(
     metrics["loss_total"] = ones
     for term_name, term_val in term_losses.items():
         metrics[f"{term_name}_sum"] = term_val
-        metrics[f"{term_name}_total"] = ones
+        metrics[f"{term_name}_total"] = ones.clone()
 
-    acc_start = 0 if decay_mode == "domino" else 1
+    # Start position: 0 if domino mode or sample_from_anchor, else 1 (skip anchor)
+    acc_start = 0 if (decay_mode == "domino" or sample_from_anchor) else 1
     metrics["full_acc_sum"] = correct_per_pos[acc_start:].sum()
     metrics["full_acc_total"] = total_per_pos[acc_start:].sum()
 
@@ -108,5 +112,5 @@ def compute_metrics(
         cum = cum * acc
         eal = eal + cum
     metrics["eal_sum"] = eal
-    metrics["eal_total"] = ones
+    metrics["eal_total"] = ones.clone()
     return loss, metrics

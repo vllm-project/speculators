@@ -76,6 +76,30 @@ MM_MODEL = "Qwen/Qwen3-VL-2B-Instruct"
             ],
             None,
         ),  # P-EAGLE with parallel multi-token prediction
+        (
+            TEXT_MODEL,
+            "sharegpt",
+            "dspark",
+            [
+                "--block-size",
+                "8",
+                "--max-anchors",
+                "256",
+                "--num-layers",
+                "3",
+                "--markov-rank",
+                "256",
+                "--markov-head-type",
+                "vanilla",
+                "--enable-confidence-head",
+                "--confidence-head-with-markov",
+                "--confidence-head-alpha",
+                "1.0",
+                "--loss-fn",
+                '{"ce": 0.1, "tv": 0.9}',
+            ],
+            [1, 13, 25],
+        ),  # DSpark with Markov + confidence heads
     ],
 )
 def test_offline_smoke(

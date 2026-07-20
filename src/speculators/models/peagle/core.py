@@ -142,26 +142,41 @@ class PEagleDraftModel(Eagle3DraftModel):
 
         position_embeddings = self.rotary_emb(layer_input, position_ids)
 
-        mask_mod = create_peagle_mask_mod(
-            anchor_pos=anchor_pos,
-            depth=depth,
-            document_ids=document_ids.squeeze(0).to(device),
-        )
+        doc_ids_1d = document_ids.squeeze(0).to(device)
 
-        attention_mask = self._create_mask_fn(
-            mask_mod,
-            B=None,
-            H=None,
-            Q_LEN=total_sampled,
-            KV_LEN=total_sampled,
-            device=device,
+        def _build_attn_mask(sliding_window=None):
+            mask_mod = create_peagle_mask_mod(
+                anchor_pos=anchor_pos,
+                depth=depth,
+                document_ids=doc_ids_1d,
+                sliding_window=sliding_window,
+            )
+            return self._create_mask_fn(
+                mask_mod,
+                B=None,
+                H=None,
+                Q_LEN=total_sampled,
+                KV_LEN=total_sampled,
+                device=device,
+            )
+
+        full_attn_mask = _build_attn_mask() if self.uses_full_attn else None
+        sliding_window_attn_mask = (
+            _build_attn_mask(self.sliding_window)
+            if self.uses_sliding_window_attn
+            else None
         )
 
         hidden_states = layer_input
-        for layer in self.layers:
+        for layer_idx, layer in enumerate(self.layers):
+            layer_mask = (
+                sliding_window_attn_mask
+                if layer_idx in self.sliding_window_indices
+                else full_attn_mask
+            )
             hidden_states = layer(
                 hidden_states,
-                attention_mask=attention_mask,
+                attention_mask=layer_mask,
                 position_ids=position_ids,
                 position_embeddings=position_embeddings,
                 **kwargs,

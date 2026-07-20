@@ -89,6 +89,17 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
         )
         self.layers = torch.nn.ModuleList(layers)
 
+        # Sliding window attention support
+        self.sliding_window = getattr(tl_config, "sliding_window", None)
+        layer_types = getattr(tl_config, "layer_types", None) or []
+        self.sliding_window_indices = [
+            i
+            for i, layer_type in enumerate(layer_types)
+            if layer_type == "sliding_attention"
+        ]
+        self.uses_sliding_window_attn = bool(self.sliding_window_indices)
+        self.uses_full_attn = bool(num_layers - len(self.sliding_window_indices))
+
         # ROTARY EMBEDDINGS
         # Create a modified config for the rotary embedding to use 2x the hidden size
         modified_tl_config = copy.copy(config.transformer_layer_config)
@@ -130,6 +141,21 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
         """Target layer IDs for auxiliary hidden states."""
         return self.config.eagle_aux_hidden_state_layer_ids
 
+    def _build_attn_mask(self, doc_ids_1d, seq_len, device, sliding_window=None):
+        mask_mod = create_combined_mask_mod(
+            doc_ids_1d,
+            seq_len,
+            sliding_window=sliding_window,
+        )
+        return self._create_mask_fn(
+            mask_mod,
+            B=None,
+            H=None,
+            Q_LEN=seq_len,
+            KV_LEN=seq_len,
+            device=device,
+        )
+
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path, *args, **kwargs):
         model = super().from_pretrained(pretrained_model_name_or_path, *args, **kwargs)
@@ -170,7 +196,6 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
         | None = None,  # shape: [1, total_seq_len, hidden_size]
         ttt_steps: int = 3,
         ttt_step_loss_decay: float = 1.0,
-        use_off_policy_tokens: bool = False,
         loss_config: LossConfig | None = None,
         **kwargs,
     ):
@@ -183,19 +208,24 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
             ).unsqueeze(0)
             # shape: [1, total_seq_len]
 
-        past_key_values = DynamicCache(config=self.config.transformer_layer_config)
+        past_key_values = DynamicCache()
 
-        combined_mask_mod = create_combined_mask_mod(
-            document_ids.squeeze(0).to(device), total_seq_len
+        doc_ids_1d = document_ids.squeeze(0).to(device)
+
+        full_attn_mask = (
+            self._build_attn_mask(doc_ids_1d, total_seq_len, device)
+            if self.uses_full_attn
+            else None
         )
-        # Note: Attention mask is stored as a BlockMask object
-        attention_mask = self._create_mask_fn(
-            combined_mask_mod,
-            B=None,
-            H=None,
-            Q_LEN=total_seq_len,
-            KV_LEN=total_seq_len,
-            device=device,
+        sliding_window_attn_mask = (
+            self._build_attn_mask(
+                doc_ids_1d,
+                total_seq_len,
+                device,
+                self.sliding_window,
+            )
+            if self.uses_sliding_window_attn
+            else None
         )
 
         if self.input_norm is not None:
@@ -248,10 +278,15 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
 
             position_embeddings = self.rotary_emb(hidden_states, position_ids)
 
-            for decoder_layer in self.layers:
+            for layer_idx, decoder_layer in enumerate(self.layers):
+                layer_mask = (
+                    sliding_window_attn_mask
+                    if layer_idx in self.sliding_window_indices
+                    else full_attn_mask
+                )
                 hidden_states = decoder_layer(
                     hidden_states,
-                    attention_mask=attention_mask,
+                    attention_mask=layer_mask,
                     position_ids=position_ids,
                     past_key_values=past_key_values,
                     cache_position=cache_position,
@@ -282,34 +317,38 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
             input_ids = torch.argmax(logits, dim=-1)
             draft_tokens.append(input_ids.detach().clone())
             # shape: [1, total_seq_len]
-            # Use d2t to map draft tokens to verifier tokens.
-            # Must be in verifier vocabulary space because we use the full verifier
-            # vocabulary in the embedding.
-            if self.d2t is not None:
-                input_ids = input_ids + self.d2t[input_ids]  # type: ignore[index]
 
-            if use_off_policy_tokens:
-                # Overwrite input_ids with ground truth tokens
-                # shift input_ids by 1 to the left and pad with 0
-                # note: inputs_ids no longer line up with verifier_last_hidden_states
-                # the draft logits generated from the padded tokens are ignored
-                # and sliced out for loss calculation
-                input_ids = torch.cat(
-                    [
-                        original_input_ids[:, 1 + ttt_step :],
-                        original_input_ids.new_zeros(1, 1 + ttt_step),
-                    ],
-                    dim=-1,
-                )
-                # shape: [1, total_seq_len]
+            # Teacher forcing: feed the ground-truth tokens (already in the verifier
+            # vocabulary) into the next TTT step instead of the draft's own
+            # predictions. Shift left by 1 + ttt_step and right-pad with 0; the padded
+            # positions produce logits that no longer line up with
+            # verifier_last_hidden_states and are sliced out of the loss (see
+            # align_for_step).
+            input_ids = torch.cat(
+                [
+                    original_input_ids[:, 1 + ttt_step :],
+                    original_input_ids.new_zeros(1, 1 + ttt_step),
+                ],
+                dim=-1,
+            )
+            # shape: [1, total_seq_len]
 
             if self._attn_impl == "simple_flex_attention":
-                attention_mask = extend_mask_for_draft_tokens(attention_mask)
+                if full_attn_mask is not None:
+                    full_attn_mask = extend_mask_for_draft_tokens(full_attn_mask)
+                if sliding_window_attn_mask is not None:
+                    sliding_window_attn_mask = extend_mask_for_draft_tokens(
+                        sliding_window_attn_mask
+                    )
             else:
-                attention_mask = extend_dense_mask_for_draft_tokens(
-                    attention_mask,  # type: ignore[arg-type]
-                    total_seq_len,
-                )
+                if full_attn_mask is not None:
+                    full_attn_mask = extend_dense_mask_for_draft_tokens(
+                        full_attn_mask, total_seq_len
+                    )
+                if sliding_window_attn_mask is not None:
+                    sliding_window_attn_mask = extend_dense_mask_for_draft_tokens(
+                        sliding_window_attn_mask, total_seq_len
+                    )
             position_ids = position_ids + 1
             # shape: [1, total_seq_len]
 
@@ -391,13 +430,11 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
         """
         loss_config = resolve_loss_config(kwargs["loss_fn"])
         train_kwargs = {
-            "use_off_policy_tokens": kwargs["use_off_policy_tokens"],
             "ttt_steps": kwargs["ttt_steps"],
             "ttt_step_loss_decay": kwargs["ttt_step_loss_decay"],
             "loss_config": loss_config,
         }
         val_kwargs = {
-            "use_off_policy_tokens": False,
             "ttt_steps": kwargs["ttt_steps"],
             "ttt_step_loss_decay": kwargs["ttt_step_loss_decay"],
             "loss_config": loss_config,

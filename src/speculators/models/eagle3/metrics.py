@@ -110,7 +110,7 @@ def compute_metrics(
     s_metrics[f"loss_{ttt_step}_total"] = ones
     for term_name, term_val in term_losses.items():
         s_metrics[f"{term_name}_{ttt_step}_sum"] = term_val
-        s_metrics[f"{term_name}_{ttt_step}_total"] = ones
+        s_metrics[f"{term_name}_{ttt_step}_total"] = ones.clone()
     s_metrics[f"full_acc_{ttt_step}_sum"] = full_correct
     s_metrics[f"full_acc_{ttt_step}_total"] = full_total
     s_metrics[f"cond_acc_{ttt_step}_sum"] = cond_correct

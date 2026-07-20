@@ -434,6 +434,35 @@ def test_build_from_config_only_preserves_existing_verifier_name(tmp_path):
     assert built.config.speculators_config.verifier.name_or_path == "real-verifier"
 
 
+def test_config_roundtrip_drops_attn_implementation(tmp_path):
+    # Precondition of the --from-pretrained bug: HF configs never serialize
+    # _attn_implementation, so the field does not survive a save/load round-trip
+    # and must be re-applied from the CLI selection.
+    config = _make_eagle3_config()
+    config.transformer_layer_config._attn_implementation = "sdpa"
+    save_dir = tmp_path / "roundtrip"
+    config.save_pretrained(str(save_dir))
+
+    reloaded = Eagle3SpeculatorConfig.from_pretrained(str(save_dir))
+
+    assert reloaded.transformer_layer_config._attn_implementation != "sdpa"
+
+
+def test_build_from_config_only_reapplies_draft_attn_impl(tmp_path):
+    model_dir = _save_config_only_dir(tmp_path)
+
+    with patch.object(Eagle3DraftModel, "load_verifier_weights"):
+        built = _build_from_config_only(
+            Eagle3DraftModel,
+            str(model_dir),
+            None,
+            None,
+            draft_attn_impl="sdpa",
+        )
+
+    assert built.config.transformer_layer_config._attn_implementation == "sdpa"
+
+
 # ---------------------------------------------------------------------------
 # build_draft_model: MTP-from-scratch routing
 # ---------------------------------------------------------------------------
@@ -467,6 +496,7 @@ def test_build_draft_model_mtp_from_scratch_uses_verifier_decoder(monkeypatch):
         verifier_name_or_path="some-verifier",
         mask_token_id=None,
         num_speculative_steps=3,
+        draft_mrope_full_head_hack=True,
     )
 
     built = build_draft_model(args, _FakeMTP, None, None, None)  # type: ignore[arg-type]
@@ -515,6 +545,7 @@ def _capture_full_attention_indices(
         full_attention_indices=requested_indices,
         mask_token_id=None,
         trust_remote_code=False,
+        draft_mrope_full_head_hack=True,
     )
     build_draft_model(args, _FakeModel, None, None, 128)  # type: ignore[arg-type]
     return captured["full_attention_indices"]
@@ -526,15 +557,16 @@ def _capture_full_attention_indices(
         ("dflash", [], []),
         ("dspark", [], []),
         ("dflash", [1], [1]),
-        ("eagle3", [], [0, 1, 2]),
+        ("eagle3", [], []),
+        ("peagle", [], []),
+        ("eagle3", [0, 2], [0, 2]),
     ],
 )
 def test_build_draft_model_routing(
     monkeypatch, speculator_type, requested_indices, expected_indices
 ):
-    """dflash/dspark default every layer to sliding window (empty opt-out list) and
-    forward an explicit non-empty list unchanged; other speculator types put every
-    layer on full attention (the num_layers-derived [0, 1, 2])."""
+    """All speculator types (except mtp) default every layer to sliding window
+    (empty opt-out list) and forward an explicit non-empty list unchanged."""
     assert (
         _capture_full_attention_indices(monkeypatch, speculator_type, requested_indices)
         == expected_indices

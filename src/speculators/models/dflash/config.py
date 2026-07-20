@@ -126,6 +126,17 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
         "Stored in the checkpoint config so inference can align predictions.",
     )
 
+    sample_from_anchor: bool = Field(
+        default=False,
+        description=(
+            "Whether to sample from the anchor position. "
+            "False: anchor is the bonus token, only mask tokens predict "
+            "(block_size-1 speculative tokens). "
+            "True: sample from anchor and all mask positions "
+            "(block_size speculative tokens). "
+        ),
+    )
+
     @model_validator(mode="after")
     def _derive_shift_label(self) -> "DFlashSpeculatorConfig":
         if self.shift_label is None:
@@ -147,7 +158,6 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
                 "vocab mapping files (d2t/t2d) to use the full verifier vocabulary."
             )
         return self
-
     @field_serializer("transformer_layer_config")
     def serialize_transformer_config(self, value: PretrainedConfig) -> dict:
         """Serialize transformer config to dict."""

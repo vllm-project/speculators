@@ -14,12 +14,14 @@ from transformers import LlamaConfig, PretrainedConfig
 from transformers.models.auto.configuration_auto import AutoConfig
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
+from hs_connectors import HiddenStatesBackend
 from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_REQUEST_TIMEOUT,
 )
 from speculators.model import SpeculatorModel
 from speculators.models.eagle3.data import shift_batch
+from speculators.models.eagle3.rotary_partial import install_partial_neox_rotary
 from speculators.models.metrics import resolve_loss_config
 from speculators.models.mtp.data import shift_batch_mtp
 from speculators.models.utils import (
@@ -29,6 +31,7 @@ from speculators.models.utils import (
 from speculators.train.dataloader import create_train_val_loaders
 from speculators.train.distributed import (
     get_rank,
+    is_distributed,
     maybe_destroy_distributed,
     maybe_setup_distributed,
 )
@@ -48,11 +51,7 @@ DRAFT_ARCH_CONFIGS: dict[str, type] = {
     "llama": LlamaConfig,
     "qwen3": Qwen3Config,
 }
-
-# Speculator types that default every draft layer to sliding window attention;
-# --full-attention-indices opts specific layers back into full attention. All
-# other speculator types use full attention on every layer.
-SLIDING_WINDOW_SPECULATOR_TYPES = ("dflash", "dspark")
+MROPE_INVERSE_TOLERANCE = 1e-6
 
 
 def set_seed(seed: int, deterministic: bool = False):
@@ -68,6 +67,47 @@ def set_seed(seed: int, deterministic: bool = False):
         torch.backends.cudnn.benchmark = False
 
 
+def _maybe_apply_mrope_full_head_hack(
+    rope_params: dict,
+    resolved_head_dim: int,
+    enabled: bool,
+) -> None:
+    """Optionally rescale partial MRoPE settings to full-head semantics."""
+    if "mrope_section" not in rope_params:
+        return
+
+    inherited_partial = float(rope_params.get("partial_rotary_factor", 1.0))
+    if enabled and inherited_partial < 1.0:
+        old_section = list(rope_params["mrope_section"])
+        inv = 1.0 / inherited_partial
+        if abs(inv - round(inv)) > MROPE_INVERSE_TOLERANCE:
+            raise ValueError(
+                "mrope_full_head_hack cannot rescale mrope_section because "
+                f"1/partial_rotary_factor={inv} is not an integer."
+            )
+        scale = int(round(inv))
+        new_section = [int(x) * scale for x in old_section]
+        if 2 * sum(new_section) != resolved_head_dim:
+            raise ValueError(
+                "mrope_full_head_hack rescaling produced inconsistent "
+                f"mrope_section {new_section}: 2*sum={2 * sum(new_section)} "
+                f"but head_dim={resolved_head_dim}."
+            )
+        rope_params["mrope_section"] = new_section
+        rope_params["partial_rotary_factor"] = 1.0
+        logger.warning(
+            "MRoPE full-head hack applied: partial_rotary_factor "
+            f"{inherited_partial} -> 1.0, mrope_section {old_section} -> "
+            f"{new_section}."
+        )
+    elif not enabled and inherited_partial < 1.0:
+        logger.warning(
+            "mrope_full_head_hack=False with partial_rotary_factor="
+            f"{inherited_partial} < 1.0 can cause HF trainer / vLLM "
+            "partial-rotation mismatch."
+        )
+
+
 def create_transformer_layer_config(  # noqa: C901
     verifier_name_or_path: str,
     num_layers: int,
@@ -75,6 +115,7 @@ def create_transformer_layer_config(  # noqa: C901
     hidden_act: str | None,
     sliding_window: int,
     full_attention_indices: list[int],
+    mrope_full_head_hack: bool = True,
 ) -> PretrainedConfig:
     if draft_arch not in DRAFT_ARCH_CONFIGS:
         raise ValueError(
@@ -120,6 +161,7 @@ def create_transformer_layer_config(  # noqa: C901
         num_attention_heads = verifier_config.hidden_size // head_dim
         if num_attention_heads % num_key_value_heads != 0:
             num_key_value_heads = num_attention_heads
+    resolved_head_dim = head_dim or verifier_config.hidden_size // num_attention_heads
 
     if full_attention_indices and (
         min(full_attention_indices) < 0 or max(full_attention_indices) >= num_layers
@@ -165,18 +207,42 @@ def create_transformer_layer_config(  # noqa: C901
                     or rope_params.get("full_attention")
                     or {}
                 )
-                rope_params = {
-                    "rope_type": "default",
-                    "rope_theta": sub.get("rope_theta", 10000.0),
-                }
-            config.rope_parameters = rope_params
+                if isinstance(sub, dict):
+                    rope_params = dict(sub)
+                    rope_params.setdefault("rope_type", "default")
+                    rope_params.setdefault("rope_theta", 10000.0)
+                else:
+                    rope_params = {"rope_type": "default", "rope_theta": 10000.0}
 
-            _MROPE_KEYS = ("mrope_section", "mrope_interleaved", "type")  # noqa: N806
-            for key in _MROPE_KEYS:
-                config.rope_parameters.pop(key, None)
+            if isinstance(rope_params, dict):
+                _maybe_apply_mrope_full_head_hack(
+                    rope_params, resolved_head_dim, mrope_full_head_hack
+                )
+                # ``type`` is a legacy alias (only "mrope" on VL models) that
+                # transformers strips during validation and that breaks vLLM's
+                # config checks; drop it while keeping the real MRoPE fields.
+                rope_params.pop("type", None)
+                rope_params.pop("mrope_interleaved", None)
+                # The verifier (e.g. Mistral) may use partial rotary embeddings,
+                # but the draft model doesn't support partial_rotary_factor.
+                # Only keep it for MRoPE configs that need it.
+                if "mrope_section" not in rope_params:
+                    rope_params.pop("partial_rotary_factor", None)
+            config.rope_parameters = rope_params
     else:
         if hasattr(verifier_config, "rope_scaling"):
-            config.rope_scaling = deepcopy(verifier_config.rope_scaling)
+            rope_scaling = deepcopy(verifier_config.rope_scaling)
+            if isinstance(rope_scaling, dict):
+                _maybe_apply_mrope_full_head_hack(
+                    rope_scaling, resolved_head_dim, mrope_full_head_hack
+                )
+                # Strip legacy fields for consistency with rope_parameters path
+                rope_scaling.pop("type", None)
+                rope_scaling.pop("mrope_interleaved", None)
+                # Same partial_rotary_factor guard as the rope_parameters path.
+                if "mrope_section" not in rope_scaling:
+                    rope_scaling.pop("partial_rotary_factor", None)
+            config.rope_scaling = rope_scaling
         config.rope_theta = getattr(verifier_config, "rope_theta", 10000.0)
 
     return config
@@ -310,6 +376,7 @@ def _build_from_config_only(
     t2d: torch.Tensor | None,
     d2t: torch.Tensor | None,
     verifier_name_or_path: str | None = None,
+    draft_attn_impl: str | None = None,
 ) -> SpeculatorModel:
     """Initialize a fresh draft from a saved speculator *config* (no weights).
 
@@ -318,6 +385,8 @@ def _build_from_config_only(
     no trained draft weights to restore (decoder weights are randomly initialized).
     """
     config = model_class.config_class.from_pretrained(path)
+    if draft_attn_impl is not None:
+        config.transformer_layer_config._attn_implementation = draft_attn_impl
     speculators_config = getattr(config, "speculators_config", None)
     # Fall back to the CLI --verifier-name-or-path only when the saved config has
     # no verifier path -- either null or blanked to "". A real path in the config
@@ -330,9 +399,9 @@ def _build_from_config_only(
         speculators_config.verifier.name_or_path = verifier_name_or_path
     model = model_class(config=config)
     if hasattr(model, "load_vocab_mappings"):
-        model.load_vocab_mappings(t2d, d2t)  # type: ignore[attr-defined]
+        model.load_vocab_mappings(t2d, d2t)  # type: ignore[attr-defined, operator]
     if hasattr(model, "load_verifier_weights"):
-        model.load_verifier_weights()  # type: ignore[attr-defined]
+        model.load_verifier_weights()  # type: ignore[attr-defined, operator]
     return model
 
 
@@ -370,6 +439,23 @@ def build_draft_model(
                 t2d=t2d,
                 d2t=d2t,
                 verifier_name_or_path=args.verifier_name_or_path,
+                draft_attn_impl=(
+                    args.draft_attn_impl if args.speculator_type != "mtp" else None
+                ),
+            )
+        if args.speculator_type != "mtp":
+            # _attn_implementation is never serialized by HF configs, so re-apply
+            # the CLI selection before construction -- mirroring from_training_args.
+            # MTP is skipped: its from_training_args never sets the field and its
+            # __init__ resolves its own default ("eager") when it is absent.
+            config = model_class.config_class.from_pretrained(args.from_pretrained)
+            config.transformer_layer_config._attn_implementation = args.draft_attn_impl
+            return model_class.from_pretrained(
+                args.from_pretrained,
+                config=config,
+                t2d=t2d,
+                d2t=d2t,
+                verifier=args.verifier_name_or_path,
             )
         return model_class.from_pretrained(
             args.from_pretrained,
@@ -390,20 +476,15 @@ def build_draft_model(
                 args.draft_config, args.verifier_name_or_path
             )
         else:
-            if args.speculator_type in SLIDING_WINDOW_SPECULATOR_TYPES:
-                full_attention_indices = args.full_attention_indices
-                if not full_attention_indices:
-                    logger.info(
-                        "All %d draft layers using sliding window attention "
-                        "(window=%d). To use full attention on specific layers, "
-                        "pass '--full-attention-indices <layer_ids>'.",
-                        args.num_layers,
-                        args.sliding_window,
-                    )
-            else:
-                # Other speculator types (eagle3, peagle) only support full
-                # attention: mark every layer full-attention.
-                full_attention_indices = list(range(args.num_layers))
+            full_attention_indices = args.full_attention_indices
+            if not full_attention_indices:
+                logger.info(
+                    "All %d draft layers using sliding window attention "
+                    "(window=%d). To use full attention on specific layers, "
+                    "pass '--full-attention-indices <layer_ids>'.",
+                    args.num_layers,
+                    args.sliding_window,
+                )
 
             transformer_layer_config = create_transformer_layer_config(
                 verifier_name_or_path=args.verifier_name_or_path,
@@ -412,6 +493,7 @@ def build_draft_model(
                 hidden_act=args.draft_hidden_act,
                 sliding_window=args.sliding_window,
                 full_attention_indices=full_attention_indices,
+                mrope_full_head_hack=args.draft_mrope_full_head_hack,
             )
 
         args.mask_token_id = resolve_mask_token_id(
@@ -443,6 +525,19 @@ def main(args: argparse.Namespace):  # noqa: C901
     # Setup distributed training
     maybe_setup_distributed()
 
+    if args.fsdp_shard and not is_distributed():
+        raise ValueError(
+            "--fsdp-shard requires launching with torchrun/distributed training; "
+            "otherwise parameters are not sharded."
+        )
+
+    # Install partial-neox rotary patch if not using full-head hack
+    if not args.draft_mrope_full_head_hack:
+        install_partial_neox_rotary()
+        logger.info(
+            "Installed partial-neox rotary patch for HF/vLLM RoPE alignment "
+            "(draft_mrope_full_head_hack=False)"
+        )
     if get_rank() == 0:
         save_train_command(args.save_path)
 
@@ -451,6 +546,15 @@ def main(args: argparse.Namespace):  # noqa: C901
             "--hidden-states-dtype must be a dtype attribute of torch. e.g. `bfloat16`"
         )
     hidden_states_dtype = getattr(torch, args.hidden_states_dtype)
+
+    if hidden_states_dtype == torch.float16:
+        raise NotImplementedError(
+            "--hidden-states-dtype=float16 is not supported. "
+            "float16 with torch.autocast requires gradient scaling (GradScaler) to "
+            "prevent gradient underflow, which is not implemented. "
+            "Use bfloat16 instead, which provides the same memory savings with "
+            "better numerical stability and no gradient scaling required."
+        )
 
     if args.speculator_type == "mtp":
         if args.draft_attn_impl != "simple_flex_attention":
@@ -469,15 +573,9 @@ def main(args: argparse.Namespace):  # noqa: C901
     else:
         d2t, t2d, draft_vocab_size = parse_vocab_mappings(args)
 
-        if (
-            args.full_attention_indices
-            and args.speculator_type not in SLIDING_WINDOW_SPECULATOR_TYPES
-        ):
+        if args.full_attention_indices and args.speculator_type == "mtp":
             raise ValueError(
-                "--full-attention-indices is only meaningful for dflash and dspark "
-                "draft models (which use sliding window attention by default). "
-                "Please open an issue/pr if you would like to use sliding window "
-                "attention with a different speculator type."
+                "--full-attention-indices is not supported for mtp draft models."
             )
 
     registry = SpeculatorModel.registry
@@ -492,7 +590,7 @@ def main(args: argparse.Namespace):  # noqa: C901
     draft_model = build_draft_model(args, model_class, t2d, d2t, draft_vocab_size)
 
     # Get target layer IDs from the model (resolved at model level)
-    num_target_layers = len(draft_model.target_layer_ids)
+    num_target_layers = len(draft_model.target_layer_ids)  # type: ignore[arg-type]
 
     if args.speculator_type == "mtp":
         args.num_speculative_steps = draft_model.config.num_speculative_steps
@@ -501,9 +599,7 @@ def main(args: argparse.Namespace):  # noqa: C901
     # config/weights can be validated (e.g. in vLLM). The saved checkpoint can be
     # fed straight back via --from-pretrained to start training.
     if args.dry_run:
-        # Match Trainer.setup_model: weights are (re)initialized in
-        # hidden_states_dtype, so save the dry-run checkpoint in that dtype too
-        # rather than the float32 the model is built in.
+        # Save in hidden_states_dtype (bf16) for compact checkpoints.
         draft_model.to(hidden_states_dtype)
         if get_rank() == 0:
             logger.info(
@@ -530,14 +626,17 @@ def main(args: argparse.Namespace):  # noqa: C901
     }
     preprocess = preprocess_fns.get(args.speculator_type)
 
+    backend_registry = HiddenStatesBackend.registry
+    backend_cls = backend_registry[args.hidden_states_backend]
+    transfer = backend_cls.from_train_args(args, args.data_path)
+
     train_loader, val_loader = create_train_val_loaders(
         data_path=args.data_path,
-        train_data_ratio=args.train_data_ratio,
         total_seq_len=args.total_seq_len,
         hidden_states_dtype=hidden_states_dtype,
         noise_std=args.noise_std,
         legacy_data=args.legacy_data,
-        hidden_states_path=args.hidden_states_path,
+        transfer=transfer,
         vllm_endpoint=args.vllm_endpoint,
         on_missing=args.on_missing,
         on_generate=args.on_generate,
@@ -549,6 +648,7 @@ def main(args: argparse.Namespace):  # noqa: C901
         num_workers=args.num_workers,
         prefetch_factor=args.prefetch_factor,
         preprocess=preprocess,
+        train_data_ratio=args.train_data_ratio,
     )
 
     # Get trainer kwargs from model class
@@ -577,6 +677,7 @@ def main(args: argparse.Namespace):  # noqa: C901
         save_best=args.save_best,
         hidden_states_dtype=hidden_states_dtype,
         log_freq=args.log_freq,
+        fsdp_shard=args.fsdp_shard,
     )
     trainer = Trainer(draft_model, trainer_config, train_loader, val_loader)
 
@@ -724,15 +825,19 @@ def parse_args():
             "(token_freq.pt), and hidden states (default: ./output)"
         ),
     )
+    backend_registry = HiddenStatesBackend.registry
     parser.add_argument(
-        "--hidden-states-path",
-        type=str,
-        default=None,
+        "--hidden-states-backend",
+        choices=list(backend_registry.keys()),
+        default="file",
         help=(
-            "The path where cached hidden states files are stored. (Default: "
-            "args.data_path / 'hidden_states')"
+            "Hidden states transfer backend. Each backend may add its own "
+            "CLI arguments (see below). Default: 'file'."
         ),
     )
+    for backend_cls in backend_registry.values():
+        backend_cls.add_train_args(parser)
+
     parser.add_argument(
         "--vllm-endpoint",
         type=str,
@@ -840,6 +945,16 @@ def parse_args():
         "as None to automatically fall back to the verifier's activation function.",
     )
     parser.add_argument(
+        "--draft-mrope-full-head-hack",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "For MRoPE configs with partial_rotary_factor < 1, rescale "
+            "mrope_section and set partial_rotary_factor=1.0 so HF training "
+            "and vLLM inference use equivalent full-head rotary semantics."
+        ),
+    )
+    parser.add_argument(
         "--target-layer-ids",
         type=int,
         nargs="+",
@@ -889,7 +1004,7 @@ def parse_args():
         default="kl_div",
         help=(
             "Loss function specification. Pass a name for a single loss "
-            "(kl_div, rkl, ce, tv, nla, lk_hybrid) or a JSON dict for a weighted "
+            "(kl_div, rkl, jsd, ce, tv, nla, lk_hybrid) or a JSON dict for a weighted "
             'combination, e.g. \'{"ce": 0.1, "tv": 0.9}\'.'
         ),
     )
@@ -910,19 +1025,16 @@ def parse_args():
         "--hidden-states-dtype",
         type=str,
         default="bfloat16",
-        help="The dtype to initialize model weights and dataloader hidden states to",
+        help="Data type for dataloader hidden states and autocast compute. "
+        "Model master weights are always kept in fp32. "
+        "Options: float32 (full precision), bfloat16 (recommended). "
+        "Note: float16 is not supported (requires gradient scaling).",
     )
     parser.add_argument(
         "--deterministic-cuda",
         action="store_true",
         default=False,
         help="Sets cuda to deterministic mode. This may impact performance.",
-    )
-    parser.add_argument(
-        "--use-off-policy-tokens",
-        action="store_true",
-        default=False,
-        help="Use off-policy tokens during training (required for regenerated data)",
     )
     # Model hyperparameters
     parser.add_argument(
@@ -969,6 +1081,13 @@ def parse_args():
         type=int,
         default=8,
         help="Block size for DFlash model (default: 8)",
+    )
+    parser.add_argument(
+        "--sample-from-anchor",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Sample from the anchor position (all positions predict). "
+        "Default: False for dflash, True for dspark. ",
     )
     parser.add_argument(
         "--max-anchors",
@@ -1124,7 +1243,7 @@ def parse_args():
         type=int,
         default=2048,
         help="Sliding window size for sliding window attention layers (default: 2048). "
-        "For dflash and dspark, all layers use sliding window by default.",
+        "All draft layers use sliding window by default (except mtp).",
     )
     parser.add_argument(
         "--full-attention-indices",
@@ -1132,8 +1251,8 @@ def parse_args():
         nargs="+",
         default=[],
         help="(Optional) Space-separated draft layer indices that should use full "
-        "attention instead of sliding window. For dflash and dspark, all layers "
-        "use sliding window attention by default. "
+        "attention instead of sliding window. All draft layers use sliding window "
+        "by default (except mtp). "
         "(e.g. '--full-attention-indices 0 2' makes layers 0 and 2 use full "
         "attention; the rest use sliding window).",
     )
@@ -1171,6 +1290,16 @@ def parse_args():
         action="store_true",
         default=False,
         help="Pointing to checkpoint with lowest validation loss.",
+    )
+
+    # distributed strategy
+    parser.add_argument(
+        "--fsdp-shard",
+        action="store_true",
+        default=False,
+        help="Shard model parameters across GPUs with FSDP. By default, "
+        "parameters are fully replicated (DDP-like). Enable this when the "
+        "model does not fit in a single GPU's memory.",
     )
 
     # lr scheduler
@@ -1260,7 +1389,10 @@ if __name__ == "__main__":
 
 # RUN WITH:
 # torchrun --standalone --nproc_per_node=<num_gpus>  scripts/train.py
-# for FSDP training
+# for multi-GPU training (DDP by default)
+# OR
+# torchrun --standalone --nproc_per_node=<num_gpus>  scripts/train.py --fsdp-shard
+# for FSDP sharded training (when model doesn't fit in a single GPU)
 # OR
 # python scripts/train.py
 # for single GPU training

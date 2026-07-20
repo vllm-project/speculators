@@ -2,7 +2,6 @@ import json
 import math
 import os
 import random
-import shutil
 import warnings
 from collections.abc import Callable
 from os import PathLike
@@ -11,18 +10,16 @@ from typing import Any, Literal, cast
 
 import openai
 import torch
-import torch.nn.functional as F  # noqa: N812
 from datasets import load_from_disk
-from safetensors.torch import load_file
 from torch.utils.data import Dataset
 
+from hs_connectors import FileTransfer, HiddenStatesTransfer
 from speculators.data_generation.offline import check_hidden_states
 from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_REQUEST_TIMEOUT,
     ClientItem,
     generate_hidden_states,
-    wait_for_lock,
 )
 from speculators.train.noise_transforms import TransformTensors
 
@@ -39,13 +36,6 @@ def list_files(path):
             datapath.append(file_path)
 
     return datapath
-
-
-def slice_and_pad_to_length(tensor, length):
-    sliced_tensor = tensor[:length]
-    padding = [0, 0] * sliced_tensor.dim()
-    padding[-1] = length - sliced_tensor.shape[0]
-    return F.pad(sliced_tensor, padding)
 
 
 def split_files(datapath: str, ratio: float = 0.9, seed: int = 0):
@@ -185,12 +175,6 @@ class BaseDataset(Dataset):
         #  "loss_mask": [seq_len],
         # }
 
-        # Convert hidden states to the correct dtype
-        data = {
-            k: v.to(self.hidden_states_dtype) if "hidden_states" in k else v
-            for k, v in data.items()
-        }
-
         # Add lengths tensor
         seq_len = data["input_ids"].shape[0]
         data["lengths"] = torch.tensor([seq_len], dtype=torch.long)
@@ -215,23 +199,12 @@ class BaseDataset(Dataset):
         return data
 
 
-def _maybe_load_hs_file(file_path: Path) -> dict[str, torch.Tensor] | None:
-    lock_path = str(file_path) + ".lock"
-    if Path(lock_path).exists():
-        wait_for_lock(lock_path)
-
-    if file_path.exists():
-        return load_file(file_path)
-
-    return None
-
-
 class ArrowDataset(BaseDataset):
     def __init__(
         self,
         max_len: int,
         datapath: str | PathLike,
-        hidden_states_path: str | PathLike | None = None,
+        transfer: HiddenStatesTransfer | None = None,
         vllm_endpoint: str = "http://localhost:8000/v1",
         on_missing: Literal["generate", "skip", "warn", "raise"] = "generate",
         on_generate: Literal["cache", "delete"] = "delete",
@@ -242,14 +215,6 @@ class ArrowDataset(BaseDataset):
         request_timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
         max_retries: int = DEFAULT_MAX_RETRIES,
     ):
-        """Initialize the ArrowDataset.
-        Args:
-            max_len: The maximum length of the sequence.
-            datapath: The path to the data directory that contains the preprocessed
-            arrow dataset.
-            transform: The transform to apply to the data.
-            hidden_states_dtype: The dtype of the hidden states.
-        """
         self.data = load_from_disk(datapath)
         self.start_file_idx = 0
         if split_ratio == 1.0:
@@ -265,16 +230,10 @@ class ArrowDataset(BaseDataset):
         else:
             raise ValueError("split_ratio must be in range (-1.0, 1.0] excluding 0.0.")
 
-        self.hidden_states_path: Path = (
-            Path(datapath) / "hidden_states"
-            if hidden_states_path is None
-            else Path(hidden_states_path)
-        )
+        self.transfer = transfer or FileTransfer(Path(datapath) / "hidden_states")
         self.vllm_endpoint = vllm_endpoint
         self.on_missing = on_missing
         self.on_generate = on_generate
-        if self.on_generate == "cache":
-            self.hidden_states_path.mkdir(parents=True, exist_ok=True)
         self.client: openai.OpenAI | None = None
         self.model = model
         self.request_timeout = request_timeout
@@ -287,7 +246,6 @@ class ArrowDataset(BaseDataset):
         return index + self.start_file_idx
 
     def _setup_client(self):
-        # Delay client setup so it runs in dataloader thread if on_missing="generate"
         self.client = openai.OpenAI(
             base_url=self.vllm_endpoint, api_key="EMPTY", max_retries=0
         )
@@ -300,6 +258,7 @@ class ArrowDataset(BaseDataset):
                 "Please make sure --endpoint is set to the correct vllm instance."
             )
         self.model = model_id
+        self.transfer.setup()
 
     def __len__(self):
         return len(self.data)
@@ -316,7 +275,7 @@ class ArrowDataset(BaseDataset):
         client_item = build_client_item(dataset_item)
 
         try:
-            hs_filepath = generate_hidden_states(
+            handle = generate_hidden_states(
                 self.client,  # type:ignore[arg-type]
                 self.model,  # type:ignore[arg-type]
                 client_item,
@@ -324,19 +283,18 @@ class ArrowDataset(BaseDataset):
                 max_retries=self.max_retries,
             )
 
-            loaded_hs = _maybe_load_hs_file(Path(hs_filepath))
+            loaded_hs = self.transfer.get_generated(handle)
             if loaded_hs is None:
-                raise ValueError(f"Failed to load hidden states from {hs_filepath}")
+                raise ValueError(f"Failed to load hidden states for handle {handle}")
 
             check_hidden_states(loaded_hs, dataset_item["input_ids"].tolist())
 
+            file_idx = self._map_to_file_idx(index)
             match self.on_generate:
                 case "cache":
-                    file_idx = self._map_to_file_idx(index)
-                    target_path = self.hidden_states_path / f"hs_{file_idx}.safetensors"
-                    shutil.move(hs_filepath, target_path)
+                    self.transfer.cache(handle, file_idx)
                 case "delete":
-                    Path(hs_filepath).unlink()
+                    self.transfer.delete(handle)
         except Exception as e:
             if isinstance(e, ValueError) and "NaN" in str(e):
                 raise
@@ -350,8 +308,7 @@ class ArrowDataset(BaseDataset):
 
     def _get_raw_data(self, index):
         file_idx = self._map_to_file_idx(index)
-        candidate_path = self.hidden_states_path / f"hs_{file_idx}.safetensors"
-        loaded_hs = _maybe_load_hs_file(candidate_path)
+        loaded_hs = self.transfer.get_cached(file_idx)
 
         if loaded_hs is None:
             match self.on_missing:
@@ -519,16 +476,25 @@ def create_collate_fn(
 
         collated_data = {}
         for key in batch[0]:  # type: ignore[union-attr]
-            # Concatenate the tensors along the seq (0th) dimension
-            collated_data[key] = torch.cat([b[key] for b in batch], dim=0)  # type: ignore[index]
-            # shape: [total_seq_len, ...]
-
-            if key != "lengths":
-                # Slice and pad on seq (0th) dimension to max_len
-                collated_data[key] = slice_and_pad_to_length(
-                    collated_data[key], max_len
-                ).unsqueeze(0)
-                # shape: [1, max_len, ...]
+            if key == "lengths":
+                collated_data[key] = torch.cat([b[key] for b in batch], dim=0)  # type: ignore[index]
+                continue
+            # one copy per sample: preallocated buffer, hidden states cast during write
+            first = batch[0][key]  # type: ignore[index]
+            buffer_dtype = dtype if "hidden_states" in key else first.dtype
+            out = torch.zeros(
+                (max_len, *first.shape[1:]), dtype=buffer_dtype, device=first.device
+            )
+            offset = 0
+            for b in batch:
+                tensor = b[key]  # type: ignore[index]
+                num_rows = min(tensor.shape[0], max_len - offset)
+                out[offset : offset + num_rows] = tensor[:num_rows]
+                offset += num_rows
+                if offset == max_len:
+                    break
+            collated_data[key] = out.unsqueeze(0)
+            # shape: [1, max_len, ...]
 
         # Include lengths until while they fit in max_len
         # The last included length is (if necessary) truncated
