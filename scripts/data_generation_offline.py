@@ -289,12 +289,10 @@ async def worker(  # noqa: C901
             elapsed = time.perf_counter() - stats["start_time"]
             postfix = {"ok": stats["ok"], "err": stats["errors"]}
             if elapsed > 0 and stats["ok"] > 0:
-                postfix["rps"] = f"{stats['requests'] / elapsed:.1f}"
-                postfix["vllm"] = (
-                    f"{stats['total_vllm_s'] / stats['requests'] * 1000:.0f}ms"
-                )
+                postfix["rps"] = f"{stats['ok'] / elapsed:.1f}"
+                postfix["vllm"] = f"{stats['total_vllm_s'] / stats['ok'] * 1000:.0f}ms"
                 postfix["write"] = (
-                    f"{stats['total_write_s'] / stats['requests'] * 1000:.0f}ms"
+                    f"{stats['total_write_s'] / stats['ok'] * 1000:.0f}ms"
                 )
             pbar.set_postfix(postfix, refresh=False)
             pbar.update(1)
