@@ -36,8 +36,18 @@ class _FakeMooncakeStore:
         self._tensors[key] = tensor.clone()
         return 0
 
-    def get_tensor(self, key: str) -> torch.Tensor:
-        return self._tensors[key].clone()
+    def get_tensor(self, key: str) -> torch.Tensor | None:
+        t = self._tensors.get(key)
+        return t.clone() if t is not None else None
+
+    def batch_remove(self, keys: list[str], force: bool = False) -> list[int]:
+        results = []
+        for key in keys:
+            removed = key in self._bytes or key in self._tensors
+            self._bytes.pop(key, None)
+            self._tensors.pop(key, None)
+            results.append(0 if removed else -1)
+        return results
 
 
 @pytest.fixture
@@ -70,3 +80,31 @@ def test_meta_written_last_gates_visibility(store):
     store._store._tensors["req-2:hidden_states"] = torch.zeros(1)
     with pytest.raises(TimeoutError):
         store.get_sample("req-2", timeout=0.2, poll_interval=0.02)
+
+
+def test_delete_sample_removes_all_keys(store):
+    hs = torch.randn(4, 2, 8, dtype=torch.bfloat16)
+    tids = torch.arange(4, dtype=torch.int64)
+    store.put_sample("req-del", {"hidden_states": hs, "token_ids": tids})
+
+    store.delete_sample("req-del")
+
+    assert store._store.get("req-del:meta") == b""
+    assert store._store.get_tensor("req-del:hidden_states") is None
+    assert store._store.get_tensor("req-del:token_ids") is None
+
+
+def test_delete_sample_noop_when_missing(store):
+    store.delete_sample("nonexistent-key")
+
+
+def test_get_sample_raises_on_evicted_tensor(store):
+    hs = torch.randn(4, 2, 8, dtype=torch.bfloat16)
+    tids = torch.arange(4, dtype=torch.int64)
+    store.put_sample("req-evict", {"hidden_states": hs, "token_ids": tids})
+
+    # Simulate eviction: meta key survives but tensor data is gone
+    del store._store._tensors["req-evict:hidden_states"]
+
+    with pytest.raises(RuntimeError, match="evicted"):
+        store.get_sample("req-evict", timeout=1.0)
