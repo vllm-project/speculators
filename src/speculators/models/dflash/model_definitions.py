@@ -8,11 +8,11 @@ from transformers.models.qwen3.modeling_qwen3 import (
     FlashAttentionKwargs,
     GradientCheckpointingLayer,
     Qwen3Config,
-    Qwen3MLP,
-    Qwen3RMSNorm,
     eager_attention_forward,
 )
 from typing_extensions import Unpack
+
+from speculators.models.dflash.kernels import DFlashKernels
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -49,7 +49,7 @@ class Qwen3DFlashAttention(nn.Module):
 
     # Implements the custom attention which injects the target models
     # hidden states into the kv cache.
-    def __init__(self, config: Qwen3Config, layer_idx: int):
+    def __init__(self, config: Qwen3Config, layer_idx: int, kernels: DFlashKernels):
         super().__init__()
         self.config = config
         self.layer_idx = layer_idx
@@ -84,8 +84,8 @@ class Qwen3DFlashAttention(nn.Module):
             config.hidden_size,  # type: ignore[arg-type]
             bias=config.attention_bias,  # type: ignore[arg-type]
         )
-        self.q_norm = Qwen3RMSNorm(self.head_dim, eps=config.rms_norm_eps)  # type: ignore[arg-type]
-        self.k_norm = Qwen3RMSNorm(self.head_dim, eps=config.rms_norm_eps)  # type: ignore[arg-type]
+        self.q_norm = kernels.make_rms_norm(self.head_dim, config.rms_norm_eps)  # type: ignore[arg-type]
+        self.k_norm = kernels.make_rms_norm(self.head_dim, config.rms_norm_eps)  # type: ignore[arg-type]
         self.sliding_window = (
             config.sliding_window
             if hasattr(config, "layer_types")
@@ -156,15 +156,27 @@ class Qwen3DFlashAttention(nn.Module):
 
 
 class Qwen3DFlashDecoderLayer(GradientCheckpointingLayer):
-    def __init__(self, config: Qwen3Config, layer_idx: int):
+    def __init__(
+        self,
+        config: Qwen3Config,
+        layer_idx: int,
+        kernels: DFlashKernels,
+    ):
         super().__init__()
         self.hidden_size = config.hidden_size
-        self.self_attn = Qwen3DFlashAttention(config=config, layer_idx=layer_idx)
-        self.mlp = Qwen3MLP(config)
-        self.input_layernorm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)  # type: ignore[arg-type]
-        self.post_attention_layernorm = Qwen3RMSNorm(
+        self.self_attn = Qwen3DFlashAttention(
+            config=config,
+            layer_idx=layer_idx,
+            kernels=kernels,
+        )
+        self.mlp = kernels.make_mlp(config)
+        self.input_layernorm = kernels.make_rms_norm(
             config.hidden_size,
-            eps=config.rms_norm_eps,  # type: ignore[arg-type]
+            config.rms_norm_eps,  # type: ignore[arg-type]
+        )
+        self.post_attention_layernorm = kernels.make_rms_norm(
+            config.hidden_size,
+            config.rms_norm_eps,  # type: ignore[arg-type]
         )
 
     def forward(
