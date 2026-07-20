@@ -183,6 +183,14 @@ class BaseCheckpointer:
         finally:
             os.close(dir_fd)
 
+    def clear_checkpoint_complete(self, epoch: int | str) -> None:
+        """Durably remove a stale marker before rewriting an epoch dir."""
+        epoch_dir = self.path / str(epoch)
+        marker = self.complete_marker_path(epoch)
+        if marker.exists():
+            marker.unlink()
+            self._fsync_directory(epoch_dir)
+
     def mark_checkpoint_complete(self, epoch: int | str) -> None:
         """Sync checkpoint files, then atomically publish the marker."""
         epoch_dir = self.path / str(epoch)

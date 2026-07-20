@@ -125,6 +125,57 @@ def test_maybe_save_checkpoint_writes_marker(
     assert SingleGPUCheckpointer(str(tmp_path)).previous_epoch == 0
 
 
+def test_clear_checkpoint_complete_fsyncs_epoch_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    epoch_dir = tmp_path / "3"
+    epoch_dir.mkdir()
+    marker = epoch_dir / SingleGPUCheckpointer.COMPLETE_MARKER_FILENAME
+    marker.touch()
+
+    fsynced_inodes: set[int] = set()
+    real_fsync = os.fsync
+
+    def tracking_fsync(fd: int) -> None:
+        fsynced_inodes.add(os.fstat(fd).st_ino)
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", tracking_fsync)
+
+    SingleGPUCheckpointer(str(tmp_path)).clear_checkpoint_complete(3)
+
+    assert not marker.exists()
+    assert epoch_dir.stat().st_ino in fsynced_inodes
+
+
+def test_failed_same_epoch_rewrite_cannot_retain_completion_marker(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    trainer = _make_minimal_trainer(tmp_path, checkpoint_freq=1, save_best=False)
+    save_calls = 0
+
+    def fake_cp_save_checkpoint(_model, _opt, epoch):
+        nonlocal save_calls
+        save_calls += 1
+        epoch_dir = tmp_path / str(epoch)
+        epoch_dir.mkdir(exist_ok=True)
+        (epoch_dir / "model.safetensors").write_bytes(b"partial")
+        if save_calls == 2:
+            raise RuntimeError("injected rewrite failure")
+
+    monkeypatch.setattr(
+        trainer.checkpointer, "save_checkpoint", fake_cp_save_checkpoint
+    )
+    trainer.maybe_save_checkpoint(0, local_step=1)
+
+    with pytest.raises(RuntimeError, match="injected rewrite failure"):
+        trainer.maybe_save_checkpoint(0, local_step=2)
+
+    marker = tmp_path / "0" / SingleGPUCheckpointer.COMPLETE_MARKER_FILENAME
+    assert not marker.exists()
+    assert SingleGPUCheckpointer(str(tmp_path)).previous_epoch == -1
+
+
 def test_update_best_symlink_creates_and_updates(tmp_path: Path):
     (tmp_path / "1").mkdir()
     (tmp_path / "3").mkdir()

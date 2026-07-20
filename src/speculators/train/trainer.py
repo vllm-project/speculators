@@ -570,6 +570,8 @@ class Trainer:
             return
 
         root_logger.info(f"Saving checkpoint to {self.checkpointer.path / str(epoch)}")
+        if not self.is_distributed or dist.get_rank() == 0:
+            self.checkpointer.clear_checkpoint_complete(epoch)
         self.checkpointer.save_checkpoint(self.model, self.optimizers, epoch)
         if self.schedulers:
             self.checkpointer.save_scheduler_state_dict(self.schedulers, epoch)
@@ -598,6 +600,8 @@ class Trainer:
             return
 
         if self.config.save_best:
+            if not self.is_distributed or dist.get_rank() == 0:
+                self.checkpointer.clear_checkpoint_complete(epoch)
             self.checkpointer.save_checkpoint(self.model, self.optimizers, epoch)
             if self.schedulers:
                 self.checkpointer.save_scheduler_state_dict(self.schedulers, epoch)
