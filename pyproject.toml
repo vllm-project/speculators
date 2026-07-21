@@ -55,7 +55,7 @@ dependencies = [
     "pydantic-settings>=2.0.0",
     "rich",
     "safetensors",
-    "torch>=2.9.0,<=2.12.1",
+    "torch>=2.9.0,<=2.13.0",
     "torchaudio",
     "torchvision",
     "tqdm>=4.66.3,<=4.69.0",
