@@ -85,10 +85,14 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
         )
         self._block_size = vllm_config.cache_config.block_size
 
-        assert self._vllm_config.speculative_config is not None, (
-            "MooncakeHiddenStatesConnector requires the 'extract_hidden_states' "
-            "speculative method"
-        )
+        if (
+            self._vllm_config.speculative_config is None
+            or self._vllm_config.speculative_config.method != "extract_hidden_states"
+        ):
+            raise ValueError(
+                "MooncakeHiddenStatesConnector requires the "
+                "'extract_hidden_states' speculative method"
+            )
 
         mooncake_cfg = MooncakeStoreConfig.from_dict(
             self._kv_transfer_config.get_from_extra_config("mooncake", {})
