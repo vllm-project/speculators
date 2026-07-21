@@ -17,6 +17,7 @@ theme:
     - content.code.annotate
     - content.code.copy
     - content.code.select
+    - content.tabs.link
     - navigation.footer
     - navigation.indexes
     - navigation.instant
@@ -67,6 +68,11 @@ markdown_extensions:
   - pymdownx.arithmatex:
       generic: true
   - pymdownx.blocks.caption
+  # Tabs use the `blocks` API (`/// tab | Name`) rather than the indentation-based
+  # `pymdownx.tabbed` syntax: mdformat (run by `make quality`) reformats indented
+  # tab bodies into code blocks, but leaves `///` fences untouched.
+  - pymdownx.blocks.tab:
+      alternate_style: true
   - pymdownx.details
   - pymdownx.magiclink
   - pymdownx.emoji:

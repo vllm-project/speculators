@@ -11,7 +11,7 @@
 #   bash examples/train/dspark_qwen3_0_6b_sharegpt_online.sh
 #
 # For a detailed walkthrough, see
-# https://docs.vllm.ai/projects/speculators/en/latest/user_guide/tutorials/train_dflash_online/
+# https://docs.vllm.ai/projects/speculators/en/latest/user_guide/tutorials/train/
 
 ### Example E2E run for DSpark Qwen3-0.6B on 5k samples from ShareGPT ###
 

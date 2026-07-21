@@ -1,6 +1,6 @@
 # Algorithms
 
-Speculators supports three speculative decoding algorithms. All are lossless -- they produce output from the same distribution as the target model.
+Speculators supports five speculative decoding algorithms. All are lossless -- they produce output from the same distribution as the target model.
 
 ## [Eagle-3](eagle3.md)
 
@@ -13,6 +13,10 @@ Extends Eagle-3 with parallel multi-token prediction across multiple depths, usi
 ## [DFlash](dflash.md)
 
 Predicts all draft tokens in a single forward pass using block-based prediction with Qwen3-style draft layers. Newer, with support improving rapidly.
+
+## [DSpark](dspark.md)
+
+Extends DFlash with a sequential Markov head for intra-block token dependencies and a confidence head predicting per-position acceptance. Newest, with support improving rapidly.
 
 ## [MTP](mtp.md)
 

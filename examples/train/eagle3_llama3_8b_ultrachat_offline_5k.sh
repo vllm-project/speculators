@@ -8,7 +8,7 @@
 #   bash examples/train/eagle3_llama3_8b_ultrachat_offline_5k.sh
 #
 # For a detailed walkthrough, see
-# https://docs.vllm.ai/projects/speculators/en/latest/user_guide/tutorials/train_eagle3_offline/
+# https://docs.vllm.ai/projects/speculators/en/latest/user_guide/tutorials/train/
 
 ### Example E2E run for Llama 3.1 8B on 5k samples from UltraChat ###
 
