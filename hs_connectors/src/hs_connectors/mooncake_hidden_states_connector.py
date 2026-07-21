@@ -74,6 +74,49 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
         # Must be False so the drafter KV cache isn't merged with the verifier's.
         return False
 
+    @classmethod
+    def _find_cache_kv_group_id(cls, kv_cache_config: KVCacheConfig | None) -> int:
+        """Index of the KV cache group holding the extracted hidden states.
+
+        Located by spec type so it resolves on both scheduler and worker side.
+        """
+        if kv_cache_config is None:
+            return 0
+
+        from vllm.v1.kv_cache_interface import HiddenStateCacheSpec  # noqa: PLC0415
+
+        groups = kv_cache_config.kv_cache_groups
+        group_ids = [
+            gid
+            for gid, group in enumerate(groups)
+            if isinstance(group.kv_cache_spec, HiddenStateCacheSpec)
+        ]
+        if len(group_ids) == 1:
+            return group_ids[0]
+        if not group_ids and len(groups) == 1:
+            return 0
+        raise ValueError(
+            "Could not uniquely identify the extract-hidden-states KV cache "
+            f"group among {len(groups)} groups; the hidden-states layer must be "
+            "isolated in its own group (MLA verifiers are unsupported)."
+        )
+
+    @staticmethod
+    def _get_cache_block_size(
+        vllm_config: VllmConfig,
+        kv_cache_config: KVCacheConfig | None,
+        cache_kv_group_id: int,
+    ) -> int:
+        """Block size of the hidden-states group, read from its own spec.
+
+        cache_config.block_size is bumped to a common multiple for hybrid
+        verifiers; the page-aligned hidden-states group keeps a smaller one.
+        """
+        if kv_cache_config is None:
+            return vllm_config.cache_config.block_size
+        cache_group = kv_cache_config.kv_cache_groups[cache_kv_group_id]
+        return cache_group.kv_cache_spec.block_size
+
     def __init__(
         self,
         vllm_config: VllmConfig,
@@ -83,7 +126,12 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
         super().__init__(
             vllm_config=vllm_config, role=role, kv_cache_config=kv_cache_config
         )
-        self._block_size = vllm_config.cache_config.block_size
+        # Read the hidden-states group and its block size from the group spec;
+        # cache_config.block_size is bumped (wrong) for hybrid verifiers.
+        self._hs_group_idx = self._find_cache_kv_group_id(kv_cache_config)
+        self._block_size = self._get_cache_block_size(
+            vllm_config, kv_cache_config, self._hs_group_idx
+        )
 
         if (
             self._vllm_config.speculative_config is None
@@ -105,7 +153,6 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
 
         # Worker-side state (set in register_kv_caches).
         self._kv_cache: torch.Tensor | None = None
-        self._hs_group_idx: int = 0
         self._is_tp_rank_zero: bool = True
         self._store_ready: bool = False
         self._executor = ThreadPoolExecutor(
@@ -151,12 +198,6 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
             f"Expected 1 CacheOnlyAttentionLayer, got {len(cache_layers)}"
         )
         self._kv_cache = kv_caches[cache_layers[0]]
-
-        if self._kv_cache_config is not None:
-            for i, group in enumerate(self._kv_cache_config.kv_cache_groups):
-                if cache_layers[0] in group.layer_names:
-                    self._hs_group_idx = i
-                    break
 
     def _ensure_store(self) -> None:
         if not self._store_ready:
