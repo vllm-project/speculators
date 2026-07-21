@@ -245,13 +245,13 @@ if "gemma2" in base_components.model_classes:
                 # Fallback to zeros if not provided (e.g. dummy forward passes)
                 batch_sz, seq_len = input_shape
                 kv_tensor = torch.zeros(
-                    (batch_sz, seq_len, 2, self.num_key_value_heads, self.head_dim),
+                    (batch_sz, seq_len, 2, self.config.num_key_value_heads, self.head_dim),
                     dtype=query_states.dtype,
                     device=query_states.device
                 )
             elif kv_tensor.dim() == 3:
                 batch_sz, seq_len, _ = kv_tensor.shape
-                kv_tensor = kv_tensor.view(batch_sz, seq_len, 2, self.num_key_value_heads, self.head_dim)
+                kv_tensor = kv_tensor.view(batch_sz, seq_len, 2, self.config.num_key_value_heads, self.head_dim)
 
             key_states = kv_tensor[..., 0, :, :].transpose(1, 2)
             value_states = kv_tensor[..., 1, :, :].transpose(1, 2)
