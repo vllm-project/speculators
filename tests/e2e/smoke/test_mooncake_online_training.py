@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+pytest.importorskip("mooncake.store", reason="mooncake not installed")
+
 from tests.e2e.utils import (
     launch_mooncake_master_context,
     launch_vllm_server_context,

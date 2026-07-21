@@ -18,6 +18,7 @@ import pytest
 
 from tests.e2e.utils import launch_mooncake_master_context, launch_vllm_server_context
 
+pytest.importorskip("mooncake.store", reason="mooncake not installed")
 mc_store = pytest.importorskip(
     "hs_connectors.mooncake_store",
     reason="hs_connectors[mooncake] not installed",
