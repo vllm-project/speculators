@@ -143,7 +143,7 @@ python scripts/response_regeneration/script.py --dataset ultrachat
 
 After regenerating your dataset:
 
-1. **Train a speculator** - See [Train Eagle-3 Online](train_eagle3_online.md) or [Train Eagle-3 Offline](train_eagle3_offline.md). For Eagle-3, pass `--use-off-policy-tokens` to the trainer when using regenerated data (other architectures ignore this flag).
+1. **Train a speculator** - See [Train Eagle-3 Online](train_eagle3_online.md) or [Train Eagle-3 Offline](train_eagle3_offline.md).
 2. **Evaluate performance** - See [Evaluating Performance](evaluating_performance.md)
 3. **Deploy to production** - See [Serve in vLLM](serve_vllm.md)
 
