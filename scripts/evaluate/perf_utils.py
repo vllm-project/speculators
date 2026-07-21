@@ -33,12 +33,15 @@ logger = logging.getLogger("evaluate")
 # Metric definitions (for plotting)
 # ---------------------------------------------------------------------------
 
+DEFAULT_XLABEL = "Requests per second (RPS)"
+
 METRICS: dict[str, dict[str, str | bool]] = {
     "latency": {
         "csv_col": "latency_median_s",
         "json_key": "request_latency",
         "stat": "median",
         "label": "Median Latency (s)",
+        "xlabel": DEFAULT_XLABEL,
         "increasing": True,
     },
     "itl": {
@@ -46,6 +49,7 @@ METRICS: dict[str, dict[str, str | bool]] = {
         "json_key": "inter_token_latency_ms",
         "stat": "median",
         "label": "Median ITL (ms)",
+        "xlabel": DEFAULT_XLABEL,
         "increasing": True,
     },
     "ttft": {
@@ -53,6 +57,7 @@ METRICS: dict[str, dict[str, str | bool]] = {
         "json_key": "time_to_first_token_ms",
         "stat": "median",
         "label": "Median TTFT (ms)",
+        "xlabel": DEFAULT_XLABEL,
         "increasing": True,
     },
     "output_tps": {
@@ -60,7 +65,20 @@ METRICS: dict[str, dict[str, str | bool]] = {
         "json_key": "output_tokens_per_second",
         "stat": "median",
         "label": "Output Tokens/s",
+        "xlabel": DEFAULT_XLABEL,
         "increasing": False,
+    },
+    # x = 1000 / ITL_ms (tok/s/user); y = system_tps / num_gpus.
+    # System TPS is total_output_tokens / duration (falls back to guidellm mean),
+    # not the per-request median. Requires --num-gpus.
+    "interactivity": {
+        "csv_col": "output_tps_mean",
+        "json_key": "output_tokens_per_second",
+        "stat": "mean",
+        "label": "Token throughput per GPU (tok/s/GPU)",
+        "xlabel": "Interactivity (tok/s/user)",
+        "increasing": False,
+        "requires_num_gpus": True,
     },
 }
 
@@ -95,6 +113,7 @@ BASE_CSV_COLUMNS = [
     "itl_median_ms",
     "ttft_median_ms",
     "output_tps_median",
+    "output_tps_mean",
     "total_output_tokens",
 ]
 
@@ -123,10 +142,27 @@ class Vector(Metric):
 # ---------------------------------------------------------------------------
 
 
+def _subset_from_sweep_json(data: dict) -> str:
+    """Extract subset name from guidellm 0.7+ or legacy 0.6 sweep JSON."""
+    try:
+        return Path(
+            data["config"]["spec"]["data"][0]["load_kwargs"]["data_files"]
+        ).stem
+    except (KeyError, TypeError, IndexError):
+        pass
+    try:
+        return Path(data["args"]["data_args"][0]["data_files"]).stem
+    except (KeyError, TypeError, IndexError):
+        return "unknown"
+
+
 def _load_csv(
     filepath: Path,
     metric_name: str,
 ) -> dict[str, list[tuple[float, float]]]:
+    if metric_name == "interactivity":
+        return _load_interactivity_csv(filepath)
+
     cfg = METRICS[metric_name]
     result: dict[str, list[tuple[float, float]]] = defaultdict(list)
     with filepath.open(newline="") as f:
@@ -147,11 +183,14 @@ def _load_json(
     filepath: Path,
     metric_name: str,
 ) -> dict[str, list[tuple[float, float]]]:
+    if metric_name == "interactivity":
+        return _load_interactivity_json(filepath)
+
     cfg = METRICS[metric_name]
     with filepath.open() as f:
         data = json.load(f)
 
-    subset = Path(data["config"]["spec"]["data"][0]["load_kwargs"]["data_files"]).stem
+    subset = _subset_from_sweep_json(data)
     points: list[tuple[float, float]] = []
     for bench in data.get("benchmarks", []):
         if bench.get("config", {}).get("strategy", {}).get("type_") != "constant":
@@ -167,6 +206,108 @@ def _load_json(
     return {subset: points} if points else {}
 
 
+def _system_tps_from_bench(bench: dict) -> float | None:
+    """Aggregate output tokens/s for a benchmark (not per-request median)."""
+    metrics = bench.get("metrics", {})
+    try:
+        out = metrics["output_token_count"]["successful"]
+        duration = float(bench["duration"])
+        total = float(out["total_sum"])
+        if duration > 0:
+            return total / duration
+    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+        pass
+    try:
+        return float(metrics["output_tokens_per_second"]["successful"]["mean"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _interactivity_point_from_bench(bench: dict) -> tuple[float, float] | None:
+    """Return ``(itl_ms, system_tps)`` for a constant-rate benchmark."""
+    if bench.get("config", {}).get("strategy", {}).get("type_") != "constant":
+        return None
+    try:
+        itl_ms = float(
+            bench["metrics"]["inter_token_latency_ms"]["successful"]["median"]
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+    system_tps = _system_tps_from_bench(bench)
+    if system_tps is None or itl_ms <= 0:
+        return None
+    return (itl_ms, system_tps)
+
+
+def _load_interactivity_json(
+    filepath: Path,
+) -> dict[str, list[tuple[float, float]]]:
+    with filepath.open() as f:
+        data = json.load(f)
+
+    subset = _subset_from_sweep_json(data)
+    points: list[tuple[float, float]] = []
+    for bench in data.get("benchmarks", []):
+        pt = _interactivity_point_from_bench(bench)
+        if pt is not None:
+            points.append(pt)
+    points.sort(key=lambda p: p[0])
+    return {subset: points} if points else {}
+
+
+def _load_interactivity_from_artifact_jsons(
+    csv_path: Path,
+) -> dict[str, list[tuple[float, float]]]:
+    """Fall back to sibling ``artifacts/run_*.json`` when CSV lacks system TPS."""
+    artifacts = csv_path.parent / "artifacts"
+    if not artifacts.is_dir():
+        return {}
+    combined: dict[str, list[tuple[float, float]]] = defaultdict(list)
+    for json_path in sorted(artifacts.glob("run_*.json")):
+        for subset, points in _load_interactivity_json(json_path).items():
+            combined[subset].extend(points)
+    return dict(combined)
+
+
+def _load_interactivity_csv(
+    filepath: Path,
+) -> dict[str, list[tuple[float, float]]]:
+    """Load ``(itl_ms, system_tps)`` from CSV, or from sibling JSONs if needed."""
+    result: dict[str, list[tuple[float, float]]] = defaultdict(list)
+    has_mean = False
+    with filepath.open(newline="") as f:
+        reader = csv.DictReader(f)
+        fieldnames = reader.fieldnames or []
+        has_mean = "output_tps_mean" in fieldnames
+        if has_mean:
+            for row in reader:
+                if row.get("strategy") != "constant":
+                    continue
+                try:
+                    subset = re.sub(r"^run_", "", row.get("subset", "unknown"))
+                    itl_ms = float(row["itl_median_ms"])
+                    system_tps = float(row["output_tps_mean"])
+                    if itl_ms > 0:
+                        result[subset].append((itl_ms, system_tps))
+                except (ValueError, KeyError):
+                    continue
+
+    if result:
+        return dict(result)
+
+    fallback = _load_interactivity_from_artifact_jsons(filepath)
+    if fallback:
+        return fallback
+
+    hint = (
+        "CSV is missing output_tps_mean and no artifacts/run_*.json found. "
+        "Re-run evaluation or point --source at the sweep JSON."
+        if not has_mean
+        else "No constant-rate interactivity rows found."
+    )
+    raise ValueError(f"Cannot load interactivity from {filepath}: {hint}")
+
+
 def load_data(
     filepath: Path,
     metric_name: str,
@@ -178,6 +319,29 @@ def load_data(
     raise ValueError(
         f"Unsupported file type: {filepath.suffix} (expected .csv or .json)"
     )
+
+
+def transform_interactivity(
+    data: dict[str, list[tuple[float, float]]],
+    num_gpus: int,
+) -> dict[str, list[tuple[float, float]]]:
+    """Transform ``(itl_ms, system_tps)`` into ``(tok/s/user, tok/s/gpu)``.
+
+    Interactivity (x) = ``1000 / ITL_ms``; throughput/GPU (y) = ``system_tps / num_gpus``.
+    """
+    if num_gpus <= 0:
+        raise ValueError(f"num_gpus must be positive, got {num_gpus}")
+
+    result: dict[str, list[tuple[float, float]]] = {}
+    for subset, points in data.items():
+        transformed: list[tuple[float, float]] = []
+        for itl_ms, system_tps in points:
+            if itl_ms <= 0:
+                continue
+            transformed.append((1000.0 / itl_ms, system_tps / num_gpus))
+        if transformed:
+            result[subset] = transformed
+    return result
 
 
 def parse_source_args(source_args: list[str]) -> dict[str, list[Path]]:
@@ -386,6 +550,11 @@ def parse_sweep_file(filepath: Path) -> list[dict]:
         for metric_key, csv_key in METRICS_TO_EXTRACT:
             val = metrics.get(metric_key, {})
             row[csv_key] = val.get("successful", {}).get("median", "")
+        row["output_tps_mean"] = (
+            metrics.get("output_tokens_per_second", {})
+            .get("successful", {})
+            .get("mean", "")
+        )
         out_tok = metrics.get("output_tokens", {})
         row["total_output_tokens"] = out_tok.get("successful", {}).get("sum", "")
         rows.append(row)
