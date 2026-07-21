@@ -64,9 +64,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-mooncake = [
-    "hs-connectors[mooncake]",
-]
 dev = [
     # build
     "build>=1.5.0",

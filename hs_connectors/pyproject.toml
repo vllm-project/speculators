@@ -15,7 +15,3 @@ dependencies = [
     "torch",
 ]
 
-[project.optional-dependencies]
-mooncake = [
-    "mooncake-transfer-engine",
-]
