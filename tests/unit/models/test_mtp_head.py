@@ -152,18 +152,27 @@ def test_mtp_draft_model_integration_centroid_loss():
     """Test that MTPDraftModel includes centroid loss when num_centroids is configured."""
     from speculators.models.mtp.core import MTPDraftModel
     from speculators.models.mtp.config import MTPSpeculatorConfig
-    from speculators.config import SpeculatorsConfig
+    from speculators.config import SpeculatorsConfig, VerifierConfig
     from speculators.proposals.greedy import GreedyTokenProposalConfig
-    from transformers.models.qwen2.configuration_qwen2 import Qwen2Config
+    from transformers.models.gemma2.configuration_gemma2 import Gemma2Config
     
-    tc = Qwen2Config(hidden_size=16, vocab_size=256, num_hidden_layers=1, num_attention_heads=2)
+    tc = Gemma2Config(
+        hidden_size=16, 
+        vocab_size=256, 
+        num_hidden_layers=1, 
+        num_attention_heads=2,
+        num_key_value_heads=2,
+        head_dim=8
+    )
     config = MTPSpeculatorConfig(
         transformer_layer_config=tc,
         num_centroids=4,
+        centroid_intermediate_top_k=2,
         speculators_config=SpeculatorsConfig(
             algorithm="mtp",
             proposal_methods=[GreedyTokenProposalConfig(speculative_tokens=1)],
-            default_proposal_method="greedy"
+            default_proposal_method="greedy",
+            verifier=VerifierConfig(architectures=["Gemma2ForCausalLM"], name_or_path="dummy")
         )
     )
     
