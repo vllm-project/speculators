@@ -35,7 +35,7 @@ fi
 CC=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -1 | tr -d '.')
 if [ "${CC:-0}" -ge 90 ]; then
   echo "--- Installing flash-attn (FA4) for Hopper+ GPU"
-  uv pip install flash-attn --prerelease allow || echo "WARNING: flash-attn install failed, FA4 tests will be skipped"
+  uv pip install flash-attn-4 --prerelease allow || echo "WARNING: flash-attn install failed, FA4 tests will be skipped"
 fi
 
 echo "+++ Running tests"

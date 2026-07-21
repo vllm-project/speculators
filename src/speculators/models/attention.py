@@ -35,7 +35,10 @@ def fa4_is_available() -> bool:
     major, minor = torch.cuda.get_device_capability()
     if (major, minor) < (9, 0):
         return False
-    return importlib.util.find_spec("flash_attn.cute") is not None
+    try:
+        return importlib.util.find_spec("flash_attn.cute") is not None
+    except (ImportError, ModuleNotFoundError, ValueError):
+        return False
 
 
 _fa4_mode: Literal["auto", "on", "off"] = "auto"
