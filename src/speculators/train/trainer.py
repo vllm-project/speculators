@@ -41,7 +41,7 @@ metric_logger = logging.getLogger("speculators.metrics")
 
 
 class _StepTimer:
-    # Each mark()/now() forces a cuda.synchronize to capture true GPU time.
+    # Each mark()/now() forces an accelerator.synchronize to capture true GPU time.
     # This serialises the CUDA pipeline, so profiled steps are slower; keep
     # log_freq > 1 in perf-sensitive runs.
     def __init__(self, enabled: bool = False):
