@@ -60,4 +60,4 @@ def test_targets_match_full_sequence_roll(sample_from_anchor, max_anchors):
             full_logits = torch.roll(full_logits, 1, dims=1)
         expected = full_logits[:, anchored_block_indices]
 
-    assert torch.allclose(targets, expected, atol=1e-5)
+    torch.testing.assert_close(targets, expected, atol=1e-5, rtol=0)
