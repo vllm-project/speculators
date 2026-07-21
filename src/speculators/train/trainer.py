@@ -522,7 +522,7 @@ class Trainer:
         if self.rank == 0:
             val_loader = tqdm(val_loader, desc=f"Epoch {epoch}")  # type: ignore[assignment]
 
-        val_metrics: dict[str, float] = {}
+        accumulated: dict[str, torch.Tensor] = {}
         num_batches = len(val_loader)
         for batch in val_loader:
             gpu_batch = {
@@ -539,12 +539,16 @@ class Trainer:
                     **gpu_batch, **(self.config.val_call_kwargs or {})
                 )
 
-            if self.is_distributed:
-                for m in metrics.values():
-                    dist.all_reduce(m, op=dist.ReduceOp.SUM)
-
             for k, v in metrics.items():
-                val_metrics[k] = val_metrics.get(k, 0.0) + v.item()
+                acc = accumulated.get(k)
+                accumulated[k] = v.float() if acc is None else acc + v.float()
+
+        val_metrics: dict[str, float] = {}
+        if accumulated:
+            stacked = torch.stack(list(accumulated.values()))
+            if self.is_distributed:
+                dist.all_reduce(stacked, op=dist.ReduceOp.SUM)
+            val_metrics = dict(zip(accumulated, stacked.tolist(), strict=True))
 
         world_size = dist.get_world_size() if self.is_distributed else 1
         val_metrics = {k: v / num_batches for k, v in val_metrics.items()}
