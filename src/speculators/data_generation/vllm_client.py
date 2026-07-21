@@ -165,6 +165,20 @@ def wait_for_lock(lock_path, timeout=10.0, poll_interval=0.1):
     os.remove(lock_path)
 
 
+# Models whose chat template appends a trailing EOS on a *closed* final turn that
+# ``input_ids`` omits; open the turn for them to keep prompt_token_ids == input_ids.
+_OPEN_FINAL_TURN_MODEL_MARKERS = ("mistral",)
+
+
+def _continue_final_message_for(model: str) -> bool:
+    """Whether to leave the final assistant turn open when re-rendering the MM
+    chat prompt. Default False (closed, reproducing ``input_ids``); True for
+    Mistral, whose template adds a spurious EOS on close."""
+    # Basename match so the ``mistralai/`` org prefix doesn't sweep in siblings.
+    name = model.rsplit("/", 1)[-1].lower()
+    return any(marker in name for marker in _OPEN_FINAL_TURN_MODEL_MARKERS)
+
+
 @with_retries
 async def generate_hidden_states_async(
     client: openai.AsyncClient,
@@ -202,7 +216,8 @@ async def generate_hidden_states_async(
             max_tokens=1,
             extra_body={
                 "add_generation_prompt": False,
-                "continue_final_message": True,
+                # Re-render to match the stored ``input_ids`` (model-dependent).
+                "continue_final_message": _continue_final_message_for(model),
                 "return_token_ids": True,
             },
             timeout=timeout,
@@ -248,7 +263,8 @@ def generate_hidden_states(
             max_tokens=1,
             extra_body={
                 "add_generation_prompt": False,
-                "continue_final_message": True,
+                # Re-render to match the stored ``input_ids`` (model-dependent).
+                "continue_final_message": _continue_final_message_for(model),
                 "return_token_ids": True,
             },
             timeout=timeout,
