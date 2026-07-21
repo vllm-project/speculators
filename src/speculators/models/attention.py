@@ -4,7 +4,11 @@ This module contains attention functions and utilities shared across different
 speculator architectures (EAGLE3, DFlash, etc.) to avoid code duplication.
 """
 
+import importlib.util
+import logging
 from collections.abc import Callable
+from functools import lru_cache
+from typing import Literal
 
 import torch
 from torch.nn.attention.flex_attention import (
@@ -15,6 +19,47 @@ from torch.nn.attention.flex_attention import (
     create_mask as _create_mask,
 )
 from transformers.modeling_utils import AttentionInterface
+
+logger = logging.getLogger(__name__)
+
+
+@lru_cache(maxsize=1)
+def fa4_is_available() -> bool:
+    """Check whether the FA4 (FlashAttention-4) backend can be used.
+
+    Requires both Hopper+ GPU (compute capability >= 9.0) and the
+    ``flash_attn.cute`` CuTeDSL kernels to be installed.
+    """
+    if not torch.cuda.is_available():
+        return False
+    major, minor = torch.cuda.get_device_capability()
+    if (major, minor) < (9, 0):
+        return False
+    return importlib.util.find_spec("flash_attn.cute") is not None
+
+
+_fa4_mode: Literal["auto", "on", "off"] = "auto"
+
+
+def configure_fa4(mode: Literal["auto", "on", "off"] = "auto") -> None:
+    """Set the FA4 backend policy.
+
+    * ``"auto"`` (default): use FA4 when :func:`fa4_is_available` is True.
+    * ``"on"``: always request FA4 (errors at compile time if unavailable).
+    * ``"off"``: never use FA4, always use the default Triton backend.
+    """
+    global _fa4_mode  # noqa: PLW0603
+    _fa4_mode = mode
+    enabled = mode == "on" or (mode == "auto" and fa4_is_available())
+    logger.info("FA4 flex-attention backend: mode=%s, enabled=%s", mode, enabled)
+
+
+def _should_use_fa4() -> bool:
+    if _fa4_mode == "on":
+        return True
+    if _fa4_mode == "off":
+        return False
+    return fa4_is_available()
 
 
 def flex_attention_forward(
@@ -52,6 +97,8 @@ def flex_attention_forward(
     key = key.contiguous()
     value = value.contiguous()
 
+    kernel_options = {"BACKEND": "FLASH"} if _should_use_fa4() else None
+
     flex_attention_output = flex_attention(
         query,
         key,
@@ -60,6 +107,7 @@ def flex_attention_forward(
         block_mask=attention_mask,
         enable_gqa=enable_gqa,
         scale=scaling,
+        kernel_options=kernel_options,  # type: ignore[arg-type]
     )
     attention_output: torch.Tensor = flex_attention_output
     attention_output = attention_output.transpose(1, 2).contiguous()
