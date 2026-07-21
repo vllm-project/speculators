@@ -140,10 +140,7 @@ Rows are pre-tokenized and ready for training: one row per target generation, ho
   "primary_id": "conv-abc",
   "input_ids": [151644, 872, ...],
   "loss_mask": [0, 0, ..., 1, 1],
-  "conversations": [
-    {"role": "user", "content": "What is the capital of France?"},
-    {"role": "assistant", "content": "The capital of France is Paris."}
-  ],
+  "text": "<|im_start|>user\nWhat is the capital of France?<|im_end|>\n<|im_start|>assistant\nThe capital of France is Paris.<|im_end|>",
   "metadata": {
     "idx": 0,
     "finish_reason": "stop",
@@ -159,7 +156,7 @@ Rows are pre-tokenized and ready for training: one row per target generation, ho
 - A conversation yields one row per target generation, each carrying the history before it. Generation `k`'s row is `{primary_id}_gen{k}`. A plain assistant turn is one generation; a turn that calls a tool is two or more (see [Tool calls](#tool-calls)).
 - `primary_id` is the conversation's stable id, used by `--resume`. The row `id` is generation-suffixed and never matches it.
 - `is_tool_call` marks a row whose generated tokens are a tool call rather than a final answer.
-- `conversations` is a human-readable twin of `input_ids` for review only. Training drops it.
+- `text` is a human-readable decode of `input_ids` (`tokenizer.decode`, special tokens kept) for review only — faithful to the tokens by construction. Training drops it.
 
 Rows are written only once a conversation finishes. A conversation that fails partway writes nothing to the output file and one row to a sibling error file instead (`--outfile out.jsonl` gives `out.errors.jsonl`), so `--resume` retries it whole:
 
