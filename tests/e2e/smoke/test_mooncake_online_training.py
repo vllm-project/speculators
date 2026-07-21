@@ -9,16 +9,12 @@ transfer instead of a shared filesystem:
   5. Validate the trained checkpoint via vLLM inference (run_vllm_engine)
 """
 
-import shutil
-import subprocess
-import time
-from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
-from loguru import logger
 
 from tests.e2e.utils import (
+    launch_mooncake_master_context,
     launch_vllm_server_context,
     run_prepare_data,
     run_training,
@@ -28,35 +24,6 @@ from tests.e2e.utils import (
 MODEL = "Qwen/Qwen3-0.6B"
 MOONCAKE_MASTER_PORT = 50051
 MOONCAKE_MASTER_ADDR = f"127.0.0.1:{MOONCAKE_MASTER_PORT}"
-
-
-@contextmanager
-def mooncake_master_context(port: int = MOONCAKE_MASTER_PORT):
-    """Start and stop a mooncake_master process."""
-    exe = shutil.which("mooncake_master")
-    if exe is None:
-        pytest.skip("mooncake_master not found on PATH")
-
-    cmd = [exe, "--port", str(port)]
-    logger.info("Starting mooncake_master: {}", " ".join(cmd))
-    proc = subprocess.Popen(cmd)  # noqa: S603
-    time.sleep(2)
-
-    if proc.poll() is not None:
-        raise RuntimeError(
-            f"mooncake_master exited immediately with code {proc.returncode}"
-        )
-
-    try:
-        yield
-    finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
-        logger.info("mooncake_master stopped (exit code {})", proc.returncode)
 
 
 @pytest.mark.e2e
@@ -82,7 +49,7 @@ def test_mooncake_online_smoke(
     }
 
     with (
-        mooncake_master_context(),
+        launch_mooncake_master_context(MOONCAKE_MASTER_PORT),
         launch_vllm_server_context(
             MODEL,
             port,
