@@ -2,8 +2,9 @@ import json
 import logging
 import time
 import warnings
+from collections.abc import Callable
 from pathlib import Path
-from typing import Literal, NamedTuple
+from typing import Any, Literal, NamedTuple, Protocol, TypeVar, cast
 
 import torch
 import torch.distributed as dist
@@ -26,6 +27,7 @@ from speculators.train.checkpointer import (
     DistributedCheckpointer,
     SingleGPUCheckpointer,
 )
+from speculators.train.data import WINDOWED_BATCH_LEASES_KEY
 from speculators.train.distributed import (
     apply_fully_sharded,
     get_local_rank,
@@ -33,11 +35,24 @@ from speculators.train.distributed import (
     is_distributed,
 )
 from speculators.train.graceful_shutdown import with_graceful_shutdown
-from speculators.train.optimizers import build_optimizers
+from speculators.train.optimizers import build_optimizers, restore_adamw_backend
 from speculators.train.utils import normalize_counted_metrics
 
 root_logger = logging.getLogger("speculators")
 metric_logger = logging.getLogger("speculators.metrics")
+_T = TypeVar("_T")
+
+
+class _WindowedDataset(Protocol):
+    def prepare_windowed_epoch(
+        self, samples: tuple[Any, ...], *, cursor: int, reset: bool
+    ) -> None: ...
+
+    def start_windowed_producer(self) -> None: ...
+
+
+class _FusedOptimizer(Protocol):
+    grad_scale: torch.Tensor
 
 
 class _StepTimer:
@@ -102,6 +117,9 @@ class TrainerConfig(NamedTuple):
     train_call_kwargs: dict | None = None
     val_call_kwargs: dict | None = None
     optimizer: Literal["adamw", "muon"] = "adamw"
+    adamw_backend: Literal["auto", "foreach", "fused"] = "auto"
+    gradient_clip_backend: Literal["torch", "fused_adamw"] = "torch"
+    max_grad_norm: float = 1.0
     weight_decay: float = 0.01
     muon_lr: float = 0.02
     muon_momentum: float = 0.95
@@ -185,7 +203,80 @@ class Trainer:
 
         self.setup_trainer()
         self.setup_model()
+        self._prepare_model_execution_backends()
         self.setup_optimizer()
+        self._prepared_windowed_datasets: set[int] = set()
+
+    def _prepare_windowed_loader(
+        self,
+        loader: DataLoader,
+        *,
+        epoch: int,
+        skip_steps: int,
+        full_batches: list | None = None,
+    ):
+        sampler = loader.batch_sampler
+        dataset = loader.dataset
+        if not hasattr(sampler, "full_epoch_samples") or not all(
+            hasattr(dataset, method)
+            for method in ("prepare_windowed_epoch", "start_windowed_producer")
+        ):
+            return iter(loader)
+        windowed_dataset = cast("_WindowedDataset", dataset)
+        batches = (
+            sampler._generate_batches(epoch)  # type: ignore[union-attr]  # noqa: SLF001
+            if full_batches is None
+            else full_batches
+        )
+        samples = tuple(sample for batch in batches for sample in batch)
+        if skip_steps < len(batches) and batches[skip_steps]:
+            cursor = batches[skip_steps][0].sequence
+        elif samples:
+            cursor = samples[-1].sequence + 1
+        else:
+            cursor = 0
+        dataset_id = id(dataset)
+        windowed_dataset.prepare_windowed_epoch(
+            samples,
+            cursor=cursor,
+            reset=dataset_id not in self._prepared_windowed_datasets,
+        )
+        self._prepared_windowed_datasets.add(dataset_id)
+        iterator = iter(loader)
+        windowed_dataset.start_windowed_producer()
+        return iterator
+
+    @staticmethod
+    def _run_windowed_phase(
+        loader: DataLoader, operation: Callable[[int], _T], epoch: int
+    ) -> _T:
+        completed = False
+        try:
+            result = operation(epoch)
+            completed = True
+            return result
+        finally:
+            dataset = getattr(loader, "dataset", None)
+            if dataset is not None and hasattr(dataset, "stop_windowed_producer"):
+                try:
+                    dataset.stop_windowed_producer(completed=completed)
+                except Exception:
+                    if completed:
+                        raise
+                    root_logger.exception(
+                        "Windowed producer cleanup failed while the training phase "
+                        "was already unwinding"
+                    )
+
+    @staticmethod
+    def _ack_windowed_batch(dataset, leases: list[dict]) -> None:
+        if leases and hasattr(dataset, "ack_windowed_batch"):
+            dataset.ack_windowed_batch(leases)
+
+    @staticmethod
+    def _abandon_windowed_batch(dataset, leases: list[dict]) -> None:
+        if leases and hasattr(dataset, "abandon_windowed_batch"):
+            dataset.abandon_windowed_batch(leases)
 
     def _training_state_path(self, epoch: int) -> Path:
         return self.checkpointer.path / str(epoch) / "training_state.json"
@@ -337,6 +428,7 @@ class Trainer:
         last_epoch = -1
         if self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1:
             self.checkpointer.load_optimizer_state_dict(self.model, self.optimizers)
+            restore_adamw_backend(self.optimizers, self.config.adamw_backend)
             last_epoch = self.checkpointer.previous_epoch
 
         # Setup scheduler(s) — one per optimizer so each optimizer's base LR (e.g.
@@ -370,13 +462,66 @@ class Trainer:
         if self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1:
             self.checkpointer.load_scheduler_state_dict(self.schedulers)
 
+    def _prepare_model_execution_backends(self) -> None:
+        train_kwargs = self.config.train_call_kwargs or {}
+        if train_kwargs.get("linear_cross_entropy_backend") != "liger":
+            return
+        model = (
+            self.model.module
+            if isinstance(self.model, DistributedDataParallel)
+            else self.model
+        )
+        prepare = getattr(model, "prepare_fused_linear_cross_entropy", None)
+        if prepare is None:
+            raise ValueError(
+                "linear_cross_entropy_backend='liger' is unsupported by this model"
+            )
+        prepare(self.config.hidden_states_dtype)
+
     def _optimizers_zero_grad(self):
         for opt in self.optimizers:
             opt.zero_grad()
 
+    def _clip_gradients(self):
+        if self.config.gradient_clip_backend == "torch":
+            return torch.nn.utils.clip_grad_norm_(
+                self.model.parameters(), self.config.max_grad_norm
+            )
+        if self.config.gradient_clip_backend != "fused_adamw":
+            raise ValueError("gradient_clip_backend must be 'torch' or 'fused_adamw'")
+        if len(self.optimizers) != 1:
+            raise RuntimeError("fused AdamW gradient clipping requires one optimizer")
+        optimizer = self.optimizers[0]
+        group_backends = {
+            (group.get("foreach"), group.get("fused"))
+            for group in optimizer.param_groups
+        }
+        if group_backends != {(False, True)}:
+            raise RuntimeError(
+                "gradient_clip_backend='fused_adamw' requires fused AdamW"
+            )
+        gradients = [
+            parameter.grad
+            for parameter in self.model.parameters()
+            if parameter.grad is not None
+        ]
+        if not gradients:
+            return torch.tensor(0.0)
+        grad_norm = torch.nn.utils.get_total_norm(gradients, foreach=True)
+        fused_optimizer = cast("_FusedOptimizer", optimizer)
+        fused_optimizer.grad_scale = (
+            ((grad_norm + 1e-6) / self.config.max_grad_norm).clamp(min=1.0).float()
+        )
+        return grad_norm
+
     def _optimizers_step(self):
-        for opt in self.optimizers:
-            opt.step()
+        try:
+            for opt in self.optimizers:
+                opt.step()
+        finally:
+            for opt in self.optimizers:
+                if hasattr(opt, "grad_scale"):
+                    del opt.grad_scale
 
     def _schedulers_step(self):
         for scheduler in self.schedulers:
@@ -423,11 +568,22 @@ class Trainer:
 
         # Capture full-epoch step count before any resume fast-skip mutation.
         num_steps = len(self.train_loader)
+        sampler = self.train_loader.batch_sampler
+        full_batches = (
+            sampler._generate_batches(epoch)  # type: ignore[union-attr]  # noqa: SLF001
+            if hasattr(sampler, "full_epoch_samples")
+            else None
+        )
 
         # Determine how many batches to skip for mid-epoch resume.
         skip_steps = self._prepare_resume_skip(epoch)
 
-        train_loader = self.train_loader
+        train_loader = self._prepare_windowed_loader(
+            self.train_loader,
+            epoch=epoch,
+            skip_steps=skip_steps,
+            full_batches=full_batches,
+        )
         if self.rank == 0:
             train_loader = tqdm(train_loader, desc=f"Epoch {epoch}")  # type: ignore[assignment]
 
@@ -444,34 +600,41 @@ class Trainer:
             timer.reset(self.global_step % self.config.log_freq == 0)
 
             timer.mark_value("start", t_before_fetch)
-            gpu_batch = {
-                k: v.to(self.local_rank, non_blocking=True)
-                if isinstance(v, torch.Tensor)
-                else v
-                for k, v in batch.items()
-            }
+            leases = batch.pop(WINDOWED_BATCH_LEASES_KEY, [])
+            try:
+                gpu_batch = {
+                    k: v.to(self.local_rank, non_blocking=True)
+                    if isinstance(v, torch.Tensor)
+                    else v
+                    for k, v in batch.items()
+                }
 
-            with torch.autocast(
-                self.device_type, dtype=self.config.hidden_states_dtype
-            ):
-                timer.mark("fetch")
-                _draft_tokens, loss, metrics = self.model(
-                    **gpu_batch, **(self.config.train_call_kwargs or {})
-                )
+                with torch.autocast(
+                    self.device_type, dtype=self.config.hidden_states_dtype
+                ):
+                    timer.mark("fetch")
+                    _draft_tokens, loss, metrics = self.model(
+                        **gpu_batch, **(self.config.train_call_kwargs or {})
+                    )
 
-            timer.mark("fwd")
-            self._optimizers_zero_grad()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+                timer.mark("fwd")
+                self._optimizers_zero_grad()
+                loss.backward()
+                self._clip_gradients()
 
-            timer.mark("bwd")
-            self._optimizers_step()
+                timer.mark("bwd")
+                self._optimizers_step()
 
-            current_lrs = {
-                type(opt).__name__: opt.param_groups[0]["lr"] for opt in self.optimizers
-            }
-            self._schedulers_step()
-            timer.mark("opt")
+                current_lrs = {
+                    type(opt).__name__: opt.param_groups[0]["lr"]
+                    for opt in self.optimizers
+                }
+                self._schedulers_step()
+                timer.mark("opt")
+            except BaseException:
+                self._abandon_windowed_batch(self.train_loader.dataset, leases)
+                raise
+            self._ack_windowed_batch(self.train_loader.dataset, leases)
             t_before_fetch = timer.now() or time.perf_counter()
 
             profile = None
@@ -518,26 +681,43 @@ class Trainer:
         self.model.eval()
         if hasattr(self.val_loader.batch_sampler, "set_epoch"):
             self.val_loader.batch_sampler.set_epoch(epoch)  # type: ignore[union-attr]
-        val_loader = self.val_loader
+        val_sampler = self.val_loader.batch_sampler
+        full_batches = (
+            val_sampler._generate_batches(epoch)  # type: ignore[union-attr]  # noqa: SLF001
+            if hasattr(val_sampler, "full_epoch_samples")
+            else None
+        )
+        val_loader = self._prepare_windowed_loader(
+            self.val_loader,
+            epoch=epoch,
+            skip_steps=0,
+            full_batches=full_batches,
+        )
         if self.rank == 0:
             val_loader = tqdm(val_loader, desc=f"Epoch {epoch}")  # type: ignore[assignment]
 
         val_metrics: dict[str, float] = {}
-        num_batches = len(val_loader)
+        num_batches = len(self.val_loader)
         for batch in val_loader:
-            gpu_batch = {
-                k: v.to(self.local_rank, non_blocking=True)
-                if isinstance(v, torch.Tensor)
-                else v
-                for k, v in batch.items()
-            }
+            leases = batch.pop(WINDOWED_BATCH_LEASES_KEY, [])
+            try:
+                gpu_batch = {
+                    k: v.to(self.local_rank, non_blocking=True)
+                    if isinstance(v, torch.Tensor)
+                    else v
+                    for k, v in batch.items()
+                }
 
-            with torch.autocast(
-                self.device_type, dtype=self.config.hidden_states_dtype
-            ):
-                _draft_tokens, _loss, metrics = self.model(
-                    **gpu_batch, **(self.config.val_call_kwargs or {})
-                )
+                with torch.autocast(
+                    self.device_type, dtype=self.config.hidden_states_dtype
+                ):
+                    _draft_tokens, _loss, metrics = self.model(
+                        **gpu_batch, **(self.config.val_call_kwargs or {})
+                    )
+            except BaseException:
+                self._abandon_windowed_batch(self.val_loader.dataset, leases)
+                raise
+            self._ack_windowed_batch(self.val_loader.dataset, leases)
 
             if self.is_distributed:
                 for m in metrics.values():
@@ -618,7 +798,7 @@ class Trainer:
         n_epochs = self.config.num_epochs
         for epoch in range(self.current_epoch, n_epochs):
             root_logger.info(f"Training epoch {epoch + 1}/{n_epochs} started")
-            self.train_epoch(epoch)
+            self._run_windowed_phase(self.train_loader, self.train_epoch, epoch)
             root_logger.info(f"Training epoch {epoch + 1}/{n_epochs} completed")
 
             if self.is_distributed:
@@ -635,7 +815,9 @@ class Trainer:
                 root_logger.warning("No val loader, skipping validation epoch")
             else:
                 root_logger.info(f"Validation epoch {epoch + 1}/{n_epochs} started")
-                val_metrics = self.val_epoch(epoch)
+                val_metrics = self._run_windowed_phase(
+                    self.val_loader, self.val_epoch, epoch
+                )
                 root_logger.info(f"Validation epoch {epoch + 1}/{n_epochs} completed")
 
             if self.is_distributed:
@@ -645,3 +827,8 @@ class Trainer:
 
             if self.is_distributed:
                 dist.barrier()
+
+        for loader in (self.train_loader, self.val_loader):
+            dataset = getattr(loader, "dataset", None)
+            if dataset is not None and hasattr(dataset, "stop_windowed_producer"):
+                dataset.stop_windowed_producer(completed=True)

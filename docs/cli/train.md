@@ -80,9 +80,47 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--vllm-endpoint`** (str, default: `"http://localhost:8000/v1"`) vLLM endpoint address for generating hidden states on-demand (online training). Ignored if `--on-missing` is not set to `generate`.
 
-- **`--request-timeout`** (float, default: `180.0`) Timeout in seconds for each individual vLLM request.
+- **`--request-timeout`** (float, default: `120.0`) Timeout in seconds for each individual vLLM request.
 
 - **`--max-retries`** (int, default: `3`) Maximum number of retry attempts per vLLM request on failure.
+
+- **`--shared-hidden-states-path`** (str, default: `None`) Optional filesystem cache that coalesces identical online hidden-state requests across independent trainers. All participating trainers must use the same path. This does not change `--hidden-states-path`, which remains the per-dataset indexed cache used by `--on-generate cache`.
+
+- **`--shared-hidden-states-namespace`** (str, default: `None`) Optional additional request-identity namespace for producer extraction settings not represented by the model or target layer IDs. Target layer IDs are fingerprinted automatically. Use the same value for trainers sharing artifacts and a different value for any other extraction semantic that changes the resulting tensors.
+
+- **`--shared-hidden-states-ttl`** (float, default: `3600.0`) Seconds to retain shared artifacts before regenerating them. Set to `0` to disable expiration.
+
+- **`--shared-hidden-states-lock-timeout`** (float, default: `300.0`) Maximum seconds to wait while another trainer generates and atomically publishes the same artifact.
+
+- **`--shared-hidden-states-consumer-id`** (str, default: `None`) Stable logical trainer identity. Setting this option enables bounded asynchronous windows and requires `--on-missing generate`. Training and validation append separate stream suffixes automatically.
+
+- **`--shared-hidden-states-lookbehind`** (int, default: `2`) Committed stream positions retained behind this consumer's cursor.
+
+- **`--shared-hidden-states-lookahead`** (int, default: `40`) Stream positions retained ahead of this consumer's committed cursor.
+
+- **`--shared-hidden-states-max-prefetch-per-consumer`** (int, default: `8`) Maximum PREFETCH artifacts for one consumer that may be queued or generating at once. Demand requests bypass this bound. This value cannot exceed `lookahead + 1`.
+
+- **`--shared-hidden-states-capture-batch-size`** (int, default: `8`) Global maximum number of hidden-state captures in flight across all trainer dispatchers sharing the coordinator.
+
+- **`--shared-hidden-states-capture-batch-wait`** (float, default: `0.002`) Seconds each dispatcher waits before claiming work so newly queued requests can coalesce into a producer batch.
+
+- **`--shared-hidden-states-max-inflight`** (int, default: `32`) Maximum waiting or leased positions per consumer. Once the first sample of a packed batch is admitted, the rest of that batch may complete atomically so a batch larger than this value cannot deadlock before trainer ACK.
+
+- **`--shared-hidden-states-consumer-timeout`** (float, default: `120.0`) Heartbeat timeout before a dead consumer's window and leases are released.
+
+- **`--shared-hidden-states-claim-timeout`** (float, default: `300.0`) Timeout before an interrupted producer claim can be reassigned.
+
+- **`--shared-hidden-states-acquire-timeout`** (float, default: derived) Maximum total seconds a consumer waits for one windowed artifact. By default this covers every configured request attempt, all exponential retry backoff, and a five-second scheduling margin. Set an explicit value to override that derived deadline.
+
+- **`--shared-hidden-states-lease-timeout`** (float, default: `3600.0`) Timeout before an unacknowledged artifact read lease is released. Increase this only when one legitimate training step can exceed the default.
+
+- **`--shared-hidden-states-generation-attempts`** (int, default: `3`) Maximum coordinated generation attempts, including expired producer claims.
+
+  The shared cache is a filesystem data plane, not Mooncake or GPU-direct transport. Its directory must provide reliable POSIX `flock`, same-filesystem atomic rename, and directory `fsync` semantics to every trainer. Do not assume an arbitrary NFS mount is safe unless those guarantees have been verified.
+
+  Without `--shared-hidden-states-consumer-id`, this remains the legacy TTL cache: setting the TTL to zero retains one artifact per unique request, and a finite TTL does not by itself bound a pass over unseen samples.
+
+  With a consumer ID, SQLite tracks deterministic sampler positions, independent consumer cursors, generation claims, read leases, and the union of live windows. Window retention and active prefetch are separate bounds: the full lookahead remains reusable while only the nearest configured prefetches consume producer capacity. DataLoader workers only acquire and materialize authorized artifacts. The trainer main process advances the cursor after a successful training optimizer boundary or validation forward. Artifacts outside every live window are removed only after all read leases are released. In this mode TTL expiration is disabled; retention is controlled by windows and explicit leases.
 
 - **`--legacy-data`** (flag) **DEPRECATED.** Use the old data format which stores hidden states alongside token_ids.
 
@@ -114,7 +152,7 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--lr`** (float, default: `1e-4`) Learning rate.
 
-- **`--train-data-ratio`** (float, default: `0.9`) Ratio of data to use for training, the rest of the provided data will be used for validation.
+- **`--train-data-ratio`** (float, default: `0.9`) Ratio of data to use for training. The rest is used for validation; set this to `1.0` for a train-only run with no validation loader.
 
 - **`--no-resume-from-checkpoint`** (flag) Disable automatic checkpoint resumption. Without this flag, this script will automatically load the latest checkpoint in `{save-path}` if one exists.
 
@@ -133,6 +171,12 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 ### Optimizer Arguments
 
 - **`--optimizer`** (str, default: `"muon"`) Optimizer to use. Options: `adamw`, `muon`. The `muon` option applies the Muon optimizer to 2D weight matrices and AdamW to the remaining parameters (norms, biases, embeddings, lm_head).
+
+- **`--adamw-backend`** (str, default: `"auto"`) AdamW execution backend. Options: `auto`, `foreach`, `fused`. This also applies to the AdamW parameter group in Muon mode. The fused backend requires CUDA parameters.
+
+- **`--gradient-clip-backend`** (str, default: `"torch"`) Gradient clipping implementation. Options: `torch`, `fused_adamw`. The fused option avoids a separate gradient-scaling kernel and requires both `--optimizer adamw` and `--adamw-backend fused`.
+
+- **`--max-grad-norm`** (float, default: `1.0`) Maximum gradient norm used by either clipping backend.
 
 - **`--weight-decay`** (float, default: `0.01`) Weight decay for the AdamW optimizer (and the AdamW group in muon mode).
 
@@ -172,9 +216,17 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--sample-from-anchor`** / **`--no-sample-from-anchor`** (bool, default: algorithm-specific) Whether to sample from the anchor position. `True`: sample from anchor and all mask positions (default for dspark, produces block_size tokens). `False`: anchor is bonus token (default for dflash, produces block_size-1 tokens).
 
-- **`--max-anchors`** (int, default: `256`) Maximum anchor positions for DFlash training.
+- **`--max-anchors`** (int, default: `3072`) Maximum anchor positions for DFlash training.
 
 - **`--dflash-decay-gamma`** (float, default: `4.0`) Decay gamma for DFlash loss weighting.
+
+- **`--dflash-linear-cross-entropy-backend`** (str, default: `"torch"`) DFlash cross-entropy backend. Options: `torch`, `liger`. Liger avoids materializing draft logits and requires an exactly-CE loss configuration plus the optional `speculators[liger]` dependency.
+
+- **`--dflash-compact-zero-weight-ce-rows`** / **`--no-dflash-compact-zero-weight-ce-rows`** (bool, default: `False`) Exclude masked, zero-weight rows before the fused Liger CE kernel. Requires `--dflash-linear-cross-entropy-backend liger`.
+
+- **`--dflash-label-source`** (str, default: `"verifier_argmax"`) Hard-label source for the opt-in Liger CE path. Options: `verifier_argmax`, `input_ids`. The default preserves DFlash verifier-target semantics; `input_ids` is an explicitly different training target and requires the full verifier vocabulary.
+
+- **`--dflash-verifier-argmax-chunk-size`** (int, default: `0`) Number of verifier LM-head rows processed per argmax chunk in the Liger CE path. `0` materializes the complete verifier logits; a positive value reduces their peak memory. Requires the Liger CE backend.
 
 ### Sliding Window Attention Arguments
 

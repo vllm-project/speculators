@@ -5,6 +5,7 @@ for training, multi-batch, and vocab boundary scenarios, plus model-specific
 parameter variation tests.
 """
 
+import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import partial
@@ -13,6 +14,7 @@ from typing import Any
 import pytest
 import torch
 
+from speculators.models.metrics import resolve_loss_config
 from speculators.models.mtp import shift_batch_mtp
 from speculators.models.mtp.core import compute_step_weights
 from tests.conftest import requires_cuda, requires_transformers_version
@@ -248,6 +250,38 @@ class TestVocabBoundary:
 
 @requires_cuda
 class TestDFlashParams:
+    @pytest.mark.skipif(
+        os.environ.get("SPECULATORS_RUN_LIGER_TESTS") != "1",
+        reason="set SPECULATORS_RUN_LIGER_TESTS=1 on an exclusive CUDA GPU",
+    )
+    def test_compiled_liger_ce_forward_backward(self):
+        torch.compiler.reset()
+        model = make_dflash_model(dtype=torch.float32)
+        with torch.no_grad():
+            model.verifier_lm_head.weight.copy_(model.lm_head.weight)
+        model.prepare_fused_linear_cross_entropy(torch.bfloat16)
+        samples = _make_samples([128])
+        batch = make_batch(max_len=MAX_LEN, samples=samples, hidden_size=HIDDEN_SIZE)
+
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            _, loss, metrics = model(
+                **batch,
+                max_anchors=8,
+                loss_config=resolve_loss_config("ce"),
+                linear_cross_entropy_backend="liger",
+                compact_zero_weight_ce_rows=True,
+                verifier_argmax_chunk_size=32,
+            )
+        loss.backward()
+
+        assert loss.isfinite()
+        assert metrics["loss_sum"].isfinite()
+        assert any(
+            parameter.grad is not None and parameter.grad.isfinite().all()
+            for parameter in model.parameters()
+            if parameter.requires_grad
+        )
+
     @pytest.mark.parametrize("block_size", [2, 4, 8])
     def test_varying_block_size(self, block_size):
         model = make_dflash_model(block_size=block_size)

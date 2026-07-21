@@ -13,6 +13,7 @@ Newton-Schulz orthogonalization dispatches across ranks automatically.
 """
 
 import logging
+from collections.abc import Iterable
 
 import torch
 from torch import Tensor
@@ -27,6 +28,59 @@ _ADAMW_NAME_HINTS = ("embed_tokens", "lm_head")
 
 # Muon only orthogonalizes 2D weight matrices.
 _MATRIX_NDIM = 2
+
+
+def _build_adamw(
+    named_params: Iterable[tuple[str, Tensor]], config
+) -> torch.optim.AdamW:
+    params = list(named_params)
+    if config.adamw_backend == "auto":
+        return torch.optim.AdamW(params, lr=config.lr, weight_decay=config.weight_decay)
+    if config.adamw_backend == "foreach":
+        return torch.optim.AdamW(
+            params,
+            lr=config.lr,
+            weight_decay=config.weight_decay,
+            foreach=True,
+            fused=False,
+        )
+    if config.adamw_backend == "fused":
+        if any(param.device.type != "cuda" for _, param in params):
+            raise ValueError("adamw_backend='fused' requires CUDA parameters")
+        return torch.optim.AdamW(
+            params,
+            lr=config.lr,
+            weight_decay=config.weight_decay,
+            foreach=False,
+            fused=True,
+        )
+    raise ValueError(f"Unsupported AdamW backend: {config.adamw_backend!r}")
+
+
+def restore_adamw_backend(
+    optimizers: list[torch.optim.Optimizer], backend: str
+) -> None:
+    """Restore the requested AdamW execution backend after checkpoint loading.
+
+    ``Optimizer.load_state_dict`` restores ``foreach`` and ``fused`` from each saved
+    parameter group. Those values describe the run that wrote the checkpoint, not the
+    current run, so they must not silently override the current trainer configuration.
+    """
+    if backend == "auto":
+        foreach, fused = None, None
+    elif backend == "foreach":
+        foreach, fused = True, False
+    elif backend == "fused":
+        foreach, fused = False, True
+    else:
+        raise ValueError(f"Unsupported AdamW backend: {backend!r}")
+
+    for optimizer in optimizers:
+        if not isinstance(optimizer, torch.optim.AdamW):
+            continue
+        for param_group in optimizer.param_groups:
+            param_group["foreach"] = foreach
+            param_group["fused"] = fused
 
 
 def split_named_params_for_muon(
@@ -67,13 +121,7 @@ def build_optimizers(model: Module, config) -> list[torch.optim.Optimizer]:
         "adamw" returns a single optimizer; "muon" returns ``[Muon, AdamW]``.
     """
     if config.optimizer == "adamw":
-        return [
-            torch.optim.AdamW(
-                model.named_parameters(),
-                lr=config.lr,
-                weight_decay=config.weight_decay,
-            )
-        ]
+        return [_build_adamw(model.named_parameters(), config)]
 
     if config.optimizer == "muon":
         muon_params, adamw_params = split_named_params_for_muon(model)
@@ -96,13 +144,7 @@ def build_optimizers(model: Module, config) -> list[torch.optim.Optimizer]:
                 )
             )
         if adamw_params:
-            optimizers.append(
-                torch.optim.AdamW(
-                    adamw_params,
-                    lr=config.lr,
-                    weight_decay=config.weight_decay,
-                )
-            )
+            optimizers.append(_build_adamw(adamw_params, config))
         if not optimizers:
             raise ValueError("No trainable parameters found to optimize.")
         return optimizers

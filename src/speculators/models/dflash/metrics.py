@@ -15,6 +15,7 @@ from speculators.models.metrics import (
 )
 
 _DEFAULT_LOSS_CONFIG: LossConfig = {"kl_div": (kl_div_loss, 1.0)}
+_EPS = 1e-5
 
 
 def compute_metrics(
@@ -103,6 +104,80 @@ def compute_metrics(
         acc = correct_per_pos[pos] / total_per_pos[pos].clamp(min=1.0)
         cum = cum * acc
         eal = eal + cum
+    metrics["eal_sum"] = eal
+    metrics["eal_total"] = ones.clone()
+    return loss, metrics
+
+
+def compute_fused_ce_metrics(
+    loss_per_token: torch.Tensor,
+    token_accuracy: torch.Tensor,
+    loss_mask: torch.Tensor,
+    block_size: int,
+    *,
+    loss_weight: float = 1.0,
+    gamma: float = 4.0,
+    per_position_loss_weight: str = "fixed-exp-decay",
+    dpace_alpha: float = 0.5,
+    sample_from_anchor: bool = False,
+) -> tuple[torch.Tensor, dict]:
+    """Reduce fused hard-label CE outputs with the standard DFlash semantics."""
+
+    loss_per_token = loss_per_token.reshape_as(loss_mask)
+    token_accuracy = token_accuracy.reshape_as(loss_mask)
+    seq_len = loss_mask.shape[1]
+    pos_idx = torch.arange(seq_len, device=loss_mask.device)
+    pos_idx = pos_idx.remainder(block_size).unsqueeze(0)
+
+    elementwise_loss = loss_per_token * loss_mask.to(loss_per_token.dtype)
+    if per_position_loss_weight == "dpace":
+        decay_mult = dpace_loss_decay(
+            pos_idx.to(elementwise_loss.dtype),
+            loss_mask=loss_mask,
+            block_size=block_size,
+            dpace_alpha=dpace_alpha,
+            elementwise_loss=elementwise_loss,
+        )
+    else:
+        decay_mult = dflash_loss_decay(
+            pos_idx.to(elementwise_loss.dtype),
+            gamma=gamma,
+            sample_from_anchor=sample_from_anchor,
+        )
+    elementwise_loss = elementwise_loss * decay_mult
+    denominator = loss_mask.to(elementwise_loss.dtype).sum(dim=1) + _EPS
+    ce_loss = (elementwise_loss.sum(dim=1) / denominator).mean()
+    loss = ce_loss * loss_weight
+
+    selected = loss_mask.to(torch.bool)
+    correct = torch.masked_select(token_accuracy.to(torch.bool), selected)
+    selected_positions = torch.masked_select(pos_idx, selected)
+    correct_per_pos = torch.zeros(
+        block_size, dtype=torch.float, device=loss_mask.device
+    )
+    total_per_pos = torch.zeros_like(correct_per_pos)
+    correct_per_pos.scatter_add_(0, selected_positions, correct.float())
+    total_per_pos.scatter_add_(
+        0, selected_positions, torch.ones_like(correct, dtype=torch.float)
+    )
+
+    ones = torch.tensor(1.0, device=loss_mask.device)
+    metrics: dict[str, Any] = {
+        "loss_sum": loss.detach().clone(),
+        "loss_total": ones,
+    }
+    start_pos = 0 if sample_from_anchor else 1
+    metrics["full_acc_sum"] = correct_per_pos[start_pos:].sum()
+    metrics["full_acc_total"] = total_per_pos[start_pos:].sum()
+
+    eal = torch.zeros((), device=loss_mask.device)
+    cumulative_accuracy = torch.ones((), device=loss_mask.device)
+    for pos in range(start_pos, block_size):
+        metrics[f"position_{pos}_acc_sum"] = correct_per_pos[pos]
+        metrics[f"position_{pos}_acc_total"] = total_per_pos[pos]
+        position_accuracy = correct_per_pos[pos] / total_per_pos[pos].clamp(min=1.0)
+        cumulative_accuracy = cumulative_accuracy * position_accuracy
+        eal = eal + cumulative_accuracy
     metrics["eal_sum"] = eal
     metrics["eal_total"] = ones.clone()
     return loss, metrics

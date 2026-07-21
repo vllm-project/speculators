@@ -15,6 +15,9 @@ from transformers.models.auto.configuration_auto import AutoConfig
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
 from hs_connectors import HiddenStatesBackend
+from speculators.data_generation.artifact_cache import (
+    canonical_hidden_state_extraction_namespace,
+)
 from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_REQUEST_TIMEOUT,
@@ -591,6 +594,12 @@ def main(args: argparse.Namespace):  # noqa: C901
 
     # Get target layer IDs from the model (resolved at model level)
     num_target_layers = len(draft_model.target_layer_ids)  # type: ignore[arg-type]
+    shared_artifacts_namespace = None
+    if args.shared_hidden_states_path is not None:
+        shared_artifacts_namespace = canonical_hidden_state_extraction_namespace(
+            tuple(int(layer_id) for layer_id in draft_model.target_layer_ids),  # type: ignore[union-attr]
+            user_namespace=args.shared_hidden_states_namespace,
+        )
 
     if args.speculator_type == "mtp":
         args.num_speculative_steps = draft_model.config.num_speculative_steps
@@ -643,6 +652,42 @@ def main(args: argparse.Namespace):  # noqa: C901
         verifier_name_or_path=args.verifier_name_or_path,
         request_timeout=args.request_timeout,
         max_retries=args.max_retries,
+        shared_artifacts_path=args.shared_hidden_states_path,
+        shared_artifacts_namespace=shared_artifacts_namespace,
+        shared_artifacts_ttl_seconds=(
+            None
+            if args.shared_hidden_states_ttl == 0
+            else args.shared_hidden_states_ttl
+        ),
+        shared_artifacts_lock_timeout_seconds=(args.shared_hidden_states_lock_timeout),
+        shared_artifacts_consumer_id=args.shared_hidden_states_consumer_id,
+        shared_artifacts_lookbehind=args.shared_hidden_states_lookbehind,
+        shared_artifacts_lookahead=args.shared_hidden_states_lookahead,
+        shared_artifacts_max_prefetch_per_consumer=(
+            args.shared_hidden_states_max_prefetch_per_consumer
+        ),
+        shared_artifacts_capture_batch_size=(
+            args.shared_hidden_states_capture_batch_size
+        ),
+        shared_artifacts_capture_batch_wait_seconds=(
+            args.shared_hidden_states_capture_batch_wait
+        ),
+        shared_artifacts_max_inflight=args.shared_hidden_states_max_inflight,
+        shared_artifacts_consumer_timeout_seconds=(
+            args.shared_hidden_states_consumer_timeout
+        ),
+        shared_artifacts_claim_timeout_seconds=(
+            args.shared_hidden_states_claim_timeout
+        ),
+        shared_artifacts_acquire_timeout_seconds=(
+            args.shared_hidden_states_acquire_timeout
+        ),
+        shared_artifacts_lease_timeout_seconds=(
+            args.shared_hidden_states_lease_timeout
+        ),
+        shared_artifacts_generation_attempts=(
+            args.shared_hidden_states_generation_attempts
+        ),
         hidden_size=hidden_size,
         num_target_layers=num_target_layers,
         num_workers=args.num_workers,
@@ -662,6 +707,9 @@ def main(args: argparse.Namespace):  # noqa: C901
         train_call_kwargs=train_call_kwargs,
         val_call_kwargs=val_call_kwargs,
         optimizer=args.optimizer,
+        adamw_backend=args.adamw_backend,
+        gradient_clip_backend=args.gradient_clip_backend,
+        max_grad_norm=args.max_grad_norm,
         weight_decay=args.weight_decay,
         muon_lr=args.muon_lr,
         muon_momentum=args.muon_momentum,
@@ -770,7 +818,100 @@ def validate_draft_init_args(
         )
 
 
-def parse_args():
+def _validate_windowed_consumer_args(
+    parser: argparse.ArgumentParser, args: argparse.Namespace
+) -> None:
+    consumer_id = args.shared_hidden_states_consumer_id
+    if consumer_id is None:
+        return
+    if args.shared_hidden_states_path is None:
+        parser.error(
+            "--shared-hidden-states-consumer-id requires --shared-hidden-states-path"
+        )
+    if not consumer_id.strip():
+        parser.error("--shared-hidden-states-consumer-id must be non-empty")
+    if args.on_missing != "generate":
+        parser.error(
+            "--shared-hidden-states-consumer-id requires --on-missing generate"
+        )
+
+
+def _validate_windowed_prefetch_args(
+    parser: argparse.ArgumentParser, args: argparse.Namespace
+) -> None:
+    if args.shared_hidden_states_max_prefetch_per_consumer < 0:
+        parser.error(
+            "--shared-hidden-states-max-prefetch-per-consumer must be non-negative"
+        )
+    if (
+        args.shared_hidden_states_max_prefetch_per_consumer
+        > args.shared_hidden_states_lookahead + 1
+    ):
+        parser.error(
+            "--shared-hidden-states-max-prefetch-per-consumer must not exceed "
+            "--shared-hidden-states-lookahead + 1"
+        )
+    if args.shared_hidden_states_capture_batch_size < 1:
+        parser.error("--shared-hidden-states-capture-batch-size must be at least one")
+    if args.shared_hidden_states_capture_batch_wait < 0:
+        parser.error("--shared-hidden-states-capture-batch-wait must be non-negative")
+
+
+def _validate_windowed_shared_hidden_state_args(
+    parser: argparse.ArgumentParser, args: argparse.Namespace
+) -> None:
+    _validate_windowed_consumer_args(parser, args)
+    for name in (
+        "shared_hidden_states_lookbehind",
+        "shared_hidden_states_lookahead",
+    ):
+        if getattr(args, name) < 0:
+            parser.error(f"--{name.replace('_', '-')} must be non-negative")
+    if args.shared_hidden_states_max_inflight < 1:
+        parser.error("--shared-hidden-states-max-inflight must be at least one")
+    _validate_windowed_prefetch_args(parser, args)
+    if args.shared_hidden_states_consumer_timeout <= 0:
+        parser.error("--shared-hidden-states-consumer-timeout must be positive")
+    if args.shared_hidden_states_claim_timeout <= 0:
+        parser.error("--shared-hidden-states-claim-timeout must be positive")
+    if (
+        args.shared_hidden_states_acquire_timeout is not None
+        and args.shared_hidden_states_acquire_timeout <= 0
+    ):
+        parser.error("--shared-hidden-states-acquire-timeout must be positive")
+    if args.shared_hidden_states_lease_timeout <= 0:
+        parser.error("--shared-hidden-states-lease-timeout must be positive")
+    if args.shared_hidden_states_generation_attempts < 1:
+        parser.error("--shared-hidden-states-generation-attempts must be at least one")
+
+
+def _validate_shared_hidden_state_args(
+    parser: argparse.ArgumentParser, args: argparse.Namespace
+) -> None:
+    if args.shared_hidden_states_path is not None:
+        if not args.shared_hidden_states_path.strip():
+            parser.error("--shared-hidden-states-path must be non-empty")
+        if args.legacy_data:
+            parser.error(
+                "--shared-hidden-states-path is incompatible with --legacy-data"
+            )
+    elif args.shared_hidden_states_namespace is not None:
+        parser.error(
+            "--shared-hidden-states-namespace requires --shared-hidden-states-path"
+        )
+    if (
+        args.shared_hidden_states_namespace is not None
+        and not args.shared_hidden_states_namespace.strip()
+    ):
+        parser.error("--shared-hidden-states-namespace must be non-empty")
+    if args.shared_hidden_states_ttl < 0:
+        parser.error("--shared-hidden-states-ttl must be non-negative")
+    if args.shared_hidden_states_lock_timeout <= 0:
+        parser.error("--shared-hidden-states-lock-timeout must be positive")
+    _validate_windowed_shared_hidden_state_args(parser, args)
+
+
+def parse_args():  # noqa: C901
     parser = argparse.ArgumentParser()
     parser.add_argument("--verifier-name-or-path", type=str, required=True)
     parser.add_argument(
@@ -895,6 +1036,126 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--shared-hidden-states-path",
+        type=str,
+        default=None,
+        help=(
+            "Optional shared artifact cache used to coalesce identical hidden-state "
+            "requests across independent trainers. Disabled by default."
+        ),
+    )
+    parser.add_argument(
+        "--shared-hidden-states-namespace",
+        type=str,
+        default=None,
+        help=(
+            "Optional additional identity namespace for the producer's extraction "
+            "configuration. Target layer IDs are always included automatically. "
+            "Trainers sharing artifacts must use the same value."
+        ),
+    )
+    parser.add_argument(
+        "--shared-hidden-states-ttl",
+        type=float,
+        default=3600.0,
+        help=(
+            "Seconds to retain shared artifacts before regeneration; 0 disables "
+            "expiration. Only applies when --shared-hidden-states-path is set."
+        ),
+    )
+    parser.add_argument(
+        "--shared-hidden-states-lock-timeout",
+        type=float,
+        default=300.0,
+        help=(
+            "Maximum seconds to wait for another trainer publishing the same shared "
+            "artifact. Only applies when --shared-hidden-states-path is set."
+        ),
+    )
+    parser.add_argument(
+        "--shared-hidden-states-consumer-id",
+        type=str,
+        default=None,
+        help=(
+            "Stable logical trainer identity. Setting this enables bounded "
+            "asynchronous windows and trainer-owned artifact acknowledgements."
+        ),
+    )
+    parser.add_argument(
+        "--shared-hidden-states-lookbehind",
+        type=int,
+        default=2,
+        help="Committed positions retained behind each consumer cursor.",
+    )
+    parser.add_argument(
+        "--shared-hidden-states-lookahead",
+        type=int,
+        default=40,
+        help="Positions asynchronously prepared ahead of each consumer cursor.",
+    )
+    parser.add_argument(
+        "--shared-hidden-states-max-prefetch-per-consumer",
+        type=int,
+        default=8,
+        help=(
+            "Maximum queued or generating prefetches for one logical consumer. "
+            "Demand requests bypass this limit."
+        ),
+    )
+    parser.add_argument(
+        "--shared-hidden-states-capture-batch-size",
+        type=int,
+        default=8,
+        help="Maximum concurrent hidden-state captures across all consumers.",
+    )
+    parser.add_argument(
+        "--shared-hidden-states-capture-batch-wait",
+        type=float,
+        default=0.002,
+        help=(
+            "Seconds to wait for producer requests to coalesce before claiming a batch."
+        ),
+    )
+    parser.add_argument(
+        "--shared-hidden-states-max-inflight",
+        type=int,
+        default=32,
+        help="Maximum waiting or leased positions for one logical consumer.",
+    )
+    parser.add_argument(
+        "--shared-hidden-states-consumer-timeout",
+        type=float,
+        default=120.0,
+        help="Seconds without a heartbeat before releasing a consumer's interests.",
+    )
+    parser.add_argument(
+        "--shared-hidden-states-claim-timeout",
+        type=float,
+        default=300.0,
+        help="Seconds before an interrupted producer claim can be reassigned.",
+    )
+    parser.add_argument(
+        "--shared-hidden-states-acquire-timeout",
+        type=float,
+        default=None,
+        help=(
+            "Maximum seconds a consumer waits for one artifact. By default this "
+            "covers all request attempts, retry backoff, and a small margin."
+        ),
+    )
+    parser.add_argument(
+        "--shared-hidden-states-lease-timeout",
+        type=float,
+        default=3600.0,
+        help="Seconds before an unacknowledged read lease is released.",
+    )
+    parser.add_argument(
+        "--shared-hidden-states-generation-attempts",
+        type=int,
+        default=3,
+        help="Maximum coordinated generation attempts per artifact.",
+    )
+    parser.add_argument(
         "--legacy-data",
         action="store_true",
         help=(
@@ -906,7 +1167,15 @@ def parse_args():
     parser.add_argument("--save-path", type=str, default="./output/checkpoints")
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--train-data-ratio", type=float, default=0.9)
+    parser.add_argument(
+        "--train-data-ratio",
+        type=float,
+        default=0.9,
+        help=(
+            "Fraction of data used for training in (0, 1]. "
+            "Set to 1.0 to disable validation."
+        ),
+    )
     parser.add_argument("--no-resume-from-checkpoint", action="store_true")
     parser.add_argument(
         "--logger",
@@ -1102,6 +1371,30 @@ def parse_args():
         default=4.0,
         help="Decay gamma for DFlash/DSpark loss weighting (default: 4.0)",
     )
+    parser.add_argument(
+        "--dflash-linear-cross-entropy-backend",
+        choices=["torch", "liger"],
+        default="torch",
+        help="DFlash CE backend. Liger is available only for an exactly-CE loss.",
+    )
+    parser.add_argument(
+        "--dflash-compact-zero-weight-ce-rows",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Exclude zero-weight DFlash rows before the fused Liger CE kernel.",
+    )
+    parser.add_argument(
+        "--dflash-label-source",
+        choices=["verifier_argmax", "input_ids"],
+        default="verifier_argmax",
+        help="Hard-label source for the opt-in fused DFlash CE path.",
+    )
+    parser.add_argument(
+        "--dflash-verifier-argmax-chunk-size",
+        type=int,
+        default=0,
+        help="Verifier LM-head rows per argmax chunk; 0 materializes all rows.",
+    )
     # D-Pace specific arguments (loss weight option + smoothing)
     parser.add_argument(
         "--per-position-loss-weight",
@@ -1273,6 +1566,24 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--adamw-backend",
+        choices=["auto", "foreach", "fused"],
+        default="auto",
+        help="AdamW execution backend (also applies to AdamW parameters in Muon mode).",
+    )
+    parser.add_argument(
+        "--gradient-clip-backend",
+        choices=["torch", "fused_adamw"],
+        default="torch",
+        help="Apply clipping explicitly or through the fused AdamW grad scale.",
+    )
+    parser.add_argument(
+        "--max-grad-norm",
+        type=float,
+        default=1.0,
+        help="Maximum gradient norm (default: 1.0).",
+    )
+    parser.add_argument(
         "--weight-decay",
         type=float,
         default=0.01,
@@ -1297,6 +1608,7 @@ def parse_args():
     )
 
     args = parser.parse_args()
+    _validate_shared_hidden_state_args(parser, args)
 
     is_eagle3 = args.speculator_type == "eagle3"
     if args.draft_arch is None:
@@ -1310,7 +1622,47 @@ def parse_args():
 
     provided = explicitly_provided_dests(parser, DECODER_SHAPING_FLAGS)
     validate_draft_init_args(parser, args, provided)
-    resolve_loss_config(args.loss_fn)
+    loss_config = resolve_loss_config(args.loss_fn)
+
+    if args.dflash_linear_cross_entropy_backend == "liger":
+        if args.speculator_type != "dflash":
+            parser.error(
+                "--dflash-linear-cross-entropy-backend=liger requires "
+                "--speculator-type=dflash"
+            )
+        if set(loss_config) != {"ce"}:
+            parser.error(
+                "--dflash-linear-cross-entropy-backend=liger requires an "
+                "exactly-CE --loss-fn"
+            )
+    if (
+        args.dflash_compact_zero_weight_ce_rows
+        and args.dflash_linear_cross_entropy_backend != "liger"
+    ):
+        parser.error(
+            "--dflash-compact-zero-weight-ce-rows requires the Liger CE backend"
+        )
+    if args.dflash_label_source != "verifier_argmax" and (
+        args.dflash_linear_cross_entropy_backend != "liger"
+    ):
+        parser.error("--dflash-label-source=input_ids requires the Liger CE backend")
+    if args.dflash_verifier_argmax_chunk_size < 0:
+        parser.error("--dflash-verifier-argmax-chunk-size must be non-negative")
+    if args.dflash_verifier_argmax_chunk_size and (
+        args.dflash_linear_cross_entropy_backend != "liger"
+    ):
+        parser.error(
+            "--dflash-verifier-argmax-chunk-size requires the Liger CE backend"
+        )
+    if args.max_grad_norm <= 0:
+        parser.error("--max-grad-norm must be positive")
+    if args.gradient_clip_backend == "fused_adamw" and (
+        args.optimizer != "adamw" or args.adamw_backend != "fused"
+    ):
+        parser.error(
+            "--gradient-clip-backend=fused_adamw requires "
+            "--optimizer=adamw --adamw-backend=fused"
+        )
 
     if args.per_position_loss_weight == "dpace":
         if args.loss_fn != "ce":

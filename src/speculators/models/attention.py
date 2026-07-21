@@ -61,7 +61,9 @@ def flex_attention_forward(
         enable_gqa=enable_gqa,
         scale=scaling,
     )
-    attention_output: torch.Tensor = flex_attention_output
+    if not isinstance(flex_attention_output, torch.Tensor):
+        raise TypeError("Flex Attention unexpectedly returned auxiliary output")
+    attention_output = flex_attention_output
     attention_output = attention_output.transpose(1, 2).contiguous()
     return attention_output, None
 

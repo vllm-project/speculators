@@ -1,5 +1,7 @@
 """Tests for CLI arguments."""
 
+import pytest
+
 from scripts.train import parse_args
 from speculators.models.dflash.core import DFlashDraftModel
 from speculators.models.dspark.core import DSparkDraftModel
@@ -13,6 +15,145 @@ def _parse(monkeypatch, extra: list[str]):
         "sys.argv", ["train.py", "--verifier-name-or-path", "dummy"] + extra
     )
     return parse_args()
+
+
+def test_shared_hidden_state_cache_is_opt_in(monkeypatch):
+    args = _parse(monkeypatch, [])
+
+    assert args.shared_hidden_states_path is None
+    assert args.shared_hidden_states_namespace is None
+    assert args.shared_hidden_states_ttl == 3600.0
+    assert args.shared_hidden_states_lock_timeout == 300.0
+    assert args.shared_hidden_states_consumer_id is None
+    assert args.shared_hidden_states_lookbehind == 2
+    assert args.shared_hidden_states_lookahead == 40
+    assert args.shared_hidden_states_max_prefetch_per_consumer == 8
+    assert args.shared_hidden_states_capture_batch_size == 8
+    assert args.shared_hidden_states_capture_batch_wait == 0.002
+    assert args.shared_hidden_states_max_inflight == 32
+    assert args.shared_hidden_states_acquire_timeout is None
+    assert args.shared_hidden_states_lease_timeout == 3600.0
+
+
+def test_shared_hidden_state_cache_arguments(monkeypatch):
+    args = _parse(
+        monkeypatch,
+        [
+            "--shared-hidden-states-path",
+            "shared-cache",
+            "--shared-hidden-states-namespace",
+            "layers:2,18,33",
+            "--shared-hidden-states-ttl",
+            "0",
+            "--shared-hidden-states-lock-timeout",
+            "45",
+        ],
+    )
+
+    assert args.shared_hidden_states_path == "shared-cache"
+    assert args.shared_hidden_states_namespace == "layers:2,18,33"
+    assert args.shared_hidden_states_ttl == 0
+    assert args.shared_hidden_states_lock_timeout == 45
+
+
+def test_windowed_shared_hidden_state_arguments(monkeypatch):
+    args = _parse(
+        monkeypatch,
+        [
+            "--shared-hidden-states-path",
+            "shared-cache",
+            "--shared-hidden-states-consumer-id",
+            "consumer-a",
+            "--shared-hidden-states-lookbehind",
+            "3",
+            "--shared-hidden-states-lookahead",
+            "20",
+            "--shared-hidden-states-max-prefetch-per-consumer",
+            "7",
+            "--shared-hidden-states-capture-batch-size",
+            "6",
+            "--shared-hidden-states-capture-batch-wait",
+            "0.01",
+            "--shared-hidden-states-max-inflight",
+            "40",
+            "--shared-hidden-states-consumer-timeout",
+            "60",
+            "--shared-hidden-states-claim-timeout",
+            "90",
+            "--shared-hidden-states-acquire-timeout",
+            "180",
+            "--shared-hidden-states-lease-timeout",
+            "600",
+            "--shared-hidden-states-generation-attempts",
+            "4",
+        ],
+    )
+
+    assert args.shared_hidden_states_consumer_id == "consumer-a"
+    assert args.shared_hidden_states_lookbehind == 3
+    assert args.shared_hidden_states_lookahead == 20
+    assert args.shared_hidden_states_max_prefetch_per_consumer == 7
+    assert args.shared_hidden_states_capture_batch_size == 6
+    assert args.shared_hidden_states_capture_batch_wait == 0.01
+    assert args.shared_hidden_states_max_inflight == 40
+    assert args.shared_hidden_states_consumer_timeout == 60
+    assert args.shared_hidden_states_claim_timeout == 90
+    assert args.shared_hidden_states_acquire_timeout == 180
+    assert args.shared_hidden_states_lease_timeout == 600
+    assert args.shared_hidden_states_generation_attempts == 4
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        ["--shared-hidden-states-path", ""],
+        ["--shared-hidden-states-namespace", "namespace-only"],
+        ["--shared-hidden-states-path", "cache", "--legacy-data"],
+        [
+            "--shared-hidden-states-path",
+            "cache",
+            "--shared-hidden-states-namespace",
+            "",
+        ],
+        ["--shared-hidden-states-ttl", "-1"],
+        ["--shared-hidden-states-lock-timeout", "0"],
+        ["--shared-hidden-states-consumer-id", "consumer"],
+        [
+            "--shared-hidden-states-path",
+            "cache",
+            "--shared-hidden-states-consumer-id",
+            "consumer",
+            "--on-missing",
+            "raise",
+        ],
+        [
+            "--shared-hidden-states-path",
+            "cache",
+            "--shared-hidden-states-consumer-id",
+            "",
+        ],
+        ["--shared-hidden-states-lookbehind", "-1"],
+        ["--shared-hidden-states-lookahead", "-1"],
+        ["--shared-hidden-states-max-prefetch-per-consumer", "-1"],
+        [
+            "--shared-hidden-states-lookahead",
+            "0",
+            "--shared-hidden-states-max-prefetch-per-consumer",
+            "2",
+        ],
+        ["--shared-hidden-states-capture-batch-size", "0"],
+        ["--shared-hidden-states-capture-batch-wait", "-0.001"],
+        ["--shared-hidden-states-max-inflight", "0"],
+        ["--shared-hidden-states-consumer-timeout", "0"],
+        ["--shared-hidden-states-claim-timeout", "0"],
+        ["--shared-hidden-states-acquire-timeout", "0"],
+        ["--shared-hidden-states-lease-timeout", "0"],
+        ["--shared-hidden-states-generation-attempts", "0"],
+    ],
+)
+def test_shared_hidden_state_cache_rejects_invalid_combinations(monkeypatch, extra):
+    with pytest.raises(SystemExit, match="2"):
+        _parse(monkeypatch, extra)
 
 
 # ---------------------------------------------------------------------------
@@ -169,3 +310,70 @@ def test_no_norm_before_fc_flag(monkeypatch):
 def test_no_norm_output_flag(monkeypatch):
     args = _parse(monkeypatch, ["--no-norm-output"])
     assert args.norm_output is False
+
+
+def test_consumer_optimization_defaults_preserve_existing_backends(monkeypatch):
+    args = _parse(monkeypatch, ["--speculator-type", "dflash"])
+
+    assert args.dflash_linear_cross_entropy_backend == "torch"
+    assert not args.dflash_compact_zero_weight_ce_rows
+    assert args.dflash_label_source == "verifier_argmax"
+    assert args.dflash_verifier_argmax_chunk_size == 0
+    assert args.adamw_backend == "auto"
+    assert args.gradient_clip_backend == "torch"
+    assert args.max_grad_norm == 1.0
+
+
+def test_consumer_optimization_arguments_flow_to_dflash(monkeypatch):
+    args = _parse(
+        monkeypatch,
+        [
+            "--speculator-type",
+            "dflash",
+            "--loss-fn",
+            "ce",
+            "--dflash-linear-cross-entropy-backend",
+            "liger",
+            "--dflash-compact-zero-weight-ce-rows",
+            "--dflash-label-source",
+            "input_ids",
+            "--dflash-verifier-argmax-chunk-size",
+            "512",
+            "--optimizer",
+            "adamw",
+            "--adamw-backend",
+            "fused",
+            "--gradient-clip-backend",
+            "fused_adamw",
+            "--max-grad-norm",
+            "0.75",
+        ],
+    )
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(
+            "speculators.models.dflash.core.validate_liger_installation", lambda: None
+        )
+        train_kw, val_kw = DFlashDraftModel.get_trainer_kwargs(**vars(args))
+
+    assert train_kw["linear_cross_entropy_backend"] == "liger"
+    assert train_kw["compact_zero_weight_ce_rows"] is True
+    assert train_kw["label_source"] == "input_ids"
+    assert train_kw["verifier_argmax_chunk_size"] == 512
+    assert val_kw == train_kw
+    assert args.adamw_backend == "fused"
+    assert args.gradient_clip_backend == "fused_adamw"
+    assert args.max_grad_norm == 0.75
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        ["--speculator-type", "dflash", "--dflash-compact-zero-weight-ce-rows"],
+        ["--speculator-type", "dflash", "--dflash-label-source", "input_ids"],
+        ["--speculator-type", "dflash", "--dflash-verifier-argmax-chunk-size", "-1"],
+        ["--gradient-clip-backend", "fused_adamw"],
+    ],
+)
+def test_consumer_optimization_rejects_invalid_combinations(monkeypatch, extra):
+    with pytest.raises(SystemExit, match="2"):
+        _parse(monkeypatch, extra)
