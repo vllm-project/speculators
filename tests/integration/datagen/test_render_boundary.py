@@ -69,6 +69,41 @@ def test_boundary_unstable_raises(monkeypatch):
         preprocessing._render_boundary_rows(_conv(2), "http://x", 100)
 
 
+def test_over_length_turn_does_not_drop_later_turns(monkeypatch):
+    # Context is not monotonic in the turn index. Qwen3 strips `<think>` from
+    # history once a later user turn arrives, so turn 3 can be over the window
+    # while turn 5 -- rendered after the strip -- is 4 tokens. Stopping at the
+    # first over-length turn silently discarded every trainable turn after it.
+    _patch_encode(
+        monkeypatch,
+        {
+            (1, True): [1, 2],  # turn 1 context: fits
+            (2, False): [1, 2, 8, 9],
+            (3, True): [1] * 12,  # turn 3 context: over max_length=10
+            (5, True): [1, 2, 3, 4],  # turn 5: reasoning stripped, fits again
+            (6, False): [1, 2, 3, 4, 7, 7],
+        },
+    )
+    rows = preprocessing._render_boundary_rows(_conv(6), "http://x", 10)
+    assert len(rows) == 2  # turns 1 and 5; only turn 3 is skipped
+    assert rows[0]["loss_mask"] == [0, 0, 1, 1]
+    assert rows[1]["loss_mask"] == [0, 0, 0, 0, 1, 1]
+
+
+def test_over_length_first_turn_yields_no_rows(monkeypatch):
+    # The first assistant turn's context holds no assistant message, so nothing
+    # can be stripped from it -- it is the smallest the conversation ever gets.
+    # Every later turn overflows too, and the conversation yields nothing.
+    _patch_encode(
+        monkeypatch,
+        {
+            (1, True): [1] * 12,
+            (3, True): [1] * 15,
+        },
+    )
+    assert preprocessing._render_boundary_rows(_conv(4), "http://x", 10) == []
+
+
 # --------------------------------------------------------------------------- #
 # _append_row -- clip / filter / keep                                          #
 # --------------------------------------------------------------------------- #
