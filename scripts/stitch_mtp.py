@@ -206,15 +206,25 @@ def _stitch_sharded(
     weight_map: dict[str, str] = index_data["weight_map"]
 
     shard_to_new: dict[str, dict[str, torch.Tensor]] = {}
+    new_keys: dict[str, torch.Tensor] = {}
     for key, tensor in native_weights.items():
         shard = weight_map.get(key)
         if shard is None:
-            raise ValueError(
-                f"Finetuned key '{key}' not found in verifier weight "
-                "map. The finetuned checkpoint may not match the "
-                "verifier."
-            )
-        shard_to_new.setdefault(shard, {})[key] = tensor
+            new_keys[key] = tensor
+        else:
+            shard_to_new.setdefault(shard, {})[key] = tensor
+
+    if new_keys:
+        last_shard = sorted(set(weight_map.values()))[-1]
+        shard_to_new.setdefault(last_shard, {}).update(new_keys)
+        for key in new_keys:
+            weight_map[key] = last_shard
+        with index_path.open("w") as f:
+            json.dump(index_data, f, indent=2)
+        console.print(
+            f"  Added [cyan]{len(new_keys)}[/] new key(s) to shard "
+            f"[dim]{last_shard}[/]"
+        )
 
     with _bar() as progress:
         task = progress.add_task("Stitching shards", total=len(shard_to_new))

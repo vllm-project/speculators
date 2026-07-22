@@ -341,7 +341,15 @@ class ArrowDataset(BaseDataset):
 
     def _get_raw_data(self, index):
         file_idx = self._map_to_file_idx(index)
-        loaded_hs = self.transfer.get_cached(file_idx)
+        try:
+            loaded_hs = self.transfer.get_cached(file_idx)
+        except Exception as e:
+            warnings.warn(
+                f"Corrupted cached hidden states for sample {index} "
+                f"(file_idx={file_idx}): {e}. Treating as missing.",
+                stacklevel=1,
+            )
+            loaded_hs = None
 
         if loaded_hs is None:
             match self.on_missing:
