@@ -82,6 +82,14 @@ class PEagleDraftModel(Eagle3DraftModel):
         Returns:
             Tuple of (draft_tokens, loss, metrics)
         """
+        from speculators.train.distributed import get_sp_size  # noqa: PLC0415
+
+        if get_sp_size() > 1:
+            raise NotImplementedError(
+                "PEagleDraftModel does not yet support "
+                "sequence parallelism (sp_size > 1)"
+            )
+
         if verifier_last_hidden_states is None:
             raise ValueError("verifier_last_hidden_states required for training")
 

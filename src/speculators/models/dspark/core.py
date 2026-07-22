@@ -125,6 +125,14 @@ class DSparkDraftModel(DFlashDraftModel):
         dpace_alpha: float = 0.5,
         **kwargs,
     ):
+        from speculators.train.distributed import get_sp_size  # noqa: PLC0415
+
+        if get_sp_size() > 1:
+            raise NotImplementedError(
+                "DSparkDraftModel does not yet support "
+                "sequence parallelism (sp_size > 1)"
+            )
+
         hidden, logits, targets, aligned_loss_mask, anchored_block_indices = (
             self._backbone_forward(
                 hidden_states,
