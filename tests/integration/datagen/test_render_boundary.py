@@ -12,8 +12,7 @@ import time
 import pytest
 from datasets import Dataset as HFDataset
 
-import speculators.data_generation.preprocessing as P  # noqa: N812
-from speculators.data_generation import render_client as RC  # noqa: N812
+from speculators.data_generation import preprocessing, render_client
 from speculators.data_generation.preprocessing import build_eagle3_dataset
 from speculators.data_generation.vllm_client import InvalidResponseError
 
@@ -30,7 +29,7 @@ def _patch_encode(monkeypatch, renders: dict[tuple[int, bool], list[int]]):
     def fake(conv_prefix, render_endpoint, *, add_generation_prompt, tools=None):
         return renders[(len(conv_prefix), add_generation_prompt)]
 
-    monkeypatch.setattr(P, "_encode_render", fake)
+    monkeypatch.setattr(preprocessing, "_encode_render", fake)
 
 
 # --------------------------------------------------------------------------- #
@@ -51,7 +50,7 @@ def test_scaffold_lcp_fallback(monkeypatch):
             (2, False): [1, 2, 3, 4, 5],  # full: diverges from prompt at idx 3
         },
     )
-    rows = P._render_boundary_rows(_conv(2), "http://x", 100)
+    rows = preprocessing._render_boundary_rows(_conv(2), "http://x", 100)
     assert len(rows) == 1
     assert rows[0]["loss_mask"] == [0, 0, 0, 1, 1]
 
@@ -66,8 +65,8 @@ def test_boundary_unstable_raises(monkeypatch):
             (2, False): [1, 5, 6, 7],
         },
     )
-    with pytest.raises(P.BoundaryUnstableError):
-        P._render_boundary_rows(_conv(2), "http://x", 100)
+    with pytest.raises(preprocessing.BoundaryUnstableError):
+        preprocessing._render_boundary_rows(_conv(2), "http://x", 100)
 
 
 # --------------------------------------------------------------------------- #
@@ -75,9 +74,12 @@ def test_boundary_unstable_raises(monkeypatch):
 # --------------------------------------------------------------------------- #
 def test_append_row_statuses():
     results: dict[str, list] = {"input_ids": [], "loss_mask": [], "seq_len": []}
-    assert P._append_row(results, [1, 2, 3], [0, 0, 0], 10, None) == "unsupervised"
-    assert P._append_row(results, [1, 2, 3], [0, 1, 1], 10, 3) == "filtered"
-    assert P._append_row(results, [1, 2, 3], [0, 1, 1], 10, 1) == "kept"
+    assert (
+        preprocessing._append_row(results, [1, 2, 3], [0, 0, 0], 10, None)
+        == "unsupervised"
+    )
+    assert preprocessing._append_row(results, [1, 2, 3], [0, 1, 1], 10, 3) == "filtered"
+    assert preprocessing._append_row(results, [1, 2, 3], [0, 1, 1], 10, 1) == "kept"
     assert len(results["input_ids"]) == 1
     assert results["seq_len"] == [3]
 
@@ -96,9 +98,9 @@ class _Resp:
 
 
 def test_render_conversation_missing_token_ids_raises(monkeypatch):
-    monkeypatch.setattr(RC.httpx, "post", lambda *a, **k: _Resp(200, {}))
-    with pytest.raises(RC.RenderError):
-        RC.render_conversation(
+    monkeypatch.setattr(render_client.httpx, "post", lambda *a, **k: _Resp(200, {}))
+    with pytest.raises(render_client.RenderError):
+        render_client.render_conversation(
             "http://x", [], add_generation_prompt=False, max_retries=0
         )
 
@@ -110,9 +112,9 @@ def test_render_conversation_client_error_not_retried(monkeypatch):
         calls.append(1)
         return _Resp(400, {}, "bad request")
 
-    monkeypatch.setattr(RC.httpx, "post", post)
+    monkeypatch.setattr(render_client.httpx, "post", post)
     with pytest.raises(InvalidResponseError):
-        RC.render_conversation("http://x", [], add_generation_prompt=False)
+        render_client.render_conversation("http://x", [], add_generation_prompt=False)
     assert len(calls) == 1  # 4xx is deterministic: no retry
 
 
@@ -124,10 +126,10 @@ def test_render_conversation_transient_status_is_retried(monkeypatch, status):
         calls.append(1)
         return _Resp(status, {}, "slow down")
 
-    monkeypatch.setattr(RC.httpx, "post", post)
+    monkeypatch.setattr(render_client.httpx, "post", post)
     monkeypatch.setattr(time, "sleep", lambda _: None)  # skip the backoff
-    with pytest.raises(RC.RenderError):
-        RC.render_conversation(
+    with pytest.raises(render_client.RenderError):
+        render_client.render_conversation(
             "http://x", [], add_generation_prompt=False, max_retries=2
         )
     assert len(calls) == 3  # initial attempt + 2 retries
