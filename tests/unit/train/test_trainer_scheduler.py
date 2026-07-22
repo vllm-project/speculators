@@ -1,6 +1,6 @@
 import pytest
 
-from scripts.train import parse_args
+from speculators.train.config import TrainConfig
 from speculators.train.trainer import (
     TrainerConfig,
     _resolve_scheduler_steps,
@@ -61,13 +61,10 @@ def test_scheduler_warmup_ratio_must_be_between_zero_and_one():
         _resolve_scheduler_steps(make_config(scheduler_warmup_ratio=1.1), 20)
 
 
-def test_scheduler_type_rejects_unsupported_values(monkeypatch):
+def test_scheduler_type_rejects_unsupported_values():
     # --verifier-name-or-path is supplied so the only parse failure is the rejected
     # --scheduler-type choice (not the missing required verifier arg).
-    monkeypatch.setattr(
-        "sys.argv",
-        ["train.py", "--verifier-name-or-path", "x", "--scheduler-type", "constant"],
-    )
-
     with pytest.raises(SystemExit):
-        parse_args()
+        TrainConfig.resolve(
+            ["--verifier-name-or-path", "x", "--scheduler-type", "constant"]
+        )

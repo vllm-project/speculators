@@ -1,18 +1,18 @@
 """Tests for CLI arguments."""
 
-from scripts.train import parse_args
+import argparse
+
 from speculators.models.dflash.core import DFlashDraftModel
 from speculators.models.dspark.core import DSparkDraftModel
 from speculators.models.eagle3.core import Eagle3DraftModel
 from speculators.models.metrics import ce_loss, kl_div_loss, tv_loss_fused_or_eager
 from speculators.models.peagle.core import PEagleDraftModel
+from speculators.train.config import TrainConfig
 
 
-def _parse(monkeypatch, extra: list[str]):
-    monkeypatch.setattr(
-        "sys.argv", ["train.py", "--verifier-name-or-path", "dummy"] + extra
-    )
-    return parse_args()
+def _parse(monkeypatch, extra: list[str]) -> argparse.Namespace:
+    cfg = TrainConfig.resolve(["--verifier-name-or-path", "dummy", *extra])
+    return argparse.Namespace(**cfg.flatten())
 
 
 # ---------------------------------------------------------------------------

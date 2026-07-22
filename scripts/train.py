@@ -15,19 +15,15 @@ from transformers.models.auto.configuration_auto import AutoConfig
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
 from hs_connectors import HiddenStatesBackend
-from speculators.data_generation.vllm_client import (
-    DEFAULT_MAX_RETRIES,
-    DEFAULT_REQUEST_TIMEOUT,
-)
 from speculators.model import SpeculatorModel
 from speculators.models.eagle3.data import shift_batch
 from speculators.models.eagle3.rotary_partial import install_partial_neox_rotary
-from speculators.models.metrics import resolve_loss_config
 from speculators.models.mtp.data import shift_batch_mtp
 from speculators.models.utils import (
     get_verifier_config,
     resolve_draft_intermediate_size,
 )
+from speculators.train.config import TrainConfig
 from speculators.train.dataloader import create_train_val_loaders
 from speculators.train.distributed import (
     get_rank,
@@ -37,12 +33,11 @@ from speculators.train.distributed import (
 )
 from speculators.train.logger import setup_metric_logger, setup_root_logger
 from speculators.train.trainer import Trainer, TrainerConfig
-from speculators.train.utils import resolve_mask_token_id, save_train_command
+from speculators.train.utils import resolve_mask_token_id
 from speculators.train.vocab_mapping import (
     build_vocab_mappings_from_distribution,
     get_target_vocab_size,
 )
-from speculators.utils.argparse_utils import explicitly_provided_dests
 from speculators.utils.loading import is_config_only_dir
 
 logger = logging.getLogger(__name__)
@@ -512,7 +507,13 @@ def build_draft_model(
     )
 
 
-def main(args: argparse.Namespace):  # noqa: C901
+def main(cfg: TrainConfig):  # noqa: C901
+    # Phase-1 adapter: the model layer still consumes a flat vars(args)-shaped
+    # dict via **kwargs, so flatten the typed config back into a namespace here.
+    # New code should read cfg.<group>.<field> directly and must NOT add new
+    # args.* accesses below this line.
+    args = argparse.Namespace(**cfg.flatten())
+
     # Set random seed for reproducibility
     set_seed(args.seed, args.deterministic_cuda)
 
@@ -538,23 +539,13 @@ def main(args: argparse.Namespace):  # noqa: C901
             "Installed partial-neox rotary patch for HF/vLLM RoPE alignment "
             "(draft_mrope_full_head_hack=False)"
         )
+    # Write the reproducibility artifacts (run.yaml + train_command.txt) next to
+    # the checkpoints at rank 0 only, so every checkpoint carries the resolved
+    # config that produced it.
     if get_rank() == 0:
-        save_train_command(args.save_path)
+        cfg.save(args.save_path)
 
-    if not hasattr(torch, args.hidden_states_dtype):
-        raise ValueError(
-            "--hidden-states-dtype must be a dtype attribute of torch. e.g. `bfloat16`"
-        )
     hidden_states_dtype = getattr(torch, args.hidden_states_dtype)
-
-    if hidden_states_dtype == torch.float16:
-        raise NotImplementedError(
-            "--hidden-states-dtype=float16 is not supported. "
-            "float16 with torch.autocast requires gradient scaling (GradScaler) to "
-            "prevent gradient underflow, which is not implemented. "
-            "Use bfloat16 instead, which provides the same memory savings with "
-            "better numerical stability and no gradient scaling required."
-        )
 
     if args.speculator_type == "mtp":
         if args.draft_attn_impl != "simple_flex_attention":
@@ -628,6 +619,12 @@ def main(args: argparse.Namespace):  # noqa: C901
 
     backend_registry = HiddenStatesBackend.registry
     backend_cls = backend_registry[args.hidden_states_backend]
+    # from_train_args is the live runtime consumer of the backend's (mirrored)
+    # train-args, read off the flattened namespace. hs_connectors stays
+    # argparse-based and standalone so vLLM can use it without speculators; that
+    # is why the backend's train-args are mirrored into the pydantic schema rather
+    # than the plugin depending on pydantic. test_backend_reconciliation.py keeps
+    # the mirror complete so nothing read here was dropped during resolution.
     transfer = backend_cls.from_train_args(args, args.data_path)
 
     train_loader, val_loader = create_train_val_loaders(
@@ -692,638 +689,8 @@ def main(args: argparse.Namespace):  # noqa: C901
     maybe_destroy_distributed()
 
 
-def _checkpoint_freq(value: str) -> float:
-    fvalue = float(value)
-    if fvalue <= 0:
-        raise argparse.ArgumentTypeError("--checkpoint-freq must be > 0")
-    if fvalue > 1 and not fvalue.is_integer():
-        raise argparse.ArgumentTypeError(
-            f"--checkpoint-freq={fvalue} is not an integer. Values > 1 are treated "
-            "as epoch counts and must be whole numbers."
-        )
-    return fvalue
-
-
-# CLI flags that synthesize the draft decoder shape. They conflict with both
-# --from-pretrained and --draft-config, each of which fully defines the draft.
-DECODER_SHAPING_FLAGS: dict[str, str] = {
-    "num_layers": "--num-layers",
-    "draft_arch": "--draft-arch",
-    "draft_hidden_act": "--draft-hidden-act",
-    "sliding_window": "--sliding-window",
-    "full_attention_indices": "--full-attention-indices",
-}
-
-
-def validate_draft_init_args(
-    parser: argparse.ArgumentParser,
-    args: argparse.Namespace,
-    provided: set[str],
-) -> None:
-    """Enforce the draft-init contract.
-
-    The draft model may be defined in exactly one way:
-
-    * ``--from-pretrained`` -- load a complete speculator checkpoint (or a
-      config-only directory); or
-    * ``--draft-config`` -- load just the decoder config and build the rest of
-      the speculator from the other CLI args; or
-    * the decoder-shaping flags (``--num-layers`` etc.) -- synthesize everything.
-
-    ``--from-pretrained`` takes precedence over all other model-definition
-    options: it is mutually exclusive with ``--draft-config`` and with the
-    decoder-shaping flags, since those values come from the checkpoint.
-    ``--draft-config`` is likewise incompatible with the decoder-shaping flags.
-    MTP from scratch (``--speculator-type mtp`` without ``--from-pretrained``)
-    reuses the verifier's own decoder config, so ``--draft-config`` and the
-    decoder-shaping flags do not apply and are rejected.
-
-    ``provided`` is the set of decoder-shaping dests the user explicitly passed
-    (see :func:`speculators.utils.argparse_utils.explicitly_provided_dests`); a flag
-    passed at its default value still counts as a conflict.
-    """
-    shaping = [flag for dest, flag in DECODER_SHAPING_FLAGS.items() if dest in provided]
-    if args.from_pretrained:
-        conflicting = shaping + (["--draft-config"] if args.draft_config else [])
-        if conflicting:
-            parser.error(
-                "--from-pretrained loads a complete draft model and takes precedence "
-                "over all other model-definition options, so these conflict with it "
-                f"(remove them): {', '.join(conflicting)}"
-            )
-        return
-    if args.speculator_type == "mtp":
-        # MTP-from-scratch reuses the verifier's own decoder config and extracts the
-        # native MTP head weights; --draft-config and the decoder-shaping flags do not
-        # apply, so reject them rather than silently ignoring them.
-        conflicting = shaping + (["--draft-config"] if args.draft_config else [])
-        if conflicting:
-            parser.error(
-                "--speculator-type mtp reuses the verifier's decoder config, so these "
-                f"options do not apply (remove them): {', '.join(conflicting)}"
-            )
-        return
-    if args.draft_config and shaping:
-        parser.error(
-            "--draft-config defines the draft decoder, so these flags conflict with "
-            f"it (remove them): {', '.join(shaping)}"
-        )
-
-
-def parse_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--verifier-name-or-path", type=str, required=True)
-    parser.add_argument(
-        "--trust-remote-code",
-        action="store_true",
-        help="Allow executing code from HF Hub when loading the verifier's tokenizer.",
-    )
-    parser.add_argument(
-        "--speculator-type",
-        type=str,
-        default="eagle3",
-        help="Type of speculator model to train (eagle3, dflash, dspark, peagle, mtp)",
-    )
-    parser.add_argument(
-        "--from-pretrained",
-        type=str,
-        default="",
-        help="Path or HF id of a pretrained draft. May also point to a "
-        "local directory containing only a config.json, in which case a "
-        "fresh draft is initialized from that full speculator config. Takes precedence "
-        "over and is mutually exclusive with --draft-config and the decoder-shaping "
-        "flags (--num-layers, --draft-arch, --draft-hidden-act, --sliding-window, "
-        "--full-attention-indices).",
-    )
-    parser.add_argument(
-        "--draft-config",
-        type=str,
-        default="",
-        help="HF id, directory, or JSON path of a decoder config (LlamaConfig for "
-        "eagle3/peagle, Qwen3Config for dflash) to use as the draft "
-        "transformer_layer_config; the rest of the speculator is built from the other "
-        "CLI args. Mutually exclusive with --from-pretrained and with the "
-        "decoder-shaping flags (--num-layers, --draft-arch, --draft-hidden-act, "
-        "--sliding-window, --full-attention-indices).",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        default=False,
-        help="Build the speculator, initialize weights, save a checkpoint to "
-        "--save-path, then exit before training. Useful to validate the config and "
-        "weights (e.g. in vLLM) before launching a full run. Can be combined with "
-        "--draft-config or --from-pretrained.",
-    )
-    parser.add_argument(
-        "--data-path",
-        type=str,
-        default="./output",
-        help=(
-            "Root data directory containing the preprocessed dataset, "
-            "vocab mappings (d2t.npy, t2d.npy), token frequencies "
-            "(token_freq.pt), and hidden states (default: ./output)"
-        ),
-    )
-    backend_registry = HiddenStatesBackend.registry
-    parser.add_argument(
-        "--hidden-states-backend",
-        choices=list(backend_registry.keys()),
-        default="file",
-        help=(
-            "Hidden states transfer backend. Each backend may add its own "
-            "CLI arguments (see below). Default: 'file'."
-        ),
-    )
-    for backend_cls in backend_registry.values():
-        backend_cls.add_train_args(parser)
-
-    parser.add_argument(
-        "--vllm-endpoint",
-        type=str,
-        default="http://localhost:8000/v1",
-        help=(
-            "vLLM endpoint address to use if generating hidden states on-demand."
-            " Only required if `--on-missing=generate` and samples are missing."
-            " Note: the vLLM instance must be configured to cache hidden states"
-            " to a location that is accessible from the training instance. i.e."
-            " on the same node, or a shared network drive. (Default: 'http://localhost:8000/v1')"
-        ),
-    )
-    parser.add_argument(
-        "--on-missing",
-        choices=["generate", "skip", "warn", "raise"],
-        default="generate",
-        help=(
-            "Dataloader behaviour when there are no cached hidden states for a sample."
-            "Default: 'generate', which attempts to generate the hidden states on-"
-            "demand using the provided vLLM endpoint. The other options skip the sample"
-            ", skip and warn, or raise an error respectively."
-        ),
-    )
-    parser.add_argument(
-        "--on-generate",
-        choices=["cache", "delete"],
-        default="delete",
-        help=(
-            "Dataloader behaviour when a new hidden state has been generated"
-            " (only applies if args.on_missing=='generate'). Default: 'delete', "
-            "deletes hidden states once they are loaded. 'cache' will instead store"
-            "the hidden states in the args.hidden_states_path. This can be used to "
-            "enable hybrid online/offline training, with hidden states generated on the"
-            "first epoch, and reused on subsequent epochs."
-        ),
-    )
-    parser.add_argument(
-        "--request-timeout",
-        type=float,
-        default=DEFAULT_REQUEST_TIMEOUT,
-        help=(
-            "Timeout in seconds for each individual vLLM request "
-            f"(default: {DEFAULT_REQUEST_TIMEOUT}). "
-            "Only applies if --on-missing=generate."
-        ),
-    )
-    parser.add_argument(
-        "--max-retries",
-        type=int,
-        default=DEFAULT_MAX_RETRIES,
-        help=(
-            "Maximum number of retry attempts per vLLM request on failure "
-            f"(default: {DEFAULT_MAX_RETRIES}). "
-            "Only applies if --on-missing=generate."
-        ),
-    )
-    parser.add_argument(
-        "--legacy-data",
-        action="store_true",
-        help=(
-            "DEPRECATED. Use the old data format which stores hidden states alongside "
-            "token_ids and assistant_masks, in data_i.pt files. This option will be "
-            "removed soon."
-        ),
-    )
-    parser.add_argument("--save-path", type=str, default="./output/checkpoints")
-    parser.add_argument("--epochs", type=int, default=20)
-    parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--train-data-ratio", type=float, default=0.9)
-    parser.add_argument("--no-resume-from-checkpoint", action="store_true")
-    parser.add_argument(
-        "--logger",
-        type=str,
-        default="",
-        help=(
-            "One of 'trackio', 'wandb', 'tensorboard', 'mlflow' or "
-            "comma separated list."
-        ),
-    )
-    parser.add_argument("--total-seq-len", type=int, default=8192)
-    parser.add_argument(
-        "--log-freq",
-        type=int,
-        default=1,
-        help="Log training metrics every N steps (default: 1)",
-    )
-    parser.add_argument("--log-dir", type=str, default="./logs")
-    parser.add_argument("--run-name", type=str, default=None)
-    parser.add_argument("--num-layers", type=int, default=1)
-    parser.add_argument(
-        "--draft-arch",
-        type=str,
-        default=None,
-        choices=list(DRAFT_ARCH_CONFIGS.keys()),
-        help="Architecture for draft decoder layers "
-        "(default: 'llama' for eagle3, 'qwen3' otherwise).",
-    )
-    parser.add_argument(
-        "--draft-hidden-act",
-        type=str,
-        default="silu",
-        help="Activation function for draft decoder layers. Defaults to 'silu' for "
-        "sigmoid linear unit. Qwen3 layers of dflash expect 'silu' activation for "
-        "vLLM deployment. If another function is desired, set as a string or leave "
-        "as None to automatically fall back to the verifier's activation function.",
-    )
-    parser.add_argument(
-        "--draft-mrope-full-head-hack",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help=(
-            "For MRoPE configs with partial_rotary_factor < 1, rescale "
-            "mrope_section and set partial_rotary_factor=1.0 so HF training "
-            "and vLLM inference use equivalent full-head rotary semantics."
-        ),
-    )
-    parser.add_argument(
-        "--target-layer-ids",
-        type=int,
-        nargs="+",
-        help=(
-            "(Optional) A (space separated) list of integer layer ids. Defaults to"
-            "[2, num_hidden_layers // 2, num_hidden_layers - 3, num_hidden_layers]. "
-            "Note: must be set explicitly if custom values were used to launch vllm"
-        ),
-    )
-    parser.add_argument(
-        "--token-freq-path",
-        type=str,
-        default=None,
-        help=(
-            "Path to token frequency distribution file (.pt). Used together with "
-            "--draft-vocab-size to build vocab mappings at training time. Falls back "
-            "to '<data-path>/token_freq.pt' if not provided. If neither that file "
-            "exists nor --draft-vocab-size is set, vocab mapping is skipped and the "
-            "full verifier vocab is used."
-        ),
-    )
-    parser.add_argument(
-        "--draft-vocab-size",
-        type=int,
-        default=None,
-        help=(
-            "Vocabulary size for the draft model. Must be provided together with a "
-            "token frequency file (--token-freq-path or '<data-path>/token_freq.pt') "
-            "to generate vocab mappings. If either is absent, vocab mapping is skipped "
-            "and the full verifier vocab is used, making this argument a no-op."
-        ),
-    )
-    parser.add_argument("--d2t-path", type=str, default=None)
-    parser.add_argument("--t2d-path", type=str, default=None)
-    parser.add_argument("--mask-token-id", type=int, default=None)
-    parser.add_argument("--ttt-steps", type=int, default=3)
-    parser.add_argument(
-        "--num-speculative-steps",
-        type=int,
-        default=3,
-        help="Number of MTP prediction steps (default: 3). Only used with MTP.",
-    )
-    parser.add_argument("--ttt-step-loss-decay", type=float, default=1.0)
-    parser.add_argument(
-        "--loss-fn",
-        type=str,
-        default="kl_div",
-        help=(
-            "Loss function specification. Pass a name for a single loss "
-            "(kl_div, rkl, jsd, ce, tv, nla, lk_hybrid) or a JSON dict for a weighted "
-            'combination, e.g. \'{"ce": 0.1, "tv": 0.9}\'.'
-        ),
-    )
-    parser.add_argument(
-        "--step-weight-beta",
-        type=float,
-        default=0.6,
-        help=(
-            "Exponential decay factor for MTP step weights. "
-            "Higher values weight earlier prediction steps more heavily. "
-            "Only used with MTP algorithm."
-        ),
-    )
-    parser.add_argument(
-        "--seed", type=int, default=42, help="Random seed for reproducibility"
-    )
-    parser.add_argument(
-        "--hidden-states-dtype",
-        type=str,
-        default="bfloat16",
-        help="Data type for dataloader hidden states and autocast compute. "
-        "Model master weights are always kept in fp32. "
-        "Options: float32 (full precision), bfloat16 (recommended). "
-        "Note: float16 is not supported (requires gradient scaling).",
-    )
-    parser.add_argument(
-        "--deterministic-cuda",
-        action="store_true",
-        default=False,
-        help="Sets cuda to deterministic mode. This may impact performance.",
-    )
-    # Model hyperparameters
-    parser.add_argument(
-        "--norm-before-residual",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Toggle normalization before residual connections (default: True)",
-    )
-    parser.add_argument(
-        "--embed-requires-grad",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Whether to train embedding layer weights (default: False)",
-    )
-    parser.add_argument(
-        "--norm-before-fc",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Apply a single RMSNorm to the concatenated auxiliary hidden states "
-        "before the FC projection (gpt-oss style). See --fc-norm for the "
-        "per-layer alternative from the Eagle 3.1 paper. "
-        "(default: True for eagle3, False otherwise). "
-        "Disable with --no-norm-before-fc.",
-    )
-    parser.add_argument(
-        "--fc-norm",
-        action="store_true",
-        default=False,
-        help="Apply per-layer RMSNorm to each auxiliary hidden state before "
-        "concatenation and FC projection (Eagle 3.1 paper approach).",
-    )
-    parser.add_argument(
-        "--norm-output",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Feed post-norm hidden states back across TTT steps to stabilize "
-        "magnitude drift across speculation depths "
-        "(default: True for eagle3, False otherwise). "
-        "Disable with --no-norm-output.",
-    )
-    # D-Flash specific parameters
-    parser.add_argument(
-        "--block-size",
-        type=int,
-        default=8,
-        help="Block size for DFlash model (default: 8)",
-    )
-    parser.add_argument(
-        "--sample-from-anchor",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Sample from the anchor position (all positions predict). "
-        "Default: False for dflash, True for dspark. ",
-    )
-    parser.add_argument(
-        "--max-anchors",
-        type=int,
-        default=3072,
-        help="Maximum anchor positions for DFlash, DSpark, "
-        "and P-EAGLE training (default: 3072).",
-    )
-    parser.add_argument(
-        "--dflash-decay-gamma",
-        type=float,
-        default=4.0,
-        help="Decay gamma for DFlash/DSpark loss weighting (default: 4.0)",
-    )
-    # D-Pace specific arguments (loss weight option + smoothing)
-    parser.add_argument(
-        "--per-position-loss-weight",
-        choices=["fixed-exp-decay", "dpace"],
-        default="fixed-exp-decay",
-        help="Per-position loss weight option for D-PACE support"
-        "default: fixed-exp-decay",
-    )
-    parser.add_argument(
-        "--dpace-alpha",
-        type=float,
-        default=0.5,
-        help="Smoothing constant for D-PACE loss (default: 0.5)",
-    )
-    # DSpark-specific arguments (sequential Markov head + confidence head).
-    parser.add_argument(
-        "--markov-rank",
-        type=int,
-        default=256,
-        help="DSpark: low-rank dim of the Markov logit-bias head (0 disables it).",
-    )
-    parser.add_argument(
-        "--markov-head-type",
-        type=str,
-        default="vanilla",
-        choices=["vanilla", "gated", "rnn"],
-        help="DSpark: sequential head variant (default: vanilla).",
-    )
-    parser.add_argument(
-        "--enable-confidence-head",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="DSpark: attach the per-position acceptance confidence head.",
-    )
-    parser.add_argument(
-        "--confidence-head-with-markov",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="DSpark: feed the Markov previous-token embedding into the "
-        "confidence head alongside the backbone hidden state.",
-    )
-    parser.add_argument(
-        "--confidence-head-alpha",
-        type=float,
-        default=1.0,
-        help="DSpark: weight of the confidence-head BCE term (default: 1.0).",
-    )
-    parser.add_argument(
-        "--draft-attn-impl",
-        type=str,
-        default="simple_flex_attention",
-        choices=["simple_flex_attention", "sdpa", "eager"],
-        help="Attention implementation for draft layers. "
-        "Use 'sdpa' or 'eager' for hardware that doesn't support flex attention."
-        "Not supported for MTP.",
-    )
-    # P-EAGLE specific parameters
-    parser.add_argument(
-        "--num-depths",
-        type=int,
-        default=8,
-        help="Number of parallel prediction depths for P-EAGLE (default: 8)",
-    )
-    parser.add_argument(
-        "--down-sample-ratio",
-        type=float,
-        default=0.7,
-        help="Geometric decay ratio for COD sampling in P-EAGLE (default: 0.7)",
-    )
-    parser.add_argument(
-        "--down-sample-ratio-min",
-        type=float,
-        default=0.2,
-        help="Minimum retention ratio for COD sampling in P-EAGLE (default: 0.2)",
-    )
-    parser.add_argument(
-        "--sliding-window",
-        type=int,
-        default=2048,
-        help="Sliding window size for sliding window attention layers (default: 2048). "
-        "All draft layers use sliding window by default (except mtp).",
-    )
-    parser.add_argument(
-        "--full-attention-indices",
-        type=int,
-        nargs="+",
-        default=[],
-        help="(Optional) Space-separated draft layer indices that should use full "
-        "attention instead of sliding window. All draft layers use sliding window "
-        "by default (except mtp). "
-        "(e.g. '--full-attention-indices 0 2' makes layers 0 and 2 use full "
-        "attention; the rest use sliding window).",
-    )
-    parser.add_argument(
-        "--sliding-window-non-causal",
-        action="store_true",
-        default=False,
-        help="Use non-causal (bidirectional) masking within draft blocks for sliding "
-        "window attention layers. Full attention layers are always bidirectional. "
-        "Note: vLLM currently doesn't support these models.",
-    )
-    # Dataloader parameters
-    parser.add_argument(
-        "--num-workers", type=int, default=12, help="Number of dataloader workers"
-    )
-    parser.add_argument(
-        "--prefetch-factor", type=int, default=4, help="Dataloader prefetch factor"
-    )
-    parser.add_argument(
-        "--noise-std",
-        type=float,
-        default=0.05,
-        help="Standard deviation for noise augmentation",
-    )
-    # Checkpoint Parameters
-    parser.add_argument(
-        "--checkpoint-freq",
-        type=_checkpoint_freq,
-        default=1.0,
-        help="Save a checkpoint every N epochs. Values < 1 enable sub-epoch "
-        "checkpointing (e.g. 0.5 = every half epoch).",
-    )
-    parser.add_argument(
-        "--save-best",
-        action="store_true",
-        default=False,
-        help="Pointing to checkpoint with lowest validation loss.",
-    )
-
-    # distributed strategy
-    parser.add_argument(
-        "--fsdp-shard",
-        action="store_true",
-        default=False,
-        help="Shard model parameters across GPUs with FSDP. By default, "
-        "parameters are fully replicated (DDP-like). Enable this when the "
-        "model does not fit in a single GPU's memory.",
-    )
-
-    # lr scheduler
-    parser.add_argument(
-        "--scheduler-type",
-        type=str,
-        default="linear",
-        choices=["linear", "cosine", "none"],
-    )
-    parser.add_argument("--scheduler-warmup-steps", type=int, default=None)
-    parser.add_argument(
-        "--scheduler-warmup-ratio",
-        type=float,
-        default=None,
-        help=(
-            "Warmup as a fraction of total scheduler steps, in [0, 1]. Ignored "
-            "(with a warning) when --scheduler-warmup-steps is also set."
-        ),
-    )
-    parser.add_argument("--scheduler-total-steps", type=int, default=None)
-    parser.add_argument("--scheduler-num-cosine-cycles", type=float, default=0.5)
-
-    # optimizer
-    parser.add_argument(
-        "--optimizer",
-        type=str,
-        default="muon",
-        choices=["adamw", "muon"],
-        help=(
-            "Optimizer to use. 'muon' applies Muon to 2D weight matrices and AdamW to "
-            "the remaining params (norms, biases, embeddings, lm_head)."
-        ),
-    )
-    parser.add_argument(
-        "--weight-decay",
-        type=float,
-        default=0.01,
-        help="Weight decay for the AdamW optimizer (and the AdamW group in muon mode).",
-    )
-    parser.add_argument(
-        "--muon-lr",
-        type=float,
-        default=None,
-        help="LR for the Muon (2D weights) group. Only used with --optimizer muon. "
-        "Defaults to 10*lr (and --lr defaults to 1e-4)",
-    )
-    parser.add_argument("--muon-momentum", type=float, default=0.95)
-    parser.add_argument("--muon-weight-decay", type=float, default=0.1)
-    parser.add_argument("--muon-ns-steps", type=int, default=5)
-    parser.add_argument(
-        "--muon-adjust-lr-fn",
-        type=str,
-        default="match_rms_adamw",
-        choices=["original", "match_rms_adamw"],
-        help="Muon LR adjustment. 'match_rms_adamw' matches AdamW's update RMS.",
-    )
-
-    args = parser.parse_args()
-
-    is_eagle3 = args.speculator_type == "eagle3"
-    if args.draft_arch is None:
-        args.draft_arch = "llama" if is_eagle3 else "qwen3"
-    if args.norm_before_fc is None:
-        args.norm_before_fc = is_eagle3
-    if args.norm_output is None:
-        args.norm_output = is_eagle3
-    if args.muon_lr is None:
-        args.muon_lr = 10 * args.lr
-
-    provided = explicitly_provided_dests(parser, DECODER_SHAPING_FLAGS)
-    validate_draft_init_args(parser, args, provided)
-    resolve_loss_config(args.loss_fn)
-
-    if args.per_position_loss_weight == "dpace":
-        if args.loss_fn != "ce":
-            parser.error("--per-position-loss-weight=dpace requires --loss-fn=ce")
-        if not 0.0 < args.dpace_alpha <= 1.0:
-            raise ValueError(f"alpha must be in (0, 1], got {args.dpace_alpha}")
-
-    return args
-
-
 if __name__ == "__main__":
-    args = parse_args()
-    main(args)
+    main(TrainConfig.resolve())
 
 
 # RUN WITH:

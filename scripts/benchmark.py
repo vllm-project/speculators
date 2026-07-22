@@ -54,14 +54,12 @@ from train import (
     parse_vocab_mappings,
     set_seed,
 )
-from train import (
-    parse_args as parse_train_args,
-)
 
 from hs_connectors import HiddenStatesBackend
 from speculators.model import SpeculatorModel
 from speculators.models.eagle3.data import shift_batch
 from speculators.models.mtp.data import shift_batch_mtp
+from speculators.train.config import TrainConfig
 from speculators.train.dataloader import create_train_val_loaders
 from speculators.train.distributed import (
     get_rank,
@@ -652,13 +650,9 @@ def main():
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         bench_args.output = f"benchmark_{ts}.json"
 
-    # Parse train.py args by injecting them into sys.argv.
-    original_argv = sys.argv
-    sys.argv = ["train.py"] + train_argv
-    try:
-        train_args = parse_train_args()
-    finally:
-        sys.argv = original_argv
+    # Resolve train.py args through the shared TrainConfig, flattened to the
+    # same argparse.Namespace the model layer consumes in train.main().
+    train_args = argparse.Namespace(**TrainConfig.resolve(train_argv).flatten())
 
     run_benchmark(bench_args, train_args)
 
