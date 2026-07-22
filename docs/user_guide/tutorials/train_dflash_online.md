@@ -38,6 +38,8 @@ Note: if you are using an experiment tracker (e.g. trackio, wandb, tensorboard, 
 
 ## Step 1: Prepare Your Data
 
+**Recommended:** regenerate the dataset's responses with your target model first (see [Response Regeneration](response_regeneration.md)) and pass the resulting JSONL to `--data`. This on-policy data aligns the drafter with what the target actually generates. Using the dataset's original responses, as shown below, is a cheaper off-policy fallback that skips a full target-model pass over the data, at the cost of lower acceptance length.
+
 First, preprocess your training dataset:
 
 ```bash

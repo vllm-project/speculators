@@ -1,6 +1,6 @@
 # Response Regeneration
 
-This tutorial walks you through regenerating assistant responses in an existing dataset using a target model served by vLLM. The resulting dataset pairs the original user prompts with freshly generated responses, which can be used as training data for speculator models with improved alignment to your target model.
+This tutorial walks you through regenerating assistant responses in an existing dataset using a target model served by vLLM. The resulting dataset pairs the original user prompts with freshly generated responses (on-policy data), and is the recommended starting point for speculator training: the drafter learns to predict what the target model actually generates, not what the dataset's original authors wrote. Training directly on the dataset's original responses (off-policy) is a cheaper fallback, since it skips a full target-model pass over the data, but costs acceptance length at inference time.
 
 ## Overview
 
@@ -143,7 +143,7 @@ python scripts/response_regeneration/script.py --dataset ultrachat
 
 After regenerating your dataset:
 
-1. **Train a speculator** - See [Train Eagle-3 Online](train_eagle3_online.md) or [Train Eagle-3 Offline](train_eagle3_offline.md)
+1. **Train a speculator** - See [Train Eagle-3 Online](train_eagle3_online.md) or [Train Eagle-3 Offline](train_eagle3_offline.md).
 2. **Evaluate performance** - See [Evaluating Performance](evaluating_performance.md)
 3. **Deploy to production** - See [Serve in vLLM](serve_vllm.md)
 
