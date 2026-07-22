@@ -69,11 +69,11 @@ def test_mooncake_hidden_states_roundtrip(tmp_path: Path):
     ):
         resp = _send_completion(f"http://127.0.0.1:{VLLM_PORT}", MODEL, prompt)
 
-        key = resp["kv_transfer_params"]["mooncake_key"]
+        key = resp["kv_transfer_params"]["handle"]
         ptids = resp["choices"][0].get("prompt_token_ids") or resp.get(
             "prompt_token_ids"
         )
-        assert key, "mooncake_key missing from response"
+        assert key, "handle missing from response"
         assert ptids, "prompt_token_ids missing from response"
 
         store = MooncakeHiddenStatesStore(

@@ -225,6 +225,10 @@ def launch_mooncake_master(port: int) -> subprocess.Popen:
 
 def stop_mooncake_master(process: subprocess.Popen):
     """Stop the mooncake_master process group."""
+    if process.poll() is not None:
+        logger.info("mooncake_master already exited (code {})", process.returncode)
+        return
+
     pgid = os.getpgid(process.pid)
 
     os.killpg(pgid, signal.SIGTERM)

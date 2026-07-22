@@ -345,7 +345,7 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
             block_ids=list(block_ids),
         )
         # Returning True delays block freeing until get_finished extracts.
-        return True, {"mooncake_key": mooncake_key}
+        return True, {"handle": mooncake_key}
 
     def request_finished_all_groups(
         self, request: Request, block_ids: tuple[list[int], ...]

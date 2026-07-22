@@ -231,7 +231,7 @@ class MooncakeBackend(HiddenStatesBackend):
     """Mooncake distributed store backend (no shared filesystem required)."""
 
     @staticmethod
-    def add_train_args(parser: argparse.ArgumentParser) -> None:
+    def _add_mooncake_args(parser: argparse.ArgumentParser) -> None:
         parser.add_argument(
             "--mooncake-master",
             type=str,
@@ -255,28 +255,12 @@ class MooncakeBackend(HiddenStatesBackend):
         )
 
     @staticmethod
+    def add_train_args(parser: argparse.ArgumentParser) -> None:
+        MooncakeBackend._add_mooncake_args(parser)
+
+    @staticmethod
     def add_launch_args(parser: argparse.ArgumentParser) -> None:
-        parser.add_argument(
-            "--mooncake-master",
-            type=str,
-            default="127.0.0.1:50051",
-            help="Mooncake master server address. Used with backend=mooncake.",
-        )
-        parser.add_argument(
-            "--mooncake-metadata-server",
-            type=str,
-            default="P2PHANDSHAKE",
-            help=(
-                "Mooncake metadata server (or P2PHANDSHAKE). "
-                "Used with backend=mooncake."
-            ),
-        )
-        parser.add_argument(
-            "--mooncake-protocol",
-            choices=["tcp", "rdma"],
-            default="tcp",
-            help="Mooncake transport protocol. Used with backend=mooncake.",
-        )
+        MooncakeBackend._add_mooncake_args(parser)
 
     @staticmethod
     def from_train_args(

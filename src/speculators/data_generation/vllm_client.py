@@ -113,12 +113,12 @@ def extract_output(
         raise InvalidResponseError("Response missing kv_transfer_params")
 
     handle = kv_transfer_params.get("hidden_states_path") or kv_transfer_params.get(
-        "mooncake_key"
+        "handle"
     )
     if handle is None:
         raise InvalidResponseError(
             "Response kv_transfer_params missing both 'hidden_states_path' and "
-            "'mooncake_key'"
+            "'handle'"
         )
     return handle
 
