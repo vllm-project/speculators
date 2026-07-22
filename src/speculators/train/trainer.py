@@ -184,16 +184,6 @@ class Trainer:
         self.checkpointer: BaseCheckpointer = checkpointer_class(self.config.save_path)
 
         self.setup_trainer()
-        # Eagerly spawn persistent DataLoader workers while the CUDA context
-        # is still clean.  Workers forked later (after setup_model moves the
-        # model to GPU) inherit CUDA state and can crash on pin-memory cleanup.
-        for loader in (self.train_loader, self.val_loader):
-            if (
-                loader is not None
-                and loader.num_workers > 0
-                and getattr(loader, "_iterator", None) is None
-            ):
-                iter(loader)
         self.setup_model()
         self.setup_optimizer()
 

@@ -18,7 +18,7 @@ from speculators.models.mtp.core import MTPDraftModel
 from speculators.models.peagle.config import PEagleSpeculatorConfig
 from speculators.models.peagle.core import PEagleDraftModel
 from speculators.proposals.greedy import GreedyTokenProposalConfig
-from speculators.train.data import create_collate_fn
+from speculators.train.data import CollateFn
 
 # ---------------------------------------------------------------------------
 # Tiny verifier configs
@@ -315,7 +315,7 @@ def make_batch(
 ) -> dict[str, torch.Tensor]:
     """Collate a list of samples into a single batch using the real collate_fn.
 
-    Uses ``create_collate_fn`` from ``speculators.train.data`` to pack and pad
+    Uses ``CollateFn`` from ``speculators.train.data`` to pack and pad
     samples exactly the way the training pipeline does.
 
     Args:
@@ -330,7 +330,7 @@ def make_batch(
     Returns:
         Dict with keys matching model forward() signatures, all on ``device``.
     """
-    collate_fn = create_collate_fn(
+    collate_fn = CollateFn(
         max_len=max_len,
         hidden_size=hidden_size,
         num_target_layers=num_target_layers,

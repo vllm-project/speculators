@@ -11,7 +11,7 @@ from speculators.models.eagle3.data import shift_batch
 from speculators.train.data import (
     ArrowDataset,
     SampleFileDataset,
-    create_collate_fn,
+    CollateFn,
     standardize_data_v1,
 )
 
@@ -133,7 +133,7 @@ def test_collate_fn_basic():
     max_len = 10
     hidden_size = 1
     num_target_layers = 3
-    collate_fn = create_collate_fn(
+    collate_fn = CollateFn(
         max_len, hidden_size, num_target_layers=num_target_layers, dtype=torch.float32
     )
 
@@ -210,7 +210,7 @@ def test_collate_fn_basic():
 
 def test_collate_fn_casts_hidden_states_dtype():
     """Test that hidden-states keys are cast to the target dtype during collation."""
-    collate_fn = create_collate_fn(4, 1, dtype=torch.bfloat16)
+    collate_fn = CollateFn(4, 1, dtype=torch.bfloat16)
     batch = [
         {
             "input_ids": torch.tensor([0], dtype=torch.long),
@@ -234,7 +234,7 @@ def test_collate_fn_length_truncation():
     max_len = 11
     hidden_size = 8
     num_target_layers = 3
-    collate_fn = create_collate_fn(
+    collate_fn = CollateFn(
         max_len, hidden_size, num_target_layers=num_target_layers, dtype=torch.float32
     )
 
