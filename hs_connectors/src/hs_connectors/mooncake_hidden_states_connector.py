@@ -155,6 +155,9 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
         self._kv_cache: torch.Tensor | None = None
         self._is_tp_rank_zero: bool = True
         self._store_ready: bool = False
+        # Dedicated CUDA stream for DtoH copies so they don't block
+        # the default stream (model forward).
+        self._copy_stream: torch.cuda.Stream | None = None
         self._executor = ThreadPoolExecutor(
             max_workers=mooncake_cfg.num_writer_threads,
             thread_name_prefix="vllm-mooncake-hs",
@@ -198,14 +201,30 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
             f"Expected 1 CacheOnlyAttentionLayer, got {len(cache_layers)}"
         )
         self._kv_cache = kv_caches[cache_layers[0]]
+        self._copy_stream = torch.cuda.Stream()
+
+    def _get_copy_stream(self) -> torch.cuda.Stream:
+        """Return the dedicated copy stream, lazily creating it if needed."""
+        if self._copy_stream is None:
+            self._copy_stream = torch.cuda.Stream()
+        return self._copy_stream
 
     def _ensure_store(self) -> None:
         if not self._store_ready:
             self._store.setup()
             self._store_ready = True
 
-    def _write_sample(self, pending: PendingSave) -> None:
+    def _write_sample(
+        self, pending: PendingSave, ready_event: torch.cuda.Event
+    ) -> None:
         assert self._kv_cache is not None
+
+        copy_stream = self._get_copy_stream()
+        # Make the copy stream wait until the forward pass has finished
+        # writing to the KV cache (the event was recorded on the default
+        # stream in get_finished).
+        copy_stream.wait_event(ready_event)
+
         block_ids_t = torch.tensor(pending.block_ids, dtype=torch.long)
         num_blocks = block_ids_t.shape[0]
         block_offsets = torch.arange(0, self._block_size, dtype=torch.long)
@@ -215,14 +234,26 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
         ).flatten()
 
         num_tokens = pending.token_ids.shape[0]
-        slot_mapping = slot_mapping.to(self._kv_cache.device)
-        hidden_states = extract_from_kv_cache(
-            self._kv_cache, slot_mapping, num_tokens
-        ).to("cpu")
+
+        with torch.cuda.stream(copy_stream):
+            slot_mapping = slot_mapping.to(
+                self._kv_cache.device, non_blocking=True
+            )
+            hidden_states = extract_from_kv_cache(
+                self._kv_cache, slot_mapping, num_tokens
+            )
+            # Async DtoH copy into pinned host memory.
+            pinned_hs = torch.empty_like(
+                hidden_states, device="cpu", pin_memory=True
+            )
+            pinned_hs.copy_(hidden_states, non_blocking=True)
+
+        # Wait for the DtoH copy to complete before handing data to the store.
+        copy_stream.synchronize()
 
         self._store.put_sample(
             pending.mooncake_key,
-            {"hidden_states": hidden_states, "token_ids": pending.token_ids},
+            {"hidden_states": pinned_hs, "token_ids": pending.token_ids},
         )
 
     def get_finished(
@@ -237,8 +268,13 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
                     if pending.req_id in self._req_futures:
                         continue
                     self._ensure_store()
+                    # Record an event on the current (default) stream so
+                    # the worker thread can wait for the forward pass to
+                    # finish writing to the KV cache before reading it.
+                    ready_event = torch.cuda.Event()
+                    ready_event.record()
                     self._req_futures[pending.req_id] = self._executor.submit(
-                        self._write_sample, pending
+                        self._write_sample, pending, ready_event
                     )
 
         self._accumulated_finished_req_ids.update(finished_req_ids)
