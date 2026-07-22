@@ -717,6 +717,30 @@ def test_preprocess_batch_truncation():
 
 
 @pytest.mark.sanity
+def test_preprocess_batch_preserves_exact_rollout_tokens():
+    """Exact rollout IDs and their mask bypass chat-template rendering."""
+    results = _preprocess_batch(
+        {
+            "conversations": [
+                [
+                    {"role": "user", "content": "Use the tool"},
+                    {"role": "assistant", "content": "done"},
+                ]
+            ],
+            "input_ids": [[11, 12, 13, 14]],
+            "loss_mask": [[False, True, True, False]],
+        },
+        processor=object(),
+        max_length=3,
+        assistant_pattern=None,
+    )
+
+    assert results["input_ids"][0].tolist() == [11, 12, 13]
+    assert results["loss_mask"][0].tolist() == [0, 1, 1]
+    assert results["seq_len"] == [3]
+
+
+@pytest.mark.sanity
 def test_preprocess_batch_uses_hf_assistant_mask():
     """Test that HF assistant token mask is used when supported."""
     processor = load_processor(TEXT_MODEL_REPO, trust_remote_code=True)

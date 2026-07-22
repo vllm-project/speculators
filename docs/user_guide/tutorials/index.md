@@ -44,6 +44,12 @@ Regenerate dataset responses using your target model for improved drafter alignm
 
 **Time required:** ~10 minutes
 
+## [Agentic Regeneration with Verifiers](agentic_regeneration.md)
+
+Collect exact-token, on-policy agent trajectories and aligned vLLM hidden states.
+
+**Time required:** ~10 minutes
+
 ## [Evaluating Model Performance](evaluating_performance.md)
 
 Benchmark and evaluate your trained speculator models.
