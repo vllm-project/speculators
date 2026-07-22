@@ -117,8 +117,7 @@ def extract_output(
     )
     if handle is None:
         raise InvalidResponseError(
-            "Response kv_transfer_params missing both 'hidden_states_path' and "
-            "'handle'"
+            "Response kv_transfer_params missing both 'hidden_states_path' and 'handle'"
         )
     return handle
 

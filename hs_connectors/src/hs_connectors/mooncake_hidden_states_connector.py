@@ -242,16 +242,12 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
         num_tokens = pending.token_ids.shape[0]
 
         with torch.cuda.stream(copy_stream):
-            slot_mapping = slot_mapping.to(
-                self._kv_cache.device, non_blocking=True
-            )
+            slot_mapping = slot_mapping.to(self._kv_cache.device, non_blocking=True)
             hidden_states = extract_from_kv_cache(
                 self._kv_cache, slot_mapping, num_tokens
             )
             # Async DtoH copy into pinned host memory.
-            pinned_hs = torch.empty_like(
-                hidden_states, device="cpu", pin_memory=True
-            )
+            pinned_hs = torch.empty_like(hidden_states, device="cpu", pin_memory=True)
             pinned_hs.copy_(hidden_states, non_blocking=True)
 
         # Wait for the DtoH copy to complete before handing data to the store.
