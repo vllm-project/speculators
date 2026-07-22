@@ -158,10 +158,8 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
         # Dedicated CUDA stream for DtoH copies so they don't block
         # the default stream (model forward).
         self._copy_stream: torch.cuda.Stream | None = None
-        self._executor = ThreadPoolExecutor(
-            max_workers=mooncake_cfg.num_writer_threads,
-            thread_name_prefix="vllm-mooncake-hs",
-        )
+        self._num_writer_threads = mooncake_cfg.num_writer_threads
+        self._executor: ThreadPoolExecutor | None = None
         self._req_futures: dict[str, Future] = {}
         self._accumulated_finished_req_ids: set[str] = set()
 
@@ -208,6 +206,14 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
         if self._copy_stream is None:
             self._copy_stream = torch.cuda.Stream()
         return self._copy_stream
+
+    def _get_executor(self) -> ThreadPoolExecutor:
+        if self._executor is None:
+            self._executor = ThreadPoolExecutor(
+                max_workers=self._num_writer_threads,
+                thread_name_prefix="vllm-mooncake-hs",
+            )
+        return self._executor
 
     def _ensure_store(self) -> None:
         if not self._store_ready:
@@ -273,7 +279,7 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
                     # finish writing to the KV cache before reading it.
                     ready_event = torch.cuda.Event()
                     ready_event.record()
-                    self._req_futures[pending.req_id] = self._executor.submit(
+                    self._req_futures[pending.req_id] = self._get_executor().submit(
                         self._write_sample, pending, ready_event
                     )
 
