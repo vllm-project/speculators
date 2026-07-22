@@ -569,20 +569,20 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         )
         loss = (1.0 - lambda_base) * final_loss + lambda_base * base_loss
 
-        ones = torch.tensor(1.0, device=logits.device)
+        _one = lambda: torch.tensor(1.0, device=logits.device)  # noqa: E731
         metrics = {
             "loss_sum": loss.detach().clone(),
-            "loss_total": ones,
+            "loss_total": _one(),
             "base_loss_sum": base_loss.detach().clone(),
-            "base_loss_total": ones,
+            "base_loss_total": _one(),
             "full_acc_sum": base_metrics["full_acc_sum"],
             "full_acc_total": base_metrics["full_acc_total"],
             "final_loss_sum": final_loss.detach().clone(),
-            "final_loss_total": ones,
+            "final_loss_total": _one(),
             "final_full_acc_sum": final_metrics["full_acc_sum"],
             "final_full_acc_total": final_metrics["full_acc_total"],
             "lambda_base_sum": torch.tensor(lambda_base, device=logits.device),
-            "lambda_base_total": ones,
+            "lambda_base_total": _one(),
             **{
                 k: v
                 for k, v in final_metrics.items()
