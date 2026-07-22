@@ -60,16 +60,12 @@ def render_conversation(
         # requests without changing the outcome. InvalidResponseError short-
         # circuits @with_retries (see vllm_client._handle_retry_error).
         raise InvalidResponseError(
-            f"Render endpoint returned {resp.status_code}: {resp.text[:500]}"
+            f"Render endpoint returned {resp.status_code}: {resp.text}"
         )
     if resp.status_code != HTTPStatus.OK:
-        raise RenderError(
-            f"Render endpoint returned {resp.status_code}: {resp.text[:500]}"
-        )
+        raise RenderError(f"Render endpoint returned {resp.status_code}: {resp.text}")
 
     data = resp.json()
     if "token_ids" not in data:
-        raise RenderError(
-            f"Render endpoint response missing 'token_ids': {str(data)[:500]}"
-        )
+        raise RenderError(f"Render endpoint response missing 'token_ids': {data}")
     return data["token_ids"]
