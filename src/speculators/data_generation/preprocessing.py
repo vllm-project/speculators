@@ -346,7 +346,8 @@ def _passthrough_pretokenized(
     need no rendering.
     """
     results: dict[str, list] = {"input_ids": [], "loss_mask": [], "seq_len": []}
-    num_unsupervised = num_clipped = 0
+    num_unsupervised = 0
+    num_clipped = 0
     for ids, mask in zip(examples["input_ids"], examples["loss_mask"], strict=True):
         # A per-row length skew survives strict= column pairing; the collator
         # packs each key independently and would shift the mask silently.
@@ -404,7 +405,8 @@ def _preprocess_batch(
         )
         tools_col = None
 
-    num_unsupervised = num_clipped = 0
+    num_unsupervised = 0
+    num_clipped = 0
     num_convs_in = 0
     num_convs_empty = 0
 
