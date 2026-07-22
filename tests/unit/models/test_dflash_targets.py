@@ -15,7 +15,7 @@ def _tiny_model(sample_from_anchor: bool) -> DFlashDraftModel:
         num_key_value_heads=1,
         head_dim=8,
         vocab_size=64,
-        _attn_implementation="eager",
+        _attn_implementation="eager",  # type: ignore[call-arg]
     )
     config = DFlashSpeculatorConfig(
         transformer_layer_config=tl_config,
