@@ -546,6 +546,3 @@ class CollateFn:
         collated_data["document_ids"] = document_ids
 
         return collated_data
-
-
-create_collate_fn = CollateFn
