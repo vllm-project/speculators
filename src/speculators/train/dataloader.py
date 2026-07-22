@@ -15,7 +15,7 @@ from speculators.train.data import (
     ArrowDataset,
     BaseDataset,
     SampleFileDataset,
-    create_collate_fn,
+    CollateFn,
     split_files,
 )
 from speculators.train.distributed import get_dp_rank, get_dp_size
@@ -51,7 +51,7 @@ def _setup_dataloader(
         num_workers=num_workers,
         prefetch_factor=prefetch_factor if use_workers else None,
         pin_memory=True,
-        collate_fn=create_collate_fn(
+        collate_fn=CollateFn(
             total_seq_len,
             hidden_size,
             num_target_layers=num_target_layers,
@@ -59,6 +59,7 @@ def _setup_dataloader(
             preprocess=preprocess,
         ),
         persistent_workers=use_workers,
+        multiprocessing_context="spawn" if use_workers else None,
     )
 
 
