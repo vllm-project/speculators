@@ -212,8 +212,9 @@ def _render_boundary_rows(
     back to the common prefix, valid only if history agrees.
 
     Every turn gets its own row, carrying the history re-rendered the way
-    inference would see it. Trailing non-assistant messages are dropped, and
-    turns whose context alone fills ``max_length`` are skipped.
+    inference would see it. Trailing non-assistant messages are dropped, and a
+    turn whose context alone fills ``max_length`` is skipped -- only that turn,
+    since a later one can fit again once the template drops history reasoning.
 
     Raises:
         BoundaryUnstableError: the renders diverge inside history.
@@ -232,9 +233,11 @@ def _render_boundary_rows(
             tools=tools,
         )
         if len(prompt_ids) >= max_length:
-            # Context fills the window; this and later turns yield only
-            # unsupervised rows.
-            break
+            # Skip this turn, not the rest: context is not monotonic in ``j``.
+            # Templates that strip reasoning from history (Qwen3, and DeepSeek-R1
+            # distills) shrink the context once a later user turn arrives, so a
+            # turn past an over-long one can fit again.
+            continue
 
         full_ids = _encode_render(
             normalized_conv[: j + 1],
