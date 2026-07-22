@@ -172,14 +172,15 @@ class DSparkDraftModel(DFlashDraftModel):
             )
 
         if self.confidence_head is not None:
-            # confidence_head_with_markov requires markov_rank > 0 (enforced in
-            # __init__), so prev_emb is always set when the flag is on.
+            # Detach inputs so the confidence BCE loss only trains the
+            # confidence head itself, not the backbone or Markov head.
+            h_det = hidden_blocks.detach()
             if self.config.confidence_head_with_markov and prev_emb is not None:
                 conf_features = torch.cat(
-                    [hidden_blocks, prev_emb.to(hidden_blocks.dtype)], dim=-1
+                    [h_det, prev_emb.detach().to(h_det.dtype)], dim=-1
                 )
             else:
-                conf_features = hidden_blocks
+                conf_features = h_det
             confidence_logits = self.confidence_head(conf_features).reshape(
                 1, mask_tokens_size
             )
