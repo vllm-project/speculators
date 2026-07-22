@@ -959,9 +959,11 @@ def parse_args():
         type=int,
         nargs="+",
         help=(
-            "(Optional) A (space separated) list of integer layer ids. Defaults to"
-            "[2, num_hidden_layers // 2, num_hidden_layers - 3, num_hidden_layers]. "
-            "Note: must be set explicitly if custom values were used to launch vllm"
+            "(Optional) A (space separated) list of integer layer ids for the "
+            "auxiliary hidden states. Defaults to "
+            "[2, num_hidden_layers // 2, num_hidden_layers - 3]. Note: if custom "
+            "values were used to launch vllm, pass the same ids here, excluding "
+            "the final layer launch_vllm.py appends."
         ),
     )
     parser.add_argument(
