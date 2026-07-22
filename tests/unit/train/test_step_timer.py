@@ -16,7 +16,7 @@ def test_disabled_timer_returns_none():
     assert timer.profile(num_tokens=1024) is None
 
 
-@patch("speculators.train.trainer.torch.cuda.synchronize")
+@patch("speculators.train.trainer.torch.accelerator.synchronize")
 def test_enabled_timer_returns_profile(mock_sync):
     timer = _StepTimer(enabled=True)
 
@@ -79,7 +79,7 @@ def test_disabled_to_enabled_transition():
     timer.mark_value("start", t_before_fetch)
 
     with (
-        patch("speculators.train.trainer.torch.cuda.synchronize"),
+        patch("speculators.train.trainer.torch.accelerator.synchronize"),
         patch(
             "speculators.train.trainer.time.perf_counter",
             side_effect=[2.1, 2.4, 2.5, 2.6, 2.6],
@@ -106,7 +106,7 @@ def test_zero_step_ms_returns_zero_throughput():
     timer = _StepTimer(enabled=True)
     timer.mark_value("start", 1.0)
     with (
-        patch("speculators.train.trainer.torch.cuda.synchronize"),
+        patch("speculators.train.trainer.torch.accelerator.synchronize"),
         patch("speculators.train.trainer.time.perf_counter", return_value=1.0),
     ):
         timer.mark("fetch")

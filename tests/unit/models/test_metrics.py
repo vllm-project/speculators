@@ -16,7 +16,7 @@ from speculators.models.metrics import (
     loss_function,
     neg_log_acceptance_loss,
     nla_loss_fused_or_eager,
-    resolve_loss_fn,
+    resolve_loss_config,
     reverse_kl_div_loss,
     tv_loss,
     tv_loss_fused_or_eager,
@@ -120,8 +120,8 @@ class TestReverseKLDivLoss:
         )
 
     def test_resolve_rkl(self):
-        """resolve_loss_fn maps 'rkl' to reverse_kl_div_loss."""
-        assert resolve_loss_fn("rkl") is reverse_kl_div_loss
+        """resolve_loss_config wires 'rkl' to reverse_kl_div_loss."""
+        assert resolve_loss_config("rkl")["rkl"][0] is reverse_kl_div_loss
 
 
 class TestJSDivLoss:
@@ -171,8 +171,8 @@ class TestJSDivLoss:
         assert torch.allclose(out, expected, atol=1e-5)
 
     def test_resolve_jsd(self):
-        """resolve_loss_fn maps 'jsd' to js_div_loss."""
-        assert resolve_loss_fn("jsd") is js_div_loss
+        """resolve_loss_config wires 'jsd' to js_div_loss."""
+        assert resolve_loss_config("jsd")["jsd"][0] is js_div_loss
 
 
 class TestTVLoss:
@@ -199,8 +199,8 @@ class TestTVLoss:
         assert (out <= 1).all()
 
     def test_resolve_tv(self):
-        """resolve_loss_fn maps 'tv' to the fused-or-eager dispatcher."""
-        assert resolve_loss_fn("tv") is tv_loss_fused_or_eager
+        """resolve_loss_config wires 'tv' to the fused-or-eager dispatcher."""
+        assert resolve_loss_config("tv")["tv"][0] is tv_loss_fused_or_eager
 
     @pytest.mark.skipif(
         not torch.cuda.is_available(), reason="fused Triton loss requires CUDA"
@@ -271,8 +271,8 @@ class TestNegLogAcceptanceLoss:
         assert torch.isfinite(neg_log_acceptance_loss(logits, targets)).all()
 
     def test_resolve_nla(self):
-        """resolve_loss_fn maps 'nla' to the fused-or-eager dispatcher."""
-        assert resolve_loss_fn("nla") is nla_loss_fused_or_eager
+        """resolve_loss_config wires 'nla' to the fused-or-eager dispatcher."""
+        assert resolve_loss_config("nla")["nla"][0] is nla_loss_fused_or_eager
 
 
 class TestLKHybridLoss:
@@ -330,8 +330,8 @@ class TestLKHybridLoss:
         assert not torch.allclose(g_detached, g_nodetach, atol=1e-4)
 
     def test_resolve_lk_hybrid(self):
-        """resolve_loss_fn maps 'lk_hybrid' to lk_hybrid_loss."""
-        assert resolve_loss_fn("lk_hybrid") is lk_hybrid_loss
+        """resolve_loss_config wires 'lk_hybrid' to lk_hybrid_loss."""
+        assert resolve_loss_config("lk_hybrid")["lk_hybrid"][0] is lk_hybrid_loss
 
 
 class TestComputeAccuracySingleStep:

@@ -188,11 +188,7 @@ For single-line comments, use `line` only. For multi-line, use `start_line` + `l
 
 If there are zero inline comments beyond the summary, post just the review body.
 
-If no issues survive filtering (all < 80 confidence), post a short review comment. Keep it to 1–3 sentences max. Do NOT list everything you checked — that's noise. Examples:
-
-- "LGTM. Recommend approving."
-- "LGTM. Agree with @coderabbitai's suggestion to add tests for auto-detection and `_save` happy path. Recommend approving once addressed."
-- "LGTM, one minor non-blocking note below. Recommend approving."
+If no issues survive filtering (all < 80 confidence), **do not post a review**. Report to the invoker that no actionable findings were found, but do not leave a comment on the PR — clean PRs don't need noise.
 
 **Never approve a PR automatically.** Always use `event="COMMENT"`, never `event="APPROVE"`. Only the human reviewer should submit an approval.
 
