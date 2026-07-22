@@ -14,8 +14,8 @@ from hs_connectors import HiddenStatesTransfer
 from speculators.train.data import (
     ArrowDataset,
     BaseDataset,
-    SampleFileDataset,
     CollateFn,
+    SampleFileDataset,
     split_files,
 )
 from speculators.train.distributed import get_dp_rank, get_dp_size

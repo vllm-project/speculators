@@ -3,7 +3,7 @@ import math
 import os
 import random
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from os import PathLike
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -469,7 +469,7 @@ class CollateFn:
         self.dtype = dtype
         self.preprocess = preprocess
 
-    def __call__(self, batch: list[BatchType | None]) -> BatchType:
+    def __call__(self, batch: Sequence[BatchType | None]) -> BatchType:
         max_len = self.max_len
         dtype = self.dtype
         preprocess = self.preprocess

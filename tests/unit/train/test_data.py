@@ -10,8 +10,8 @@ from safetensors.torch import save_file
 from speculators.models.eagle3.data import shift_batch
 from speculators.train.data import (
     ArrowDataset,
-    SampleFileDataset,
     CollateFn,
+    SampleFileDataset,
     standardize_data_v1,
 )
 
