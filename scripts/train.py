@@ -523,7 +523,19 @@ def main(args: argparse.Namespace):  # noqa: C901
     )
 
     # Setup distributed training
-    maybe_setup_distributed()
+    maybe_setup_distributed(sp_size=args.sp_size)
+
+    if args.sp_size > 1:
+        if args.total_seq_len % args.sp_size != 0:
+            raise ValueError(
+                f"--total-seq-len ({args.total_seq_len}) must be divisible "
+                f"by --sp-size ({args.sp_size})"
+            )
+        if args.speculator_type != "eagle3":
+            raise ValueError(
+                f"Sequence parallelism (--sp-size > 1) is currently only "
+                f"supported for eagle3, got --speculator-type={args.speculator_type}"
+            )
 
     if args.fsdp_shard and not is_distributed():
         raise ValueError(
@@ -918,6 +930,18 @@ def parse_args():
         ),
     )
     parser.add_argument("--total-seq-len", type=int, default=8192)
+    parser.add_argument(
+        "--sp-size",
+        type=int,
+        default=1,
+        help=(
+            "Sequence parallelism degree (Ulysses). Splits the packed "
+            "sequence across this many ranks within each SP group, "
+            "reducing per-device activation memory. Requires "
+            "world_size %% sp_size == 0 and total_seq_len %% sp_size == 0. "
+            "Currently only supported for eagle3."
+        ),
+    )
     parser.add_argument(
         "--log-freq",
         type=int,

@@ -514,6 +514,12 @@ def loss_function(
 ):
     """Compute masked, optionally position-decayed training loss.
 
+    When Ulysses SP is active (``sp_size > 1``), each rank holds a
+    local chunk of the sequence.  The numerator and denominator are
+    all-reduced across the SP group so that every rank computes the
+    same globally-averaged loss, producing correct gradients after
+    the SP gradient all-reduce.
+
     Args:
         logits: Draft model logits.
         targets: Target model logits.
@@ -525,6 +531,10 @@ def loss_function(
     Returns:
         Scalar mean loss across the batch.
     """
+    import torch.distributed as dist  # noqa: PLC0415
+
+    from speculators.train.distributed import get_sp_group, get_sp_size  # noqa: PLC0415
+
     elementwise_loss = loss_fn(logits, targets)  # shape: [1, seq_len]
 
     loss_mask = loss_mask.to(elementwise_loss.dtype)
@@ -536,7 +546,13 @@ def loss_function(
         )
         elementwise_loss = elementwise_loss * decay_mult
 
+    numerator = torch.sum(elementwise_loss, dim=1)
     denominator = loss_mask.sum(dim=1) + _EPS
 
-    batch_loss = torch.sum(elementwise_loss, dim=1) / denominator  # shape: [1]
+    if get_sp_size() > 1:
+        sp_group = get_sp_group()
+        dist.all_reduce(numerator, group=sp_group)
+        dist.all_reduce(denominator, group=sp_group)
+
+    batch_loss = numerator / denominator  # shape: [1]
     return batch_loss.mean()  # shape: []

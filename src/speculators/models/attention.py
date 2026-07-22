@@ -26,10 +26,12 @@ def flex_attention_forward(
     scaling: float | None = None,
     **_kwargs,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
-    """Shared flex attention forward implementation.
+    """Shared flex attention forward with optional Ulysses sequence parallelism.
 
-    This function is used by both EAGLE3 and DFlash attention mechanisms to avoid
-    code duplication and ensure consistent behavior.
+    When ``sp_size > 1``, Q/K/V are transposed via all-to-all from
+    sequence-parallel layout ``(B, H, S_local, D)`` to head-parallel
+    layout ``(B, H/sp, S_full, D)`` before attention, and the output
+    is transposed back afterwards.
 
     Args:
         module: The attention module (unused but required for interface compatibility).
@@ -44,6 +46,21 @@ def flex_attention_forward(
         Tuple of (attention_output, None) where attention_output has shape
         (batch, seq_len, num_heads, head_dim) and None represents no attention weights.
     """
+    from speculators.train.distributed import get_sp_group, get_sp_size  # noqa: PLC0415
+    from speculators.train.sequence_parallel import (  # noqa: PLC0415
+        ulysses_gather,
+        ulysses_scatter,
+    )
+
+    sp_size = get_sp_size()
+    use_sp = sp_size > 1
+
+    if use_sp:
+        sp_group = get_sp_group()
+        query = ulysses_scatter(query, sp_group, sp_size)
+        key = ulysses_scatter(key, sp_group, sp_size)
+        value = ulysses_scatter(value, sp_group, sp_size)
+
     num_query_heads = query.shape[1]
     num_key_value_heads = key.shape[1]
     enable_gqa = num_query_heads != num_key_value_heads
@@ -62,6 +79,10 @@ def flex_attention_forward(
         scale=scaling,
     )
     attention_output: torch.Tensor = flex_attention_output
+
+    if use_sp:
+        attention_output = ulysses_gather(attention_output, sp_group, sp_size)
+
     attention_output = attention_output.transpose(1, 2).contiguous()
     return attention_output, None
 
