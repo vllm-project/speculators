@@ -70,10 +70,8 @@ def test_boundary_unstable_raises(monkeypatch):
 
 
 def test_over_length_turn_does_not_drop_later_turns(monkeypatch):
-    # Context is not monotonic in the turn index. Qwen3 strips `<think>` from
-    # history once a later user turn arrives, so turn 3 can be over the window
-    # while turn 5 -- rendered after the strip -- is 4 tokens. Stopping at the
-    # first over-length turn silently discarded every trainable turn after it.
+    # Qwen3 strips `<think>` from history once a later user turn arrives, so
+    # turn 3 can exceed the window while turn 5 fits again.
     _patch_encode(
         monkeypatch,
         {
@@ -91,9 +89,8 @@ def test_over_length_turn_does_not_drop_later_turns(monkeypatch):
 
 
 def test_over_length_first_turn_yields_no_rows(monkeypatch):
-    # The first assistant turn's context holds no assistant message, so nothing
-    # can be stripped from it -- it is the smallest the conversation ever gets.
-    # Every later turn overflows too, and the conversation yields nothing.
+    # No assistant message in the first turn's context, so nothing can be
+    # stripped: it is the smallest the conversation ever gets.
     _patch_encode(
         monkeypatch,
         {
