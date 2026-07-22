@@ -41,7 +41,7 @@ def render_conversation(
     """
     url = f"{endpoint.rstrip('/')}/v1/chat/completions/render"
 
-    body: dict = {
+    body = {
         "messages": messages,
         "add_generation_prompt": add_generation_prompt,
     }
