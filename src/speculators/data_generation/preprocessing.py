@@ -393,7 +393,7 @@ def _preprocess_batch(
         )
 
     results: dict[str, list] = {"input_ids": [], "loss_mask": [], "seq_len": []}
-    conversations: list[dict] = examples.get("conversations", [])
+    conversations: list[list[dict]] = examples.get("conversations", [])
 
     # MM inputs are extracted via the Chat Completions API, which needs the
     # original messages -- token ids alone cannot carry the images.
