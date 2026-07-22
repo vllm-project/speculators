@@ -2,7 +2,7 @@ import json
 from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Literal
+from typing import Literal, TypedDict
 
 import torch
 from datasets import Dataset as HFDataset
@@ -169,6 +169,12 @@ class BoundaryUnstableError(ValueError):
     """The chat template is not prefix-stable at an assistant turn boundary."""
 
 
+class BoundaryRow(TypedDict):
+    input_ids: list[int]
+    loss_mask: list[int]
+    conv: list[dict]  # prefix through this turn; multimodal rows re-send it
+
+
 def _encode_render(
     conv_prefix: list[dict],
     render_endpoint: str,
@@ -201,7 +207,7 @@ def _render_boundary_rows(
     max_length: int,
     *,
     tools: list[dict] | None = None,
-) -> list[dict]:
+) -> list[BoundaryRow]:
     """Build one training row per assistant turn, masked at its render boundary.
 
     For assistant turn ``j``, the boundary is where the ``conv[:j+1]`` full render
@@ -219,7 +225,7 @@ def _render_boundary_rows(
     Raises:
         BoundaryUnstableError: the renders diverge inside history.
     """
-    rows: list[dict] = []
+    rows: list[BoundaryRow] = []
 
     for j, turn in enumerate(normalized_conv):
         # j == 0 has no preceding context to bound against; keep it as context only.
@@ -233,10 +239,8 @@ def _render_boundary_rows(
             tools=tools,
         )
         if len(prompt_ids) >= max_length:
-            # Skip this turn, not the rest: context is not monotonic in ``j``.
-            # Templates that strip reasoning from history (Qwen3, and DeepSeek-R1
-            # distills) shrink the context once a later user turn arrives, so a
-            # turn past an over-long one can fit again.
+            # Not a break: templates that strip history reasoning (Qwen3,
+            # DeepSeek-R1) shrink the context, so a later turn can fit again.
             continue
 
         full_ids = _encode_render(
