@@ -2,6 +2,7 @@ import logging
 from typing import ClassVar
 
 import torch
+import torch.distributed as dist
 from torch import nn
 from torch.nn.attention.flex_attention import create_block_mask, create_mask
 from transformers import PretrainedConfig
@@ -51,6 +52,8 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
     t2d: torch.Tensor | None
     d2t: torch.Tensor | None
 
+    _sp_splits_batch: ClassVar[bool] = False
+
     def __init__(
         self,
         config: DFlashSpeculatorConfig,
@@ -68,6 +71,14 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             if self._attn_impl == "eager"
             else create_mask
         )
+
+        from speculators.train.distributed import get_sp_size  # noqa: PLC0415
+
+        if get_sp_size() > 1:
+            config.transformer_layer_config._attn_implementation = (  # noqa: SLF001
+                "dflash_flex_attention"
+            )
+
         super().__init__(config=config)
         self._init_vocab(config)
 
@@ -289,11 +300,24 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
 
     @torch.compiler.disable
     def _build_attention_mask(self, loss_mask, max_anchors, document_ids, device):
+        from speculators.train.distributed import (  # noqa: PLC0415
+            get_sp_group,
+            get_sp_rank,
+            get_sp_size,
+        )
+
         total_seq_len = loss_mask.shape[1]
+        sp_size = get_sp_size()
 
         anchor_positions, anchor_valid = select_anchors(
             loss_mask, max_anchors, self.block_size
         )
+
+        if sp_size > 1:
+            sp_group = get_sp_group()
+            src = dist.get_process_group_ranks(sp_group)[0]
+            dist.broadcast(anchor_positions, src=src, group=sp_group)
+            dist.broadcast(anchor_valid, src=src, group=sp_group)
 
         full_attn_mask = None
         if self.uses_full_attn:
@@ -316,6 +340,13 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 sliding_window_non_causal=self.sliding_window_non_causal,
             )
 
+        if sp_size > 1:
+            sp_rank = get_sp_rank()
+            n_per_rank = max_anchors // sp_size
+            local_start = sp_rank * n_per_rank
+            anchor_positions = anchor_positions[local_start : local_start + n_per_rank]
+            anchor_valid = anchor_valid[local_start : local_start + n_per_rank]
+
         return full_attn_mask, sliding_window_attn_mask, anchor_positions, anchor_valid
 
     def _backbone_forward(
@@ -333,10 +364,25 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         Returns ``(hidden, logits, targets, aligned_loss_mask,
         anchored_block_indices)``. DSpark reuses this and adds its Markov and
         confidence heads before computing its own loss.
+
+        When ``sp_size > 1``, each SP rank processes a local slice of the
+        context and a partition of the anchors.  The attention function
+        handles the all-to-all communication to reconstruct the global
+        context and noise inside each layer.
         """
+        from speculators.train.distributed import (  # noqa: PLC0415
+            get_sp_rank,
+            get_sp_size,
+        )
+
         device = hidden_states.device
         total_seq_len = hidden_states.shape[1]
         num_anchors = kwargs.pop("max_anchors", 3072)
+
+        sp_size = get_sp_size()
+        sp_rank = get_sp_rank()
+        local_seq_len = total_seq_len // sp_size if sp_size > 1 else total_seq_len
+        sp_start = sp_rank * local_seq_len if sp_size > 1 else 0
 
         if position_ids is None:
             position_ids = torch.arange(
@@ -347,46 +393,48 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             self._build_attention_mask(loss_mask, num_anchors, document_ids, device)
         )
 
-        mask_tokens_size = num_anchors * self.block_size
+        local_num_anchors = len(anchor_positions)
+        mask_tokens_size = local_num_anchors * self.block_size
 
         mask_token_ids = torch.full(
             (1, mask_tokens_size),
             self.mask_token_id,
             dtype=torch.long,
             device=device,
-        )  # shape: [1, num_anchors*block_size]
+        )
         mask_token_ids[:, :: self.block_size] = input_ids[:, anchor_positions]
         noise_embedding = self.embed_tokens(mask_token_ids)
-        # shape: [1, num_anchors*block_size, hidden_size]
 
-        fc_output = self.fc(hidden_states)
+        fc_output = self.fc(hidden_states[:, sp_start : sp_start + local_seq_len])
         fc_output = self.hidden_norm(fc_output)
-        # shape: [1, total_seq_len, hidden_size]
 
         mask_position_ids = get_base_indices_for_anchored_blocks(
             position_ids[0, anchor_positions], self.block_size
         )
-        position_ids = torch.cat([position_ids, mask_position_ids.unsqueeze(0)], dim=1)
-        # shape: [1, total_seq_len + num_anchors*block_size]
+        local_position_ids = torch.cat(
+            [
+                position_ids[:, sp_start : sp_start + local_seq_len],
+                mask_position_ids.unsqueeze(0),
+            ],
+            dim=1,
+        )
 
-        # the hidden_states shape doesn't match position_ids but doesn't need
-        # to, as hidden_states is only used to set dtype and device in rotary_emb
-        position_embeddings = self.rotary_emb(hidden_states, position_ids)
+        position_embeddings = self.rotary_emb(
+            hidden_states[:, sp_start : sp_start + local_seq_len],
+            local_position_ids,
+        )
 
         anchored_block_indices = get_base_indices_for_anchored_blocks(
             anchor_positions, self.block_size
-        )  # shape: [num_anchors*block_size]
+        )
 
         with torch.no_grad():
             verifier_logits = self.verifier_lm_head(
                 self.verifier_norm(verifier_last_hidden_states)
             )
             if not self.config.sample_from_anchor:
-                # False: shift right by 1 so slot j predicts token at position j
                 verifier_logits = torch.roll(verifier_logits, 1, dims=1)
-            # else: True, slot k predicts token at position k+1 (next), no shift
             targets = verifier_logits[:, anchored_block_indices]
-            # shape: [1, num_anchors*block_size, draft_vocab_size]
 
         for layer_idx, layer in enumerate(self.layers):
             noise_embedding = layer(
@@ -395,7 +443,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 attention_mask=sliding_window_attn_mask
                 if layer_idx in self.sliding_window_indices
                 else full_attn_mask,
-                position_ids=position_ids,
+                position_ids=local_position_ids,
                 use_cache=False,
                 position_embeddings=position_embeddings,
                 **kwargs,
@@ -403,19 +451,15 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
 
         hidden = self.norm(noise_embedding)
         logits = self.lm_head(hidden)
-        # shape: [1, num_anchors*block_size, vocab_size]
 
         aligned_loss_mask = loss_mask.clone()[:, anchored_block_indices]
-        # shape: [1, num_anchors*block_size]
 
-        # zero out any padded anchor blocks
         aligned_loss_mask = aligned_loss_mask * (
             anchor_valid.repeat_interleave(self.block_size)
             .unsqueeze(0)
             .to(aligned_loss_mask.dtype)
-        )  # shape: [1, num_anchors*block_size]
+        )
 
-        # For sample_from_anchor=False, mask slot 0 (anchor) since it's not trained
         if not self.config.sample_from_anchor:
             aligned_loss_mask[:, :: self.block_size] = 0
 
@@ -439,11 +483,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
     ):
         from speculators.train.distributed import get_sp_size  # noqa: PLC0415
 
-        if get_sp_size() > 1:
-            raise NotImplementedError(
-                "DFlashDraftModel does not yet support "
-                "sequence parallelism (sp_size > 1)"
-            )
+        sp_size = get_sp_size()
 
         _, logits, targets, aligned_loss_mask, _ = self._backbone_forward(
             hidden_states,
@@ -466,4 +506,10 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             dpace_alpha=dpace_alpha,
             sample_from_anchor=self.config.sample_from_anchor,
         )
+
+        if sp_size > 1:
+            for k in list(metrics):
+                if k.endswith("_total") and metrics[k].numel() == 1:
+                    metrics[k] = metrics[k] / sp_size
+
         return None, loss, metrics
