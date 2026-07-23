@@ -429,12 +429,23 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         )
 
         with torch.no_grad():
-            verifier_logits = self.verifier_lm_head(
-                self.verifier_norm(verifier_last_hidden_states)
-            )
-            if not self.config.sample_from_anchor:
-                verifier_logits = torch.roll(verifier_logits, 1, dims=1)
-            targets = verifier_logits[:, anchored_block_indices]
+            if anchored_block_indices.numel() < total_seq_len:
+                target_indices = (
+                    anchored_block_indices
+                    if self.config.sample_from_anchor
+                    else (anchored_block_indices - 1) % total_seq_len
+                )
+                targets = self.verifier_lm_head(
+                    self.verifier_norm(verifier_last_hidden_states[:, target_indices])
+                )
+            else:
+                verifier_logits = self.verifier_lm_head(
+                    self.verifier_norm(verifier_last_hidden_states)
+                )
+                if not self.config.sample_from_anchor:
+                    verifier_logits = torch.roll(verifier_logits, 1, dims=1)
+                targets = verifier_logits[:, anchored_block_indices]
+            # shape: [1, num_anchors*block_size, draft_vocab_size]
 
         for layer_idx, layer in enumerate(self.layers):
             noise_embedding = layer(
