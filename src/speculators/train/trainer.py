@@ -460,7 +460,10 @@ class Trainer:
                 else v
                 for k, v in batch.items()
             }
-            gpu_batch = split_batch_for_sp(gpu_batch, get_sp_rank(), get_sp_size())
+            if getattr(self.model, "_sp_splits_batch", True):
+                gpu_batch = split_batch_for_sp(
+                    gpu_batch, get_sp_rank(), get_sp_size()
+                )
 
             with torch.autocast(
                 self.device_type, dtype=self.config.hidden_states_dtype
@@ -555,7 +558,10 @@ class Trainer:
                 else v
                 for k, v in batch.items()
             }
-            gpu_batch = split_batch_for_sp(gpu_batch, get_sp_rank(), get_sp_size())
+            if getattr(self.model, "_sp_splits_batch", True):
+                gpu_batch = split_batch_for_sp(
+                    gpu_batch, get_sp_rank(), get_sp_size()
+                )
 
             with torch.autocast(
                 self.device_type, dtype=self.config.hidden_states_dtype
