@@ -58,6 +58,8 @@ def flex_attention_forward(
 
     if use_sp:
         sp_group = get_sp_group()
+        assert sp_group is not None, "SP group did not initialize for sequence parallelism, something went wrong!"
+
         key, value = maybe_replicate_kv_heads(key, value, sp_size)
         query = ulysses_scatter(query, sp_group, sp_size)
         key = ulysses_scatter(key, sp_group, sp_size)

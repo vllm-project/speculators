@@ -30,6 +30,7 @@ _MIN_SPLIT_NDIM = 2
 # ---------------------------------------------------------------------------
 
 
+@torch.compiler.allow_in_graph
 class _AllToAllSP(torch.autograd.Function):
     """Differentiable all-to-all for sequence parallelism.
 
@@ -239,12 +240,12 @@ def dflash_flex_attention_forward(
 
     from torch.nn.attention.flex_attention import flex_attention  # noqa: PLC0415
 
-    ctx_len = kwargs.pop("ctx_len", None)
-    if ctx_len is None:
-        raise ValueError("ctx_len must be provided for DFlash Ulysses attention")
-
     sp_group = get_sp_group()
     key, value = maybe_replicate_kv_heads(key, value, sp_size)
+
+    # DFlash K/V = [context | noise]. Q is noise-only,
+    # so ctx_len = kv_seq_len - q_seq_len.
+    ctx_len = key.shape[2] - query.shape[2]
 
     k_ctx, k_noise = key.split([ctx_len, key.shape[2] - ctx_len], dim=2)
     v_ctx, v_noise = value.split([ctx_len, value.shape[2] - ctx_len], dim=2)
