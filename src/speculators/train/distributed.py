@@ -110,6 +110,7 @@ def _init_sp_process_groups(rank: int, world_size: int, sp_size: int) -> None:
 
     dp_size = world_size // sp_size
 
+    # get the SP group for this rank
     sp_group = None
     for i in range(dp_size):
         sp_ranks = list(range(i * sp_size, (i + 1) * sp_size))
@@ -117,6 +118,7 @@ def _init_sp_process_groups(rank: int, world_size: int, sp_size: int) -> None:
         if rank in sp_ranks:
             sp_group = pg
 
+    # get the DP group for this rank
     dp_group = None
     for i in range(sp_size):
         dp_ranks = list(range(i, world_size, sp_size))
@@ -153,14 +155,14 @@ def maybe_setup_distributed(sp_size: int = 1) -> None:
     """
     global _local_rank, _rank, _is_distributed, _world_size  # noqa: PLW0603
 
-    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
     distributed = "LOCAL_RANK" in os.environ
-
-    _local_rank = local_rank
     _is_distributed = distributed
 
     if not distributed:
         return
+
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    _local_rank = local_rank
 
     torch.accelerator.set_device_index(local_rank)
     acc = torch.accelerator.current_accelerator()

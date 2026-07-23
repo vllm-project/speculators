@@ -25,6 +25,57 @@ _KEEP_FULL_KEYS = frozenset({"document_ids"})
 _MIN_SPLIT_NDIM = 2
 
 
+# ---------------------------------------------------------------------------
+# Differentiable all-to-all primitive
+# ---------------------------------------------------------------------------
+
+
+class _AllToAllSP(torch.autograd.Function):
+    """Differentiable all-to-all for sequence parallelism.
+
+    Scatters along ``scatter_dim`` and gathers along ``gather_dim``.
+    The backward pass reverses the two dimensions so gradients flow
+    back through the communication correctly.
+    """
+
+    @staticmethod
+    def forward(
+        ctx,
+        input_tensor: torch.Tensor,
+        sp_group: ProcessGroup,
+        scatter_dim: int,
+        gather_dim: int,
+    ) -> torch.Tensor:
+        ctx.sp_group = sp_group
+        ctx.scatter_dim = scatter_dim
+        ctx.gather_dim = gather_dim
+
+        world_size = dist.get_world_size(sp_group)
+        if world_size == 1:
+            return input_tensor
+
+        input_chunks = input_tensor.chunk(world_size, dim=scatter_dim)
+        output_chunks = [torch.empty_like(c) for c in input_chunks]
+        dist.all_to_all(output_chunks, list(input_chunks), group=sp_group)
+        return torch.cat(output_chunks, dim=gather_dim).contiguous()
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor):
+        return (
+            _AllToAllSP.apply(
+                grad_output, ctx.sp_group, ctx.gather_dim, ctx.scatter_dim
+            ),
+            None,
+            None,
+            None,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Batch splitting
+# ---------------------------------------------------------------------------
+
+
 def split_batch_for_sp(
     batch: dict[str, torch.Tensor],
     sp_rank: int,
@@ -65,35 +116,31 @@ def split_batch_for_sp(
     return out
 
 
+# ---------------------------------------------------------------------------
+# Ulysses scatter / gather for attention
+# ---------------------------------------------------------------------------
+
+
 def ulysses_scatter(
     x: torch.Tensor,
     sp_group: ProcessGroup,
-    sp_size: int,
+    sp_size: int,  # noqa: ARG001
 ) -> torch.Tensor:
     """All-to-all: sequence-parallel to head-parallel layout.
 
     Input:  ``(B, H, S_local, D)``
     Output: ``(B, H // sp_size, S_full, D)``
 
-    Each rank scatters ``sp_size`` head-chunks and gathers ``sp_size``
-    sequence-chunks, yielding the full sequence over fewer heads.
+    Scatters heads (dim 1) and gathers sequence chunks (dim 2).
+    Gradients flow back through the reverse all-to-all automatically.
     """
-    bsz, num_heads, seq_local, head_dim = x.shape
-    heads_local = num_heads // sp_size
-
-    x = x.reshape(bsz, sp_size, heads_local, seq_local, head_dim)
-    input_list = [x[:, i].contiguous() for i in range(sp_size)]
-    output_list = [
-        torch.empty_like(input_list[0]) for _ in range(sp_size)
-    ]
-    dist.all_to_all(output_list, input_list, group=sp_group)
-    return torch.cat(output_list, dim=2)
+    return _AllToAllSP.apply(x, sp_group, 1, 2)
 
 
 def ulysses_gather(
     x: torch.Tensor,
     sp_group: ProcessGroup,
-    sp_size: int,
+    sp_size: int,  # noqa: ARG001
 ) -> torch.Tensor:
     """All-to-all: head-parallel to sequence-parallel layout.
 
@@ -102,13 +149,4 @@ def ulysses_gather(
 
     Inverse of :func:`ulysses_scatter`.
     """
-    bsz, heads_local, seq_full, head_dim = x.shape
-    seq_local = seq_full // sp_size
-
-    x = x.reshape(bsz, heads_local, sp_size, seq_local, head_dim)
-    input_list = [x[:, :, i].contiguous() for i in range(sp_size)]
-    output_list = [
-        torch.empty_like(input_list[0]) for _ in range(sp_size)
-    ]
-    dist.all_to_all(output_list, input_list, group=sp_group)
-    return torch.cat(output_list, dim=1)
+    return _AllToAllSP.apply(x, sp_group, 2, 1)
