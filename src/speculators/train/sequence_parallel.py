@@ -54,9 +54,11 @@ class _AllToAllSP(torch.autograd.Function):
         if world_size == 1:
             return input_tensor
 
-        input_chunks = input_tensor.chunk(world_size, dim=scatter_dim)
+        input_chunks = [
+            c.contiguous() for c in input_tensor.chunk(world_size, dim=scatter_dim)
+        ]
         output_chunks = [torch.empty_like(c) for c in input_chunks]
-        dist.all_to_all(output_chunks, list(input_chunks), group=sp_group)
+        dist.all_to_all(output_chunks, input_chunks, group=sp_group)
         return torch.cat(output_chunks, dim=gather_dim).contiguous()
 
     @staticmethod
