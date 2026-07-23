@@ -315,12 +315,13 @@ if "gemma4_text" in base_components.model_classes:
         Gemma4TextRotaryEmbedding.forward requires a layer_type arg
         (per-type RoPE params), but MTPDraftModel.forward calls
         rotary_emb(x, position_ids) without one. This wrapper fixes
-        the layer_type to the MTP layer's type (layer_types[0]).
+        the layer_type to full_attention — the single MTP layer must
+        be full_attention (enforced by Gemma4TextConfig.__post_init__).
         """
 
         def __init__(self, config: PretrainedConfig, device=None) -> None:
             super().__init__(config, device)
-            self._mtp_layer_type = config.layer_types[0]
+            self._mtp_layer_type = "full_attention"
 
         def forward(
             self, x: torch.Tensor, position_ids: torch.Tensor, layer_type: str | None = None
@@ -400,14 +401,60 @@ if "gemma4_text" in base_components.model_classes:
             attn_output = self.o_proj(attn_output)
             return attn_output, attn_weights
 
-    class Gemma4TextMTPLayer(MTPLayerMixin, Gemma4TextDecoderLayer):
+    class Gemma4NativeMTPLayer(Gemma4TextDecoderLayer):
+        """Gemma4 MTP layer matching vLLM's native Gemma4MultiTokenPredictor.
+
+        Uses pre/post projection (no pre-fc norms) and returns a tuple
+        (draft_hidden, backbone_hidden) for split logit/feedback paths.
+        The single MTP layer is always full_attention — Gemma4TextConfig
+        enforces this in __post_init__, and vLLM builds the model
+        accordingly.
+        """
+
         def __init__(self, config: PretrainedConfig, layer_idx: int = 0) -> None:
+            config = copy.copy(config)
+            config.layer_types = ["full_attention"]
             super().__init__(config, layer_idx)
-            self._setup_mtp_modules(config, Gemma4RMSNorm)
             self.self_attn = QueryOnlyGemma4TextAttention(config, layer_idx)
+
+            hidden_size = config.hidden_size
+            self.pre_projection = nn.Linear(2 * hidden_size, hidden_size, bias=False)
+            self.post_projection = nn.Linear(hidden_size, hidden_size, bias=False)
+            self.final_norm = Gemma4RMSNorm(hidden_size, eps=config.rms_norm_eps)
+            self.register_buffer(
+                "normalizer",
+                torch.tensor(hidden_size**0.5),
+                persistent=False,
+            )
+
+        def forward(
+            self,
+            hidden_states: torch.Tensor,
+            token_embeddings: torch.Tensor,
+            attention_mask: Optional[torch.Tensor] = None,
+            position_ids: Optional[torch.Tensor] = None,
+            position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+            **kwargs: Any,
+        ) -> Tuple[torch.Tensor, torch.Tensor]:
+            scaled_embeds = token_embeddings * self.normalizer
+            combined = torch.cat([scaled_embeds, hidden_states], dim=-1)
+            projected = self.pre_projection(combined)
+
+            decoder_output = super().forward(
+                hidden_states=projected,
+                position_embeddings=position_embeddings,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                **kwargs,
+            )
+            hidden = decoder_output[0] if isinstance(decoder_output, tuple) else decoder_output
+
+            draft_hidden = self.final_norm(hidden)
+            backbone_hidden = self.post_projection(draft_hidden)
+            return draft_hidden, backbone_hidden
 
     mtp_model_classes["gemma4_text"] = base_components.override_components(
         "gemma4_text",
-        first_layer_class=Gemma4TextMTPLayer,
+        first_layer_class=Gemma4NativeMTPLayer,
         rotary_emb_class=Gemma4MTPRotaryEmbedding,
     )

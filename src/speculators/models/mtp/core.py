@@ -216,7 +216,12 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
                 verifier_kv_last_global=kwargs.get("verifier_kv_last_global"),
             )
 
-            logits = self.lm_head(mtp_output)
+            if isinstance(mtp_output, tuple):
+                draft_hidden, backbone_hidden = mtp_output
+            else:
+                draft_hidden = backbone_hidden = mtp_output
+
+            logits = self.lm_head(draft_hidden)
             all_logits.append(logits)
 
             step_targets = input_ids[:, step + 2 : step + 2 + valid_len]
@@ -235,7 +240,7 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
 
             if getattr(self, "masked_embedding", None) is not None:
                 unreduced = unreduced + self.masked_embedding.compute_centroid_loss(
-                    hidden_states=mtp_output,
+                    hidden_states=draft_hidden,
                     targets=step_targets,
                     ignore_index=_IGNORE_INDEX,
                 )
@@ -244,7 +249,7 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
             total_loss = total_loss + step_loss
             metrics[f"loss_step_{step}"] = step_loss.detach().clone()
 
-            current_hidden = mtp_output
+            current_hidden = backbone_hidden
 
         metrics["loss_sum"] = total_loss.detach().clone()
         metrics["loss_total"] = torch.tensor(1.0, device=device)

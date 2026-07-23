@@ -20,8 +20,7 @@ CUDA_VISIBLE_DEVICES=2,3 python scripts/train.py \
   --on-generate delete
 
 
-CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 scripts/train.py  
- --verifier-name-or-path google/gemma-4-31B-it   --data-path ./output/mtp_gemma-4-31B-it   --vllm-endpoint http://localhost:8000/v1   --save-path ./output/mtp_gemma-4-31B-it/checkpoints   --speculator-type mtp   --num-speculative-steps 3   --step-weight-beta 0.6   --epochs 3   chs 3   --lr 1e-4   --total-seq-len 8192 --on-missing raise
+CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 scripts/train.py  --verifier-name-or-path google/gemma-4-31B-it   --data-path ./output/mtp_gemma-4-31B-it   --vllm-endpoint http://localhost:8000/v1   --save-path ./output/mtp_gemma-4-31B-it/checkpoints   --speculator-type mtp   --num-speculative-steps 3   --step-weight-beta 0.6   --epochs 3   chs 3   --lr 1e-4   --total-seq-len 8192 --on-missing raise
 
 
 
