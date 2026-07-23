@@ -5,8 +5,8 @@
       "url": "https://arxiv.org/abs/2607.07409",
       "date_found": "2026-07-20",
       "classification": "variant",
-      "status": "pursuing",
-      "notes": "Extends DFlash with lightweight local head as short-context expert. Very actionable. Implementation branches: feat/dels_spec, feat/dels-spec-v2."
+      "status": "implemented",
+      "notes": "Extends DFlash with lightweight local head as short-context expert. Implementation branches: feat/dels_spec, feat/dels-spec-v2."
     },
     "2605.29343": {
       "title": "Draft-OPD: On-Policy Distillation for Speculative Draft Models",
@@ -152,21 +152,13 @@
       "status": "skipped",
       "notes": "Position-specialized draft layers (multiple specialists for different draft positions). Extends EAGLE-style approach. From June 2025, outside 90-day window."
     },
-    "2607.19223": {
-      "title": "AdaFlash: Adaptive Speculative Decoding via On-Policy Distilled Diffusion Drafters",
-      "url": "https://arxiv.org/abs/2607.19223",
-      "date_found": "2026-07-23",
-      "classification": "variant",
-      "status": "pursuing",
-      "notes": "Extends DFlash with on-policy distillation (reverse-KL for diffusion drafters) + adaptive length head. Two components: (1) OPD training improves domain-level variance, (2) adaptive length head adjusts draft sequence length dynamically. Claims ~66% higher throughput than SOTA. Clear algorithmic description. Within 90-day window."
-    },
     "2606.07710": {
       "title": "WhiFlash: Accelerating Speculative Decoding with Token-Level Cross-Paradigm Routing",
       "url": "https://arxiv.org/abs/2606.07710",
       "date_found": "2026-07-23",
       "classification": "variant",
       "status": "skipped",
-      "notes": "Cross-paradigm routing framework between autoregressive (EAGLE-3) and diffusion (DFlash) drafters. Not a new draft model architecture — inference-time routing with cache management optimizations. Requires both drafter types simultaneously. More of a vLLM serving layer concern than a speculators model."
+      "notes": "Cross-paradigm routing framework between autoregressive (EAGLE-3) and diffusion (DFlash) drafters. Not a new draft model architecture \u2014 inference-time routing with cache management optimizations. Requires both drafter types simultaneously. More of a vLLM serving layer concern than a speculators model."
     },
     "2606.27550": {
       "title": "EntMTP: Accelerating LLM Inference with Entropy Guided Multi Token Prediction",
@@ -231,6 +223,38 @@
       "classification": "variant",
       "status": "skipped",
       "notes": "Self-speculative approach using gated LoRA for multi-token prediction. Modifies base model directly. Outside 90-day window (July 2025)."
+    },
+    "2607.08690": {
+      "title": "A Practical Investigation of Training-free Relaxed Speculative Decoding",
+      "url": "https://arxiv.org/abs/2607.08690",
+      "date_found": "2026-07-23",
+      "classification": "irrelevant",
+      "status": "skipped",
+      "notes": "Empirical survey/benchmarking of existing relaxed SD techniques. No new method or architecture."
+    },
+    "2607.12696": {
+      "title": "EcoSpec: Cost-Aware Speculative Decoding for Mixture-of-Experts",
+      "url": "https://arxiv.org/abs/2607.12696",
+      "date_found": "2026-07-23",
+      "classification": "variant",
+      "status": "skipped",
+      "notes": "Draft-tree selection optimization for MoE models (expert activation cost). Serving-side optimization, not a new draft model architecture. Not implementable in speculators."
+    },
+    "2605.30852": {
+      "title": "SPD: Speculative Pipeline Decoding",
+      "url": "https://arxiv.org/abs/2605.30852",
+      "date_found": "2026-07-23",
+      "classification": "new-method",
+      "status": "skipped",
+      "notes": "Pipeline-parallel speculation using intermediate target model representations. Requires modifying target model inference pipeline. Doesn't fit speculators' separate-model paradigm."
+    },
+    "2605.09329": {
+      "title": "Test-Time Speculation (TTS)",
+      "url": "https://arxiv.org/abs/2605.09329",
+      "date_found": "2026-07-23",
+      "classification": "variant",
+      "status": "skipped",
+      "notes": "Online distillation that adapts existing draft models at inference time. Training method improvement for existing speculators (DFlash, EAGLE-3). Not a new model architecture. Worth pursuing as a manual training enhancement."
     }
   },
   "seen_models": {
@@ -305,6 +329,21 @@
       "date_found": "2026-07-23",
       "classification": "irrelevant",
       "notes": "DSpark serving recipe for DGX Spark. Not a new method."
+    },
+    "NVIDIA/Model-Optimizer": {
+      "date_found": "2026-07-23",
+      "classification": "irrelevant",
+      "notes": "NVIDIA optimization toolkit. Includes spec dec as one of many techniques."
+    },
+    "hec-ovi/strix-vllm-laguna-s2.1": {
+      "date_found": "2026-07-23",
+      "classification": "irrelevant",
+      "notes": "vLLM serving setup for AMD Strix Halo with DFlash. Application of existing methods."
+    },
+    "maleshep/hpc-llm-serving": {
+      "date_found": "2026-07-23",
+      "classification": "irrelevant",
+      "notes": "Slurm-based LLM serving with existing spec dec methods."
     }
   },
   "last_scan": "2026-07-23"
