@@ -403,3 +403,46 @@ def test_fast_skip_sampler_slice_avoids_skipped_getitem(
         assert sampler.generated_for_epoch == 0
         assert sampler._cached_generated_batches == (0, sampler.all_batches[3:])
         assert dataset.seen_indices == list(range(3, 10))
+
+
+def test_fast_skip_progress_bar_starts_at_resume_step(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Rank-zero progress reflects already skipped mid-epoch batches."""
+    dataset = _CountingDataset(n_items=3)
+    sampler = _FastSkipBatchSampler(n_items=3)
+    loader = DataLoader(dataset, batch_sampler=sampler)
+    config = TrainerConfig(
+        save_path=str(tmp_path),
+        num_epochs=1,
+        lr=1e-4,
+        resume_from_checkpoint=False,
+        checkpoint_freq=0.3,
+        log_freq=1,
+        scheduler_type="none",
+    )
+    trainer = Trainer.__new__(Trainer)
+    trainer.model = _dummy_model()
+    trainer.train_loader = loader
+    trainer.rank = 0
+    trainer.current_epoch = 0
+    trainer._resume_local_step = 3
+    trainer.global_step = 3
+    trainer.config = config
+
+    captured: dict[str, object] = {}
+
+    class _Progress:
+        def __init__(self, iterable, **kwargs) -> None:
+            captured.update(kwargs)
+            self.iterable = iterable
+
+        def __iter__(self):
+            return iter(self.iterable)
+
+    monkeypatch.setattr("speculators.train.trainer.tqdm", _Progress)
+
+    trainer.train_epoch(0)
+
+    assert captured == {"desc": "Epoch 0", "total": 3, "initial": 3}

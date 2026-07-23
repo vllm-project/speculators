@@ -429,7 +429,12 @@ class Trainer:
 
         train_loader = self.train_loader
         if self.rank == 0:
-            train_loader = tqdm(train_loader, desc=f"Epoch {epoch}")  # type: ignore[assignment]
+            train_loader = tqdm(  # type: ignore[assignment]
+                train_loader,
+                desc=f"Epoch {epoch}",
+                total=num_steps,
+                initial=skip_steps,
+            )
 
         step_interval = (
             max(1, round(num_steps * self.config.checkpoint_freq))
