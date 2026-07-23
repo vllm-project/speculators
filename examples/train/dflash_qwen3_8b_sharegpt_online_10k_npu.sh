@@ -23,7 +23,7 @@ set -euo pipefail
 
 # ============ Configuration ============
 MODEL="Qwen/Qwen3-8B"
-DATASET="Evol-instruction-66k/Evol-Instruct-66k-sharegpt.json"                # sharegpt, ultrachat, or path to custom data
+DATASET="sharegpt"                # sharegpt, ultrachat, or path to custom data
 OUTPUT_DIR="./output/dflash_qwen3_8b_sharegpt"
 VLLM_PORT=8010
 MAX_SAMPLES=10000
