@@ -2,6 +2,7 @@
 
 import copy
 from collections.abc import Callable
+from typing import Literal
 
 import pytest
 import torch
@@ -132,22 +133,29 @@ def make_eagle3_model(
 
 def make_dflash_model(
     *,
-    draft_vocab_size: int = 64,
+    draft_vocab_size: int | None = None,
     block_size: int = 4,
+    projector_type: Literal["dflash", "domino"] = "dflash",
     draft_attn_impl: str | None = None,
     device: str = "cuda:0",
     dtype: torch.dtype = torch.bfloat16,
+    **domino_kwargs,
 ) -> DFlashDraftModel:
     """Create a tiny DFlash model with real initialized weights."""
     transformer_config = copy.deepcopy(TINY_QWEN3_CONFIG)
     if draft_attn_impl is not None:
         transformer_config._attn_implementation = draft_attn_impl
+    if draft_vocab_size is None:
+        draft_vocab_size = (
+            TINY_QWEN3_CONFIG.vocab_size if projector_type == "domino" else 64
+        )
     config = DFlashSpeculatorConfig(
         transformer_layer_config=transformer_config,
         draft_vocab_size=draft_vocab_size,
         block_size=block_size,
         aux_hidden_state_layer_ids=[0, 1, 2],
         mask_token_id=0,
+        projector_type=projector_type,
         speculators_config=SpeculatorsConfig(
             algorithm="dflash",
             proposal_methods=[
@@ -159,6 +167,7 @@ def make_dflash_model(
                 architectures=["Qwen3ForCausalLM"],
             ),
         ),
+        **domino_kwargs,
     )
     model = DFlashDraftModel(config)
     _fill_nan_weights(model)

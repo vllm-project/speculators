@@ -211,6 +211,9 @@ def apply_fully_sharded(
     for layer in model.layers:  # type: ignore[union-attr]
         fully_shard(layer, mp_policy=mp_policy)
 
+    if hasattr(model, "domino_head"):
+        fully_shard(model.domino_head, mp_policy=mp_policy)
+
     fully_shard(model, mp_policy=mp_policy)
 
     return model

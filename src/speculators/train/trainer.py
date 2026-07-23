@@ -342,12 +342,16 @@ class Trainer:
         # Setup scheduler(s) — one per optimizer so each optimizer's base LR (e.g.
         # Muon's higher LR vs AdamW's) is warmed up / decayed independently.
         if self.config.scheduler_type == "none":
+            self.total_steps = self.config.scheduler_total_steps or (
+                self.config.num_epochs * len(self.train_loader)
+            )
             self.schedulers: list[torch.optim.lr_scheduler.LRScheduler] = []
             return
 
         scheduler_warmup_steps, scheduler_total_steps = _resolve_scheduler_steps(
             self.config, len(self.train_loader)
         )
+        self.total_steps = scheduler_total_steps
 
         def make_scheduler(opt: torch.optim.Optimizer):
             if self.config.scheduler_type == "linear":
@@ -455,8 +459,11 @@ class Trainer:
                 self.device_type, dtype=self.config.hidden_states_dtype
             ):
                 timer.mark("fetch")
+                train_kwargs = dict(self.config.train_call_kwargs or {})
+                train_kwargs["global_step"] = self.global_step
+                train_kwargs["total_steps"] = self.total_steps
                 _draft_tokens, loss, metrics = self.model(
-                    **gpu_batch, **(self.config.train_call_kwargs or {})
+                    **gpu_batch, **train_kwargs
                 )
 
             timer.mark("fwd")
@@ -535,8 +542,11 @@ class Trainer:
             with torch.autocast(
                 self.device_type, dtype=self.config.hidden_states_dtype
             ):
+                val_kwargs = dict(self.config.val_call_kwargs or {})
+                val_kwargs["global_step"] = self.global_step
+                val_kwargs["total_steps"] = self.total_steps
                 _draft_tokens, _loss, metrics = self.model(
-                    **gpu_batch, **(self.config.val_call_kwargs or {})
+                    **gpu_batch, **val_kwargs
                 )
 
             for k, v in metrics.items():

@@ -317,6 +317,22 @@ def dflash_loss_decay(
     return decay_mult  # noqa: RET504
 
 
+def domino_loss_decay(pos_idx: torch.Tensor, gamma: float, **_kwargs):
+    """Compute Domino-style exponential decay weights per position.
+
+    Unlike dflash_loss_decay, position 0 gets weight 1.0 (not zero) because
+    with shift_label=True, position 0 predicts a real token (anchor+1).
+
+    Args:
+        pos_idx: Position indices within each speculative block.
+        gamma: Decay rate (higher = slower decay).
+
+    Returns:
+        Decay multiplier tensor with same shape as pos_idx.
+    """
+    return torch.exp(-pos_idx.float() / gamma)
+
+
 def exp_loss_decay(pos_idx: torch.Tensor, gamma: float, **_kwargs):
     """Compute simple exponential decay weights as gamma^pos_idx.
 
@@ -475,6 +491,7 @@ def compound_loss(
     pos_idx: torch.Tensor,
     loss_config: LossConfig,
     decay_fn: Callable[..., torch.Tensor] | None = None,
+    normalize_by_decay: bool = False,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """Compute a weighted sum of loss terms.
 
@@ -497,6 +514,7 @@ def compound_loss(
             pos_idx,
             loss_fn=fn,
             decay_fn=decay_fn,
+            normalize_by_decay=normalize_by_decay,
         )
         if multi:
             term_losses[f"{name}_loss"] = term.detach()
@@ -511,6 +529,7 @@ def loss_function(
     pos_idx: torch.Tensor,  # shape: [1, seq_len]
     loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = kl_div_loss,
     decay_fn: Callable[..., torch.Tensor] | None = None,
+    normalize_by_decay: bool = False,
 ):
     """Compute masked, optionally position-decayed training loss.
 
@@ -521,6 +540,8 @@ def loss_function(
         pos_idx: Position indices within each speculative block.
         loss_fn: Per-position loss function (default: kl_div_loss).
         decay_fn: Optional position-dependent decay weighting function.
+        normalize_by_decay: When True and decay_fn is provided, divide by the
+            sum of decay weights instead of the token count.
 
     Returns:
         Scalar mean loss across the batch.
@@ -530,13 +551,14 @@ def loss_function(
     loss_mask = loss_mask.to(elementwise_loss.dtype)
     elementwise_loss = elementwise_loss * loss_mask
 
+    denominator = loss_mask.sum(dim=1) + _EPS
     if decay_fn is not None:
         decay_mult = decay_fn(
             pos_idx.to(elementwise_loss.dtype), elementwise_loss=elementwise_loss
         )
         elementwise_loss = elementwise_loss * decay_mult
-
-    denominator = loss_mask.sum(dim=1) + _EPS
+        if normalize_by_decay:
+            denominator = (loss_mask * decay_mult).sum(dim=1) + _EPS
 
     batch_loss = torch.sum(elementwise_loss, dim=1) / denominator  # shape: [1]
     return batch_loss.mean()  # shape: []

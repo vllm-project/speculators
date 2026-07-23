@@ -169,6 +169,43 @@ CUDA_VISIBLE_DEVICES=2,3 torchrun \
 - `--on-missing generate` - Generate hidden states on-the-fly if not cached
 - `--on-generate delete` - Delete generated hidden states after use (saves disk space)
 
+#### Domino Variant
+
+DFlash supports an optional **Domino correction head** (use `--projector-type domino`) that refines the base draft logits with a lightweight causal GRU, improving per-position accuracy:
+
+```bash
+python scripts/train.py \
+  --verifier-name-or-path Qwen/Qwen3-8B \
+  --data-path ./output/dflash_qwen3_8b_sharegpt \
+  --vllm-endpoint http://localhost:8000/v1 \
+  --save-path ./output/domino_qwen3_8b_sharegpt/checkpoints \
+  --speculator-type dflash \
+  --projector-type domino \
+  --block-size 16 \
+  --max-anchors 3072 \
+  --num-layers 5 \
+  --draft-vocab-size 32000 \
+  --target-layer-ids 2 18 33 \
+  --domino-gru-hidden-dim 1024 \
+  --domino-emb-dim 256 \
+  --domino-pure-draft-prefix-len 1 \
+  --domino-lambda-start 1.0 \
+  --domino-lambda-decay-ratio 1.0 \
+  --epochs 5 \
+  --lr 1e-4
+```
+
+**Additional Domino-specific parameters:**
+
+- `--projector-type domino` — Enable the Domino correction head (default: `dflash`)
+- `--domino-gru-hidden-dim 1024` — Hidden dimension for the GRU
+- `--domino-emb-dim 256` — Bottleneck dimension for the projection MLP
+- `--domino-pure-draft-prefix-len 1` — Number of leading block positions using pure DFlash logits without correction
+- `--domino-lambda-start 1.0` — Base loss starts at 100% weight
+- `--domino-lambda-decay-ratio 1.0` — Linearly transitions to 100% final loss over the full training run
+
+During inference, the same checkpoint loads as a DFlash speculator — no extra serving configuration is needed.
+
 **Note:** There are a lot of configuration options available at this stage. We've attempted to set sensible defaults but please see the [train.py cli reference](/cli/train.md) to see all available options.
 
 ## Step 4: Inspect Checkpoints

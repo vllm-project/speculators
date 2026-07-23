@@ -14,6 +14,7 @@ from speculators.model import DraftVocabMixin, SpeculatorModel
 from speculators.models.attention import create_float_mask
 from speculators.models.dflash import DFlashSpeculatorConfig
 from speculators.models.dflash.attention import create_anchor_block_mask_mod
+from speculators.models.dflash.domino import DominoHead
 from speculators.models.dflash.metrics import compute_metrics
 from speculators.models.dflash.model_definitions import Qwen3DFlashDecoderLayer
 from speculators.models.dflash.utils import (
@@ -42,6 +43,12 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         "verifier_lm_head.weight",
         "t2d",
         "d2t",
+        # Domino head weights are absent when loading a plain DFlash checkpoint
+        # (no Domino head trained). Suppress the spurious missing-key warning.
+        "domino_head.prefix_gru.weight_ih_l0",
+        "domino_head.prefix_gru.weight_hh_l0",
+        "domino_head.embed_proj.0.weight",
+        "domino_head.embed_proj.2.weight",
     ]
     _keys_to_ignore_on_save: ClassVar[list[str]] = [  # type: ignore[misc,assignment]
         "verifier_lm_head.weight",
@@ -112,6 +119,14 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         )
         self.verifier_norm.weight.requires_grad = False
         self.block_size = config.block_size
+        self.projector_type = config.projector_type
+        if self.projector_type == "domino":
+            self.domino_head = DominoHead(
+                hidden_size=self.hidden_size,
+                gru_hidden_dim=config.gru_hidden_dim,
+                emb_dim=config.emb_dim,
+                draft_vocab_size=self.draft_vocab_size,
+            )
 
         # Warn if using DFlash with sample_from_anchor=True (may not be supported)
         if type(self).__name__ == "DFlashDraftModel" and config.sample_from_anchor:
@@ -211,6 +226,13 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             "aux_hidden_state_layer_ids": target_layer_ids,
             "mask_token_id": kwargs.get("mask_token_id"),
             "sliding_window_non_causal": kwargs.get("sliding_window_non_causal", False),
+            "projector_type": kwargs.get("projector_type", "dflash"),
+            "pure_draft_prefix_len": kwargs.get("domino_pure_draft_prefix_len", 1),
+            "emb_dim": kwargs.get("domino_emb_dim", 256),
+            "gru_hidden_dim": kwargs.get("domino_gru_hidden_dim", 1024),
+            "lambda_base_start": kwargs.get("domino_lambda_start", 1.0),
+            "lambda_base_decay_ratio": kwargs.get("domino_lambda_decay_ratio", 1.0),
+            "auf": kwargs.get("auf", False),
             "sample_from_anchor": sample_from_anchor,
             "speculators_config": SpeculatorsConfig(
                 algorithm=algorithm,
@@ -237,6 +259,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         loss_config = resolve_loss_config(kwargs["loss_fn"])
         gamma = kwargs.get("dflash_decay_gamma", 4.0)
         max_anchors = kwargs.get("max_anchors", 3072)
+        normalize_by_decay = kwargs.get("normalize_loss_by_decay", False)
         per_position_loss_weight = kwargs.get(
             "per_position_loss_weight", "fixed-exp-decay"
         )
@@ -245,10 +268,78 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             "loss_config": loss_config,
             "gamma": gamma,
             "max_anchors": max_anchors,
+            "normalize_by_decay": normalize_by_decay,
             "per_position_loss_weight": per_position_loss_weight,
             "dpace_alpha": dpace_alpha,
         }
         return dict(shared), dict(shared)
+
+    @staticmethod
+    def _auf_mask(
+        logits: torch.Tensor,
+        targets: torch.Tensor,
+        base_mask: torch.Tensor,
+        num_anchors: int,
+        block_size: int,
+        return_j_star: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        """Compute the Accept-Until-Fail (AUF) loss mask for the base branch.
+
+        Truncates the cross-entropy support at the first greedy prediction error
+        within each block. Positions up to and including the first error (the
+        "breaker" token j*) retain their gradient; positions strictly after j*
+        are zeroed. This aligns training supervision with the prefix-acceptance
+        semantics of the verifier and eliminates wasted capacity on unreachable
+        suffix positions.
+
+        Reference: Yang & Li, "Spec-AUF: Accept-Until-Fail Training under
+        Train-Inference Misalignment for Masked Block Drafters" (arXiv 2607.01893).
+
+        Args:
+            logits: Base logits [1, T, vocab]. Detached internally — j* is not
+                a gradient path.
+            targets: Verifier logit distributions [1, T, vocab]. Detached
+                internally.
+            base_mask: Boolean validity mask [1, T] (e.g. domino_loss_mask).
+            num_anchors: Number of anchor blocks.
+            block_size: Tokens per block.
+            return_j_star: If True, also return j* (first error position) per block.
+
+        Returns:
+            If return_j_star is False:
+                Boolean mask [1, T] with the same shape as base_mask, zeroed out
+                for all positions strictly after the first error in each block.
+            If return_j_star is True:
+                Tuple of (mask, j_star) where j_star is [num_anchors] tensor
+                containing the first error position (0-indexed) per block.
+                j* = block_size means no error (all accepted).
+        """
+        base_preds_4d = (
+            logits.detach().argmax(dim=-1).reshape(1, num_anchors, block_size)
+        )
+        target_ids_4d = (
+            targets.detach().argmax(dim=-1).reshape(1, num_anchors, block_size)
+        )
+        mask_4d = base_mask.bool().reshape(1, num_anchors, block_size)
+        errors = (base_preds_4d != target_ids_4d) & mask_4d
+        error_floats = errors.float()
+        running_errors = error_floats.cumsum(dim=-1)
+        # errors_before == 0: keep accepted prefix + breaker token j*
+        # errors_before >= 1: zero the unreachable suffix
+        errors_before = running_errors - error_floats
+        auf_mask = (mask_4d & (errors_before == 0)).reshape_as(base_mask)
+
+        if not return_j_star:
+            return auf_mask
+
+        # j* = first error position per block (0-indexed within block)
+        # If no error, j* = block_size (all positions accepted)
+        first_error = errors.float().argmax(dim=-1)  # [1, num_anchors]
+        has_error = errors.any(dim=-1)  # [1, num_anchors]
+        j_star = torch.where(
+            has_error, first_error, torch.full_like(first_error, block_size)
+        )
+        return auf_mask, j_star.squeeze(0)  # [num_anchors]
 
     @property
     def mask_token_id(self) -> int:
@@ -385,7 +476,11 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
                 # False: shift right by 1 so slot j predicts token at position j
                 verifier_logits = torch.roll(verifier_logits, 1, dims=1)
             # else: True, slot k predicts token at position k+1 (next), no shift
-            targets = verifier_logits[:, anchored_block_indices]
+            target_indices = anchored_block_indices + (
+                1 if self.config.shift_label else 0
+            )
+            target_indices = target_indices.clamp(max=verifier_logits.shape[1] - 1)
+            targets = verifier_logits[:, target_indices]
             # shape: [1, num_anchors*block_size, draft_vocab_size]
 
         for layer_idx, layer in enumerate(self.layers):
@@ -419,7 +514,124 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         if not self.config.sample_from_anchor:
             aligned_loss_mask[:, :: self.block_size] = 0
 
+        if self.config.projector_type == "domino":
+            oob = (anchored_block_indices + 1) >= verifier_logits.shape[1]
+            aligned_loss_mask[:, oob] = 0
+
         return hidden, logits, targets, aligned_loss_mask, anchored_block_indices
+
+    @torch.compiler.disable
+    def _compute_domino_metrics(
+        self,
+        *,
+        hidden: torch.Tensor,
+        logits: torch.Tensor,
+        targets: torch.Tensor,
+        input_ids: torch.Tensor,
+        loss_mask: torch.Tensor,
+        aligned_loss_mask: torch.Tensor,
+        anchored_block_indices: torch.Tensor,
+        loss_config: "LossConfig | None",
+        gamma: float,
+        normalize_by_decay: bool,
+        global_step: int,
+        total_steps: int,
+    ) -> tuple[torch.Tensor, dict]:
+        """Compute Domino dual-branch loss and metrics."""
+        decay_ratio = self.config.lambda_base_decay_ratio
+        if decay_ratio > 0 and total_steps > 0:
+            decay_steps = int(total_steps * decay_ratio)
+            progress = min(global_step / decay_steps, 1.0)
+            lambda_base = self.config.lambda_base_start * (1.0 - progress)
+            lambda_base = max(0.0, min(1.0, lambda_base))
+        else:
+            lambda_base = self.config.lambda_base_start
+
+        num_anchors = hidden.shape[1] // self.block_size
+        hidden_4d = hidden.reshape(1, num_anchors, self.block_size, -1)
+        base_logits_4d = logits.reshape(1, num_anchors, self.block_size, -1)
+
+        prev_token_ids_4d = input_ids[:, anchored_block_indices].reshape(
+            1, num_anchors, self.block_size
+        )
+        refined_logits = self.domino_head(
+            hidden_states_4d=hidden_4d,
+            base_logits_4d=base_logits_4d,
+            prev_token_ids=prev_token_ids_4d,
+            suffix_start=self.config.pure_draft_prefix_len,
+            embed_tokens=self.embed_tokens,
+        ).reshape(1, num_anchors * self.block_size, -1)
+
+        domino_loss_mask = aligned_loss_mask.clone()
+        anchor_pos_in_mask = anchored_block_indices[:: self.block_size]
+        domino_loss_mask[:, :: self.block_size] = loss_mask[:, anchor_pos_in_mask]
+
+        # B-AUF+D (arXiv 2607.01893): L_final keeps full mask;
+        # L_base is optionally truncated.
+        j_star = None
+        if self.config.auf:
+            base_mask, j_star = self._auf_mask(
+                logits,
+                targets,
+                domino_loss_mask,
+                num_anchors,
+                self.block_size,
+                return_j_star=True,
+            )
+        else:
+            base_mask = domino_loss_mask
+
+        base_loss, base_metrics = compute_metrics(
+            logits,
+            targets,
+            base_mask,
+            self.block_size,
+            gamma=gamma,
+            loss_config=loss_config,
+            normalize_by_decay=normalize_by_decay,
+            decay_mode="domino",
+        )
+        final_loss, final_metrics = compute_metrics(
+            refined_logits,
+            targets,
+            domino_loss_mask,
+            self.block_size,
+            gamma=gamma,
+            loss_config=loss_config,
+            normalize_by_decay=normalize_by_decay,
+            decay_mode="domino",
+        )
+        loss = (1.0 - lambda_base) * final_loss + lambda_base * base_loss
+
+        ones = torch.tensor(1.0, device=logits.device)
+        metrics = {
+            "loss_sum": loss.detach().clone(),
+            "loss_total": ones,
+            "base_loss_sum": base_loss.detach().clone(),
+            "base_loss_total": ones,
+            "full_acc_sum": base_metrics["full_acc_sum"],
+            "full_acc_total": base_metrics["full_acc_total"],
+            "final_loss_sum": final_loss.detach().clone(),
+            "final_loss_total": ones,
+            "final_full_acc_sum": final_metrics["full_acc_sum"],
+            "final_full_acc_total": final_metrics["full_acc_total"],
+            "lambda_base_sum": torch.tensor(lambda_base, device=logits.device),
+            "lambda_base_total": ones,
+            **{
+                k: v
+                for k, v in final_metrics.items()
+                if k.startswith(("position_", "eal"))
+            },
+        }
+
+        # AUF observability: mean j* (first error position) - proxy for acceptance
+        if j_star is not None:
+            metrics["j_star_sum"] = j_star.float().sum()
+            metrics["j_star_total"] = torch.tensor(
+                float(j_star.numel()), device=logits.device
+            )
+
+        return loss, metrics
 
     @conditional_torch_compile
     def forward(
@@ -433,29 +645,75 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         loss_config: LossConfig | None = None,
         gamma: float = 4.0,
         max_anchors: int = 3072,
+        normalize_by_decay: bool = False,
+        global_step: int = 0,
+        total_steps: int = 0,
         per_position_loss_weight: str = "fixed-exp-decay",
         dpace_alpha: float = 0.5,
         **kwargs,
     ):
-        _, logits, targets, aligned_loss_mask, _ = self._backbone_forward(
-            hidden_states,
-            input_ids,
-            loss_mask,
-            verifier_last_hidden_states,
-            document_ids,
-            position_ids,
-            max_anchors=max_anchors,
-            **kwargs,
+        hidden, logits, targets, aligned_loss_mask, anchored_block_indices = (
+            self._backbone_forward(
+                hidden_states,
+                input_ids,
+                loss_mask,
+                verifier_last_hidden_states,
+                document_ids,
+                position_ids,
+                max_anchors=max_anchors,
+                **kwargs,
+            )
         )
-        loss, metrics = compute_metrics(
-            logits,
-            targets,
-            aligned_loss_mask,
-            self.block_size,
-            gamma=gamma,
-            loss_config=loss_config,
-            per_position_loss_weight=per_position_loss_weight,
-            dpace_alpha=dpace_alpha,
-            sample_from_anchor=self.config.sample_from_anchor,
-        )
-        return None, loss, metrics
+
+        draft_tokens = torch.argmax(logits, dim=-1)
+
+        if self.projector_type == "domino":
+            loss, metrics = self._compute_domino_metrics(
+                hidden=hidden,
+                logits=logits,
+                targets=targets,
+                input_ids=input_ids,
+                loss_mask=loss_mask,
+                aligned_loss_mask=aligned_loss_mask,
+                anchored_block_indices=anchored_block_indices,
+                loss_config=loss_config,
+                gamma=gamma,
+                normalize_by_decay=normalize_by_decay,
+                global_step=global_step,
+                total_steps=total_steps,
+            )
+        else:
+            j_star = None
+            if self.config.auf:
+                num_anchors = aligned_loss_mask.shape[1] // self.block_size
+                auf_loss_mask, j_star = self._auf_mask(
+                    logits,
+                    targets,
+                    aligned_loss_mask,
+                    num_anchors,
+                    self.block_size,
+                    return_j_star=True,
+                )
+            else:
+                auf_loss_mask = aligned_loss_mask
+
+            loss, metrics = compute_metrics(
+                logits,
+                targets,
+                auf_loss_mask,
+                self.block_size,
+                gamma=gamma,
+                loss_config=loss_config,
+                normalize_by_decay=normalize_by_decay,
+                per_position_loss_weight=per_position_loss_weight,
+                dpace_alpha=dpace_alpha,
+                sample_from_anchor=self.config.sample_from_anchor,
+            )
+
+            if j_star is not None:
+                metrics["j_star_sum"] = j_star.float().sum()
+                metrics["j_star_total"] = torch.tensor(
+                    float(j_star.numel()), device=logits.device
+                )
+
+        return draft_tokens, loss, metrics

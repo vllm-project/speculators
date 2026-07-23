@@ -10,6 +10,7 @@ from speculators.models.metrics import (
     compound_loss,
     compute_accuracy_multi_step,
     dflash_loss_decay,
+    domino_loss_decay,
     dpace_loss_decay,
     kl_div_loss,
 )
@@ -24,6 +25,8 @@ def compute_metrics(
     block_size: int = 1,
     gamma: float = 4.0,
     loss_config: LossConfig | None = None,
+    normalize_by_decay: bool = False,
+    decay_mode: str = "dflash",
     per_position_loss_weight: str = "fixed-exp-decay",
     dpace_alpha: float = 0.5,
     sample_from_anchor: bool = False,
@@ -37,6 +40,8 @@ def compute_metrics(
         block_size: Block size for per-position metrics
         gamma: Temperature for exponential decay in loss weighting
         loss_config: Mapping of ``{name: (loss_fn, weight)}``
+        decay_mode: "dflash" zeros position 0; "domino" gives position 0
+            weight 1.0 (for shift_label=True where position 0 is useful).
         per_position_loss_weight: Weighting option for per-position block-drafting loss
         dpace_alpha: Smoothing constant for D-Pace loss weighting
 
@@ -60,6 +65,8 @@ def compute_metrics(
             block_size=block_size,
             dpace_alpha=dpace_alpha,
         )
+    elif decay_mode == "domino":
+        decay_fn = partial(domino_loss_decay, gamma=gamma)
     else:
         decay_fn = partial(
             dflash_loss_decay, gamma=gamma, sample_from_anchor=sample_from_anchor
@@ -72,6 +79,7 @@ def compute_metrics(
         pos_idx,
         loss_config=loss_config,
         decay_fn=decay_fn,
+        normalize_by_decay=normalize_by_decay,
     )
 
     pred_ids = torch.argmax(logits, dim=-1)
@@ -89,15 +97,15 @@ def compute_metrics(
         metrics[f"{term_name}_sum"] = term_val
         metrics[f"{term_name}_total"] = ones.clone()
 
-    # Start position: 0 if sample_from_anchor else 1 (skip anchor)
-    start_pos = 0 if sample_from_anchor else 1
-    metrics["full_acc_sum"] = correct_per_pos[start_pos:].sum()
-    metrics["full_acc_total"] = total_per_pos[start_pos:].sum()
+    # Start position: 0 if domino mode or sample_from_anchor, else 1 (skip anchor)
+    acc_start = 0 if (decay_mode == "domino" or sample_from_anchor) else 1
+    metrics["full_acc_sum"] = correct_per_pos[acc_start:].sum()
+    metrics["full_acc_total"] = total_per_pos[acc_start:].sum()
 
     # EAL = sum_k prod_{i<=k} acc_i over drafted positions
     eal = torch.zeros((), device=logits.device)
     cum = torch.ones((), device=logits.device)
-    for pos in range(start_pos, block_size):
+    for pos in range(acc_start, block_size):
         metrics[f"position_{pos}_acc_sum"] = correct_per_pos[pos]
         metrics[f"position_{pos}_acc_total"] = total_per_pos[pos]
         acc = correct_per_pos[pos] / total_per_pos[pos].clamp(min=1.0)

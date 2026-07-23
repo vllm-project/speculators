@@ -1102,6 +1102,24 @@ def parse_args():
         default=4.0,
         help="Decay gamma for DFlash/DSpark loss weighting (default: 4.0)",
     )
+    parser.add_argument(
+        "--auf",
+        action="store_true",
+        default=False,
+        help="Enable Accept-Until-Fail (AUF) truncation on the loss mask "
+        "(arXiv 2607.01893). Zeros positions after the first greedy prediction "
+        "error in each block, aligning training with the verifier's "
+        "prefix-acceptance semantics. For Domino, only the base branch is "
+        "truncated; the final branch always uses the full mask. (default: False)",
+    )
+    parser.add_argument(
+        "--normalize-loss-by-decay",
+        action="store_true",
+        default=False,
+        help="Normalize loss by sum of decay weights instead of token count. "
+        "Produces a proper weighted average, stabilizing loss magnitude "
+        "across different gamma values (default: False).",
+    )
     # D-Pace specific arguments (loss weight option + smoothing)
     parser.add_argument(
         "--per-position-loss-weight",
@@ -1148,6 +1166,49 @@ def parse_args():
         type=float,
         default=1.0,
         help="DSpark: weight of the confidence-head BCE term (default: 1.0).",
+    )
+    # Domino-specific arguments (DFlash sub-mode)
+    parser.add_argument(
+        "--projector-type",
+        type=str,
+        default="dflash",
+        choices=["dflash", "domino"],
+        help="Projector type for DFlash. 'dflash' (default) uses standard parallel "
+        "logits. 'domino' adds a causal GRU correction head.",
+    )
+    parser.add_argument(
+        "--domino-gru-hidden-dim",
+        type=int,
+        default=1024,
+        help="Hidden dimension for Domino GRU head (default: 1024)",
+    )
+    parser.add_argument(
+        "--domino-emb-dim",
+        type=int,
+        default=256,
+        help="Bottleneck dimension for Domino embed projection (default: 256)",
+    )
+    parser.add_argument(
+        "--domino-pure-draft-prefix-len",
+        type=int,
+        default=1,
+        help="Number of leading positions using pure DFlash without Domino correction "
+        "(default: 1)",
+    )
+    parser.add_argument(
+        "--domino-lambda-start",
+        type=float,
+        default=1.0,
+        help="Initial weight of the base loss in the Domino loss schedule "
+        "(default: 1.0)",
+    )
+    parser.add_argument(
+        "--domino-lambda-decay-ratio",
+        type=float,
+        default=1.0,
+        help="Fraction of total training steps over which lambda_base decays "
+        "from start to 0 (default: 1.0, full decay over the entire run). "
+        "Set to 0 to disable decay.",
     )
     parser.add_argument(
         "--draft-attn-impl",

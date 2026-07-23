@@ -1,6 +1,6 @@
 from typing import Any, Literal
 
-from pydantic import Field, field_serializer, field_validator
+from pydantic import Field, field_serializer, field_validator, model_validator
 from transformers import AutoConfig, PretrainedConfig
 from transformers.models.qwen3.modeling_qwen3 import (
     Qwen3Config,
@@ -70,6 +70,62 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
         "bidirectional.",
     )
 
+    projector_type: Literal["dflash", "domino"] = Field(
+        default="dflash",
+        description="Projector type: 'dflash' (default) or 'domino' (adds causal "
+        "correction head)",
+    )
+
+    pure_draft_prefix_len: int = Field(
+        default=1,
+        ge=0,
+        description="Number of leading block positions that use pure DFlash without "
+        "Domino correction",
+    )
+
+    emb_dim: int = Field(
+        default=256,
+        gt=0,
+        description="Bottleneck dimension for Domino embed projection MLP",
+    )
+
+    gru_hidden_dim: int = Field(
+        default=1024,
+        gt=0,
+        description="Hidden dimension for Domino prefix GRU",
+    )
+
+    lambda_base_start: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=1.0,
+        description="Initial weight of the base loss in the Domino loss schedule",
+    )
+
+    lambda_base_decay_ratio: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=1.0,
+        description="Fraction of total training steps over which lambda_base decays "
+        "from lambda_base_start to 0. 1.0 (default, matches paper) means a full "
+        "linear decay over the entire run. Set to 0 to disable decay.",
+    )
+    auf: bool = Field(
+        default=False,
+        description="Enable Accept-Until-Fail (AUF) truncation on the loss mask "
+        "(arXiv 2607.01893). Zeros out positions after the first greedy "
+        "prediction error in each block, aligning training with the verifier's "
+        "prefix-acceptance semantics. For Domino, only the base branch is "
+        "truncated; the final branch always uses the full mask. "
+        "(default: False)",
+    )
+    shift_label: bool | None = Field(
+        default=None,
+        description="Shift training targets by +1 position. When None (default), "
+        "automatically set to True for projector_type='domino' and False otherwise. "
+        "Stored in the checkpoint config so inference can align predictions.",
+    )
+
     sample_from_anchor: bool = Field(
         default=False,
         description=(
@@ -81,6 +137,27 @@ class DFlashSpeculatorConfig(SpeculatorModelConfig):
         ),
     )
 
+    @model_validator(mode="after")
+    def _derive_shift_label(self) -> "DFlashSpeculatorConfig":
+        if self.shift_label is None:
+            object.__setattr__(self, "shift_label", self.projector_type == "domino")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_domino_vocab(self) -> "DFlashSpeculatorConfig":
+        if (
+            self.projector_type == "domino"
+            and self.draft_vocab_size != self.target_vocab_size
+        ):
+            raise ValueError(
+                f"Domino requires draft_vocab_size ({self.draft_vocab_size}) to equal "
+                f"the verifier vocab_size ({self.target_vocab_size}). The Domino "
+                "correction head outputs logits in the target model's vocabulary "
+                "space (paper: arXiv 2605.29707, Section 4.1.2); pruned draft "
+                "vocabularies are not supported. Remove --draft-vocab-size and "
+                "vocab mapping files (d2t/t2d) to use the full verifier vocabulary."
+            )
+        return self
     @field_serializer("transformer_layer_config")
     def serialize_transformer_config(self, value: PretrainedConfig) -> dict:
         """Serialize transformer config to dict."""
