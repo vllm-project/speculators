@@ -537,10 +537,7 @@ def main(args: argparse.Namespace):  # noqa: C901
                 f"supported for eagle3 and dflash, "
                 f"got --speculator-type={args.speculator_type}"
             )
-        if (
-            args.speculator_type == "dflash"
-            and args.max_anchors % args.sp_size != 0
-        ):
+        if args.speculator_type == "dflash" and args.max_anchors % args.sp_size != 0:
             raise ValueError(
                 f"--max-anchors ({args.max_anchors}) must be divisible "
                 f"by --sp-size ({args.sp_size}) for DFlash SP"
