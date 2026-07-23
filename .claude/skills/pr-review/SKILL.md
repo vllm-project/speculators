@@ -93,6 +93,14 @@ If the PR description, commit messages, or code comments reference a paper (arXi
 
 Only flag mismatches you can concretely demonstrate by quoting both the paper and the code. Do not flag stylistic differences in how math is expressed if the computation is equivalent.
 
+### Phase 3.7: CONTRIBUTING.md compliance
+
+Check the PR against the project's contribution guidelines (`CONTRIBUTING.md`):
+
+1. **Issue linkage for significant changes**: If the PR adds new training algorithms/model support, modifies the data pipeline or CLI/API, is a large refactor, or touches 3+ files — verify it references an assigned issue. Small fixes (typos, docs, bug fixes < 20 lines, type annotations, minor deps) are exempt.
+2. **DCO sign-off**: All commits must have a `Signed-off-by` line. Check with `gh pr view -R vllm-project/speculators <number> --json commits --jq '.commits[].messageBody'` — if any commit lacks the sign-off, flag it (CI will also catch this, but noting it saves a round-trip).
+3. **Documentation updates**: If the PR changes user-facing behavior (CLI flags, config options, APIs), check whether docs were updated. Missing doc updates for behavior changes should be flagged.
+
 ### Phase 4: Line-level review
 
 Apply path-specific focus based on which files changed:
@@ -188,7 +196,11 @@ For single-line comments, use `line` only. For multi-line, use `start_line` + `l
 
 If there are zero inline comments beyond the summary, post just the review body.
 
-If no issues survive filtering (all < 80 confidence), **do not post a review**. Report to the invoker that no actionable findings were found, but do not leave a comment on the PR — clean PRs don't need noise.
+If no issues survive filtering (all < 80 confidence), post a short review comment. Keep it to 1–3 sentences max. Do NOT list everything you checked — that's noise. Examples:
+
+- "LGTM. Recommend approving."
+- "LGTM. Agree with @coderabbitai's suggestion to add tests for auto-detection and `_save` happy path. Recommend approving once addressed."
+- "LGTM, one minor non-blocking note below. Recommend approving."
 
 **Never approve a PR automatically.** Always use `event="COMMENT"`, never `event="APPROVE"`. Only the human reviewer should submit an approval.
 
