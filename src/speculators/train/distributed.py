@@ -13,6 +13,7 @@ import os
 import torch
 import torch.distributed as dist
 from torch.distributed import ProcessGroup
+from torch.distributed.device_mesh import DeviceMesh, init_device_mesh
 from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
 
 logger = logging.getLogger("speculators")
@@ -33,6 +34,7 @@ _dp_rank: int = 0
 
 _sp_group: ProcessGroup | None = None
 _dp_group: ProcessGroup | None = None
+_device_mesh: DeviceMesh | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -80,6 +82,10 @@ def get_dp_rank() -> int:
     return _dp_rank
 
 
+def get_device_mesh() -> DeviceMesh | None:
+    return _device_mesh
+
+
 # ---------------------------------------------------------------------------
 # Initialization
 # ---------------------------------------------------------------------------
@@ -92,6 +98,7 @@ def _init_sp_process_groups(rank: int, world_size: int, sp_size: int) -> None:
     DP groups use strided ranks (e.g. sp_size=2, world_size=4: {0,2}, {1,3}).
     """
     global _sp_group, _dp_group, _sp_size, _sp_rank, _dp_size, _dp_rank  # noqa: PLW0603
+    global _device_mesh  # noqa: PLW0603
 
     if sp_size <= 0:
         raise ValueError(f"sp_size must be positive, got {sp_size}")
@@ -103,6 +110,7 @@ def _init_sp_process_groups(rank: int, world_size: int, sp_size: int) -> None:
 
     dp_size = world_size // sp_size
 
+    # get the SP group for this rank
     sp_group = None
     for i in range(dp_size):
         sp_ranks = list(range(i * sp_size, (i + 1) * sp_size))
@@ -110,6 +118,7 @@ def _init_sp_process_groups(rank: int, world_size: int, sp_size: int) -> None:
         if rank in sp_ranks:
             sp_group = pg
 
+    # get the DP group for this rank
     dp_group = None
     for i in range(sp_size):
         dp_ranks = list(range(i, world_size, sp_size))
@@ -127,6 +136,13 @@ def _init_sp_process_groups(rank: int, world_size: int, sp_size: int) -> None:
     _dp_size = dp_size
     _dp_rank = rank // sp_size
 
+    if sp_size > 1:
+        _device_mesh = init_device_mesh(
+            "cuda",
+            (dp_size, sp_size),
+            mesh_dim_names=("dp", "sp"),
+        )
+
 
 def maybe_setup_distributed(sp_size: int = 1) -> None:
     """Set up distributed training if launched with ``torchrun``.
@@ -139,14 +155,14 @@ def maybe_setup_distributed(sp_size: int = 1) -> None:
     """
     global _local_rank, _rank, _is_distributed, _world_size  # noqa: PLW0603
 
-    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
     distributed = "LOCAL_RANK" in os.environ
-
-    _local_rank = local_rank
     _is_distributed = distributed
 
     if not distributed:
         return
+
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    _local_rank = local_rank
 
     torch.accelerator.set_device_index(local_rank)
     acc = torch.accelerator.current_accelerator()
@@ -171,7 +187,7 @@ def maybe_destroy_distributed() -> None:
     """Destroy the distributed process group if using distributed training."""
     global _is_distributed, _local_rank, _rank, _world_size  # noqa: PLW0603
     global _sp_size, _sp_rank, _dp_size, _dp_rank  # noqa: PLW0603
-    global _sp_group, _dp_group  # noqa: PLW0603
+    global _sp_group, _dp_group, _device_mesh  # noqa: PLW0603
 
     if not _is_distributed:
         return
@@ -192,6 +208,7 @@ def maybe_destroy_distributed() -> None:
     _dp_rank = 0
     _sp_group = None
     _dp_group = None
+    _device_mesh = None
 
 
 def apply_fully_sharded(
@@ -202,15 +219,46 @@ def apply_fully_sharded(
     Assumes the model has a `layers` attribute containing the decoder layers.
     Model should be validated with SpeculatorModel.verify_training_compatible()
     before calling this function.
+
+    When ``sp_size > 1``, FSDP shards only across the DP sub-mesh so that
+    SP ranks hold identical parameters.
     """
     mp_policy = MixedPrecisionPolicy(
         param_dtype=param_dtype,
         reduce_dtype=torch.float32,
     )
 
-    for layer in model.layers:  # type: ignore[union-attr]
-        fully_shard(layer, mp_policy=mp_policy)
+    mesh = _device_mesh
+    fsdp_kwargs: dict = {"mp_policy": mp_policy}
+    if mesh is not None and _sp_size > 1:
+        fsdp_kwargs["mesh"] = mesh["dp"]
 
-    fully_shard(model, mp_policy=mp_policy)
+    for layer in model.layers:  # type: ignore[union-attr]
+        fully_shard(layer, **fsdp_kwargs)
+
+    fully_shard(model, **fsdp_kwargs)
 
     return model
+
+
+def register_sp_gradient_hooks(model: torch.nn.Module) -> list:
+    """Register hooks to all-reduce gradients across the SP group.
+
+    Each SP rank computes gradients from its own sequence chunk.
+    These hooks ensure the partial gradients are summed so that
+    the optimizer sees the correct total gradient.
+
+    Returns the hook handles for cleanup.
+    """
+    if _sp_size <= 1 or _sp_group is None:
+        return []
+
+    sp_group = _sp_group
+    hooks = []
+    for param in model.parameters():
+        if param.requires_grad:
+            hook = param.register_post_accumulate_grad_hook(
+                lambda p, _group=sp_group: dist.all_reduce(p.grad, group=_group)
+            )
+            hooks.append(hook)
+    return hooks

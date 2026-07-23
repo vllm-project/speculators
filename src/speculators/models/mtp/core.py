@@ -143,6 +143,13 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
             (lengths, verifier_last_hidden_states)
         :return: Tuple of (logits_list, loss, metrics)
         """
+        from speculators.train.distributed import get_sp_size  # noqa: PLC0415
+
+        if get_sp_size() > 1:
+            raise NotImplementedError(
+                "MTPDraftModel does not yet support sequence parallelism (sp_size > 1)"
+            )
+
         input_ids = input_ids.long()
         device = input_ids.device
         batch_size, seq_len = input_ids.shape

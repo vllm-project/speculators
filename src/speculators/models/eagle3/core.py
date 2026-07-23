@@ -200,13 +200,15 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
         **kwargs,
     ):
         device = hidden_states.device
-        total_seq_len = hidden_states.shape[1]
+        # With Ulysses SP, hidden_states is split but document_ids is full.
+        local_seq_len = hidden_states.shape[1]
+        total_seq_len = document_ids.shape[1]
 
         if position_ids is None:
             position_ids = 1 + torch.arange(
-                total_seq_len, dtype=torch.long, device=device
+                local_seq_len, dtype=torch.long, device=device
             ).unsqueeze(0)
-            # shape: [1, total_seq_len]
+            # shape: [1, local_seq_len]
 
         past_key_values = DynamicCache()
 
@@ -237,7 +239,7 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
                 dim=-1,
             )
         hidden_states = self.fc(hidden_states)
-        # shape: [1, total_seq_len, hidden_size]
+        # shape: [1, local_seq_len, hidden_size]
 
         original_input_ids = input_ids.detach().clone()
         return_loss = verifier_last_hidden_states is not None
@@ -246,7 +248,7 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
                 targets = self.verifier_lm_head(
                     self.verifier_norm(verifier_last_hidden_states)
                 )
-                # shape: [1, total_seq_len, draft_vocab_size]
+                # shape: [1, local_seq_len, draft_vocab_size]
             loss = torch.tensor(0.0, device=device)
 
             # prev_correct is a boolean tensor that is True for tokens that have been
@@ -256,7 +258,7 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
             prev_correct = (
                 loss_mask.clone()
                 if loss_mask is not None
-                else torch.ones(1, total_seq_len, device=device, dtype=torch.bool)
+                else torch.ones(1, local_seq_len, device=device, dtype=torch.bool)
             )
             metrics = {}
 
@@ -264,14 +266,14 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
         for ttt_step in range(ttt_steps):
             with torch.no_grad():
                 input_embeds = self.embed_tokens(input_ids)
-                # shape: [1, total_seq_len, hidden_size]
+                # shape: [1, local_seq_len, hidden_size]
             cache_position = torch.arange(
-                ttt_step * total_seq_len,
-                (ttt_step + 1) * total_seq_len,
+                ttt_step * local_seq_len,
+                (ttt_step + 1) * local_seq_len,
                 dtype=torch.long,
                 device=device,
             )
-            # shape: [total_seq_len]
+            # shape: [local_seq_len]
 
             hidden_states = torch.cat([input_embeds, hidden_states], dim=-1)
             # shape: [1, total_seq_len, 2 * hidden_size]
