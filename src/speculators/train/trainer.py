@@ -118,6 +118,7 @@ class TrainerConfig(NamedTuple):
     hidden_states_dtype: torch.dtype = torch.bfloat16
     log_freq: int = 1
     fsdp_shard: bool = False
+    max_steps: int | None = None
 
 
 def _resolve_scheduler_steps(
@@ -501,6 +502,12 @@ class Trainer:
                     extra={"step": self.global_step},
                 )
             self.global_step += 1
+
+            if (
+                self.config.max_steps is not None
+                and self.global_step >= self.config.max_steps
+            ):
+                break
 
             if (
                 step_interval is not None
