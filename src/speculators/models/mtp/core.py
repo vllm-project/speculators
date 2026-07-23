@@ -147,8 +147,7 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
 
         if get_sp_size() > 1:
             raise NotImplementedError(
-                "MTPDraftModel does not yet support "
-                "sequence parallelism (sp_size > 1)"
+                "MTPDraftModel does not yet support sequence parallelism (sp_size > 1)"
             )
 
         input_ids = input_ids.long()

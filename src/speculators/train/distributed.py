@@ -258,9 +258,7 @@ def register_sp_gradient_hooks(model: torch.nn.Module) -> list:
     for param in model.parameters():
         if param.requires_grad:
             hook = param.register_post_accumulate_grad_hook(
-                lambda p, _group=sp_group: dist.all_reduce(
-                    p.grad, group=_group
-                )
+                lambda p, _group=sp_group: dist.all_reduce(p.grad, group=_group)
             )
             hooks.append(hook)
     return hooks
