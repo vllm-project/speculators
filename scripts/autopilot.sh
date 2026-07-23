@@ -31,7 +31,9 @@ cd "$(dirname "$0")/.."
 # creates a claude-runner user with the right groups — just re-exec as it.
 if [ "$(id -u)" -eq 0 ]; then
     WS_GID=$(stat -c '%g' /workspace)
-    chmod -R g+rwX .claude 2>/dev/null || true
+    # Grant group-write so claude-runner can create branches, edit source, and commit.
+    chmod -R g+rwX . 2>/dev/null || true
+    chmod -R g+rwX /workspace/vllm 2>/dev/null || true
     chmod g+r /root/.claude/.credentials.json 2>/dev/null || true
     chown root:"$WS_GID" /root/.claude/.credentials.json 2>/dev/null || true
     # GCP/Vertex auth files
