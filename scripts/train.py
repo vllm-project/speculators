@@ -531,10 +531,19 @@ def main(args: argparse.Namespace):  # noqa: C901
                 f"--total-seq-len ({args.total_seq_len}) must be divisible "
                 f"by --sp-size ({args.sp_size})"
             )
-        if args.speculator_type != "eagle3":
+        if args.speculator_type not in ("eagle3", "dflash"):
             raise ValueError(
                 f"Sequence parallelism (--sp-size > 1) is currently only "
-                f"supported for eagle3, got --speculator-type={args.speculator_type}"
+                f"supported for eagle3 and dflash, "
+                f"got --speculator-type={args.speculator_type}"
+            )
+        if (
+            args.speculator_type == "dflash"
+            and args.max_anchors % args.sp_size != 0
+        ):
+            raise ValueError(
+                f"--max-anchors ({args.max_anchors}) must be divisible "
+                f"by --sp-size ({args.sp_size}) for DFlash SP"
             )
 
     if args.fsdp_shard and not is_distributed():

@@ -48,6 +48,7 @@ def flex_attention_forward(
     """
     from speculators.train.distributed import get_sp_group, get_sp_size  # noqa: PLC0415
     from speculators.train.sequence_parallel import (  # noqa: PLC0415
+        maybe_replicate_kv_heads,
         ulysses_gather,
         ulysses_scatter,
     )
@@ -57,6 +58,7 @@ def flex_attention_forward(
 
     if use_sp:
         sp_group = get_sp_group()
+        key, value = maybe_replicate_kv_heads(key, value, sp_size)
         query = ulysses_scatter(query, sp_group, sp_size)
         key = ulysses_scatter(key, sp_group, sp_size)
         value = ulysses_scatter(value, sp_group, sp_size)
@@ -127,3 +129,16 @@ def block_mask_to_dense_attention_mask(
 # Singleton registry for attention functions (shared across all models)
 ALL_ATTENTION_FUNCTIONS = AttentionInterface()
 ALL_ATTENTION_FUNCTIONS.register("simple_flex_attention", flex_attention_forward)
+
+
+def _dflash_flex_attention_forward(*args, **kwargs):
+    from speculators.train.sequence_parallel import (  # noqa: PLC0415
+        dflash_flex_attention_forward,
+    )
+
+    return dflash_flex_attention_forward(*args, **kwargs)
+
+
+ALL_ATTENTION_FUNCTIONS.register(
+    "dflash_flex_attention", _dflash_flex_attention_forward
+)
