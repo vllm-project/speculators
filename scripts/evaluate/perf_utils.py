@@ -6,7 +6,6 @@ import csv
 import json
 import logging
 import math
-import os
 import re
 import shutil
 import statistics
@@ -152,7 +151,7 @@ def _load_json(
     with filepath.open() as f:
         data = json.load(f)
 
-    subset = Path(data["args"]["data_args"][0]["data_files"]).stem
+    subset = Path(data["config"]["spec"]["data"][0]["load_kwargs"]["data_files"]).stem
     points: list[tuple[float, float]] = []
     for bench in data.get("benchmarks", []):
         if bench.get("config", {}).get("strategy", {}).get("type_") != "constant":
@@ -248,7 +247,7 @@ def parse_gen_len_file(filepath: Path) -> dict:
     if not successful:
         raise ValueError(f"No successful requests found in {filepath}")
 
-    output_tokens = [r["output_tokens"] for r in successful]
+    output_tokens = [r["output_metrics"]["text_tokens"] for r in successful]
     median = statistics.median(output_tokens)
 
     return {
@@ -518,17 +517,14 @@ def check_dependencies() -> None:
         sys.exit(1)
 
 
-def build_backend_args(gen_kwargs: str, max_tokens: int) -> str:
-    if gen_kwargs:
-        try:
-            body = json.loads(gen_kwargs)
-        except json.JSONDecodeError as e:
-            msg = f"Invalid JSON in --gen-kwargs: {gen_kwargs!r}: {e}"
-            raise ValueError(msg) from e
-    else:
-        body = {}
-    body["max_tokens"] = max_tokens
-    return json.dumps({"extras": {"body": body}})
+def parse_gen_kwargs(gen_kwargs: str) -> dict:
+    if not gen_kwargs:
+        return {}
+    try:
+        return json.loads(gen_kwargs)
+    except json.JSONDecodeError as e:
+        msg = f"Invalid JSON in --gen-kwargs: {gen_kwargs!r}: {e}"
+        raise ValueError(msg) from e
 
 
 def fetch_metrics(metrics_url: str, retries: int = 3, delay: float = 2.0) -> str | None:
@@ -559,33 +555,31 @@ def run_guidellm(
     max_requests: int | None,
     max_concurrency: int,
     output_path: Path,
-    backend_args: str,
+    max_tokens: int,
+    gen_kwargs: dict | None = None,
 ) -> None:
-    cmd = [
-        "guidellm",
-        "benchmark",
-        "--target",
-        target,
-        "--data",
-        dataset,
-        "--data-column-mapper",
-        data_column_mapper,
-        "--profile",
-        profile,
-        "--rate",
-        str(rate),
-        "--output-path",
-        str(output_path),
-        "--backend-args",
-        backend_args,
-    ]
-    # When subset is given, filter to that file within the HF dataset.
-    # When subset is None the dataset IS the file (e.g. a local JSONL).
-    if subset is not None:
-        cmd.extend(["--data-args", json.dumps({"data_files": f"{subset}.jsonl"})])
-    if max_requests is not None:
-        cmd.extend(["--max-requests", str(max_requests)])
+    backend = f"kind=openai_http,target={target},max_tokens={max_tokens}"
+    for k, v in (gen_kwargs or {}).items():
+        backend += f",extras.body.{k}={v}"
+    cmd = ["guidellm", "run", "--backend", backend]
 
-    env = os.environ.copy()
-    env["GUIDELLM__MAX_CONCURRENCY"] = str(max_concurrency)
-    subprocess.run(cmd, check=True, env=env)  # noqa: S603
+    if subset is not None:
+        data = f"kind=huggingface,source={dataset}"
+        data += f",load_kwargs.data_files={subset}.jsonl"
+    else:
+        data = f"kind=json_file,path={dataset}"
+    cmd.extend(["--data", data])
+
+    cmd.extend(["--data-column-mapper", data_column_mapper])
+
+    profile_str = f"kind={profile},max_concurrency={max_concurrency}"
+    if profile == "sweep":
+        profile_str += f",sweep_size={rate}"
+    cmd.extend(["--profile", profile_str])
+
+    if max_requests is not None:
+        cmd.extend(["--constraint", f"kind=max_requests,count={max_requests}"])
+
+    cmd.extend(["--output", f"kind=json,path={output_path}"])
+
+    subprocess.run(cmd, check=True)  # noqa: S603

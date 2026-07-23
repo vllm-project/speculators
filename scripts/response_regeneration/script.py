@@ -701,7 +701,9 @@ async def worker(
             out_fh.flush()
             if samples:
                 stats["ok"] += 1
-            if truncated:
+            if truncated or any(
+                s.get("metadata", {}).get("finish_reason") == "length" for s in samples
+            ):
                 stats["truncated"] += 1
         except Exception as e:  # noqa: BLE001
             # Failures go to a separate error file, not the training output.

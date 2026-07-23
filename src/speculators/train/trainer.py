@@ -41,7 +41,7 @@ metric_logger = logging.getLogger("speculators.metrics")
 
 
 class _StepTimer:
-    # Each mark()/now() forces a cuda.synchronize to capture true GPU time.
+    # Each mark()/now() forces an accelerator.synchronize to capture true GPU time.
     # This serialises the CUDA pipeline, so profiled steps are slower; keep
     # log_freq > 1 in perf-sensitive runs.
     def __init__(self, enabled: bool = False):
@@ -54,7 +54,7 @@ class _StepTimer:
 
     def mark(self, name: str) -> None:
         if self.enabled:
-            torch.cuda.synchronize()
+            torch.accelerator.synchronize()
             self._marks[name] = time.perf_counter()
 
     def mark_value(self, name: str, value: float) -> None:
@@ -64,7 +64,7 @@ class _StepTimer:
     def now(self) -> float | None:
         if not self.enabled:
             return None
-        torch.cuda.synchronize()
+        torch.accelerator.synchronize()
         return time.perf_counter()
 
     def profile(self, num_tokens: int) -> dict[str, float] | None:
@@ -529,7 +529,7 @@ class Trainer:
         if self.rank == 0:
             val_loader = tqdm(val_loader, desc=f"Epoch {epoch}")  # type: ignore[assignment]
 
-        val_metrics: dict[str, float] = {}
+        accumulated: dict[str, torch.Tensor] = {}
         num_batches = len(val_loader)
         for batch in val_loader:
             gpu_batch = {
@@ -549,12 +549,16 @@ class Trainer:
                     **gpu_batch, **val_kwargs
                 )
 
-            if self.is_distributed:
-                for m in metrics.values():
-                    dist.all_reduce(m, op=dist.ReduceOp.SUM)
-
             for k, v in metrics.items():
-                val_metrics[k] = val_metrics.get(k, 0.0) + v.item()
+                acc = accumulated.get(k)
+                accumulated[k] = v.float() if acc is None else acc + v.float()
+
+        val_metrics: dict[str, float] = {}
+        if accumulated:
+            stacked = torch.stack(list(accumulated.values()))
+            if self.is_distributed:
+                dist.all_reduce(stacked, op=dist.ReduceOp.SUM)
+            val_metrics = dict(zip(accumulated, stacked.tolist(), strict=True))
 
         world_size = dist.get_world_size() if self.is_distributed else 1
         val_metrics = {k: v / num_batches for k, v in val_metrics.items()}

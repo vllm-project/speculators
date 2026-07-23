@@ -35,10 +35,10 @@ from perf_utils import (
     BASE_CSV_COLUMNS,
     CsvWriter,
     acceptance_csv_columns,
-    build_backend_args,
     check_dependencies,
     extract_spec_decode_metrics,
     fetch_metrics,
+    parse_gen_kwargs,
     parse_gen_len_results,
     parse_prometheus_metrics,
     parse_sweep_results,
@@ -57,13 +57,17 @@ DEFAULT_MAX_CONCURRENCY = 128
 DEFAULT_MAX_REQUESTS = 200
 DEFAULT_GEN_LEN_RATE = 128
 DEFAULT_SWEEP_RATE = 10
-DEFAULT_DATA_COLUMN_MAPPER = '{"text_column":"prompt"}'
+DEFAULT_DATA_COLUMN_MAPPER = (
+    "kind=generative_column_mapper,column_mappings.text_column=prompt"
+)
 
 # ---------------------------------------------------------------------------
 # SPEED-Bench constants
 # ---------------------------------------------------------------------------
 
-_SPEEDBENCH_COLUMN_MAPPER = '{"text_column":"turns"}'
+_SPEEDBENCH_COLUMN_MAPPER = (
+    "kind=generative_column_mapper,column_mappings.text_column=turns"
+)
 
 
 def _fetch_model_name(target: str) -> str | None:
@@ -182,7 +186,8 @@ def _run_subset(
             rate=args.gen_len_rate,
             max_requests=None,
             output_path=gen_len_output,
-            backend_args=build_backend_args(args.gen_kwargs, 4096),
+            max_tokens=4096,
+            gen_kwargs=parse_gen_kwargs(args.gen_kwargs),
         )
         mapping = parse_gen_len_results(
             [gen_len_output],
@@ -202,7 +207,8 @@ def _run_subset(
         profile=profile,
         max_requests=args.max_requests,
         output_path=run_output,
-        backend_args=build_backend_args(args.gen_kwargs, max_tokens),
+        max_tokens=max_tokens,
+        gen_kwargs=parse_gen_kwargs(args.gen_kwargs),
     )
     current = _require_metrics(metrics_url)
 
@@ -400,7 +406,8 @@ def main() -> None:
     parser.add_argument(
         "--data-column-mapper",
         default=DEFAULT_DATA_COLUMN_MAPPER,
-        help=f"Column mapping for guidellm (default: {DEFAULT_DATA_COLUMN_MAPPER})",
+        help="Column mapping for guidellm in typed key=value format"
+        f" (default: {DEFAULT_DATA_COLUMN_MAPPER})",
     )
     parser.add_argument(
         "--speedbench-data-dir",
