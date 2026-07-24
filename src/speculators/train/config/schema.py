@@ -400,6 +400,12 @@ class TrainerArgs(_Group):
         "parameters are fully replicated (DDP-like). Enable when the model does not "
         "fit in a single GPU's memory.",
     )
+    max_steps: int | None = Field(
+        default=None,
+        ge=1,
+        description="Stop training after this many optimizer steps (counted across "
+        "epochs). Useful for quick smoke runs. Default: run all epochs to completion.",
+    )
 
     @field_validator("checkpoint_freq")
     @classmethod
