@@ -123,6 +123,13 @@ plugins:
             show_symbol_type_heading: true
             show_symbol_type_toc: true
             summary: true
+  - redirects:
+      redirect_maps:
+        user_guide/tutorials/train_eagle3_online.md: user_guide/tutorials/train.md
+        user_guide/tutorials/train_eagle3_offline.md: user_guide/tutorials/train.md
+        user_guide/tutorials/train_dflash_online.md: user_guide/tutorials/train.md
+        user_guide/tutorials/train_peagle_offline.md: user_guide/tutorials/train.md
+        user_guide/tutorials/train_mtp_online.md: user_guide/tutorials/train.md
   - search
   - section-index
   - social
