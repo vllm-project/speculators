@@ -10,25 +10,59 @@ Pick an algorithm and a training mode below; the rest of the walkthrough is the 
 
 All five are lossless: they produce output from the same distribution as the target model. See the [Decision Guide](../algorithms/decision_guide.md) if you're unsure. You don't need to memorize the flags -- [Step 4](#step-4-train) gives a complete command for whichever pair you choose.
 
-| Algorithm                          | What it does                                                                                                                                |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| [Eagle-3](../algorithms/eagle3.md) | Predicts draft tokens autoregressively. The most mature option -- start here if unsure.                                                     |
-| [P-EAGLE](../algorithms/peagle.md) | Extends Eagle-3 with parallel multi-token prediction across depths, using COD sampling.                                                     |
-| [DFlash](../algorithms/dflash.md)  | Predicts a whole block in one forward pass using anchored block diffusion.                                                                  |
-| [DSpark](../algorithms/dspark.md)  | DFlash plus a Markov logit-bias head and a per-position confidence head.                                                                    |
-| [MTP](../algorithms/mtp.md)        | Finetunes the verifier's own multi-token prediction head instead of training a draft from scratch. Needs a verifier with native MTP layers. |
+/// tab | Eagle-3
+
+Predicts draft tokens autoregressively. The most mature option; start here if unsure. ([details](../algorithms/eagle3.md))
+
+///
+
+/// tab | P-EAGLE
+
+Extends Eagle-3 with parallel multi-token prediction across depths, using COD sampling. ([details](../algorithms/peagle.md))
+
+///
+
+/// tab | DFlash
+
+Predicts a whole block in one forward pass using anchored block diffusion. ([details](../algorithms/dflash.md))
+
+///
+
+/// tab | DSpark
+
+DFlash plus a Markov logit-bias head and a per-position confidence head. ([details](../algorithms/dspark.md))
+
+///
+
+/// tab | MTP
+
+Finetunes the verifier's own multi-token prediction head instead of training a draft from scratch. Needs a verifier with native MTP layers. ([details](../algorithms/mtp.md))
+
+///
 
 ### 2. Pick a training mode
 
 The mode controls only where the verifier's hidden states come from. The pipeline is otherwise identical.
 
-| Mode        | Hidden states                                               | Use when                                                                                               |
-| ----------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| **Online**  | Generated on demand from a live vLLM server, then discarded | You have GPUs to spare for vLLM alongside training, and don't want the disk cost                       |
-| **Offline** | Pre-generated to disk, then read back                       | GPU resources are limited -- give them all to generation, then all to training. Needs substantial disk |
-| **Hybrid**  | Generated on demand during epoch 0, cached, reused after    | You want to pay the generation cost once and reuse it across epochs                                    |
+/// tab | Online
 
-Select your mode in any tab below and the rest of the page follows along.
+Hidden states are generated on demand from a live vLLM server, then discarded. Use when you have GPUs to spare for vLLM alongside training and don't want the disk cost.
+
+///
+
+/// tab | Offline
+
+Hidden states are pre-generated to disk, then read back. Use when GPU resources are limited, so you can give them all to generation and then all to training. Needs substantial disk.
+
+///
+
+/// tab | Hybrid
+
+Hidden states are generated on demand during epoch 0, cached, then reused. Use when you want to pay the generation cost once and reuse it across epochs.
+
+///
+
+Your picks follow you down the page: Steps 3 and 4 show the algorithm and mode you select here.
 
 ## Step 0: Setup Your Environment
 
