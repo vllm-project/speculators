@@ -11,6 +11,7 @@ Covers the three mutually exclusive init paths and their guard rails:
   ``--draft-config`` is mutually exclusive with the decoder-shaping flags.
 """
 
+import argparse
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -22,16 +23,16 @@ from transformers.models.llama.configuration_llama import LlamaConfig
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
 from scripts.train import (
-    DECODER_SHAPING_FLAGS,
     _build_from_config_only,
     build_draft_model,
     create_transformer_layer_config,
     load_draft_transformer_layer_config,
-    parse_args,
 )
 from speculators import SpeculatorsConfig, VerifierConfig
 from speculators.models.eagle3 import Eagle3DraftModel, Eagle3SpeculatorConfig
 from speculators.proposals.greedy import GreedyTokenProposalConfig
+from speculators.train.config import TrainConfig
+from speculators.train.config.resolution import DECODER_SHAPING_FLAGS
 from speculators.utils.loading import is_config_only_dir
 
 # ---------------------------------------------------------------------------
@@ -51,11 +52,9 @@ TINY_LLAMA_KWARGS: dict[str, Any] = {
 }
 
 
-def _parse(monkeypatch, extra: list[str]):
-    monkeypatch.setattr(
-        "sys.argv", ["train.py", "--verifier-name-or-path", "dummy"] + extra
-    )
-    return parse_args()
+def _parse(monkeypatch, extra: list[str]) -> argparse.Namespace:
+    cfg = TrainConfig.resolve(["--verifier-name-or-path", "dummy", *extra])
+    return argparse.Namespace(**cfg.flatten())
 
 
 def _make_eagle3_config(verifier_name_or_path: str | None = "some-verifier"):
