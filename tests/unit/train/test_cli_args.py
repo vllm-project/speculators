@@ -263,3 +263,23 @@ def test_max_steps_explicit(monkeypatch):
 def test_max_steps_rejects_non_positive(monkeypatch):
     with pytest.raises(SystemExit):
         _parse(monkeypatch, ["--max-steps", "0"])
+
+
+# ---------------------------------------------------------------------------
+# Gradient accumulation
+# ---------------------------------------------------------------------------
+
+
+def test_gradient_accumulation_steps_default(monkeypatch):
+    args = _parse(monkeypatch, [])
+    assert args.gradient_accumulation_steps == 1
+
+
+def test_gradient_accumulation_steps_explicit(monkeypatch):
+    args = _parse(monkeypatch, ["--gradient-accumulation-steps", "8"])
+    assert args.gradient_accumulation_steps == 8
+
+
+def test_gradient_accumulation_steps_rejects_zero(monkeypatch):
+    with pytest.raises(SystemExit):
+        _parse(monkeypatch, ["--gradient-accumulation-steps", "0"])
