@@ -492,6 +492,115 @@ def test_arrow_dataset_default_split_ratio_does_not_crash(tmp_path: Path):
     assert arrow_ds._map_to_file_idx(5) == 5
 
 
+<<<<<<< HEAD
+=======
+def test_verifier_kvs_survive_pipeline():
+    """Test that optional verifier KV caches survive standardize_data_v1 and collate_fn."""
+    # 1. Create a dummy v1 offline data dictionary with KV caches
+    v1_data = {
+        "input_ids": torch.tensor([0, 1, 2], dtype=torch.long),
+        "loss_mask": torch.tensor([0, 1, 1], dtype=torch.long),
+        "hidden_states": [
+            torch.tensor([[0.0, 0.1], [1.0, 1.1], [2.0, 2.1]]),  # Layer 0
+            torch.tensor([[10.0, 10.1], [11.0, 11.1], [12.0, 12.1]]),  # Verifier last hs
+        ],
+        "verifier_kv_last_local": torch.tensor([[100.0], [101.0], [102.0]]),
+        "verifier_kv_last_global": torch.tensor([[200.0], [201.0], [202.0]]),
+    }
+
+    # 2. Pass through standardize_data_v1
+    standardized = standardize_data_v1(v1_data)
+    
+    assert "verifier_kv_last_local" in standardized
+    assert "verifier_kv_last_global" in standardized
+    assert torch.equal(standardized["verifier_kv_last_local"], v1_data["verifier_kv_last_local"])
+    
+    # 3. Add lengths and position_ids (simulate BaseDataset.__getitem__)
+    standardized["lengths"] = torch.tensor([3], dtype=torch.long)
+    standardized["position_ids"] = torch.tensor([0, 1, 2], dtype=torch.long)
+    
+    # 4. Pass through collate_fn
+    collate_fn = create_collate_fn(max_len=5, hidden_size=2, num_target_layers=1)
+    batch = [standardized]
+    
+    collated = collate_fn(batch)
+    
+    # 5. Verify the KV caches survived collation and were properly padded
+    assert "verifier_kv_last_local" in collated
+    assert "verifier_kv_last_global" in collated
+    
+    local_kv = collated["verifier_kv_last_local"]
+    assert local_kv.shape == (1, 5, 1)  # [batch=1, max_len=5, ...]
+    
+    # First 3 positions should match original, last 2 should be padded with 0
+    expected_local = torch.tensor([[[100.0], [101.0], [102.0], [0.0], [0.0]]])
+    assert torch.equal(local_kv, expected_local)
+
+
+def test_verifier_kvs_mixed_batch():
+    """KV-present and KV-absent samples in one batch should not crash or drop data."""
+    from speculators.train.data import create_collate_fn
+    
+    with_kv = {
+        "input_ids": torch.tensor([0]),
+        "loss_mask": torch.tensor([1]),
+        "hidden_states": torch.tensor([[0.0]]),
+        "verifier_last_hidden_states": torch.tensor([[0.0]]),
+        "verifier_kv_last_local": torch.tensor([[100.0]]),
+        "lengths": torch.tensor([1]),
+        "position_ids": torch.tensor([0]),
+    }
+    without_kv = {k: v for k, v in with_kv.items() if not k.startswith("verifier_kv")}
+    collate_fn = create_collate_fn(max_len=5, hidden_size=1, num_target_layers=1)
+    
+    # Test both orderings
+    for batch in [[with_kv, without_kv], [without_kv, with_kv]]:
+        collated = collate_fn(batch)
+        
+        assert "verifier_kv_last_local" in collated
+        local_kv = collated["verifier_kv_last_local"]
+        assert local_kv.shape == (1, 5, 1)
+        
+        if batch[0] == with_kv:
+            expected = torch.tensor([[[100.0], [0.0], [0.0], [0.0], [0.0]]])
+        else:
+            expected = torch.tensor([[[0.0], [100.0], [0.0], [0.0], [0.0]]])
+            
+        assert torch.equal(local_kv, expected)
+
+
+def test_verifier_kvs_dtype_cast():
+    """Verify BaseDataset.__getitem__ casts verifier KV tensors when hidden_states_dtype is bfloat16."""
+    from speculators.train.data import BaseDataset
+    
+    class DummyDataset(BaseDataset):
+        def __len__(self):
+            return 1
+            
+        def _compute_approx_lengths(self):
+            return [1]
+            
+        def _get_raw_data(self, idx):
+            return {
+                "input_ids": torch.tensor([0]),
+                "loss_mask": torch.tensor([1]),
+                "hidden_states": torch.tensor([[0.0]], dtype=torch.float32),
+                "verifier_last_hidden_states": torch.tensor([[0.0]], dtype=torch.float32),
+                "verifier_kv_last_local": torch.tensor([[100.0]], dtype=torch.float32),
+            }
+            
+    ds = DummyDataset(
+        max_len=128,
+        hidden_states_dtype=torch.bfloat16,
+    )
+    
+    item = ds[0]
+    assert item["verifier_kv_last_local"].dtype == torch.bfloat16
+    assert item["hidden_states"].dtype == torch.bfloat16
+    assert item["verifier_last_hidden_states"].dtype == torch.bfloat16
+
+
+>>>>>>> 40e5d06 (fix(mtp): address PR 767 CodeRabbit and collaborator comments)
 def test_arrow_dataset_on_generate_cache_creates_hidden_states_dir(tmp_path: Path):
     """on_generate="cache" must create the cache dir when cache() is called —
     otherwise shutil.move into it raises FileNotFoundError, which _maybe_generate_hs
@@ -527,3 +636,63 @@ def test_arrow_dataset_on_generate_cache_creates_hidden_states_dir(tmp_path: Pat
     assert arrow_ds.transfer.hidden_states_path.is_dir()
     # And the cached file should exist
     assert (arrow_ds.transfer.hidden_states_path / "hs_0.safetensors").exists()
+
+def test_verifier_kvs_survive_pipeline():
+    """Test optional verifier KV caches survive standardize_data_v1 and collate_fn."""
+    # 1. Create a dummy v1 offline data dictionary with KV caches
+    v1_data = {
+        "input_ids": torch.tensor([0, 1, 2], dtype=torch.long),
+        "loss_mask": torch.tensor([0, 1, 1], dtype=torch.long),
+        "hidden_states": [
+            torch.tensor([[0.0, 0.1], [1.0, 1.1], [2.0, 2.1]]),  # Layer 0
+            torch.tensor(
+                [[10.0, 10.1], [11.0, 11.1], [12.0, 12.1]]
+            ),  # Verifier last hs
+        ],
+        "kv_last_local_k": torch.tensor([[100.0], [101.0], [102.0]]),
+        "kv_last_local_v": torch.tensor([[110.0], [111.0], [112.0]]),
+        "kv_last_global_k": torch.tensor([[200.0], [201.0], [202.0]]),
+        "kv_last_global_v": torch.tensor([[210.0], [211.0], [212.0]]),
+    }
+
+    # 2. Pass through standardize_data_v1
+    standardized = standardize_data_v1(v1_data)
+
+    assert "verifier_kv_last_local" in standardized
+    assert "verifier_kv_last_global" in standardized
+    
+    expected_local_stack = torch.stack(
+        [v1_data["kv_last_local_k"], v1_data["kv_last_local_v"]], dim=1  # type: ignore[arg-type]
+    )
+    assert torch.equal(standardized["verifier_kv_last_local"], expected_local_stack)
+
+    # 3. Add lengths and position_ids (simulate BaseDataset.__getitem__)
+    standardized["lengths"] = torch.tensor([3], dtype=torch.long)
+    standardized["position_ids"] = torch.tensor([0, 1, 2], dtype=torch.long)
+
+    # 4. Pass through collate_fn
+    collate_fn = create_collate_fn(max_len=5, hidden_size=2, num_target_layers=1)
+    batch = [standardized]
+
+    collated = collate_fn(batch)
+
+    # 5. Verify the KV caches survived collation and were properly padded
+    assert "verifier_kv_last_local" in collated
+    assert "verifier_kv_last_global" in collated
+
+    local_kv = collated["verifier_kv_last_local"]
+    assert local_kv.shape == (1, 5, 2, 1)  # [batch=1, max_len=5, ...]
+
+    # First 3 positions should match original, last 2 should be padded with 0
+    expected_local = torch.tensor(
+        [
+            [
+                [[100.0], [110.0]],
+                [[101.0], [111.0]],
+                [[102.0], [112.0]],
+                [[0.0], [0.0]],
+                [[0.0], [0.0]],
+            ]
+        ]
+    )
+    assert torch.equal(local_kv, expected_local)

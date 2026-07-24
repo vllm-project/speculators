@@ -63,10 +63,14 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
         "verifier_lm_head.weight",
         "t2d",
         "d2t",
+        "masked_embedding.centroids.weight",
+        "masked_embedding.token_ordering",
+        "masked_embedding.token_ordering_inv",
     ]
 
     t2d: torch.Tensor | None
     d2t: torch.Tensor | None
+    masked_embedding: nn.Module | None
 
     def __init__(self, config: MTPSpeculatorConfig) -> None:
         if config.transformer_layer_config._attn_implementation is None:  # noqa: SLF001
@@ -86,6 +90,17 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
         self.rotary_emb = self._model_definitions.rotary_emb_class(tc)
 
         self.post_init()
+
+        if getattr(self.config, "num_centroids", None) is not None:
+            from speculators.models.mtp.head import MultiLevelLMHead
+
+            self.masked_embedding = MultiLevelLMHead(
+                hidden_size=tc.hidden_size,
+                vocab_size=tc.vocab_size,
+                num_centroids=self.config.num_centroids,
+            )
+        else:
+            self.masked_embedding = None
 
     @property
     def layers(self) -> nn.ModuleList:
@@ -208,12 +223,20 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
                 step_targets = step_targets.clone()
                 step_targets[step_mask == 0] = _IGNORE_INDEX
             weight = step_weights[step] if step_weights is not None else 1.0
+
             unreduced = nn.functional.cross_entropy(
                 logits.permute(0, 2, 1),
                 step_targets,
                 ignore_index=_IGNORE_INDEX,
                 reduction="none",
             )
+
+            if getattr(self, "masked_embedding", None) is not None:
+                unreduced = unreduced + self.masked_embedding.compute_centroid_loss(
+                    hidden_states=mtp_output,
+                    targets=step_targets,
+                    ignore_index=_IGNORE_INDEX,
+                )
             valid_count = (step_targets != _IGNORE_INDEX).sum()
             step_loss = weight * unreduced.sum() / valid_count.clamp(min=1)
             total_loss = total_loss + step_loss
