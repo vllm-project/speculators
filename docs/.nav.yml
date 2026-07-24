@@ -8,7 +8,6 @@ nav:
                 - user_guide/algorithms/index.md
                 - Eagle3: user_guide/algorithms/eagle3.md
                 - Dflash: user_guide/algorithms/dflash.md
-                - DSpark: user_guide/algorithms/dspark.md
                 - P-Eagle: user_guide/algorithms/peagle.md
                 - MTP: user_guide/algorithms/mtp.md
                 - Decision Guide: user_guide/algorithms/decision_guide.md
