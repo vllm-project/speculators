@@ -782,7 +782,8 @@ def parse_args():
         "--speculator-type",
         type=str,
         default="eagle3",
-        help="Type of speculator model to train (eagle3, dflash, dspark, peagle, mtp)",
+        help="Type of speculator model to train "
+        "(eagle3, dflash, dspark, dels_spec, peagle, mtp)",
     )
     parser.add_argument(
         "--from-pretrained",
@@ -1157,6 +1158,26 @@ def parse_args():
         help="Attention implementation for draft layers. "
         "Use 'sdpa' or 'eager' for hardware that doesn't support flex attention."
         "Not supported for MTP.",
+    )
+    # DeLS-Spec specific arguments (GRU-based local head).
+    parser.add_argument(
+        "--gru-hidden-size",
+        type=int,
+        default=1024,
+        help="DeLS-Spec: hidden size of the GRU local head (default: 1024).",
+    )
+    parser.add_argument(
+        "--low-rank-dim",
+        type=int,
+        default=256,
+        help="DeLS-Spec: low-rank projection dim before vocab head (default: 256).",
+    )
+    parser.add_argument(
+        "--dels-spec-head-type",
+        type=str,
+        default="rnn",
+        choices=["rnn", "markov"],
+        help="DeLS-Spec: local head variant (default: rnn).",
     )
     # P-EAGLE specific parameters
     parser.add_argument(
