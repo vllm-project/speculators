@@ -10,10 +10,13 @@ The output is a processed dataset ready for online training or offline hidden st
 
 ## Basic Usage
 
+Off-policy conversations are tokenized by a running vLLM server, so `--render-endpoint` is required unless the input is already pre-tokenized:
+
 ```bash
 python scripts/prepare_data.py \
   --model meta-llama/Llama-3.1-8B-Instruct \
   --data sharegpt \
+  --render-endpoint http://localhost:8000 \
   --output ./training_data \
   --max-samples 5000
 ```
@@ -42,7 +45,7 @@ python scripts/prepare_data.py \
 
 - **`--token-freq-path`** (str, default: `{output}/token_freq.pt`) Path to save token frequency distribution. Defaults to `token_freq.pt` in the output directory.
 
-- **`--assistant-pattern`** (str, default: `None`) Custom regex pattern for matching assistant responses. If not provided, auto-detected from chat template.
+- **`--render-endpoint`** (str, default: `None`) Base URL of a running vLLM server (e.g. `http://localhost:8000`), typically the same instance used for hidden-state extraction. Conversations are tokenized by its `/v1/chat/completions/render` endpoint and the loss mask is derived from the render boundary. Required unless the input is already pre-tokenized.
 
 - **`--minimum-valid-tokens`** (int, default: `None`) Drop samples whose loss mask contains fewer than this many trainable tokens.
 
@@ -65,6 +68,7 @@ python scripts/prepare_data.py \
   --model meta-llama/Llama-3.1-8B-Instruct \
   --data sharegpt \
   --data ./custom_conversations.jsonl \
+  --render-endpoint http://localhost:8000 \
   --output ./prepared_data \
   --seq-length 4096 \
   --max-samples 10000 \
