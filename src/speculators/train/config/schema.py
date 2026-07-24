@@ -400,6 +400,14 @@ class TrainerArgs(_Group):
         "parameters are fully replicated (DDP-like). Enable when the model does not "
         "fit in a single GPU's memory.",
     )
+    gradient_accumulation_steps: int = Field(
+        default=1,
+        ge=1,
+        description="Accumulate gradients over N microbatches before each optimizer "
+        "step (effective batch = per-step batch * N). The trailing partial window is "
+        "dropped each epoch; step-based counters (global_step, scheduler total, "
+        "log/checkpoint cadence) are measured in optimizer steps.",
+    )
 
     @field_validator("checkpoint_freq")
     @classmethod

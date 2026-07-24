@@ -114,6 +114,8 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--lr`** (float, default: `1e-4`) Learning rate.
 
+- **`--gradient-accumulation-steps`** (int, default: `1`) Accumulate gradients over N microbatches before each optimizer step, giving an effective batch size of `per-step batch × N` without extra per-microbatch memory. Must be ≥ 1. Notes: step-based counters (`global_step`, `--scheduler-total-steps`, `--log-freq`, and `--checkpoint-freq` when `< 1`) are counted in optimizer steps, so an accumulated run performs `1/N` as many scheduler steps per epoch; trailing microbatches that don't fill a full window are dropped each epoch; and the value must not change across a resume. On multi-GPU DDP, the gradient all-reduce is skipped on non-boundary microbatches (`no_sync`).
+
 - **`--train-data-ratio`** (float, default: `0.9`) Ratio of data to use for training, the rest of the provided data will be used for validation.
 
 - **`--no-resume-from-checkpoint`** (flag) Disable automatic checkpoint resumption. Without this flag, this script will automatically load the latest checkpoint in `{save-path}` if one exists.

@@ -1,3 +1,4 @@
+import contextlib
 import json
 import logging
 import time
@@ -98,6 +99,7 @@ class TrainerConfig(NamedTuple):
     lr: float
     num_epochs: int
     save_path: str
+    gradient_accumulation_steps: int = 1
     resume_from_checkpoint: bool = False
     train_call_kwargs: dict | None = None
     val_call_kwargs: dict | None = None
@@ -121,6 +123,16 @@ class TrainerConfig(NamedTuple):
     max_steps: int | None = None
 
 
+def _optimizer_steps_per_epoch(num_batches: int, accum: int) -> int:
+    """Number of optimizer steps taken in one epoch under gradient accumulation.
+
+    Each optimizer step consumes ``accum`` microbatches; the trailing partial
+    window (``num_batches % accum`` microbatches) is dropped. Single source of
+    truth for the drop-remainder policy.
+    """
+    return num_batches // accum
+
+
 def _resolve_scheduler_steps(
     config: TrainerConfig,
     train_loader_len: int,
@@ -132,7 +144,10 @@ def _resolve_scheduler_steps(
     default of 1% of the resolved total steps. ``scheduler_total_steps`` defaults
     to ``num_epochs * train_loader_len``.
     """
-    default_total_steps = config.num_epochs * train_loader_len
+    steps_per_epoch = _optimizer_steps_per_epoch(
+        train_loader_len, config.gradient_accumulation_steps
+    )
+    default_total_steps = config.num_epochs * steps_per_epoch
     scheduler_total_steps = (
         config.scheduler_total_steps
         if config.scheduler_total_steps is not None
@@ -173,6 +188,16 @@ class Trainer:
         self.rank = get_rank()
         self.train_loader = train_loader
         self.val_loader = val_loader
+
+        accum = config.gradient_accumulation_steps
+        if accum < 1:
+            raise ValueError(f"gradient_accumulation_steps must be >= 1, got {accum}.")
+        if _optimizer_steps_per_epoch(len(train_loader), accum) == 0:
+            raise ValueError(
+                f"gradient_accumulation_steps={accum} exceeds the number of "
+                f"batches per epoch ({len(train_loader)}); no optimizer step would "
+                "ever run. Lower gradient_accumulation_steps or add more data."
+            )
         self.is_distributed = is_distributed()
         self.resume_from_checkpoint = config.resume_from_checkpoint
         acc = torch.accelerator.current_accelerator()
@@ -197,6 +222,7 @@ class Trainer:
                 "epoch": epoch,
                 "local_step": local_step,
                 "global_step": self.global_step,
+                "gradient_accumulation_steps": self.config.gradient_accumulation_steps,
             }
             p = self._training_state_path(epoch)
             p.parent.mkdir(parents=True, exist_ok=True)
@@ -222,6 +248,16 @@ class Trainer:
                 # Check if this was a mid-epoch checkpoint — if so, resume
                 # from within that epoch rather than jumping to the next one.
                 state = self._load_training_state()
+                # Accumulation windows are aligned to the saved microbatch index, so
+                # resuming with a different accum would misalign them; reject it.
+                saved_accum = state.get("gradient_accumulation_steps", 1)
+                if state and saved_accum != self.config.gradient_accumulation_steps:
+                    raise ValueError(
+                        "Cannot resume: checkpoint was trained with "
+                        f"gradient_accumulation_steps={saved_accum}, but this run "
+                        f"uses {self.config.gradient_accumulation_steps}. "
+                        "They must match to resume."
+                    )
                 is_mid_epoch = (
                     state
                     and state.get("epoch") == self.checkpointer.previous_epoch
@@ -371,6 +407,76 @@ class Trainer:
         if self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1:
             self.checkpointer.load_scheduler_state_dict(self.schedulers)
 
+    def _maybe_no_sync(self, is_boundary: bool):
+        """Skip DDP gradient all-reduce on non-boundary accumulation micro-steps.
+
+        Returns ``model.no_sync()`` only for a real ``DistributedDataParallel``
+        model on a non-boundary micro-step; otherwise a no-op context. Single-GPU
+        (raw module) and FSDP2 (``fully_shard``) fall through to ``nullcontext`` and
+        remain correct because gradients accumulate additively into ``.grad``.
+        """
+        if isinstance(self.model, DistributedDataParallel) and not is_boundary:
+            return self.model.no_sync()
+        return contextlib.nullcontext()
+
+    def _accumulate_and_step(
+        self,
+        loss: torch.Tensor,
+        accum: int,
+        is_window_start: bool,
+        is_boundary: bool,
+        timer: "_StepTimer",
+    ) -> dict[str, float]:
+        """Run one accumulation micro-step; step the optimizer only at a boundary.
+
+        Gradients are zeroed at the start of each accumulation window and the loss is
+        scaled by ``accum`` so the accumulated gradient equals the mean over the
+        effective (window) batch. On a boundary micro-step the gradient is clipped,
+        the optimizer and schedulers step. LRs are captured before the scheduler step
+        to match the pre-step logging semantics. Returns those LRs by optimizer name.
+        """
+        if is_window_start:
+            self._optimizers_zero_grad()
+        with self._maybe_no_sync(is_boundary):
+            (loss / accum).backward()
+
+        current_lrs = {
+            type(opt).__name__: opt.param_groups[0]["lr"] for opt in self.optimizers
+        }
+        if is_boundary:
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+            timer.mark("bwd")
+            self._optimizers_step()
+            self._schedulers_step()
+        timer.mark("opt")
+        return current_lrs
+
+    def _maybe_save_step_checkpoint(
+        self,
+        epoch: int,
+        local_step: int,
+        accum: int,
+        opt_steps_per_epoch: int,
+        step_interval: int | None,
+        is_boundary: bool,
+    ) -> None:
+        """Save a mid-epoch checkpoint at the configured optimizer-step cadence.
+
+        Cadence is measured in optimizer steps so it aligns with accumulation-window
+        boundaries; saves too close to the end of the epoch are skipped. ``local_step``
+        (a microbatch index on a window boundary) is what gets persisted, so resume
+        lands on a fresh window start.
+        """
+        if not is_boundary or step_interval is None or self.config.save_best:
+            return
+        opt_step = local_step // accum
+        if (
+            opt_step % step_interval == 0
+            and opt_steps_per_epoch - opt_step >= step_interval * MIN_STEP_PCT
+            # Avoid saving back to back at the end of each epoch
+        ):
+            self.maybe_save_checkpoint(epoch, local_step=local_step)
+
     def _optimizers_zero_grad(self):
         for opt in self.optimizers:
             opt.zero_grad()
@@ -432,17 +538,28 @@ class Trainer:
         if self.rank == 0:
             train_loader = tqdm(train_loader, desc=f"Epoch {epoch}")  # type: ignore[assignment]
 
+        accum = self.config.gradient_accumulation_steps
+        opt_steps_per_epoch = _optimizer_steps_per_epoch(num_steps, accum)
+        # Sub-epoch checkpoint cadence is measured in optimizer steps so it aligns
+        # with accumulation-window boundaries (microbatch counts would rarely match).
         step_interval = (
-            max(1, round(num_steps * self.config.checkpoint_freq))
+            max(1, round(opt_steps_per_epoch * self.config.checkpoint_freq))
             if self.config.checkpoint_freq < 1
             else None
         )
+        # Last microbatch index that completes a full accumulation window; any
+        # trailing microbatches that can't fill a window are dropped.
+        last_boundary = opt_steps_per_epoch * accum
         t_before_fetch = time.perf_counter()
         timer = _StepTimer()
         for local_step_rel, batch in enumerate(train_loader, 1):
             # local_step is 1-based index into the *full* epoch (not the slice).
             local_step = local_step_rel + skip_steps
-            timer.reset(self.global_step % self.config.log_freq == 0)
+            if local_step > last_boundary:
+                break
+            is_window_start = (local_step - 1) % accum == 0
+            is_boundary = local_step % accum == 0
+            timer.reset(is_boundary and self.global_step % self.config.log_freq == 0)
 
             timer.mark_value("start", t_before_fetch)
             gpu_batch = {
@@ -461,18 +578,9 @@ class Trainer:
                 )
 
             timer.mark("fwd")
-            self._optimizers_zero_grad()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-
-            timer.mark("bwd")
-            self._optimizers_step()
-
-            current_lrs = {
-                type(opt).__name__: opt.param_groups[0]["lr"] for opt in self.optimizers
-            }
-            self._schedulers_step()
-            timer.mark("opt")
+            current_lrs = self._accumulate_and_step(
+                loss, accum, is_window_start, is_boundary, timer
+            )
             t_before_fetch = timer.now() or time.perf_counter()
 
             profile = None
@@ -501,7 +609,8 @@ class Trainer:
                     },
                     extra={"step": self.global_step},
                 )
-            self.global_step += 1
+            if is_boundary:
+                self.global_step += 1
 
             if (
                 self.config.max_steps is not None
@@ -509,14 +618,14 @@ class Trainer:
             ):
                 break
 
-            if (
-                step_interval is not None
-                and not self.config.save_best
-                and local_step % step_interval == 0
-                and num_steps - local_step >= step_interval * MIN_STEP_PCT
-                # Avoid saving back to back ay the end of each epoch
-            ):
-                self.maybe_save_checkpoint(epoch, local_step=local_step)
+            self._maybe_save_step_checkpoint(
+                epoch,
+                local_step,
+                accum,
+                opt_steps_per_epoch,
+                step_interval,
+                is_boundary,
+            )
 
     @torch.no_grad()
     def val_epoch(self, epoch: int) -> dict[str, float] | None:
