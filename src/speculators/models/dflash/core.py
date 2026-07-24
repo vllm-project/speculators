@@ -507,9 +507,5 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             sample_from_anchor=self.config.sample_from_anchor,
         )
 
-        if sp_size > 1:
-            for k in list(metrics):
-                if k.endswith("_total") and metrics[k].numel() == 1:
-                    metrics[k] = metrics[k] / sp_size
 
         return None, loss, metrics
