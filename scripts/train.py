@@ -20,6 +20,7 @@ from speculators.data_generation.vllm_client import (
     DEFAULT_REQUEST_TIMEOUT,
 )
 from speculators.model import SpeculatorModel
+from speculators.models.attention import configure_fa4
 from speculators.models.eagle3.data import shift_batch
 from speculators.models.eagle3.rotary_partial import install_partial_neox_rotary
 from speculators.models.metrics import resolve_loss_config
@@ -555,6 +556,8 @@ def main(args: argparse.Namespace):  # noqa: C901
             "Use bfloat16 instead, which provides the same memory savings with "
             "better numerical stability and no gradient scaling required."
         )
+
+    configure_fa4(args.fa4)
 
     if args.speculator_type == "mtp":
         if args.draft_attn_impl != "simple_flex_attention":
@@ -1157,6 +1160,15 @@ def parse_args():
         help="Attention implementation for draft layers. "
         "Use 'sdpa' or 'eager' for hardware that doesn't support flex attention."
         "Not supported for MTP.",
+    )
+    parser.add_argument(
+        "--fa4",
+        type=str,
+        default="auto",
+        choices=["auto", "on", "off"],
+        help="FA4 (FlashAttention-4) backend for flex attention. "
+        "'auto' (default) enables FA4 when Hopper+ GPU and flash_attn.cute are "
+        "available. 'on' forces FA4 (errors if unavailable). 'off' disables FA4.",
     )
     # P-EAGLE specific parameters
     parser.add_argument(

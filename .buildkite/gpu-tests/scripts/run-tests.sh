@@ -31,5 +31,12 @@ if [ -n "${TRANSFORMERS_VERSION:-}" ] && [ "${TRANSFORMERS_VERSION}" != "latest"
   uv pip install "transformers${TRANSFORMERS_VERSION}"
 fi
 
+# Install FA4 on Hopper+ GPUs (compute capability >= 9.0) so FA4 tests run.
+CC=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -1 | tr -d '.')
+if [ "${CC:-0}" -ge 90 ]; then
+  echo "--- Installing flash-attn (FA4) for Hopper+ GPU"
+  uv pip install flash-attn-4 --prerelease allow || echo "WARNING: flash-attn install failed, FA4 tests will be skipped"
+fi
+
 echo "+++ Running tests"
 python -m pytest -ra "tests/${TEST_TYPE}"
