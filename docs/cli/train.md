@@ -170,6 +170,8 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--block-size`** (int, default: `8`) Block size for DFlash model.
 
+- **`--use-liger-kernel`** (flag, default: `False`) Use Liger Qwen3 RMSNorm and SwiGLU kernels for DFlash training. Requires the optional `speculators[liger]` extra.
+
 - **`--sample-from-anchor`** / **`--no-sample-from-anchor`** (bool, default: algorithm-specific) Whether to sample from the anchor position. `True`: sample from anchor and all mask positions (default for dspark, produces block_size tokens). `False`: anchor is bonus token (default for dflash, produces block_size-1 tokens).
 
 - **`--max-anchors`** (int, default: `256`) Maximum anchor positions for DFlash training.

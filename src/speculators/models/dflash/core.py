@@ -5,15 +5,13 @@ import torch
 from torch import nn
 from torch.nn.attention.flex_attention import create_block_mask, create_mask
 from transformers import PretrainedConfig
-from transformers.models.qwen3.modeling_qwen3 import (
-    Qwen3RMSNorm,
-    Qwen3RotaryEmbedding,
-)
+from transformers.models.qwen3.modeling_qwen3 import Qwen3RotaryEmbedding
 
 from speculators.model import DraftVocabMixin, SpeculatorModel
 from speculators.models.attention import create_float_mask
 from speculators.models.dflash import DFlashSpeculatorConfig
 from speculators.models.dflash.attention import create_anchor_block_mask_mod
+from speculators.models.dflash.kernels import DEFAULT_DFLASH_KERNELS, DFlashKernels
 from speculators.models.dflash.metrics import compute_metrics
 from speculators.models.dflash.model_definitions import Qwen3DFlashDecoderLayer
 from speculators.models.dflash.utils import (
@@ -54,6 +52,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
     def __init__(
         self,
         config: DFlashSpeculatorConfig,
+        dflash_kernels: DFlashKernels | None = None,
     ) -> None:
         # Forcibly override config settings
         if config.transformer_layer_config._attn_implementation is None:  # noqa: SLF001
@@ -70,6 +69,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         )
         super().__init__(config=config)
         self._init_vocab(config)
+        kernels = dflash_kernels or DEFAULT_DFLASH_KERNELS
 
         tl_config = config.transformer_layer_config
 
@@ -77,7 +77,11 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         num_draft_layers = tl_config.num_hidden_layers
         self.layers = nn.ModuleList(
             [
-                Qwen3DFlashDecoderLayer(config.transformer_layer_config, layer_idx)  # type: ignore[arg-type]
+                Qwen3DFlashDecoderLayer(
+                    config.transformer_layer_config,  # type: ignore[arg-type]
+                    layer_idx,
+                    kernels,
+                )
                 for layer_idx in range(num_draft_layers)
             ]
         )
@@ -91,9 +95,9 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         self.uses_full_attn = bool(num_draft_layers - len(self.sliding_window_indices))
         self.sliding_window_non_causal = config.sliding_window_non_causal
 
-        self.norm = Qwen3RMSNorm(
+        self.norm = kernels.make_rms_norm(
             config.transformer_layer_config.hidden_size,
-            eps=config.transformer_layer_config.rms_norm_eps,  # type: ignore[arg-type]
+            config.transformer_layer_config.rms_norm_eps,  # type: ignore[arg-type]
         )
         self.rotary_emb = Qwen3RotaryEmbedding(config.transformer_layer_config)  # type: ignore[arg-type]
 
@@ -102,13 +106,13 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             config.transformer_layer_config.hidden_size,
             bias=False,
         )
-        self.hidden_norm = Qwen3RMSNorm(
+        self.hidden_norm = kernels.make_rms_norm(
             config.transformer_layer_config.hidden_size,
-            eps=config.transformer_layer_config.rms_norm_eps,  # type: ignore[arg-type]
+            config.transformer_layer_config.rms_norm_eps,  # type: ignore[arg-type]
         )
-        self.verifier_norm = Qwen3RMSNorm(
+        self.verifier_norm = kernels.make_rms_norm(
             config.transformer_layer_config.hidden_size,
-            eps=config.transformer_layer_config.rms_norm_eps,  # type: ignore[arg-type]
+            config.transformer_layer_config.rms_norm_eps,  # type: ignore[arg-type]
         )
         self.verifier_norm.weight.requires_grad = False
         self.block_size = config.block_size
@@ -156,11 +160,12 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             The number of draft layers is encoded in verifier_config.num_hidden_layers,
             following the same pattern as EAGLE3.
         """
+        dflash_kernels = kwargs.pop("dflash_kernels", None)
         config = DFlashSpeculatorConfig(
             **cls._build_base_config_kwargs("dflash", verifier_config, **kwargs)
         )
 
-        model = cls(config=config)
+        model = cls(config=config, dflash_kernels=dflash_kernels)
         model.load_vocab_mappings(t2d, d2t)
         model.load_verifier_weights()
         return model
@@ -400,9 +405,11 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             noise_embedding = layer(
                 hidden_states=noise_embedding,
                 target_hidden=fc_output,
-                attention_mask=sliding_window_attn_mask
-                if layer_idx in self.sliding_window_indices
-                else full_attn_mask,
+                attention_mask=(
+                    sliding_window_attn_mask
+                    if layer_idx in self.sliding_window_indices
+                    else full_attn_mask
+                ),
                 position_ids=position_ids,
                 use_cache=False,
                 position_embeddings=position_embeddings,

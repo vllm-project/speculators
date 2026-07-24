@@ -1,5 +1,7 @@
 """Tests for CLI arguments."""
 
+import pytest
+
 from scripts.train import parse_args
 from speculators.models.dflash.core import DFlashDraftModel
 from speculators.models.dspark.core import DSparkDraftModel
@@ -169,3 +171,14 @@ def test_no_norm_before_fc_flag(monkeypatch):
 def test_no_norm_output_flag(monkeypatch):
     args = _parse(monkeypatch, ["--no-norm-output"])
     assert args.norm_output is False
+
+
+def test_liger_kernel_flag_parses_for_dflash(monkeypatch):
+    args = _parse(monkeypatch, ["--speculator-type", "dflash", "--use-liger-kernel"])
+
+    assert args.use_liger_kernel is True
+
+
+def test_liger_kernel_flag_rejects_non_dflash(monkeypatch):
+    with pytest.raises(SystemExit):
+        _parse(monkeypatch, ["--speculator-type", "eagle3", "--use-liger-kernel"])

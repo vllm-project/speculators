@@ -573,6 +573,99 @@ def test_build_draft_model_routing(
     )
 
 
+def test_build_draft_model_threads_liger_kernels_to_from_scratch(monkeypatch):
+    kernels = object()
+    captured = {}
+
+    monkeypatch.setattr("scripts.train._resolve_dflash_kernels", lambda _args: kernels)
+    monkeypatch.setattr(
+        "scripts.train.create_transformer_layer_config",
+        lambda **_kwargs: SimpleNamespace(vocab_size=128),
+    )
+    monkeypatch.setattr("scripts.train.resolve_mask_token_id", lambda *_a, **_k: 0)
+
+    class _FakeModel:
+        @classmethod
+        def from_training_args(cls, **kwargs):
+            captured.update(kwargs)
+            return "MODEL"
+
+    args = SimpleNamespace(
+        use_liger_kernel=True,
+        speculator_type="dflash",
+        from_pretrained="",
+        draft_config="",
+        verifier_name_or_path="some-verifier",
+        num_layers=3,
+        draft_arch="qwen3",
+        draft_hidden_act=None,
+        sliding_window=2048,
+        full_attention_indices=[],
+        mask_token_id=None,
+        trust_remote_code=False,
+        draft_mrope_full_head_hack=True,
+    )
+
+    assert build_draft_model(args, _FakeModel, None, None, 128) == "MODEL"  # type: ignore[arg-type]
+    assert captured["dflash_kernels"] is kernels
+
+
+def test_build_draft_model_threads_liger_kernels_to_config_only(monkeypatch):
+    kernels = object()
+    captured = {}
+
+    monkeypatch.setattr("scripts.train._resolve_dflash_kernels", lambda _args: kernels)
+    monkeypatch.setattr("scripts.train.is_config_only_dir", lambda _path: True)
+
+    def build_from_config_only(*_args, **kwargs):
+        captured.update(kwargs)
+        return "MODEL"
+
+    monkeypatch.setattr("scripts.train._build_from_config_only", build_from_config_only)
+    args = SimpleNamespace(
+        use_liger_kernel=True,
+        speculator_type="dflash",
+        from_pretrained="config-only-checkpoint",
+        verifier_name_or_path="some-verifier",
+        draft_attn_impl="eager",
+    )
+
+    assert build_draft_model(args, object, None, None, None) == "MODEL"  # type: ignore[arg-type]
+    assert captured["dflash_kernels"] is kernels
+
+
+def test_build_draft_model_threads_liger_kernels_to_pretrained(monkeypatch):
+    kernels = object()
+    captured = {}
+
+    monkeypatch.setattr("scripts.train._resolve_dflash_kernels", lambda _args: kernels)
+    monkeypatch.setattr("scripts.train.is_config_only_dir", lambda _path: False)
+
+    class _ConfigClass:
+        @classmethod
+        def from_pretrained(cls, _path):
+            return SimpleNamespace(transformer_layer_config=SimpleNamespace())
+
+    class _FakeModel:
+        config_class = _ConfigClass
+
+        @classmethod
+        def from_pretrained(cls, *_args, **kwargs):
+            captured.update(kwargs)
+            return "MODEL"
+
+    args = SimpleNamespace(
+        use_liger_kernel=True,
+        speculator_type="dflash",
+        from_pretrained="checkpoint",
+        verifier_name_or_path="some-verifier",
+        draft_attn_impl="eager",
+    )
+
+    assert build_draft_model(args, _FakeModel, None, None, None) == "MODEL"  # type: ignore[arg-type]
+    assert captured["dflash_kernels"] is kernels
+
+
 # ---------------------------------------------------------------------------
 # intermediate_size resolution (dense + MoE verifiers)
 # ---------------------------------------------------------------------------
