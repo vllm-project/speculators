@@ -10,7 +10,7 @@ Speculators provides the following CLI scripts for different stages of the specu
 | ---------------------------- | ------------------------------------------------------------ | --------------------------------------- |
 | `prepare_data.py`            | Preprocess and tokenize datasets for training                | [→ Details](prepare_data.md)            |
 | `data_generation_offline.py` | Generate hidden states offline using vLLM                    | [→ Details](data_generation_offline.md) |
-| `launch_vllm.py`             | Launch vLLM server configured for hidden states extraction   | [→ Details](launch_vllm.md)             |
+| `launch_vllm_hidden_states.py`             | Launch vLLM server configured for hidden states extraction   | [→ Details](launch_vllm_hidden_states.md)             |
 | `train.py`                   | Train speculator models with online or offline hidden states | [→ Details](train.md)                   |
 | `response_regeneration/`     | Regenerate dataset responses using a vLLM-served model       | [→ Details](response_regeneration.md)   |
 
@@ -26,14 +26,14 @@ flowchart TD
 
     subgraph offline ["Offline Pipeline"]
         B["prepare_data.py\nTokenize & format dataset"]
-        C["launch_vllm.py\nStart vLLM server"]
+        C["launch_vllm_hidden_states.py\nStart vLLM server"]
         D["data_generation_offline.py\nExtract hidden states from verifier and cache to disk"]
         E["train.py \nTrain draft model on saved hidden states"]
     end
 
     subgraph online ["Online Pipeline"]
         F["prepare_data.py\nTokenize & format dataset"]
-        G["launch_vllm.py\nStart vLLM server"]
+        G["launch_vllm_hidden_states.py\nStart vLLM server"]
         H["train.py \nExtract hidden states & train in one step"]
     end
 
@@ -44,8 +44,8 @@ flowchart TD
 
     click B "prepare_data/" _self
     click F "prepare_data/" _self
-    click C "launch_vllm/" _self
-    click G "launch_vllm/" _self
+    click C "launch_vllm_hidden_states/" _self
+    click G "launch_vllm_hidden_states/" _self
     click D "data_generation_offline/" _self
     click E "train/" _self
     click A "response_regeneration/" _self

@@ -72,7 +72,7 @@ python scripts/prepare_data.py \
 
 # Step 2: Launch vLLM server in the background
 echo "=== Step 2: Launching vLLM server ==="
-CUDA_VISIBLE_DEVICES="$VLLM_GPU" python scripts/launch_vllm.py "$MODEL" \
+CUDA_VISIBLE_DEVICES="$VLLM_GPU" python scripts/launch_vllm_hidden_states.py "$MODEL" \
     --target-layer-ids 32 \
     -- --port "$VLLM_PORT" &
 VLLM_PID=$!

@@ -74,17 +74,17 @@ output/
 
 ## Step 2: Launch vLLM Server
 
-During training, the drafter model takes internal hidden states from the verifier model as input. We use vLLM to serve the verifier and extract these hidden states. The `launch_vllm.py` script is a lightweight wrapper that sets up the right CLI arguments for vLLM to enable hidden state extraction.
+During training, the drafter model takes internal hidden states from the verifier model as input. We use vLLM to serve the verifier and extract these hidden states. The `launch_vllm_hidden_states.py` script is a lightweight wrapper that sets up the right CLI arguments for vLLM to enable hidden state extraction.
 
 ```bash
 # in vLLM venv
 # For 8B model - use data parallelism
-CUDA_VISIBLE_DEVICES=0,1 python scripts/launch_vllm.py \
+CUDA_VISIBLE_DEVICES=0,1 python scripts/launch_vllm_hidden_states.py \
   meta-llama/Llama-3.1-8B-Instruct \
   -- --data-parallel-size 2 --port 8000
 
 # For 70B model - combine tensor parallelism and data parallelism
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 python scripts/launch_vllm.py \
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 python scripts/launch_vllm_hidden_states.py \
   meta-llama/Llama-3.3-70B-Instruct \
   -- --tensor-parallel-size 4 --data-parallel-size 2 --port 8000
 ```
@@ -104,7 +104,7 @@ INFO:     Waiting for application startup.
 INFO:     Application startup complete
 ```
 
-**Note:** This stage is also when you must decide which layer ids to extract from vLLM. For Eagle-3, if you don't pass in `--target-layer-ids`, this script will use sensible default values. For more information on usage, please see the [launch_vllm.py cli reference](/cli/launch_vllm.md).
+**Note:** This stage is also when you must decide which layer ids to extract from vLLM. For Eagle-3, if you don't pass in `--target-layer-ids`, this script will use sensible default values. For more information on usage, please see the [launch_vllm_hidden_states.py cli reference](/cli/launch_vllm_hidden_states.md).
 
 ## Step 3: Generate Hidden States Offline
 
@@ -153,7 +153,7 @@ output/hidden_states/
 
 ```bash
 # 8 GPUs with DP=8
-python scripts/launch_vllm.py model -- --data-parallel-size 8
+python scripts/launch_vllm_hidden_states.py model -- --data-parallel-size 8
 ```
 
 **Use multiple nodes:**

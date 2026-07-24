@@ -35,7 +35,7 @@ nav:
           - cli/index.md
           - prepare_data.py: cli/prepare_data.md
           - data_generation_offline.py: cli/data_generation_offline.md
-          - launch_vllm.py: cli/launch_vllm.md
+          - launch_vllm_hidden_states.py: cli/launch_vllm_hidden_states.md
           - train.py: cli/train.md
           - response_regeneration: cli/response_regeneration.md
     - Community:

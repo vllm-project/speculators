@@ -75,11 +75,11 @@ output/peagle_qwen3_8b_sharegpt/
 
 ## Step 2: Launch vLLM Server
 
-During training, the drafter model takes internal hidden states from the verifier model as input. We use vLLM to serve the verifier and extract these hidden states. The `launch_vllm.py` script is a lightweight wrapper that sets up the right CLI arguments for vLLM to enable hidden state extraction.
+During training, the drafter model takes internal hidden states from the verifier model as input. We use vLLM to serve the verifier and extract these hidden states. The `launch_vllm_hidden_states.py` script is a lightweight wrapper that sets up the right CLI arguments for vLLM to enable hidden state extraction.
 
 ```bash
 # in vLLM venv
-CUDA_VISIBLE_DEVICES=0,1 python scripts/launch_vllm.py Qwen/Qwen3-8B \
+CUDA_VISIBLE_DEVICES=0,1 python scripts/launch_vllm_hidden_states.py Qwen/Qwen3-8B \
   --hidden-states-path ./output/peagle_qwen3_8b_sharegpt/hidden_states \
   -- --data-parallel-size 2 --port 8000
 ```
@@ -99,7 +99,7 @@ INFO:     Waiting for application startup.
 INFO:     Application startup complete
 ```
 
-**Note:** For more information on usage, please see the [launch_vllm.py cli reference](/cli/launch_vllm.md).
+**Note:** For more information on usage, please see the [launch_vllm_hidden_states.py cli reference](/cli/launch_vllm_hidden_states.md).
 
 ## Step 3: Generate Hidden States Offline
 
@@ -148,7 +148,7 @@ output/peagle_qwen3_8b_sharegpt/hidden_states/
 
 ```bash
 # 8 GPUs with DP=8
-python scripts/launch_vllm.py model -- --data-parallel-size 8
+python scripts/launch_vllm_hidden_states.py model -- --data-parallel-size 8
 ```
 
 ### Resuming Interrupted Generation

@@ -74,16 +74,16 @@ output/
 
 ## Step 2: Launch vLLM Server
 
-During training, the drafter model takes internal hidden states from the verifier model as input. We use vLLM to serve the verifier and extract these hidden states. The `launch_vllm.py` script is a lightweight wrapper that sets up the right CLI arguments for vLLM to enable hidden state extraction.
+During training, the drafter model takes internal hidden states from the verifier model as input. We use vLLM to serve the verifier and extract these hidden states. The `launch_vllm_hidden_states.py` script is a lightweight wrapper that sets up the right CLI arguments for vLLM to enable hidden state extraction.
 
 ```bash
 # in vLLM venv
 
 # Single GPU
-python scripts/launch_vllm.py Qwen/Qwen3-8B
+python scripts/launch_vllm_hidden_states.py Qwen/Qwen3-8B
 
 # Multiple GPUs with data parallelism (recommended)
-CUDA_VISIBLE_DEVICES=0,1 python scripts/launch_vllm.py \
+CUDA_VISIBLE_DEVICES=0,1 python scripts/launch_vllm_hidden_states.py \
   Qwen/Qwen3-8B -- --data-parallel-size 2 --port 8000
 ```
 
@@ -102,7 +102,7 @@ INFO:     Waiting for application startup.
 INFO:     Application startup complete
 ```
 
-**Note:** This stage is also when you must decide which layer ids to extract from vLLM. For Eagle-3, if you don't pass in `--target-layer-ids`, this script will use sensible default values. For more information on usage, please see the [launch_vllm.py cli reference](/cli/launch_vllm.md).
+**Note:** This stage is also when you must decide which layer ids to extract from vLLM. For Eagle-3, if you don't pass in `--target-layer-ids`, this script will use sensible default values. For more information on usage, please see the [launch_vllm_hidden_states.py cli reference](/cli/launch_vllm_hidden_states.md).
 
 ## Step 3: Start Training
 
@@ -235,13 +235,13 @@ vLLM: CUDA out of memory
 
 ```bash
 # Increase GPU memory utilization
-python scripts/launch_vllm.py model -- --gpu-memory-utilization 0.95
+python scripts/launch_vllm_hidden_states.py model -- --gpu-memory-utilization 0.95
 
 # Reduce max model length
-python scripts/launch_vllm.py model -- --max-model-len 4096
+python scripts/launch_vllm_hidden_states.py model -- --max-model-len 4096
 
 # Use more GPUs
-python scripts/launch_vllm.py model -- --tensor-parallel-size 2
+python scripts/launch_vllm_hidden_states.py model -- --tensor-parallel-size 2
 ```
 
 ### Issue: Training Loss Not Decreasing
@@ -275,7 +275,7 @@ python scripts/launch_vllm.py model -- --tensor-parallel-size 2
 
 **Solutions:**
 
-1. **Redistribute GPUs between training and datagen processes:** If possible, increase the number of gpus assigned to vLLM datagen (i.e. the `launch_vllm.py` step) and reduce the number used during training. Inconsistent training performance typically means the training process is stuck waiting for new data samples to be generated.
+1. **Redistribute GPUs between training and datagen processes:** If possible, increase the number of gpus assigned to vLLM datagen (i.e. the `launch_vllm_hidden_states.py` step) and reduce the number used during training. Inconsistent training performance typically means the training process is stuck waiting for new data samples to be generated.
 
 2. **Consider switching to offline training:** Offline training pre-generates the hidden states for all samples and caches them on disk. Then during training the samples can just be loaded directly. If gpu resources are limited, this can be a better approach as it allows you to assign all gpus to data gen and then all to training.
 
