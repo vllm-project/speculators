@@ -30,7 +30,6 @@ _MIN_SPLIT_NDIM = 2
 # ---------------------------------------------------------------------------
 
 
-@torch.compiler.allow_in_graph
 class _AllToAllSP(torch.autograd.Function):
     """Differentiable all-to-all for sequence parallelism.
 
