@@ -162,6 +162,14 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--ttt-step-loss-decay`** (float, default: `1.0`) Loss decay factor for test-time training steps.
 
+### P-EAGLE-Specific Arguments
+
+- **`--num-depths`** (int, default: `8`) Number of parallel prediction depths.
+
+- **`--down-sample-ratio`** (float, default: `0.7`) Geometric decay ratio for COD sampling.
+
+- **`--down-sample-ratio-min`** (float, default: `0.2`) Minimum retention ratio for COD sampling.
+
 ### Attention Backend Arguments
 
 - **`--draft-attn-impl`** (str, default: `"simple_flex_attention"`) Attention implementation for draft layers. Options: `simple_flex_attention`, `sdpa`, `eager`. Use `sdpa` or `eager` on hardware where flex attention is unavailable (e.g. Ascend NPU). Applies to Eagle3, P-EAGLE, and DFlash. Not supported for MTP.
@@ -175,6 +183,24 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 - **`--max-anchors`** (int, default: `256`) Maximum anchor positions for DFlash training.
 
 - **`--dflash-decay-gamma`** (float, default: `4.0`) Decay gamma for DFlash loss weighting.
+
+- **`--per-position-loss-weight`** (str, default: `"fixed-exp-decay"`) Per-position loss weighting scheme. Options: `fixed-exp-decay`, `dpace`. Applies to DFlash and DSpark.
+
+- **`--dpace-alpha`** (float, default: `0.5`) Confidence smoothing constant for the D-PACE loss. Only used with `--per-position-loss-weight dpace`.
+
+### DSpark-Specific Arguments
+
+DSpark builds on DFlash, so all DFlash-specific arguments apply as well.
+
+- **`--markov-rank`** (int, default: `256`) Low-rank dim of the Markov logit-bias head. `0` disables it.
+
+- **`--markov-head-type`** (str, default: `"vanilla"`) Sequential head variant. Options: `vanilla`, `gated`, `rnn`.
+
+- **`--enable-confidence-head`** / **`--no-enable-confidence-head`** (flag, default: `True`) Attach the per-position acceptance confidence head.
+
+- **`--confidence-head-with-markov`** / **`--no-confidence-head-with-markov`** (flag, default: `True`) Feed the Markov previous-token embedding into the confidence head alongside the backbone hidden state.
+
+- **`--confidence-head-alpha`** (float, default: `1.0`) Weight of the confidence-head BCE term.
 
 ### Sliding Window Attention Arguments
 
