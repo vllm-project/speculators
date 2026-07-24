@@ -1,0 +1,31 @@
+model = "Qwen/Qwen3-8B"
+num_tasks = 1
+num_rollouts = 1
+max_concurrent = 1
+max_turns = 6
+push = false
+rich = false
+output_dir = "output/agentic_regen/prolog"
+
+[taskset]
+id = "prolog-v1"
+
+[harness]
+id = "default"
+
+[harness.runtime]
+type = "docker"
+
+[client]
+type = "train"
+base_url = "http://127.0.0.1:8000/v1"
+api_key_var = "VLLM_API_KEY"
+renderer_model_name = "Qwen/Qwen3-8B"
+
+[client.renderer]
+name = "qwen3"
+enable_thinking = false
+
+[sampling]
+temperature = 0.0
+max_tokens = 4096

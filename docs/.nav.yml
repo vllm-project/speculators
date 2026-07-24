@@ -19,6 +19,7 @@ nav:
                 - Train P-Eagle Model Offline: user_guide/tutorials/train_peagle_offline.md
                 - Train MTP Model Online: user_guide/tutorials/train_mtp_online.md
                 - Response Regeneration: user_guide/tutorials/response_regeneration.md
+                - Agentic Regeneration: user_guide/tutorials/agentic_regeneration.md
                 - Evaluating Model Performance: user_guide/tutorials/evaluating_performance.md
                 - Serve in vLLM: user_guide/tutorials/serve_vllm.md
     - Developer Guide:
