@@ -27,7 +27,7 @@ def create_peagle_mask_mod(
 
     Args example:
 
-    Given a sequnce of length 6.
+    Given a sequence of length 6.
     Original positions: [0,1,2,3,4,5]
     Apply COD sampling:
     Round 1: sample locations [0, 1, 3, 4]
