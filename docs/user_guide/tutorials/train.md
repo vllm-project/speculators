@@ -10,19 +10,13 @@ Pick an algorithm and a training mode below; the rest of the walkthrough is the 
 
 All five are lossless: they produce output from the same distribution as the target model. See the [Decision Guide](../algorithms/decision_guide.md) if you're unsure. You don't need to memorize the flags -- [Step 4](#step-4-train) gives a complete command for whichever pair you choose.
 
-| Algorithm                          | What it does                                                                                                                                | What it changes in the train command                                                                             |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| [Eagle-3](../algorithms/eagle3.md) | Predicts draft tokens autoregressively. The most mature option -- start here if unsure.                                                     | *(nothing -- it's the default)*                                                                                  |
-| [P-EAGLE](../algorithms/peagle.md) | Extends Eagle-3 with parallel multi-token prediction across depths, using COD sampling.                                                     | `--speculator-type peagle`, 4 draft layers, 4 depths, cosine schedule, higher LR                                 |
-| [DFlash](../algorithms/dflash.md)  | Predicts a whole block in one forward pass using anchored block diffusion.                                                                  | `--speculator-type dflash`, 5 draft layers, higher LR                                                            |
-| [DSpark](../algorithms/dspark.md)  | DFlash plus a Markov logit-bias head and a per-position confidence head.                                                                    | `--speculator-type dspark`, same shape as DFlash, plus a blended CE/TV loss                                      |
-| [MTP](../algorithms/mtp.md)        | Finetunes the verifier's own multi-token prediction head instead of training a draft from scratch. Needs a verifier with native MTP layers. | `--speculator-type mtp`, an explicit `--target-layer-ids`, no draft vocabulary, and a stitch step after training |
-
-Everything not listed above is left at its default. In particular `--block-size 8`, `--max-anchors 3072`, `--down-sample-ratio 0.7`, `--down-sample-ratio-min 0.2`, `--markov-rank 256`, `--enable-confidence-head`, `--num-speculative-steps 3`, and `--step-weight-beta 0.6` are already the defaults, so they don't need to be passed.
-
-For Eagle-3, P-EAGLE, DFlash, and DSpark, `--target-layer-ids` is also left at its default, which resolves to `[2, num_layers // 2, num_layers - 3]` -- for Qwen3-8B that is `[2, 18, 33]`. Training prints a warning noting the layers it picked; that is expected. Set it explicitly only if you passed custom layers to `launch_vllm.py`.
-
-**MTP is the exception:** it consumes only the verifier's final hidden layer, not the auxiliary ones, so it needs `--target-layer-ids <num_hidden_layers>` passed explicitly to both `launch_vllm.py` and `train.py`. For Qwen3.5-9B that is `32`.
+| Algorithm                          | What it does                                                                                                                                |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Eagle-3](../algorithms/eagle3.md) | Predicts draft tokens autoregressively. The most mature option -- start here if unsure.                                                     |
+| [P-EAGLE](../algorithms/peagle.md) | Extends Eagle-3 with parallel multi-token prediction across depths, using COD sampling.                                                     |
+| [DFlash](../algorithms/dflash.md)  | Predicts a whole block in one forward pass using anchored block diffusion.                                                                  |
+| [DSpark](../algorithms/dspark.md)  | DFlash plus a Markov logit-bias head and a per-position confidence head.                                                                    |
+| [MTP](../algorithms/mtp.md)        | Finetunes the verifier's own multi-token prediction head instead of training a draft from scratch. Needs a verifier with native MTP layers. |
 
 ### 2. Pick a training mode
 
