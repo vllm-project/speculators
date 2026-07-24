@@ -38,10 +38,9 @@ All DFlash parameters (`--block-size`, `--max-anchors`, `--num-layers`, ...) app
 
 Pretrained DSpark speculator models are available on HuggingFace from the [RedHatAI speculator models collection](https://huggingface.co/collections/RedHatAI/speculator-models):
 
-| Verifier                | Speculator                                                                                                      |
-| ----------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `zai-org/GLM-5.2-FP8`   | [`RedHatAI/GLM-5.2-speculator.dspark`](https://huggingface.co/RedHatAI/GLM-5.2-speculator.dspark)               |
-| `google/gemma-4-31B-it` | [`RedHatAI/gemma-4-31B-it-speculator.dspark`](https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.dspark) |
+| Verifier              | Speculator                                                                                                       |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `zai-org/GLM-5.2-FP8` | [`RedHatAI/GLM-5.2-speculator.dspark-preview`](https://huggingface.co/RedHatAI/GLM-5.2-speculator.dspark-preview) |
 
 To train your own, see `examples/train/dspark_qwen3_0_6b_sharegpt_online.sh`.
 
