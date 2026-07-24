@@ -1,0 +1,350 @@
+{
+  "seen_papers": {
+    "2607.07409": {
+      "title": "DeLS-Spec: Decoupled Long-Short Contexts for Parallel Speculative Drafting",
+      "url": "https://arxiv.org/abs/2607.07409",
+      "date_found": "2026-07-20",
+      "classification": "variant",
+      "status": "implemented",
+      "notes": "Extends DFlash with lightweight local head as short-context expert. Implementation branches: feat/dels_spec, feat/dels-spec-v2."
+    },
+    "2605.29343": {
+      "title": "Draft-OPD: On-Policy Distillation for Speculative Draft Models",
+      "url": "https://arxiv.org/abs/2605.29343",
+      "date_found": "2026-07-20",
+      "classification": "variant",
+      "status": "skipped",
+      "notes": "Training method improvement only (on-policy distillation). No new model architecture. Worth pursuing as a manual training enhancement PR."
+    },
+    "2606.04446": {
+      "title": "D2SD: Accelerating Speculative Decoding with Dual Diffusion Draft Models",
+      "url": "https://arxiv.org/abs/2606.04446",
+      "date_found": "2026-07-20",
+      "classification": "new-method",
+      "status": "skipped",
+      "notes": "Requires dual diffusion model infrastructure not present in codebase. Too architecturally different."
+    },
+    "2605.27255": {
+      "title": "PIPO: Pair-In, Pair-Out Latent Multi-Token Prediction",
+      "url": "https://arxiv.org/abs/2605.27255",
+      "date_found": "2026-07-20",
+      "classification": "new-method",
+      "status": "skipped",
+      "notes": "Modifies backbone model directly (input compression + MTP head). Doesn't fit speculators' separate-model paradigm."
+    },
+    "2605.18817": {
+      "title": "Multi-Token Residual Prediction (MRP)",
+      "url": "https://arxiv.org/abs/2605.18817",
+      "date_found": "2026-07-20",
+      "classification": "irrelevant",
+      "status": "skipped",
+      "notes": "For diffusion LLMs, not autoregressive."
+    },
+    "2606.02544": {
+      "title": "SimSD: Simple Speculative Decoding in Diffusion Language Models",
+      "url": "https://arxiv.org/abs/2606.02544",
+      "date_found": "2026-07-20",
+      "classification": "irrelevant",
+      "status": "skipped",
+      "notes": "For diffusion LLMs, not autoregressive."
+    },
+    "2607.05147": {
+      "title": "DSpark: Confidence-Scheduled Speculative Decoding",
+      "url": "https://arxiv.org/abs/2607.05147",
+      "date_found": "2026-07-20",
+      "classification": "already-implemented",
+      "status": "skipped",
+      "notes": "Already implemented in speculators codebase."
+    },
+    "2603.03251": {
+      "title": "Speculative Speculative Decoding (Saguaro)",
+      "url": "https://arxiv.org/abs/2603.03251",
+      "date_found": "2026-07-20",
+      "classification": "new-method",
+      "status": "skipped",
+      "notes": "Outside 90-day window (March 2026). Inference framework, not a new draft model architecture."
+    },
+    "2602.13836": {
+      "title": "SpecVocab: Speculative Decoding with a Speculative Vocabulary",
+      "url": "https://arxiv.org/abs/2602.13836",
+      "date_found": "2026-07-20",
+      "classification": "variant",
+      "status": "skipped",
+      "notes": "Outside 90-day window (February 2026)."
+    },
+    "2512.21323": {
+      "title": "Parallel Token Prediction (PTP)",
+      "url": "https://arxiv.org/abs/2512.21323",
+      "date_found": "2026-07-20",
+      "classification": "new-method",
+      "status": "skipped",
+      "notes": "Outside 90-day window (December 2025). ICLR 2026."
+    },
+    "2603.17942": {
+      "title": "ESP: Training-Free Multi-Token Prediction via Embedding-Space Probing",
+      "url": "https://arxiv.org/abs/2603.17942",
+      "date_found": "2026-07-20",
+      "classification": "new-method",
+      "status": "skipped",
+      "notes": "Outside 90-day window (March 2026)."
+    },
+    "2602.05774": {
+      "title": "Variational Speculative Decoding (VSD)",
+      "url": "https://arxiv.org/abs/2602.05774",
+      "date_found": "2026-07-20",
+      "classification": "variant",
+      "status": "skipped",
+      "notes": "Outside 90-day window (February 2026). Training framework."
+    },
+    "2602.06019": {
+      "title": "Multi-Token Prediction via Self-Distillation",
+      "url": "https://arxiv.org/abs/2602.06019",
+      "date_found": "2026-07-20",
+      "classification": "new-method",
+      "status": "skipped",
+      "notes": "Outside 90-day window (February 2026)."
+    },
+    "2603.12617": {
+      "title": "OnlineSpec: Speculative Decoding Meets Online Learning",
+      "url": "https://arxiv.org/abs/2603.12617",
+      "date_found": "2026-07-20",
+      "classification": "variant",
+      "status": "skipped",
+      "notes": "Outside 90-day window (March 2026)."
+    },
+    "2607.16673": {
+      "title": "SpecLA: Efficient Speculative Decoding for Linear-Attention Models",
+      "url": "https://arxiv.org/abs/2607.16673",
+      "date_found": "2026-07-21",
+      "classification": "variant",
+      "status": "skipped",
+      "notes": "Specifically for linear-attention models (GDN), not standard transformer LLMs. EAGLE-style drafter adapted for recurrent state management. Not applicable to speculators codebase."
+    },
+    "2604.12989": {
+      "title": "DDTree: Accelerating Speculative Decoding with Block Diffusion Draft Trees",
+      "url": "https://arxiv.org/abs/2604.12989",
+      "date_found": "2026-07-21",
+      "classification": "variant",
+      "status": "skipped",
+      "notes": "Extends DFlash with tree-structured verification from diffusion drafter. Outside 90-day window (April 12, 2026). Diffusion-based."
+    },
+    "2604.15672": {
+      "title": "SMC-SD: Faster LLM Inference via Sequential Monte Carlo Speculative Decoding",
+      "url": "https://arxiv.org/abs/2604.15672",
+      "date_found": "2026-07-21",
+      "classification": "variant",
+      "status": "skipped",
+      "notes": "Replaces token-level rejection with importance-weighted resampling. Verification algorithm change, not a new draft model architecture. Outside 90-day window (April 2026)."
+    },
+    "2601.11580": {
+      "title": "Speculative Decoding: Performance or Illusion?",
+      "url": "https://arxiv.org/abs/2601.11580",
+      "date_found": "2026-07-21",
+      "classification": "irrelevant",
+      "status": "skipped",
+      "notes": "Benchmark/analysis paper studying SD variants on vLLM. No new method."
+    },
+    "2506.03566": {
+      "title": "POSS: Position Specialist Generates Better Draft for Speculative Decoding",
+      "url": "https://arxiv.org/abs/2506.03566",
+      "date_found": "2026-07-21",
+      "classification": "variant",
+      "status": "skipped",
+      "notes": "Position-specialized draft layers (multiple specialists for different draft positions). Extends EAGLE-style approach. From June 2025, outside 90-day window."
+    },
+    "2606.07710": {
+      "title": "WhiFlash: Accelerating Speculative Decoding with Token-Level Cross-Paradigm Routing",
+      "url": "https://arxiv.org/abs/2606.07710",
+      "date_found": "2026-07-23",
+      "classification": "variant",
+      "status": "skipped",
+      "notes": "Cross-paradigm routing framework between autoregressive (EAGLE-3) and diffusion (DFlash) drafters. Not a new draft model architecture \u2014 inference-time routing with cache management optimizations. Requires both drafter types simultaneously. More of a vLLM serving layer concern than a speculators model."
+    },
+    "2606.27550": {
+      "title": "EntMTP: Accelerating LLM Inference with Entropy Guided Multi Token Prediction",
+      "url": "https://arxiv.org/abs/2606.27550",
+      "date_found": "2026-07-23",
+      "classification": "variant",
+      "status": "skipped",
+      "notes": "Training-free inference-time scheduler that toggles between tree-based attention topologies based on entropy. No new model architecture or training method. Modest speedups (1.15x over Hydra). Inference framework optimization only."
+    },
+    "2605.02888": {
+      "title": "SpecKV: Adaptive Speculative Decoding with Compression-Aware Gamma Selection",
+      "url": "https://arxiv.org/abs/2605.02888",
+      "date_found": "2026-07-23",
+      "classification": "variant",
+      "status": "skipped",
+      "notes": "Adaptive gamma (speculation length) selection via small MLP. Inference-time optimization, not a new draft model architecture."
+    },
+    "2605.30580": {
+      "title": "Speculative Decoding Across Languages",
+      "url": "https://arxiv.org/abs/2605.30580",
+      "date_found": "2026-07-23",
+      "classification": "irrelevant",
+      "status": "skipped",
+      "notes": "Empirical comparison of multilingual finetuning strategies for existing draft models. No new architecture."
+    },
+    "2603.23911": {
+      "title": "MTP-D: Self-Distillation for Multi-Token Prediction",
+      "url": "https://arxiv.org/abs/2603.23911",
+      "date_found": "2026-07-23",
+      "classification": "variant",
+      "status": "skipped",
+      "notes": "Self-distillation to boost MTP head acceptance rates. Training method improvement. Outside 90-day window (March 2026)."
+    },
+    "2411.05894": {
+      "title": "SSSD: Simply-Scalable Speculative Decoding",
+      "url": "https://arxiv.org/abs/2411.05894",
+      "date_found": "2026-07-23",
+      "classification": "variant",
+      "status": "skipped",
+      "notes": "Training-free n-gram matching method. Outside 90-day window (November 2024)."
+    },
+    "2510.22876": {
+      "title": "EQSPEC/EXSPEC: Batch Speculative Decoding Done Right",
+      "url": "https://arxiv.org/abs/2510.22876",
+      "date_found": "2026-07-23",
+      "classification": "variant",
+      "status": "skipped",
+      "notes": "Batch synchronization algorithms for serving. Outside 90-day window (October 2025)."
+    },
+    "2602.23881": {
+      "title": "LK Losses: Direct Acceptance Rate Optimization for Speculative Decoding",
+      "url": "https://arxiv.org/abs/2602.23881",
+      "date_found": "2026-07-23",
+      "classification": "variant",
+      "status": "skipped",
+      "notes": "Training loss function improvement for draft models. Outside 90-day window (February 2026)."
+    },
+    "2507.11851": {
+      "title": "Your LLM Knows the Future: Uncovering Its Multi-Token Prediction Potential",
+      "url": "https://arxiv.org/abs/2507.11851",
+      "date_found": "2026-07-23",
+      "classification": "variant",
+      "status": "skipped",
+      "notes": "Self-speculative approach using gated LoRA for multi-token prediction. Modifies base model directly. Outside 90-day window (July 2025)."
+    },
+    "2607.08690": {
+      "title": "A Practical Investigation of Training-free Relaxed Speculative Decoding",
+      "url": "https://arxiv.org/abs/2607.08690",
+      "date_found": "2026-07-23",
+      "classification": "irrelevant",
+      "status": "skipped",
+      "notes": "Empirical survey/benchmarking of existing relaxed SD techniques. No new method or architecture."
+    },
+    "2607.12696": {
+      "title": "EcoSpec: Cost-Aware Speculative Decoding for Mixture-of-Experts",
+      "url": "https://arxiv.org/abs/2607.12696",
+      "date_found": "2026-07-23",
+      "classification": "variant",
+      "status": "skipped",
+      "notes": "Draft-tree selection optimization for MoE models (expert activation cost). Serving-side optimization, not a new draft model architecture. Not implementable in speculators."
+    },
+    "2605.30852": {
+      "title": "SPD: Speculative Pipeline Decoding",
+      "url": "https://arxiv.org/abs/2605.30852",
+      "date_found": "2026-07-23",
+      "classification": "new-method",
+      "status": "skipped",
+      "notes": "Pipeline-parallel speculation using intermediate target model representations. Requires modifying target model inference pipeline. Doesn't fit speculators' separate-model paradigm."
+    },
+    "2605.09329": {
+      "title": "Test-Time Speculation (TTS)",
+      "url": "https://arxiv.org/abs/2605.09329",
+      "date_found": "2026-07-23",
+      "classification": "variant",
+      "status": "skipped",
+      "notes": "Online distillation that adapts existing draft models at inference time. Training method improvement for existing speculators (DFlash, EAGLE-3). Not a new model architecture. Worth pursuing as a manual training enhancement."
+    }
+  },
+  "seen_models": {
+    "yuyijiong/speculative_pipeline_decoding": {
+      "date_found": "2026-07-20",
+      "classification": "irrelevant",
+      "notes": "Pipeline decoding model, not a new draft architecture."
+    },
+    "position-specialist-speculative-decoding/Speed-E3-Llama3.1-8B-Instruct-vllm": {
+      "date_found": "2026-07-20",
+      "classification": "new-base-model",
+      "notes": "EAGLE-3 variant for Llama 3.1 8B."
+    },
+    "param108/iisc_llm_draft_model": {
+      "date_found": "2026-07-21",
+      "classification": "irrelevant",
+      "notes": "Generic draft model, no novel architecture."
+    },
+    "payelb/rnn-speculative-decoding-classifier": {
+      "date_found": "2026-07-21",
+      "classification": "irrelevant",
+      "notes": "RNN-based classifier for spec dec, not a new draft method."
+    },
+    "praful-goel/speculative_decoding_models": {
+      "date_found": "2026-07-23",
+      "classification": "irrelevant",
+      "notes": "Generic OpenWebText-trained draft models. No novel architecture."
+    },
+    "RyeCatcher/speculative-decoding-cross-domain-analysis": {
+      "date_found": "2026-07-23",
+      "classification": "irrelevant",
+      "notes": "Cross-domain analysis model, not a new draft method."
+    }
+  },
+  "seen_repos": {
+    "sgl-project/SpecForge": {
+      "date_found": "2026-07-20",
+      "classification": "irrelevant",
+      "notes": "Training tool for SGLang, not a new spec dec method."
+    },
+    "Nanji-Huaji/DuoDecoding": {
+      "date_found": "2026-07-20",
+      "classification": "irrelevant",
+      "notes": "Cloud-edge-end distributed inference, not a new draft model."
+    },
+    "ARahim3/mlx-dspark": {
+      "date_found": "2026-07-21",
+      "classification": "irrelevant",
+      "notes": "MLX port of DSpark for Apple Silicon. Not a new method."
+    },
+    "Rmuk655/Distill-Spec-Research": {
+      "date_found": "2026-07-21",
+      "classification": "irrelevant",
+      "notes": "Research repo on draft-target alignment. Not a new method."
+    },
+    "jireh-father/fastserve": {
+      "date_found": "2026-07-21",
+      "classification": "irrelevant",
+      "notes": "Auto-config tool for vLLM (quantization + spec dec). Not a new method."
+    },
+    "Parusann/edgespark": {
+      "date_found": "2026-07-23",
+      "classification": "irrelevant",
+      "notes": "Quantized speculative decoding on consumer AMD GPU. Application of existing methods."
+    },
+    "Komalpreet2809/Chimera": {
+      "date_found": "2026-07-23",
+      "classification": "irrelevant",
+      "notes": "General LLM inference engine built from scratch. Not a new spec dec method."
+    },
+    "binhdnguyen/DeepSeek-V4-Flash-DSpark-2x-DGX-Spark": {
+      "date_found": "2026-07-23",
+      "classification": "irrelevant",
+      "notes": "DSpark serving recipe for DGX Spark. Not a new method."
+    },
+    "NVIDIA/Model-Optimizer": {
+      "date_found": "2026-07-23",
+      "classification": "irrelevant",
+      "notes": "NVIDIA optimization toolkit. Includes spec dec as one of many techniques."
+    },
+    "hec-ovi/strix-vllm-laguna-s2.1": {
+      "date_found": "2026-07-23",
+      "classification": "irrelevant",
+      "notes": "vLLM serving setup for AMD Strix Halo with DFlash. Application of existing methods."
+    },
+    "maleshep/hpc-llm-serving": {
+      "date_found": "2026-07-23",
+      "classification": "irrelevant",
+      "notes": "Slurm-based LLM serving with existing spec dec methods."
+    }
+  },
+  "last_scan": "2026-07-23"
+}
