@@ -20,7 +20,7 @@ python scripts/train.py ... --loss-fn kl_div
 | `nla`       | Negative log-acceptance, `-log(alpha)` | TV's target with a `1 / alpha` gradient boost, so it trains from a cold start. |
 | `lk_hybrid` | Adaptive KL/TV blend                   | `lambda * KL + (1 - lambda) * TV` with `lambda = exp(-3 * alpha)`, detached.   |
 
-`tv` and `nla` use a fused Triton kernel on CUDA/ROCm and fall back to eager PyTorch elsewhere.
+`tv` and `nla` use a fused Triton kernel on CUDA devices when it is available, and fall back to eager PyTorch otherwise.
 
 ## Choosing a Loss
 
@@ -30,7 +30,7 @@ python scripts/train.py ... --loss-fn kl_div
 
 ## Weighted Combinations
 
-Pass a JSON dict to train on a weighted sum of several losses. Each term is logged separately as `{name}_loss`.
+Pass a JSON dict to train on a weighted sum of several losses. Weights are used as provided and are not normalized. Each term is also logged separately as `{name}_loss`, before its weight is applied.
 
 ```bash
 python scripts/train.py ... --loss-fn '{"ce": 0.1, "tv": 0.9}'
