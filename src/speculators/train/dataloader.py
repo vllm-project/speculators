@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING, Any, Literal
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+import os
+
 import torch
 from torch.utils.data import DataLoader
 
@@ -14,8 +16,8 @@ from hs_connectors import HiddenStatesTransfer
 from speculators.train.data import (
     ArrowDataset,
     BaseDataset,
+    CollateFn,
     SampleFileDataset,
-    create_collate_fn,
     split_files,
 )
 from speculators.train.distributed import get_dp_rank, get_dp_size
@@ -27,6 +29,27 @@ from speculators.train.noise_transforms import AddUniformNoise
 logger = logging.getLogger(__name__)
 
 BatchType = dict[str, Any]
+
+
+def _limit_worker_threads() -> None:
+    """Limit per-worker thread pools to avoid thread exhaustion.
+
+    With ``multiprocessing_context='spawn'``, each worker is a full process
+    that re-imports numpy (OpenBLAS) and torch, each creating thread pools
+    sized to the core count.  DataLoader workers only do I/O and tensor
+    slicing — they don't benefit from intra-op parallelism.
+
+    The env vars must be set before numpy/torch are imported to take effect
+    on OpenBLAS/OMP.  Call this at the top of the training entry point,
+    before DataLoader construction.
+    """
+    os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+    os.environ.setdefault("OMP_NUM_THREADS", "1")
+    os.environ.setdefault("MKL_NUM_THREADS", "1")
+
+
+def _worker_init_fn(worker_id: int) -> None:  # noqa: ARG001
+    torch.set_num_threads(1)
 
 
 def _setup_dataloader(
@@ -51,7 +74,7 @@ def _setup_dataloader(
         num_workers=num_workers,
         prefetch_factor=prefetch_factor if use_workers else None,
         pin_memory=True,
-        collate_fn=create_collate_fn(
+        collate_fn=CollateFn(
             total_seq_len,
             hidden_size,
             num_target_layers=num_target_layers,
@@ -59,6 +82,8 @@ def _setup_dataloader(
             preprocess=preprocess,
         ),
         persistent_workers=use_workers,
+        multiprocessing_context="spawn" if use_workers else None,
+        worker_init_fn=_worker_init_fn if use_workers else None,
     )
 
 
@@ -90,6 +115,7 @@ def create_train_val_loaders(
     batches via scatter).  Reads DP/SP topology from
     :mod:`speculators.train.distributed`.
     """
+    _limit_worker_threads()
     noise_transform = AddUniformNoise(std=noise_std)
 
     if not (0.0 < train_data_ratio < 1.0):

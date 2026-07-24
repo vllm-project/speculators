@@ -3,7 +3,7 @@ import math
 import os
 import random
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from os import PathLike
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -452,14 +452,28 @@ class SampleFileDataset(BaseDataset):
         )
 
 
-def create_collate_fn(
-    max_len: int,
-    hidden_size: int,
-    num_target_layers: int = 3,
-    dtype: torch.dtype = torch.bfloat16,
-    preprocess: Callable[[BatchType], BatchType] | None = None,
-):
-    def collate_fn(batch: list[BatchType | None]) -> BatchType:
+class CollateFn:
+    """Picklable collate function for use with ``multiprocessing_context='spawn'``."""
+
+    def __init__(
+        self,
+        max_len: int,
+        hidden_size: int,
+        num_target_layers: int = 3,
+        dtype: torch.dtype = torch.bfloat16,
+        preprocess: Callable[[BatchType], BatchType] | None = None,
+    ):
+        self.max_len = max_len
+        self.hidden_size = hidden_size
+        self.num_target_layers = num_target_layers
+        self.dtype = dtype
+        self.preprocess = preprocess
+
+    def __call__(self, batch: Sequence[BatchType | None]) -> BatchType:
+        max_len = self.max_len
+        dtype = self.dtype
+        preprocess = self.preprocess
+
         # Apply per-sample preprocessing and filter failed samples
         batch = [preprocess(b) if preprocess else b for b in batch if b is not None]
 
@@ -469,7 +483,9 @@ def create_collate_fn(
             # Match the configured `dtype` so the placeholder doesn't crash
             # downstream layers loaded at a different precision (e.g. bf16
             # weights vs fp32 default placeholders).
-            empty = create_empty_sample(hidden_size, num_target_layers, dtype=dtype)
+            empty = create_empty_sample(
+                self.hidden_size, self.num_target_layers, dtype=dtype
+            )
             if preprocess:
                 empty = preprocess(empty)
             batch = [empty]
@@ -524,5 +540,3 @@ def create_collate_fn(
         collated_data["document_ids"] = document_ids
 
         return collated_data
-
-    return collate_fn
