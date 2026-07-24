@@ -81,7 +81,7 @@ The following table summarizes the models that have been trained end-to-end by o
 <tr>
 <td rowspan="3">Qwen3</td>
 <td>8B</td>
-<td><a href="https://huggingface.co/RedHatAI/Qwen3-8B-speculator.eagle3">Eagle-3</a> ✅</td>
+<td><a href="https://huggingface.co/RedHatAI/Qwen3-8B-speculator.eagle3">Eagle-3</a> ✅<br/><a href="https://huggingface.co/RedHatAI/Qwen3-8B-speculator.dflash">DFlash</a> ✅<br/><a href="https://huggingface.co/RedHatAI/Qwen3-8B-speculator.peagle">P-EAGLE</a> ✅</td>
 <td>✅</td>
 </tr>
 <tr>
@@ -108,11 +108,16 @@ The following table summarizes the models that have been trained end-to-end by o
 <td>✅</td>
 </tr>
 <tr>
-  <td rowspan="3">Qwen3 MoE</td>
+  <td rowspan="4">Qwen3 MoE</td>
   <td>30B-Instruct</td>
   <td><a href="https://huggingface.co/RedHatAI/Qwen3-30B-A3B-Instruct-2507-speculator.eagle3">
       Eagle-3
-    </a> ✅</td>
+    </a> ✅<br/><a href="https://huggingface.co/RedHatAI/Qwen3-30B-A3B-Instruct-2507-speculator.dflash">DFlash</a> ✅</td>
+  <td>✅</td>
+</tr>
+<tr>
+  <td>30B</td>
+  <td><a href="https://huggingface.co/RedHatAI/Qwen3-30B-A3B-speculator.dflash">DFlash</a> ✅</td>
   <td>✅</td>
 </tr>
 <tr>
@@ -139,15 +144,9 @@ The following table summarizes the models that have been trained end-to-end by o
 <td>✅</td>
 </tr>
 <tr>
-<td>Mistral 3 Large</td>
-<td>675B-Instruct</td>
-<td>Eagle-3 ⏳</td>
-<td>⏳</td>
-</tr>
-<tr>
-<td>Qwen3.5</td>
-<td>9B</td>
-<td>MTP ✅</td>
+<td>Mistral Small 4</td>
+<td>119B</td>
+<td><a href="https://huggingface.co/RedHatAI/Mistral-Small-4-119B-2603.dflash">DFlash</a> ✅</td>
 <td>✅</td>
 </tr>
 <tr>
@@ -160,6 +159,18 @@ The following table summarizes the models that have been trained end-to-end by o
 <td>Gemma 4 MoE</td>
 <td>26B-A4B-it</td>
 <td><a href="https://huggingface.co/RedHatAI/gemma-4-26B-A4B-it-speculator.eagle3">Eagle-3</a> ✅</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>NVIDIA Nemotron 3 Ultra</td>
+<td>550B-A55B</td>
+<td><a href="https://huggingface.co/RedHatAI/NVIDIA-Nemotron-3-Ultra-550B-A55B-speculator.dflash">DFlash</a> ✅</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>NVIDIA Nemotron 3 Super</td>
+<td>120B-A12B</td>
+<td><a href="https://huggingface.co/RedHatAI/NVIDIA-Nemotron-3-Super-120B-A12B-speculator.dflash">DFlash</a> ✅</td>
 <td>✅</td>
 </tr>
 </tbody>
