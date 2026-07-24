@@ -16,8 +16,12 @@ Classes:
         auto-discovery enabled by default
 """
 
-from collections.abc import Callable
-from typing import Any, ClassVar
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any, ClassVar
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 __all__ = ["ClassRegistryMixin"]
 
