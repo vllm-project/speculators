@@ -1,0 +1,41 @@
+# See https://help.github.com/articles/about-codeowners/
+# for more info about CODEOWNERS file
+
+/src/speculators/ @fynnsu @shanjiaz @rahul-tuli @orestis-z
+/src/speculators/convert/ @shanjiaz @fynnsu @rahul-tuli
+/src/speculators/convert/mtp/ @rahul-tuli @fynnsu
+/src/speculators/convert/eagle/ @shanjiaz @fynnsu
+/src/speculators/data_generation/ @shanjiaz @fynnsu @rahul-tuli
+/src/speculators/models/ @fynnsu @shanjiaz @rahul-tuli @orestis-z
+/src/speculators/models/mtp/ @rahul-tuli @fynnsu
+/src/speculators/models/peagle/ @orestis-z @shanjiaz
+/src/speculators/models/eagle3/ @fynnsu @shanjiaz @orestis-z
+/src/speculators/models/dflash/ @fynnsu @shanjiaz @orestis-z
+/src/speculators/train/ @fynnsu @shanjiaz
+
+/tests/ @fynnsu @shanjiaz @rahul-tuli @orestis-z
+/tests/unit/convert/ @shanjiaz @rahul-tuli @fynnsu
+/tests/unit/models/ @fynnsu @rahul-tuli @shanjiaz
+/tests/unit/train/ @fynnsu @shanjiaz
+/tests/integration/ @fynnsu @shanjiaz @orestis-z
+/tests/e2e/ @shanjiaz @fynnsu @rahul-tuli
+/tests/e2e/regression/ @shanjiaz @fynnsu @rahul-tuli @dsikka
+/tests/e2e/smoke/ @shanjiaz @rahul-tuli @dsikka
+
+/scripts/ @fynnsu @shanjiaz @rahul-tuli @orestis-z
+
+/hs_connectors/ @fynnsu @shanjiaz
+
+/.buildkite/ @dsikka @dhuangnm @deepak-kumar-neu
+
+/.github/ @dsikka @fynnsu @shanjiaz
+
+/README.md @dsikka @fynnsu @shanjiaz @rahul-tuli
+/CONTRIBUTING.md @dsikka @fynnsu @shanjiaz @rahul-tuli
+/CODE_OF_CONDUCT.md @dsikka @fynnsu @shanjiaz @rahul-tuli
+/Makefile @dsikka @fynnsu @shanjiaz @rahul-tuli
+/mkdocs.yml @dsikka @fynnsu @shanjiaz @rahul-tuli
+/pyproject.toml @dsikka @fynnsu @shanjiaz @rahul-tuli
+/setup.py @dsikka @fynnsu @shanjiaz @rahul-tuli
+/.coderabbit.yaml @dsikka @fynnsu @shanjiaz @rahul-tuli
+
