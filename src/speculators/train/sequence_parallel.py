@@ -26,51 +26,70 @@ _MIN_SPLIT_NDIM = 2
 
 
 # ---------------------------------------------------------------------------
-# Differentiable all-to-all primitive
+# Differentiable all-to-all primitive (torch.compile-friendly custom op)
 # ---------------------------------------------------------------------------
 
 
-class _AllToAllSP(torch.autograd.Function):
-    """Differentiable all-to-all for sequence parallelism.
+@torch.library.custom_op("speculators::all_to_all_sp", mutates_args=())
+def all_to_all_sp(
+    input_tensor: torch.Tensor,
+    scatter_dim: int,
+    gather_dim: int,
+) -> torch.Tensor:
+    from speculators.train.distributed import get_sp_group, get_sp_size  # noqa: PLC0415
 
-    Scatters along ``scatter_dim`` and gathers along ``gather_dim``.
-    The backward pass reverses the two dimensions so gradients flow
-    back through the communication correctly.
-    """
+    sp_size = get_sp_size()
+    if sp_size == 1:
+        return input_tensor
 
-    @staticmethod
-    def forward(
-        ctx,
-        input_tensor: torch.Tensor,
-        sp_group: ProcessGroup,
-        scatter_dim: int,
-        gather_dim: int,
-    ) -> torch.Tensor:
-        ctx.sp_group = sp_group
-        ctx.scatter_dim = scatter_dim
-        ctx.gather_dim = gather_dim
+    sp_group = get_sp_group()
+    input_chunks = [
+        c.contiguous() for c in input_tensor.chunk(sp_size, dim=scatter_dim)
+    ]
+    output_chunks = [torch.empty_like(c) for c in input_chunks]
+    dist.all_to_all(output_chunks, input_chunks, group=sp_group)
+    return torch.cat(output_chunks, dim=gather_dim).contiguous()
 
-        world_size = dist.get_world_size(sp_group)
-        if world_size == 1:
-            return input_tensor
 
-        input_chunks = [
-            c.contiguous() for c in input_tensor.chunk(world_size, dim=scatter_dim)
-        ]
-        output_chunks = [torch.empty_like(c) for c in input_chunks]
-        dist.all_to_all(output_chunks, input_chunks, group=sp_group)
-        return torch.cat(output_chunks, dim=gather_dim).contiguous()
+@all_to_all_sp.register_fake
+def _all_to_all_sp_fake(
+    input_tensor: torch.Tensor,
+    scatter_dim: int,
+    gather_dim: int,
+) -> torch.Tensor:
+    from speculators.train.distributed import get_sp_size  # noqa: PLC0415
 
-    @staticmethod
-    def backward(ctx, grad_output: torch.Tensor):
-        return (
-            _AllToAllSP.apply(
-                grad_output, ctx.sp_group, ctx.gather_dim, ctx.scatter_dim
-            ),
-            None,
-            None,
-            None,
-        )
+    sp_size = get_sp_size()
+    if sp_size == 1:
+        return input_tensor.new_empty(input_tensor.shape)
+
+    shape = list(input_tensor.shape)
+    shape[scatter_dim] //= sp_size
+    shape[gather_dim] *= sp_size
+    return input_tensor.new_empty(shape)
+
+
+def _all_to_all_sp_setup(ctx, inputs, output):  # noqa: ARG001
+    _, scatter_dim, gather_dim = inputs
+    ctx.scatter_dim = scatter_dim
+    ctx.gather_dim = gather_dim
+
+
+def _all_to_all_sp_backward(ctx, grad_output):
+    return (
+        torch.ops.speculators.all_to_all_sp(
+            grad_output, ctx.gather_dim, ctx.scatter_dim
+        ),
+        None,
+        None,
+    )
+
+
+torch.library.register_autograd(
+    "speculators::all_to_all_sp",
+    _all_to_all_sp_backward,
+    setup_context=_all_to_all_sp_setup,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -169,7 +188,7 @@ def maybe_replicate_kv_heads(
 
 def ulysses_scatter(
     x: torch.Tensor,
-    sp_group: ProcessGroup,
+    sp_group: ProcessGroup,  # noqa: ARG001
     sp_size: int,  # noqa: ARG001
 ) -> torch.Tensor:
     """All-to-all: sequence-parallel to head-parallel layout.
@@ -180,12 +199,12 @@ def ulysses_scatter(
     Scatters heads (dim 1) and gathers sequence chunks (dim 2).
     Gradients flow back through the reverse all-to-all automatically.
     """
-    return _AllToAllSP.apply(x, sp_group, 1, 2)
+    return torch.ops.speculators.all_to_all_sp(x, 1, 2)
 
 
 def ulysses_gather(
     x: torch.Tensor,
-    sp_group: ProcessGroup,
+    sp_group: ProcessGroup,  # noqa: ARG001
     sp_size: int,  # noqa: ARG001
 ) -> torch.Tensor:
     """All-to-all: head-parallel to sequence-parallel layout.
@@ -195,7 +214,7 @@ def ulysses_gather(
 
     Inverse of :func:`ulysses_scatter`.
     """
-    return _AllToAllSP.apply(x, sp_group, 2, 1)
+    return torch.ops.speculators.all_to_all_sp(x, 2, 1)
 
 
 # ---------------------------------------------------------------------------
@@ -224,7 +243,7 @@ def dflash_flex_attention_forward(
     Falls back to the base ``flex_attention_forward`` when SP is
     inactive (``sp_size <= 1``).
     """
-    from speculators.train.distributed import get_sp_group, get_sp_size  # noqa: PLC0415
+    from speculators.train.distributed import get_sp_size  # noqa: PLC0415
 
     sp_size = get_sp_size()
 
@@ -239,7 +258,6 @@ def dflash_flex_attention_forward(
 
     from torch.nn.attention.flex_attention import flex_attention  # noqa: PLC0415
 
-    sp_group = get_sp_group()
     key, value = maybe_replicate_kv_heads(key, value, sp_size)
 
     # DFlash K/V = [context | noise]. Q is noise-only,
@@ -249,11 +267,11 @@ def dflash_flex_attention_forward(
     k_ctx, k_noise = key.split([ctx_len, key.shape[2] - ctx_len], dim=2)
     v_ctx, v_noise = value.split([ctx_len, value.shape[2] - ctx_len], dim=2)
 
-    query = _AllToAllSP.apply(query, sp_group, 1, 2)
-    k_ctx = _AllToAllSP.apply(k_ctx, sp_group, 1, 2)
-    k_noise = _AllToAllSP.apply(k_noise, sp_group, 1, 2)
-    v_ctx = _AllToAllSP.apply(v_ctx, sp_group, 1, 2)
-    v_noise = _AllToAllSP.apply(v_noise, sp_group, 1, 2)
+    query = torch.ops.speculators.all_to_all_sp(query, 1, 2)
+    k_ctx = torch.ops.speculators.all_to_all_sp(k_ctx, 1, 2)
+    k_noise = torch.ops.speculators.all_to_all_sp(k_noise, 1, 2)
+    v_ctx = torch.ops.speculators.all_to_all_sp(v_ctx, 1, 2)
+    v_noise = torch.ops.speculators.all_to_all_sp(v_noise, 1, 2)
 
     key = torch.cat([k_ctx, k_noise], dim=2)
     value = torch.cat([v_ctx, v_noise], dim=2)
@@ -271,6 +289,6 @@ def dflash_flex_attention_forward(
         scale=scaling,
     )
 
-    attn_output = _AllToAllSP.apply(attn_output, sp_group, 2, 1)
+    attn_output = torch.ops.speculators.all_to_all_sp(attn_output, 2, 1)
     attn_output = attn_output.transpose(1, 2).contiguous()
     return attn_output, None

@@ -481,10 +481,6 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         dpace_alpha: float = 0.5,
         **kwargs,
     ):
-        from speculators.train.distributed import get_sp_size  # noqa: PLC0415
-
-        sp_size = get_sp_size()
-
         _, logits, targets, aligned_loss_mask, _ = self._backbone_forward(
             hidden_states,
             input_ids,
@@ -506,6 +502,5 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             dpace_alpha=dpace_alpha,
             sample_from_anchor=self.config.sample_from_anchor,
         )
-
 
         return None, loss, metrics

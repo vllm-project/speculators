@@ -3,6 +3,7 @@
 from typing import ClassVar
 
 import torch
+import torch.distributed as dist
 from transformers import PretrainedConfig
 
 from speculators.config import SpeculatorsConfig, VerifierConfig
@@ -31,6 +32,7 @@ class PEagleDraftModel(Eagle3DraftModel):
         *Eagle3DraftModel._keys_to_ignore_on_load_missing,  # noqa: SLF001
         "mask_hidden",
     ]
+    _sp_splits_batch: ClassVar[bool] = False
 
     def __init__(
         self,
@@ -66,40 +68,22 @@ class PEagleDraftModel(Eagle3DraftModel):
         down_sample_ratio_min: float = 0.2,
         **kwargs,
     ):
-        """
-        Forward pass for P-EAGLE model training with parallel group prediction.
-
-        Args:
-            hidden_states: Verifier hidden states [1, seq_len, 3*hidden_size]
-            input_ids: Input token IDs [1, seq_len]
-            document_ids: Document IDs [1, seq_len], maps positions to doc index, pad -1
-            position_ids: Position IDs [1, seq_len] (optional)
-            loss_mask: Loss mask for which tokens to compute loss on
-                [1, seq_len]
-            verifier_last_hidden_states: Verifier final hidden states for
-                targets [1, seq_len, hidden_size]
-
-        Returns:
-            Tuple of (draft_tokens, loss, metrics)
-        """
-        from speculators.train.distributed import get_sp_size  # noqa: PLC0415
-
-        if get_sp_size() > 1:
-            raise NotImplementedError(
-                "PEagleDraftModel does not yet support "
-                "sequence parallelism (sp_size > 1)"
-            )
+        from speculators.train.distributed import (  # noqa: PLC0415
+            get_sp_group,
+            get_sp_rank,
+            get_sp_size,
+        )
 
         if verifier_last_hidden_states is None:
             raise ValueError("verifier_last_hidden_states required for training")
 
         device = hidden_states.device
         seq_length = input_ids.shape[1]
+        sp_size = get_sp_size()
 
         if loss_mask is None:
             loss_mask = torch.ones_like(input_ids, dtype=torch.float32)
 
-        # Generate COD sampling indices
         anchor_pos, depth = generate_cod_sample_indices(
             seq_length=seq_length,
             loss_mask=loss_mask,
@@ -108,30 +92,63 @@ class PEagleDraftModel(Eagle3DraftModel):
             down_sample_ratio_min=down_sample_ratio_min,
             max_anchors=max_anchors,
         )
+
+        if sp_size > 1:
+            sp_group = get_sp_group()
+            sp_rank = get_sp_rank()
+            src = dist.get_process_group_ranks(sp_group)[0]
+            # Broadcast size first so non-rank-0 can allocate
+            size_t = torch.tensor(anchor_pos.shape[0], device=device)
+            dist.broadcast(size_t, src=src, group=sp_group)
+            total_sampled = size_t.item()
+            if anchor_pos.shape[0] != total_sampled:
+                anchor_pos = torch.empty(total_sampled, device=device, dtype=torch.long)
+                depth = torch.empty(total_sampled, device=device, dtype=torch.long)
+            dist.broadcast(anchor_pos, src=src, group=sp_group)
+            dist.broadcast(depth, src=src, group=sp_group)
+
+            # Pad to be divisible by sp_size
+            remainder = total_sampled % sp_size
+            if remainder != 0:
+                pad_len = sp_size - remainder
+                anchor_pos = torch.nn.functional.pad(anchor_pos, (0, pad_len))
+                depth = torch.nn.functional.pad(depth, (0, pad_len))
+
         total_sampled = anchor_pos.shape[0]
+        # Full tensors needed for mask construction
+        full_anchor_pos = anchor_pos
+        full_depth = depth
+        full_orig_positions = full_anchor_pos + full_depth
 
-        orig_positions = anchor_pos + depth
-        is_depth_0 = depth == 0  # [total_sampled]
+        if sp_size > 1:
+            n_per_rank = total_sampled // sp_size
+            local_start = sp_rank * n_per_rank
+            local_anchor_pos = anchor_pos[local_start : local_start + n_per_rank]
+            local_depth = depth[local_start : local_start + n_per_rank]
+            local_orig_positions = local_anchor_pos + local_depth
+            local_sampled = n_per_rank
+        else:
+            local_anchor_pos = anchor_pos
+            local_depth = depth
+            local_orig_positions = full_orig_positions
+            local_sampled = total_sampled
 
-        # Build sampled input_ids: real tokens for depth 0, mask for others
+        is_depth_0 = local_depth == 0
+
         sampled_ids = torch.where(
             is_depth_0,
-            input_ids[0, orig_positions],
+            input_ids[0, local_orig_positions],
             torch.tensor(self.mask_token_id, dtype=input_ids.dtype, device=device),
-        ).unsqueeze(0)  # [1, total_sampled]
-        inputs_embeds = self.embed_tokens(sampled_ids).to(
-            hidden_states.dtype
-        )  # [1, total_sampled, hidden_size]
+        ).unsqueeze(0)
+        inputs_embeds = self.embed_tokens(sampled_ids).to(hidden_states.dtype)
 
-        # Build sampled hidden states: real for depth 0, mask_hidden for others
         mask_hidden = self.mask_hidden.to(device=device, dtype=hidden_states.dtype)
         sampled_hidden = torch.where(
             is_depth_0.unsqueeze(-1),
-            hidden_states[0, orig_positions],
-            mask_hidden.squeeze(0).expand(orig_positions.shape[0], -1),
-        ).unsqueeze(0)  # [1, total_sampled, 3*hidden_size]
+            hidden_states[0, local_orig_positions],
+            mask_hidden.squeeze(0).expand(local_sampled, -1),
+        ).unsqueeze(0)
 
-        # Project concatenated hidden states (3*hidden_size) -> hidden_size
         if self.input_norm is not None:
             sampled_hidden = self.input_norm(sampled_hidden)
         if self.fc_norm is not None:
@@ -140,22 +157,21 @@ class PEagleDraftModel(Eagle3DraftModel):
                 [norm(chunk) for norm, chunk in zip(self.fc_norm, chunks, strict=True)],
                 dim=-1,
             )
-        sampled_hidden = self.fc(sampled_hidden)  # [1, total_sampled, hidden_size]
+        sampled_hidden = self.fc(sampled_hidden)
 
-        layer_input = torch.cat(
-            [inputs_embeds, sampled_hidden], dim=-1
-        )  # [1, total_sampled, 2*hidden_size]
+        layer_input = torch.cat([inputs_embeds, sampled_hidden], dim=-1)
 
-        position_ids = orig_positions.unsqueeze(0)  # [1, total_sampled]
+        position_ids = local_orig_positions.unsqueeze(0)
 
         position_embeddings = self.rotary_emb(layer_input, position_ids)
 
         doc_ids_1d = document_ids.squeeze(0).to(device)
 
+        # Build masks at FULL total_sampled scale (matches post-all-to-all layout)
         def _build_attn_mask(sliding_window=None):
             mask_mod = create_peagle_mask_mod(
-                anchor_pos=anchor_pos,
-                depth=depth,
+                anchor_pos=full_anchor_pos,
+                depth=full_depth,
                 document_ids=doc_ids_1d,
                 sliding_window=sliding_window,
             )
@@ -190,23 +206,21 @@ class PEagleDraftModel(Eagle3DraftModel):
                 **kwargs,
             )
 
-        logits = self.lm_head(
-            self.norm(hidden_states)
-        )  # [1, total_sampled, vocab_size]
+        logits = self.lm_head(self.norm(hidden_states))
 
         with torch.no_grad():
             targets = self.verifier_lm_head(
                 self.verifier_norm(verifier_last_hidden_states)
             )
 
-        targets = targets[:, orig_positions, :]  # [1, total_sampled, vocab_size]
+        targets = targets[:, local_orig_positions, :]
 
         loss, metrics = compute_metrics(
             logits=logits,
             targets=targets,
             loss_mask=loss_mask,
-            anchor_pos=anchor_pos,
-            depth=depth,
+            anchor_pos=local_anchor_pos,
+            depth=local_depth,
             num_depths=num_depths,
             loss_config=loss_config,
         )
