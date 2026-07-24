@@ -2,6 +2,8 @@
 
 import argparse
 
+import pytest
+
 from speculators.models.dflash.core import DFlashDraftModel
 from speculators.models.dspark.core import DSparkDraftModel
 from speculators.models.eagle3.core import Eagle3DraftModel
@@ -169,3 +171,23 @@ def test_no_norm_before_fc_flag(monkeypatch):
 def test_no_norm_output_flag(monkeypatch):
     args = _parse(monkeypatch, ["--no-norm-output"])
     assert args.norm_output is False
+
+
+# ---------------------------------------------------------------------------
+# --max-steps
+# ---------------------------------------------------------------------------
+
+
+def test_max_steps_default_is_none(monkeypatch):
+    args = _parse(monkeypatch, [])
+    assert args.max_steps is None
+
+
+def test_max_steps_explicit(monkeypatch):
+    args = _parse(monkeypatch, ["--max-steps", "15"])
+    assert args.max_steps == 15
+
+
+def test_max_steps_rejects_non_positive(monkeypatch):
+    with pytest.raises(SystemExit):
+        _parse(monkeypatch, ["--max-steps", "0"])
