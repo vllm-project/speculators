@@ -83,6 +83,7 @@ merge_protections:
     description: >-
       All pull requests must have at least one approving review from a
       member of the approved reviewers list before merging.
+    if: []
     success_conditions:
       - &approved_reviewer_check
         or:
