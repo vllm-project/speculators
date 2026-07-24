@@ -1354,6 +1354,7 @@ def parse_args():
 if __name__ == "__main__":
     args = parse_args()
     main(args)
+    print(f"Peak GPU memory: {torch.cuda.max_memory_allocated() / 1e9:.2f} GB")
 
 
 # RUN WITH:
