@@ -254,6 +254,8 @@ Nothing to do up front. The first epoch generates hidden states from the live vL
 
 Wait for vLLM to finish launching (online and hybrid modes). In a **separate terminal** on the same node, start training.
 
+The commands below assume a four-GPU node: vLLM holds GPUs 0-1 from Step 2, so training takes 2-3. Adjust `CUDA_VISIBLE_DEVICES` and `--nproc_per_node` to your machine -- in offline mode vLLM is already stopped, so training can use all of them.
+
 Pick your mode and algorithm below -- each combination gives a complete command. Both selections follow you across the page.
 
 //// tab | Online
@@ -264,7 +266,8 @@ Hidden states stream from the live vLLM server and are discarded after use. vLLM
 
 ```bash
 # in speculators venv
-python scripts/train.py \
+CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
+  scripts/train.py \
   --verifier-name-or-path Qwen/Qwen3-8B \
   --data-path ./output \
   --save-path ./output/checkpoints \
@@ -282,7 +285,8 @@ python scripts/train.py \
 
 ```bash
 # in speculators venv
-python scripts/train.py \
+CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
+  scripts/train.py \
   --verifier-name-or-path Qwen/Qwen3-8B \
   --data-path ./output \
   --save-path ./output/checkpoints \
@@ -306,7 +310,8 @@ python scripts/train.py \
 
 ```bash
 # in speculators venv
-python scripts/train.py \
+CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
+  scripts/train.py \
   --verifier-name-or-path Qwen/Qwen3-8B \
   --data-path ./output \
   --save-path ./output/checkpoints \
@@ -327,7 +332,8 @@ python scripts/train.py \
 
 ```bash
 # in speculators venv
-python scripts/train.py \
+CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
+  scripts/train.py \
   --verifier-name-or-path Qwen/Qwen3-8B \
   --data-path ./output \
   --save-path ./output/checkpoints \
@@ -349,7 +355,8 @@ python scripts/train.py \
 
 ```bash
 # in speculators venv
-python scripts/train.py \
+CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
+  scripts/train.py \
   --verifier-name-or-path Qwen/Qwen3.5-9B \
   --data-path ./output \
   --save-path ./output/checkpoints \
@@ -389,7 +396,8 @@ Reads the hidden states cached in Step 3. vLLM is not needed during training.
 
 ```bash
 # in speculators venv
-python scripts/train.py \
+CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
+  scripts/train.py \
   --verifier-name-or-path Qwen/Qwen3-8B \
   --data-path ./output \
   --save-path ./output/checkpoints \
@@ -406,7 +414,8 @@ python scripts/train.py \
 
 ```bash
 # in speculators venv
-python scripts/train.py \
+CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
+  scripts/train.py \
   --verifier-name-or-path Qwen/Qwen3-8B \
   --data-path ./output \
   --save-path ./output/checkpoints \
@@ -429,7 +438,8 @@ python scripts/train.py \
 
 ```bash
 # in speculators venv
-python scripts/train.py \
+CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
+  scripts/train.py \
   --verifier-name-or-path Qwen/Qwen3-8B \
   --data-path ./output \
   --save-path ./output/checkpoints \
@@ -449,7 +459,8 @@ python scripts/train.py \
 
 ```bash
 # in speculators venv
-python scripts/train.py \
+CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
+  scripts/train.py \
   --verifier-name-or-path Qwen/Qwen3-8B \
   --data-path ./output \
   --save-path ./output/checkpoints \
@@ -470,7 +481,8 @@ python scripts/train.py \
 
 ```bash
 # in speculators venv
-python scripts/train.py \
+CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
+  scripts/train.py \
   --verifier-name-or-path Qwen/Qwen3.5-9B \
   --data-path ./output \
   --save-path ./output/checkpoints \
@@ -508,7 +520,8 @@ The first epoch generates hidden states from the live vLLM server and caches the
 
 ```bash
 # in speculators venv
-python scripts/train.py \
+CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
+  scripts/train.py \
   --verifier-name-or-path Qwen/Qwen3-8B \
   --data-path ./output \
   --save-path ./output/checkpoints \
@@ -527,7 +540,8 @@ python scripts/train.py \
 
 ```bash
 # in speculators venv
-python scripts/train.py \
+CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
+  scripts/train.py \
   --verifier-name-or-path Qwen/Qwen3-8B \
   --data-path ./output \
   --save-path ./output/checkpoints \
@@ -552,7 +566,8 @@ python scripts/train.py \
 
 ```bash
 # in speculators venv
-python scripts/train.py \
+CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
+  scripts/train.py \
   --verifier-name-or-path Qwen/Qwen3-8B \
   --data-path ./output \
   --save-path ./output/checkpoints \
@@ -574,7 +589,8 @@ python scripts/train.py \
 
 ```bash
 # in speculators venv
-python scripts/train.py \
+CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
+  scripts/train.py \
   --verifier-name-or-path Qwen/Qwen3-8B \
   --data-path ./output \
   --save-path ./output/checkpoints \
@@ -597,7 +613,8 @@ python scripts/train.py \
 
 ```bash
 # in speculators venv
-python scripts/train.py \
+CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
+  scripts/train.py \
   --verifier-name-or-path Qwen/Qwen3.5-9B \
   --data-path ./output \
   --save-path ./output/checkpoints \
@@ -636,16 +653,7 @@ python scripts/stitch_mtp.py \
 - `--epochs` - Number of training epochs (the default is 20)
 - `--total-seq-len 8192` - Maximum sequence length for training
 
-**Multi-GPU training (FSDP):** prefix any of the commands above with `torchrun`, and add `--fsdp-shard` if the model does not fit on a single GPU:
-
-```bash
-# in speculators venv
-CUDA_VISIBLE_DEVICES=2,3 torchrun \
-  --standalone \
-  --nproc_per_node 2 \
-  scripts/train.py \
-  ... # same arguments as above
-```
+**Single GPU:** drop the `torchrun` wrapper and call `python scripts/train.py` directly with the same arguments.
 
 **Note:** There are a lot of configuration options available at this stage. We've attempted to set sensible defaults but please see the [train.py cli reference](/cli/train.md) to see all available options.
 
