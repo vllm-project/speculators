@@ -48,6 +48,34 @@ For larger models, use data parallelism and/or tensor parallelism:
   --dataset magpie
 ```
 
+### Tool-Call Regeneration
+
+For tool-calling datasets (e.g. `hermes-fc`), pass the model's `--tool-call-parser` (and `--reasoning-parser`, for thinking models) so the server returns structured `tool_calls` and separated reasoning instead of plain text. Both are model-specific, so look them up in the model's [vLLM recipe](https://recipes.vllm.ai/):
+
+```bash
+# Qwen3
+./scripts/response_regeneration/run_all.sh \
+  --model "Qwen/Qwen3-8B" \
+  --tool-call-parser hermes --reasoning-parser qwen3 \
+  --dataset hermes-fc
+
+# Gemma 4
+./scripts/response_regeneration/run_all.sh \
+  --model "google/gemma-4-E2B-it" \
+  --tool-call-parser gemma4 --reasoning-parser gemma4 \
+  --dataset hermes-fc
+
+# gpt-oss (reasoning is parsed automatically)
+./scripts/response_regeneration/run_all.sh \
+  --model "openai/gpt-oss-20b" \
+  --tool-call-parser openai \
+  --dataset hermes-fc
+```
+
+This is **semi-on-policy** tool-call regeneration: the target regenerates the tool-call tokens on-policy, but tools are not executed. The *i*-th cached tool result from the source data is spliced positionally after the target's *i*-th regenerated call.
+
+**Limitation:** parallel tool calls are under development; the turn is currently truncated to the first call.
+
 ## Step 2: Verify the Output
 
 The output is a JSONL file with one pre-tokenized row per target generation. `loss_mask` is `0` over the prompt the target conditioned on and `1` over the tokens it generated, so training needs no further masking:
