@@ -7,7 +7,7 @@ import torch
 from loguru import logger
 
 from speculators.convert.eagle.eagle3_converter import Eagle3Converter
-from speculators.convert.eagle.eagle3_legacy_model import Eagle3Speculator
+from speculators.models.eagle3 import Eagle3DraftModel
 
 
 class TestEagle3Conversion:
@@ -75,53 +75,6 @@ class TestEagle3Conversion:
         )
         assert len(weight_files) > 0, "No model weight files found"
 
-    def execute_forward_pass(self, model: Eagle3Speculator) -> bool:
-        """
-        Actually runs the model to verify it works correctly after conversion.
-        This catches issues like shape mismatches or broken layers.
-        """
-        try:
-            batch_size = 1
-            seq_len = 5
-
-            # Create dummy input_ids from draft vocabulary
-            input_ids = torch.tensor([[1, 2, 3, 4, 5]], dtype=torch.long)
-
-            # Eagle3 requires hidden_states from 3 verifier layers
-            target_hidden_size = model.target_hidden_size
-            hidden_states = torch.randn(batch_size, seq_len, 3 * target_hidden_size)
-            logger.info(
-                f"Forward pass inputs - input_ids: {input_ids.shape}, "
-                f"hidden_states: {hidden_states.shape}"
-            )
-
-            # Execute forward pass
-            with torch.no_grad():
-                output = model(input_ids=input_ids, hidden_states=hidden_states)
-
-            # Basic checks
-            assert hasattr(output, "logits"), "Output missing logits"
-            assert output.logits.shape[0] == batch_size, (
-                f"Wrong batch size: {output.logits.shape[0]}"
-            )
-            assert output.logits.shape[1] == seq_len, (
-                f"Wrong sequence length: {output.logits.shape[1]}"
-            )
-
-            # Verify output uses target vocabulary size (mapped from draft)
-            expected_vocab_size = model.config.target_vocab_size
-            assert output.logits.shape[2] == expected_vocab_size, (
-                f"Wrong vocab size: expected {expected_vocab_size}, "
-                f"got {output.logits.shape[2]}"
-            )
-
-            logger.info(f"Forward pass successful, logits shape: {output.logits.shape}")
-            return True
-
-        except (RuntimeError, ValueError, AssertionError) as e:
-            logger.error(f"Forward pass failed: {e}")
-            return False
-
     # TODO: @dsikka - add llama3 example
     @pytest.mark.smoke
     @pytest.mark.parametrize(
@@ -182,10 +135,8 @@ class TestEagle3Conversion:
 
         # Step 2: Load model
         logger.info("Loading converted model...")
-        model = Eagle3Speculator.from_pretrained(
-            converted_dir, verifier=base_model, verifier_attachment_mode="detached"
-        )
-        assert isinstance(model, Eagle3Speculator), "Wrong model type loaded"
+        model = Eagle3DraftModel.from_pretrained(converted_dir)
+        assert isinstance(model, Eagle3DraftModel), "Wrong model type loaded"
         assert model.config.speculators_model_type == "eagle3"
 
         # Verify norm_before_residual setting

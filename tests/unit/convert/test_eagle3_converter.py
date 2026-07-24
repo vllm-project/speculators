@@ -13,8 +13,12 @@ from unittest.mock import patch
 import pytest
 import torch
 
-from speculators.convert.eagle.eagle3_converter import Eagle3Converter
-from speculators.convert.utils import load_checkpoint_config
+from speculators.convert.eagle.eagle3_converter import (
+    _VERIFIER_FILLED_KEYS,
+    Eagle3Converter,
+)
+from speculators.convert.utils import load_checkpoint_config, load_checkpoint_weights
+from speculators.models.eagle3 import Eagle3DraftModel
 
 
 class TestEagle3ConverterFixes:
@@ -157,7 +161,7 @@ class TestEagle3ConverterFixes:
 
     @pytest.mark.sanity
     def test_converted_model_config_structure(self):
-        """Test that the config structure created is valid for Eagle3Speculator."""
+        """Test that the config structure created is valid for Eagle3DraftModel."""
         converter = Eagle3Converter()
 
         eagle_config = {
@@ -248,6 +252,50 @@ class TestEagle3ConverterFixes:
             config_dict = config.to_dict()
             assert "eagle_aux_hidden_state_layer_ids" in config_dict
             assert config_dict["eagle_aux_hidden_state_layer_ids"] == layer_ids
+
+    @pytest.mark.sanity
+    def test_save_keeps_all_layers_and_skips_absent_weights(self, tmp_path):
+        """Saved checkpoint keeps every decoder layer and only source weights."""
+        converter = Eagle3Converter()
+
+        eagle_config = {
+            "target_vocab_size": 64,
+            "draft_vocab_size": 32,
+            "hidden_size": 16,
+            "intermediate_size": 32,
+            "num_hidden_layers": 2,
+            "num_attention_heads": 2,
+            "num_key_value_heads": 1,
+            "head_dim": 8,
+        }
+
+        with patch(
+            "speculators.convert.eagle.eagle3_converter.PretrainedConfig.get_config_dict"
+        ) as mock_config:
+            mock_config.return_value = ({"max_position_embeddings": 32}, None)
+            config = converter._build_eagle3_speculator_config(
+                eagle_config, "meta-llama/Llama-3.1-8B-Instruct"
+            )
+
+        reference = Eagle3DraftModel(config=config).state_dict()
+        weights = {
+            key.replace("layers.0.", "midlayer."): torch.randn_like(value)
+            for key, value in reference.items()
+            if key not in _VERIFIER_FILLED_KEYS
+        }
+
+        output_dir = tmp_path / "converted"
+        converter._save_converted_checkpoint(config, weights, output_dir)
+
+        saved = load_checkpoint_weights(output_dir)
+        expected = {
+            key.replace("midlayer.", "layers.0."): value
+            for key, value in weights.items()
+        }
+        assert set(saved) == set(expected)
+        assert any(key.startswith("layers.1.") for key in saved)
+        for key, value in expected.items():
+            assert torch.equal(saved[key], value), f"Weight mismatch for {key}"
 
     @pytest.mark.sanity
     def test_nm_testing_2layer_eagle3_model_config(self, tmp_path):
