@@ -15,7 +15,7 @@
 #   bash examples/train/mtp_qwen3_5_9b_gsm8k_online.sh
 #
 # For a detailed walkthrough, see
-# https://docs.vllm.ai/projects/speculators/en/latest/user_guide/tutorials/train_mtp_online/
+# https://docs.vllm.ai/projects/speculators/en/latest/user_guide/tutorials/train/
 
 ### Example E2E run for Qwen3.5-9B on GSM8K ###
 

@@ -17,6 +17,7 @@ theme:
     - content.code.annotate
     - content.code.copy
     - content.code.select
+    - content.tabs.link
     - navigation.footer
     - navigation.indexes
     - navigation.instant
@@ -67,6 +68,11 @@ markdown_extensions:
   - pymdownx.arithmatex:
       generic: true
   - pymdownx.blocks.caption
+  # Tabs use the `blocks` API (`/// tab | Name`) rather than the indentation-based
+  # `pymdownx.tabbed` syntax: mdformat (run by `make quality`) reformats indented
+  # tab bodies into code blocks, but leaves `///` fences untouched.
+  - pymdownx.blocks.tab:
+      alternate_style: true
   - pymdownx.details
   - pymdownx.magiclink
   - pymdownx.emoji:
@@ -117,6 +123,13 @@ plugins:
             show_symbol_type_heading: true
             show_symbol_type_toc: true
             summary: true
+  - redirects:
+      redirect_maps:
+        user_guide/tutorials/train_eagle3_online.md: user_guide/tutorials/train.md
+        user_guide/tutorials/train_eagle3_offline.md: user_guide/tutorials/train.md
+        user_guide/tutorials/train_dflash_online.md: user_guide/tutorials/train.md
+        user_guide/tutorials/train_peagle_offline.md: user_guide/tutorials/train.md
+        user_guide/tutorials/train_mtp_online.md: user_guide/tutorials/train.md
   - search
   - section-index
   - social

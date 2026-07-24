@@ -23,11 +23,11 @@ DFlash supports two sampling modes controlled by the `sample_from_anchor` config
 
 - **`False` (default for DFlash)**: Anchor is the bonus token, only mask tokens predict. Slot 0 is not trained. Produces `block_size - 1` speculative tokens.
 
-- **`True` (default for DSpark)**: Sample from anchor and all mask positions. All slots predict future tokens and are trained. Produces `block_size` speculative tokens. This matches the approach from the DSpark paper.
+- **`True` (default for [DSpark](dspark.md))**: Sample from anchor and all mask positions. All slots predict future tokens and are trained. Produces `block_size` speculative tokens. This matches the approach from the [DSpark paper](https://arxiv.org/abs/2607.05147).
 
 The sampling mode affects both training (which targets are used and which slots are masked) and inference (how predictions are harvested from draft model outputs). When deploying to inference engines, ensure the engine's `sample_from_anchor` setting matches your model's config.
 
-**Training:** Use `--sample-from-anchor` / `--no-sample-from-anchor` flags:
+**Training:** Use the `--sample-from-anchor` / `--no-sample-from-anchor` flags to override the algorithm-specific default.
 
 ## Pretrained Models
 
@@ -54,4 +54,5 @@ DFlash is based on research from Z Lab: [DFlash Project Page](https://z-lab.ai/p
 
 ## See Also
 
-- [Train DFlash Tutorial](../tutorials/train_dflash_online.md) -- Step-by-step training guide
+- [DSpark](dspark.md) -- Builds on DFlash with a sequential Markov head and a confidence head
+- [Train a Speculator](../tutorials/train.md) -- Step-by-step training guide (select DFlash or DSpark, then online, offline, or hybrid)

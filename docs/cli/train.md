@@ -172,7 +172,7 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--sample-from-anchor`** / **`--no-sample-from-anchor`** (bool, default: algorithm-specific) Whether to sample from the anchor position. `True`: sample from anchor and all mask positions (default for dspark, produces block_size tokens). `False`: anchor is bonus token (default for dflash, produces block_size-1 tokens).
 
-- **`--max-anchors`** (int, default: `256`) Maximum anchor positions for DFlash training.
+- **`--max-anchors`** (int, default: `3072`) Maximum anchor positions for DFlash training.
 
 - **`--dflash-decay-gamma`** (float, default: `4.0`) Decay gamma for DFlash loss weighting.
 
