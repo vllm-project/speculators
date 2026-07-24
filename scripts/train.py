@@ -675,6 +675,7 @@ def main(cfg: TrainConfig):  # noqa: C901
         hidden_states_dtype=hidden_states_dtype,
         log_freq=args.log_freq,
         fsdp_shard=args.fsdp_shard,
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
     )
     trainer = Trainer(draft_model, trainer_config, train_loader, val_loader)
 

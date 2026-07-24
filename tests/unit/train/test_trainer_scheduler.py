@@ -23,6 +23,35 @@ def test_scheduler_steps_default_to_one_percent_of_training_steps():
     assert warmup_steps == 1
 
 
+def test_scheduler_steps_scale_down_with_gradient_accumulation():
+    # 5 epochs * (20 // 4) = 25 optimizer steps.
+    warmup_steps, total_steps = _resolve_scheduler_steps(
+        make_config(gradient_accumulation_steps=4), 20
+    )
+
+    assert total_steps == 25
+    assert warmup_steps == 0  # 25 // 100
+
+
+def test_scheduler_steps_drop_remainder_with_gradient_accumulation():
+    # 21 // 4 == 5 (the trailing microbatch is dropped), so 5 epochs * 5 == 25.
+    _, total_steps = _resolve_scheduler_steps(
+        make_config(gradient_accumulation_steps=4), 21
+    )
+
+    assert total_steps == 25
+
+
+def test_scheduler_steps_accum_one_is_unchanged():
+    # Regression guard: accum=1 must match the pre-accumulation behavior.
+    warmup_steps, total_steps = _resolve_scheduler_steps(
+        make_config(gradient_accumulation_steps=1), 20
+    )
+
+    assert total_steps == 100
+    assert warmup_steps == 1
+
+
 def test_scheduler_total_steps_only_defaults_warmup_to_one_percent_of_total():
     # default_total_steps is num_epochs * loader_len = 100, but the explicit
     # scheduler_total_steps override must drive the 1% warmup fallback (10, not 1).
