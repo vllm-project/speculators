@@ -714,9 +714,9 @@ Check vLLM logs for speculative decoding metrics.
 
 ## Expected Results
 
-These are sanity-check runs, not production numbers. With just 5K samples, model performance will be limited -- the point is to verify that the pipeline works and the model is learning. For production quality, train on significantly more data.
+These are sanity-check runs, not production numbers. With just 5K samples, model performance will be limited, so the point is to verify that the pipeline works and the model is learning. For production quality, train on significantly more data. Reference numbers are published for DFlash and P-EAGLE so far; as a rough guide, most methods reach around 40% first-token acceptance rate on similar data.
 
-/// tab | DFlash
+### DFlash
 
 5K ShareGPT samples, 5 epochs, Qwen3-8B, measured on MT-Bench (80 prompts, 2048 max output tokens):
 
@@ -726,9 +726,7 @@ These are sanity-check runs, not production numbers. With just 5K samples, model
 | Acceptance length | 1.47         |
 | Output throughput | 129.41 tok/s |
 
-///
-
-/// tab | P-EAGLE
+### P-EAGLE
 
 5K ShareGPT samples, 5 epochs, Qwen3-8B, measured on SpecBench (80 prompts, 256 output tokens):
 
@@ -747,8 +745,6 @@ Per-position acceptance:
 | 3        | 0.15%      |
 
 > **Note:** these numbers were measured with `--total-seq-len 4096`, not the 8192 used throughout this tutorial.
-
-///
 
 ## Estimating Disk Space Requirements
 
