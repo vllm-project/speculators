@@ -120,16 +120,23 @@ def extend_dense_mask_for_draft_tokens(mask: torch.Tensor, total_seq_len: int):
     (q, new_offset + q) is True — the same diagonal pattern.
 
     Args:
-        mask: Dense boolean mask of shape [1, 1, total_seq_len, kv_len].
+        mask: Dense mask of shape [1, 1, total_seq_len, kv_len].
+            Boolean (True = attend) or float (0 = attend, -inf = masked).
         total_seq_len: Number of query positions (= original sequence length).
 
     Returns:
         Extended mask of shape [1, 1, total_seq_len, kv_len + total_seq_len].
     """
     idx = torch.arange(total_seq_len, device=mask.device)
-    diag = idx.unsqueeze(1) == idx.unsqueeze(0)
-    diag = diag.to(dtype=mask.dtype).unsqueeze(0).unsqueeze(0)
-    return torch.cat([mask, diag], dim=-1)
+    diag_bool = idx.unsqueeze(1) == idx.unsqueeze(0)
+    if mask.dtype.is_floating_point:
+        diag = torch.zeros(
+            total_seq_len, total_seq_len, dtype=mask.dtype, device=mask.device
+        )
+        diag.masked_fill_(~diag_bool, float("-inf"))
+    else:
+        diag = diag_bool.to(dtype=mask.dtype)
+    return torch.cat([mask, diag.unsqueeze(0).unsqueeze(0)], dim=-1)
 
 
 def block_mask_to_dense_attention_mask(
