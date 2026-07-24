@@ -12,6 +12,16 @@ from transformers.models.qwen3.modeling_qwen3 import (
     Qwen3RMSNorm,
     Qwen3RotaryEmbedding,
 )
+HAS_GEMMA2 = False
+try:
+    from transformers.models.gemma2.modeling_gemma2 import (
+        Gemma2DecoderLayer,
+        Gemma2RMSNorm,
+        Gemma2RotaryEmbedding,
+    )
+    HAS_GEMMA2 = True
+except ImportError:
+    pass
 
 
 class ModelComponents(NamedTuple):
@@ -50,6 +60,14 @@ model_classes: dict[str, ModelComponents] = {
         Qwen3RotaryEmbedding,
     ),
 }
+
+if HAS_GEMMA2:
+    model_classes["gemma2"] = ModelComponents(
+        Gemma2DecoderLayer,
+        Gemma2DecoderLayer,
+        Gemma2RMSNorm,
+        Gemma2RotaryEmbedding,
+    )
 
 try:
     from transformers.models.qwen3_next.modeling_qwen3_next import (

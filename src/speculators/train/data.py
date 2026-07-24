@@ -58,12 +58,14 @@ StandardizeFnSig = Callable[[dict[str, Any]], dict[str, Any]]
 
 
 def create_empty_sample(
-    hidden_size: int, num_target_layers: int = 3, dtype: torch.dtype = torch.bfloat16
+    hidden_size: int, num_target_layers: int = 3, dtype: torch.dtype = torch.bfloat16, kv_feature_dim: int = 0
 ):
     # data structure: {
     #     "hidden_states": [seq_len, num_target_layers * hidden_size],
     #     "input_ids": [seq_len],
     #     "verifier_last_hidden_states": [seq_len, hidden_size],
+    #     "verifier_kv_last_local": [seq_len, ...],
+    #     "verifier_kv_last_global": [seq_len, ...],
     #     "loss_mask": [seq_len],
     #     "lengths": [1],
     #     "position_ids": [seq_len],
@@ -77,6 +79,8 @@ def create_empty_sample(
         "hidden_states": torch.empty(0, num_target_layers * hidden_size, dtype=dtype),
         "input_ids": torch.empty(0, dtype=torch.long),
         "verifier_last_hidden_states": torch.empty(0, hidden_size, dtype=dtype),
+        "verifier_kv_last_local": torch.empty(0, kv_feature_dim, dtype=dtype) if kv_feature_dim > 0 else torch.empty(0, dtype=dtype),
+        "verifier_kv_last_global": torch.empty(0, kv_feature_dim, dtype=dtype) if kv_feature_dim > 0 else torch.empty(0, dtype=dtype),
         "loss_mask": torch.empty(0, dtype=torch.bool),
         "lengths": torch.tensor([0], dtype=torch.long),
         "position_ids": torch.arange(0, dtype=torch.long),
@@ -96,12 +100,21 @@ def standardize_data_v1(data: dict[str, Any]) -> dict[str, Any]:
     #  ],
     # }
 
-    return {
+    res = {
         "hidden_states": torch.cat(data["hidden_states"][:-1], dim=-1),
         "input_ids": data["input_ids"],
         "verifier_last_hidden_states": data["hidden_states"][-1],
         "loss_mask": data["loss_mask"],
     }
+    if "kv_last_local_k" in data and "kv_last_local_v" in data:
+        res["verifier_kv_last_local"] = torch.stack(
+            [data["kv_last_local_k"], data["kv_last_local_v"]], dim=1
+        )
+    if "kv_last_global_k" in data and "kv_last_global_v" in data:
+        res["verifier_kv_last_global"] = torch.stack(
+            [data["kv_last_global_k"], data["kv_last_global_v"]], dim=1
+        )
+    return res
 
 
 def _has_multimodal_content(messages: list[dict]) -> bool:
@@ -172,6 +185,8 @@ class BaseDataset(Dataset):
         #  "hidden_states": [seq_len, 3 * hidden_size],
         #  "input_ids": [seq_len],
         #  "verifier_last_hidden_states": [seq_len, hidden_size],
+        #  "verifier_kv_last_local": [seq_len, ...],
+        #  "verifier_kv_last_global": [seq_len, ...],
         #  "loss_mask": [seq_len],
         # }
 
@@ -187,6 +202,8 @@ class BaseDataset(Dataset):
         #     "hidden_states": [seq_len, 3 * hidden_size],
         #     "input_ids": [seq_len],
         #     "verifier_last_hidden_states": [seq_len, hidden_size],
+        #     "verifier_kv_last_local": [seq_len, ...],
+        #     "verifier_kv_last_global": [seq_len, ...],
         #     "loss_mask": [seq_len],
         #     "lengths": [1],
         #     "position_ids": [seq_len],
@@ -343,7 +360,7 @@ class ArrowDataset(BaseDataset):
             )
             return None
 
-        return {
+        res = {
             "hidden_states": loaded_hs["hidden_states"][:, :-1].flatten(
                 1
             ),  # [seq_len, 3 * hidden_size]
@@ -353,6 +370,15 @@ class ArrowDataset(BaseDataset):
             ],  # [seq_len, hidden_size]
             "loss_mask": self.data[index]["loss_mask"],  # [seq_len]
         }
+        if "kv_last_local_k" in loaded_hs and "kv_last_local_v" in loaded_hs:
+            res["verifier_kv_last_local"] = torch.stack(
+                [loaded_hs["kv_last_local_k"], loaded_hs["kv_last_local_v"]], dim=1
+            )
+        if "kv_last_global_k" in loaded_hs and "kv_last_global_v" in loaded_hs:
+            res["verifier_kv_last_global"] = torch.stack(
+                [loaded_hs["kv_last_global_k"], loaded_hs["kv_last_global_v"]], dim=1
+            )
+        return res
 
 
 class SampleFileDataset(BaseDataset):
@@ -458,6 +484,7 @@ def create_collate_fn(
     num_target_layers: int = 3,
     dtype: torch.dtype = torch.bfloat16,
     preprocess: Callable[[BatchType], BatchType] | None = None,
+    kv_feature_dim: int = 0,
 ):
     def collate_fn(batch: list[BatchType | None]) -> BatchType:
         # Apply per-sample preprocessing and filter failed samples
@@ -469,25 +496,40 @@ def create_collate_fn(
             # Match the configured `dtype` so the placeholder doesn't crash
             # downstream layers loaded at a different precision (e.g. bf16
             # weights vs fp32 default placeholders).
-            empty = create_empty_sample(hidden_size, num_target_layers, dtype=dtype)
+            empty = create_empty_sample(hidden_size, num_target_layers, dtype=dtype, kv_feature_dim=kv_feature_dim)
             if preprocess:
                 empty = preprocess(empty)
             batch = [empty]
 
+        all_keys = set()
+        for b in batch:
+            all_keys.update(b.keys())
+
         collated_data = {}
-        for key in batch[0]:  # type: ignore[union-attr]
+        for key in all_keys:
             if key == "lengths":
-                collated_data[key] = torch.cat([b[key] for b in batch], dim=0)  # type: ignore[index]
+                collated_data[key] = torch.cat([b[key] for b in batch if key in b], dim=0)
                 continue
+            
+            # Find the first sample that actually has this key to use as a template
+            template = next(b[key] for b in batch if key in b)
+            # Apply dtype casting for hidden states and KV caches
+            buffer_dtype = dtype if ("hidden_states" in key or "verifier_kv" in key) else template.dtype
+            
             # one copy per sample: preallocated buffer, hidden states cast during write
-            first = batch[0][key]  # type: ignore[index]
-            buffer_dtype = dtype if "hidden_states" in key else first.dtype
             out = torch.zeros(
-                (max_len, *first.shape[1:]), dtype=buffer_dtype, device=first.device
+                (max_len, *template.shape[1:]), dtype=buffer_dtype, device=template.device
             )
             offset = 0
             for b in batch:
-                tensor = b[key]  # type: ignore[index]
+                if key in b:
+                    tensor = b[key]
+                else:
+                    # If this sample is missing the key, pad with zeros matching its sequence length
+                    seq_len = b["input_ids"].shape[0] if "input_ids" in b else 0
+                    dummy_shape = (seq_len,) + template.shape[1:]
+                    tensor = torch.zeros(dummy_shape, dtype=buffer_dtype, device=template.device)
+
                 num_rows = min(tensor.shape[0], max_len - offset)
                 out[offset : offset + num_rows] = tensor[:num_rows]
                 offset += num_rows
