@@ -32,13 +32,20 @@ Select your mode in any tab below and the rest of the page follows along.
 
 ## Step 0: Setup Your Environment
 
-Create two virtual environments (recommended to keep separate so dependencies don't conflict):
+This tutorial drives the pipeline through the scripts in the repository (`scripts/prepare_data.py`, `scripts/train.py`, and so on). Those are not part of the published PyPI package, so start by cloning the repo -- every command below is run from its root:
+
+```bash
+git clone https://github.com/vllm-project/speculators.git
+cd speculators
+```
+
+Then create two virtual environments (recommended to keep separate so dependencies don't conflict):
 
 ```bash
 # Speculators venv (for data prep and training)
 uv venv speculators_venv
 source speculators_venv/bin/activate
-uv pip install "speculators>=0.6.0"
+uv pip install -e .
 ```
 
 ```bash
