@@ -4,6 +4,7 @@ nav:
           - user_guide/index.md
           - Getting Started: user_guide/getting_started.md
           - Features: user_guide/features.md
+          - Loss Functions: user_guide/loss_functions.md
           - Algorithms:
                 - user_guide/algorithms/index.md
                 - Eagle3: user_guide/algorithms/eagle3.md
