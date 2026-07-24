@@ -348,6 +348,61 @@ class _FastSkipBatchSampler:
         yield from self._generate_batches(self.current_epoch)
 
 
+class _ReplayLoader:
+    """Empty loader with a known epoch length and no fast-skip sampler API."""
+
+    batch_sampler = object()
+
+    def __init__(self, num_steps: int):
+        self.num_steps = num_steps
+
+    def __len__(self) -> int:
+        return self.num_steps
+
+    def __iter__(self):
+        return iter(())
+
+
+def _capture_progress_kwargs(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
+    captured: dict[str, object] = {}
+
+    class _Progress:
+        def __init__(self, iterable, **kwargs) -> None:
+            captured.update(kwargs)
+            self.iterable = iterable
+
+        def __iter__(self):
+            return iter(self.iterable)
+
+    monkeypatch.setattr("speculators.train.trainer.tqdm", _Progress)
+    return captured
+
+
+def _make_progress_test_trainer(
+    loader: object,
+    tmp_path: Path,
+    resume_local_step: int,
+) -> Trainer:
+    config = TrainerConfig(
+        save_path=str(tmp_path),
+        num_epochs=1,
+        lr=1e-4,
+        resume_from_checkpoint=False,
+        checkpoint_freq=0.3,
+        log_freq=1,
+        scheduler_type="none",
+    )
+    trainer = Trainer.__new__(Trainer)
+    trainer.model = _dummy_model()
+    trainer.train_loader = loader  # type: ignore[assignment]
+    trainer.rank = 0
+    trainer.current_epoch = 0
+    trainer._resume_local_step = resume_local_step
+    trainer.global_step = resume_local_step
+    trainer.config = config
+    return trainer
+
+
 class _FastSkipMockTrainer(_MockTrainer):
     def train_epoch(self, epoch: int) -> None:
         if hasattr(self.train_loader.batch_sampler, "set_epoch"):
@@ -403,3 +458,34 @@ def test_fast_skip_sampler_slice_avoids_skipped_getitem(
         assert sampler.generated_for_epoch == 0
         assert sampler._cached_generated_batches == (0, sampler.all_batches[3:])
         assert dataset.seen_indices == list(range(3, 10))
+
+
+def test_fast_skip_progress_bar_starts_at_resume_step(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Rank-zero progress reflects already skipped mid-epoch batches."""
+    dataset = _CountingDataset(n_items=3)
+    sampler = _FastSkipBatchSampler(n_items=3)
+    loader = DataLoader(dataset, batch_sampler=sampler)
+    trainer = _make_progress_test_trainer(loader, tmp_path, resume_local_step=3)
+    captured = _capture_progress_kwargs(monkeypatch)
+
+    trainer.train_epoch(0)
+
+    assert captured == {"desc": "Epoch 0", "total": 3, "initial": 3}
+
+
+def test_replay_progress_bar_starts_at_zero(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Fallback replay must not count unskipped batches as completed."""
+    trainer = _make_progress_test_trainer(
+        _ReplayLoader(num_steps=3), tmp_path, resume_local_step=3
+    )
+    captured = _capture_progress_kwargs(monkeypatch)
+
+    trainer.train_epoch(0)
+
+    assert captured == {"desc": "Epoch 0", "total": 3, "initial": 0}

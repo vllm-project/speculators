@@ -383,39 +383,41 @@ class Trainer:
         for scheduler in self.schedulers:
             scheduler.step()
 
-    def _prepare_resume_skip(self, epoch: int) -> int:
-        """Prepare fast-skip state for mid-epoch resume and return skipped steps."""
-        skip_steps = 0
+    def _prepare_resume_skip(self, epoch: int) -> tuple[int, int]:
+        """Prepare resume state and return its local offset and fast-skip count."""
+        resume_local_step = 0
         if epoch == getattr(self, "current_epoch", epoch):
-            skip_steps = getattr(self, "_resume_local_step", 0)
+            resume_local_step = getattr(self, "_resume_local_step", 0)
             # Only skip once — clear after use.
             self._resume_local_step = 0
 
         # Fast-skip: slice the sampler's pre-generated batch list so we never
         # call __getitem__ (and thus never call vLLM) for skipped batches.
+        fast_skipped_steps = 0
         sampler = self.train_loader.batch_sampler
         has_fast_skip_api = hasattr(sampler, "_generate_batches") and hasattr(
             sampler, "_cached_generated_batches"
         )
-        if skip_steps > 0 and has_fast_skip_api:
+        if resume_local_step > 0 and has_fast_skip_api:
             all_batches = sampler._generate_batches(epoch)  # type: ignore[union-attr]  # noqa: SLF001
-            remaining = all_batches[skip_steps:]
+            remaining = all_batches[resume_local_step:]
+            fast_skipped_steps = len(all_batches) - len(remaining)
             # Temporarily override the sampler cache with the sliced list.
             sampler._cached_generated_batches = (  # type: ignore[union-attr]  # noqa: SLF001
                 epoch,
                 remaining,
             )
             root_logger.info(
-                f"Fast-skipping {skip_steps} batches via sampler slice "
+                f"Fast-skipping {fast_skipped_steps} batches via sampler slice "
                 f"(no vLLM calls for skipped batches). "
                 f"epoch={epoch}, global_step={self.global_step}."
             )
-        elif skip_steps > 0:
+        elif resume_local_step > 0:
             root_logger.warning(
                 "Sampler lacks fast-skip API; resume will replay "
-                f"{skip_steps} batches from the start of the epoch."
+                f"{resume_local_step} batches from the start of the epoch."
             )
-        return skip_steps
+        return resume_local_step, fast_skipped_steps
 
     def train_epoch(self, epoch: int):
         self.model.train()
@@ -426,11 +428,16 @@ class Trainer:
         num_steps = len(self.train_loader)
 
         # Determine how many batches to skip for mid-epoch resume.
-        skip_steps = self._prepare_resume_skip(epoch)
+        resume_local_step, fast_skipped_steps = self._prepare_resume_skip(epoch)
 
         train_loader = self.train_loader
         if self.rank == 0:
-            train_loader = tqdm(train_loader, desc=f"Epoch {epoch}")  # type: ignore[assignment]
+            train_loader = tqdm(  # type: ignore[assignment]
+                train_loader,
+                desc=f"Epoch {epoch}",
+                total=num_steps,
+                initial=fast_skipped_steps,
+            )
 
         step_interval = (
             max(1, round(num_steps * self.config.checkpoint_freq))
@@ -441,7 +448,7 @@ class Trainer:
         timer = _StepTimer()
         for local_step_rel, batch in enumerate(train_loader, 1):
             # local_step is 1-based index into the *full* epoch (not the slice).
-            local_step = local_step_rel + skip_steps
+            local_step = local_step_rel + resume_local_step
             timer.reset(self.global_step % self.config.log_freq == 0)
 
             timer.mark_value("start", t_before_fetch)
