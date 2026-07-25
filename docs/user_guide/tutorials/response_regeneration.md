@@ -86,21 +86,19 @@ The output is a JSONL file with one pre-tokenized row per target generation. `lo
   "primary_id": "conv-abc",
   "input_ids": [151644, 872, ...],
   "loss_mask": [0, 0, ..., 1, 1],
-  "conversations": [
-    {"role": "user", "content": "What is the capital of France?"},
-    {"role": "assistant", "content": "The capital of France is Paris."}
-  ],
+  "text": "<|im_start|>user\nWhat is the capital of France?<|im_end|>\n<|im_start|>assistant\nThe capital of France is Paris.<|im_end|>",
   "metadata": {
     "idx": 0,
     "finish_reason": "stop",
     "is_tool_call": false,
     "usage": {...},
-    "endpoint": "http://127.0.0.1:8000/v1/chat/completions"
+    "endpoint": "http://127.0.0.1:8000/v1/chat/completions",
+    "sampling_params": {...}
   }
 }
 ```
 
-Each assistant turn produces at least one row — and more when the target calls a tool, since every call is its own generation — so expect more lines than input conversations. `conversations` is a review-only twin of `input_ids`; training drops it.
+Each assistant turn produces at least one row — and more when the target calls a tool, since every call is its own generation — so expect more lines than input conversations. `text` is the same tokens decoded back to a string (`tokenizer.decode`, special tokens kept), so reading it tells you exactly what `input_ids` holds. Training drops it.
 
 For multi-turn datasets, later turns include the regenerated history as context. For example, the second turn of the same conversation would be:
 
@@ -110,18 +108,14 @@ For multi-turn datasets, later turns include the regenerated history as context.
   "primary_id": "conv-abc",
   "input_ids": [151644, 872, ...],
   "loss_mask": [0, 0, ..., 1, 1],
-  "conversations": [
-    {"role": "user", "content": "What is the capital of France?"},
-    {"role": "assistant", "content": "The capital of France is Paris."},
-    {"role": "user", "content": "What about Germany?"},
-    {"role": "assistant", "content": "The capital of Germany is Berlin."}
-  ],
+  "text": "<|im_start|>user\nWhat is the capital of France?<|im_end|>\n<|im_start|>assistant\nThe capital of France is Paris.<|im_end|>\n<|im_start|>user\nWhat about Germany?<|im_end|>\n<|im_start|>assistant\nThe capital of Germany is Berlin.<|im_end|>",
   "metadata": {
     "idx": 0,
     "finish_reason": "stop",
     "is_tool_call": false,
     "usage": {...},
-    "endpoint": "http://127.0.0.1:8000/v1/chat/completions"
+    "endpoint": "http://127.0.0.1:8000/v1/chat/completions",
+    "sampling_params": {...}
   }
 }
 ```
