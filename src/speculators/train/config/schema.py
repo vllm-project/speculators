@@ -112,9 +112,10 @@ class DraftArgs(_Group):
     )
     target_layer_ids: list[int] | None = Field(
         default=None,
-        description="(Optional) space-separated list of integer layer ids. Defaults to "
-        "[2, n//2, n-3, n]. Must be set explicitly if custom values were used to "
-        "launch vllm.",
+        description="(Optional) space-separated list of integer layer ids for the "
+        "auxiliary hidden states. Defaults to [2, n//2, n-3]. If custom values were "
+        "used to launch vllm, pass the same ids here, excluding the final layer "
+        "launch_vllm.py appends.",
     )
     token_freq_path: str | None = Field(
         default=None,
