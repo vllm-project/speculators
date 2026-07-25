@@ -32,7 +32,7 @@ Wave 1, in parallel:
 
 - `gh pr view <target> --json number,title,body,state,isDraft,author,baseRefName,headRefOid,headRepositoryOwner,isCrossRepository,additions,deletions,files,labels,url,reviews,comments,closingIssuesReferences` — `reviews` carries review verdicts and summaries, `comments` the top-level thread, so neither needs its own API call.
 - `gh pr diff <target>`
-- Inline line comments — the most substantive feedback, and the only piece `gh pr view` cannot return: `gh api --paginate repos/{owner}/{repo}/pulls/{number}/comments --jq '[.[]|{user:.user.login,path,line,body}]'`. `--paginate` is load-bearing: the endpoint caps at 30 per page and reports no error, silently dropping the tail of a heavily-reviewed PR. It emits one array per page (`--slurp` cannot combine with `--jq`).
+- Inline line comments — the most substantive feedback, and the only piece `gh pr view` cannot return: `gh api --paginate repos/{owner}/{repo}/pulls/{number}/comments --jq '[.[]|{id,reply_to:.in_reply_to_id,user:.user.login,path,line,commit:.commit_id,at:.created_at,body}]'`. `--paginate` is load-bearing: the endpoint caps at 30 per page and reports no error, silently dropping the tail of a heavily-reviewed PR. It emits one array per page (`--slurp` cannot combine with `--jq`). Keep `reply_to`/`id` — they are what pair a response to the concern it answers; `commit` tells you whether a comment still applies to the current head.
 
 Wave 2, only if wave 1 found linked issues — for each entry in `closingIssuesReferences`, `gh issue view <n> --repo <its repo> --json number,title,body` for motivation.
 
@@ -52,7 +52,7 @@ The diff already carries the changed hunks at head-revision line numbers. Read a
 - Identify the subsystem(s) the diff touches. For each meaningful file, read enough around it (module `__init__`, nearby `README`/docs, docstrings, the definitions the diff calls into) to explain what that area does and how the change fits.
 - Trace the key code path the change adds or alters. Establish before-vs-after behavior.
 - Separate load-bearing changes from mechanical ones (renames, formatting, generated files).
-- Distill the review arc per the *Review → response → fix* spec in step 4. Drop reactions, nits, and resolved-without-change chatter.
+- Distill the review arc per the *Review → response → fix* spec in step 4. Pair each concern with its answer via `reply_to`/`id` rather than guessing from a shared file and line, and check `commit` before reporting something as unaddressed — it may predate a revision that fixed it. Drop reactions, nits, and resolved-without-change chatter.
 
 ### 3b. External references (only when the PR names one)
 
