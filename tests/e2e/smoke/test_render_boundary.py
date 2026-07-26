@@ -16,7 +16,7 @@ import pytest
 from datasets import Dataset as HFDataset
 from transformers import AutoTokenizer
 
-from speculators.data_generation.preprocessing import build_eagle3_dataset
+from speculators.data_generation.preprocessing import build_speculator_training_dataset
 from tests.conftest import requires_cuda
 from tests.e2e.utils import launch_vllm_server_context
 
@@ -49,7 +49,7 @@ def test_render_boundary_masks_against_live_vllm(tmp_path):
         max_model_len=1024,
         gpu_memory_utilization=0.25,
     ):
-        dataset = build_eagle3_dataset(
+        dataset = build_speculator_training_dataset(
             HFDataset.from_dict({"conversations": [CONVERSATION]}),
             tokenizer,
             max_length=1024,
