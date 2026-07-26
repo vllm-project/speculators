@@ -45,7 +45,7 @@ python scripts/prepare_data.py \
 
 - **`--token-freq-path`** (str, default: `{output}/token_freq.pt`) Path to save token frequency distribution. Defaults to `token_freq.pt` in the output directory.
 
-- **`--render-endpoint`** (str, default: `None`) Base URL of a running vLLM server (e.g. `http://localhost:8000`), typically the same instance used for hidden-state extraction. Conversations are tokenized by its `/v1/chat/completions/render` endpoint and the loss mask is derived from the render boundary. Required unless the input is already pre-tokenized.
+- **`--render-endpoint`** (str, default: `None`) Base URL of a running vLLM server (e.g. `http://localhost:8000`). The instance launched for hidden-state extraction ([launch_vllm.py](launch_vllm.md)) serves this too, so no second server is needed. Pass the base URL only: `/v1/chat/completions/render` is appended to it, so the `/v1`-suffixed form that [data_generation_offline.py](data_generation_offline.md) `--endpoint` takes will 404. Conversations are tokenized by that endpoint and the loss mask is derived from the render boundary. Required unless the input is already pre-tokenized.
 
 - **`--minimum-valid-tokens`** (int, default: `None`) Drop samples whose loss mask contains fewer than this many trainable tokens.
 
