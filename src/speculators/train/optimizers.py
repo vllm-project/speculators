@@ -16,7 +16,7 @@ import logging
 
 import torch
 from torch import Tensor
-from torch.nn import Module
+from torch.nn import Embedding, Module
 
 logger = logging.getLogger("speculators")
 
@@ -35,13 +35,24 @@ def split_named_params_for_muon(
     """Split a model's trainable parameters into Muon and AdamW groups.
 
     A parameter goes to Muon iff it requires gradients, is a 2D matrix with both
-    dimensions > 1, and is not an embedding or LM-head weight; everything else goes to
-    AdamW. Degenerate 2D weights (``[1, N]`` / ``[N, 1]`` vectors) route to AdamW --
-    Muon orthogonalizes matrices, not vectors, and crashes on them under FSDP2.
+    dimensions > 1, is not owned by an ``nn.Embedding``, and is not an LM-head weight;
+    everything else goes to AdamW. Degenerate 2D weights (``[1, N]`` / ``[N, 1]``
+    vectors) route to AdamW -- Muon orthogonalizes matrices, not vectors, and crashes
+    on them under FSDP2.
 
     :param model: The model whose parameters should be partitioned.
     :return: A ``(muon_params, adamw_params)`` tuple of named parameter lists.
     """
+    # Matched on the module, not the name: an embedding is a lookup table indexed by
+    # token id, so orthogonalizing it is meaningless whatever it happens to be called.
+    # DSpark's Markov head owns one (`markov_w1`) that no name hint would catch.
+    embedding_param_ids = {
+        id(param)
+        for module in model.modules()
+        if isinstance(module, Embedding)
+        for param in module.parameters(recurse=False)
+    }
+
     muon_params: list[tuple[str, Tensor]] = []
     adamw_params: list[tuple[str, Tensor]] = []
     for name, param in model.named_parameters():
@@ -50,6 +61,7 @@ def split_named_params_for_muon(
         if (
             param.ndim == _MATRIX_NDIM
             and min(param.shape) > 1  # exclude degenerate [1, N] / [N, 1] vectors
+            and id(param) not in embedding_param_ids
             and not any(hint in name for hint in _ADAMW_NAME_HINTS)
         ):
             muon_params.append((name, param))
