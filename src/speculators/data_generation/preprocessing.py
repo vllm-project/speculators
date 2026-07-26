@@ -20,7 +20,7 @@ from speculators.data_generation.torch_utils import set_default_torch_num_thread
 from speculators.train.vocab_mapping import save_token_frequency_distribution
 
 __all__ = [
-    "build_eagle3_dataset",
+    "build_speculator_training_dataset",
     "load_and_preprocess_dataset",
     "load_raw_dataset",
 ]
@@ -478,7 +478,7 @@ def _preprocess_batch(
     return results
 
 
-def build_eagle3_dataset(
+def build_speculator_training_dataset(
     dataset: HFDataset,
     processor: ProcessorLike,
     max_length: int = 2048,
@@ -487,7 +487,7 @@ def build_eagle3_dataset(
     render_endpoint: str | None = None,
     minimum_valid_tokens: int | None = None,
 ) -> HFDataset:
-    """Build an EAGLE3 dataset with render-boundary loss masks.
+    """Build a speculator training dataset with render-boundary loss masks.
 
     Off-policy conversations are tokenized by the vLLM ``/render`` endpoint and
     masked at the render boundary of each assistant turn (see
@@ -692,7 +692,7 @@ def load_and_preprocess_dataset(
     allow_empty_output: bool = False,
     trust_remote_code: bool = False,
 ) -> tuple[HFDataset, ProcessorLike]:
-    """Load, tokenize, and preprocess a dataset for EAGLE3 training.
+    """Load, tokenize, and preprocess a dataset for speculator training.
 
     Off-policy conversations are tokenized by a vLLM ``/render`` endpoint and
     masked at the render boundary; pre-tokenized rows pass straight through.
@@ -753,7 +753,7 @@ def load_and_preprocess_dataset(
 
         log.info(f"Loaded {len(raw_dataset)} samples")
 
-        preprocessed_dataset = build_eagle3_dataset(
+        preprocessed_dataset = build_speculator_training_dataset(
             dataset=raw_dataset,
             processor=processor,
             max_length=seq_length,
