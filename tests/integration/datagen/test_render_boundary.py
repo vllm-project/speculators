@@ -8,13 +8,21 @@ guard (needs a template that rewrites history), and the client's error paths.
 """
 
 import time
+from typing import cast
 
 import pytest
 from datasets import Dataset as HFDataset
 
 from speculators.data_generation import preprocessing, render_client
-from speculators.data_generation.preprocessing import build_speculator_training_dataset
+from speculators.data_generation.preprocessing import (
+    ProcessorLike,
+    build_speculator_training_dataset,
+)
 from speculators.data_generation.vllm_client import InvalidResponseError
+
+# Neither build path below reads the processor: the missing-endpoint guard
+# raises before it is used, and pre-tokenized rows skip preprocessing entirely.
+NO_PROCESSOR = cast("ProcessorLike", None)
 
 
 def _conv(n: int) -> list[dict]:
@@ -180,7 +188,9 @@ def test_build_speculator_training_dataset_requires_render_endpoint():
         ]
     }
     with pytest.raises(ValueError, match="render_endpoint is required"):
-        build_speculator_training_dataset(HFDataset.from_dict(data), None, num_proc=1)
+        build_speculator_training_dataset(
+            HFDataset.from_dict(data), NO_PROCESSOR, num_proc=1
+        )
 
 
 def test_pretokenized_dataset_skips_render():
@@ -188,5 +198,7 @@ def test_pretokenized_dataset_skips_render():
     # render endpoint. Passthrough content (ids/mask) is covered by the regen
     # tests in test_response_regeneration.py.
     data = {"input_ids": [[1, 2, 3, 4]], "loss_mask": [[0, 0, 1, 1]]}
-    ds = build_speculator_training_dataset(HFDataset.from_dict(data), None, num_proc=1)
+    ds = build_speculator_training_dataset(
+        HFDataset.from_dict(data), NO_PROCESSOR, num_proc=1
+    )
     assert len(ds) == 1
