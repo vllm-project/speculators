@@ -55,6 +55,12 @@ class DSparkDraftModel(DFlashDraftModel):
             )
             self.confidence_head = ConfidenceHead(input_dim)
 
+        # These heads are attached after DFlash's __init__ has already run the weight
+        # init sweep, so without a second pass they keep raw torch defaults -- N(0, 1)
+        # for the Markov embedding. Modules the first pass covered are flagged and
+        # skipped, as are the NaN-filled verifier heads.
+        self.post_init()
+
     @classmethod
     def from_training_args(
         cls,

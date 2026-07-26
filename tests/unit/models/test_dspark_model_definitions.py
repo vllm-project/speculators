@@ -2,8 +2,13 @@
 
 import pytest
 import torch
+from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
+from speculators import SpeculatorsConfig, VerifierConfig
+from speculators.models.dspark import DSparkSpeculatorConfig
+from speculators.models.dspark.core import DSparkDraftModel
 from speculators.models.dspark.model_definitions import ConfidenceHead, MarkovHead
+from speculators.proposals.greedy import GreedyTokenProposalConfig
 
 
 class TestMarkovHead:
@@ -73,3 +78,48 @@ class TestConfidenceHead:
         out = head(features)
         assert out.shape == (3, 4)
         assert torch.isfinite(out).all()
+
+
+def test_markov_head_is_covered_by_the_weight_init_sweep():
+    # The heads are attached after DFlash's __init__ has run the init sweep, so
+    # without a second pass the Markov embedding keeps nn.Embedding's N(0, 1)
+    # default -- ~50x the initializer_range every other draft matrix gets, landing
+    # as a large random bias directly on the draft logits.
+    transformer_config = Qwen3Config(
+        vocab_size=2048,
+        hidden_size=64,
+        intermediate_size=256,
+        num_hidden_layers=1,
+        num_attention_heads=4,
+        num_key_value_heads=4,
+        head_dim=16,
+        max_position_embeddings=128,
+        rms_norm_eps=1e-6,
+        tie_word_embeddings=False,
+    )
+    model = DSparkDraftModel(
+        DSparkSpeculatorConfig(
+            transformer_layer_config=transformer_config,
+            draft_vocab_size=512,
+            block_size=4,
+            aux_hidden_state_layer_ids=[0, 1, 2],
+            mask_token_id=0,
+            markov_rank=16,
+            markov_head_type="vanilla",
+            speculators_config=SpeculatorsConfig(
+                algorithm="dspark",
+                proposal_methods=[GreedyTokenProposalConfig(speculative_tokens=3)],
+                default_proposal_method="greedy",
+                verifier=VerifierConfig(
+                    name_or_path=None, architectures=["Qwen3ForCausalLM"]
+                ),
+            ),
+        )
+    )
+
+    # `fc` is a matrix the first sweep certainly covered; compare against it rather
+    # than hardcoding initializer_range.
+    reference = model.fc.weight.std().item()
+    assert model.markov_head.markov_w1.weight.std().item() == pytest.approx(
+        reference, rel=0.3
+    )
