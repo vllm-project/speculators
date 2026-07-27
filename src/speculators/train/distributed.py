@@ -155,14 +155,14 @@ def maybe_setup_distributed(sp_size: int = 1) -> None:
     """
     global _local_rank, _rank, _is_distributed, _world_size  # noqa: PLW0603
 
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
     distributed = "LOCAL_RANK" in os.environ
+
+    _local_rank = local_rank
     _is_distributed = distributed
 
     if not distributed:
         return
-
-    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
-    _local_rank = local_rank
 
     torch.accelerator.set_device_index(local_rank)
     acc = torch.accelerator.current_accelerator()
@@ -253,12 +253,20 @@ def register_sp_gradient_hooks(model: torch.nn.Module) -> list:
     if _sp_size <= 1 or _sp_group is None:
         return []
 
+    from torch.distributed.tensor import DTensor  # noqa: PLC0415
+
     sp_group = _sp_group
+
+    def _sp_all_reduce(p: torch.nn.Parameter, _group: ProcessGroup = sp_group) -> None:
+        grad = p.grad
+        if isinstance(grad, DTensor):
+            dist.all_reduce(grad._local_tensor, group=_group)  # noqa: SLF001
+        else:
+            dist.all_reduce(grad, group=_group)
+
     hooks = []
     for param in model.parameters():
         if param.requires_grad:
-            hook = param.register_post_accumulate_grad_hook(
-                lambda p, _group=sp_group: dist.all_reduce(p.grad, group=_group)
-            )
+            hook = param.register_post_accumulate_grad_hook(_sp_all_reduce)
             hooks.append(hook)
     return hooks

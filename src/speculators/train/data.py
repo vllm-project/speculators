@@ -136,12 +136,16 @@ def build_client_item(dataset_item: dict) -> ClientItem:
     Text-only EAGLE-3 models (e.g. Llama) use a plain tokenizer, so
     ``messages`` is never created and this guard is a no-op.
     """
-    out_dict: dict = {"input_ids": dataset_item["input_ids"].tolist()}
+    ids = dataset_item["input_ids"].tolist()
 
     if "messages" in dataset_item and _has_multimodal_content(dataset_item["messages"]):
-        out_dict["messages"] = dataset_item["messages"]
+        return cast("ClientItem", {"input_ids": ids, "messages": dataset_item["messages"]})
 
-    return cast("ClientItem", out_dict)
+    # Text-only / Completions API path: drop the last token so that
+    # len(prompt) + max_tokens(=1) <= max_model_len even when the sample
+    # fills the full context window.  The hidden state at the final
+    # position is never used for loss (no next-token target).
+    return cast("ClientItem", {"input_ids": ids[:-1]})
 
 
 class BaseDataset(Dataset):
@@ -293,7 +297,7 @@ class ArrowDataset(BaseDataset):
             if loaded_hs is None:
                 raise ValueError(f"Failed to load hidden states for handle {handle}")
 
-            check_hidden_states(loaded_hs, dataset_item["input_ids"].tolist())
+            check_hidden_states(loaded_hs, client_item["input_ids"])
 
             file_idx = self._map_to_file_idx(index)
             match self.on_generate:
@@ -341,23 +345,28 @@ class ArrowDataset(BaseDataset):
         #   "token_ids": [seq_len]
         # }
 
-        if not torch.equal(loaded_hs["token_ids"], self.data[index]["input_ids"]):
+        cached_ids = loaded_hs["token_ids"]
+        full_ids = self.data[index]["input_ids"]
+        # Cached hidden states may cover N-1 tokens (last token trimmed
+        # before sending to vLLM); accept any valid prefix of the full ids.
+        if not torch.equal(cached_ids, full_ids[: len(cached_ids)]):
             warnings.warn(
-                f"Loaded token ids {loaded_hs['token_ids']} for index {index} don't"
-                f"match input ids {self.data[index]['input_ids']}",
+                f"Loaded token ids {cached_ids} for index {index} don't"
+                f"match input ids {full_ids}",
                 stacklevel=1,
             )
             return None
 
+        hs_len = cached_ids.shape[0]
         return {
             "hidden_states": loaded_hs["hidden_states"][:, :-1].flatten(
                 1
-            ),  # [seq_len, 3 * hidden_size]
-            "input_ids": loaded_hs["token_ids"],  # [seq_len]
+            ),  # [hs_len, 3 * hidden_size]
+            "input_ids": cached_ids,  # [hs_len]
             "verifier_last_hidden_states": loaded_hs["hidden_states"][
                 :, -1
-            ],  # [seq_len, hidden_size]
-            "loss_mask": self.data[index]["loss_mask"],  # [seq_len]
+            ],  # [hs_len, hidden_size]
+            "loss_mask": self.data[index]["loss_mask"][:hs_len],  # [hs_len]
         }
 
 
