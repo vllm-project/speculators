@@ -19,7 +19,7 @@ import argparse
 
 import pytest
 
-from hs_connectors import HiddenStatesBackend
+from speculators._vendor.hs_connectors import HiddenStatesBackend
 from speculators.train.config.schema import CONFIG_DESTS
 
 

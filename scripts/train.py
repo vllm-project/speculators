@@ -14,7 +14,7 @@ from transformers import LlamaConfig, PretrainedConfig
 from transformers.models.auto.configuration_auto import AutoConfig
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
-from hs_connectors import HiddenStatesBackend
+from speculators._vendor.hs_connectors import HiddenStatesBackend
 from speculators.model import SpeculatorModel
 from speculators.models.eagle3.data import shift_batch
 from speculators.models.eagle3.rotary_partial import install_partial_neox_rotary
