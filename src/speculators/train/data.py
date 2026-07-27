@@ -139,7 +139,9 @@ def build_client_item(dataset_item: dict) -> ClientItem:
     ids = dataset_item["input_ids"].tolist()
 
     if "messages" in dataset_item and _has_multimodal_content(dataset_item["messages"]):
-        return cast("ClientItem", {"input_ids": ids, "messages": dataset_item["messages"]})
+        return cast(
+            "ClientItem", {"input_ids": ids, "messages": dataset_item["messages"]}
+        )
 
     # Text-only / Completions API path: drop the last token so that
     # len(prompt) + max_tokens(=1) <= max_model_len even when the sample
