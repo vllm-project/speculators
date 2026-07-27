@@ -158,6 +158,7 @@ class PEagleDraftModel(Eagle3DraftModel):
             hidden_states.dtype
         )  # [1, total_sampled, hidden_size]
 
+        # Build sampled hidden states: real for depth 0, mask_hidden for others
         mask_hidden = self.mask_hidden.to(device=device, dtype=hidden_states.dtype)
         sampled_hidden = torch.where(
             is_depth_0.unsqueeze(-1),
