@@ -208,7 +208,8 @@ class ArrowDataset(BaseDataset):
         vllm_endpoint: str = "http://localhost:8000/v1",
         on_missing: Literal["generate", "skip", "warn", "raise"] = "generate",
         on_generate: Literal["cache", "delete"] = "delete",
-        split_ratio: float = 1.0,
+        train_ratio: float = 1.0,
+        split: Literal["train", "val"] = "train",
         transform: TransformTensors | None = None,
         hidden_states_dtype=torch.bfloat16,
         model: str | None = None,
@@ -216,19 +217,24 @@ class ArrowDataset(BaseDataset):
         max_retries: int = DEFAULT_MAX_RETRIES,
     ):
         self.data = load_from_disk(datapath)
-        self.start_file_idx = 0
-        if split_ratio == 1.0:
-            pass
-        elif 1.0 > split_ratio > 0:
-            self.start_file_idx = 0
-            split_idx = int(len(self.data) * split_ratio)
-            self.data = self.data.select(range(split_idx))
-        elif -1.0 < split_ratio < 0:
-            split_idx = int(len(self.data) * (1.0 + split_ratio))
-            self.start_file_idx = split_idx
-            self.data = self.data.select(range(split_idx, len(self.data)))
-        else:
-            raise ValueError("split_ratio must be in range (-1.0, 1.0] excluding 0.0.")
+        if not 0.0 < train_ratio <= 1.0:
+            raise ValueError(f"train_ratio must be in (0.0, 1.0], got {train_ratio}")
+        if split == "val" and train_ratio == 1.0:
+            raise ValueError("train_ratio=1.0 leaves no validation split")
+
+        # Both splits derive their boundary from this one expression,
+        # so they are exactly complementary.
+        split_idx = int(len(self.data) * train_ratio)
+        start, stop = (
+            (0, split_idx) if split == "train" else (split_idx, len(self.data))
+        )
+        if start >= stop:
+            raise ValueError(
+                f"{split} split is empty (dataset has {len(self.data)} rows, "
+                f"train_ratio={train_ratio} gives split_idx={split_idx})"
+            )
+        self.start_file_idx = start
+        self.data = self.data.select(range(start, stop))
 
         self.transfer = transfer or FileTransfer(Path(datapath) / "hidden_states")
         self.vllm_endpoint = vllm_endpoint
