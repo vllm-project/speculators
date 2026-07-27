@@ -116,23 +116,26 @@ def split_batch_for_sp(
 
     out: dict[str, torch.Tensor] = {}
     full_seq_len: int | None = None
+    device: torch.device | None = None
 
     for key, tensor in batch.items():
         if key in _SPLIT_KEYS and tensor.dim() >= _MIN_SPLIT_NDIM:
             seq_len = tensor.shape[1]
             if full_seq_len is None:
                 full_seq_len = seq_len
+                device = tensor.device
             chunks = tensor.chunk(sp_size, dim=1)
             out[key] = chunks[sp_rank].contiguous()
         elif key in _KEEP_FULL_KEYS:
             if full_seq_len is None and tensor.dim() >= _MIN_SPLIT_NDIM:
                 full_seq_len = tensor.shape[1]
+                device = tensor.device
             out[key] = tensor
         else:
             out[key] = tensor
 
     if full_seq_len is not None:
-        out["full_seq_len"] = torch.tensor(full_seq_len, device=tensor.device)
+        out["full_seq_len"] = torch.tensor(full_seq_len, device=device)
 
     return out
 

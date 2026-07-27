@@ -527,6 +527,11 @@ def main(cfg: TrainConfig):  # noqa: C901
     maybe_setup_distributed(sp_size=args.sp_size)
 
     if args.sp_size > 1:
+        if not is_distributed():
+            raise ValueError(
+                "--sp-size > 1 requires launching with torchrun/distributed "
+                "training; otherwise sequence parallelism has no effect."
+            )
         if args.total_seq_len % args.sp_size != 0:
             raise ValueError(
                 f"--total-seq-len ({args.total_seq_len}) must be divisible "
