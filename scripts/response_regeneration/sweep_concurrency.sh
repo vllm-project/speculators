@@ -12,9 +12,9 @@
 #   # Sweep, then run full regeneration with the best concurrency
 #   ./sweep_concurrency.sh --model google/gemma-4-31B-it --dataset ultrachat --run --resume
 #
-#   # Custom endpoint and concurrency set
+#   # Custom endpoint, duration, and concurrency set
 #   ./sweep_concurrency.sh --endpoint http://host:8000/v1/chat/completions \
-#       --model MODEL --dataset tulu3 --concurrencies "64 256 1024 4096"
+#       --model MODEL --dataset tulu3 --duration 90 --concurrencies "64 256 1024 4096"
 #
 
 set -e
@@ -24,7 +24,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # ── Sweep defaults ──────────────────────────────────────────────────
 ENDPOINT="http://127.0.0.1:8000/v1/chat/completions"
 CONCURRENCIES=(64 128 256 512 1024 2048)
-SAMPLES_PER_TRIAL=100
+DURATION=60
 WARMUP_SAMPLES=20
 RUN_AFTER=false
 
@@ -42,8 +42,8 @@ while [[ $# -gt 0 ]]; do
             IFS=' ,' read -ra CONCURRENCIES <<< "$2"
             shift 2
             ;;
-        --samples-per-trial)
-            SAMPLES_PER_TRIAL="$2"
+        --duration)
+            DURATION="$2"
             shift 2
             ;;
         --warmup-samples)
@@ -55,7 +55,6 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --concurrency)
-            # Silently drop: the whole point is to sweep this value.
             echo "Note: --concurrency ignored during sweep (use --concurrencies)"
             shift 2
             ;;
@@ -83,6 +82,25 @@ echo ""
 SWEEP_TMPDIR=$(mktemp -d)
 trap 'rm -rf "$SWEEP_TMPDIR"' EXIT
 
+# ── Helper: count conversations and total completion tokens ─────────
+# Prints two space-separated values: conversation_count  token_count
+count_output() {
+    python3 -c "
+import json, sys
+seen = set()
+tokens = 0
+with open(sys.argv[1]) as f:
+    for line in f:
+        try:
+            d = json.loads(line)
+            seen.add(d.get('primary_id') or d.get('id'))
+            tokens += d.get('metadata', {}).get('usage', {}).get('completion_tokens', 0)
+        except (json.JSONDecodeError, KeyError):
+            pass
+print(len(seen), tokens)
+" "$1" 2>/dev/null || echo "0 0"
+}
+
 # ── Warmup ──────────────────────────────────────────────────────────
 echo "Warming up ($WARMUP_SAMPLES samples at concurrency 64)..."
 echo ""
@@ -103,42 +121,39 @@ echo ""
 SHUFFLED=($(printf '%s\n' "${CONCURRENCIES[@]}" | shuf))
 
 declare -A RESULTS_CONVS
-declare -A RESULTS_ELAPSED
+declare -A RESULTS_TOKENS
 declare -A RESULTS_RATE
 
 echo "Sweeping concurrencies: ${CONCURRENCIES[*]}"
-echo "Samples per trial: $SAMPLES_PER_TRIAL"
+echo "Duration per trial: ${DURATION}s"
 echo ""
 
 for C in "${SHUFFLED[@]}"; do
     OUTFILE="$SWEEP_TMPDIR/sweep_${C}.jsonl"
-    echo "── Trial: concurrency=$C ──"
+    touch "$OUTFILE"
+    echo "── Trial: concurrency=$C (${DURATION}s) ──"
 
-    START_NS=$(date +%s%N)
-    python "$SCRIPT_DIR/script.py" \
-        "${PYTHON_ARGS[@]}" \
-        --endpoint "$ENDPOINT" \
-        --concurrency "$C" \
-        --limit "$SAMPLES_PER_TRIAL" \
-        --outfile "$OUTFILE" \
-        2>&1 | tee "$SWEEP_TMPDIR/sweep_${C}.log"
-    END_NS=$(date +%s%N)
+    # Run for a fixed duration, then SIGINT to stop gracefully.
+    # script.py flushes after each completed conversation, so the output
+    # file contains all work that finished before the signal.
+    timeout --signal=INT "${DURATION}s" \
+        python "$SCRIPT_DIR/script.py" \
+            "${PYTHON_ARGS[@]}" \
+            --endpoint "$ENDPOINT" \
+            --concurrency "$C" \
+            --limit 999999 \
+            --outfile "$OUTFILE" \
+        || true
 
-    ELAPSED_S=$(awk "BEGIN {printf \"%.2f\", ($END_NS - $START_NS) / 1000000000}")
+    read -r CONV_COUNT TOKEN_COUNT <<< "$(count_output "$OUTFILE")"
+    TOKEN_RATE=$(awk "BEGIN {printf \"%.0f\", $TOKEN_COUNT / $DURATION}")
 
-    # script.py prints "Pipeline complete in Xs: Y conversations (Z ok, ...)"
-    OK_COUNT=$(grep -oP '\((\d+) ok' "$SWEEP_TMPDIR/sweep_${C}.log" | grep -oP '\d+' || echo "0")
-    if [ "$OK_COUNT" -eq 0 ]; then
-        OK_COUNT=$SAMPLES_PER_TRIAL
-    fi
+    RESULTS_CONVS[$C]=$CONV_COUNT
+    RESULTS_TOKENS[$C]=$TOKEN_COUNT
+    RESULTS_RATE[$C]=$TOKEN_RATE
 
-    RATE=$(awk "BEGIN {printf \"%.2f\", $OK_COUNT / $ELAPSED_S}")
-
-    RESULTS_CONVS[$C]=$OK_COUNT
-    RESULTS_ELAPSED[$C]=$ELAPSED_S
-    RESULTS_RATE[$C]=$RATE
-
-    echo "=> $OK_COUNT conversations in ${ELAPSED_S}s (${RATE}/s)"
+    echo ""
+    echo "=> $CONV_COUNT conversations, $TOKEN_COUNT tokens in ${DURATION}s (${TOKEN_RATE} tok/s)"
     echo ""
 done
 
@@ -157,17 +172,17 @@ done
 
 # ── Results table ───────────────────────────────────────────────────
 echo "==========================================="
-echo "Concurrency Sweep Results"
+echo "Concurrency Sweep Results (${DURATION}s per trial)"
 echo "==========================================="
-printf "%-15s %-15s %-10s\n" "Concurrency" "Conversations" "Conv/sec"
-printf "%-15s %-15s %-10s\n" "-----------" "-------------" "--------"
+printf "%-15s %-15s %-12s %-10s\n" "Concurrency" "Conversations" "Tokens" "Tok/sec"
+printf "%-15s %-15s %-12s %-10s\n" "-----------" "-------------" "------" "-------"
 for C in "${CONCURRENCIES[@]}"; do
     MARKER=""
     [ "$C" = "$BEST_C" ] && MARKER="  <-- best"
-    printf "%-15s %-15s %-10s%s\n" "$C" "${RESULTS_CONVS[$C]}" "${RESULTS_RATE[$C]}" "$MARKER"
+    printf "%-15s %-15s %-12s %-10s%s\n" "$C" "${RESULTS_CONVS[$C]}" "${RESULTS_TOKENS[$C]}" "${RESULTS_RATE[$C]}" "$MARKER"
 done
 echo ""
-echo "Optimal concurrency: $BEST_C ($BEST_RATE conv/s)"
+echo "Optimal concurrency: $BEST_C (${BEST_RATE} tok/s)"
 echo ""
 
 # ── Optional: chain into full regeneration ──────────────────────────
