@@ -80,7 +80,7 @@ class PEagleDraftModel(Eagle3DraftModel):
                 [1, seq_len]
             verifier_last_hidden_states: Verifier final hidden states for
                 targets [1, seq_len, hidden_size]
-        
+
         Returns:
             Tuple of (draft_tokens, loss, metrics)
         """
