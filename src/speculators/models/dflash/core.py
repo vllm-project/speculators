@@ -401,12 +401,14 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             self.mask_token_id,
             dtype=torch.long,
             device=device,
-        )
+        )  # shape: [1, num_anchors*block_size]
         mask_token_ids[:, :: self.block_size] = input_ids[:, anchor_positions]
         noise_embedding = self.embed_tokens(mask_token_ids)
+        # shape: [1, num_anchors*block_size, hidden_size]
 
         fc_output = self.fc(hidden_states[:, sp_start : sp_start + local_seq_len])
         fc_output = self.hidden_norm(fc_output)
+        # shape: [1, local_seq_len, hidden_size]
 
         mask_position_ids = get_base_indices_for_anchored_blocks(
             position_ids[0, anchor_positions], self.block_size
@@ -418,7 +420,10 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             ],
             dim=1,
         )
+        # shape: [1, total_seq_len + num_anchors*block_size]
 
+        # the hidden_states shape doesn't match position_ids but doesn't need
+        # to, as hidden_states is only used to set dtype and device in rotary_emb
         position_embeddings = self.rotary_emb(
             hidden_states[:, sp_start : sp_start + local_seq_len],
             local_position_ids,
@@ -426,7 +431,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
 
         anchored_block_indices = get_base_indices_for_anchored_blocks(
             anchor_positions, self.block_size
-        )
+        )  # shape: [num_anchors*block_size]
 
         with torch.no_grad():
             verifier_logits = self.verifier_lm_head(
@@ -451,15 +456,19 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
 
         hidden = self.norm(noise_embedding)
         logits = self.lm_head(hidden)
+        # shape: [1, num_anchors*block_size, vocab_size]
 
         aligned_loss_mask = loss_mask.clone()[:, anchored_block_indices]
+        # shape: [1, num_anchors*block_size]
 
+        # zero out any padded anchor blocks
         aligned_loss_mask = aligned_loss_mask * (
             anchor_valid.repeat_interleave(self.block_size)
             .unsqueeze(0)
             .to(aligned_loss_mask.dtype)
-        )
+        )  # shape: [1, num_anchors*block_size]
 
+        # For sample_from_anchor=False, mask slot 0 (anchor) since it's not trained
         if not self.config.sample_from_anchor:
             aligned_loss_mask[:, :: self.block_size] = 0
 
@@ -502,5 +511,4 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             dpace_alpha=dpace_alpha,
             sample_from_anchor=self.config.sample_from_anchor,
         )
-
         return None, loss, metrics
