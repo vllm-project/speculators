@@ -544,9 +544,10 @@ def main(cfg: TrainConfig):  # noqa: C901
                 f"got --speculator-type={args.speculator_type}"
             )
         if not args.fsdp_shard:
-            raise ValueError(
-                "--sp-size > 1 requires --fsdp-shard; DDP gradient sync does "
-                "not correctly separate the SP sum from the DP average."
+            logger.warning(
+                "--sp-size > 1 without --fsdp-shard uses DDP, which is "
+                "supported but less memory-efficient for long-context SP "
+                "training. Consider adding --fsdp-shard."
             )
         if args.speculator_type == "dflash" and args.max_anchors % args.sp_size != 0:
             raise ValueError(

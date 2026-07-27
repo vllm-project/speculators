@@ -28,6 +28,7 @@ from speculators.train.checkpointer import (
 )
 from speculators.train.distributed import (
     apply_fully_sharded,
+    get_dp_group,
     get_local_rank,
     get_rank,
     get_sp_rank,
@@ -337,8 +338,12 @@ class Trainer:
                 dist.broadcast(param.data, src=0)
             dist.barrier()
 
-        # DDP constructor broadcasts rank 0's params to all ranks
-        self.model = DistributedDataParallel(self.model)  # type: ignore[assignment]
+        self._sp_grad_hooks = register_sp_gradient_hooks(self.model)
+
+        # Scope DDP to the DP sub-group so its all-reduce averages across DP
+        # peers only; the SP gradient hooks handle the cross-SP sum separately.
+        dp_group = get_dp_group()
+        self.model = DistributedDataParallel(self.model, process_group=dp_group)  # type: ignore[assignment]
 
     def setup_optimizer(self):
         # Setup optimizer(s). The "muon" option returns two optimizers (Muon for the
