@@ -378,7 +378,7 @@ def build_detokenizer(model: str) -> Callable[[list[int]], str]:
     (the checkpoint, not a ``--served-model-name`` alias).
     """
     print(f"Loading tokenizer: {model}")
-    tokenizer = AutoTokenizer.from_pretrained(model)
+    tokenizer = AutoTokenizer.from_pretrained(model, trust_remote_code=True)
 
     def detokenize(token_ids: list[int]) -> str:
         # decode() is typed str | list[str]; a 1-D id list always yields str.
