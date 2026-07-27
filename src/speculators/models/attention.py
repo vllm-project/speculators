@@ -58,7 +58,11 @@ def flex_attention_forward(
 
     if use_sp:
         sp_group = get_sp_group()
-        assert sp_group is not None, "SP group did not initialize for sequence parallelism, something went wrong!"
+        if sp_group is None:
+            raise RuntimeError(
+                "SP group did not initialize for sequence parallelism, \
+                something went wrong!"
+            )
 
         key, value = maybe_replicate_kv_heads(key, value, sp_size)
         query = ulysses_scatter(query, sp_group, sp_size)
@@ -82,10 +86,10 @@ def flex_attention_forward(
         enable_gqa=enable_gqa,
         scale=scaling,
     )
-    attention_output: torch.Tensor = flex_attention_output
+    attention_output: torch.Tensor = flex_attention_output  # type: ignore[assignment]
 
     if use_sp:
-        attention_output = ulysses_gather(attention_output, sp_group, sp_size)
+        attention_output = ulysses_gather(attention_output, sp_group, sp_size)  # type: ignore[arg-type]
 
     attention_output = attention_output.transpose(1, 2).contiguous()
     return attention_output, None

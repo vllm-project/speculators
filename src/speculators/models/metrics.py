@@ -549,7 +549,8 @@ def loss_function(
     numerator = torch.sum(elementwise_loss, dim=1)
     denominator = loss_mask.sum(dim=1) + _EPS
 
-    # will need to manually detach graphs if all_reduce ever starts getting tracked by autograd
+    # will need to manually detach graphs if all_reduce
+    # ever starts getting tracked by autograd
     if get_sp_size() > 1:
         sp_group = get_sp_group()
         dist.all_reduce(numerator, group=sp_group)

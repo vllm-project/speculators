@@ -1,6 +1,6 @@
 """P-EAGLE draft model implementation with parallel multi-token prediction."""
 
-from typing import ClassVar
+from typing import ClassVar, NamedTuple
 
 import torch
 import torch.distributed as dist
@@ -16,6 +16,62 @@ from speculators.models.peagle.data import generate_cod_sample_indices
 from speculators.models.peagle.metrics import compute_metrics
 from speculators.models.utils import conditional_torch_compile, resolve_target_layer_ids
 from speculators.proposals.greedy import GreedyTokenProposalConfig
+
+
+class _SPPartition(NamedTuple):
+    full_anchor_pos: torch.Tensor
+    full_depth: torch.Tensor
+    total_sampled: int
+    local_anchor_pos: torch.Tensor
+    local_depth: torch.Tensor
+    local_orig_positions: torch.Tensor
+    local_sampled: int
+
+
+def _broadcast_and_partition_anchors(
+    anchor_pos: torch.Tensor,
+    depth: torch.Tensor,
+    device: torch.device,
+    sp_size: int,
+) -> _SPPartition:
+    """Broadcast COD anchors from SP rank 0 and partition across ranks."""
+    from speculators.train.distributed import (  # noqa: PLC0415
+        get_sp_group,
+        get_sp_rank,
+    )
+
+    sp_group = get_sp_group()
+    sp_rank = get_sp_rank()
+    src = dist.get_process_group_ranks(sp_group)[0]
+
+    size_t = torch.tensor(anchor_pos.shape[0], device=device)
+    dist.broadcast(size_t, src=src, group=sp_group)
+    total_sampled = int(size_t.item())
+    if anchor_pos.shape[0] != total_sampled:
+        anchor_pos = torch.empty(total_sampled, device=device, dtype=torch.long)
+        depth = torch.empty(total_sampled, device=device, dtype=torch.long)
+    dist.broadcast(anchor_pos, src=src, group=sp_group)
+    dist.broadcast(depth, src=src, group=sp_group)
+
+    remainder = total_sampled % sp_size
+    if remainder != 0:
+        pad_len: int = sp_size - remainder
+        anchor_pos = torch.nn.functional.pad(anchor_pos, (0, pad_len))
+        depth = torch.nn.functional.pad(depth, (0, pad_len))
+
+    total_sampled = anchor_pos.shape[0]
+    n_per_rank = total_sampled // sp_size
+    local_start = sp_rank * n_per_rank
+    return _SPPartition(
+        full_anchor_pos=anchor_pos,
+        full_depth=depth,
+        total_sampled=total_sampled,
+        local_anchor_pos=anchor_pos[local_start : local_start + n_per_rank],
+        local_depth=depth[local_start : local_start + n_per_rank],
+        local_orig_positions=anchor_pos[local_start : local_start + n_per_rank]
+        + depth[local_start : local_start + n_per_rank],
+        local_sampled=n_per_rank,
+    )
 
 
 @SpeculatorModel.register("peagle")
@@ -68,11 +124,7 @@ class PEagleDraftModel(Eagle3DraftModel):
         down_sample_ratio_min: float = 0.2,
         **kwargs,
     ):
-        from speculators.train.distributed import (  # noqa: PLC0415
-            get_sp_group,
-            get_sp_rank,
-            get_sp_size,
-        )
+        from speculators.train.distributed import get_sp_size  # noqa: PLC0415
 
         if verifier_last_hidden_states is None:
             raise ValueError("verifier_last_hidden_states required for training")
@@ -94,44 +146,26 @@ class PEagleDraftModel(Eagle3DraftModel):
         )
 
         if sp_size > 1:
-            sp_group = get_sp_group()
-            sp_rank = get_sp_rank()
-            src = dist.get_process_group_ranks(sp_group)[0]
-            # Broadcast size first so non-rank-0 can allocate
-            size_t = torch.tensor(anchor_pos.shape[0], device=device)
-            dist.broadcast(size_t, src=src, group=sp_group)
-            total_sampled = size_t.item()
-            if anchor_pos.shape[0] != total_sampled:
-                anchor_pos = torch.empty(total_sampled, device=device, dtype=torch.long)
-                depth = torch.empty(total_sampled, device=device, dtype=torch.long)
-            dist.broadcast(anchor_pos, src=src, group=sp_group)
-            dist.broadcast(depth, src=src, group=sp_group)
-
-            # Pad to be divisible by sp_size
-            remainder = total_sampled % sp_size
-            if remainder != 0:
-                pad_len = sp_size - remainder
-                anchor_pos = torch.nn.functional.pad(anchor_pos, (0, pad_len))
-                depth = torch.nn.functional.pad(depth, (0, pad_len))
-
-        total_sampled = anchor_pos.shape[0]
-        # Full tensors needed for mask construction
-        full_anchor_pos = anchor_pos
-        full_depth = depth
-        full_orig_positions = full_anchor_pos + full_depth
-
-        if sp_size > 1:
-            n_per_rank = total_sampled // sp_size
-            local_start = sp_rank * n_per_rank
-            local_anchor_pos = anchor_pos[local_start : local_start + n_per_rank]
-            local_depth = depth[local_start : local_start + n_per_rank]
-            local_orig_positions = local_anchor_pos + local_depth
-            local_sampled = n_per_rank
+            sp = _broadcast_and_partition_anchors(anchor_pos, depth, device, sp_size)
         else:
-            local_anchor_pos = anchor_pos
-            local_depth = depth
-            local_orig_positions = full_orig_positions
-            local_sampled = total_sampled
+            orig_positions = anchor_pos + depth
+            sp = _SPPartition(
+                full_anchor_pos=anchor_pos,
+                full_depth=depth,
+                total_sampled=anchor_pos.shape[0],
+                local_anchor_pos=anchor_pos,
+                local_depth=depth,
+                local_orig_positions=orig_positions,
+                local_sampled=anchor_pos.shape[0],
+            )
+
+        total_sampled = sp.total_sampled
+        full_anchor_pos = sp.full_anchor_pos
+        full_depth = sp.full_depth
+        local_anchor_pos = sp.local_anchor_pos
+        local_depth = sp.local_depth
+        local_orig_positions = sp.local_orig_positions
+        local_sampled = sp.local_sampled
 
         is_depth_0 = local_depth == 0
 
