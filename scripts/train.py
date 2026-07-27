@@ -542,6 +542,18 @@ def main(args: argparse.Namespace):  # noqa: C901
                 f"supported for eagle3, dflash, dspark, and peagle, "
                 f"got --speculator-type={args.speculator_type}"
             )
+        if not args.fsdp_shard:
+            raise ValueError(
+                "--sp-size > 1 requires --fsdp-shard; DDP gradient sync does "
+                "not correctly separate the SP sum from the DP average."
+            )
+        if args.speculator_type == "eagle3" and args.ttt_steps > 1:
+            raise ValueError(
+                "Eagle3 with --ttt-steps > 1 is not yet compatible with "
+                "--sp-size > 1. The KV cache ordering across TTT steps "
+                "conflicts with the Ulysses all-to-all layout. "
+                "Use --ttt-steps 1 or --sp-size 1."
+            )
         if args.speculator_type == "dflash" and args.max_anchors % args.sp_size != 0:
             raise ValueError(
                 f"--max-anchors ({args.max_anchors}) must be divisible "

@@ -100,48 +100,75 @@ class PEagleDraftModel(Eagle3DraftModel):
         if loss_mask is None:
             loss_mask = torch.ones_like(input_ids, dtype=torch.float32)
 
-        # Generate COD sampling indices
-        anchor_pos, depth = generate_cod_sample_indices(
-            seq_length=seq_length,
-            loss_mask=loss_mask,
-            num_depths=num_depths,
-            down_sample_ratio=down_sample_ratio,
-            down_sample_ratio_min=down_sample_ratio_min,
-            max_anchors=max_anchors,
-        )
+        pad_mask: torch.Tensor | None = None
 
         if sp_size > 1:
             sp_group = get_sp_group()
             sp_rank = get_sp_rank()
             src = dist.get_process_group_ranks(sp_group)[0]
-            size_t = torch.tensor(anchor_pos.shape[0], device=device)
+
+            # Only rank 0 generates; broadcast to the rest of the SP group
+            if sp_rank == 0:
+                anchor_pos, depth = generate_cod_sample_indices(
+                    seq_length=seq_length,
+                    loss_mask=loss_mask,
+                    num_depths=num_depths,
+                    down_sample_ratio=down_sample_ratio,
+                    down_sample_ratio_min=down_sample_ratio_min,
+                    max_anchors=max_anchors,
+                )
+                n_real = anchor_pos.shape[0]
+            else:
+                n_real = 0
+
+            size_t = torch.tensor(n_real, device=device)
             dist.broadcast(size_t, src=src, group=sp_group)
-            total_sampled = size_t.item()
-            if anchor_pos.shape[0] != total_sampled:
-                anchor_pos = torch.empty(total_sampled, device=device, dtype=torch.long)
-                depth = torch.empty(total_sampled, device=device, dtype=torch.long)
+            n_real = size_t.item()
+
+            if sp_rank != 0:
+                anchor_pos = torch.empty(n_real, device=device, dtype=torch.long)
+                depth = torch.empty(n_real, device=device, dtype=torch.long)
             dist.broadcast(anchor_pos, src=src, group=sp_group)
             dist.broadcast(depth, src=src, group=sp_group)
 
-            remainder = total_sampled % sp_size
+            remainder = n_real % sp_size
             if remainder != 0:
                 pad_len = sp_size - remainder
                 anchor_pos = torch.nn.functional.pad(anchor_pos, (0, pad_len))
                 depth = torch.nn.functional.pad(depth, (0, pad_len))
 
-        total_sampled = anchor_pos.shape[0]
-        full_anchor_pos = anchor_pos
-        full_depth = depth
-        full_orig_positions = full_anchor_pos + full_depth
+            total_sampled = anchor_pos.shape[0]
+            full_anchor_pos = anchor_pos
+            full_depth = depth
+            full_orig_positions = full_anchor_pos + full_depth
 
-        if sp_size > 1:
             n_per_rank = total_sampled // sp_size
             local_start = sp_rank * n_per_rank
             local_anchor_pos = anchor_pos[local_start : local_start + n_per_rank]
             local_depth = depth[local_start : local_start + n_per_rank]
             local_orig_positions = local_anchor_pos + local_depth
             local_sampled = n_per_rank
+
+            # total seq len not divisible by sp_size, so we need to pad the loss mask for the last rank
+            if n_real < total_sampled:
+                full_valid = torch.ones(total_sampled, device=device)
+                full_valid[n_real:] = 0
+                pad_mask = full_valid[local_start : local_start + n_per_rank]
         else:
+            anchor_pos, depth = generate_cod_sample_indices(
+                seq_length=seq_length,
+                loss_mask=loss_mask,
+                num_depths=num_depths,
+                down_sample_ratio=down_sample_ratio,
+                down_sample_ratio_min=down_sample_ratio_min,
+                max_anchors=max_anchors,
+            )
+
+            total_sampled = anchor_pos.shape[0]
+            full_anchor_pos = anchor_pos
+            full_depth = depth
+            full_orig_positions = full_anchor_pos + full_depth
+
             local_anchor_pos = anchor_pos
             local_depth = depth
             local_orig_positions = full_orig_positions
@@ -246,6 +273,7 @@ class PEagleDraftModel(Eagle3DraftModel):
             depth=local_depth,
             num_depths=num_depths,
             loss_config=loss_config,
+            pad_mask=pad_mask,
         )
 
         return None, loss, metrics
