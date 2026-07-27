@@ -65,9 +65,27 @@ def flex_attention_forward(
             )
 
         key, value = maybe_replicate_kv_heads(key, value, sp_size)
+
+        q_len = query.shape[2]
+        kv_len = key.shape[2]
+
         query = ulysses_scatter(query, sp_group, sp_size)
-        key = ulysses_scatter(key, sp_group, sp_size)
-        value = ulysses_scatter(value, sp_group, sp_size)
+
+        if kv_len > q_len:
+            # KV cache from TTT: K/V = [step0_local | step1_local | ...].
+            # Scatter each step separately so the result is
+            # [step0_full | step1_full | ...] matching the extended mask.
+            k_parts = key.split(q_len, dim=2)
+            v_parts = value.split(q_len, dim=2)
+            key = torch.cat(
+                [ulysses_scatter(k, sp_group, sp_size) for k in k_parts], dim=2
+            )
+            value = torch.cat(
+                [ulysses_scatter(v, sp_group, sp_size) for v in v_parts], dim=2
+            )
+        else:
+            key = ulysses_scatter(key, sp_group, sp_size)
+            value = ulysses_scatter(value, sp_group, sp_size)
 
     num_query_heads = query.shape[1]
     num_key_value_heads = key.shape[1]
