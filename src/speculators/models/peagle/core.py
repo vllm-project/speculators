@@ -68,6 +68,21 @@ class PEagleDraftModel(Eagle3DraftModel):
         down_sample_ratio_min: float = 0.2,
         **kwargs,
     ):
+        """
+        Forward pass for P-EAGLE model training with parallel group prediction.
+
+        Args:
+            hidden_states: Verifier hidden states [1, seq_len, 3*hidden_size]
+            input_ids: Input token IDs [1, seq_len]
+            document_ids: Document IDs [1, seq_len], maps positions to doc index, pad -1
+            position_ids: Position IDs [1, seq_len] (optional)
+            loss_mask: Loss mask for which tokens to compute loss on
+                [1, seq_len]
+            verifier_last_hidden_states: Verifier final hidden states for
+                targets [1, seq_len, hidden_size]
+        Returns:
+            Tuple of (draft_tokens, loss, metrics)
+        """
         from speculators.train.distributed import (  # noqa: PLC0415
             get_sp_group,
             get_sp_rank,
@@ -84,6 +99,7 @@ class PEagleDraftModel(Eagle3DraftModel):
         if loss_mask is None:
             loss_mask = torch.ones_like(input_ids, dtype=torch.float32)
 
+        # Generate COD sampling indices
         anchor_pos, depth = generate_cod_sample_indices(
             seq_length=seq_length,
             loss_mask=loss_mask,
@@ -132,20 +148,24 @@ class PEagleDraftModel(Eagle3DraftModel):
 
         is_depth_0 = local_depth == 0
 
+        # Build sampled input_ids: real tokens for depth 0, mask for others
         sampled_ids = torch.where(
             is_depth_0,
             input_ids[0, local_orig_positions],
             torch.tensor(self.mask_token_id, dtype=input_ids.dtype, device=device),
-        ).unsqueeze(0)
-        inputs_embeds = self.embed_tokens(sampled_ids).to(hidden_states.dtype)
+        ).unsqueeze(0)  # [1, total_sampled]
+        inputs_embeds = self.embed_tokens(sampled_ids).to(
+            hidden_states.dtype
+        )  # [1, total_sampled, hidden_size]
 
         mask_hidden = self.mask_hidden.to(device=device, dtype=hidden_states.dtype)
         sampled_hidden = torch.where(
             is_depth_0.unsqueeze(-1),
             hidden_states[0, local_orig_positions],
             mask_hidden.squeeze(0).expand(local_sampled, -1),
-        ).unsqueeze(0)
+        ).unsqueeze(0)  # [1, total_sampled, 3*hidden_size]
 
+        # Project concatenated hidden states (3*hidden_size) -> hidden_size
         if self.input_norm is not None:
             sampled_hidden = self.input_norm(sampled_hidden)
         if self.fc_norm is not None:
@@ -154,11 +174,13 @@ class PEagleDraftModel(Eagle3DraftModel):
                 [norm(chunk) for norm, chunk in zip(self.fc_norm, chunks, strict=True)],
                 dim=-1,
             )
-        sampled_hidden = self.fc(sampled_hidden)
+        sampled_hidden = self.fc(sampled_hidden)  # [1, total_sampled, hidden_size]
 
-        layer_input = torch.cat([inputs_embeds, sampled_hidden], dim=-1)
+        layer_input = torch.cat(
+            [inputs_embeds, sampled_hidden], dim=-1
+        )  # [1, total_sampled, 2*hidden_size]
 
-        position_ids = local_orig_positions.unsqueeze(0)
+        position_ids = local_orig_positions.unsqueeze(0)  # [1, total_sampled]
 
         position_embeddings = self.rotary_emb(layer_input, position_ids)
 
@@ -203,14 +225,16 @@ class PEagleDraftModel(Eagle3DraftModel):
                 **kwargs,
             )
 
-        logits = self.lm_head(self.norm(hidden_states))
+        logits = self.lm_head(
+            self.norm(hidden_states)
+        )  # [1, total_sampled, vocab_size]
 
         with torch.no_grad():
             targets = self.verifier_lm_head(
                 self.verifier_norm(verifier_last_hidden_states)
             )
 
-        targets = targets[:, local_orig_positions, :]
+        targets = targets[:, local_orig_positions, :]  # [1, total_sampled, vocab_size]
 
         loss, metrics = compute_metrics(
             logits=logits,
