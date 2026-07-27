@@ -401,6 +401,14 @@ class TrainerArgs(_Group):
         "parameters are fully replicated (DDP-like). Enable when the model does not "
         "fit in a single GPU's memory.",
     )
+    sp_size: int = Field(
+        default=1,
+        ge=1,
+        description="Ulysses sequence parallelism degree. Shards the sequence "
+        "dimension across this many GPUs within each node, reducing per-GPU "
+        "memory for long-context training. Must divide --total-seq-len and "
+        "world_size. Currently supported for eagle3, dflash, dspark, and peagle.",
+    )
     max_steps: int | None = Field(
         default=None,
         ge=1,
