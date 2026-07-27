@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 import torch
 from torch.utils.data import DataLoader
 
-from hs_connectors import HiddenStatesTransfer
+from speculators._vendor.hs_connectors import HiddenStatesTransfer
 from speculators.train.data import (
     ArrowDataset,
     BaseDataset,

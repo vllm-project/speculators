@@ -13,7 +13,7 @@ import torch
 from datasets import load_from_disk
 from torch.utils.data import Dataset
 
-from hs_connectors import FileTransfer, HiddenStatesTransfer
+from speculators._vendor.hs_connectors import FileTransfer, HiddenStatesTransfer
 from speculators.data_generation.offline import check_hidden_states
 from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,

@@ -5,7 +5,7 @@ import sys
 import warnings
 
 try:
-    from hs_connectors import HiddenStatesBackend
+    from speculators._vendor.hs_connectors import HiddenStatesBackend
 
     _backend_registry: dict[str, type[HiddenStatesBackend]] = dict(
         HiddenStatesBackend.registry  # type: ignore[misc]
