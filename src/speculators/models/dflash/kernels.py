@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
+import torch
 from torch import nn
 from transformers.models.qwen3.modeling_qwen3 import Qwen3Config, Qwen3MLP, Qwen3RMSNorm
 
@@ -12,15 +13,24 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 
+class RMSNormModule(Protocol):
+    """The RMS norm surface the DFlash backbone reads, beyond `nn.Module`."""
+
+    @property
+    def weight(self) -> torch.Tensor: ...
+
+    def __call__(self, hidden_states: torch.Tensor) -> torch.Tensor: ...
+
+
 @dataclass(frozen=True)
 class DFlashKernels:
     """Construct the replaceable Qwen3 modules used by a DFlash draft."""
 
-    make_rms_norm: Callable[[int, float], nn.Module]
+    make_rms_norm: Callable[[int, float], RMSNormModule]
     make_mlp: Callable[[Qwen3Config], nn.Module]
 
 
-def _make_qwen3_rms_norm(hidden_size: int, eps: float) -> nn.Module:
+def _make_qwen3_rms_norm(hidden_size: int, eps: float) -> RMSNormModule:
     return Qwen3RMSNorm(hidden_size, eps=eps)
 
 
@@ -49,7 +59,7 @@ def load_liger_dflash_kernels() -> DFlashKernels:
             ) from exc
         raise
 
-    def make_rms_norm(hidden_size: int, eps: float) -> nn.Module:
+    def make_rms_norm(hidden_size: int, eps: float) -> RMSNormModule:
         return LigerRMSNorm(hidden_size, eps=eps)
 
     def make_mlp(config: Qwen3Config) -> nn.Module:
