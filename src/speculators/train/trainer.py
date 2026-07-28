@@ -493,7 +493,9 @@ class Trainer:
 
             profile = None
             if timer.enabled:
-                num_tokens = int((gpu_batch["document_ids"] != -1).sum().item())
+                num_tokens = (
+                    int((gpu_batch["document_ids"] != -1).sum().item()) // get_sp_size()
+                )
                 profile = timer.profile(num_tokens)
                 if self.is_distributed:
                     for v in metrics.values():

@@ -276,7 +276,7 @@ class Eagle3DraftModel(DraftVocabMixin, SpeculatorModel):
             # shape: [local_seq_len]
 
             hidden_states = torch.cat([input_embeds, hidden_states], dim=-1)
-            # shape: [1, total_seq_len, 2 * hidden_size]
+            # shape: [1, local_seq_len, 2 * hidden_size]
 
             position_embeddings = self.rotary_emb(hidden_states, position_ids)
 

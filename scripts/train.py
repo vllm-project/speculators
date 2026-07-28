@@ -549,7 +549,15 @@ def main(cfg: TrainConfig):  # noqa: C901
                 "supported but less memory-efficient for long-context SP "
                 "training. Consider adding --fsdp-shard."
             )
-        if args.speculator_type == "dflash" and args.max_anchors % args.sp_size != 0:
+        if args.draft_attn_impl != "simple_flex_attention":
+            raise ValueError(
+                f"Sequence parallelism (--sp-size > 1) requires "
+                f"--draft-attn-impl=simple_flex_attention, "
+                f"got '{args.draft_attn_impl}'"
+            )
+        if (
+            args.speculator_type in ("dflash", "dspark")
+        ) and args.max_anchors % args.sp_size != 0:
             raise ValueError(
                 f"--max-anchors ({args.max_anchors}) must be divisible "
                 f"by --sp-size ({args.sp_size}) for DFlash SP"
