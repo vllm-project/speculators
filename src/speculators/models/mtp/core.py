@@ -107,7 +107,16 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
         super().load_verifier_weights()
         del self.verifier_lm_head
 
-    @conditional_torch_compile
+    # Compile with static shapes (dynamic=False). The forward is written for a
+    # fixed per-call sequence length and is meant to recompile per shape. If
+    # dynamo's automatic-dynamic promotes seq_len to a symbol, inductor must reason
+    # about strides derived from
+    #   valid_len = seq_len - min(num_steps, max(0, seq_len - 2)) - 1  (below)
+    # and chokes on the resulting symbolic expression: torch 2.13 raises "Exponent
+    # must be non-negative" (safe_pow over a PowByNatural(_, -1) term from
+    # valid_len**2 / valid_len) and torch 2.12 raises CantSplit on the same stride.
+    # Pinning static shapes keeps seq_len concrete and sidesteps both.
+    @conditional_torch_compile(dynamic=False)
     def forward(
         self,
         input_ids: torch.Tensor,
