@@ -15,7 +15,7 @@ import yaml
 from pydantic import ValidationError
 from pydantic.fields import FieldInfo
 
-from hs_connectors import HiddenStatesBackend
+from speculators._vendor.hs_connectors import HiddenStatesBackend
 from speculators.train.config.schema import (
     _GROUPS,
     _ROOT_FIELDS,

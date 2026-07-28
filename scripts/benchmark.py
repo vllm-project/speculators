@@ -55,7 +55,7 @@ from train import (
     set_seed,
 )
 
-from hs_connectors import HiddenStatesBackend
+from speculators._vendor.hs_connectors import HiddenStatesBackend
 from speculators.model import SpeculatorModel
 from speculators.models.eagle3.data import shift_batch
 from speculators.models.mtp.data import shift_batch_mtp
