@@ -8,7 +8,6 @@ from speculators.train.sequence_parallel import (
     split_batch_for_sp,
 )
 
-
 # ---------------------------------------------------------------------------
 # split_batch_for_sp
 # ---------------------------------------------------------------------------
@@ -34,8 +33,13 @@ class TestSplitBatchForSP:
         batch = self._make_batch(seq_len=16)
         result = split_batch_for_sp(batch, sp_rank=0, sp_size=2)
 
-        for key in ("hidden_states", "verifier_last_hidden_states",
-                     "input_ids", "loss_mask", "position_ids"):
+        for key in (
+            "hidden_states",
+            "verifier_last_hidden_states",
+            "input_ids",
+            "loss_mask",
+            "position_ids",
+        ):
             assert result[key].shape[1] == 8, f"{key} not split"
 
     def test_document_ids_kept_full(self):

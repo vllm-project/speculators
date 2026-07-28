@@ -12,7 +12,6 @@ import torch.multiprocessing as mp
 
 from tests.conftest import requires_multi_gpu
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -37,7 +36,7 @@ def _dist_teardown():
 def _worker_sp_group_init(rank, world_size, sp_size, results_dir):
     _dist_setup(rank, world_size)
     try:
-        from speculators.train.distributed import (
+        from speculators.train.distributed import (  # noqa: PLC0415
             _init_sp_process_groups,
             get_dp_rank,
             get_dp_size,
@@ -62,7 +61,9 @@ def _worker_sp_group_init(rank, world_size, sp_size, results_dir):
             results_dir / f"rank{rank}.pt",
         )
     finally:
-        from speculators.train.distributed import maybe_destroy_distributed
+        from speculators.train.distributed import (  # noqa: PLC0415
+            maybe_destroy_distributed,
+        )
 
         maybe_destroy_distributed()
         _dist_teardown()
@@ -124,7 +125,9 @@ def test_sp_group_init_sp1(tmp_path):
 def _worker_all_to_all_roundtrip(rank, world_size, results_dir):
     _dist_setup(rank, world_size)
     try:
-        from speculators.train.distributed import _init_sp_process_groups
+        from speculators.train.distributed import (  # noqa: PLC0415
+            _init_sp_process_groups,
+        )
 
         sp_size = world_size
         _init_sp_process_groups(rank, world_size, sp_size)
@@ -137,17 +140,22 @@ def _worker_all_to_all_roundtrip(rank, world_size, results_dir):
         x = torch.randn(1, num_heads, local_seq, head_dim, device="cuda")
         x_orig = x.clone()
 
-        from speculators.train.sequence_parallel import (
+        from speculators.train.distributed import get_sp_group  # noqa: PLC0415
+        from speculators.train.sequence_parallel import (  # noqa: PLC0415
             ulysses_gather,
             ulysses_scatter,
         )
-        from speculators.train.distributed import get_sp_group
 
         sp_group = get_sp_group()
 
         # scatter: (B, H, S_local, D) -> (B, H/sp, S_full, D)
         scattered = ulysses_scatter(x, sp_group, sp_size)
-        assert scattered.shape == (1, num_heads // sp_size, local_seq * sp_size, head_dim)
+        assert scattered.shape == (
+            1,
+            num_heads // sp_size,
+            local_seq * sp_size,
+            head_dim,
+        )
 
         # gather: (B, H/sp, S_full, D) -> (B, H, S_local, D)
         gathered = ulysses_gather(scattered, sp_group, sp_size)
@@ -158,7 +166,9 @@ def _worker_all_to_all_roundtrip(rank, world_size, results_dir):
             results_dir / f"rank{rank}.pt",
         )
     finally:
-        from speculators.train.distributed import maybe_destroy_distributed
+        from speculators.train.distributed import (  # noqa: PLC0415
+            maybe_destroy_distributed,
+        )
 
         maybe_destroy_distributed()
         _dist_teardown()
@@ -191,7 +201,9 @@ def test_all_to_all_roundtrip(tmp_path):
 def _worker_all_to_all_backward(rank, world_size, results_dir):
     _dist_setup(rank, world_size)
     try:
-        from speculators.train.distributed import _init_sp_process_groups
+        from speculators.train.distributed import (  # noqa: PLC0415
+            _init_sp_process_groups,
+        )
 
         sp_size = world_size
         _init_sp_process_groups(rank, world_size, sp_size)
@@ -204,11 +216,11 @@ def _worker_all_to_all_backward(rank, world_size, results_dir):
         )
 
         # Forward: scatter then gather = identity
-        from speculators.train.sequence_parallel import (
+        from speculators.train.distributed import get_sp_group  # noqa: PLC0415
+        from speculators.train.sequence_parallel import (  # noqa: PLC0415
             ulysses_gather,
             ulysses_scatter,
         )
-        from speculators.train.distributed import get_sp_group
 
         sp_group = get_sp_group()
         y = ulysses_gather(ulysses_scatter(x, sp_group, sp_size), sp_group, sp_size)
@@ -221,7 +233,9 @@ def _worker_all_to_all_backward(rank, world_size, results_dir):
             results_dir / f"rank{rank}.pt",
         )
     finally:
-        from speculators.train.distributed import maybe_destroy_distributed
+        from speculators.train.distributed import (  # noqa: PLC0415
+            maybe_destroy_distributed,
+        )
 
         maybe_destroy_distributed()
         _dist_teardown()
@@ -254,7 +268,7 @@ def test_all_to_all_backward(tmp_path):
 def _worker_sp_gradient_hooks(rank, world_size, results_dir):
     _dist_setup(rank, world_size)
     try:
-        from speculators.train.distributed import (
+        from speculators.train.distributed import (  # noqa: PLC0415
             _init_sp_process_groups,
             register_sp_gradient_hooks,
         )
@@ -288,7 +302,9 @@ def _worker_sp_gradient_hooks(rank, world_size, results_dir):
 
         torch.save({"grad": grad.cpu()}, results_dir / f"rank{rank}.pt")
     finally:
-        from speculators.train.distributed import maybe_destroy_distributed
+        from speculators.train.distributed import (  # noqa: PLC0415
+            maybe_destroy_distributed,
+        )
 
         maybe_destroy_distributed()
         _dist_teardown()
