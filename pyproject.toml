@@ -47,7 +47,7 @@ dependencies = [
     "hs-connectors",
     "huggingface-hub",
     "loguru>=0.7.2,<=0.7.3",
-    "numpy>=2.0.0,<=2.5.1",
+    "numpy>=2.0.0,<=2.4.6",
     "openai>=2.0.0",
     "protobuf",
     "psutil",
@@ -132,7 +132,7 @@ issues = "https://github.com/vllm-project/speculators/issues"
 
 [tool.mypy]
 files = ["src/speculators", "tests"]
-python_version = "3.12"
+python_version = "3.10"
 warn_redundant_casts = true
 warn_unused_ignores = false
 show_error_codes = true
