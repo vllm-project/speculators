@@ -107,7 +107,8 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
         super().load_verifier_weights()
         del self.verifier_lm_head
 
-    @conditional_torch_compile
+    # requires `dynamic=False`. See #876
+    @conditional_torch_compile(dynamic=False)
     def forward(
         self,
         input_ids: torch.Tensor,
