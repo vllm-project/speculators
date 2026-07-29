@@ -2,6 +2,7 @@ import argparse
 import datetime
 import hashlib
 import importlib.metadata
+import importlib.util
 import json
 import os
 import shlex
@@ -160,14 +161,14 @@ def _is_vllm_repo(path: str) -> bool:
 def _find_vllm_repo() -> str | None:
     """Find the vllm git checkout by walking up from the installed package."""
     try:
-        dist = importlib.metadata.distribution("vllm")
-        if dist.files:
-            d = str(dist._path.parent)
+        spec = importlib.util.find_spec("vllm")
+        if spec and spec.origin:
+            d = os.path.dirname(spec.origin)
             while d != os.path.dirname(d):
                 if _is_vllm_repo(d):
                     return d
                 d = os.path.dirname(d)
-    except (importlib.metadata.PackageNotFoundError, AttributeError):
+    except (ModuleNotFoundError, ValueError):
         pass
 
     for candidate in [
