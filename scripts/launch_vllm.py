@@ -155,6 +155,13 @@ def _git_info(repo: str) -> tuple[str, str | None]:
     return sha, diff
 
 
+def _is_vllm_repo(path: str) -> bool:
+    """Check that *path* looks like the vllm source tree, not an unrelated repo."""
+    return os.path.isdir(os.path.join(path, ".git")) and os.path.isfile(
+        os.path.join(path, "vllm", "__init__.py")
+    )
+
+
 def _find_vllm_repo() -> str | None:
     """Find the vllm git checkout by walking up from the installed package."""
     try:
@@ -162,7 +169,7 @@ def _find_vllm_repo() -> str | None:
         if dist.files:
             d = str(dist._path.parent)
             while d != os.path.dirname(d):
-                if os.path.isdir(os.path.join(d, ".git")):
+                if _is_vllm_repo(d):
                     return d
                 d = os.path.dirname(d)
     except (importlib.metadata.PackageNotFoundError, AttributeError):
@@ -172,7 +179,7 @@ def _find_vllm_repo() -> str | None:
         os.path.expanduser("~/vllm"),
         "/workspace/vllm",
     ]:
-        if os.path.isdir(os.path.join(candidate, ".git")):
+        if _is_vllm_repo(candidate):
             return candidate
     return None
 
@@ -182,12 +189,20 @@ def _save_vllm_provenance(cmd: list[str], provenance_dir: str) -> None:
 
     Best-effort — failures are printed but never fatal.
     """
-    os.makedirs(provenance_dir, exist_ok=True)
+    try:
+        os.makedirs(provenance_dir, exist_ok=True)
+    except OSError as exc:
+        print(
+            f"Warning: could not create provenance dir: {exc}",
+            file=sys.stderr,
+        )
+        return
 
     vllm_repo = _find_vllm_repo()
     git_sha = "unknown"
+    diff: str | None = None
     if vllm_repo:
-        git_sha, _ = _git_info(vllm_repo)
+        git_sha, diff = _git_info(vllm_repo)
 
     try:
         vllm_ver = importlib.metadata.version("vllm")
@@ -197,10 +212,8 @@ def _save_vllm_provenance(cmd: list[str], provenance_dir: str) -> None:
     # --- vllm_command.txt ---
     try:
         sha_label = git_sha
-        if vllm_repo:
-            _, diff = _git_info(vllm_repo)
-            if diff:
-                sha_label += " (dirty)"
+        if diff:
+            sha_label += " (dirty)"
 
         ts = datetime.datetime.now(tz=datetime.timezone.utc).isoformat()
         header = "\n".join(
@@ -214,24 +227,31 @@ def _save_vllm_provenance(cmd: list[str], provenance_dir: str) -> None:
         content = f"{header}\n{shlex.join(cmd)}\n"
         _atomic_write(os.path.join(provenance_dir, "vllm_command.txt"), content)
     except OSError as exc:
-        print(f"Warning: could not save vllm_command.txt: {exc}", file=sys.stderr)
+        print(
+            f"Warning: could not save vllm_command.txt: {exc}",
+            file=sys.stderr,
+        )
 
     # --- vllm.patch ---
     try:
         if vllm_repo:
-            _, diff = _git_info(vllm_repo)
+            patch_content = f"# repo: {vllm_repo} ({git_sha})\n"
             if diff:
-                _atomic_write(
-                    os.path.join(provenance_dir, "vllm.patch"),
-                    f"# repo: {vllm_repo} ({git_sha})\n{diff}",
-                )
+                patch_content += diff
+            _atomic_write(
+                os.path.join(provenance_dir, "vllm.patch"),
+                patch_content,
+            )
         else:
             _atomic_write(
                 os.path.join(provenance_dir, "vllm.patch"),
                 f"# vllm {vllm_ver} (wheel install, no git repo found)\n",
             )
     except OSError as exc:
-        print(f"Warning: could not save vllm.patch: {exc}", file=sys.stderr)
+        print(
+            f"Warning: could not save vllm.patch: {exc}",
+            file=sys.stderr,
+        )
 
 
 def main():
