@@ -170,13 +170,6 @@ def _find_vllm_repo() -> str | None:
                 d = os.path.dirname(d)
     except (ModuleNotFoundError, ValueError):
         pass
-
-    for candidate in [
-        os.path.expanduser("~/vllm"),
-        "/workspace/vllm",
-    ]:
-        if _is_vllm_repo(candidate):
-            return candidate
     return None
 
 
