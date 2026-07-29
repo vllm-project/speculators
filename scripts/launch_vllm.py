@@ -163,7 +163,7 @@ def _find_vllm_repo() -> str | None:
     try:
         spec = importlib.util.find_spec("vllm")
         if spec and spec.origin:
-            d = os.path.dirname(spec.origin)
+            d = os.path.realpath(os.path.dirname(spec.origin))
             while d != os.path.dirname(d):
                 if _is_vllm_repo(d):
                     return d
