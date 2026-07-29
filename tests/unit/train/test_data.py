@@ -469,8 +469,7 @@ def test_dataset_fallback_when_sample_lengths_json_malformed(tmp_path: Path):
     assert len(dataset.approx_lengths) == 2
 
 
-def test_arrow_dataset_default_split_ratio_does_not_crash(tmp_path: Path):
-    """ArrowDataset with default split_ratio=1.0 should support indexing."""
+def test_arrow_dataset_default_train_ratio_does_not_crash(tmp_path: Path):
     ds = Dataset.from_dict(
         {
             "input_ids": [[1, 2, 3]],

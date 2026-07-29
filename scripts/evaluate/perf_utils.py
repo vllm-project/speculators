@@ -734,7 +734,7 @@ def run_guidellm(
 
     if subset is not None:
         data = f"kind=huggingface,source={dataset}"
-        data += f",load_kwargs.data_files={subset}.jsonl"
+        data += f",load_kwargs.data_files={subset}.jsonl,load_kwargs.split=train"
     else:
         data = f"kind=json_file,path={dataset}"
     cmd.extend(["--data", data])
