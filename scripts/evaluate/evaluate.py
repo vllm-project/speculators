@@ -23,10 +23,15 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import json
 import logging
+import os
+import shlex
+import subprocess
 import sys
-from datetime import datetime
+import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen
@@ -88,6 +93,66 @@ def _fetch_model_name(target: str) -> str | None:
 
 def _sanitize_dir_name(name: str) -> str:
     return name.replace("/", "_").replace(" ", "_")
+
+
+def save_eval_provenance(output_dir: Path) -> None:
+    """Write ``eval_command.txt`` into *output_dir*.
+
+    Records the full command line, timestamp, and package versions so the
+    eval can be reproduced.  Best-effort — never blocks the eval on failure.
+    """
+    try:
+        try:
+            sha = (
+                subprocess.run(
+                    ["git", "rev-parse", "HEAD"],  # noqa: S607
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    check=False,
+                ).stdout.strip()
+                or "unknown"
+            )
+        except OSError:
+            sha = "unknown"
+
+        pkg_versions: list[str] = []
+        for pkg in (
+            "speculators",
+            "vllm",
+            "transformers",
+            "torch",
+            "compressed-tensors",
+        ):
+            try:
+                ver = importlib.metadata.version(pkg)
+            except importlib.metadata.PackageNotFoundError:
+                ver = "not installed"
+            pkg_versions.append(f"# {pkg}: {ver}")
+
+        header = "\n".join(
+            [
+                f"# Timestamp: {datetime.now(timezone.utc).isoformat()}",
+                f"# Git SHA: {sha}",
+                *pkg_versions,
+            ]
+        )
+        content = f"{header}\n{shlex.join(sys.argv)}\n"
+
+        dest = output_dir / "eval_command.txt"
+        fd, tmp = tempfile.mkstemp(
+            dir=output_dir, prefix=".eval_command_", suffix=".tmp"
+        )
+        tmp_path = Path(tmp)
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(content)
+            tmp_path.replace(dest)
+        finally:
+            if tmp_path.exists():
+                tmp_path.unlink()
+    except Exception:
+        logger.warning("Failed to save eval_command.txt", exc_info=True)
 
 
 def _require_metrics(metrics_url: str) -> list:
@@ -258,6 +323,8 @@ def run_benchmark(args: argparse.Namespace) -> None:
     artifacts_dir = output_dir / "artifacts"
     artifacts_dir.mkdir(parents=True, exist_ok=True)
 
+    save_eval_provenance(output_dir)
+
     acceptance_csv = None
     perf_csv = None
     all_max_tokens: dict[str, int] = {}
@@ -418,7 +485,6 @@ def main() -> None:
             "Required when --dataset is a speedbench/ spec."
         ),
     )
-
     args = parser.parse_args()
 
     if args.output_dir is None:

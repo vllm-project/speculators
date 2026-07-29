@@ -1,7 +1,12 @@
 import argparse
+import datetime
+import importlib.metadata
 import json
 import os
+import shlex
+import subprocess
 import sys
+import tempfile
 import warnings
 
 try:
@@ -86,11 +91,147 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--provenance-dir",
+        type=str,
+        default=None,
+        help=(
+            "Directory to write vllm_command.txt and vllm.patch for "
+            "eval reproducibility (e.g. the eval output directory)."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print the command that would be executed without running it",
     )
     return parser.parse_known_args()
+
+
+def _atomic_write(path: str, content: str) -> None:
+    fd, tmp = tempfile.mkstemp(
+        dir=os.path.dirname(path),
+        prefix=f".{os.path.basename(path)}_",
+        suffix=".tmp",
+    )
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(content)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def _git_info(repo: str) -> tuple[str, str | None]:
+    """Return ``(sha, diff)`` for a git repo.  *diff* is None on failure."""
+    try:
+        sha = (
+            subprocess.run(
+                ["git", "rev-parse", "HEAD"],  # noqa: S607
+                capture_output=True,
+                text=True,
+                cwd=repo,
+                timeout=5,
+                check=False,
+            ).stdout.strip()
+            or "unknown"
+        )
+    except OSError:
+        sha = "unknown"
+
+    try:
+        result = subprocess.run(
+            ["git", "diff", "HEAD"],  # noqa: S607
+            capture_output=True,
+            text=True,
+            cwd=repo,
+            timeout=30,
+            check=False,
+        )
+        diff = result.stdout if result.returncode == 0 else None
+    except OSError:
+        diff = None
+
+    return sha, diff
+
+
+def _find_vllm_repo() -> str | None:
+    """Find the vllm git checkout by walking up from the installed package."""
+    try:
+        dist = importlib.metadata.distribution("vllm")
+        if dist.files:
+            d = str(dist._path.parent)
+            while d != os.path.dirname(d):
+                if os.path.isdir(os.path.join(d, ".git")):
+                    return d
+                d = os.path.dirname(d)
+    except (importlib.metadata.PackageNotFoundError, AttributeError):
+        pass
+
+    for candidate in [
+        os.path.expanduser("~/vllm"),
+        "/workspace/vllm",
+    ]:
+        if os.path.isdir(os.path.join(candidate, ".git")):
+            return candidate
+    return None
+
+
+def _save_vllm_provenance(cmd: list[str], provenance_dir: str) -> None:
+    """Write vllm_command.txt and vllm.patch to *provenance_dir*.
+
+    Best-effort — failures are printed but never fatal.
+    """
+    os.makedirs(provenance_dir, exist_ok=True)
+
+    vllm_repo = _find_vllm_repo()
+    git_sha = "unknown"
+    if vllm_repo:
+        git_sha, _ = _git_info(vllm_repo)
+
+    try:
+        vllm_ver = importlib.metadata.version("vllm")
+    except importlib.metadata.PackageNotFoundError:
+        vllm_ver = "unknown"
+
+    # --- vllm_command.txt ---
+    try:
+        sha_label = git_sha
+        if vllm_repo:
+            _, diff = _git_info(vllm_repo)
+            if diff:
+                sha_label += " (dirty)"
+
+        ts = datetime.datetime.now(tz=datetime.timezone.utc).isoformat()
+        header = "\n".join(
+            [
+                f"# Timestamp: {ts}",
+                f"# Python: {sys.executable}",
+                f"# Git SHA: {sha_label}",
+                f"# vllm: {vllm_ver}",
+            ]
+        )
+        content = f"{header}\n{shlex.join(cmd)}\n"
+        _atomic_write(os.path.join(provenance_dir, "vllm_command.txt"), content)
+    except OSError as exc:
+        print(f"Warning: could not save vllm_command.txt: {exc}", file=sys.stderr)
+
+    # --- vllm.patch ---
+    try:
+        if vllm_repo:
+            _, diff = _git_info(vllm_repo)
+            if diff:
+                _atomic_write(
+                    os.path.join(provenance_dir, "vllm.patch"),
+                    f"# repo: {vllm_repo} ({git_sha})\n{diff}",
+                )
+        else:
+            _atomic_write(
+                os.path.join(provenance_dir, "vllm.patch"),
+                f"# vllm {vllm_ver} (wheel install, no git repo found)\n",
+            )
+    except OSError as exc:
+        print(f"Warning: could not save vllm.patch: {exc}", file=sys.stderr)
 
 
 def main():
@@ -151,6 +292,9 @@ def main():
 
     print("Running command:")
     print(" ".join(cmd))
+
+    if args.provenance_dir:
+        _save_vllm_provenance(cmd, args.provenance_dir)
 
     if not args.dry_run:
         os.execvp(cmd[0], cmd)  # noqa: S606
