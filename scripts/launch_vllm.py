@@ -1,5 +1,6 @@
 import argparse
 import datetime
+import hashlib
 import importlib.metadata
 import json
 import os
@@ -184,7 +185,43 @@ def _find_vllm_repo() -> str | None:
     return None
 
 
-def _save_vllm_provenance(cmd: list[str], provenance_dir: str) -> None:
+def _sha256_file(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while chunk := f.read(1 << 20):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _save_checkpoint_sha256(provenance_dir: str, model: str) -> None:
+    dest = os.path.join(provenance_dir, "checkpoint_sha256.txt")
+    try:
+        model_path = os.path.expanduser(model)
+        if os.path.isdir(model_path):
+            safetensors = sorted(
+                f for f in os.listdir(model_path) if f.endswith(".safetensors")
+            )
+            if safetensors:
+                lines = []
+                for name in safetensors:
+                    h = _sha256_file(os.path.join(model_path, name))
+                    lines.append(f"{h}  {name}")
+                _atomic_write(dest, "\n".join(lines) + "\n")
+            else:
+                _atomic_write(
+                    dest,
+                    f"# no .safetensors files in {model_path}\n",
+                )
+        else:
+            _atomic_write(dest, f"# model: {model} (not a local path)\n")
+    except OSError as exc:
+        print(
+            f"Warning: could not save checkpoint_sha256.txt: {exc}",
+            file=sys.stderr,
+        )
+
+
+def _save_vllm_provenance(cmd: list[str], provenance_dir: str, model: str) -> None:
     """Write vllm_command.txt and vllm.patch to *provenance_dir*.
 
     Best-effort — failures are printed but never fatal.
@@ -253,6 +290,8 @@ def _save_vllm_provenance(cmd: list[str], provenance_dir: str) -> None:
             file=sys.stderr,
         )
 
+    _save_checkpoint_sha256(provenance_dir, model)
+
 
 def main():
     args, vllm_args = parse_args()
@@ -314,7 +353,7 @@ def main():
     print(" ".join(cmd))
 
     if args.provenance_dir:
-        _save_vllm_provenance(cmd, args.provenance_dir)
+        _save_vllm_provenance(cmd, args.provenance_dir, args.model)
 
     if not args.dry_run:
         os.execvp(cmd[0], cmd)  # noqa: S606
