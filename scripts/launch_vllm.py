@@ -108,6 +108,10 @@ def parse_args():
     return parser.parse_known_args()
 
 
+def _warn(msg: str) -> None:
+    print(f"Warning: {msg}", file=sys.stderr)
+
+
 def _atomic_write(path: str, content: str) -> None:
     fd, tmp = tempfile.mkstemp(
         dir=os.path.dirname(path),
@@ -123,37 +127,27 @@ def _atomic_write(path: str, content: str) -> None:
             os.unlink(tmp)
 
 
-def _git_info(repo: str) -> tuple[str, str | None]:
-    """Return ``(sha, diff)`` for a git repo.  *diff* is None on failure."""
+def _run_git(args: list[str], cwd: str, timeout: int = 5) -> str:
+    """Run a git command and return stdout, or empty string on failure."""
     try:
-        sha = (
-            subprocess.run(
-                ["git", "rev-parse", "HEAD"],  # noqa: S607
-                capture_output=True,
-                text=True,
-                cwd=repo,
-                timeout=5,
-                check=False,
-            ).stdout.strip()
-            or "unknown"
-        )
-    except OSError:
-        sha = "unknown"
-
-    try:
-        result = subprocess.run(
-            ["git", "diff", "HEAD"],  # noqa: S607
+        result = subprocess.run(  # noqa: S603
+            args,
             capture_output=True,
             text=True,
-            cwd=repo,
-            timeout=30,
+            cwd=cwd,
+            timeout=timeout,
             check=False,
         )
-        diff = result.stdout if result.returncode == 0 else None
+        return result.stdout.strip() if result.returncode == 0 else ""
     except OSError:
-        diff = None
+        return ""
 
-    return sha, diff
+
+def _pkg_version(name: str) -> str:
+    try:
+        return importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:
+        return "unknown"
 
 
 def _is_vllm_repo(path: str) -> bool:
@@ -193,104 +187,115 @@ def _sha256_file(path: str) -> str:
     return h.hexdigest()
 
 
+# ---------------------------------------------------------------------------
+# Individual provenance writers — each is self-contained and best-effort.
+# ---------------------------------------------------------------------------
+
+
+def _save_vllm_command(
+    provenance_dir: str,
+    cmd: list[str],
+    git_sha: str,
+    diff: str,
+    vllm_ver: str,
+) -> None:
+    sha_label = f"{git_sha} (dirty)" if diff else git_sha
+    ts = datetime.datetime.now(tz=datetime.timezone.utc).isoformat()
+    header = "\n".join(
+        [
+            f"# Timestamp: {ts}",
+            f"# Python: {sys.executable}",
+            f"# Git SHA: {sha_label}",
+            f"# vllm: {vllm_ver}",
+        ]
+    )
+    _atomic_write(
+        os.path.join(provenance_dir, "vllm_command.txt"),
+        f"{header}\n{shlex.join(cmd)}\n",
+    )
+
+
+def _save_vllm_patch(
+    provenance_dir: str,
+    vllm_repo: str | None,
+    git_sha: str,
+    diff: str,
+    vllm_ver: str,
+) -> None:
+    if vllm_repo:
+        content = f"# repo: {vllm_repo} ({git_sha})\n{diff}"
+    else:
+        content = f"# vllm {vllm_ver} (wheel install, no git repo found)\n"
+    _atomic_write(os.path.join(provenance_dir, "vllm.patch"), content)
+
+
 def _save_checkpoint_sha256(provenance_dir: str, model: str) -> None:
     dest = os.path.join(provenance_dir, "checkpoint_sha256.txt")
-    try:
-        model_path = os.path.expanduser(model)
-        if os.path.isdir(model_path):
-            safetensors = sorted(
-                f for f in os.listdir(model_path) if f.endswith(".safetensors")
-            )
-            if safetensors:
-                lines = []
-                for name in safetensors:
-                    h = _sha256_file(os.path.join(model_path, name))
-                    lines.append(f"{h}  {name}")
-                _atomic_write(dest, "\n".join(lines) + "\n")
-            else:
-                _atomic_write(
-                    dest,
-                    f"# no .safetensors files in {model_path}\n",
-                )
-        else:
-            _atomic_write(dest, f"# model: {model} (not a local path)\n")
-    except OSError as exc:
-        print(
-            f"Warning: could not save checkpoint_sha256.txt: {exc}",
-            file=sys.stderr,
-        )
+    model_path = os.path.expanduser(model)
+    if not os.path.isdir(model_path):
+        _atomic_write(dest, f"# model: {model} (not a local path)\n")
+        return
+    safetensors = sorted(
+        f for f in os.listdir(model_path) if f.endswith(".safetensors")
+    )
+    if not safetensors:
+        _atomic_write(dest, f"# no .safetensors files in {model_path}\n")
+        return
+    lines = [
+        f"{_sha256_file(os.path.join(model_path, name))}  {name}"
+        for name in safetensors
+    ]
+    _atomic_write(dest, "\n".join(lines) + "\n")
 
 
-def _save_vllm_provenance(cmd: list[str], provenance_dir: str, model: str) -> None:
-    """Write vllm_command.txt and vllm.patch to *provenance_dir*.
+# ---------------------------------------------------------------------------
+# Top-level entry point
+# ---------------------------------------------------------------------------
 
-    Best-effort — failures are printed but never fatal.
+def _save_vllm_provenance(
+    cmd: list[str], provenance_dir: str, model: str
+) -> None:
+    """Write vllm_command.txt, vllm.patch, and checkpoint_sha256.txt.
+
+    Best-effort — failures warn but never block the vLLM launch.
     """
     try:
         os.makedirs(provenance_dir, exist_ok=True)
     except OSError as exc:
-        print(
-            f"Warning: could not create provenance dir: {exc}",
-            file=sys.stderr,
-        )
+        _warn(f"could not create provenance dir: {exc}")
         return
 
     vllm_repo = _find_vllm_repo()
-    git_sha = "unknown"
-    diff: str | None = None
-    if vllm_repo:
-        git_sha, diff = _git_info(vllm_repo)
-
-    try:
-        vllm_ver = importlib.metadata.version("vllm")
-    except importlib.metadata.PackageNotFoundError:
-        vllm_ver = "unknown"
-
-    # --- vllm_command.txt ---
-    try:
-        sha_label = git_sha
-        if diff:
-            sha_label += " (dirty)"
-
-        ts = datetime.datetime.now(tz=datetime.timezone.utc).isoformat()
-        header = "\n".join(
-            [
-                f"# Timestamp: {ts}",
-                f"# Python: {sys.executable}",
-                f"# Git SHA: {sha_label}",
-                f"# vllm: {vllm_ver}",
-            ]
+    git_sha = _run_git(
+        ["git", "rev-parse", "HEAD"], vllm_repo or "."
+    ) or "unknown"
+    diff = (
+        _run_git(
+            ["git", "diff", "HEAD"],
+            vllm_repo or ".",
+            timeout=30,
         )
-        content = f"{header}\n{shlex.join(cmd)}\n"
-        _atomic_write(os.path.join(provenance_dir, "vllm_command.txt"), content)
-    except OSError as exc:
-        print(
-            f"Warning: could not save vllm_command.txt: {exc}",
-            file=sys.stderr,
-        )
+        if vllm_repo
+        else ""
+    )
+    vllm_ver = _pkg_version("vllm")
 
-    # --- vllm.patch ---
-    try:
-        if vllm_repo:
-            patch_content = f"# repo: {vllm_repo} ({git_sha})\n"
-            if diff:
-                patch_content += diff
-            _atomic_write(
-                os.path.join(provenance_dir, "vllm.patch"),
-                patch_content,
-            )
-        else:
-            _atomic_write(
-                os.path.join(provenance_dir, "vllm.patch"),
-                f"# vllm {vllm_ver} (wheel install, no git repo found)\n",
-            )
-    except OSError as exc:
-        print(
-            f"Warning: could not save vllm.patch: {exc}",
-            file=sys.stderr,
-        )
-
-    _save_checkpoint_sha256(provenance_dir, model)
+    writers = [
+        ("vllm_command.txt", lambda: _save_vllm_command(
+            provenance_dir, cmd, git_sha, diff, vllm_ver,
+        )),
+        ("vllm.patch", lambda: _save_vllm_patch(
+            provenance_dir, vllm_repo, git_sha, diff, vllm_ver,
+        )),
+        ("checkpoint_sha256.txt", lambda: _save_checkpoint_sha256(
+            provenance_dir, model,
+        )),
+    ]
+    for artifact, write in writers:
+        try:
+            write()
+        except Exception as exc:  # noqa: BLE001
+            _warn(f"could not save {artifact}: {exc}")
 
 
 def main():

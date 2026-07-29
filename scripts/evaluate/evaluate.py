@@ -95,6 +95,50 @@ def _sanitize_dir_name(name: str) -> str:
     return name.replace("/", "_").replace(" ", "_")
 
 
+def _git_sha() -> str:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],  # noqa: S607
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        return result.stdout.strip() or "unknown"
+    except OSError:
+        return "unknown"
+
+
+def _pkg_version(name: str) -> str:
+    try:
+        return importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:
+        return "not installed"
+
+
+def _atomic_write(path: Path, content: str) -> None:
+    fd, tmp = tempfile.mkstemp(
+        dir=path.parent, prefix=f".{path.name}_", suffix=".tmp"
+    )
+    tmp_path = Path(tmp)
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(content)
+        tmp_path.replace(path)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
+
+
+_TRACKED_PACKAGES = (
+    "speculators",
+    "vllm",
+    "transformers",
+    "torch",
+    "compressed-tensors",
+)
+
+
 def save_eval_provenance(output_dir: Path) -> None:
     """Write ``eval_command.txt`` into *output_dir*.
 
@@ -102,55 +146,19 @@ def save_eval_provenance(output_dir: Path) -> None:
     eval can be reproduced.  Best-effort — never blocks the eval on failure.
     """
     try:
-        try:
-            sha = (
-                subprocess.run(
-                    ["git", "rev-parse", "HEAD"],  # noqa: S607
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                    check=False,
-                ).stdout.strip()
-                or "unknown"
-            )
-        except OSError:
-            sha = "unknown"
-
-        pkg_versions: list[str] = []
-        for pkg in (
-            "speculators",
-            "vllm",
-            "transformers",
-            "torch",
-            "compressed-tensors",
-        ):
-            try:
-                ver = importlib.metadata.version(pkg)
-            except importlib.metadata.PackageNotFoundError:
-                ver = "not installed"
-            pkg_versions.append(f"# {pkg}: {ver}")
-
+        sha = _git_sha()
+        versions = [f"# {p}: {_pkg_version(p)}" for p in _TRACKED_PACKAGES]
         header = "\n".join(
             [
                 f"# Timestamp: {datetime.now(timezone.utc).isoformat()}",
                 f"# Git SHA: {sha}",
-                *pkg_versions,
+                *versions,
             ]
         )
-        content = f"{header}\n{shlex.join(sys.argv)}\n"
-
-        dest = output_dir / "eval_command.txt"
-        fd, tmp = tempfile.mkstemp(
-            dir=output_dir, prefix=".eval_command_", suffix=".tmp"
+        _atomic_write(
+            output_dir / "eval_command.txt",
+            f"{header}\n{shlex.join(sys.argv)}\n",
         )
-        tmp_path = Path(tmp)
-        try:
-            with os.fdopen(fd, "w") as f:
-                f.write(content)
-            tmp_path.replace(dest)
-        finally:
-            if tmp_path.exists():
-                tmp_path.unlink()
     except Exception:
         logger.warning("Failed to save eval_command.txt", exc_info=True)
 
