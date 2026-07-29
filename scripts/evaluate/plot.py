@@ -162,7 +162,8 @@ def run_compare(args: argparse.Namespace) -> None:
         if args.title:
             title_parts.append(args.title)
         title_parts.extend(pretty_subset(s) for s in sorted(all_subsets))
-        ax.set_title(", ".join(title_parts) or str(metric_cfg["label"]), fontsize=14, fontweight="bold")
+        title = ", ".join(title_parts) or str(metric_cfg["label"])
+        ax.set_title(title, fontsize=14, fontweight="bold")
         ax.set_xlabel(str(metric_cfg["xlabel"]), fontsize=12)
         ax.set_ylabel(str(metric_cfg["label"]), fontsize=12)
         ax.legend(framealpha=0.9)
@@ -407,12 +408,18 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "examples:\n"
-            '  python plot.py compare --source "No Spec=nospec/results.csv" \\\n'
-            '      --source "Eagle3=eagle3/results.csv" --metric latency --title "Qwen3-8B"\n\n'
-            '  python plot.py compare --source "No Spec=nospec/results.csv" \\\n'
-            '      --source "Eagle3=eagle3/results.csv" --metric interactivity\n\n'
-            '  python plot.py speedup --baseline "No Spec=nospec/results.csv" \\\n'
-            '      --target "Eagle3=eagle3/results.csv" --metric latency --title "Qwen3-8B"\n'
+            "  python plot.py compare \\\n"
+            '      --source "No Spec=nospec/results.csv" \\\n'
+            '      --source "Eagle3=eagle3/results.csv" \\\n'
+            '      --metric latency --title "Qwen3-8B"\n\n'
+            "  python plot.py compare \\\n"
+            '      --source "No Spec=nospec/results.csv" \\\n'
+            '      --source "Eagle3=eagle3/results.csv" \\\n'
+            "      --metric interactivity\n\n"
+            "  python plot.py speedup \\\n"
+            '      --baseline "No Spec=nospec/results.csv" \\\n'
+            '      --target "Eagle3=eagle3/results.csv" \\\n'
+            '      --metric latency --title "Qwen3-8B"\n'
         ),
     )
     sub = parser.add_subparsers(dest="command", title="commands")
