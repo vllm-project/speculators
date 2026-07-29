@@ -96,8 +96,8 @@ def parse_args():
         type=str,
         default=None,
         help=(
-            "Directory to write vllm_command.txt and vllm.patch for "
-            "eval reproducibility (e.g. the eval output directory)."
+            "Directory to write vllm_command.txt, vllm.patch, and "
+            "checkpoint_sha256.txt. Defaults to vllm_<model>_<timestamp>/."
         ),
     )
     parser.add_argument(
@@ -357,8 +357,11 @@ def main():
     print("Running command:")
     print(" ".join(cmd))
 
-    if args.provenance_dir:
-        _save_vllm_provenance(cmd, args.provenance_dir, args.model)
+    if not args.provenance_dir:
+        sanitized = args.model.replace("/", "_").replace(" ", "_")
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        args.provenance_dir = f"vllm_{sanitized}_{ts}"
+    _save_vllm_provenance(cmd, args.provenance_dir, args.model)
 
     if not args.dry_run:
         os.execvp(cmd[0], cmd)  # noqa: S606

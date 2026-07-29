@@ -335,8 +335,8 @@ def run_benchmark(args: argparse.Namespace) -> None:
 
     if not (output_dir / "vllm_command.txt").exists():
         logger.info(
-            "Tip: pass --provenance-dir %s to launch_vllm.py "
-            "to capture vLLM launch artifacts here",
+            "Tip: launch_vllm.py saves provenance to vllm_<model>_<ts>/ "
+            "by default, or pass --provenance-dir %s to co-locate here",
             output_dir,
         )
 
