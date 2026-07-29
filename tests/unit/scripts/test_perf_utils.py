@@ -1,4 +1,12 @@
-"""Tests for scripts/evaluate/perf_utils.py."""
+"""Tests for scripts/evaluate/perf_utils.py.
+
+Covers the changed code paths from the guidellm 0.6→0.7 upgrade:
+  - parse_gen_kwargs (replaced build_backend_args)
+  - run_guidellm CLI command construction
+  - _load_json (new JSON output structure)
+  - parse_gen_len_file (new request stats structure)
+  - parse_sweep_file (unchanged, regression guard)
+"""
 
 import importlib.util
 import json
