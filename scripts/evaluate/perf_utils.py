@@ -68,17 +68,14 @@ METRICS: dict[str, dict[str, str | bool]] = {
         "xlabel": DEFAULT_XLABEL,
         "increasing": False,
     },
-    # x = 1000 / ITL_ms (tok/s/user); y = system_tps / num_gpus.
-    # System TPS is total_output_tokens / duration (falls back to guidellm mean),
-    # not the per-request median. Requires --num-gpus.
+    # x = 1000 / ITL_ms (tok/s/user); y = system output TPS (mean).
     "interactivity": {
         "csv_col": "output_tps_mean",
         "json_key": "output_tokens_per_second",
         "stat": "mean",
-        "label": "Token throughput per GPU (tok/s/GPU)",
+        "label": "Output throughput (tok/s)",
         "xlabel": "Interactivity (tok/s/user)",
         "increasing": False,
-        "requires_num_gpus": True,
     },
 }
 
@@ -143,15 +140,11 @@ class Vector(Metric):
 
 
 def _subset_from_sweep_json(data: dict) -> str:
-    """Extract subset name from guidellm 0.7+ or legacy 0.6 sweep JSON."""
+    """Extract subset name from a guidellm sweep JSON."""
     try:
         return Path(
             data["config"]["spec"]["data"][0]["load_kwargs"]["data_files"]
         ).stem
-    except (KeyError, TypeError, IndexError):
-        pass
-    try:
-        return Path(data["args"]["data_args"][0]["data_files"]).stem
     except (KeyError, TypeError, IndexError):
         return "unknown"
 
@@ -209,14 +202,6 @@ def _load_json(
 def _system_tps_from_bench(bench: dict) -> float | None:
     """Aggregate output tokens/s for a benchmark (not per-request median)."""
     metrics = bench.get("metrics", {})
-    try:
-        out = metrics["output_token_count"]["successful"]
-        duration = float(bench["duration"])
-        total = float(out["total_sum"])
-        if duration > 0:
-            return total / duration
-    except (KeyError, TypeError, ValueError, ZeroDivisionError):
-        pass
     try:
         return float(metrics["output_tokens_per_second"]["successful"]["mean"])
     except (KeyError, TypeError, ValueError):
@@ -323,22 +308,18 @@ def load_data(
 
 def transform_interactivity(
     data: dict[str, list[tuple[float, float]]],
-    num_gpus: int,
 ) -> dict[str, list[tuple[float, float]]]:
-    """Transform ``(itl_ms, system_tps)`` into ``(tok/s/user, tok/s/gpu)``.
+    """Transform ``(itl_ms, system_tps)`` into ``(tok/s/user, system_tps)``.
 
-    Interactivity (x) = ``1000 / ITL_ms``; throughput/GPU (y) = ``system_tps / num_gpus``.
+    Interactivity (x) = ``1000 / ITL_ms``; throughput (y) = total system output TPS.
     """
-    if num_gpus <= 0:
-        raise ValueError(f"num_gpus must be positive, got {num_gpus}")
-
     result: dict[str, list[tuple[float, float]]] = {}
     for subset, points in data.items():
         transformed: list[tuple[float, float]] = []
         for itl_ms, system_tps in points:
             if itl_ms <= 0:
                 continue
-            transformed.append((1000.0 / itl_ms, system_tps / num_gpus))
+            transformed.append((1000.0 / itl_ms, system_tps))
         if transformed:
             result[subset] = transformed
     return result

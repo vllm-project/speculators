@@ -14,7 +14,7 @@ Examples:
     python plot.py compare \\
         --source "No Spec=nospec/results.csv" \\
         --source "Eagle3=eagle3/results.csv" \\
-        --metric interactivity --num-gpus 1 --title "Qwen3-8B"
+        --metric interactivity --title "Qwen3-8B"
 
     python plot.py speedup \\
         --baseline "No Spec=nospec/results.csv" \\
@@ -102,35 +102,18 @@ def _plot_compare_subset(
         ax.plot(x_smooth, y_smooth, color=color, linewidth=2.5, label=label, zorder=4)
 
 
-def _require_num_gpus(metrics: list[str], num_gpus: int | None) -> None:
-    needs_gpus = any(METRICS[m].get("requires_num_gpus") for m in metrics)
-    if needs_gpus and num_gpus is None:
-        print(
-            "[ERROR] --num-gpus is required for metric 'interactivity' "
-            "(GPU count is not stored in result CSVs/JSONs).",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    if num_gpus is not None and num_gpus <= 0:
-        print(f"[ERROR] --num-gpus must be positive, got {num_gpus}", file=sys.stderr)
-        sys.exit(1)
-
-
 def _maybe_transform_interactivity(
     data: dict[str, list[tuple[float, float]]],
     metric_name: str,
-    num_gpus: int | None,
 ) -> dict[str, list[tuple[float, float]]]:
-    if not METRICS[metric_name].get("requires_num_gpus"):
+    if metric_name != "interactivity":
         return data
-    assert num_gpus is not None  # validated by _require_num_gpus
-    return transform_interactivity(data, num_gpus)
+    return transform_interactivity(data)
 
 
 def run_compare(args: argparse.Namespace) -> None:
     metrics = args.metric or ["latency"]
     subset_filter = set(args.subsets.split(",")) if args.subsets else None
-    _require_num_gpus(metrics, args.num_gpus)
 
     try:
         sources = parse_source_args(args.source)
@@ -145,9 +128,7 @@ def run_compare(args: argparse.Namespace) -> None:
         metric_cfg = METRICS[metric_name]
         all_data = _collect_all_data(sources, metric_name)
         all_data = {
-            label: _maybe_transform_interactivity(
-                subset_data, metric_name, args.num_gpus
-            )
+            label: _maybe_transform_interactivity(subset_data, metric_name)
             for label, subset_data in all_data.items()
         }
 
@@ -355,7 +336,6 @@ def _plot_speedup_subset(
 def run_speedup(args: argparse.Namespace) -> None:
     metrics = args.metric or ["latency"]
     subset_filter = set(args.subsets.split(",")) if args.subsets else None
-    _require_num_gpus(metrics, args.num_gpus)
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     for metric_name in metrics:
@@ -369,12 +349,8 @@ def run_speedup(args: argparse.Namespace) -> None:
             print(f"[ERROR] {e}", file=sys.stderr)
             sys.exit(1)
 
-        baseline_data = _maybe_transform_interactivity(
-            baseline_data, metric_name, args.num_gpus
-        )
-        target_data = _maybe_transform_interactivity(
-            target_data, metric_name, args.num_gpus
-        )
+        baseline_data = _maybe_transform_interactivity(baseline_data, metric_name)
+        target_data = _maybe_transform_interactivity(target_data, metric_name)
 
         all_subsets = set(baseline_data.keys()) & set(target_data.keys())
         if subset_filter:
@@ -434,7 +410,7 @@ def main() -> None:
             '  python plot.py compare --source "No Spec=nospec/results.csv" \\\n'
             '      --source "Eagle3=eagle3/results.csv" --metric latency --title "Qwen3-8B"\n\n'
             '  python plot.py compare --source "No Spec=nospec/results.csv" \\\n'
-            '      --source "Eagle3=eagle3/results.csv" --metric interactivity --num-gpus 1\n\n'
+            '      --source "Eagle3=eagle3/results.csv" --metric interactivity\n\n'
             '  python plot.py speedup --baseline "No Spec=nospec/results.csv" \\\n'
             '      --target "Eagle3=eagle3/results.csv" --metric latency --title "Qwen3-8B"\n'
         ),
@@ -481,17 +457,6 @@ def main() -> None:
         type=str,
         default=None,
         help="Optional title prefix for plots (e.g. model name)",
-    )
-    cmp.add_argument(
-        "--num-gpus",
-        type=int,
-        default=None,
-        metavar="N",
-        help=(
-            "GPU count for metric 'interactivity' (tok/s/gpu = system_tps / N). "
-            "Required for interactivity; not stored in result CSVs/JSONs "
-            "(see vLLM logs: tensor_parallel_size / world_size)."
-        ),
     )
     cmp.set_defaults(func=run_compare)
 
@@ -542,17 +507,6 @@ def main() -> None:
         type=str,
         default=None,
         help="Optional title prefix for plots (e.g. model name)",
-    )
-    spd.add_argument(
-        "--num-gpus",
-        type=int,
-        default=None,
-        metavar="N",
-        help=(
-            "GPU count for metric 'interactivity' (tok/s/gpu = system_tps / N). "
-            "Required for interactivity; not stored in result CSVs/JSONs "
-            "(see vLLM logs: tensor_parallel_size / world_size)."
-        ),
     )
     spd.set_defaults(func=run_speedup)
 
