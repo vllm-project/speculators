@@ -52,7 +52,7 @@ Hidden states are generated on demand from a live vLLM server, then discarded. U
 
 /// tab | Offline
 
-Hidden states are pre-generated to disk, then read back. Use when GPU resources are limited, so you can give them all to generation and then all to training. Needs substantial disk.
+Hidden states are pre-generated to disk, then read back. Use when GPU resources are limited, so you can give them all to generation and then all to training. Needs substantial disk space.
 
 ///
 
