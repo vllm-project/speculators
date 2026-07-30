@@ -95,12 +95,28 @@ def _sanitize_dir_name(name: str) -> str:
     return name.replace("/", "_").replace(" ", "_")
 
 
+def _speculators_repo_root() -> str | None:
+    try:
+        import speculators  # noqa: PLC0415
+
+        d = os.path.realpath(os.path.dirname(speculators.__file__))
+        while d != os.path.dirname(d):
+            if os.path.isdir(os.path.join(d, ".git")):
+                return d
+            d = os.path.dirname(d)
+    except (ImportError, OSError):
+        pass
+    return None
+
+
 def _git_sha() -> str:
     try:
+        repo = _speculators_repo_root()
         result = subprocess.run(
             ["git", "rev-parse", "HEAD"],  # noqa: S607
             capture_output=True,
             text=True,
+            cwd=repo,
             timeout=5,
             check=False,
         )
@@ -117,9 +133,7 @@ def _pkg_version(name: str) -> str:
 
 
 def _atomic_write(path: Path, content: str) -> None:
-    fd, tmp = tempfile.mkstemp(
-        dir=path.parent, prefix=f".{path.name}_", suffix=".tmp"
-    )
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}_", suffix=".tmp")
     tmp_path = Path(tmp)
     try:
         with os.fdopen(fd, "w") as f:

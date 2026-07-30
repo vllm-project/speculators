@@ -107,11 +107,22 @@ def save_train_command(save_path: str, argv: list[str] | None = None) -> None:
     it during resolution); it falls back to the live ``sys.argv`` when a caller has
     no recorded argv, so a direct call is unchanged.
     """
+    repo_root = None
+    try:
+        d = Path(__file__).resolve().parent
+        while d != d.parent:
+            if (d / ".git").is_dir():
+                repo_root = d
+                break
+            d = d.parent
+    except OSError:
+        pass
     try:
         sha = subprocess.run(
             ["git", "rev-parse", "HEAD"],  # noqa: S607
             capture_output=True,
             text=True,
+            cwd=repo_root,
             check=True,
         ).stdout.strip()
     except (OSError, subprocess.CalledProcessError):

@@ -102,6 +102,17 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--no-hash-checkpoints",
+        action="store_true",
+        default=False,
+        help=(
+            "Skip SHA256 hashing of .safetensors files. Useful for large "
+            "checkpoints where hashing adds significant launch latency. "
+            "When set, checkpoint_sha256.txt records file sizes and "
+            "modification times instead."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print the command that would be executed without running it",
@@ -223,7 +234,9 @@ def _save_vllm_patch(
     _atomic_write(os.path.join(provenance_dir, "vllm.patch"), content)
 
 
-def _save_checkpoint_sha256(provenance_dir: str, model: str) -> None:
+def _save_checkpoint_sha256(
+    provenance_dir: str, model: str, *, skip_hash: bool = False
+) -> None:
     dest = os.path.join(provenance_dir, "checkpoint_sha256.txt")
     model_path = os.path.expanduser(model)
     if not os.path.isdir(model_path):
@@ -235,19 +248,33 @@ def _save_checkpoint_sha256(provenance_dir: str, model: str) -> None:
     if not safetensors:
         _atomic_write(dest, f"# no .safetensors files in {model_path}\n")
         return
-    lines = [
-        f"{_sha256_file(os.path.join(model_path, name))}  {name}"
-        for name in safetensors
-    ]
-    _atomic_write(dest, "\n".join(lines) + "\n")
+    if skip_hash:
+        lines = []
+        for name in safetensors:
+            fp = os.path.join(model_path, name)
+            st = os.stat(fp)
+            lines.append(f"size={st.st_size}  mtime={st.st_mtime}  {name}")
+        header = "# hashing skipped (--no-hash-checkpoints)\n"
+        _atomic_write(dest, header + "\n".join(lines) + "\n")
+    else:
+        lines = [
+            f"{_sha256_file(os.path.join(model_path, name))}  {name}"
+            for name in safetensors
+        ]
+        _atomic_write(dest, "\n".join(lines) + "\n")
 
 
 # ---------------------------------------------------------------------------
 # Top-level entry point
 # ---------------------------------------------------------------------------
 
+
 def _save_vllm_provenance(
-    cmd: list[str], provenance_dir: str, model: str
+    cmd: list[str],
+    provenance_dir: str,
+    model: str,
+    *,
+    skip_hash: bool = False,
 ) -> None:
     """Write vllm_command.txt, vllm.patch, and checkpoint_sha256.txt.
 
@@ -260,9 +287,7 @@ def _save_vllm_provenance(
         return
 
     vllm_repo = _find_vllm_repo()
-    git_sha = _run_git(
-        ["git", "rev-parse", "HEAD"], vllm_repo or "."
-    ) or "unknown"
+    git_sha = _run_git(["git", "rev-parse", "HEAD"], vllm_repo or ".") or "unknown"
     diff = (
         _run_git(
             ["git", "diff", "HEAD"],
@@ -275,15 +300,34 @@ def _save_vllm_provenance(
     vllm_ver = _pkg_version("vllm")
 
     writers = [
-        ("vllm_command.txt", lambda: _save_vllm_command(
-            provenance_dir, cmd, git_sha, diff, vllm_ver,
-        )),
-        ("vllm.patch", lambda: _save_vllm_patch(
-            provenance_dir, vllm_repo, git_sha, diff, vllm_ver,
-        )),
-        ("checkpoint_sha256.txt", lambda: _save_checkpoint_sha256(
-            provenance_dir, model,
-        )),
+        (
+            "vllm_command.txt",
+            lambda: _save_vllm_command(
+                provenance_dir,
+                cmd,
+                git_sha,
+                diff,
+                vllm_ver,
+            ),
+        ),
+        (
+            "vllm.patch",
+            lambda: _save_vllm_patch(
+                provenance_dir,
+                vllm_repo,
+                git_sha,
+                diff,
+                vllm_ver,
+            ),
+        ),
+        (
+            "checkpoint_sha256.txt",
+            lambda: _save_checkpoint_sha256(
+                provenance_dir,
+                model,
+                skip_hash=skip_hash,
+            ),
+        ),
     ]
     for artifact, write in writers:
         try:
@@ -355,7 +399,12 @@ def main():
         sanitized = args.model.replace("/", "_").replace(" ", "_")
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         args.provenance_dir = f"vllm_{sanitized}_{ts}"
-    _save_vllm_provenance(cmd, args.provenance_dir, args.model)
+    _save_vllm_provenance(
+        cmd,
+        args.provenance_dir,
+        args.model,
+        skip_hash=args.no_hash_checkpoints,
+    )
 
     if not args.dry_run:
         os.execvp(cmd[0], cmd)  # noqa: S606
