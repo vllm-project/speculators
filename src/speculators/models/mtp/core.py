@@ -69,8 +69,9 @@ class MTPDraftModel(DraftVocabMixin, SpeculatorModel):
     d2t: torch.Tensor | None
 
     def __init__(self, config: MTPSpeculatorConfig) -> None:
+        # SDPA, not eager — eager OOMs on long sequences (#886).
         if config.transformer_layer_config._attn_implementation is None:  # noqa: SLF001
-            config.transformer_layer_config._attn_implementation = "eager"  # noqa: SLF001
+            config.transformer_layer_config._attn_implementation = "sdpa"  # noqa: SLF001
         super().__init__(config=config)
         self._init_vocab(config)
         if self.use_draft_vocab:
