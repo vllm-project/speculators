@@ -8,7 +8,7 @@ Pick an algorithm and a training mode below; the rest of the walkthrough is the 
 
 ### 1. Pick an algorithm
 
-All five are lossless: they produce output from the same distribution as the target model. See the [Decision Guide](../algorithms/decision_guide.md) if you're unsure. You don't need to memorize the flags -- [Step 4](#step-4-train) gives a complete command for whichever pair you choose.
+All five are lossless: they produce output from the same distribution as the target model. See the [Decision Guide](../algorithms/decision_guide.md) if you're unsure.
 
 /// tab | Eagle-3
 
