@@ -284,15 +284,11 @@ Nothing to do up front. The first epoch generates hidden states from the live vL
 
 ## Step 4: Train
 
-Wait for vLLM to finish launching (online and hybrid modes). In a **separate terminal** on the same node, start training.
-
-The commands below assume a four-GPU node: vLLM holds GPUs 0-1 from Step 2, so training takes 2-3. Adjust `CUDA_VISIBLE_DEVICES` and `--nproc_per_node` to your machine -- in offline mode vLLM is already stopped, so training can use all of them.
-
-Pick your mode and algorithm below -- each combination gives a complete command. Both selections follow you across the page.
-
 //// tab | Online
 
-Hidden states stream from the live vLLM server and are discarded after use. vLLM must stay up for the whole run.
+Wait for vLLM to finish launching. In a **separate terminal** on the same node, start training. Hidden states stream from the live vLLM server and are discarded after use. vLLM must stay up for the whole run.
+
+The commands below assume a four-GPU node: vLLM holds GPUs 0-1 from Step 2, so training takes 2-3. Adjust `CUDA_VISIBLE_DEVICES` and `--nproc_per_node` to your machine
 
 /// tab | Eagle-3
 
@@ -424,11 +420,13 @@ python scripts/stitch_mtp.py \
 
 Reads the hidden states cached in Step 3. vLLM is not needed during training.
 
+The commands below assume a four-GPU node: since vLLM is no longer needed once data generation is complete, we can use all gpus for training. Adjust `CUDA_VISIBLE_DEVICES` and `--nproc_per_node` to your machine
+
 /// tab | Eagle-3
 
 ```bash
 # in speculators venv
-CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
+CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nproc_per_node 4 \
   scripts/train.py \
   --verifier-name-or-path Qwen/Qwen3-8B \
   --data-path ./output \
@@ -446,7 +444,7 @@ CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
 
 ```bash
 # in speculators venv
-CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
+CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nproc_per_node 4 \
   scripts/train.py \
   --verifier-name-or-path Qwen/Qwen3-8B \
   --data-path ./output \
@@ -470,7 +468,7 @@ CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
 
 ```bash
 # in speculators venv
-CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
+CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nproc_per_node 4 \
   scripts/train.py \
   --verifier-name-or-path Qwen/Qwen3-8B \
   --data-path ./output \
@@ -491,7 +489,7 @@ CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
 
 ```bash
 # in speculators venv
-CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
+CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nproc_per_node 4 \
   scripts/train.py \
   --verifier-name-or-path Qwen/Qwen3-8B \
   --data-path ./output \
@@ -513,7 +511,7 @@ CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
 
 ```bash
 # in speculators venv
-CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
+CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nproc_per_node 4 \
   scripts/train.py \
   --verifier-name-or-path Qwen/Qwen3.5-9B \
   --data-path ./output \
@@ -546,7 +544,9 @@ python scripts/stitch_mtp.py \
 
 //// tab | Hybrid
 
-The first epoch generates hidden states from the live vLLM server and caches them; later epochs read the cache.
+Wait for vLLM to finish launching. In a **separate terminal** on the same node, start training. The first epoch generates hidden states from the live vLLM server and caches them; later epochs read the cache. vLLM can be stopped after the first epoch.
+
+The commands below assume a four-GPU node: vLLM holds GPUs 0-1 from Step 2, so training takes 2-3. Adjust `CUDA_VISIBLE_DEVICES` and `--nproc_per_node` to your machine
 
 /// tab | Eagle-3
 
