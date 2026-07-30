@@ -559,19 +559,6 @@ def build_draft_model(
             # __init__ resolves its own default ("eager") when it is absent.
             config = model_class.config_class.from_pretrained(args.from_pretrained)
             config.transformer_layer_config._attn_implementation = args.draft_attn_impl
-
-            # Overlay sliding window config from CLI args — the checkpoint may
-            # predate the default-sliding-window change (#749).
-            tl = config.transformer_layer_config
-            full_attn_idx = set(args.full_attention_indices or [])
-            layer_types = [
-                "full_attention" if i in full_attn_idx else "sliding_attention"
-                for i in range(tl.num_hidden_layers)
-            ]
-            tl.sliding_window = args.sliding_window
-            tl.use_sliding_window = "sliding_attention" in layer_types
-            tl.layer_types = layer_types
-
             return model_class.from_pretrained(
                 args.from_pretrained,
                 config=config,
@@ -668,26 +655,13 @@ def main(cfg: TrainConfig):  # noqa: C901
             "(draft_mrope_full_head_hack=False)"
         )
 
-    if args.fsdp_shard and not is_distributed():
-        raise ValueError(
-            "--fsdp-shard requires launching with torchrun/distributed training; "
-            "otherwise parameters are not sharded."
-        )
-
-
+    # Write the reproducibility artifacts (run.yaml + train_command.txt) next to
+    # the checkpoints at rank 0 only, so every checkpoint carries the resolved
+    # config that produced it.
     if get_rank() == 0:
         cfg.save(args.save_path)
 
     hidden_states_dtype = getattr(torch, args.hidden_states_dtype)
-
-    if hidden_states_dtype == torch.float16:
-        raise ValueError(
-            "--hidden-states-dtype=float16 is not supported. "
-            "float16 with torch.autocast requires gradient scaling (GradScaler) to "
-            "prevent gradient underflow, which is not implemented. "
-            "Use bfloat16 instead, which provides the same memory savings with "
-            "better numerical stability and no gradient scaling required."
-        )
 
     if args.speculator_type == "mtp":
         if args.draft_attn_impl != "simple_flex_attention":
