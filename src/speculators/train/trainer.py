@@ -93,6 +93,10 @@ class _StepTimer:
 warnings.filterwarnings("ignore", category=TqdmExperimentalWarning)
 MIN_STEP_PCT = 0.25
 
+# Re-synchronise ranks every N validation batches to bound cross-rank skew, which would
+# otherwise blow the NCCL watchdog at the end-of-epoch metrics all-reduce. 0 disables.
+_VAL_SYNC_INTERVAL = 50
+
 
 class TrainerConfig(NamedTuple):
     lr: float
@@ -118,6 +122,7 @@ class TrainerConfig(NamedTuple):
     hidden_states_dtype: torch.dtype = torch.bfloat16
     log_freq: int = 1
     fsdp_shard: bool = False
+    max_steps: int | None = None
 
 
 def _resolve_scheduler_steps(
@@ -503,6 +508,12 @@ class Trainer:
             self.global_step += 1
 
             if (
+                self.config.max_steps is not None
+                and self.global_step >= self.config.max_steps
+            ):
+                break
+
+            if (
                 step_interval is not None
                 and not self.config.save_best
                 and local_step % step_interval == 0
@@ -510,6 +521,12 @@ class Trainer:
                 # Avoid saving back to back ay the end of each epoch
             ):
                 self.maybe_save_checkpoint(epoch, local_step=local_step)
+
+    def _maybe_val_sync(self, batch_index: int) -> None:
+        if not self.is_distributed or _VAL_SYNC_INTERVAL <= 0:
+            return
+        if batch_index > 0 and batch_index % _VAL_SYNC_INTERVAL == 0:
+            dist.barrier()
 
     @torch.no_grad()
     def val_epoch(self, epoch: int) -> dict[str, float] | None:
@@ -524,7 +541,8 @@ class Trainer:
 
         accumulated: dict[str, torch.Tensor] = {}
         num_batches = len(val_loader)
-        for batch in val_loader:
+        for i, batch in enumerate(val_loader):
+            self._maybe_val_sync(i)
             gpu_batch = {
                 k: v.to(self.local_rank, non_blocking=True)
                 if isinstance(v, torch.Tensor)
