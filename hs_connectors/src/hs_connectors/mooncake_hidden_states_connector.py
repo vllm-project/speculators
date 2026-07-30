@@ -201,12 +201,6 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
         self._kv_cache = kv_caches[cache_layers[0]]
         self._copy_stream = torch.cuda.Stream()
 
-    def _get_copy_stream(self) -> torch.cuda.Stream:
-        """Return the dedicated copy stream, lazily creating it if needed."""
-        if self._copy_stream is None:
-            self._copy_stream = torch.cuda.Stream()
-        return self._copy_stream
-
     def _get_executor(self) -> ThreadPoolExecutor:
         if self._executor is None:
             self._executor = ThreadPoolExecutor(
@@ -224,8 +218,9 @@ class MooncakeHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
         self, pending: PendingSave, ready_event: torch.cuda.Event
     ) -> None:
         assert self._kv_cache is not None
+        assert self._copy_stream is not None
 
-        copy_stream = self._get_copy_stream()
+        copy_stream = self._copy_stream
         # Make the copy stream wait until the forward pass has finished
         # writing to the KV cache (the event was recorded on the default
         # stream in get_finished).
