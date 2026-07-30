@@ -62,8 +62,6 @@ Hidden states are generated on demand during epoch 0, cached, then reused. Use w
 
 ///
 
-Your picks follow you down the page: Steps 3 and 4 show the algorithm and mode you select here.
-
 ## Step 0: Setup Your Environment
 
 This tutorial drives the pipeline through the scripts in the repository (`scripts/prepare_data.py`, `scripts/train.py`, and so on). Those are not part of the published PyPI package, so start by cloning the repo -- every command below is run from its root:
