@@ -689,7 +689,9 @@ class TrainConfig(BaseSettings):
         """Inverse of :meth:`flatten`: recover the typed config from a flat
         working-dict. Non-config keys are dropped; the value validators are
         idempotent on already-resolved values."""
-        from speculators.train.config.resolution import _BACKEND_DESTS  # noqa: PLC0415
+        from speculators.train.config.resolution import (  # noqa: PLC0415
+            _BACKEND_DESTS,  # circular
+        )
 
         known = {dest: value for dest, value in flat.items() if dest in CONFIG_DESTS}
         backend = {

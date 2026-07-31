@@ -9,10 +9,13 @@ can run on different nodes.
 from __future__ import annotations
 
 import json
+import logging
 import time
 from dataclasses import dataclass
 
 import torch
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -20,8 +23,8 @@ class MooncakeStoreConfig:
     """Connection settings, passed straight to ``MooncakeDistributedStore.setup``."""
 
     local_hostname: str = "localhost"
-    metadata_server: str = "http://localhost:8080/metadata"
-    master_server_address: str = "localhost:50051"
+    metadata_server: str = "P2PHANDSHAKE"
+    master_server_address: str = "127.0.0.1:50051"
     global_segment_size: int = 4 * 1024 * 1024 * 1024
     local_buffer_size: int = 2 * 1024 * 1024 * 1024
     protocol: str = "tcp"
@@ -32,6 +35,9 @@ class MooncakeStoreConfig:
     def from_dict(cls, d: dict | None) -> MooncakeStoreConfig:
         d = d or {}
         known = set(cls.__dataclass_fields__)  # type: ignore[attr-defined]
+        unknown = set(d) - known
+        if unknown:
+            logger.warning("Unknown MooncakeStoreConfig keys ignored: %s", unknown)
         return cls(**{k: v for k, v in d.items() if k in known})
 
 
@@ -79,7 +85,8 @@ class MooncakeHiddenStatesStore:
         return self
 
     def put_sample(self, key: str, tensors: dict[str, torch.Tensor]) -> None:
-        assert self._store is not None, "call setup() first"
+        if self._store is None:
+            raise RuntimeError("call setup() first")
         names = []
         for name, tensor in tensors.items():
             self._store.put_tensor(
@@ -90,7 +97,8 @@ class MooncakeHiddenStatesStore:
 
     def delete_sample(self, key: str) -> None:
         """Remove all keys for a sample from the store."""
-        assert self._store is not None, "call setup() first"
+        if self._store is None:
+            raise RuntimeError("call setup() first")
         raw = self._store.get(f"{key}:meta")
         if not raw:
             return
@@ -101,7 +109,8 @@ class MooncakeHiddenStatesStore:
     def get_sample(
         self, key: str, timeout: float = 120.0, poll_interval: float = 0.05
     ) -> dict[str, torch.Tensor]:
-        assert self._store is not None, "call setup() first"
+        if self._store is None:
+            raise RuntimeError("call setup() first")
         names = json.loads(self._wait_for(f"{key}:meta", timeout, poll_interval))
         result = {}
         for name in names:
@@ -112,7 +121,8 @@ class MooncakeHiddenStatesStore:
         return result
 
     def _wait_for(self, key: str, timeout: float, poll_interval: float) -> bytes:
-        assert self._store is not None, "call setup() first"
+        if self._store is None:
+            raise RuntimeError("call setup() first")
         deadline = time.monotonic() + timeout
         while True:
             raw = self._store.get(key)

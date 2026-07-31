@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import dataclasses
 import fcntl
 import os
 import shutil
+import socket
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -13,11 +15,11 @@ from typing import TYPE_CHECKING, Any, ClassVar
 import torch
 from safetensors.torch import load_file
 
+from hs_connectors.mooncake_store import MooncakeHiddenStatesStore, MooncakeStoreConfig
+
 if TYPE_CHECKING:
     import argparse
     from collections.abc import Callable
-
-    from hs_connectors.mooncake_store import MooncakeHiddenStatesStore
 
 
 def wait_for_lock(lock_path: str, timeout: float = 10.0, poll_interval: float = 0.1):
@@ -267,14 +269,6 @@ class MooncakeBackend(HiddenStatesBackend):
         args: argparse.Namespace,
         data_path: str,  # noqa: ARG004
     ) -> MooncakeTransfer:
-        import os  # noqa: PLC0415
-        import socket  # noqa: PLC0415
-
-        from hs_connectors.mooncake_store import (  # noqa: PLC0415
-            MooncakeHiddenStatesStore,
-            MooncakeStoreConfig,
-        )
-
         local_hostname = os.environ.get(
             "MOONCAKE_LOCAL_HOSTNAME"
         ) or socket.gethostbyname(socket.gethostname())
@@ -291,13 +285,6 @@ class MooncakeBackend(HiddenStatesBackend):
 
     @staticmethod
     def build_kv_transfer_config(args: argparse.Namespace) -> dict[str, Any]:
-        import os  # noqa: PLC0415
-        import socket  # noqa: PLC0415
-
-        from hs_connectors.mooncake_store import (  # noqa: PLC0415
-            MooncakeStoreConfig,
-        )
-
         local_hostname = os.environ.get(
             "MOONCAKE_LOCAL_HOSTNAME"
         ) or socket.gethostbyname(socket.gethostname())
@@ -316,15 +303,6 @@ class MooncakeBackend(HiddenStatesBackend):
                 "hs_connectors.mooncake_hidden_states_connector"
             ),
             "kv_connector_extra_config": {
-                "mooncake": {
-                    "local_hostname": mooncake_cfg.local_hostname,
-                    "metadata_server": mooncake_cfg.metadata_server,
-                    "master_server_address": mooncake_cfg.master_server_address,
-                    "global_segment_size": mooncake_cfg.global_segment_size,
-                    "local_buffer_size": mooncake_cfg.local_buffer_size,
-                    "protocol": mooncake_cfg.protocol,
-                    "device_name": mooncake_cfg.device_name,
-                    "num_writer_threads": mooncake_cfg.num_writer_threads,
-                }
+                "mooncake": dataclasses.asdict(mooncake_cfg),
             },
         }
