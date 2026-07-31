@@ -10,27 +10,32 @@ __all__ = [
 ]
 
 
+NormalizeFn = Callable[[dict], dict]
+
+
 @dataclass(kw_only=True)
 class DatasetConfig:
-    """Configuration for loading a dataset"""
+    """Configuration for loading a dataset.
+
+    Datasets already in the canonical ``conversations`` schema (or using the
+    OpenAI-style ``messages`` key, which is renamed to ``conversations``
+    automatically during ingestion) need no normalizer. ``normalize_fn`` is an
+    explicit escape hatch for any other schema (e.g. prompt/answer pairs or
+    multi-modal datasets).
+    """
 
     name: str
     hf_path: str
     subset: str | None = None
     split: str
     filter_fn: Callable[[dict], bool] | None = None
-    normalize_fn: Callable[[dict], dict] | None = None
+    normalize_fn: NormalizeFn | None = None
     # Bare user-prompt column, used when a row has no conversation.
     prompt_field: str | None = None
 
 
-def _normalize_ultrachat(example: dict) -> dict:
-    if "messages" in example:
-        return {"conversations": example["messages"]}
-    return example
-
-
 def _normalize_gsm8k(example: dict) -> dict:
+    """Build a conversation from a GSM8K ``question``/``answer`` pair."""
     return {
         "conversations": [
             {"role": "user", "content": example["question"]},
@@ -113,8 +118,8 @@ DATASET_CONFIGS: dict[str, DatasetConfig] = {
         name="ultrachat",
         hf_path="HuggingFaceH4/ultrachat_200k",
         split="train_sft",
-        normalize_fn=_normalize_ultrachat,
         prompt_field="prompt",
+        # 'messages' column is renamed to 'conversations' automatically.
     ),
     "gsm8k": DatasetConfig(
         name="gsm8k",
