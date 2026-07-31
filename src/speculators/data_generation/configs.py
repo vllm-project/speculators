@@ -146,6 +146,14 @@ DATASET_CONFIGS: dict[str, DatasetConfig] = {
         filter_fn=_filter_sharegpt4v_coco,
         normalize_fn=_normalize_sharegpt4v_coco,
     ),
+    "opd": DatasetConfig(
+        name="opd",
+        hf_path="data/opd_prompts_raw.jsonl",
+        split="train",
+        normalize_fn=lambda row: {
+            "conversations": row["prompt"],
+        },
+    ),
     "open-perfectblend": DatasetConfig(
         name="open-perfectblend",
         hf_path="mlabonne/open-perfectblend",

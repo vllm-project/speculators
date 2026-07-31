@@ -777,7 +777,10 @@ async def main():
     print()
 
     seen_ids = load_seen(args.outfile) if args.resume else set()
-    dataset = load_dataset(dataset_id, name=subset, split=split, streaming=True)
+    if dataset_id.endswith((".jsonl", ".json")):
+        dataset = load_dataset("json", data_files=dataset_id, split=split, streaming=True)
+    else:
+        dataset = load_dataset(dataset_id, name=subset, split=split, streaming=True)
 
     queue: asyncio.Queue = asyncio.Queue(maxsize=args.concurrency * 4)
 

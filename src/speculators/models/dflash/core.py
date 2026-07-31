@@ -16,6 +16,7 @@ from speculators.models.dflash import DFlashSpeculatorConfig
 from speculators.models.dflash.attention import create_anchor_block_mask_mod
 from speculators.models.dflash.metrics import compute_metrics
 from speculators.models.dflash.model_definitions import Qwen3DFlashDecoderLayer
+from speculators.models.opd_loss import build_accept_mask, compute_opd_metrics
 from speculators.models.dflash.utils import (
     get_base_indices_for_anchored_blocks,
     select_anchors,
@@ -248,6 +249,12 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             "per_position_loss_weight": per_position_loss_weight,
             "dpace_alpha": dpace_alpha,
         }
+        training_stage = kwargs.get("training_stage", "sft")
+        if training_stage == "opd":
+            shared["training_stage"] = "opd"
+            shared["gamma_opd"] = kwargs.get("gamma_opd", 0.8)
+            shared["lambda_acc"] = kwargs.get("lambda_acc", 1.0)
+            shared["lambda_rej"] = kwargs.get("lambda_rej", 1.0)
         return dict(shared), dict(shared)
 
     @property
@@ -443,6 +450,10 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         max_anchors: int = 3072,
         per_position_loss_weight: str = "fixed-exp-decay",
         dpace_alpha: float = 0.5,
+        training_stage: str = "sft",
+        gamma_opd: float = 0.8,
+        lambda_acc: float = 1.0,
+        lambda_rej: float = 1.0,
         **kwargs,
     ):
         _, logits, targets, aligned_loss_mask, _ = self._backbone_forward(
@@ -455,15 +466,23 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             max_anchors=max_anchors,
             **kwargs,
         )
-        loss, metrics = compute_metrics(
-            logits,
-            targets,
-            aligned_loss_mask,
-            self.block_size,
-            gamma=gamma,
-            loss_config=loss_config,
-            per_position_loss_weight=per_position_loss_weight,
-            dpace_alpha=dpace_alpha,
-            sample_from_anchor=self.config.sample_from_anchor,
-        )
+        if training_stage == "opd":
+            accept_mask = build_accept_mask(
+                logits, targets, self.block_size,
+                self.config.sample_from_anchor,
+            )
+            loss, metrics = compute_opd_metrics(
+                logits, targets, accept_mask, aligned_loss_mask,
+                self.block_size, gamma=gamma_opd,
+                lambda_acc=lambda_acc, lambda_rej=lambda_rej,
+                sample_from_anchor=self.config.sample_from_anchor,
+            )
+        else:
+            loss, metrics = compute_metrics(
+                logits, targets, aligned_loss_mask, self.block_size,
+                gamma=gamma, loss_config=loss_config,
+                per_position_loss_weight=per_position_loss_weight,
+                dpace_alpha=dpace_alpha,
+                sample_from_anchor=self.config.sample_from_anchor,
+            )
         return None, loss, metrics
