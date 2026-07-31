@@ -47,6 +47,16 @@ def _dataset_choice(name: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def ensure_parent_dirs(*paths: str) -> None:
+    """Create parent directories for output files.
+
+    open(..., "a") creates the file but not its parent directories.
+    """
+    for path in paths:
+        if parent := os.path.dirname(path):
+            os.makedirs(parent, exist_ok=True)
+
+
 def parse_args():
     """Parse command-line arguments for the script."""
     parser = argparse.ArgumentParser(
@@ -780,6 +790,8 @@ async def main():
     dataset = load_dataset(dataset_id, name=subset, split=split, streaming=True)
 
     queue: asyncio.Queue = asyncio.Queue(maxsize=args.concurrency * 4)
+
+    ensure_parent_dirs(args.outfile, error_outfile)
 
     timeout = aiohttp.ClientTimeout(total=None, sock_connect=90, sock_read=None)
     connector = aiohttp.TCPConnector(

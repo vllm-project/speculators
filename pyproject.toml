@@ -55,10 +55,10 @@ dependencies = [
     "pydantic-settings>=2.0.0",
     "rich",
     "safetensors",
-    "torch>=2.9.0,<=2.12.1",
+    "torch>=2.9.0,<=2.13.0",
     "torchaudio",
     "torchvision",
-    "tqdm>=4.66.3,<=4.69.0",
+    "tqdm>=4.66.3,<=4.70.0",
     "transformers>=4.56.1,<5.15.0",
     "typer>=0.12.0",
 ]
@@ -83,6 +83,7 @@ dev = [
     "mkdocstrings-python~=2.0.5",
     "mkdocs-gen-files~=0.6.1",
     "mkdocs-nav-weight~=0.3.0",
+    "mkdocs-redirects~=1.2.3",
     "pygments<2.20.0",
 
     # general and configurations
@@ -144,7 +145,7 @@ exclude = ["venv", "build", "dist"]
 follow_imports = 'silent'
 
 [[tool.mypy.overrides]]
-module = ["datasets.*", "transformers.*", "setuptools.*", "setuptools_git_versioning.*", "vllm.*", "triton.*"]
+module = ["datasets.*", "transformers.*", "setuptools.*", "setuptools_git_versioning.*", "vllm.*", "triton.*", "hs_connectors.*", "mooncake.*"]
 ignore_missing_imports=true
 
 [tool.ruff]
@@ -268,6 +269,7 @@ select = [
 "hs_connectors/**/*.py" = [
     "INP001", # separate package
     "PTH", # os.path acceptable
+    "S101", # assert for internal invariants is acceptable
 ]
 
 [tool.ruff.lint.isort]

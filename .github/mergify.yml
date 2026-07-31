@@ -79,13 +79,28 @@ pull_request_rules:
           - quality-failed
 
 merge_protections:
+  - name: Require approval from approved reviewers list
+    description: >-
+      All pull requests must have at least one approving review from a
+      member of the approved reviewers list before merging.
+    if: []
+    success_conditions:
+      - &approved_reviewer_check
+        or:
+          - approved-reviews-by = fynnsu
+          - approved-reviews-by = shanjiaz
+          - approved-reviews-by = dsikka
+          - approved-reviews-by = rahul-tuli
+          - approved-reviews-by = orestis-z
+
   - name: Require two reviews
     description: >-
-      PRs labelled "two-reviews" must have at least two approving reviews
-      before merging.
+      PRs labelled "two-reviews" must have at least two approving reviews,
+      with at least one from the approved reviewers list, before merging.
     if:
       - label = two-reviews
     success_conditions:
       - "#approved-reviews-by >= 2"
+      - *approved_reviewer_check
 merge_protections_settings:
   reporting_method: check-runs

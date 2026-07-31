@@ -3,7 +3,7 @@ import math
 import os
 import random
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from os import PathLike
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -208,7 +208,8 @@ class ArrowDataset(BaseDataset):
         vllm_endpoint: str = "http://localhost:8000/v1",
         on_missing: Literal["generate", "skip", "warn", "raise"] = "generate",
         on_generate: Literal["cache", "delete"] = "delete",
-        split_ratio: float = 1.0,
+        train_ratio: float = 1.0,
+        split: Literal["train", "val"] = "train",
         transform: TransformTensors | None = None,
         hidden_states_dtype=torch.bfloat16,
         model: str | None = None,
@@ -216,19 +217,24 @@ class ArrowDataset(BaseDataset):
         max_retries: int = DEFAULT_MAX_RETRIES,
     ):
         self.data = load_from_disk(datapath)
-        self.start_file_idx = 0
-        if split_ratio == 1.0:
-            pass
-        elif 1.0 > split_ratio > 0:
-            self.start_file_idx = 0
-            split_idx = int(len(self.data) * split_ratio)
-            self.data = self.data.select(range(split_idx))
-        elif -1.0 < split_ratio < 0:
-            split_idx = int(len(self.data) * (1.0 + split_ratio))
-            self.start_file_idx = split_idx
-            self.data = self.data.select(range(split_idx, len(self.data)))
-        else:
-            raise ValueError("split_ratio must be in range (-1.0, 1.0] excluding 0.0.")
+        if not 0.0 < train_ratio <= 1.0:
+            raise ValueError(f"train_ratio must be in (0.0, 1.0], got {train_ratio}")
+        if split == "val" and train_ratio == 1.0:
+            raise ValueError("train_ratio=1.0 leaves no validation split")
+
+        # Both splits derive their boundary from this one expression,
+        # so they are exactly complementary.
+        split_idx = int(len(self.data) * train_ratio)
+        start, stop = (
+            (0, split_idx) if split == "train" else (split_idx, len(self.data))
+        )
+        if start >= stop:
+            raise ValueError(
+                f"{split} split is empty (dataset has {len(self.data)} rows, "
+                f"train_ratio={train_ratio} gives split_idx={split_idx})"
+            )
+        self.start_file_idx = start
+        self.data = self.data.select(range(start, stop))
 
         self.transfer = transfer or FileTransfer(Path(datapath) / "hidden_states")
         self.vllm_endpoint = vllm_endpoint
@@ -452,14 +458,28 @@ class SampleFileDataset(BaseDataset):
         )
 
 
-def create_collate_fn(
-    max_len: int,
-    hidden_size: int,
-    num_target_layers: int = 3,
-    dtype: torch.dtype = torch.bfloat16,
-    preprocess: Callable[[BatchType], BatchType] | None = None,
-):
-    def collate_fn(batch: list[BatchType | None]) -> BatchType:
+class CollateFn:
+    """Picklable collate function for use with ``multiprocessing_context='spawn'``."""
+
+    def __init__(
+        self,
+        max_len: int,
+        hidden_size: int,
+        num_target_layers: int = 3,
+        dtype: torch.dtype = torch.bfloat16,
+        preprocess: Callable[[BatchType], BatchType] | None = None,
+    ):
+        self.max_len = max_len
+        self.hidden_size = hidden_size
+        self.num_target_layers = num_target_layers
+        self.dtype = dtype
+        self.preprocess = preprocess
+
+    def __call__(self, batch: Sequence[BatchType | None]) -> BatchType:
+        max_len = self.max_len
+        dtype = self.dtype
+        preprocess = self.preprocess
+
         # Apply per-sample preprocessing and filter failed samples
         batch = [preprocess(b) if preprocess else b for b in batch if b is not None]
 
@@ -469,7 +489,9 @@ def create_collate_fn(
             # Match the configured `dtype` so the placeholder doesn't crash
             # downstream layers loaded at a different precision (e.g. bf16
             # weights vs fp32 default placeholders).
-            empty = create_empty_sample(hidden_size, num_target_layers, dtype=dtype)
+            empty = create_empty_sample(
+                self.hidden_size, self.num_target_layers, dtype=dtype
+            )
             if preprocess:
                 empty = preprocess(empty)
             batch = [empty]
@@ -524,5 +546,3 @@ def create_collate_fn(
         collated_data["document_ids"] = document_ids
 
         return collated_data
-
-    return collate_fn
