@@ -112,7 +112,14 @@ def extract_output(
     if kv_transfer_params is None:
         raise InvalidResponseError("Response missing kv_transfer_params")
 
-    return kv_transfer_params.get("hidden_states_path")
+    handle = kv_transfer_params.get("hidden_states_path") or kv_transfer_params.get(
+        "handle"
+    )
+    if handle is None:
+        raise InvalidResponseError(
+            "Response kv_transfer_params missing both 'hidden_states_path' and 'handle'"
+        )
+    return handle
 
 
 class ClientItem(TypedDict):

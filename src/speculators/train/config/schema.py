@@ -205,11 +205,6 @@ class DataArgs(_Group):
         "arguments. Default: 'file'.",
         json_schema_extra=_CLI_CHOICES,
     )
-    hidden_states_path: str | None = Field(
-        default=None,
-        description="Path where cached hidden states are stored "
-        "(default: <data-path>/hidden_states). Contributed by the 'file' backend.",
-    )
     total_seq_len: int = Field(
         default=8192, description="Maximum training sequence length, in tokens."
     )
@@ -587,6 +582,7 @@ class TrainConfig(BaseSettings):
     # Exposed read-only via the ``provenance`` / ``argv`` properties below.
     _provenance: dict[str, str] = PrivateAttr(default_factory=dict)
     _argv: list[str] = PrivateAttr(default_factory=list)
+    _backend_args: dict[str, Any] = PrivateAttr(default_factory=dict)
 
     @property
     def provenance(self) -> Mapping[str, str]:
@@ -597,6 +593,11 @@ class TrainConfig(BaseSettings):
     def argv(self) -> Sequence[str]:
         """The argv the run was resolved from."""
         return tuple(self._argv)
+
+    @property
+    def backend_args(self) -> Mapping[str, Any]:
+        """Backend-contributed args (not pydantic fields), read-only."""
+        return MappingProxyType(self._backend_args)
 
     speculator_type: str = Field(
         default="eagle3",
@@ -680,6 +681,7 @@ class TrainConfig(BaseSettings):
             group = getattr(self, gname)
             for fname in type(group).model_fields:
                 values[fname] = getattr(group, fname)
+        values.update(self._backend_args)
         return values
 
     @classmethod
@@ -687,8 +689,17 @@ class TrainConfig(BaseSettings):
         """Inverse of :meth:`flatten`: recover the typed config from a flat
         working-dict. Non-config keys are dropped; the value validators are
         idempotent on already-resolved values."""
+        from speculators.train.config.resolution import (  # noqa: PLC0415
+            _BACKEND_DESTS,  # circular
+        )
+
         known = {dest: value for dest, value in flat.items() if dest in CONFIG_DESTS}
-        return cls(**nest_flat(known))
+        backend = {
+            dest: value for dest, value in flat.items() if dest in _BACKEND_DESTS
+        }
+        cfg = cls(**nest_flat(known))
+        cfg._backend_args = backend
+        return cfg
 
     @classmethod
     def from_sources(
@@ -697,6 +708,7 @@ class TrainConfig(BaseSettings):
         cli: dict[str, Any],
         config_path: str | None = None,
         argv: list[str],
+        backend_cli: dict[str, Any] | None = None,
     ) -> "TrainConfig":
         """The pure, argv-free core: layer the sources into a validated config and
         record each value's origin. Raises on bad input; never exits.
@@ -704,13 +716,14 @@ class TrainConfig(BaseSettings):
         ``cli`` is the flat ``{dest: value}`` map of flags the user passed;
         ``config_path`` names an optional stage-shaped YAML file layered beneath
         the flags; ``argv`` is the command recorded for the reproducibility
-        manifest. This is the primary test seam -- it can be exercised without
-        ``sys.argv``.
+        manifest; ``backend_cli`` carries backend-contributed args that bypass
+        the pydantic schema. This is the primary test seam -- it can be exercised
+        without ``sys.argv``.
         """
         from speculators.train.config import resolution  # noqa: PLC0415
 
         return resolution.build_from_sources(
-            cls, cli=cli, config_path=config_path, argv=argv
+            cls, cli=cli, config_path=config_path, argv=argv, backend_cli=backend_cli
         )
 
     @classmethod
