@@ -5,6 +5,7 @@ import torch
 from torch import nn
 from torch.nn.attention.flex_attention import create_block_mask, create_mask
 from transformers import PretrainedConfig
+from transformers.models.gemma3.modeling_gemma3 import Gemma3RMSNorm
 from transformers.models.qwen3.modeling_qwen3 import (
     Qwen3RMSNorm,
     Qwen3RotaryEmbedding,
@@ -106,7 +107,20 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             config.transformer_layer_config.hidden_size,
             eps=config.transformer_layer_config.rms_norm_eps,  # type: ignore[arg-type]
         )
-        self.verifier_norm = Qwen3RMSNorm(
+        verifier_architectures = (
+            config.speculators_config.verifier.architectures
+            if config.speculators_config is not None
+            else []
+        )
+        verifier_norm_cls = (
+            Gemma3RMSNorm
+            if any(
+                architecture.startswith("Gemma3")
+                for architecture in verifier_architectures
+            )
+            else Qwen3RMSNorm
+        )
+        self.verifier_norm = verifier_norm_cls(
             config.transformer_layer_config.hidden_size,
             eps=config.transformer_layer_config.rms_norm_eps,  # type: ignore[arg-type]
         )

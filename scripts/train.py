@@ -169,6 +169,7 @@ def create_transformer_layer_config(  # noqa: C901
         "full_attention" if i in full_attention_indices else "sliding_attention"
         for i in range(num_layers)
     ]
+    has_sliding = "sliding_attention" in layer_types
 
     config = config_class(
         vocab_size=verifier_config.vocab_size,
@@ -183,8 +184,8 @@ def create_transformer_layer_config(  # noqa: C901
         rms_norm_eps=verifier_config.rms_norm_eps,
         head_dim=head_dim,
         tie_word_embeddings=False,
-        sliding_window=sliding_window,
-        use_sliding_window="sliding_attention" in layer_types,
+        sliding_window=sliding_window if has_sliding else None,
+        use_sliding_window=has_sliding,
         layer_types=layer_types,
     )
 
@@ -194,12 +195,16 @@ def create_transformer_layer_config(  # noqa: C901
             rope_params = deepcopy(verifier_config.rope_parameters)
             # Some verifiers (e.g. Laguna) use the nested per-layer-type rope format
             # {"full_attention": {...}, "sliding_attention": {...}} with no top-level
-            # "rope_theta". The llama-style draft uses a single rope, so collapse it to
-            # a flat default rope (preferring the sliding-attention theta).
+            # "rope_theta". The draft uses a single rope, so collapse it to the rope
+            # matching its attention mode.
             if isinstance(rope_params, dict) and "rope_theta" not in rope_params:
                 sub = (
-                    rope_params.get("sliding_attention")
-                    or rope_params.get("full_attention")
+                    rope_params.get(
+                        "sliding_attention" if has_sliding else "full_attention"
+                    )
+                    or rope_params.get(
+                        "full_attention" if has_sliding else "sliding_attention"
+                    )
                     or {}
                 )
                 if isinstance(sub, dict):
