@@ -31,8 +31,9 @@ Both `throughput` and `sweep` share the same options:
 
 ```
   --target URL               vLLM server endpoint (required)
-  --dataset DATASET          HF dataset ID or local dir (default: RedHatAI/speculator_benchmarks)
-  --subsets LIST             Comma-separated subset names (default: all 9)
+  --dataset DATASET          HF dataset ID, local path, or benchmark spec
+  --dataset-dir DIR          Prepared data for a benchmark spec
+  --subsets LIST             Comma-separated HF subset names (default: all 9)
   --output-dir DIR           Output directory (default: perf_results_TIMESTAMP)
   --max-concurrency N        Max concurrent requests (default: 128)
   --max-requests N           Max requests per sweep point (default: 200)
@@ -41,9 +42,11 @@ Both `throughput` and `sweep` share the same options:
   --gen-kwargs JSON          Generation kwargs, e.g. '{"temperature":0.6}'
   --data-column-mapper TEXT  Column mapping for guidellm in typed key=value format
                              (default: kind=generative_column_mapper,column_mappings.text_column=prompt)
-  --speedbench-data-dir DIR  Prepared SPEED-Bench data
-  --ruler2-data-dir DIR      Prepared RULER v2 data
 ```
+
+Prepared benchmarks use a common syntax: `--dataset <adapter>[/<selection>] --dataset-dir <path>`. The older `--speedbench-data-dir` and `--ruler2-data-dir` flags remain accepted as deprecated aliases.
+
+Internally, every source is normalized to the same typed run specification (label, dataset, column mapping, and optional HF subset). Dataset-specific discovery lives in a small adapter registry, so another prepared benchmark only needs a resolver and registry entry; the GuideLLM execution path and CLI do not change.
 
 ## SPEED-Bench
 
@@ -69,32 +72,32 @@ python scripts/evaluate/prepare_speedbench.py --data-dir ./speedbench_data
 
 ### Running evaluations
 
-Pass a `speedbench/<config>` spec to `--dataset` together with `--speedbench-data-dir`:
+Pass a `speedbench/<config>` spec to `--dataset` together with `--dataset-dir`:
 
 ```bash
 # All 11 qualitative categories
 python evaluate.py throughput \
     --target http://localhost:8000/v1 \
     --dataset speedbench/qualitative \
-    --speedbench-data-dir ./speedbench_data
+    --dataset-dir ./speedbench_data
 
 # Single category
 python evaluate.py throughput \
     --target http://localhost:8000/v1 \
     --dataset speedbench/qualitative/coding \
-    --speedbench-data-dir ./speedbench_data
+    --dataset-dir ./speedbench_data
 
 # All throughput_1k subcategories
 python evaluate.py throughput \
     --target http://localhost:8000/v1 \
     --dataset speedbench/throughput_1k \
-    --speedbench-data-dir ./speedbench_data
+    --dataset-dir ./speedbench_data
 
 # One entropy tier only
 python evaluate.py throughput \
     --target http://localhost:8000/v1 \
     --dataset speedbench/throughput_1k/high_entropy \
-    --speedbench-data-dir ./speedbench_data
+    --dataset-dir ./speedbench_data
 ```
 
 Available configs: `qualitative`, `throughput_1k`, `throughput_2k`, `throughput_8k`, `throughput_32k`.
@@ -122,16 +125,44 @@ NeMo Skills writes the tasks under `./ruler2_data/ruler2/qwen3-8b-32k`. Pass tha
 python evaluate.py throughput \
     --target http://localhost:8000/v1 \
     --dataset ruler2/qwen3-8b-32k \
-    --ruler2-data-dir ./ruler2_data/ruler2
+    --dataset-dir ./ruler2_data/ruler2
 
 # One task
 python evaluate.py throughput \
     --target http://localhost:8000/v1 \
     --dataset ruler2/qwen3-8b-32k/mv_niah_hard \
-    --ruler2-data-dir ./ruler2_data/ruler2
+    --dataset-dir ./ruler2_data/ruler2
 ```
 
 This measures speculative-decoding performance and acceptance per RULER v2 task. Use NeMo Skills' `ns eval` pipeline when you also need the benchmark's answer-quality scores.
+
+## LongBench
+
+[LongBench](https://huggingface.co/datasets/zai-org/LongBench) contains 21 English, Chinese, and code tasks. Its rows keep the long `context` and task `input` in separate columns, and the Hugging Face repository uses a legacy dataset loading script. Prepare local prompt-only files once so the evaluator can use the benchmark's official per-task prompt templates with current `datasets` releases:
+
+```bash
+python scripts/evaluate/prepare_longbench.py \
+    --data-dir ./longbench_data \
+    --download
+```
+
+The download includes the official data archive (about 114 MB) and prompt-template configuration. The component datasets retain their original licenses; do not redistribute the prepared files without checking them.
+
+```bash
+# All 21 tasks
+python evaluate.py throughput \
+    --target http://localhost:8000/v1 \
+    --dataset longbench \
+    --dataset-dir ./longbench_data
+
+# One task
+python evaluate.py throughput \
+    --target http://localhost:8000/v1 \
+    --dataset longbench/hotpotqa \
+    --dataset-dir ./longbench_data
+```
+
+This path measures speculative-decoding throughput and acceptance per task; it does not compute LongBench answer-quality scores. Use the official LongBench evaluation pipeline for accuracy comparisons.
 
 ## Visualization
 

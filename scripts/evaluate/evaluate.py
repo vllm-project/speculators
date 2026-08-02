@@ -14,15 +14,20 @@ Examples:
     # SPEED-Bench (run prepare_speedbench.py once first to split data):
     python evaluate.py --target http://localhost:8000/v1 throughput \\
         --dataset speedbench/qualitative \\
-        --speedbench-data-dir ./speedbench_data
+        --dataset-dir ./speedbench_data
     python evaluate.py --target http://localhost:8000/v1 throughput \\
         --dataset speedbench/qualitative/coding \\
-        --speedbench-data-dir ./speedbench_data
+        --dataset-dir ./speedbench_data
 
     # RULER v2 (prepare tokenizer-specific data with NeMo Skills first):
     python evaluate.py --target http://localhost:8000/v1 throughput \\
         --dataset ruler2/qwen3-8b-32k \\
-        --ruler2-data-dir ./ruler2_data/ruler2
+        --dataset-dir ./ruler2_data/ruler2
+
+    # LongBench (run prepare_longbench.py once first):
+    python evaluate.py --target http://localhost:8000/v1 throughput \\
+        --dataset longbench \\
+        --dataset-dir ./longbench_data
 """
 
 from __future__ import annotations
@@ -31,10 +36,15 @@ import argparse
 import json
 import logging
 import sys
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.error import URLError
 from urllib.request import urlopen
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 from perf_utils import (
     BASE_CSV_COLUMNS,
@@ -76,6 +86,27 @@ _SPEEDBENCH_COLUMN_MAPPER = (
 _RULER2_COLUMN_MAPPER = (
     "kind=generative_column_mapper,column_mappings.text_column=question"
 )
+_LONGBENCH_COLUMN_MAPPER = DEFAULT_DATA_COLUMN_MAPPER
+
+
+@dataclass(frozen=True)
+class RunSpec:
+    """One fully resolved GuideLLM run."""
+
+    label: str
+    dataset: str
+    data_column_mapper: str
+    subset: str | None = None
+
+
+@dataclass(frozen=True)
+class DatasetAdapter:
+    """Resolve a benchmark spec into local GuideLLM datasets."""
+
+    resolver: Callable[[str, Path], list[tuple[str, Path]]]
+    data_column_mapper: str
+    preparation_hint: str
+    legacy_dir_arg: str | None = None
 
 
 def _fetch_model_name(target: str) -> str | None:
@@ -116,7 +147,11 @@ def _resolve_speedbench(
     ``scripts/evaluate/prepare_speedbench.py``.  Run that script once after
     NVIDIA's ``prepare.py`` to create per-category/subcategory files.
     """
-    parts = spec.removeprefix("speedbench/").split("/")
+    prefix, *parts = spec.split("/")
+    if prefix != "speedbench" or not parts or not all(parts):
+        logger.error("Invalid SPEED-Bench dataset spec: %s", spec)
+        sys.exit(1)
+
     config = parts[0]
     rest = parts[1:]
     # Build glob pattern matching prepare_speedbench.py's naming convention:
@@ -136,7 +171,7 @@ def _resolve_speedbench(
     files = sorted(data_dir.glob(pattern))
     if not files:
         logger.error(
-            "--speedbench-data-dir='%s': no files matching '%s'.\n"
+            "--dataset-dir='%s': no files matching '%s'.\n"
             "Run scripts/evaluate/prepare_speedbench.py first.",
             data_dir,
             pattern,
@@ -156,7 +191,7 @@ def _resolve_speedbench(
 
 def _resolve_ruler2(spec: str, data_dir: Path) -> list[tuple[str, Path]]:
     """Resolve a ``ruler2/<setup>[/<task>]`` NeMo Skills dataset."""
-    parts = spec.removeprefix("ruler2/").split("/")
+    parts = spec.split("/")[1:]
     if len(parts) not in (1, 2) or not all(parts):
         logger.error("Invalid RULER v2 dataset spec: %s", spec)
         sys.exit(1)
@@ -171,7 +206,7 @@ def _resolve_ruler2(spec: str, data_dir: Path) -> list[tuple[str, Path]]:
     files = [path for path in files if path.is_file()]
     if not files:
         logger.error(
-            "--ruler2-data-dir='%s': no data found for '%s'.\n"
+            "--dataset-dir='%s': no data found for '%s'.\n"
             "Prepare it with `ns prepare_data ruler2` first.",
             data_dir,
             spec,
@@ -181,68 +216,131 @@ def _resolve_ruler2(spec: str, data_dir: Path) -> list[tuple[str, Path]]:
     return [(f"ruler2/{setup}/{path.parent.name}", path) for path in files]
 
 
-def _resolve_local_dataset(
-    spec: str, args: argparse.Namespace
-) -> tuple[list[tuple[str, Path]], str] | None:
-    benchmarks = (
-        (
-            "speedbench/",
-            "speedbench_data_dir",
-            _SPEEDBENCH_COLUMN_MAPPER,
-            _resolve_speedbench,
-            "Run scripts/evaluate/prepare_speedbench.py first.",
-        ),
-        (
-            "ruler2/",
-            "ruler2_data_dir",
-            _RULER2_COLUMN_MAPPER,
-            _resolve_ruler2,
-            "Prepare it with `ns prepare_data ruler2` first.",
-        ),
+def _resolve_longbench(spec: str, data_dir: Path) -> list[tuple[str, Path]]:
+    """Resolve ``longbench[/<task>]`` data prepared by prepare_longbench.py."""
+    prefix, separator, task = spec.partition("/")
+    if prefix != "longbench":
+        logger.error("Invalid LongBench dataset spec: %s", spec)
+        sys.exit(1)
+    if not separator:
+        files = sorted(data_dir.glob("longbench_*.jsonl"))
+    elif task and "/" not in task:
+        files = [data_dir / f"longbench_{task}.jsonl"]
+    else:
+        logger.error("Invalid LongBench dataset spec: %s", spec)
+        sys.exit(1)
+
+    files = [path for path in files if path.is_file()]
+    if not files:
+        logger.error(
+            "--dataset-dir='%s': no prepared data found for '%s'.\n"
+            "Run scripts/evaluate/prepare_longbench.py first.",
+            data_dir,
+            spec,
+        )
+        sys.exit(1)
+
+    return [
+        (f"longbench/{path.stem.removeprefix('longbench_')}", path) for path in files
+    ]
+
+
+_DATASET_ADAPTERS = {
+    "speedbench": DatasetAdapter(
+        _resolve_speedbench,
+        _SPEEDBENCH_COLUMN_MAPPER,
+        "Run scripts/evaluate/prepare_speedbench.py first.",
+        "speedbench_data_dir",
+    ),
+    "ruler2": DatasetAdapter(
+        _resolve_ruler2,
+        _RULER2_COLUMN_MAPPER,
+        "Prepare it with `ns prepare_data ruler2` first.",
+        "ruler2_data_dir",
+    ),
+    "longbench": DatasetAdapter(
+        _resolve_longbench,
+        _LONGBENCH_COLUMN_MAPPER,
+        "Run scripts/evaluate/prepare_longbench.py first.",
+    ),
+}
+
+
+def _adapter_data_dir(
+    name: str, adapter: DatasetAdapter, args: argparse.Namespace
+) -> Path:
+    data_dir = getattr(args, "dataset_dir", None)
+    legacy_dir = (
+        getattr(args, adapter.legacy_dir_arg, None) if adapter.legacy_dir_arg else None
     )
-    for prefix, arg_name, mapper, resolver, hint in benchmarks:
-        if spec.startswith(prefix):
-            data_dir = getattr(args, arg_name, None)
-            if not data_dir:
-                logger.error(
-                    "--%s is required for %s datasets.\n%s",
-                    arg_name.replace("_", "-"),
-                    prefix,
-                    hint,
-                )
-                sys.exit(1)
-            return resolver(spec, Path(data_dir)), mapper
-    return None
+    if (
+        data_dir
+        and legacy_dir
+        and Path(data_dir).resolve() != Path(legacy_dir).resolve()
+    ):
+        logger.error("Use --dataset-dir only; conflicting legacy path was also set.")
+        sys.exit(1)
+    if legacy_dir:
+        logger.warning(
+            "--%s is deprecated; use --dataset-dir.",
+            adapter.legacy_dir_arg.replace("_", "-"),
+        )
+    if not (data_dir or legacy_dir):
+        logger.error(
+            "--dataset-dir is required for '%s'.\n%s",
+            name,
+            adapter.preparation_hint,
+        )
+        sys.exit(1)
+    return Path(data_dir or legacy_dir)
+
+
+def _resolve_runs(args: argparse.Namespace) -> list[RunSpec]:
+    """Normalize an HF dataset, local path, or adapter spec into run specs."""
+    spec = args.dataset
+    adapter_name = spec.partition("/")[0]
+    adapter = _DATASET_ADAPTERS.get(adapter_name)
+    if adapter:
+        data_dir = _adapter_data_dir(adapter_name, adapter, args)
+        return [
+            RunSpec(label, str(path), adapter.data_column_mapper)
+            for label, path in adapter.resolver(spec, data_dir)
+        ]
+
+    path = Path(spec)
+    if path.exists():
+        return [RunSpec(path.stem or path.name, spec, args.data_column_mapper)]
+
+    return [
+        RunSpec(subset, spec, args.data_column_mapper, subset)
+        for subset in (part.strip() for part in args.subsets.split(","))
+        if subset
+    ]
 
 
 def _run_subset(
-    subset: str,
+    run: RunSpec,
     args: argparse.Namespace,
     *,
     is_sweep: bool,
     metrics_url: str,
     artifacts_dir: Path,
     output_dir: Path,
-    guidellm_common: dict,
     acceptance_csv: CsvWriter | None,
     perf_csv: CsvWriter | None,
 ) -> tuple[CsvWriter | None, CsvWriter | None, int | None]:
-    """Run benchmark for one subset.
+    """Run one normalized benchmark spec."""
 
-    *subset* is the human-readable label used for output file names and the
-    acceptance CSV.  When ``guidellm_common["dataset"]`` is a local file path
-    the ``--data-args`` flag is suppressed automatically; when it is an HF
-    dataset ID *subset* is also passed as the data-args filter so guidellm
-    loads just that split.
-    """
-
+    subset = run.label
     logger.info("[%s] Starting", subset)
     safe = subset.replace("/", "_").replace(" ", "_")
     max_tokens = 4096
-
-    # For local JSONL files (SPEED-Bench) the dataset path IS the file —
-    # no --data-args needed.  For HF datasets subset name doubles as the filter.
-    guidellm_subset = None if Path(guidellm_common["dataset"]).exists() else subset
+    guidellm_common = {
+        "target": args.target,
+        "dataset": run.dataset,
+        "data_column_mapper": run.data_column_mapper,
+        "max_concurrency": args.max_concurrency,
+    }
 
     if is_sweep:
         gen_len_dir = artifacts_dir / "gen_len"
@@ -250,7 +348,7 @@ def _run_subset(
         gen_len_output = gen_len_dir / f"gen_len_{safe}.json"
         run_guidellm(
             **guidellm_common,
-            subset=guidellm_subset,
+            subset=run.subset,
             profile="throughput",
             rate=args.gen_len_rate,
             max_requests=None,
@@ -262,7 +360,7 @@ def _run_subset(
             [gen_len_output],
             gen_len_dir / f"max_tokens_{safe}.json",
         )
-        key = guidellm_subset if guidellm_subset else safe
+        key = run.subset or safe
         max_tokens = mapping.get(key, max_tokens)
         logger.info("[%s] max_tokens=%d", subset, max_tokens)
 
@@ -271,7 +369,7 @@ def _run_subset(
     run_output = artifacts_dir / f"run_{safe}.json"
     run_guidellm(
         **guidellm_common,
-        subset=guidellm_subset,
+        subset=run.subset,
         rate=args.sweep_rate if is_sweep else args.gen_len_rate,
         profile=profile,
         max_requests=args.max_requests,
@@ -331,53 +429,24 @@ def run_benchmark(args: argparse.Namespace) -> None:
     perf_csv = None
     all_max_tokens: dict[str, int] = {}
 
-    # Build a flat list of (label, guidellm_common) to run uniformly.
-    # _run_subset auto-detects whether --data-args is needed from the dataset path.
-    dataset_spec = args.dataset
-    run_items: list[tuple[str, dict]] = []
-
-    local_dataset = _resolve_local_dataset(dataset_spec, args)
-    if local_dataset is not None:
-        pairs, mapper = local_dataset
-        for label, local_path in pairs:
-            run_items.append(
-                (
-                    label,
-                    {
-                        "target": args.target,
-                        "dataset": str(local_path),
-                        "data_column_mapper": mapper,
-                        "max_concurrency": args.max_concurrency,
-                    },
-                )
-            )
-    else:
-        guidellm_common = {
-            "target": args.target,
-            "dataset": dataset_spec,
-            "data_column_mapper": args.data_column_mapper,
-            "max_concurrency": args.max_concurrency,
-        }
-        for subset in [s.strip() for s in args.subsets.split(",") if s.strip()]:
-            run_items.append((subset, guidellm_common))
+    run_items = _resolve_runs(args)
 
     logger.info(
         "Mode: %s | %d subsets | Output: %s", args.mode, len(run_items), output_dir
     )
-    for label, common in run_items:
+    for run in run_items:
         acceptance_csv, perf_csv, mt = _run_subset(
-            label,
+            run,
             args,
             is_sweep=is_sweep,
             metrics_url=metrics_url,
             artifacts_dir=artifacts_dir,
             output_dir=output_dir,
-            guidellm_common=common,
             acceptance_csv=acceptance_csv,
             perf_csv=perf_csv,
         )
         if mt is not None:
-            all_max_tokens[label] = mt
+            all_max_tokens[run.label] = mt
 
     if acceptance_csv is None:
         logger.error("No acceptance metrics collected from any subset")
@@ -432,7 +501,7 @@ def main() -> None:
     parser.add_argument(
         "--subsets",
         default=DEFAULT_SUBSETS,
-        help="Comma-separated subset names (default: all 9 standard subsets)",
+        help="Comma-separated HF subset names (default: all 9 standard subsets)",
     )
     parser.add_argument(
         "--output-dir",
@@ -475,21 +544,20 @@ def main() -> None:
         f" (default: {DEFAULT_DATA_COLUMN_MAPPER})",
     )
     parser.add_argument(
+        "--dataset-dir",
+        default=None,
+        help=("Prepared data directory for speedbench, ruler2, or longbench specs"),
+    )
+    parser.add_argument(
         "--speedbench-data-dir",
         default=None,
         dest="speedbench_data_dir",
-        help=(
-            "Path to directory produced by SPEED-Bench prepare.py. "
-            "Required when --dataset is a speedbench/ spec."
-        ),
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--ruler2-data-dir",
         default=None,
-        help=(
-            "Path to the ruler2 directory produced by NeMo Skills. "
-            "Required when --dataset is a ruler2/ spec."
-        ),
+        help=argparse.SUPPRESS,
     )
 
     args = parser.parse_args()
