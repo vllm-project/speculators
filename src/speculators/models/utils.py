@@ -78,3 +78,23 @@ def resolve_draft_intermediate_size(verifier_config: PretrainedConfig) -> int:
         stacklevel=3,
     )
     return intermediate_size
+
+
+def strip_verifier_final_layer_id(
+    target_layer_ids: list[int],
+    verifier_name_or_path: str,
+) -> list[int]:
+    """Remove the verifier final layer from training auxiliary layer IDs."""
+    num_layers = get_verifier_config(verifier_name_or_path).num_hidden_layers
+    aux_target_layer_ids = [
+        layer_id for layer_id in target_layer_ids if layer_id != num_layers
+    ]
+    if len(aux_target_layer_ids) != len(target_layer_ids):
+        warnings.warn(
+            "Stripping the verifier's final layer "
+            f"({num_layers}) from --target-layer-ids for training. "
+            "The last extracted layer is consumed separately as "
+            "`verifier_last_hidden_states`.",
+            stacklevel=2,
+        )
+    return aux_target_layer_ids
