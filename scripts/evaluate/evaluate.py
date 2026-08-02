@@ -18,6 +18,11 @@ Examples:
     python evaluate.py --target http://localhost:8000/v1 throughput \\
         --dataset speedbench/qualitative/coding \\
         --speedbench-data-dir ./speedbench_data
+
+    # RULER v2 (prepare tokenizer-specific data with NeMo Skills first):
+    python evaluate.py --target http://localhost:8000/v1 throughput \\
+        --dataset ruler2/qwen3-8b-32k \\
+        --ruler2-data-dir ./ruler2_data/ruler2
 """
 
 from __future__ import annotations
@@ -62,11 +67,14 @@ DEFAULT_DATA_COLUMN_MAPPER = (
 )
 
 # ---------------------------------------------------------------------------
-# SPEED-Bench constants
+# Local benchmark column mappings
 # ---------------------------------------------------------------------------
 
 _SPEEDBENCH_COLUMN_MAPPER = (
     "kind=generative_column_mapper,column_mappings.text_column=turns"
+)
+_RULER2_COLUMN_MAPPER = (
+    "kind=generative_column_mapper,column_mappings.text_column=question"
 )
 
 
@@ -144,6 +152,67 @@ def _resolve_speedbench(
         logger.info("  %s: %s", label, path.name)
 
     return results
+
+
+def _resolve_ruler2(spec: str, data_dir: Path) -> list[tuple[str, Path]]:
+    """Resolve a ``ruler2/<setup>[/<task>]`` NeMo Skills dataset."""
+    parts = spec.removeprefix("ruler2/").split("/")
+    if len(parts) not in (1, 2) or not all(parts):
+        logger.error("Invalid RULER v2 dataset spec: %s", spec)
+        sys.exit(1)
+
+    setup = parts[0]
+    root = data_dir / setup
+    files = (
+        sorted(root.glob("*/test.jsonl"))
+        if len(parts) == 1
+        else [root / parts[1] / "test.jsonl"]
+    )
+    files = [path for path in files if path.is_file()]
+    if not files:
+        logger.error(
+            "--ruler2-data-dir='%s': no data found for '%s'.\n"
+            "Prepare it with `ns prepare_data ruler2` first.",
+            data_dir,
+            spec,
+        )
+        sys.exit(1)
+
+    return [(f"ruler2/{setup}/{path.parent.name}", path) for path in files]
+
+
+def _resolve_local_dataset(
+    spec: str, args: argparse.Namespace
+) -> tuple[list[tuple[str, Path]], str] | None:
+    benchmarks = (
+        (
+            "speedbench/",
+            "speedbench_data_dir",
+            _SPEEDBENCH_COLUMN_MAPPER,
+            _resolve_speedbench,
+            "Run scripts/evaluate/prepare_speedbench.py first.",
+        ),
+        (
+            "ruler2/",
+            "ruler2_data_dir",
+            _RULER2_COLUMN_MAPPER,
+            _resolve_ruler2,
+            "Prepare it with `ns prepare_data ruler2` first.",
+        ),
+    )
+    for prefix, arg_name, mapper, resolver, hint in benchmarks:
+        if spec.startswith(prefix):
+            data_dir = getattr(args, arg_name, None)
+            if not data_dir:
+                logger.error(
+                    "--%s is required for %s datasets.\n%s",
+                    arg_name.replace("_", "-"),
+                    prefix,
+                    hint,
+                )
+                sys.exit(1)
+            return resolver(spec, Path(data_dir)), mapper
+    return None
 
 
 def _run_subset(
@@ -267,15 +336,9 @@ def run_benchmark(args: argparse.Namespace) -> None:
     dataset_spec = args.dataset
     run_items: list[tuple[str, dict]] = []
 
-    if dataset_spec.startswith("speedbench/"):
-        if not getattr(args, "speedbench_data_dir", None):
-            logger.error(
-                "--speedbench-data-dir is required for speedbench/ datasets.\n"
-                "Run scripts/evaluate/prepare_speedbench.py first, then add"
-                " --speedbench-data-dir <dir>.",
-            )
-            sys.exit(1)
-        pairs = _resolve_speedbench(dataset_spec, Path(args.speedbench_data_dir))
+    local_dataset = _resolve_local_dataset(dataset_spec, args)
+    if local_dataset is not None:
+        pairs, mapper = local_dataset
         for label, local_path in pairs:
             run_items.append(
                 (
@@ -283,7 +346,7 @@ def run_benchmark(args: argparse.Namespace) -> None:
                     {
                         "target": args.target,
                         "dataset": str(local_path),
-                        "data_column_mapper": _SPEEDBENCH_COLUMN_MAPPER,
+                        "data_column_mapper": mapper,
                         "max_concurrency": args.max_concurrency,
                     },
                 )
@@ -362,7 +425,9 @@ def main() -> None:
     parser.add_argument(
         "--dataset",
         default=DEFAULT_DATASET,
-        help=f"HF dataset ID or local directory (default: {DEFAULT_DATASET})",
+        help=(
+            f"HF dataset ID, local path, or benchmark spec (default: {DEFAULT_DATASET})"
+        ),
     )
     parser.add_argument(
         "--subsets",
@@ -416,6 +481,14 @@ def main() -> None:
         help=(
             "Path to directory produced by SPEED-Bench prepare.py. "
             "Required when --dataset is a speedbench/ spec."
+        ),
+    )
+    parser.add_argument(
+        "--ruler2-data-dir",
+        default=None,
+        help=(
+            "Path to the ruler2 directory produced by NeMo Skills. "
+            "Required when --dataset is a ruler2/ spec."
         ),
     )
 

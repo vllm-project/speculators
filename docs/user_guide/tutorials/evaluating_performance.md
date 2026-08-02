@@ -41,6 +41,8 @@ Both `throughput` and `sweep` share the same options:
   --gen-kwargs JSON          Generation kwargs, e.g. '{"temperature":0.6}'
   --data-column-mapper TEXT  Column mapping for guidellm in typed key=value format
                              (default: kind=generative_column_mapper,column_mappings.text_column=prompt)
+  --speedbench-data-dir DIR  Prepared SPEED-Bench data
+  --ruler2-data-dir DIR      Prepared RULER v2 data
 ```
 
 ## SPEED-Bench
@@ -98,6 +100,38 @@ python evaluate.py throughput \
 Available configs: `qualitative`, `throughput_1k`, `throughput_2k`, `throughput_8k`, `throughput_32k`.
 
 Results are written to `acceptance.csv` in the output directory with per-category acceptance lengths and per-position acceptance rates, identical in format to the `RedHatAI/speculator_benchmarks` output.
+
+## RULER v2
+
+[RULER v2](https://github.com/NVIDIA/RULER/tree/rulerv2-ns) covers 12 long-context tasks across multi-key retrieval, multi-value retrieval, and multi-document QA. Its prompts depend on the model tokenizer and target context length, so generate them with [NeMo Skills](https://github.com/NVIDIA-NeMo/Skills/tree/main/nemo_skills/dataset/ruler2):
+
+```bash
+# Run in a NeMo Skills environment with a configured local cluster.
+ns prepare_data ruler2 \
+    --cluster=local \
+    --data_dir=./ruler2_data \
+    --setup=qwen3-8b-32k \
+    --tokenizer_path=Qwen/Qwen3-8B \
+    --max_seq_length=32768
+```
+
+NeMo Skills writes the tasks under `./ruler2_data/ruler2/qwen3-8b-32k`. Pass that directory and setup name to `evaluate.py`:
+
+```bash
+# All 12 tasks
+python evaluate.py throughput \
+    --target http://localhost:8000/v1 \
+    --dataset ruler2/qwen3-8b-32k \
+    --ruler2-data-dir ./ruler2_data/ruler2
+
+# One task
+python evaluate.py throughput \
+    --target http://localhost:8000/v1 \
+    --dataset ruler2/qwen3-8b-32k/mv_niah_hard \
+    --ruler2-data-dir ./ruler2_data/ruler2
+```
+
+This measures speculative-decoding performance and acceptance per RULER v2 task. Use NeMo Skills' `ns eval` pipeline when you also need the benchmark's answer-quality scores.
 
 ## Visualization
 
