@@ -30,7 +30,11 @@ def list_files(path):
     datapath = []
     for root, _directories, files in os.walk(path):
         for file in files:
-            if not file.endswith("pt"):
+            # Match the ".pt" extension exactly: a bare "pt" suffix would also
+            # pick up e.g. "model.ckpt" or "notes.gpt" and crash the loader.
+            # token_freq.pt is the vocab-mapping cache the documented data
+            # layout stores alongside the samples; it is not a sample either.
+            if not file.endswith(".pt") or file == "token_freq.pt":
                 continue
             file_path = Path(root) / file
             datapath.append(file_path)

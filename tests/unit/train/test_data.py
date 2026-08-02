@@ -12,6 +12,7 @@ from speculators.train.data import (
     ArrowDataset,
     SampleFileDataset,
     create_collate_fn,
+    list_files,
     standardize_data_v1,
 )
 
@@ -527,3 +528,17 @@ def test_arrow_dataset_on_generate_cache_creates_hidden_states_dir(tmp_path: Pat
     assert arrow_ds.transfer.hidden_states_path.is_dir()
     # And the cached file should exist
     assert (arrow_ds.transfer.hidden_states_path / "hs_0.safetensors").exists()
+
+
+def test_list_files_matches_only_dot_pt_sample_files(tmp_path):
+    """A bare "pt" suffix match would also pick up model.ckpt / notes.gpt, and
+    the documented data layout stores token_freq.pt next to the samples."""
+    (tmp_path / "sample_0.pt").write_bytes(b"x")
+    (tmp_path / "nested").mkdir()
+    (tmp_path / "nested" / "sample_1.pt").write_bytes(b"x")
+    (tmp_path / "model.ckpt").write_bytes(b"x")
+    (tmp_path / "notes.gpt").write_bytes(b"x")
+    (tmp_path / "token_freq.pt").write_bytes(b"x")
+
+    found = sorted(p.name for p in list_files(tmp_path))
+    assert found == ["sample_0.pt", "sample_1.pt"]
