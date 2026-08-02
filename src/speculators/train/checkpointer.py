@@ -312,9 +312,9 @@ class SingleGPUCheckpointer(BaseCheckpointer):
 
     def load_optimizer_state_dict(
         self,
-        model: PreTrainedModel,
+        model: PreTrainedModel,  # noqa: ARG002 (BaseCheckpointer signature)
         optimizer: OptimizerOrList,
-        float_dtype: torch.dtype | None = None,
+        float_dtype: torch.dtype | None = None,  # noqa: ARG002 (unused: no cast)
     ):
         device = get_current_device()
         loaded = torch.load(
@@ -324,12 +324,12 @@ class SingleGPUCheckpointer(BaseCheckpointer):
         )
         optimizers = _as_list(optimizer)
         loaded_list = loaded if isinstance(loaded, list) else [loaded]
-        raw_model = (
-            model.module if isinstance(model, DistributedDataParallel) else model
-        )
-        dtype = float_dtype or raw_model.dtype
+        # Load without a dtype cast: Optimizer.load_state_dict aligns per-param
+        # float state with the param dtype itself and keeps "step" untouched.
+        # Casting here would re-quantize fp32 moments and step counters to the
+        # model dtype (e.g. bf16), undoing the full-precision save.
         for opt, state_dict in zip(optimizers, loaded_list, strict=True):
-            opt.load_state_dict(convert_float_dtype(state_dict, dtype))
+            opt.load_state_dict(state_dict)
 
     @_rank0_only
     def save_checkpoint(
@@ -347,9 +347,11 @@ class SingleGPUCheckpointer(BaseCheckpointer):
         patch_config_dtype(self.path / str(epoch) / "config.json", float_dtype)
 
         optimizers = _as_list(optimizer)
-        state_dicts = [
-            convert_float_dtype(opt.state_dict(), float_dtype) for opt in optimizers
-        ]
+        # Optimizer state is saved at full precision on purpose: casting to
+        # bf16 quantizes the Adam moments and rounds the step counters (bf16
+        # has an 8-bit mantissa, so any step count above 256 is no longer
+        # exact), which corrupts resumed runs.
+        state_dicts = [opt.state_dict() for opt in optimizers]
         # Preserve the legacy single-optimizer format when there is only one.
         payload = state_dicts[0] if len(state_dicts) == 1 else state_dicts
         torch.save(payload, self.optimizer_path(epoch))
@@ -381,7 +383,7 @@ class DistributedCheckpointer(BaseCheckpointer):
         self,
         model,
         optimizer: OptimizerOrList,
-        float_dtype: torch.dtype | None = None,
+        float_dtype: torch.dtype | None = None,  # noqa: ARG002 (unused: no cast)
     ):
         optimizers = _as_list(optimizer)
         full_state_dict = torch.load(
@@ -390,10 +392,9 @@ class DistributedCheckpointer(BaseCheckpointer):
             weights_only=True,
             map_location="cpu",
         )
-        full_state_dict = convert_float_dtype(
-            full_state_dict, float_dtype or model.dtype
-        )
-
+        # No dtype cast here: casting would re-quantize the fp32-saved Adam
+        # moments and step counters to the model dtype (e.g. bf16), undoing
+        # the full-precision save.
         set_optimizer_state_dict(
             model,
             optimizers,
@@ -401,7 +402,8 @@ class DistributedCheckpointer(BaseCheckpointer):
             options=StateDictOptions(full_state_dict=True, broadcast_from_rank0=True),
         )
 
-        # Cast step counters back to float32
+        # Cast step counters back to float32 (repairs legacy checkpoints that
+        # were saved with bf16-converted optimizer state).
         for opt in optimizers:
             for state in opt.state.values():
                 if "step" in state and isinstance(state["step"], torch.Tensor):
@@ -426,7 +428,8 @@ class DistributedCheckpointer(BaseCheckpointer):
             _as_list(optimizer),
             options=StateDictOptions(full_state_dict=True, cpu_offload=True),
         )
-        optimizer_state_dict = convert_float_dtype(optimizer_state_dict, float_dtype)
+        # Optimizer state stays at full precision (see SingleGPUCheckpointer):
+        # bf16 would quantize the Adam moments and round the step counters.
 
         if get_rank() == 0:
             # Only rank 0 saves the checkpoint

@@ -288,3 +288,65 @@ def test_graceful_shutdown_saves_interrupted_checkpoint(
     trainer.run_training()
 
     assert "interrupted" in saved_labels
+
+
+class _TinyOptimModel(torch.nn.Module):
+    """Duck-typed stand-in for a PreTrainedModel: save_pretrained + dtype."""
+
+    def __init__(self):
+        super().__init__()
+        self.linear = torch.nn.Linear(4, 4)
+
+    @property
+    def dtype(self):
+        return next(self.parameters()).dtype
+
+    def save_pretrained(self, save_directory, state_dict=None, **kwargs):
+        Path(save_directory).mkdir(parents=True, exist_ok=True)
+
+
+def _stepped_optimizer(model):
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+    model.linear.weight.grad = torch.randn_like(model.linear.weight)
+    model.linear.bias.grad = torch.randn_like(model.linear.bias)
+    optimizer.step()
+    # Simulate a long run: bf16 would round 10001 to a multiple of 64.
+    for state in optimizer.state.values():
+        if isinstance(state.get("step"), torch.Tensor):
+            state["step"] = state["step"] + 10000.0
+    return optimizer
+
+
+def test_optimizer_state_round_trips_at_full_precision(tmp_path):
+    """Optimizer state must survive save + load without dtype degradation:
+    bf16 casts quantize the Adam moments and round the step counters (bf16 has
+    an 8-bit mantissa, so step counts above 256 are no longer exact)."""
+    model = _TinyOptimModel()
+    optimizer = _stepped_optimizer(model)
+    reference = optimizer.state_dict()
+
+    checkpointer = SingleGPUCheckpointer(tmp_path)
+    checkpointer.save_checkpoint(model, optimizer, epoch=0)
+
+    saved = torch.load(
+        checkpointer.optimizer_path(0), weights_only=True, map_location="cpu"
+    )
+    for param_id, state in reference["state"].items():
+        saved_state = saved["state"][param_id]
+        assert torch.equal(saved_state["step"], state["step"])
+        for key in ("exp_avg", "exp_avg_sq"):
+            assert saved_state[key].dtype == torch.float32
+            assert torch.equal(saved_state[key], state[key])
+
+    # Load path: a fresh checkpointer resumes from the saved epoch and must
+    # restore the state exactly, without casting to the model dtype.
+    resumed_model = _TinyOptimModel()
+    resumed_optimizer = torch.optim.AdamW(resumed_model.parameters(), lr=1e-3)
+    resumed_checkpointer = SingleGPUCheckpointer(tmp_path)
+    resumed_checkpointer.load_optimizer_state_dict(resumed_model, resumed_optimizer)
+    restored = resumed_optimizer.state_dict()
+    for param_id, state in reference["state"].items():
+        restored_state = restored["state"][param_id]
+        assert torch.equal(restored_state["step"], state["step"])
+        for key in ("exp_avg", "exp_avg_sq"):
+            assert torch.equal(restored_state[key], state[key])
