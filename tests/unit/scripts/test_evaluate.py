@@ -5,8 +5,6 @@ import sys
 from argparse import Namespace
 from pathlib import Path
 
-import pytest
-
 _SCRIPT_DIR = Path(__file__).resolve().parents[3] / "scripts" / "evaluate"
 sys.path.insert(0, str(_SCRIPT_DIR))
 try:
@@ -26,8 +24,6 @@ def _args(**overrides) -> Namespace:
     values = {
         "dataset": "org/dataset",
         "dataset_dir": None,
-        "speedbench_data_dir": None,
-        "ruler2_data_dir": None,
         "data_column_mapper": evaluate.DEFAULT_DATA_COLUMN_MAPPER,
         "subsets": "first,second",
     }
@@ -55,11 +51,6 @@ def test_resolve_ruler2_task(tmp_path):
     ]
 
 
-def test_resolve_ruler2_missing(tmp_path):
-    with pytest.raises(SystemExit):
-        evaluate._resolve_ruler2("ruler2/model-32k", tmp_path)
-
-
 def test_resolve_longbench_all(tmp_path):
     paths = [
         tmp_path / "longbench_hotpotqa.jsonl",
@@ -71,15 +62,6 @@ def test_resolve_longbench_all(tmp_path):
     assert evaluate._resolve_longbench("longbench", tmp_path) == [
         ("longbench/hotpotqa", paths[0]),
         ("longbench/qasper", paths[1]),
-    ]
-
-
-def test_resolve_longbench_task(tmp_path):
-    path = tmp_path / "longbench_repobench-p.jsonl"
-    path.write_text('{"prompt": "text"}\n')
-
-    assert evaluate._resolve_longbench("longbench/repobench-p", tmp_path) == [
-        ("longbench/repobench-p", path)
     ]
 
 
@@ -128,15 +110,16 @@ def test_resolve_runs_treats_local_path_as_one_run(tmp_path):
     ]
 
 
-def test_legacy_dataset_dir_alias(tmp_path):
-    path = _task(tmp_path, "model-32k", "qa_hard")
+def test_resolve_runs_preserves_speedbench(tmp_path):
+    path = tmp_path / "qualitative_coding.jsonl"
+    path.write_text('{"turns": "prompt"}\n')
 
     assert evaluate._resolve_runs(
-        _args(dataset="ruler2/model-32k", ruler2_data_dir=tmp_path)
+        _args(dataset="speedbench/qualitative/coding", dataset_dir=tmp_path)
     ) == [
         evaluate.RunSpec(
-            "ruler2/model-32k/qa_hard",
+            "speedbench/qualitative/coding",
             str(path),
-            evaluate._RULER2_COLUMN_MAPPER,
+            evaluate._SPEEDBENCH_COLUMN_MAPPER,
         )
     ]

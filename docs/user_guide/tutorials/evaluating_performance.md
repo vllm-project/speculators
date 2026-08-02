@@ -44,9 +44,7 @@ Both `throughput` and `sweep` share the same options:
                              (default: kind=generative_column_mapper,column_mappings.text_column=prompt)
 ```
 
-Prepared benchmarks use a common syntax: `--dataset <adapter>[/<selection>] --dataset-dir <path>`. The older `--speedbench-data-dir` and `--ruler2-data-dir` flags remain accepted as deprecated aliases.
-
-Internally, every source is normalized to the same typed run specification (label, dataset, column mapping, and optional HF subset). Dataset-specific discovery lives in a small adapter registry, so another prepared benchmark only needs a resolver and registry entry; the GuideLLM execution path and CLI do not change.
+Prepared benchmarks use a common syntax: `--dataset <adapter>[/<selection>] --dataset-dir <path>`. The existing `--speedbench-data-dir` option remains accepted as a compatibility alias.
 
 ## SPEED-Bench
 

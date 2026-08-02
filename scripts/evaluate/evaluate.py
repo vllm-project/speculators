@@ -86,7 +86,6 @@ _SPEEDBENCH_COLUMN_MAPPER = (
 _RULER2_COLUMN_MAPPER = (
     "kind=generative_column_mapper,column_mappings.text_column=question"
 )
-_LONGBENCH_COLUMN_MAPPER = DEFAULT_DATA_COLUMN_MAPPER
 
 
 @dataclass(frozen=True)
@@ -106,7 +105,6 @@ class DatasetAdapter:
     resolver: Callable[[str, Path], list[tuple[str, Path]]]
     data_column_mapper: str
     preparation_hint: str
-    legacy_dir_arg: str | None = None
 
 
 def _fetch_model_name(target: str) -> str | None:
@@ -250,49 +248,18 @@ _DATASET_ADAPTERS = {
         _resolve_speedbench,
         _SPEEDBENCH_COLUMN_MAPPER,
         "Run scripts/evaluate/prepare_speedbench.py first.",
-        "speedbench_data_dir",
     ),
     "ruler2": DatasetAdapter(
         _resolve_ruler2,
         _RULER2_COLUMN_MAPPER,
         "Prepare it with `ns prepare_data ruler2` first.",
-        "ruler2_data_dir",
     ),
     "longbench": DatasetAdapter(
         _resolve_longbench,
-        _LONGBENCH_COLUMN_MAPPER,
+        DEFAULT_DATA_COLUMN_MAPPER,
         "Run scripts/evaluate/prepare_longbench.py first.",
     ),
 }
-
-
-def _adapter_data_dir(
-    name: str, adapter: DatasetAdapter, args: argparse.Namespace
-) -> Path:
-    data_dir = getattr(args, "dataset_dir", None)
-    legacy_dir = (
-        getattr(args, adapter.legacy_dir_arg, None) if adapter.legacy_dir_arg else None
-    )
-    if (
-        data_dir
-        and legacy_dir
-        and Path(data_dir).resolve() != Path(legacy_dir).resolve()
-    ):
-        logger.error("Use --dataset-dir only; conflicting legacy path was also set.")
-        sys.exit(1)
-    if legacy_dir:
-        logger.warning(
-            "--%s is deprecated; use --dataset-dir.",
-            adapter.legacy_dir_arg.replace("_", "-"),
-        )
-    if not (data_dir or legacy_dir):
-        logger.error(
-            "--dataset-dir is required for '%s'.\n%s",
-            name,
-            adapter.preparation_hint,
-        )
-        sys.exit(1)
-    return Path(data_dir or legacy_dir)
 
 
 def _resolve_runs(args: argparse.Namespace) -> list[RunSpec]:
@@ -301,10 +268,16 @@ def _resolve_runs(args: argparse.Namespace) -> list[RunSpec]:
     adapter_name = spec.partition("/")[0]
     adapter = _DATASET_ADAPTERS.get(adapter_name)
     if adapter:
-        data_dir = _adapter_data_dir(adapter_name, adapter, args)
+        if not args.dataset_dir:
+            logger.error(
+                "--dataset-dir is required for '%s'.\n%s",
+                adapter_name,
+                adapter.preparation_hint,
+            )
+            sys.exit(1)
         return [
             RunSpec(label, str(path), adapter.data_column_mapper)
-            for label, path in adapter.resolver(spec, data_dir)
+            for label, path in adapter.resolver(spec, Path(args.dataset_dir))
         ]
 
     path = Path(spec)
@@ -550,13 +523,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--speedbench-data-dir",
-        default=None,
-        dest="speedbench_data_dir",
-        help=argparse.SUPPRESS,
-    )
-    parser.add_argument(
-        "--ruler2-data-dir",
-        default=None,
+        dest="dataset_dir",
         help=argparse.SUPPRESS,
     )
 

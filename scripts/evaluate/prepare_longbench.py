@@ -24,10 +24,15 @@ from zipfile import ZipFile
 
 logger = logging.getLogger("prepare_longbench")
 
-_DATA_URL = "https://huggingface.co/datasets/zai-org/LongBench/resolve/main/data.zip"
+# Pin both sources so the rendered benchmark prompts are reproducible.
+_DATA_URL = (
+    "https://huggingface.co/datasets/zai-org/LongBench/resolve/"
+    "5e628be450b7e67fb7ae6e201bd6d8f7056f7672/data.zip"
+)
 _PROMPTS_URL = (
     "https://raw.githubusercontent.com/THUDM/LongBench/"
-    "main/LongBench/config/dataset2prompt.json"
+    "2e00731f8d0bff23dc4325161044d0ed8af94c1e/"
+    "LongBench/config/dataset2prompt.json"
 )
 
 
@@ -43,18 +48,13 @@ def prepare(
     archive_path: Path,
     prompts_path: Path,
     output_dir: Path,
-    tasks: tuple[str, ...] | None = None,
 ) -> int:
     """Render official ``context``/``input`` templates into prompt JSONL files."""
-    templates = json.loads(prompts_path.read_text())
-    tasks = tasks or tuple(templates)
-    unknown = sorted(set(tasks) - set(templates))
-    if unknown:
-        raise ValueError(f"unknown LongBench tasks: {', '.join(unknown)}")
+    templates = json.loads(prompts_path.read_text(encoding="utf-8"))
     output_dir.mkdir(parents=True, exist_ok=True)
 
     with ZipFile(archive_path) as archive:
-        for task in tasks:
+        for task, template in templates.items():
             source_name = f"data/{task}.jsonl"
             output_path = output_dir / f"longbench_{task}.jsonl"
             rows = 0
@@ -66,13 +66,13 @@ def prepare(
                 for line in lines:
                     if not line.strip():
                         continue
-                    prompt = templates[task].format(**json.loads(line))
+                    prompt = template.format(**json.loads(line))
                     output.write(json.dumps({"prompt": prompt}, ensure_ascii=False))
                     output.write("\n")
                     rows += 1
             logger.info("  wrote %s (%d rows)", output_path.name, rows)
 
-    return len(tasks)
+    return len(templates)
 
 
 def main() -> None:
@@ -81,10 +81,6 @@ def main() -> None:
         description="Prepare prompt-only LongBench JSONL files.",
     )
     parser.add_argument("--data-dir", required=True, type=Path)
-    parser.add_argument(
-        "--tasks",
-        help="Comma-separated tasks (default: all official LongBench tasks)",
-    )
     parser.add_argument(
         "--download",
         action="store_true",
@@ -107,15 +103,7 @@ def main() -> None:
         logger.error("Missing %s; rerun with --download.", ", ".join(map(str, missing)))
         sys.exit(1)
 
-    tasks = (
-        tuple(task.strip() for task in args.tasks.split(",") if task.strip())
-        if args.tasks
-        else None
-    )
-    try:
-        written = prepare(archive_path, prompts_path, data_dir, tasks)
-    except ValueError as error:
-        parser.error(str(error))
+    written = prepare(archive_path, prompts_path, data_dir)
     logger.info("Done. %d files written to %s", written, data_dir)
 
 
