@@ -503,10 +503,7 @@ class Trainer:
                 )
             self.global_step += 1
 
-            if (
-                self.config.max_steps is not None
-                and self.global_step >= self.config.max_steps
-            ):
+            if self._reached_max_steps():
                 break
 
             if (
@@ -568,14 +565,20 @@ class Trainer:
 
         return val_metrics
 
-    def maybe_save_checkpoint(self, epoch: int | str, local_step: int = 0):
-        if epoch != "interrupted" and (
-            self.config.save_best
-            or (
-                self.config.checkpoint_freq >= 1
-                and isinstance(epoch, int)
-                and epoch != 0
-                and (epoch + 1) % self.config.checkpoint_freq != 0
+    def maybe_save_checkpoint(
+        self, epoch: int | str, local_step: int = 0, force: bool = False
+    ):
+        if (
+            not force
+            and epoch != "interrupted"
+            and (
+                self.config.save_best
+                or (
+                    self.config.checkpoint_freq >= 1
+                    and isinstance(epoch, int)
+                    and epoch != 0
+                    and (epoch + 1) % self.config.checkpoint_freq != 0
+                )
             )
         ):
             return
@@ -624,10 +627,22 @@ class Trainer:
         if self.config.save_best:
             self.checkpointer.cleanup_keep_only_best(best_epoch=epoch)
 
+    def _reached_max_steps(self) -> bool:
+        return (
+            self.config.max_steps is not None
+            and self.global_step >= self.config.max_steps
+        )
+
     @with_graceful_shutdown()
     def run_training(self):
         n_epochs = self.config.num_epochs
         for epoch in range(self.current_epoch, n_epochs):
+            if self._reached_max_steps():
+                root_logger.info(
+                    f"Reached max_steps={self.config.max_steps} "
+                    f"(global_step={self.global_step}); stopping training."
+                )
+                break
             root_logger.info(f"Training epoch {epoch + 1}/{n_epochs} started")
             self.train_epoch(epoch)
             root_logger.info(f"Training epoch {epoch + 1}/{n_epochs} completed")
@@ -635,7 +650,10 @@ class Trainer:
             if self.is_distributed:
                 dist.barrier()
 
-            self.maybe_save_checkpoint(epoch)
+            # Bypass the checkpoint_freq / save_best gates when this is the
+            # final segment before max_steps stops training: its steps would
+            # otherwise never be persisted.
+            self.maybe_save_checkpoint(epoch, force=self._reached_max_steps())
 
             if self.is_distributed:
                 dist.barrier()
