@@ -22,6 +22,7 @@ def select_anchors(
     loss_mask: torch.Tensor,  # shape: [1, total_seq_len]
     num_anchors: int,
     block_size: int,
+    document_ids: torch.Tensor | None = None,  # shape: [1, total_seq_len]
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Randomly select anchor positions from valid tokens in sequence.
 
@@ -29,6 +30,10 @@ def select_anchors(
         loss_mask: Binary mask indicating valid positions [1, total_seq_len]
         n: Number of anchors to select per batch item
         block_size: Block size (last block_size positions excluded)
+        document_ids: Optional per-position document ids of the packed
+            sequence. When given, anchors whose block would cross a document
+            boundary are excluded, so a block never mixes one document's
+            context with the next document's targets and loss mask.
 
     Returns:
         tuple: (anchors, anchor_valid)
@@ -43,6 +48,14 @@ def select_anchors(
 
     valid_mask = loss_mask.bool().clone()
     valid_mask[:, -block_size:] = False
+    if document_ids is not None and block_size > 1:
+        # An anchor's block spans positions [p, p + block_size - 1]; documents
+        # are contiguous, so the block stays in one document iff its first and
+        # last positions share a document id.
+        same_doc = (
+            document_ids[:, : -(block_size - 1)] == document_ids[:, block_size - 1 :]
+        )
+        valid_mask[:, : same_doc.shape[1]] &= same_doc
 
     valid_indices = torch.nonzero(valid_mask.squeeze(0), as_tuple=False).squeeze(
         -1
