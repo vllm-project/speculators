@@ -23,7 +23,8 @@ set -euo pipefail
 
 # ============ Configuration ============
 MODEL="Qwen/Qwen3-0.6B"
-DATASET="sharegpt"                # sharegpt, ultrachat, or path to custom data
+# Produce this with response_regeneration/run_all.sh before training.
+DATASET="./sharegpt_Qwen3-0.6B.jsonl"
 OUTPUT_DIR="./output/dspark_qwen3_0_6b_sharegpt"
 VLLM_PORT=8000
 MAX_SAMPLES=5000
@@ -54,7 +55,6 @@ NUM_TRAIN_GPUS=1
 # Step 1: Prepare data
 echo "=== Step 1: Preparing data ==="
 python scripts/prepare_data.py \
-    --model "$MODEL" \
     --data "$DATASET" \
     --output "$OUTPUT_DIR" \
     --max-samples "$MAX_SAMPLES" \

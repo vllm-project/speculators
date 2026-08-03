@@ -9,7 +9,7 @@ import tempfile
 import warnings
 from pathlib import Path
 
-from speculators.data_generation.preprocessing import get_tokenizer, load_processor
+from transformers import AutoProcessor, ProcessorMixin
 
 logger = logging.getLogger("speculators")
 
@@ -33,11 +33,13 @@ def resolve_mask_token_id(
         logger.info(f"Using explicit mask_token_id={mask_token_id}")
         return mask_token_id
 
-    processor = load_processor(
+    processor = AutoProcessor.from_pretrained(
         verifier_name_or_path,
         trust_remote_code=trust_remote_code,
     )
-    tokenizer = get_tokenizer(processor)
+    tokenizer = (
+        processor.tokenizer if isinstance(processor, ProcessorMixin) else processor
+    )
 
     if tokenizer.mask_token_id is not None:
         logger.info(f"Using tokenizer mask_token_id={tokenizer.mask_token_id}")

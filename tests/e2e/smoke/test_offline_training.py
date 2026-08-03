@@ -20,11 +20,9 @@ from tests.e2e.utils import (
     run_prepare_data,
     run_training,
     run_vllm_engine,
-    setup_dummy_sharegpt4v_coco,
 )
 
 TEXT_MODEL = "Qwen/Qwen3-0.6B"
-MM_MODEL = "Qwen/Qwen3-VL-2B-Instruct"
 
 
 @pytest.mark.e2e
@@ -33,7 +31,6 @@ MM_MODEL = "Qwen/Qwen3-VL-2B-Instruct"
     ("model", "dataset", "speculator_type", "extra_train_args", "target_layer_ids"),
     [
         (TEXT_MODEL, "sharegpt", "eagle3", [], None),  # Use default EAGLE layers
-        (MM_MODEL, "sharegpt4v_coco", "eagle3", [], None),  # Multimodal
         (
             TEXT_MODEL,
             "sharegpt",
@@ -85,7 +82,6 @@ MM_MODEL = "Qwen/Qwen3-VL-2B-Instruct"
     ],
 )
 def test_offline_smoke(
-    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     model: str,
     dataset: str,
@@ -94,16 +90,6 @@ def test_offline_smoke(
     extra_train_args: list[str],
     target_layer_ids: list[int] | None,
 ):
-    if dataset == "sharegpt4v_coco":
-        coco_dir = tmp_path / "coco"
-
-        monkeypatch.setenv("COCO_DIR", str(coco_dir))
-        setup_dummy_sharegpt4v_coco(coco_dir)
-
-        vllm_media_path = str(coco_dir)
-    else:
-        vllm_media_path = None
-
     run_offline_e2e(
         tmp_path,
         model,
@@ -112,7 +98,6 @@ def test_offline_smoke(
         vllm_kwargs={
             "enforce_eager": True,
             "gpu_memory_utilization": 0.9,
-            "allowed_local_media_path": vllm_media_path,
         },
         speculator_type=speculator_type,
         extra_train_args=extra_train_args,

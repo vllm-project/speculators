@@ -9,15 +9,18 @@ import re
 import sys
 import time
 from collections import deque
-from collections.abc import Callable
-from typing import Any, cast
+from typing import Any
 
 import aiohttp
 from datasets import load_dataset
 from tqdm import tqdm
-from transformers import AutoTokenizer
 
 from speculators.data_generation.configs import DATASET_CONFIGS, DatasetConfig
+from speculators.data_generation.records import (
+    conversation_from_row,
+    parse_tools,
+    prepared_sample,
+)
 from speculators.data_generation.vllm_client import (
     DEFAULT_MAX_RETRIES,
     InvalidResponseError,
@@ -25,22 +28,6 @@ from speculators.data_generation.vllm_client import (
 )
 
 logger = logging.getLogger(__name__)
-
-# On-policy regeneration has no multimodal support yet; off-policy `prepare-data`
-# does, so these presets are gated here rather than dropped from the registry.
-MULTIMODAL_DATASETS = {"sharegpt4v_coco"}
-REGEN_DATASETS = [name for name in DATASET_CONFIGS if name not in MULTIMODAL_DATASETS]
-
-
-def _dataset_choice(name: str) -> str:
-    """Reject multimodal presets with a reason, not a bare invalid choice."""
-    if name in MULTIMODAL_DATASETS:
-        raise argparse.ArgumentTypeError(
-            f"{name!r} is multimodal; on-policy regeneration does not support "
-            "images yet. Use it off-policy with `prepare-data`."
-        )
-    return name
-
 
 # ---------------------------------------------------------------------------
 # CLI & run configuration
@@ -75,8 +62,7 @@ def parse_args():
     parser.add_argument(
         "--dataset",
         default="ultrachat",
-        type=_dataset_choice,
-        choices=REGEN_DATASETS,
+        choices=DATASET_CONFIGS,
         help="Dataset to process",
     )
     parser.add_argument(
@@ -163,29 +149,6 @@ def sanitize_filename(name: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _conversation_messages(row: dict[str, Any]) -> list:
-    """The ``messages`` or ``conversations`` list from a row, else []."""
-    convs = row.get("messages")
-    if not (isinstance(convs, list) and convs):
-        convs = row.get("conversations")
-    return convs if isinstance(convs, list) else []
-
-
-def _message_role_content(m: dict) -> tuple[str | None, Any]:
-    """Canonical ``(role, content)`` for a message across the role/content and
-    from/value schemas. ``role`` collapses ``human`` to ``user``; ``system`` and
-    ``tool`` pass through; anything else (assistant/gpt) returns ``None``."""
-    role = m.get("role") or m.get("from")
-    content = m.get("content")
-    if content is None:
-        content = m.get("value")
-    if role in ("user", "human"):
-        return "user", content
-    if role in ("system", "tool"):
-        return role, content
-    return None, content
-
-
 def extract_conversation(
     row: dict[str, Any], prompt_field: str | None
 ) -> tuple[list[dict[str, Any]], list[tuple[Any, list[str]]]]:
@@ -202,10 +165,9 @@ def extract_conversation(
     """
     turns: list[dict[str, Any]] = []
     results: list[tuple[Any, list[str]]] = []
-    for m in _conversation_messages(row):
-        if not isinstance(m, dict):
-            continue
-        role, content = _message_role_content(m)
+    for message in conversation_from_row(row):
+        role = message["role"]
+        content = message["content"]
         if role in ("system", "user") and content:
             turns.append({"role": role, "content": content})
         elif role == "tool" and content is not None:
@@ -245,30 +207,6 @@ def _maybe_json(value: Any):
         return json.loads(value)
     except (TypeError, json.JSONDecodeError):
         return None
-
-
-def _list_field(row, key) -> list | None:
-    """Non-empty list from ``row[key]`` (JSON-decoded if a string), else None."""
-    value = row.get(key)
-    if isinstance(value, str):
-        value = _maybe_json(value)
-    return value if isinstance(value, list) and value else None
-
-
-def extract_tools(row) -> list | None:
-    """Return the OpenAI-style ``tools`` schema for a row, or ``None``.
-
-    Reads the ``tools`` column -- a list, or a JSON-string encoding one, as the
-    Hermes function-calling dataset stores it. A row that declares a ``tools``
-    field we cannot read as a list raises ``ValueError`` rather than silently
-    regenerating tool-free; a tool-free row returns ``None``.
-    """
-    tools = _list_field(row, "tools")
-    if tools:
-        return tools
-    if row.get("tools") not in (None, "", [], {}):
-        raise ValueError("a tools field is present but not a usable list")
-    return None
 
 
 _TOOL_RESPONSE_RE = re.compile(r"<tool_response>\s*(.*?)\s*</tool_response>", re.DOTALL)
@@ -379,24 +317,6 @@ async def detect_model(endpoint: str) -> str:
         ) from e
 
 
-def build_detokenizer(model: str) -> Callable[[list[int]], str]:
-    """Return a decoder for the review-only ``text`` twin (see _sample_from_response).
-
-    Loads ``model``'s tokenizer so the twin is exactly ``decode(input_ids)``;
-    ``skip_special_tokens=False`` keeps the chat/control tokens (``<|im_start|>``,
-    ``<think>``, ``<|im_end|>``) visible. Pass a tokenizer path as ``--model``
-    (the checkpoint, not a ``--served-model-name`` alias).
-    """
-    print(f"Loading tokenizer: {model}")
-    tokenizer = AutoTokenizer.from_pretrained(model)
-
-    def detokenize(token_ids: list[int]) -> str:
-        # decode() is typed str | list[str]; a 1-D id list always yields str.
-        return cast("str", tokenizer.decode(token_ids, skip_special_tokens=False))
-
-    return detokenize
-
-
 # Transient statuses worth retrying: request timeout, conflict, too-early, and
 # rate limiting, plus all 5xx. Other non-2xx replies (e.g. 400/401/404) are
 # permanent config/client errors and fail fast.
@@ -438,22 +358,8 @@ async def _post_chat(
 # ---------------------------------------------------------------------------
 
 
-def build_boundary_sample(
-    prompt_token_ids: list[int],
-    completion_token_ids: list[int],
-) -> tuple[list[int], list[int]]:
-    """Build one training sample: prompt (loss_mask 0) + generated tokens (1).
-
-    The generation boundary is the mask -- no ``{% generation %}`` markers, no regex.
-    """
-    input_ids = [*prompt_token_ids, *completion_token_ids]
-    loss_mask = [0] * len(prompt_token_ids) + [1] * len(completion_token_ids)
-    return input_ids, loss_mask
-
-
 def _tool_result_message(tool_call: dict, content: str) -> dict[str, Any]:
-    """Build the ``tool`` message that feeds a cached (off-policy) result back to
-    the target, paired to the id of the call the target just generated."""
+    """Pair a cached environment observation with the regenerated tool call."""
     message: dict[str, Any] = {"role": "tool", "content": content}
     call_id = tool_call.get("id")
     if call_id:
@@ -464,7 +370,6 @@ def _tool_result_message(tool_call: dict, content: str) -> dict[str, Any]:
 def _sample_from_response(
     data: dict[str, Any],
     *,
-    detokenize: Callable[[list[int]], str],
     conv_id: str,
     sample_index: int,
     idx: int,
@@ -495,7 +400,9 @@ def _sample_from_response(
             "endpoint returned no token ids; it must support return_token_ids"
         )
 
-    input_ids, loss_mask = build_boundary_sample(prompt_token_ids, completion_token_ids)
+    canonical = prepared_sample(
+        [*prompt_token_ids, *completion_token_ids], len(prompt_token_ids)
+    )
     if tool_calls:
         # History keeps the parsed call; any generated <think> is supervised in
         # this row's completion tokens, not re-rendered.
@@ -512,12 +419,7 @@ def _sample_from_response(
         # Conversation-level key for --resume; the row `id` is generation-suffixed
         # and would never match a recomputed one.
         "primary_id": conv_id,
-        "input_ids": input_ids,
-        "loss_mask": loss_mask,
-        # Review-only decode of input_ids; ignored by training. Faithful to the
-        # tokens by construction -- system/user context, the template's <think>
-        # priming, and history with prior-turn reasoning already stripped.
-        "text": detokenize(input_ids),
+        **canonical,
         "metadata": {
             "idx": idx,
             "finish_reason": choice.get("finish_reason"),
@@ -539,7 +441,6 @@ async def regenerate_conversation(
     endpoint: str,
     sampling_params: dict[str, Any],
     samples: list[dict[str, Any]],
-    detokenize: Callable[[list[int]], str],
 ) -> bool:
     """Regenerate one conversation into per-generation boundary samples.
 
@@ -588,7 +489,6 @@ async def regenerate_conversation(
             data = await post_fn(payload)
             sample, assistant_msg, tool_calls = _sample_from_response(
                 data,
-                detokenize=detokenize,
                 conv_id=conv_id,
                 sample_index=len(samples),
                 idx=item["idx"],
@@ -659,7 +559,6 @@ async def worker(
     endpoint: str,
     progress,
     stats: dict[str, Any],
-    detokenize: Callable[[list[int]], str],
 ):
     """Pull conversations off the queue and regenerate them into boundary rows.
 
@@ -698,7 +597,6 @@ async def worker(
                 endpoint=endpoint,
                 sampling_params=args.sampling_params,
                 samples=samples,
-                detokenize=detokenize,
             )
             # Written only after the conversation finishes -- a clean truncation
             # included, since rerunning it would truncate again. An exception
@@ -756,9 +654,6 @@ async def main():
         args.model = await detect_model(endpoint)
 
     print(f"Using model: {args.model}")
-
-    # Decoder for the review-only `text` twin; see build_detokenizer.
-    detokenize = build_detokenizer(args.model)
 
     # Get dataset configuration
     dataset_config = DATASET_CONFIGS[args.dataset]
@@ -835,7 +730,6 @@ async def main():
                         endpoint,
                         progress,
                         stats,
-                        detokenize,
                     )
                 )
                 for _ in range(args.concurrency)
@@ -860,7 +754,7 @@ async def main():
 
                 # Broken input tool schema: record and skip (don't crash the run).
                 try:
-                    tools = extract_tools(normalized)
+                    tools = parse_tools(normalized.get("tools"))
                 except ValueError as exc:
                     logger.warning(
                         "Skipping row %s: input tool schema is broken (%s)",
