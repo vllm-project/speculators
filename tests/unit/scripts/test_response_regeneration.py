@@ -12,6 +12,7 @@ import asyncio
 import copy
 import importlib.util
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -442,7 +443,7 @@ class _Args:
 
 
 class _NullProgress:
-    def set_postfix(self, **kwargs): ...
+    def set_postfix(self, ordered_dict=None, **kwargs): ...
     def update(self, n): ...
 
 
@@ -477,7 +478,15 @@ def _run_worker(responses, tmp_path, stem):
         queue: asyncio.Queue = asyncio.Queue()
         await queue.put(_TWO_TURN_ITEM)
         await queue.put(None)
-        stats = {"ok": 0, "errors": 0, "truncated": 0}
+        stats = {
+            "ok": 0,
+            "errors": 0,
+            "truncated": 0,
+            "requests": 0,
+            "completion_tokens": 0,
+            "total_request_s": 0.0,
+            "start_time": time.perf_counter(),
+        }
         await regen.worker(
             _FakeSession(responses),
             queue,
@@ -487,6 +496,7 @@ def _run_worker(responses, tmp_path, stem):
             "http://x/v1/chat/completions",
             _NullProgress(),
             stats,
+            _detok,
         )
         return stats
 
@@ -507,7 +517,11 @@ def test_worker_row_identity_and_all_or_nothing_writes(tmp_path):
         tmp_path,
         "ok",
     )
-    assert stats == {"ok": 1, "errors": 0, "truncated": 0}
+    assert stats["ok"] == 1
+    assert stats["errors"] == 0
+    assert stats["truncated"] == 0
+    assert stats["requests"] > 0
+    assert stats["total_request_s"] > 0.0
     rows = [json.loads(line) for line in out_path.read_text().splitlines()]
     assert [r["id"] for r in rows] == ["conv-abc_gen0", "conv-abc_gen1"]
     assert {r["primary_id"] for r in rows} == {"conv-abc"}
@@ -526,7 +540,9 @@ def test_worker_row_identity_and_all_or_nothing_writes(tmp_path):
         tmp_path,
         "fail",
     )
-    assert stats == {"ok": 0, "errors": 1, "truncated": 0}
+    assert stats["ok"] == 0
+    assert stats["errors"] == 1
+    assert stats["truncated"] == 0
     assert out_path.read_text() == ""
     assert regen.load_seen(str(out_path)) == set()
     error = json.loads(err_path.read_text())
@@ -566,6 +582,11 @@ def _response(
     }
 
 
+def _detok(token_ids):
+    """Test stand-in for ``tokenizer.decode`` -- deterministic and readable."""
+    return " ".join(str(t) for t in token_ids)
+
+
 def _fake_post(responses):
     """A post_fn returning canned responses in order and recording sent payloads."""
     sent = []
@@ -591,6 +612,7 @@ def _regen(
             endpoint=endpoint,
             sampling_params=sampling_params or {},
             samples=samples,
+            detokenize=_detok,
         )
     )
     return samples, truncated, sent
@@ -683,7 +705,7 @@ def test_sample_from_response_rejects_empty_and_missing_token_ids():
     with pytest.raises(ValueError, match="empty assistant generation"):
         regen._sample_from_response(
             _response(prompt_token_ids=[1], token_ids=[2], content=None),
-            prefix=[],
+            detokenize=_detok,
             conv_id="c",
             sample_index=0,
             idx=0,
@@ -698,7 +720,7 @@ def test_sample_from_response_rejects_empty_and_missing_token_ids():
     with pytest.raises(ValueError, match="return_token_ids"):
         regen._sample_from_response(
             bad,
-            prefix=[],
+            detokenize=_detok,
             conv_id="c",
             sample_index=0,
             idx=0,

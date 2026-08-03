@@ -65,6 +65,7 @@ echo "=== Step 2: Running acceptance rate evaluation ==="
 python "$SCRIPT_DIR/evaluate.py" \
     --target "${SERVER_URL}/v1" \
     --dataset "$DATASET" \
+    --data-column-mapper "kind=generative_column_mapper,column_mappings.text_column=prompt" \
     throughput \
     --subsets "HumanEval" \
     --max-requests 80

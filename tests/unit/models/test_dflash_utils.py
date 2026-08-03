@@ -1,8 +1,11 @@
-"""Unit tests for get_base_indices_for_anchored_blocks."""
+"""Unit tests for get_base_indices_for_anchored_blocks and select_anchors."""
 
 import torch
 
-from speculators.models.dflash.utils import get_base_indices_for_anchored_blocks
+from speculators.models.dflash.utils import (
+    get_base_indices_for_anchored_blocks,
+    select_anchors,
+)
 
 
 class TestGetBaseIndicesForAnchoredBlocks:
@@ -43,3 +46,14 @@ class TestGetBaseIndicesForAnchoredBlocks:
         anchor_positions = torch.tensor([[2.0, 5.0]])
         result = get_base_indices_for_anchored_blocks(anchor_positions, block_size=2)
         assert result.dtype == torch.long
+
+
+class TestSelectAnchors:
+    def test_sampled_anchors_are_sorted(self):
+        # Anchors are returned sorted by position so the draft blocks form
+        # contiguous flex-attention blocks (fast path) instead of scattered ones.
+        torch.manual_seed(0)
+        loss_mask = torch.ones(1, 64)
+        anchors, anchor_valid = select_anchors(loss_mask, num_anchors=8, block_size=4)
+        selected = anchors[anchor_valid]
+        assert torch.equal(selected, torch.sort(selected).values)

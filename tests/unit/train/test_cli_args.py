@@ -1,18 +1,20 @@
 """Tests for CLI arguments."""
 
-from scripts.train import parse_args
+import argparse
+
+import pytest
+
 from speculators.models.dflash.core import DFlashDraftModel
 from speculators.models.dspark.core import DSparkDraftModel
 from speculators.models.eagle3.core import Eagle3DraftModel
-from speculators.models.metrics import ce_loss, kl_div_loss, tv_loss
+from speculators.models.metrics import ce_loss, kl_div_loss, tv_loss_fused_or_eager
 from speculators.models.peagle.core import PEagleDraftModel
+from speculators.train.config import TrainConfig
 
 
-def _parse(monkeypatch, extra: list[str]):
-    monkeypatch.setattr(
-        "sys.argv", ["train.py", "--verifier-name-or-path", "dummy"] + extra
-    )
-    return parse_args()
+def _parse(monkeypatch, extra: list[str]) -> argparse.Namespace:
+    cfg = TrainConfig.resolve(["--verifier-name-or-path", "dummy", *extra])
+    return argparse.Namespace(**cfg.flatten())
 
 
 # ---------------------------------------------------------------------------
@@ -113,7 +115,7 @@ def test_dspark_compound_loss(monkeypatch):
     assert train_kw["loss_config"]["ce"][0] is ce_loss
     assert train_kw["loss_config"]["ce"][1] == 0.1
     assert "tv" in train_kw["loss_config"]
-    assert train_kw["loss_config"]["tv"][0] is tv_loss
+    assert train_kw["loss_config"]["tv"][0] is tv_loss_fused_or_eager
     assert train_kw["loss_config"]["tv"][1] == 0.9
     assert "ce" in val_kw["loss_config"]
     assert "tv" in val_kw["loss_config"]
@@ -169,3 +171,23 @@ def test_no_norm_before_fc_flag(monkeypatch):
 def test_no_norm_output_flag(monkeypatch):
     args = _parse(monkeypatch, ["--no-norm-output"])
     assert args.norm_output is False
+
+
+# ---------------------------------------------------------------------------
+# --max-steps
+# ---------------------------------------------------------------------------
+
+
+def test_max_steps_default_is_none(monkeypatch):
+    args = _parse(monkeypatch, [])
+    assert args.max_steps is None
+
+
+def test_max_steps_explicit(monkeypatch):
+    args = _parse(monkeypatch, ["--max-steps", "15"])
+    assert args.max_steps == 15
+
+
+def test_max_steps_rejects_non_positive(monkeypatch):
+    with pytest.raises(SystemExit):
+        _parse(monkeypatch, ["--max-steps", "0"])

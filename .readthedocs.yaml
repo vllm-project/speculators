@@ -17,6 +17,8 @@ mkdocs:
 python:
   install:
     - method: pip
+      path: ./hs_connectors
+    - method: pip
       path: .
       extra_requirements:
         - dev

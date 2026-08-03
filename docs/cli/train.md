@@ -1,6 +1,6 @@
 # train.py
 
-Trains speculator models using either online or offline hidden states. Supports single-GPU and multi-GPU distributed training with PyTorch FSDP.
+Trains speculator models using either online or offline hidden states. Supports single-GPU and multi-GPU distributed training.
 
 ## Basic Usage
 
@@ -15,7 +15,7 @@ python scripts/train.py \
   --epochs 10
 ```
 
-**Multi-GPU (FSDP):**
+**Multi-GPU (DDP):**
 
 ```bash
 torchrun --standalone --nproc_per_node=4 scripts/train.py \
@@ -24,6 +24,18 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
   --save-path ./checkpoints \
   --draft-vocab-size 32000 \
   --epochs 10
+```
+
+**Multi-GPU (FSDP sharded):**
+
+```bash
+torchrun --standalone --nproc_per_node=4 scripts/train.py \
+  --verifier-name-or-path meta-llama/Llama-3.1-8B-Instruct \
+  --data-path ./training_data \
+  --save-path ./checkpoints \
+  --draft-vocab-size 32000 \
+  --epochs 10 \
+  --fsdp-shard
 ```
 
 ## Arguments
@@ -88,7 +100,11 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--mask-token-id`** (int, default: auto-detect) Token ID to use as mask token (for DFlash). Auto-detected if not provided.
 
-- **`--target-layer-ids`** (int list, default: auto-select) Space-separated list of layer IDs used for hidden states. Default: `[2, num_layers//2, num_layers-3]` **Must match the values used when launching vLLM if custom layers were specified.**
+- **`--target-layer-ids`** (int list, default: auto-select) Space-separated list of layer IDs for the auxiliary hidden states. Default: `[2, num_layers//2, num_layers-3]` **If custom layers were specified when launching vLLM, pass the same ids here, excluding the final layer `launch_vllm.py` appends** — that one reaches training separately as the verifier's last hidden states.
+
+### Distributed Training Arguments
+
+- **`--fsdp-shard`** (flag) Shard model parameters across GPUs with FSDP. By default, parameters are fully replicated (DDP-like). Enable this when the model does not fit in a single GPU's memory.
 
 ### Training Arguments
 
@@ -110,7 +126,7 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--seed`** (int, default: `42`) Random seed for reproducibility.
 
-- **`--hidden-states-dtype`** (str, default: `"bfloat16"`) Data type for model weights and hidden states. Options: `float32`, `float16`, `bfloat16`
+- **`--hidden-states-dtype`** (str, default: `"bfloat16"`) Data type for dataloader hidden states and autocast compute. Model master weights are always kept in fp32. Options: `float32` (full precision, for debugging), `bfloat16` (recommended for mixed precision training). Note: `float16` is not supported as it requires gradient scaling to prevent underflow.
 
 - **`--deterministic-cuda`** (flag) Enable deterministic CUDA operations. May impact performance.
 
@@ -132,8 +148,6 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 ### Eagle3-Specific Arguments
 
-- **`--use-off-policy-tokens`** (flag) Use off-policy tokens during training (required for [regenerated data](response_regeneration.md)).
-
 - **`--norm-before-residual` / `--no-norm-before-residual`** (flag, default: `True`) Toggle normalization before residual connections.
 
 - **`--embed-requires-grad` / `--no-embed-requires-grad`** (flag, default: `False`) Whether to train embedding layer weights.
@@ -148,6 +162,14 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--ttt-step-loss-decay`** (float, default: `1.0`) Loss decay factor for test-time training steps.
 
+### P-EAGLE-Specific Arguments
+
+- **`--num-depths`** (int, default: `8`) Number of parallel prediction depths.
+
+- **`--down-sample-ratio`** (float, default: `0.7`) Geometric decay ratio for COD sampling.
+
+- **`--down-sample-ratio-min`** (float, default: `0.2`) Minimum retention ratio for COD sampling.
+
 ### Attention Backend Arguments
 
 - **`--draft-attn-impl`** (str, default: `"simple_flex_attention"`) Attention implementation for draft layers. Options: `simple_flex_attention`, `sdpa`, `eager`. Use `sdpa` or `eager` on hardware where flex attention is unavailable (e.g. Ascend NPU). Applies to Eagle3, P-EAGLE, and DFlash. Not supported for MTP.
@@ -158,9 +180,27 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--sample-from-anchor`** / **`--no-sample-from-anchor`** (bool, default: algorithm-specific) Whether to sample from the anchor position. `True`: sample from anchor and all mask positions (default for dspark, produces block_size tokens). `False`: anchor is bonus token (default for dflash, produces block_size-1 tokens).
 
-- **`--max-anchors`** (int, default: `256`) Maximum anchor positions for DFlash training.
+- **`--max-anchors`** (int, default: `3072`) Maximum anchor positions for DFlash, DSpark, and P-EAGLE training.
 
 - **`--dflash-decay-gamma`** (float, default: `4.0`) Decay gamma for DFlash loss weighting.
+
+- **`--per-position-loss-weight`** (str, default: `"fixed-exp-decay"`) Per-position loss weighting scheme. Options: `fixed-exp-decay`, `dpace`. Applies to DFlash and DSpark.
+
+- **`--dpace-alpha`** (float, default: `0.5`) Confidence smoothing constant for the D-PACE loss. Only used with `--per-position-loss-weight dpace`.
+
+### DSpark-Specific Arguments
+
+DSpark builds on DFlash, so all DFlash-specific arguments apply as well.
+
+- **`--markov-rank`** (int, default: `256`) Low-rank dim of the Markov logit-bias head. `0` disables it.
+
+- **`--markov-head-type`** (str, default: `"vanilla"`) Sequential head variant. Options: `vanilla`, `gated`, `rnn`.
+
+- **`--enable-confidence-head`** / **`--no-enable-confidence-head`** (flag, default: `True`) Attach the per-position acceptance confidence head.
+
+- **`--confidence-head-with-markov`** / **`--no-confidence-head-with-markov`** (flag, default: `True`) Feed the Markov previous-token embedding into the confidence head alongside the backbone hidden state.
+
+- **`--confidence-head-alpha`** (float, default: `1.0`) Weight of the confidence-head BCE term.
 
 ### Sliding Window Attention Arguments
 
@@ -271,7 +311,8 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun \
   --scheduler-type cosine \
   --scheduler-warmup-steps 100 \
   --checkpoint-freq 2 \
-  --save-best
+  --save-best \
+  --fsdp-shard
 ```
 
 ### Fine-tuning a Pretrained Model

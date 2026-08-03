@@ -7,12 +7,15 @@ import logging
 import os
 import re
 import sys
+import time
 from collections import deque
-from typing import Any
+from collections.abc import Callable
+from typing import Any, cast
 
 import aiohttp
 from datasets import load_dataset
 from tqdm import tqdm
+from transformers import AutoTokenizer
 
 from speculators.data_generation.configs import DATASET_CONFIGS, DatasetConfig
 from speculators.data_generation.vllm_client import (
@@ -42,6 +45,16 @@ def _dataset_choice(name: str) -> str:
 # ---------------------------------------------------------------------------
 # CLI & run configuration
 # ---------------------------------------------------------------------------
+
+
+def ensure_parent_dirs(*paths: str) -> None:
+    """Create parent directories for output files.
+
+    open(..., "a") creates the file but not its parent directories.
+    """
+    for path in paths:
+        if parent := os.path.dirname(path):
+            os.makedirs(parent, exist_ok=True)
 
 
 def parse_args():
@@ -366,6 +379,24 @@ async def detect_model(endpoint: str) -> str:
         ) from e
 
 
+def build_detokenizer(model: str) -> Callable[[list[int]], str]:
+    """Return a decoder for the review-only ``text`` twin (see _sample_from_response).
+
+    Loads ``model``'s tokenizer so the twin is exactly ``decode(input_ids)``;
+    ``skip_special_tokens=False`` keeps the chat/control tokens (``<|im_start|>``,
+    ``<think>``, ``<|im_end|>``) visible. Pass a tokenizer path as ``--model``
+    (the checkpoint, not a ``--served-model-name`` alias).
+    """
+    print(f"Loading tokenizer: {model}")
+    tokenizer = AutoTokenizer.from_pretrained(model)
+
+    def detokenize(token_ids: list[int]) -> str:
+        # decode() is typed str | list[str]; a 1-D id list always yields str.
+        return cast("str", tokenizer.decode(token_ids, skip_special_tokens=False))
+
+    return detokenize
+
+
 # Transient statuses worth retrying: request timeout, conflict, too-early, and
 # rate limiting, plus all 5xx. Other non-2xx replies (e.g. 400/401/404) are
 # permanent config/client errors and fail fast.
@@ -433,7 +464,7 @@ def _tool_result_message(tool_call: dict, content: str) -> dict[str, Any]:
 def _sample_from_response(
     data: dict[str, Any],
     *,
-    prefix: list[dict[str, Any]],
+    detokenize: Callable[[list[int]], str],
     conv_id: str,
     sample_index: int,
     idx: int,
@@ -483,8 +514,10 @@ def _sample_from_response(
         "primary_id": conv_id,
         "input_ids": input_ids,
         "loss_mask": loss_mask,
-        # Review-only twin of input_ids; ignored by training.
-        "conversations": [*prefix, assistant_msg],
+        # Review-only decode of input_ids; ignored by training. Faithful to the
+        # tokens by construction -- system/user context, the template's <think>
+        # priming, and history with prior-turn reasoning already stripped.
+        "text": detokenize(input_ids),
         "metadata": {
             "idx": idx,
             "finish_reason": choice.get("finish_reason"),
@@ -506,6 +539,7 @@ async def regenerate_conversation(
     endpoint: str,
     sampling_params: dict[str, Any],
     samples: list[dict[str, Any]],
+    detokenize: Callable[[list[int]], str],
 ) -> bool:
     """Regenerate one conversation into per-generation boundary samples.
 
@@ -554,7 +588,7 @@ async def regenerate_conversation(
             data = await post_fn(payload)
             sample, assistant_msg, tool_calls = _sample_from_response(
                 data,
-                prefix=prefix,
+                detokenize=detokenize,
                 conv_id=conv_id,
                 sample_index=len(samples),
                 idx=item["idx"],
@@ -593,6 +627,24 @@ async def regenerate_conversation(
     return truncated
 
 
+def _log_summary(stats: dict[str, Any]) -> None:
+    elapsed = time.perf_counter() - stats["start_time"]
+    n_convs = stats["ok"] + stats["errors"]
+    print(
+        f"\nPipeline complete in {elapsed:.1f}s: {n_convs} conversations "
+        f"({stats['ok']} ok, {stats['errors']} errors, "
+        f"{stats['truncated']} truncated)"
+    )
+    if stats["requests"] > 0:
+        rps = stats["requests"] / elapsed if elapsed > 0 else 0
+        tps = int(stats["completion_tokens"] / elapsed) if elapsed > 0 else 0
+        avg_latency = stats["total_request_s"] / stats["requests"] * 1000
+        print(
+            f"Throughput: {rps:.1f} req/s, {tps} tok/s | "
+            f"Avg request latency: {avg_latency:.0f} ms"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Worker pool & orchestration
 # ---------------------------------------------------------------------------
@@ -606,7 +658,8 @@ async def worker(
     err_fh,
     endpoint: str,
     progress,
-    stats: dict[str, int],
+    stats: dict[str, Any],
+    detokenize: Callable[[list[int]], str],
 ):
     """Pull conversations off the queue and regenerate them into boundary rows.
 
@@ -616,9 +669,15 @@ async def worker(
     """
 
     async def post(payload: dict[str, Any]) -> dict[str, Any]:
-        return await _post_chat(
+        t0 = time.perf_counter()
+        result = await _post_chat(
             session, endpoint, payload, max_retries=args.max_retries
         )
+        latency = time.perf_counter() - t0
+        stats["total_request_s"] += latency
+        stats["requests"] += 1
+        logger.debug("vLLM request completed in %.0f ms", latency * 1000)
+        return result
 
     while True:
         item = await queue.get()
@@ -639,6 +698,7 @@ async def worker(
                 endpoint=endpoint,
                 sampling_params=args.sampling_params,
                 samples=samples,
+                detokenize=detokenize,
             )
             # Written only after the conversation finishes -- a clean truncation
             # included, since rerunning it would truncate again. An exception
@@ -646,10 +706,14 @@ async def worker(
             # conversation needs no rerun (see load_seen).
             for sample in samples:
                 out_fh.write(json.dumps(sample, ensure_ascii=False) + "\n")
+                usage = sample.get("metadata", {}).get("usage", {})
+                stats["completion_tokens"] += usage.get("completion_tokens", 0)
             out_fh.flush()
             if samples:
                 stats["ok"] += 1
-            if truncated:
+            if truncated or any(
+                s.get("metadata", {}).get("finish_reason") == "length" for s in samples
+            ):
                 stats["truncated"] += 1
         except Exception as e:  # noqa: BLE001
             # Failures go to a separate error file, not the training output.
@@ -666,12 +730,16 @@ async def worker(
             err_fh.flush()
             stats["errors"] += 1
         finally:
-            progress.set_postfix(
-                ok=stats["ok"],
-                errors=stats["errors"],
-                truncated=stats["truncated"],
-                refresh=False,
-            )
+            elapsed = time.perf_counter() - stats["start_time"]
+            postfix = {
+                "ok": stats["ok"],
+                "err": stats["errors"],
+                "trunc": stats["truncated"],
+            }
+            if elapsed > 0 and stats["requests"] > 0:
+                postfix["rps"] = f"{stats['requests'] / elapsed:.1f}"
+                postfix["tps"] = f"{stats['completion_tokens'] / elapsed:.0f}"
+            progress.set_postfix(postfix, refresh=False)
             progress.update(1)
             queue.task_done()
 
@@ -688,6 +756,9 @@ async def main():
         args.model = await detect_model(endpoint)
 
     print(f"Using model: {args.model}")
+
+    # Decoder for the review-only `text` twin; see build_detokenizer.
+    detokenize = build_detokenizer(args.model)
 
     # Get dataset configuration
     dataset_config = DATASET_CONFIGS[args.dataset]
@@ -720,6 +791,8 @@ async def main():
 
     queue: asyncio.Queue = asyncio.Queue(maxsize=args.concurrency * 4)
 
+    ensure_parent_dirs(args.outfile, error_outfile)
+
     timeout = aiohttp.ClientTimeout(total=None, sock_connect=90, sock_read=None)
     connector = aiohttp.TCPConnector(
         limit=None, force_close=False, enable_cleanup_closed=True
@@ -742,7 +815,15 @@ async def main():
                 dynamic_ncols=True,
             ) as progress,
         ):
-            stats = {"ok": 0, "errors": 0, "truncated": 0}
+            stats = {
+                "ok": 0,
+                "errors": 0,
+                "truncated": 0,
+                "requests": 0,
+                "completion_tokens": 0,
+                "total_request_s": 0.0,
+                "start_time": time.perf_counter(),
+            }
             workers = [
                 asyncio.create_task(
                     worker(
@@ -754,6 +835,7 @@ async def main():
                         endpoint,
                         progress,
                         stats,
+                        detokenize,
                     )
                 )
                 for _ in range(args.concurrency)
@@ -817,6 +899,8 @@ async def main():
             for _ in range(len(workers)):
                 await queue.put(None)
             await asyncio.gather(*workers)
+
+            _log_summary(stats)
 
 
 if __name__ == "__main__":

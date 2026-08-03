@@ -61,7 +61,9 @@ def compute_metrics(
             dpace_alpha=dpace_alpha,
         )
     else:
-        decay_fn = partial(dflash_loss_decay, gamma=gamma)
+        decay_fn = partial(
+            dflash_loss_decay, gamma=gamma, sample_from_anchor=sample_from_anchor
+        )
 
     loss, term_losses = compound_loss(
         logits,
