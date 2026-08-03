@@ -31,8 +31,9 @@ Both `throughput` and `sweep` share the same options:
 
 ```
   --target URL               vLLM server endpoint (required)
-  --dataset DATASET          HF dataset ID, local path, or benchmark spec
-  --dataset-dir DIR          Prepared data for a benchmark spec
+  --dataset DATASET          HF ID, local path, or prepared benchmark selector
+                             (default: RedHatAI/speculator_benchmarks)
+  --dataset-dir DIR          Directory containing prepared benchmark data
   --subsets LIST             Comma-separated HF subset names (default: all 9)
   --output-dir DIR           Output directory (default: perf_results_TIMESTAMP)
   --max-concurrency N        Max concurrent requests (default: 128)
@@ -44,7 +45,7 @@ Both `throughput` and `sweep` share the same options:
                              (default: kind=generative_column_mapper,column_mappings.text_column=prompt)
 ```
 
-Prepared benchmarks use a common syntax: `--dataset <adapter>[/<selection>] --dataset-dir <path>`. The existing `--speedbench-data-dir` option remains accepted as a compatibility alias.
+A prepared benchmark selector identifies the benchmark and an optional task or category, such as `speedbench/qualitative/coding`, `ruler2/qwen3-8b-32k/mv_niah_hard`, or `longbench/hotpotqa`. Pass its prepared files separately with `--dataset-dir`. The existing `--speedbench-data-dir` option remains accepted as a compatibility alias.
 
 ## SPEED-Bench
 
@@ -70,7 +71,7 @@ python scripts/evaluate/prepare_speedbench.py --data-dir ./speedbench_data
 
 ### Running evaluations
 
-Pass a `speedbench/<config>` spec to `--dataset` together with `--dataset-dir`:
+Pass a `speedbench/<config>` selector to `--dataset` together with `--dataset-dir`:
 
 ```bash
 # All 11 qualitative categories
@@ -104,7 +105,9 @@ Results are written to `acceptance.csv` in the output directory with per-categor
 
 ## RULER v2
 
-[RULER v2](https://github.com/NVIDIA/RULER/tree/rulerv2-ns) covers 12 long-context tasks across multi-key retrieval, multi-value retrieval, and multi-document QA. Its prompts depend on the model tokenizer and target context length, so generate them with [NeMo Skills](https://github.com/NVIDIA-NeMo/Skills/tree/main/nemo_skills/dataset/ruler2):
+[RULER v2](https://github.com/NVIDIA/RULER/tree/rulerv2-ns) covers 12 long-context tasks across multi-key retrieval, multi-value retrieval, and multi-document QA. Its prompts depend on the model tokenizer and target context length.
+
+The one-time data preparation step requires a separate [NeMo Skills](https://github.com/NVIDIA-NeMo/Skills/tree/main/nemo_skills/dataset/ruler2) environment; NeMo Skills is not a dependency of this project and is not needed when running `evaluate.py` on already-prepared files:
 
 ```bash
 # Run in a NeMo Skills environment with a configured local cluster.

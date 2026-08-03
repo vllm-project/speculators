@@ -25,13 +25,13 @@ def _args(**overrides) -> Namespace:
         "dataset": "org/dataset",
         "dataset_dir": None,
         "data_column_mapper": evaluate.DEFAULT_DATA_COLUMN_MAPPER,
-        "subsets": "first,second",
+        "subsets": "qa",
     }
     values.update(overrides)
     return Namespace(**values)
 
 
-def test_resolve_ruler2_setup(tmp_path):
+def test_resolve_ruler2_setup_and_task(tmp_path):
     paths = [
         _task(tmp_path, "model-32k", "mk_niah_basic"),
         _task(tmp_path, "model-32k", "qa_hard"),
@@ -41,17 +41,12 @@ def test_resolve_ruler2_setup(tmp_path):
         ("ruler2/model-32k/mk_niah_basic", paths[0]),
         ("ruler2/model-32k/qa_hard", paths[1]),
     ]
-
-
-def test_resolve_ruler2_task(tmp_path):
-    path = _task(tmp_path, "model-32k", "mv_niah_hard")
-
-    assert evaluate._resolve_ruler2("ruler2/model-32k/mv_niah_hard", tmp_path) == [
-        ("ruler2/model-32k/mv_niah_hard", path)
+    assert evaluate._resolve_ruler2("ruler2/model-32k/qa_hard", tmp_path) == [
+        ("ruler2/model-32k/qa_hard", paths[1])
     ]
 
 
-def test_resolve_longbench_all(tmp_path):
+def test_resolve_longbench_all_and_task(tmp_path):
     paths = [
         tmp_path / "longbench_hotpotqa.jsonl",
         tmp_path / "longbench_qasper.jsonl",
@@ -63,41 +58,26 @@ def test_resolve_longbench_all(tmp_path):
         ("longbench/hotpotqa", paths[0]),
         ("longbench/qasper", paths[1]),
     ]
-
-
-def test_resolve_runs_uses_adapter_mapper_and_no_subset(tmp_path):
-    path = tmp_path / "longbench_qasper.jsonl"
-    path.write_text('{"prompt": "text"}\n')
-
     assert evaluate._resolve_runs(
         _args(dataset="longbench/qasper", dataset_dir=tmp_path)
     ) == [
         evaluate.RunSpec(
             "longbench/qasper",
-            str(path),
+            str(paths[1]),
             evaluate.DEFAULT_DATA_COLUMN_MAPPER,
         )
     ]
 
 
-def test_resolve_runs_sets_hf_subset_explicitly():
+def test_resolve_runs_distinguishes_hf_and_local(tmp_path):
     assert evaluate._resolve_runs(_args()) == [
         evaluate.RunSpec(
-            "first",
+            "qa",
             "org/dataset",
             evaluate.DEFAULT_DATA_COLUMN_MAPPER,
-            "first",
-        ),
-        evaluate.RunSpec(
-            "second",
-            "org/dataset",
-            evaluate.DEFAULT_DATA_COLUMN_MAPPER,
-            "second",
+            "qa",
         ),
     ]
-
-
-def test_resolve_runs_treats_local_path_as_one_run(tmp_path):
     path = tmp_path / "prompts.jsonl"
     path.write_text('{"prompt": "text"}\n')
 

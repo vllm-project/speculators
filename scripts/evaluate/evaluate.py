@@ -63,6 +63,26 @@ from perf_utils import (
 
 logger = logging.getLogger("evaluate")
 
+
+@dataclass(frozen=True)
+class RunSpec:
+    """One fully resolved GuideLLM run."""
+
+    label: str
+    dataset: str
+    data_column_mapper: str
+    subset: str | None = None
+
+
+@dataclass(frozen=True)
+class DatasetAdapter:
+    """Resolve a prepared benchmark selector into local datasets."""
+
+    resolver: Callable[[str, Path], list[tuple[str, Path]]]
+    data_column_mapper: str
+    preparation_hint: str
+
+
 DEFAULT_DATASET = "RedHatAI/speculator_benchmarks"
 DEFAULT_SUBSETS = (
     "HumanEval,math_reasoning,qa,question,rag,"
@@ -86,25 +106,6 @@ _SPEEDBENCH_COLUMN_MAPPER = (
 _RULER2_COLUMN_MAPPER = (
     "kind=generative_column_mapper,column_mappings.text_column=question"
 )
-
-
-@dataclass(frozen=True)
-class RunSpec:
-    """One fully resolved GuideLLM run."""
-
-    label: str
-    dataset: str
-    data_column_mapper: str
-    subset: str | None = None
-
-
-@dataclass(frozen=True)
-class DatasetAdapter:
-    """Resolve a benchmark spec into local GuideLLM datasets."""
-
-    resolver: Callable[[str, Path], list[tuple[str, Path]]]
-    data_column_mapper: str
-    preparation_hint: str
 
 
 def _fetch_model_name(target: str) -> str | None:
@@ -263,7 +264,7 @@ _DATASET_ADAPTERS = {
 
 
 def _resolve_runs(args: argparse.Namespace) -> list[RunSpec]:
-    """Normalize an HF dataset, local path, or adapter spec into run specs."""
+    """Normalize an HF dataset, local path, or benchmark selector into run specs."""
     spec = args.dataset
     adapter_name = spec.partition("/")[0]
     adapter = _DATASET_ADAPTERS.get(adapter_name)
@@ -468,7 +469,8 @@ def main() -> None:
         "--dataset",
         default=DEFAULT_DATASET,
         help=(
-            f"HF dataset ID, local path, or benchmark spec (default: {DEFAULT_DATASET})"
+            "HF dataset ID, local path, or prepared benchmark selector "
+            f"(default: {DEFAULT_DATASET})"
         ),
     )
     parser.add_argument(
@@ -519,7 +521,7 @@ def main() -> None:
     parser.add_argument(
         "--dataset-dir",
         default=None,
-        help=("Prepared data directory for speedbench, ruler2, or longbench specs"),
+        help="Prepared data directory for speedbench, ruler2, or longbench",
     )
     parser.add_argument(
         "--speedbench-data-dir",
