@@ -176,7 +176,8 @@ class DSparkDraftModel(DFlashDraftModel):
             # __init__), so prev_emb is always set when the flag is on.
             if self.config.confidence_head_with_markov and prev_emb is not None:
                 conf_features = torch.cat(
-                    [hidden_blocks, prev_emb.to(hidden_blocks.dtype)], dim=-1,
+                    [hidden_blocks, prev_emb.to(hidden_blocks.dtype)],
+                    dim=-1,
                 )
             else:
                 conf_features = hidden_blocks
