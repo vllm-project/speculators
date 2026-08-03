@@ -1,13 +1,12 @@
 """Real, dependency-light tests for the response-regeneration script.
 
 No network and no mocked HTTP: the script's seams are exercised directly against
-the real downstream ``_preprocess_batch``, and ``worker`` is driven end to end
+the real downstream finalizer, and ``worker`` is driven end to end
 over a fake endpoint.
 
 The script is not a package, so it is imported by path.
 """
 
-import argparse
 import asyncio
 import copy
 import importlib.util
@@ -20,7 +19,8 @@ import pytest
 
 from speculators.data_generation import vllm_client
 from speculators.data_generation.configs import DATASET_CONFIGS, DatasetConfig
-from speculators.data_generation.preprocessing import _preprocess_batch
+from speculators.data_generation.preprocessing import _finalize_prepared_batch
+from speculators.data_generation.records import parse_tools, prepared_sample
 from speculators.data_generation.vllm_client import InvalidResponseError
 
 
@@ -189,29 +189,30 @@ def test_extract_conversation_no_usable_input_returns_empty():
 
 
 # ---------------------------------------------------------------------------
-# 2. The generation boundary is the loss mask; pre-tokenized rows pass through.
+# 2. The generation boundary is the loss mask; prepared rows pass through.
 # ---------------------------------------------------------------------------
 
 
 def test_build_boundary_sample_is_the_mask():
-    input_ids, loss_mask = regen.build_boundary_sample([10, 11, 12, 13], [20, 21, 22])
+    sample = prepared_sample([10, 11, 12, 13, 20, 21, 22], 4)
+    input_ids, loss_mask = sample["input_ids"], sample["loss_mask"]
     assert input_ids == [10, 11, 12, 13, 20, 21, 22]
     assert loss_mask == [0, 0, 0, 0, 1, 1, 1]
 
 
 def test_pretokenized_rows_pass_through_preprocessing():
     # A regen row reaches training already masked: no processor, no re-masking,
-    # and the review-only `conversations` field is dropped.
-    input_ids, loss_mask = regen.build_boundary_sample([10, 11, 12], [20, 21])
-    out = _preprocess_batch(
+    # and unrelated source columns are dropped.
+    sample = prepared_sample([10, 11, 12, 20, 21], 3)
+    input_ids, loss_mask = sample["input_ids"], sample["loss_mask"]
+    out = _finalize_prepared_batch(
         {
             "input_ids": [input_ids],
             "loss_mask": [loss_mask],
             "conversations": [[{"role": "user", "content": "2+2?"}]],
         },
-        is_multimodal=False,  # passthrough returns before this is read
         max_length=2048,
-        render_endpoint=None,
+        minimum_valid_tokens=None,
     )
     assert out["input_ids"][0].tolist() == input_ids
     assert out["loss_mask"][0].tolist() == loss_mask
@@ -221,13 +222,14 @@ def test_pretokenized_rows_pass_through_preprocessing():
 def test_pretokenized_passthrough_truncates_and_filters():
     # Truncation can cut the completion span away (all-zero mask); such a row must
     # be dropped by minimum_valid_tokens, like the tokenized path.
-    kept = regen.build_boundary_sample([1, 2], [3, 4])  # fits max_length=4
-    cut = regen.build_boundary_sample([1, 2, 3, 4], [5, 6])  # completion truncated off
-    out = _preprocess_batch(
-        {"input_ids": [kept[0], cut[0]], "loss_mask": [kept[1], cut[1]]},
-        is_multimodal=False,  # passthrough returns before this is read
+    kept = prepared_sample([1, 2, 3, 4], 2)
+    cut = prepared_sample([1, 2, 3, 4, 5, 6], 4)
+    out = _finalize_prepared_batch(
+        {
+            "input_ids": [kept["input_ids"], cut["input_ids"]],
+            "loss_mask": [kept["loss_mask"], cut["loss_mask"]],
+        },
         max_length=4,
-        render_endpoint=None,
         minimum_valid_tokens=1,
     )
     assert [t.tolist() for t in out["input_ids"]] == [[1, 2, 3, 4]]
@@ -239,11 +241,10 @@ def test_pretokenized_passthrough_rejects_length_mismatch():
     # whose mask is shorter than its ids must fail loudly here: the collator packs
     # each key independently, so it would otherwise shift the mask silently.
     with pytest.raises(ValueError, match="shape mismatch"):
-        _preprocess_batch(
+        _finalize_prepared_batch(
             {"input_ids": [[1, 2, 3, 4, 5]], "loss_mask": [[0, 0, 1]]},
-            is_multimodal=False,  # passthrough returns before this is read
             max_length=2048,
-            render_endpoint=None,
+            minimum_valid_tokens=None,
         )
 
 
@@ -496,7 +497,6 @@ def _run_worker(responses, tmp_path, stem):
             "http://x/v1/chat/completions",
             _NullProgress(),
             stats,
-            _detok,
         )
         return stats
 
@@ -582,11 +582,6 @@ def _response(
     }
 
 
-def _detok(token_ids):
-    """Test stand-in for ``tokenizer.decode`` -- deterministic and readable."""
-    return " ".join(str(t) for t in token_ids)
-
-
 def _fake_post(responses):
     """A post_fn returning canned responses in order and recording sent payloads."""
     sent = []
@@ -612,7 +607,6 @@ def _regen(
             endpoint=endpoint,
             sampling_params=sampling_params or {},
             samples=samples,
-            detokenize=_detok,
         )
     )
     return samples, truncated, sent
@@ -624,24 +618,24 @@ def _regen(
 def test_extract_tools_passthrough_and_json_string():
     tools = [{"type": "function", "function": {"name": "f"}}]
     # A list passes through; a JSON-string column (the Hermes shape) is decoded.
-    assert regen.extract_tools({"tools": tools}) == tools
-    assert regen.extract_tools({"tools": json.dumps(tools)}) == tools
+    assert parse_tools(tools) == tools
+    assert parse_tools(json.dumps(tools)) == tools
     # Absent / empty -> None (tool-free datasets unchanged).
-    assert regen.extract_tools({"prompt": "hi"}) is None
-    assert regen.extract_tools({"tools": []}) is None
+    assert parse_tools(None) is None
+    assert parse_tools([]) is None
 
 
 def test_extract_tools_raises_when_declared_but_unusable():
     # A row that advertises a tools field we cannot read as a list must fail
     # loud, not silently regenerate tool-free.
     with pytest.raises(ValueError):
-        regen.extract_tools({"tools": {"name": "f"}})  # present but not a list
+        parse_tools({"name": "f"})
     with pytest.raises(ValueError):
-        regen.extract_tools({"tools": "not json"})  # present but not a list
+        parse_tools("not json")
     # Absent or explicitly empty stays tool-free.
-    assert regen.extract_tools({}) is None
-    assert regen.extract_tools({"tools": []}) is None
-    assert regen.extract_tools({"tools": ""}) is None
+    assert parse_tools(None) is None
+    assert parse_tools([]) is None
+    assert parse_tools("") is None
 
 
 def test_extract_conversation_collects_ordered_results():
@@ -705,7 +699,6 @@ def test_sample_from_response_rejects_empty_and_missing_token_ids():
     with pytest.raises(ValueError, match="empty assistant generation"):
         regen._sample_from_response(
             _response(prompt_token_ids=[1], token_ids=[2], content=None),
-            detokenize=_detok,
             conv_id="c",
             sample_index=0,
             idx=0,
@@ -720,7 +713,6 @@ def test_sample_from_response_rejects_empty_and_missing_token_ids():
     with pytest.raises(ValueError, match="return_token_ids"):
         regen._sample_from_response(
             bad,
-            detokenize=_detok,
             conv_id="c",
             sample_index=0,
             idx=0,
@@ -854,11 +846,11 @@ def test_regenerate_truncates_on_tool_name_mismatch():
 
 
 # ---------------------------------------------------------------------------
-# 6. Every shared-registry preset works on-policy (off-policy parity).
+# 6. Every source preset works through target-model regeneration.
 # ---------------------------------------------------------------------------
 
 
-def test_prepare_row_normalizes_like_off_policy():
+def test_prepare_row_uses_source_normalizer():
     # nemotron rows only become extractable through the preset's normalize_fn.
     row = {
         "input": [{"role": "user", "content": "Hi"}],
@@ -870,7 +862,7 @@ def test_prepare_row_normalizes_like_off_policy():
 
 def test_prepare_row_applies_filter_fn():
     config = DatasetConfig(
-        name="t",
+        name="test",
         hf_path="t",
         split="train",
         filter_fn=lambda row: row["keep"],
@@ -884,7 +876,7 @@ def test_prepare_row_applies_filter_fn():
 def test_prepare_row_merges_normalize_output_over_raw_row():
     # HF map merges columns: normalize output must not clobber the raw fallback.
     config = DatasetConfig(
-        name="t",
+        name="test",
         hf_path="t",
         split="train",
         normalize_fn=lambda row: {"conversations": []},
@@ -894,17 +886,11 @@ def test_prepare_row_merges_normalize_output_over_raw_row():
     assert turns == [{"role": "user", "content": "Hi"}]
 
 
-def test_dataset_choice_rejects_multimodal_with_a_reason():
-    with pytest.raises(argparse.ArgumentTypeError, match="does not support images"):
-        regen._dataset_choice("sharegpt4v_coco")
-    assert regen._dataset_choice("ultrachat") == "ultrachat"
-
-
 def test_tools_and_results_are_read_from_the_normalized_row():
     # Under a normalize_fn preset the conversation only appears in `messages`
     # after normalization; reading tools off the raw row regenerates tool-free.
     config = DatasetConfig(
-        name="toolcalls",
+        name="test",
         hf_path="t",
         split="train",
         normalize_fn=lambda row: {"messages": row["input"]},
@@ -919,7 +905,7 @@ def test_tools_and_results_are_read_from_the_normalized_row():
 
     normalized, _, tool_results = regen.prepare_row(row, config)
 
-    assert regen.extract_tools(normalized) == [
+    assert parse_tools(normalized["tools"]) == [
         {"type": "function", "function": {"name": "get_weather"}}
     ]
     assert tool_results == [("sunny", [])]

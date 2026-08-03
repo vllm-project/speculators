@@ -43,10 +43,8 @@ def test_parse_args_forwards_allow_empty_output(monkeypatch: pytest.MonkeyPatch)
         "sys.argv",
         [
             "prepare_data.py",
-            "--model",
-            "target",
             "--data",
-            "sharegpt",
+            "on-policy.jsonl",
             "--output",
             "out",
             "--allow-empty-output",
@@ -61,7 +59,7 @@ def test_parse_args_forwards_allow_empty_output(monkeypatch: pytest.MonkeyPatch)
 def test_parse_args_allow_empty_output_defaults_false(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
         "sys.argv",
-        ["prepare_data.py", "--model", "target", "--data", "sharegpt", "--output", "o"],
+        ["prepare_data.py", "--data", "on-policy.jsonl", "--output", "o"],
     )
 
     args = parse_args()
@@ -69,31 +67,23 @@ def test_parse_args_allow_empty_output_defaults_false(monkeypatch: pytest.Monkey
     assert args.allow_empty_output is False
 
 
-class _FakeProcessor:
-    """Minimal processor stub that passes the chat-template precondition."""
-
-    chat_template = "{{ messages }}"
-
-    def apply_chat_template(self, *args, **kwargs):
-        return ""
-
-
 def _patch_empty_pipeline(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Make load_and_preprocess_dataset produce an empty dataset without GPU/network."""
-    empty = HFDataset.from_dict({"input_ids": [], "loss_mask": [], "seq_len": []})
-    monkeypatch.setattr(
-        preprocessing_module, "load_processor", lambda *a, **k: _FakeProcessor()
+    """Make load_and_preprocess_dataset produce an empty dataset without network."""
+    empty = HFDataset.from_dict(
+        {"input_ids": [], "loss_mask": [], "seq_len": [], "messages": []}
     )
     monkeypatch.setattr(
         preprocessing_module,
         "load_raw_dataset",
-        lambda _path: (HFDataset.from_dict({"conversations": []}), None),
+        lambda _path: HFDataset.from_dict({"conversations": []}),
     )
     monkeypatch.setattr(
         preprocessing_module, "build_speculator_training_dataset", lambda *a, **k: empty
     )
     monkeypatch.setattr(
-        preprocessing_module, "save_token_frequency_distribution", lambda **k: None
+        preprocessing_module,
+        "save_token_frequency_distribution",
+        lambda *args, **kwargs: None,
     )
 
 
@@ -103,7 +93,6 @@ def test_load_and_preprocess_raises_on_empty_output(
     _patch_empty_pipeline(monkeypatch)
     with pytest.raises(ValueError, match="No samples remain"):
         load_and_preprocess_dataset(
-            "target-model",
             ["sharegpt"],
             seq_length=8,
             token_freq_path=tmp_path / "token_freq.pt",
@@ -114,8 +103,7 @@ def test_load_and_preprocess_allows_empty_output_with_flag(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
     _patch_empty_pipeline(monkeypatch)
-    dataset, processor = load_and_preprocess_dataset(
-        "target-model",
+    dataset = load_and_preprocess_dataset(
         ["sharegpt"],
         seq_length=8,
         token_freq_path=tmp_path / "token_freq.pt",
@@ -123,4 +111,3 @@ def test_load_and_preprocess_allows_empty_output_with_flag(
     )
 
     assert len(dataset) == 0
-    assert isinstance(processor, _FakeProcessor)

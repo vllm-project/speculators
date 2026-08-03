@@ -8,21 +8,16 @@ guard (needs a template that rewrites history), and the client's error paths.
 """
 
 import time
-from typing import cast
 
 import pytest
 from datasets import Dataset as HFDataset
 
 from speculators.data_generation import preprocessing, render_client
 from speculators.data_generation.preprocessing import (
-    ProcessorLike,
     build_speculator_training_dataset,
 )
+from speculators.data_generation.records import prepared_sample
 from speculators.data_generation.vllm_client import InvalidResponseError
-
-# Neither build path below reads the processor: the missing-endpoint guard
-# raises before it is used, and pre-tokenized rows skip preprocessing entirely.
-NO_PROCESSOR = cast("ProcessorLike", None)
 
 
 def _conv(n: int) -> list[dict]:
@@ -41,7 +36,7 @@ def _patch_encode(monkeypatch, renders: dict[tuple[int, bool], list[int]]):
 
 
 # --------------------------------------------------------------------------- #
-# _render_boundary_rows -- branches no real template reaches                    #
+# _render_boundary_samples -- branches no real template reaches                 #
 # --------------------------------------------------------------------------- #
 def test_scaffold_lcp_fallback(monkeypatch):
     # Load-bearing, not hypothetical: DeepSeek-R1 distills pre-fill `<think>\n`
@@ -58,7 +53,7 @@ def test_scaffold_lcp_fallback(monkeypatch):
             (2, False): [1, 2, 3, 4, 5],  # full: diverges from prompt at idx 3
         },
     )
-    rows = preprocessing._render_boundary_rows(_conv(2), "http://x", 100)
+    rows = preprocessing._render_boundary_samples(_conv(2), "http://x", 100)
     assert len(rows) == 1
     assert rows[0]["loss_mask"] == [0, 0, 0, 1, 1]
 
@@ -74,7 +69,7 @@ def test_boundary_unstable_raises(monkeypatch):
         },
     )
     with pytest.raises(preprocessing.BoundaryUnstableError):
-        preprocessing._render_boundary_rows(_conv(2), "http://x", 100)
+        preprocessing._render_boundary_samples(_conv(2), "http://x", 100)
 
 
 def test_over_length_turn_does_not_drop_later_turns(monkeypatch):
@@ -90,7 +85,7 @@ def test_over_length_turn_does_not_drop_later_turns(monkeypatch):
             (6, False): [1, 2, 3, 4, 7, 7],
         },
     )
-    rows = preprocessing._render_boundary_rows(_conv(6), "http://x", 10)
+    rows = preprocessing._render_boundary_samples(_conv(6), "http://x", 10)
     assert len(rows) == 2  # turns 1 and 5; only turn 3 is skipped
     assert rows[0]["loss_mask"] == [0, 0, 1, 1]
     assert rows[1]["loss_mask"] == [0, 0, 0, 0, 1, 1]
@@ -106,20 +101,21 @@ def test_over_length_first_turn_yields_no_rows(monkeypatch):
             (3, True): [1] * 15,
         },
     )
-    assert preprocessing._render_boundary_rows(_conv(4), "http://x", 10) == []
+    assert preprocessing._render_boundary_samples(_conv(4), "http://x", 10) == []
 
 
 # --------------------------------------------------------------------------- #
-# _append_row -- clip / filter / keep                                          #
+# _finalize_samples -- validate / clip / filter                                #
 # --------------------------------------------------------------------------- #
-def test_append_row_statuses():
-    results: dict[str, list] = {"input_ids": [], "loss_mask": [], "seq_len": []}
-    assert (
-        preprocessing._append_row(results, [1, 2, 3], [0, 0, 0], 10, None)
-        == "unsupervised"
+def test_finalize_samples_filters_and_keeps():
+    results = preprocessing._finalize_samples(
+        [
+            prepared_sample([1, 2, 3], 3),
+            prepared_sample([1, 2, 3], 1),
+        ],
+        10,
+        1,
     )
-    assert preprocessing._append_row(results, [1, 2, 3], [0, 1, 1], 10, 3) == "filtered"
-    assert preprocessing._append_row(results, [1, 2, 3], [0, 1, 1], 10, 1) == "kept"
     assert len(results["input_ids"]) == 1
     assert results["seq_len"] == [3]
 
@@ -188,17 +184,13 @@ def test_build_speculator_training_dataset_requires_render_endpoint():
         ]
     }
     with pytest.raises(ValueError, match="render_endpoint is required"):
-        build_speculator_training_dataset(
-            HFDataset.from_dict(data), NO_PROCESSOR, num_proc=1
-        )
+        build_speculator_training_dataset(HFDataset.from_dict(data), num_proc=1)
 
 
 def test_pretokenized_dataset_skips_render():
-    # The load-bearing contract: on-policy pre-tokenized rows build without a
+    # The load-bearing contract: canonical prepared rows build without a
     # render endpoint. Passthrough content (ids/mask) is covered by the regen
     # tests in test_response_regeneration.py.
     data = {"input_ids": [[1, 2, 3, 4]], "loss_mask": [[0, 0, 1, 1]]}
-    ds = build_speculator_training_dataset(
-        HFDataset.from_dict(data), NO_PROCESSOR, num_proc=1
-    )
+    ds = build_speculator_training_dataset(HFDataset.from_dict(data), num_proc=1)
     assert len(ds) == 1

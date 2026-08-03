@@ -1,76 +1,67 @@
 # prepare_data.py
 
-Prepares data for speculator training by:
+Converts target-model data into the canonical format consumed by speculator
+training. It accepts two input representations:
 
-1. Applying chat template and tokenizing each sample
-2. Producing a loss/assistant mask for each sample
-3. Recording token frequency statistics
+1. On-policy natural-language conversations in a `messages` or `conversations`
+   column.
+2. Prepared rows that already contain `input_ids` and `loss_mask`, such as the
+   output of [response regeneration](response_regeneration.md).
 
-The output is a processed dataset ready for online training or offline hidden states generation.
+The command does not generate responses. Natural-language assistant turns must
+already come from the target model; the vLLM `/render` endpoint only applies the
+serving chat template and returns token IDs.
 
-## Basic Usage
+## Basic usage
 
-Off-policy conversations are tokenized by a running vLLM server, so `--render-endpoint` is required unless the input is already pre-tokenized:
+Given `on_policy.jsonl`:
+
+```json
+{"messages":[{"role":"user","content":"Hello"},{"role":"assistant","content":"Hello!"}]}
+```
+
+run the target model with vLLM and render the conversations:
 
 ```bash
 python scripts/prepare_data.py \
-  --model meta-llama/Llama-3.1-8B-Instruct \
-  --data sharegpt \
+  --data ./on_policy.jsonl \
   --render-endpoint http://localhost:8000 \
-  --output ./training_data \
-  --max-samples 5000
+  --output ./training_data
 ```
+
+Prepared regeneration output needs no endpoint:
+
+```bash
+python scripts/prepare_data.py \
+  --data ./magpie_Llama-3.3-70B-Instruct.jsonl \
+  --output ./training_data
+```
+
+Raw source presets such as `sharegpt` and `gsm8k` are intentionally rejected.
+Pass them through [response regeneration](response_regeneration.md) first so
+their original assistant responses never enter training.
 
 ## Arguments
 
-### Model Arguments
+- **`--data`** (required, repeatable): A local JSON/JSONL file, a directory of
+  JSON/JSONL shards, or `hf:<dataset>[:<subset>:<split>]`. Every input must be
+  on-policy natural language or prepared `input_ids`/`loss_mask` rows.
+- **`--render-endpoint`**: Base URL of the target model's vLLM server. Required
+  for natural-language input and unused for prepared rows. The command appends
+  `/v1/chat/completions/render`; pass `http://localhost:8000`, not a `/v1`
+  endpoint.
+- **`--seq-length`** (default: `8192`): Maximum prepared sequence length.
+- **`--max-samples`**: Maximum number of rows after combining inputs.
+- **`--minimum-valid-tokens`**: Drop rows with fewer supervised tokens.
+- **`--token-freq-path`**: Token-frequency output path. Defaults to
+  `{output}/token_freq.pt`.
+- **`--output`** (default: `./output`): Prepared HuggingFace dataset directory.
+- **`--overwrite`**: Replace an existing directory containing only artifacts
+  created by this command.
+- **`--allow-empty-output`**: Permit an empty output after filtering.
+- **`--seed`** (default: `0`): Shuffle seed.
+- **`--num-preprocessing-workers`** (default: `8`): Dataset map workers.
 
-- **`--model`** (str, required) HuggingFace model ID or local path for the target model.
-
-  Example: `meta-llama/Llama-3.1-8B-Instruct`
-
-- **`--trust-remote-code`** (flag) Allow executing code from HF Hub when loading the target model's processor.
-
-### Data Arguments
-
-- **`--data`** (str, required, repeatable) Path to training data. Can be a HuggingFace dataset name or local path. Use multiple times to specify multiple datasets.
-
-  Example: `--data sharegpt --data ./custom_data.jsonl`
-
-  The input conversation should be provided in the `conversations` column. Tool-calling datasets that include separate columns for tools are also supported, as demonstrated in [llamafactory/reason-tool-use-demo-1500](https://huggingface.co/datasets/llamafactory/reason-tool-use-demo-1500) and [interstellarninja/hermes_reasoning_tool_use](https://huggingface.co/datasets/interstellarninja/hermes_reasoning_tool_use).
-
-- **`--seq-length`** (int, default: `8192`) Maximum sequence length for each sample. Longer samples will be truncated.
-
-- **`--max-samples`** (int, default: `None`) Maximum number of samples to process. If `None`, processes all samples.
-
-- **`--token-freq-path`** (str, default: `{output}/token_freq.pt`) Path to save token frequency distribution. Defaults to `token_freq.pt` in the output directory.
-
-- **`--render-endpoint`** (str, default: `None`) Base URL of a running vLLM server (e.g. `http://localhost:8000`). The instance launched for hidden-state extraction ([launch_vllm.py](launch_vllm.md)) serves this too, so no second server is needed. Pass the base URL only: `/v1/chat/completions/render` is appended to it, so the `/v1`-suffixed form that [data_generation_offline.py](data_generation_offline.md) `--endpoint` takes will 404. Conversations are tokenized by that endpoint and the loss mask is derived from the render boundary. Required unless every `--data` input is already pre-tokenized.
-
-- **`--minimum-valid-tokens`** (int, default: `None`) Drop samples whose loss mask contains fewer than this many trainable tokens.
-
-### Output Arguments
-
-- **`--output`** (str, required) Directory to save the processed dataset.
-
-- **`--overwrite`** (flag) Forcibly rerun preprocessing and overwrite existing content in output directory.
-
-### Processing Arguments
-
-- **`--seed`** (int, default: `0`) Random seed for reproducibility. Must match the seed used in other scripts.
-
-- **`--num-preprocessing-workers`** (int, default: `8`) Number of CPU processes for dataset preprocessing.
-
-## Full Example
-
-```bash
-python scripts/prepare_data.py \
-  --model meta-llama/Llama-3.1-8B-Instruct \
-  --data sharegpt \
-  --data ./custom_conversations.jsonl \
-  --render-endpoint http://localhost:8000 \
-  --output ./prepared_data \
-  --seq-length 4096 \
-  --max-samples 10000 \
-  --num-preprocessing-workers 16
-```
+Tool-calling conversations may include a `tools` column containing an
+OpenAI-style list or a JSON-encoded list. Complete assistant tool calls and tool
+results remain part of the conversation; preparation never executes tools.

@@ -64,7 +64,6 @@ DATASET_DIR="$OUTPUT_DIR/dataset"
 hf download "$DATASET" "$DATASET_FILE" --repo-type dataset --local-dir "$DATASET_DIR"
 
 python scripts/prepare_data.py \
-    --model "$MODEL" \
     --data "$DATASET_DIR/$DATASET_FILE" \
     --max-samples "$MAX_SAMPLES" \
     --output "$OUTPUT_DIR" \

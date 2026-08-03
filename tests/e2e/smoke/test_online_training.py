@@ -18,11 +18,9 @@ from tests.e2e.utils import (
     run_prepare_data,
     run_training,
     run_vllm_engine,
-    setup_dummy_sharegpt4v_coco,
 )
 
 TEXT_MODEL = "Qwen/Qwen3-0.6B"
-MM_MODEL = "Qwen/Qwen3-VL-2B-Instruct"
 
 
 @pytest.mark.e2e
@@ -31,26 +29,14 @@ MM_MODEL = "Qwen/Qwen3-VL-2B-Instruct"
     ("model", "dataset"),
     [
         (TEXT_MODEL, "sharegpt"),
-        (MM_MODEL, "sharegpt4v_coco"),
     ],
 )
 def test_online_smoke(
-    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     model: str,
     dataset: str,
     prompts: list[list[dict[str, str]]],
 ):
-    if dataset == "sharegpt4v_coco":
-        coco_dir = tmp_path / "coco"
-
-        monkeypatch.setenv("COCO_DIR", str(coco_dir))
-        setup_dummy_sharegpt4v_coco(coco_dir)
-
-        vllm_media_path = str(coco_dir)
-    else:
-        vllm_media_path = None
-
     run_online_e2e(
         tmp_path,
         model,
@@ -58,7 +44,6 @@ def test_online_smoke(
         prompts=prompts,
         vllm_kwargs={
             "enforce_eager": True,
-            "allowed_local_media_path": vllm_media_path,
         },
     )
 

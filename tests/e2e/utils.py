@@ -15,9 +15,8 @@ from textwrap import indent
 
 import pytest
 from loguru import logger
-from PIL import Image
 
-from speculators.data_generation.preprocessing import load_raw_dataset
+from speculators.data_generation.configs import DATASET_CONFIGS
 
 __all__ = [
     "SCRIPTS_DIR",
@@ -252,25 +251,6 @@ def launch_mooncake_master_context(port: int):
         stop_mooncake_master(process)
 
 
-def setup_dummy_sharegpt4v_coco(coco_dir: Path):
-    """Enable ShareGPT4V to be used without downloading the actual COCO dataset."""
-    coco_dir.mkdir(parents=True, exist_ok=True)
-
-    dummy_image = Image.new("RGB", (256, 256))
-    dummy_image_path = coco_dir / "dummy.png"
-    dummy_image.save(dummy_image_path)
-
-    raw_dataset, normalize_fn = load_raw_dataset("sharegpt4v_coco")
-
-    # Use symlinks to avoid copying the image
-    for raw_path in raw_dataset["image"]:
-        image_path = coco_dir / raw_path.removeprefix("coco/")
-
-        if not image_path.exists():
-            image_path.parent.mkdir(parents=True, exist_ok=True)
-            image_path.symlink_to(dummy_image_path)
-
-
 def run_prepare_data(
     model: str,
     data: str,
@@ -279,12 +259,37 @@ def run_prepare_data(
     seq_length: int = 512,
     timeout: float | None = None,
 ):
-    """Tokenize data using prepare_data.py."""
+    """Generate source-preset responses, then prepare canonical training rows."""
+    if data in DATASET_CONFIGS:
+        regenerated_path = data_path.parent / f"{data}_on_policy.jsonl"
+        regeneration_cmd = [
+            "bash",
+            str(SCRIPTS_DIR / "response_regeneration" / "run_all.sh"),
+            "--model",
+            model,
+            "--dataset",
+            data,
+            "--limit",
+            str(max_samples),
+            "--max-model-len",
+            str(seq_length),
+            "--max-tokens",
+            str(seq_length),
+            "--outfile",
+            str(regenerated_path),
+        ]
+        logger.info("Regenerating responses: {}", " ".join(regeneration_cmd))
+        result = subprocess.run(  # noqa: S603
+            regeneration_cmd,
+            check=False,
+            timeout=timeout,
+        )
+        assert result.returncode == 0, "response regeneration failed"
+        data = str(regenerated_path)
+
     cmd = [
         sys.executable,
         str(SCRIPTS_DIR / "prepare_data.py"),
-        "--model",
-        model,
         "--data",
         data,
         "--output",

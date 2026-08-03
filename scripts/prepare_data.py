@@ -2,10 +2,10 @@
 """
 Prepare data for speculator training
 
-This script processes an input dataset and:
-1. Applies chat template + tokenizes each sample
-2. Produces a loss/assistant mask for each sample
-3. Records token frequency statistics
+Accepted inputs contain target-model responses, either as natural-language
+conversations or as prepared ``input_ids`` and ``loss_mask`` rows. Natural
+language is rendered by the target model's vLLM endpoint; this command never
+generates responses.
 
 The output of this script is:
 1. Processed dataset ready for online training or offline datagen in output_dir
@@ -16,8 +16,8 @@ Token frequencies are saved in the output directory by default.
 
 Usage:
     python prepare_data.py \
-        --model meta-llama/Llama-3.1-8B-Instruct \
-        --data sharegpt \
+        --data ./on_policy_conversations.jsonl \
+        --render-endpoint http://localhost:8000 \
         --output ./training_data \
         --max-samples 5000
 """
@@ -29,7 +29,6 @@ import shutil
 import sys
 from pathlib import Path
 
-from speculators.data_generation.logging_utils import PipelineLogger
 from speculators.data_generation.preprocessing import (
     load_and_preprocess_dataset,
 )
@@ -37,7 +36,7 @@ from speculators.data_generation.preprocessing import (
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
-log = PipelineLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 # Files prepare_data.py itself writes into --output; only these may be removed by
@@ -79,29 +78,17 @@ def assert_safe_to_overwrite(output: Path, token_freq_path: Path) -> None:
 def parse_args():
     parser = argparse.ArgumentParser(description="Prepare data for speculator training")
 
-    # Model arguments
-    parser.add_argument(
-        "--model",
-        type=str,
-        required=True,
-        help="HuggingFace model ID or local path for target model",
-    )
-    parser.add_argument(
-        "--trust-remote-code",
-        action="store_true",
-        help=(
-            "Allow executing code from HF Hub when loading the target model's "
-            "processor."
-        ),
-    )
-
     # Data arguments
     parser.add_argument(
         "--data",
         type=str,
         action="append",
         required=True,
-        help="Path to training data (same as used in preprocessing)",
+        help=(
+            "On-policy conversations or prepared input_ids/loss_mask rows. "
+            "Use local JSON/JSONL or hf:<dataset>; source presets belong to "
+            "response regeneration."
+        ),
     )
     parser.add_argument(
         "--seq-length",
@@ -136,7 +123,7 @@ def parse_args():
             "/v1-suffixed form that data_generation_offline.py --endpoint "
             "takes will 404. Conversations are tokenized by that endpoint and "
             "the loss mask is derived from the render boundary. Required "
-            "unless every --data input is already pre-tokenized."
+            "unless every --data input already has input_ids and loss_mask."
         ),
     )
 
@@ -191,14 +178,7 @@ def parse_args():
 def main():
     args = parse_args()
 
-    log.section("Preparing data")
-    log.config(
-        {
-            "Target Model": args.model,
-            "Dataset": args.data,
-            "Output Dir": args.output,
-        }
-    )
+    logger.info("Preparing %s into %s", args.data, args.output)
 
     output = Path(args.output)
     token_freq_path = (
@@ -209,21 +189,20 @@ def main():
 
     if output.exists():
         if not args.overwrite and glob.glob(str(output / "*.arrow")):
-            log.warning(
+            logger.warning(
                 "Dataset files already exists in output directory, skipping "
                 "preprocessing. To existing overwrite files use --overwrite."
             )
             sys.exit(0)
         if args.overwrite:
             assert_safe_to_overwrite(output, token_freq_path)
-            log.warning(f"Removing existing output directory: {output}")
+            logger.warning("Removing existing output directory: %s", output)
             shutil.rmtree(output)
             output.mkdir(parents=True)
     else:
         output.mkdir(parents=True)
 
-    dataset, _ = load_and_preprocess_dataset(
-        target_model_path=args.model,
+    dataset = load_and_preprocess_dataset(
         train_data_paths=args.data,
         seq_length=args.seq_length,
         build_dataset_num_proc=args.num_preprocessing_workers,
@@ -233,11 +212,9 @@ def main():
         render_endpoint=args.render_endpoint,
         minimum_valid_tokens=args.minimum_valid_tokens,
         allow_empty_output=args.allow_empty_output,
-        trust_remote_code=args.trust_remote_code,
     )
 
-    log.info("Done preparing data")
-    log.section(f"Writing dataset to {args.output}")
+    logger.info("Writing dataset to %s", args.output)
     dataset.save_to_disk(args.output)
 
 

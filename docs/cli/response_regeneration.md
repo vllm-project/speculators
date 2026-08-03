@@ -1,6 +1,6 @@
 # response_regeneration
 
-Regenerates assistant responses in existing datasets using a vLLM-served model. Given a dataset containing conversations (e.g., Magpie, UltraChat, GSM8K), this pipeline extracts conversation turns, regenerates each assistant response turn-by-turn against the model's own prior outputs, and produces pre-tokenized training samples. For multi-turn conversations, each turn conditions on the regenerated history, producing on-policy training data.
+Regenerates assistant responses in existing datasets using a vLLM-served model. Given a source dataset such as Magpie, UltraChat, or GSM8K, the pipeline discards its assistant responses and produces prepared `input_ids`/`loss_mask` rows from target-model generations. Multi-turn generations condition on the target model's own prior outputs.
 
 The pipeline consists of two scripts:
 
@@ -57,7 +57,7 @@ All other arguments are passed through to `script.py`.
 
 ## script.py
 
-Extracts conversation turns from a dataset, regenerates each assistant response turn-by-turn via a vLLM chat completion endpoint, and writes out pre-tokenized training samples with generation boundaries marked in the loss mask.
+Extracts source prompts, regenerates each assistant response turn-by-turn via a vLLM chat completion endpoint, and writes prepared samples whose loss mask is the generation boundary.
 
 ### Features
 
@@ -124,7 +124,7 @@ python scripts/response_regeneration/script.py \
 
 ## Supported Datasets
 
-The text presets from the shared dataset registry (`DATASET_CONFIGS` in `speculators/data_generation/configs.py`) — the same ones `prepare-data` accepts:
+Raw source presets live in `DATASET_CONFIGS` in `speculators/data_generation/configs.py`. They are accepted here, not by `prepare_data.py`:
 
 | Dataset             | HuggingFace ID                                    | Default Split |
 | ------------------- | ------------------------------------------------- | ------------- |
@@ -136,11 +136,9 @@ The text presets from the shared dataset registry (`DATASET_CONFIGS` in `specula
 | `open-perfectblend` | `mlabonne/open-perfectblend`                      | `train`       |
 | `hermes-fc`         | `NousResearch/hermes-function-calling-v1`         | `train`       |
 
-The registry's multimodal preset, `sharegpt4v_coco`, is **off-policy only** and `--dataset` rejects it. Its turns carry image content parts, which the Chat Completions API rejects, and the pre-tokenized output row has nowhere to keep pixel data. Use it with `prepare-data`.
-
 ## Output Format
 
-Rows are pre-tokenized and ready for training: one row per target generation, holding the prompt the target conditioned on followed by the tokens it generated. The endpoint must support `return_token_ids`, which the script uses to read the generation boundary directly instead of re-tokenizing the text and recovering the boundary with a regex.
+Rows use the canonical prepared representation: one row per target generation, holding the prompt the target conditioned on followed by the tokens it generated. The endpoint must support `return_token_ids`, which exposes the generation boundary without a second tokenizer or regex.
 
 ```json
 {
@@ -148,7 +146,6 @@ Rows are pre-tokenized and ready for training: one row per target generation, ho
   "primary_id": "conv-abc",
   "input_ids": [151644, 872, ...],
   "loss_mask": [0, 0, ..., 1, 1],
-  "text": "<|im_start|>user\nWhat is the capital of France?<|im_end|>\n<|im_start|>assistant\nThe capital of France is Paris.<|im_end|>",
   "metadata": {
     "idx": 0,
     "finish_reason": "stop",
@@ -164,7 +161,6 @@ Rows are pre-tokenized and ready for training: one row per target generation, ho
 - A conversation yields one row per target generation, each carrying the history before it. Generation `k`'s row is `{primary_id}_gen{k}`. A plain assistant turn is one generation; a turn that calls a tool is two or more (see [Tool calls](#tool-calls)).
 - `primary_id` is the conversation's stable id, used by `--resume`. The row `id` is generation-suffixed and never matches it.
 - `is_tool_call` marks a row whose generated tokens are a tool call rather than a final answer.
-- `text` is a human-readable decode of `input_ids` (`tokenizer.decode`, special tokens kept) for review only — faithful to the tokens by construction. Training drops it.
 
 Rows are written only once a conversation finishes. A conversation that fails partway writes nothing to the output file and one row to a sibling error file instead (`--outfile out.jsonl` gives `out.errors.jsonl`), so `--resume` retries it whole:
 
@@ -184,7 +180,7 @@ Rows are written only once a conversation finishes. A conversation that fails pa
 
 If a source row carries a `tools` schema, it is forwarded to the endpoint on every request and the target regenerates its own tool calls, which are supervised like any other generation.
 
-Tools are **not executed**. The target's *k*-th regenerated call is paired with the *k*-th cached tool result already present in the source row, spliced back as a `tool` message so the conversation can continue. This keeps the call tokens on-policy while the results stay off-policy.
+Tools are **not executed**. The target's *k*-th regenerated call is paired with the *k*-th cached tool result already present in the source row and spliced back as a `tool` message. Assistant and tool-call tokens come from the target model; tool results are environment observations and are never supervised.
 
 A conversation stops early — keeping the rows completed so far — when the target emits a call that cannot be paired 1:1 with a cached result: it has exhausted the cached results, emitted parallel calls in a single generation, or called a different tool than the next cached result answers. Such conversations are counted under `truncated` in the progress bar.
 

@@ -15,10 +15,15 @@ from speculators.data_generation.configs import (
     _normalize_nemotron,
 )
 from speculators.data_generation.preprocessing import (
-    _adapt_conv_for_vllm,
     _load_hf_dataset,
-    _normalize_conversation,
+    build_speculator_training_dataset,
     load_raw_dataset,
+)
+from speculators.data_generation.records import (
+    adapt_conversation_for_vllm as _adapt_conv_for_vllm,
+)
+from speculators.data_generation.records import (
+    normalize_conversation as _normalize_conversation,
 )
 
 # Test model from HuggingFace with chat template
@@ -197,7 +202,7 @@ def test_adapt_conv_for_vllm_invalid_content_formats():
     Test converting from normalized conversation to vLLM format
     with unsupported content formats.
     """
-    with pytest.raises(ValueError, match=r"'image':.* is not supported"):
+    with pytest.raises(ValueError, match="Inline image data is not supported"):
         _adapt_conv_for_vllm(
             [
                 {
@@ -209,7 +214,7 @@ def test_adapt_conv_for_vllm_invalid_content_formats():
             ]
         )
 
-    with pytest.raises(ValueError, match=r"'base64':.* is not supported"):
+    with pytest.raises(ValueError, match="Inline image data is not supported"):
         _adapt_conv_for_vllm(
             [
                 {
@@ -307,10 +312,9 @@ def test_load_raw_dataset_local_file(tmp_path):
     data_file = tmp_path / "data.jsonl"
     _write_jsonl(data_file, [_conv_row("a"), _conv_row("b")])
 
-    dataset, normalize_fn = load_raw_dataset(str(data_file))
+    dataset = load_raw_dataset(str(data_file))
 
     assert len(dataset) == 2
-    assert normalize_fn is None
 
 
 @pytest.mark.sanity
@@ -323,10 +327,9 @@ def test_load_raw_dataset_local_directory(tmp_path):
     nested.mkdir()
     _write_jsonl(nested / "shard3.json", [_conv_row("d")])
 
-    dataset, normalize_fn = load_raw_dataset(str(tmp_path))
+    dataset = load_raw_dataset(str(tmp_path))
 
     assert len(dataset) == 4
-    assert normalize_fn is None
 
 
 @pytest.mark.sanity
@@ -340,24 +343,16 @@ def test_load_raw_dataset_empty_directory_raises(tmp_path):
 
 
 @pytest.mark.sanity
-def test_load_raw_dataset_named_preset():
-    """A named preset resolves through DATASET_CONFIGS to load_dataset."""
-    sentinel = HFDataset.from_list([_conv_row("x")])
-    with patch(f"{PREFIX}.load_dataset", return_value=sentinel) as mock_load:
-        dataset, normalize_fn = load_raw_dataset("sharegpt")
-
-    config = DATASET_CONFIGS["sharegpt"]
-    mock_load.assert_called_once_with(
-        config.hf_path, name=config.subset, split=config.split
-    )
-    assert dataset is sentinel
-    assert normalize_fn is config.normalize_fn
+def test_load_raw_dataset_rejects_source_preset():
+    """Raw source presets are only accepted by response regeneration."""
+    with pytest.raises(ValueError, match="response regeneration"):
+        load_raw_dataset("sharegpt")
 
 
 @pytest.mark.sanity
 def test_load_raw_dataset_unsupported_source_raises():
     """An unknown source that is not a file/dir/preset/hf: spec raises."""
-    with pytest.raises(ValueError, match="Unsupported dataset"):
+    with pytest.raises(ValueError, match="Unsupported input"):
         load_raw_dataset("not_a_real_preset")
 
 
@@ -374,13 +369,12 @@ def test_load_hf_dataset_spec_parsing(spec, expected_id, expected_name, expected
     """hf: specs parse into (id, subset, split) and call load_dataset."""
     sentinel = HFDataset.from_list([_conv_row("x")])
     with patch(f"{PREFIX}.load_dataset", return_value=sentinel) as mock_load:
-        dataset, normalize_fn = load_raw_dataset(spec)
+        dataset = load_raw_dataset(spec)
 
     mock_load.assert_called_once_with(
         expected_id, name=expected_name, split=expected_split
     )
     assert dataset is sentinel
-    assert normalize_fn is None
 
 
 # A small public dataset already in conversations format, used to exercise the
@@ -397,24 +391,20 @@ def test_load_raw_dataset_hf_real_download():
     conversations guard are covered deterministically by the mocked tests above.
     """
     try:
-        dataset, normalize_fn = load_raw_dataset(f"hf:{HF_CONV_DATASET}")
+        dataset = load_raw_dataset(f"hf:{HF_CONV_DATASET}")
     except Exception as exc:  # noqa: BLE001
         pytest.skip(f"Could not fetch {HF_CONV_DATASET}: {exc}")
 
-    assert normalize_fn is None
     assert "conversations" in dataset.column_names
     assert len(dataset) > 0
 
 
 @pytest.mark.sanity
-def test_load_hf_dataset_non_conversations_raises():
-    """An hf: dataset without a conversations column fails loudly."""
+def test_dataset_without_supported_schema_raises():
+    """Schema validation happens once, at the dataset-level branch."""
     non_conv = HFDataset.from_list([{"prompt": "hi", "response": "there"}])
-    with (
-        patch(f"{PREFIX}.load_dataset", return_value=non_conv),
-        pytest.raises(ValueError, match="conversations format"),
-    ):
-        _load_hf_dataset("hf:org/name")
+    with pytest.raises(ValueError, match="messages/conversations"):
+        build_speculator_training_dataset(non_conv, num_proc=1)
 
 
 @pytest.mark.sanity

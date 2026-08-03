@@ -37,7 +37,8 @@ set -euo pipefail
 
 # ============ Configuration ============
 MODEL="meta-llama/Llama-3.1-8B-Instruct"
-DATASET="ultrachat"                # sharegpt, ultrachat, or path to custom data
+# Produce this with response_regeneration/run_all.sh before training.
+DATASET="./ultrachat_Llama-3.1-8B-Instruct.jsonl"
 OUTPUT_DIR="./output"
 HIDDEN_STATES_DIR="$OUTPUT_DIR/hidden_states"
 VLLM_PORT=8000
@@ -56,7 +57,6 @@ NUM_GPUS=2
 # Step 1: Prepare data
 echo "=== Step 1: Preparing data ==="
 python scripts/prepare_data.py \
-    --model "$MODEL" \
     --data "$DATASET" \
     --max-samples "$MAX_SAMPLES" \
     --output "$OUTPUT_DIR" \
