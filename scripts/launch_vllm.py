@@ -86,6 +86,17 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--provenance-dir",
+        type=str,
+        default=None,
+        help="Directory to save provenance artifacts (vllm_command.txt, vllm.patch, checkpoint_sha256.txt).",
+    )
+    parser.add_argument(
+        "--no-hash-checkpoints",
+        action="store_true",
+        help="Skip hashing the .safetensors checkpoints in the provenance directory.",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print the command that would be executed without running it",
@@ -151,6 +162,53 @@ def main():
 
     print("Running command:")
     print(" ".join(cmd))
+
+    import datetime
+    import shlex
+    from pathlib import Path
+    from speculators.utils.provenance import (
+        get_git_sha,
+        get_git_diff,
+        get_package_root,
+        get_package_versions,
+        hash_safetensors,
+        write_atomic,
+    )
+
+    prov_dir = args.provenance_dir
+    if not prov_dir:
+        safe_model = args.model.replace("/", "_")
+        ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
+        prov_dir = f"vllm_{safe_model}_{ts}"
+    prov_path = Path(prov_dir)
+
+    spec_root = get_package_root("speculators") or Path.cwd()
+    vllm_root = get_package_root("vllm")
+    
+    spec_sha = get_git_sha(spec_root)
+    versions = get_package_versions(["vllm"])
+    vllm_ver = versions[0] if versions else "unknown"
+
+    vllm_cmd_header = "\n".join([
+        f"# Timestamp: {datetime.datetime.now(datetime.timezone.utc).isoformat()}",
+        f"# Python: {sys.executable}",
+        f"# Speculators Git SHA: {spec_sha}",
+        f"{vllm_ver}",
+    ])
+    vllm_cmd_content = f"{vllm_cmd_header}\n{shlex.join(cmd)}\n"
+    write_atomic(prov_path, "vllm_command.txt", vllm_cmd_content)
+
+    if vllm_root and (vllm_root.parent / ".git").exists():
+        vllm_repo = vllm_root.parent
+        diff = get_git_diff(vllm_repo)
+        patch_header = f"# repo: {vllm_repo} ({get_git_sha(vllm_repo)})"
+        write_atomic(prov_path, "vllm.patch", f"{patch_header}\n{diff}\n")
+    else:
+        write_atomic(prov_path, "vllm.patch", f"# Installed from wheel or non-git source\n{vllm_ver}\n")
+
+    if not args.no_hash_checkpoints:
+        hashes = hash_safetensors(args.model)
+        write_atomic(prov_path, "checkpoint_sha256.txt", hashes + "\n")
 
     if not args.dry_run:
         os.execvp(cmd[0], cmd)  # noqa: S606

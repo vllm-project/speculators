@@ -258,6 +258,29 @@ def run_benchmark(args: argparse.Namespace) -> None:
     artifacts_dir = output_dir / "artifacts"
     artifacts_dir.mkdir(parents=True, exist_ok=True)
 
+    from datetime import timezone
+    import shlex
+    from speculators.utils.provenance import (
+        get_git_sha,
+        get_package_root,
+        get_package_versions,
+    )
+
+    speculators_root = get_package_root("speculators") or Path.cwd()
+    sha = get_git_sha(speculators_root)
+    pkg_versions = get_package_versions(
+        ["speculators", "vllm", "transformers", "torch", "compressed-tensors"]
+    )
+    header = "\n".join(
+        [
+            f"# Timestamp: {datetime.now(timezone.utc).isoformat()}",
+            f"# Git SHA: {sha}",
+            *pkg_versions,
+        ]
+    )
+    with (artifacts_dir / "eval_command.txt").open("w") as f:
+        f.write(f"{header}\n{shlex.join(sys.argv)}\n")
+
     acceptance_csv = None
     perf_csv = None
     all_max_tokens: dict[str, int] = {}

@@ -107,23 +107,20 @@ def save_train_command(save_path: str, argv: list[str] | None = None) -> None:
     it during resolution); it falls back to the live ``sys.argv`` when a caller has
     no recorded argv, so a direct call is unchanged.
     """
-    try:
-        sha = subprocess.run(
-            ["git", "rev-parse", "HEAD"],  # noqa: S607
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip()
-    except (OSError, subprocess.CalledProcessError):
-        sha = "unknown"
+    from speculators.utils.provenance import (
+        get_git_diff,
+        get_git_sha,
+        get_package_root,
+        get_package_versions,
+        write_atomic,
+    )
 
-    pkg_versions: list[str] = []
-    for pkg in ("speculators", "vllm", "transformers", "torch", "compressed-tensors"):
-        try:
-            ver = importlib.metadata.version(pkg)
-        except importlib.metadata.PackageNotFoundError:
-            ver = "not installed"
-        pkg_versions.append(f"# {pkg}: {ver}")
+    speculators_root = get_package_root("speculators") or Path.cwd()
+    sha = get_git_sha(speculators_root)
+
+    pkg_versions = get_package_versions(
+        ["speculators", "vllm", "transformers", "torch", "compressed-tensors"]
+    )
 
     header = "\n".join(
         [
@@ -136,15 +133,8 @@ def save_train_command(save_path: str, argv: list[str] | None = None) -> None:
 
     command = shlex.join(argv or sys.argv)
     content = f"{header}\n{command}\n"
+    write_atomic(save_path, "train_command.txt", content)
 
-    path = Path(save_path)
-    path.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=save_path, prefix=".train_command_", suffix=".tmp")
-    tmp_path = Path(tmp)
-    try:
-        with os.fdopen(fd, "w") as f:
-            f.write(content)
-        tmp_path.replace(path / "train_command.txt")
-    finally:
-        if tmp_path.exists():
-            tmp_path.unlink()
+    diff = get_git_diff(speculators_root)
+    if diff:
+        write_atomic(save_path, "speculators.patch", diff)
