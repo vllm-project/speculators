@@ -98,9 +98,7 @@ Note: if you are using an experiment tracker (e.g. trackio, wandb, tensorboard, 
 
 ## Step 1: Prepare Your Data
 
-Generate the assistant responses with your target model first; see
-[Response Regeneration](response_regeneration.md). Then prepare its canonical
-`input_ids` and `loss_mask` rows:
+Generate the assistant responses with your target model first; see [Response Regeneration](response_regeneration.md). Then prepare its canonical `input_ids` and `loss_mask` rows:
 
 ```bash
 # in speculators venv
@@ -129,9 +127,7 @@ python scripts/prepare_data.py \
 
 **Parameters explained:**
 
-- `--data` - On-policy natural-language data or prepared `input_ids`/`loss_mask`
-  rows. Raw source presets are accepted by response regeneration, not this
-  command. The option can be repeated to combine inputs.
+- `--data` - On-policy natural-language data or prepared `input_ids`/`loss_mask` rows. Raw source presets are accepted by response regeneration, not this command. The option can be repeated to combine inputs.
 - `--output` - Where to save preprocessed data
 - `--max-samples` - Limit samples (optional, good for testing/getting started)
 - `--seq-length` - Maximum sequence length
@@ -147,8 +143,7 @@ output/
 └── token_freq.pt                # Token frequencies for vocab mapping
 ```
 
-**Time:** ~15 seconds to ~2 minutes for 5K prepared rows. Rendering
-natural-language conversations also depends on the vLLM endpoint.
+**Time:** ~15 seconds to ~2 minutes for 5K prepared rows. Rendering natural-language conversations also depends on the vLLM endpoint.
 
 **Note:** This step sets up the dataset used to train your model and is the same for every algorithm and mode. It's important that any data configuration choices are made at this stage. For example, limiting the data sample length, filtering out samples with limited assistant response tokens, handling multi-turn conversation responses, etc. For more information please see the [prepare_data.py cli reference](/cli/prepare_data.md).
 
