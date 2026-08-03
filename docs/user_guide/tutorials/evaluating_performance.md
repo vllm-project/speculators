@@ -45,7 +45,7 @@ Both `throughput` and `sweep` share the same options:
                              (default: kind=generative_column_mapper,column_mappings.text_column=prompt)
 ```
 
-A prepared benchmark selector identifies the benchmark and an optional task or category, such as `speedbench/qualitative/coding`, `ruler2/qwen3-8b-32k/mv_niah_hard`, or `longbench/hotpotqa`. Pass its prepared files separately with `--dataset-dir`. The existing `--speedbench-data-dir` option remains accepted as a compatibility alias.
+A prepared benchmark selector identifies a supported benchmark, such as `speedbench/qualitative/coding` or `longbench-v2`. Pass its prepared files separately with `--dataset-dir`. The existing `--speedbench-data-dir` option remains accepted as a compatibility alias.
 
 ## SPEED-Bench
 
@@ -103,67 +103,26 @@ Available configs: `qualitative`, `throughput_1k`, `throughput_2k`, `throughput_
 
 Results are written to `acceptance.csv` in the output directory with per-category acceptance lengths and per-position acceptance rates, identical in format to the `RedHatAI/speculator_benchmarks` output.
 
-## RULER v2
+## LongBench-v2
 
-[RULER v2](https://github.com/NVIDIA/RULER/tree/rulerv2-ns) covers 12 long-context tasks across multi-key retrieval, multi-value retrieval, and multi-document QA. Its prompts depend on the model tokenizer and target context length.
-
-The one-time data preparation step requires a separate [NeMo Skills](https://github.com/NVIDIA-NeMo/Skills/tree/main/nemo_skills/dataset/ruler2) environment; NeMo Skills is not a dependency of this project and is not needed when running `evaluate.py` on already-prepared files:
+[LongBench-v2](https://huggingface.co/datasets/zai-org/LongBench-v2) contains 503 multiple-choice questions with contexts ranging from 8K to 2M words. Prepare one local prompt-only file using the benchmark's official zero-shot template:
 
 ```bash
-# Run in a NeMo Skills environment with a configured local cluster.
-ns prepare_data ruler2 \
-    --cluster=local \
-    --data_dir=./ruler2_data \
-    --setup=qwen3-8b-32k \
-    --tokenizer_path=Qwen/Qwen3-8B \
-    --max_seq_length=32768
-```
-
-NeMo Skills writes the tasks under `./ruler2_data/ruler2/qwen3-8b-32k`. Pass that directory and setup name to `evaluate.py`:
-
-```bash
-# All 12 tasks
-python evaluate.py throughput \
-    --target http://localhost:8000/v1 \
-    --dataset ruler2/qwen3-8b-32k \
-    --dataset-dir ./ruler2_data/ruler2
-
-# One task
-python evaluate.py throughput \
-    --target http://localhost:8000/v1 \
-    --dataset ruler2/qwen3-8b-32k/mv_niah_hard \
-    --dataset-dir ./ruler2_data/ruler2
-```
-
-This measures speculative-decoding performance and acceptance per RULER v2 task. Use NeMo Skills' `ns eval` pipeline when you also need the benchmark's answer-quality scores.
-
-## LongBench
-
-[LongBench](https://huggingface.co/datasets/zai-org/LongBench) contains 21 English, Chinese, and code tasks. Its rows keep the long `context` and task `input` in separate columns, and the Hugging Face repository uses a legacy dataset loading script. Prepare local prompt-only files once so the evaluator can use the benchmark's official per-task prompt templates with current `datasets` releases:
-
-```bash
-python scripts/evaluate/prepare_longbench.py \
-    --data-dir ./longbench_data \
+python scripts/evaluate/prepare_longbench_v2.py \
+    --data-dir ./longbench_v2_data \
     --download
 ```
 
-The download includes the official data archive (about 114 MB) and prompt-template configuration. The component datasets retain their original licenses; do not redistribute the prepared files without checking them.
+This downloads the pinned official JSON file (about 465 MB) and uses only the Python standard library. The prepared file keeps the full contexts, so configure the server's context window for the requests you intend to run.
 
 ```bash
-# All 21 tasks
 python evaluate.py throughput \
     --target http://localhost:8000/v1 \
-    --dataset longbench \
-    --dataset-dir ./longbench_data
-
-# One task
-python evaluate.py throughput \
-    --target http://localhost:8000/v1 \
-    --dataset longbench/hotpotqa \
-    --dataset-dir ./longbench_data
+    --dataset longbench-v2 \
+    --dataset-dir ./longbench_v2_data
 ```
 
-This path measures speculative-decoding throughput and acceptance per task; it does not compute LongBench answer-quality scores. Use the official LongBench evaluation pipeline for accuracy comparisons.
+This measures speculative-decoding throughput and acceptance; it does not compute LongBench-v2 answer accuracy or truncate prompts to a model-specific context window. Use the [official LongBench evaluation pipeline](https://github.com/THUDM/LongBench) for accuracy comparisons and model-specific truncation.
 
 ## Visualization
 

@@ -13,13 +13,6 @@ finally:
     sys.path.pop(0)
 
 
-def _task(data_dir: Path, setup: str, name: str) -> Path:
-    path = data_dir / setup / name / "test.jsonl"
-    path.parent.mkdir(parents=True)
-    path.write_text('{"question": "prompt"}\n')
-    return path
-
-
 def _args(**overrides) -> Namespace:
     values = {
         "dataset": "org/dataset",
@@ -31,39 +24,16 @@ def _args(**overrides) -> Namespace:
     return Namespace(**values)
 
 
-def test_resolve_ruler2_setup_and_task(tmp_path):
-    paths = [
-        _task(tmp_path, "model-32k", "mk_niah_basic"),
-        _task(tmp_path, "model-32k", "qa_hard"),
-    ]
+def test_resolve_longbench_v2(tmp_path):
+    path = tmp_path / "longbench_v2.jsonl"
+    path.write_text('{"prompt": "text"}\n')
 
-    assert evaluate._resolve_ruler2("ruler2/model-32k", tmp_path) == [
-        ("ruler2/model-32k/mk_niah_basic", paths[0]),
-        ("ruler2/model-32k/qa_hard", paths[1]),
-    ]
-    assert evaluate._resolve_ruler2("ruler2/model-32k/qa_hard", tmp_path) == [
-        ("ruler2/model-32k/qa_hard", paths[1])
-    ]
-
-
-def test_resolve_longbench_all_and_task(tmp_path):
-    paths = [
-        tmp_path / "longbench_hotpotqa.jsonl",
-        tmp_path / "longbench_qasper.jsonl",
-    ]
-    for path in paths:
-        path.write_text('{"prompt": "text"}\n')
-
-    assert evaluate._resolve_longbench("longbench", tmp_path) == [
-        ("longbench/hotpotqa", paths[0]),
-        ("longbench/qasper", paths[1]),
-    ]
     assert evaluate._resolve_runs(
-        _args(dataset="longbench/qasper", dataset_dir=tmp_path)
+        _args(dataset="longbench-v2", dataset_dir=tmp_path)
     ) == [
         evaluate.RunSpec(
-            "longbench/qasper",
-            str(paths[1]),
+            "longbench-v2",
+            str(path),
             evaluate.DEFAULT_DATA_COLUMN_MAPPER,
         )
     ]

@@ -19,15 +19,10 @@ Examples:
         --dataset speedbench/qualitative/coding \\
         --dataset-dir ./speedbench_data
 
-    # RULER v2 (prepare tokenizer-specific data with NeMo Skills first):
+    # LongBench-v2 (run prepare_longbench_v2.py once first):
     python evaluate.py --target http://localhost:8000/v1 throughput \\
-        --dataset ruler2/qwen3-8b-32k \\
-        --dataset-dir ./ruler2_data/ruler2
-
-    # LongBench (run prepare_longbench.py once first):
-    python evaluate.py --target http://localhost:8000/v1 throughput \\
-        --dataset longbench \\
-        --dataset-dir ./longbench_data
+        --dataset longbench-v2 \\
+        --dataset-dir ./longbench_v2_data
 """
 
 from __future__ import annotations
@@ -102,9 +97,6 @@ DEFAULT_DATA_COLUMN_MAPPER = (
 
 _SPEEDBENCH_COLUMN_MAPPER = (
     "kind=generative_column_mapper,column_mappings.text_column=turns"
-)
-_RULER2_COLUMN_MAPPER = (
-    "kind=generative_column_mapper,column_mappings.text_column=question"
 )
 
 
@@ -188,60 +180,23 @@ def _resolve_speedbench(
     return results
 
 
-def _resolve_ruler2(spec: str, data_dir: Path) -> list[tuple[str, Path]]:
-    """Resolve a ``ruler2/<setup>[/<task>]`` NeMo Skills dataset."""
-    parts = spec.split("/")[1:]
-    if len(parts) not in (1, 2) or not all(parts):
-        logger.error("Invalid RULER v2 dataset spec: %s", spec)
+def _resolve_longbench_v2(spec: str, data_dir: Path) -> list[tuple[str, Path]]:
+    """Resolve data prepared by ``prepare_longbench_v2.py``."""
+    if spec != "longbench-v2":
+        logger.error("Invalid LongBench-v2 dataset selector: %s", spec)
         sys.exit(1)
 
-    setup = parts[0]
-    root = data_dir / setup
-    files = (
-        sorted(root.glob("*/test.jsonl"))
-        if len(parts) == 1
-        else [root / parts[1] / "test.jsonl"]
-    )
-    files = [path for path in files if path.is_file()]
-    if not files:
+    path = data_dir / "longbench_v2.jsonl"
+    if not path.is_file():
         logger.error(
-            "--dataset-dir='%s': no data found for '%s'.\n"
-            "Prepare it with `ns prepare_data ruler2` first.",
+            "--dataset-dir='%s': %s not found.\n"
+            "Run scripts/evaluate/prepare_longbench_v2.py first.",
             data_dir,
-            spec,
+            path.name,
         )
         sys.exit(1)
 
-    return [(f"ruler2/{setup}/{path.parent.name}", path) for path in files]
-
-
-def _resolve_longbench(spec: str, data_dir: Path) -> list[tuple[str, Path]]:
-    """Resolve ``longbench[/<task>]`` data prepared by prepare_longbench.py."""
-    prefix, separator, task = spec.partition("/")
-    if prefix != "longbench":
-        logger.error("Invalid LongBench dataset spec: %s", spec)
-        sys.exit(1)
-    if not separator:
-        files = sorted(data_dir.glob("longbench_*.jsonl"))
-    elif task and "/" not in task:
-        files = [data_dir / f"longbench_{task}.jsonl"]
-    else:
-        logger.error("Invalid LongBench dataset spec: %s", spec)
-        sys.exit(1)
-
-    files = [path for path in files if path.is_file()]
-    if not files:
-        logger.error(
-            "--dataset-dir='%s': no prepared data found for '%s'.\n"
-            "Run scripts/evaluate/prepare_longbench.py first.",
-            data_dir,
-            spec,
-        )
-        sys.exit(1)
-
-    return [
-        (f"longbench/{path.stem.removeprefix('longbench_')}", path) for path in files
-    ]
+    return [(spec, path)]
 
 
 _DATASET_ADAPTERS = {
@@ -250,15 +205,10 @@ _DATASET_ADAPTERS = {
         _SPEEDBENCH_COLUMN_MAPPER,
         "Run scripts/evaluate/prepare_speedbench.py first.",
     ),
-    "ruler2": DatasetAdapter(
-        _resolve_ruler2,
-        _RULER2_COLUMN_MAPPER,
-        "Prepare it with `ns prepare_data ruler2` first.",
-    ),
-    "longbench": DatasetAdapter(
-        _resolve_longbench,
+    "longbench-v2": DatasetAdapter(
+        _resolve_longbench_v2,
         DEFAULT_DATA_COLUMN_MAPPER,
-        "Run scripts/evaluate/prepare_longbench.py first.",
+        "Run scripts/evaluate/prepare_longbench_v2.py first.",
     ),
 }
 
@@ -521,7 +471,7 @@ def main() -> None:
     parser.add_argument(
         "--dataset-dir",
         default=None,
-        help="Prepared data directory for speedbench, ruler2, or longbench",
+        help="Prepared data directory for speedbench or longbench-v2",
     )
     parser.add_argument(
         "--speedbench-data-dir",
