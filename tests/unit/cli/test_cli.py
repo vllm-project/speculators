@@ -30,6 +30,16 @@ class TestRootApp:
         assert "generate-data" in result.output
         assert "stitch" in result.output
 
+    def test_pipeline_train_in_help(self):
+        result = runner.invoke(app, ["--help"])
+        assert result.exit_code == 0
+        assert "train" in result.output
+
+    def test_pipeline_regenerate_responses_in_help(self):
+        result = runner.invoke(app, ["--help"])
+        assert result.exit_code == 0
+        assert "regenerate-responses" in result.output
+
     def test_tools_commands_in_help(self):
         result = runner.invoke(app, ["--help"])
         assert result.exit_code == 0
@@ -71,6 +81,44 @@ class TestPrepareDataCommand:
 
     def test_missing_required_args(self):
         result = runner.invoke(app, ["prepare-data"])
+        assert result.exit_code != 0
+
+
+class TestTrainCommand:
+    def test_help(self):
+        result = runner.invoke(app, ["train", "--help"])
+        assert result.exit_code == 0
+        assert "Train a speculator model" in result.output
+
+    def test_train_appears_in_pipeline_panel(self):
+        result = runner.invoke(app, ["--help"])
+        assert result.exit_code == 0
+        assert "train" in result.output
+
+
+class TestRegenerateResponsesCommand:
+    def test_help(self):
+        result = runner.invoke(app, ["regenerate-responses", "--help"])
+        assert result.exit_code == 0
+        assert "--endpoint" in result.output
+        assert "--dataset" in result.output
+        assert "--concurrency" in result.output
+        assert "--max-tokens" in result.output
+
+    def test_invalid_max_retries(self):
+        result = runner.invoke(app, ["regenerate-responses", "--max-retries", "-1"])
+        assert result.exit_code != 0
+
+    def test_invalid_sampling_params(self):
+        result = runner.invoke(
+            app, ["regenerate-responses", "--sampling-params", "not-json"]
+        )
+        assert result.exit_code != 0
+
+    def test_sampling_params_must_be_object(self):
+        result = runner.invoke(
+            app, ["regenerate-responses", "--sampling-params", "[1,2,3]"]
+        )
         assert result.exit_code != 0
 
 
