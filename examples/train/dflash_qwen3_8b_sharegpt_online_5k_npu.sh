@@ -12,7 +12,7 @@
 
 ### Example E2E run for DFlash Qwen3-8B on Ascend NPU device from ShareGPT ###
 
-# Note: With just 10k samples, the model performance will not be very good, however there
+# Note: With just 5k samples, the model performance will not be very good, however there
 # are enough samples to verify that the pipeline is working correctly and that the model
 # is learning something. This is a good sanity check when creating a drafter for a new
 # target model.
