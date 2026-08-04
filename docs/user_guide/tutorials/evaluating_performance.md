@@ -124,7 +124,7 @@ python evaluate.py throughput \
 
 This measures speculative-decoding throughput and acceptance; it does not compute LongBench-v2 answer accuracy or truncate prompts to a model-specific context window. Use the [official LongBench evaluation pipeline](https://github.com/THUDM/LongBench) for accuracy comparisons and model-specific truncation.
 
-Expect most prompts to be rejected rather than a few: the median is roughly 100K tokens and only about 60% fit a 128K window. Rejections do not fail the run, so check `requests_errored` in `acceptance.csv` before comparing numbers — the longest prompts are the ones that drop out, biasing whatever survives toward shorter contexts.
+Rejections are routine rather than an edge case: measured with the Qwen3 tokenizer and 512 tokens reserved for generation, the median prompt is about 100K tokens, roughly 40% exceed a 128K window and about 77% exceed a 32K one. Rejections do not fail the run, so check `requests_errored` in `acceptance.csv` before comparing numbers — the longest prompts are the ones that drop out, biasing whatever survives toward shorter contexts.
 
 ## Visualization
 

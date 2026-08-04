@@ -36,7 +36,12 @@ Format your response as follows: "The correct answer is (insert answer here)".""
 def _download(url: str, path: Path) -> None:
     logger.info("Downloading %s ...", url)
     partial = path.with_suffix(f"{path.suffix}.part")
-    with urlopen(url) as source, partial.open("wb") as destination:  # noqa: S310
+    # Bounds each socket read, not the transfer: a stall raises instead of
+    # hanging a 465 MB download indefinitely.
+    with (
+        urlopen(url, timeout=30) as source,  # noqa: S310
+        partial.open("wb") as destination,
+    ):
         shutil.copyfileobj(source, destination)
     partial.replace(path)
 
