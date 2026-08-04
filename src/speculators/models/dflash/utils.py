@@ -23,6 +23,7 @@ def select_anchors(
     num_anchors: int,
     block_size: int,
     document_ids: torch.Tensor | None = None,  # shape: [1, total_seq_len]
+    sample_from_anchor: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Randomly select anchor positions from valid tokens in sequence.
 
@@ -34,6 +35,9 @@ def select_anchors(
             sequence. When given, anchors whose block would cross a document
             boundary are excluded, so a block never mixes one document's
             context with the next document's targets and loss mask.
+        sample_from_anchor: Whether slot k predicts token ``p + k + 1`` (DSpark)
+            rather than ``p + k`` (DFlash). It shifts the block's last target by
+            one, so the boundary check has to reach one position further.
 
     Returns:
         tuple: (anchors, anchor_valid)
@@ -48,13 +52,13 @@ def select_anchors(
 
     valid_mask = loss_mask.bool().clone()
     valid_mask[:, -block_size:] = False
-    if document_ids is not None and block_size > 1:
-        # An anchor's block spans positions [p, p + block_size - 1]; documents
-        # are contiguous, so the block stays in one document iff its first and
-        # last positions share a document id.
-        same_doc = (
-            document_ids[:, : -(block_size - 1)] == document_ids[:, block_size - 1 :]
-        )
+    # An anchor's block covers positions [p, p + horizon]: slot k predicts token
+    # p + k for DFlash and p + k + 1 for DSpark, so DSpark's last target sits one
+    # position further out. Documents are contiguous, so the block stays in one
+    # document iff its first and last positions share a document id.
+    horizon = block_size if sample_from_anchor else block_size - 1
+    if document_ids is not None and horizon > 0:
+        same_doc = document_ids[:, :-horizon] == document_ids[:, horizon:]
         valid_mask[:, : same_doc.shape[1]] &= same_doc
 
     valid_indices = torch.nonzero(valid_mask.squeeze(0), as_tuple=False).squeeze(
