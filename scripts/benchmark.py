@@ -269,7 +269,6 @@ def _build_train_loader(
         total_seq_len=train_args.total_seq_len,
         hidden_states_dtype=hidden_states_dtype,
         noise_std=train_args.noise_std,
-        legacy_data=train_args.legacy_data,
         transfer=transfer,
         vllm_endpoint=train_args.vllm_endpoint,
         on_missing=train_args.on_missing,

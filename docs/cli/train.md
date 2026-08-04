@@ -84,8 +84,6 @@ torchrun --standalone --nproc_per_node=4 scripts/train.py \
 
 - **`--max-retries`** (int, default: `3`) Maximum number of retry attempts per vLLM request on failure.
 
-- **`--legacy-data`** (flag) **DEPRECATED.** Use the old data format which stores hidden states alongside token_ids.
-
 - **`--total-seq-len`** (int, default: `8192`) Maximum total sequence length for training batches. Note: samples will be packed into batches with total combined sequence length `{total-seq-len}`.
 
 ### Vocabulary Mapping Arguments
