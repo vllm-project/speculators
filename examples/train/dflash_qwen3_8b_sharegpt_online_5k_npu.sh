@@ -5,7 +5,7 @@
 # and training (with hidden states generated on-the-fly from the live server).
 #
 # Usage: Copy this script, modify the configuration variables below, then run:
-#   bash examples/train/dflash_qwen3_8b_sharegpt_online_10k_npu.sh
+#   bash examples/train/dflash_qwen3_8b_sharegpt_online_5k_npu.sh
 #
 # For a detailed walkthrough, see 
 # https://docs.vllm.ai/projects/speculators/en/latest/user_guide/tutorials/train_dflash_online/
