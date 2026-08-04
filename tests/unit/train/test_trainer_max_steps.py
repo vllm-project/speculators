@@ -16,19 +16,20 @@ class _LoopProbe(Trainer):
         self.val_loader = None
         self.epoch_len = epoch_len
         self.epochs_entered: list[int] = []
-        self.save_calls: list[tuple[int, bool]] = []
+        self.save_calls: list[tuple[int, int, bool]] = []
 
-    def train_epoch(self, epoch: int) -> None:
+    def train_epoch(self, epoch: int) -> int:
         self.epochs_entered.append(epoch)
         # Mirror the real inner-loop behavior: step until the epoch ends or
-        # max_steps is hit.
-        for _ in range(self.epoch_len):
+        # max_steps is hit, returning the partial-epoch cursor in the latter case.
+        for local_step in range(1, self.epoch_len + 1):
             self.global_step += 1
             if self._reached_max_steps():
-                break
+                return local_step if local_step < self.epoch_len else 0
+        return 0
 
     def maybe_save_checkpoint(self, epoch, local_step=0, force=False) -> None:
-        self.save_calls.append((epoch, force))
+        self.save_calls.append((epoch, local_step, force))
 
     def maybe_update_best(self, epoch, val_metrics) -> None:
         pass
@@ -50,7 +51,24 @@ def test_final_segment_checkpoint_is_forced():
     # checkpoint_freq / save_best gates would skip that epoch.
     trainer = _LoopProbe(num_epochs=10, max_steps=15, epoch_len=10)
     trainer.run_training()
-    assert trainer.save_calls == [(0, False), (1, True)]
+    assert trainer.save_calls == [(0, 0, False), (1, 5, True)]
+
+
+def test_forced_checkpoint_records_the_partial_epoch_cursor():
+    # max_steps=15 with 10 steps per epoch stops five batches into epoch 1.
+    # Recording local_step=0 there would mark the epoch complete, so a resume
+    # with a higher max_steps would silently skip the five untrained batches.
+    trainer = _LoopProbe(num_epochs=10, max_steps=15, epoch_len=10)
+    trainer.run_training()
+    epoch, local_step, force = trainer.save_calls[-1]
+    assert (epoch, local_step, force) == (1, 5, True)
+
+
+def test_max_steps_on_the_last_batch_records_end_of_epoch():
+    # The epoch did complete, so the checkpoint must stay an end-of-epoch one.
+    trainer = _LoopProbe(num_epochs=10, max_steps=20, epoch_len=10)
+    trainer.run_training()
+    assert trainer.save_calls[-1] == (1, 0, True)
 
 
 def test_epoch_loop_unaffected_without_max_steps():
