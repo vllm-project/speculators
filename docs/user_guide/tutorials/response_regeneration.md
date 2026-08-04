@@ -1,6 +1,6 @@
 # Response Regeneration
 
-This tutorial walks you through regenerating assistant responses in an existing dataset using a target model served by vLLM. The resulting dataset pairs the original user prompts with freshly generated responses (on-policy data), and is the recommended starting point for speculator training: the drafter learns to predict what the target model actually generates, not what the dataset's original authors wrote. For multi-turn conversations, each assistant turn is regenerated sequentially against the model's own prior responses, keeping the entire history on-policy. Training directly on the dataset's original responses (off-policy) is a cheaper fallback, since it skips a full target-model pass over the data, but costs acceptance length at inference time.
+This tutorial walks you through regenerating assistant responses in an existing dataset using a target model served by vLLM. The resulting dataset pairs the original user prompts with freshly generated responses (on-policy data) for speculator training: the drafter learns to predict what the target actually generates, not what the dataset's original authors wrote. For multi-turn conversations, each assistant turn is regenerated sequentially against the model's own prior responses, keeping the entire assistant history on-policy.
 
 ## Overview
 
@@ -27,7 +27,7 @@ This will:
 
 1. Start a vLLM server with the specified model
 2. Extract conversation turns from the dataset and regenerate assistant responses turn-by-turn
-3. Save pre-tokenized results to a JSONL file (e.g., `magpie_Llama-3.3-70B-Instruct.jsonl`)
+3. Save speculator-format results to a JSONL file (e.g., `magpie_Llama-3.3-70B-Instruct.jsonl`)
 4. Stop the server
 
 ### Multi-GPU Configurations
@@ -72,13 +72,13 @@ For tool-calling datasets (e.g. `hermes-fc`), pass the model's `--tool-call-pars
   --dataset hermes-fc
 ```
 
-This is **semi-on-policy** tool-call regeneration: the target regenerates the tool-call tokens on-policy, but tools are not executed. The *i*-th cached tool result from the source data is spliced positionally after the target's *i*-th regenerated call.
+This regenerates all assistant and tool-call tokens on-policy, but does not execute tools. The *i*-th cached tool result from the source data is treated as an environment observation and spliced positionally after the target's *i*-th regenerated call.
 
 **Limitation:** parallel tool calls are under development; the turn is currently truncated to the first call.
 
 ## Step 2: Verify the Output
 
-The output is a JSONL file with one pre-tokenized row per target generation. `loss_mask` is `0` over the prompt the target conditioned on and `1` over the tokens it generated, so training needs no further masking:
+The output is a JSONL file with one speculator-format row per target generation. `loss_mask` is `0` over the prompt the target conditioned on and `1` over the tokens it generated, so training needs no further masking:
 
 ```json
 {
