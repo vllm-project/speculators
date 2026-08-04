@@ -112,6 +112,8 @@ class TestRunGuidellm:
         assert "kind=huggingface" in data
         assert "source=RedHatAI/speculator_benchmarks" in data
         assert "load_kwargs.data_files=qa.jsonl" in data
+        # Without it guidellm's column mapper gets a DatasetDict and crashes.
+        assert "load_kwargs.split=train" in data
 
     def test_data_local_file_without_subset(self, perf_utils):
         cmd = self._capture_cmd(
@@ -123,6 +125,7 @@ class TestRunGuidellm:
         data = cmd[idx + 1]
         assert "kind=json_file" in data
         assert "path=/tmp/local.jsonl" in data
+        assert "load_kwargs.split=train" in data
 
     def test_profile_sweep(self, perf_utils):
         cmd = self._capture_cmd(perf_utils, profile="sweep", rate=10)
