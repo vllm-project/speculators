@@ -364,3 +364,56 @@ class TestParseSweepFile:
         fp.write_text(json.dumps(_make_sweep_json()))
         rows = perf_utils.parse_sweep_file(fp)
         assert rows[0]["subset"] == "HumanEval"
+
+
+class TestParseRequestCounts:
+    @staticmethod
+    def _write(tmp_path, benchmarks):
+        fp = tmp_path / "run_qa.json"
+        fp.write_text(json.dumps({"benchmarks": benchmarks}))
+        return fp
+
+    def test_counts_each_outcome(self, perf_utils, tmp_path):
+        # The null "total" is guidellm's real output shape, not a placeholder.
+        fp = self._write(
+            tmp_path,
+            [
+                {
+                    "requests": {
+                        "successful": [{}],
+                        "errored": [{}, {}, {}],
+                        "incomplete": [{}],
+                        "total": None,
+                    }
+                }
+            ],
+        )
+        assert perf_utils.parse_request_counts(fp) == {
+            "requests_ok": 1,
+            "requests_errored": 3,
+            "requests_incomplete": 1,
+        }
+
+    def test_sums_across_benchmarks_and_tolerates_missing_buckets(
+        self, perf_utils, tmp_path
+    ):
+        fp = self._write(
+            tmp_path,
+            [
+                {"requests": {"successful": [{}, {}]}},
+                {"requests": {"successful": [{}], "errored": [{}]}},
+                {},
+            ],
+        )
+        assert perf_utils.parse_request_counts(fp) == {
+            "requests_ok": 3,
+            "requests_errored": 1,
+            "requests_incomplete": 0,
+        }
+
+    def test_counts_join_the_acceptance_columns_when_present(self, perf_utils):
+        spec = {"num_drafts": 1.0, "acceptance_length": 2.0, "requests_ok": 5}
+        cols = perf_utils.acceptance_csv_columns(spec)
+        assert cols[0] == "requests_ok"
+        assert "requests_errored" not in cols
+        assert perf_utils.acceptance_csv_columns({"num_drafts": 1.0})[0] == "num_drafts"

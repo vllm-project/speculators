@@ -51,6 +51,7 @@ from perf_utils import (
     parse_gen_kwargs,
     parse_gen_len_results,
     parse_prometheus_metrics,
+    parse_request_counts,
     parse_sweep_results,
     print_acceptance_report,
     run_guidellm,
@@ -303,10 +304,26 @@ def _run_subset(
     )
     current = _require_metrics(metrics_url)
 
+    # Rejected prompts cost the run its sample, not its exit code.
+    counts = parse_request_counts(run_output)
+    landed = sum(counts.values())
+    if landed and counts["requests_ok"] < landed:
+        logger.warning(
+            "[%s] %d/%d requests did not complete (%d errored, %d incomplete);"
+            " metrics below reflect only the %d that did",
+            subset,
+            landed - counts["requests_ok"],
+            landed,
+            counts["requests_errored"],
+            counts["requests_incomplete"],
+            counts["requests_ok"],
+        )
+
     spec = extract_spec_decode_metrics(
         current,
         baseline_metrics=baseline,
     )
+    spec.update(counts)
     has_spec = spec and spec.get("num_drafts", 0) > 0
 
     if has_spec:

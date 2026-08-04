@@ -392,13 +392,41 @@ def parse_sweep_file(filepath: Path) -> list[dict]:
     return rows
 
 
+_REQUEST_BUCKETS = {
+    "successful": "requests_ok",
+    "errored": "requests_errored",
+    "incomplete": "requests_incomplete",
+}
+
+REQUEST_COUNT_COLUMNS = tuple(_REQUEST_BUCKETS.values())
+
+
+def parse_request_counts(filepath: Path) -> dict[str, int]:
+    """Count per-outcome requests in a guidellm run JSON.
+
+    A partly failed run still yields ordinary-looking metrics; these counts are
+    what mark it as partial.  guidellm always leaves ``total`` null, so the
+    buckets are the only source.
+    """
+    with filepath.open() as f:
+        data = json.load(f)
+
+    counts = dict.fromkeys(REQUEST_COUNT_COLUMNS, 0)
+    for bench in data.get("benchmarks", []):
+        requests = bench.get("requests") or {}
+        for bucket, column in _REQUEST_BUCKETS.items():
+            counts[column] += len(requests.get(bucket) or [])
+    return counts
+
+
 # ---------------------------------------------------------------------------
 # Higher-level result writers
 # ---------------------------------------------------------------------------
 
 
 def acceptance_csv_columns(spec: dict[str, float]) -> list[str]:
-    cols = [
+    cols = [c for c in REQUEST_COUNT_COLUMNS if c in spec]
+    cols += [
         "num_drafts",
         "num_draft_tokens",
         "num_accepted_tokens",

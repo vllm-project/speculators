@@ -101,7 +101,7 @@ python evaluate.py throughput \
 
 Available configs: `qualitative`, `throughput_1k`, `throughput_2k`, `throughput_8k`, `throughput_32k`.
 
-Results are written to `acceptance.csv` in the output directory with per-category acceptance lengths and per-position acceptance rates, identical in format to the `RedHatAI/speculator_benchmarks` output.
+Results are written to `acceptance.csv` in the output directory with per-category acceptance lengths and per-position acceptance rates, identical in format to the `RedHatAI/speculator_benchmarks` output. Each row also carries `requests_ok`, `requests_errored` and `requests_incomplete`, so a result computed from a partly failed run stays recognisable as one.
 
 ## LongBench-v2
 
@@ -123,6 +123,8 @@ python evaluate.py throughput \
 ```
 
 This measures speculative-decoding throughput and acceptance; it does not compute LongBench-v2 answer accuracy or truncate prompts to a model-specific context window. Use the [official LongBench evaluation pipeline](https://github.com/THUDM/LongBench) for accuracy comparisons and model-specific truncation.
+
+Expect most prompts to be rejected rather than a few: the median is roughly 100K tokens and only about 60% fit a 128K window. Rejections do not fail the run, so check `requests_errored` in `acceptance.csv` before comparing numbers — the longest prompts are the ones that drop out, biasing whatever survives toward shorter contexts.
 
 ## Visualization
 
