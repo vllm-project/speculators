@@ -142,6 +142,57 @@ class DFlashConverter:
             speculators_config=speculators_config,
         )
 
+    def _remap_weights(
+        self,
+        weights: dict[str, torch.Tensor],
+        config: DFlashSpeculatorConfig,
+        model: DFlashDraftModel,
+    ) -> dict[str, torch.Tensor]:
+        """Remap checkpoint weights to match DFlashDraftModel's state dict.
+
+        Handles Laguna-style fused ``qkv_proj`` → separate ``q/k/v_proj``,
+        drops ``g_proj`` and ``aux_hidden_norms`` (no DFlash equivalent), and
+        slices ``fc.weight`` when the source has more target layers than needed.
+        """
+        has_fused_qkv = any("qkv_proj" in k for k in weights)
+        if not has_fused_qkv:
+            return weights
+
+        tl = config.transformer_layer_config
+        q_dim = tl.num_attention_heads * tl.head_dim
+        kv_dim = tl.num_key_value_heads * tl.head_dim
+
+        remapped: dict[str, torch.Tensor] = {}
+        dropped: list[str] = []
+
+        for key, tensor in weights.items():
+            if "qkv_proj" in key:
+                q, k, v = tensor.split([q_dim, kv_dim, kv_dim], dim=0)
+                remapped[key.replace("qkv_proj", "q_proj")] = q
+                remapped[key.replace("qkv_proj", "k_proj")] = k
+                remapped[key.replace("qkv_proj", "v_proj")] = v
+            elif ".g_proj." in key or key.startswith("aux_hidden_norms."):
+                dropped.append(key)
+            elif key == "fc.weight":
+                model_fc_dim = model.fc.in_features
+                if tensor.shape[1] > model_fc_dim:
+                    logger.info(
+                        f"Slicing fc.weight from {tensor.shape[1]} to {model_fc_dim}"
+                    )
+                    remapped[key] = tensor[:, :model_fc_dim]
+                else:
+                    remapped[key] = tensor
+            else:
+                remapped[key] = tensor
+
+        if dropped:
+            logger.info(f"Dropped {len(dropped)} incompatible keys: {dropped}")
+        logger.info(
+            f"Remapped {sum(1 for k in weights if 'qkv_proj' in k)} fused qkv_proj "
+            f"→ separate q/k/v_proj"
+        )
+        return remapped
+
     def _save(
         self,
         config: DFlashSpeculatorConfig,
@@ -151,6 +202,7 @@ class DFlashConverter:
         model = DFlashDraftModel(config=config)
 
         body = {k: v for k, v in weights.items() if k not in ("t2d", "d2t")}
+        body = self._remap_weights(body, config, model)
         missing, unexpected = model.load_state_dict(body, strict=False)
         if unexpected:
             raise ValueError(
