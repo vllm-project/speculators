@@ -304,19 +304,22 @@ def _run_subset(
     )
     current = _require_metrics(metrics_url)
 
+    with run_output.open() as f:
+        run_data = json.load(f)
+
     # Rejected prompts cost the run its sample, not its exit code.
-    counts = parse_request_counts(run_output)
+    counts = parse_request_counts(run_data)
     landed = sum(counts.values())
-    if landed and counts["requests_ok"] < landed:
+    if counts["requests_successful"] < landed:
         logger.warning(
             "[%s] %d/%d requests did not complete (%d errored, %d incomplete);"
             " metrics below reflect only the %d that did",
             subset,
-            landed - counts["requests_ok"],
+            landed - counts["requests_successful"],
             landed,
             counts["requests_errored"],
             counts["requests_incomplete"],
-            counts["requests_ok"],
+            counts["requests_successful"],
         )
 
     spec = extract_spec_decode_metrics(
@@ -342,6 +345,7 @@ def _run_subset(
         rows = parse_sweep_results(
             run_output,
             spec if has_spec else None,
+            data=run_data,
         )
         if rows:
             if perf_csv is None:

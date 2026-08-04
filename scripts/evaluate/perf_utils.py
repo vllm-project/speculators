@@ -360,10 +360,16 @@ def load_prometheus_file(path: Path | None) -> list[Metric]:
 # ---------------------------------------------------------------------------
 
 
-def parse_sweep_file(filepath: Path) -> list[dict]:
-    """Parse a single sweep JSON and return rows for the CSV."""
-    with filepath.open() as f:
-        data = json.load(f)
+def parse_sweep_file(filepath: Path, data: dict | None = None) -> list[dict]:
+    """Parse a single sweep JSON and return rows for the CSV.
+
+    *data* lets a caller that has already read *filepath* skip a second parse;
+    guidellm echoes every prompt back into the run JSON, so for long-context
+    datasets it is large enough to be worth loading once.
+    """
+    if data is None:
+        with filepath.open() as f:
+            data = json.load(f)
 
     benchmarks = data.get("benchmarks", [])
     if not benchmarks:
@@ -392,30 +398,25 @@ def parse_sweep_file(filepath: Path) -> list[dict]:
     return rows
 
 
-_REQUEST_BUCKETS = {
-    "successful": "requests_ok",
-    "errored": "requests_errored",
-    "incomplete": "requests_incomplete",
-}
-
-REQUEST_COUNT_COLUMNS = tuple(_REQUEST_BUCKETS.values())
+REQUEST_COUNT_COLUMNS = (
+    "requests_successful",
+    "requests_errored",
+    "requests_incomplete",
+)
 
 
-def parse_request_counts(filepath: Path) -> dict[str, int]:
-    """Count per-outcome requests in a guidellm run JSON.
+def parse_request_counts(data: dict) -> dict[str, int]:
+    """Sum guidellm's per-outcome request totals across a run's benchmarks.
 
     A partly failed run still yields ordinary-looking metrics; these counts are
-    what mark it as partial.  guidellm always leaves ``total`` null, so the
-    buckets are the only source.
+    what mark it as partial.  The top-level ``requests`` buckets hold sampled
+    records rather than every request, so they would undercount.
     """
-    with filepath.open() as f:
-        data = json.load(f)
-
     counts = dict.fromkeys(REQUEST_COUNT_COLUMNS, 0)
     for bench in data.get("benchmarks", []):
-        requests = bench.get("requests") or {}
-        for bucket, column in _REQUEST_BUCKETS.items():
-            counts[column] += len(requests.get(bucket) or [])
+        totals = (bench.get("metrics") or {}).get("request_totals") or {}
+        for column in REQUEST_COUNT_COLUMNS:
+            counts[column] += totals.get(column.removeprefix("requests_"), 0)
     return counts
 
 
@@ -425,8 +426,8 @@ def parse_request_counts(filepath: Path) -> dict[str, int]:
 
 
 def acceptance_csv_columns(spec: dict[str, float]) -> list[str]:
-    cols = [c for c in REQUEST_COUNT_COLUMNS if c in spec]
-    cols += [
+    cols = [
+        *REQUEST_COUNT_COLUMNS,
         "num_drafts",
         "num_draft_tokens",
         "num_accepted_tokens",
@@ -476,9 +477,10 @@ def parse_gen_len_results(files: list[Path], output: Path) -> dict[str, int]:
 def parse_sweep_results(
     filepath: Path,
     spec_decode_metrics: dict[str, float] | None = None,
+    data: dict | None = None,
 ) -> list[dict]:
     """Parse a sweep JSON and enrich rows with pre-computed acceptance metrics."""
-    rows = parse_sweep_file(filepath)
+    rows = parse_sweep_file(filepath, data)
     if spec_decode_metrics:
         for row in rows:
             row.update(spec_decode_metrics)

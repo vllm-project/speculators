@@ -101,7 +101,7 @@ python evaluate.py throughput \
 
 Available configs: `qualitative`, `throughput_1k`, `throughput_2k`, `throughput_8k`, `throughput_32k`.
 
-Results are written to `acceptance.csv` in the output directory with per-category acceptance lengths and per-position acceptance rates, identical in format to the `RedHatAI/speculator_benchmarks` output. Each row also carries `requests_ok`, `requests_errored` and `requests_incomplete`, so a result computed from a partly failed run stays recognisable as one.
+Results are written to `acceptance.csv` in the output directory with per-category acceptance lengths and per-position acceptance rates, identical in format to the `RedHatAI/speculator_benchmarks` output. Each row also carries `requests_successful`, `requests_errored` and `requests_incomplete`, so a result computed from a partly failed run stays recognisable as one.
 
 ## LongBench-v2
 

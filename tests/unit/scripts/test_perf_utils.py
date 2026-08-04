@@ -367,53 +367,44 @@ class TestParseSweepFile:
 
 
 class TestParseRequestCounts:
-    @staticmethod
-    def _write(tmp_path, benchmarks):
-        fp = tmp_path / "run_qa.json"
-        fp.write_text(json.dumps({"benchmarks": benchmarks}))
-        return fp
-
-    def test_counts_each_outcome(self, perf_utils, tmp_path):
-        # The null "total" is guidellm's real output shape, not a placeholder.
-        fp = self._write(
-            tmp_path,
-            [
+    def test_counts_each_outcome(self, perf_utils):
+        data = {
+            "benchmarks": [
                 {
-                    "requests": {
-                        "successful": [{}],
-                        "errored": [{}, {}, {}],
-                        "incomplete": [{}],
-                        "total": None,
-                    }
+                    "metrics": {
+                        "request_totals": {
+                            "successful": 1,
+                            "errored": 3,
+                            "incomplete": 1,
+                            "total": 5,
+                        }
+                    },
+                    # The sampled buckets undercount, so they must not be used.
+                    "requests": {"successful": [{}], "errored": [], "total": None},
                 }
-            ],
-        )
-        assert perf_utils.parse_request_counts(fp) == {
-            "requests_ok": 1,
+            ]
+        }
+        assert perf_utils.parse_request_counts(data) == {
+            "requests_successful": 1,
             "requests_errored": 3,
             "requests_incomplete": 1,
         }
 
-    def test_sums_across_benchmarks_and_tolerates_missing_buckets(
-        self, perf_utils, tmp_path
-    ):
-        fp = self._write(
-            tmp_path,
-            [
-                {"requests": {"successful": [{}, {}]}},
-                {"requests": {"successful": [{}], "errored": [{}]}},
+    def test_sums_across_benchmarks_and_tolerates_missing_totals(self, perf_utils):
+        data = {
+            "benchmarks": [
+                {"metrics": {"request_totals": {"successful": 2}}},
+                {"metrics": {"request_totals": {"successful": 1, "errored": 1}}},
                 {},
-            ],
-        )
-        assert perf_utils.parse_request_counts(fp) == {
-            "requests_ok": 3,
+            ]
+        }
+        assert perf_utils.parse_request_counts(data) == {
+            "requests_successful": 3,
             "requests_errored": 1,
             "requests_incomplete": 0,
         }
 
-    def test_counts_join_the_acceptance_columns_when_present(self, perf_utils):
-        spec = {"num_drafts": 1.0, "acceptance_length": 2.0, "requests_ok": 5}
-        cols = perf_utils.acceptance_csv_columns(spec)
-        assert cols[0] == "requests_ok"
-        assert "requests_errored" not in cols
-        assert perf_utils.acceptance_csv_columns({"num_drafts": 1.0})[0] == "num_drafts"
+    def test_counts_lead_the_acceptance_columns(self, perf_utils):
+        cols = perf_utils.acceptance_csv_columns({"num_drafts": 1.0})
+        assert cols[:3] == list(perf_utils.REQUEST_COUNT_COLUMNS)
+        assert cols[3] == "num_drafts"
