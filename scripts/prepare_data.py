@@ -2,10 +2,16 @@
 """
 Prepare data for speculator training
 
-This script processes an input dataset and:
-1. Applies chat template + tokenizes each sample
-2. Produces a loss/assistant mask for each sample
+Accepted inputs contain responses produced by the target model, either as
+natural-language conversations or as speculator-format ``input_ids`` and
+``loss_mask`` rows. For natural-language input this script:
+
+1. Uses the target model's vLLM endpoint to render each conversation
+2. Derives a loss mask from each assistant-turn boundary
 3. Records token frequency statistics
+
+Rendering converts an existing on-policy conversation into speculator format.
+It does not generate responses or make an arbitrary conversation on-policy.
 
 The output of this script is:
 1. Processed dataset ready for online training or offline datagen in output_dir
@@ -17,7 +23,8 @@ Token frequencies are saved in the output directory by default.
 Usage:
     python prepare_data.py \
         --model meta-llama/Llama-3.1-8B-Instruct \
-        --data sharegpt \
+        --data ./on_policy_conversations.jsonl \
+        --render-endpoint http://localhost:8000 \
         --output ./training_data \
         --max-samples 5000
 """

@@ -351,10 +351,10 @@ def _warn_seq_length(num_unsupervised: int, num_clipped: int) -> None:
 def _passthrough_pretokenized(
     examples: dict, max_length: int, minimum_valid_tokens: int | None = None
 ) -> dict[str, list]:
-    """Carry pre-tokenized ``(input_ids, loss_mask)`` rows through, truncated only.
+    """Carry speculator-format ``(input_ids, loss_mask)`` rows through.
 
-    On-policy regeneration already applied the boundary as the mask, so these rows
-    need no rendering.
+    The producer already recorded which target-model tokens are supervised, so
+    these rows only need truncation and filtering.
     """
     results: dict[str, list] = {"input_ids": [], "loss_mask": [], "seq_len": []}
     num_unsupervised = 0
@@ -383,10 +383,10 @@ def _preprocess_batch(
     max_length: int,
     minimum_valid_tokens: int | None = None,
 ) -> dict[str, list]:
-    """Process a batch of conversations into tokenized rows with boundary masks."""
+    """Convert on-policy conversations or speculator-format rows for training."""
 
-    # On-policy regeneration rows are already masked (boundary); pass them through
-    # instead of re-rendering.
+    # Speculator-format rows already carry their supervision mask; pass them
+    # through instead of re-rendering.
     if "input_ids" in examples and "loss_mask" in examples:
         return _passthrough_pretokenized(examples, max_length, minimum_valid_tokens)
 
@@ -493,24 +493,26 @@ def build_speculator_training_dataset(
 ) -> HFDataset:
     """Build a speculator training dataset with render-boundary loss masks.
 
-    Off-policy conversations are tokenized by the vLLM ``/render`` endpoint and
-    masked at the render boundary of each assistant turn (see
-    ``_render_boundary_rows``), fanning out to one row per assistant turn.
-    Pre-tokenized rows (on-policy regeneration) carry their own boundary mask
-    and pass straight through.
+    Both accepted representations contain responses produced by the target
+    model. Natural-language conversations are tokenized by the vLLM ``/render``
+    endpoint and masked at each assistant-turn boundary, fanning out to one row
+    per assistant turn. Rendering only converts representation; it does not
+    generate responses or make arbitrary data on-policy. Speculator-format rows
+    already carry ``input_ids`` and ``loss_mask`` and pass straight through.
 
     Args:
-        dataset: Raw dataset with conversations, or pre-tokenized rows.
+        dataset: On-policy natural-language conversations, or speculator-format
+            rows containing ``input_ids`` and ``loss_mask``.
         processor: Processor, used to detect multimodal inputs and to decode.
         max_length: Maximum sequence length.
         num_proc: Number of worker processes; each renders concurrently.
         render_endpoint: Base URL of a vLLM server. Required unless the dataset
-            is already pre-tokenized.
+            is already in speculator format.
         minimum_valid_tokens: Minimum supervised tokens for a row to be kept.
     """
     original_cols = dataset.column_names
-    # These rows carry the generation boundary as their mask, so _preprocess_batch
-    # passes them through: no rendering, no boundary derivation.
+    # These rows carry their supervision mask, so _preprocess_batch passes them
+    # through without rendering or boundary derivation.
     pretokenized = {"input_ids", "loss_mask"} <= set(original_cols)
     # Multimodal rows keep their `messages` so the images survive to hidden-state
     # extraction. Compute once here rather than pickling the heavyweight processor
@@ -698,8 +700,10 @@ def load_and_preprocess_dataset(
 ) -> tuple[HFDataset, ProcessorLike]:
     """Load, tokenize, and preprocess a dataset for speculator training.
 
-    Off-policy conversations are tokenized by a vLLM ``/render`` endpoint and
-    masked at the render boundary; pre-tokenized rows pass straight through.
+    Natural-language conversations containing target-model responses are
+    tokenized by a vLLM ``/render`` endpoint and masked at each assistant-turn
+    boundary. Speculator-format rows pass straight through. Rendering converts
+    representation; it does not generate or validate response provenance.
     Caching is handled automatically by HuggingFace datasets.
 
     Args:
@@ -713,7 +717,7 @@ def load_and_preprocess_dataset(
         cache_dir: Directory to cache HuggingFace datasets (optional)
         render_endpoint: Base URL of a running vLLM server (e.g.
             ``http://localhost:8000``) used to render conversations. Required
-            unless every dataset is already pre-tokenized.
+            unless every dataset is already in speculator format.
         minimum_valid_tokens: Number of tokens to consider for a valid sample
         allow_empty_output: If True, allow returning an empty dataset instead of
                           raising when no samples survive preprocessing.

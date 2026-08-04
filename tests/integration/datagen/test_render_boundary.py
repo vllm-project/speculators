@@ -21,7 +21,7 @@ from speculators.data_generation.preprocessing import (
 from speculators.data_generation.vllm_client import InvalidResponseError
 
 # Neither build path below reads the processor: the missing-endpoint guard
-# raises before it is used, and pre-tokenized rows skip preprocessing entirely.
+# raises before it is used, and speculator-format rows skip rendering entirely.
 NO_PROCESSOR = cast("ProcessorLike", None)
 
 
@@ -194,8 +194,8 @@ def test_build_speculator_training_dataset_requires_render_endpoint():
 
 
 def test_pretokenized_dataset_skips_render():
-    # The load-bearing contract: on-policy pre-tokenized rows build without a
-    # render endpoint. Passthrough content (ids/mask) is covered by the regen
+    # The load-bearing contract: speculator-format rows build without a render
+    # endpoint. Passthrough content (ids/mask) is covered by the regeneration
     # tests in test_response_regeneration.py.
     data = {"input_ids": [[1, 2, 3, 4]], "loss_mask": [[0, 0, 1, 1]]}
     ds = build_speculator_training_dataset(
