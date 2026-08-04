@@ -17,7 +17,7 @@
 # is learning something. This is a good sanity check when creating a drafter for a new
 # target model.
 
-# Experiments on 6x Ascend 910B 64GB NPUs, DP=2
+# Experiments on 4x Ascend 910B 64GB NPUs, DP=2
 
 set -euo pipefail
 
@@ -93,7 +93,7 @@ ASCEND_RT_VISIBLE_DEVICES="$TRAIN_NPUS" torchrun \
     --max-anchors "$MAX_ANCHORS" \
     --num-layers "$NUM_LAYERS" \
     --target-layer-ids $TARGET_LAYER_IDS \
-    --draft-attn-impl sdpa \
+    --draft-attn-impl sdpa \   # FlexAttention not available on Ascend NPU
     --on-missing generate \
     --on-generate delete
 
