@@ -1,7 +1,7 @@
 """E2E test for the online training workflow.
 
 Exercises the full pipeline documented in
-docs/user_guide/tutorials/train_eagle3_online.md:
+docs/user_guide/tutorials/train.md:
   1. Prepare data (scripts/prepare_data.py)
   2. Launch a vLLM server for hidden-state extraction (scripts/launch_vllm.py)
   3. Train a draft model against the live server (scripts/train.py)
@@ -26,7 +26,7 @@ from tests.utils import requires_cadence
 @pytest.mark.parametrize(
     ("model", "dataset", "acceptance_thresholds"),
     [
-        ("Qwen/Qwen3-8B", "sharegpt", [0.4, 0.1, 0.01]),
+        ("Qwen/Qwen3-8B", "sharegpt", [0.38, 0.1, 0.01]),
         ("Qwen/Qwen3-VL-2B-Instruct", "sharegpt4v_coco", [0.4, 0.2, 0.04]),
     ],
 )

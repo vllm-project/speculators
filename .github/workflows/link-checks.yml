@@ -31,7 +31,7 @@ jobs:
         uses: lycheeverse/lychee-action@v2
         with:
           fail: false
-          args: --root-dir "$(pwd)/docs" --verbose --no-progress './docs/**/*.md'
+          args: --root-dir "$(pwd)/docs" --verbose --no-progress './docs/**/*.md' --accept 100..=103,200..=299,429
       - name: (DOCS) Find existing comment
         if: github.event.pull_request.head.repo.full_name == github.repository
         uses: peter-evans/find-comment@v4
@@ -84,7 +84,7 @@ jobs:
         uses: lycheeverse/lychee-action@v2
         with:
           fail: false
-          args: --root-dir "$(pwd)" --verbose --no-progress --exclude-path 'docs' './**/*.md'
+          args: --root-dir "$(pwd)" --verbose --no-progress --exclude-path 'docs' './**/*.md' --accept 100..=103,200..=299,429
       - name: (REPO) Find existing comment
         if: github.event.pull_request.head.repo.full_name == github.repository
         uses: peter-evans/find-comment@v4
