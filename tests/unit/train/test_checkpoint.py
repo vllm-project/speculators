@@ -347,9 +347,13 @@ def test_optimizer_state_round_trips_at_full_precision(tmp_path):
     restored = resumed_optimizer.state_dict()
     for param_id, state in reference["state"].items():
         restored_state = restored["state"][param_id]
-        assert torch.equal(restored_state["step"], state["step"])
+        # load_optimizer_state_dict maps onto the current accelerator, so on a GPU
+        # host the restored tensors live on cuda while the reference is on cpu.
+        # Compare on cpu: this test is about dtype and value, not placement.
+        assert torch.equal(restored_state["step"].cpu(), state["step"].cpu())
         for key in ("exp_avg", "exp_avg_sq"):
-            assert torch.equal(restored_state[key], state[key])
+            assert restored_state[key].dtype == state[key].dtype
+            assert torch.equal(restored_state[key].cpu(), state[key].cpu())
 
 
 def test_legacy_bf16_optimizer_step_is_restored_to_float32(tmp_path):
