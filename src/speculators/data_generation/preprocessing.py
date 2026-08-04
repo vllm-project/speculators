@@ -364,7 +364,7 @@ def _passthrough_pretokenized(
         # packs each key independently and would shift the mask silently.
         if len(ids) != len(mask):
             raise ValueError(
-                f"Pre-tokenized row shape mismatch: "
+                f"Speculator-format row shape mismatch: "
                 f"input_ids={len(ids)}, loss_mask={len(mask)}"
             )
         status = _append_row(results, ids, mask, max_length, minimum_valid_tokens)
@@ -392,8 +392,8 @@ def _preprocess_batch(
 
     if render_endpoint is None:
         raise ValueError(
-            "render_endpoint is required to derive loss masks for off-policy "
-            "conversations"
+            "render_endpoint is required to convert natural-language "
+            "conversations to speculator training rows"
         )
 
     results: dict[str, list] = {"input_ids": [], "loss_mask": [], "seq_len": []}
@@ -520,11 +520,12 @@ def build_speculator_training_dataset(
     is_multimodal = isinstance(processor, ProcessorMixin)
 
     if pretokenized:
-        log.info("Pre-tokenized rows: using their loss mask, skipping render")
+        log.info("Speculator-format rows: using their loss mask, skipping render")
     elif render_endpoint is None:
         raise ValueError(
-            "render_endpoint is required to derive loss masks for off-policy "
-            "conversations. Pass --render-endpoint pointing at a vLLM server."
+            "render_endpoint is required to convert natural-language "
+            "conversations to speculator training rows. Pass --render-endpoint "
+            "pointing at the target model's vLLM server."
         )
     else:
         log.info("Deriving loss masks from vLLM render boundaries")

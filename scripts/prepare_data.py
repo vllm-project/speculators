@@ -108,7 +108,11 @@ def parse_args():
         type=str,
         action="append",
         required=True,
-        help="Path to training data (same as used in preprocessing)",
+        help=(
+            "On-policy target-model data as natural-language conversations or "
+            "speculator-format input_ids/loss_mask rows. Assistant responses "
+            "must come from the target model; this command does not generate them."
+        ),
     )
     parser.add_argument(
         "--seq-length",
@@ -142,8 +146,9 @@ def parse_args():
             "/v1/chat/completions/render is appended to it, so the "
             "/v1-suffixed form that data_generation_offline.py --endpoint "
             "takes will 404. Conversations are tokenized by that endpoint and "
-            "the loss mask is derived from the render boundary. Required "
-            "unless every --data input is already pre-tokenized."
+            "the loss mask is derived from the render boundary. Rendering does "
+            "not generate responses or make arbitrary data on-policy. Required "
+            "unless every --data input already contains input_ids and loss_mask."
         ),
     )
 
