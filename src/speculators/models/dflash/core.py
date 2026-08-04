@@ -1,4 +1,5 @@
 import logging
+from copy import deepcopy
 from typing import ClassVar
 
 import torch
@@ -98,10 +99,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         rotary_config = config.transformer_layer_config
         rope_params = getattr(rotary_config, "rope_parameters", None)
         if rope_params and "sliding_attention" in rope_params:
-            # Laguna-style nested per-layer-type rope_parameters — flatten to
-            # the sliding_attention variant (all DFlash draft layers use it).
-            from copy import deepcopy  # noqa: PLC0415
-
+            # Flatten nested rope_parameters to the sliding_attention variant.
             rotary_config = deepcopy(rotary_config)
             rotary_config.rope_parameters = rope_params["sliding_attention"]
         self.rotary_emb = Qwen3RotaryEmbedding(rotary_config)  # type: ignore[arg-type]
