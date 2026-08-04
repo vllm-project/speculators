@@ -305,6 +305,37 @@ def _parse_conv_tools(conv_tools: object, idx: int) -> list | None:
         return None
 
 
+def _render_conversation_rows(
+    conv: list[dict],
+    conv_tools: object,
+    idx: int,
+    render_endpoint: str,
+    max_length: int,
+) -> list[BoundaryRow] | None:
+    """Render one valid conversation; return ``None`` when it is unusable."""
+    if not conv or not isinstance(conv, list):
+        return None
+
+    normalized_conv = _normalize_conversation(conv)
+    if not normalized_conv:
+        return None
+
+    parsed_tools = _parse_conv_tools(conv_tools, idx)
+    try:
+        return _render_boundary_rows(
+            normalized_conv,
+            render_endpoint,
+            max_length,
+            tools=parsed_tools,
+        )
+    # One row the render endpoint or boundary derivation can't handle must
+    # not kill the run. The failure modes can't be enumerated -- templates
+    # are swappable and raise arbitrary types -- so catch broadly and skip.
+    except Exception as e:
+        log.error(f"Failed to process conversation {idx}: {type(e).__name__}: {e}")
+        return []
+
+
 def _append_row(
     results: dict[str, list],
     input_ids: list[int],
@@ -328,6 +359,37 @@ def _append_row(
     results["loss_mask"].append(torch.tensor(loss_mask, dtype=torch.long))
     results["seq_len"].append(len(input_ids))
     return "kept"
+
+
+def _append_boundary_rows(
+    results: dict[str, list],
+    rows: list[BoundaryRow],
+    max_length: int,
+    minimum_valid_tokens: int | None,
+) -> tuple[int, int, int]:
+    """Append rendered rows and return kept, unsupervised, and clipped counts."""
+    num_kept = 0
+    num_unsupervised = 0
+    num_clipped = 0
+
+    for row in rows:
+        status = _append_row(
+            results,
+            row["input_ids"],
+            row["loss_mask"],
+            max_length,
+            minimum_valid_tokens,
+        )
+        num_unsupervised += status == "unsupervised"
+        # Kept-but-truncated only: a row clipped past its boundary reports
+        # as unsupervised above, and would otherwise be counted twice.
+        num_clipped += status == "kept" and len(row["input_ids"]) > max_length
+        if status == "kept":
+            num_kept += 1
+            if "messages" in results:
+                results["messages"].append(_adapt_conv_for_vllm(row["conv"]))
+
+    return num_kept, num_unsupervised, num_clipped
 
 
 def _warn_seq_length(num_unsupervised: int, num_clipped: int) -> None:
@@ -423,49 +485,25 @@ def _preprocess_batch(
 
     for idx, conv in enumerate(conversations):
         conv_tools = tools_col[idx] if tools_col is not None else None
-
-        if not conv or not isinstance(conv, list):
+        rows = _render_conversation_rows(
+            conv,
+            conv_tools,
+            idx,
+            render_endpoint,
+            max_length,
+        )
+        if rows is None:
             continue
 
-        normalized_conv = _normalize_conversation(conv)
-        if not normalized_conv:
-            continue
-
-        parsed_tools = _parse_conv_tools(conv_tools, idx)
         num_convs_in += 1
-
-        try:
-            rows = _render_boundary_rows(
-                normalized_conv,
-                render_endpoint,
-                max_length,
-                tools=parsed_tools,
-            )
-        # One row the render endpoint or boundary derivation can't handle must
-        # not kill the run. The failure modes can't be enumerated -- templates
-        # are swappable and raise arbitrary types -- so catch broadly and skip.
-        except Exception as e:
-            log.error(f"Failed to process conversation {idx}: {type(e).__name__}: {e}")
-            num_convs_empty += 1
-            continue
-
-        num_kept = 0
-        for row in rows:
-            status = _append_row(
-                results,
-                row["input_ids"],
-                row["loss_mask"],
-                max_length,
-                minimum_valid_tokens,
-            )
-            num_unsupervised += status == "unsupervised"
-            # Kept-but-truncated only: a row clipped past its boundary reports
-            # as unsupervised above, and would otherwise be counted twice.
-            num_clipped += status == "kept" and len(row["input_ids"]) > max_length
-            if status == "kept":
-                num_kept += 1
-                if "messages" in results:
-                    results["messages"].append(_adapt_conv_for_vllm(row["conv"]))
+        num_kept, row_unsupervised, row_clipped = _append_boundary_rows(
+            results,
+            rows,
+            max_length,
+            minimum_valid_tokens,
+        )
+        num_unsupervised += row_unsupervised
+        num_clipped += row_clipped
         num_convs_empty += num_kept == 0
 
     _warn_seq_length(num_unsupervised, num_clipped)
