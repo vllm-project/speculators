@@ -189,7 +189,7 @@ def test_extract_conversation_no_usable_input_returns_empty():
 
 
 # ---------------------------------------------------------------------------
-# 2. The generation boundary is the loss mask; pre-tokenized rows pass through.
+# 2. The generation boundary is the loss mask; speculator-format rows pass through.
 # ---------------------------------------------------------------------------
 
 
@@ -200,8 +200,9 @@ def test_build_boundary_sample_is_the_mask():
 
 
 def test_pretokenized_rows_pass_through_preprocessing():
-    # A regen row reaches training already masked: no processor, no re-masking,
-    # and the review-only `conversations` field is dropped.
+    # A speculator-format regeneration row reaches training already masked: no
+    # processor, no re-masking, and the review-only `conversations` field is
+    # dropped.
     input_ids, loss_mask = regen.build_boundary_sample([10, 11, 12], [20, 21])
     out = _preprocess_batch(
         {
