@@ -80,18 +80,19 @@ def test_normalize_conversation_with_system():
 
 @pytest.mark.sanity
 def test_normalize_conversation_unknown_role():
-    """Test that unknown roles are skipped with warning."""
+    """Test that unknown roles are mapped to assistant."""
     conv = [
         {"role": "user", "content": "Hello"},
-        {"role": "unknown", "content": "Should be skipped"},
+        {"role": "laguna_s", "content": "On-policy response"},
         {"role": "assistant", "content": "Hi!"},
     ]
     result = _normalize_conversation(conv)
 
-    # Unknown role should be skipped
-    assert len(result) == 2
+    assert len(result) == 3
     assert result[0]["role"] == "user"
     assert result[1]["role"] == "assistant"
+    assert result[1]["content"] == "On-policy response"
+    assert result[2]["role"] == "assistant"
 
 
 @pytest.mark.sanity
