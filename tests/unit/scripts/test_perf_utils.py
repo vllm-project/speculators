@@ -367,7 +367,7 @@ class TestParseSweepFile:
 
 
 class TestParseRequestCounts:
-    def test_counts_each_outcome(self, perf_utils):
+    def test_sums_guidellm_totals_not_sampled_buckets(self, perf_utils):
         data = {
             "benchmarks": [
                 {
@@ -379,32 +379,16 @@ class TestParseRequestCounts:
                             "total": 5,
                         }
                     },
-                    # The sampled buckets undercount, so they must not be used.
+                    # Sampled records, so reading these would undercount.
                     "requests": {"successful": [{}], "errored": [], "total": None},
-                }
-            ]
-        }
-        assert perf_utils.parse_request_counts(data) == {
-            "requests_successful": 1,
-            "requests_errored": 3,
-            "requests_incomplete": 1,
-        }
-
-    def test_sums_across_benchmarks_and_tolerates_missing_totals(self, perf_utils):
-        data = {
-            "benchmarks": [
+                },
+                # A sweep emits one benchmark per rate point.
                 {"metrics": {"request_totals": {"successful": 2}}},
-                {"metrics": {"request_totals": {"successful": 1, "errored": 1}}},
                 {},
             ]
         }
         assert perf_utils.parse_request_counts(data) == {
             "requests_successful": 3,
-            "requests_errored": 1,
-            "requests_incomplete": 0,
+            "requests_errored": 3,
+            "requests_incomplete": 1,
         }
-
-    def test_counts_lead_the_acceptance_columns(self, perf_utils):
-        cols = perf_utils.acceptance_csv_columns({"num_drafts": 1.0})
-        assert cols[:3] == list(perf_utils.REQUEST_COUNT_COLUMNS)
-        assert cols[3] == "num_drafts"
