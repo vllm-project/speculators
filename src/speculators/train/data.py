@@ -1,7 +1,3 @@
-import json
-import math
-import os
-import random
 import warnings
 from collections.abc import Callable, Sequence
 from os import PathLike
@@ -24,37 +20,6 @@ from speculators.data_generation.vllm_client import (
 from speculators.train.noise_transforms import TransformTensors
 
 BatchType = dict[str, Any]
-
-
-def list_files(path):
-    datapath = []
-    for root, _directories, files in os.walk(path):
-        for file in files:
-            if not file.endswith("pt"):
-                continue
-            file_path = Path(root) / file
-            datapath.append(file_path)
-
-    return datapath
-
-
-def split_files(datapath: str, ratio: float = 0.9, seed: int = 0):
-    """Given a datapath, split the files into a training and validation set
-    ratio is the proportion of files to put in the training set
-    1 - ratio is the proportion of files to put in the validation set
-    """
-    random.seed(seed)
-    file_list = list_files(datapath)
-    random.shuffle(file_list)
-    num_files = len(file_list)
-    num_train_files = int(num_files * ratio)
-    train_files = file_list[:num_train_files]
-    val_files = file_list[num_train_files:]
-    return train_files, val_files
-
-
-# Data standardization functions
-StandardizeFnSig = Callable[[dict[str, Any]], dict[str, Any]]
 
 
 def create_empty_sample(
@@ -80,27 +45,6 @@ def create_empty_sample(
         "loss_mask": torch.empty(0, dtype=torch.bool),
         "lengths": torch.tensor([0], dtype=torch.long),
         "position_ids": torch.arange(0, dtype=torch.long),
-    }
-
-
-def standardize_data_v1(data: dict[str, Any]) -> dict[str, Any]:
-    # v1 data format:
-    # {
-    #  "input_ids": [seq_len],
-    #  "loss_mask": [seq_len],
-    #  "hidden_states": [
-    #    [seq_len, hidden_size],
-    #    [seq_len, hidden_size],
-    #    [seq_len, hidden_size],
-    #    ...
-    #  ],
-    # }
-
-    return {
-        "hidden_states": torch.cat(data["hidden_states"][:-1], dim=-1),
-        "input_ids": data["input_ids"],
-        "verifier_last_hidden_states": data["hidden_states"][-1],
-        "loss_mask": data["loss_mask"],
     }
 
 
@@ -359,103 +303,6 @@ class ArrowDataset(BaseDataset):
             ],  # [seq_len, hidden_size]
             "loss_mask": self.data[index]["loss_mask"],  # [seq_len]
         }
-
-
-class SampleFileDataset(BaseDataset):
-    def __init__(
-        self,
-        max_len: int,
-        datapath: str | None = None,
-        file_list: list[str] | None = None,
-        transform: TransformTensors | None = None,
-        hidden_states_dtype: torch.dtype = torch.bfloat16,
-    ):
-        """Initialize the SampleFileDataset.
-        Args:
-            max_len: The maximum length of the sequence.
-            datapath: The path to the data directory. All `.pt` files in this directory
-            or its subdirectories will be loaded and used as training data. MUTUALLY
-            EXCLUSIVE with `file_list`.
-            file_list: The list of explict file paths to load data from. These files
-            must be in the format produced by the Speculators generation scripts.
-            MUTUALLY EXCLUSIVE with `datapath`.
-            transform: The transform to apply to the data.
-            hidden_states_dtype: The dtype of the hidden states.
-            standardize_fn: The function to standardize the data.
-
-            Note: datapath or file_list must be provided, but not both.
-
-        """
-
-        if datapath is not None and file_list is not None:
-            raise ValueError(
-                "Either `datapath` or `file_list` must be provided, but "
-                "not both. Use `datapath` to auto-discover files, or "
-                "`file_list` to use a list of explicit file paths."
-            )
-
-        if datapath is not None:
-            file_list = list_files(datapath)
-
-        if file_list is None:
-            raise ValueError(
-                "Either `datapath` or `file_list` must be provided, but "
-                "not both. Use `datapath` to auto-discover files, or "
-                "`file_list` to use a list of explicit file paths."
-            )
-
-        self.data: list[str] = file_list
-
-        # Delay super init so that `_compute_approx_lengths` has required data
-        super().__init__(max_len, transform, hidden_states_dtype)
-
-    def __len__(self):
-        return len(self.data)
-
-    def _compute_approx_lengths(self) -> list[int]:
-        """Get lengths of the dataset samples.
-
-        First tries to load exact lengths from sample_lengths.json if available.
-        Falls back to approximation based on file sizes.
-        """
-        # Look for the sample_lengths.json file
-        sample_lengths_path = Path(self.data[0]).parent / "sample_lengths.json"
-        if sample_lengths_path.exists():
-            try:
-                with sample_lengths_path.open() as f:
-                    sample_lengths = json.load(f)
-                # Extract file index from filename (e.g., data_42.pt -> 42)
-                lengths = []
-                for fname in self.data:
-                    file_stem = Path(fname).stem
-                    file_idx = file_stem.split("_")[-1]
-                    lengths.append(sample_lengths[file_idx])
-                return lengths
-            except (KeyError, ValueError):
-                pass
-
-        # Fallback: approximate lengths from file sizes
-        item_0 = self.__getitem__(0)
-        if item_0 is None:
-            raise ValueError(
-                "Failed to load first element of datasets for length approximation"
-            )
-        lengths_0 = item_0["lengths"]
-        # this is a single sample so there is only one length
-        lengths_0 = lengths_0[0].item()
-        size_0 = Path(self.data[0]).stat().st_size
-
-        return [
-            math.ceil(Path(fname).stat().st_size / size_0 * lengths_0)
-            for fname in self.data
-        ]
-
-    def _get_raw_data(self, index):
-        return standardize_data_v1(
-            torch.load(
-                self.data[index], mmap=True, weights_only=True, map_location="cpu"
-            )
-        )
 
 
 class CollateFn:
