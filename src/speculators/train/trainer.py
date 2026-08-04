@@ -392,6 +392,20 @@ class Trainer:
                     "global_step reads 0 and the schedule restarts from warmup."
                 )
             self.checkpointer.load_scheduler_state_dict(self.schedulers)
+            self._sync_optimizer_lrs_from_schedulers()
+
+    def _sync_optimizer_lrs_from_schedulers(self) -> None:
+        """Write each scheduler's restored LR back into its optimizer.
+
+        ``LRScheduler.load_state_dict`` restores the scheduler's own counters but
+        never touches the optimizer's param groups. When the two disagree (a
+        checkpoint without ``training_state.json`` seeds ``global_step=0``, so the
+        constructor leaves the LR at warmup step 0), the first resumed optimizer
+        step would otherwise run at that stale LR.
+        """
+        for sched, opt in zip(self.schedulers, self.optimizers, strict=True):
+            for group, lr in zip(opt.param_groups, sched.get_last_lr(), strict=True):
+                group["lr"] = lr
 
     def _optimizers_zero_grad(self):
         for opt in self.optimizers:

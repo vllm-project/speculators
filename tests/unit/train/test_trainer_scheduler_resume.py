@@ -65,8 +65,41 @@ def test_scheduler_resume_seed_uses_global_step():
         reference_opt, num_warmup_steps=100, num_training_steps=1000
     )
     for _ in range(RESUMED_GLOBAL_STEP):
+        # Optimizer first, matching train_epoch's order (and PyTorch's).
+        reference_opt.step()
         reference.step()
     assert scheduler.get_last_lr() == reference.get_last_lr()
+
+
+def test_resumed_scheduler_state_is_pushed_into_the_optimizer():
+    """A checkpoint that carries scheduler state but no training_state.json
+    resumes with global_step=0, so the scheduler is constructed at warmup step 0
+    (LR 0). load_state_dict restores the scheduler's counters but not the
+    optimizer's param groups, so the LR must be written back explicitly."""
+    trainer = _make_trainer()
+    trainer.global_step = 0
+
+    donor_model = nn.Linear(4, 4)
+    donor_opt = torch.optim.AdamW(donor_model.parameters(), lr=1e-3)
+    donor = get_linear_schedule_with_warmup(
+        donor_opt, num_warmup_steps=100, num_training_steps=1000
+    )
+    for _ in range(RESUMED_GLOBAL_STEP):
+        donor_opt.step()
+        donor.step()
+    saved_state = donor.state_dict()
+
+    def _load(schedulers):
+        for sched in schedulers:
+            sched.load_state_dict(saved_state)
+
+    trainer.checkpointer.load_scheduler_state_dict = _load
+    trainer.setup_optimizer()
+
+    (scheduler,) = trainer.schedulers
+    (optimizer,) = trainer.optimizers
+    assert scheduler.get_last_lr() == donor.get_last_lr()
+    assert [g["lr"] for g in optimizer.param_groups] == donor.get_last_lr()
 
 
 def test_scheduler_fresh_run_still_starts_at_minus_one():
