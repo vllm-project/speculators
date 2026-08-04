@@ -331,6 +331,15 @@ class SingleGPUCheckpointer(BaseCheckpointer):
         for opt, state_dict in zip(optimizers, loaded_list, strict=True):
             opt.load_state_dict(state_dict)
 
+        # Cast step counters back to float32 (repairs legacy checkpoints that
+        # were saved with bf16-converted optimizer state). The non-capturable
+        # loader returns "step" in its saved dtype, so a bf16 counter would keep
+        # rounding its in-place increments and corrupt bias correction.
+        for opt in optimizers:
+            for state in opt.state.values():
+                if "step" in state and isinstance(state["step"], torch.Tensor):
+                    state["step"] = state["step"].float()
+
     @_rank0_only
     def save_checkpoint(
         self,

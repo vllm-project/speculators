@@ -350,3 +350,31 @@ def test_optimizer_state_round_trips_at_full_precision(tmp_path):
         assert torch.equal(restored_state["step"], state["step"])
         for key in ("exp_avg", "exp_avg_sq"):
             assert torch.equal(restored_state[key], state[key])
+
+
+def test_legacy_bf16_optimizer_step_is_restored_to_float32(tmp_path):
+    """A checkpoint written by the previous bf16 save path stores "step" in
+    bf16. The non-capturable loader keeps that dtype, so in-place increments
+    would round once the count is large. The load path must repair it."""
+    model = _TinyOptimModel()
+    optimizer = _stepped_optimizer(model)
+
+    checkpointer = SingleGPUCheckpointer(tmp_path)
+    checkpointer.save_checkpoint(model, optimizer, epoch=0)
+
+    # Rewrite the saved file the way the old bf16-casting save path would have.
+    legacy = torch.load(
+        checkpointer.optimizer_path(0), weights_only=True, map_location="cpu"
+    )
+    for state in legacy["state"].values():
+        state["step"] = state["step"].to(torch.bfloat16)
+    torch.save(legacy, checkpointer.optimizer_path(0))
+
+    resumed_model = _TinyOptimModel()
+    resumed_optimizer = torch.optim.AdamW(resumed_model.parameters(), lr=1e-3)
+    SingleGPUCheckpointer(tmp_path).load_optimizer_state_dict(
+        resumed_model, resumed_optimizer
+    )
+
+    for state in resumed_optimizer.state.values():
+        assert state["step"].dtype == torch.float32
