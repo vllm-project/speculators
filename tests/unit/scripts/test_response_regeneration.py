@@ -855,7 +855,7 @@ def test_regenerate_truncates_on_tool_name_mismatch():
 
 
 # ---------------------------------------------------------------------------
-# 6. Every shared-registry preset works on-policy (off-policy parity).
+# 6. Every text-only shared-registry preset works in on-policy regeneration.
 # ---------------------------------------------------------------------------
 
 
