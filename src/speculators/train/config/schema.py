@@ -286,6 +286,21 @@ class GenerationArgs(_Group):
         description="Maximum retry attempts per vLLM request on failure. Only applies "
         "if --on-missing=generate.",
     )
+    generation_validation_retries: int = Field(
+        default=2,
+        ge=0,
+        description="Number of additional complete generate/load/validate attempts "
+        "after a corrupt, missing, non-finite, or otherwise invalid hidden-state "
+        "payload. HTTP retries within each generation remain controlled by "
+        "--max-retries.",
+    )
+    max_consecutive_generation_failures: int = Field(
+        default=20,
+        gt=0,
+        description="Trip the data-generation circuit breaker after this many "
+        "consecutive failed complete round trips in one persistent DataLoader "
+        "worker. Successful validation resets the counter.",
+    )
 
 
 class LossArgs(_Group):

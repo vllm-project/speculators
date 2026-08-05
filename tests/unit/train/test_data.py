@@ -2,14 +2,17 @@
 
 from pathlib import Path
 
+import pytest
 import torch
 from datasets import Dataset
 from safetensors.torch import save_file
 
+import speculators.train.data as data_module
 from speculators.models.eagle3.data import shift_batch
 from speculators.train.data import (
     ArrowDataset,
     CollateFn,
+    GenerationFailure,
 )
 
 
@@ -263,3 +266,201 @@ def test_arrow_dataset_on_generate_cache_creates_hidden_states_dir(tmp_path: Pat
     assert arrow_ds.transfer.hidden_states_path.is_dir()
     # And the cached file should exist
     assert (arrow_ds.transfer.hidden_states_path / "hs_0.safetensors").exists()
+
+
+def test_arrow_dataset_can_raise_generation_errors(tmp_path: Path, monkeypatch):
+    ds = Dataset.from_dict(
+        {
+            "input_ids": [[1, 2, 3]],
+            "loss_mask": [[1, 1, 1]],
+            "seq_len": [3],
+        }
+    )
+    ds.save_to_disk(str(tmp_path / "data"))
+    arrow_ds = ArrowDataset(
+        max_len=128,
+        datapath=str(tmp_path / "data"),
+        generation_validation_retries=0,
+        raise_on_generate_error=True,
+    )
+    arrow_ds.data.set_format(type="torch")
+    arrow_ds.client = object()  # type: ignore[assignment]
+    arrow_ds.model = "model"
+
+    def fail_generation(*_args, **_kwargs):
+        raise ValueError("corrupt Mooncake metadata")
+
+    monkeypatch.setattr(data_module, "generate_hidden_states", fail_generation)
+
+    with pytest.raises(RuntimeError, match="dataset index 0"):
+        arrow_ds._maybe_generate_hs(0)
+
+
+class _SequenceTransfer:
+    """Minimal transfer fake which returns or raises queued generated results."""
+
+    def __init__(self, generated_results):
+        self.generated_results = list(generated_results)
+        self.deleted: list[str] = []
+
+    def setup(self):
+        return None
+
+    def get_cached(self, _file_idx):
+        return None
+
+    def get_generated(self, _handle):
+        result = self.generated_results.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    def delete(self, handle):
+        self.deleted.append(handle)
+
+    def cache(self, _handle, _file_idx):
+        return None
+
+
+def _make_generation_dataset(
+    tmp_path: Path,
+    transfer: _SequenceTransfer,
+    **kwargs,
+) -> ArrowDataset:
+    ds = Dataset.from_dict(
+        {
+            "input_ids": [[1, 2, 3]],
+            "loss_mask": [[1, 1, 1]],
+            "seq_len": [3],
+        }
+    )
+    ds.save_to_disk(str(tmp_path / "data"))
+    arrow_ds = ArrowDataset(
+        max_len=8,
+        datapath=str(tmp_path / "data"),
+        transfer=transfer,  # type: ignore[arg-type]
+        **kwargs,
+    )
+    arrow_ds.data.set_format(type="torch")
+    arrow_ds.client = object()  # type: ignore[assignment]
+    arrow_ds.model = "model"
+    return arrow_ds
+
+
+def _valid_generated_sample() -> dict[str, torch.Tensor]:
+    return {
+        "hidden_states": torch.ones(3, 2, 4, dtype=torch.bfloat16),
+        "token_ids": torch.tensor([1, 2, 3], dtype=torch.long),
+    }
+
+
+def test_arrow_dataset_retries_nonfinite_read_then_recovers(tmp_path, monkeypatch):
+    corrupt = _valid_generated_sample()
+    corrupt["hidden_states"][1, 0, 0] = float("nan")
+    transfer = _SequenceTransfer([corrupt, _valid_generated_sample()])
+    arrow_ds = _make_generation_dataset(
+        tmp_path,
+        transfer,
+        generation_validation_retries=1,
+    )
+    handles = iter(["bad-handle", "good-handle"])
+    monkeypatch.setattr(
+        data_module,
+        "generate_hidden_states",
+        lambda *_args, **_kwargs: next(handles),
+    )
+
+    with pytest.warns(UserWarning, match="non-finite"):
+        item = arrow_ds[0]
+
+    assert isinstance(item, dict)
+    assert item["hidden_states"].shape == (3, 4)
+    assert torch.isfinite(item["hidden_states"]).all()
+    assert transfer.deleted == ["bad-handle", "good-handle"]
+    assert arrow_ds._consecutive_generation_failures == 0
+
+
+def test_exhausted_generation_produces_locally_empty_zero_loss_batch(
+    tmp_path, monkeypatch
+):
+    transfer = _SequenceTransfer(
+        [ValueError("checksum mismatch"), ValueError("checksum mismatch")]
+    )
+    arrow_ds = _make_generation_dataset(
+        tmp_path,
+        transfer,
+        generation_validation_retries=1,
+        max_consecutive_generation_failures=10,
+    )
+    handles = iter(["bad-1", "bad-2"])
+    monkeypatch.setattr(
+        data_module,
+        "generate_hidden_states",
+        lambda *_args, **_kwargs: next(handles),
+    )
+
+    with pytest.warns(UserWarning, match="checksum mismatch"):
+        failure = arrow_ds[0]
+
+    assert isinstance(failure, GenerationFailure)
+    assert not failure.fatal
+    collated = CollateFn(
+        max_len=8,
+        hidden_size=4,
+        num_target_layers=1,
+        dtype=torch.bfloat16,
+    )([failure])
+    assert collated["error_records"] == 1
+    assert collated["__locally_empty_batch__"] is True
+    assert collated["__generation_failure_count__"] == 1
+    assert "__generation_circuit_breaker__" not in collated
+    assert not collated["loss_mask"].bool().any()
+    assert torch.equal(collated["document_ids"], torch.full((1, 8), -1))
+    assert collated["hidden_states"].shape == (1, 8, 4)
+    assert collated["hidden_states"].dtype == torch.bfloat16
+
+
+def test_consecutive_generation_failures_trip_circuit_breaker(tmp_path, monkeypatch):
+    transfer = _SequenceTransfer([ValueError("bad read 1"), ValueError("bad read 2")])
+    arrow_ds = _make_generation_dataset(
+        tmp_path,
+        transfer,
+        generation_validation_retries=2,
+        max_consecutive_generation_failures=2,
+    )
+    handles = iter(["bad-1", "bad-2"])
+    monkeypatch.setattr(
+        data_module,
+        "generate_hidden_states",
+        lambda *_args, **_kwargs: next(handles),
+    )
+
+    with pytest.warns(UserWarning, match="consecutive failures=2/2"):
+        failure = arrow_ds[0]
+
+    assert isinstance(failure, GenerationFailure)
+    assert failure.fatal
+    assert failure.consecutive_failures == 2
+    collated = CollateFn(8, 4, num_target_layers=1)([failure])
+    assert collated["__generation_circuit_breaker__"] is True
+    assert "bad read 2" in collated["__generation_error__"]
+
+
+def test_collator_keeps_valid_samples_when_one_generation_fails():
+    valid = {
+        "input_ids": torch.tensor([1, 2], dtype=torch.long),
+        "hidden_states": torch.ones(2, 4, dtype=torch.bfloat16),
+        "verifier_last_hidden_states": torch.ones(2, 4, dtype=torch.bfloat16),
+        "loss_mask": torch.ones(2, dtype=torch.long),
+        "lengths": torch.tensor([2], dtype=torch.long),
+        "position_ids": torch.arange(2, dtype=torch.long),
+    }
+    failure = GenerationFailure("transient read", consecutive_failures=1)
+
+    collated = CollateFn(8, 4, num_target_layers=1)([None, failure, valid])
+
+    assert "__locally_empty_batch__" not in collated
+    assert collated["error_records"] == 2
+    assert collated["__generation_failure_count__"] == 1
+    assert collated["loss_mask"].sum() == 2
+    assert torch.equal(collated["input_ids"][0, :2], torch.tensor([1, 2]))

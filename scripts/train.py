@@ -667,6 +667,8 @@ def main(cfg: TrainConfig):  # noqa: C901
         verifier_name_or_path=args.verifier_name_or_path,
         request_timeout=args.request_timeout,
         max_retries=args.max_retries,
+        generation_validation_retries=args.generation_validation_retries,
+        max_consecutive_generation_failures=args.max_consecutive_generation_failures,
         hidden_size=hidden_size,
         num_target_layers=num_target_layers,
         num_workers=args.num_workers,

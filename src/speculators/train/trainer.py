@@ -34,7 +34,10 @@ from speculators.train.distributed import (
 )
 from speculators.train.graceful_shutdown import with_graceful_shutdown
 from speculators.train.optimizers import build_optimizers
-from speculators.train.utils import normalize_counted_metrics
+from speculators.train.utils import (
+    consume_recovery_metadata,
+    normalize_counted_metrics,
+)
 
 root_logger = logging.getLogger("speculators")
 metric_logger = logging.getLogger("speculators.metrics")
@@ -449,6 +452,7 @@ class Trainer:
             timer.reset(self.global_step % self.config.log_freq == 0)
 
             timer.mark_value("start", t_before_fetch)
+            consume_recovery_metadata(batch, phase="training")
             gpu_batch = {
                 k: v.to(self.local_rank, non_blocking=True)
                 if isinstance(v, torch.Tensor)
@@ -550,6 +554,7 @@ class Trainer:
         num_batches = len(val_loader)
         for i, batch in enumerate(val_loader):
             self._maybe_val_sync(i)
+            consume_recovery_metadata(batch, phase="validation")
             gpu_batch = {
                 k: v.to(self.local_rank, non_blocking=True)
                 if isinstance(v, torch.Tensor)
