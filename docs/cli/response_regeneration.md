@@ -1,13 +1,13 @@
-# response_regeneration
+# regenerate-responses
 
 Regenerates assistant responses in existing datasets using a vLLM-served model. Given a dataset containing conversations (e.g., Magpie, UltraChat, GSM8K), this pipeline extracts conversation turns, regenerates each assistant response turn-by-turn against the model's own prior outputs, and produces speculator-format training samples. For multi-turn conversations, each turn conditions on the regenerated history, producing on-policy training data.
 
-The pipeline consists of two scripts:
+The pipeline consists of two entry points:
 
-| Script       | Purpose                                                        |
-| ------------ | -------------------------------------------------------------- |
-| `run_all.sh` | End-to-end pipeline: starts vLLM, regenerates responses, stops |
-| `script.py`  | Standalone response regeneration against a running vLLM server |
+| Entry point                  | Purpose                                                        |
+| ---------------------------- | -------------------------------------------------------------- |
+| `run_all.sh`                 | End-to-end pipeline: starts vLLM, regenerates responses, stops |
+| `speculators regenerate-responses` | Standalone response regeneration against a running vLLM server |
 
 ## run_all.sh
 
@@ -55,7 +55,7 @@ All other arguments are passed through to `script.py`.
   --max-tokens 4096
 ```
 
-## script.py
+## speculators regenerate-responses
 
 Extracts conversation turns from a dataset, regenerates each assistant response turn-by-turn via a vLLM chat completion endpoint, and writes out speculator-format training samples with generation boundaries marked in the loss mask.
 
@@ -70,7 +70,7 @@ Extracts conversation turns from a dataset, regenerates each assistant response 
 ### Basic Usage
 
 ```bash
-python scripts/response_regeneration/script.py --dataset magpie
+speculators regenerate-responses --dataset magpie
 ```
 
 ### Arguments
@@ -112,7 +112,7 @@ python scripts/response_regeneration/script.py --dataset magpie
 ### Full Example
 
 ```bash
-python scripts/response_regeneration/script.py \
+speculators regenerate-responses \
   --dataset magpie \
   --endpoint http://127.0.0.1:8000/v1/chat/completions \
   --limit 1000 \
