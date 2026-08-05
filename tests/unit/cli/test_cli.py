@@ -22,6 +22,11 @@ class TestRootApp:
         assert result.exit_code == 0
         assert "speculators version:" in result.output
 
+    def test_pipeline_commands_in_help(self):
+        result = runner.invoke(app, ["--help"])
+        assert result.exit_code == 0
+        assert "generate-data" in result.output
+
     def test_tools_commands_in_help(self):
         result = runner.invoke(app, ["--help"])
         assert result.exit_code == 0
@@ -43,4 +48,19 @@ class TestConvertCommand:
 
     def test_missing_required_args(self):
         result = runner.invoke(app, ["convert"])
+        assert result.exit_code != 0
+
+
+class TestGenerateDataCommand:
+    def test_help(self):
+        result = runner.invoke(app, ["generate-data", "--help"])
+        assert result.exit_code == 0
+        assert "--endpoint" in result.output
+        assert "--preprocessed-data" in result.output
+        assert "--concurrency" in result.output
+
+    def test_invalid_rank(self):
+        result = runner.invoke(
+            app, ["generate-data", "--rank", "5", "--world-size", "2"]
+        )
         assert result.exit_code != 0
