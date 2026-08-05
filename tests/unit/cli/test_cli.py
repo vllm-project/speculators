@@ -87,3 +87,18 @@ class TestGenerateDataCommand:
             app, ["generate-data", "--rank", "5", "--world-size", "2"]
         )
         assert result.exit_code != 0
+
+
+class TestGenerateDataCommand:
+    def test_help(self):
+        result = runner.invoke(app, ["generate-data", "--help"])
+        assert result.exit_code == 0
+        assert "--endpoint" in result.output
+        assert "--preprocessed-data" in result.output
+        assert "--concurrency" in result.output
+
+    def test_invalid_rank(self):
+        result = runner.invoke(
+            app, ["generate-data", "--rank", "5", "--world-size", "2"]
+        )
+        assert result.exit_code != 0
