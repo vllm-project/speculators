@@ -138,7 +138,7 @@ head -1 magpie_Llama-3.3-70B-Instruct.jsonl | python -m json.tool
 
 ## Step 3: Use the Data for Training
 
-The output JSONL can be passed directly to `prepare_data.py` for speculator training:
+The output JSONL can be passed directly to `speculators prepare-data` for speculator training:
 
 ```bash
 speculators prepare-data \
