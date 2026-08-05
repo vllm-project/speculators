@@ -28,6 +28,7 @@ class TestRootApp:
         assert result.exit_code == 0
         assert "stitch-mtp" in result.output
         assert "prepare-data" in result.output
+        assert "generate-data" in result.output
 
     def test_tools_commands_in_help(self):
         result = runner.invoke(app, ["--help"])
@@ -92,3 +93,18 @@ class TestPrepareDataCommand:
         result = runner.invoke(app, ["prepare-data", "--help"])
         assert result.exit_code == 0
         assert "--render-endpoint" in result.output
+
+
+class TestGenerateDataCommand:
+    def test_help(self):
+        result = runner.invoke(app, ["generate-data", "--help"])
+        assert result.exit_code == 0
+        assert "--endpoint" in result.output
+        assert "--preprocessed-data" in result.output
+        assert "--concurrency" in result.output
+
+    def test_invalid_rank(self):
+        result = runner.invoke(
+            app, ["generate-data", "--rank", "5", "--world-size", "2"]
+        )
+        assert result.exit_code != 0
