@@ -324,8 +324,7 @@ class Trainer:
         self.model.to(self.local_rank)  # type: ignore[arg-type]
 
         if load_checkpoint:
-            if dist.get_rank() == 0:
-                self.checkpointer.load_model_state_dict(self.model)
+            self.checkpointer.load_model_state_dict(self.model)
         else:
             # Fresh init: broadcast rank 0's random initialization to all ranks
             for param in self.model.parameters():

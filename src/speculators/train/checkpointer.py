@@ -390,8 +390,13 @@ class DistributedCheckpointer(BaseCheckpointer):
             weights_only=True,
             map_location="cpu",
         )
+
+        if isinstance(model, DistributedDataParallel):
+            model_dtype = model.module.dtype
+        else:
+            model_dtype = model.dtype
         full_state_dict = convert_float_dtype(
-            full_state_dict, float_dtype or model.dtype
+            full_state_dict, float_dtype or model_dtype
         )
 
         set_optimizer_state_dict(
