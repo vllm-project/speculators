@@ -876,11 +876,10 @@ def load_and_preprocess_dataset(
     log.subsection("Loading processor")
     processor = load_processor(target_model_path, trust_remote_code=trust_remote_code)
 
-    if not hasattr(processor, "apply_chat_template") or processor.chat_template is None:
-        raise ValueError(
-            f"Processor for {target_model_path} does not support chat templates. "
-            "Please use a model with a pre-configured chat template."
-        )
+    processor_has_chat_template = (
+        hasattr(processor, "apply_chat_template")
+        and getattr(processor, "chat_template", None) is not None
+    )
 
     processed_datasets = []
     for train_data_path in train_data_paths:
@@ -899,6 +898,14 @@ def load_and_preprocess_dataset(
                 normalize_fn,
                 num_proc=build_dataset_num_proc,
                 keep_in_memory=True,  # skip caching
+            )
+
+        pretokenized = {"input_ids", "loss_mask"} <= set(raw_dataset.column_names)
+        if not pretokenized and not processor_has_chat_template:
+            raise ValueError(
+                f"Processor for {target_model_path} does not support chat templates. "
+                "Please use a model with a pre-configured chat template or provide "
+                "pre-tokenized input_ids and loss_mask columns."
             )
 
         log.info(f"Loaded {len(raw_dataset)} samples")
