@@ -64,7 +64,7 @@ Hidden states are generated on demand during epoch 0, cached, then reused. Use w
 
 ## Step 0: Setup Your Environment
 
-This tutorial drives the pipeline through the scripts in the repository (`scripts/prepare_data.py`, `scripts/train.py`, and so on). Those are not part of the published PyPI package, so start by cloning the repo -- every command below is run from its root:
+This tutorial drives the pipeline through CLI commands (`speculators prepare-data`, `speculators train`, and so on). Start by cloning the repo -- every command below is run from its root:
 
 ```bash
 git clone https://github.com/vllm-project/speculators.git
@@ -153,7 +153,7 @@ output/
 
 **Time:** ~15 seconds to ~2 minutes for 5K samples, depending on dataset and tokenizer.
 
-**Note:** This step sets up the dataset used to train your model and is the same for every algorithm and mode. It's important that any data configuration choices are made at this stage. For example, limiting the data sample length, filtering out samples with limited assistant response tokens, handling multi-turn conversation responses, etc. For more information please see the [prepare_data.py cli reference](/cli/prepare_data.md).
+**Note:** This step sets up the dataset used to train your model and is the same for every algorithm and mode. It's important that any data configuration choices are made at this stage. For example, limiting the data sample length, filtering out samples with limited assistant response tokens, handling multi-turn conversation responses, etc. For more information please see the [prepare-data CLI reference](/cli/prepare_data.md).
 
 ## Step 2: Launch vLLM Server
 

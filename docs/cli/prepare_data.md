@@ -60,9 +60,11 @@ speculators prepare-data \
 
 ### Output Arguments
 
-- **`--output`** (str, required) Directory to save the processed dataset.
+- **`--output`** (str, default: `./output`) Directory to save the processed dataset.
 
 - **`--overwrite`** (flag) Forcibly rerun preprocessing and overwrite existing content in output directory.
+
+- **`--allow-empty-output`** (flag) Allow writing an empty preprocessed dataset. By default raises when normalization or filtering removes every sample.
 
 ### Processing Arguments
 
