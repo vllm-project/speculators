@@ -202,11 +202,11 @@ Nothing to do here -- training generates hidden states on demand from the live v
 
 /// tab | Offline
 
-Use `data_generation_offline.py` to pre-generate all hidden states before training starts:
+Use `speculators generate-data` to pre-generate all hidden states before training starts:
 
 ```bash
 # in speculators venv
-python scripts/data_generation_offline.py \
+speculators generate-data \
   --preprocessed-data ./output \
   --endpoint http://localhost:8000/v1 \
   --output ./output/hidden_states \
@@ -250,12 +250,12 @@ If you have access to multiple machines, each with its own vLLM server, you can 
 
 ```bash
 # On node 0
-python scripts/data_generation_offline.py \
+speculators generate-data \
   --preprocessed-data ./output --output ./output/hidden_states \
   --max-samples 5000 --world-size 2 --rank 0
 
 # On node 1
-python scripts/data_generation_offline.py \
+speculators generate-data \
   --preprocessed-data ./output --output ./output/hidden_states \
   --max-samples 5000 --world-size 2 --rank 1
 ```
