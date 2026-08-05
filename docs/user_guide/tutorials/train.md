@@ -398,7 +398,7 @@ CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
 Then stitch the finetuned MTP weights back into the verifier checkpoint. This produces a self-contained checkpoint deployable on vLLM with native MTP speculative decoding:
 
 ```bash
-speculators stitch \
+speculators stitch-mtp \
   ./output/checkpoints/checkpoint_best \
   Qwen/Qwen3.5-9B \
   --output-path ./output/stitched
@@ -525,7 +525,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nproc_per_node 4 \
 Then stitch the finetuned MTP weights back into the verifier checkpoint. This produces a self-contained checkpoint deployable on vLLM with native MTP speculative decoding:
 
 ```bash
-speculators stitch \
+speculators stitch-mtp \
   ./output/checkpoints/checkpoint_best \
   Qwen/Qwen3.5-9B \
   --output-path ./output/stitched
@@ -661,7 +661,7 @@ CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
 Then stitch the finetuned MTP weights back into the verifier checkpoint. This produces a self-contained checkpoint deployable on vLLM with native MTP speculative decoding:
 
 ```bash
-speculators stitch \
+speculators stitch-mtp \
   ./output/checkpoints/checkpoint_best \
   Qwen/Qwen3.5-9B \
   --output-path ./output/stitched

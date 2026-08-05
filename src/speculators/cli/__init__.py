@@ -39,5 +39,5 @@ def _main(
     pass
 
 
-app.command(name="stitch", rich_help_panel="Pipeline")(stitch_command)
+app.command(name="stitch-mtp", rich_help_panel="Pipeline")(stitch_command)
 app.command(rich_help_panel="Tools")(convert)
