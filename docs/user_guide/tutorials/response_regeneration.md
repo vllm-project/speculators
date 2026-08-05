@@ -141,7 +141,7 @@ head -1 magpie_Llama-3.3-70B-Instruct.jsonl | python -m json.tool
 The output JSONL can be passed directly to `prepare_data.py` for speculator training:
 
 ```bash
-python scripts/prepare_data.py \
+speculators prepare-data \
   --model meta-llama/Llama-3.3-70B-Instruct \
   --data ./magpie_Llama-3.3-70B-Instruct.jsonl \
   --output ./output \

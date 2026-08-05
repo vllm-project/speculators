@@ -1,4 +1,4 @@
-# prepare_data.py
+# prepare-data
 
 Prepares data for speculator training by:
 
@@ -11,7 +11,7 @@ The output is a processed dataset ready for online training or offline hidden st
 ## Basic Usage
 
 ```bash
-python scripts/prepare_data.py \
+speculators prepare-data \
   --model meta-llama/Llama-3.1-8B-Instruct \
   --data sharegpt \
   --output ./training_data \
@@ -61,7 +61,7 @@ python scripts/prepare_data.py \
 ## Full Example
 
 ```bash
-python scripts/prepare_data.py \
+speculators prepare-data \
   --model meta-llama/Llama-3.1-8B-Instruct \
   --data sharegpt \
   --data ./custom_conversations.jsonl \

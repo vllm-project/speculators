@@ -104,7 +104,7 @@ First, preprocess your training dataset:
 
 ```bash
 # in speculators venv
-python scripts/prepare_data.py \
+speculators prepare-data \
   --model Qwen/Qwen3-8B \
   --data sharegpt \
   --output ./output \
@@ -121,7 +121,7 @@ hf download \
   --repo-type dataset \
   --local-dir ./output/dataset
 
-python scripts/prepare_data.py \
+speculators prepare-data \
   --model Qwen/Qwen3.5-9B \
   --data ./output/dataset/gsm8k.jsonl \
   --output ./output \
