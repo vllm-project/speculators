@@ -93,8 +93,7 @@ def _unfuse_moe_experts(  # noqa: C901
     if not gate_up_keys:
         if down_keys:
             raise ValueError(
-                "Found down_proj without matching gate_up_proj at: "
-                f"{sorted(down_keys)}"
+                f"Found down_proj without matching gate_up_proj at: {sorted(down_keys)}"
             )
         return weights
 
