@@ -11,6 +11,7 @@ from importlib.metadata import version as pkg_version
 import typer
 
 from speculators.cli.convert import convert
+from speculators.cli.train import train_command
 
 __all__ = ["app"]
 
@@ -38,4 +39,9 @@ def _main(
     pass
 
 
+app.command(
+    name="train",
+    rich_help_panel="Pipeline",
+    context_settings={"allow_extra_args": True, "allow_interspersed_args": False},
+)(train_command)
 app.command(rich_help_panel="Tools")(convert)
