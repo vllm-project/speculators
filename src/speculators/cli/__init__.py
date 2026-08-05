@@ -11,6 +11,7 @@ from importlib.metadata import version as pkg_version
 import typer
 
 from speculators.cli.convert import convert
+from speculators.cli.stitch_mtp import stitch_command
 
 __all__ = ["app"]
 
@@ -41,4 +42,5 @@ def _main(
     pass
 
 
+app.command(name="stitch-mtp", rich_help_panel="Pipeline")(stitch_command)
 app.command(rich_help_panel="Tools")(convert)
