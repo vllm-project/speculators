@@ -5,7 +5,7 @@ import warnings
 
 import typer
 
-from speculators.cli.stitch import stitch_command
+from speculators.cli.stitch_mtp import stitch_command
 
 warnings.warn(
     "scripts/stitch_mtp.py is deprecated. Use 'speculators stitch-mtp' instead.",

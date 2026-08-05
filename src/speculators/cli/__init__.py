@@ -11,7 +11,7 @@ from importlib.metadata import version as pkg_version
 import typer
 
 from speculators.cli.convert import convert
-from speculators.cli.stitch import stitch_command
+from speculators.cli.stitch_mtp import stitch_command
 
 __all__ = ["app"]
 
