@@ -64,7 +64,7 @@ class VerifierArgs(_Group):
     trust_remote_code: bool = Field(
         default=False,
         description="Allow executing code from HF Hub when loading the verifier's "
-        "tokenizer.",
+        "configuration or tokenizer.",
     )
 
 
