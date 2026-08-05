@@ -7,21 +7,22 @@ over a fake endpoint.
 The script is not a package, so it is imported by path.
 """
 
-import argparse
 import asyncio
 import copy
-import importlib.util
+import importlib
 import json
 import time
-from pathlib import Path
 from typing import Any
 
 import pytest
+import typer
 
 from speculators.data_generation import vllm_client
 from speculators.data_generation.configs import DATASET_CONFIGS, DatasetConfig
 from speculators.data_generation.preprocessing import _preprocess_batch
 from speculators.data_generation.vllm_client import InvalidResponseError
+
+regen = importlib.import_module("speculators.cli.regenerate_responses")
 
 
 @pytest.fixture(autouse=True)
@@ -29,26 +30,6 @@ def _no_retry_backoff(monkeypatch):
     # with_retries sleeps RETRY_BACKOFF_BASE ** attempt between retries; zero it
     # so the retry tests don't actually sleep.
     monkeypatch.setattr(vllm_client, "RETRY_BACKOFF_BASE", 0)
-
-
-_SCRIPT_PATH = (
-    Path(__file__).resolve().parents[3]
-    / "scripts"
-    / "response_regeneration"
-    / "script.py"
-)
-
-
-def _load_regen_module():
-    spec = importlib.util.spec_from_file_location("response_regen_script", _SCRIPT_PATH)
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-regen = _load_regen_module()
 
 
 # ---------------------------------------------------------------------------
@@ -488,16 +469,19 @@ def _run_worker(responses, tmp_path, stem):
             "total_request_s": 0.0,
             "start_time": time.perf_counter(),
         }
-        await regen.worker(
+        await regen._worker(
             _FakeSession(responses),
             queue,
-            _Args(),
-            out_fh,
-            err_fh,
-            "http://x/v1/chat/completions",
-            _NullProgress(),
-            stats,
-            _detok,
+            model=_Args.model,
+            max_tokens=_Args.max_tokens,
+            endpoint="http://x/v1/chat/completions",
+            sampling_params=_Args.sampling_params,
+            max_retries=_Args.max_retries,
+            out_fh=out_fh,
+            err_fh=err_fh,
+            progress=_NullProgress(),
+            stats=stats,
+            detokenize=_detok,
         )
         return stats
 
@@ -896,9 +880,9 @@ def test_prepare_row_merges_normalize_output_over_raw_row():
 
 
 def test_dataset_choice_rejects_multimodal_with_a_reason():
-    with pytest.raises(argparse.ArgumentTypeError, match="does not support images"):
-        regen._dataset_choice("sharegpt4v_coco")
-    assert regen._dataset_choice("ultrachat") == "ultrachat"
+    with pytest.raises(typer.BadParameter, match="does not support images"):
+        regen._validate_dataset("sharegpt4v_coco")
+    assert regen._validate_dataset("ultrachat") == "ultrachat"
 
 
 def test_tools_and_results_are_read_from_the_normalized_row():
