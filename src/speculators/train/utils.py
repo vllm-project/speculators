@@ -8,11 +8,23 @@ import sys
 import tempfile
 import warnings
 from pathlib import Path
+from typing import Any
+
+import torch
+import torch.distributed as dist
 
 from speculators.data_generation.preprocessing import get_tokenizer, load_processor
 from speculators.provenance import find_repo_root
+from speculators.train.distributed import get_local_rank, get_rank, is_distributed
 
 logger = logging.getLogger("speculators")
+
+# Keys the collator attaches to a batch to report hidden-state generation failures.
+# ``consume_recovery_metadata`` removes them again before the batch reaches the model.
+LOCALLY_EMPTY_BATCH_KEY = "__locally_empty_batch__"
+GENERATION_FAILURE_COUNT_KEY = "__generation_failure_count__"
+GENERATION_CIRCUIT_BREAKER_KEY = "__generation_circuit_breaker__"
+GENERATION_ERROR_KEY = "__generation_error__"
 
 
 def resolve_mask_token_id(
@@ -99,6 +111,67 @@ def normalize_counted_metrics(
                 metrics[k] /= world_size
 
     return metrics
+
+
+def consume_recovery_metadata(
+    batch: dict[str, Any],
+    *,
+    phase: str,
+    device: torch.device | int | None = None,
+) -> None:
+    """Strip the collator's recovery metadata from ``batch`` in place.
+
+    A locally empty batch intentionally stays local: that rank runs the normal
+    forward/backward path with an empty loss mask and contributes zero gradients to
+    DDP, while other ranks keep their useful samples. The small status all-reduce
+    exists only so a tripped failure threshold stops every rank at the same point
+    instead of one rank vanishing first, and so rank 0 can report the global count.
+
+    ``device`` overrides where that status tensor lives; it defaults to this rank's
+    accelerator, which is what the NCCL backend requires.
+
+    Raises ``RuntimeError`` if the circuit breaker tripped on any rank.
+    """
+    rank = get_rank()
+    locally_empty = bool(batch.pop(LOCALLY_EMPTY_BATCH_KEY, False))
+    failures = int(batch.pop(GENERATION_FAILURE_COUNT_KEY, 0))
+    fatal = bool(batch.pop(GENERATION_CIRCUIT_BREAKER_KEY, False))
+    error = str(batch.pop(GENERATION_ERROR_KEY, ""))
+
+    if leftover := sorted(key for key in batch if key.startswith("__")):
+        raise RuntimeError(f"Unconsumed data recovery metadata: {leftover}")
+
+    if failures or locally_empty:
+        logger.warning(
+            "%s data recovery on rank %d: failed_samples=%d, locally_empty_batch=%s",
+            phase,
+            rank,
+            failures,
+            locally_empty,
+        )
+
+    if is_distributed():
+        if device is None:
+            device = get_local_rank()
+        status = torch.tensor([int(fatal), failures], dtype=torch.int64, device=device)
+        dist.all_reduce(status, op=dist.ReduceOp.SUM)
+        fatal_ranks, total_failures = (int(v) for v in status.tolist())
+    else:
+        fatal_ranks, total_failures = int(fatal), failures
+
+    if total_failures and rank == 0:
+        logger.warning(
+            "%s hidden-state generation dropped %d sample(s) across DDP ranks; "
+            "affected ranks continue with remaining or locally empty data.",
+            phase,
+            total_failures,
+        )
+    if fatal_ranks:
+        detail = f" Local error: {error}" if error else ""
+        raise RuntimeError(
+            f"Hidden-state generation circuit breaker tripped on "
+            f"{fatal_ranks} rank(s) during {phase}.{detail}"
+        )
 
 
 def save_train_command(save_path: str, argv: list[str] | None = None) -> None:
