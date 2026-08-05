@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Backward-compatibility shim — use ``speculators stitch`` instead."""
+"""Backward-compatibility shim — use ``speculators stitch-mtp`` instead."""
 
 import warnings
 
@@ -8,7 +8,7 @@ import typer
 from speculators.cli.stitch import stitch_command
 
 warnings.warn(
-    "scripts/stitch_mtp.py is deprecated. Use 'speculators stitch' instead.",
+    "scripts/stitch_mtp.py is deprecated. Use 'speculators stitch-mtp' instead.",
     DeprecationWarning,
     stacklevel=1,
 )

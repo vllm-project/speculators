@@ -26,7 +26,7 @@ class TestRootApp:
     def test_pipeline_commands_in_help(self):
         result = runner.invoke(app, ["--help"])
         assert result.exit_code == 0
-        assert "stitch" in result.output
+        assert "stitch-mtp" in result.output
 
     def test_tools_commands_in_help(self):
         result = runner.invoke(app, ["--help"])
@@ -54,11 +54,11 @@ class TestConvertCommand:
 
 class TestStitchCommand:
     def test_help(self):
-        result = runner.invoke(app, ["stitch", "--help"])
+        result = runner.invoke(app, ["stitch-mtp", "--help"])
         assert result.exit_code == 0
         assert "finetuned_checkpoint" in result.output
         assert "verifier_path" in result.output
 
     def test_missing_required_args(self):
-        result = runner.invoke(app, ["stitch"])
+        result = runner.invoke(app, ["stitch-mtp"])
         assert result.exit_code != 0
