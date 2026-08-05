@@ -19,6 +19,28 @@ def _ids_to_logits(ids: torch.Tensor, vocab_size: int) -> torch.Tensor:
 
 
 class TestComputeMetrics:
+    def test_empty_loss_mask_keeps_backward_graph_with_zero_gradients(self):
+        logits = torch.randn(1, 8, 16, requires_grad=True)
+        targets = torch.randn(1, 8, 16)
+        confidence_logits = torch.randn(1, 8, requires_grad=True)
+        loss_mask = torch.zeros(1, 8)
+
+        loss, _ = compute_metrics(
+            logits,
+            targets,
+            confidence_logits,
+            loss_mask,
+            block_size=2,
+            loss_config=_DEFAULT_LOSS,
+        )
+        loss.backward()
+
+        assert loss.item() == 0
+        assert logits.grad is not None
+        assert confidence_logits.grad is not None
+        assert torch.count_nonzero(logits.grad) == 0
+        assert torch.count_nonzero(confidence_logits.grad) == 0
+
     def test_perfect_draft_low_loss_high_accept(self):
         # block_size=2; with sample_from_anchor=False, position 0 is the anchor
         # (masked) and position 1 supervised.
