@@ -162,9 +162,7 @@ class TestRemapWeights:
 
         remapped = DFlashConverter()._remap_weights(weights, config, model)
         assert remapped["fc.weight"].shape[1] == model.fc.in_features
-        assert torch.equal(
-            remapped["fc.weight"], wide_fc[:, : model.fc.in_features]
-        )
+        assert torch.equal(remapped["fc.weight"], wide_fc[:, : model.fc.in_features])
 
     def test_passthrough_when_no_fused_qkv(self):
         config = _tiny_dflash_config()
@@ -180,6 +178,16 @@ class TestRemapWeights:
         remapped = DFlashConverter()._remap_weights(weights, config, model)
         assert "layers.0.self_attn.o_proj.weight" in remapped
         assert "norm.weight" in remapped
+
+    def test_rejects_mixed_fused_and_separate_projections(self):
+        config = _tiny_dflash_config()
+        model = DFlashDraftModel(config=config)
+        weights = self._make_fused_weights()
+        # Add a conflicting separate projection
+        weights["layers.0.self_attn.q_proj.weight"] = torch.randn(_Q_DIM, _HIDDEN)
+
+        with pytest.raises(ValueError, match="Mixed fused and separate projections"):
+            DFlashConverter()._remap_weights(weights, config, model)
 
 
 class TestSave:
