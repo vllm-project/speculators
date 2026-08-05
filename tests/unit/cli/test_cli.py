@@ -28,6 +28,7 @@ class TestRootApp:
         assert result.exit_code == 0
         assert "prepare-data" in result.output
         assert "generate-data" in result.output
+        assert "regenerate-responses" in result.output
         assert "stitch-mtp" in result.output
 
     def test_tools_commands_in_help(self):
@@ -89,16 +90,27 @@ class TestGenerateDataCommand:
         assert result.exit_code != 0
 
 
-class TestGenerateDataCommand:
+class TestRegenerateResponsesCommand:
     def test_help(self):
-        result = runner.invoke(app, ["generate-data", "--help"])
+        result = runner.invoke(app, ["regenerate-responses", "--help"])
         assert result.exit_code == 0
         assert "--endpoint" in result.output
-        assert "--preprocessed-data" in result.output
+        assert "--dataset" in result.output
         assert "--concurrency" in result.output
+        assert "--max-tokens" in result.output
 
-    def test_invalid_rank(self):
+    def test_invalid_max_retries(self):
+        result = runner.invoke(app, ["regenerate-responses", "--max-retries", "-1"])
+        assert result.exit_code != 0
+
+    def test_invalid_sampling_params(self):
         result = runner.invoke(
-            app, ["generate-data", "--rank", "5", "--world-size", "2"]
+            app, ["regenerate-responses", "--sampling-params", "not-json"]
+        )
+        assert result.exit_code != 0
+
+    def test_sampling_params_must_be_object(self):
+        result = runner.invoke(
+            app, ["regenerate-responses", "--sampling-params", "[1,2,3]"]
         )
         assert result.exit_code != 0
