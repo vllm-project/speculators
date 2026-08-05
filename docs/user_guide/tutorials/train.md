@@ -270,7 +270,7 @@ python scripts/data_generation_offline.py \
 # Press Ctrl+C in the vLLM terminal
 ```
 
-**Note:** For more information on usage, please see the [data_generation_offline.py cli reference](/cli/data_generation_offline.md).
+**Note:** For more information on usage, please see the [generate-data cli reference](/cli/data_generation_offline.md).
 
 ///
 
@@ -293,7 +293,7 @@ The commands below assume a four-GPU node: vLLM holds GPUs 0-1 from Step 2, so t
 ```bash
 # in speculators venv
 CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
-  scripts/train.py \
+  -m speculators.train \
   --verifier-name-or-path Qwen/Qwen3-8B \
   --data-path ./output \
   --save-path ./output/checkpoints \
@@ -312,7 +312,7 @@ CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
 ```bash
 # in speculators venv
 CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
-  scripts/train.py \
+  -m speculators.train \
   --verifier-name-or-path Qwen/Qwen3-8B \
   --data-path ./output \
   --save-path ./output/checkpoints \
@@ -337,7 +337,7 @@ CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
 ```bash
 # in speculators venv
 CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
-  scripts/train.py \
+  -m speculators.train \
   --verifier-name-or-path Qwen/Qwen3-8B \
   --data-path ./output \
   --save-path ./output/checkpoints \
@@ -359,7 +359,7 @@ CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
 ```bash
 # in speculators venv
 CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
-  scripts/train.py \
+  -m speculators.train \
   --verifier-name-or-path Qwen/Qwen3-8B \
   --data-path ./output \
   --save-path ./output/checkpoints \
@@ -382,7 +382,7 @@ CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
 ```bash
 # in speculators venv
 CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
-  scripts/train.py \
+  -m speculators.train \
   --verifier-name-or-path Qwen/Qwen3.5-9B \
   --data-path ./output \
   --save-path ./output/checkpoints \
@@ -425,7 +425,7 @@ The commands below assume a four-GPU node: since vLLM is no longer needed once d
 ```bash
 # in speculators venv
 CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nproc_per_node 4 \
-  scripts/train.py \
+  -m speculators.train \
   --verifier-name-or-path Qwen/Qwen3-8B \
   --data-path ./output \
   --save-path ./output/checkpoints \
@@ -443,7 +443,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nproc_per_node 4 \
 ```bash
 # in speculators venv
 CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nproc_per_node 4 \
-  scripts/train.py \
+  -m speculators.train \
   --verifier-name-or-path Qwen/Qwen3-8B \
   --data-path ./output \
   --save-path ./output/checkpoints \
@@ -467,7 +467,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nproc_per_node 4 \
 ```bash
 # in speculators venv
 CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nproc_per_node 4 \
-  scripts/train.py \
+  -m speculators.train \
   --verifier-name-or-path Qwen/Qwen3-8B \
   --data-path ./output \
   --save-path ./output/checkpoints \
@@ -488,7 +488,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nproc_per_node 4 \
 ```bash
 # in speculators venv
 CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nproc_per_node 4 \
-  scripts/train.py \
+  -m speculators.train \
   --verifier-name-or-path Qwen/Qwen3-8B \
   --data-path ./output \
   --save-path ./output/checkpoints \
@@ -510,7 +510,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nproc_per_node 4 \
 ```bash
 # in speculators venv
 CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nproc_per_node 4 \
-  scripts/train.py \
+  -m speculators.train \
   --verifier-name-or-path Qwen/Qwen3.5-9B \
   --data-path ./output \
   --save-path ./output/checkpoints \
@@ -551,7 +551,7 @@ The commands below assume a four-GPU node: vLLM holds GPUs 0-1 from Step 2, so t
 ```bash
 # in speculators venv
 CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
-  scripts/train.py \
+  -m speculators.train \
   --verifier-name-or-path Qwen/Qwen3-8B \
   --data-path ./output \
   --save-path ./output/checkpoints \
@@ -571,7 +571,7 @@ CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
 ```bash
 # in speculators venv
 CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
-  scripts/train.py \
+  -m speculators.train \
   --verifier-name-or-path Qwen/Qwen3-8B \
   --data-path ./output \
   --save-path ./output/checkpoints \
@@ -597,7 +597,7 @@ CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
 ```bash
 # in speculators venv
 CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
-  scripts/train.py \
+  -m speculators.train \
   --verifier-name-or-path Qwen/Qwen3-8B \
   --data-path ./output \
   --save-path ./output/checkpoints \
@@ -620,7 +620,7 @@ CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
 ```bash
 # in speculators venv
 CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
-  scripts/train.py \
+  -m speculators.train \
   --verifier-name-or-path Qwen/Qwen3-8B \
   --data-path ./output \
   --save-path ./output/checkpoints \
@@ -644,7 +644,7 @@ CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
 ```bash
 # in speculators venv
 CUDA_VISIBLE_DEVICES=2,3 torchrun --standalone --nproc_per_node 2 \
-  scripts/train.py \
+  -m speculators.train \
   --verifier-name-or-path Qwen/Qwen3.5-9B \
   --data-path ./output \
   --save-path ./output/checkpoints \
@@ -683,9 +683,9 @@ python scripts/stitch_mtp.py \
 - `--epochs` - Number of training epochs (the default is 20)
 - `--total-seq-len 8192` - Maximum sequence length for training
 
-**Single GPU:** drop the `torchrun` wrapper and call `python scripts/train.py` directly with the same arguments.
+**Single GPU:** drop the `torchrun` wrapper and call `speculators train` directly with the same arguments.
 
-**Note:** There are a lot of configuration options available at this stage. We've attempted to set sensible defaults but please see the [train.py cli reference](/cli/train.md) to see all available options.
+**Note:** There are a lot of configuration options available at this stage. We've attempted to set sensible defaults but please see the [train cli reference](/cli/train.md) to see all available options.
 
 ## Step 5: Inspect Checkpoints
 
@@ -804,12 +804,12 @@ torch.cuda.OutOfMemoryError
 
 ```bash
 # Reduce sequence length
-python scripts/train.py --total-seq-len 4096 ...
+speculators train --total-seq-len 4096 ...
 
 # Consider different model configurations
 # e.g. fewer draft layers, or fewer depths for P-EAGLE
-python scripts/train.py --num-layers 1
-python scripts/train.py --num-layers 2 --num-depths 2
+speculators train --num-layers 1
+speculators train --num-layers 2 --num-depths 2
 ```
 
 ### Issue: Out of Memory (vLLM)
