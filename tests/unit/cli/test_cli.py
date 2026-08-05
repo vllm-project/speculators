@@ -22,6 +22,11 @@ class TestRootApp:
         assert result.exit_code == 0
         assert "speculators version:" in result.output
 
+    def test_pipeline_commands_in_help(self):
+        result = runner.invoke(app, ["--help"])
+        assert result.exit_code == 0
+        assert "prepare-data" in result.output
+
     def test_tools_commands_in_help(self):
         result = runner.invoke(app, ["--help"])
         assert result.exit_code == 0
@@ -43,4 +48,18 @@ class TestConvertCommand:
 
     def test_missing_required_args(self):
         result = runner.invoke(app, ["convert"])
+        assert result.exit_code != 0
+
+
+class TestPrepareDataCommand:
+    def test_help(self):
+        result = runner.invoke(app, ["prepare-data", "--help"])
+        assert result.exit_code == 0
+        assert "--model" in result.output
+        assert "--data" in result.output
+        assert "--output" in result.output
+        assert "--seq-length" in result.output
+
+    def test_missing_required_args(self):
+        result = runner.invoke(app, ["prepare-data"])
         assert result.exit_code != 0
