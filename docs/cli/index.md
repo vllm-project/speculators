@@ -13,7 +13,7 @@ Speculators provides the following CLI commands for different stages of the spec
 | `launch_vllm.py`                   | Launch vLLM server configured for hidden states extraction   | [→ Details](launch_vllm.md)             |
 | `speculators train`                | Train speculator models with online or offline hidden states | [→ Details](train.md)                   |
 | `speculators regenerate-responses` | Regenerate dataset responses using a vLLM-served model       | [→ Details](response_regeneration.md)   |
-| `speculators stitch`               | Stitch finetuned MTP weights back into verifier checkpoint   | `speculators stitch --help`             |
+| `speculators stitch-mtp`           | Stitch finetuned MTP weights back into verifier checkpoint   | `speculators stitch-mtp --help`         |
 | `speculators convert`              | Convert speculator checkpoints between formats               | `speculators convert --help`            |
 
 ## Common Workflows
