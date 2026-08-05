@@ -27,6 +27,7 @@ class TestRootApp:
         result = runner.invoke(app, ["--help"])
         assert result.exit_code == 0
         assert "stitch-mtp" in result.output
+        assert "prepare-data" in result.output
 
     def test_tools_commands_in_help(self):
         result = runner.invoke(app, ["--help"])
@@ -61,4 +62,18 @@ class TestStitchCommand:
 
     def test_missing_required_args(self):
         result = runner.invoke(app, ["stitch-mtp"])
+        assert result.exit_code != 0
+
+
+class TestPrepareDataCommand:
+    def test_help(self):
+        result = runner.invoke(app, ["prepare-data", "--help"])
+        assert result.exit_code == 0
+        assert "--model" in result.output
+        assert "--data" in result.output
+        assert "--output" in result.output
+        assert "--seq-length" in result.output
+
+    def test_missing_required_args(self):
+        result = runner.invoke(app, ["prepare-data"])
         assert result.exit_code != 0
