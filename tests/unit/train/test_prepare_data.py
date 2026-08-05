@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from datasets import Dataset as HFDataset
 
-from scripts.prepare_data import assert_safe_to_overwrite, parse_args
+from speculators.cli.prepare_data import assert_safe_to_overwrite
 from speculators.data_generation import preprocessing as preprocessing_module
 from speculators.data_generation.preprocessing import load_and_preprocess_dataset
 
@@ -36,37 +36,6 @@ def test_assert_safe_to_overwrite_honors_custom_token_freq_path(tmp_path: Path):
     token_freq_path.touch()
 
     assert_safe_to_overwrite(output, token_freq_path)
-
-
-def test_parse_args_forwards_allow_empty_output(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(
-        "sys.argv",
-        [
-            "prepare_data.py",
-            "--model",
-            "target",
-            "--data",
-            "sharegpt",
-            "--output",
-            "out",
-            "--allow-empty-output",
-        ],
-    )
-
-    args = parse_args()
-
-    assert args.allow_empty_output is True
-
-
-def test_parse_args_allow_empty_output_defaults_false(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(
-        "sys.argv",
-        ["prepare_data.py", "--model", "target", "--data", "sharegpt", "--output", "o"],
-    )
-
-    args = parse_args()
-
-    assert args.allow_empty_output is False
 
 
 class _FakeProcessor:
