@@ -84,7 +84,7 @@ class MooncakeStoreConfig:
     local_buffer_size: int = 2 * 1024 * 1024 * 1024
     protocol: str = "tcp"
     device_name: str = ""
-    num_writer_threads: int = 16
+    num_writer_threads: int = 4
 
     @classmethod
     def from_dict(cls, d: dict | None) -> MooncakeStoreConfig:
