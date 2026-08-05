@@ -42,6 +42,11 @@ def _main(
 app.command(
     name="train",
     rich_help_panel="Pipeline",
-    context_settings={"allow_extra_args": True, "allow_interspersed_args": False},
+    context_settings={
+        "allow_extra_args": True,
+        "allow_interspersed_args": False,
+        "ignore_unknown_options": True,
+        "help_option_names": [],
+    },
 )(train_command)
 app.command(rich_help_panel="Tools")(convert)
