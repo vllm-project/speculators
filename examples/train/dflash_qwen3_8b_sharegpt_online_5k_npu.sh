@@ -93,8 +93,10 @@ ASCEND_RT_VISIBLE_DEVICES="$TRAIN_NPUS" torchrun \
     --max-anchors "$MAX_ANCHORS" \
     --num-layers "$NUM_LAYERS" \
     --target-layer-ids $TARGET_LAYER_IDS \
-    --draft-attn-impl sdpa \   # FlexAttention not available on Ascend NPU
+    --draft-attn-impl sdpa \
     --on-missing generate \
     --on-generate delete
+
+# Note: FlexAttention not available on Ascend NPU, use sdpa instead.
 
 echo "Done. Checkpoints saved to $OUTPUT_DIR/checkpoints/"
