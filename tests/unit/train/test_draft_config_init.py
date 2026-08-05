@@ -315,7 +315,9 @@ def test_mtp_with_from_pretrained_parses(monkeypatch):
 def _patch_verifier(monkeypatch, hidden_size: int, vocab_size: int):
     monkeypatch.setattr(
         "scripts.train.get_verifier_config",
-        lambda _path: SimpleNamespace(hidden_size=hidden_size, vocab_size=vocab_size),
+        lambda _path, **_kwargs: SimpleNamespace(
+            hidden_size=hidden_size, vocab_size=vocab_size
+        ),
     )
 
 
@@ -471,7 +473,9 @@ def test_build_draft_model_mtp_from_scratch_uses_verifier_decoder(monkeypatch):
     """MTP without --from-pretrained reuses the verifier's own decoder config and
     must not synthesize a decoder or resolve a draft mask token."""
     verifier_cfg = object()
-    monkeypatch.setattr("scripts.train.get_verifier_config", lambda _p: verifier_cfg)
+    monkeypatch.setattr(
+        "scripts.train.get_verifier_config", lambda _p, **_kwargs: verifier_cfg
+    )
 
     def _must_not_call(*_a, **_k):
         raise AssertionError("not expected for MTP-from-scratch")

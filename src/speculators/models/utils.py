@@ -17,8 +17,14 @@ def conditional_torch_compile(func=None, *args, **kwargs):
     return func
 
 
-def get_verifier_config(verifier_name_or_path: str) -> PretrainedConfig:
-    verifier_config = AutoConfig.from_pretrained(verifier_name_or_path)
+def get_verifier_config(
+    verifier_name_or_path: str,
+    trust_remote_code: bool = False,
+) -> PretrainedConfig:
+    verifier_config = AutoConfig.from_pretrained(
+        verifier_name_or_path,
+        trust_remote_code=trust_remote_code,
+    )
     if hasattr(verifier_config, "text_config"):
         verifier_config = verifier_config.text_config
     return verifier_config
@@ -34,11 +40,15 @@ DEFAULT_TARGET_LAYER_IDS_WARNING = (
 def resolve_target_layer_ids(
     target_layer_ids: list[int] | None,
     verifier_name_or_path: str,
+    trust_remote_code: bool = False,
 ) -> list[int]:
     if target_layer_ids is not None:
         return target_layer_ids
 
-    num_layers = get_verifier_config(verifier_name_or_path).num_hidden_layers
+    num_layers = get_verifier_config(
+        verifier_name_or_path,
+        trust_remote_code=trust_remote_code,
+    ).num_hidden_layers
     target_layer_ids = [2, num_layers // 2, num_layers - 3]
     warnings.warn(
         DEFAULT_TARGET_LAYER_IDS_WARNING.format(target_layer_ids=target_layer_ids),
