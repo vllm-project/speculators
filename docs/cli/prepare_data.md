@@ -1,4 +1,4 @@
-# prepare_data.py
+# prepare-data
 
 Converts on-policy target-model data into the format consumed by speculator training. It accepts either:
 
@@ -20,7 +20,7 @@ Given a natural-language JSONL file such as:
 where the assistant response came from the target model:
 
 ```bash
-python scripts/prepare_data.py \
+speculators prepare-data \
   --model meta-llama/Llama-3.1-8B-Instruct \
   --data ./on_policy_conversations.jsonl \
   --render-endpoint http://localhost:8000 \
@@ -73,7 +73,7 @@ python scripts/prepare_data.py \
 ## Full Example
 
 ```bash
-python scripts/prepare_data.py \
+speculators prepare-data \
   --model meta-llama/Llama-3.1-8B-Instruct \
   --data ./target_responses_part1.jsonl \
   --data ./target_responses_part2.jsonl \
