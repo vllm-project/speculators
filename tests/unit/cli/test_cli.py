@@ -28,6 +28,7 @@ class TestRootApp:
         assert result.exit_code == 0
         assert "prepare-data" in result.output
         assert "generate-data" in result.output
+        assert "train" in result.output
         assert "regenerate-responses" in result.output
         assert "stitch-mtp" in result.output
 
@@ -114,3 +115,17 @@ class TestRegenerateResponsesCommand:
             app, ["regenerate-responses", "--sampling-params", "[1,2,3]"]
         )
         assert result.exit_code != 0
+
+
+class TestTrainCommand:
+    def test_help(self):
+        result = runner.invoke(app, ["train", "--help"])
+        assert result.exit_code == 0
+        assert "--verifier-name-or-path" in result.output
+        assert "--config" in result.output
+        assert "--speculator-type" in result.output
+
+    def test_train_appears_in_pipeline_panel(self):
+        result = runner.invoke(app, ["--help"])
+        assert result.exit_code == 0
+        assert "train" in result.output
