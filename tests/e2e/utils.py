@@ -115,11 +115,14 @@ def launch_vllm_server(
     mooncake_master: str | None = None,
     mooncake_metadata_server: str | None = None,
     mooncake_protocol: str | None = None,
+    enable_chunked_prefill: bool | None = None,
 ) -> subprocess.Popen:
     """Launch a vLLM server configured for hidden-state extraction.
 
     Returns the server subprocess. Caller is responsible for stopping it
     via stop_vllm_server().
+
+    enable_chunked_prefill overrides the launch script's default of disabling it.
     """
     cmd = [
         VLLM_PYTHON,
@@ -152,6 +155,12 @@ def launch_vllm_server(
         str(gpu_memory_utilization),
         "--disable-uvicorn-access-log",
     ]
+    if enable_chunked_prefill is not None:
+        cmd.append(
+            "--enable-chunked-prefill"
+            if enable_chunked_prefill
+            else "--no-enable-chunked-prefill"
+        )
     logger.info("Starting vLLM server: {}", " ".join(cmd))
 
     process = subprocess.Popen(cmd)  # noqa: S603

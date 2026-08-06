@@ -145,9 +145,13 @@ def main():
         *vllm_args,
     ]
 
-    disable_cp_arg = "--no-enable-chunked-prefill"
-    if disable_cp_arg not in cmd:
-        cmd.append(disable_cp_arg)
+    # Default off unless the caller already chose; hybrid mamba models need it on
+    # for vLLM's 'align' cache mode. vLLM treats '_' and '-' in flags as equivalent.
+    chunked_prefill_flags = ("--enable-chunked-prefill", "--no-enable-chunked-prefill")
+    if not any(
+        a.replace("_", "-").startswith(chunked_prefill_flags) for a in vllm_args
+    ):
+        cmd.append("--no-enable-chunked-prefill")
 
     print("Running command:")
     print(" ".join(cmd))
