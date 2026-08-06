@@ -57,12 +57,14 @@ def _setup_dataloader(
     num_target_layers: int = 3,
     prefetch_factor: int | None = 4,
     preprocess: Callable[[BatchType], BatchType] | None = None,
+    max_batches: int | None = None,
 ) -> DataLoader:
     batch_sampler = MultipackDistributedBatchSamplerV2(
         batch_max_length=total_seq_len,
         lengths=dataset.approx_lengths,
         num_replicas=get_dp_size(),
         rank=get_dp_rank(),
+        max_batches=max_batches,
     )
     use_workers = num_workers > 0
     return DataLoader(
@@ -105,6 +107,7 @@ def create_train_val_loaders(
     prefetch_factor: int,
     preprocess: Callable[[BatchType], BatchType] | None,
     train_data_ratio: float = 0.9,
+    max_train_batches: int | None = None,
 ) -> tuple[DataLoader, DataLoader]:
     """Create training and validation DataLoaders.
 
@@ -160,6 +163,7 @@ def create_train_val_loaders(
         num_workers=num_workers,
         prefetch_factor=prefetch_factor,
         preprocess=preprocess,
+        max_batches=max_train_batches,
     )
     val_loader = _setup_dataloader(
         val_dataset,

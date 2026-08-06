@@ -19,8 +19,11 @@ from benchmark import (  # type: ignore[import-not-found]
     _SyntheticLoader,
     collect_provenance,
     compare_benchmarks,
+    compute_aggregate_throughput,
     compute_statistics,
     create_synthetic_batch,
+    select_measured_profiles,
+    shutdown_dataloader_workers,
 )
 
 # ---------------------------------------------------------------------------
@@ -52,6 +55,29 @@ class TestComputeStatistics:
         result = compute_statistics([5.0, 5.0, 5.0])
         assert result["mean"] == 5.0
         assert result["std"] == 0.0
+
+
+def test_compute_aggregate_throughput_is_time_weighted():
+    profiles = [
+        {"step_ms": 1000.0, "tokens_per_s": 100.0},
+        {"step_ms": 3000.0, "tokens_per_s": 300.0},
+    ]
+
+    result = compute_aggregate_throughput(profiles)
+
+    assert result["measured_time_s"] == 4.0
+    assert result["rank0_tokens"] == 1000.0
+    assert result["effective_rank0_tokens_per_s"] == 250.0
+
+
+def test_shutdown_dataloader_workers():
+    loader = MagicMock()
+    iterator = loader._iterator
+
+    shutdown_dataloader_workers(loader)
+
+    iterator._shutdown_workers.assert_called_once_with()
+    assert loader._iterator is None
 
 
 # ---------------------------------------------------------------------------
@@ -308,31 +334,32 @@ class TestWarmupMeasuredSplit:
     def test_discard_warmup(self):
         warmup_steps = 3
         all_profiles = [{"step_ms": float(i)} for i in range(13)]
-        measured = all_profiles[warmup_steps:]
+        measured = select_measured_profiles(all_profiles, warmup_steps, 10)
         assert len(measured) == 10
         assert measured[0]["step_ms"] == 3.0
 
     def test_exact_boundary(self):
         warmup_steps = 5
         all_profiles = [{"step_ms": float(i)} for i in range(5)]
-        measured = all_profiles[warmup_steps:]
-        assert len(measured) == 0
+        with pytest.raises(RuntimeError, match="dataset exhausted"):
+            select_measured_profiles(all_profiles, warmup_steps, 1)
 
     def test_zero_warmup(self):
         warmup_steps = 0
         all_profiles = [{"step_ms": float(i)} for i in range(10)]
-        measured = all_profiles[warmup_steps:]
+        measured = select_measured_profiles(all_profiles, warmup_steps, 10)
         assert len(measured) == 10
         assert measured[0]["step_ms"] == 0.0
 
-    def test_fallback_on_insufficient_profiles(self):
-        """When fewer profiles than expected, fallback uses all of them."""
-        warmup_steps = 10
+    def test_insufficient_profiles_raises(self):
         all_profiles = [{"step_ms": float(i)} for i in range(5)]
-        measured = all_profiles[warmup_steps:]
-        if not measured:
-            measured = all_profiles
-        assert len(measured) == 5
+        with pytest.raises(RuntimeError, match="got 5, requested 15"):
+            select_measured_profiles(all_profiles, 10, 5)
+
+    def test_extra_profiles_are_not_measured(self):
+        all_profiles = [{"step_ms": float(i)} for i in range(20)]
+        measured = select_measured_profiles(all_profiles, 3, 5)
+        assert [profile["step_ms"] for profile in measured] == [3.0, 4.0, 5.0, 6.0, 7.0]
 
 
 # ---------------------------------------------------------------------------
@@ -393,6 +420,8 @@ class TestCompareBenchmarks:
     def test_basic_compare(self, tmp_path, capsys):
         baseline = _make_result(step_ms_mean=50.0, git_sha="aaa111")
         candidate = _make_result(step_ms_mean=45.0, git_sha="bbb222")
+        baseline["aggregate"] = {"effective_rank0_tokens_per_s": 1000.0}
+        candidate["aggregate"] = {"effective_rank0_tokens_per_s": 1200.0}
 
         baseline_path = tmp_path / "baseline.json"
         candidate_path = tmp_path / "candidate.json"
@@ -406,6 +435,7 @@ class TestCompareBenchmarks:
         assert "bbb222" in output
         assert "step_ms" in output
         assert "-5.00" in output or "-10.0%" in output
+        assert "1000.00 -> 1200.00" in output
 
     def test_comparability_warning_gpu(self, tmp_path, capsys):
         baseline = _make_result(gpu_name="H100")
