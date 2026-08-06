@@ -173,10 +173,19 @@ class DFlashConverter:
 
         for key, tensor in weights.items():
             if "qkv_proj" in key:
+                q_key = key.replace("qkv_proj", "q_proj")
+                k_key = key.replace("qkv_proj", "k_proj")
+                v_key = key.replace("qkv_proj", "v_proj")
+                for dest_key in (q_key, k_key, v_key):
+                    if dest_key in remapped or dest_key in weights:
+                        raise ValueError(
+                            f"Mixed fused and separate projections: "
+                            f"target key {dest_key} already exists."
+                        )
                 q, k, v = tensor.split([q_dim, kv_dim, kv_dim], dim=0)
-                remapped[key.replace("qkv_proj", "q_proj")] = q
-                remapped[key.replace("qkv_proj", "k_proj")] = k
-                remapped[key.replace("qkv_proj", "v_proj")] = v
+                remapped[q_key] = q
+                remapped[k_key] = k
+                remapped[v_key] = v
             elif ".g_proj." in key or key.startswith("aux_hidden_norms."):
                 dropped.append(key)
             elif key == "fc.weight":
