@@ -171,6 +171,7 @@ class MultipackDistributedBatchSamplerV2(Sampler):
         rank: int,
         truncate_long_samples: bool = True,
         seed: int = 0,
+        max_batches: int | None = None,
     ):
         """Efficient distributed packing sampler for linear attention style models
 
@@ -182,12 +183,16 @@ class MultipackDistributedBatchSamplerV2(Sampler):
             truncate_long_samples (bool, optional): Whether to truncate long samples
             (True) or drop them (False). Default is True.
             seed (int, optional): Seed for RNG, must be the same on all ranks. Default 0
+            max_batches (int, optional): Limit batches exposed per epoch. Used by
+                bounded benchmarks to prevent workers from prefetching beyond the
+                measured run.
         """
         self.num_replicas = num_replicas
         self.rank = rank
         self.seed = seed
         self.epoch = 0
         self.batch_max_length = batch_max_length
+        self.max_batches = max_batches
         self.lengths = np.array(lengths)
 
         self.valid_indices = np.nonzero(self.lengths <= self.batch_max_length)[0]
@@ -244,6 +249,8 @@ class MultipackDistributedBatchSamplerV2(Sampler):
         # Translate them so that they are instead relative to the overall unshuffled
         # self.lengths array.
         batches = [indices[batch] for batch in batches]
+        if self.max_batches is not None:
+            batches = batches[: self.max_batches]
 
         # Cache result
         self._cached_generated_batches = (epoch, batches)

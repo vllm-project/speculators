@@ -99,3 +99,16 @@ def test_rotation_actually_moves_the_largest_sample_off_rank_zero():
         owners.add(best_rank)
 
     assert len(owners) > 1, "largest sample always lands on the same rank"
+
+
+def test_max_batches_limits_prefetchable_batches():
+    sampler = MultipackDistributedBatchSamplerV2(
+        batch_max_length=MAX_LEN,
+        lengths=_skewed_lengths(),
+        num_replicas=4,
+        rank=0,
+        max_batches=7,
+    )
+
+    assert len(sampler) == 7
+    assert len(list(sampler)) == 7
