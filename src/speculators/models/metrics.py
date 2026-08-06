@@ -382,7 +382,7 @@ def dpace_loss_decay(
 
 
 # ``tv`` and ``nla`` run the fused Triton kernels on CUDA/ROCm (much lower peak
-# memory at long context; see models/fused_tv_loss.py) and fall back to the eager
+# memory at long context; see models/fused_losses.py) and fall back to the eager
 # losses above on every other backend -- CPU, or non-CUDA accelerators such as
 # Ascend NPU where mainline Triton has no backend. ``logits.is_cuda`` gates
 # CUDA/ROCm; the import is lazy so this module imports without Triton installed.
@@ -392,7 +392,7 @@ def dpace_loss_decay(
 def _fused_kernel(name: str):
     """Import and cache a fused kernel by name; ``None`` if Triton is unavailable."""
     try:
-        from speculators.models import fused_tv_loss as mod  # noqa: PLC0415
+        from speculators.models import fused_losses as mod  # noqa: PLC0415
     except ImportError:
         return None
     return getattr(mod, name)
