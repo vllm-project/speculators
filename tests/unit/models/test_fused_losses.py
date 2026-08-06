@@ -103,6 +103,29 @@ def test_fused_matches_eager(name, eager_fn, fused_name):
     _assert_fused_matches_eager(eager_fn, fused_fn, logits, targets, LOSS_TOL, GRAD_TOL)
 
 
+@requires_cuda
+@pytest.mark.parametrize(
+    ("name", "eager_fn", "fused_name"), CASES, ids=[c[0] for c in CASES]
+)
+def test_compiles_fullgraph(name, eager_fn, fused_name):
+    """torch.compile(fullgraph=True) must trace the fused losses.
+
+    The OP selector crosses the autograd.Function boundary, and Dynamo cannot
+    represent a tl.constexpr object there -- passing one graph-breaks (or
+    fails under fullgraph). Model forwards are wrapped in torch.compile, so
+    this guards the compiled training path.
+    """
+    fused_losses = pytest.importorskip("speculators.models.fused_losses")
+    fused_fn = getattr(fused_losses, fused_name)
+    logits = torch.randn(1, 8, 512, device="cuda", requires_grad=True)
+    targets = torch.randn(1, 8, 512, device="cuda")
+
+    compiled = torch.compile(lambda a, b: fused_fn(a, b).sum(), fullgraph=True)
+    compiled(logits, targets).backward()
+    assert logits.grad is not None
+    assert torch.isfinite(logits.grad).all()
+
+
 def test_dispatcher_falls_back_to_eager_for_differentiable_targets():
     """Fused kernels return no target gradient, so the dispatcher must take the
     eager path when targets require grad. (ce excluded: argmax gives no target
