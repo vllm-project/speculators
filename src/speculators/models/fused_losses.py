@@ -35,7 +35,10 @@ MAX_FUSED_SIZE = 131072
 # tl.constexpr instances: Triton kernels may only read globals wrapped this way.
 _LOG2 = tl.constexpr(0.6931471805599453)
 
-# Reduction selector, baked into the kernel at specialization time.
+# Reduction selector, baked into the kernel at specialization time. Pass
+# ``.value`` (a plain int) across the autograd boundary -- Dynamo cannot
+# represent a constexpr object as an autograd.Function argument and would
+# graph-break; the ``OP: tl.constexpr`` parameter re-wraps it in the kernel.
 _OP_KL = tl.constexpr(0)
 _OP_RKL = tl.constexpr(1)
 _OP_JSD = tl.constexpr(2)
@@ -287,27 +290,27 @@ _EPS = 1e-5  # matches models/metrics.py neg_log_acceptance_loss
 
 def fused_kl_div_loss(logits, targets):
     """Per-position forward KL ``[1, T]``; fused twin of ``kl_div_loss``."""
-    return _FusedLoss.apply(logits, targets, _OP_KL)
+    return _FusedLoss.apply(logits, targets, _OP_KL.value)
 
 
 def fused_reverse_kl_div_loss(logits, targets):
     """Per-position reverse KL ``[1, T]``; fused twin of ``reverse_kl_div_loss``."""
-    return _FusedLoss.apply(logits, targets, _OP_RKL)
+    return _FusedLoss.apply(logits, targets, _OP_RKL.value)
 
 
 def fused_js_div_loss(logits, targets):
     """Per-position JSD ``[1, T]``; fused twin of ``js_div_loss``."""
-    return _FusedLoss.apply(logits, targets, _OP_JSD)
+    return _FusedLoss.apply(logits, targets, _OP_JSD.value)
 
 
 def fused_ce_loss(logits, targets):
     """Per-position CE vs argmax(targets) ``[1, T]``; fused twin of ``ce_loss``."""
-    return _FusedLoss.apply(logits, targets, _OP_CE)
+    return _FusedLoss.apply(logits, targets, _OP_CE.value)
 
 
 def fused_tv_loss(logits, targets):
     """Per-position TV distance ``[1, T]`` from draft/target logits (fused Triton)."""
-    return _FusedLoss.apply(logits, targets, _OP_TV)
+    return _FusedLoss.apply(logits, targets, _OP_TV.value)
 
 
 def fused_nla_loss(logits, targets):
