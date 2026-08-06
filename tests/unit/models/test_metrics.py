@@ -211,7 +211,7 @@ class TestTVLoss:
         Uses bf16 inputs (the real training regime): the loss must be returned in
         fp32 like the eager path, not downcast to the bf16 input dtype.
         """
-        from speculators.models.fused_tv_loss import fused_tv_loss  # noqa: PLC0415
+        from speculators.models.fused_losses import fused_tv_loss  # noqa: PLC0415
 
         torch.manual_seed(0)
         base = torch.randn(1, 64, 512)
