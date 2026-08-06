@@ -117,7 +117,13 @@ class DFlashConverter:
             # z-lab reads hidden_states[layer_id + 1] (index 0 is the embedding
             # output) while speculators uses the layer id directly.
             # Source: z-lab utils.extract_context_feature.
-            aux_hidden_state_layer_ids = [i + 1 for i in target_layer_ids]
+            # Exclude the last verifier layer — it is always included
+            # implicitly by launch_vllm.py (--include-last-layer) and split
+            # off as verifier_last_hidden_states during training.
+            num_verifier_layers = verifier_config_dict["num_hidden_layers"]
+            aux_hidden_state_layer_ids = [
+                i + 1 for i in target_layer_ids if i + 1 != num_verifier_layers
+            ]
 
         speculators_config = SpeculatorsConfig(
             algorithm="dflash",

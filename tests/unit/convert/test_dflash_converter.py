@@ -71,7 +71,11 @@ class TestBuildConfig:
     @patch("speculators.convert.dflash.converter.PretrainedConfig.get_config_dict")
     def test_happy_path(self, mock_get_config):
         mock_get_config.return_value = (
-            {"hidden_size": 4096, "architectures": ["Qwen3ForCausalLM"]},
+            {
+                "hidden_size": 4096,
+                "num_hidden_layers": 36,
+                "architectures": ["Qwen3ForCausalLM"],
+            },
             None,
         )
         config = DFlashConverter()._build_config(
@@ -91,6 +95,23 @@ class TestBuildConfig:
         assert not hasattr(config.transformer_layer_config, "dflash_config")
 
     @patch("speculators.convert.dflash.converter.PretrainedConfig.get_config_dict")
+    def test_excludes_last_verifier_layer(self, mock_get_config):
+        mock_get_config.return_value = (
+            {
+                "hidden_size": 4096,
+                "num_hidden_layers": 34,
+                "architectures": ["Qwen3ForCausalLM"],
+            },
+            None,
+        )
+        # target_layer_ids [1, 9, 17, 25, 33] → +1 → [2, 10, 18, 26, 34]
+        # but 34 == num_hidden_layers, so it should be excluded
+        config = DFlashConverter()._build_config(
+            _source_config(), "Qwen/Qwen3-8B", None
+        )
+        assert config.aux_hidden_state_layer_ids == [2, 10, 18, 26]
+
+    @patch("speculators.convert.dflash.converter.PretrainedConfig.get_config_dict")
     def test_explicit_aux_layer_ids_override(self, mock_get_config):
         mock_get_config.return_value = ({"hidden_size": 4096}, None)
         config = DFlashConverter()._build_config(
@@ -106,7 +127,10 @@ class TestBuildConfig:
 
     @patch("speculators.convert.dflash.converter.PretrainedConfig.get_config_dict")
     def test_missing_target_layer_ids_raises(self, mock_get_config):
-        mock_get_config.return_value = ({"hidden_size": 4096}, None)
+        mock_get_config.return_value = (
+            {"hidden_size": 4096, "num_hidden_layers": 36},
+            None,
+        )
         source = _source_config(dflash_config={"mask_token_id": 151669})
         with pytest.raises(ValueError, match="target_layer_ids"):
             DFlashConverter()._build_config(source, "Qwen/Qwen3-8B", None)
