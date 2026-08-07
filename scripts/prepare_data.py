@@ -7,6 +7,10 @@ This script processes an input dataset and:
 2. Produces a loss/assistant mask for each sample
 3. Records token frequency statistics
 
+Rows that already carry input_ids and loss_mask, as on-policy response
+regeneration emits, skip steps 1 and 2. They are truncated to --seq-length and
+filtered, but never re-tokenized or re-masked.
+
 The output of this script is:
 1. Processed dataset ready for online training or offline datagen in output_dir
 2. Token frequency statistics file at token_freq_path
