@@ -88,7 +88,7 @@ class TestSaveEvalProvenance:
         assert tmp_files == []
 
     def test_best_effort_never_raises(self, tmp_path: Path):
-        with patch("evaluate._atomic_write", side_effect=RuntimeError("disk full")):
+        with patch("evaluate._atomic_write", side_effect=OSError("disk full")):
             save_eval_provenance(tmp_path)
 
     def test_overwrites_existing(self, tmp_path: Path):
