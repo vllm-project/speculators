@@ -1,7 +1,14 @@
 import argparse
+import datetime
+import hashlib
+import importlib.metadata
+import importlib.util
 import json
 import os
+import shlex
+import subprocess
 import sys
+import tempfile
 import warnings
 
 try:
@@ -86,11 +93,247 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--provenance-dir",
+        type=str,
+        default=None,
+        help=(
+            "Directory to write vllm_command.txt, vllm.patch, and "
+            "checkpoint_sha256.txt. Defaults to vllm_<model>_<timestamp>/."
+        ),
+    )
+    parser.add_argument(
+        "--no-hash-checkpoints",
+        action="store_true",
+        default=False,
+        help=(
+            "Skip SHA256 hashing of .safetensors files. Useful for large "
+            "checkpoints where hashing adds significant launch latency. "
+            "When set, checkpoint_sha256.txt records file sizes and "
+            "modification times instead."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print the command that would be executed without running it",
     )
     return parser.parse_known_args()
+
+
+def _warn(msg: str) -> None:
+    print(f"Warning: {msg}", file=sys.stderr)
+
+
+def _atomic_write(path: str, content: str) -> None:
+    fd, tmp = tempfile.mkstemp(
+        dir=os.path.dirname(path),
+        prefix=f".{os.path.basename(path)}_",
+        suffix=".tmp",
+    )
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(content)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def _run_git(args: list[str], cwd: str, timeout: int = 5) -> str:
+    """Run a git command and return stdout, or empty string on failure."""
+    try:
+        result = subprocess.run(  # noqa: S603
+            args,
+            capture_output=True,
+            text=True,
+            cwd=cwd,
+            timeout=timeout,
+            check=False,
+        )
+        return result.stdout.strip() if result.returncode == 0 else ""
+    except OSError:
+        return ""
+
+
+def _pkg_version(name: str) -> str:
+    try:
+        return importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:
+        return "unknown"
+
+
+def _is_vllm_repo(path: str) -> bool:
+    """Check that *path* looks like the vllm source tree, not an unrelated repo."""
+    return os.path.exists(os.path.join(path, ".git")) and os.path.isfile(
+        os.path.join(path, "vllm", "__init__.py")
+    )
+
+
+def _find_vllm_repo() -> str | None:
+    """Find the vllm git checkout by walking up from the installed package."""
+    try:
+        spec = importlib.util.find_spec("vllm")
+        if spec and spec.origin:
+            d = os.path.realpath(os.path.dirname(spec.origin))
+            while d != os.path.dirname(d):
+                if _is_vllm_repo(d):
+                    return d
+                d = os.path.dirname(d)
+    except (ModuleNotFoundError, ValueError):
+        pass
+    return None
+
+
+def _sha256_file(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while chunk := f.read(1 << 20):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Individual provenance writers — each is self-contained and best-effort.
+# ---------------------------------------------------------------------------
+
+
+def _save_vllm_command(
+    provenance_dir: str,
+    cmd: list[str],
+    git_sha: str,
+    diff: str,
+    vllm_ver: str,
+) -> None:
+    sha_label = f"{git_sha} (dirty)" if diff else git_sha
+    ts = datetime.datetime.now(tz=datetime.timezone.utc).isoformat()
+    header = "\n".join(
+        [
+            f"# Timestamp: {ts}",
+            f"# Python: {sys.executable}",
+            f"# Git SHA: {sha_label}",
+            f"# vllm: {vllm_ver}",
+        ]
+    )
+    _atomic_write(
+        os.path.join(provenance_dir, "vllm_command.txt"),
+        f"{header}\n{shlex.join(cmd)}\n",
+    )
+
+
+def _save_vllm_patch(
+    provenance_dir: str,
+    vllm_repo: str | None,
+    git_sha: str,
+    diff: str,
+    vllm_ver: str,
+) -> None:
+    if vllm_repo:
+        content = f"# repo: {vllm_repo} ({git_sha})\n{diff}"
+    else:
+        content = f"# vllm {vllm_ver} (wheel install, no git repo found)\n"
+    _atomic_write(os.path.join(provenance_dir, "vllm.patch"), content)
+
+
+def _save_checkpoint_sha256(
+    provenance_dir: str, model: str, *, skip_hash: bool = False
+) -> None:
+    dest = os.path.join(provenance_dir, "checkpoint_sha256.txt")
+    model_path = os.path.expanduser(model)
+    if not os.path.isdir(model_path):
+        _atomic_write(dest, f"# model: {model} (not a local path)\n")
+        return
+    safetensors = sorted(
+        f for f in os.listdir(model_path) if f.endswith(".safetensors")
+    )
+    if not safetensors:
+        _atomic_write(dest, f"# no .safetensors files in {model_path}\n")
+        return
+    if skip_hash:
+        lines = []
+        for name in safetensors:
+            fp = os.path.join(model_path, name)
+            st = os.stat(fp)
+            lines.append(f"size={st.st_size}  mtime={st.st_mtime}  {name}")
+        header = "# hashing skipped (--no-hash-checkpoints)\n"
+        _atomic_write(dest, header + "\n".join(lines) + "\n")
+    else:
+        lines = [
+            f"{_sha256_file(os.path.join(model_path, name))}  {name}"
+            for name in safetensors
+        ]
+        _atomic_write(dest, "\n".join(lines) + "\n")
+
+
+# ---------------------------------------------------------------------------
+# Top-level entry point
+# ---------------------------------------------------------------------------
+
+
+def _save_vllm_provenance(
+    cmd: list[str],
+    provenance_dir: str,
+    model: str,
+    *,
+    skip_hash: bool = False,
+) -> None:
+    """Write vllm_command.txt, vllm.patch, and checkpoint_sha256.txt.
+
+    Best-effort — failures warn but never block the vLLM launch.
+    """
+    try:
+        os.makedirs(provenance_dir, exist_ok=True)
+    except OSError as exc:
+        _warn(f"could not create provenance dir: {exc}")
+        return
+
+    vllm_repo = _find_vllm_repo()
+    git_sha = _run_git(["git", "rev-parse", "HEAD"], vllm_repo or ".") or "unknown"
+    diff = (
+        _run_git(
+            ["git", "diff", "HEAD"],
+            vllm_repo or ".",
+            timeout=30,
+        )
+        if vllm_repo
+        else ""
+    )
+    vllm_ver = _pkg_version("vllm")
+
+    writers = [
+        (
+            "vllm_command.txt",
+            lambda: _save_vllm_command(
+                provenance_dir,
+                cmd,
+                git_sha,
+                diff,
+                vllm_ver,
+            ),
+        ),
+        (
+            "vllm.patch",
+            lambda: _save_vllm_patch(
+                provenance_dir,
+                vllm_repo,
+                git_sha,
+                diff,
+                vllm_ver,
+            ),
+        ),
+        (
+            "checkpoint_sha256.txt",
+            lambda: _save_checkpoint_sha256(
+                provenance_dir,
+                model,
+                skip_hash=skip_hash,
+            ),
+        ),
+    ]
+    for artifact, write in writers:
+        try:
+            write()
+        except Exception as exc:  # noqa: BLE001
+            _warn(f"could not save {artifact}: {exc}")
 
 
 def main():
@@ -151,6 +394,17 @@ def main():
 
     print("Running command:")
     print(" ".join(cmd))
+
+    if not args.provenance_dir:
+        sanitized = args.model.replace("/", "_").replace(" ", "_")
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        args.provenance_dir = f"vllm_{sanitized}_{ts}"
+    _save_vllm_provenance(
+        cmd,
+        args.provenance_dir,
+        args.model,
+        skip_hash=args.no_hash_checkpoints,
+    )
 
     if not args.dry_run:
         os.execvp(cmd[0], cmd)  # noqa: S606
