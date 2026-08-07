@@ -14,10 +14,15 @@ Examples:
     # SPEED-Bench (run prepare_speedbench.py once first to split data):
     python evaluate.py --target http://localhost:8000/v1 throughput \\
         --dataset speedbench/qualitative \\
-        --speedbench-data-dir ./speedbench_data
+        --dataset-dir ./speedbench_data
     python evaluate.py --target http://localhost:8000/v1 throughput \\
         --dataset speedbench/qualitative/coding \\
-        --speedbench-data-dir ./speedbench_data
+        --dataset-dir ./speedbench_data
+
+    # LongBench-v2 (run prepare_longbench_v2.py once first):
+    python evaluate.py --target http://localhost:8000/v1 throughput \\
+        --dataset longbench-v2 \\
+        --dataset-dir ./longbench_v2_data
 """
 
 from __future__ import annotations
@@ -26,10 +31,15 @@ import argparse
 import json
 import logging
 import sys
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.error import URLError
 from urllib.request import urlopen
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 from perf_utils import (
     BASE_CSV_COLUMNS,
@@ -41,12 +51,33 @@ from perf_utils import (
     parse_gen_kwargs,
     parse_gen_len_results,
     parse_prometheus_metrics,
+    parse_request_counts,
     parse_sweep_results,
     print_acceptance_report,
     run_guidellm,
 )
 
 logger = logging.getLogger("evaluate")
+
+
+@dataclass(frozen=True)
+class RunSpec:
+    """One fully resolved GuideLLM run."""
+
+    label: str
+    dataset: str
+    data_column_mapper: str
+    subset: str | None = None
+
+
+@dataclass(frozen=True)
+class DatasetAdapter:
+    """Resolve a prepared benchmark selector into local datasets."""
+
+    resolver: Callable[[str, Path], list[tuple[str, Path]]]
+    data_column_mapper: str
+    preparation_hint: str
+
 
 DEFAULT_DATASET = "RedHatAI/speculator_benchmarks"
 DEFAULT_SUBSETS = (
@@ -62,7 +93,7 @@ DEFAULT_DATA_COLUMN_MAPPER = (
 )
 
 # ---------------------------------------------------------------------------
-# SPEED-Bench constants
+# Local benchmark column mappings
 # ---------------------------------------------------------------------------
 
 _SPEEDBENCH_COLUMN_MAPPER = (
@@ -108,7 +139,11 @@ def _resolve_speedbench(
     ``scripts/evaluate/prepare_speedbench.py``.  Run that script once after
     NVIDIA's ``prepare.py`` to create per-category/subcategory files.
     """
-    parts = spec.removeprefix("speedbench/").split("/")
+    prefix, *parts = spec.split("/")
+    if prefix != "speedbench" or not parts or not all(parts):
+        logger.error("Invalid SPEED-Bench dataset spec: %s", spec)
+        sys.exit(1)
+
     config = parts[0]
     rest = parts[1:]
     # Build glob pattern matching prepare_speedbench.py's naming convention:
@@ -128,7 +163,7 @@ def _resolve_speedbench(
     files = sorted(data_dir.glob(pattern))
     if not files:
         logger.error(
-            "--speedbench-data-dir='%s': no files matching '%s'.\n"
+            "--dataset-dir='%s': no files matching '%s'.\n"
             "Run scripts/evaluate/prepare_speedbench.py first.",
             data_dir,
             pattern,
@@ -146,34 +181,91 @@ def _resolve_speedbench(
     return results
 
 
+def _resolve_longbench_v2(spec: str, data_dir: Path) -> list[tuple[str, Path]]:
+    """Resolve data prepared by ``prepare_longbench_v2.py``."""
+    if spec != "longbench-v2":
+        logger.error("Invalid LongBench-v2 dataset selector: %s", spec)
+        sys.exit(1)
+
+    path = data_dir / "longbench_v2.jsonl"
+    if not path.is_file():
+        logger.error(
+            "--dataset-dir='%s': %s not found.\n"
+            "Run scripts/evaluate/prepare_longbench_v2.py first.",
+            data_dir,
+            path.name,
+        )
+        sys.exit(1)
+
+    return [(spec, path)]
+
+
+_DATASET_ADAPTERS = {
+    "speedbench": DatasetAdapter(
+        _resolve_speedbench,
+        _SPEEDBENCH_COLUMN_MAPPER,
+        "Run scripts/evaluate/prepare_speedbench.py first.",
+    ),
+    "longbench-v2": DatasetAdapter(
+        _resolve_longbench_v2,
+        DEFAULT_DATA_COLUMN_MAPPER,
+        "Run scripts/evaluate/prepare_longbench_v2.py first.",
+    ),
+}
+
+
+def _resolve_runs(args: argparse.Namespace) -> list[RunSpec]:
+    """Normalize an HF dataset, local path, or benchmark selector into run specs."""
+    spec = args.dataset
+    adapter_name = spec.partition("/")[0]
+    adapter = _DATASET_ADAPTERS.get(adapter_name)
+    if adapter:
+        if not args.dataset_dir:
+            logger.error(
+                "--dataset-dir is required for '%s'.\n%s",
+                adapter_name,
+                adapter.preparation_hint,
+            )
+            sys.exit(1)
+        return [
+            RunSpec(label, str(path), adapter.data_column_mapper)
+            for label, path in adapter.resolver(spec, Path(args.dataset_dir))
+        ]
+
+    path = Path(spec)
+    if path.exists():
+        return [RunSpec(path.stem or path.name, spec, args.data_column_mapper)]
+
+    return [
+        RunSpec(subset, spec, args.data_column_mapper, subset)
+        for subset in (part.strip() for part in args.subsets.split(","))
+        if subset
+    ]
+
+
 def _run_subset(
-    subset: str,
+    run: RunSpec,
     args: argparse.Namespace,
     *,
     is_sweep: bool,
     metrics_url: str,
     artifacts_dir: Path,
     output_dir: Path,
-    guidellm_common: dict,
     acceptance_csv: CsvWriter | None,
     perf_csv: CsvWriter | None,
 ) -> tuple[CsvWriter | None, CsvWriter | None, int | None]:
-    """Run benchmark for one subset.
+    """Run one normalized benchmark spec."""
 
-    *subset* is the human-readable label used for output file names and the
-    acceptance CSV.  When ``guidellm_common["dataset"]`` is a local file path
-    the ``--data-args`` flag is suppressed automatically; when it is an HF
-    dataset ID *subset* is also passed as the data-args filter so guidellm
-    loads just that split.
-    """
-
+    subset = run.label
     logger.info("[%s] Starting", subset)
     safe = subset.replace("/", "_").replace(" ", "_")
     max_tokens = 4096
-
-    # For local JSONL files (SPEED-Bench) the dataset path IS the file —
-    # no --data-args needed.  For HF datasets subset name doubles as the filter.
-    guidellm_subset = None if Path(guidellm_common["dataset"]).exists() else subset
+    guidellm_common = {
+        "target": args.target,
+        "dataset": run.dataset,
+        "data_column_mapper": run.data_column_mapper,
+        "max_concurrency": args.max_concurrency,
+    }
 
     if is_sweep:
         gen_len_dir = artifacts_dir / "gen_len"
@@ -181,7 +273,7 @@ def _run_subset(
         gen_len_output = gen_len_dir / f"gen_len_{safe}.json"
         run_guidellm(
             **guidellm_common,
-            subset=guidellm_subset,
+            subset=run.subset,
             profile="throughput",
             rate=args.gen_len_rate,
             max_requests=None,
@@ -193,7 +285,7 @@ def _run_subset(
             [gen_len_output],
             gen_len_dir / f"max_tokens_{safe}.json",
         )
-        key = guidellm_subset if guidellm_subset else safe
+        key = run.subset or safe
         max_tokens = mapping.get(key, max_tokens)
         logger.info("[%s] max_tokens=%d", subset, max_tokens)
 
@@ -202,7 +294,7 @@ def _run_subset(
     run_output = artifacts_dir / f"run_{safe}.json"
     run_guidellm(
         **guidellm_common,
-        subset=guidellm_subset,
+        subset=run.subset,
         rate=args.sweep_rate if is_sweep else args.gen_len_rate,
         profile=profile,
         max_requests=args.max_requests,
@@ -212,10 +304,29 @@ def _run_subset(
     )
     current = _require_metrics(metrics_url)
 
+    with run_output.open() as f:
+        run_data = json.load(f)
+
+    # Rejected prompts cost the run its sample, not its exit code.
+    counts = parse_request_counts(run_data)
+    landed = sum(counts.values())
+    if counts["requests_successful"] < landed:
+        logger.warning(
+            "[%s] %d/%d requests did not complete (%d errored, %d incomplete);"
+            " metrics below reflect only the %d that did",
+            subset,
+            landed - counts["requests_successful"],
+            landed,
+            counts["requests_errored"],
+            counts["requests_incomplete"],
+            counts["requests_successful"],
+        )
+
     spec = extract_spec_decode_metrics(
         current,
         baseline_metrics=baseline,
     )
+    spec.update(counts)
     has_spec = spec and spec.get("num_drafts", 0) > 0
 
     if has_spec:
@@ -234,6 +345,7 @@ def _run_subset(
         rows = parse_sweep_results(
             run_output,
             spec if has_spec else None,
+            data=run_data,
         )
         if rows:
             if perf_csv is None:
@@ -262,59 +374,24 @@ def run_benchmark(args: argparse.Namespace) -> None:
     perf_csv = None
     all_max_tokens: dict[str, int] = {}
 
-    # Build a flat list of (label, guidellm_common) to run uniformly.
-    # _run_subset auto-detects whether --data-args is needed from the dataset path.
-    dataset_spec = args.dataset
-    run_items: list[tuple[str, dict]] = []
-
-    if dataset_spec.startswith("speedbench/"):
-        if not getattr(args, "speedbench_data_dir", None):
-            logger.error(
-                "--speedbench-data-dir is required for speedbench/ datasets.\n"
-                "Run scripts/evaluate/prepare_speedbench.py first, then add"
-                " --speedbench-data-dir <dir>.",
-            )
-            sys.exit(1)
-        pairs = _resolve_speedbench(dataset_spec, Path(args.speedbench_data_dir))
-        for label, local_path in pairs:
-            run_items.append(
-                (
-                    label,
-                    {
-                        "target": args.target,
-                        "dataset": str(local_path),
-                        "data_column_mapper": _SPEEDBENCH_COLUMN_MAPPER,
-                        "max_concurrency": args.max_concurrency,
-                    },
-                )
-            )
-    else:
-        guidellm_common = {
-            "target": args.target,
-            "dataset": dataset_spec,
-            "data_column_mapper": args.data_column_mapper,
-            "max_concurrency": args.max_concurrency,
-        }
-        for subset in [s.strip() for s in args.subsets.split(",") if s.strip()]:
-            run_items.append((subset, guidellm_common))
+    run_items = _resolve_runs(args)
 
     logger.info(
         "Mode: %s | %d subsets | Output: %s", args.mode, len(run_items), output_dir
     )
-    for label, common in run_items:
+    for run in run_items:
         acceptance_csv, perf_csv, mt = _run_subset(
-            label,
+            run,
             args,
             is_sweep=is_sweep,
             metrics_url=metrics_url,
             artifacts_dir=artifacts_dir,
             output_dir=output_dir,
-            guidellm_common=common,
             acceptance_csv=acceptance_csv,
             perf_csv=perf_csv,
         )
         if mt is not None:
-            all_max_tokens[label] = mt
+            all_max_tokens[run.label] = mt
 
     if acceptance_csv is None:
         logger.error("No acceptance metrics collected from any subset")
@@ -362,12 +439,15 @@ def main() -> None:
     parser.add_argument(
         "--dataset",
         default=DEFAULT_DATASET,
-        help=f"HF dataset ID or local directory (default: {DEFAULT_DATASET})",
+        help=(
+            "HF dataset ID, local path, or prepared benchmark selector "
+            f"(default: {DEFAULT_DATASET})"
+        ),
     )
     parser.add_argument(
         "--subsets",
         default=DEFAULT_SUBSETS,
-        help="Comma-separated subset names (default: all 9 standard subsets)",
+        help="Comma-separated HF subset names (default: all 9 standard subsets)",
     )
     parser.add_argument(
         "--output-dir",
@@ -410,13 +490,14 @@ def main() -> None:
         f" (default: {DEFAULT_DATA_COLUMN_MAPPER})",
     )
     parser.add_argument(
-        "--speedbench-data-dir",
+        "--dataset-dir",
         default=None,
-        dest="speedbench_data_dir",
-        help=(
-            "Path to directory produced by SPEED-Bench prepare.py. "
-            "Required when --dataset is a speedbench/ spec."
-        ),
+        help="Prepared data directory for speedbench or longbench-v2",
+    )
+    parser.add_argument(
+        "--speedbench-data-dir",
+        dest="dataset_dir",
+        help=argparse.SUPPRESS,
     )
 
     args = parser.parse_args()
