@@ -146,10 +146,25 @@ class DraftVocabMixin(nn.Module):
         if hasattr(self, "verifier_norm"):
             weights_to_load.append("model.norm.weight")
 
-        verifier_weights = load_model_layers(
-            weights_to_load,
-            verifier_config.name_or_path,
-        )
+        lm_head_rows: dict[str, torch.Tensor] | None = None
+        if self.use_draft_vocab:
+            if self.t2d is None or not torch.any(self.t2d).item():  # type: ignore[arg-type]
+                raise ValueError(
+                    "t2d tensor hasn't been set. Please call "
+                    "`.load_vocab_mappings(t2d, d2t)` before `.load_verifier_weights()`"
+                )
+            lm_head_rows = {"lm_head.weight": self.t2d.detach().cpu()}
+        if lm_head_rows is None:
+            verifier_weights = load_model_layers(
+                weights_to_load,
+                verifier_config.name_or_path,
+            )
+        else:
+            verifier_weights = load_model_layers(
+                weights_to_load,
+                verifier_config.name_or_path,
+                row_indices=lm_head_rows,
+            )
 
         embed_tokens_weight = verifier_weights["embed_tokens.weight"]
         lm_head_weight = verifier_weights.get("lm_head.weight", embed_tokens_weight)
@@ -159,14 +174,21 @@ class DraftVocabMixin(nn.Module):
             self.embed_tokens.load_state_dict({"weight": embed_tokens_weight})
 
         if self.use_draft_vocab:
-            if self.t2d is None or not torch.any(self.t2d).item():  # type: ignore[arg-type]
+            # An absent LM head falls back to the full embedding tensor. An
+            # explicit dense or quantized LM head was already row-selected by
+            # load_model_layers to avoid materializing unused vocabulary rows.
+            if lm_head_weight.shape[0] == self.verifier_vocab_size:
+                lm_head_weight = lm_head_weight[
+                    self.t2d.to(  # type: ignore[union-attr,index]
+                        device=lm_head_weight.device, dtype=torch.bool
+                    ),
+                    :,
+                ]
+            elif lm_head_weight.shape[0] != self.draft_vocab_size:
                 raise ValueError(
-                    "t2d tensor hasn't been set. Please call "
-                    "`.load_vocab_mappings(t2d, d2t)` before `.load_verifier_weights()`"
+                    f"Loaded LM head has {lm_head_weight.shape[0]} rows, expected "
+                    f"{self.draft_vocab_size} selected draft-vocabulary rows."
                 )
-            lm_head_weight = lm_head_weight[
-                self.t2d.to(device=lm_head_weight.device, dtype=torch.bool), :  # type: ignore[union-attr,index]
-            ]
 
         if self.lm_head.weight.isnan().any():
             self.lm_head.load_state_dict(
