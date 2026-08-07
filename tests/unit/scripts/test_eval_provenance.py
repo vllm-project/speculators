@@ -19,7 +19,7 @@ class TestSpeculatorsRepoRoot:
         root = _speculators_repo_root()
         if root is not None:
             assert isinstance(root, str)
-            assert (Path(root) / ".git").is_dir()
+            assert (Path(root) / ".git").exists()
 
     def test_returns_none_when_import_fails(self):
         with patch.dict(sys.modules, {"speculators": None}):
