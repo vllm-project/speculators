@@ -107,23 +107,16 @@ class Qwen3DFlashAttention(nn.Module):
         # Instead of computing the k and v matricies from the hidden states,
         # the target_hidden is injected into the kv cache, (shape is context
         # length + block size)
-        bsz, q_len = hidden_states.shape[:-1]
-        ctx_len = target_hidden.shape[1]
         q = self.q_proj(hidden_states)
-        q = q.view(bsz, q_len, -1, self.head_dim)
+        q = q.unflatten(-1, (-1, self.head_dim))
         q = self.q_norm(q).transpose(1, 2)
         # This is the main difference from the usual attention mechanism.
         k_ctx = self.k_proj(target_hidden)
         k_noise = self.k_proj(hidden_states)
         v_ctx = self.v_proj(target_hidden)
         v_noise = self.v_proj(hidden_states)
-        k = torch.cat([k_ctx, k_noise], dim=1).view(
-            bsz, ctx_len + q_len, -1, self.head_dim
-        )
-        # note the length becomes context length + block size
-        v = torch.cat([v_ctx, v_noise], dim=1).view(
-            bsz, ctx_len + q_len, -1, self.head_dim
-        )
+        k = torch.cat([k_ctx, k_noise], dim=1).unflatten(-1, (-1, self.head_dim))
+        v = torch.cat([v_ctx, v_noise], dim=1).unflatten(-1, (-1, self.head_dim))
         k = self.k_norm(k).transpose(1, 2)
         v = v.transpose(1, 2)
         cos, sin = position_embeddings
@@ -150,7 +143,7 @@ class Qwen3DFlashAttention(nn.Module):
             sliding_window=self.sliding_window,
             **kwargs,
         )
-        attn_output = attn_output.reshape(bsz, q_len, -1)
+        attn_output = attn_output.flatten(2)
         attn_output = self.o_proj(attn_output)
         return attn_output, attn_weights
 
