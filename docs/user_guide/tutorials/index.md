@@ -6,6 +6,10 @@ Step-by-step tutorials to guide you through complete workflows, from data prepar
 
 The main end-to-end walkthrough: prepare data, generate hidden states, train, and serve. Covers Eagle-3, P-EAGLE, DFlash, DSpark, and MTP, in online, offline, or hybrid mode -- pick your algorithm and mode at the top of the page.
 
+## [Two-Stage SFT](two_stage_sft.md)
+
+Continue a trained speculator on a second target-generated dataset as a controlled baseline.
+
 ## [Response Regeneration](response_regeneration.md)
 
 Regenerate dataset responses using your target model for improved drafter alignment. Recommended before training.
