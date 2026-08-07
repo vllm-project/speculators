@@ -1,7 +1,10 @@
 import os
+import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import patch
+
+import pytest
 
 from speculators.train.checkpointer import SingleGPUCheckpointer
 from speculators.train.utils import save_train_command
@@ -59,8 +62,8 @@ class TestSaveTrainCommand:
 
     def test_git_sha_fallback_on_error(self, tmp_path: Path):
         with patch(
-            "speculators.train.utils.subprocess.run",
-            side_effect=OSError("no git"),
+            "speculators.train.utils._git_sha",
+            return_value="unknown",
         ):
             save_train_command(str(tmp_path))
         content = (tmp_path / "train_command.txt").read_text()
@@ -85,6 +88,54 @@ class TestSaveTrainCommand:
         content = (tmp_path / "train_command.txt").read_text()
         assert "old content" not in content
         assert "# Timestamp:" in content
+
+
+# ---------------------------------------------------------------------------
+# speculators.patch tests
+# ---------------------------------------------------------------------------
+
+
+class TestSpeculatorsPatch:
+    def test_creates_patch_file(self, tmp_path: Path):
+        save_train_command(str(tmp_path))
+        assert (tmp_path / "speculators.patch").exists()
+
+    def test_patch_contains_repo_header(self, tmp_path: Path):
+        save_train_command(str(tmp_path))
+        content = (tmp_path / "speculators.patch").read_text()
+        assert content.startswith("# repo: ")
+
+    def test_patch_contains_sha(self, tmp_path: Path):
+        save_train_command(str(tmp_path))
+        content = (tmp_path / "speculators.patch").read_text()
+        first_line = content.split("\n")[0]
+        assert "(" in first_line
+        assert ")" in first_line
+
+    def test_no_patch_when_no_repo(self, tmp_path: Path):
+        with patch(
+            "speculators.train.utils._find_repo_root",
+            return_value=None,
+        ):
+            save_train_command(str(tmp_path))
+        assert not (tmp_path / "speculators.patch").exists()
+
+    def test_patch_failure_raises(self, tmp_path: Path):
+        original_run = subprocess.run
+
+        def _fail_on_diff(*args, **kwargs):
+            if "diff" in args[0]:
+                raise OSError("git broke")
+            return original_run(*args, **kwargs)
+
+        with (
+            patch(
+                "speculators.train.utils.subprocess.run",
+                side_effect=_fail_on_diff,
+            ),
+            pytest.raises(OSError, match="git broke"),
+        ):
+            save_train_command(str(tmp_path))
 
 
 # ---------------------------------------------------------------------------
