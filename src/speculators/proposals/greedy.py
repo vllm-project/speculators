@@ -62,7 +62,7 @@ class GreedyTokenProposalConfig(TokenProposalConfig):
         default=0.0,
         description=(
             "When verifier_accept_k > 1, this is the maximum distance, "
-            "in log liklihood, a speculative token found within the verifier's "
+            "in log likelihood, a speculative token found within the verifier's "
             "top k tokens can be from the verifier's top token to be accepted. "
             "This enables a limit on how likely a speculative token must be to "
             "be accepted ensuring that unlikely or poorly predicted tokens "
