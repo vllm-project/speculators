@@ -1,4 +1,5 @@
 import logging
+from copy import deepcopy
 from typing import ClassVar
 
 import torch
@@ -95,7 +96,13 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             config.transformer_layer_config.hidden_size,
             eps=config.transformer_layer_config.rms_norm_eps,  # type: ignore[arg-type]
         )
-        self.rotary_emb = Qwen3RotaryEmbedding(config.transformer_layer_config)  # type: ignore[arg-type]
+        rotary_config = config.transformer_layer_config
+        rope_params = getattr(rotary_config, "rope_parameters", None)
+        if rope_params and "sliding_attention" in rope_params:
+            # Flatten nested rope_parameters to the sliding_attention variant.
+            rotary_config = deepcopy(rotary_config)
+            rotary_config.rope_parameters = rope_params["sliding_attention"]
+        self.rotary_emb = Qwen3RotaryEmbedding(rotary_config)  # type: ignore[arg-type]
 
         self.fc = nn.Linear(
             len(self.target_layer_ids) * config.transformer_layer_config.hidden_size,
