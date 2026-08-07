@@ -144,8 +144,8 @@ def js_div_loss(
     Returns:
         Per-position JS divergence with shape [1, seq_len].
     """
-    draft_logq = torch.nn.functional.log_softmax(logits, dim=-1)
-    target_logp = torch.nn.functional.log_softmax(targets, dim=-1)
+    draft_logq = torch.nn.functional.log_softmax(logits, dim=-1, dtype=torch.float32)
+    target_logp = torch.nn.functional.log_softmax(targets, dim=-1, dtype=torch.float32)
     # log m = log((p + q) / 2), computed in log space for stability
     log_m = torch.logaddexp(draft_logq, target_logp) - math.log(2.0)
     kl_target_to_mix = torch.nn.functional.kl_div(
@@ -381,49 +381,62 @@ def dpace_loss_decay(
     return weight.reshape(1, -1)
 
 
-# ``tv`` and ``nla`` run the fused Triton kernels on CUDA/ROCm (much lower peak
-# memory at long context; see models/fused_tv_loss.py) and fall back to the eager
-# losses above on every other backend -- CPU, or non-CUDA accelerators such as
-# Ascend NPU where mainline Triton has no backend. ``logits.is_cuda`` gates
-# CUDA/ROCm; the import is lazy so this module imports without Triton installed.
+# Fused Triton losses run on CUDA/ROCm (a few scalars per row instead of fp32
+# [T, V] intermediates; see models/fused_losses.py); everything else -- CPU,
+# NPUs without a Triton backend -- falls back to the eager losses above. The
+# import is lazy so this module works without Triton installed.
 
 
 @cache
 def _fused_kernel(name: str):
-    """Import and cache a fused kernel by name; ``None`` if Triton is unavailable."""
+    """Import and cache a fused loss by name; ``None`` if Triton is unavailable."""
     try:
-        from speculators.models import fused_tv_loss as mod  # noqa: PLC0415
+        from speculators.models import fused_losses as mod  # noqa: PLC0415
     except ImportError:
         return None
     return getattr(mod, name)
 
 
-def tv_loss_fused_or_eager(logits: torch.Tensor, targets: torch.Tensor):
-    """TV loss: fused Triton on CUDA/ROCm (fp32), eager ``tv_loss`` on CPU/NPU."""
-    if logits.is_cuda:
-        kernel = _fused_kernel("fused_tv_loss")
-        if kernel is not None:
-            return kernel(logits, targets)
-    return tv_loss(logits, targets)
+def _fused_or_eager(
+    fused_name: str,
+    eager_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
+) -> Callable[[torch.Tensor, torch.Tensor], torch.Tensor]:
+    """Dispatch to the fused Triton twin on CUDA/ROCm, else run *eager_fn*.
+
+    Fused backward returns no target gradient, so differentiable targets also
+    fall back to eager (training targets come from a no-grad verifier).
+    """
+
+    def loss_fn(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        if logits.is_cuda and not targets.requires_grad:
+            fused = _fused_kernel(fused_name)
+            if fused is not None:
+                return fused(logits, targets)
+        return eager_fn(logits, targets)
+
+    loss_fn.__name__ = f"{eager_fn.__name__}_fused_or_eager"
+    return loss_fn
 
 
-def nla_loss_fused_or_eager(logits: torch.Tensor, targets: torch.Tensor):
-    """NLA loss: fused Triton on CUDA/ROCm (fp32), eager on CPU/NPU."""
-    if logits.is_cuda:
-        kernel = _fused_kernel("fused_nla_loss")
-        if kernel is not None:
-            return kernel(logits, targets)
-    return neg_log_acceptance_loss(logits, targets)
+kl_div_loss_fused_or_eager = _fused_or_eager("fused_kl_div_loss", kl_div_loss)
+reverse_kl_div_loss_fused_or_eager = _fused_or_eager(
+    "fused_reverse_kl_div_loss", reverse_kl_div_loss
+)
+js_div_loss_fused_or_eager = _fused_or_eager("fused_js_div_loss", js_div_loss)
+ce_loss_fused_or_eager = _fused_or_eager("fused_ce_loss", ce_loss)
+tv_loss_fused_or_eager = _fused_or_eager("fused_tv_loss", tv_loss)
+nla_loss_fused_or_eager = _fused_or_eager("fused_nla_loss", neg_log_acceptance_loss)
+lk_hybrid_loss_fused_or_eager = _fused_or_eager("fused_lk_hybrid_loss", lk_hybrid_loss)
 
 
 _LOSS_FN_MAP: dict[str, Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = {
-    "kl_div": kl_div_loss,
-    "rkl": reverse_kl_div_loss,
-    "jsd": js_div_loss,
-    "ce": ce_loss,
+    "kl_div": kl_div_loss_fused_or_eager,
+    "rkl": reverse_kl_div_loss_fused_or_eager,
+    "jsd": js_div_loss_fused_or_eager,
+    "ce": ce_loss_fused_or_eager,
     "tv": tv_loss_fused_or_eager,
     "nla": nla_loss_fused_or_eager,
-    "lk_hybrid": lk_hybrid_loss,
+    "lk_hybrid": lk_hybrid_loss_fused_or_eager,
 }
 
 
