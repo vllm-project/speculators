@@ -4,6 +4,7 @@ from collections.abc import Callable
 from functools import cache
 
 import torch
+import torch.distributed as dist
 
 _EPS = 1e-5
 
@@ -535,6 +536,16 @@ def loss_function(
             pos_idx.to(elementwise_loss.dtype), elementwise_loss=elementwise_loss
         )
         elementwise_loss = elementwise_loss * decay_mult
+
+    if dist.is_available() and dist.is_initialized() and dist.get_world_size() > 1:
+        # Normalize by the GLOBAL token count: the per-rank mean below, once
+        # DDP/FSDP mean-averages the grads, yields the rank-local mean of ratios
+        # instead of Σ_r Σ_t loss / Σ_r Σ_t mask. The ×world_size counteracts that
+        # averaging, so this is grad-identical for token-balanced ranks and only
+        # corrects the imbalanced case. Denominator is detached (a normalizer).
+        global_den = loss_mask.sum().detach()
+        dist.all_reduce(global_den, op=dist.ReduceOp.SUM)
+        return elementwise_loss.sum() / (global_den + _EPS) * dist.get_world_size()
 
     denominator = loss_mask.sum(dim=1) + _EPS
 
