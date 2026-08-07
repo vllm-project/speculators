@@ -248,6 +248,31 @@ class TestVocabBoundary:
 
 @requires_cuda
 class TestDFlashParams:
+    def test_loss_mask_gates_the_predicted_token(self):
+        # sample_from_anchor=True (DSpark's default) supervises slot j on token
+        # a+j+1, so gating it on loss_mask[a+j] trains the slot past a turn's
+        # last content token on the separator that follows it.
+        model = make_dflash_model(sample_from_anchor=True, draft_attn_impl="eager")
+        samples = _make_samples([MAX_LEN])
+        batch = make_batch(max_len=MAX_LEN, samples=samples, hidden_size=HIDDEN_SIZE)
+        batch["loss_mask"] = torch.zeros_like(batch["loss_mask"])
+        batch["loss_mask"][0, 8:40] = 1  # one assistant turn, boundary at 40
+
+        *_, aligned_loss_mask, anchored_block_indices = model._backbone_forward(
+            hidden_states=batch["hidden_states"],
+            input_ids=batch["input_ids"],
+            loss_mask=batch["loss_mask"],
+            verifier_last_hidden_states=batch["verifier_last_hidden_states"],
+            document_ids=batch["document_ids"],
+            position_ids=batch["position_ids"],
+            max_anchors=8,
+        )
+
+        supervised = aligned_loss_mask[0].bool()
+        predicted_is_supervised = batch["loss_mask"][0][anchored_block_indices + 1]
+        assert supervised.any(), "no slot was supervised; the probe proves nothing"
+        assert predicted_is_supervised[supervised].all()
+
     @pytest.mark.parametrize("block_size", [2, 4, 8])
     def test_varying_block_size(self, block_size):
         model = make_dflash_model(block_size=block_size)

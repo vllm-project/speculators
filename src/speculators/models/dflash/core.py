@@ -413,7 +413,14 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         logits = self.lm_head(hidden)
         # shape: [1, num_anchors*block_size, vocab_size]
 
-        aligned_loss_mask = loss_mask.clone()[:, anchored_block_indices]
+        # The mask must gate the token a slot predicts, not the slot's own
+        # position. select_anchors' tail exclusion keeps the shift in range.
+        mask_indices = (
+            anchored_block_indices + 1
+            if self.config.sample_from_anchor
+            else anchored_block_indices
+        )
+        aligned_loss_mask = loss_mask.clone()[:, mask_indices]
         # shape: [1, num_anchors*block_size]
 
         # zero out any padded anchor blocks
