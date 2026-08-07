@@ -39,18 +39,148 @@ def _make_minimal_trainer(tmp_path: Path, checkpoint_freq: int, save_best: bool)
     return trainer
 
 
+def _mark_complete(tmp_path: Path, epoch: int | str) -> None:
+    (tmp_path / str(epoch) / SingleGPUCheckpointer.COMPLETE_MARKER_FILENAME).touch()
+
+
 def test_previous_epoch_ignores_checkpoint_best(tmp_path: Path):
     (tmp_path / "0").mkdir()
     (tmp_path / "2").mkdir()
+    _mark_complete(tmp_path, 0)
+    _mark_complete(tmp_path, 2)
     (tmp_path / "checkpoint_best").symlink_to("0", target_is_directory=True)
 
     cp = SingleGPUCheckpointer(str(tmp_path))
     assert cp.previous_epoch == 2
 
 
+def test_previous_epoch_skips_unmarked_dir(tmp_path: Path):
+    """A crash mid-save leaves an epoch dir without the completeness marker;
+    resume must fall back to the newest complete checkpoint."""
+    (tmp_path / "0").mkdir()
+    _mark_complete(tmp_path, 0)
+    (tmp_path / "1").mkdir()
+    (tmp_path / "1" / "model.safetensors").write_bytes(b"truncated")  # no marker
+
+    cp = SingleGPUCheckpointer(str(tmp_path))
+    assert cp.previous_epoch == 0
+
+
+def test_mark_checkpoint_complete_enables_resume(tmp_path: Path):
+    (tmp_path / "3").mkdir()
+    (tmp_path / "3" / "model.safetensors").write_bytes(b"weights")
+
+    cp = SingleGPUCheckpointer(str(tmp_path))
+    assert cp.previous_epoch == -1
+
+    cp.mark_checkpoint_complete(3)
+    assert (tmp_path / "3" / cp.COMPLETE_MARKER_FILENAME).exists()
+    assert SingleGPUCheckpointer(str(tmp_path)).previous_epoch == 3
+
+
+def test_mark_checkpoint_complete_fsyncs_temp_marker_before_publish(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    epoch_dir = tmp_path / "3"
+    epoch_dir.mkdir()
+    (epoch_dir / "model.safetensors").write_bytes(b"weights")
+
+    fsynced_inodes: set[int] = set()
+    real_fsync = os.fsync
+    real_replace = os.replace
+
+    def tracking_fsync(fd: int) -> None:
+        fsynced_inodes.add(os.fstat(fd).st_ino)
+        real_fsync(fd)
+
+    def checking_replace(source: str | Path, destination: str | Path) -> None:
+        assert Path(source).stat().st_ino in fsynced_inodes
+        real_replace(source, destination)
+
+    monkeypatch.setattr(os, "fsync", tracking_fsync)
+    monkeypatch.setattr(os, "replace", checking_replace)
+
+    cp = SingleGPUCheckpointer(str(tmp_path))
+    cp.mark_checkpoint_complete(3)
+
+    assert cp.complete_marker_path(3).exists()
+    assert not (epoch_dir / ".checkpoint_complete.tmp").exists()
+
+
+def test_maybe_save_checkpoint_writes_marker(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    trainer = _make_minimal_trainer(tmp_path, checkpoint_freq=1, save_best=False)
+
+    def fake_cp_save_checkpoint(_model, _opt, epoch):
+        (tmp_path / str(epoch)).mkdir(exist_ok=True)
+
+    monkeypatch.setattr(
+        trainer.checkpointer, "save_checkpoint", fake_cp_save_checkpoint
+    )
+    trainer.maybe_save_checkpoint(0, local_step=0)
+
+    marker = tmp_path / "0" / SingleGPUCheckpointer.COMPLETE_MARKER_FILENAME
+    assert marker.exists()
+    assert SingleGPUCheckpointer(str(tmp_path)).previous_epoch == 0
+
+
+def test_clear_checkpoint_complete_fsyncs_epoch_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    epoch_dir = tmp_path / "3"
+    epoch_dir.mkdir()
+    marker = epoch_dir / SingleGPUCheckpointer.COMPLETE_MARKER_FILENAME
+    marker.touch()
+
+    fsynced_inodes: set[int] = set()
+    real_fsync = os.fsync
+
+    def tracking_fsync(fd: int) -> None:
+        fsynced_inodes.add(os.fstat(fd).st_ino)
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", tracking_fsync)
+
+    SingleGPUCheckpointer(str(tmp_path)).clear_checkpoint_complete(3)
+
+    assert not marker.exists()
+    assert epoch_dir.stat().st_ino in fsynced_inodes
+
+
+def test_failed_same_epoch_rewrite_cannot_retain_completion_marker(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    trainer = _make_minimal_trainer(tmp_path, checkpoint_freq=1, save_best=False)
+    save_calls = 0
+
+    def fake_cp_save_checkpoint(_model, _opt, epoch):
+        nonlocal save_calls
+        save_calls += 1
+        epoch_dir = tmp_path / str(epoch)
+        epoch_dir.mkdir(exist_ok=True)
+        (epoch_dir / "model.safetensors").write_bytes(b"partial")
+        if save_calls == 2:
+            raise RuntimeError("injected rewrite failure")
+
+    monkeypatch.setattr(
+        trainer.checkpointer, "save_checkpoint", fake_cp_save_checkpoint
+    )
+    trainer.maybe_save_checkpoint(0, local_step=1)
+
+    with pytest.raises(RuntimeError, match="injected rewrite failure"):
+        trainer.maybe_save_checkpoint(0, local_step=2)
+
+    marker = tmp_path / "0" / SingleGPUCheckpointer.COMPLETE_MARKER_FILENAME
+    assert not marker.exists()
+    assert SingleGPUCheckpointer(str(tmp_path)).previous_epoch == -1
+
+
 def test_update_best_symlink_creates_and_updates(tmp_path: Path):
     (tmp_path / "1").mkdir()
     (tmp_path / "3").mkdir()
+    _mark_complete(tmp_path, 1)
+    _mark_complete(tmp_path, 3)
 
     cp = SingleGPUCheckpointer(str(tmp_path))
     cp.update_best_symlink(1)
@@ -210,6 +340,87 @@ def test_checkpoint_freq_flag_controls_saves(
     assert best_path.resolve() == (tmp_path / "5").resolve()
 
 
+def test_checkpoint_best_ignores_incomplete_target(tmp_path: Path):
+    (tmp_path / "0").mkdir()
+    _mark_complete(tmp_path, 0)
+    (tmp_path / "1").mkdir()
+    (tmp_path / "1" / "val_metrics.json").write_text('{"loss_epoch": 0.01}')
+    (tmp_path / "checkpoint_best").symlink_to("1", target_is_directory=True)
+
+    cp = SingleGPUCheckpointer(str(tmp_path))
+    assert cp.previous_epoch == 0
+    assert cp.read_best_epoch() is None
+    assert cp.load_best_val_loss() is None
+
+
+def test_checkpoint_best_rejects_target_outside_checkpoint_root(tmp_path: Path):
+    (tmp_path / "0").mkdir()
+    _mark_complete(tmp_path, 0)
+    external = tmp_path.parent / f"{tmp_path.name}-external"
+    external.mkdir()
+    _mark_complete(external.parent, external.name)
+    (tmp_path / "checkpoint_best").symlink_to(external, target_is_directory=True)
+
+    cp = SingleGPUCheckpointer(str(tmp_path))
+    assert cp.read_best_epoch() is None
+    assert cp.load_best_val_loss() is None
+
+
+def test_checkpoint_best_ignores_symlink_loop(tmp_path: Path):
+    (tmp_path / "checkpoint_best").symlink_to("checkpoint_best")
+
+    cp = SingleGPUCheckpointer(str(tmp_path))
+    assert cp.read_best_epoch() is None
+    assert cp.load_best_val_loss() is None
+
+
+def test_cleanup_rejects_incomplete_best_target(tmp_path: Path):
+    (tmp_path / "0").mkdir()
+    _mark_complete(tmp_path, 0)
+    (tmp_path / "1").mkdir()
+    (tmp_path / "checkpoint_best").symlink_to("1", target_is_directory=True)
+
+    cp = SingleGPUCheckpointer(str(tmp_path))
+    with pytest.raises(ValueError, match="requested committed epoch"):
+        cp.cleanup_keep_only_best(1)
+
+    assert (tmp_path / "0").is_dir()
+    assert (tmp_path / "1").is_dir()
+
+
+def test_update_best_symlink_requires_complete_epoch(tmp_path: Path):
+    (tmp_path / "1").mkdir()
+    cp = SingleGPUCheckpointer(str(tmp_path))
+
+    with pytest.raises(FileNotFoundError, match="incomplete epoch 1"):
+        cp.update_best_symlink(1)
+
+
+def test_maybe_update_best_publishes_marker_before_best_symlink(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    trainer = _make_minimal_trainer(tmp_path, checkpoint_freq=1, save_best=False)
+    calls: list[str] = []
+    original_mark = trainer.checkpointer.mark_checkpoint_complete
+    original_update = trainer.checkpointer.update_best_symlink
+
+    def mark(epoch: int) -> None:
+        calls.append("mark")
+        original_mark(epoch)
+
+    def update(epoch: int) -> None:
+        calls.append("best")
+        assert trainer.checkpointer.complete_marker_path(epoch).is_file()
+        original_update(epoch)
+
+    monkeypatch.setattr(trainer.checkpointer, "mark_checkpoint_complete", mark)
+    monkeypatch.setattr(trainer.checkpointer, "update_best_symlink", update)
+
+    trainer.maybe_update_best(0, {"loss_epoch": 0.1})
+
+    assert calls == ["mark", "best"]
+
+
 def test_save_and_load_val_metrics(tmp_path: Path):
     cp = SingleGPUCheckpointer(str(tmp_path))
 
@@ -219,12 +430,14 @@ def test_save_and_load_val_metrics(tmp_path: Path):
     # Save val_metrics for epoch 0 and point checkpoint_best at it
     (tmp_path / "0").mkdir()
     cp.save_val_metrics(0, {"loss_epoch": 0.123456, "full_acc_0_epoch": 0.5})
+    _mark_complete(tmp_path, 0)
     cp.update_best_symlink(0)
     assert cp.load_best_val_loss() == pytest.approx(0.123456)
 
     # Save better metrics for epoch 1 and update best
     (tmp_path / "1").mkdir()
     cp.save_val_metrics(1, {"loss_epoch": 0.05, "full_acc_0_epoch": 0.7})
+    _mark_complete(tmp_path, 1)
     cp.update_best_symlink(1)
     assert cp.load_best_val_loss() == pytest.approx(0.05)
 
@@ -234,6 +447,7 @@ def test_best_val_loss_restored_on_resume(tmp_path: Path):
 
     cp = SingleGPUCheckpointer(str(tmp_path))
     cp.save_val_metrics(4, {"loss_epoch": 0.42, "full_acc_0_epoch": 0.6})
+    _mark_complete(tmp_path, 4)
     cp.update_best_symlink(4)
 
     trainer = Trainer.__new__(Trainer)
