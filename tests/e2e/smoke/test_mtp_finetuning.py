@@ -53,6 +53,8 @@ def test_mtp_finetuning_smoke(
         lr=3e-4,
         prompts=prompts,
         enforce_eager=True,
+        # Qwen3.5 is hybrid mamba: 'align' cache mode requires chunked prefill.
+        enable_chunked_prefill=True,
     )
 
 
@@ -72,6 +74,7 @@ def run_mtp_finetuning_e2e(
     train_timeout: int = 30 * 60,
     gpu_memory_utilization: float = 0.5,
     enforce_eager: bool = False,
+    enable_chunked_prefill: bool | None = None,
 ):
     """Run MTP online finetuning E2E pipeline.
 
@@ -121,6 +124,7 @@ def run_mtp_finetuning_e2e(
         gpu_memory_utilization=gpu_memory_utilization,
         target_layer_ids=target_layer_ids,
         enforce_eager=enforce_eager,
+        enable_chunked_prefill=enable_chunked_prefill,
     ):
         run_training(
             model=verifier,
