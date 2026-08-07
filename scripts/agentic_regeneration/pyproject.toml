@@ -1,0 +1,13 @@
+[project]
+name = "speculators-agentic-regeneration"
+version = "0.1.0"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "verifiers==0.2.0",
+    "prolog-v1 @ git+https://github.com/PrimeIntellect-ai/research-environments.git@54f30788fb9cf16c541feea8afcd83bfb3f9fb60#subdirectory=environments/reasoning/prolog_v1",
+    "livecodebench-v1 @ git+https://github.com/PrimeIntellect-ai/research-environments.git@54f30788fb9cf16c541feea8afcd83bfb3f9fb60#subdirectory=environments/code/livecodebench_v1",
+    "r2e-gym-v1 @ git+https://github.com/PrimeIntellect-ai/research-environments.git@54f30788fb9cf16c541feea8afcd83bfb3f9fb60#subdirectory=environments/swe/r2e_gym_v1",
+]
+
+[tool.uv]
+package = false
