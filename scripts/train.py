@@ -158,6 +158,11 @@ def create_transformer_layer_config(  # noqa: C901
             num_key_value_heads = num_attention_heads
     resolved_head_dim = head_dim or verifier_config.hidden_size // num_attention_heads
 
+    if head_dim is None:
+        # Verifiers like Qwen2 omit head_dim from their config; derive the
+        # implicit value so draft configs that require an int don't reject None.
+        head_dim = verifier_config.hidden_size // num_attention_heads
+
     if full_attention_indices and (
         min(full_attention_indices) < 0 or max(full_attention_indices) >= num_layers
     ):
