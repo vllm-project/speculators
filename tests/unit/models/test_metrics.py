@@ -380,6 +380,82 @@ class TestComputeAccuracySingleStep:
         assert cond_correct_1.item() == pytest.approx(2, abs=1e-4)
         assert cond_total_1.item() == pytest.approx(3, abs=1e-4)
 
+    def test_cond_total_respects_loss_mask(self):
+        """cond_total must count only positions that survive loss_mask.
+
+        Real tokens [0,1,2,3]: preds [1,2,3,9] vs tgt [1,2,3,4] -> [0,1,2]
+        correct, [3] wrong. Positions [4,5] are padding (masked out) and must
+        not enter the conditional denominator. With prev_correct all True the
+        conditional accuracy is 3 correct / 4 eligible, NOT 3 / 6.
+        """
+        pred = torch.tensor([[1, 2, 3, 9, 0, 0]])
+        tgt = torch.tensor([[1, 2, 3, 4, 7, 8]])
+        mask = torch.tensor([[1, 1, 1, 1, 0, 0]], dtype=torch.bool)
+        prev = torch.ones(1, 6, dtype=torch.bool)
+
+        _, _, cond_correct, cond_total = compute_accuracy_single_step(
+            pred, tgt, loss_mask=mask, prev_correct=prev
+        )
+        assert cond_correct.item() == pytest.approx(3, abs=1e-4)
+        assert cond_total.item() == pytest.approx(4, abs=1e-4)
+
+    def test_cond_acc_invariant_to_padding(self):
+        """Conditional accuracy must not change when only padding count changes."""
+        pred4 = torch.tensor([[1, 2, 3, 9]])
+        tgt4 = torch.tensor([[1, 2, 3, 4]])
+        mask4 = torch.ones(1, 4, dtype=torch.bool)
+        _, _, c4, t4 = compute_accuracy_single_step(
+            pred4,
+            tgt4,
+            loss_mask=mask4,
+            prev_correct=torch.ones(1, 4, dtype=torch.bool),
+        )
+
+        # Same 4 real tokens, now with 4 masked-out padding positions appended.
+        pred8 = torch.tensor([[1, 2, 3, 9, 0, 0, 0, 0]])
+        tgt8 = torch.tensor([[1, 2, 3, 4, 7, 8, 7, 8]])
+        mask8 = torch.tensor([[1, 1, 1, 1, 0, 0, 0, 0]], dtype=torch.bool)
+        _, _, c8, t8 = compute_accuracy_single_step(
+            pred8,
+            tgt8,
+            loss_mask=mask8,
+            prev_correct=torch.ones(1, 8, dtype=torch.bool),
+        )
+
+        assert (c4 / t4).item() == pytest.approx((c8 / t8).item(), abs=1e-4)
+        assert (c4 / t4).item() == pytest.approx(0.75, abs=1e-4)
+
+    def test_cond_total_first_step_respects_loss_mask(self):
+        """On the first step (prev_correct=None) cond_total equals masked count."""
+        pred = torch.tensor([[1, 2, 9, 0]])
+        tgt = torch.tensor([[1, 2, 3, 7]])
+        mask = torch.tensor([[1, 1, 1, 0]], dtype=torch.bool)
+
+        _, _, cond_correct, cond_total = compute_accuracy_single_step(
+            pred, tgt, loss_mask=mask, prev_correct=None
+        )
+        assert cond_correct.item() == pytest.approx(2, abs=1e-4)
+        assert cond_total.item() == pytest.approx(3, abs=1e-4)
+
+    def test_cond_total_uses_pre_and_prev_correct(self):
+        """Denominator must use previously-correct positions, not post-AND ones.
+
+        prev_correct = [T, T]; the current step gets only position 0 right.
+        The eligible (pre-AND) count is 2, so cond_acc is 1/2. A naive
+        denominator read after the in-place logical_and would be 1, wrongly
+        inflating cond_acc to 1.0.
+        """
+        pred = torch.tensor([[1, 9]])
+        tgt = torch.tensor([[1, 2]])
+        mask = torch.ones(1, 2, dtype=torch.bool)
+        prev = torch.ones(1, 2, dtype=torch.bool)
+
+        _, _, cond_correct, cond_total = compute_accuracy_single_step(
+            pred, tgt, loss_mask=mask, prev_correct=prev
+        )
+        assert cond_correct.item() == pytest.approx(1, abs=1e-4)
+        assert cond_total.item() == pytest.approx(2, abs=1e-4)
+
 
 class TestDecayFunctions:
     def test_dflash_anchor_zero_and_exp_values(self):
