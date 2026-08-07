@@ -106,13 +106,28 @@ Results are written to `acceptance.csv` in the output directory with per-categor
 python plot.py compare \
     --source "No Spec=nospec/perf_results.csv" \
     --source "DFlash=dflash/perf_results.csv" \
-    --metric latency --output-dir ./plots
+    --metric latency --title "Qwen3-8B" --output-dir ./plots
 
 # Pairwise speedup (blue = faster, red = regression)
 python plot.py speedup \
     --baseline "No Spec=nospec/perf_results.csv" \
     --target "DFlash=dflash/perf_results.csv" \
     --metric latency --title "Qwen3-8B" --output-dir ./plots
+
+# Interactivity: tok/s/user vs tok/s/GPU
+python plot.py compare \
+    --source "No Spec=nospec/perf_results.csv" \
+    --source "DFlash=dflash/perf_results.csv" \
+    --metric interactivity --num-gpus 1 --title "Qwen3-8B" --output-dir ./plots
 ```
 
-Both accept CSVs or raw GuideLLM sweep JSONs. Available metrics: `latency`, `itl`, `ttft`, `output_tps`.
+Both accept CSVs or raw GuideLLM sweep JSONs. Available metrics: `latency`, `itl`, `ttft`, `output_tps`, `interactivity`.
+
+Most metrics plot the chosen y-value against requests per second (RPS). The `interactivity` metric instead plots:
+
+| Axis | Definition |
+|------|------------|
+| **x** — Interactivity (tok/s/user) | `1000 / median_ITL_ms` |
+| **y** — Token throughput per GPU (tok/s/GPU) | `system_tps / num_gpus` |
+
+System throughput is aggregate output tokens per second (`total_output_tokens / duration`, falling back to GuideLLM's mean `output_tokens_per_second`), not the per-request median. `--num-gpus` is required because GPU count is not stored in result CSVs/JSONs (check vLLM logs for `tensor_parallel_size` / `world_size`). New sweeps write `output_tps_mean` into `perf_results.csv`; older CSVs without that column fall back to sibling `artifacts/run_*.json` files when present.
