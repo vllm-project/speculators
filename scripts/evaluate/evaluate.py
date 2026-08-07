@@ -173,7 +173,7 @@ def save_eval_provenance(output_dir: Path) -> None:
             output_dir / "eval_command.txt",
             f"{header}\n{shlex.join(sys.argv)}\n",
         )
-    except Exception:
+    except OSError:
         logger.warning("Failed to save eval_command.txt", exc_info=True)
 
 
