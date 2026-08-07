@@ -16,8 +16,8 @@ jobs:
       matrix:
         python: ["3.10", "3.13"]
         transformers: ["<5.0.0", ""] # empty string means latest version
-        exclude:                                                                                                                                                                                                                                                                        
-            - python: "3.13"                                                                                                                                                                                                                                                              
+        exclude:
+            - python: "3.13"
               transformers: "<5.0.0"
     steps:
       - uses: actions/checkout@v6
