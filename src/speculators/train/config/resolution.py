@@ -102,15 +102,74 @@ _ALGORITHM_GROUP_USERS: dict[str, frozenset[str]] = {
 
 # Marker key (schema ``_CLI_CHOICES``) -> the live registry supplying a field's
 # argparse choices. Binding the registry here -- not in the schema -- keeps the schema
-# free of runtime backend objects. The schema, not each backend's add_train_args, now
-# generates the flag surface: every backend's train-args are mirrored as schema fields
-# (e.g. the 'file' backend's --hidden-states-path is DataArgs' hidden_states_path) so
-# they survive resolution's CONFIG_DESTS filter; test_backend_reconciliation.py guards
-# against a backend adding a train-arg with no matching schema field (which would
-# otherwise be silently dropped).
+# free of runtime backend objects.
 _CLI_CHOICE_REGISTRIES: dict[str, Any] = {
     "hidden_states_backends": HiddenStatesBackend.registry,
 }
+
+
+# ---------------------------------------------------------------------------
+# Backend train-arg auto-registration
+# ---------------------------------------------------------------------------
+# Each HiddenStatesBackend's add_train_args is introspected once at import time
+# so the backend-contributed flags appear in the real parser and survive
+# resolution's CONFIG_DESTS filter. Backend args bypass pydantic entirely --
+# they are carried on TrainConfig._backend_args and merged into flatten().
+
+
+def _collect_backend_args() -> tuple[dict[str, list[argparse.Action]], frozenset[str]]:
+    """Introspect every registered backend's ``add_train_args``.
+
+    Returns ``(per_backend, all_dests)`` where *per_backend* maps backend name
+    to its argparse actions and *all_dests* is the union of their dests.
+    Raises at import time on dest collisions (cross-backend or with the schema).
+    """
+    per_backend: dict[str, list[argparse.Action]] = {}
+    all_dests: set[str] = set()
+    seen_dests: dict[str, str] = {}
+
+    for name, backend_cls in sorted(HiddenStatesBackend.registry.items()):
+        scratch = argparse.ArgumentParser(add_help=False)
+        backend_cls.add_train_args(scratch)
+        actions = [
+            a
+            for a in scratch._actions  # noqa: SLF001
+            if a.dest not in ("help", argparse.SUPPRESS)
+        ]
+        per_backend[name] = actions
+        for action in actions:
+            dest = action.dest
+            if dest in seen_dests:
+                raise RuntimeError(
+                    f"Backend '{name}' and '{seen_dests[dest]}' both register "
+                    f"train-arg dest '{dest}'"
+                )
+            if dest in CONFIG_DESTS:
+                raise RuntimeError(
+                    f"Backend '{name}' train-arg dest '{dest}' collides with "
+                    f"an existing schema field in CONFIG_DESTS"
+                )
+            seen_dests[dest] = name
+            all_dests.add(dest)
+
+    return per_backend, frozenset(all_dests)
+
+
+_BACKEND_ACTIONS, _BACKEND_DESTS = _collect_backend_args()
+
+
+def _backfill_backend_defaults(selected_backend: str, merged: dict[str, Any]) -> None:
+    """Fill in defaults for the selected backend's unset args.
+
+    Backend flags use ``default=SUPPRESS`` in the real parser so only
+    user-provided values appear, but ``from_train_args`` expects every arg to
+    exist on the namespace. This restores the backend's own defaults for any
+    dest the user did not provide.
+    """
+    actions = _BACKEND_ACTIONS.get(selected_backend, [])
+    for action in actions:
+        if action.dest not in merged and action.default is not argparse.SUPPRESS:
+            merged[action.dest] = action.default
 
 
 def _annotation_spec(annotation: Any) -> tuple[Any, bool, list[Any] | None]:
@@ -187,11 +246,36 @@ def _add_field_argument(
     parser.add_argument(flag, **kwargs)
 
 
+def _add_backend_arguments(parser: argparse.ArgumentParser) -> None:
+    """Append backend-contributed flags to *parser*, deduplicating by dest."""
+    backend_group = parser.add_argument_group("hidden-states backends")
+    seen_flags: set[str] = set()
+    for _bname, actions in sorted(_BACKEND_ACTIONS.items()):
+        for action in actions:
+            flag = _dest_to_flag(action.dest)
+            if flag in seen_flags:
+                continue
+            seen_flags.add(flag)
+            kwargs: dict[str, Any] = {
+                "dest": action.dest,
+                "default": argparse.SUPPRESS,
+            }
+            if action.help:
+                kwargs["help"] = action.help
+            if action.type is not None:
+                kwargs["type"] = action.type
+            if action.choices is not None:
+                kwargs["choices"] = action.choices
+            backend_group.add_argument(flag, **kwargs)
+
+
 def add_config_cli_arguments(parser: argparse.ArgumentParser) -> None:
     """Register every config field as a flag, grouped by concern for ``--help``.
 
     This is the whole tunable surface: generated from the schema, so a new field
     becomes a new flag with the right type, choices, bool style, and help.
+    Backend-contributed flags are appended via auto-registration from each
+    :class:`HiddenStatesBackend`'s ``add_train_args``.
     """
     general = parser.add_argument_group("general")
     for name in _ROOT_FIELDS:
@@ -200,6 +284,9 @@ def add_config_cli_arguments(parser: argparse.ArgumentParser) -> None:
         group = parser.add_argument_group(gname)
         for name, field in gmodel.model_fields.items():
             _add_field_argument(group, name, field)
+
+    if _BACKEND_ACTIONS:
+        _add_backend_arguments(parser)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -302,6 +389,7 @@ def build_from_sources(
     cli: dict[str, Any],
     config_path: str | None,
     argv: list[str],
+    backend_cli: dict[str, Any] | None = None,
 ) -> TrainConfig:
     """Layer the sources into a validated config, recording each value's origin.
 
@@ -309,7 +397,8 @@ def build_from_sources(
     stage-shaped ``config_path`` YAML, feeds the ``flag`` and ``yaml`` layers to
     pydantic-settings in precedence order (so the merge yields
     ``flag > yaml > default``), records per dest which layer won, and enforces the
-    cross-field draft-init contract. Raises :class:`ConfigError` /
+    cross-field draft-init contract. Backend-contributed args bypass pydantic and
+    are carried on ``cfg._backend_args``. Raises :class:`ConfigError` /
     ``ValidationError`` on bad input; never exits the process.
     """
     yaml_nested: dict[str, Any] = {}
@@ -330,6 +419,25 @@ def build_from_sources(
         for dest in CONFIG_DESTS
     }
     cfg._argv = list(argv)
+
+    # Backend-contributed args: merge YAML (backend: block) and CLI with
+    # flag > yaml precedence, then backfill defaults for the selected backend.
+    yaml_backend = {}
+    if isinstance(yaml_nested.get("backend"), dict):
+        yaml_backend = {
+            k: v for k, v in yaml_nested["backend"].items() if k in _BACKEND_DESTS
+        }
+    merged_backend = dict(yaml_backend)
+    if backend_cli:
+        merged_backend.update(backend_cli)
+    _backfill_backend_defaults(cfg.data.hidden_states_backend, merged_backend)
+    cfg._backend_args = merged_backend
+
+    for dest in _BACKEND_DESTS:
+        if backend_cli and dest in backend_cli:
+            cfg._provenance[dest] = "flag"
+        elif dest in yaml_backend:
+            cfg._provenance[dest] = "yaml"
 
     provided = {dest for dest, layer in cfg._provenance.items() if layer != "default"}
     _warn_mismatched_algorithm_blocks(cfg, provided)
@@ -406,6 +514,9 @@ def _partition_yaml_keys(yaml_nested: dict[str, Any]) -> tuple[set[str], set[str
             group_fields = _GROUPS[key].model_fields
             for leaf in value:
                 (known if leaf in group_fields else unknown).add(leaf)
+        elif key == "backend" and isinstance(value, dict):
+            for leaf in value:
+                (known if leaf in _BACKEND_DESTS else unknown).add(leaf)
         elif key in _ROOT_FIELDS:
             known.add(key)
         else:
@@ -435,14 +546,21 @@ def resolve(cls: type[TrainConfig], argv: list[str] | None) -> TrainConfig:
     parser = build_parser()
     namespace = parser.parse_args(argv)
     config_path = namespace.config
-    cli = {
-        dest: value for dest, value in vars(namespace).items() if dest in CONFIG_DESTS
+    ns_vars = vars(namespace)
+    cli = {dest: value for dest, value in ns_vars.items() if dest in CONFIG_DESTS}
+    backend_cli = {
+        dest: value for dest, value in ns_vars.items() if dest in _BACKEND_DESTS
     }
     # The command recorded for provenance: the live argv on the real launch path,
     # or a reconstruction when resolve() is driven with an explicit argv.
     full_argv = list(sys.argv) if argv is None else [sys.argv[0], *argv]
     try:
-        cfg = cls.from_sources(cli=cli, config_path=config_path, argv=full_argv)
+        cfg = cls.from_sources(
+            cli=cli,
+            config_path=config_path,
+            argv=full_argv,
+            backend_cli=backend_cli,
+        )
     except ValidationError as exc:
         parser.error(_format_config_error(exc))
     except ConfigError as exc:

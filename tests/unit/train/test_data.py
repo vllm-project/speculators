@@ -10,8 +10,8 @@ from safetensors.torch import save_file
 from speculators.models.eagle3.data import shift_batch
 from speculators.train.data import (
     ArrowDataset,
+    CollateFn,
     SampleFileDataset,
-    create_collate_fn,
     standardize_data_v1,
 )
 
@@ -133,7 +133,7 @@ def test_collate_fn_basic():
     max_len = 10
     hidden_size = 1
     num_target_layers = 3
-    collate_fn = create_collate_fn(
+    collate_fn = CollateFn(
         max_len, hidden_size, num_target_layers=num_target_layers, dtype=torch.float32
     )
 
@@ -210,7 +210,7 @@ def test_collate_fn_basic():
 
 def test_collate_fn_casts_hidden_states_dtype():
     """Test that hidden-states keys are cast to the target dtype during collation."""
-    collate_fn = create_collate_fn(4, 1, dtype=torch.bfloat16)
+    collate_fn = CollateFn(4, 1, dtype=torch.bfloat16)
     batch = [
         {
             "input_ids": torch.tensor([0], dtype=torch.long),
@@ -234,7 +234,7 @@ def test_collate_fn_length_truncation():
     max_len = 11
     hidden_size = 8
     num_target_layers = 3
-    collate_fn = create_collate_fn(
+    collate_fn = CollateFn(
         max_len, hidden_size, num_target_layers=num_target_layers, dtype=torch.float32
     )
 
@@ -469,8 +469,7 @@ def test_dataset_fallback_when_sample_lengths_json_malformed(tmp_path: Path):
     assert len(dataset.approx_lengths) == 2
 
 
-def test_arrow_dataset_default_split_ratio_does_not_crash(tmp_path: Path):
-    """ArrowDataset with default split_ratio=1.0 should support indexing."""
+def test_arrow_dataset_default_train_ratio_does_not_crash(tmp_path: Path):
     ds = Dataset.from_dict(
         {
             "input_ids": [[1, 2, 3]],

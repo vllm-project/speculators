@@ -30,6 +30,8 @@ def dump_yaml(cfg: "TrainConfig") -> str:
     defaults, yielding an identical config. The provenance record only selects
     which keys to emit; it is never inlined.
     """
+    from speculators.train.config.resolution import _BACKEND_DESTS  # noqa: PLC0415
+
     # Iterate the pinned flatten() order (not the provenance dict, whose key
     # order varies with how the config was populated) so the emitted YAML is
     # byte-stable across reloads regardless of flag-vs-yaml source.
@@ -38,7 +40,7 @@ def dump_yaml(cfg: "TrainConfig") -> str:
         provided = {
             dest: value
             for dest, value in resolved.items()
-            if cfg.provenance[dest] != "default"
+            if cfg.provenance.get(dest, "default") != "default"
         }
     else:
         # A from_flat config carries no layer provenance, so "customized" is
@@ -49,8 +51,14 @@ def dump_yaml(cfg: "TrainConfig") -> str:
             for dest, value in resolved.items()
             if value != baseline.get(dest)
         }
+
+    backend_provided = {k: v for k, v in provided.items() if k in _BACKEND_DESTS}
+    schema_provided = {k: v for k, v in provided.items() if k not in _BACKEND_DESTS}
+    nested = nest_flat(schema_provided)
+    if backend_provided:
+        nested["backend"] = backend_provided
     return yaml.safe_dump(
-        {"train": nest_flat(provided)},
+        {"train": nested},
         sort_keys=False,
         default_flow_style=False,
     )

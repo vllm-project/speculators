@@ -442,7 +442,7 @@ def build_draft_model(
             # _attn_implementation is never serialized by HF configs, so re-apply
             # the CLI selection before construction -- mirroring from_training_args.
             # MTP is skipped: its from_training_args never sets the field and its
-            # __init__ resolves its own default ("eager") when it is absent.
+            # __init__ resolves its own default ("sdpa") when it is absent.
             config = model_class.config_class.from_pretrained(args.from_pretrained)
             config.transformer_layer_config._attn_implementation = args.draft_attn_impl
             return model_class.from_pretrained(
