@@ -421,7 +421,13 @@ class Trainer:
             )
         return skip_steps
 
-    def train_epoch(self, epoch: int):
+    def train_epoch(self, epoch: int) -> int:
+        """Train one epoch and return the local step it stopped on.
+
+        Returns 0 when the epoch ran to completion, and the 1-based local step
+        when ``max_steps`` cut the epoch short, so the caller can persist the
+        partial-epoch cursor instead of recording an end-of-epoch checkpoint.
+        """
         self.model.train()
         if hasattr(self.train_loader.batch_sampler, "set_epoch"):
             self.train_loader.batch_sampler.set_epoch(epoch)  # type: ignore[union-attr]
@@ -507,11 +513,11 @@ class Trainer:
                 )
             self.global_step += 1
 
-            if (
-                self.config.max_steps is not None
-                and self.global_step >= self.config.max_steps
-            ):
-                break
+            if self._reached_max_steps():
+                # Hand the terminal cursor back so the forced checkpoint records
+                # where the epoch stopped. Reaching max_steps on the very last
+                # batch still completes the epoch, so that stays 0 (end-of-epoch).
+                return local_step if local_step < num_steps else 0
 
             if (
                 step_interval is not None
@@ -521,6 +527,8 @@ class Trainer:
                 # Avoid saving back to back ay the end of each epoch
             ):
                 self.maybe_save_checkpoint(epoch, local_step=local_step)
+
+        return 0
 
     def _maybe_val_sync(self, batch_index: int) -> None:
         if not self.is_distributed or _VAL_SYNC_INTERVAL <= 0:
@@ -579,14 +587,20 @@ class Trainer:
 
         return val_metrics
 
-    def maybe_save_checkpoint(self, epoch: int | str, local_step: int = 0):
-        if epoch != "interrupted" and (
-            self.config.save_best
-            or (
-                self.config.checkpoint_freq >= 1
-                and isinstance(epoch, int)
-                and epoch != 0
-                and (epoch + 1) % self.config.checkpoint_freq != 0
+    def maybe_save_checkpoint(
+        self, epoch: int | str, local_step: int = 0, force: bool = False
+    ):
+        if (
+            not force
+            and epoch != "interrupted"
+            and (
+                self.config.save_best
+                or (
+                    self.config.checkpoint_freq >= 1
+                    and isinstance(epoch, int)
+                    and epoch != 0
+                    and (epoch + 1) % self.config.checkpoint_freq != 0
+                )
             )
         ):
             return
@@ -635,18 +649,37 @@ class Trainer:
         if self.config.save_best:
             self.checkpointer.cleanup_keep_only_best(best_epoch=epoch)
 
+    def _reached_max_steps(self) -> bool:
+        return (
+            self.config.max_steps is not None
+            and self.global_step >= self.config.max_steps
+        )
+
     @with_graceful_shutdown()
     def run_training(self):
         n_epochs = self.config.num_epochs
         for epoch in range(self.current_epoch, n_epochs):
+            if self._reached_max_steps():
+                root_logger.info(
+                    f"Reached max_steps={self.config.max_steps} "
+                    f"(global_step={self.global_step}); stopping training."
+                )
+                break
             root_logger.info(f"Training epoch {epoch + 1}/{n_epochs} started")
-            self.train_epoch(epoch)
+            stopped_at_local_step = self.train_epoch(epoch)
             root_logger.info(f"Training epoch {epoch + 1}/{n_epochs} completed")
 
             if self.is_distributed:
                 dist.barrier()
 
-            self.maybe_save_checkpoint(epoch)
+            # Bypass the checkpoint_freq / save_best gates when this is the
+            # final segment before max_steps stops training: its steps would
+            # otherwise never be persisted.
+            self.maybe_save_checkpoint(
+                epoch,
+                local_step=stopped_at_local_step,
+                force=self._reached_max_steps(),
+            )
 
             if self.is_distributed:
                 dist.barrier()
