@@ -76,4 +76,4 @@ def test_epoch_loop_unaffected_without_max_steps():
     trainer.run_training()
     assert trainer.epochs_entered == [0, 1, 2]
     assert trainer.global_step == 12
-    assert all(force is False for _, force in trainer.save_calls)
+    assert all(force is False for _, _, force in trainer.save_calls)
