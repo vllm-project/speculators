@@ -9,6 +9,6 @@ Supported Research Repositories:
     - HASS: https://github.com/HArmonizedSS/HASS
 """
 
-from .entrypoints import convert_model
+from .entrypoints import SUPPORTED_ALGORITHMS, convert_model
 
-__all__ = ["convert_model"]
+__all__ = ["SUPPORTED_ALGORITHMS", "convert_model"]
