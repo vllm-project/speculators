@@ -1,5 +1,7 @@
 import json
 import os
+import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -11,6 +13,7 @@ from functools import wraps
 from pathlib import Path
 from textwrap import indent
 
+import pytest
 from loguru import logger
 from PIL import Image
 
@@ -19,6 +22,8 @@ from speculators.data_generation.preprocessing import load_raw_dataset
 __all__ = [
     "SCRIPTS_DIR",
     "VLLM_PYTHON",
+    "launch_mooncake_master",
+    "launch_mooncake_master_context",
     "launch_vllm_server",
     "launch_vllm_server_context",
     "purge_newfiles",
@@ -27,6 +32,7 @@ __all__ = [
     "run_stitch_mtp",
     "run_training",
     "run_vllm_engine",
+    "stop_mooncake_master",
     "stop_vllm_server",
     "wait_for_server",
 ]
@@ -105,6 +111,10 @@ def launch_vllm_server(
     target_layer_ids: list[int] | None = None,
     enforce_eager: bool = False,
     allowed_local_media_path: str | None = None,
+    hidden_states_backend: str = "file",
+    mooncake_master: str | None = None,
+    mooncake_metadata_server: str | None = None,
+    mooncake_protocol: str | None = None,
 ) -> subprocess.Popen:
     """Launch a vLLM server configured for hidden-state extraction.
 
@@ -117,7 +127,15 @@ def launch_vllm_server(
         model,
         "--hidden-states-path",
         str(hidden_states_path),
+        "--hidden-states-backend",
+        hidden_states_backend,
     ]
+    if mooncake_master is not None:
+        cmd += ["--mooncake-master", mooncake_master]
+    if mooncake_metadata_server is not None:
+        cmd += ["--mooncake-metadata-server", mooncake_metadata_server]
+    if mooncake_protocol is not None:
+        cmd += ["--mooncake-protocol", mooncake_protocol]
     if target_layer_ids is not None:
         cmd += ["--target-layer-ids"] + [str(lid) for lid in target_layer_ids]
     if enforce_eager:
@@ -174,6 +192,64 @@ def launch_vllm_server_context(*args, **kwargs):
         yield
     finally:
         stop_vllm_server(process)
+
+
+def launch_mooncake_master(port: int) -> subprocess.Popen:
+    """Launch a mooncake_master process.
+
+    Returns the subprocess. Caller is responsible for stopping it
+    via stop_mooncake_master().
+
+    The process is started in its own session (start_new_session=True)
+    because the installed ``mooncake_master`` entry-point is a Python
+    wrapper that spawns the real binary via subprocess.call().  Killing
+    only the wrapper leaves the child binary running as an orphan.
+    Using a dedicated session lets stop_mooncake_master() kill the
+    entire process group at once.
+    """
+    exe = shutil.which("mooncake_master")
+    if exe is None:
+        pytest.skip("mooncake_master not found on PATH")
+
+    cmd = [exe, "--port", str(port)]
+    logger.info("Starting mooncake_master: {}", " ".join(cmd))
+    proc = subprocess.Popen(cmd, start_new_session=True)  # noqa: S603
+    time.sleep(2)
+
+    if proc.poll() is not None:
+        raise RuntimeError(
+            f"mooncake_master exited immediately with code {proc.returncode}"
+        )
+    return proc
+
+
+def stop_mooncake_master(process: subprocess.Popen):
+    """Stop the mooncake_master process group."""
+    if process.poll() is not None:
+        logger.info("mooncake_master already exited (code {})", process.returncode)
+        return
+
+    pgid = os.getpgid(process.pid)
+
+    os.killpg(pgid, signal.SIGTERM)
+    try:
+        process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        os.killpg(pgid, signal.SIGKILL)
+        process.wait(timeout=10)
+
+    if process.returncode not in (0, -15, -signal.SIGKILL):
+        logger.error("mooncake_master exited with code {}", process.returncode)
+    logger.info("mooncake_master stopped (exit code {})", process.returncode)
+
+
+@contextmanager
+def launch_mooncake_master_context(port: int):
+    process = launch_mooncake_master(port)
+    try:
+        yield
+    finally:
+        stop_mooncake_master(process)
 
 
 def setup_dummy_sharegpt4v_coco(coco_dir: Path):
@@ -281,6 +357,10 @@ def run_training(
     target_layer_ids: list[int] | None = None,
     num_layers: int | None = None,
     log_freq: int = 1,
+    hidden_states_backend: str = "file",
+    mooncake_master: str | None = None,
+    mooncake_metadata_server: str | None = None,
+    mooncake_protocol: str | None = None,
 ):
     train_cmd = [
         sys.executable,
@@ -305,7 +385,15 @@ def run_training(
         speculator_type,
         "--log-freq",
         str(log_freq),
+        "--hidden-states-backend",
+        hidden_states_backend,
     ]
+    if mooncake_master is not None:
+        train_cmd += ["--mooncake-master", mooncake_master]
+    if mooncake_metadata_server is not None:
+        train_cmd += ["--mooncake-metadata-server", mooncake_metadata_server]
+    if mooncake_protocol is not None:
+        train_cmd += ["--mooncake-protocol", mooncake_protocol]
     if online:
         train_cmd += [
             "--on-missing",

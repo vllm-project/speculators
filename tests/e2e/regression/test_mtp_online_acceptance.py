@@ -48,4 +48,5 @@ def test_mtp_online_regression(
         max_tokens=512,
         train_timeout=60 * 60,
         gpu_memory_utilization=0.25,
+        enforce_eager=True,
     )
