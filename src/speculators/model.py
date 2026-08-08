@@ -154,9 +154,13 @@ class DraftVocabMixin(nn.Module):
         embed_tokens_weight = verifier_weights["embed_tokens.weight"]
         lm_head_weight = verifier_weights.get("lm_head.weight", embed_tokens_weight)
 
-        # Load embed_tokens if not already loaded (NaN means uninitialized)
-        if self.embed_tokens.weight.isnan().any():
-            self.embed_tokens.load_state_dict({"weight": embed_tokens_weight})
+        # embed_tokens and lm_head are frozen verifier-derived parameters, so
+        # they are always overwritten from the verifier. The previous NaN guard
+        # is unreliable: transformers re-materializes parameters absent from a
+        # checkpoint with uninitialized storage (see
+        # _move_missing_keys_from_meta_to_device), so NaN no longer means
+        # "uninitialized" and a slim checkpoint would load garbage.
+        self.embed_tokens.load_state_dict({"weight": embed_tokens_weight})
 
         if self.use_draft_vocab:
             if self.t2d is None or not torch.any(self.t2d).item():  # type: ignore[arg-type]
@@ -168,10 +172,9 @@ class DraftVocabMixin(nn.Module):
                 self.t2d.to(device=lm_head_weight.device, dtype=torch.bool), :  # type: ignore[union-attr,index]
             ]
 
-        if self.lm_head.weight.isnan().any():
-            self.lm_head.load_state_dict(
-                {"weight": lm_head_weight.detach().clone()}, strict=False
-            )
+        self.lm_head.load_state_dict(
+            {"weight": lm_head_weight.detach().clone()}, strict=False
+        )
         self.verifier_lm_head.load_state_dict(
             {"weight": lm_head_weight.detach().clone()}, strict=False
         )

@@ -39,6 +39,8 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         "verifier_norm.weight",
         # verifier_lm_head is reloaded from the verifier (see load_verifier_weights)
         # and excluded on save, so it is expected to be absent from checkpoints.
+        # lm_head is handled per-instance in __init__: omitted only for full-vocab
+        # drafts, where it is the exact frozen verifier projection.
         "verifier_lm_head.weight",
         "t2d",
         "d2t",
@@ -122,6 +124,21 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             )
 
         self.post_init()
+        # Verifier-owned weights are reconstructed on load. Keep a reduced-vocab
+        # lm_head serialized because current runtimes cannot derive it from the
+        # full verifier head.
+        #
+        # Copy ClassVar lists before adding per-instance save rules.
+        self._keys_to_ignore_on_save = list(
+            type(self)._keys_to_ignore_on_save  # noqa: SLF001
+        )
+        self._keys_to_ignore_on_load_missing = list(
+            type(self)._keys_to_ignore_on_load_missing  # noqa: SLF001
+        )
+        self._keys_to_ignore_on_save.append("embed_tokens.weight")
+        if not self.use_draft_vocab:
+            self._keys_to_ignore_on_save.append("lm_head.weight")
+            self._keys_to_ignore_on_load_missing.append("lm_head.weight")
 
     @property
     def target_layer_ids(self) -> list[int]:
