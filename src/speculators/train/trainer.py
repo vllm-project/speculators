@@ -342,7 +342,19 @@ class Trainer:
         last_epoch = -1
         if self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1:
             self.checkpointer.load_optimizer_state_dict(self.model, self.optimizers)
-            last_epoch = self.checkpointer.previous_epoch
+            # These schedulers step once per optimizer step, so the resume seed
+            # is the resumed global step, not the epoch index (the constructor's
+            # initial step advances last_epoch by one, hence the -1).
+            # load_scheduler_state_dict overrides this seed whenever
+            # scheduler_state_dict.pt exists; this is the fallback for
+            # checkpoints saved without one.
+            last_epoch = self.global_step - 1
+            # Constructing a scheduler with last_epoch >= 0 requires initial_lr
+            # in the param groups. Checkpoints from scheduler-less runs do not
+            # carry it, so fall back to each group's current lr as the base.
+            for opt in self.optimizers:
+                for group in opt.param_groups:
+                    group.setdefault("initial_lr", group["lr"])
 
         # Setup scheduler(s) — one per optimizer so each optimizer's base LR (e.g.
         # Muon's higher LR vs AdamW's) is warmed up / decayed independently.
@@ -373,7 +385,31 @@ class Trainer:
         self.schedulers = [make_scheduler(opt) for opt in self.optimizers]
 
         if self.resume_from_checkpoint and self.checkpointer.previous_epoch != -1:
+            scheduler_state_path = self.checkpointer.scheduler_path(
+                self.checkpointer.previous_epoch
+            )
+            if not scheduler_state_path.exists():
+                root_logger.warning(
+                    "No scheduler_state_dict.pt in the resumed checkpoint; "
+                    f"seeding the LR schedule from global_step={self.global_step}. "
+                    "If the checkpoint also lacks training_state.json, "
+                    "global_step reads 0 and the schedule restarts from warmup."
+                )
             self.checkpointer.load_scheduler_state_dict(self.schedulers)
+            self._sync_optimizer_lrs_from_schedulers()
+
+    def _sync_optimizer_lrs_from_schedulers(self) -> None:
+        """Write each scheduler's restored LR back into its optimizer.
+
+        ``LRScheduler.load_state_dict`` restores the scheduler's own counters but
+        never touches the optimizer's param groups. When the two disagree (a
+        checkpoint without ``training_state.json`` seeds ``global_step=0``, so the
+        constructor leaves the LR at warmup step 0), the first resumed optimizer
+        step would otherwise run at that stale LR.
+        """
+        for sched, opt in zip(self.schedulers, self.optimizers, strict=True):
+            for group, lr in zip(opt.param_groups, sched.get_last_lr(), strict=True):
+                group["lr"] = lr
 
     def _optimizers_zero_grad(self):
         for opt in self.optimizers:
