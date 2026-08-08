@@ -292,7 +292,11 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         total_seq_len = loss_mask.shape[1]
 
         anchor_positions, anchor_valid = select_anchors(
-            loss_mask, max_anchors, self.block_size
+            loss_mask,
+            max_anchors,
+            self.block_size,
+            document_ids=document_ids,
+            sample_from_anchor=self.config.sample_from_anchor,
         )
 
         full_attn_mask = None

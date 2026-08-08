@@ -57,3 +57,78 @@ class TestSelectAnchors:
         anchors, anchor_valid = select_anchors(loss_mask, num_anchors=8, block_size=4)
         selected = anchors[anchor_valid]
         assert torch.equal(selected, torch.sort(selected).values)
+
+
+class TestSelectAnchorsDocumentBoundaries:
+    def test_blocks_never_cross_document_boundaries(self):
+        torch.manual_seed(0)
+        total, block_size = 32, 4
+        loss_mask = torch.ones(1, total)
+        document_ids = torch.zeros(1, total, dtype=torch.long)
+        document_ids[:, 10:] = 1  # two packed documents: [0, 10) and [10, 32)
+
+        anchors, anchor_valid = select_anchors(
+            loss_mask,
+            num_anchors=total,
+            block_size=block_size,
+            document_ids=document_ids,
+        )
+        selected = anchors[anchor_valid]
+        assert selected.numel() > 0
+        for pos in selected.tolist():
+            block_docs = document_ids[0, pos : pos + block_size]
+            assert torch.all(block_docs == block_docs[0]), (
+                f"anchor {pos} spans documents {block_docs.tolist()}"
+            )
+        # Doc 0 allows anchors 0..6 (7..9 would spill into doc 1); doc 1 allows
+        # 10..27 (the global last-block_size cut removes 28..31).
+        assert anchor_valid.sum().item() == 7 + 18
+
+    def test_sample_from_anchor_covers_the_shifted_last_target(self):
+        # With sample_from_anchor=True (DSpark) slot k predicts token p + k + 1,
+        # so the block's last target is p + block_size, one past the DFlash one.
+        torch.manual_seed(0)
+        total, block_size = 32, 4
+        loss_mask = torch.ones(1, total)
+        document_ids = torch.zeros(1, total, dtype=torch.long)
+        document_ids[:, 10:] = 1
+
+        anchors, anchor_valid = select_anchors(
+            loss_mask,
+            num_anchors=total,
+            block_size=block_size,
+            document_ids=document_ids,
+            sample_from_anchor=True,
+        )
+        for pos in anchors[anchor_valid].tolist():
+            block_docs = document_ids[0, pos : pos + block_size + 1]
+            assert torch.all(block_docs == block_docs[0]), (
+                f"anchor {pos} spans documents {block_docs.tolist()}"
+            )
+        # Doc 0 now allows 0..5 only (anchor 6 targets 7..10, and 10 is doc 1);
+        # doc 1 allows 10..27 as before.
+        assert anchor_valid.sum().item() == 6 + 18
+
+    def test_block_size_one_still_checks_the_dspark_target(self):
+        # block_size == 1 skipped the check entirely, yet DSpark still predicts
+        # p + 1, which can be the first token of the next document.
+        loss_mask = torch.ones(1, 8)
+        document_ids = torch.zeros(1, 8, dtype=torch.long)
+        document_ids[:, 4:] = 1
+
+        anchors, anchor_valid = select_anchors(
+            loss_mask,
+            num_anchors=8,
+            block_size=1,
+            document_ids=document_ids,
+            sample_from_anchor=True,
+        )
+        selected = sorted(anchors[anchor_valid].tolist())
+        # 3 would target 4 (next document); 7 is removed by the tail cut.
+        assert selected == [0, 1, 2, 4, 5, 6]
+
+    def test_document_ids_none_keeps_previous_behavior(self):
+        torch.manual_seed(0)
+        loss_mask = torch.ones(1, 16)
+        anchors, anchor_valid = select_anchors(loss_mask, num_anchors=16, block_size=4)
+        assert anchor_valid.sum().item() == 12  # only the tail cut applies
