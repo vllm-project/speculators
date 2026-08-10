@@ -40,7 +40,11 @@ def test_mooncake_online_smoke(
     port = 8322
 
     run_prepare_data(
-        MODEL, "sharegpt", data_path, max_samples=50, seq_length=seq_length
+        MODEL,
+        "hf:inference-optimization/speculators-ci-datasets:smoke_regen",
+        data_path,
+        max_samples=50,
+        seq_length=seq_length,
     )
 
     mooncake_kwargs = {

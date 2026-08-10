@@ -82,7 +82,11 @@ def test_resume_after_checkpoint_best(tmp_path: Path):
     save_path = tmp_path / "checkpoints"
 
     # Step 1: Prepare data
-    run_prepare_data(MODEL, "sharegpt", data_path)
+    run_prepare_data(
+        MODEL,
+        "hf:inference-optimization/speculators-ci-datasets:smoke_regen",
+        data_path,
+    )
 
     # Step 2: Generate hidden states offline
     with launch_vllm_server_context(
