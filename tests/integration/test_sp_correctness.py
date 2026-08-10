@@ -1,7 +1,8 @@
+# ruff: noqa: T201, PLC0415
 """Verify Ulysses sequence parallelism produces identical results to non-SP.
 
 Run with:
-    torchrun --standalone --nproc_per_node=2 scripts/test_sp_correctness.py
+    torchrun --standalone --nproc_per_node=2 tests/integration/test_sp_correctness.py
 
 Tests:
   1. All-to-all round-trip: scatter then gather recovers the original tensor.
@@ -18,19 +19,23 @@ import torch.distributed as dist
 from torch.nn.attention.flex_attention import create_block_mask, flex_attention
 
 
-def _causal(b, h, q_idx, kv_idx):  # noqa: ARG001
+def _causal(b, h, q_idx, kv_idx):
     return q_idx >= kv_idx
 
 
-def test_round_trip(sp_group, rank, device):
-    """Scatter then gather should recover the original tensor."""
-    from speculators.train.sequence_parallel import _AllToAllSP
+def _a2a(x, scatter_dim, gather_dim):
+    import speculators.train.sequence_parallel  # noqa: F401
 
+    return torch.ops.speculators.all_to_all_sp(x, scatter_dim, gather_dim)
+
+
+def test_round_trip(rank, device):
+    """Scatter then gather should recover the original tensor."""
     torch.manual_seed(42)
     x = torch.randn(1, 8, 256, 64, device=device, dtype=torch.bfloat16)
 
-    scattered = _AllToAllSP.apply(x, sp_group, 1, 2)
-    recovered = _AllToAllSP.apply(scattered, sp_group, 2, 1)
+    scattered = _a2a(x, 1, 2)
+    recovered = _a2a(scattered, 2, 1)
 
     max_diff = (x - recovered).abs().max().item()
     if rank == 0:
@@ -39,10 +44,9 @@ def test_round_trip(sp_group, rank, device):
     return max_diff < 1e-6
 
 
-def test_attention_equivalence(sp_group, sp_size, rank, device):
+def test_attention_equivalence(sp_size, rank, device):
     """SP scatter->attention->gather should match direct attention."""
     from speculators.train.sequence_parallel import (
-        _AllToAllSP,
         maybe_replicate_kv_heads,
     )
 
@@ -50,27 +54,23 @@ def test_attention_equivalence(sp_group, sp_size, rank, device):
     B, H, S_full, D = 1, 8, 256, 64
     S_local = S_full // sp_size
 
-    # Each rank starts with a local chunk of the sequence (all heads)
     q_full = torch.randn(B, H, S_full, D, device=device, dtype=torch.bfloat16)
     k_full = torch.randn(B, H, S_full, D, device=device, dtype=torch.bfloat16)
     v_full = torch.randn(B, H, S_full, D, device=device, dtype=torch.bfloat16)
 
-    # Reference: direct attention on the full tensors
     full_mask = create_block_mask(
         _causal, B=None, H=None, Q_LEN=S_full, KV_LEN=S_full, device=device
     )
     ref = flex_attention(q_full, k_full, v_full, block_mask=full_mask)
 
-    # SP path: each rank holds S_local of sequence, all heads.
-    # Scatter trades heads for sequence so each rank sees S_full but fewer heads.
     q_local = q_full[:, :, rank * S_local : (rank + 1) * S_local, :]
     k_local = k_full[:, :, rank * S_local : (rank + 1) * S_local, :]
     v_local = v_full[:, :, rank * S_local : (rank + 1) * S_local, :]
 
     k_rep, v_rep = maybe_replicate_kv_heads(k_local, v_local, sp_size)
-    q_sp = _AllToAllSP.apply(q_local, sp_group, 1, 2)
-    k_sp = _AllToAllSP.apply(k_rep, sp_group, 1, 2)
-    v_sp = _AllToAllSP.apply(v_rep, sp_group, 1, 2)
+    q_sp = _a2a(q_local, 1, 2)
+    k_sp = _a2a(k_rep, 1, 2)
+    v_sp = _a2a(v_rep, 1, 2)
 
     sp_out = flex_attention(
         q_sp.contiguous(),
@@ -79,10 +79,8 @@ def test_attention_equivalence(sp_group, sp_size, rank, device):
         block_mask=full_mask,
         enable_gqa=q_sp.shape[1] != k_sp.shape[1],
     )
-    # Gather trades sequence back for heads → (B, H, S_local, D)
-    sp_out = _AllToAllSP.apply(sp_out, sp_group, 2, 1)
+    sp_out = _a2a(sp_out, 2, 1)
 
-    # Compare this rank's local chunk of the reference output
     ref_local = ref[:, :, rank * S_local : (rank + 1) * S_local, :]
 
     max_diff = (ref_local - sp_out).abs().max().item()
@@ -96,10 +94,9 @@ def test_attention_equivalence(sp_group, sp_size, rank, device):
     return max_diff < 5e-2
 
 
-def test_gradient_equivalence(sp_group, sp_size, rank, device):
+def test_gradient_equivalence(sp_size, rank, device):
     """Gradients through SP path should match gradients without SP."""
     from speculators.train.sequence_parallel import (
-        _AllToAllSP,
         maybe_replicate_kv_heads,
     )
 
@@ -115,23 +112,21 @@ def test_gradient_equivalence(sp_group, sp_size, rank, device):
         _causal, B=None, H=None, Q_LEN=S_full, KV_LEN=S_full, device=device
     )
 
-    # Reference path
     q_ref = q_full.clone().requires_grad_(True)
     k_ref = k_full.clone().requires_grad_(True)
     v_ref = v_full.clone().requires_grad_(True)
     ref_out = flex_attention(q_ref, k_ref, v_ref, block_mask=full_mask)
     ref_out.sum().backward()
 
-    # SP path: start from local chunks
     sl = slice(rank * S_local, (rank + 1) * S_local)
     q_local = q_full[:, :, sl, :].clone().requires_grad_(True)
     k_local = k_full[:, :, sl, :].clone().requires_grad_(True)
     v_local = v_full[:, :, sl, :].clone().requires_grad_(True)
 
     k_rep, v_rep = maybe_replicate_kv_heads(k_local, v_local, sp_size)
-    q2 = _AllToAllSP.apply(q_local, sp_group, 1, 2)
-    k2 = _AllToAllSP.apply(k_rep, sp_group, 1, 2)
-    v2 = _AllToAllSP.apply(v_rep, sp_group, 1, 2)
+    q2 = _a2a(q_local, 1, 2)
+    k2 = _a2a(k_rep, 1, 2)
+    v2 = _a2a(v_rep, 1, 2)
 
     sp_out = flex_attention(
         q2.contiguous(),
@@ -140,10 +135,9 @@ def test_gradient_equivalence(sp_group, sp_size, rank, device):
         block_mask=full_mask,
         enable_gqa=q2.shape[1] != k2.shape[1],
     )
-    sp_out = _AllToAllSP.apply(sp_out, sp_group, 2, 1)
+    sp_out = _a2a(sp_out, 2, 1)
     sp_out.sum().backward()
 
-    # Compare the local chunk of ref gradients to SP gradients
     q_ref_local = q_ref.grad[:, :, sl, :]
     q_max = (q_ref_local - q_local.grad).abs().max().item()
     if rank == 0:
@@ -159,15 +153,19 @@ def main():
     torch.cuda.set_device(rank)
     device = torch.device(f"cuda:{rank}")
 
-    sp_group = dist.new_group(list(range(world_size)))
+    from speculators.train.distributed import (
+        _init_sp_process_groups,
+    )
+
+    _init_sp_process_groups(rank, world_size, sp_size=world_size)
 
     if rank == 0:
         print(f"Testing SP correctness with {world_size} GPUs\n")
 
     results = [
-        test_round_trip(sp_group, rank, device),
-        test_attention_equivalence(sp_group, world_size, rank, device),
-        test_gradient_equivalence(sp_group, world_size, rank, device),
+        test_round_trip(rank, device),
+        test_attention_equivalence(world_size, rank, device),
+        test_gradient_equivalence(world_size, rank, device),
     ]
 
     if rank == 0:

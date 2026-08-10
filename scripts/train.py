@@ -560,7 +560,7 @@ def main(cfg: TrainConfig):  # noqa: C901
         ) and args.max_anchors % args.sp_size != 0:
             raise ValueError(
                 f"--max-anchors ({args.max_anchors}) must be divisible "
-                f"by --sp-size ({args.sp_size}) for DFlash SP"
+                f"by --sp-size ({args.sp_size}) for DFlash/DSpark SP"
             )
 
     if args.fsdp_shard and not is_distributed():
