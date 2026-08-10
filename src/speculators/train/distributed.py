@@ -138,7 +138,7 @@ def _init_sp_process_groups(rank: int, world_size: int, sp_size: int) -> None:
 
     if sp_size > 1:
         _device_mesh = init_device_mesh(
-            "cuda",
+            torch.accelerator.current_accelerator().type,
             (dp_size, sp_size),
             mesh_dim_names=("dp", "sp"),
         )

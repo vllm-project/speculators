@@ -185,6 +185,7 @@ class Trainer:
         self.val_loader = val_loader
         self.is_distributed = is_distributed()
         self.resume_from_checkpoint = config.resume_from_checkpoint
+        self._sp_grad_hooks: list = []
         acc = torch.accelerator.current_accelerator()
         self.device_type = acc.type if acc is not None else "cuda"
         checkpointer_class: type[BaseCheckpointer] = (
@@ -197,6 +198,11 @@ class Trainer:
         self.setup_trainer()
         self.setup_model()
         self.setup_optimizer()
+
+    def _cleanup(self):
+        for handle in self._sp_grad_hooks:
+            handle.remove()
+        self._sp_grad_hooks.clear()
 
     def _training_state_path(self, epoch: int) -> Path:
         return self.checkpointer.path / str(epoch) / "training_state.json"
@@ -684,3 +690,5 @@ class Trainer:
 
             if self.is_distributed:
                 dist.barrier()
+
+        self._cleanup()

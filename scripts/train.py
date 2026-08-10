@@ -537,6 +537,11 @@ def main(cfg: TrainConfig):  # noqa: C901
                 f"--total-seq-len ({args.total_seq_len}) must be divisible "
                 f"by --sp-size ({args.sp_size})"
             )
+        if num_attention_heads % args.sp_size != 0:
+            raise ValueError(
+                f"num_attention_heads ({num_attention_heads}) must be "
+                f"divisible by --sp-size ({args.sp_size})"
+            )
         if args.speculator_type not in ("eagle3", "dflash", "dspark", "peagle"):
             raise ValueError(
                 f"Sequence parallelism (--sp-size > 1) is currently only "
