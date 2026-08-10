@@ -96,8 +96,6 @@ def extract_output(
     token_ids: list[int],
 ) -> str:
     if isinstance(response, Completion):
-        if not response.choices:
-            raise InvalidResponseError("Response has no choices")
         prompt_token_ids = getattr(response.choices[0], "prompt_token_ids", None)
     else:
         prompt_token_ids = getattr(response, "prompt_token_ids", None)
@@ -197,8 +195,8 @@ async def generate_hidden_states_async(
     timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
 ) -> str:
     """
-    Runs prefill to extract hidden states and returns path to hidden states
-    file.
+    Runs decode w/ max_tokens 1 to generate hidden states and returns path to
+    hidden states file.
 
     Args:
         client: The async OpenAI client.
@@ -250,8 +248,8 @@ def generate_hidden_states(
     timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
 ) -> str:
     """
-    Runs prefill to extract hidden states and returns path to hidden states
-    file.
+    Runs decode w/ max_tokens 1 to generate hidden states and returns path to
+    hidden states file.
     """
     token_ids = client_item["input_ids"]
     messages = client_item.get("messages")

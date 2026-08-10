@@ -381,6 +381,11 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
 
         sp_size = get_sp_size()
         sp_rank = get_sp_rank()
+        if total_seq_len % sp_size != 0:
+            raise ValueError(
+                f"total_seq_len ({total_seq_len}) must be divisible by "
+                f"sp_size ({sp_size}) for DFlash/DSpark SP"
+            )
         local_seq_len = total_seq_len // sp_size if sp_size > 1 else total_seq_len
         sp_start = sp_rank * local_seq_len if sp_size > 1 else 0
 
