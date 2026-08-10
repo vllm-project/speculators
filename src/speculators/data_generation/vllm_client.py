@@ -141,7 +141,7 @@ async def _poll_lock_async(fd, poll_interval):
 
 
 async def wait_for_lock_async(lock_path, timeout=10.0, poll_interval=0.1):
-    fd = os.open(lock_path, os.O_RDONLY)
+    fd = os.open(lock_path, os.O_RDWR)
     try:
         await asyncio.wait_for(_poll_lock_async(fd, poll_interval), timeout=timeout)
     except BaseException:
@@ -152,7 +152,7 @@ async def wait_for_lock_async(lock_path, timeout=10.0, poll_interval=0.1):
 
 
 def wait_for_lock(lock_path, timeout=10.0, poll_interval=0.1):
-    fd = os.open(lock_path, os.O_RDONLY)
+    fd = os.open(lock_path, os.O_RDWR)
     try:
         deadline = time.monotonic() + timeout
         while True:
