@@ -124,6 +124,11 @@ def split_batch_for_sp(
             if full_seq_len is None:
                 full_seq_len = seq_len
                 device = tensor.device
+            if seq_len % sp_size != 0:
+                raise ValueError(
+                    f"Sequence length ({seq_len}) of '{key}' must be "
+                    f"divisible by sp_size ({sp_size})"
+                )
             chunks = tensor.chunk(sp_size, dim=1)
             out[key] = chunks[sp_rank].contiguous()
         elif key in _KEEP_FULL_KEYS:
