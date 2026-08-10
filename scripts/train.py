@@ -730,6 +730,8 @@ def main(cfg: TrainConfig):  # noqa: C901
 if __name__ == "__main__":
     main(TrainConfig.resolve())
 
+    print(f"Peak GPU memory: {torch.cuda.max_memory_allocated() / 1e9:.2f} GB")
+
 
 # RUN WITH:
 # torchrun --standalone --nproc_per_node=<num_gpus>  scripts/train.py

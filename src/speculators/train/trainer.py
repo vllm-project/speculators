@@ -177,6 +177,7 @@ class Trainer:
         val_loader: DataLoader | None = None,
     ):
         self.model = model
+        self._sp_splits_batch = getattr(model, "_sp_splits_batch", True)
         self.config = config
         self.local_rank = get_local_rank()
         self.rank = get_rank()
@@ -465,7 +466,7 @@ class Trainer:
                 else v
                 for k, v in batch.items()
             }
-            if getattr(self.model, "_sp_splits_batch", True):
+            if self._sp_splits_batch:
                 gpu_batch = split_batch_for_sp(gpu_batch, get_sp_rank(), get_sp_size())
 
             with torch.autocast(
@@ -563,7 +564,7 @@ class Trainer:
                 else v
                 for k, v in batch.items()
             }
-            if getattr(self.model, "_sp_splits_batch", True):
+            if self._sp_splits_batch:
                 gpu_batch = split_batch_for_sp(gpu_batch, get_sp_rank(), get_sp_size())
 
             with torch.autocast(
