@@ -90,7 +90,7 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
 
         if get_sp_size() > 1:
             for layer in self.layers:
-                layer.self_attn._attn_impl_override = "dflash_flex_attention"  # noqa: SLF001
+                layer.self_attn._attn_impl_override = "dflash_flex_attention"  # type: ignore[union-attr]  # noqa: SLF001
 
         self.sliding_window = tl_config.sliding_window
         self.sliding_window_indices = [

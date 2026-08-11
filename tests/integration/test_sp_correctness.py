@@ -138,6 +138,8 @@ def test_gradient_equivalence(sp_size, rank, device):
     sp_out = _a2a(sp_out, 2, 1)
     sp_out.sum().backward()
 
+    assert q_ref.grad is not None
+    assert q_local.grad is not None
     q_ref_local = q_ref.grad[:, :, sl, :]
     q_max = (q_ref_local - q_local.grad).abs().max().item()
     if rank == 0:
