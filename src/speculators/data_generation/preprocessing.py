@@ -387,7 +387,15 @@ def _append_boundary_rows(
         if status == "kept":
             num_kept += 1
             if "messages" in results:
-                results["messages"].append(_adapt_conv_for_vllm(row["conv"]))
+                # Serialized to JSON: conversations are heterogeneous (optional
+                # tool_calls, str vs typed-part-list content), so storing them
+                # structured lets each `map` shard infer a different Arrow
+                # schema and the final concatenation fails with "The features
+                # can't be aligned". A string column is deterministic
+                # regardless of sharding. Decoded in `build_client_item`.
+                results["messages"].append(
+                    json.dumps(_adapt_conv_for_vllm(row["conv"]))
+                )
 
     return num_kept, num_unsupervised, num_clipped
 

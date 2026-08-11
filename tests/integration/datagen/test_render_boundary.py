@@ -7,11 +7,16 @@ scaffold fallback (needs a template that pre-fills ``<think>``), the unstable
 guard (needs a template that rewrites history), and the client's error paths.
 """
 
+import json
+import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import cast
 
 import pytest
 from datasets import Dataset as HFDataset
+from datasets import load_dataset
+from transformers import ProcessorMixin
 
 from speculators.data_generation import preprocessing, render_client
 from speculators.data_generation.preprocessing import (
@@ -202,3 +207,100 @@ def test_pretokenized_dataset_skips_render():
         HFDataset.from_dict(data), NO_PROCESSOR, num_proc=1
     )
     assert len(ds) == 1
+
+
+# --------------------------------------------------------------------------- #
+# multiproc map -- Arrow schema alignment of the stored messages column        #
+# --------------------------------------------------------------------------- #
+class _FakeMMProcessor(ProcessorMixin):
+    """Multimodal stand-in: the builder only isinstance-checks the processor
+    to decide whether the ``messages`` column is kept."""
+
+    def __init__(self):
+        pass
+
+
+def _stub_token_count(messages: list[dict], add_generation_prompt: bool) -> int:
+    """Deterministic stand-in tokenization, monotonic in content length so a
+    full render always extends its generation-prompt render."""
+    n = sum(2 + len(str(m.get("content", ""))) // 10 for m in messages)
+    return n + bool(add_generation_prompt)
+
+
+@pytest.fixture
+def render_stub():
+    """A local render endpoint reachable from ``map`` worker processes, where
+    a monkeypatch would not survive the spawn."""
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            n = _stub_token_count(body["messages"], body["add_generation_prompt"])
+            payload = json.dumps({"token_ids": list(range(n))}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *args):
+            """Keep test output clean."""
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield f"http://127.0.0.1:{server.server_port}"
+    server.shutdown()
+    thread.join()
+
+
+@pytest.mark.sanity
+def test_multiproc_heterogeneous_conversations(render_stub, tmp_path):
+    """Shards with different conversation shapes must still concatenate.
+
+    With ``num_proc > 1`` each worker shard used to infer its own Arrow schema
+    for the ``messages`` column. Rows with plain-string content landing in one
+    shard and typed-part-list content (or tool calls) in another made the
+    schemas disagree, and ``map`` crashed with "The features can't be
+    aligned". Storing ``messages`` as a JSON string keeps the schema
+    deterministic regardless of sharding.
+    """
+    img_path = str(tmp_path / "blank.png")  # never opened: the stub renders
+
+    text_conv = [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi!"},
+    ]
+    mm_conv = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Describe this image."},
+                {"type": "image", "path": img_path},
+            ],
+        },
+        {"role": "assistant", "content": [{"type": "text", "text": "Blank."}]},
+    ]
+    # Load through the json builder like prepare_data.py does: from_dict would
+    # reject the heterogeneous conversations column outright.
+    data_file = tmp_path / "convs.jsonl"
+    with data_file.open("w") as f:
+        for conv in (text_conv, text_conv, mm_conv, mm_conv):
+            f.write(json.dumps({"conversations": conv}) + "\n")
+    dataset = load_dataset("json", data_files=str(data_file), split="train")
+
+    result = build_speculator_training_dataset(
+        dataset,
+        _FakeMMProcessor(),
+        max_length=2048,
+        num_proc=2,
+        render_endpoint=render_stub,
+    )
+
+    assert len(result) == 4
+    decoded = [json.loads(m) for m in result["messages"]]
+    assert decoded[0][-1] == {"role": "assistant", "content": "Hi!"}
+    assert decoded[2][0]["content"][1] == {
+        "type": "image_url",
+        "image_url": {"url": f"file://{img_path}"},
+    }

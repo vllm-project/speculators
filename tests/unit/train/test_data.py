@@ -1,5 +1,6 @@
 """Unit tests for data processing in speculators.train.data."""
 
+import json
 from pathlib import Path
 
 import torch
@@ -10,6 +11,7 @@ from speculators.models.eagle3.data import shift_batch
 from speculators.train.data import (
     ArrowDataset,
     CollateFn,
+    build_client_item,
 )
 
 
@@ -257,3 +259,54 @@ def test_arrow_dataset_on_generate_cache_creates_hidden_states_dir(tmp_path: Pat
     assert arrow_ds.transfer.hidden_states_path.is_dir()
     # And the cached file should exist
     assert (arrow_ds.transfer.hidden_states_path / "hs_0.safetensors").exists()
+
+
+def test_build_client_item_decodes_json_serialized_messages():
+    """Multimodal messages stored as a JSON string are decoded and forwarded."""
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Describe this image."},
+                {"type": "image_url", "image_url": {"url": "file:///img.png"}},
+            ],
+        },
+        {"role": "assistant", "content": "It is blank."},
+    ]
+    item = {
+        "input_ids": torch.tensor([1, 2, 3], dtype=torch.long),
+        "messages": json.dumps(messages),
+    }
+
+    client_item = build_client_item(item)
+
+    assert client_item["input_ids"] == [1, 2, 3]
+    assert client_item["messages"] == messages
+
+
+def test_build_client_item_omits_text_only_json_messages():
+    """Text-only conversations must not forward messages (input_ids wins)."""
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi!"},
+    ]
+    item = {
+        "input_ids": torch.tensor([1, 2], dtype=torch.long),
+        "messages": json.dumps(messages),
+    }
+
+    assert "messages" not in build_client_item(item)
+
+
+def test_build_client_item_accepts_structured_messages():
+    """Datasets prepared before messages were JSON-serialized store structured
+    rows; they must keep working."""
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": "file:///i.png"}}],
+        },
+    ]
+    item = {"input_ids": torch.tensor([7], dtype=torch.long), "messages": messages}
+
+    assert build_client_item(item)["messages"] == messages

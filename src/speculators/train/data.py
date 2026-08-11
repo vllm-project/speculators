@@ -1,3 +1,4 @@
+import json
 import warnings
 from collections.abc import Callable, Sequence
 from os import PathLike
@@ -82,8 +83,15 @@ def build_client_item(dataset_item: dict) -> ClientItem:
     """
     out_dict: dict = {"input_ids": dataset_item["input_ids"].tolist()}
 
-    if "messages" in dataset_item and _has_multimodal_content(dataset_item["messages"]):
-        out_dict["messages"] = dataset_item["messages"]
+    if "messages" in dataset_item:
+        messages = dataset_item["messages"]
+        # ``_preprocess_batch`` stores messages as a JSON string so the Arrow
+        # schema stays deterministic across preprocessing shards. Datasets
+        # prepared before that change hold structured rows; accept both.
+        if isinstance(messages, str):
+            messages = json.loads(messages)
+        if _has_multimodal_content(messages):
+            out_dict["messages"] = messages
 
     return cast("ClientItem", out_dict)
 
