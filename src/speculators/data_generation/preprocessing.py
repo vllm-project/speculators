@@ -177,6 +177,7 @@ class BoundaryRow(TypedDict):
     input_ids: list[int]
     loss_mask: list[int]
     conv: list[dict]  # prefix through this turn; multimodal rows re-send it
+    tools: list | None  # tools the row was rendered with; re-sent alongside
 
 
 def _encode_render(
@@ -276,6 +277,7 @@ def _render_boundary_rows(
                 "input_ids": full_ids,
                 "loss_mask": [0] * boundary + [1] * (len(full_ids) - boundary),
                 "conv": normalized_conv[: j + 1],
+                "tools": tools,
             }
         )
 
@@ -396,6 +398,13 @@ def _append_boundary_rows(
                 results["messages"].append(
                     json.dumps(_adapt_conv_for_vllm(row["conv"]))
                 )
+                # Kept next to the messages (JSON string, same reason): the
+                # chat template renders tool definitions into the prompt, so
+                # the vLLM request has to carry them for its re-render to
+                # reproduce ``input_ids``.
+                results["tools"].append(
+                    json.dumps(row["tools"]) if row["tools"] else ""
+                )
 
     return num_kept, num_unsupervised, num_clipped
 
@@ -473,6 +482,7 @@ def _preprocess_batch(
     # original messages -- token ids alone cannot carry the images.
     if is_multimodal:
         results["messages"] = []
+        results["tools"] = []
 
     if not conversations:
         log.warning(f"No conversations key found. Keys: {list(examples.keys())}")

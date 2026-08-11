@@ -130,6 +130,11 @@ class ClientItem(TypedDict):
     """If provided, pass `messages` to Chat Completions API
     instead of passing `token_ids` to Completions API."""
 
+    tools: NotRequired[list[dict]]
+    """Tool definitions the conversation was tokenized with.  Chat templates
+    render them into the prompt, so they must be sent alongside `messages`
+    for the re-rendered prompt to reproduce `input_ids`."""
+
 
 async def _poll_lock_async(fd, poll_interval):
     while True:
@@ -186,6 +191,25 @@ def _continue_final_message_for(model: str) -> bool:
     return any(marker in name for marker in _OPEN_FINAL_TURN_MODEL_MARKERS)
 
 
+def _chat_extra_body(model: str, client_item: ClientItem) -> dict[str, Any]:
+    """Body fields for the Chat Completions re-render of a stored prompt."""
+    extra_body: dict[str, Any] = {
+        "add_generation_prompt": False,
+        # Re-render to match the stored ``input_ids`` (model-dependent).
+        "continue_final_message": _continue_final_message_for(model),
+        "return_token_ids": True,
+    }
+
+    # Chat templates render tool definitions into the prompt, so a conversation
+    # tokenized with tools only reproduces its ``input_ids`` when the same
+    # tools are sent back.
+    tools = client_item.get("tools")
+    if tools:
+        extra_body["tools"] = tools
+
+    return extra_body
+
+
 @with_retries
 async def generate_hidden_states_async(
     client: openai.AsyncClient,
@@ -221,12 +245,7 @@ async def generate_hidden_states_async(
             model=model,
             messages=messages,
             max_tokens=1,
-            extra_body={
-                "add_generation_prompt": False,
-                # Re-render to match the stored ``input_ids`` (model-dependent).
-                "continue_final_message": _continue_final_message_for(model),
-                "return_token_ids": True,
-            },
+            extra_body=_chat_extra_body(model, client_item),
             timeout=timeout,
         )
 
@@ -268,12 +287,7 @@ def generate_hidden_states(
             model=model,
             messages=messages,
             max_tokens=1,
-            extra_body={
-                "add_generation_prompt": False,
-                # Re-render to match the stored ``input_ids`` (model-dependent).
-                "continue_final_message": _continue_final_message_for(model),
-                "return_token_ids": True,
-            },
+            extra_body=_chat_extra_body(model, client_item),
             timeout=timeout,
         )
 

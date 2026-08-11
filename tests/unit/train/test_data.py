@@ -373,3 +373,59 @@ def test_build_client_item_keeps_string_tool_call_arguments():
     }
 
     assert build_client_item(item)["messages"] == messages
+
+
+MM_MESSAGES = [
+    {
+        "role": "user",
+        "content": [{"type": "image_url", "image_url": {"url": "file:///i.png"}}],
+    },
+]
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "click",
+            "description": "Click at the given position.",
+            "parameters": {"type": "object", "properties": {"x": {"type": "integer"}}},
+        },
+    }
+]
+
+
+def test_build_client_item_forwards_tools():
+    """Tools are rendered into the prompt by the chat template, so they must be
+    sent with the request for vLLM's re-render to reproduce input_ids."""
+    item = {
+        "input_ids": torch.tensor([1], dtype=torch.long),
+        "messages": json.dumps(MM_MESSAGES),
+        "tools": json.dumps(TOOLS),
+    }
+
+    assert build_client_item(item)["tools"] == TOOLS
+
+
+def test_build_client_item_omits_empty_tools():
+    """Conversations tokenized without tools keep the key out of the request."""
+    item = {
+        "input_ids": torch.tensor([1], dtype=torch.long),
+        "messages": json.dumps(MM_MESSAGES),
+        "tools": "",
+    }
+
+    assert "tools" not in build_client_item(item)
+
+
+def test_build_client_item_omits_tools_for_text_only_messages():
+    """Text-only conversations go through the Completions API, so neither
+    messages nor tools may be forwarded."""
+    item = {
+        "input_ids": torch.tensor([1], dtype=torch.long),
+        "messages": json.dumps([{"role": "user", "content": "Hi"}]),
+        "tools": json.dumps(TOOLS),
+    }
+
+    client_item = build_client_item(item)
+
+    assert "messages" not in client_item
+    assert "tools" not in client_item

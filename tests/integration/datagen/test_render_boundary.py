@@ -281,12 +281,22 @@ def test_multiproc_heterogeneous_conversations(render_stub, tmp_path):
         },
         {"role": "assistant", "content": [{"type": "text", "text": "Blank."}]},
     ]
+    tools = [
+        {
+            "type": "function",
+            "function": {"name": "click", "parameters": {"type": "object"}},
+        }
+    ]
     # Load through the json builder like prepare_data.py does: from_dict would
     # reject the heterogeneous conversations column outright.
     data_file = tmp_path / "convs.jsonl"
     with data_file.open("w") as f:
-        for conv in (text_conv, text_conv, mm_conv, mm_conv):
-            f.write(json.dumps({"conversations": conv}) + "\n")
+        for i, conv in enumerate((text_conv, text_conv, mm_conv, mm_conv)):
+            row: dict = {"conversations": conv}
+            # Only some rows carry tools, so the column is heterogeneous too.
+            if i == 3:
+                row["tools"] = json.dumps(tools)
+            f.write(json.dumps(row) + "\n")
     dataset = load_dataset("json", data_files=str(data_file), split="train")
 
     result = build_speculator_training_dataset(
@@ -304,3 +314,7 @@ def test_multiproc_heterogeneous_conversations(render_stub, tmp_path):
         "type": "image_url",
         "image_url": {"url": f"file://{img_path}"},
     }
+    # Tools travel with the messages: the template renders them into the
+    # prompt, so the vLLM request must be able to send them back.
+    assert json.loads(result["tools"][3]) == tools
+    assert result["tools"][2] == ""
