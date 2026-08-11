@@ -310,3 +310,66 @@ def test_build_client_item_accepts_structured_messages():
     item = {"input_ids": torch.tensor([7], dtype=torch.long), "messages": messages}
 
     assert build_client_item(item)["messages"] == messages
+
+
+def test_build_client_item_stringifies_dict_tool_call_arguments():
+    """HF chat templates need dict tool-call arguments, but the OpenAI Chat
+    Completions schema vLLM validates against requires a JSON string."""
+    arguments = {"element": "Submit button", "x": 772, "y": 512}
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": "file:///i.png"}}],
+        },
+        {
+            "role": "assistant",
+            "content": "Clicking.",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "click_web", "arguments": arguments},
+                }
+            ],
+        },
+    ]
+    item = {
+        "input_ids": torch.tensor([1], dtype=torch.long),
+        "messages": json.dumps(messages),
+    }
+
+    sent = build_client_item(item)["messages"]
+
+    sent_arguments = sent[1]["tool_calls"][0]["function"]["arguments"]
+    assert isinstance(sent_arguments, str)
+    assert json.loads(sent_arguments) == arguments
+    # The rest of the payload is untouched
+    assert sent[0] == messages[0]
+    assert sent[1]["tool_calls"][0]["function"]["name"] == "click_web"
+
+
+def test_build_client_item_keeps_string_tool_call_arguments():
+    """Arguments already serialized as JSON strings pass through unchanged."""
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": "file:///i.png"}}],
+        },
+        {
+            "role": "assistant",
+            "content": "Clicking.",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "click", "arguments": '{"x": 65, "y": 105}'},
+                }
+            ],
+        },
+    ]
+    item = {
+        "input_ids": torch.tensor([1], dtype=torch.long),
+        "messages": json.dumps(messages),
+    }
+
+    assert build_client_item(item)["messages"] == messages

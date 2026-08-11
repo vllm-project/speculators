@@ -59,6 +59,35 @@ def _has_multimodal_content(messages: list[dict]) -> bool:
     return any(isinstance(m.get("content"), list) for m in messages)
 
 
+def _stringify_tool_call_arguments(messages: list[dict]) -> list[dict]:
+    """Re-encode assistant ``tool_calls[].function.arguments`` as JSON strings.
+
+    HF chat templates iterate tool-call arguments as a mapping, so
+    conversations are stored with dict arguments.  The OpenAI Chat Completions
+    schema that vLLM validates requests against requires ``arguments`` to be a
+    JSON *string* instead; vLLM decodes it back to a dict server-side before
+    rendering its chat template.  String arguments pass through unchanged.
+    """
+    out = []
+    for turn in messages:
+        tool_calls = turn.get("tool_calls")
+        if not tool_calls:
+            out.append(turn)
+            continue
+        adapted_calls = []
+        for call in tool_calls:
+            function = call.get("function")
+            if function and not isinstance(function.get("arguments", ""), str):
+                arguments = json.dumps(function["arguments"])
+                adapted_calls.append(
+                    call | {"function": function | {"arguments": arguments}}
+                )
+            else:
+                adapted_calls.append(call)
+        out.append(turn | {"tool_calls": adapted_calls})
+    return out
+
+
 def build_client_item(dataset_item: dict) -> ClientItem:
     """Build a request payload for vLLM hidden-state extraction.
 
@@ -91,7 +120,7 @@ def build_client_item(dataset_item: dict) -> ClientItem:
         if isinstance(messages, str):
             messages = json.loads(messages)
         if _has_multimodal_content(messages):
-            out_dict["messages"] = messages
+            out_dict["messages"] = _stringify_tool_call_arguments(messages)
 
     return cast("ClientItem", out_dict)
 
