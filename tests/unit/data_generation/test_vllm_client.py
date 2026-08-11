@@ -31,8 +31,12 @@ class TestChatExtraBody:
         )
 
         assert body["tools"] == TOOLS
+        # With tools present, tool_choice defaults to "auto", which vLLM
+        # rejects unless the server runs a tool-call parser.
+        assert body["tool_choice"] == "none"
 
     def test_tools_omitted_when_absent(self):
         body = _chat_extra_body("some/model", {"input_ids": [1], "messages": []})
 
         assert "tools" not in body
+        assert "tool_choice" not in body

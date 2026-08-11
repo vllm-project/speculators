@@ -202,10 +202,14 @@ def _chat_extra_body(model: str, client_item: ClientItem) -> dict[str, Any]:
 
     # Chat templates render tool definitions into the prompt, so a conversation
     # tokenized with tools only reproduces its ``input_ids`` when the same
-    # tools are sent back.
+    # tools are sent back. tool_choice must be pinned to "none": with tools
+    # present it defaults to "auto", which vLLM rejects unless the server
+    # runs a tool-call parser -- and we only render the prompt, never parse
+    # tool calls from the one generated token.
     tools = client_item.get("tools")
     if tools:
         extra_body["tools"] = tools
+        extra_body["tool_choice"] = "none"
 
     return extra_body
 
